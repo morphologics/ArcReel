@@ -178,6 +178,8 @@ export default {
   'about_published_at': '发布时间：{{date}}',
   'about_checked_at': '最近检查：{{date}}',
   'about_legal_title': '版权与署名',
+  'about_modified_version': '这是 ArcReel 的修改版本。本版本的源代码：',
+  'source_code_link': '源代码',
   'diagnostics_section_title': '诊断日志',
   'diagnostics_section_desc': '打包最近 7 天的日志与系统信息（密钥已脱敏），用于反馈问题。',
   'diagnostics_download': '下载诊断日志',

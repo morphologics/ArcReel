@@ -9,6 +9,7 @@ import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/component
 import { formatDate } from "@/utils/date-format";
 import { downloadBlob } from "@/utils/download";
 import type { GetSystemVersionResponse } from "@/types";
+import { MODIFIED_SOURCE_URL } from "@/utils/source-offer";
 
 const ABOUT_DATE_OPTS: Intl.DateTimeFormatOptions = {
   year: "numeric",
@@ -189,6 +190,18 @@ export function AboutSection() {
         <h3 className="text-sm font-medium">{t("about_legal_title")}</h3>
         <div className="flex flex-col gap-1 text-sm text-muted-foreground">
           <p>Copyright © 2026 Pollo3470 and ArcReel contributors</p>
+          {/* AGPLv3 §13: this is a modified version, so its source is offered here too */}
+          <p>
+            {t("about_modified_version")}{" "}
+            <a
+              href={MODIFIED_SOURCE_URL}
+              target="_blank"
+              rel="noreferrer"
+              className="break-all text-primary underline-offset-4 hover:underline"
+            >
+              {MODIFIED_SOURCE_URL}
+            </a>
+          </p>
           <p>
             Powered by ArcReel —{" "}
             <a

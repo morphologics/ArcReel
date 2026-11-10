@@ -177,6 +177,8 @@ export default {
   'about_published_at': 'Published: {{date}}',
   'about_checked_at': 'Last checked: {{date}}',
   'about_legal_title': 'Copyright & Attribution',
+  'about_modified_version': 'This is a modified version of ArcReel. Source code of this version:',
+  'source_code_link': 'Source code',
   'diagnostics_section_title': 'Diagnostic logs',
   'diagnostics_section_desc': 'Bundle the last 7 days of logs and system info (keys masked) for bug reports.',
   'diagnostics_download': 'Download diagnostic logs',

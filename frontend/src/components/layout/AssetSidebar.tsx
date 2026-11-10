@@ -40,6 +40,7 @@ import { useDeleteEpisode } from "@/components/canvas/episodes/useDeleteEpisode"
 import { useMoveEpisode } from "@/components/canvas/episodes/useMoveEpisode";
 import { EpisodeCard } from "./EpisodeCard";
 import { SidebarEpisodeList } from "./SidebarEpisodeList";
+import { MODIFIED_SOURCE_URL, ORIGINAL_PROJECT_URL } from "@/utils/source-offer";
 
 interface AssetSidebarProps {
   /** 收为 56px 图标栏：只显示导航图标与集序号，名称在悬停或聚焦时显示。 */
@@ -266,7 +267,7 @@ export function AssetSidebar({ collapsed, onCollapsedChange }: AssetSidebarProps
         </section>
       )}
 
-      <div className={cn("flex shrink-0 border-t border-border p-2", collapsed && "justify-center")}>
+      <div className={cn("flex shrink-0 items-center gap-2 border-t border-border p-2", collapsed && "justify-center")}>
         <Button
           variant="ghost"
           size="icon-sm"
@@ -276,6 +277,19 @@ export function AssetSidebar({ collapsed, onCollapsedChange }: AssetSidebarProps
         >
           {collapsed ? <PanelLeftOpen aria-hidden /> : <PanelLeftClose aria-hidden />}
         </Button>
+        {/* credit to the original project and the offer of this modified version's source (AGPLv3 §7(b), §13) */}
+        {!collapsed && (
+          <p className="m-0 min-w-0 truncate text-xs text-muted-foreground">
+            Powered by{" "}
+            <a href={ORIGINAL_PROJECT_URL} target="_blank" rel="noreferrer" className="underline-offset-4 hover:underline">
+              ArcReel
+            </a>
+            {" · "}
+            <a href={MODIFIED_SOURCE_URL} target="_blank" rel="noreferrer" className="underline-offset-4 hover:underline">
+              {t("dashboard:source_code_link")}
+            </a>
+          </p>
+        )}
       </div>
 
       {createAfter !== undefined && currentProjectName ? (

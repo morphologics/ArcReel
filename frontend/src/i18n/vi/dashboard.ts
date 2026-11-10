@@ -178,6 +178,8 @@ export default {
   'about_published_at': 'Phát hành: {{date}}',
   'about_checked_at': 'Kiểm tra lần cuối: {{date}}',
   'about_legal_title': 'Bản quyền & ghi công',
+  'about_modified_version': 'Đây là phiên bản ArcReel đã sửa đổi. Mã nguồn của phiên bản này:',
+  'source_code_link': 'Mã nguồn',
   'diagnostics_section_title': 'Nhật ký chẩn đoán',
   'diagnostics_section_desc': 'Đóng gói nhật ký 7 ngày gần nhất và thông tin hệ thống (khóa đã được ẩn) để báo lỗi.',
   'diagnostics_download': 'Tải nhật ký chẩn đoán',

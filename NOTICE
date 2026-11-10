@@ -93,4 +93,11 @@ ArcReel 随附 lib/subtitle_style/fonts/SourceHanSansCN-Bold.otf，即 Adobe 思
 未作修改。思源黑体按 SIL 开源字体许可证 1.1 版授权，许可证全文见
 lib/subtitle_style/fonts/LICENSE.txt。
 
+==== Modifications ====
+
+This is a modified version of ArcReel, published at
+https://github.com/morphologics/ArcReel (branch "studio").
+Modified by Morphologics, 2026. The changes are the commits on that branch
+after the upstream tag v0.35.0; each commit message describes its change.
+
 ==== End of Notices ====
