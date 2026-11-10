@@ -37,11 +37,7 @@ import {
   type EpisodeViewFacts,
 } from "./episode-view";
 import { EpisodeHead } from "./EpisodeHead";
-import {
-  EpisodeHeaderActions,
-  EpisodeHeaderCenterProvider,
-  EpisodeHeaderSlotProvider,
-} from "./EpisodeHeaderActions";
+import { EpisodeHeaderActions, EpisodeHeaderSlotProvider } from "./EpisodeHeaderActions";
 import { EpisodePageHeader } from "./EpisodePageHeader";
 import { EpisodeViewFactsProvider } from "./EpisodeViewScope";
 import { StorySettingView } from "./StorySettingView";
@@ -95,7 +91,6 @@ function EpisodePageContent({
   const { t } = useTranslation("dashboard");
   const [searchParams, setSearchParams] = useSearchParams();
   const [actionsSlot, setActionsSlot] = useState<HTMLDivElement | null>(null);
-  const [centerSlot, setCenterSlot] = useState<HTMLDivElement | null>(null);
 
   const meta = projectData?.episodes?.find((entry) => entry.episode === episode);
   const isAd = projectData?.content_mode === "ad";
@@ -203,7 +198,6 @@ function EpisodePageContent({
 
   return (
     <EpisodeHeaderSlotProvider value={actionsSlot}>
-      <EpisodeHeaderCenterProvider value={view === "edit" ? undefined : centerSlot}>
       <div className="flex min-h-0 flex-1 flex-col">
         <EpisodePageHeader
           head={
@@ -236,7 +230,6 @@ function EpisodePageContent({
           onViewChange={changeView}
           boardLabel={t(route === "reference_video" ? "episode_view_units" : "episode_view_board")}
           onActionsSlot={setActionsSlot}
-          onCenterSlot={setCenterSlot}
           // the Edit view needs the height for its player
           compact={view === "edit"}
         />
@@ -273,7 +266,6 @@ function EpisodePageContent({
           {body}
         </div>
       </div>
-      </EpisodeHeaderCenterProvider>
     </EpisodeHeaderSlotProvider>
   );
 }

@@ -60,6 +60,8 @@ interface MediaCardProps {
   editScriptFile?: string | null;
   /** Buttons placed left of the upload button (the shot's delete and notes). */
   leadingActions?: ReactNode;
+  /** Centred in the title row between the title and the buttons (the shot's position and facts). */
+  centerContent?: ReactNode;
 }
 
 const UPLOAD_ACCEPT: Record<MediaKind, string> = {
@@ -83,6 +85,7 @@ export function MediaCard({
   onRestore,
   onUpload,
   leadingActions,
+  centerContent,
   uploading,
   uploadDisabled,
   editScriptFile,
@@ -138,7 +141,11 @@ export function MediaCard({
       <div className="mb-2 flex min-h-7 items-center gap-1.5">
         <Icon aria-hidden className="size-3.5 text-muted-foreground" />
         <h3 className="text-xs font-medium text-subtle-foreground">{title}</h3>
-        <span className="flex-1" />
+        {centerContent ? (
+          <div className="flex min-w-0 flex-1 flex-wrap items-center justify-center gap-x-2 gap-y-1">{centerContent}</div>
+        ) : (
+          <span className="flex-1" />
+        )}
         {leadingActions}
         {onUpload && !demoReadOnly && (
           <UploadIconButton

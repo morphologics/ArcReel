@@ -2320,7 +2320,7 @@ export default {
   'reference_unit_move_earlier': 'Di chuyển đơn vị lên trước',
   'reference_unit_move_later': 'Di chuyển đơn vị ra sau',
   'shot_drag_hint': 'Kéo để sắp xếp lại thứ tự',
-  'segment_break_toggle': 'Đặt làm điểm ngắt chương',
+  'segment_break_toggle': 'Chuyển cảnh',
   'segment_break_hint': 'Không tham chiếu ảnh phân cảnh trước đó nữa; ở chế độ lưới, một nhóm mới bắt đầu từ đây',
   'reference_unit_add_first': 'Thêm đơn vị video đầu tiên',
   'reference_unit_add_title': 'Thêm đơn vị video',

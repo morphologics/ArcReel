@@ -22,21 +22,3 @@ export function EpisodeHeaderActions({ children }: { children: ReactNode }) {
   if (slot === null) return null;
   return createPortal(children, slot);
 }
-
-/** The middle of the header's second row (between the view tabs and the actions): `undefined` outside an episode page. */
-const EpisodeHeaderCenterContext = createContext<HTMLElement | null | undefined>(undefined);
-
-export function EpisodeHeaderCenterProvider({ value, children }: { value: HTMLElement | null; children: ReactNode }) {
-  return <EpisodeHeaderCenterContext.Provider value={value}>{children}</EpisodeHeaderCenterContext.Provider>;
-}
-
-/**
- * Facts of what the view is showing, centred in the header's second row (the storyboard view puts the
- * selected shot's ID, duration, status and chapter break there). Rendered in place outside an episode page.
- */
-export function EpisodeHeaderCenter({ children }: { children: ReactNode }) {
-  const slot = useContext(EpisodeHeaderCenterContext);
-  if (slot === undefined) return <>{children}</>;
-  if (slot === null) return null;
-  return createPortal(children, slot);
-}

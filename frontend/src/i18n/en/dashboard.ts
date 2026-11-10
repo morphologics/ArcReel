@@ -2574,7 +2574,7 @@ export default {
   'reference_unit_move_earlier': 'Move unit earlier',
   'reference_unit_move_later': 'Move unit later',
   'shot_drag_hint': 'Drag to reorder',
-  'segment_break_toggle': 'Set as chapter break',
+  'segment_break_toggle': 'Scene break',
   'segment_break_hint': 'Stops referencing the previous storyboard image; in grid mode, a new group starts here',
   'reference_unit_add_first': 'Add the first video unit',
   'reference_unit_add_title': 'Add video unit',

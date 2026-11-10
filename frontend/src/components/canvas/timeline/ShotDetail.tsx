@@ -18,6 +18,7 @@ import { DialogueListEditor } from "./DialogueListEditor";
 import { UtteranceListEditor } from "./UtteranceListEditor";
 import { SourceTextReadonly } from "@/components/shared/SourceTextReadonly";
 import { TruncatedText } from "@/components/shared/TruncatedText";
+import { ItemPositionOfTotal } from "@/components/shared/episode-item/ItemPositionOfTotal";
 import { ShotDetailLayout, ShotGroup, ShotMediaGrid, ShotSection, ShotSourceCollapsible } from "./ShotDetailLayout";
 import { ShotDetailHeader } from "./ShotDetailHeader";
 import { Badge } from "@/components/ui/badge";
@@ -1001,6 +1002,33 @@ export function ShotDetail({
     />
   );
 
+  const durationBusy = !!generatingStoryboard || !!generatingVideo;
+  // The shot's facts (duration, status, chapter break): in the shot header, or (minimal header, under the
+  // storyboard strip) with the position, centred in the storyboard image's title row.
+  const shotMeta = (
+    <>
+      <DurationPill
+        seconds={fields.duration_seconds}
+        segmentId={segmentId}
+        projectName={projectName}
+        scriptFile={scriptFile}
+        durationOptions={durationOptions}
+        durationEndpointFixed={durationEndpointFixed}
+        durationWarningReason={durationWarningReason}
+        onChange={readOnly ? undefined : (seconds) => setField("duration_seconds", seconds)}
+        busy={durationBusy}
+      />
+      <StatusBadge status={status} />
+      {(isNarration || isDrama) && !readOnly && (
+        <SegmentBreakToggle
+          checked={fields.segment_break === true}
+          onChange={(next) => setField("segment_break", next)}
+          disabled={durationBusy}
+        />
+      )}
+    </>
+  );
+
   const storyboardMedia = (
     <MediaCard
       kind="storyboard"
@@ -1025,6 +1053,14 @@ export function ShotDetail({
       generateDisabled={editBusy || refreshPending}
       generateDisabledHint={savingHint}
       leadingActions={minimalHeader ? structureActions : undefined}
+      centerContent={
+        minimalHeader ? (
+          <>
+            <ItemPositionOfTotal itemId={segmentId} kind="shot" position={selectedIndex + 1} total={totalCount} />
+            {shotMeta}
+          </>
+        ) : undefined
+      }
     />
   );
 
@@ -1089,40 +1125,16 @@ export function ShotDetail({
       />
     ) : null;
 
-  const durationBusy = !!generatingStoryboard || !!generatingVideo;
 
-  const header = (
+  const header = minimalHeader ? null : (
     <ShotDetailHeader
       segmentId={segmentId}
       index={selectedIndex}
       total={totalCount}
-      meta={
-        <>
-          <DurationPill
-            seconds={fields.duration_seconds}
-            segmentId={segmentId}
-            projectName={projectName}
-            scriptFile={scriptFile}
-            durationOptions={durationOptions}
-            durationEndpointFixed={durationEndpointFixed}
-            durationWarningReason={durationWarningReason}
-            onChange={readOnly ? undefined : (seconds) => setField("duration_seconds", seconds)}
-            busy={durationBusy}
-          />
-          <StatusBadge status={status} />
-          {(isNarration || isDrama) && !readOnly && (
-            <SegmentBreakToggle
-              checked={fields.segment_break === true}
-              onChange={(next) => setField("segment_break", next)}
-              disabled={durationBusy}
-            />
-          )}
-        </>
-      }
-      onMoveEarlier={onMoveShot && !minimalHeader ? () => void onMoveShot(segmentId, "earlier") : undefined}
-      onMoveLater={onMoveShot && !minimalHeader ? () => void onMoveShot(segmentId, "later") : undefined}
-      hideNav={minimalHeader}
-      structureActions={minimalHeader ? undefined : structureActions}
+      meta={shotMeta}
+      onMoveEarlier={onMoveShot ? () => void onMoveShot(segmentId, "earlier") : undefined}
+      onMoveLater={onMoveShot ? () => void onMoveShot(segmentId, "later") : undefined}
+      structureActions={structureActions}
       onPrev={onPrev}
       onNext={onNext}
       navDisabled={navDisabled}
