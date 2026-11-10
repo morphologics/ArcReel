@@ -114,7 +114,8 @@ export function ReferencesSection({
     setOpen(true);
   };
 
-  const heading = <h3 className="text-xs font-medium text-muted-foreground">{t("eyebrow_segment_refs")}</h3>;
+  // One compact row: the label on the left, the summary in the middle, the stale badge and edit button on the right.
+  const heading = <h3 className="shrink-0 text-xs font-medium text-muted-foreground">{t("eyebrow_segment_refs")}</h3>;
 
   const modal = open ? (
     <SegmentRefsEditModal
@@ -136,14 +137,14 @@ export function ReferencesSection({
 
   if (isEmpty) {
     return (
-      <section className="flex flex-col gap-2">
-        <div className="flex min-h-7 items-center">{heading}</div>
+      <section className="flex min-h-8 items-center gap-2">
+        {heading}
         <button
           type="button"
           onClick={openModal}
           disabled={disabled}
           title={disabled ? disabledHint : undefined}
-          className="focus-ring flex w-full items-center gap-2.5 rounded-lg border border-dashed border-border px-3 py-2.5 text-left text-muted-foreground transition-colors hover:border-solid hover:border-input disabled:pointer-events-none disabled:opacity-50"
+          className="focus-ring flex min-w-0 flex-1 items-center gap-2.5 rounded-lg border border-dashed border-border px-2.5 py-1 text-left text-muted-foreground transition-colors hover:border-solid hover:border-input disabled:pointer-events-none disabled:opacity-50"
         >
           <span className="flex-1 truncate text-xs">{t("references_empty_full")}</span>
           <span className="inline-flex shrink-0 items-center gap-1 text-xs text-primary">
@@ -157,43 +158,14 @@ export function ReferencesSection({
   }
 
   return (
-    <section className="flex flex-col gap-2">
-      <div className="flex min-h-7 items-center gap-2">
-        {heading}
-        {totalStale > 0 && (
-          <InfoTip>
-            <InfoTipTrigger
-              render={
-                <button
-                  type="button"
-                  className="num inline-flex items-center gap-1 rounded-full bg-warn/10 px-1.5 py-0.5 text-xs text-warn ring-1 ring-warn/30"
-                />
-              }
-            >
-              <AlertTriangle aria-hidden className="size-3" />
-              {t("segment_refs_stale_badge", { count: totalStale })}
-            </InfoTipTrigger>
-            <InfoTipContent title={t("segment_refs_stale_badge", { count: totalStale })}>{t("segment_refs_stale_hint")}</InfoTipContent>
-          </InfoTip>
-        )}
-        <span className="flex-1" />
-        <TooltipIconButton
-          label={t("segment_refs_edit_button")}
-          hint={disabledHint}
-          disabled={disabled}
-          onClick={openModal}
-          size="icon-xs"
-        >
-          <Edit3 aria-hidden />
-        </TooltipIconButton>
-      </div>
-
+    <section className="flex min-h-8 items-center gap-2">
+      {heading}
       <button
         type="button"
         onClick={openModal}
         disabled={disabled}
         title={disabled ? disabledHint : undefined}
-        className="focus-ring flex w-full flex-wrap items-center gap-x-3 gap-y-1.5 rounded-lg border border-border/50 bg-muted/30 px-3 py-2 text-left transition-colors hover:border-input disabled:cursor-not-allowed"
+        className="focus-ring flex min-w-0 flex-1 items-center gap-x-3 overflow-hidden rounded-lg border border-border/50 bg-muted/30 px-2.5 py-1 text-left transition-colors hover:border-input disabled:cursor-not-allowed"
       >
         {characterNames.length > 0 && (
           <Group
@@ -242,7 +214,31 @@ export function ReferencesSection({
           </Group>
         )}
       </button>
-
+      {totalStale > 0 && (
+        <InfoTip>
+          <InfoTipTrigger
+            render={
+              <button
+                type="button"
+                className="num inline-flex shrink-0 items-center gap-1 rounded-full bg-warn/10 px-1.5 py-0.5 text-xs text-warn ring-1 ring-warn/30"
+              />
+            }
+          >
+            <AlertTriangle aria-hidden className="size-3" />
+            {t("segment_refs_stale_badge", { count: totalStale })}
+          </InfoTipTrigger>
+          <InfoTipContent title={t("segment_refs_stale_badge", { count: totalStale })}>{t("segment_refs_stale_hint")}</InfoTipContent>
+        </InfoTip>
+      )}
+      <TooltipIconButton
+        label={t("segment_refs_edit_button")}
+        hint={disabledHint}
+        disabled={disabled}
+        onClick={openModal}
+        size="icon-xs"
+      >
+        <Edit3 aria-hidden />
+      </TooltipIconButton>
       {modal}
     </section>
   );
@@ -260,7 +256,7 @@ function Group({
   children: React.ReactNode;
 }) {
   return (
-    <div className="flex items-center gap-2">
+    <div className="flex shrink-0 items-center gap-2">
       {children}
       <span className="inline-flex items-center gap-1 text-xs text-muted-foreground">
         {icon}

@@ -85,7 +85,7 @@ export function EpisodePageHeader({
         <div className="flex h-11 items-center gap-3 px-3">
           {head}
           {viewTabs}
-          <div className="relative flex min-w-0 shrink overflow-x-auto scroll-fade-x">
+          <div className="relative flex min-w-0 shrink overflow-x-auto">
             <div ref={onActionsSlot} className="ml-auto flex shrink-0 items-center gap-1.5" />
           </div>
           {progress}
@@ -102,7 +102,7 @@ export function EpisodePageHeader({
       <div className="flex h-10 items-center gap-3 px-4">
         {viewTabs}
         {/* 动作多到放不下时横向滚动；插槽靠右，溢出时从左端开始滚，不裁掉第一个动作。 */}
-        <div className="relative flex min-w-0 flex-1 overflow-x-auto scroll-fade-x">
+        <div className="relative flex min-w-0 flex-1 overflow-x-auto">
           <div ref={onActionsSlot} className="ml-auto flex shrink-0 items-center gap-1.5" />
         </div>
       </div>

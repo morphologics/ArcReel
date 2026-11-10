@@ -766,14 +766,6 @@ export function ShotDetail({
 
   const promptsGroup = (
     <ShotGroup>
-      <div className="flex items-center gap-2">
-        <h3 className="text-sm font-medium text-subtle-foreground">{t("detail_section_prompts")}</h3>
-        <span className="flex-1" />
-        {episode !== undefined && (
-          <PromptAuthoringButton projectName={projectName} episode={episode} scope="current" currentEntryId={segmentId} />
-        )}
-      </div>
-
       {segment.pending_authoring === true && (
         <div role="status" className="rounded-lg border border-border/50 bg-warn/5 px-3 py-2 text-xs text-subtle-foreground">
           {t("detail_pending_authoring_hint")}
@@ -783,6 +775,17 @@ export function ShotDetail({
       <ShotSection
         title={t("detail_image_prompt_title")}
         icon={<ImageIcon aria-hidden className="size-3.5" />}
+        afterTitle={
+          episode !== undefined && (
+            <PromptAuthoringButton
+              projectName={projectName}
+              episode={episode}
+              scope="current"
+              currentEntryId={segmentId}
+              iconOnly
+            />
+          )
+        }
         actions={
           <>
             {imgValue && (

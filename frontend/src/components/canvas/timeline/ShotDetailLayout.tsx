@@ -29,7 +29,7 @@ export function ShotDetailLayout({
       <div className="@container/shot-detail flex min-h-0 flex-1 flex-col">
         <div className="relative grid min-h-0 flex-1 auto-rows-max grid-cols-[minmax(0,1fr)] content-start overflow-y-auto [scrollbar-gutter:stable] @min-[480px]/shot-detail:grid-cols-[minmax(0,1fr)_300px] @min-[480px]/shot-detail:grid-rows-[minmax(0,1fr)] @min-[480px]/shot-detail:content-stretch @min-[480px]/shot-detail:overflow-visible @min-[860px]/shot-detail:grid-cols-[minmax(360px,560px)_minmax(0,1fr)]">
           <div className="relative min-h-0 @min-[480px]/shot-detail:overflow-y-auto @min-[480px]/shot-detail:[scrollbar-gutter:stable]">
-            <div className="flex flex-col gap-5 px-5 pt-4 pb-8">{main}</div>
+            <div className="flex flex-col gap-3 px-5 pt-2 pb-8">{main}</div>
           </div>
           <div className="@container/shot-media relative min-h-0 border-t border-border/50 px-4 pt-4 pb-8 @min-[480px]/shot-detail:overflow-y-auto @min-[480px]/shot-detail:border-t-0 @min-[480px]/shot-detail:border-l">
             {media}
@@ -44,7 +44,7 @@ export function ShotDetailLayout({
 /** 编辑栏里的一组内容；组与组之间用分隔线隔开。 */
 export function ShotGroup({ children }: { children: ReactNode }) {
   return (
-    <div className="flex flex-col gap-4 border-t border-border/50 pt-5 first:border-t-0 first:pt-0">{children}</div>
+    <div className="flex flex-col gap-4 border-t border-border/50 pt-4 first:border-t-0 first:pt-0">{children}</div>
   );
 }
 
@@ -56,12 +56,15 @@ export function ShotSection({
   title,
   icon,
   htmlFor,
+  afterTitle,
   actions,
   children,
 }: {
   title: string;
   icon?: ReactNode;
   htmlFor?: string;
+  /** Right next to the title (e.g. an icon button that belongs to it); `actions` sit at the far right. */
+  afterTitle?: ReactNode;
   actions?: ReactNode;
   children: ReactNode;
 }) {
@@ -80,6 +83,7 @@ export function ShotSection({
       <div className="flex min-h-7 items-center gap-1.5">
         {icon ? <span className="flex text-muted-foreground">{icon}</span> : null}
         {heading}
+        {afterTitle}
         {actions ? <div className="ml-auto flex items-center gap-1">{actions}</div> : null}
       </div>
       {children}
