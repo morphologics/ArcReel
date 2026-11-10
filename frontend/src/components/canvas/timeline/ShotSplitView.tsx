@@ -13,6 +13,7 @@ import { stepAnchor } from "@/utils/move-anchor";
 import { RetainedEditUnit } from "@/components/shared/edit-unit/RetainedEditUnit";
 import { useConfirmLeave } from "@/components/shared/edit-unit/LeaveGuard";
 import { ShotList } from "./ShotList";
+import { ShotStrip } from "./ShotStrip";
 import { ShotDetail, type ShotEditHandle } from "./ShotDetail";
 import { ShotShortcutHint } from "./ShotShortcutHint";
 import type { InsertShotHandler } from "./ShotStructureActions";
@@ -66,7 +67,8 @@ interface Selection {
 }
 
 /**
- * 分镜分屏：左侧分镜列表（220px，可收为 44px）+ 右侧分镜详情。
+ * 分镜分屏：上方横向分镜条（整部作品按集连在一起，见 ShotStrip）+ 下方全宽的分镜详情。
+ * Reorder mode swaps the strip for the vertical list with drag handles (left, 220px) beside the detail.
  * 切换分镜经离开拦截：当前分镜有未保存修改时先询问。J / K 切换分镜，⌘S / Ctrl+S 保存当前分镜。
  */
 export function ShotSplitView({
@@ -96,7 +98,8 @@ export function ShotSplitView({
 }: ShotSplitViewProps) {
   const { t } = useTranslation("common");
   const [selection, setSelection] = useState<Selection>({ id: null, index: 0 });
-  const [collapsed, setCollapsed] = useState(false);
+  // Reorder mode: the vertical list with drag handles instead of the strip (reordering is rare).
+  const [reorderMode, setReorderMode] = useState(false);
   const [movePending, setMovePending] = useState(false);
   const [structurePending, setStructurePending] = useState(false);
   const rootRef = useRef<HTMLDivElement>(null);
@@ -211,25 +214,45 @@ export function ShotSplitView({
     <div
       ref={rootRef}
       className={cn(
-        "grid h-full min-h-0 min-w-0 grid-rows-[minmax(0,1fr)]",
-        collapsed ? "grid-cols-[44px_minmax(0,1fr)]" : "grid-cols-[220px_minmax(0,1fr)]",
+        "h-full min-h-0 min-w-0",
+        reorderMode
+          ? "grid grid-cols-[220px_minmax(0,1fr)] grid-rows-[minmax(0,1fr)]"
+          : "flex flex-col",
       )}
     >
-      <ShotList
-        segments={segments}
-        selectedIndex={safeIndex}
-        onSelect={select}
-        contentMode={contentMode}
-        projectName={projectName}
-        aspectRatio={aspectRatio}
-        collapsed={collapsed}
-        onToggleCollapse={() => setCollapsed((c) => !c)}
-        onAppend={handleInsertShot}
-        appendDisabled={structurePending || movePending}
-        onMove={handleMoveShot}
-        moveDisabled={structurePending || movePending}
-        footer={<ShotShortcutHint canSave={Boolean(onUpdatePrompt)} />}
-      />
+      {reorderMode ? (
+        <ShotList
+          segments={segments}
+          selectedIndex={safeIndex}
+          onSelect={select}
+          contentMode={contentMode}
+          projectName={projectName}
+          aspectRatio={aspectRatio}
+          collapsed={false}
+          onToggleCollapse={() => setReorderMode(false)}
+          onAppend={handleInsertShot}
+          appendDisabled={structurePending || movePending}
+          onMove={handleMoveShot}
+          moveDisabled={structurePending || movePending}
+          footer={<ShotShortcutHint canSave={Boolean(onUpdatePrompt)} />}
+        />
+      ) : (
+        <ShotStrip
+          segments={segments}
+          selectedIndex={safeIndex}
+          onSelect={select}
+          contentMode={contentMode}
+          projectName={projectName}
+          episode={episode}
+          aspectRatio={aspectRatio}
+          onAppend={handleInsertShot}
+          appendDisabled={structurePending || movePending}
+          onReorderMode={handleMoveShot ? () => setReorderMode(true) : undefined}
+          trailing={<ShotShortcutHint canSave={Boolean(onUpdatePrompt)} />}
+        />
+      )}
+      {/* the detail fills what the strip leaves (strip mode) or its grid cell (reorder mode) */}
+      <div className={cn("flex min-h-0 min-w-0 flex-col", !reorderMode && "flex-1")}>
       <RetainedEditUnit identity={segmentId ?? "missing"} value={
       segmentId !== undefined && segment ? <ShotDetail
         key={segmentId}
@@ -268,6 +291,7 @@ export function ShotSplitView({
       } message={t("dashboard:shot_externally_removed")}>
         {(detail) => detail}
       </RetainedEditUnit>
+      </div>
     </div>
   );
 }

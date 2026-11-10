@@ -87,6 +87,8 @@ describe("ShotSplitView 改序", () => {
   it("拖拽改序成功后选中仍跟随原来的分镜", async () => {
     const onMoveShot = vi.fn().mockResolvedValue(true);
     const { rerender } = render(view(segments("E1S01", "E1S02", "E1S03"), { onMoveShot }));
+    // reordering lives in reorder mode (the list with drag handles), not on the strip
+    fireEvent.click(screen.getByRole("button", { name: "调整分镜顺序（带拖动把手的列表）" }));
 
     await act(async () => {
       fireEvent.click(screen.getByRole("button", { name: "drag-last-to-front" }));
