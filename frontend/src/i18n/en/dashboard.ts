@@ -2537,6 +2537,7 @@ export default {
   'shot_shortcut_switch': 'Switch shot',
   'shot_shortcut_save': 'Save',
   'shot_notes_button': 'Notes',
+  'shot_notes_add': 'Add note',
   'shot_notes_placeholder': 'Notes for {{id}}: references, revisions, todos…',
   'shot_notes_title': 'Notes',
   'detail_section_dialogue': 'Dialogue',

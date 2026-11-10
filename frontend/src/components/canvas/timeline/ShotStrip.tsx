@@ -5,7 +5,6 @@ import {
   useRef,
   type MouseEvent,
   type PointerEvent,
-  type ReactNode,
   type WheelEvent,
 } from "react";
 import { useTranslation } from "react-i18next";
@@ -46,8 +45,6 @@ interface ShotStripProps {
   appendDisabled?: boolean;
   /** Switch to reorder mode (the vertical list with drag handles); without it there is no button. */
   onReorderMode?: () => void;
-  /** Shown at the right end of the strip (the keyboard shortcut hint). */
-  trailing?: ReactNode;
 }
 
 interface StripEpisode {
@@ -93,7 +90,6 @@ export function ShotStrip({
   onAppend,
   appendDisabled = false,
   onReorderMode,
-  trailing,
 }: ShotStripProps) {
   const { t } = useTranslation("dashboard");
   // The episode records themselves (not the display ledger): the strip needs each one's script file.
@@ -310,9 +306,6 @@ export function ShotStrip({
           </section>
         ))}
       </div>
-      {trailing ? (
-        <div className="flex shrink-0 flex-col justify-end border-l border-border/50">{trailing}</div>
-      ) : null}
     </nav>
   );
 }

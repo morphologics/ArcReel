@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useId, useMemo, useState, type RefObject } from "react";
 import { useTranslation } from "react-i18next";
-import { AlertTriangle, Film, ImageIcon, Timer } from "lucide-react";
+import { AlertTriangle, Film, ImageIcon, StickyNote, Timer, Wand2 } from "lucide-react";
+import { DropdownMenuItem } from "@/components/ui/dropdown-menu";
+import { ImageEditDialog } from "./ImageEditButton";
 import type { DurationOutOfRangeReason } from "@/hooks/useModelCapabilities";
 import type {
   NarrationSegment,
@@ -548,6 +550,9 @@ export function ShotDetail({
   const hasNarrationText = narrationText.trim().length > 0;
 
   const [restoringMedia, setRestoringMedia] = useState(false);
+  // opened from the storyboard image's right-click menu (the buttons open them too)
+  const [notesOpen, setNotesOpen] = useState(false);
+  const [imageEditOpen, setImageEditOpen] = useState(false);
   const [uploadingKind, setUploadingKind] = useState<"storyboard" | "video" | null>(null);
   const [endFrameSubmitting, setEndFrameSubmitting] = useState(false);
   const handleUpload = async (kind: "storyboard" | "video", file: File) => {
@@ -996,13 +1001,39 @@ export function ShotDetail({
       beforeInsert={
         // 备注只有落库才有意义：只读展示下不给入口，免得输入的备注静默丢弃
         readOnly ? null : (
-          <NotesDrawer shotId={segmentId} value={fields.note} onChange={(note) => setField("note", note)} />
+          <NotesDrawer
+            shotId={segmentId}
+            value={fields.note}
+            onChange={(note) => setField("note", note)}
+            open={notesOpen}
+            onOpenChange={setNotesOpen}
+          />
         )
       }
     />
   );
 
   const durationBusy = !!generatingStoryboard || !!generatingVideo;
+  // Right-click menu on the storyboard image: the same note and edit-region actions as the title row's buttons.
+  const imageEditBusy = !!generatingStoryboard || uploadingKind !== null || restoringMedia;
+  const canEditImage = !readOnly && Boolean(scriptFile);
+  const imageMenuItems = readOnly ? undefined : (
+    <>
+      <DropdownMenuItem onClick={() => setNotesOpen(true)}>
+        <StickyNote aria-hidden />
+        {t("shot_notes_add")}
+      </DropdownMenuItem>
+      {canEditImage && (
+        <DropdownMenuItem
+          disabled={imageEditBusy || !assets?.storyboard_image}
+          onClick={() => setImageEditOpen(true)}
+        >
+          <Wand2 aria-hidden />
+          {t("image_edit_action")}
+        </DropdownMenuItem>
+      )}
+    </>
+  );
   // The shot's facts (duration, status, chapter break): in the shot header, or (minimal header, under the
   // storyboard strip) with the position, centred in the storyboard image's title row.
   const shotMeta = (
@@ -1053,6 +1084,7 @@ export function ShotDetail({
       generateDisabled={editBusy || refreshPending}
       generateDisabledHint={savingHint}
       leadingActions={minimalHeader ? structureActions : undefined}
+      contextMenuItems={imageMenuItems}
       centerContent={
         minimalHeader ? (
           <>
@@ -1144,6 +1176,18 @@ export function ShotDetail({
 
   return (
     <>
+      {canEditImage && (
+        <ImageEditDialog
+          projectName={projectName}
+          resourceType="storyboard"
+          resourceId={segmentId}
+          scriptFile={scriptFile}
+          hasImage={Boolean(assets?.storyboard_image)}
+          busy={imageEditBusy}
+          open={imageEditOpen}
+          onOpenChange={setImageEditOpen}
+        />
+      )}
       <ShotDetailLayout
         header={header}
         footer={<UnsavedChangesBar unit={unit} busy={formSwitching !== null} className="mx-5 my-3 shrink-0" />}

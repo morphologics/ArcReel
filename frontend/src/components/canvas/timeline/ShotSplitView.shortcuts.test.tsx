@@ -16,7 +16,7 @@ afterEach(() => {
   useProjectsStore.setState(useProjectsStore.getInitialState(), true);
 });
 
-function renderView(onUpdatePrompt = vi.fn().mockResolvedValue(true)) {
+function renderView(onUpdatePrompt = vi.fn().mockResolvedValue(true), onMoveShot?: () => Promise<boolean>) {
   // 分镜视图展示的是项目里的正式剧本，称呼分镜时按它在剧本里的位置
   useProjectsStore.setState({
     currentScripts: { "episode_1.json": { episode: 1, content_mode: "narration", segments } as never },
@@ -30,6 +30,7 @@ function renderView(onUpdatePrompt = vi.fn().mockResolvedValue(true)) {
         projectName="demo"
         scriptFile="episode_1.json"
         onUpdatePrompt={onUpdatePrompt}
+        onMoveShot={onMoveShot}
         durationOptions={[8]}
       />
     </LeaveGuardProvider>,
@@ -123,7 +124,9 @@ describe("ShotSplitView 切换拦截与快捷键", () => {
   });
 
   it("分镜列表底部常驻快捷键提示", () => {
-    renderView();
+    renderView(undefined, vi.fn().mockResolvedValue(true));
+    // the hint lives in reorder mode's list (the strip has no room for it)
+    fireEvent.click(screen.getByRole("button", { name: "调整分镜顺序（带拖动把手的列表）" }));
 
     const list = screen.getByRole("navigation", { name: "分镜列表" });
     expect(within(list).getByText("切换分镜")).toBeInTheDocument();

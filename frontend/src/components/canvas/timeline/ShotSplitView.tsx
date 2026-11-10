@@ -248,7 +248,6 @@ export function ShotSplitView({
           onAppend={handleInsertShot}
           appendDisabled={structurePending || movePending}
           onReorderMode={handleMoveShot ? () => setReorderMode(true) : undefined}
-          trailing={<ShotShortcutHint canSave={Boolean(onUpdatePrompt)} />}
         />
       )}
       {/* the detail fills what the strip leaves (strip mode) or its grid cell (reorder mode) */}

@@ -1,4 +1,6 @@
 import { useRef, useState, type ReactNode } from "react";
+import { ContextMenu } from "@base-ui/react/context-menu";
+import { DropdownMenuContent } from "@/components/ui/dropdown-menu";
 import { isResourceBusy } from "@/stores/tasks-store";
 import { Sparkles, ImageIcon, Film } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -62,6 +64,8 @@ interface MediaCardProps {
   leadingActions?: ReactNode;
   /** Centred in the title row between the title and the buttons (the shot's position and facts). */
   centerContent?: ReactNode;
+  /** Items of the right-click menu on the storyboard image (DropdownMenuItem elements); no menu when absent. */
+  contextMenuItems?: ReactNode;
 }
 
 const UPLOAD_ACCEPT: Record<MediaKind, string> = {
@@ -86,6 +90,7 @@ export function MediaCard({
   onUpload,
   leadingActions,
   centerContent,
+  contextMenuItems,
   uploading,
   uploadDisabled,
   editScriptFile,
@@ -185,19 +190,21 @@ export function MediaCard({
 
       {assetUrl ? (
         kind === "storyboard" ? (
-          <PreviewableImageFrame src={assetUrl} alt={`${itemLabel} ${title}`}>
-            <AspectFrame ratio={aspectRatio}>
-              <img
-                src={assetUrl}
-                srcSet={storyboardSrcSet}
-                sizes="(min-width: 1280px) 720px, 640px"
-                alt={`${itemLabel} ${title}`}
-                loading="lazy"
-                decoding="async"
-                className="size-full object-cover"
-              />
-            </AspectFrame>
-          </PreviewableImageFrame>
+          <ImageContextMenu items={contextMenuItems}>
+            <PreviewableImageFrame src={assetUrl} alt={`${itemLabel} ${title}`}>
+              <AspectFrame ratio={aspectRatio}>
+                <img
+                  src={assetUrl}
+                  srcSet={storyboardSrcSet}
+                  sizes="(min-width: 1280px) 720px, 640px"
+                  alt={`${itemLabel} ${title}`}
+                  loading="lazy"
+                  decoding="async"
+                  className="size-full object-cover"
+                />
+              </AspectFrame>
+            </PreviewableImageFrame>
+          </ImageContextMenu>
         ) : (
           <div className="overflow-hidden rounded-lg ring-1 ring-border">
             <AspectFrame ratio={aspectRatio}>
@@ -241,5 +248,16 @@ export function MediaCard({
         </Button>
       )}
     </div>
+  );
+}
+
+/** Right-click menu on the storyboard image (alternative to the title row's buttons); plain children without items. */
+function ImageContextMenu({ items, children }: { items?: ReactNode; children: ReactNode }) {
+  if (!items) return <>{children}</>;
+  return (
+    <ContextMenu.Root>
+      <ContextMenu.Trigger render={<div />}>{children}</ContextMenu.Trigger>
+      <DropdownMenuContent className="w-auto min-w-40">{items}</DropdownMenuContent>
+    </ContextMenu.Root>
   );
 }

@@ -2536,6 +2536,7 @@ export default {
   'shot_shortcut_switch': '切换分镜',
   'shot_shortcut_save': '保存',
   'shot_notes_button': '备注',
+  'shot_notes_add': '添加备注',
   'shot_notes_placeholder': '关于 {{id}} 的备注：参考、修改方向、TODO…',
   'shot_notes_title': '备注',
   'detail_section_dialogue': '对话',

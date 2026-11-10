@@ -2500,6 +2500,7 @@ export default {
   'shot_list_collapse': 'Thu gọn danh sách cảnh quay',
   'shot_list_expand': 'Mở danh sách cảnh quay',
   'shot_notes_button': 'Ghi chú',
+  'shot_notes_add': 'Thêm ghi chú',
   'shot_notes_placeholder': 'Ghi chú cho {{id}}: tham chiếu, chỉnh sửa, việc cần làm…',
   'shot_notes_title': 'Ghi chú',
   'shot_search_placeholder': 'Tìm cảnh quay…',

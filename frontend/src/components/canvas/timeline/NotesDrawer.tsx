@@ -13,20 +13,23 @@ interface NotesDrawerProps {
   value: string;
   /** 输入即写入分镜的未保存修改，由分镜详情统一保存 */
   onChange: (value: string) => void;
+  /** Controlled open state (e.g. opened from the storyboard image's right-click menu); uncontrolled when absent. */
+  open?: boolean;
+  onOpenChange?: (open: boolean) => void;
 }
 
 /**
  * 分镜备注：页头行尾的图标按钮打开弹层。备注是分镜的字段，输入写进分镜的未保存修改，
  * 与提示词一起由提示条保存或放弃。有备注时按钮带一个小圆点。
  */
-export function NotesDrawer({ shotId, value, onChange }: NotesDrawerProps) {
+export function NotesDrawer({ shotId, value, onChange, open, onOpenChange }: NotesDrawerProps) {
   const { t } = useTranslation("dashboard");
   const itemLabel = useItemPositionLabel(shotId);
   const titleId = useId();
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   return (
-    <Popover>
+    <Popover open={open} onOpenChange={onOpenChange ? (next) => onOpenChange(next) : undefined}>
       <PopoverTrigger
         render={<Button variant="ghost" size="icon-sm" className="relative" aria-label={t("shot_notes_button")} />}
       >
