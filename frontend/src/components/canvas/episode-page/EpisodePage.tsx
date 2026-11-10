@@ -6,6 +6,7 @@ import { useConfirmLeave } from "@/components/shared/edit-unit/LeaveGuard";
 import { RetainedEditUnit } from "@/components/shared/edit-unit/RetainedEditUnit";
 import { EPISODE_VIEW_PARAM } from "@/app-routes";
 import { EditTimelineEmptyState } from "@/components/canvas/edit-render/EditTimelineEmptyState";
+import { EpisodeRenderShortcut } from "@/components/canvas/edit-render/EpisodeRenderShortcut";
 import { RenderButton } from "@/components/canvas/edit-render/RenderButton";
 import { EpisodeSourceReview } from "@/components/canvas/EpisodeSourceReview";
 import { AdScriptHost } from "@/components/canvas/shared/AdScriptDialog";
@@ -146,6 +147,8 @@ function EpisodePageContent({
   );
 
   const ttsNarration = projectData?.narration_delivery === "use_tts";
+  // prefix of the final cut's download name: project title and episode (RenderDialog adds timeline, version, time)
+  const renderFileStem = `${projectData?.title || projectName} - E${episode}`;
   let body: ReactNode;
   if (view === "edit") {
     body = (
@@ -168,6 +171,7 @@ function EpisodePageContent({
                   issues={issues}
                   narrationAvailable={ttsNarration}
                   onShowIssues={showIssues}
+                  fileStem={renderFileStem}
                 />
               </EpisodeHeaderActions>
             )
@@ -227,6 +231,18 @@ function EpisodePageContent({
           boardLabel={t(route === "reference_video" ? "episode_view_units" : "episode_view_board")}
           onActionsSlot={setActionsSlot}
         />
+        {/* Render shortcut on the views other than Edit (the Edit view places its own via EditTimelineView) */}
+        {!demo && view !== "edit" && (
+          <EpisodeHeaderActions>
+            <EpisodeRenderShortcut
+              projectName={projectName}
+              episode={episode}
+              narrationAvailable={ttsNarration}
+              fileStem={renderFileStem}
+              onShowIssues={() => changeView("edit")}
+            />
+          </EpisodeHeaderActions>
+        )}
         {!demo && (
           <>
             <TextTaskFailureNote projectName={projectName} episode={episode} isAd={isAd} hasScript={hasScript} />

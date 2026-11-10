@@ -16,6 +16,10 @@ interface RenderButtonProps {
   narrationAvailable: boolean;
   /** 打开剪辑视图的「问题」列表。 */
   onShowIssues: () => void;
+  /** Prefix of the final cut's download name (e.g. "Project title - E1"), see RenderDialog. */
+  fileStem?: string;
+  /** Called after the render dialog closes (e.g. to re-read the timeline's issues). */
+  onDialogClose?: () => void;
 }
 
 /**
@@ -31,6 +35,8 @@ export function RenderButton({
   issues,
   narrationAvailable,
   onShowIssues,
+  fileStem,
+  onDialogClose,
 }: RenderButtonProps) {
   const { t } = useTranslation("dashboard");
   const [open, setOpen] = useState(false);
@@ -64,12 +70,16 @@ export function RenderButton({
       </span>
       <RenderDialog
         open={open}
-        onClose={() => setOpen(false)}
+        onClose={() => {
+          setOpen(false);
+          onDialogClose?.();
+        }}
         projectName={projectName}
         timelineId={timelineId}
         timelineName={timelineName}
         issues={issues}
         narrationAvailable={narrationAvailable}
+        fileStem={fileStem}
       />
     </div>
   );

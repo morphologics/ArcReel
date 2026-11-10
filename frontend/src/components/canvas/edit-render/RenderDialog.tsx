@@ -11,7 +11,7 @@ import { Label } from "@/components/ui/label";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { errMsg } from "@/utils/async";
 import { formatRelativeTime, isJustNow } from "@/utils/date-format";
-import { triggerBrowserDownload } from "@/utils/download";
+import { saveDownloadAs, triggerBrowserDownload } from "@/utils/download";
 import type {
   EditTimelineIssueRef,
   JianyingVersion,
@@ -21,6 +21,7 @@ import type {
   TaskItem,
 } from "@/types";
 import type { TimelineNarration } from "@/types/edit-timeline";
+import { finalCutFileName } from "./render-file-name";
 import { useBlockedReason } from "./useBlockedReason";
 import { useRenderArtifact, type RenderArtifactView } from "./useRenderArtifact";
 
@@ -44,6 +45,8 @@ interface RenderDialogProps {
   issues: readonly EditTimelineIssueRef[];
   /** 项目用 TTS 配音时可以选旁白版本；否则只出不带旁白版本。 */
   narrationAvailable: boolean;
+  /** Prefix of the final cut's download name (e.g. "Project title - E1"); the timeline name, version and render time follow. Without it: the timeline name only. */
+  fileStem?: string;
 }
 
 /**
@@ -61,6 +64,7 @@ export function RenderDialog({
   timelineName,
   issues,
   narrationAvailable,
+  fileStem,
 }: RenderDialogProps) {
   const { t } = useTranslation("dashboard");
   const [kind, setKind] = useState<RenderKind>("final_cut");
@@ -95,6 +99,7 @@ export function RenderDialog({
             projectName={projectName}
             timelineId={timelineId}
             timelineName={timelineName}
+            fileStem={fileStem}
             kind={kind}
             onKindChange={setKind}
             narration={narrationAvailable ? narration : null}
@@ -119,6 +124,7 @@ function RenderPanel({
   projectName,
   timelineId,
   timelineName,
+  fileStem,
   kind,
   onKindChange,
   narration,
@@ -135,6 +141,7 @@ function RenderPanel({
   projectName: string;
   timelineId: string;
   timelineName: string;
+  fileStem?: string;
   kind: RenderKind;
   onKindChange: (kind: RenderKind) => void;
   /** 所选旁白版本；项目不能选旁白版本时为 null，按不带旁白版本出片。 */
@@ -183,8 +190,19 @@ function RenderPanel({
     if (!artifact || !canDownload) return;
     setDownloadError(null);
     if (!isDraft) {
-      const url = "download_url" in artifact ? artifact.download_url : null;
-      if (url) triggerBrowserDownload(url, `${timelineName}.mp4`);
+      if (!("download_url" in artifact) || !artifact.download_url) return;
+      const name = finalCutFileName(fileStem, timelineName, artifact.narration, artifact.subtitles, artifact.rendered_at);
+      const url = artifact.download_url;
+      // open the save dialog synchronously (only a click can open it); keep the dialog open while the file is written
+      const saving = saveDownloadAs(url, name);
+      setDownloading(true);
+      try {
+        await saving;
+      } catch (err) {
+        setDownloadError(errMsg(err));
+      } finally {
+        setDownloading(false);
+      }
       return;
     }
     const root = draftPath.trim();

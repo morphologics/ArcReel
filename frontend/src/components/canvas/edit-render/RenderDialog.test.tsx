@@ -6,6 +6,7 @@ import { useAppStore } from "@/stores/app-store";
 import { useProjectsStore } from "@/stores/projects-store";
 import type { EditTimelineIssueRef, EpisodeScript, FinalCutStatus, JianyingDraftStatus, TaskItem } from "@/types";
 import { RenderButton } from "./RenderButton";
+import { finalCutFileName } from "./render-file-name";
 import { RenderDialog } from "./RenderDialog";
 
 function finalCut(overrides: Partial<FinalCutStatus> = {}): FinalCutStatus {
@@ -435,5 +436,18 @@ describe("RenderButton", () => {
     const dialog = await screen.findByRole("dialog", { name: "出片 · 初剪" });
     expect(within(dialog).queryByRole("combobox", { name: /剪辑时间线/ })).not.toBeInTheDocument();
     expect(API.getFinalCutStatus).toHaveBeenCalledWith("demo", "tl-1", expect.anything());
+  });
+});
+
+describe("finalCutFileName", () => {
+  it("prefix, timeline name, non-default version tags and render time (local)", () => {
+    const at = new Date(2026, 10, 10, 1, 42).toISOString();
+    expect(finalCutFileName("Broken Mirror - E1", "初剪", "with_narration", "no_subtitles", at)).toBe(
+      "Broken Mirror - E1 - 初剪 - narration - no subtitles - 20261110-0142.mp4",
+    );
+  });
+
+  it("timeline name only without prefix and render time", () => {
+    expect(finalCutFileName(undefined, "初剪", "without_narration", "burned_subtitles", null)).toBe("初剪.mp4");
   });
 });
