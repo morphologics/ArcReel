@@ -31,6 +31,8 @@ function DisabledViewTab({ view, label }: { view: EpisodeView; label: string }) 
 /**
  * 集页页头，两行共约 85px：第一行是集头与行尾的制作进度入口，第二行是视图 tab 与当前视图的动作插槽。
  * 动作由各视图经 `EpisodeHeaderActions` 放进插槽，页头不认识具体动作。
+ * `compact`: one 44px row (head, view tabs, action slot, progress) for views that need the height for
+ * their own content, such as the Edit view's player.
  */
 export function EpisodePageHeader({
   head,
@@ -40,6 +42,7 @@ export function EpisodePageHeader({
   onViewChange,
   boardLabel,
   onActionsSlot,
+  compact = false,
 }: {
   head: ReactNode;
   /** 制作进度入口；演示项目没有。 */
@@ -50,6 +53,8 @@ export function EpisodePageHeader({
   /** 「分镜」tab 的名称：参考生视频项目称「视频单元」。 */
   boardLabel: string;
   onActionsSlot: (node: HTMLDivElement | null) => void;
+  /** One row instead of two (see above). */
+  compact?: boolean;
 }) {
   const { t } = useTranslation("dashboard");
   const label: Record<EpisodeView, string> = {
@@ -59,6 +64,35 @@ export function EpisodePageHeader({
     board: boardLabel,
     edit: t("episode_view_edit"),
   };
+  const viewTabs = (
+    <Tabs value={view} onValueChange={(next: EpisodeView) => onViewChange(next)} className="shrink-0">
+      <TabsList aria-label={t("episode_view_aria")}>
+        {tabs.map((tab) =>
+          tab.disabled ? (
+            <DisabledViewTab key={tab.view} view={tab.view} label={label[tab.view]} />
+          ) : (
+            <TabsTrigger key={tab.view} value={tab.view} id={episodeViewTabId(tab.view)}>
+              {label[tab.view]}
+            </TabsTrigger>
+          ),
+        )}
+      </TabsList>
+    </Tabs>
+  );
+  if (compact) {
+    return (
+      <header className="shrink-0 border-b border-border">
+        <div className="flex h-11 items-center gap-3 px-3">
+          {head}
+          {viewTabs}
+          <div className="relative flex min-w-0 shrink overflow-x-auto scroll-fade-x">
+            <div ref={onActionsSlot} className="ml-auto flex shrink-0 items-center gap-1.5" />
+          </div>
+          {progress}
+        </div>
+      </header>
+    );
+  }
   return (
     <header className="shrink-0 border-b border-border">
       <div className="flex h-11 items-center gap-3 px-4">
@@ -66,19 +100,7 @@ export function EpisodePageHeader({
         {progress}
       </div>
       <div className="flex h-10 items-center gap-3 px-4">
-        <Tabs value={view} onValueChange={(next: EpisodeView) => onViewChange(next)} className="shrink-0">
-          <TabsList aria-label={t("episode_view_aria")}>
-            {tabs.map((tab) =>
-              tab.disabled ? (
-                <DisabledViewTab key={tab.view} view={tab.view} label={label[tab.view]} />
-              ) : (
-                <TabsTrigger key={tab.view} value={tab.view} id={episodeViewTabId(tab.view)}>
-                  {label[tab.view]}
-                </TabsTrigger>
-              ),
-            )}
-          </TabsList>
-        </Tabs>
+        {viewTabs}
         {/* 动作多到放不下时横向滚动；插槽靠右，溢出时从左端开始滚，不裁掉第一个动作。 */}
         <div className="relative flex min-w-0 flex-1 overflow-x-auto scroll-fade-x">
           <div ref={onActionsSlot} className="ml-auto flex shrink-0 items-center gap-1.5" />

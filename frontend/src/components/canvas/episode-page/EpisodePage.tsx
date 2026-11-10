@@ -230,6 +230,8 @@ function EpisodePageContent({
           onViewChange={changeView}
           boardLabel={t(route === "reference_video" ? "episode_view_units" : "episode_view_board")}
           onActionsSlot={setActionsSlot}
+          // the Edit view needs the height for its player
+          compact={view === "edit"}
         />
         {/* Render shortcut on the views other than Edit (the Edit view places its own via EditTimelineView) */}
         {!demo && view !== "edit" && (

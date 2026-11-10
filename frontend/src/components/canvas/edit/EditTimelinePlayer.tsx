@@ -31,6 +31,8 @@ interface EditTimelinePlayerProps {
 /**
  * 播放画面与播放控制：两个 `<video>` 叠放，只显示当前那一个；字幕按剪映草稿的样式比例叠在画面上。
  * 画面按所在格子的宽高缩放：舞台是尺寸容器，画框取「容器宽」与「容器高 × 画幅比」中较小的一个。
+ * The play controls sit over the bottom of the picture (shown while paused, on hover and on keyboard focus)
+ * instead of in a row below it, so the picture gets that height too.
  */
 export function EditTimelinePlayer({
   plan,
@@ -59,7 +61,7 @@ export function EditTimelinePlayer({
           role="region"
           aria-label={t("edit_view_player_aria")}
           className={cn(
-            "@container-size relative overflow-hidden rounded-lg bg-black",
+            "group/player @container-size relative overflow-hidden rounded-lg bg-black",
             portrait
               ? "aspect-[9/16] w-[min(100cqw,calc(100cqh*9/16))]"
               : "aspect-video w-[min(100cqw,calc(100cqh*16/9))]",
@@ -117,6 +119,34 @@ export function EditTimelinePlayer({
               )}
             </div>
           )}
+          <div
+            data-testid="edit-player-controls"
+            className={cn(
+              "absolute inset-x-0 bottom-0 flex items-center gap-3 bg-linear-to-t from-black/75 to-transparent px-3 pt-6 pb-2 transition-opacity duration-fast",
+              playback.playing &&
+                "opacity-0 group-hover/player:opacity-100 group-focus-within/player:opacity-100",
+            )}
+          >
+            <Button
+              size="icon-sm"
+              onClick={playback.toggle}
+              disabled={plan.segments.length === 0}
+              aria-label={playback.playing ? t("edit_view_pause") : t("edit_view_play")}
+            >
+              {playback.playing ? <Pause aria-hidden /> : <Play aria-hidden />}
+            </Button>
+            <span className="text-sm text-subtle-foreground tabular-nums">
+              <span data-testid="edit-playback-clock">{formatClock(playback.t)}</span>{" "}
+              <span className="text-muted-foreground">/ {formatClock(plan.duration)}</span>
+            </span>
+            <span className="text-xs text-muted-foreground">
+              {t("edit_view_clip_count", { count: plan.segments.length })}
+            </span>
+            <Toggle size="sm" pressed={showSubtitles} onPressedChange={onToggleSubtitles} className="ml-auto">
+              <Captions data-icon="inline-start" aria-hidden />
+              {t("edit_view_subtitles_toggle")}
+            </Toggle>
+          </div>
           {playback.buffering && (
             <span
               role="status"
@@ -127,27 +157,6 @@ export function EditTimelinePlayer({
             </span>
           )}
         </div>
-      </div>
-      <div className="flex shrink-0 items-center gap-3">
-        <Button
-          size="icon-sm"
-          onClick={playback.toggle}
-          disabled={plan.segments.length === 0}
-          aria-label={playback.playing ? t("edit_view_pause") : t("edit_view_play")}
-        >
-          {playback.playing ? <Pause aria-hidden /> : <Play aria-hidden />}
-        </Button>
-        <span className="text-sm text-subtle-foreground tabular-nums">
-          <span data-testid="edit-playback-clock">{formatClock(playback.t)}</span>{" "}
-          <span className="text-muted-foreground">/ {formatClock(plan.duration)}</span>
-        </span>
-        <span className="text-xs text-muted-foreground">
-          {t("edit_view_clip_count", { count: plan.segments.length })}
-        </span>
-        <Toggle size="sm" pressed={showSubtitles} onPressedChange={onToggleSubtitles} className="ml-auto">
-          <Captions data-icon="inline-start" aria-hidden />
-          {t("edit_view_subtitles_toggle")}
-        </Toggle>
       </div>
       {(playback.blocked || hasTransitions) && (
         <div className="flex shrink-0 flex-col gap-1 text-xs">

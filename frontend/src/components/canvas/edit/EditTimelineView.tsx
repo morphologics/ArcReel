@@ -1,6 +1,21 @@
-import { useCallback, useEffect, useId, useMemo, useState, type ReactNode } from "react";
+import {
+  useCallback,
+  useEffect,
+  useId,
+  useMemo,
+  useRef,
+  useState,
+  type CSSProperties,
+  type KeyboardEvent,
+  type PointerEvent,
+  type ReactNode,
+  type RefObject,
+} from "react";
+import { PanelRightClose, PanelRightOpen } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { useParams, useSearchParams } from "wouter";
+
+import { cn } from "cn";
 
 import { API } from "@/api";
 import { TruncatedText } from "@/components/shared/TruncatedText";
@@ -128,10 +143,11 @@ export function EditTimelineView({
     setChosenId(null);
     setRetry((n) => n + 1);
   }, []);
+  // Bumped when the issue list must be shown while the details column is folded away.
+  const [issuesRequest, setIssuesRequest] = useState(0);
   const showIssues = useCallback(() => {
-    const heading = document.getElementById(ISSUE_LIST_HEADING_ID);
-    heading?.scrollIntoView({ block: "nearest", behavior: "smooth" });
-    heading?.focus({ preventScroll: true });
+    if (focusIssueList()) return;
+    setIssuesRequest((n) => n + 1);
   }, []);
 
   useEffect(() => {
@@ -248,7 +264,7 @@ export function EditTimelineView({
   // 整个视图不滚动：标签行固定高度，下方的播放器、详情栏与轨道分掉剩余高度，只有详情栏自己滚动。
   return (
     <div className="@container-size/edit-view flex h-full min-h-0 flex-col">
-      <div className="flex h-12 shrink-0 items-center gap-2 px-4 edit-short:h-10">
+      <div className="flex h-10 shrink-0 items-center gap-2 px-3">
         {/* 剪辑时间线多、名称长时标签横向滚动，不把标签行撑高 */}
         <div className="relative flex min-w-0 overflow-x-auto scroll-fade-x">
           {/* 方向键移动焦点即切换：切换标签只换预览内容，不卸载别的东西 */}
@@ -284,7 +300,7 @@ export function EditTimelineView({
         id={panelId}
         aria-labelledby={tabId(selected.id)}
         // 播放器、详情栏与轨道固定深色：浅底会干扰对画面明暗的判断
-        className="dark flex min-h-0 flex-1 flex-col bg-background px-4 pb-4 text-foreground edit-short:pb-2"
+        className="dark flex min-h-0 flex-1 flex-col bg-background px-2 pb-2 text-foreground"
       >
         {current && "value" in current ? (
           <TimelinePreview
@@ -297,6 +313,7 @@ export function EditTimelineView({
             ttsNarration={ttsNarration}
             seekRequest={jump && (jump.timelineId === null || jump.timelineId === selected.id) ? jump : null}
             onSeekHandled={handleJumpApplied}
+            issuesRequest={issuesRequest}
           />
         ) : current && "error" in current ? (
           <LoadFailed message={current.error} onRetry={reload} />
@@ -318,6 +335,110 @@ interface TimelinePreviewProps {
   /** 链接要求定位的位置；处理完调用 `onSeekHandled`。 */
   seekRequest: LinkJump | null;
   onSeekHandled: () => void;
+  /** Counter from the actions area's "show issues": open the details column and focus the issue list. */
+  issuesRequest: number;
+}
+
+/** Scroll to the issue list heading and focus it; false when the list is not rendered (details folded away). */
+function focusIssueList(): boolean {
+  const heading = document.getElementById(ISSUE_LIST_HEADING_ID);
+  if (!heading) return false;
+  heading.scrollIntoView({ block: "nearest", behavior: "smooth" });
+  heading.focus({ preventScroll: true });
+  return true;
+}
+
+// The timeline's height is the viewer's choice, kept per browser: null = its natural height.
+const TIMELINE_HEIGHT_KEY = "arcreel.editTimeline.height";
+const TIMELINE_MIN_HEIGHT = 72;
+/** The player keeps at least this much height when the timeline is dragged up. */
+const PLAYER_MIN_HEIGHT = 160;
+const TIMELINE_KEY_STEP = 16;
+
+function readTimelineHeight(): number | null {
+  try {
+    const raw = localStorage.getItem(TIMELINE_HEIGHT_KEY);
+    const value = raw === null ? Number.NaN : Number(raw);
+    return Number.isFinite(value) && value >= TIMELINE_MIN_HEIGHT ? value : null;
+  } catch {
+    return null;
+  }
+}
+
+function saveTimelineHeight(value: number | null) {
+  try {
+    if (value === null) localStorage.removeItem(TIMELINE_HEIGHT_KEY);
+    else localStorage.setItem(TIMELINE_HEIGHT_KEY, String(Math.round(value)));
+  } catch {
+    // storage blocked: the height simply isn't remembered
+  }
+}
+
+/**
+ * The bar between the player and the timeline: drag it (or use the arrow keys) to give the player or the
+ * timeline more height; double-click or Home goes back to the timeline's natural height.
+ */
+function TimelineSplitter({
+  areaRef,
+  timelineRef,
+  height,
+  onChange,
+}: {
+  areaRef: RefObject<HTMLDivElement | null>;
+  timelineRef: RefObject<HTMLDivElement | null>;
+  height: number | null;
+  onChange: (value: number | null) => void;
+}) {
+  const { t } = useTranslation("dashboard");
+  const drag = useRef<{ startY: number; startHeight: number } | null>(null);
+  const clamp = (value: number) => {
+    const area = areaRef.current?.getBoundingClientRect().height ?? Number.POSITIVE_INFINITY;
+    return Math.max(TIMELINE_MIN_HEIGHT, Math.min(value, area - PLAYER_MIN_HEIGHT));
+  };
+  const current = () => height ?? timelineRef.current?.getBoundingClientRect().height ?? TIMELINE_MIN_HEIGHT;
+  const onPointerDown = (event: PointerEvent<HTMLDivElement>) => {
+    if (event.button !== 0) return;
+    event.currentTarget.setPointerCapture(event.pointerId);
+    drag.current = { startY: event.clientY, startHeight: current() };
+  };
+  const onPointerMove = (event: PointerEvent<HTMLDivElement>) => {
+    if (!drag.current) return;
+    onChange(clamp(drag.current.startHeight - (event.clientY - drag.current.startY)));
+  };
+  const onPointerUp = () => {
+    drag.current = null;
+  };
+  const onKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
+    if (event.key === "ArrowUp" || event.key === "ArrowDown") {
+      event.preventDefault();
+      onChange(clamp(current() + (event.key === "ArrowUp" ? TIMELINE_KEY_STEP : -TIMELINE_KEY_STEP)));
+    } else if (event.key === "Home") {
+      event.preventDefault();
+      onChange(null);
+    }
+  };
+  // A focusable separator is a widget in ARIA (window splitter pattern), which jsx-a11y does not know.
+  return (
+    // eslint-disable-next-line jsx-a11y/no-noninteractive-element-interactions -- window splitter: dragged with the pointer, moved with the arrow keys
+    <div
+      role="separator"
+      aria-orientation="horizontal"
+      aria-label={t("edit_view_timeline_resize")}
+      aria-valuenow={height === null ? undefined : Math.round(height)}
+      title={t("edit_view_timeline_resize")}
+      // eslint-disable-next-line jsx-a11y/no-noninteractive-tabindex -- window splitter: keyboard users move it with the arrow keys
+      tabIndex={0}
+      onPointerDown={onPointerDown}
+      onPointerMove={onPointerMove}
+      onPointerUp={onPointerUp}
+      onPointerCancel={onPointerUp}
+      onDoubleClick={() => onChange(null)}
+      onKeyDown={onKeyDown}
+      className="group focus-ring flex h-2 shrink-0 cursor-row-resize touch-none items-center justify-center rounded-sm"
+    >
+      <span className="h-0.5 w-10 rounded-full bg-border transition-colors group-hover:bg-primary/60 group-focus-visible:bg-primary" />
+    </div>
+  );
 }
 
 function TimelinePreview({
@@ -329,9 +450,38 @@ function TimelinePreview({
   aspect,
   seekRequest,
   onSeekHandled,
+  issuesRequest,
 }: TimelinePreviewProps) {
   const { t } = useTranslation("dashboard");
-  const [selectedClipId, setSelectedClipId] = useState<string | null>(null);
+  const [selectedClipId, setSelectedClipIdState] = useState<string | null>(null);
+  // The details column folds away to give the player the width. It starts open only when the timeline has
+  // issues to read, opens when a clip is selected, and otherwise stays as the viewer left it (it does not
+  // fold by itself when a refresh clears the issues).
+  const [detailsOpen, setDetailsOpen] = useState(() => readout.issues.length > 0);
+  const setSelectedClipId = useCallback((clipId: string | null) => {
+    setSelectedClipIdState(clipId);
+    if (clipId !== null) setDetailsOpen(true);
+  }, []);
+  useEffect(() => {
+    if (issuesRequest === 0) return;
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- one-off request from the actions area: unfold the details column so the issue list can take focus
+    setDetailsOpen(true);
+  }, [issuesRequest]);
+  // Focus once per request, as soon as the column is open (not again when the viewer later reopens it).
+  const handledIssuesRequest = useRef(0);
+  useEffect(() => {
+    if (issuesRequest > handledIssuesRequest.current && detailsOpen) {
+      handledIssuesRequest.current = issuesRequest;
+      focusIssueList();
+    }
+  }, [issuesRequest, detailsOpen]);
+  const [timelineHeight, setTimelineHeightState] = useState<number | null>(readTimelineHeight);
+  const setTimelineHeight = useCallback((value: number | null) => {
+    setTimelineHeightState(value);
+    saveTimelineHeight(value);
+  }, []);
+  const areaRef = useRef<HTMLDivElement>(null);
+  const timelineRef = useRef<HTMLDivElement>(null);
   const [showSubtitles, setShowSubtitles] = useState(true);
 
   // 内容相同的重新读取不换计划引用，播放不因项目的无关变更而重新定位。
@@ -394,7 +544,7 @@ function TimelinePreview({
     }
     // 处理完立即作废，plan 随后的刷新不会再把播放头拉回去。
     onSeekHandled();
-  }, [seekRequest, seek, plan, onSeekHandled]);
+  }, [seekRequest, seek, plan, onSeekHandled, setSelectedClipId]);
 
   const trimIgnored = useMemo(() => issueClipIds(readout, "trim_ignored"), [readout]);
   const unused = useMemo(() => unusedUnitIds(readout), [readout]);
@@ -405,44 +555,80 @@ function TimelinePreview({
   const selectedClip = readout.clips.find((clip) => clip.id === selectedClipId);
   const clipIds = useMemo(() => new Set(readout.clips.map((clip) => clip.id)), [readout]);
 
-  // 播放器在左、详情栏在右，轨道横跨底部全宽。详情栏随画布宽度取 280px 或 340px。
+  // Player on the left, the details column (280px or 340px with the canvas width, or folded to a thin rail)
+  // on the right; the tracks run full width below, behind a splitter that sets their height.
   return (
-    <div className="grid min-h-0 flex-1 grid-cols-[minmax(0,1fr)_280px] grid-rows-[minmax(0,1fr)_auto] gap-3 edit-short:gap-2 @6xl/canvas:grid-cols-[minmax(0,1fr)_340px]">
-      <div className="min-h-0 min-w-0">
-        <EditTimelinePlayer
-          plan={plan}
-          playback={playback}
-          aspect={aspect}
-          current={currentClip}
-          positions={positions}
-          trimIgnored={currentClip ? trimIgnored.has(currentClip.id) : false}
-          subtitles={subtitles}
-          showSubtitles={showSubtitles}
-          onToggleSubtitles={() => setShowSubtitles((shown) => !shown)}
-        />
-      </div>
-      {/* 详情栏是视图里唯一的滚动区；可以只有说明文字，所以自身可聚焦，键盘也能滚动 */}
-      <div
-        role="region"
-        aria-label={t("edit_view_details_aria")}
-        // eslint-disable-next-line jsx-a11y/no-noninteractive-tabindex -- 详情栏可能只有说明文字，须能用键盘聚焦后滚动
-        tabIndex={0}
-        className="focus-ring relative flex min-h-0 flex-col gap-4 overflow-y-auto rounded-lg border border-border bg-card p-4"
-      >
-        <section className="shrink-0" aria-label={t("edit_view_inspector_aria")}>
-          <ClipInspector
-            projectName={projectName}
-            clip={selectedClip}
-            trimIgnored={selectedClip ? trimIgnored.has(selectedClip.id) : false}
-            thumbnail={selectedClip ? thumbnails.get(selectedClip.unit_id) : undefined}
+    <div ref={areaRef} className="flex min-h-0 flex-1 flex-col">
+      <div className="flex min-h-0 flex-1 gap-2">
+        <div className="min-h-0 min-w-0 flex-1">
+          <EditTimelinePlayer
+            plan={plan}
+            playback={playback}
+            aspect={aspect}
+            current={currentClip}
             positions={positions}
+            trimIgnored={currentClip ? trimIgnored.has(currentClip.id) : false}
+            subtitles={subtitles}
+            showSubtitles={showSubtitles}
+            onToggleSubtitles={() => setShowSubtitles((shown) => !shown)}
           />
-        </section>
-        <div className="shrink-0 border-t border-border pt-4">
-          <IssueList issues={readout.issues} clipIds={clipIds} positions={positions} onSelectClip={setSelectedClipId} />
         </div>
+        {detailsOpen ? (
+          /* 详情栏是视图里唯一的滚动区；可以只有说明文字，所以自身可聚焦，键盘也能滚动 */
+          <div
+            role="region"
+            aria-label={t("edit_view_details_aria")}
+            // eslint-disable-next-line jsx-a11y/no-noninteractive-tabindex -- 详情栏可能只有说明文字，须能用键盘聚焦后滚动
+            tabIndex={0}
+            className="focus-ring relative flex min-h-0 w-[280px] shrink-0 flex-col gap-4 overflow-y-auto rounded-lg border border-border bg-card p-3 @6xl/canvas:w-[340px]"
+          >
+            <Button
+              variant="ghost"
+              size="icon-xs"
+              className="absolute top-2 right-2"
+              onClick={() => setDetailsOpen(false)}
+              aria-label={t("edit_view_details_hide")}
+              title={t("edit_view_details_hide")}
+            >
+              <PanelRightClose aria-hidden />
+            </Button>
+            <section className="shrink-0 pr-6" aria-label={t("edit_view_inspector_aria")}>
+              <ClipInspector
+                projectName={projectName}
+                clip={selectedClip}
+                trimIgnored={selectedClip ? trimIgnored.has(selectedClip.id) : false}
+                thumbnail={selectedClip ? thumbnails.get(selectedClip.unit_id) : undefined}
+                positions={positions}
+              />
+            </section>
+            <div className="shrink-0 border-t border-border pt-4">
+              <IssueList issues={readout.issues} clipIds={clipIds} positions={positions} onSelectClip={setSelectedClipId} />
+            </div>
+          </div>
+        ) : (
+          <Button
+            variant="outline"
+            size="icon-sm"
+            className="shrink-0 self-start"
+            onClick={() => setDetailsOpen(true)}
+            aria-label={t("edit_view_details_show")}
+            title={t("edit_view_details_show")}
+          >
+            <PanelRightOpen aria-hidden />
+          </Button>
+        )}
       </div>
-      <div className="col-span-2 min-w-0">
+      <TimelineSplitter
+        areaRef={areaRef}
+        timelineRef={timelineRef}
+        height={timelineHeight}
+        onChange={setTimelineHeight}
+      />
+      <div
+        ref={timelineRef}
+        className={cn("min-w-0 shrink-0", timelineHeight !== null && "relative h-(--timeline-height) overflow-y-auto")}
+        style={timelineHeight !== null ? ({ "--timeline-height": `${timelineHeight}px` } as CSSProperties) : undefined}
+      >
         <EditTimelineTracks
           projectName={projectName}
           readout={readout}

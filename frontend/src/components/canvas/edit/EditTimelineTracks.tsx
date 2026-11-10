@@ -76,7 +76,7 @@ export function EditTimelineTracks({
   };
 
   return (
-    <div className="flex flex-col gap-2 rounded-lg border border-border bg-sidebar/60 p-3 edit-short:p-2">
+    <div className="flex flex-col gap-2 rounded-lg border border-border bg-sidebar/60 p-2">
       <div className="relative overflow-x-auto scroll-fade-x">
         <div
           className="relative min-w-(--track-min-width) pl-16"
@@ -90,7 +90,7 @@ export function EditTimelineTracks({
             aria-label={translate("edit_view_track_aria")}
             role="group"
           >
-            <TrackRow label={translate("edit_view_track_video")} height="h-14 edit-short:h-10">
+            <TrackRow label={translate("edit_view_track_video")} height="h-12 edit-short:h-10">
               <VideoClips
                 clips={readout.clips}
                 duration={duration}
@@ -101,15 +101,15 @@ export function EditTimelineTracks({
                 onSelectClip={onSelectClip}
               />
             </TrackRow>
-            <TrackRow label={translate("edit_view_track_narration")} height="h-10 edit-short:h-7">
+            <TrackRow label={translate("edit_view_track_narration")} height="h-8 edit-short:h-7">
               <NarrationBlocks spans={narration} duration={duration} positions={positions} />
             </TrackRow>
-            <TrackRow label={translate("edit_view_track_subtitles")} height="h-8 edit-short:h-6">
+            <TrackRow label={translate("edit_view_track_subtitles")} height="h-7 edit-short:h-6">
               <SubtitleBlocks subtitles={subtitles} duration={duration} />
             </TrackRow>
             <TrackRow
               label={translate("edit_view_track_bgm")}
-              height="h-8 edit-short:h-6"
+              height="h-7 edit-short:h-6"
               action={<BgmUploadButton projectName={projectName} />}
             >
               {bgm.length > 0 ? (

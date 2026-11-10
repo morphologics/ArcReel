@@ -384,6 +384,27 @@ describe("EditTimelineView", () => {
     expect(screen.getByRole("heading", { name: "问题（0）" })).toBeInTheDocument();
   });
 
+  it("starts with the details column folded when there are no issues, and folds and unfolds it on request", async () => {
+    vi.spyOn(API, "listEditTimelines").mockResolvedValue({
+      timelines: [summary("tl-00000002", "初剪", "2026-09-30T10:00:00Z", 3)],
+    });
+    vi.spyOn(API, "getEditTimeline").mockResolvedValue({ ...INITIAL_CUT, issues: [] });
+
+    renderView();
+    await screen.findByTestId("edit-clip-c3");
+    expect(screen.queryByRole("heading", { name: "问题（0）" })).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "显示片段详情与问题" }));
+    expect(screen.getByRole("heading", { name: "问题（0）" })).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "收起片段详情与问题" }));
+    expect(screen.queryByRole("heading", { name: "问题（0）" })).not.toBeInTheDocument();
+
+    // selecting a clip opens it again, on the clip's details
+    fireEvent.click(screen.getByTestId("edit-clip-c3"));
+    expect(screen.getByTestId("edit-clip-inspector")).toBeInTheDocument();
+  });
+
   it("keeps the last preview when a refresh fails", async () => {
     vi.spyOn(API, "listEditTimelines").mockResolvedValue({
       timelines: [summary("tl-00000002", "初剪", "2026-09-30T10:00:00Z", 3)],
