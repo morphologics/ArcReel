@@ -248,6 +248,8 @@ export function ShotSplitView({
           onAppend={handleInsertShot}
           appendDisabled={structurePending || movePending}
           onReorderMode={handleMoveShot ? () => setReorderMode(true) : undefined}
+          onMoveStep={handleMoveStep}
+          moveDisabled={structurePending || movePending}
         />
       )}
       {/* the detail fills what the strip leaves (strip mode) or its grid cell (reorder mode) */}

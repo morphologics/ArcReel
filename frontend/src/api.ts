@@ -915,6 +915,33 @@ class API {
     );
   }
 
+  /**
+   * Apply a batch of edits to an edit timeline as one new revision (the agent's operations, e.g.
+   * `{op: "delete", clip}`), read against `baseRevision`. Returns the new revision number.
+   */
+  static async editEditTimeline(
+    projectName: string,
+    timelineId: string,
+    body: { base_revision: number; summary: string; operations: Array<Record<string, unknown>> },
+  ): Promise<{ revision: number; base_revision: number; message: string }> {
+    return this.request(`${this.editTimelinePath(projectName, timelineId)}/operations`, {
+      method: "POST",
+      body: JSON.stringify(body),
+    });
+  }
+
+  /** Roll an edit timeline back to an earlier revision (appended as a new revision; history is kept). */
+  static async restoreEditTimeline(
+    projectName: string,
+    timelineId: string,
+    revision: number,
+  ): Promise<{ revision: number; base_revision: number; message: string }> {
+    return this.request(`${this.editTimelinePath(projectName, timelineId)}/restore`, {
+      method: "POST",
+      body: JSON.stringify({ revision }),
+    });
+  }
+
   /** 删除剪辑时间线及其成片与剪映草稿；仍有渲染任务在排队或执行时服务端拒绝。 */
   static async deleteEditTimeline(projectName: string, timelineId: string): Promise<void> {
     await this.request(

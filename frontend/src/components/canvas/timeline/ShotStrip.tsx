@@ -1,19 +1,23 @@
 import {
   startTransition,
+  useCallback,
   useEffect,
   useMemo,
   useRef,
+  useState,
   type MouseEvent,
   type PointerEvent,
   type WheelEvent,
 } from "react";
 import { useTranslation } from "react-i18next";
-import { ArrowDownUp } from "lucide-react";
+import { ArrowDownUp, ArrowLeft, ArrowRight, Eye, EyeOff, ParkingSquare, Scissors, Undo2 } from "lucide-react";
+import { ContextMenu } from "@base-ui/react/context-menu";
 import { useLocation, useSearchParams } from "wouter";
 import { cn } from "cn";
 import { API } from "@/api";
 import { EPISODE_VIEW_PARAM, WORKSPACE_ROUTE_EPISODES } from "@/app-routes";
 import { Button } from "@/components/ui/button";
+import { DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator } from "@/components/ui/dropdown-menu";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { ItemPositionBadge } from "@/components/shared/episode-item/ItemPositionBadge";
 import { statusFromAssets } from "@/components/canvas/timeline/shot-status";
@@ -23,6 +27,7 @@ import { useProjectsStore } from "@/stores/projects-store";
 import type { EpisodeMeta } from "@/types";
 import { episodeDisplayName } from "@/utils/episode-display";
 import { getScriptItemId, getScriptItems, type EditorContentMode, type ScriptItem } from "@/utils/script-shape";
+import { leaveShotOutOfCut, leaveShotOutOfLoadedCut, restoreShotToCut, useEpisodeCut } from "./leave-out-of-cut";
 import { InsertShotButton, type InsertShotHandler } from "./ShotStructureActions";
 
 const NO_EPISODES: EpisodeMeta[] = [];
@@ -45,6 +50,9 @@ interface ShotStripProps {
   appendDisabled?: boolean;
   /** Switch to reorder mode (the vertical list with drag handles); without it there is no button. */
   onReorderMode?: () => void;
+  /** Move a shot of the current episode one place left / right (right-click menu); without it the items are off. */
+  onMoveStep?: (shotId: string, direction: "earlier" | "later") => void;
+  moveDisabled?: boolean;
 }
 
 interface StripEpisode {
@@ -90,6 +98,8 @@ export function ShotStrip({
   onAppend,
   appendDisabled = false,
   onReorderMode,
+  onMoveStep,
+  moveDisabled = false,
 }: ShotStripProps) {
   const { t } = useTranslation("dashboard");
   // The episode records themselves (not the display ledger): the strip needs each one's script file.
@@ -101,6 +111,10 @@ export function ShotStrip({
   const scrollRef = useRef<HTMLDivElement>(null);
   const drag = useRef<{ x: number; scrollLeft: number; moved: boolean } | null>(null);
   const portrait = aspectRatio === "9:16";
+  const [hidden, toggleHidden] = useHiddenShots(projectName);
+  // The current episode's cut: shots left out of it show as a placeholder, like collapsed ones.
+  const [cut, reloadCut, patchCut] = useEpisodeCut(projectName, episode);
+  const shotOrder = useMemo(() => segments.map((seg) => getScriptItemId(seg, contentMode)), [segments, contentMode]);
 
   const episodes = useMemo<StripEpisode[]>(() => {
     const own = (shots: ScriptItem[]): StripEpisode => ({
@@ -248,45 +262,114 @@ export function ShotStrip({
                   ? API.getFileUrl(projectName, imagePath, fingerprints[imagePath] ?? null, { width: 320 })
                   : null;
                 const text = shotText(seg, contentMode);
+                const outOfCut = group.current && cut !== null && !cut.clipsByShot.has(id);
+                const isHidden = hidden.has(id) || outOfCut;
                 return (
                   <li key={id} data-shot-id={id} data-strip-current={group.current ? "true" : undefined}>
-                    <button
-                      id={group.current ? `segment-${id}` : undefined}
-                      type="button"
-                      onClick={() => openShot(group, id, index)}
-                      aria-current={active || undefined}
-                      title={text || undefined}
-                      className={cn(
-                        "focus-ring flex flex-col gap-1 rounded-md p-1 text-left transition-colors hover:bg-muted/60",
-                        active && "bg-primary/15 ring-2 ring-primary hover:bg-primary/15",
-                        !group.current && "opacity-70 hover:opacity-100",
-                      )}
-                    >
-                      <span
+                    <ContextMenu.Root>
+                      <ContextMenu.Trigger
+                        render={<button type="button" />}
+                        id={group.current ? `segment-${id}` : undefined}
+                        onClick={() => openShot(group, id, index)}
+                        aria-current={active || undefined}
+                        title={outOfCut ? t("shot_out_of_cut_title", { name: cut?.name ?? "" }) : text || undefined}
                         className={cn(
-                          "relative block overflow-hidden rounded-sm bg-muted",
-                          portrait ? "h-24 w-[54px]" : "h-[63px] w-28",
+                          "focus-ring flex flex-col gap-1 rounded-md p-1 text-left transition-colors hover:bg-muted/60",
+                          active && "bg-primary/15 ring-2 ring-primary hover:bg-primary/15",
+                          !group.current && "opacity-70 hover:opacity-100",
                         )}
                       >
-                        {imageUrl ? (
-                          <img
-                            src={imageUrl}
-                            alt=""
-                            draggable={false}
-                            className="size-full object-cover"
-                            loading="lazy"
-                            decoding="async"
-                          />
-                        ) : null}
-                        <ItemPositionBadge position={index + 1} kind="shot" overlay />
-                      </span>
-                      <span className="flex items-center justify-between gap-1 text-xs text-muted-foreground">
-                        <StatusBadge status={statusFromAssets(seg.generated_assets?.status)} />
-                        <span className="num">
-                          {t("duration_seconds_value_text", { value: seg.duration_seconds ?? 0 })}
-                        </span>
-                      </span>
-                    </button>
+                        {isHidden ? (
+                          <span
+                            className={cn(
+                              "flex w-5 flex-col items-center justify-center gap-1 rounded-sm bg-muted/50 text-muted-foreground",
+                              portrait ? "h-[118px]" : "h-[85px]",
+                            )}
+                          >
+                            {outOfCut ? <Scissors aria-hidden className="size-3" /> : <EyeOff aria-hidden className="size-3" />}
+                            <span className="num text-[10px]">{index + 1}</span>
+                          </span>
+                        ) : (
+                          <>
+                            <span
+                              className={cn(
+                                "relative block overflow-hidden rounded-sm bg-muted",
+                                portrait ? "h-24 w-[54px]" : "h-[63px] w-28",
+                              )}
+                            >
+                              {imageUrl ? (
+                                <img
+                                  src={imageUrl}
+                                  alt=""
+                                  draggable={false}
+                                  className="size-full object-cover"
+                                  loading="lazy"
+                                  decoding="async"
+                                />
+                              ) : null}
+                              <ItemPositionBadge position={index + 1} kind="shot" overlay />
+                            </span>
+                            <span className="flex items-center justify-between gap-1 text-xs text-muted-foreground">
+                              <StatusBadge status={statusFromAssets(seg.generated_assets?.status)} />
+                              <span className="num">
+                                {t("duration_seconds_value_text", { value: seg.duration_seconds ?? 0 })}
+                              </span>
+                            </span>
+                          </>
+                        )}
+                      </ContextMenu.Trigger>
+                      {outOfCut && cut ? (
+                        <DropdownMenuContent className="w-auto min-w-40">
+                          <DropdownMenuItem
+                            onClick={() => void restoreShotToCut(projectName, cut, id, shotOrder, t, reloadCut, patchCut)}
+                          >
+                            <Undo2 aria-hidden />
+                            {t("shot_strip_restore_to_cut")}
+                          </DropdownMenuItem>
+                          <DropdownMenuItem disabled>
+                            <ParkingSquare aria-hidden />
+                            {t("shot_strip_park")}
+                          </DropdownMenuItem>
+                        </DropdownMenuContent>
+                      ) : (
+                      <DropdownMenuContent className="w-auto min-w-40">
+                        <DropdownMenuItem
+                          disabled={!group.current || !onMoveStep || moveDisabled || index === 0}
+                          onClick={() => onMoveStep?.(id, "earlier")}
+                        >
+                          <ArrowLeft aria-hidden />
+                          {t("shot_strip_move_left")}
+                        </DropdownMenuItem>
+                        <DropdownMenuItem
+                          disabled={!group.current || !onMoveStep || moveDisabled || index === group.shots.length - 1}
+                          onClick={() => onMoveStep?.(id, "later")}
+                        >
+                          <ArrowRight aria-hidden />
+                          {t("shot_strip_move_right")}
+                        </DropdownMenuItem>
+                        <DropdownMenuItem onClick={() => toggleHidden(id)}>
+                          {isHidden ? <Eye aria-hidden /> : <EyeOff aria-hidden />}
+                          {t(isHidden ? "shot_strip_unhide" : "shot_strip_hide")}
+                        </DropdownMenuItem>
+                        <DropdownMenuSeparator />
+                        <DropdownMenuItem
+                          disabled={!group.current || episode === undefined}
+                          onClick={() => {
+                            // the strip holds the cut already: show the change at once, write in the background
+                            if (cut) void leaveShotOutOfLoadedCut(projectName, cut, id, t, patchCut, reloadCut);
+                            else if (episode !== undefined) void leaveShotOutOfCut(projectName, episode, id, t, reloadCut);
+                          }}
+                        >
+                          <Scissors aria-hidden />
+                          {t("shot_strip_leave_out")}
+                        </DropdownMenuItem>
+                        <DropdownMenuItem disabled>
+                          <ParkingSquare aria-hidden />
+                          {t("shot_strip_park")}
+                        </DropdownMenuItem>
+                      </DropdownMenuContent>
+                      )}
+                    </ContextMenu.Root>
                   </li>
                 );
               })}
@@ -308,4 +391,39 @@ export function ShotStrip({
       </div>
     </nav>
   );
+}
+
+/**
+ * Shots collapsed on the strip (a view setting, kept per project in this browser): a collapsed shot shows as a
+ * narrow stub until it is expanded. Nothing in the script or the cut changes (leaving a shot out of the cut
+ * is a separate, planned action).
+ */
+function useHiddenShots(projectName: string): [ReadonlySet<string>, (id: string) => void] {
+  const key = `arcreel.strip.hidden.${projectName}`;
+  const [hidden, setHidden] = useState<ReadonlySet<string>>(() => readHidden(key));
+  const toggle = useCallback(
+    (id: string) =>
+      setHidden((current) => {
+        const next = new Set(current);
+        if (next.has(id)) next.delete(id);
+        else next.add(id);
+        try {
+          localStorage.setItem(key, JSON.stringify([...next]));
+        } catch {
+          // storage blocked: hidden only until the page reloads
+        }
+        return next;
+      }),
+    [key],
+  );
+  return [hidden, toggle];
+}
+
+function readHidden(key: string): ReadonlySet<string> {
+  try {
+    const raw = JSON.parse(localStorage.getItem(key) ?? "[]") as unknown;
+    return new Set(Array.isArray(raw) ? raw.filter((v): v is string => typeof v === "string") : []);
+  } catch {
+    return new Set();
+  }
 }

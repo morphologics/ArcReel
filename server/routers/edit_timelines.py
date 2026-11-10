@@ -29,6 +29,7 @@ from lib.edit_timeline import (
     TimelineSummary,
 )
 from lib.edit_timeline.errors import edit_timeline_message
+from lib.edit_timeline.operations import TimelineOperation
 from lib.final_cut.basis import SubtitleMode
 from lib.final_cut.errors import FinalCutError
 from lib.final_cut.overview import EpisodeEditOverview, episode_edit_overview
@@ -177,6 +178,16 @@ class RestoreEditTimelineRequest(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     revision: int = Field(ge=1, description="要回滚到的修订号")
+
+
+class EditTimelineOperationsRequest(BaseModel):
+    """A batch of edits from the web UI (the same operations the agent's edit tool takes)."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    base_revision: int = Field(ge=1, description="The revision the operations were read against")
+    summary: str = Field(description="One-line change summary recorded with the new revision")
+    operations: list[TimelineOperation] = Field(min_length=1)
 
 
 class RenderFinalCutBody(BaseModel):
@@ -340,6 +351,33 @@ async def restore_edit_timeline_revision(
                 project_name,
                 timeline_id,
                 revision=body.revision,
+                author=RevisionAuthor(kind="creator", user_id=user.id),
+            )
+    except EditTimelineError as exc:
+        raise edit_timeline_api_error(exc) from exc
+
+
+@router.post("/projects/{project_name}/edit-timelines/{timeline_id}/operations")
+async def edit_edit_timeline(
+    project_name: str,
+    timeline_id: str,
+    body: EditTimelineOperationsRequest,
+    service: EditTimelineServiceDep,
+    user: CurrentUser,
+) -> EditTimelineWriteResult:
+    """Apply a batch of edits from the web UI as one new revision (e.g. leaving a shot out of the cut).
+
+    Same rules as the agent's edits: interpreted against ``base_revision``, refused with
+    ``revision_conflict`` when the clips involved changed since; undo is a rollback to the previous revision.
+    """
+    try:
+        with project_change_source("webui"):
+            return await service.edit(
+                project_name,
+                timeline_id,
+                base_revision=body.base_revision,
+                summary=body.summary,
+                operations=body.operations,
                 author=RevisionAuthor(kind="creator", user_id=user.id),
             )
     except EditTimelineError as exc:

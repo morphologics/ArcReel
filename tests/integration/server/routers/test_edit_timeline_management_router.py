@@ -150,6 +150,43 @@ async def test_revision_history_and_rollback(timeline_client: AsyncClient, timel
     assert [clip["reason"] for clip in read.json()["clips"]] == [None, None]
 
 
+async def test_web_ui_operations_leave_a_clip_out_and_rollback_puts_it_back(timeline_client: AsyncClient) -> None:
+    timeline_id = await _create(timeline_client)
+    before = (await timeline_client.get(_url(timeline_id))).json()
+    first = before["clips"][0]["id"]
+
+    edited = await timeline_client.post(
+        _url(timeline_id, "/operations"),
+        json={"base_revision": 1, "summary": "Leave out", "operations": [{"op": "delete", "clip": first}]},
+    )
+    after = (await timeline_client.get(_url(timeline_id))).json()
+    history = (await timeline_client.get(_url(timeline_id, "/revisions"))).json()
+    undone = await timeline_client.post(_url(timeline_id, "/restore"), json={"revision": 1})
+    restored = (await timeline_client.get(_url(timeline_id))).json()
+
+    assert edited.status_code == 200
+    assert edited.json()["revision"] == 2
+    assert first not in [clip["id"] for clip in after["clips"]]
+    assert (history["revisions"][-1]["author"]["kind"], history["revisions"][-1]["summary"]) == ("creator", "Leave out")
+    assert undone.status_code == 200
+    assert [clip["id"] for clip in restored["clips"]] == [clip["id"] for clip in before["clips"]]
+
+
+async def test_web_ui_operations_reject_an_empty_batch_and_unknown_clips(timeline_client: AsyncClient) -> None:
+    timeline_id = await _create(timeline_client)
+
+    empty = await timeline_client.post(
+        _url(timeline_id, "/operations"), json={"base_revision": 1, "summary": "x", "operations": []}
+    )
+    unknown = await timeline_client.post(
+        _url(timeline_id, "/operations"),
+        json={"base_revision": 1, "summary": "x", "operations": [{"op": "delete", "clip": "c99"}]},
+    )
+
+    assert empty.status_code == 422
+    assert unknown.status_code >= 400
+
+
 async def test_delete_removes_the_timeline_and_the_agent_listing_follows(
     timeline_client: AsyncClient, timeline_project: ProjectManager
 ) -> None:
