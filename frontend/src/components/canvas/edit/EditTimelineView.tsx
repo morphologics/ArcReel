@@ -266,7 +266,7 @@ export function EditTimelineView({
     <div className="@container-size/edit-view flex h-full min-h-0 flex-col">
       <div className="flex h-10 shrink-0 items-center gap-2 px-3">
         {/* 剪辑时间线多、名称长时标签横向滚动，不把标签行撑高 */}
-        <div className="relative flex min-w-0 overflow-x-auto scroll-fade-x">
+        <div className="relative flex min-w-0 overflow-x-auto">
           {/* 方向键移动焦点即切换：切换标签只换预览内容，不卸载别的东西 */}
           <Tabs value={selected.id} onValueChange={(value: string) => choose(value)} className="shrink-0">
             <TabsList aria-label={t("edit_view_timelines_aria")} activateOnFocus>

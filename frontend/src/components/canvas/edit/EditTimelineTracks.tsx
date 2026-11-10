@@ -77,7 +77,7 @@ export function EditTimelineTracks({
 
   return (
     <div className="flex flex-col gap-2 rounded-lg border border-border bg-sidebar/60 p-2">
-      <div className="relative overflow-x-auto scroll-fade-x">
+      <div className="relative overflow-x-auto">
         <div
           className="relative min-w-(--track-min-width) pl-16"
           style={{ "--track-min-width": `${LABEL_WIDTH + duration * MIN_PIXELS_PER_SECOND}px` } as CSSProperties}
@@ -139,7 +139,7 @@ export function EditTimelineTracks({
           aria-label={translate("edit_view_unused")}
           // eslint-disable-next-line jsx-a11y/no-noninteractive-tabindex -- 条目多时这一行横向滚动，里面没有可聚焦的元素，键盘要能聚焦后滚动
           tabIndex={0}
-          className="focus-ring relative flex items-center gap-2 overflow-x-auto border-t edit-short:hidden border-border/50 pt-2 text-xs whitespace-nowrap text-muted-foreground scroll-fade-x">
+          className="focus-ring relative flex items-center gap-2 overflow-x-auto border-t edit-short:hidden border-border/50 pt-2 text-xs whitespace-nowrap text-muted-foreground">
           <span className="shrink-0">{translate("edit_view_unused")}</span>
           {unusedUnits.map((unitId) => {
             const thumbnail = thumbnails.get(unitId);
