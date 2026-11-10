@@ -1397,6 +1397,21 @@ class ProjectArchiveService:
         project_payload.setdefault("characters", {})
         if not isinstance(project_payload.get("characters"), dict):
             return False
+        # a shot may reference a
+        # derivative as "Owner/Derivative" ("/" is reserved in asset names for exactly this).
+        # Never register that string as a top-level character: only a missing OWNER gets a placeholder.
+        owner_ref, sep, derivative_name = character_name.partition("/")
+        if sep:
+            owner_ref, derivative_name = owner_ref.strip(), derivative_name.strip()
+            if not owner_ref or not derivative_name:
+                return False
+            owner = _resolve_existing_asset(owner_ref, project_characters)
+            if owner not in project_characters:
+                # the owner itself is missing: add it (as a plain character), not "Owner/Derivative"
+                return self._add_placeholder_character(project_payload, project_characters, owner_ref, diagnostics)
+            # the owner is registered: its derivatives are its own business (an existing one needs
+            # nothing; a missing one is not invented here, the derivative table has its own rules)
+            return False
         # 占位角色不带描述：描述是生成资产图的输入，由用户补写或直接上传资产图。
         project_payload["characters"][character_name] = {"description": ""}
         project_characters.add(character_name)
