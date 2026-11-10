@@ -5,6 +5,7 @@ from __future__ import annotations
 import base64
 import json
 import re
+import uuid
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any
@@ -94,6 +95,10 @@ def build_context(
         if context.get(name) is None:
             context[name] = value
     context["inputs"] = dict(inputs or {})
+    # a fresh UUID v4 per request, for providers whose
+    # protocol wants a client-made task id in the body (Runware: "taskUUID"). Poll uses {{ task_id }}.
+    # width_64 / height_64 (below): sizes for providers that need multiples of 64.
+    context["task_uuid"] = str(uuid.uuid4())
     aspect_ratio = context.get("aspect_ratio")
     if isinstance(aspect_ratio, str):
         resolution = context.get("resolution")
@@ -107,6 +112,17 @@ def build_context(
         )
         context["width"] = width
         context["height"] = height
+        # the same ratio and tier with both sides divisible by 64 and at most 2048
+        # (Runware imageInference rejects other widths: "invalid width").
+        context["width_64"], context["height_64"] = aspect_size(
+            aspect_ratio,
+            resolution_to_short_edge(
+                resolution if isinstance(resolution, str) else None,
+                tier_map=_TIER_SHORT_EDGE_BY_MEDIA_TYPE[media_type],
+            ),
+            round_to=64,
+            max_long_edge=2048,
+        )
     return context
 
 

@@ -73,6 +73,9 @@ BASE_VARIABLES = frozenset(
         "seed",
         "width",
         "height",
+        "task_uuid",  # fresh UUID per request (template_engine.build_context)
+        "width_64",  # width/height rounded to multiples of 64, max 2048 (build_context)
+        "height_64",
     }
 )
 
@@ -137,7 +140,8 @@ MEDIA_TYPE_RULES: Mapping[str, MediaTypeRules] = {
         required_capabilities=(),
     ),
     "image": MediaTypeRules(
-        variables=frozenset({"base_url", "model", "prompt", "aspect_ratio", "resolution", "seed", "width", "height"}),
+        variables=frozenset({"base_url", "model", "prompt", "aspect_ratio", "resolution", "seed", "width", "height",
+                             "task_uuid", "width_64", "height_64"}),  # see BASE_VARIABLES
         enum_map_variables=frozenset({"aspect_ratio", "resolution"}),
         default_value_types={"aspect_ratio": str, "resolution": str, "seed": int},
         input_sources=frozenset({"reference_images"}),
