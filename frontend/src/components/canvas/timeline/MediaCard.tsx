@@ -1,8 +1,8 @@
 import { useRef, useState, type ReactNode } from "react";
 import { ContextMenu } from "@base-ui/react/context-menu";
-import { DropdownMenuContent } from "@/components/ui/dropdown-menu";
+import { DropdownMenuContent, DropdownMenuItem } from "@/components/ui/dropdown-menu";
 import { isResourceBusy } from "@/stores/tasks-store";
-import { Sparkles, ImageIcon, Film } from "lucide-react";
+import { Sparkles, ImageIcon, Film, History, Upload } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useTranslation } from "react-i18next";
 import { API } from "@/api";
@@ -140,6 +140,31 @@ export function MediaCard({
   // uploadDisabled 是本卡片之外的互斥占用（如同一分镜另一张卡在上传中）；
   // 编辑/版本恢复/生成同样写这个资源，须一并禁用，否则会与占用中的写操作并发冲突。
   const resourceBusy = generating || uploading || uploadDisabled || restoring || externalRestoring;
+  // Right-click menu on the storyboard image: the caller's items (note, edit region) plus upload and versions.
+  const [versionsOpen, setVersionsOpen] = useState(false);
+  const menuUploadRef = useRef<HTMLInputElement>(null);
+  // The menu's Versions opens a second, controlled version list anchored to the image (a controlled
+  // VersionTimeMachine renders no button of its own, so the title row's Versions button stays as it is).
+  const imageAnchorRef = useRef<HTMLDivElement>(null);
+  const menuItems =
+    kind === "storyboard" && contextMenuItems ? (
+      <>
+        {onRestore && !demoReadOnly && (
+          // opened after the menu has closed, or the menu's closing focus move would dismiss it at once
+          <DropdownMenuItem onClick={() => window.setTimeout(() => setVersionsOpen(true), 0)}>
+            <History aria-hidden />
+            {t("version_mgmt")}
+          </DropdownMenuItem>
+        )}
+        {contextMenuItems}
+        {onUpload && !demoReadOnly && (
+          <DropdownMenuItem disabled={resourceBusy} onClick={() => menuUploadRef.current?.click()}>
+            <Upload aria-hidden />
+            {t("media_upload_storyboard")}
+          </DropdownMenuItem>
+        )}
+      </>
+    ) : undefined;
 
   return (
     <div>
@@ -188,9 +213,37 @@ export function MediaCard({
         )}
       </div>
 
+      {menuItems && onRestore && !demoReadOnly && (
+        <VersionTimeMachine
+          projectName={projectName}
+          resourceType={resourceType}
+          resourceId={segmentId}
+          onRestore={onRestore}
+          busy={resourceBusy}
+          checkBusy={freshBusy}
+          onRestoringChange={setRestoreBusy}
+          open={versionsOpen}
+          onOpenChange={setVersionsOpen}
+          anchor={imageAnchorRef}
+        />
+      )}
+      {menuItems && onUpload && (
+        <input
+          ref={menuUploadRef}
+          type="file"
+          accept={UPLOAD_ACCEPT[kind]}
+          className="hidden"
+          onChange={(e) => {
+            const f = e.target.files?.[0];
+            e.target.value = "";
+            if (f && !freshBusy()) void onUpload(f);
+          }}
+        />
+      )}
       {assetUrl ? (
         kind === "storyboard" ? (
-          <ImageContextMenu items={contextMenuItems}>
+          <div ref={imageAnchorRef}>
+          <ImageContextMenu items={menuItems}>
             <PreviewableImageFrame src={assetUrl} alt={`${itemLabel} ${title}`}>
               <AspectFrame ratio={aspectRatio}>
                 <img
@@ -205,6 +258,7 @@ export function MediaCard({
               </AspectFrame>
             </PreviewableImageFrame>
           </ImageContextMenu>
+          </div>
         ) : (
           <div className="overflow-hidden rounded-lg ring-1 ring-border">
             <AspectFrame ratio={aspectRatio}>

@@ -444,7 +444,7 @@ describe("EditTimelineView", () => {
     expect(screen.getByRole("tab", { name: "初剪" })).toHaveAttribute("aria-selected", "true");
   });
 
-  it("switches timelines with the arrow keys and labels the preview with the selected tab", async () => {
+  it("switches timelines with the up / down arrow keys (vertical tab column) and labels the preview with the selected tab", async () => {
     vi.spyOn(API, "listEditTimelines").mockResolvedValue({
       timelines: [
         summary("tl-00000001", "按脚本顺序", "2026-09-30T09:00:00Z"),
@@ -460,13 +460,13 @@ describe("EditTimelineView", () => {
 
     const user = userEvent.setup();
     act(() => cut.focus());
-    await user.keyboard("{ArrowRight}");
+    await user.keyboard("{ArrowDown}");
     const byScript = screen.getByRole("tab", { name: "按脚本顺序" });
     await waitFor(() => expect(byScript).toHaveAttribute("aria-selected", "true"));
     expect(byScript).toHaveFocus();
     expect(screen.getByRole("tabpanel", { name: "按脚本顺序" })).toBeInTheDocument();
 
-    await user.keyboard("{ArrowLeft}");
+    await user.keyboard("{ArrowUp}");
     expect(screen.getByRole("tab", { name: "初剪" })).toHaveFocus();
   });
 

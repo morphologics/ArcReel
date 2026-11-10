@@ -18,7 +18,6 @@ import { useParams, useSearchParams } from "wouter";
 import { cn } from "cn";
 
 import { API } from "@/api";
-import { TruncatedText } from "@/components/shared/TruncatedText";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useAppStore } from "@/stores/app-store";
@@ -261,32 +260,40 @@ export function EditTimelineView({
   const updatedJustNow = isJustNow(selected.updated_at);
   const updatedAt = formatRelativeTime(selected.updated_at, i18n.language) ?? selected.updated_at;
 
-  // 整个视图不滚动：标签行固定高度，下方的播放器、详情栏与轨道分掉剩余高度，只有详情栏自己滚动。
+  // 整个视图不滚动。The timeline tabs, their menu and the "edited by" line stack in a narrow column left of the
+  // preview (instead of a row above it), so the player keeps that height; the column scrolls if there are many.
   return (
-    <div className="@container-size/edit-view flex h-full min-h-0 flex-col">
-      <div className="flex h-10 shrink-0 items-center gap-2 px-3">
-        {/* 剪辑时间线多、名称长时标签横向滚动，不把标签行撑高 */}
-        <div className="relative flex min-w-0 overflow-x-auto">
-          {/* 方向键移动焦点即切换：切换标签只换预览内容，不卸载别的东西 */}
-          <Tabs value={selected.id} onValueChange={(value: string) => choose(value)} className="shrink-0">
-            <TabsList aria-label={t("edit_view_timelines_aria")} activateOnFocus>
-              {timelines.map((item) => (
-                <TabsTrigger key={item.id} value={item.id} id={tabId(item.id)} aria-controls={panelId}>
-                  {item.name}
-                </TabsTrigger>
-              ))}
-            </TabsList>
-          </Tabs>
-        </div>
-        <EditTimelineMenu projectName={projectName} timeline={selected} onRenamed={reload} onDeleted={handleDeleted} />
-        <TruncatedText
-          className="min-w-0 text-xs text-muted-foreground"
-          text={
-            updatedJustNow
+    <div className="@container-size/edit-view dark flex h-full min-h-0 bg-background text-foreground">
+      <div className="flex w-40 shrink-0 flex-col gap-2 overflow-y-auto border-r border-border/50 p-2">
+        {/* 方向键移动焦点即切换：切换标签只换预览内容，不卸载别的东西 */}
+        <Tabs
+          value={selected.id}
+          onValueChange={(value: string) => choose(value)}
+          orientation="vertical"
+          className="min-w-0"
+        >
+          <TabsList aria-label={t("edit_view_timelines_aria")} activateOnFocus className="w-full">
+            {timelines.map((item) => (
+              <TabsTrigger
+                key={item.id}
+                value={item.id}
+                id={tabId(item.id)}
+                aria-controls={panelId}
+                className="min-w-0 justify-start"
+              >
+                <span className="truncate">{item.name}</span>
+              </TabsTrigger>
+            ))}
+          </TabsList>
+        </Tabs>
+        <div className="flex min-w-0 items-start gap-1">
+          <EditTimelineMenu projectName={projectName} timeline={selected} onRenamed={reload} onDeleted={handleDeleted} />
+          <p className="m-0 min-w-0 pt-1 text-xs text-muted-foreground">
+            {updatedJustNow
               ? t("edit_view_updated_just_now", { author: authorName })
-              : t("edit_view_updated", { author: authorName, time: updatedAt })
-          }
-        />
+              : t("edit_view_updated", { author: authorName, time: updatedAt })}
+          </p>
+        </div>
         {renderActions?.({
           timelineId: selected.id,
           timelineName: selected.name,
@@ -300,7 +307,7 @@ export function EditTimelineView({
         id={panelId}
         aria-labelledby={tabId(selected.id)}
         // 播放器、详情栏与轨道固定深色：浅底会干扰对画面明暗的判断
-        className="dark flex min-h-0 flex-1 flex-col bg-background px-2 pb-2 text-foreground"
+        className="flex min-h-0 min-w-0 flex-1 flex-col px-2 py-2"
       >
         {current && "value" in current ? (
           <TimelinePreview
