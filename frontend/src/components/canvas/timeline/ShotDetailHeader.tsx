@@ -2,6 +2,7 @@ import type { ReactNode } from "react";
 import { ChevronDown, ChevronLeft, ChevronRight, ChevronUp } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { ItemPositionOfTotal } from "@/components/shared/episode-item/ItemPositionOfTotal";
+import { EpisodeHeaderCenter } from "@/components/canvas/episode-page/EpisodeHeaderActions";
 import { TooltipIconButton } from "./TooltipIconButton";
 
 interface ShotDetailHeaderProps {
@@ -22,7 +23,10 @@ interface ShotDetailHeaderProps {
   navDisabledHint?: string;
   /** 行尾的备注入口。 */
   notes?: ReactNode;
-  /** No previous / next buttons (the storyboard strip and J / K do that). */
+  /**
+   * Minimal header (under the storyboard strip): no previous / next buttons (the strip and J / K do that),
+   * and the shot's facts go to the middle of the episode header instead of a row of their own.
+   */
   hideNav?: boolean;
 }
 
@@ -43,10 +47,22 @@ export function ShotDetailHeader({
   hideNav = false,
 }: ShotDetailHeaderProps) {
   const { t } = useTranslation("dashboard");
-  return (
-    <div className="flex shrink-0 flex-wrap items-center gap-x-2.5 gap-y-1.5 border-b border-border/50 px-5 py-2.5">
+  const facts = (
+    <>
       <ItemPositionOfTotal itemId={segmentId} kind="shot" position={index + 1} total={total} />
       {meta}
+    </>
+  );
+  if (hideNav && !onMoveEarlier && !structureActions && !notes) {
+    return (
+      <EpisodeHeaderCenter>
+        <div className="flex min-w-0 items-center gap-2.5">{facts}</div>
+      </EpisodeHeaderCenter>
+    );
+  }
+  return (
+    <div className="flex shrink-0 flex-wrap items-center gap-x-2.5 gap-y-1.5 border-b border-border/50 px-5 py-2.5">
+      {facts}
       <div className="ml-auto flex items-center gap-0.5">
         {onMoveEarlier && onMoveLater ? (
           <>

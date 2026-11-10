@@ -42,6 +42,7 @@ export function EpisodePageHeader({
   onViewChange,
   boardLabel,
   onActionsSlot,
+  onCenterSlot,
   compact = false,
 }: {
   head: ReactNode;
@@ -53,6 +54,8 @@ export function EpisodePageHeader({
   /** 「分镜」tab 的名称：参考生视频项目称「视频单元」。 */
   boardLabel: string;
   onActionsSlot: (node: HTMLDivElement | null) => void;
+  /** The middle of the second row (EpisodeHeaderCenter); not shown in the compact header. */
+  onCenterSlot?: (node: HTMLDivElement | null) => void;
   /** One row instead of two (see above). */
   compact?: boolean;
 }) {
@@ -101,8 +104,9 @@ export function EpisodePageHeader({
       </div>
       <div className="flex h-10 items-center gap-3 px-4">
         {viewTabs}
+        <div ref={onCenterSlot} className="flex min-w-0 flex-1 items-center justify-center gap-2.5 overflow-hidden" />
         {/* 动作多到放不下时横向滚动；插槽靠右，溢出时从左端开始滚，不裁掉第一个动作。 */}
-        <div className="relative flex min-w-0 flex-1 overflow-x-auto">
+        <div className="relative flex min-w-0 shrink overflow-x-auto">
           <div ref={onActionsSlot} className="ml-auto flex shrink-0 items-center gap-1.5" />
         </div>
       </div>
