@@ -22,6 +22,8 @@ interface ShotDetailHeaderProps {
   navDisabledHint?: string;
   /** 行尾的备注入口。 */
   notes?: ReactNode;
+  /** No previous / next buttons (the storyboard strip and J / K do that). */
+  hideNav?: boolean;
 }
 
 /** 分镜详情页头：左侧「位置 / 总数」与属性，右侧移动、增删、上一镜 / 下一镜与备注。 */
@@ -38,6 +40,7 @@ export function ShotDetailHeader({
   navDisabled,
   navDisabledHint,
   notes,
+  hideNav = false,
 }: ShotDetailHeaderProps) {
   const { t } = useTranslation("dashboard");
   return (
@@ -66,24 +69,28 @@ export function ShotDetailHeader({
           </>
         ) : null}
         {structureActions}
-        <TooltipIconButton
-          label={t("shot_detail_prev")}
-          hint={navDisabledHint}
-          disabled={navDisabled}
-          onClick={onPrev}
-          shortcut="K"
-        >
-          <ChevronLeft aria-hidden />
-        </TooltipIconButton>
-        <TooltipIconButton
-          label={t("shot_detail_next")}
-          hint={navDisabledHint}
-          disabled={navDisabled}
-          onClick={onNext}
-          shortcut="J"
-        >
-          <ChevronRight aria-hidden />
-        </TooltipIconButton>
+        {hideNav ? null : (
+          <>
+            <TooltipIconButton
+              label={t("shot_detail_prev")}
+              hint={navDisabledHint}
+              disabled={navDisabled}
+              onClick={onPrev}
+              shortcut="J"
+            >
+              <ChevronLeft aria-hidden />
+            </TooltipIconButton>
+            <TooltipIconButton
+              label={t("shot_detail_next")}
+              hint={navDisabledHint}
+              disabled={navDisabled}
+              onClick={onNext}
+              shortcut="K"
+            >
+              <ChevronRight aria-hidden />
+            </TooltipIconButton>
+          </>
+        )}
         {notes}
       </div>
     </div>

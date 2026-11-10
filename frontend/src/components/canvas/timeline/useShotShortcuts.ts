@@ -53,7 +53,8 @@ export function useShotShortcuts({ rootRef, onPrev, onNext, onSave, navDisabled 
       if (key !== "j" && key !== "k") return;
       if (isTypingTarget(target) || navDisabled) return;
       event.preventDefault();
-      if (key === "j") onNext();
+      // K = next shot, J = previous (the strip runs left to right: J is the left-hand key)
+      if (key === "k") onNext();
       else onPrev();
     };
     document.addEventListener("keydown", onKeyDown);

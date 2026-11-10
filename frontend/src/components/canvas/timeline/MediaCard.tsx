@@ -1,4 +1,4 @@
-import { useRef, useState } from "react";
+import { useRef, useState, type ReactNode } from "react";
 import { isResourceBusy } from "@/stores/tasks-store";
 import { Sparkles, ImageIcon, Film } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -58,6 +58,8 @@ interface MediaCardProps {
   uploadDisabled?: boolean;
   /** 分镜编辑所需的剧集文件；提供时（且 kind=storyboard、已有图）显示编辑入口 */
   editScriptFile?: string | null;
+  /** Buttons placed left of the upload button (the shot's delete and notes). */
+  leadingActions?: ReactNode;
 }
 
 const UPLOAD_ACCEPT: Record<MediaKind, string> = {
@@ -80,6 +82,7 @@ export function MediaCard({
   generateLabel: generateLabelOverride,
   onRestore,
   onUpload,
+  leadingActions,
   uploading,
   uploadDisabled,
   editScriptFile,
@@ -136,6 +139,7 @@ export function MediaCard({
         <Icon aria-hidden className="size-3.5 text-muted-foreground" />
         <h3 className="text-xs font-medium text-subtle-foreground">{title}</h3>
         <span className="flex-1" />
+        {leadingActions}
         {onUpload && !demoReadOnly && (
           <UploadIconButton
             accept={UPLOAD_ACCEPT[kind]}

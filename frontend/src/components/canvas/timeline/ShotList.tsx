@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
-import { ChevronLeft, ChevronRight, SearchIcon } from "lucide-react";
+import { PanelLeftClose, PanelLeftOpen, SearchIcon } from "lucide-react";
 import { cn } from "cn";
 import type { NarrationSegment, AdShot } from "@/types";
 import { API } from "@/api";
@@ -148,7 +148,7 @@ export function ShotList({
           <TooltipTrigger
             render={<Button variant="ghost" size="icon-sm" aria-label={t("shot_list_expand")} onClick={onToggleCollapse} />}
           >
-            <ChevronRight aria-hidden />
+            <PanelLeftOpen aria-hidden />
           </TooltipTrigger>
           <TooltipContent side="right">{t("shot_list_expand")}</TooltipContent>
         </Tooltip>
@@ -200,7 +200,7 @@ export function ShotList({
           <TooltipTrigger
             render={<Button variant="ghost" size="icon-sm" aria-label={t("shot_list_collapse")} onClick={onToggleCollapse} />}
           >
-            <ChevronLeft aria-hidden />
+            <PanelLeftClose aria-hidden />
           </TooltipTrigger>
           <TooltipContent>{t("shot_list_collapse")}</TooltipContent>
         </Tooltip>

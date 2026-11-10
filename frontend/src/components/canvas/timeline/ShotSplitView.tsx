@@ -287,6 +287,8 @@ export function ShotSplitView({
         capabilitiesLoading={capabilitiesLoading}
         durationWarningReason={durationWarningReason}
         editRef={editRef}
+        // reorder mode keeps the header's move / insert / previous-next buttons; the strip covers them otherwise
+        minimalHeader={!reorderMode}
       /> : null
       } message={t("dashboard:shot_externally_removed")}>
         {(detail) => detail}

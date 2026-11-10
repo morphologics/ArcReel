@@ -190,6 +190,25 @@ export function ShotStrip({
       aria-label={t("shot_list_label")}
       className="flex min-w-0 shrink-0 items-stretch border-b border-border/50 bg-sidebar/40"
     >
+      {onReorderMode ? (
+        <div className="flex shrink-0 items-center border-r border-border/50 px-1.5">
+          <Tooltip>
+            <TooltipTrigger
+              render={
+                <Button
+                  variant="ghost"
+                  size="icon-sm"
+                  aria-label={t("shot_strip_reorder")}
+                  onClick={onReorderMode}
+                />
+              }
+            >
+              <ArrowDownUp aria-hidden />
+            </TooltipTrigger>
+            <TooltipContent>{t("shot_strip_reorder")}</TooltipContent>
+          </Tooltip>
+        </div>
+      ) : null}
       <div
         ref={scrollRef}
         onPointerDown={onPointerDown}
@@ -283,7 +302,7 @@ export function ShotStrip({
                     onInsert={onAppend}
                     label={t("shot_append")}
                     disabled={appendDisabled}
-                    variant="compact"
+                    variant="icon"
                   />
                 </li>
               ) : null}
@@ -291,29 +310,9 @@ export function ShotStrip({
           </section>
         ))}
       </div>
-      <div className="flex shrink-0 flex-col items-end justify-between gap-1 border-l border-border/50 py-1">
-        {onReorderMode ? (
-          <Tooltip>
-            <TooltipTrigger
-              render={
-                <Button
-                  variant="ghost"
-                  size="icon-sm"
-                  className="mr-2"
-                  aria-label={t("shot_strip_reorder")}
-                  onClick={onReorderMode}
-                />
-              }
-            >
-              <ArrowDownUp aria-hidden />
-            </TooltipTrigger>
-            <TooltipContent>{t("shot_strip_reorder")}</TooltipContent>
-          </Tooltip>
-        ) : (
-          <span />
-        )}
-        {trailing}
-      </div>
+      {trailing ? (
+        <div className="flex shrink-0 flex-col justify-end border-l border-border/50">{trailing}</div>
+      ) : null}
     </nav>
   );
 }

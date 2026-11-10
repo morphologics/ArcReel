@@ -126,6 +126,11 @@ interface ShotDetailProps {
   durationWarningReason?: (seconds: number) => DurationOutOfRangeReason | null;
   /** 分镜视图经它读当前分镜有无未保存修改、用 ⌘S / Ctrl+S 保存；卸载时清空。 */
   editRef?: RefObject<ShotEditHandle | null>;
+  /**
+   * Header with only notes and delete: no move, insert or previous / next buttons (the storyboard strip,
+   * reorder mode and J / K cover those). Used by the split view.
+   */
+  minimalHeader?: boolean;
 }
 
 /** 分镜视图需要的当前分镜编辑状态。 */
@@ -470,6 +475,7 @@ export function ShotDetail({
   capabilitiesLoading,
   durationWarningReason,
   editRef,
+  minimalHeader = false,
 }: ShotDetailProps) {
   const { t } = useTranslation("dashboard");
   const itemLabel = useItemPositionLabel(segmentId);
@@ -959,6 +965,42 @@ export function ShotDetail({
   const generateLabel = dirty ? t("common:save_and_generate") : undefined;
   const savingHint = saving ? t("common:save_status_saving") : undefined;
 
+  // 重排在途也要锁定切镜：ShotSplitView 在移动完成回调里按当前 selectedIndex 偏移，
+  // 在途切换分镜会让偏移作用到新选中项，选中态跳到错误分镜。有未保存修改时切镜由离开拦截询问。
+  const navDisabled = !!movePending || !!structurePending;
+  const navDisabledHint = movePending
+    ? t("shot_move_pending")
+    : structurePending
+      ? t("shot_structure_pending")
+      : undefined;
+  // 增删会刷新整份剧本并改变选中项，有未保存修改时先保存或放弃
+  const structureDisabled = navDisabled || dirty || saving;
+  const structureDisabledHint = navDisabledHint ?? (dirty || saving ? t("shot_detail_save_first") : undefined);
+
+  // Delete and notes: in the header, or (minimal header, under the storyboard strip) beside the storyboard
+  // image's upload button.
+  const structureActions = (
+    <ShotStructureActions
+      segmentId={segmentId}
+      contentMode={contentMode}
+      disabled={structureDisabled}
+      disabledHint={structureDisabledHint}
+      removeBlockedHint={
+        generatingStoryboard || generatingVideo || generatingNarration
+          ? t("shot_remove_blocked_generating")
+          : undefined
+      }
+      onInsert={minimalHeader ? undefined : onInsertShot}
+      onRemove={onRemoveShot}
+      beforeInsert={
+        // 备注只有落库才有意义：只读展示下不给入口，免得输入的备注静默丢弃
+        readOnly ? null : (
+          <NotesDrawer shotId={segmentId} value={fields.note} onChange={(note) => setField("note", note)} />
+        )
+      }
+    />
+  );
+
   const storyboardMedia = (
     <MediaCard
       kind="storyboard"
@@ -982,6 +1024,7 @@ export function ShotDetail({
       editScriptFile={readOnly ? undefined : scriptFile}
       generateDisabled={editBusy || refreshPending}
       generateDisabledHint={savingHint}
+      leadingActions={minimalHeader ? structureActions : undefined}
     />
   );
 
@@ -1046,17 +1089,6 @@ export function ShotDetail({
       />
     ) : null;
 
-  // 重排在途也要锁定切镜：ShotSplitView 在移动完成回调里按当前 selectedIndex 偏移，
-  // 在途切换分镜会让偏移作用到新选中项，选中态跳到错误分镜。有未保存修改时切镜由离开拦截询问。
-  const navDisabled = !!movePending || !!structurePending;
-  const navDisabledHint = movePending
-    ? t("shot_move_pending")
-    : structurePending
-      ? t("shot_structure_pending")
-      : undefined;
-  // 增删会刷新整份剧本并改变选中项，有未保存修改时先保存或放弃
-  const structureDisabled = navDisabled || dirty || saving;
-  const structureDisabledHint = navDisabledHint ?? (dirty || saving ? t("shot_detail_save_first") : undefined);
   const durationBusy = !!generatingStoryboard || !!generatingVideo;
 
   const header = (
@@ -1087,33 +1119,14 @@ export function ShotDetail({
           )}
         </>
       }
-      onMoveEarlier={onMoveShot ? () => void onMoveShot(segmentId, "earlier") : undefined}
-      onMoveLater={onMoveShot ? () => void onMoveShot(segmentId, "later") : undefined}
-      structureActions={
-        <ShotStructureActions
-          segmentId={segmentId}
-          contentMode={contentMode}
-          disabled={structureDisabled}
-          disabledHint={structureDisabledHint}
-          removeBlockedHint={
-            generatingStoryboard || generatingVideo || generatingNarration
-              ? t("shot_remove_blocked_generating")
-              : undefined
-          }
-          onInsert={onInsertShot}
-          onRemove={onRemoveShot}
-        />
-      }
+      onMoveEarlier={onMoveShot && !minimalHeader ? () => void onMoveShot(segmentId, "earlier") : undefined}
+      onMoveLater={onMoveShot && !minimalHeader ? () => void onMoveShot(segmentId, "later") : undefined}
+      hideNav={minimalHeader}
+      structureActions={minimalHeader ? undefined : structureActions}
       onPrev={onPrev}
       onNext={onNext}
       navDisabled={navDisabled}
       navDisabledHint={navDisabledHint}
-      notes={
-        // 备注只有落库才有意义：只读展示下不给入口，免得输入的备注静默丢弃
-        readOnly ? null : (
-          <NotesDrawer shotId={segmentId} value={fields.note} onChange={(note) => setField("note", note)} />
-        )
-      }
     />
   );
 

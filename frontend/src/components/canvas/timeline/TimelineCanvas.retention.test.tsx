@@ -35,6 +35,8 @@ describe("TimelineCanvas 定位到分镜", () => {
     const onMoveShot = vi.fn().mockResolvedValue(true);
     const { rerender } = render(board(twoShots(), { onMoveShot }));
     fireEvent.change(screen.getByDisplayValue("E1S01 画面"), { target: { value: "改序前的修改" } });
+    // moving a shot is a reorder-mode action (the strip's ⇅ button)
+    fireEvent.click(screen.getByRole("button", { name: "调整分镜顺序（带拖动把手的列表）" }));
 
     await act(async () => {
       fireEvent.click(screen.getByRole("button", { name: "后移分镜" }));

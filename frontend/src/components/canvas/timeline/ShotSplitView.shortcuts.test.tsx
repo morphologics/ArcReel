@@ -40,11 +40,11 @@ function renderView(onUpdatePrompt = vi.fn().mockResolvedValue(true)) {
 const position = () => screen.getByText(/^\d \/ 2$/).textContent;
 
 describe("ShotSplitView 切换拦截与快捷键", () => {
-  it("改了提示词后按 J 先询问，放弃修改后切到下一个分镜且不提交", async () => {
+  it("改了提示词后按 K 先询问，放弃修改后切到下一个分镜且不提交", async () => {
     const onUpdatePrompt = renderView();
     fireEvent.change(screen.getByDisplayValue("雨夜街道"), { target: { value: "雨后的街道" } });
 
-    fireEvent.keyDown(document.body, { key: "j" });
+    fireEvent.keyDown(document.body, { key: "k" });
     const dialog = await screen.findByRole("alertdialog", { name: "「分镜 1」有未保存的修改" });
     expect(within(dialog).getByRole("button", { name: "保存并切换" })).toBeInTheDocument();
     expect(position()).toBe("1 / 2");
@@ -56,21 +56,21 @@ describe("ShotSplitView 切换拦截与快捷键", () => {
     expect(onUpdatePrompt).not.toHaveBeenCalled();
   });
 
-  it("没有未保存修改时 J / K 直接切到下一个与上一个分镜", () => {
+  it("没有未保存修改时 K / J 直接切到下一个与上一个分镜", () => {
     renderView();
 
-    fireEvent.keyDown(document.body, { key: "j" });
-    expect(position()).toBe("2 / 2");
     fireEvent.keyDown(document.body, { key: "k" });
+    expect(position()).toBe("2 / 2");
+    fireEvent.keyDown(document.body, { key: "j" });
     expect(position()).toBe("1 / 2");
     expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
   });
 
-  it("焦点在输入框里或输入法组合输入中时 J 不切换分镜", () => {
+  it("焦点在输入框里或输入法组合输入中时 K 不切换分镜", () => {
     renderView();
 
-    fireEvent.keyDown(screen.getByDisplayValue("雨夜街道"), { key: "j" });
-    fireEvent.keyDown(document.body, { key: "j", isComposing: true });
+    fireEvent.keyDown(screen.getByDisplayValue("雨夜街道"), { key: "k" });
+    fireEvent.keyDown(document.body, { key: "k", isComposing: true });
 
     expect(position()).toBe("1 / 2");
   });

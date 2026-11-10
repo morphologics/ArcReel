@@ -1,4 +1,4 @@
-import { useId, useState } from "react";
+import { useId, useState, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { Loader2, Plus, Trash2 } from "lucide-react";
 import {
@@ -154,6 +154,8 @@ interface ShotStructureActionsProps {
   onInsert?: InsertShotHandler;
   /** 移除当前分镜；resolve 为是否成功。 */
   onRemove?: (itemId: string) => Promise<boolean>;
+  /** Shown between the remove button and the insert button (the notes button). */
+  beforeInsert?: ReactNode;
 }
 
 /**
@@ -167,13 +169,14 @@ export function ShotStructureActions({
   removeBlockedHint,
   onInsert,
   onRemove,
+  beforeInsert,
 }: ShotStructureActionsProps) {
   const { t } = useTranslation(["dashboard", "common"]);
   const itemLabel = useItemPositionLabel(segmentId);
   const [removeOpen, setRemoveOpen] = useState(false);
   const [removing, setRemoving] = useState(false);
 
-  if (!onInsert && !onRemove) return null;
+  if (!onInsert && !onRemove) return beforeInsert ?? null;
 
   const handleRemove = async () => {
     // 确认框打开后才出现的阻塞（如别处开始生成）同样拦下，不以打开时的状态为准。
@@ -188,17 +191,6 @@ export function ShotStructureActions({
 
   return (
     <>
-      {onInsert && (
-        <InsertShotButton
-          afterId={segmentId}
-          contentMode={contentMode}
-          onInsert={onInsert}
-          label={t("shot_insert_after")}
-          disabled={disabled}
-          disabledHint={disabledHint}
-          variant="icon"
-        />
-      )}
       {onRemove && (
         <>
           <TooltipIconButton
@@ -235,6 +227,18 @@ export function ShotStructureActions({
             </AlertDialogContent>
           </AlertDialog>
         </>
+      )}
+      {beforeInsert}
+      {onInsert && (
+        <InsertShotButton
+          afterId={segmentId}
+          contentMode={contentMode}
+          onInsert={onInsert}
+          label={t("shot_insert_after")}
+          disabled={disabled}
+          disabledHint={disabledHint}
+          variant="icon"
+        />
       )}
     </>
   );
