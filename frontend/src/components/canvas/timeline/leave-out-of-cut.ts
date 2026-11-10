@@ -7,6 +7,25 @@ import { useAppStore } from "@/stores/app-store";
 import { useProjectsStore } from "@/stores/projects-store";
 import { errMsg } from "@/utils/async";
 
+/** Shots with a leave-out / restore in flight: a second click on the same shot is ignored until it settles. */
+const pendingShots = new Set<string>();
+
+/**
+ * The timeline as it is now (not the strip's copy, which can lag behind a write or an agent edit): the
+ * revision to write against and the shot's clips in it.
+ */
+async function readCurrent(projectName: string, timelineId: string, shotId: string) {
+  const readout = await API.getEditTimeline(projectName, timelineId);
+  return {
+    revision: readout.revision,
+    shotClips: readout.clips.filter((clip) => clip.unit_id === shotId).map((clip) => clip.id),
+    clipsByShot: readout.clips.reduce((map, clip) => {
+      map.set(clip.unit_id, [...(map.get(clip.unit_id) ?? []), clip.id]);
+      return map;
+    }, new Map<string, string[]>()),
+  };
+}
+
 /**
  * "Leave out of the cut": remove a shot's clips from the episode's current edit timeline (the one the Edit
  * view opens by default, i.e. the most recently edited) as one new revision, with Undo in the toast (a
@@ -127,19 +146,28 @@ export async function restoreShotToCut(
   patch?: (change: (cut: EpisodeCut) => EpisodeCut) => void,
 ) {
   const toast = useAppStore.getState().pushToast;
+  if (pendingShots.has(shotId)) return;
+  pendingShots.add(shotId);
   patch?.((current) => withShot(current, shotId));
-  const index = shotOrder.indexOf(shotId);
-  let after: string | null = null;
-  for (let i = index - 1; i >= 0; i--) {
-    const clips = cut.clipsByShot.get(shotOrder[i]);
-    if (clips && clips.length > 0) {
-      after = clips[clips.length - 1];
-      break;
-    }
-  }
   try {
+    // the live timeline, not the strip's copy: a shot that is already back in (a second click, Undo, the
+    // agent) is not inserted twice
+    const now = await readCurrent(projectName, cut.timelineId, shotId);
+    if (now.shotClips.length > 0) {
+      onChanged?.();
+      return;
+    }
+    const index = shotOrder.indexOf(shotId);
+    let after: string | null = null;
+    for (let i = index - 1; i >= 0; i--) {
+      const clips = now.clipsByShot.get(shotOrder[i]);
+      if (clips && clips.length > 0) {
+        after = clips[clips.length - 1];
+        break;
+      }
+    }
     await API.editEditTimeline(projectName, cut.timelineId, {
-      base_revision: cut.revision,
+      base_revision: now.revision,
       summary: t("shot_restore_summary", { id: shotId }),
       operations: [{ op: "insert", unit_id: shotId, after }],
     });
@@ -148,6 +176,8 @@ export async function restoreShotToCut(
   } catch (err) {
     onChanged?.();
     toast(t("shot_leave_out_failed", { message: errMsg(err) }), "error");
+  } finally {
+    pendingShots.delete(shotId);
   }
 }
 
@@ -178,17 +208,22 @@ export async function leaveShotOutOfLoadedCut(
   reload: () => void,
 ) {
   const toast = useAppStore.getState().pushToast;
-  const clips = cut.clipsByShot.get(shotId) ?? [];
-  if (clips.length === 0) {
-    toast(t("shot_leave_out_not_in_cut", { name: cut.name }), "info");
-    return;
-  }
+  if (pendingShots.has(shotId)) return;
+  pendingShots.add(shotId);
   patch((current) => withoutShot(current, shotId));
+  let before = cut.revision;
   try {
+    const now = await readCurrent(projectName, cut.timelineId, shotId);
+    before = now.revision;
+    if (now.shotClips.length === 0) {
+      reload();
+      toast(t("shot_leave_out_not_in_cut", { name: cut.name }), "info");
+      return;
+    }
     await API.editEditTimeline(projectName, cut.timelineId, {
-      base_revision: cut.revision,
+      base_revision: now.revision,
       summary: t("shot_leave_out_summary", { id: shotId }),
-      operations: clips.map((clip) => ({ op: "delete", clip })),
+      operations: now.shotClips.map((clip) => ({ op: "delete", clip })),
     });
     reload();
     toast(t("shot_leave_out_done", { name: cut.name }), "success", {
@@ -196,7 +231,7 @@ export async function leaveShotOutOfLoadedCut(
         label: t("shot_leave_out_undo"),
         onClick: () => {
           patch((current) => withShot(current, shotId));
-          API.restoreEditTimeline(projectName, cut.timelineId, cut.revision)
+          API.restoreEditTimeline(projectName, cut.timelineId, before)
             .then(() => toast(t("shot_leave_out_undone", { name: cut.name }), "success"))
             .catch((err: unknown) => toast(t("shot_leave_out_failed", { message: errMsg(err) }), "error"))
             .finally(reload);
@@ -206,5 +241,7 @@ export async function leaveShotOutOfLoadedCut(
   } catch (err) {
     reload();
     toast(t("shot_leave_out_failed", { message: errMsg(err) }), "error");
+  } finally {
+    pendingShots.delete(shotId);
   }
 }
