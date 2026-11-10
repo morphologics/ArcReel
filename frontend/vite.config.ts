@@ -12,6 +12,10 @@ export default defineConfig({
     server: {
         host: "0.0.0.0",
         port: 5173,
+        // Dev server behind a reverse proxy: both only apply
+        // when the variables are set, so plain local `pnpm dev` is unchanged.
+        allowedHosts: process.env.VITE_ALLOWED_HOSTS ? process.env.VITE_ALLOWED_HOSTS.split(",") : undefined,
+        hmr: process.env.VITE_HMR_CLIENT_PORT ? { clientPort: Number(process.env.VITE_HMR_CLIENT_PORT) } : undefined,
         proxy: {
             "/api": {
                 target: "http://127.0.0.1:1241",
