@@ -108,7 +108,9 @@ class GrokImageBackend:
             "aspect_ratio": _validate_aspect_ratio(request.aspect_ratio),
         }
         if request.image_size is not None:
-            generate_kwargs["resolution"] = request.image_size
+            # xai_sdk only accepts lowercase
+            # "1k"/"2k"; the catalog says "1K"/"2K" -> "Invalid image resolution 2K."
+            generate_kwargs["resolution"] = request.image_size.lower()
 
         # I2I：将所有参考图转为 base64 data URI 列表
         reference_count = 0
@@ -145,6 +147,7 @@ class GrokImageBackend:
             usage=per_image_usage(
                 output_images=1,
                 input_images=reference_count,
-                dimensions={"resolution": generate_kwargs["resolution"]} if "resolution" in generate_kwargs else None,
+                # meter by the catalog tier ("2K"), not the SDK's lowercase value
+                dimensions={"resolution": request.image_size} if request.image_size is not None else None,
             ),
         )
