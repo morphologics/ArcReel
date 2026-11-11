@@ -21,6 +21,9 @@ export function useMediaQuery(query: string): boolean {
 /** Phone width: the layouts that stack or fold what sits side by side on wider screens. */
 export const PHONE_QUERY = "(max-width: 639px)";
 
+/** Narrower than a tablet in portrait (< 768px): the header's labelled buttons collapse to their icons. */
+export const COMPACT_HEADER_QUERY = "(max-width: 767px)";
+
 export function isPhoneWidth(): boolean {
   return matches(PHONE_QUERY);
 }

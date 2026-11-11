@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useLocation } from "wouter";
-import { AlertTriangle, Bot, ChevronDown, Loader2 } from "lucide-react";
+import { AlertTriangle, Bot, CheckCircle2, ChevronDown, Loader2 } from "lucide-react";
 
 import { API } from "@/api";
 import { EPISODE_PLANNING_SLOTS, enqueueEpisodePlanning } from "@/actions/generation";
@@ -448,7 +448,10 @@ export function ProjectStatusBar({ projectName }: { projectName: string }) {
       {allComplete && (
         <>
           <Divider />
-          <span className="px-3 text-xs text-good">{t("guide_all_complete")}</span>
+          {/* an indicator, not words: the header has little room (the label stays the tooltip and accessible name) */}
+          <span role="img" aria-label={t("guide_all_complete")} title={t("guide_all_complete")} className="flex px-2.5 text-good">
+            <CheckCircle2 aria-hidden className="size-4" />
+          </span>
         </>
       )}
       {yieldToPanel && (

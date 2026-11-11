@@ -256,7 +256,7 @@ describe("ProjectStatusBar", () => {
     );
     renderBar();
 
-    expect(await screen.findByText("全部完成")).toBeInTheDocument();
+    expect(await screen.findByRole("img", { name: "全部完成" })).toBeInTheDocument();
     expect(screen.queryByText("下一步")).not.toBeInTheDocument();
   });
 
@@ -269,7 +269,7 @@ describe("ProjectStatusBar", () => {
     renderBar();
 
     expect(await screen.findByRole("button", { name: /继续 AI 分集规划/ })).toBeInTheDocument();
-    expect(screen.queryByText("全部完成")).not.toBeInTheDocument();
+    expect(screen.queryByRole("img", { name: "全部完成" })).not.toBeInTheDocument();
   });
 
   it("shows short-film progress without an episode list for ad projects", () => {

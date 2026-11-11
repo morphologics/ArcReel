@@ -577,8 +577,8 @@ function TimelinePreview({
   return (
     <div ref={areaRef} className="flex min-h-0 flex-1 flex-col">
       {phone && !detailsOpen && readout.issues.length > 0 && (
-        <Button variant="link" size="sm" className="mb-1 self-start" onClick={() => setDetailsOpen(true)}>
-          <AlertTriangle aria-hidden data-icon="inline-start" className="text-destructive" />
+        <Button variant="link-destructive" size="inline" className="mb-1 self-start" onClick={() => setDetailsOpen(true)}>
+          <AlertTriangle aria-hidden data-icon="inline-start" />
           {t("edit_view_issues_title", { count: readout.issues.length })}
         </Button>
       )}

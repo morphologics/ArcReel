@@ -55,7 +55,7 @@ import { ProblemList } from "./ProblemList";
 import { StepListRow } from "./StepListRow";
 import { blockerViews, nextStepForAction } from "./problem-views";
 import { buildStepList, type StepAct } from "./step-list";
-import { PHONE_QUERY, useMediaQuery } from "@/hooks/useMediaQuery";
+import { COMPACT_HEADER_QUERY, useMediaQuery } from "@/hooks/useMediaQuery";
 
 /**
  * 任务指纹变化到发起重新求解之间的合并窗口（毫秒）。
@@ -406,7 +406,8 @@ export function WorkflowPanel({ projectName, episode, onViewUnit, onRegenerate, 
     }
   };
 
-  const phone = useMediaQuery(PHONE_QUERY);
+  // under 768px wide: the icon only
+  const phone = useMediaQuery(COMPACT_HEADER_QUERY);
   // 计划没能投影成步骤清单（项目整体不可用、目标集绑定损坏）时，只复述后端给的下一步。
   const headline = view
     ? view.summary

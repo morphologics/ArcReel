@@ -24,7 +24,7 @@ import { WorkspaceNotifications } from "./WorkspaceNotificationsDrawer";
 import { DownloadsIndicator } from "./DownloadsIndicator";
 import { GenerationQueueIndicator } from "./GenerationQueueIndicator";
 import { RenderQueueIndicator } from "./RenderQueueIndicator";
-import { PHONE_QUERY, useMediaQuery } from "@/hooks/useMediaQuery";
+import { COMPACT_HEADER_QUERY, useMediaQuery } from "@/hooks/useMediaQuery";
 
 /**
  * 工作区顶栏，三段：
@@ -41,7 +41,8 @@ export function GlobalHeader() {
   const isConfigComplete = useConfigStatusStore((s) => s.isComplete);
   const fetchConfigStatus = useConfigStatusStore((s) => s.fetch);
   const demoMode = useDemoWorkbench();
-  const phone = useMediaQuery(PHONE_QUERY);
+  // under 768px wide: Projects and Export Project as icons only
+  const phone = useMediaQuery(COMPACT_HEADER_QUERY);
 
   // 导出提示里的剪辑视图链接：在集页时指向当前集，否则指向播出顺序上的第一集；文案用集名。
   const routeEpisode = /\/episodes\/(\d+)/.exec(location)?.[1];
@@ -100,30 +101,29 @@ export function GlobalHeader() {
   };
 
   return (
-    <header className="@container/header grid h-12 shrink-0 grid-cols-[minmax(0,1fr)_auto_minmax(min-content,1fr)] items-center gap-3 border-b border-border bg-background px-2">
-      <div className="flex min-w-0 items-center gap-1">
-        {/* phone width: a Projects icon instead of "‹ Projects" */}
+    // Three columns: the left keeps at least the Projects icon (2.5rem) and clips the project name; the middle
+    // status bar shrinks and clips when there isn't room (instead of covering the left); the right icons keep
+    // their width. With room to spare the middle stays centred.
+    <header className="@container/header grid h-12 shrink-0 grid-cols-[minmax(2.5rem,1fr)_minmax(0,auto)_minmax(min-content,1fr)] items-center gap-3 border-b border-border bg-background px-2">
+      <div className="flex min-w-0 items-center gap-1 overflow-hidden">
+        {/* a Projects icon instead of "‹ Projects" while the header is narrower than 52rem (832px): below that the
+            header's middle and right take the room and would squeeze the text out of view */}
         <Link
           href={`~${ROUTE_APP_PROJECTS}`}
-          className={buttonVariants({ variant: "ghost", size: phone ? "icon-sm" : "sm" })}
-          aria-label={phone ? t("dashboard:projects") : undefined}
-          title={phone ? t("dashboard:projects") : undefined}
+          className={buttonVariants({ variant: "ghost", size: "sm" })}
+          aria-label={t("dashboard:projects")}
+          title={t("dashboard:projects")}
         >
-          {phone ? (
-            <LayoutGrid aria-hidden />
-          ) : (
-            <>
-              <ChevronLeft aria-hidden data-icon="inline-start" />
-              {t("dashboard:projects")}
-            </>
-          )}
+          <LayoutGrid aria-hidden className="@min-[52rem]/header:hidden" />
+          <ChevronLeft aria-hidden data-icon="inline-start" className="hidden @min-[52rem]/header:block" />
+          <span className="hidden @min-[52rem]/header:inline">{t("dashboard:projects")}</span>
         </Link>
         <span aria-hidden className="h-4 w-px shrink-0 bg-border" />
         <ProjectMenu />
         {demoMode && <DemoReadOnlyBadge />}
       </div>
 
-      <div className="flex justify-center">
+      <div className="flex min-w-0 justify-center overflow-hidden">
         {currentProjectName ? <ProjectStatusBar key={currentProjectName} projectName={currentProjectName} /> : null}
       </div>
 
@@ -161,7 +161,7 @@ export function GlobalHeader() {
               ) : (
                 <Download aria-hidden data-icon={phone ? undefined : "inline-start"} />
               )}
-              {/* phone width: the icon only (the tooltip and label still name it) */}
+              {/* under 768px: the icon only (the tooltip and label still name it) */}
               {!phone && (exporting ? t("dashboard:exporting_zip") : t("dashboard:export_zip"))}
             </TooltipTrigger>
             <TooltipContent side="bottom">
