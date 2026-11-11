@@ -23,7 +23,14 @@ from lib.artifacts.artifact_activation import (
 )
 from lib.artifacts.artifact_manifest import ArtifactKey
 from lib.catalog.errors import ModelNotInCatalogError
-from lib.config.resolver import ConfigResolver, video_bucket_for_generation_mode
+from lib.artifacts.video_visual_provenance import resolve_video_aspect_ratio
+from lib.config.resolver import VIDEO_MODEL_OVERRIDE_KEY, ConfigResolver, video_bucket_for_generation_mode
+from lib.generation.video_request_facts import (
+    ExecutionVideoIdentity,
+    VideoRequestCostFacts,
+    VideoRequestFacts,
+    evaluate_video_request_facts,
+)
 from lib.generation.generation_queue import get_generation_queue
 from lib.generation.generation_queue_client import TaskSpec
 from lib.infra.api_errors import BadRequestError, ConflictError, NotFoundError
@@ -49,6 +56,7 @@ from lib.speech.speech_composition import SpeechMode, admit_script_unit
 from server.auth import CurrentUser
 from server.i18n import Translator
 from server.routers._validators import require_audio_switch_supported, require_video_bucket_capability
+from server.services.admission.cost_estimation import quote_video_request
 from server.services.admission.reference_admission import require_admitted_storyboard_references
 from server.services.tasks.derivative_sheet_tasks import build_derivative_sheet_instruction
 from server.services.tasks.generation_context import AudioLaneRequest, resolve_generation_context
@@ -93,6 +101,14 @@ class GenerateVideoRequest(BaseModel):
     script_file: str
     duration_seconds: int | None = Field(default=None, gt=0)
     seed: int | None = None
+    # "provider/model" for this request only ("Regenerate with …"); None uses the configured video model
+    video_model: str | None = Field(default=None, pattern=r"^[^/\s]+/\S.*$", max_length=200)
+
+
+class VideoModelQuotesRequest(BaseModel):
+    script_file: str
+    duration_seconds: int = Field(gt=0)
+    models: list[str] = Field(max_length=60)
 
 
 class GenerateTtsRequest(BaseModel):
@@ -254,8 +270,11 @@ async def generate_video(
     # 上面的生成模式检查已挡掉参考生视频，此处对能到达的项目恒为 i2v。解析闸预检让能力缺失 /
     # 悬空引用在提交入口即返回修复指引，而非任务面板里的异步失败。
     _video_bucket = video_bucket_for_generation_mode(project.get("generation_mode"))
-    await require_video_bucket_capability(project, _video_bucket)
-    await require_audio_switch_supported(project, _video_bucket)
+    override = {VIDEO_MODEL_OVERRIDE_KEY: req.video_model} if req.video_model else None
+    await require_video_bucket_capability(project, _video_bucket, override)
+    if override is None:
+        # the audio-switch check reads the configured model; a chosen model's audio form is checked by the worker
+        await require_audio_switch_supported(project, _video_bucket)
 
     # 结构校验 + 构造经单一守卫点（与 SDK 入队同源，规则不分叉）。
     # duration 是能力维度，留待执行层在 provider 解析后校验（见 ADR-0001）。
@@ -263,6 +282,8 @@ async def generate_video(
         "seed": req.seed,
         "duration_seconds": req.duration_seconds,
     }
+    if override is not None:
+        extra_payload.update(override)
     spec = TaskSpec.from_request(
         task_type="video",
         media_type="video",
@@ -290,6 +311,54 @@ async def generate_video(
         "deduped": result.get("deduped", False),
         "message": _t("video_task_submitted", segment_id=segment_id),
     }
+
+
+@router.post("/projects/{project_name}/generate/video/{segment_id}/model-quotes")
+async def quote_video_models(project_name: str, segment_id: str, req: VideoModelQuotesRequest):
+    """What regenerating this shot's video would cost with each of the given models ("Regenerate with …").
+
+    Per model: the price of a request of ``duration_seconds`` at the project's aspect ratio (None when unpriced),
+    whether the model takes that duration, or the reason it can't run this task; plus the configured model.
+    """
+    from lib.db import async_session_factory
+
+    project = await run_sync_transaction(lambda: get_project_manager().load_project(project_name))
+    if is_reference_video_project(project):
+        raise ConflictError("video_route_is_reference_video")
+    bucket = video_bucket_for_generation_mode(project.get("generation_mode"))
+    aspect_ratio = resolve_video_aspect_ratio(project)
+    resolver = ConfigResolver(async_session_factory)
+    try:
+        configured = await resolver.resolve_video_backend(project, None, generation_type=bucket)
+        current: str | None = f"{configured.provider_id}/{configured.model_id}"
+    except ValueError:  # includes the capability and catalogue errors
+        current = None
+
+    quotes: dict[str, dict[str, object]] = {}
+    for pair in dict.fromkeys(req.models):
+        provider_id, _, model_id = pair.partition("/")
+        if not provider_id or not model_id:
+            continue
+        facts = await evaluate_video_request_facts(
+            project,
+            route="storyboard",
+            generation_type=bucket,
+            identity=ExecutionVideoIdentity(provider_id, model_id),
+            resolver=resolver,
+        )
+        if not isinstance(facts, VideoRequestFacts):
+            quotes[pair] = {"unavailable": facts.code}
+            continue
+        quote = await quote_video_request(
+            VideoRequestCostFacts(facts, req.duration_seconds, aspect_ratio=aspect_ratio, has_first_frame=True),
+            async_session_factory,
+        )
+        quotes[pair] = {
+            "cost": quote.to_payload() if quote is not None else None,
+            "duration_supported": facts.duration_endpoint_fixed or req.duration_seconds in facts.supported_durations,
+            "supported_durations": list(facts.supported_durations),
+        }
+    return {"current": current, "quotes": quotes}
 
 
 # ==================== 旁白配音（TTS）生成 ====================

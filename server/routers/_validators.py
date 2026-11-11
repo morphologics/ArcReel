@@ -44,7 +44,9 @@ def reject_retired_query_params(request: Request, *names: str) -> None:
         raise RequestValidationError(errors)
 
 
-async def require_video_bucket_capability(project: dict, generation_type: VideoGenerationType) -> None:
+async def require_video_bucket_capability(
+    project: dict, generation_type: VideoGenerationType, payload: dict | None = None
+) -> None:
     """视频生成入口预检：按任务类型桶解析全局 + 项目配置并过解析闸（``docs/adr/0054``）。
 
     解析出的模型缺该桶所需能力、或配置引用已不可用（模型被删 / 能力被改 / 供应商被删）时抛
@@ -56,8 +58,9 @@ async def require_video_bucket_capability(project: dict, generation_type: VideoG
     from lib.db import async_session_factory
 
     try:
+        # ``payload`` carries a model chosen for this request, checked by the same gate
         await ConfigResolver(async_session_factory).resolve_video_backend(
-            project, None, generation_type=generation_type
+            project, payload, generation_type=generation_type
         )
     except VideoBucketCapabilityError as exc:
         raise BadRequestError(exc.code, **exc.params) from exc

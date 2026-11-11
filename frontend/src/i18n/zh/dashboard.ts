@@ -2174,6 +2174,11 @@ export default {
   'version_show_history': '在面板中查看历史',
   'media_history_storyboard': '分镜图历史',
   'media_history_video': '视频生成历史',
+  'video_regenerate_with': '换模型重新生成…',
+  'video_models_load_failed': '视频模型加载失败',
+  'video_models_none_other': '没有启用其他视频模型',
+  'video_model_unavailable': '无法生成此分镜（图生视频）',
+  'video_model_duration_unsupported': '不支持 {{seconds}} 秒（可选 {{supported}}）',
   'media_tabs': '分镜图或视频',
   'media_switch_to': '切换到{{name}}',
 

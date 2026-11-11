@@ -44,6 +44,7 @@ import { PartialSaveError, useEditUnit } from "@/components/shared/edit-unit/use
 import { UnsavedChangesBar } from "@/components/shared/edit-unit/UnsavedChangesBar";
 import { useStaysInEpisodeView } from "@/components/canvas/episode-page/EpisodeViewScope";
 import { MediaCard } from "./MediaCard";
+import { VideoRegenerateItems } from "./VideoRegenerateItems";
 import { EndFrameRow } from "./EndFrameRow";
 import { NarrationAudioCard } from "./NarrationAudioCard";
 import { NotesDrawer } from "./NotesDrawer";
@@ -113,7 +114,8 @@ interface ShotDetailProps {
   /** 分镜新增 / 移除请求在途，切镜与增删入口禁用 */
   structurePending?: boolean;
   onGenerateStoryboard?: (segmentId: string) => void;
-  onGenerateVideo?: (segmentId: string) => void | Promise<void>;
+  /** `videoModel`: "provider/model" for this request only ("Regenerate with …"). */
+  onGenerateVideo?: (segmentId: string, scriptFile?: string, videoModel?: string) => void | Promise<void>;
   onGenerateNarration?: (segmentId: string) => void;
   /** 版本恢复与媒体上传之后刷新项目；resolve 为 false 时刷新没成功（父级已提示），不再报告成功。 */
   onRestoreStoryboard?: () => Promise<unknown> | void;
@@ -1154,6 +1156,21 @@ export function ShotDetail({
         onUpload={scriptFile && !readOnly ? (file) => handleUpload("video", file) : undefined}
         uploading={uploadingKind === "video"}
         uploadDisabled={uploadingKind !== null || endFrameSubmitting}
+        contextMenuItems={
+          !readOnly && scriptFile && onGenerateVideo ? (
+            <VideoRegenerateItems
+              projectName={projectName}
+              segmentId={segmentId}
+              scriptFile={scriptFile}
+              durationSeconds={fields.duration_seconds || 4}
+              hasVideo={Boolean(assets?.video_clip)}
+              disabled={generatingVideo || !hasStoryboard || editBusy || refreshPending}
+              onGenerate={(videoModel) =>
+                void unit.saveAndGenerate(() => onGenerateVideo(segmentId, undefined, videoModel ?? undefined))
+              }
+            />
+          ) : undefined
+        }
       />
     </>
   );

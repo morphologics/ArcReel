@@ -1983,3 +1983,23 @@ class TestAutoResolvedBackendsPreview:
         pid = make_provider_id(provider.id)
         assert preview == {"t2i": (pid, "t2i-m"), "i2i": (pid, "i2i-m"), "i2v": None, "r2v": None, "text": None}
         assert preview == executed
+
+
+class TestPayloadVideoModelOverride:
+    """A model chosen for one request ("Regenerate with …"): wins over the configured layers, through the gate."""
+
+    async def test_override_wins_over_project(self):
+        resolver = ConfigResolver.__new__(ConfigResolver)
+        fake_svc = _FakeConfigService(settings={})
+        project = {"video_provider_i2v": "vidu/viduq3-pro", "video_backend": "grok/grok-imagine-video"}
+        payload = {"video_model_override": "kling/kling-v3"}
+        resolved = await resolver._resolve_video_provider_model(fake_svc, None, project, payload, "i2v")
+        assert (resolved.provider_id, resolved.model_id) == ("kling", "kling-v3")
+
+    async def test_override_goes_through_the_capability_gate(self):
+        """An i2v-only model chosen for an r2v task is refused, not run."""
+        resolver = ConfigResolver.__new__(ConfigResolver)
+        fake_svc = _FakeConfigService(settings={})
+        payload = {"video_model_override": "vidu/viduq3-pro"}
+        with pytest.raises(VideoBucketCapabilityError):
+            await resolver._resolve_video_provider_model(fake_svc, None, None, payload, "r2v")

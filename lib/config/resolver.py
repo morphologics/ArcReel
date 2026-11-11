@@ -96,6 +96,11 @@ _REFERENCE_TOTAL_MAX_BYTES_KEY = "reference_total_max_bytes"
 _REFERENCE_SINGLE_MAX_BYTES_KEY = "reference_single_max_bytes"
 
 
+#: Payload key of a video model chosen for one request (``provider/model``); not an execution identity, so the queue
+#: keeps it and every resolution of the task (claim, worker, quote) uses it.
+VIDEO_MODEL_OVERRIDE_KEY = "video_model_override"
+
+
 def _split_pair(raw: object) -> tuple[str, str] | None:
     """解析 ``"<provider>/<model>"`` → (provider, model)；不合法返回 None。
 
@@ -1297,6 +1302,15 @@ class ConfigResolver:
                 pinned_generation_type, pair = pinned
                 selected = ProviderModel(*pair)
                 await self._ensure_video_identity_resolvable(session, selected, pinned_generation_type)
+                return selected
+            # A model chosen for this one request ("Regenerate with …"): used instead of the configured layers,
+            # through the same capability gate as a bucket setting (it must be able to run this task).
+            override = _split_pair(payload.get(VIDEO_MODEL_OVERRIDE_KEY))
+            if override is not None:
+                selected = ProviderModel(*override)
+                if generation_type is None:
+                    return await self._resolve_effective_video_provider_model(session, selected)
+                await self._ensure_video_bucket_capability(session, selected, generation_type)
                 return selected
         if generation_type is None:
             provider_id, model_id = await self._resolve_layered_backend(

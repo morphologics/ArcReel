@@ -259,7 +259,7 @@ export function StudioCanvasRouter() {
     }
   }, [currentProjectName, t]);
 
-  const handleGenerateVideo = useCallback(async (segmentId: string, scriptFile?: string) => {
+  const handleGenerateVideo = useCallback(async (segmentId: string, scriptFile?: string, videoModel?: string) => {
     const scripts = useProjectsStore.getState().currentScripts;
     if (!currentProjectName || !scripts) return;
     const resolved = resolveSegmentPrompt(scripts, segmentId, "video_prompt", scriptFile);
@@ -271,6 +271,7 @@ export function StudioCanvasRouter() {
         resolved.prompt as string | Record<string, unknown>,
         resolved.resolvedFile,
         resolved.duration,
+        videoModel,
       );
     } catch (err) {
       useAppStore.getState().pushToast(t("generate_video_failed", { message: errMsg(err) }), "error");

@@ -241,6 +241,7 @@ import type {
   UsageRecordsQuery,
   UsageSessionsQuery,
   UsageSummaryQuery,
+  VideoModelQuotes,
   VersionInfo,
   VideoCapabilitiesQuery,
 } from "./api/types";
@@ -269,6 +270,7 @@ export type {
   UsageRecordsQuery,
   UsageSessionsQuery,
   UsageSummaryQuery,
+  VideoModelQuotes,
   VersionInfo,
   VersionGeneration,
   VideoCapabilitiesQuery,
@@ -2550,6 +2552,7 @@ class API {
    * @param prompt - 视频生成 prompt（支持字符串或结构化对象）
    * @param scriptFile - 剧本文件名
    * @param durationSeconds - 时长（秒）
+   * @param videoModel - "provider/model" for this request only; omitted uses the configured video model
    * @enqueue
    */
   static async generateVideo(
@@ -2558,6 +2561,7 @@ class API {
     prompt: string | Record<string, unknown>,
     scriptFile: string,
     durationSeconds: number = 4,
+    videoModel?: string,
   ): Promise<{ success: boolean; task_id: string; deduped: boolean; message: string }> {
     return this.request(
       `/projects/${encodeURIComponent(projectName)}/generate/video/${encodeURIComponent(segmentId)}`,
@@ -2567,8 +2571,22 @@ class API {
           prompt,
           script_file: scriptFile,
           duration_seconds: durationSeconds,
+          ...(videoModel ? { video_model: videoModel } : {}),
         }),
       }
+    );
+  }
+
+  /** What regenerating a shot's video would cost with each of the given models ("Regenerate with …"). */
+  static async quoteVideoModels(
+    projectName: string,
+    segmentId: string,
+    body: { script_file: string; duration_seconds: number; models: string[] },
+    options: { signal?: AbortSignal } = {},
+  ): Promise<VideoModelQuotes> {
+    return this.request(
+      `/projects/${encodeURIComponent(projectName)}/generate/video/${encodeURIComponent(segmentId)}/model-quotes`,
+      { method: "POST", body: JSON.stringify(body), signal: options.signal },
     );
   }
 

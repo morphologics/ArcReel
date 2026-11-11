@@ -74,7 +74,7 @@ interface MediaCardProps {
   leadingActions?: ReactNode;
   /** Centred in the title row between the title and the buttons (the shot's position and facts). */
   centerContent?: ReactNode;
-  /** Items of the right-click menu on the storyboard image (DropdownMenuItem elements); no menu when absent. */
+  /** Items of the right-click menu on the image or video (DropdownMenuItem elements); no menu when absent. */
   contextMenuItems?: ReactNode;
 }
 
@@ -203,19 +203,19 @@ export function MediaCard({
   // Right-click menu on the storyboard image: the caller's items (note, edit region) plus upload and versions.
   const menuUploadRef = useRef<HTMLInputElement>(null);
   const menuItems =
-    kind === "storyboard" && contextMenuItems ? (
+    contextMenuItems ? (
       <>
         {onRestore && !demoReadOnly && (
           <DropdownMenuItem onClick={() => setMode(kind, "history")}>
             <History aria-hidden />
-            {t("version_mgmt")}
+            {historyLabel}
           </DropdownMenuItem>
         )}
         {contextMenuItems}
         {onUpload && !demoReadOnly && (
           <DropdownMenuItem disabled={resourceBusy} onClick={() => menuUploadRef.current?.click()}>
             <Upload aria-hidden />
-            {t("media_upload_storyboard")}
+            {t(kind === "storyboard" ? "media_upload_storyboard" : "media_upload_video")}
           </DropdownMenuItem>
         )}
       </>
@@ -413,6 +413,7 @@ export function MediaCard({
             </PreviewableImageFrame>
           </ImageContextMenu>
         ) : (
+          <ImageContextMenu items={menuItems}>
           <div className="overflow-hidden rounded-lg ring-1 ring-border">
             <AspectFrame ratio={aspectRatio}>
               <PresentationPlayer
@@ -425,6 +426,7 @@ export function MediaCard({
               />
             </AspectFrame>
           </div>
+          </ImageContextMenu>
         )
       ) : (
         <AspectFrame ratio={aspectRatio}>
@@ -458,7 +460,7 @@ export function MediaCard({
   );
 }
 
-/** Right-click menu on the storyboard image (alternative to the title row's buttons); plain children without items. */
+/** Right-click menu on the image or video (alternative to the title row's buttons); plain children without items. */
 function ImageContextMenu({ items, children }: { items?: ReactNode; children: ReactNode }) {
   if (!items) return <>{children}</>;
   return (

@@ -2175,6 +2175,11 @@ export default {
   'version_show_history': 'Show history in the pane',
   'media_history_storyboard': 'Storyboard history',
   'media_history_video': 'Video generation history',
+  'video_regenerate_with': 'Regenerate with…',
+  'video_models_load_failed': 'Couldn’t load the video models',
+  'video_models_none_other': 'No other video model enabled',
+  'video_model_unavailable': 'Can’t run this shot (image-to-video)',
+  'video_model_duration_unsupported': '{{seconds}}s not offered (takes {{supported}})',
   'media_tabs': 'Storyboard or video',
   'media_switch_to': 'Switch to {{name}}',
 

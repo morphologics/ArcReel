@@ -2165,6 +2165,11 @@ export default {
   'version_show_history': 'Xem lịch sử trong khung',
   'media_history_storyboard': 'Lịch sử phân cảnh',
   'media_history_video': 'Lịch sử tạo video',
+  'video_regenerate_with': 'Tạo lại bằng…',
+  'video_models_load_failed': 'Không tải được các mô hình video',
+  'video_models_none_other': 'Không có mô hình video nào khác được bật',
+  'video_model_unavailable': 'Không chạy được cảnh này (ảnh sang video)',
+  'video_model_duration_unsupported': 'Không có {{seconds}} giây (hỗ trợ {{supported}})',
   'media_tabs': 'Phân cảnh hoặc video',
   'media_switch_to': 'Chuyển sang {{name}}',
 

@@ -116,6 +116,21 @@ export interface VersionInfo {
   seed?: number | string;
 }
 
+/** Per model ("provider/model"): the price of the shot's video request, or why the model can't run it. */
+export interface VideoModelQuotes {
+  /** The configured video model; null when none resolves. */
+  current: string | null;
+  quotes: Record<
+    string,
+    | { unavailable: string }
+    | {
+        cost: { amount: number | null; currency: string | null; unpriced_reason: string | null } | null;
+        duration_supported: boolean;
+        supported_durations: number[];
+      }
+  >;
+}
+
 export interface VersionGeneration {
   provider: string;
   model: string;
