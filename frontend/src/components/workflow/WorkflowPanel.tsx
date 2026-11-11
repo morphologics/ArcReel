@@ -55,6 +55,7 @@ import { ProblemList } from "./ProblemList";
 import { StepListRow } from "./StepListRow";
 import { blockerViews, nextStepForAction } from "./problem-views";
 import { buildStepList, type StepAct } from "./step-list";
+import { PHONE_QUERY, useMediaQuery } from "@/hooks/useMediaQuery";
 
 /**
  * 任务指纹变化到发起重新求解之间的合并窗口（毫秒）。
@@ -405,6 +406,7 @@ export function WorkflowPanel({ projectName, episode, onViewUnit, onRegenerate, 
     }
   };
 
+  const phone = useMediaQuery(PHONE_QUERY);
   // 计划没能投影成步骤清单（项目整体不可用、目标集绑定损坏）时，只复述后端给的下一步。
   const headline = view
     ? view.summary
@@ -419,11 +421,24 @@ export function WorkflowPanel({ projectName, episode, onViewUnit, onRegenerate, 
       <Popover open={open} onOpenChange={setOpen}>
         <PopoverTrigger
           data-testid="workflow-panel"
-          render={<Button variant="outline" size="sm" className="max-w-[24em] min-w-0" />}
+          render={
+            <Button
+              variant="outline"
+              size="sm"
+              className="max-w-[24em] min-w-0"
+              // phone width: the icon only (and the blocker count), the title and status in the label
+              aria-label={phone ? `${t("panel_title")}: ${headline}` : undefined}
+              title={phone ? `${t("panel_title")}: ${headline}` : undefined}
+            />
+          }
         >
-          <ListChecks aria-hidden data-icon="inline-start" />
-          <span className="shrink-0 font-medium text-foreground">{t("panel_title")}</span>
-          <span className="min-w-0 truncate text-muted-foreground">{headline}</span>
+          <ListChecks aria-hidden data-icon={phone ? undefined : "inline-start"} />
+          {!phone && (
+            <>
+              <span className="shrink-0 font-medium text-foreground">{t("panel_title")}</span>
+              <span className="min-w-0 truncate text-muted-foreground">{headline}</span>
+            </>
+          )}
           {blockers.length > 0 && (
             <Badge variant="destructive">
               <span aria-hidden>{blockers.length}</span>

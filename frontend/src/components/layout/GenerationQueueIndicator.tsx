@@ -123,7 +123,7 @@ export function GenerationQueueIndicator({
             {t("gen_queue_counts", { running: running.length, queued: active.length - running.length, failed })}
           </span>
         </div>
-        <ul className="m-0 flex max-h-[28rem] list-none flex-col gap-1 overflow-y-auto p-0">
+        <ul className="relative m-0 flex max-h-[28rem] list-none flex-col gap-1 overflow-y-auto p-0">
           {listed.slice(0, LIST_LIMIT).map((task) => {
             const ref = task.resource_ref;
             const target = buildTaskFailureTarget(task, projectData);

@@ -147,7 +147,11 @@ export async function enqueueStoryboard(
 ): Promise<EnqueueResult> {
   const res = await submit(
     [markResource(projectName, "storyboard", segmentId, "storyboard")],
-    () => API.generateStoryboard(projectName, segmentId, prompt, scriptFile, imageModel),
+    // the model only when one was chosen ("Generate with …"): otherwise the request is unchanged
+    () =>
+      imageModel
+        ? API.generateStoryboard(projectName, segmentId, prompt, scriptFile, imageModel)
+        : API.generateStoryboard(projectName, segmentId, prompt, scriptFile),
     oneTaskId,
   );
   notifyEnqueued(res.deduped, i18n.t("dashboard:storyboard_task_submitted_toast", { id: itemLabel(segmentId) }));
@@ -164,7 +168,10 @@ export async function enqueueVideo(
 ): Promise<EnqueueResult> {
   const res = await submit(
     [markResource(projectName, "video", segmentId, "video")],
-    () => API.generateVideo(projectName, segmentId, prompt, scriptFile, durationSeconds, videoModel),
+    () =>
+      videoModel
+        ? API.generateVideo(projectName, segmentId, prompt, scriptFile, durationSeconds, videoModel)
+        : API.generateVideo(projectName, segmentId, prompt, scriptFile, durationSeconds),
     oneTaskId,
   );
   notifyEnqueued(res.deduped, i18n.t("dashboard:video_task_submitted_toast", { id: itemLabel(segmentId) }));

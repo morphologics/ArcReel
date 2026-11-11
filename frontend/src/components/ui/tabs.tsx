@@ -10,6 +10,8 @@ function Tabs({
   return (
     <TabsPrimitive.Root
       data-slot="tabs"
+      // passed on as well: the arrow keys follow it (up / down in a vertical list)
+      orientation={orientation}
       data-orientation={orientation}
       className={cn(
         "group/tabs flex gap-2 data-horizontal:flex-col",

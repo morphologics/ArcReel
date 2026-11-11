@@ -11,8 +11,9 @@ import {
   type ReactNode,
   type RefObject,
 } from "react";
-import { PanelRightClose, PanelRightOpen } from "lucide-react";
+import { AlertTriangle, PanelRightClose, PanelRightOpen } from "lucide-react";
 import { useTranslation } from "react-i18next";
+import { isPhoneWidth, PHONE_QUERY, useMediaQuery } from "@/hooks/useMediaQuery";
 import { useParams, useSearchParams } from "wouter";
 
 import { cn } from "cn";
@@ -262,17 +263,23 @@ export function EditTimelineView({
 
   // 整个视图不滚动。The timeline tabs, their menu and the "edited by" line stack in a narrow column left of the
   // preview (instead of a row above it), so the player keeps that height; the column scrolls if there are many.
+  // Narrower than 40rem (phones) the column becomes one row above the preview (tabs, menu, Render), scrolling
+  // sideways, without the "edited by" line.
   return (
-    <div className="@container-size/edit-view dark flex h-full min-h-0 bg-background text-foreground">
-      <div className="flex w-40 shrink-0 flex-col gap-2 overflow-y-auto border-r border-border/50 p-2">
+    <div className="@container-size/edit-view dark flex h-full min-h-0 flex-col bg-background text-foreground @min-[40rem]/edit-view:flex-row">
+      <div className="relative flex shrink-0 items-center gap-2 overflow-x-auto border-b border-border/50 p-2 @min-[40rem]/edit-view:w-40 @min-[40rem]/edit-view:flex-col @min-[40rem]/edit-view:items-stretch @min-[40rem]/edit-view:overflow-x-visible @min-[40rem]/edit-view:overflow-y-auto @min-[40rem]/edit-view:border-r @min-[40rem]/edit-view:border-b-0">
         {/* 方向键移动焦点即切换：切换标签只换预览内容，不卸载别的东西 */}
         <Tabs
           value={selected.id}
           onValueChange={(value: string) => choose(value)}
           orientation="vertical"
-          className="min-w-0"
+          className="min-w-0 shrink-0"
         >
-          <TabsList aria-label={t("edit_view_timelines_aria")} activateOnFocus className="w-full">
+          <TabsList
+            aria-label={t("edit_view_timelines_aria")}
+            activateOnFocus
+            className="@max-[40rem]/edit-view:flex-row! @min-[40rem]/edit-view:w-full"
+          >
             {timelines.map((item) => (
               <TabsTrigger
                 key={item.id}
@@ -286,9 +293,9 @@ export function EditTimelineView({
             ))}
           </TabsList>
         </Tabs>
-        <div className="flex min-w-0 items-start gap-1">
+        <div className="flex shrink-0 items-start gap-1 @min-[40rem]/edit-view:min-w-0 @min-[40rem]/edit-view:shrink">
           <EditTimelineMenu projectName={projectName} timeline={selected} onRenamed={reload} onDeleted={handleDeleted} />
-          <p className="m-0 min-w-0 pt-1 text-xs text-muted-foreground">
+          <p className="m-0 hidden min-w-0 pt-1 text-xs text-muted-foreground @min-[40rem]/edit-view:block">
             {updatedJustNow
               ? t("edit_view_updated_just_now", { author: authorName })
               : t("edit_view_updated", { author: authorName, time: updatedAt })}
@@ -464,10 +471,13 @@ function TimelinePreview({
   // The details column folds away to give the player the width. It starts open only when the timeline has
   // issues to read, opens when a clip is selected, and otherwise stays as the viewer left it (it does not
   // fold by itself when a refresh clears the issues).
-  const [detailsOpen, setDetailsOpen] = useState(() => readout.issues.length > 0);
+  // On a phone it starts folded and stays folded on a clip selection (it would cover the player); an "Issues" link
+  // above the preview opens it over the player.
+  const phone = useMediaQuery(PHONE_QUERY);
+  const [detailsOpen, setDetailsOpen] = useState(() => readout.issues.length > 0 && !isPhoneWidth());
   const setSelectedClipId = useCallback((clipId: string | null) => {
     setSelectedClipIdState(clipId);
-    if (clipId !== null) setDetailsOpen(true);
+    if (clipId !== null && !isPhoneWidth()) setDetailsOpen(true);
   }, []);
   useEffect(() => {
     if (issuesRequest === 0) return;
@@ -566,7 +576,13 @@ function TimelinePreview({
   // on the right; the tracks run full width below, behind a splitter that sets their height.
   return (
     <div ref={areaRef} className="flex min-h-0 flex-1 flex-col">
-      <div className="flex min-h-0 flex-1 gap-2">
+      {phone && !detailsOpen && readout.issues.length > 0 && (
+        <Button variant="link" size="sm" className="mb-1 self-start" onClick={() => setDetailsOpen(true)}>
+          <AlertTriangle aria-hidden data-icon="inline-start" className="text-destructive" />
+          {t("edit_view_issues_title", { count: readout.issues.length })}
+        </Button>
+      )}
+      <div className="relative flex min-h-0 flex-1 gap-2">
         <div className="min-h-0 min-w-0 flex-1">
           <EditTimelinePlayer
             plan={plan}
@@ -587,7 +603,12 @@ function TimelinePreview({
             aria-label={t("edit_view_details_aria")}
             // eslint-disable-next-line jsx-a11y/no-noninteractive-tabindex -- 详情栏可能只有说明文字，须能用键盘聚焦后滚动
             tabIndex={0}
-            className="focus-ring relative flex min-h-0 w-[280px] shrink-0 flex-col gap-4 overflow-y-auto rounded-lg border border-border bg-card p-3 @6xl/canvas:w-[340px]"
+            className={cn(
+              "focus-ring relative flex min-h-0 shrink-0 flex-col gap-4 overflow-y-auto rounded-lg border border-border bg-card p-3",
+              // on a phone it lies over the player instead of beside it
+              // (later in the page than the player, so it lies above it without a z-index)
+              phone ? "absolute inset-0" : "w-[280px] @6xl/canvas:w-[340px]",
+            )}
           >
             <Button
               variant="ghost"
@@ -612,7 +633,7 @@ function TimelinePreview({
               <IssueList issues={readout.issues} clipIds={clipIds} positions={positions} onSelectClip={setSelectedClipId} />
             </div>
           </div>
-        ) : (
+        ) : phone ? null : (
           <Button
             variant="outline"
             size="icon-sm"

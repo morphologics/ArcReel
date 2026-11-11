@@ -185,7 +185,7 @@ export function GridImageToVideoCanvas({
     : undefined;
   const handleGenSb = (segId: string) => onGenerateStoryboard?.(segId, scriptFile);
   const handleGenVid = (segId: string, _scriptFile?: string, videoModel?: string) =>
-    onGenerateVideo?.(segId, scriptFile, videoModel);
+    videoModel ? onGenerateVideo?.(segId, scriptFile, videoModel) : onGenerateVideo?.(segId, scriptFile);
   const handleGenNarration = onGenerateNarration
     ? (segId: string) => onGenerateNarration(segId, scriptFile)
     : undefined;

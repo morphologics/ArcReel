@@ -642,7 +642,7 @@ describe("EditTimelineView", () => {
     const tracks = screen.getByRole("group", { name: "时间线轨道，点击跳到对应时间" });
     vi.spyOn(tracks, "getBoundingClientRect").mockReturnValue(new DOMRect(0, 0, 780, 100));
     const button = screen.getByRole("button", { name: "上传 BGM" });
-    fireEvent.pointerDown(button, { button: 0, clientX: 390 });
+    fireEvent.pointerUp(button, { button: 0, clientX: 390 });
     expect(playheadSeconds()).toBe(0);
 
     const file = new File(["mp3"], "雨夜.mp3", { type: "audio/mpeg" });
@@ -728,10 +728,10 @@ describe("EditTimelineView", () => {
     const tracks = screen.getByRole("group", { name: "时间线轨道，点击跳到对应时间" });
     vi.spyOn(tracks, "getBoundingClientRect").mockReturnValue(new DOMRect(0, 0, 780, 100));
 
-    fireEvent.pointerDown(tracks, { button: 2, clientX: 390 });
+    fireEvent.pointerUp(tracks, { button: 2, clientX: 390 });
     expect(playheadSeconds()).toBe(0);
 
-    fireEvent.pointerDown(tracks, { button: 0, clientX: 390 });
+    fireEvent.pointerUp(tracks, { button: 0, clientX: 390 });
     // 点在轨道正中：7.8s 的一半
     await waitFor(() => expect(playheadSeconds()).toBeCloseTo(3.9, 1));
   });

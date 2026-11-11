@@ -1,6 +1,6 @@
 import { startTransition, useEffect, type ReactNode } from "react";
 import { Link, useLocation } from "wouter";
-import { ChevronLeft, Download, Library, Loader2, Settings } from "lucide-react";
+import { ChevronLeft, Download, LayoutGrid, Library, Loader2, Settings } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { ROUTE_APP_ASSETS, ROUTE_APP_PROJECTS, ROUTE_APP_SETTINGS, episodeEditViewPath } from "@/app-routes";
 import { UsageHeaderEntry } from "@/components/usage/UsageHeaderEntry";
@@ -24,6 +24,7 @@ import { WorkspaceNotifications } from "./WorkspaceNotificationsDrawer";
 import { DownloadsIndicator } from "./DownloadsIndicator";
 import { GenerationQueueIndicator } from "./GenerationQueueIndicator";
 import { RenderQueueIndicator } from "./RenderQueueIndicator";
+import { PHONE_QUERY, useMediaQuery } from "@/hooks/useMediaQuery";
 
 /**
  * 工作区顶栏，三段：
@@ -40,6 +41,7 @@ export function GlobalHeader() {
   const isConfigComplete = useConfigStatusStore((s) => s.isComplete);
   const fetchConfigStatus = useConfigStatusStore((s) => s.fetch);
   const demoMode = useDemoWorkbench();
+  const phone = useMediaQuery(PHONE_QUERY);
 
   // 导出提示里的剪辑视图链接：在集页时指向当前集，否则指向播出顺序上的第一集；文案用集名。
   const routeEpisode = /\/episodes\/(\d+)/.exec(location)?.[1];
@@ -100,9 +102,21 @@ export function GlobalHeader() {
   return (
     <header className="@container/header grid h-12 shrink-0 grid-cols-[minmax(0,1fr)_auto_minmax(min-content,1fr)] items-center gap-3 border-b border-border bg-background px-2">
       <div className="flex min-w-0 items-center gap-1">
-        <Link href={`~${ROUTE_APP_PROJECTS}`} className={buttonVariants({ variant: "ghost", size: "sm" })}>
-          <ChevronLeft aria-hidden data-icon="inline-start" />
-          {t("dashboard:projects")}
+        {/* phone width: a Projects icon instead of "‹ Projects" */}
+        <Link
+          href={`~${ROUTE_APP_PROJECTS}`}
+          className={buttonVariants({ variant: "ghost", size: phone ? "icon-sm" : "sm" })}
+          aria-label={phone ? t("dashboard:projects") : undefined}
+          title={phone ? t("dashboard:projects") : undefined}
+        >
+          {phone ? (
+            <LayoutGrid aria-hidden />
+          ) : (
+            <>
+              <ChevronLeft aria-hidden data-icon="inline-start" />
+              {t("dashboard:projects")}
+            </>
+          )}
         </Link>
         <span aria-hidden className="h-4 w-px shrink-0 bg-border" />
         <ProjectMenu />
@@ -134,7 +148,7 @@ export function GlobalHeader() {
               render={
                 <Button
                   variant="ghost"
-                  size="sm"
+                  size={phone ? "icon-sm" : "sm"}
                   aria-label={t("dashboard:export_project_zip")}
                   aria-busy={exporting}
                   disabled={!currentProjectName || exporting || demoMode}
@@ -143,11 +157,12 @@ export function GlobalHeader() {
               }
             >
               {exporting ? (
-                <Loader2 aria-hidden data-icon="inline-start" className="animate-spin" />
+                <Loader2 aria-hidden data-icon={phone ? undefined : "inline-start"} className="animate-spin" />
               ) : (
-                <Download aria-hidden data-icon="inline-start" />
+                <Download aria-hidden data-icon={phone ? undefined : "inline-start"} />
               )}
-              {exporting ? t("dashboard:exporting_zip") : t("dashboard:export_zip")}
+              {/* phone width: the icon only (the tooltip and label still name it) */}
+              {!phone && (exporting ? t("dashboard:exporting_zip") : t("dashboard:export_zip"))}
             </TooltipTrigger>
             <TooltipContent side="bottom">
               {demoMode ? t("onboarding:demo_action_unavailable") : t("dashboard:export_project_zip")}

@@ -29,6 +29,12 @@ interface TimelineLabel {
   episode: number;
 }
 
+/** The render's timeline ID from its request ("" when missing). */
+function timelineIdOf(task: TaskItem): string {
+  const id = task.payload.timeline_id;
+  return typeof id === "string" ? id : "";
+}
+
 function isActive(task: TaskItem): boolean {
   return task.status === "queued" || task.status === "running";
 }
@@ -80,7 +86,7 @@ export function RenderQueueIndicator({ onOpenEpisode }: { onOpenEpisode: (episod
   const running = active.filter((task) => task.status === "running");
 
   // timeline names for the list: render tasks carry only the timeline ID, so look them up per episode when opened
-  const timelineIds = renders.map((task) => String(task.payload.timeline_id ?? "")).join(",");
+  const timelineIds = renders.map((task) => timelineIdOf(task)).join(",");
   useEffect(() => {
     if (!open || !projectName || !episodes?.length) return;
     if (timelineIds.split(",").every((id) => !id || labels.has(id))) return;
@@ -102,7 +108,7 @@ export function RenderQueueIndicator({ onOpenEpisode }: { onOpenEpisode: (episod
 
   const download = async (task: TaskItem, label: TimelineLabel) => {
     const pushToast = useAppStore.getState().pushToast;
-    const timelineId = String(task.payload.timeline_id);
+    const timelineId = timelineIdOf(task);
     const narration = (task.payload.narration as TimelineNarration | undefined) ?? "without_narration";
     try {
       const result =
@@ -163,9 +169,9 @@ export function RenderQueueIndicator({ onOpenEpisode }: { onOpenEpisode: (episod
       </PopoverTrigger>
       <PopoverContent align="end" sideOffset={6} className="w-160">
         <PopoverTitle>{t("render_queue_title")}</PopoverTitle>
-        <ul className="m-0 flex max-h-96 list-none flex-col gap-1 overflow-y-auto p-0">
+        <ul className="relative m-0 flex max-h-96 list-none flex-col gap-1 overflow-y-auto p-0">
           {renders.map((task) => {
-            const label = labels.get(String(task.payload.timeline_id ?? ""));
+            const label = labels.get(timelineIdOf(task));
             const kind = t(task.task_type === "render_final_cut" ? "render_queue_final_cut" : "render_queue_draft");
             const variant = [
               task.payload.narration === "with_narration" ? t("edit_render_narration_with") : t("edit_render_narration_without"),

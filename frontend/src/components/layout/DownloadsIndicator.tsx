@@ -70,7 +70,7 @@ export function DownloadsIndicator() {
             </Button>
           )}
         </div>
-        <ul className="m-0 flex max-h-96 list-none flex-col gap-3 overflow-y-auto p-0">
+        <ul className="relative m-0 flex max-h-96 list-none flex-col gap-3 overflow-y-auto p-0">
           {items.map((item) => (
             <li key={item.id} className="flex flex-col gap-1.5">
               <div className="flex min-w-0 items-center gap-2">

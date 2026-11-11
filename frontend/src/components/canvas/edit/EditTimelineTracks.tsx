@@ -1,6 +1,16 @@
 import { cn } from "cn";
 import { AlertTriangle, Loader2, Upload } from "lucide-react";
-import { memo, useRef, useState, type ChangeEvent, type CSSProperties, type PointerEvent, type ReactNode } from "react";
+import {
+  memo,
+  useRef,
+  useState,
+  type ChangeEvent,
+  type CSSProperties,
+  type MouseEvent,
+  type PointerEvent,
+  type ReactNode,
+  type WheelEvent,
+} from "react";
 import { useTranslation } from "react-i18next";
 
 import { API } from "@/api";
@@ -22,6 +32,8 @@ function percentOf(seconds: number, duration: number): string {
 /** 每秒至少占这么宽，长时间线横向滚动而不是把片段挤成细条。 */
 const MIN_PIXELS_PER_SECOND = 14;
 /** 轨道名一列的宽度，与下方 `pl-16` / `-left-16` 一致。 */
+/** Pointer travel (px) before a mouse press on the tracks counts as a drag-scroll rather than a click. */
+const DRAG_THRESHOLD = 4;
 const LABEL_WIDTH = 64;
 
 
@@ -68,16 +80,64 @@ export function EditTimelineTracks({
   const duration = readout.duration;
   const percent = (seconds: number) => percentOf(seconds, duration);
 
-  const seekFromPointer = (event: PointerEvent) => {
-    if (event.button !== 0) return;
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const drag = useRef<{ x: number; scrollLeft: number; moved: boolean } | null>(null);
+
+  // A click or tap on the tracks seeks (on release); a swipe (touch, natively: the browser cancels the pointer) or a
+  // mouse drag scrolls them sideways, like the shots strip, without moving the playhead.
+  const seekOnRelease = (event: PointerEvent<HTMLDivElement>) => {
+    if (event.button !== 0 || drag.current?.moved) return;
     const box = trackRef.current?.getBoundingClientRect();
     if (!box || box.width <= 0) return;
     onSeek(((event.clientX - box.left) / box.width) * duration);
   };
+  const onPointerDown = (event: PointerEvent<HTMLDivElement>) => {
+    if (event.pointerType !== "mouse" || event.button !== 0 || !scrollRef.current) return;
+    drag.current = { x: event.clientX, scrollLeft: scrollRef.current.scrollLeft, moved: false };
+  };
+  const onPointerMove = (event: PointerEvent<HTMLDivElement>) => {
+    const state = drag.current;
+    const box = scrollRef.current;
+    if (!state || !box) return;
+    const dx = event.clientX - state.x;
+    if (!state.moved && Math.abs(dx) < DRAG_THRESHOLD) return;
+    if (!state.moved) {
+      state.moved = true;
+      box.setPointerCapture?.(event.pointerId);
+    }
+    box.scrollLeft = state.scrollLeft - dx;
+  };
+  const onPointerUp = () => {
+    // keep `moved` until the click that follows has been swallowed
+    if (drag.current && !drag.current.moved) drag.current = null;
+  };
+  const onClickCapture = (event: MouseEvent) => {
+    if (drag.current?.moved) {
+      event.stopPropagation();
+      event.preventDefault();
+    }
+    drag.current = null;
+  };
+  // a plain mouse wheel scrolls the tracks sideways when they're wider than the view
+  const onWheel = (event: WheelEvent<HTMLDivElement>) => {
+    const box = scrollRef.current;
+    if (!box || box.scrollWidth <= box.clientWidth || event.shiftKey) return;
+    if (Math.abs(event.deltaX) > Math.abs(event.deltaY)) return;
+    box.scrollLeft += event.deltaY;
+  };
 
   return (
     <div className="flex flex-col gap-2 rounded-lg border border-border bg-sidebar/60 p-2">
-      <div className="relative overflow-x-auto">
+      <div
+        ref={scrollRef}
+        className="relative overflow-x-auto"
+        onPointerDown={onPointerDown}
+        onPointerMove={onPointerMove}
+        onPointerUp={onPointerUp}
+        onPointerCancel={onPointerUp}
+        onClickCapture={onClickCapture}
+        onWheel={onWheel}
+      >
         <div
           className="relative min-w-(--track-min-width) pl-16"
           style={{ "--track-min-width": `${LABEL_WIDTH + duration * MIN_PIXELS_PER_SECOND}px` } as CSSProperties}
@@ -86,7 +146,7 @@ export function EditTimelineTracks({
           <div
             ref={trackRef}
             className="relative cursor-pointer"
-            onPointerDown={seekFromPointer}
+            onPointerUp={seekOnRelease}
             aria-label={translate("edit_view_track_aria")}
             role="group"
           >
@@ -248,7 +308,8 @@ function BgmUploadButton({ projectName }: { projectName: string }) {
         title={label}
         disabled={uploading}
         data-testid="edit-bgm-upload"
-        onPointerDown={(event) => event.stopPropagation()}
+        // the tracks seek on release; uploading isn't a seek
+        onPointerUp={(event) => event.stopPropagation()}
         onClick={() => input.current?.click()}
       >
         {uploading ? <Loader2 aria-hidden className="animate-spin" /> : <Upload aria-hidden />}

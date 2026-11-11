@@ -196,10 +196,12 @@ export function TimelineCanvas(props: TimelineCanvasProps) {
   // 而非渲染一个点了没反应的按钮。
   // the model chosen in "Generate with …" passes through (the episode's script file is filled in here)
   const handleGenSb = onGenerateStoryboard
-    ? (segId: string, _scriptFile?: string, imageModel?: string) => onGenerateStoryboard(segId, scriptFile, imageModel)
+    ? (segId: string, _scriptFile?: string, imageModel?: string) =>
+        imageModel ? onGenerateStoryboard(segId, scriptFile, imageModel) : onGenerateStoryboard(segId, scriptFile)
     : undefined;
   const handleGenVid = onGenerateVideo
-    ? (segId: string, _scriptFile?: string, videoModel?: string) => onGenerateVideo(segId, scriptFile, videoModel)
+    ? (segId: string, _scriptFile?: string, videoModel?: string) =>
+        videoModel ? onGenerateVideo(segId, scriptFile, videoModel) : onGenerateVideo(segId, scriptFile)
     : undefined;
   const handleGenNarration = onGenerateNarration
     ? (segId: string) => onGenerateNarration(segId, scriptFile)
