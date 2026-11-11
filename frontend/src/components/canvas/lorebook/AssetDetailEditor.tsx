@@ -38,6 +38,12 @@ import { GalleryStatusMarker } from "./GalleryStatusMarker";
 import { GenerateButton } from "./GenerateButton";
 import { AssetWriteProvider, useAssetWrites } from "./useAssetWrites";
 import { useStaleRegenerateConfirm } from "./useStaleRegenerateConfirm";
+import { ContextMenu } from "@base-ui/react/context-menu";
+import { DropdownMenuContent } from "@/components/ui/dropdown-menu";
+import { enqueueAssetSheetWith } from "@/actions/generation";
+import { AssetSheetGenerateItems, currentModel, useAssetSheetModels } from "@/components/canvas/timeline/VideoRegenerateItems";
+import { errMsg } from "@/utils/async";
+import { useAppStore } from "@/stores/app-store";
 
 const DESCRIPTION_PLACEHOLDER = {
   character: "dashboard:character_desc_placeholder",
@@ -167,12 +173,25 @@ export function AssetDetailEditor({
     onGenerate: () => onGenerate(name),
   });
 
-  const generate = () => {
+  // the configured image model and every enabled one, priced for this sheet ("Generate Image - model - ~$0.04",
+  // and the right-click "Generate with ›")
+  const modelOptions = useAssetSheetModels(projectName, assetType, name);
+  const generateWith = async (imageModel: string) => {
+    try {
+      await enqueueAssetSheetWith(projectName, assetType, name, imageModel);
+    } catch (err) {
+      useAppStore.getState().pushToast(t("dashboard:submit_failed", { message: errMsg(err) }), "error");
+    }
+  };
+
+  /** `imageModel`: a model chosen for this request; none = the configured one. */
+  const generate = (imageModel: string | null = null) => {
     if (busy || rejectIfAssetBusy(assetType, projectName, name, t, "assets:gallery_busy_hint")) return;
     // 资产图只由描述与原图生成：改了描述，保存后这张图就会过期，服务端此刻的判定还看不到
     const willBeStale = value.description !== unit.savedValue.description;
     void unit.saveAndGenerate(() => {
-      if (!rejectIfAssetBusy(assetType, projectName, name, t, "assets:gallery_busy_hint")) return onGenerate(name);
+      if (rejectIfAssetBusy(assetType, projectName, name, t, "assets:gallery_busy_hint")) return;
+      return imageModel ? generateWith(imageModel) : onGenerate(name);
     }, {
       confirm: async () => {
         if (!(await staleConfirm.confirm({ willBeStale }))) return false;
@@ -184,11 +203,17 @@ export function AssetDetailEditor({
   const setField = <K extends keyof AssetFields>(key: K, next: AssetFields[K]) =>
     setValue((prev) => ({ ...prev, [key]: next }));
 
-  const generateLabel = unit.dirty
-    ? t("common:save_and_generate")
-    : gallery.sheetPath
-      ? t("dashboard:regenerate_design")
-      : t("dashboard:generate_design");
+  // "Generate Image - Seedream 4.5 - ~$0.04" (the configured model and its estimated cost, once known)
+  const configured = currentModel(modelOptions);
+  const generateLabel = [
+    unit.dirty
+      ? t("common:save_and_generate")
+      : t(gallery.sheetPath ? "dashboard:asset_regenerate_image" : "dashboard:asset_generate_image"),
+    configured?.name,
+    configured?.cost,
+  ]
+    .filter(Boolean)
+    .join(" - ");
   const describable = hasUsableDescription(value.description);
   const character = assetType === "character" ? (asset as Character) : null;
   const product = assetType === "product" ? (asset as Product) : null;
@@ -228,6 +253,18 @@ export function AssetDetailEditor({
       <SheetBody>
         <div className="flex flex-col gap-6">
           <section aria-label={t("assets:sheet_section")} className="flex flex-col gap-3">
+            <SheetContextMenu
+              items={
+                readOnly ? null : (
+                  <AssetSheetGenerateItems
+                    options={modelOptions}
+                    hasImage={Boolean(gallery.sheetPath)}
+                    disabled={!describable || busy}
+                    onGenerate={(imageModel) => generate(imageModel)}
+                  />
+                )
+              }
+            >
             <div className="relative aspect-video overflow-hidden rounded-lg border border-border bg-muted/40">
               {imageUrl ? (
                 <button
@@ -255,10 +292,11 @@ export function AssetDetailEditor({
                 className="absolute top-2 left-2"
               />
             </div>
+            </SheetContextMenu>
             {readOnly ? null : (
               <div className="flex flex-col gap-1.5">
                 <GenerateButton
-                  onClick={generate}
+                  onClick={() => generate()}
                   loading={generating}
                   disabled={!describable || busy}
                   label={generateLabel}
@@ -391,3 +429,15 @@ export function AssetDetailEditor({
     </AssetWriteProvider>
   );
 }
+
+/** Right-click menu on the sheet image (or its empty placeholder); the plain children without items. */
+function SheetContextMenu({ items, children }: { items: ReactNode; children: ReactNode }) {
+  if (!items) return <>{children}</>;
+  return (
+    <ContextMenu.Root>
+      <ContextMenu.Trigger render={<div />}>{children}</ContextMenu.Trigger>
+      <DropdownMenuContent className="w-auto min-w-44">{items}</DropdownMenuContent>
+    </ContextMenu.Root>
+  );
+}
+

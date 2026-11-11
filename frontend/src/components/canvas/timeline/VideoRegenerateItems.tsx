@@ -22,7 +22,7 @@ function loadCandidates(): Promise<ModelCandidatesResponse> {
   return candidatesOnce;
 }
 
-interface ModelOption {
+export interface ModelOption {
   pair: string;
   name: string;
   provider: string;
@@ -32,7 +32,7 @@ interface ModelOption {
   reason: string | null;
 }
 
-interface ModelOptions {
+export interface ModelOptions {
   current: string | null;
   models: ModelOption[];
 }
@@ -235,3 +235,81 @@ export function StoryboardGenerateItems({
     />
   );
 }
+
+export type SheetAssetType = "character" | "scene" | "prop" | "product";
+
+/**
+ * An asset sheet's model options: the configured model (name and estimated cost, for the Generate button) and
+ * every enabled image model for the sheet's lane, priced. Loads once per asset; null until loaded or on failure.
+ */
+export function useAssetSheetModels(projectName: string, assetType: SheetAssetType, name: string): ModelOptions | null {
+  const { t } = useTranslation("dashboard");
+  const [state, setState] = useState<{ key: string; options: ModelOptions | null } | null>(null);
+  const key = `${projectName}\0${assetType}\0${name}`;
+  useEffect(() => {
+    const controller = new AbortController();
+    void (async () => {
+      try {
+        const candidates = await loadCandidates();
+        const quotes = await API.quoteAssetSheetModels(projectName, assetType, name, candidates.image.default, {
+          signal: controller.signal,
+        });
+        const pairs = candidates.image.buckets[quotes.lane] ?? candidates.image.default;
+        const models = pairs.map((pair) => {
+          const quote = quotes.quotes[pair];
+          const reason = quote && "unavailable" in quote ? t("image_model_unavailable_for_asset") : null;
+          return { pair, ...describe(candidates, pair), cost: quote && "cost" in quote ? costText(quote.cost) : null, reason };
+        });
+        if (quotes.current && !models.some((m) => m.pair === quotes.current)) {
+          const quote = quotes.quotes[quotes.current];
+          models.push({
+            pair: quotes.current,
+            ...describe(candidates, quotes.current),
+            cost: quote && "cost" in quote ? costText(quote.cost) : null,
+            reason: null,
+          });
+        }
+        if (!controller.signal.aborted) setState({ key, options: { current: quotes.current, models } });
+      } catch {
+        if (!controller.signal.aborted) setState({ key, options: null });
+      }
+    })();
+    return () => controller.abort();
+  }, [projectName, assetType, name, key, t]);
+  return state?.key === key ? state.options : null;
+}
+
+/** The configured model of loaded options: its name and cost ("~$0.04"), for a button label. */
+export function currentModel(options: ModelOptions | null): ModelOption | null {
+  return options?.models.find((m) => m.pair === options.current) ?? null;
+}
+
+/** The asset sheet's right-click items, from options already loaded by useAssetSheetModels. */
+export function AssetSheetGenerateItems({
+  options,
+  hasImage,
+  disabled,
+  onGenerate,
+}: {
+  options: ModelOptions | null;
+  hasImage: boolean;
+  disabled: boolean;
+  onGenerate: (imageModel: string | null) => void;
+}) {
+  const { t } = useTranslation("dashboard");
+  const load = useCallback(
+    () => (options ? Promise.resolve(options) : Promise.reject(new Error("model options not loaded"))),
+    [options],
+  );
+  return (
+    <ModelGenerateItems
+      icon={ImageIcon}
+      label={t(hasImage ? "asset_regenerate_image" : "asset_generate_image")}
+      withLabel={t(hasImage ? "storyboard_regenerate_with" : "storyboard_generate_with")}
+      disabled={disabled}
+      load={load}
+      onGenerate={onGenerate}
+    />
+  );
+}
+

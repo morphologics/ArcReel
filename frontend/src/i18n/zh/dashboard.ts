@@ -2200,6 +2200,9 @@ export default {
   'media_back_to_preview': '返回预览',
   'prompt_insert_character': '插入角色',
   'prompt_insert_prop': '插入道具',
+  'asset_generate_image': '生成图片',
+  'asset_regenerate_image': '重新生成图片',
+  'image_model_unavailable_for_asset': '无法生成此图',
   'media_tabs': '分镜图或视频',
   'media_switch_to': '切换到{{name}}',
 

@@ -2201,6 +2201,9 @@ export default {
   'media_back_to_preview': 'Back to preview',
   'prompt_insert_character': 'Insert character',
   'prompt_insert_prop': 'Insert prop',
+  'asset_generate_image': 'Generate Image',
+  'asset_regenerate_image': 'Regenerate Image',
+  'image_model_unavailable_for_asset': 'Can’t make this image',
   'media_tabs': 'Storyboard or video',
   'media_switch_to': 'Switch to {{name}}',
 

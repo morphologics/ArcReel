@@ -24,7 +24,7 @@ from lib.artifacts.artifact_activation import (
 )
 from lib.artifacts.artifact_manifest import ArtifactKey
 from lib.catalog.errors import ModelNotInCatalogError
-from lib.artifacts.generation_input import project_input_observation, storyboard_image_input
+from lib.artifacts.generation_input import asset_sheet_input, project_input_observation, storyboard_image_input
 from lib.artifacts.video_visual_provenance import resolve_video_aspect_ratio
 from lib.config.resolver import VIDEO_MODEL_OVERRIDE_KEY, ConfigResolver, video_bucket_for_generation_mode
 from lib.generation.video_request_facts import (
@@ -100,6 +100,54 @@ class GenerateStoryboardRequest(BaseModel):
 class ImageModelQuotesRequest(BaseModel):
     script_file: str
     models: list[str] = Field(max_length=60)
+
+
+class GenerateAssetRequest(BaseModel):
+    # "provider/model" for this request only ("Generate with …"); None uses the configured image model
+    image_model: str | None = Field(default=None, pattern=r"^[^/\s]+/\S.*$", max_length=200)
+
+
+class AssetModelQuotesRequest(BaseModel):
+    models: list[str] = Field(default_factory=list, max_length=60)
+
+
+def _asset_sheet_lane(project_name: str, asset_type: str, name: str) -> tuple[dict, str, int, str]:
+    """The project, the asset sheet's image lane (i2i with reference images, else t2i), its reference count and
+    canvas ratio, as the asset task will assemble them. Unknown asset → ``KeyError``."""
+    pm_local = get_project_manager()
+    project = pm_local.load_project(project_name)
+    try:
+        generation_input = asset_sheet_input(
+            project,
+            asset_type=asset_type,
+            name=name,
+            observation=project_input_observation(pm_local.get_project_path(project_name)),
+        )
+    except ValueError as exc:
+        raise KeyError(name) from exc
+    references = len(generation_input.references)
+    return project, "i2i" if references else "t2i", references, generation_input.canvas_ratio
+
+
+async def _chosen_image_model_payload(project: dict, lane: str, image_model: str) -> dict[str, object]:
+    """The task payload for an image model chosen for one request ("Generate with …"), checked now through the
+    generation gate: an unknown provider would otherwise fall back to the configured model, and a model the lane
+    can't use would fail in the queue."""
+    from lib.db import async_session_factory
+
+    provider_id, _, model_id = image_model.partition("/")
+    payload: dict[str, object] = {"image_provider": provider_id, "image_model": model_id}
+    try:
+        resolved = await ConfigResolver(async_session_factory).resolve_image_backend(
+            project, payload, generation_type=lane
+        )
+    except ModelNotInCatalogError:
+        raise
+    except ValueError as exc:
+        raise BadRequestError("image_model_unavailable", model=image_model) from exc
+    if (resolved.provider_id, resolved.model_id) != (provider_id, model_id):
+        raise BadRequestError("image_model_unavailable", model=image_model)
+    return payload
 
 
 def _storyboard_image_lane(project_name: str, segment_id: str, script_file: str) -> tuple[dict, str, int, str]:
@@ -196,25 +244,10 @@ async def generate_storyboard(
 
     extra_payload: dict[str, object] | None = None
     if req.image_model:
-        # a model chosen for this request: checked now through the generation gate (the task would otherwise fall
-        # back to the configured model for an unknown provider, or fail on a model the lane can't use)
-        from lib.db import async_session_factory
-
-        provider_id, _, model_id = req.image_model.partition("/")
-        extra_payload = {"image_provider": provider_id, "image_model": model_id}
         project, lane, _refs, _ratio = await run_sync_transaction(
             lambda: _storyboard_image_lane(project_name, segment_id, req.script_file)
         )
-        try:
-            resolved = await ConfigResolver(async_session_factory).resolve_image_backend(
-                project, extra_payload, generation_type=lane
-            )
-        except ModelNotInCatalogError:
-            raise
-        except ValueError as exc:
-            raise BadRequestError("image_model_unavailable", model=req.image_model) from exc
-        if (resolved.provider_id, resolved.model_id) != (provider_id, model_id):
-            raise BadRequestError("image_model_unavailable", model=req.image_model)
+        extra_payload = await _chosen_image_model_payload(project, lane, req.image_model)
 
     # 结构校验 + 构造经单一守卫点（与 SDK 入队同源，规则不分叉）；
     # 校验失败抛 TaskSpecValidationError，由 app 级 handler 映射为 400
@@ -838,6 +871,7 @@ async def _enqueue_asset_generation(
     resource_name: str,
     user_id: str,
     _t: Translator,
+    image_model: str | None = None,
 ) -> dict:
     """项目级资产（character / scene / prop / product）资产图生成共用入队逻辑。
 
@@ -861,10 +895,22 @@ async def _enqueue_asset_generation(
 
     resource_key = await asyncio.to_thread(_sync)
 
+    extra_payload: dict[str, object] | None = None
+    if image_model:
+        # a model chosen for this request ("Generate with …"), checked against the lane the task will use
+        try:
+            project, lane, _refs, _ratio = await asyncio.to_thread(
+                _asset_sheet_lane, project_name, asset_type, resource_key
+            )
+        except KeyError as exc:
+            raise NotFoundError(keys["not_found"], name=resource_name) from exc
+        extra_payload = await _chosen_image_model_payload(project, lane, image_model)
+
     task_spec = TaskSpec.from_request(
         task_type=asset_type,
         media_type="image",
         resource_id=resource_key,
+        **({"extra_payload": extra_payload} if extra_payload else {}),
     )
 
     queue = get_generation_queue()
@@ -892,6 +938,7 @@ async def generate_character(
     char_name: str,
     user: CurrentUser,
     _t: Translator,
+    req: GenerateAssetRequest | None = None,
 ):
     """提交角色资产图生成任务到队列，立即返回 task_id。"""
     return await _enqueue_asset_generation(
@@ -900,6 +947,7 @@ async def generate_character(
         resource_name=char_name,
         user_id=user.id,
         _t=_t,
+        image_model=req.image_model if req else None,
     )
 
 
@@ -959,6 +1007,7 @@ async def generate_scene(
     scene_name: str,
     user: CurrentUser,
     _t: Translator,
+    req: GenerateAssetRequest | None = None,
 ):
     """提交场景资产图生成任务到队列，立即返回 task_id。"""
     return await _enqueue_asset_generation(
@@ -967,6 +1016,7 @@ async def generate_scene(
         resource_name=scene_name,
         user_id=user.id,
         _t=_t,
+        image_model=req.image_model if req else None,
     )
 
 
@@ -976,6 +1026,7 @@ async def generate_prop(
     prop_name: str,
     user: CurrentUser,
     _t: Translator,
+    req: GenerateAssetRequest | None = None,
 ):
     """提交道具资产图生成任务到队列，立即返回 task_id。"""
     return await _enqueue_asset_generation(
@@ -984,6 +1035,7 @@ async def generate_prop(
         resource_name=prop_name,
         user_id=user.id,
         _t=_t,
+        image_model=req.image_model if req else None,
     )
 
 
@@ -993,6 +1045,7 @@ async def generate_product(
     product_name: str,
     user: CurrentUser,
     _t: Translator,
+    req: GenerateAssetRequest | None = None,
 ):
     """提交商品标准参考图（product sheet）生成任务到队列，立即返回 task_id。"""
     return await _enqueue_asset_generation(
@@ -1001,7 +1054,40 @@ async def generate_product(
         resource_name=product_name,
         user_id=user.id,
         _t=_t,
+        image_model=req.image_model if req else None,
     )
+
+
+@router.post("/projects/{project_name}/generate/{asset_type}/{name}/model-quotes")
+async def quote_asset_sheet_models(project_name: str, asset_type: str, name: str, req: AssetModelQuotesRequest):
+    """What generating this asset's sheet would cost with each of the given models ("Generate with …"), on the
+    lane the task will use (image-to-image with reference images); plus the configured model."""
+    from lib.db import async_session_factory
+
+    if asset_type not in _ASSET_GENERATE_I18N:
+        raise NotFoundError("resource_not_found")
+    try:
+        project, lane, references, ratio = await run_sync_transaction(
+            lambda: _asset_sheet_lane(project_name, asset_type, name)
+        )
+    except KeyError as exc:
+        raise NotFoundError(_ASSET_GENERATE_I18N[asset_type]["not_found"], name=name) from exc
+    resolver = ConfigResolver(async_session_factory)
+    try:
+        configured = await resolver.resolve_image_backend(project, None, generation_type=lane)
+        current: str | None = f"{configured.provider_id}/{configured.model_id}"
+    except ValueError:  # includes the capability and catalogue errors
+        current = None
+    quotes = await quote_image_models(
+        project,
+        lane,
+        req.models,
+        aspect_ratio=ratio,
+        reference_count=references,
+        resolver=resolver,
+        session_factory=async_session_factory,
+    )
+    return {"current": current, "lane": lane, "quotes": quotes}
 
 
 # ==================== 图片指令式编辑（image edit） ====================

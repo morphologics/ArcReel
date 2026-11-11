@@ -131,7 +131,7 @@ describe("资产详情 Sheet", () => {
 
     const sheet = await openAsset(user, "林夕");
     expect(within(sheet).getByRole("button", { name: "重命名" })).toBeDisabled();
-    expect(within(sheet).getByRole("button", { name: "重新生成资产图" })).toBeDisabled();
+    expect(within(sheet).getByRole("button", { name: "重新生成图片" })).toBeDisabled();
     expect(within(sheet).getByRole("button", { name: "上传原图", hidden: true })).toBeDisabled();
     await act(() => pending.resolve({ success: true }));
     expect(within(sheet).getByRole("button", { name: "重命名" })).toBeEnabled();
@@ -151,7 +151,7 @@ describe("资产详情 Sheet", () => {
     const confirm = await screen.findByRole("alertdialog", { name: "重命名「林夕」？" });
     await user.click(within(confirm).getByRole("button", { name: "重命名" }));
 
-    expect(within(sheet).getByRole("button", { name: "重新生成资产图", hidden: true })).toBeDisabled();
+    expect(within(sheet).getByRole("button", { name: "重新生成图片", hidden: true })).toBeDisabled();
     expect(within(sheet).getByRole("button", { name: "上传原图", hidden: true })).toBeDisabled();
     await user.keyboard("{Escape}");
     expect(screen.getByRole("alertdialog", { name: "重命名「林夕」？" })).toBeInTheDocument();
@@ -165,7 +165,7 @@ describe("资产详情 Sheet", () => {
     const sheet = await openAsset(user, "林夕");
     act(() => useTasksStore.setState({ tasks: [makeTask({ project_name: "demo", task_type: "character_derivative", resource_id: "林夕/战斗装", status: "running" })] }));
     expect(within(sheet).getByRole("button", { name: "重命名" })).toBeDisabled();
-    expect(within(sheet).getByRole("button", { name: "重新生成资产图" })).toBeDisabled();
+    expect(within(sheet).getByRole("button", { name: "重新生成图片" })).toBeDisabled();
     expect(within(sheet).getByRole("button", { name: "上传原图", hidden: true })).toBeDisabled();
   });
 
@@ -747,7 +747,7 @@ describe("资产详情 Sheet", () => {
     renderGallery("scene");
     const sheet = await openAsset(user, "庭院");
 
-    expect(within(sheet).getByRole("button", { name: "生成资产图" })).toBeDisabled();
+    expect(within(sheet).getByRole("button", { name: "生成图片" })).toBeDisabled();
     expect(within(sheet).getByText("需要先填写描述")).toBeInTheDocument();
 
     await user.type(within(sheet).getByRole("textbox", { name: "描述" }), "月下庭院");

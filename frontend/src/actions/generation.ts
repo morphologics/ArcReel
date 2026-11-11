@@ -257,6 +257,22 @@ export async function enqueueCharacterVoiceSample(
   return { taskIds: [res.task_id], deduped: res.deduped };
 }
 
+/** An asset's sheet with a model chosen for this request only ("Generate with …"). */
+export async function enqueueAssetSheetWith(
+  projectName: string,
+  assetType: "character" | "scene" | "prop" | "product",
+  name: string,
+  imageModel: string,
+): Promise<EnqueueResult> {
+  const res = await submit(
+    [markResource(projectName, assetType, name, assetType)],
+    () => API.generateAssetSheetWith(projectName, assetType, name, imageModel),
+    oneTaskId,
+  );
+  notifyEnqueued(res.deduped, i18n.t(`dashboard:${assetType}_task_submitted_toast`, { name }));
+  return { taskIds: [res.task_id], deduped: res.deduped };
+}
+
 export async function enqueueScene(
   projectName: string,
   name: string,

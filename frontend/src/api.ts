@@ -2562,6 +2562,33 @@ class API {
     );
   }
 
+  /** Generate an asset's sheet with a model chosen for this request only ("Generate with …"). */
+  static async generateAssetSheetWith(
+    projectName: string,
+    assetType: "character" | "scene" | "prop" | "product",
+    name: string,
+    imageModel: string,
+  ): Promise<{ success: boolean; task_id: string; deduped: boolean; message: string }> {
+    return this.request(
+      `/projects/${encodeURIComponent(projectName)}/generate/${assetType}/${encodeURIComponent(name)}`,
+      { method: "POST", body: JSON.stringify({ image_model: imageModel }) },
+    );
+  }
+
+  /** What generating an asset's sheet would cost with each of the given models, and the configured model. */
+  static async quoteAssetSheetModels(
+    projectName: string,
+    assetType: "character" | "scene" | "prop" | "product",
+    name: string,
+    models: string[],
+    options: { signal?: AbortSignal } = {},
+  ): Promise<ImageModelQuotes> {
+    return this.request(
+      `/projects/${encodeURIComponent(projectName)}/generate/${assetType}/${encodeURIComponent(name)}/model-quotes`,
+      { method: "POST", body: JSON.stringify({ models }), signal: options.signal },
+    );
+  }
+
   /** What generating a shot's storyboard image would cost with each of the given models ("Generate with …"). */
   static async quoteStoryboardModels(
     projectName: string,

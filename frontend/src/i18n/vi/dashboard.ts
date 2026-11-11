@@ -2191,6 +2191,9 @@ export default {
   'media_back_to_preview': 'Về xem trước',
   'prompt_insert_character': 'Chèn nhân vật',
   'prompt_insert_prop': 'Chèn đạo cụ',
+  'asset_generate_image': 'Tạo ảnh',
+  'asset_regenerate_image': 'Tạo lại ảnh',
+  'image_model_unavailable_for_asset': 'Không tạo được ảnh này',
   'media_tabs': 'Phân cảnh hoặc video',
   'media_switch_to': 'Chuyển sang {{name}}',
 
