@@ -1050,6 +1050,15 @@ class ProjectArchiveService:
                     versions_payload=versions_payload,
                 ):
                     project_changed = True
+                if self._repair_path_to_canonical(
+                    project_dir,
+                    prop_data,
+                    field_name="reference_image",
+                    canonical_rel=f"props/refs/{prop_name}.png",
+                    location=f"props[{prop_name}].reference_image",
+                    diagnostics=diagnostics,
+                ):
+                    project_changed = True
 
         project_characters = {name for name, payload in (characters or {}).items() if isinstance(payload, dict)}
         project_scenes = {name for name, payload in (scenes or {}).items() if isinstance(payload, dict)}

@@ -122,7 +122,10 @@ ASSET_SPECS: dict[str, AssetSpec] = {
         label_zh="道具",
         namespace_priority=2,
         reference_list_fields=("props",),
-        extra_string_fields=(),
+        # reference_image: an uploaded picture of the prop, sent with its description when its sheet is generated
+        # (as a character's); a file path, set through its upload API, not by the agent.
+        original_image_fields=("reference_image",),
+        extra_string_fields=("reference_image",),
         extra_list_fields=(ALIASES_FIELD,),
         agent_editable_extra_fields=(ALIASES_FIELD,),
     ),

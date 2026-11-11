@@ -276,6 +276,7 @@ export default {
   "original_section": "原图",
   "original_upload": "上传原图",
   "original_replace": "更换原图",
+  "original_remove": "移除原图",
   "original_alt": "「{{name}}」的原图",
   "original_alt_indexed": "「{{name}}」的商品原图 {{index}}",
   "reference_audio_replace": "更换参考音频",

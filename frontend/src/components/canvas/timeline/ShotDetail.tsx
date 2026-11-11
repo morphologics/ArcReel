@@ -14,6 +14,7 @@ import type {
   Utterance,
 } from "@/types";
 import { AD_SECTION_VALUES } from "@/types";
+import { AssetMentionMenu } from "./AssetMentionMenu";
 import { ImagePromptEditor } from "./ImagePromptEditor";
 import { VideoPromptEditor } from "./VideoPromptEditor";
 import { DialogueListEditor } from "./DialogueListEditor";
@@ -817,14 +818,20 @@ export function ShotDetail({
         {imgValue ? (
           <ImagePromptEditor prompt={imgValue} onUpdate={handleImgUpdate} readOnly={readOnly || formSwitching === "image"} />
         ) : (
-          <Textarea
-            aria-label={t("detail_image_prompt_title")}
+          <AssetMentionMenu
             value={typeof fields.image_prompt === "string" ? fields.image_prompt : ""}
-            onChange={(e) => setField("image_prompt", e.target.value)}
-            readOnly={readOnly}
-            placeholder={t("detail_image_prompt_placeholder")}
-            className="max-h-none min-h-31"
-          />
+            onChange={(text) => setField("image_prompt", text)}
+            disabled={readOnly}
+          >
+            <Textarea
+              aria-label={t("detail_image_prompt_title")}
+              value={typeof fields.image_prompt === "string" ? fields.image_prompt : ""}
+              onChange={(e) => setField("image_prompt", e.target.value)}
+              readOnly={readOnly}
+              placeholder={t("detail_image_prompt_placeholder")}
+              className="max-h-none min-h-31"
+            />
+          </AssetMentionMenu>
         )}
         {renderFormSwitchError("image")}
       </ShotSection>

@@ -1855,6 +1855,19 @@ class API {
 
   // ==================== 文件管理 ====================
 
+  /** Remove a character's or prop's reference image (the file stays; a new upload replaces it). */
+  static async deleteReferenceImage(
+    projectName: string,
+    assetType: "character" | "prop",
+    name: string,
+  ): Promise<SuccessResponse> {
+    const kind = assetType === "character" ? "characters" : "props";
+    return this.request(
+      `/projects/${encodeURIComponent(projectName)}/${kind}/${encodeURIComponent(name)}/reference-image`,
+      { method: "DELETE" },
+    );
+  }
+
   static async uploadFile(
     projectName: string,
     uploadType: string,

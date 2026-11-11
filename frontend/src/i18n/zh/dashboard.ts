@@ -2198,6 +2198,8 @@ export default {
   'generate_models_load_failed': '模型加载失败',
   'generate_models_none_other': '没有启用其他模型',
   'media_back_to_preview': '返回预览',
+  'prompt_insert_character': '插入角色',
+  'prompt_insert_prop': '插入道具',
   'media_tabs': '分镜图或视频',
   'media_switch_to': '切换到{{name}}',
 

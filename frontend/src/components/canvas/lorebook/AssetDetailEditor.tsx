@@ -14,7 +14,7 @@ import { SheetBody, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { Textarea } from "@/components/ui/textarea";
 import { useProjectsStore } from "@/stores/projects-store";
 import { DEFAULT_CHARACTER_VOICE_BINDING } from "@/types";
-import type { AssetSheetStatusRow, AssetSheetType, Character, Product } from "@/types";
+import type { AssetSheetStatusRow, AssetSheetType, Character, Product, Prop } from "@/types";
 import { refreshAfterWrite } from "@/components/canvas/shared/refreshAfterWrite";
 import { ASSET_SHEET_TYPE_ICON } from "@/components/assets/asset-type-icons";
 import { rejectIfAssetBusy, useAssetBusyNames } from "./assetBusyGuard";
@@ -184,10 +184,13 @@ export function AssetDetailEditor({
   const describable = hasUsableDescription(value.description);
   const character = assetType === "character" ? (asset as Character) : null;
   const product = assetType === "product" ? (asset as Product) : null;
+  const prop = assetType === "prop" ? (asset as Prop) : null;
   const aliases = "aliases" in asset ? (asset.aliases ?? []) : [];
-  const originals = character
-    ? character.reference_image
-      ? [character.reference_image]
+  // a character's or prop's one reference image, or a product's several
+  const single = character ?? prop;
+  const originals = single
+    ? single.reference_image
+      ? [single.reference_image]
       : []
     : (product?.reference_images ?? []);
 
@@ -262,12 +265,12 @@ export function AssetDetailEditor({
 
           {readOnly && originals.length === 0
             ? null
-            : (character || product) && (
+            : (character || prop || product) && (
                 <EditorSection title={product ? t("dashboard:product_reference_images") : t("assets:original_section")}>
                   <AssetOriginalsField
                     projectName={projectName}
                     name={name}
-                    assetType={product ? "product" : "character"}
+                    assetType={product ? "product" : prop ? "prop" : "character"}
                     paths={originals}
                     readOnly={readOnly}
                     busy={busy}

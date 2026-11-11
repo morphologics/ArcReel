@@ -821,6 +821,37 @@ class TestFilesRouter:
                 pm.load_project("demo")["characters"]["Alice"]["reference_audio"] == "characters/refs_audio/Alice.mp3"
             )
 
+    def test_prop_reference_image_upload_and_remove(self, tmp_path, monkeypatch):
+        client, pm = _client(monkeypatch, tmp_path)
+        with client:
+            upload = client.post(
+                "/api/v1/projects/demo/upload/prop_ref?name=玉佩",
+                files={"file": ("jade.png", _img_bytes("PNG"), "image/png")},
+            )
+            assert upload.status_code == 200
+            assert upload.json()["path"] == "props/refs/玉佩.png"
+            assert pm.load_project("demo")["props"]["玉佩"]["reference_image"] == "props/refs/玉佩.png"
+
+            remove = client.delete("/api/v1/projects/demo/props/玉佩/reference-image")
+            assert remove.status_code == 200
+            assert pm.load_project("demo")["props"]["玉佩"]["reference_image"] == ""
+            # the file stays: a new upload replaces it
+            assert (pm.get_project_path("demo") / "props" / "refs" / "玉佩.png").exists()
+
+            missing = client.delete("/api/v1/projects/demo/props/不存在/reference-image")
+            assert missing.status_code == 404
+
+    def test_character_reference_image_remove(self, tmp_path, monkeypatch):
+        client, pm = _client(monkeypatch, tmp_path)
+        with client:
+            client.post(
+                "/api/v1/projects/demo/upload/character_ref?name=Alice",
+                files={"file": ("alice.png", _img_bytes("PNG"), "image/png")},
+            )
+            remove = client.delete("/api/v1/projects/demo/characters/Alice/reference-image")
+            assert remove.status_code == 200
+            assert pm.load_project("demo")["characters"]["Alice"]["reference_image"] == ""
+
     def test_delete_character_reference_audio(self, tmp_path, monkeypatch):
         client, pm = _client(monkeypatch, tmp_path)
         with client:

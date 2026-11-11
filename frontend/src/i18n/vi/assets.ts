@@ -276,6 +276,7 @@ export default {
   "original_section": "Ảnh gốc",
   "original_upload": "Tải ảnh gốc lên",
   "original_replace": "Thay ảnh gốc",
+  "original_remove": "Gỡ ảnh gốc",
   "original_alt": "Ảnh gốc của \"{{name}}\"",
   "original_alt_indexed": "Ảnh gốc sản phẩm {{index}} của \"{{name}}\"",
   "reference_audio_replace": "Thay âm thanh tham chiếu",

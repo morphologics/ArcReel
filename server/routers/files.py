@@ -269,6 +269,13 @@ UPLOAD_SPECS: dict[str, UploadSpec] = {
         content_check="normalize_image",
         metadata_setter=ProjectManager.update_prop_sheet,
     ),
+    "prop_ref": UploadSpec(
+        allowed_exts=_IMAGE_EXTS,
+        subdir=(ASSET_SPECS["prop"].subdir, "refs"),
+        naming="stable_png",
+        content_check="normalize_image",
+        metadata_setter=ProjectManager.update_prop_reference_image,
+    ),
     "product": UploadSpec(
         allowed_exts=_IMAGE_EXTS,
         subdir=(ASSET_SPECS["product"].subdir,),
@@ -418,7 +425,7 @@ async def upload_file(
 
     Args:
         project_name: 项目名称
-        upload_type: 上传类型 (source/character/character_ref/character_audio_ref/scene/prop/product/product_ref/bgm)
+        upload_type: 上传类型 (source/character/character_ref/character_audio_ref/scene/prop/prop_ref/product/product_ref/bgm)
         file: 上传的文件
         name: 可选，用于角色/场景/道具/商品名称（自动更新元数据）；product_ref 必填；
             分镜/视频上传走 shot_uploads 路由
@@ -646,6 +653,42 @@ async def list_bgm(project_name: str, _t: Translator):
     except BgmError as exc:
         raise _bgm_http_error(exc, _t) from exc
     return {"bgm": [_bgm_view(project_name, track) for track in tracks]}
+
+
+async def _clear_reference_image(project_name: str, asset_type: str, name: str, _t: Translator) -> dict:
+    """Remove a character's or prop's reference image from its entry; the file stays (a new upload replaces it)."""
+    try:
+
+        def _sync():
+            manager = get_project_manager()
+            try:
+                with project_change_source("webui"):
+                    manager.clear_asset_reference_image(project_name, asset_type, name)
+            except KeyError as exc:
+                raise HTTPException(status_code=404, detail=_t(f"{asset_type}_not_found", name=name)) from exc
+            return {"success": True}
+
+        return await run_sync_transaction(_sync)
+
+    except FileNotFoundError as exc:
+        raise NotFoundError("project_not_found", name=project_name) from exc
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.exception("请求处理失败")
+        raise HTTPException(status_code=500, detail=_t("internal_server_error")) from exc
+
+
+@router.delete("/projects/{project_name}/characters/{name}/reference-image")
+async def delete_character_reference_image(project_name: str, name: str, _t: Translator):
+    """Remove a character's reference image."""
+    return await _clear_reference_image(project_name, "character", name, _t)
+
+
+@router.delete("/projects/{project_name}/props/{name}/reference-image")
+async def delete_prop_reference_image(project_name: str, name: str, _t: Translator):
+    """Remove a prop's reference image."""
+    return await _clear_reference_image(project_name, "prop", name, _t)
 
 
 @router.delete("/projects/{project_name}/characters/{name}/reference-audio")

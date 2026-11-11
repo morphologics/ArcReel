@@ -2199,6 +2199,8 @@ export default {
   'generate_models_load_failed': 'Couldn’t load the models',
   'generate_models_none_other': 'No other model enabled',
   'media_back_to_preview': 'Back to preview',
+  'prompt_insert_character': 'Insert character',
+  'prompt_insert_prop': 'Insert prop',
   'media_tabs': 'Storyboard or video',
   'media_switch_to': 'Switch to {{name}}',
 

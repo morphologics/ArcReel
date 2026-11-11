@@ -2,6 +2,7 @@ import { useTranslation } from "react-i18next";
 import { Textarea } from "@/components/ui/textarea";
 import { SHOT_TYPES, SHOT_TYPE_I18N_KEYS } from "@/types";
 import type { ImagePrompt } from "@/types";
+import { AssetMentionMenu } from "./AssetMentionMenu";
 import { CompactInput } from "./CompactInput";
 import { PromptFieldGrid } from "./PromptFieldGrid";
 import { PromptFieldSelect } from "./PromptFieldSelect";
@@ -21,14 +22,16 @@ export function ImagePromptEditor({ prompt, onUpdate, readOnly }: ImagePromptEdi
 
   return (
     <div className="flex flex-col gap-2">
-      <Textarea
-        value={prompt.scene}
-        onChange={(e) => onUpdate({ scene: e.target.value })}
-        readOnly={readOnly}
-        aria-label={t("detail_image_prompt_title")}
-        placeholder={t("image_prompt_placeholder")}
-        className="max-h-none"
-      />
+      <AssetMentionMenu value={prompt.scene} onChange={(scene) => onUpdate({ scene })} disabled={readOnly}>
+        <Textarea
+          value={prompt.scene}
+          onChange={(e) => onUpdate({ scene: e.target.value })}
+          readOnly={readOnly}
+          aria-label={t("detail_image_prompt_title")}
+          placeholder={t("image_prompt_placeholder")}
+          className="max-h-none"
+        />
+      </AssetMentionMenu>
       <PromptFieldGrid title={t("composition_params")}>
         <PromptFieldSelect
           label={t("shot_label")}

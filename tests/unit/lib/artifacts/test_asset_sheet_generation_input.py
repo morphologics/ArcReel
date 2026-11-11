@@ -150,6 +150,16 @@ class TestAssetSheetReferences:
         assert all(ref.claim is None for ref in result.references)
         assert result.canvas_ratio == "16:9"
 
+    def test_prop_reference_image_is_an_original(self, tmp_path):
+        fixture = _Fixture(tmp_path)
+        fixture.write_image("props/refs/玉佩.png")
+        fixture.project["props"]["玉佩"]["reference_image"] = "props/refs/玉佩.png"
+
+        result = fixture.sheet("prop", "玉佩")
+
+        assert not result.gaps, result
+        assert _references(result) == [("props/refs/玉佩.png", "source", "original")]
+
     def test_description_comes_from_the_stored_entry(self, tmp_path):
         fixture = _Fixture(tmp_path)
         fixture.project["scenes"]["祠堂"]["description"] = "  古旧祠堂  "

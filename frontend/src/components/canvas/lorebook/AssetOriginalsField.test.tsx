@@ -1,6 +1,7 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { act, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { API } from "@/api";
 import { useProjectsStore } from "@/stores/projects-store";
 import { AssetOriginalsField } from "./AssetOriginalsField";
 
@@ -40,5 +41,28 @@ describe("AssetOriginalsField", () => {
       "src",
       "/api/v1/files/p/characters/a.png?v=9&w=640",
     );
+  });
+
+  it("uploads a prop's reference image as prop_ref", async () => {
+    const user = userEvent.setup();
+    useProjectsStore.setState({ assetFingerprints: {} });
+    const upload = vi.spyOn(API, "uploadFile").mockResolvedValue({ success: true } as never);
+    render(<AssetOriginalsField projectName="p" name="Wine Glass" assetType="prop" paths={[]} />);
+
+    const file = new File(["png"], "glass.png", { type: "image/png" });
+    await user.upload(screen.getByLabelText("上传原图", { selector: "input" }), file);
+
+    expect(upload).toHaveBeenCalledWith("p", "prop_ref", file, "Wine Glass");
+  });
+
+  it("removes a character's reference image", async () => {
+    const user = userEvent.setup();
+    useProjectsStore.setState({ assetFingerprints: {} });
+    const remove = vi.spyOn(API, "deleteReferenceImage").mockResolvedValue({ success: true } as never);
+    render(<AssetOriginalsField projectName="p" name="阿青" assetType="character" paths={["characters/refs/阿青.png"]} />);
+
+    await user.click(screen.getByRole("button", { name: "移除原图" }));
+
+    expect(remove).toHaveBeenCalledWith("p", "character", "阿青");
   });
 });

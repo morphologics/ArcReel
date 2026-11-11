@@ -1,6 +1,6 @@
 import { useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { ImagePlus, Loader2, Upload } from "lucide-react";
+import { ImagePlus, Loader2, Trash2, Upload } from "lucide-react";
 import { API } from "@/api";
 import { Button } from "@/components/ui/button";
 import { useAppStore } from "@/stores/app-store";
@@ -14,7 +14,14 @@ import { useTrackWrite } from "./useAssetWrites";
 
 const IMAGE_ACCEPT = ".png,.jpg,.jpeg,.webp";
 
-type OriginalsAssetType = "character" | "product";
+type OriginalsAssetType = "character" | "prop" | "product";
+
+/** The upload type for each asset's originals (one image for a character or prop, several for a product). */
+const UPLOAD_TYPE: Record<OriginalsAssetType, string> = {
+  character: "character_ref",
+  prop: "prop_ref",
+  product: "product_ref",
+};
 
 interface AssetOriginalsFieldProps {
   projectName: string;
@@ -72,7 +79,7 @@ export function AssetOriginalsField({
         (async () => {
           for (const file of files) {
             // react-doctor-disable-next-line react-doctor/async-await-in-loop -- 同一资产的原图逐张写入：保持选择顺序、避免并发改写同一条资产记录，中途失败即停并按已传张数刷新
-            await API.uploadFile(projectName, multiple ? "product_ref" : "character_ref", file, name);
+            await API.uploadFile(projectName, UPLOAD_TYPE[assetType], file, name);
             uploaded += 1;
           }
         })(),
@@ -88,7 +95,24 @@ export function AssetOriginalsField({
     }
   };
 
-  const disabled = busy || uploading;
+  // a single reference image (character, prop) can be removed: the entry stops pointing at it, the next sheet
+  // generation goes by the description alone
+  const [removing, setRemoving] = useState(false);
+  const remove = async () => {
+    if (multiple || busy || uploading || removing) return;
+    if (rejectIfAssetBusy(assetType, projectName, name, t, "assets:gallery_busy_hint")) return;
+    setRemoving(true);
+    try {
+      await track(API.deleteReferenceImage(projectName, assetType, name));
+      await track(refreshAfterWrite(projectName, t, { invalidateKeys: [buildEntityRevisionKey(assetType, name)] }));
+    } catch (err) {
+      useAppStore.getState().pushToast(errMsg(err), "error");
+    } finally {
+      setRemoving(false);
+    }
+  };
+
+  const disabled = busy || uploading || removing;
   const uploadIcon = uploading ? (
     <Loader2 aria-hidden data-icon="inline-start" className="animate-spin" />
   ) : multiple ? (
@@ -130,11 +154,21 @@ export function AssetOriginalsField({
         </button>
       )}
       {readOnly || urls.length === 0 ? null : (
-        <div>
+        <div className="flex flex-wrap gap-2">
           <Button variant="outline" size="sm" onClick={() => inputRef.current?.click()} disabled={disabled}>
             {uploadIcon}
             {uploadLabel}
           </Button>
+          {!multiple && (
+            <Button variant="ghost" size="sm" onClick={() => void remove()} disabled={disabled || removing}>
+              {removing ? (
+                <Loader2 aria-hidden data-icon="inline-start" className="animate-spin" />
+              ) : (
+                <Trash2 aria-hidden data-icon="inline-start" />
+              )}
+              {t("assets:original_remove")}
+            </Button>
+          )}
         </div>
       )}
       {readOnly ? null : (

@@ -3877,6 +3877,32 @@ class ProjectManager:
 
         return self.update_project(project_name, _mutate)
 
+    def update_prop_reference_image(self, project_name: str, prop_name: str, ref_path: str) -> dict:
+        """Set a prop's reference image path (an uploaded picture sent with its sheet's generation)."""
+
+        def _mutate(project: dict) -> None:
+            key = resolve_asset_key(project.get("props"), prop_name)
+            if key is None:
+                raise KeyError(f"道具 '{prop_name}' 不存在")
+            project["props"][key]["reference_image"] = ref_path
+
+        return self.update_project(project_name, _mutate)
+
+    def clear_asset_reference_image(self, project_name: str, asset_type: str, name: str) -> dict:
+        """Remove a character's or prop's reference image from its entry; the file stays (a new upload replaces it)."""
+
+        if asset_type not in ("character", "prop"):
+            raise ValueError(f"asset type has no single reference image: {asset_type}")
+        bucket = ASSET_SPECS[asset_type].bucket_key
+
+        def _mutate(project: dict) -> None:
+            key = resolve_asset_key(project.get(bucket), name)
+            if key is None:
+                raise KeyError(f"{asset_type} '{name}' 不存在")
+            project[bucket][key]["reference_image"] = ""
+
+        return self.update_project(project_name, _mutate)
+
     def update_character_reference_audio(self, project_name: str, char_name: str, ref_path: str) -> dict:
         """
         更新角色的参考音频路径（空串表示清空）

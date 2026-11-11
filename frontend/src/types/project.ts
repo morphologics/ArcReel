@@ -67,6 +67,8 @@ export interface Scene {
 export interface Prop {
   description: string;
   prop_sheet?: string;
+  /** An uploaded picture of the prop, sent with its description when its sheet is generated ("" = none). */
+  reference_image?: string;
   /** 别名：只供 AI 规划时认人参考，不参与引用。 */
   aliases?: string[];
 }

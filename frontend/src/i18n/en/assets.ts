@@ -274,6 +274,7 @@ export default {
   "original_section": "Reference image",
   "original_upload": "Upload reference image",
   "original_replace": "Replace reference image",
+  "original_remove": "Remove reference image",
   "original_alt": "Reference image of \"{{name}}\"",
   "original_alt_indexed": "Product reference image {{index}} of \"{{name}}\"",
   "reference_audio_replace": "Replace reference audio",

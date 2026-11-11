@@ -2189,6 +2189,8 @@ export default {
   'generate_models_load_failed': 'Không tải được các mô hình',
   'generate_models_none_other': 'Không có mô hình nào khác được bật',
   'media_back_to_preview': 'Về xem trước',
+  'prompt_insert_character': 'Chèn nhân vật',
+  'prompt_insert_prop': 'Chèn đạo cụ',
   'media_tabs': 'Phân cảnh hoặc video',
   'media_switch_to': 'Chuyển sang {{name}}',
 
