@@ -12,7 +12,7 @@ import { ToastOverlay } from "@/components/layout/ToastOverlay";
 import { LazyBoundary } from "@/components/shared/LazyBoundary";
 import { LoadingState } from "@/components/shared/LoadingState";
 import { LeaveGuardProvider } from "@/components/shared/edit-unit/LeaveGuard";
-import { useTrackReturnTo } from "@/components/shared/page-shell/return-to";
+import { appHomeRoute, useTrackReturnTo } from "@/components/shared/page-shell/return-to";
 import {
   buildDemoProjectData,
   buildDemoScripts,
@@ -224,14 +224,12 @@ export function AppRoutes() {
           {/* Login page */}
           <Route path="/login" component={LoginPage} />
 
-          {/* Root redirects to projects list */}
+          {/* Root, /app and /app/ reopen the last project page visited (projects list when none) */}
           <Route path="/">
-            <Redirect to="/app/projects" />
+            <Redirect to={appHomeRoute()} />
           </Route>
-
-          {/* /app and /app/ also redirect to projects list */}
           <Route path={ROUTE_APP}>
-            <Redirect to={ROUTE_APP_PROJECTS} />
+            <Redirect to={appHomeRoute()} />
           </Route>
 
           {/* Projects list */}

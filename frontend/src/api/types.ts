@@ -114,6 +114,9 @@ export interface VersionInfo {
   duration_seconds?: number;
   aspect_ratio?: string;
   seed?: number | string;
+  /** The shot's editable prompt (image_prompt / video_prompt) this version was generated from; absent on
+   * versions made before it was recorded, uploads and restores. */
+  script_prompt?: unknown;
 }
 
 /** Per model ("provider/model"): the price of the shot's video request, or why the model can't run it. */

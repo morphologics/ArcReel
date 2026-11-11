@@ -11,6 +11,8 @@ import {
 import { DEMO_PROJECT_NAME } from "@/onboarding/demo-project";
 
 const RETURN_TO_KEY = "arcreel:returnTo";
+/** The last project page visited (path + query): the app's root address reopens it. */
+const LAST_PROJECT_KEY = "arcreel:lastProject";
 
 /** 「返回」回到进入之前位置的页面。在这些页面之间往来不改变返回目标。 */
 const RETURN_TO_PAGES = [ROUTE_APP_SETTINGS, ROUTE_APP_ASSETS];
@@ -38,8 +40,32 @@ export function useTrackReturnTo() {
   const search = useSearch();
   useEffect(() => {
     if (!isAppPath(location) || !isReturnTarget(location)) return;
-    sessionStorage.setItem(RETURN_TO_KEY, search ? `${location}?${search}` : location);
+    const target = search ? `${location}?${search}` : location;
+    sessionStorage.setItem(RETURN_TO_KEY, target);
+    if (isProjectPage(location)) {
+      try {
+        localStorage.setItem(LAST_PROJECT_KEY, target);
+      } catch {
+        // storage unavailable: the root address opens the projects list
+      }
+    }
   }, [location, search]);
+}
+
+function isProjectPage(path: string) {
+  const name = path.slice(ROUTE_APP_PROJECTS.length + 1).split("/")[0];
+  return path.startsWith(`${ROUTE_APP_PROJECTS}/`) && Boolean(name) && decodeURIComponent(name) !== DEMO_PROJECT_NAME;
+}
+
+/** Where the app's root address goes: the last project page visited, else the projects list. */
+export function appHomeRoute(): string {
+  try {
+    const last = localStorage.getItem(LAST_PROJECT_KEY);
+    if (last && isProjectPage(last.split("?")[0])) return last;
+  } catch {
+    // storage unavailable
+  }
+  return ROUTE_APP_PROJECTS;
 }
 
 /**

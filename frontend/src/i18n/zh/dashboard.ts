@@ -2179,6 +2179,8 @@ export default {
   'video_models_none_other': '没有启用其他视频模型',
   'video_model_unavailable': '无法生成此分镜（图生视频）',
   'video_model_duration_unsupported': '不支持 {{seconds}} 秒（可选 {{supported}}）',
+  'version_restore_unsaved': '请先保存或放弃此分镜的修改：设为当前会同时恢复提示词',
+  'version_prompt_restore_failed': '已设为当前版本，但提示词未能恢复：{{message}}',
   'media_tabs': '分镜图或视频',
   'media_switch_to': '切换到{{name}}',
 

@@ -43,6 +43,9 @@ _LOCKS_GUARD = threading.Lock()
 _LOCKS_BY_VERSIONS_FILE: dict[str, threading.RLock] = {}
 _PREVIOUS_CURRENT_VERSION = "_previous_current_version"
 MANUAL_UPLOAD_VERSION_SOURCE = "manual_upload"
+#: A storyboard image's / video's version record: the shot's editable prompt (``image_prompt`` / ``video_prompt``
+#: as in the script) it was generated from, so making the version current can restore the prompt too.
+SCRIPT_PROMPT_VERSION_FIELD = "script_prompt"
 # 版本记录里该版本输出（即版本快照）的裸 sha256 hexdigest，算法同 ``lib.infra.content_digest.sha256_file``。
 VERSION_CONTENT_DIGEST = "content_digest"
 # 写入时记录内容指纹的资源类型：视频与音频产物。

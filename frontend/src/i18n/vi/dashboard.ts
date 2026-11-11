@@ -2170,6 +2170,8 @@ export default {
   'video_models_none_other': 'Không có mô hình video nào khác được bật',
   'video_model_unavailable': 'Không chạy được cảnh này (ảnh sang video)',
   'video_model_duration_unsupported': 'Không có {{seconds}} giây (hỗ trợ {{supported}})',
+  'version_restore_unsaved': 'Hãy lưu hoặc huỷ chỉnh sửa của cảnh này trước: Đặt làm hiện tại cũng khôi phục prompt',
+  'version_prompt_restore_failed': 'Đã đặt làm hiện tại nhưng không khôi phục được prompt: {{message}}',
   'media_tabs': 'Phân cảnh hoặc video',
   'media_switch_to': 'Chuyển sang {{name}}',
 

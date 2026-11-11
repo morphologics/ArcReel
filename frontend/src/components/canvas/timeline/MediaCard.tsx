@@ -6,7 +6,7 @@ import { isResourceBusy } from "@/stores/tasks-store";
 import { Sparkles, ImageIcon, Film, History, Upload } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useTranslation } from "react-i18next";
-import { API } from "@/api";
+import { API, type VersionInfo } from "@/api";
 import { usePlaybackStart } from "@/hooks/usePlaybackStart";
 import { useProjectsStore } from "@/stores/projects-store";
 import { AspectFrame } from "@/components/canvas/shared/AspectFrame";
@@ -75,6 +75,10 @@ interface MediaCardProps {
   /** Centred in the title row between the title and the buttons (the shot's position and facts). */
   centerContent?: ReactNode;
   /** Items of the right-click menu on the image or video (DropdownMenuItem elements); no menu when absent. */
+  /** Make current also puts back the prompt the version was made from (and, for videos, its length). */
+  onRestorePrompt?: (version: VersionInfo, kind: MediaKind) => Promise<void>;
+  /** The shot has unsaved edits: Make current with a prompt to restore waits until they are saved or discarded. */
+  unsavedEdits?: boolean;
   contextMenuItems?: ReactNode;
 }
 
@@ -101,6 +105,8 @@ export function MediaCard({
   leadingActions,
   centerContent,
   contextMenuItems,
+  onRestorePrompt,
+  unsavedEdits,
   uploading,
   uploadDisabled,
   editScriptFile,
@@ -180,6 +186,12 @@ export function MediaCard({
       useAppStore.getState().pushToast(t("version_restore_busy_hint"), "error");
       return;
     }
+    const info = versions.data?.versions.find((v) => v.version === version);
+    const restoresPrompt = Boolean(onRestorePrompt) && info?.script_prompt != null;
+    if (restoresPrompt && unsavedEdits) {
+      useAppStore.getState().pushToast(t("version_restore_unsaved"), "error");
+      return;
+    }
     setRestoringVersion(version);
     setRestoreBusy(true);
     try {
@@ -191,6 +203,13 @@ export function MediaCard({
           await onRestore?.();
           // the restored version is now the current one: the pane shows it as such
           view(kind, null);
+          if (restoresPrompt && info) {
+            try {
+              await onRestorePrompt?.(info, kind);
+            } catch (err) {
+              useAppStore.getState().pushToast(t("version_prompt_restore_failed", { message: errMsg(err) }), "error");
+            }
+          }
         })(),
       );
     } catch (err) {

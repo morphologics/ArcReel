@@ -99,7 +99,7 @@ describe("MediaCard in the demo workbench", () => {
     const { container, queryByRole } = renderCardWithAllEntries();
 
     expect(container.querySelector('input[type="file"]')).toBeNull();
-    expect(queryByRole("button", { name: /版本/ })).not.toBeInTheDocument();
+    expect(queryByRole("button", { name: "分镜图历史" })).not.toBeInTheDocument();
     expect(queryByRole("button", { name: /编辑/ })).not.toBeInTheDocument();
     expect(queryByRole("button", { name: /重新生成分镜/ })).not.toBeInTheDocument();
   });
@@ -110,7 +110,7 @@ describe("MediaCard in the demo workbench", () => {
     const { container, getByRole } = renderCardWithAllEntries();
 
     expect(container.querySelector('input[type="file"]')).not.toBeNull();
-    expect(getByRole("button", { name: /版本/ })).toBeInTheDocument();
+    expect(getByRole("button", { name: "分镜图历史" })).toBeInTheDocument();
     expect(getByRole("button", { name: /局部修改/ })).toBeInTheDocument();
     expect(getByRole("button", { name: /重新生成分镜/ })).toBeInTheDocument();
   });
@@ -162,5 +162,49 @@ describe("MediaCard storyboard / video tabs", () => {
     fireEvent.click(screen.getByRole("button", { name: "视频" }));
     // picking a view shows it in Preview
     expect(useShotMediaStore.getState()).toMatchObject({ tab: "video", mode: { video: "preview" } });
+  });
+});
+
+describe("MediaCard Make current restores the prompt", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+    useShotMediaStore.setState({ mode: { storyboard: "preview", video: "preview" }, viewing: { storyboard: null, video: null } });
+  });
+
+  function mockVersions(segmentId: string) {
+    vi.spyOn(API, "getVersions").mockResolvedValue({
+      resource_type: "storyboards",
+      resource_id: segmentId,
+      current_version: 2,
+      versions: [
+        { version: 1, filename: "a", created_at: "2026-11-10T06:02:00Z", file_size: 1, is_current: false, file_url: "/v1.png", script_prompt: { scene: "rain" } },
+        { version: 2, filename: "b", created_at: "2026-11-11T06:02:00Z", file_size: 1, is_current: true, file_url: "/v2.png" },
+      ],
+    } as never);
+  }
+
+  it("puts back the version's prompt after making it current", async () => {
+    useProjectsStore.setState({ currentProjectName: "demo" });
+    mockVersions("E1S02");
+    vi.spyOn(API, "restoreVersion").mockResolvedValue({ success: true } as never);
+    const onRestorePrompt = vi.fn().mockResolvedValue(undefined);
+    renderCard({ segmentId: "E1S02", assetPath: "storyboards/E1S02.png", onRestore: vi.fn(), onRestorePrompt });
+
+    fireEvent.click(screen.getByRole("button", { name: "分镜图历史" }));
+    const makeCurrent = await screen.findByRole("button", { name: "设为当前" });
+    await act(async () => fireEvent.click(makeCurrent));
+    expect(onRestorePrompt).toHaveBeenCalledWith(expect.objectContaining({ version: 1, script_prompt: { scene: "rain" } }), "storyboard");
+  });
+
+  it("waits for unsaved edits before restoring a prompt", async () => {
+    useProjectsStore.setState({ currentProjectName: "demo" });
+    mockVersions("E1S03");
+    const restore = vi.spyOn(API, "restoreVersion").mockResolvedValue({ success: true } as never);
+    renderCard({ segmentId: "E1S03", assetPath: "storyboards/E1S03.png", onRestore: vi.fn(), onRestorePrompt: vi.fn(), unsavedEdits: true });
+
+    fireEvent.click(screen.getByRole("button", { name: "分镜图历史" }));
+    const makeCurrent = await screen.findByRole("button", { name: "设为当前" });
+    await act(async () => fireEvent.click(makeCurrent));
+    expect(restore).not.toHaveBeenCalled();
   });
 });

@@ -54,7 +54,7 @@ import { statusFromAssets } from "./shot-status";
 import { StatusBadge } from "./StatusBadge";
 import { ShotStructureActions, type InsertShotHandler } from "./ShotStructureActions";
 import { SegmentBreakToggle } from "./SegmentBreakToggle";
-import { API } from "@/api";
+import { API, type VersionInfo } from "@/api";
 import { useAppStore } from "@/stores/app-store";
 import { isResourceBusy, isScriptFileBusy } from "@/stores/tasks-store";
 import { useCostStore } from "@/stores/cost-store";
@@ -972,6 +972,18 @@ export function ShotDetail({
 
   // 有未保存修改时生成按钮先保存再生成；保存失败不生成
   const generateLabel = dirty ? t("common:save_and_generate") : undefined;
+  // Make current on a version also puts back the prompt it was made from (a video also its length), through the
+  // same save as an edit, so the left pane shows what made the current media.
+  const restorePrompt = readOnly
+    ? undefined
+    : async (version: VersionInfo, kind: "storyboard" | "video") => {
+        const isVideo = kind === "video";
+        const patch: Record<string, unknown> = { [isVideo ? "video_prompt" : "image_prompt"]: version.script_prompt };
+        if (isVideo && version.duration_seconds && version.duration_seconds !== segment.duration_seconds) {
+          patch.duration_seconds = version.duration_seconds;
+        }
+        if (!(await onUpdatePrompt?.(segmentId, patch))) throw new Error(t("shot_saved_not_refreshed"));
+      };
   // The strip's right-click Generate on this shot goes through here, so unsaved edits are saved first.
   const stripGenerate = useRef<{ storyboard?: () => void; video?: () => void }>({});
   useEffect(() => {
@@ -1107,6 +1119,8 @@ export function ShotDetail({
       generateDisabledHint={savingHint}
       leadingActions={minimalHeader ? structureActions : undefined}
       contextMenuItems={imageMenuItems}
+      onRestorePrompt={restorePrompt}
+      unsavedEdits={dirty}
       centerContent={
         minimalHeader ? (
           <>
@@ -1156,6 +1170,8 @@ export function ShotDetail({
         onUpload={scriptFile && !readOnly ? (file) => handleUpload("video", file) : undefined}
         uploading={uploadingKind === "video"}
         uploadDisabled={uploadingKind !== null || endFrameSubmitting}
+        onRestorePrompt={restorePrompt}
+        unsavedEdits={dirty}
         contextMenuItems={
           !readOnly && scriptFile && onGenerateVideo ? (
             <VideoRegenerateItems

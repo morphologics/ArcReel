@@ -2180,6 +2180,8 @@ export default {
   'video_models_none_other': 'No other video model enabled',
   'video_model_unavailable': 'Can’t run this shot (image-to-video)',
   'video_model_duration_unsupported': '{{seconds}}s not offered (takes {{supported}})',
+  'version_restore_unsaved': 'Save or discard your edits to this shot first: Make current also restores the prompt',
+  'version_prompt_restore_failed': 'Version made current, but its prompt couldn’t be restored: {{message}}',
   'media_tabs': 'Storyboard or video',
   'media_switch_to': 'Switch to {{name}}',
 

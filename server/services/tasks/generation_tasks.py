@@ -39,7 +39,7 @@ from lib.artifacts.generation_input import (
     storyboard_image_input,
 )
 from lib.artifacts.image_reference_snapshot import FrozenImageReferences, freeze_image_references
-from lib.artifacts.version_manager import PaidVersionCommit
+from lib.artifacts.version_manager import SCRIPT_PROMPT_VERSION_FIELD, PaidVersionCommit
 from lib.artifacts.video_artifact_facts import VideoArtifactCurrencyFacts
 from lib.artifacts.video_visual_provenance import build_storyboard_video_visual_basis
 from lib.artifacts.visual_artifact_provenance import (
@@ -439,6 +439,9 @@ class _StoryboardImageInputs:
     currency_resolver: ArtifactCurrencyResolver
     script_claim: ArtifactInputClaim
     generation_input: StoryboardImageInput
+    #: the shot's editable image prompt this image is made from, kept on its version so Make current can bring it
+    #: back
+    script_prompt: Any = None
 
 
 async def execute_storyboard_task(
@@ -478,12 +481,15 @@ async def execute_storyboard_task(
         # 生成输入不成立时在解析供应商通道与付费之前失败，一次报出全部缺口。
         if (_refusal := _generation_input.refusal) is not None:
             raise input_refusal_error(_refusal)
+        _items, _id_field, _, _, _ = get_storyboard_items(_script)
+        _resolved = find_storyboard_item(_items, _id_field, resource_id)
         return _StoryboardImageInputs(
             project=_project,
             project_path=_project_path,
             currency_resolver=_currency_resolver,
             script_claim=_script_input.claim,
             generation_input=_generation_input,
+            script_prompt=copy.deepcopy(_resolved[0].get("image_prompt")) if _resolved else None,
         )
 
     inputs = await run_sync_transaction(_load)
@@ -558,6 +564,9 @@ async def execute_storyboard_task(
                 build_commit_callback=_build_commit,
                 pre_submit=_pre_submit,
                 before_submit=_assert_claims_usable,
+                version_metadata=(
+                    {SCRIPT_PROMPT_VERSION_FIELD: inputs.script_prompt} if inputs.script_prompt is not None else {}
+                ),
                 warnings=frozen.warnings,
             ),
         )
@@ -1303,7 +1312,8 @@ async def execute_video_task(
                     checkpoint.to_json(),
                     checkpoint.provider_id,
                 )
-                return checkpoint_version_metadata(checkpoint)
+                # the shot's editable video prompt this video is made from: Make current brings it back
+                return {**checkpoint_version_metadata(checkpoint), SCRIPT_PROMPT_VERSION_FIELD: requested_visual_prompt}
 
             checkpoint_hook = _checkpoint_before_submit
         except BaseException:
