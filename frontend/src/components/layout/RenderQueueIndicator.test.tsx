@@ -4,6 +4,7 @@ import { API } from "@/api";
 import { useProjectsStore } from "@/stores/projects-store";
 import { useTasksStore } from "@/stores/tasks-store";
 import { makeTask } from "@/test/factories";
+import * as renderDownloads from "@/components/canvas/edit-render/render-downloads";
 import { RenderQueueIndicator } from "./RenderQueueIndicator";
 
 const now = new Date().toISOString();
@@ -33,7 +34,7 @@ describe("RenderQueueIndicator", () => {
         project_name: "demo",
         task_type: "render_final_cut",
         status,
-        payload: { timeline_id: "tl1", narration: "with_narration", subtitles: true },
+        payload: { timeline_id: "tl1", narration: "with_narration", subtitles: "burned_subtitles" },
         queued_at: now,
         started_at: status === "queued" ? null : now,
         finished_at: status === "succeeded" ? now : null,
@@ -56,5 +57,32 @@ describe("RenderQueueIndicator", () => {
 
     fireEvent.click(screen.getAllByText(/初剪/)[0]);
     expect(onOpen).toHaveBeenCalledWith(5);
+  });
+
+  it("offers Download on the newest finished render of a version only", async () => {
+    const done = (id: string, queuedAt: string) =>
+      makeTask({
+        task_id: id,
+        project_name: "demo",
+        task_type: "render_final_cut",
+        resource_id: "tl1.with_narration.burned_subtitles",
+        status: "succeeded",
+        payload: { timeline_id: "tl1", narration: "with_narration", subtitles: "burned_subtitles" },
+        queued_at: queuedAt,
+        started_at: queuedAt,
+        finished_at: now,
+        updated_at: now,
+      });
+    useTasksStore.setState({ tasks: [done("old", "2026-01-01T00:00:00Z"), done("new", now)] });
+    const download = vi.spyOn(renderDownloads, "downloadFinalCut").mockResolvedValue("started");
+    render(<RenderQueueIndicator onOpenEpisode={vi.fn()} />);
+    fireEvent.click(screen.getByRole("button", { name: "出片队列" }));
+
+    const buttons = await screen.findAllByRole("button", { name: "下载" });
+    expect(buttons).toHaveLength(1);
+    fireEvent.click(buttons[0]);
+    expect(download).toHaveBeenCalledWith(
+      expect.objectContaining({ timelineId: "tl1", timelineName: "初剪", subtitles: "burned_subtitles", fileStem: "demo - E5" }),
+    );
   });
 });

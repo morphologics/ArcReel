@@ -1,14 +1,20 @@
 import { useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { CheckCircle2, Clapperboard, Clock, Loader2, XCircle } from "lucide-react";
+import { CheckCircle2, Clapperboard, Clock, Download, Loader2, XCircle } from "lucide-react";
 import { API } from "@/api";
 import { ElapsedTime, WorkingBar } from "@/components/canvas/edit-render/ElapsedTime";
+import {
+  downloadFinalCut,
+  downloadJianyingDraft,
+  storedDraftSettings,
+} from "@/components/canvas/edit-render/render-downloads";
 import { Button } from "@/components/ui/button";
 import { Popover, PopoverContent, PopoverTitle, PopoverTrigger } from "@/components/ui/popover";
 import { useAppStore } from "@/stores/app-store";
 import { useProjectsStore } from "@/stores/projects-store";
 import { useTasksStore } from "@/stores/tasks-store";
-import type { TaskItem } from "@/types";
+import type { SubtitleMode, TaskItem } from "@/types";
+import type { TimelineNarration } from "@/types/edit-timeline";
 import { errMsg } from "@/utils/async";
 import { formatRelativeTime, parseIsoTimestamp } from "@/utils/date-format";
 import { episodeDisplayName } from "@/utils/episode-display";
@@ -29,13 +35,14 @@ function isActive(task: TaskItem): boolean {
 /**
  * Top-bar entry for the project's render queue (final cuts and Jianying drafts): shows while a render is queued or
  * running, or one finished in the last 24 h. The badge counts active renders; the popover lists each with its
- * timeline, running time or outcome, Cancel while queued (a running render can't be stopped), and opens the
- * episode's Edit View on click.
+ * timeline, running time or outcome, Cancel while queued (a running render can't be stopped), Download on the newest
+ * finished render of each version, and opens the episode's Edit View on click.
  */
 export function RenderQueueIndicator({ onOpenEpisode }: { onOpenEpisode: (episode: number) => void }) {
   const { t, i18n } = useTranslation("dashboard");
   const projectName = useProjectsStore((s) => s.currentProjectName);
   const episodes = useProjectsStore((s) => s.currentProjectData?.episodes);
+  const projectTitle = useProjectsStore((s) => s.currentProjectData?.title);
   const tasks = useTasksStore((s) => s.tasks);
   const [open, setOpen] = useState(false);
   const [labels, setLabels] = useState<Map<string, TimelineLabel>>(new Map());
@@ -59,6 +66,16 @@ export function RenderQueueIndicator({ onOpenEpisode }: { onOpenEpisode: (episod
     [tasks, projectName, now],
   );
   const active = renders.filter(isActive);
+  // a later render of the same version replaces the file: only the newest finished one can still be downloaded
+  const downloadable = new Set<string>();
+  const seenResources = new Set<string>();
+  for (const task of renders) {
+    if (task.status !== "succeeded") continue;
+    const resource = `${task.task_type}:${task.resource_id}`;
+    if (!seenResources.has(resource)) downloadable.add(task.task_id);
+    seenResources.add(resource);
+  }
+  const draftSettings = storedDraftSettings();
   const running = active.filter((task) => task.status === "running");
 
   // timeline names for the list: render tasks carry only the timeline ID, so look them up per episode when opened
@@ -81,6 +98,36 @@ export function RenderQueueIndicator({ onOpenEpisode }: { onOpenEpisode: (episod
   }, [open, projectName, episodes, timelineIds, labels]);
 
   if (!projectName || renders.length === 0) return null;
+
+  const download = async (task: TaskItem, label: TimelineLabel) => {
+    const pushToast = useAppStore.getState().pushToast;
+    const timelineId = String(task.payload.timeline_id);
+    const narration = (task.payload.narration as TimelineNarration | undefined) ?? "without_narration";
+    try {
+      const result =
+        task.task_type === "render_final_cut"
+          ? await downloadFinalCut({
+              projectName,
+              timelineId,
+              timelineName: label.name,
+              fileStem: `${projectTitle || projectName} - E${label.episode}`,
+              narration,
+              subtitles: (task.payload.subtitles as SubtitleMode | undefined) ?? "no_subtitles",
+            })
+          : await downloadJianyingDraft({
+              projectName,
+              timelineId,
+              timelineName: label.name,
+              narration,
+              draftPath: draftSettings.path,
+              jianyingVersion: draftSettings.version,
+            });
+      if (result === "duplicate") pushToast(t("downloads_already_running"), "info");
+      else if (result === "missing") pushToast(t("render_queue_file_missing"), "error");
+    } catch (err) {
+      pushToast(errMsg(err), "error");
+    }
+  };
 
   const cancel = async (task: TaskItem) => {
     try {
@@ -121,7 +168,7 @@ export function RenderQueueIndicator({ onOpenEpisode }: { onOpenEpisode: (episod
             const kind = t(task.task_type === "render_final_cut" ? "render_queue_final_cut" : "render_queue_draft");
             const variant = [
               task.payload.narration === "with_narration" ? t("edit_render_narration_with") : t("edit_render_narration_without"),
-              task.payload.subtitles === true ? t("render_queue_subtitles") : null,
+              task.payload.subtitles === "burned_subtitles" ? t("render_queue_subtitles") : null,
             ]
               .filter(Boolean)
               .join(" · ");
@@ -174,6 +221,22 @@ export function RenderQueueIndicator({ onOpenEpisode }: { onOpenEpisode: (episod
                   </span>
                   {task.status === "running" && <WorkingBar />}
                 </button>
+                {downloadable.has(task.task_id) && label && (
+                  <Button
+                    variant="ghost"
+                    size="icon-xs"
+                    aria-label={t("render_queue_download")}
+                    title={
+                      task.task_type === "render_jianying_draft" && !draftSettings.path
+                        ? t("render_queue_draft_path_needed")
+                        : t("render_queue_download")
+                    }
+                    disabled={task.task_type === "render_jianying_draft" && !draftSettings.path}
+                    onClick={() => void download(task, label)}
+                  >
+                    <Download aria-hidden />
+                  </Button>
+                )}
                 {task.status === "queued" && (
                   <Button variant="ghost" size="xs" onClick={() => void cancel(task)}>
                     {t("downloads_cancel")}

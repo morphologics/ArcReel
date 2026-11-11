@@ -24,12 +24,15 @@ import type {
 } from "@/types";
 import type { TimelineNarration } from "@/types/edit-timeline";
 import { ElapsedTime, WorkingBar } from "./ElapsedTime";
+import {
+  DRAFT_PATH_STORAGE_KEY,
+  JIANYING_VERSION_STORAGE_KEY,
+  draftDownloadKey,
+  finalCutDownloadKey,
+} from "./render-downloads";
 import { finalCutFileName } from "./render-file-name";
 import { useBlockedReason } from "./useBlockedReason";
 import { useRenderArtifact, type RenderArtifactView } from "./useRenderArtifact";
-
-const DRAFT_PATH_STORAGE_KEY = "arcreel_jianying_draft_path";
-const JIANYING_VERSION_STORAGE_KEY = "arcreel_jianying_version";
 
 const STATUS_DOT: Record<RenderArtifactStatus, string> = {
   current: "bg-good",
@@ -188,7 +191,7 @@ function RenderPanel({
   const hasFile = artifact !== null && artifact.version !== null;
   const draftReady = draftPath.trim().length > 0;
   // the same final cut already downloading (the top bar's Downloads shows it): no second copy
-  const finalCutKey = `final-cut:${projectName}:${timelineId}:${artifact?.version ?? ""}`;
+  const finalCutKey = finalCutDownloadKey(projectName, timelineId, artifact?.version ?? null);
   const finalCutRunning = useDownloadsStore((s) =>
     s.items.some((item) => item.key === finalCutKey && item.status === "running"),
   );
@@ -224,7 +227,7 @@ function RenderPanel({
       const result = await trackedDownload({
         url: draftUrl,
         filename: `${timelineName || "draft"}.zip`,
-        key: `draft:${projectName}:${timelineId}`,
+        key: draftDownloadKey(projectName, timelineId),
         mimeType: "application/zip",
       });
       if (result === "duplicate") useAppStore.getState().pushToast(t("downloads_already_running"), "info");
