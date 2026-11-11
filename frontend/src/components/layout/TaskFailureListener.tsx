@@ -1,4 +1,5 @@
 import { useAssetSheetBatchNotifications } from "@/hooks/useAssetSheetBatchNotifications";
+import { useRenderReadyToasts } from "@/hooks/useRenderReadyToasts";
 import { useTaskFailureNotifications } from "@/hooks/useTaskFailureNotifications";
 
 interface TaskFailureListenerProps {
@@ -12,5 +13,6 @@ interface TaskFailureListenerProps {
 export function TaskFailureListener({ projectName }: TaskFailureListenerProps) {
   useTaskFailureNotifications(projectName);
   useAssetSheetBatchNotifications(projectName);
+  useRenderReadyToasts(projectName);
   return null;
 }

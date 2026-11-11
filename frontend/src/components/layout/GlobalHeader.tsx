@@ -21,6 +21,8 @@ import { ProjectMenu } from "./ProjectMenu";
 import { ProjectStatusBar } from "./ProjectStatusBar";
 import { useProjectExport } from "./useProjectExport";
 import { WorkspaceNotifications } from "./WorkspaceNotificationsDrawer";
+import { DownloadsIndicator } from "./DownloadsIndicator";
+import { RenderQueueIndicator } from "./RenderQueueIndicator";
 
 /**
  * 工作区顶栏，三段：
@@ -110,6 +112,15 @@ export function GlobalHeader() {
       </div>
 
       <div className="flex items-center justify-end gap-1">
+        {!demoMode && (
+          <RenderQueueIndicator
+            onOpenEpisode={(episode) => {
+              if (!currentProjectName) return;
+              setLocation(`~${ROUTE_APP_PROJECTS}/${encodeURIComponent(currentProjectName)}${episodeEditViewPath(episode)}`);
+            }}
+          />
+        )}
+        <DownloadsIndicator />
         <WorkspaceNotifications onNavigate={handleNotificationNavigate} />
         {usageProjectName && <UsageHeaderEntry projectName={usageProjectName} />}
         <span aria-hidden className="mx-1 h-4 w-px shrink-0 bg-border" />

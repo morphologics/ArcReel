@@ -8,6 +8,7 @@ import type { EditTimelineIssueRef, EpisodeScript, FinalCutStatus, JianyingDraft
 import { RenderButton } from "./RenderButton";
 import { finalCutFileName } from "./render-file-name";
 import { RenderDialog } from "./RenderDialog";
+import { useDownloadsStore } from "@/stores/downloads-store";
 
 function finalCut(overrides: Partial<FinalCutStatus> = {}): FinalCutStatus {
   return {
@@ -81,6 +82,7 @@ function renderDialog({
 describe("RenderDialog", () => {
   let anchorClick: ReturnType<typeof vi.spyOn>;
   let downloads: { href: string; download: string }[];
+  let fetchSpy: ReturnType<typeof vi.spyOn>;
 
   beforeEach(() => {
     localStorage.clear();
@@ -91,6 +93,13 @@ describe("RenderDialog", () => {
     anchorClick = vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(function (this: HTMLAnchorElement) {
       downloads.push({ href: this.getAttribute("href") ?? "", download: this.download });
     });
+    // downloads are fetched by the studio (progress in the top bar's Downloads), then saved from memory
+    fetchSpy = vi
+      .spyOn(globalThis, "fetch")
+      .mockImplementation(async () => new Response("file", { headers: { "Content-Length": "4" } }));
+    URL.createObjectURL = vi.fn(() => "blob:download");
+    URL.revokeObjectURL = vi.fn();
+    useDownloadsStore.setState({ items: [] });
   });
 
   afterEach(() => {
@@ -109,7 +118,9 @@ describe("RenderDialog", () => {
     expect(await screen.findByText("已是最新")).toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: "下载" }));
 
-    expect(downloads).toEqual([{ href: "/api/v1/files/demo/renders/final_cut.mp4?v=3", download: "初剪.mp4" }]);
+    await waitFor(() => expect(downloads).toEqual([{ href: "blob:download", download: "初剪.mp4" }]));
+    expect(fetchSpy).toHaveBeenCalledWith("/api/v1/files/demo/renders/final_cut.mp4?v=3", expect.anything());
+    expect(useDownloadsStore.getState().items[0]).toMatchObject({ name: "初剪.mp4", status: "done", received: 4 });
     expect(renderSpy).not.toHaveBeenCalled();
   });
 
@@ -256,10 +267,12 @@ describe("RenderDialog", () => {
 
     await waitFor(() => expect(downloads).toHaveLength(1));
     expect(token).toHaveBeenCalledWith("demo", "current");
-    expect(downloads[0].href).toBe(
+    expect(fetchSpy).toHaveBeenCalledWith(
       "/api/v1/projects/demo/edit-timelines/tl-1/jianying-draft/download" +
         "?draft_path=%2FUsers%2Fme%2FDrafts&download_token=tok&jianying_version=5&narration=without_narration",
+      expect.anything(),
     );
+    expect(downloads[0].download).toBe("初剪.zip");
     expect(localStorage.getItem("arcreel_jianying_draft_path")).toBe("/Users/me/Drafts");
   });
 

@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { downloadBlob, safeFileName, saveDownloadAs } from "./download";
+import { downloadBlob, safeFileName, saveDownloadAs, trackedDownload } from "./download";
+import { useDownloadsStore } from "@/stores/downloads-store";
 
 describe("downloadBlob", () => {
   it("defers URL revocation until the browser has started consuming the download", async () => {
@@ -49,5 +50,33 @@ describe("saveDownloadAs", () => {
     });
     await expect(saveDownloadAs("/api/v1/files/demo/x.mp4", "Demo - E1.mp4")).resolves.toBe(true);
     expect(clicked).toEqual([{ href: "/api/v1/files/demo/x.mp4", download: "Demo - E1.mp4" }]);
+  });
+});
+
+describe("trackedDownload", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+    useDownloadsStore.setState({ items: [] });
+  });
+
+  it("streams the file with progress into the Downloads list and refuses a second copy while it runs", async () => {
+    let release: () => void = () => {};
+    const gate = new Promise<void>((resolve) => (release = resolve));
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(async () => {
+      await gate;
+      return new Response("12345678", { headers: { "Content-Length": "8" } });
+    });
+    Object.defineProperty(URL, "createObjectURL", { configurable: true, value: vi.fn(() => "blob:x") });
+    Object.defineProperty(URL, "revokeObjectURL", { configurable: true, value: vi.fn() });
+    vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => {});
+
+    const first = trackedDownload({ url: "/f.mp4", filename: "Cut.mp4", key: "k" });
+    await vi.waitFor(() => expect(useDownloadsStore.getState().items).toHaveLength(1));
+    await expect(trackedDownload({ url: "/f.mp4", filename: "Cut.mp4", key: "k" })).resolves.toBe("duplicate");
+    release();
+    await expect(first).resolves.toBe("started");
+
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+    expect(useDownloadsStore.getState().items[0]).toMatchObject({ status: "done", received: 8, total: 8 });
   });
 });

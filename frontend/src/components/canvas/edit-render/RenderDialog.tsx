@@ -11,7 +11,9 @@ import { Label } from "@/components/ui/label";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { errMsg } from "@/utils/async";
 import { formatRelativeTime, isJustNow } from "@/utils/date-format";
-import { saveDownloadAs, triggerBrowserDownload } from "@/utils/download";
+import { trackedDownload } from "@/utils/download";
+import { useAppStore } from "@/stores/app-store";
+import { useDownloadsStore } from "@/stores/downloads-store";
 import type {
   EditTimelineIssueRef,
   JianyingVersion,
@@ -21,6 +23,7 @@ import type {
   TaskItem,
 } from "@/types";
 import type { TimelineNarration } from "@/types/edit-timeline";
+import { ElapsedTime, WorkingBar } from "./ElapsedTime";
 import { finalCutFileName } from "./render-file-name";
 import { useBlockedReason } from "./useBlockedReason";
 import { useRenderArtifact, type RenderArtifactView } from "./useRenderArtifact";
@@ -184,7 +187,12 @@ function RenderPanel({
   const isDraft = kind === "jianying_draft";
   const hasFile = artifact !== null && artifact.version !== null;
   const draftReady = draftPath.trim().length > 0;
-  const canDownload = hasFile && !downloading && (!isDraft || draftReady);
+  // the same final cut already downloading (the top bar's Downloads shows it): no second copy
+  const finalCutKey = `final-cut:${projectName}:${timelineId}:${artifact?.version ?? ""}`;
+  const finalCutRunning = useDownloadsStore((s) =>
+    s.items.some((item) => item.key === finalCutKey && item.status === "running"),
+  );
+  const canDownload = hasFile && !downloading && !(finalCutRunning && !isDraft) && (!isDraft || draftReady);
 
   const handleDownload = async () => {
     if (!artifact || !canDownload) return;
@@ -193,16 +201,10 @@ function RenderPanel({
       if (!("download_url" in artifact) || !artifact.download_url) return;
       const name = finalCutFileName(fileStem, timelineName, artifact.narration, artifact.subtitles, artifact.rendered_at);
       const url = artifact.download_url;
-      // open the save dialog synchronously (only a click can open it); keep the dialog open while the file is written
-      const saving = saveDownloadAs(url, name);
-      setDownloading(true);
-      try {
-        await saving;
-      } catch (err) {
-        setDownloadError(errMsg(err));
-      } finally {
-        setDownloading(false);
-      }
+      // the top bar's Downloads shows progress; a second click on the same file only points there
+      // (open the save dialog in this call stack: only a click can open it)
+      const result = await trackedDownload({ url, filename: name, key: finalCutKey, mimeType: "video/mp4" });
+      if (result === "duplicate") useAppStore.getState().pushToast(t("downloads_already_running"), "info");
       return;
     }
     const root = draftPath.trim();
@@ -211,16 +213,21 @@ function RenderPanel({
     setDownloading(true);
     try {
       const { download_token } = await API.requestExportToken(projectName, "current");
-      triggerBrowserDownload(
-        API.getJianyingDraftDownloadUrl(
-          projectName,
-          timelineId,
-          root,
-          download_token,
-          jianyingVersion,
-          narration ?? "without_narration",
-        ),
+      const draftUrl = API.getJianyingDraftDownloadUrl(
+        projectName,
+        timelineId,
+        root,
+        download_token,
+        jianyingVersion,
+        narration ?? "without_narration",
       );
+      const result = await trackedDownload({
+        url: draftUrl,
+        filename: `${timelineName || "draft"}.zip`,
+        key: `draft:${projectName}:${timelineId}`,
+        mimeType: "application/zip",
+      });
+      if (result === "duplicate") useAppStore.getState().pushToast(t("downloads_already_running"), "info");
     } catch (err) {
       setDownloadError(errMsg(err));
     } finally {
@@ -241,7 +248,7 @@ function RenderPanel({
       disabled={!canDownload || submitting}
       title={isDraft && hasFile && !draftReady ? t("edit_render_draft_path_required") : undefined}
     >
-      {downloading ? (
+      {downloading || (finalCutRunning && !isDraft) ? (
         <Loader2 data-icon="inline-start" className="animate-spin" aria-hidden />
       ) : (
         <Download data-icon="inline-start" aria-hidden />
@@ -517,10 +524,19 @@ function TaskProgress({ kind, submitting, task }: { kind: RenderKind; submitting
   else if (task.status === "succeeded") text = t("edit_render_task_succeeded");
   else text = t("edit_render_task_cancelled");
   const active = submitting && task?.status !== "succeeded";
+  const working = task === null || task.status === "queued" || task.status === "running";
   return (
-    <div role="status" className="flex items-center gap-2 text-sm text-muted-foreground">
-      {active && <Loader2 aria-hidden className="size-3.5 animate-spin" />}
-      <span>{text}</span>
+    <div role="status" className="flex flex-col gap-1.5 text-sm text-muted-foreground">
+      <div className="flex items-center gap-2">
+        {active && <Loader2 aria-hidden className="size-3.5 animate-spin" />}
+        <span>{text}</span>
+        {task?.status === "running" && task.started_at && (
+          <span className="num">
+            · <ElapsedTime since={task.started_at} />
+          </span>
+        )}
+      </div>
+            {working && <WorkingBar />}
     </div>
   );
 }
