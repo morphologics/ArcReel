@@ -47,6 +47,8 @@ import { GalleryStatusMarker } from "./GalleryStatusMarker";
 import { GenerateButton } from "./GenerateButton";
 import { useTrackWrite } from "./useAssetWrites";
 import { useStaleRegenerateConfirm } from "./useStaleRegenerateConfirm";
+import { useImageLaneModel } from "@/components/canvas/timeline/VideoRegenerateItems";
+import { generateDetail } from "@/components/canvas/shared/GenerateLabel";
 
 /** 脚本正文里引用衍生的记号。 */
 function derivativeToken(characterName: string, derivativeName: string): string {
@@ -108,6 +110,8 @@ export function CharacterDerivativeRow({
 
   const resourceId = derivativeResourceId(characterName, name);
   const generating = useActiveResourceIds("character_derivative", projectName).has(resourceId);
+  // a derivative is an image edit of the owner's sheet: image-to-image with that one reference
+  const derivativeModel = useImageLaneModel(projectName, "i2i", 1);
   const token = derivativeToken(characterName, name);
   const qualified = `${characterName}/${name}`;
 
@@ -445,6 +449,7 @@ export function CharacterDerivativeRow({
                     ? t("assets:derivative_regenerate")
                     : t("assets:derivative_generate")
               }
+              detail={generateDetail(derivativeModel?.name, derivativeModel?.cost)}
               size="sm"
               variant="outline"
             />

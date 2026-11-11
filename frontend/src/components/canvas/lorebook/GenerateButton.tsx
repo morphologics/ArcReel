@@ -2,12 +2,14 @@ import type { ComponentProps } from "react";
 import { useTranslation } from "react-i18next";
 import { Loader2, Sparkles } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { GenerateLabel } from "@/components/canvas/shared/GenerateLabel";
 
 /** 资产图的生成按钮：生成中禁用，前置图标换成转圈。 */
 export function GenerateButton({
   onClick,
   loading = false,
   label,
+  detail,
   className,
   disabled = false,
   size,
@@ -16,6 +18,8 @@ export function GenerateButton({
   onClick: () => void;
   loading?: boolean;
   label: string;
+  /** Smaller text after the label (the model and its estimated cost). */
+  detail?: string | null;
   className?: string;
   disabled?: boolean;
   size?: ComponentProps<typeof Button>["size"];
@@ -30,7 +34,11 @@ export function GenerateButton({
       ) : (
         <Sparkles aria-hidden data-icon="inline-start" />
       )}
-      {loading ? t("gallery_generating") : label}
+      {loading ? (
+        t("gallery_generating")
+      ) : (
+        <GenerateLabel label={label} detail={detail} />
+      )}
     </Button>
   );
 }

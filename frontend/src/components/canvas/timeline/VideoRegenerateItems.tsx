@@ -313,3 +313,85 @@ export function AssetSheetGenerateItems({
   );
 }
 
+/** The configured model's name and estimated cost ("~$0.04"); null until known. */
+export interface ConfiguredModel {
+  name: string;
+  cost: string | null;
+}
+
+// One answer per request shape per page load: several buttons (a character's derivative rows) ask the same.
+const configuredModels = new Map<string, Promise<ConfiguredModel | null>>();
+
+function useConfiguredModel(
+  key: string,
+  fetchQuotes: (() => Promise<{ current: string | null; quotes: Record<string, unknown> }>) | null,
+): ConfiguredModel | null {
+  const [state, setState] = useState<{ key: string; model: ConfiguredModel | null } | null>(null);
+  useEffect(() => {
+    if (!fetchQuotes) return;
+    let live = true;
+    let pending = configuredModels.get(key);
+    if (!pending) {
+      pending = Promise.all([loadCandidates(), fetchQuotes()]).then(([candidates, quotes]) => {
+        if (!quotes.current) return null;
+        const quote = quotes.quotes[quotes.current] as
+          | { cost?: { amount: number | null; currency: string | null } | null }
+          | undefined;
+        return { name: describe(candidates, quotes.current).name, cost: costText(quote?.cost) };
+      });
+      pending.catch(() => configuredModels.delete(key));
+      configuredModels.set(key, pending);
+    }
+    pending.then(
+      (model) => live && setState({ key, model }),
+      () => live && setState({ key, model: null }),
+    );
+    return () => {
+      live = false;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- the key names everything fetchQuotes depends on
+  }, [key]);
+  return state?.key === key ? state.model : null;
+}
+
+/** The storyboard image's configured model (for the Generate button). */
+export function useStoryboardModel(projectName: string, segmentId: string, scriptFile: string | null): ConfiguredModel | null {
+  return useConfiguredModel(
+    `sb\0${projectName}\0${segmentId}\0${scriptFile ?? ""}`,
+    scriptFile
+      ? () => API.quoteStoryboardModels(projectName, segmentId, { script_file: scriptFile, models: [] })
+      : null,
+  );
+}
+
+/** The video's configured model (for the Generate button). */
+export function useVideoModel(
+  projectName: string,
+  segmentId: string,
+  scriptFile: string | null,
+  durationSeconds: number,
+): ConfiguredModel | null {
+  return useConfiguredModel(
+    `video\0${projectName}\0${segmentId}\0${scriptFile ?? ""}\0${durationSeconds}`,
+    scriptFile
+      ? () =>
+          API.quoteVideoModels(projectName, segmentId, {
+            script_file: scriptFile,
+            duration_seconds: durationSeconds,
+            models: [],
+          })
+      : null,
+  );
+}
+
+/** An image lane's configured model and one image's cost (e.g. a character derivative: i2i, one reference). */
+export function useImageLaneModel(
+  projectName: string,
+  lane: "t2i" | "i2i",
+  referenceCount: number,
+): ConfiguredModel | null {
+  return useConfiguredModel(`lane\0${projectName}\0${lane}\0${referenceCount}`, () =>
+    API.quoteImageLaneModels(projectName, { lane, reference_count: referenceCount }),
+  );
+}
+

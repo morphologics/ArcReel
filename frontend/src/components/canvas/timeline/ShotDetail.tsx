@@ -45,7 +45,7 @@ import { PartialSaveError, useEditUnit } from "@/components/shared/edit-unit/use
 import { UnsavedChangesBar } from "@/components/shared/edit-unit/UnsavedChangesBar";
 import { useStaysInEpisodeView } from "@/components/canvas/episode-page/EpisodeViewScope";
 import { MediaCard } from "./MediaCard";
-import { StoryboardGenerateItems, VideoRegenerateItems } from "./VideoRegenerateItems";
+import { StoryboardGenerateItems, VideoRegenerateItems, useStoryboardModel, useVideoModel } from "./VideoRegenerateItems";
 import { EndFrameRow } from "./EndFrameRow";
 import { NarrationAudioCard } from "./NarrationAudioCard";
 import { NotesDrawer } from "./NotesDrawer";
@@ -980,6 +980,9 @@ export function ShotDetail({
 
   // 有未保存修改时生成按钮先保存再生成；保存失败不生成
   const generateLabel = dirty ? t("common:save_and_generate") : undefined;
+  // the configured models, named on the Generate buttons with their estimated cost
+  const storyboardModel = useStoryboardModel(projectName, segmentId, scriptFile ?? null);
+  const videoModel = useVideoModel(projectName, segmentId, scriptFile ?? null, fields.duration_seconds || 4);
   // Make current on a version also puts back the prompt it was made from (a video also its length), through the
   // same save as an edit, so the left pane shows what made the current media.
   const restorePrompt = readOnly
@@ -1115,6 +1118,7 @@ export function ShotDetail({
         onGenerateStoryboard ? () => void unit.saveAndGenerate(() => onGenerateStoryboard(segmentId)) : undefined
       }
       generateLabel={generateLabel}
+      generateModelName={storyboardModel?.name}
       restoring={restoringMedia}
       onRestoringChange={setRestoringMedia}
       checkBusy={() => uploadingKind !== null || saving || isScriptFileBusy("grid", scriptFile, projectName)}
@@ -1173,6 +1177,7 @@ export function ShotDetail({
         estimatedCost={vidEstimate ?? undefined}
         onGenerate={onGenerateVideo ? () => void unit.saveAndGenerate(() => onGenerateVideo(segmentId)) : undefined}
         generateLabel={generateLabel}
+        generateModelName={videoModel?.name}
         restoring={restoringMedia}
         onRestoringChange={setRestoringMedia}
         checkBusy={() => uploadingKind !== null || saving || endFrameSubmitting || isScriptFileBusy("grid", scriptFile, projectName)}

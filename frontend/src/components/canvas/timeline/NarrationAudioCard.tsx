@@ -10,6 +10,7 @@ import { formatCost } from "@/utils/cost-format";
 import type { CostBreakdown } from "@/types";
 import { useItemPositionLabel } from "@/components/shared/episode-item/useEpisodeItem";
 import { VersionTimeMachine } from "./VersionTimeMachine";
+import { GenerateLabel } from "@/components/canvas/shared/GenerateLabel";
 
 interface NarrationAudioCardProps {
   readOnly?: boolean;
@@ -115,10 +116,10 @@ export function NarrationAudioCard({
           title={generateDisabled ? generateDisabledHint : undefined}
         >
           <Sparkles aria-hidden data-icon="inline-start" />
-          {generateLabel}
-          {estimatedCost && Object.values(estimatedCost).some((v) => v > 0) && (
-            <span className="num text-xs font-normal">~{formatCost(estimatedCost)}</span>
-          )}
+          <GenerateLabel
+            label={generateLabel}
+            detail={estimatedCost && Object.values(estimatedCost).some((v) => v > 0) ? `~${formatCost(estimatedCost)}` : null}
+          />
         </Button>
       )}
     </div>

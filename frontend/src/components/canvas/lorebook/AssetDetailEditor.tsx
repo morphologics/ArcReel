@@ -44,6 +44,7 @@ import { enqueueAssetSheetWith } from "@/actions/generation";
 import { AssetSheetGenerateItems, currentModel, useAssetSheetModels } from "@/components/canvas/timeline/VideoRegenerateItems";
 import { errMsg } from "@/utils/async";
 import { useAppStore } from "@/stores/app-store";
+import { generateDetail } from "@/components/canvas/shared/GenerateLabel";
 
 const DESCRIPTION_PLACEHOLDER = {
   character: "dashboard:character_desc_placeholder",
@@ -203,17 +204,12 @@ export function AssetDetailEditor({
   const setField = <K extends keyof AssetFields>(key: K, next: AssetFields[K]) =>
     setValue((prev) => ({ ...prev, [key]: next }));
 
-  // "Generate Image - Seedream 4.5 - ~$0.04" (the configured model and its estimated cost, once known)
+  // "Generate Image" with the configured model and its estimated cost after it in smaller text, once known
   const configured = currentModel(modelOptions);
-  const generateLabel = [
-    unit.dirty
-      ? t("common:save_and_generate")
-      : t(gallery.sheetPath ? "dashboard:asset_regenerate_image" : "dashboard:asset_generate_image"),
-    configured?.name,
-    configured?.cost,
-  ]
-    .filter(Boolean)
-    .join(" - ");
+  const generateLabel = unit.dirty
+    ? t("common:save_and_generate")
+    : t(gallery.sheetPath ? "dashboard:asset_regenerate_image" : "dashboard:asset_generate_image");
+  const generateDetailText = generateDetail(configured?.name, configured?.cost);
   const describable = hasUsableDescription(value.description);
   const character = assetType === "character" ? (asset as Character) : null;
   const product = assetType === "product" ? (asset as Product) : null;
@@ -300,6 +296,7 @@ export function AssetDetailEditor({
                   loading={generating}
                   disabled={!describable || busy}
                   label={generateLabel}
+                  detail={generateDetailText}
                   className="w-full"
                 />
                 {describable ? null : (

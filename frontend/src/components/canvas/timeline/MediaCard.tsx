@@ -32,6 +32,7 @@ import { errMsg } from "@/utils/async";
 import { VersionHistoryPanel } from "./VersionHistoryPanel";
 import { versionCost, versionOrigin, versionTime } from "./version-summary";
 import { MEDIA_SIDE_BY_SIDE_QUERY, useMediaQuery } from "@/hooks/useMediaQuery";
+import { GenerateLabel, generateDetail } from "@/components/canvas/shared/GenerateLabel";
 
 type MediaKind = "storyboard" | "video";
 
@@ -75,6 +76,8 @@ interface MediaCardProps {
   /** Centred in the title row between the title and the buttons (the shot's position and facts). */
   centerContent?: ReactNode;
   /** Items of the right-click menu on the image or video (DropdownMenuItem elements); no menu when absent. */
+  /** The configured model's name, shown with the estimated cost on the Generate button. */
+  generateModelName?: string | null;
   /** Under the preview, above the Generate button (the video's end frame). */
   belowPreview?: ReactNode;
   /** Make current also puts back the prompt the version was made from (and, for videos, its length). */
@@ -110,6 +113,7 @@ export function MediaCard({
   onRestorePrompt,
   unsavedEdits,
   belowPreview,
+  generateModelName,
   uploading,
   uploadDisabled,
   editScriptFile,
@@ -485,10 +489,13 @@ export function MediaCard({
           }
         >
           <Sparkles aria-hidden data-icon="inline-start" />
-          {generateLabel}
-          {estimatedCost && Object.values(estimatedCost).some((v) => v > 0) && (
-            <span className="num text-xs font-normal">~{formatCost(estimatedCost)}</span>
-          )}
+          <GenerateLabel
+            label={generateLabel}
+            detail={generateDetail(
+              generateModelName,
+              estimatedCost && Object.values(estimatedCost).some((v) => v > 0) ? `~${formatCost(estimatedCost)}` : null,
+            )}
+          />
         </Button>
       )}
     </div>

@@ -2562,6 +2562,19 @@ class API {
     );
   }
 
+  /** The configured image model of a lane and one image's estimated cost with it (and with the given models). */
+  static async quoteImageLaneModels(
+    projectName: string,
+    body: { lane: "t2i" | "i2i"; reference_count?: number; aspect_ratio?: string; models?: string[] },
+    options: { signal?: AbortSignal } = {},
+  ): Promise<ImageModelQuotes> {
+    return this.request(`/projects/${encodeURIComponent(projectName)}/generate/image/model-quotes`, {
+      method: "POST",
+      body: JSON.stringify(body),
+      signal: options.signal,
+    });
+  }
+
   /** Generate an asset's sheet with a model chosen for this request only ("Generate with …"). */
   static async generateAssetSheetWith(
     projectName: string,

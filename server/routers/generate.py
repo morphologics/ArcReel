@@ -11,6 +11,7 @@
 
 import asyncio
 import logging
+from typing import Literal
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, ConfigDict, Field
@@ -105,6 +106,13 @@ class ImageModelQuotesRequest(BaseModel):
 class GenerateAssetRequest(BaseModel):
     # "provider/model" for this request only ("Generate with …"); None uses the configured image model
     image_model: str | None = Field(default=None, pattern=r"^[^/\s]+/\S.*$", max_length=200)
+
+
+class ImageLaneQuotesRequest(BaseModel):
+    lane: Literal["t2i", "i2i"]
+    reference_count: int = Field(default=0, ge=0, le=16)
+    aspect_ratio: str = Field(default="16:9", max_length=16)
+    models: list[str] = Field(default_factory=list, max_length=60)
 
 
 class AssetModelQuotesRequest(BaseModel):
@@ -1056,6 +1064,32 @@ async def generate_product(
         _t=_t,
         image_model=req.image_model if req else None,
     )
+
+
+@router.post("/projects/{project_name}/generate/image/model-quotes")
+async def quote_image_lane_models(project_name: str, req: ImageLaneQuotesRequest):
+    """The configured image model of a lane and what one image costs with it (and with each given model), for a
+    request the caller describes (e.g. a character derivative: image-to-image with one reference, the owner sheet)."""
+    from lib.db import async_session_factory
+
+    project = await run_sync_transaction(lambda: get_project_manager().load_project(project_name))
+    resolver = ConfigResolver(async_session_factory)
+    try:
+        configured = await resolver.resolve_image_backend(project, None, generation_type=req.lane)
+        current: str | None = f"{configured.provider_id}/{configured.model_id}"
+    except ValueError:  # includes the capability and catalogue errors
+        current = None
+    models = [*req.models, *([current] if current and current not in req.models else [])]
+    quotes = await quote_image_models(
+        project,
+        req.lane,
+        models,
+        aspect_ratio=req.aspect_ratio,
+        reference_count=req.reference_count,
+        resolver=resolver,
+        session_factory=async_session_factory,
+    )
+    return {"current": current, "lane": req.lane, "quotes": quotes}
 
 
 @router.post("/projects/{project_name}/generate/{asset_type}/{name}/model-quotes")
