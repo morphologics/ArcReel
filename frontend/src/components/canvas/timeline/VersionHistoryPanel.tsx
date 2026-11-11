@@ -4,7 +4,7 @@ import type { VersionInfo } from "@/api";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { AspectFrame } from "@/components/canvas/shared/AspectFrame";
-import { versionCost, versionOrigin, versionSize, versionTime } from "./version-summary";
+import { promptSummary, versionCost, versionOrigin, versionSize, versionTime } from "./version-summary";
 
 interface VersionHistoryPanelProps {
   kind: "storyboard" | "video";
@@ -56,6 +56,7 @@ export function VersionHistoryPanel({
             {versions.map((v) => {
               const cost = versionCost(v);
               const size = versionSize(v);
+              const summary = promptSummary(v.prompt);
               return (
                 <li
                   key={v.version}
@@ -96,7 +97,11 @@ export function VersionHistoryPanel({
                           .filter(Boolean)
                           .join(" · ")}
                       </span>
-                      {v.prompt && <span className="line-clamp-1 text-[11px] text-subtle-foreground">{v.prompt}</span>}
+                      {summary && (
+                        <span className="line-clamp-1 text-[11px] text-subtle-foreground" title={v.prompt}>
+                          {summary}
+                        </span>
+                      )}
                     </span>
                   </button>
                   {onRestore && !v.is_current && v.restorable !== false && (

@@ -2172,9 +2172,8 @@ export default {
   'version_viewing': '正在查看 v{{version}}',
   'version_back_to_current': '回到当前版本',
   'version_show_history': '在面板中查看历史',
-  'media_pane_mode': '面板视图',
-  'media_pane_preview': '预览',
-  'media_pane_history': '版本历史',
+  'media_history_storyboard': '分镜图历史',
+  'media_history_video': '视频生成历史',
   'media_tabs': '分镜图或视频',
   'media_switch_to': '切换到{{name}}',
 

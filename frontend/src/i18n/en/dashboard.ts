@@ -2173,9 +2173,8 @@ export default {
   'version_viewing': 'Viewing v{{version}}',
   'version_back_to_current': 'Back to current',
   'version_show_history': 'Show history in the pane',
-  'media_pane_mode': 'Pane view',
-  'media_pane_preview': 'Preview',
-  'media_pane_history': 'Version history',
+  'media_history_storyboard': 'Storyboard history',
+  'media_history_video': 'Video generation history',
   'media_tabs': 'Storyboard or video',
   'media_switch_to': 'Switch to {{name}}',
 

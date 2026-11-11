@@ -24,7 +24,6 @@ interface ShotMediaState {
   /** Version previewed in each pane; only for its shot (another shot shows its current version). */
   viewing: Record<ShotMediaKind, ViewedVersion | null>;
   openShot: OpenShotActions | null;
-  setTab: (tab: ShotMediaKind) => void;
   setMode: (kind: ShotMediaKind, mode: ShotMediaMode) => void;
   /** Preview a version in the pane (switches it to Preview); null goes back to the current version. */
   view: (kind: ShotMediaKind, viewed: ViewedVersion | null) => void;
@@ -36,7 +35,6 @@ export const useShotMediaStore = create<ShotMediaState>((set) => ({
   mode: { storyboard: "preview", video: "preview" },
   viewing: { storyboard: null, video: null },
   openShot: null,
-  setTab: (tab) => set({ tab }),
   // switching a pane's mode or picking a version brings that pane forward
   setMode: (kind, mode) => set((s) => ({ tab: kind, mode: { ...s.mode, [kind]: mode } })),
   view: (kind, viewed) =>

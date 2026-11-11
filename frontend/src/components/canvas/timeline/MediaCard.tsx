@@ -3,7 +3,7 @@ import { cn } from "cn";
 import { ContextMenu } from "@base-ui/react/context-menu";
 import { DropdownMenuContent, DropdownMenuItem } from "@/components/ui/dropdown-menu";
 import { isResourceBusy } from "@/stores/tasks-store";
-import { Sparkles, ImageIcon, Film, History, Eye, Upload } from "lucide-react";
+import { Sparkles, ImageIcon, Film, History, Upload } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useTranslation } from "react-i18next";
 import { API } from "@/api";
@@ -22,10 +22,11 @@ import { formatCost } from "@/utils/cost-format";
 import type { CostBreakdown } from "@/types";
 import { useItemPositionLabel } from "@/components/shared/episode-item/useEpisodeItem";
 import { ImageEditButton } from "./ImageEditButton";
+import { Toggle } from "@/components/ui/toggle";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useResourceVersions, invalidateResourceVersions } from "@/hooks/useResourceVersions";
-import { useShotMediaStore, type ShotMediaKind, type ShotMediaMode } from "@/stores/shot-media-store";
+import { useShotMediaStore, type ShotMediaKind } from "@/stores/shot-media-store";
 import { useAppStore } from "@/stores/app-store";
 import { useTrackWrite } from "@/components/canvas/lorebook/useAssetWrites";
 import { errMsg } from "@/utils/async";
@@ -133,7 +134,6 @@ export function MediaCard({
       : undefined;
 
   const Icon = kind === "storyboard" ? ImageIcon : Film;
-  const setTab = useShotMediaStore((s) => s.setTab);
   const otherTitle = kind === "storyboard" ? t("media_video_title") : t("media_storyboard_title");
   // the media grid shows both side by side from this width of the media column, tabs below it
   const portrait = aspectRatio === "9:16";
@@ -164,6 +164,8 @@ export function MediaCard({
   const setMode = useShotMediaStore((s) => s.setMode);
   const view = useShotMediaStore((s) => s.view);
   const history = hasVersions && mode === "history";
+  const historyLabel = t(kind === "storyboard" ? "media_history_storyboard" : "media_history_video");
+  const shownTitle = history ? historyLabel : title;
   const viewedVersion = hasVersions && viewed?.segmentId === segmentId ? viewed.version : null;
   const versions = useResourceVersions(projectName, resourceType, segmentId, history || viewedVersion !== null);
   const viewedInfo =
@@ -223,18 +225,17 @@ export function MediaCard({
     <div>
       <div className="mb-2 flex min-h-7 items-center gap-1.5">
         {/* Side by side (wide media column): the title only. Tabs (narrow): the storyboard / video view icons, and
-            the title itself switches to the other one. */}
+            the title itself switches to the other one; either way the shown pane is in Preview. History sits
+            right of the title. */}
         <Icon aria-hidden className={cn("size-3.5 text-muted-foreground", tabsOnly)} />
-        <h3 className={cn("text-xs font-medium text-subtle-foreground", tabsOnly)}>{title}</h3>
+        <h3 className={cn("text-xs font-medium text-subtle-foreground", tabsOnly)}>{shownTitle}</h3>
         <ToggleGroup
           aria-label={t("media_tabs")}
           variant="outline"
           size="sm"
           className={tabsHidden}
           value={[kind]}
-          onValueChange={(next: string[]) => {
-            if (next[0]) setTab(next[0] as ShotMediaKind);
-          }}
+          onValueChange={(next: string[]) => setMode((next[0] ?? kind) as ShotMediaKind, "preview")}
         >
           {(["storyboard", "video"] as const).map((value) => {
             const label = t(value === "storyboard" ? "media_storyboard_title" : "media_video_title");
@@ -252,10 +253,27 @@ export function MediaCard({
           type="button"
           className={cn("focus-ring rounded-sm text-xs font-medium text-subtle-foreground hover:text-foreground", tabsHidden)}
           title={t("media_switch_to", { name: otherTitle })}
-          onClick={() => setTab(kind === "storyboard" ? "video" : "storyboard")}
+          onClick={() => setMode(kind === "storyboard" ? "video" : "storyboard", "preview")}
         >
-          {title}
+          {shownTitle}
         </button>
+        {hasVersions && (
+          <Tooltip>
+            <TooltipTrigger
+              render={
+                <Toggle
+                  size="sm"
+                  aria-label={historyLabel}
+                  pressed={history}
+                  onPressedChange={(pressed) => setMode(kind, pressed ? "history" : "preview")}
+                />
+              }
+            >
+              <History aria-hidden />
+            </TooltipTrigger>
+            <TooltipContent>{historyLabel}</TooltipContent>
+          </Tooltip>
+        )}
         {centerContent ? (
           <div className="flex min-w-0 flex-1 flex-wrap items-center justify-center gap-x-2 gap-y-1">{centerContent}</div>
         ) : (
@@ -284,29 +302,6 @@ export function MediaCard({
             hasImage={Boolean(assetPath)}
             busy={resourceBusy}
           />
-        )}
-        {hasVersions && (
-          <ToggleGroup
-            aria-label={t("media_pane_mode")}
-            variant="outline"
-            size="sm"
-            value={[mode]}
-            onValueChange={(next: string[]) => {
-              if (next[0]) setMode(kind, next[0] as ShotMediaMode);
-            }}
-          >
-            {(["preview", "history"] as const).map((value) => {
-              const label = t(value === "preview" ? "media_pane_preview" : "media_pane_history");
-              return (
-                <Tooltip key={value}>
-                  <TooltipTrigger render={<ToggleGroupItem value={value} aria-label={label} />}>
-                    {value === "preview" ? <Eye aria-hidden /> : <History aria-hidden />}
-                  </TooltipTrigger>
-                  <TooltipContent>{label}</TooltipContent>
-                </Tooltip>
-              );
-            })}
-          </ToggleGroup>
         )}
       </div>
 

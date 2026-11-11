@@ -44,3 +44,14 @@ export function versionMenuLine(version: VersionInfo, t: TFunction): string {
     .filter(Boolean)
     .join(" · ");
 }
+
+// Lines every generated prompt starts with (the project's style preset, reference image list): the same for all
+// versions, so the summary skips them and shows what is particular to the shot.
+const SHARED_PROMPT_LINE = /^(Style|Visual style|Reference_Images)\s*:/i;
+
+/** The first line of a version's prompt that describes the shot itself (not the shared style header). */
+export function promptSummary(prompt: string | undefined): string | null {
+  if (!prompt) return null;
+  const lines = prompt.split("\n").map((line) => line.trim()).filter(Boolean);
+  return lines.find((line) => !SHARED_PROMPT_LINE.test(line)) ?? lines[0] ?? null;
+}

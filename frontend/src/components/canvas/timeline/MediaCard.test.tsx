@@ -137,7 +137,7 @@ describe("MediaCard version history", () => {
     const restore = vi.spyOn(API, "restoreVersion").mockResolvedValue({ success: true } as never);
     renderCard({ assetPath: "storyboards/E1S01.png", onRestore: vi.fn() });
 
-    fireEvent.click(screen.getByRole("button", { name: "版本历史" }));
+    fireEvent.click(screen.getByRole("button", { name: "分镜图历史" }));
     expect(await screen.findByText(/seedream/)).toBeInTheDocument();
     expect(screen.getByText(/\$0\.04/)).toBeInTheDocument();
 
@@ -151,14 +151,16 @@ describe("MediaCard version history", () => {
 });
 
 describe("MediaCard storyboard / video tabs", () => {
-  afterEach(() => useShotMediaStore.setState({ tab: "storyboard" }));
+  afterEach(() => useShotMediaStore.setState({ tab: "storyboard", mode: { storyboard: "preview", video: "preview" } }));
 
   it("switches to the other pane from the title and from the view icons", () => {
     renderCard();
     fireEvent.click(screen.getByTitle("切换到视频"));
     expect(useShotMediaStore.getState().tab).toBe("video");
     useShotMediaStore.setState({ tab: "storyboard" });
+    useShotMediaStore.setState({ mode: { storyboard: "preview", video: "history" } });
     fireEvent.click(screen.getByRole("button", { name: "视频" }));
-    expect(useShotMediaStore.getState().tab).toBe("video");
+    // picking a view shows it in Preview
+    expect(useShotMediaStore.getState()).toMatchObject({ tab: "video", mode: { video: "preview" } });
   });
 });

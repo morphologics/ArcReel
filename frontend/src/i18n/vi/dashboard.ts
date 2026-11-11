@@ -2163,9 +2163,8 @@ export default {
   'version_viewing': 'Đang xem v{{version}}',
   'version_back_to_current': 'Về bản hiện tại',
   'version_show_history': 'Xem lịch sử trong khung',
-  'media_pane_mode': 'Chế độ khung',
-  'media_pane_preview': 'Xem trước',
-  'media_pane_history': 'Lịch sử phiên bản',
+  'media_history_storyboard': 'Lịch sử phân cảnh',
+  'media_history_video': 'Lịch sử tạo video',
   'media_tabs': 'Phân cảnh hoặc video',
   'media_switch_to': 'Chuyển sang {{name}}',
 
