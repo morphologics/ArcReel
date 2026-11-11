@@ -18,6 +18,7 @@ import type { TimelineNarration } from "@/types/edit-timeline";
 import { errMsg } from "@/utils/async";
 import { formatRelativeTime, parseIsoTimestamp } from "@/utils/date-format";
 import { episodeDisplayName } from "@/utils/episode-display";
+import { QueueItemMenu } from "./QueueItemMenu";
 
 const RENDER_TASK_TYPES = new Set(["render_final_cut", "render_jianying_draft"]);
 /** Finished renders stay listed this long. */
@@ -160,7 +161,7 @@ export function RenderQueueIndicator({ onOpenEpisode }: { onOpenEpisode: (episod
         )}
         <span className="num text-xs">{active.length > 0 ? `${running.length}/${active.length}` : renders.length}</span>
       </PopoverTrigger>
-      <PopoverContent align="end" className="w-96">
+      <PopoverContent align="end" sideOffset={6} className="w-160">
         <PopoverTitle>{t("render_queue_title")}</PopoverTitle>
         <ul className="m-0 flex max-h-96 list-none flex-col gap-1 overflow-y-auto p-0">
           {renders.map((task) => {
@@ -173,7 +174,9 @@ export function RenderQueueIndicator({ onOpenEpisode }: { onOpenEpisode: (episod
               .filter(Boolean)
               .join(" · ");
             return (
-              <li key={task.task_id} className="flex items-start gap-2 rounded-md p-1.5 hover:bg-muted/60">
+              <li key={task.task_id}>
+                <QueueItemMenu task={task} cancelLabel={t("queue_cancel_render")}>
+                <div className="flex items-start gap-2 rounded-md p-1.5 hover:bg-muted/60">
                 <span className="mt-0.5 shrink-0">
                   {task.status === "succeeded" ? (
                     <CheckCircle2 aria-hidden className="size-4 text-good" />
@@ -242,6 +245,8 @@ export function RenderQueueIndicator({ onOpenEpisode }: { onOpenEpisode: (episod
                     {t("downloads_cancel")}
                   </Button>
                 )}
+              </div>
+                </QueueItemMenu>
               </li>
             );
           })}

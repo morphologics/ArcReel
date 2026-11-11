@@ -40,7 +40,7 @@ export function ShotVersionsMenu({
         <History aria-hidden />
         {t("version_mgmt")}
       </DropdownMenuSubTrigger>
-      <DropdownMenuSubContent className="max-h-[70vh] min-w-64 overflow-y-auto">
+      <DropdownMenuSubContent className="relative max-h-[70vh] min-w-64 overflow-y-auto">
         {KINDS.map(({ kind, resource, label }, index) => (
           <KindVersions
             key={kind}

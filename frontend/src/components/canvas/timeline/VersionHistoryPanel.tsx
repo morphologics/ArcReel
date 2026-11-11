@@ -41,7 +41,7 @@ export function VersionHistoryPanel({
   const { t } = useTranslation(["dashboard", "common"]);
   return (
     <AspectFrame ratio={aspectRatio}>
-      <div className="size-full overflow-y-auto rounded-lg bg-muted/30 ring-1 ring-border">
+      <div className="relative size-full overflow-y-auto rounded-lg bg-muted/30 ring-1 ring-border">
         {loading ? (
           <p className="p-3 text-xs text-subtle-foreground">{t("common:loading")}</p>
         ) : error ? (
@@ -88,7 +88,7 @@ export function VersionHistoryPanel({
                         {v.generation?.model && <span className="text-subtle-foreground">· {v.generation.model}</span>}
                         {cost && <span className="num font-medium">· {cost}</span>}
                       </span>
-                      <span className="num text-[11px] text-subtle-foreground">
+                      <span className="num text-xs text-subtle-foreground">
                         {[
                           kind === "video" && v.duration_seconds ? t("duration_seconds_value_text", { value: v.duration_seconds }) : null,
                           size,
@@ -98,7 +98,7 @@ export function VersionHistoryPanel({
                           .join(" · ")}
                       </span>
                       {summary && (
-                        <span className="line-clamp-1 text-[11px] text-subtle-foreground" title={v.prompt}>
+                        <span className="line-clamp-1 text-xs text-subtle-foreground" title={v.prompt}>
                           {summary}
                         </span>
                       )}

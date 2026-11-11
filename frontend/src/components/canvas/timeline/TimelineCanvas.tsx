@@ -47,8 +47,8 @@ interface TimelineCanvasProps extends EpisodeCanvasContext {
   onInsertShot?: (afterId: string | null, novelText: string | undefined, scriptFile?: string) => Promise<boolean>;
   /** 移除分镜，resolve 为是否成功 */
   onRemoveShot?: (itemId: string, scriptFile?: string) => Promise<boolean>;
-  onGenerateStoryboard?: (segmentId: string, scriptFile?: string) => void;
-  onGenerateVideo?: (segmentId: string, scriptFile?: string) => void | Promise<void>;
+  onGenerateStoryboard?: (segmentId: string, scriptFile?: string, imageModel?: string) => void;
+  onGenerateVideo?: (segmentId: string, scriptFile?: string, videoModel?: string) => void | Promise<void>;
   onGenerateNarration?: (segmentId: string, scriptFile?: string) => void;
   onGenerateEpisodeNarration?: (scriptFile?: string) => void;
   durationOptions?: number[];
@@ -194,11 +194,12 @@ export function TimelineCanvas(props: TimelineCanvasProps) {
     : undefined;
   // 生成回调保持可选透传：未提供时编辑器隐藏对应生成入口，
   // 而非渲染一个点了没反应的按钮。
+  // the model chosen in "Generate with …" passes through (the episode's script file is filled in here)
   const handleGenSb = onGenerateStoryboard
-    ? (segId: string) => onGenerateStoryboard(segId, scriptFile)
+    ? (segId: string, _scriptFile?: string, imageModel?: string) => onGenerateStoryboard(segId, scriptFile, imageModel)
     : undefined;
   const handleGenVid = onGenerateVideo
-    ? (segId: string) => onGenerateVideo(segId, scriptFile)
+    ? (segId: string, _scriptFile?: string, videoModel?: string) => onGenerateVideo(segId, scriptFile, videoModel)
     : undefined;
   const handleGenNarration = onGenerateNarration
     ? (segId: string) => onGenerateNarration(segId, scriptFile)

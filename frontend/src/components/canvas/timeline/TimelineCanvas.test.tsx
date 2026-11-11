@@ -20,11 +20,15 @@ vi.mock("./ShotSplitView", () => ({
     onGenerateNarration,
     onInsertShot,
     onRemoveShot,
+    onGenerateStoryboard,
+    onGenerateVideo,
   }: {
     onUpdatePrompt?: unknown;
     onGenerateNarration?: unknown;
     onInsertShot?: (afterId: string, novelText?: string) => Promise<boolean>;
     onRemoveShot?: (itemId: string) => Promise<boolean>;
+    onGenerateStoryboard?: (segmentId: string, scriptFile?: string, imageModel?: string) => void;
+    onGenerateVideo?: (segmentId: string, scriptFile?: string, videoModel?: string) => void;
   }) => (
     <div
       data-testid="shot-split-view"
@@ -35,6 +39,12 @@ vi.mock("./ShotSplitView", () => ({
     >
       <button type="button" onClick={() => void onInsertShot?.("SEG-1", "风停了。")}>insert</button>
       <button type="button" onClick={() => void onRemoveShot?.("SEG-1")}>remove</button>
+      <button type="button" onClick={() => onGenerateStoryboard?.("SEG-1", undefined, "runware/cheap-image")}>
+        generate image with
+      </button>
+      <button type="button" onClick={() => onGenerateVideo?.("SEG-1", undefined, "runware/cheap-video")}>
+        generate video with
+      </button>
     </div>
   ),
 }));
@@ -133,6 +143,29 @@ describe("TimelineCanvas", () => {
 
     expect(screen.getByText("脚本尚未生成，先在「脚本规划」中完成内容确认")).toBeInTheDocument();
     expect(screen.queryByTestId("shot-split-view")).not.toBeInTheDocument();
+  });
+
+  it("forwards the model chosen in Generate with … together with the episode script file", () => {
+    const onGenerateStoryboard = vi.fn();
+    const onGenerateVideo = vi.fn();
+    render(
+      <TimelineCanvas
+        {...BOARD}
+        projectName="demo"
+        episode={1}
+        hasDraft
+        episodeScript={makeScript()}
+        scriptFile="scripts/episode_1.json"
+        projectData={makeProjectData()}
+        onGenerateStoryboard={onGenerateStoryboard}
+        onGenerateVideo={onGenerateVideo}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "generate image with" }));
+    expect(onGenerateStoryboard).toHaveBeenCalledWith("SEG-1", "scripts/episode_1.json", "runware/cheap-image");
+    fireEvent.click(screen.getByRole("button", { name: "generate video with" }));
+    expect(onGenerateVideo).toHaveBeenCalledWith("SEG-1", "scripts/episode_1.json", "runware/cheap-video");
   });
 
   it("forwards shot insert and remove with the active episode script file", () => {

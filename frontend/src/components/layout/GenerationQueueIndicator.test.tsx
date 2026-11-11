@@ -59,4 +59,15 @@ describe("GenerationQueueIndicator", () => {
     const { container } = render(<GenerationQueueIndicator kind="storyboards" onNavigate={vi.fn()} />);
     expect(container).toBeEmptyDOMElement();
   });
+
+  it("cancels a queued item from its right-click menu", async () => {
+    useTasksStore.setState({ tasks: [task("q", "video", "queued")] });
+    const cancel = vi.spyOn(API, "cancelTask").mockResolvedValue({ cancelled: [], skipped_terminal: [] });
+    render(<GenerationQueueIndicator kind="videos" onNavigate={vi.fn()} />);
+    fireEvent.click(screen.getByRole("button", { name: "视频" }));
+
+    fireEvent.contextMenu(screen.getByText(/雨夜 · #3/));
+    fireEvent.click(await screen.findByRole("menuitem", { name: /取消生成/ }));
+    expect(cancel).toHaveBeenCalledWith("q");
+  });
 });

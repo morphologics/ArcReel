@@ -61,7 +61,7 @@ export function DownloadsIndicator() {
           {running.length > 0 ? (overall !== null ? `${overall}%` : running.length) : items.length}
         </span>
       </PopoverTrigger>
-      <PopoverContent align="end" className="w-96">
+      <PopoverContent align="end" sideOffset={6} className="w-160">
         <div className="flex items-center justify-between gap-2">
           <PopoverTitle>{t("downloads_title")}</PopoverTitle>
           {items.some((item) => item.status !== "running") && (

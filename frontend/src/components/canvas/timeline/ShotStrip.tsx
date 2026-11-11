@@ -313,7 +313,7 @@ export function ShotStrip({
                             )}
                           >
                             {outOfCut ? <Scissors aria-hidden className="size-3" /> : <EyeOff aria-hidden className="size-3" />}
-                            <span className="num text-[10px]">{index + 1}</span>
+                            <span className="num text-xs">{index + 1}</span>
                           </span>
                         ) : (
                           <>

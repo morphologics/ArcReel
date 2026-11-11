@@ -351,10 +351,13 @@ async def generate_video(
     # 悬空引用在提交入口即返回修复指引，而非任务面板里的异步失败。
     _video_bucket = video_bucket_for_generation_mode(project.get("generation_mode"))
     override = {VIDEO_MODEL_OVERRIDE_KEY: req.video_model} if req.video_model else None
-    await require_video_bucket_capability(project, _video_bucket, override)
     if override is None:
-        # the audio-switch check reads the configured model; a chosen model's audio form is checked by the worker
+        await require_video_bucket_capability(project, _video_bucket)
         await require_audio_switch_supported(project, _video_bucket)
+    else:
+        # a chosen model goes through the same gate; the audio-switch check reads the configured model, so a
+        # chosen model's audio form is checked by the worker
+        await require_video_bucket_capability(project, _video_bucket, override)
 
     # 结构校验 + 构造经单一守卫点（与 SDK 入队同源，规则不分叉）。
     # duration 是能力维度，留待执行层在 provider 解析后校验（见 ADR-0001）。

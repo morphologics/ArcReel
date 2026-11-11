@@ -379,7 +379,7 @@ export function MediaCard({
           onView={(version) => view(kind, { segmentId, version })}
           onRestore={demoReadOnly ? undefined : (version) => void restore(version)}
           restoringVersion={restoringVersion}
-          restoreDisabled={resourceBusy}
+          restoreDisabled={Boolean(resourceBusy)}
         />
       ) : showingOld && viewedInfo.file_url ? (
         kind === "storyboard" ? (

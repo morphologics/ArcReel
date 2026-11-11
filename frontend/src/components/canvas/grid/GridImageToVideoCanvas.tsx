@@ -49,7 +49,7 @@ interface GridImageToVideoCanvasProps extends EpisodeCanvasContext {
   /** 保存分镜字段：失败时抛错；resolve 为本地剧本是否已刷新到保存后的内容。 */
   onUpdatePrompt?: (segmentId: string, patch: Record<string, unknown>, scriptFile?: string) => Promise<boolean>;
   onGenerateStoryboard?: (segmentId: string, scriptFile?: string) => void;
-  onGenerateVideo?: (segmentId: string, scriptFile?: string) => void | Promise<void>;
+  onGenerateVideo?: (segmentId: string, scriptFile?: string, videoModel?: string) => void | Promise<void>;
   onGenerateNarration?: (segmentId: string, scriptFile?: string) => void;
   onGenerateEpisodeNarration?: (scriptFile?: string) => void;
   onGenerateGrid?: (
@@ -184,7 +184,8 @@ export function GridImageToVideoCanvas({
     ? (segId: string, patch: Record<string, unknown>) => onUpdatePrompt(segId, patch, scriptFile)
     : undefined;
   const handleGenSb = (segId: string) => onGenerateStoryboard?.(segId, scriptFile);
-  const handleGenVid = (segId: string) => onGenerateVideo?.(segId, scriptFile);
+  const handleGenVid = (segId: string, _scriptFile?: string, videoModel?: string) =>
+    onGenerateVideo?.(segId, scriptFile, videoModel);
   const handleGenNarration = onGenerateNarration
     ? (segId: string) => onGenerateNarration(segId, scriptFile)
     : undefined;

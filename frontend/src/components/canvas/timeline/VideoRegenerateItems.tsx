@@ -101,7 +101,7 @@ function ModelGenerateItems({
           <Icon aria-hidden />
           {withLabel}
         </DropdownMenuSubTrigger>
-        <DropdownMenuSubContent className="max-h-[70vh] min-w-64 overflow-y-auto">
+        <DropdownMenuSubContent className="relative max-h-[70vh] min-w-64 overflow-y-auto">
           {failed ? (
             <DropdownMenuItem disabled>{t("generate_models_load_failed")}</DropdownMenuItem>
           ) : !options ? (

@@ -146,7 +146,7 @@ export function ShotSplitView({
   const handleMoveStep = handleMoveShot
     ? (shotId: string, direction: "earlier" | "later") => {
         const afterId = stepAnchor(ids, ids.indexOf(shotId), direction);
-        if (afterId !== undefined) return handleMoveShot(shotId, afterId);
+        if (afterId !== undefined) void handleMoveShot(shotId, afterId);
       }
     : undefined;
 

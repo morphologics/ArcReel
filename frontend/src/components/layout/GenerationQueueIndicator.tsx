@@ -12,6 +12,7 @@ import type { TaskItem, WorkspaceNotificationTarget } from "@/types";
 import { errMsg } from "@/utils/async";
 import { formatRelativeTime, parseIsoTimestamp } from "@/utils/date-format";
 import { buildTaskFailureTarget } from "@/utils/task-target";
+import { QueueItemMenu } from "./QueueItemMenu";
 
 export type GenerationQueueKind = "storyboards" | "videos";
 
@@ -115,7 +116,7 @@ export function GenerationQueueIndicator({
         )}
         <span className="num text-xs">{active.length > 0 ? `${running.length}/${active.length}` : listed.length}</span>
       </PopoverTrigger>
-      <PopoverContent align="end" className="w-[26rem]">
+      <PopoverContent align="end" sideOffset={6} className="w-160">
         <div className="flex items-baseline justify-between gap-2">
           <PopoverTitle>{title}</PopoverTitle>
           <span className="num text-xs text-muted-foreground">
@@ -128,7 +129,9 @@ export function GenerationQueueIndicator({
             const target = buildTaskFailureTarget(task, projectData);
             const thumb = ref?.item_thumbnail ? API.getFileUrl(projectName, ref.item_thumbnail, null, { width: 160 }) : null;
             return (
-              <li key={task.task_id} className="flex items-center gap-2 rounded-md p-1.5 hover:bg-muted/60">
+              <li key={task.task_id}>
+                <QueueItemMenu task={task} cancelLabel={t("queue_cancel_generation")}>
+                <div className="flex items-center gap-2 rounded-md p-1.5 hover:bg-muted/60">
                 <button
                   type="button"
                   className="flex min-w-0 flex-1 items-center gap-2 text-left"
@@ -187,6 +190,8 @@ export function GenerationQueueIndicator({
                     {t("downloads_cancel")}
                   </Button>
                 )}
+              </div>
+                </QueueItemMenu>
               </li>
             );
           })}
