@@ -19,10 +19,12 @@ from lib.artifacts.artifact_activation import (
     active_artifact_currency_resolver,
     artifact_is_usable,
     resolve_artifact_episode,
+    resolve_usable_episode_script_input,
     resolve_usable_storyboard_video_inputs,
 )
 from lib.artifacts.artifact_manifest import ArtifactKey
 from lib.catalog.errors import ModelNotInCatalogError
+from lib.artifacts.generation_input import project_input_observation, storyboard_image_input
 from lib.artifacts.video_visual_provenance import resolve_video_aspect_ratio
 from lib.config.resolver import VIDEO_MODEL_OVERRIDE_KEY, ConfigResolver, video_bucket_for_generation_mode
 from lib.generation.video_request_facts import (
@@ -56,7 +58,7 @@ from lib.speech.speech_composition import SpeechMode, admit_script_unit
 from server.auth import CurrentUser
 from server.i18n import Translator
 from server.routers._validators import require_audio_switch_supported, require_video_bucket_capability
-from server.services.admission.cost_estimation import quote_video_request
+from server.services.admission.cost_estimation import quote_image_models, quote_video_request
 from server.services.admission.reference_admission import require_admitted_storyboard_references
 from server.services.tasks.derivative_sheet_tasks import build_derivative_sheet_instruction
 from server.services.tasks.generation_context import AudioLaneRequest, resolve_generation_context
@@ -91,6 +93,34 @@ def _resolve_request_artifact_episode(
 class GenerateStoryboardRequest(BaseModel):
     prompt: str | dict
     script_file: str
+    # "provider/model" for this request only ("Generate with …"); None uses the configured image model
+    image_model: str | None = Field(default=None, pattern=r"^[^/\s]+/\S.*$", max_length=200)
+
+
+class ImageModelQuotesRequest(BaseModel):
+    script_file: str
+    models: list[str] = Field(max_length=60)
+
+
+def _storyboard_image_lane(project_name: str, segment_id: str, script_file: str) -> tuple[dict, str, int, str]:
+    """The project, the shot's image lane (i2i with reference images, else t2i), its reference count and canvas
+    ratio, as the storyboard task will assemble them."""
+    pm_local = get_project_manager()
+    project = pm_local.load_project(project_name)
+    project_path = pm_local.get_project_path(project_name)
+    script = pm_local.load_script(project_name, script_file)
+    script_input = resolve_usable_episode_script_input(
+        project_path=project_path, project=project, script=script, script_filename=script_file
+    )
+    generation_input = storyboard_image_input(
+        project,
+        script,
+        episode=script_input.episode,
+        resource_id=segment_id,
+        observation=project_input_observation(project_path),
+    )
+    references = len(generation_input.references)
+    return project, "i2i" if references else "t2i", references, generation_input.canvas_ratio
 
 
 class GenerateVideoRequest(BaseModel):
@@ -164,6 +194,28 @@ async def generate_storyboard(
 
     await run_sync_transaction(_sync)
 
+    extra_payload: dict[str, object] | None = None
+    if req.image_model:
+        # a model chosen for this request: checked now through the generation gate (the task would otherwise fall
+        # back to the configured model for an unknown provider, or fail on a model the lane can't use)
+        from lib.db import async_session_factory
+
+        provider_id, _, model_id = req.image_model.partition("/")
+        extra_payload = {"image_provider": provider_id, "image_model": model_id}
+        project, lane, _refs, _ratio = await run_sync_transaction(
+            lambda: _storyboard_image_lane(project_name, segment_id, req.script_file)
+        )
+        try:
+            resolved = await ConfigResolver(async_session_factory).resolve_image_backend(
+                project, extra_payload, generation_type=lane
+            )
+        except ModelNotInCatalogError:
+            raise
+        except ValueError as exc:
+            raise BadRequestError("image_model_unavailable", model=req.image_model) from exc
+        if (resolved.provider_id, resolved.model_id) != (provider_id, model_id):
+            raise BadRequestError("image_model_unavailable", model=req.image_model)
+
     # 结构校验 + 构造经单一守卫点（与 SDK 入队同源，规则不分叉）；
     # 校验失败抛 TaskSpecValidationError，由 app 级 handler 映射为 400
     spec = TaskSpec.from_request(
@@ -172,6 +224,7 @@ async def generate_storyboard(
         resource_id=segment_id,
         prompt=req.prompt,
         script_file=req.script_file,
+        **({"extra_payload": extra_payload} if extra_payload else {}),
     )
 
     # 入队
@@ -193,6 +246,33 @@ async def generate_storyboard(
         "deduped": result.get("deduped", False),
         "message": _t("storyboard_task_submitted", segment_id=segment_id),
     }
+
+
+@router.post("/projects/{project_name}/generate/storyboard/{segment_id}/model-quotes")
+async def quote_storyboard_image_models(project_name: str, segment_id: str, req: ImageModelQuotesRequest):
+    """What generating this shot's storyboard image would cost with each of the given models ("Generate with …"),
+    on the lane the task will use (image-to-image when the shot has reference images); plus the configured model."""
+    from lib.db import async_session_factory
+
+    project, lane, references, ratio = await run_sync_transaction(
+        lambda: _storyboard_image_lane(project_name, segment_id, req.script_file)
+    )
+    resolver = ConfigResolver(async_session_factory)
+    try:
+        configured = await resolver.resolve_image_backend(project, None, generation_type=lane)
+        current: str | None = f"{configured.provider_id}/{configured.model_id}"
+    except ValueError:  # includes the capability and catalogue errors
+        current = None
+    quotes = await quote_image_models(
+        project,
+        lane,
+        req.models,
+        aspect_ratio=ratio,
+        reference_count=references,
+        resolver=resolver,
+        session_factory=async_session_factory,
+    )
+    return {"current": current, "lane": lane, "quotes": quotes}
 
 
 # ==================== 视频生成 ====================

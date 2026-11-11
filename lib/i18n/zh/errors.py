@@ -114,6 +114,7 @@ MESSAGES = {
     "prompt_must_be_string_or_object": "prompt 必须是字符串或对象",
     "prompt_text_empty": "prompt 不能为空",
     "storyboard_task_submitted": "分镜「{segment_id}」生成任务已提交",
+    "image_model_unavailable": "图片模型 {model} 不能用于此分镜",
     "generate_storyboard_first": "请先生成分镜图 scene_{segment_id}.png",
     "video_route_is_reference_video": "该项目的生成模式是参考生视频，没有分镜图生视频这一步；请在参考生视频编辑器里按视频单元生成",
     "invalid_storyboard_image_path": "分镜「{segment_id}」的分镜图引用无效，请重新生成分镜图",

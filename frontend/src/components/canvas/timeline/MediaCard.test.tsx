@@ -158,10 +158,10 @@ describe("MediaCard storyboard / video tabs", () => {
     fireEvent.click(screen.getByTitle("切换到视频"));
     expect(useShotMediaStore.getState().tab).toBe("video");
     useShotMediaStore.setState({ tab: "storyboard" });
-    useShotMediaStore.setState({ mode: { storyboard: "preview", video: "history" } });
-    fireEvent.click(screen.getByRole("button", { name: "视频" }));
-    // picking a view shows it in Preview
-    expect(useShotMediaStore.getState()).toMatchObject({ tab: "video", mode: { video: "preview" } });
+    // switching panes keeps the mode: from the storyboard's history to the video's history
+    useShotMediaStore.setState({ tab: "storyboard", mode: { storyboard: "history", video: "preview" } });
+    fireEvent.click(screen.getByTitle("切换到视频"));
+    expect(useShotMediaStore.getState()).toMatchObject({ tab: "video", mode: { video: "history" } });
   });
 });
 

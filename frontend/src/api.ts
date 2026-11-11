@@ -241,6 +241,7 @@ import type {
   UsageRecordsQuery,
   UsageSessionsQuery,
   UsageSummaryQuery,
+  ImageModelQuotes,
   VideoModelQuotes,
   VersionInfo,
   VideoCapabilitiesQuery,
@@ -270,6 +271,7 @@ export type {
   UsageRecordsQuery,
   UsageSessionsQuery,
   UsageSummaryQuery,
+  ImageModelQuotes,
   VideoModelQuotes,
   VersionInfo,
   VersionGeneration,
@@ -2534,14 +2536,29 @@ class API {
     projectName: string,
     segmentId: string,
     prompt: string | Record<string, unknown>,
-    scriptFile: string
+    scriptFile: string,
+    /** "provider/model" for this request only; omitted uses the configured image model */
+    imageModel?: string,
   ): Promise<{ success: boolean; task_id: string; deduped: boolean; message: string }> {
     return this.request(
       `/projects/${encodeURIComponent(projectName)}/generate/storyboard/${encodeURIComponent(segmentId)}`,
       {
         method: "POST",
-        body: JSON.stringify({ prompt, script_file: scriptFile }),
+        body: JSON.stringify({ prompt, script_file: scriptFile, ...(imageModel ? { image_model: imageModel } : {}) }),
       }
+    );
+  }
+
+  /** What generating a shot's storyboard image would cost with each of the given models ("Generate with …"). */
+  static async quoteStoryboardModels(
+    projectName: string,
+    segmentId: string,
+    body: { script_file: string; models: string[] },
+    options: { signal?: AbortSignal } = {},
+  ): Promise<ImageModelQuotes> {
+    return this.request(
+      `/projects/${encodeURIComponent(projectName)}/generate/storyboard/${encodeURIComponent(segmentId)}/model-quotes`,
+      { method: "POST", body: JSON.stringify(body), signal: options.signal },
     );
   }
 

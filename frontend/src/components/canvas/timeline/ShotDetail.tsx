@@ -44,7 +44,7 @@ import { PartialSaveError, useEditUnit } from "@/components/shared/edit-unit/use
 import { UnsavedChangesBar } from "@/components/shared/edit-unit/UnsavedChangesBar";
 import { useStaysInEpisodeView } from "@/components/canvas/episode-page/EpisodeViewScope";
 import { MediaCard } from "./MediaCard";
-import { VideoRegenerateItems } from "./VideoRegenerateItems";
+import { StoryboardGenerateItems, VideoRegenerateItems } from "./VideoRegenerateItems";
 import { EndFrameRow } from "./EndFrameRow";
 import { NarrationAudioCard } from "./NarrationAudioCard";
 import { NotesDrawer } from "./NotesDrawer";
@@ -113,7 +113,8 @@ interface ShotDetailProps {
   onRemoveShot?: (itemId: string) => Promise<boolean>;
   /** 分镜新增 / 移除请求在途，切镜与增删入口禁用 */
   structurePending?: boolean;
-  onGenerateStoryboard?: (segmentId: string) => void;
+  /** `imageModel`: "provider/model" for this request only ("Generate with …"). */
+  onGenerateStoryboard?: (segmentId: string, scriptFile?: string, imageModel?: string) => void;
   /** `videoModel`: "provider/model" for this request only ("Regenerate with …"). */
   onGenerateVideo?: (segmentId: string, scriptFile?: string, videoModel?: string) => void | Promise<void>;
   onGenerateNarration?: (segmentId: string) => void;
@@ -1118,7 +1119,25 @@ export function ShotDetail({
       generateDisabled={editBusy || refreshPending}
       generateDisabledHint={savingHint}
       leadingActions={minimalHeader ? structureActions : undefined}
-      contextMenuItems={imageMenuItems}
+      contextMenuItems={
+        readOnly ? undefined : (
+          <>
+            {scriptFile && onGenerateStoryboard && (
+              <StoryboardGenerateItems
+                projectName={projectName}
+                segmentId={segmentId}
+                scriptFile={scriptFile}
+                hasImage={Boolean(assets?.storyboard_image)}
+                disabled={Boolean(generatingStoryboard) || editBusy || refreshPending}
+                onGenerate={(imageModel) =>
+                  void unit.saveAndGenerate(() => onGenerateStoryboard(segmentId, undefined, imageModel ?? undefined))
+                }
+              />
+            )}
+            {imageMenuItems}
+          </>
+        )
+      }
       onRestorePrompt={restorePrompt}
       unsavedEdits={dirty}
       centerContent={

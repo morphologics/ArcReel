@@ -38,7 +38,8 @@ interface ShotSplitViewProps {
   onInsertShot?: InsertShotHandler;
   /** 移除分镜，resolve 为是否成功 */
   onRemoveShot?: (itemId: string) => Promise<boolean>;
-  onGenerateStoryboard?: (segmentId: string) => void;
+  /** `imageModel`: "provider/model" for this request only ("Generate with …"). */
+  onGenerateStoryboard?: (segmentId: string, scriptFile?: string, imageModel?: string) => void;
   /** `videoModel`: "provider/model" for this request only ("Regenerate with …"). */
   onGenerateVideo?: (segmentId: string, scriptFile?: string, videoModel?: string) => void | Promise<void>;
   onGenerateNarration?: (segmentId: string) => void;

@@ -242,7 +242,7 @@ export function StudioCanvasRouter() {
 
   // 生成回调在调用时读 store 里的最新剧本，不用渲染时的闭包：「保存并生成」在同一次点击里先保存、
   // 刷新剧本再生成，此刻调用的仍是点击前那次渲染的回调，闭包里是保存前的提示词。
-  const handleGenerateStoryboard = useCallback(async (segmentId: string, scriptFile?: string) => {
+  const handleGenerateStoryboard = useCallback(async (segmentId: string, scriptFile?: string, imageModel?: string) => {
     const scripts = useProjectsStore.getState().currentScripts;
     if (!currentProjectName || !scripts) return;
     const resolved = resolveSegmentPrompt(scripts, segmentId, "image_prompt", scriptFile);
@@ -253,6 +253,7 @@ export function StudioCanvasRouter() {
         segmentId,
         resolved.prompt as string | Record<string, unknown>,
         resolved.resolvedFile,
+        imageModel,
       );
     } catch (err) {
       useAppStore.getState().pushToast(t("generate_storyboard_failed", { message: errMsg(err) }), "error");

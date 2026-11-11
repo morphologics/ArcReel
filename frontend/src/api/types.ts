@@ -119,6 +119,17 @@ export interface VersionInfo {
   script_prompt?: unknown;
 }
 
+/** Per image model ("provider/model"): the price of one storyboard image of the shot, or why the model can't make
+ * it; `lane` is t2i, or i2i when the shot has reference images. */
+export interface ImageModelQuotes {
+  current: string | null;
+  lane: "t2i" | "i2i";
+  quotes: Record<
+    string,
+    { unavailable: string } | { cost: { amount: number; currency: string } | null }
+  >;
+}
+
 /** Per model ("provider/model"): the price of the shot's video request, or why the model can't run it. */
 export interface VideoModelQuotes {
   /** The configured video model; null when none resolves. */

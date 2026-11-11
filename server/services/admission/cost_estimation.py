@@ -1090,6 +1090,54 @@ async def estimate_image_batch_cost(
     return BatchCostEstimate(total=total, unpriced_count=unpriced)
 
 
+async def quote_image_models(
+    project: dict[str, Any],
+    lane: Literal["t2i", "i2i"],
+    models: Sequence[str],
+    *,
+    aspect_ratio: str,
+    reference_count: int,
+    resolver: ConfigResolver,
+    session_factory: async_sessionmaker[AsyncSession],
+) -> dict[str, dict[str, object]]:
+    """Per image model ("provider/model"): the estimated cost of one image of this lane (``cost`` None when
+    unpriced), or ``unavailable`` when the model can't run the lane (the same gate as generation)."""
+
+    quotes: dict[str, dict[str, object]] = {}
+    for pair in dict.fromkeys(models):
+        provider, _, model = pair.partition("/")
+        if not provider or not model:
+            continue
+        try:
+            async with resolver.session() as r:
+                resolved = await r.resolve_image_backend(
+                    project, {"image_provider": provider, "image_model": model}, generation_type=lane
+                )
+                # an untrusted provider falls back to the configured layers: that's not this model
+                if (resolved.provider_id, resolved.model_id) != (provider, model):
+                    quotes[pair] = {"unavailable": "image_model_unavailable"}
+                    continue
+                try:
+                    resolution = await r.resolve_resolution(project, provider, model)
+                except (ValueError, SQLAlchemyError):
+                    resolution = None
+            async with session_factory() as session:
+                quote = _quote_image(
+                    provider,
+                    model,
+                    await load_custom_price_source(session, provider, model),
+                    multiplier=await get_provider_multiplier(session, provider),
+                    image_size=resolution,
+                    aspect_ratio=aspect_ratio,
+                    reference_count=reference_count if lane == "i2i" else 0,
+                )
+        except (ValueError, SQLAlchemyError) as exc:
+            quotes[pair] = {"unavailable": getattr(exc, "code", "image_model_unavailable")}
+            continue
+        quotes[pair] = {"cost": {"amount": round(quote[0], 6), "currency": quote[1]} if quote else None}
+    return quotes
+
+
 async def _quote_image_lane(
     project: dict[str, Any],
     lane: ImageLane,

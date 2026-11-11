@@ -116,6 +116,7 @@ MESSAGES = {
     "prompt_must_be_string_or_object": "prompt phải là chuỗi hoặc đối tượng",
     "prompt_text_empty": "prompt không được để trống",
     "storyboard_task_submitted": "Đã gửi tác vụ tạo phân cảnh cho '{segment_id}'",
+    "image_model_unavailable": "Không dùng được mô hình ảnh {model} cho cảnh này",
     "generate_storyboard_first": "Vui lòng tạo phân cảnh scene_{segment_id}.png trước",
     "video_route_is_reference_video": "Dự án này dùng chế độ video tham chiếu, không có bước tạo video từ phân cảnh; hãy tạo theo đơn vị video trong trình chỉnh sửa video tham chiếu",
     "invalid_storyboard_image_path": "Đoạn '{segment_id}' có tham chiếu ảnh phân cảnh không hợp lệ, vui lòng tạo lại phân cảnh",

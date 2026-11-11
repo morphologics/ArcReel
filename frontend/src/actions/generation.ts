@@ -143,10 +143,11 @@ export async function enqueueStoryboard(
   segmentId: string,
   prompt: string | Record<string, unknown>,
   scriptFile: string,
+  imageModel?: string,
 ): Promise<EnqueueResult> {
   const res = await submit(
     [markResource(projectName, "storyboard", segmentId, "storyboard")],
-    () => API.generateStoryboard(projectName, segmentId, prompt, scriptFile),
+    () => API.generateStoryboard(projectName, segmentId, prompt, scriptFile, imageModel),
     oneTaskId,
   );
   notifyEnqueued(res.deduped, i18n.t("dashboard:storyboard_task_submitted_toast", { id: itemLabel(segmentId) }));

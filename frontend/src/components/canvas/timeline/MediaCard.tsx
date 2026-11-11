@@ -244,8 +244,8 @@ export function MediaCard({
     <div>
       <div className="mb-2 flex min-h-7 items-center gap-1.5">
         {/* Side by side (wide media column): the title only. Tabs (narrow): the storyboard / video view icons, and
-            the title itself switches to the other one; either way the shown pane is in Preview. History sits
-            right of the title. */}
+            the title itself switches to the other one, in the same mode (Preview or History); this pane's own icon
+            returns to Preview. History sits right of the title. */}
         <Icon aria-hidden className={cn("size-3.5 text-muted-foreground", tabsOnly)} />
         <h3 className={cn("text-xs font-medium text-subtle-foreground", tabsOnly)}>{shownTitle}</h3>
         <ToggleGroup
@@ -254,7 +254,11 @@ export function MediaCard({
           size="sm"
           className={tabsHidden}
           value={[kind]}
-          onValueChange={(next: string[]) => setMode((next[0] ?? kind) as ShotMediaKind, "preview")}
+          onValueChange={(next: string[]) => {
+            const to = (next[0] ?? kind) as ShotMediaKind;
+            // the other pane opens in this pane's mode (History stays History); this pane's own icon returns to Preview
+            setMode(to, to === kind ? "preview" : useShotMediaStore.getState().mode[kind]);
+          }}
         >
           {(["storyboard", "video"] as const).map((value) => {
             const label = t(value === "storyboard" ? "media_storyboard_title" : "media_video_title");
@@ -272,7 +276,9 @@ export function MediaCard({
           type="button"
           className={cn("focus-ring rounded-sm text-xs font-medium text-subtle-foreground hover:text-foreground", tabsHidden)}
           title={t("media_switch_to", { name: otherTitle })}
-          onClick={() => setMode(kind === "storyboard" ? "video" : "storyboard", "preview")}
+          onClick={() =>
+            setMode(kind === "storyboard" ? "video" : "storyboard", useShotMediaStore.getState().mode[kind])
+          }
         >
           {shownTitle}
         </button>
@@ -448,12 +454,15 @@ export function MediaCard({
           </ImageContextMenu>
         )
       ) : (
-        <AspectFrame ratio={aspectRatio}>
-          <div className="flex size-full flex-col items-center justify-center gap-2 rounded-lg border border-dashed border-border bg-muted/30 text-muted-foreground">
-            <Icon aria-hidden className="size-5" />
-            <span className="text-xs">{t("media_not_generated")}</span>
-          </div>
-        </AspectFrame>
+        // not generated yet: the same right-click menu (Generate, Generate with …, upload)
+        <ImageContextMenu items={menuItems}>
+          <AspectFrame ratio={aspectRatio}>
+            <div className="flex size-full flex-col items-center justify-center gap-2 rounded-lg border border-dashed border-border bg-muted/30 text-muted-foreground">
+              <Icon aria-hidden className="size-5" />
+              <span className="text-xs">{t("media_not_generated")}</span>
+            </div>
+          </AspectFrame>
+        </ImageContextMenu>
       )}
 
       {onGenerate && !demoReadOnly && (

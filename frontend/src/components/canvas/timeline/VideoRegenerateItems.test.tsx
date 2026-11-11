@@ -3,16 +3,24 @@ import { ContextMenu } from "@base-ui/react/context-menu";
 import { describe, expect, it, vi } from "vitest";
 import { API } from "@/api";
 import { DropdownMenuContent } from "@/components/ui/dropdown-menu";
-import { VideoRegenerateItems } from "./VideoRegenerateItems";
+import { StoryboardGenerateItems, VideoRegenerateItems } from "./VideoRegenerateItems";
+
+// the model list is loaded once per page: one fixture for every test
+const CANDIDATES = {
+  image: { default: ["runware/seedream", "runware/flux"], buckets: { i2i: ["runware/seedream"] } },
+  video: { default: [], buckets: { i2v: ["runware/minimax", "runware/seedance"] } },
+  provider_names: { runware: "Runware" },
+  model_names: {
+    "runware/minimax": "MiniMax H3",
+    "runware/seedance": "Seedance",
+    "runware/seedream": "Seedream 4.5",
+    "runware/flux": "FLUX",
+  },
+};
 
 describe("VideoRegenerateItems", () => {
   it("names the configured model with its cost and regenerates with it", async () => {
-    vi.spyOn(API, "getModelCandidates").mockResolvedValue({
-      image: { default: [], buckets: {} },
-      video: { default: [], buckets: { i2v: ["runware/minimax", "runware/seedance"] } },
-      provider_names: { runware: "Runware" },
-      model_names: { "runware/minimax": "MiniMax H3", "runware/seedance": "Seedance" },
-    });
+    vi.spyOn(API, "getModelCandidates").mockResolvedValue(CANDIDATES as never);
     vi.spyOn(API, "quoteVideoModels").mockResolvedValue({
       current: "runware/minimax",
       quotes: {
@@ -47,5 +55,36 @@ describe("VideoRegenerateItems", () => {
       { script_file: "episode_1.json", duration_seconds: 6, models: ["runware/minimax", "runware/seedance"] },
       expect.anything(),
     );
+  });
+
+  it("generates the storyboard with the configured image model, priced for the shot's lane", async () => {
+    vi.spyOn(API, "getModelCandidates").mockResolvedValue(CANDIDATES as never);
+    vi.spyOn(API, "quoteStoryboardModels").mockResolvedValue({
+      current: "runware/seedream",
+      lane: "i2i",
+      quotes: {
+        "runware/seedream": { cost: { amount: 0.04, currency: "USD" } },
+        "runware/flux": { unavailable: "image_bucket_capability" },
+      },
+    });
+    const onGenerate = vi.fn();
+    render(
+      <ContextMenu.Root open>
+        <ContextMenu.Trigger render={<div />}>image</ContextMenu.Trigger>
+        <DropdownMenuContent>
+          <StoryboardGenerateItems
+            projectName="demo"
+            segmentId="E1S01"
+            scriptFile="episode_1.json"
+            hasImage={false}
+            disabled={false}
+            onGenerate={onGenerate}
+          />
+        </DropdownMenuContent>
+      </ContextMenu.Root>,
+    );
+
+    fireEvent.click(await screen.findByRole("menuitem", { name: /生成分镜.*Seedream 4\.5.*0\.04/ }));
+    expect(onGenerate).toHaveBeenCalledWith(null);
   });
 });
