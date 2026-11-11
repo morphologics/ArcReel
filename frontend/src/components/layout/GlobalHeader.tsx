@@ -14,7 +14,7 @@ import { useAppStore } from "@/stores/app-store";
 import { useConfigStatusStore } from "@/stores/config-status-store";
 import { useProjectsStore } from "@/stores/projects-store";
 import { useUsageHeaderStore } from "@/stores/usage-header-store";
-import type { WorkspaceNotification } from "@/types";
+import type { WorkspaceNotification, WorkspaceNotificationTarget } from "@/types";
 import { episodeDisplayName } from "@/utils/episode-display";
 import { AgentPanelToggle } from "./AgentPanelToggle";
 import { ProjectMenu } from "./ProjectMenu";
@@ -22,6 +22,7 @@ import { ProjectStatusBar } from "./ProjectStatusBar";
 import { useProjectExport } from "./useProjectExport";
 import { WorkspaceNotifications } from "./WorkspaceNotificationsDrawer";
 import { DownloadsIndicator } from "./DownloadsIndicator";
+import { GenerationQueueIndicator } from "./GenerationQueueIndicator";
 import { RenderQueueIndicator } from "./RenderQueueIndicator";
 
 /**
@@ -80,9 +81,7 @@ export function GlobalHeader() {
     void fetchConfigStatus();
   }, [fetchConfigStatus]);
 
-  const handleNotificationNavigate = (notification: WorkspaceNotification) => {
-    const target = notification.target;
-    if (!target) return;
+  const navigateToTarget = (target: WorkspaceNotificationTarget) => {
     startTransition(() => {
       setLocation(target.route);
     });
@@ -93,6 +92,9 @@ export function GlobalHeader() {
       highlight_style: target.highlight_style ?? "flash",
       expires_at: Date.now() + 3000,
     });
+  };
+  const handleNotificationNavigate = (notification: WorkspaceNotification) => {
+    if (notification.target) navigateToTarget(notification.target);
   };
 
   return (
@@ -112,6 +114,8 @@ export function GlobalHeader() {
       </div>
 
       <div className="flex items-center justify-end gap-1">
+        {!demoMode && <GenerationQueueIndicator kind="storyboards" onNavigate={navigateToTarget} />}
+        {!demoMode && <GenerationQueueIndicator kind="videos" onNavigate={navigateToTarget} />}
         {!demoMode && (
           <RenderQueueIndicator
             onOpenEpisode={(episode) => {
