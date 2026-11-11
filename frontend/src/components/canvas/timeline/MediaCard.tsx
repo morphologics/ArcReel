@@ -31,6 +31,7 @@ import { useTrackWrite } from "@/components/canvas/lorebook/useAssetWrites";
 import { errMsg } from "@/utils/async";
 import { VersionHistoryPanel } from "./VersionHistoryPanel";
 import { versionCost, versionOrigin, versionTime } from "./version-summary";
+import { MEDIA_SIDE_BY_SIDE_QUERY, useMediaQuery } from "@/hooks/useMediaQuery";
 
 type MediaKind = "storyboard" | "video";
 
@@ -74,6 +75,8 @@ interface MediaCardProps {
   /** Centred in the title row between the title and the buttons (the shot's position and facts). */
   centerContent?: ReactNode;
   /** Items of the right-click menu on the image or video (DropdownMenuItem elements); no menu when absent. */
+  /** Under the preview, above the Generate button (the video's end frame). */
+  belowPreview?: ReactNode;
   /** Make current also puts back the prompt the version was made from (and, for videos, its length). */
   onRestorePrompt?: (version: VersionInfo, kind: MediaKind) => Promise<void>;
   /** The shot has unsaved edits: Make current with a prompt to restore waits until they are saved or discarded. */
@@ -106,6 +109,7 @@ export function MediaCard({
   contextMenuItems,
   onRestorePrompt,
   unsavedEdits,
+  belowPreview,
   uploading,
   uploadDisabled,
   editScriptFile,
@@ -141,9 +145,10 @@ export function MediaCard({
   const Icon = kind === "storyboard" ? ImageIcon : Film;
   const otherTitle = kind === "storyboard" ? t("media_video_title") : t("media_storyboard_title");
   // the media grid shows both side by side from this width of the media column, tabs below it
-  const portrait = aspectRatio === "9:16";
-  const tabsHidden = portrait ? "@min-[440px]/shot-media:hidden" : "@min-[720px]/shot-media:hidden";
-  const tabsOnly = portrait ? "hidden @min-[440px]/shot-media:block" : "hidden @min-[720px]/shot-media:block";
+  // side by side on screens 1600px and wider (ShotMediaGrid): the plain title; narrower, the tab controls
+  const sideBySide = useMediaQuery(MEDIA_SIDE_BY_SIDE_QUERY);
+  const tabsHidden = sideBySide ? "hidden" : undefined;
+  const tabsOnly = sideBySide ? undefined : "hidden";
   const title =
     kind === "storyboard" ? t("media_storyboard_title") : t("media_video_title");
   const generateLabel =
@@ -242,7 +247,7 @@ export function MediaCard({
   return (
     <div>
       <div className="mb-2 flex min-h-7 items-center gap-1.5">
-        {/* Side by side (wide media column): the title only. Tabs (narrow): the storyboard / video view icons, and
+        {/* Side by side (screens 1600px and wider): the title only. Tabs (narrower): the storyboard / video view icons, and
             the title itself switches to the other one, in the same mode (Preview or History); this pane's own icon
             returns to Preview. History sits right of the title. */}
         <Icon aria-hidden className={cn("size-3.5 text-muted-foreground", tabsOnly)} />
@@ -464,6 +469,8 @@ export function MediaCard({
           </AspectFrame>
         </ImageContextMenu>
       )}
+
+      {belowPreview && <div className="mt-2.5">{belowPreview}</div>}
 
       {onGenerate && !demoReadOnly && (
         <Button

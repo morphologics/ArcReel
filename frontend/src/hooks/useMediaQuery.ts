@@ -24,6 +24,9 @@ export const PHONE_QUERY = "(max-width: 639px)";
 /** Narrower than a tablet in portrait (< 768px): the header's labelled buttons collapse to their icons. */
 export const COMPACT_HEADER_QUERY = "(max-width: 767px)";
 
+/** Wide screens (1600px and up): a shot's storyboard image and video side by side; narrower, one at a time. */
+export const MEDIA_SIDE_BY_SIDE_QUERY = "(min-width: 1600px)";
+
 export function isPhoneWidth(): boolean {
   return matches(PHONE_QUERY);
 }

@@ -1153,22 +1153,6 @@ export function ShotDetail({
 
   const videoMedia = (
     <>
-      {scriptFile && onGenerateVideo && (
-        <EndFrameRow
-          projectName={projectName}
-          lastFrame={lastFrame}
-          capabilitiesLoading={capabilitiesLoading}
-          segmentId={segmentId}
-          scriptFile={scriptFile}
-          contentMode={contentMode}
-          aspectRatio={aspectRatio}
-          endFramePath={segment.end_frame_image ?? null}
-          readOnly={readOnly}
-          onSubmittingChange={setEndFrameSubmitting}
-          videoUploadBusy={uploadingKind === "video"}
-          shotSaving={saving}
-        />
-      )}
       <MediaCard
         kind="video"
         projectName={projectName}
@@ -1191,6 +1175,24 @@ export function ShotDetail({
         uploadDisabled={uploadingKind !== null || endFrameSubmitting}
         onRestorePrompt={restorePrompt}
         unsavedEdits={dirty}
+        belowPreview={
+          scriptFile && onGenerateVideo ? (
+            <EndFrameRow
+              projectName={projectName}
+              lastFrame={lastFrame}
+              capabilitiesLoading={capabilitiesLoading}
+              segmentId={segmentId}
+              scriptFile={scriptFile}
+              contentMode={contentMode}
+              aspectRatio={aspectRatio}
+              endFramePath={segment.end_frame_image ?? null}
+              readOnly={readOnly}
+              onSubmittingChange={setEndFrameSubmitting}
+              videoUploadBusy={uploadingKind === "video"}
+              shotSaving={saving}
+            />
+          ) : undefined
+        }
         contextMenuItems={
           !readOnly && scriptFile && onGenerateVideo ? (
             <VideoRegenerateItems

@@ -4,6 +4,7 @@ import { useTranslation } from "react-i18next";
 import { cn } from "cn";
 import { Button } from "@/components/ui/button";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
+import { MEDIA_SIDE_BY_SIDE_QUERY, useMediaQuery } from "@/hooks/useMediaQuery";
 import { useShotMediaStore } from "@/stores/shot-media-store";
 
 /**
@@ -109,11 +110,10 @@ export function ShotSourceCollapsible({ children }: { children: ReactNode }) {
 }
 
 /**
- * 媒体栏：媒体栏够宽时分镜图与视频并排（竖屏 440px、横屏 720px 起），否则一次只显示一个，
+ * 媒体栏：屏幕 1600px 及以上时分镜图与视频并排，否则一次只显示一个，
  * 由卡片标题行切换（标题本身与两个视图图标）；配音卡在下方横跨整栏。
  */
 export function ShotMediaGrid({
-  aspectRatio,
   storyboard,
   video,
   audio,
@@ -123,42 +123,15 @@ export function ShotMediaGrid({
   video: ReactNode;
   audio?: ReactNode;
 }) {
-  const portrait = aspectRatio === "9:16";
-  // Too narrow for both side by side: one at a time, switched from the cards' title rows (no scrolling between them)
+  // Side by side only on screens 1600px and wider; narrower, one at a time, switched from the cards' title rows
+  // (no scrolling between them)
+  const sideBySide = useMediaQuery(MEDIA_SIDE_BY_SIDE_QUERY);
   const tab = useShotMediaStore((s) => s.tab);
   return (
-    <div
-      className={cn(
-        "grid items-start gap-x-4 gap-y-5",
-        portrait ? "@min-[440px]/shot-media:grid-cols-2" : "@min-[720px]/shot-media:grid-cols-2",
-      )}
-    >
-      <div
-        className={cn(
-          "min-w-0",
-          tab !== "storyboard" && (portrait ? "hidden @min-[440px]/shot-media:block" : "hidden @min-[720px]/shot-media:block"),
-        )}
-      >
-        {storyboard}
-      </div>
-      <div
-        className={cn(
-          "flex min-w-0 flex-col",
-          tab !== "video" && (portrait ? "hidden @min-[440px]/shot-media:flex" : "hidden @min-[720px]/shot-media:flex"),
-        )}
-      >
-        {video}
-      </div>
-      {audio ? (
-        <div
-          className={cn(
-            "min-w-0",
-            portrait ? "@min-[440px]/shot-media:col-span-2" : "@min-[720px]/shot-media:col-span-2",
-          )}
-        >
-          {audio}
-        </div>
-      ) : null}
+    <div className={cn("grid items-start gap-x-4 gap-y-5", sideBySide && "grid-cols-2")}>
+      <div className={cn("min-w-0", !sideBySide && tab !== "storyboard" && "hidden")}>{storyboard}</div>
+      <div className={cn("flex min-w-0 flex-col", !sideBySide && tab !== "video" && "hidden")}>{video}</div>
+      {audio ? <div className={cn("min-w-0", sideBySide && "col-span-2")}>{audio}</div> : null}
     </div>
   );
 }
