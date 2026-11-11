@@ -2198,6 +2198,7 @@ export default {
   'image_model_unavailable_for_shot': 'Can’t make this shot’s image',
   'generate_models_load_failed': 'Couldn’t load the models',
   'generate_models_none_other': 'No other model enabled',
+  'media_back_to_preview': 'Back to preview',
   'media_tabs': 'Storyboard or video',
   'media_switch_to': 'Switch to {{name}}',
 

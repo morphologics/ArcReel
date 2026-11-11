@@ -3,7 +3,7 @@ import { cn } from "cn";
 import { ContextMenu } from "@base-ui/react/context-menu";
 import { DropdownMenuContent, DropdownMenuItem } from "@/components/ui/dropdown-menu";
 import { isResourceBusy } from "@/stores/tasks-store";
-import { Sparkles, ImageIcon, Film, History, Upload } from "lucide-react";
+import { Sparkles, ImageIcon, Film, History, Eye, Upload } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useTranslation } from "react-i18next";
 import { API, type VersionInfo } from "@/api";
@@ -22,7 +22,6 @@ import { formatCost } from "@/utils/cost-format";
 import type { CostBreakdown } from "@/types";
 import { useItemPositionLabel } from "@/components/shared/episode-item/useEpisodeItem";
 import { ImageEditButton } from "./ImageEditButton";
-import { Toggle } from "@/components/ui/toggle";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useResourceVersions, invalidateResourceVersions } from "@/hooks/useResourceVersions";
@@ -283,20 +282,21 @@ export function MediaCard({
           {shownTitle}
         </button>
         {hasVersions && (
+          // shows where it goes: History from the preview, the preview (eye) from the history
           <Tooltip>
             <TooltipTrigger
               render={
-                <Toggle
-                  size="sm"
-                  aria-label={historyLabel}
-                  pressed={history}
-                  onPressedChange={(pressed) => setMode(kind, pressed ? "history" : "preview")}
+                <Button
+                  variant="ghost"
+                  size="icon-sm"
+                  aria-label={history ? t("media_back_to_preview") : historyLabel}
+                  onClick={() => setMode(kind, history ? "preview" : "history")}
                 />
               }
             >
-              <History aria-hidden />
+              {history ? <Eye aria-hidden /> : <History aria-hidden />}
             </TooltipTrigger>
-            <TooltipContent>{historyLabel}</TooltipContent>
+            <TooltipContent>{history ? t("media_back_to_preview") : historyLabel}</TooltipContent>
           </Tooltip>
         )}
         {centerContent ? (

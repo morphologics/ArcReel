@@ -2188,6 +2188,7 @@ export default {
   'image_model_unavailable_for_shot': 'Không tạo được ảnh cho cảnh này',
   'generate_models_load_failed': 'Không tải được các mô hình',
   'generate_models_none_other': 'Không có mô hình nào khác được bật',
+  'media_back_to_preview': 'Về xem trước',
   'media_tabs': 'Phân cảnh hoặc video',
   'media_switch_to': 'Chuyển sang {{name}}',
 
