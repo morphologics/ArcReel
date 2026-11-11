@@ -147,6 +147,14 @@ export function AssetDetailEditor({
       ? API.getFileUrl(projectName, gallery.sheetPath, sheetFp)
       : null;
   const imageUrl = sheetUrl && sheetUrl !== failedUrl ? sheetUrl : null;
+  // The editor shows the sheet about 510px wide: a resized copy (640px, 1280px on sharp screens) loads far faster
+  // than the original (e.g. 15 KB instead of 650 KB); full-screen viewing still opens the original.
+  const previewUrl =
+    imageUrl && gallery.sheetPath
+      ? API.getFileUrl(projectName, gallery.sheetPath, sheetFp, {
+          width: typeof window !== "undefined" && window.devicePixelRatio > 1.25 ? 1280 : 640,
+        })
+      : null;
   const Icon = ASSET_SHEET_TYPE_ICON[assetType];
   const imageAlt = t("assets:asset_image_alt", { name });
 
@@ -229,7 +237,7 @@ export function AssetDetailEditor({
                   className="focus-ring block size-full"
                 >
                   <CrossfadeImage
-                    src={imageUrl}
+                    src={previewUrl}
                     alt={imageAlt}
                     className="object-contain"
                     onError={() => setFailedUrl(imageUrl)}
