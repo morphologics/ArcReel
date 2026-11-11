@@ -1,8 +1,9 @@
 import { useRef, useState, type ReactNode } from "react";
+import { cn } from "cn";
 import { ContextMenu } from "@base-ui/react/context-menu";
 import { DropdownMenuContent, DropdownMenuItem } from "@/components/ui/dropdown-menu";
 import { isResourceBusy } from "@/stores/tasks-store";
-import { Sparkles, ImageIcon, Film, History, Upload } from "lucide-react";
+import { Sparkles, ImageIcon, Film, History, Eye, Upload } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useTranslation } from "react-i18next";
 import { API } from "@/api";
@@ -21,7 +22,15 @@ import { formatCost } from "@/utils/cost-format";
 import type { CostBreakdown } from "@/types";
 import { useItemPositionLabel } from "@/components/shared/episode-item/useEpisodeItem";
 import { ImageEditButton } from "./ImageEditButton";
-import { VersionTimeMachine } from "./VersionTimeMachine";
+import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { useResourceVersions, invalidateResourceVersions } from "@/hooks/useResourceVersions";
+import { useShotMediaStore, type ShotMediaKind, type ShotMediaMode } from "@/stores/shot-media-store";
+import { useAppStore } from "@/stores/app-store";
+import { useTrackWrite } from "@/components/canvas/lorebook/useAssetWrites";
+import { errMsg } from "@/utils/async";
+import { VersionHistoryPanel } from "./VersionHistoryPanel";
+import { versionCost, versionOrigin, versionTime } from "./version-summary";
 
 type MediaKind = "storyboard" | "video";
 
@@ -50,7 +59,7 @@ interface MediaCardProps {
   onGenerate?: () => void;
   /** 生成按钮文案，缺省按有无产物写「生成」或「重新生成」；有未保存修改时传「保存并生成」。 */
   generateLabel?: string;
-  /** 版本恢复回调；未提供时不显示版本入口（只读展示无版本可回滚） */
+  /** 版本恢复回调；未提供时不显示版本入口（Preview / History 切换）（只读展示无版本可回滚） */
   onRestore?: () => Promise<unknown> | void;
   /** 自主上传回调（替换该分镜的分镜图/视频）；未提供时不显示上传入口 */
   onUpload?: (file: File) => Promise<void> | void;
@@ -124,6 +133,12 @@ export function MediaCard({
       : undefined;
 
   const Icon = kind === "storyboard" ? ImageIcon : Film;
+  const setTab = useShotMediaStore((s) => s.setTab);
+  const otherTitle = kind === "storyboard" ? t("media_video_title") : t("media_storyboard_title");
+  // the media grid shows both side by side from this width of the media column, tabs below it
+  const portrait = aspectRatio === "9:16";
+  const tabsHidden = portrait ? "@min-[440px]/shot-media:hidden" : "@min-[720px]/shot-media:hidden";
+  const tabsOnly = portrait ? "hidden @min-[440px]/shot-media:block" : "hidden @min-[720px]/shot-media:block";
   const title =
     kind === "storyboard" ? t("media_storyboard_title") : t("media_video_title");
   const generateLabel =
@@ -140,18 +155,56 @@ export function MediaCard({
   // uploadDisabled 是本卡片之外的互斥占用（如同一分镜另一张卡在上传中）；
   // 编辑/版本恢复/生成同样写这个资源，须一并禁用，否则会与占用中的写操作并发冲突。
   const resourceBusy = generating || uploading || uploadDisabled || restoring || externalRestoring;
+  // Preview / History: the pane shows the media (the current version, or one picked from the history or the
+  // strip's menu) or the version list in its place. Mode and picked version live in the shot media store, which
+  // the strip's right-click menu also sets.
+  const hasVersions = Boolean(onRestore) && !demoReadOnly;
+  const mode = useShotMediaStore((s) => s.mode[kind]);
+  const viewed = useShotMediaStore((s) => s.viewing[kind]);
+  const setMode = useShotMediaStore((s) => s.setMode);
+  const view = useShotMediaStore((s) => s.view);
+  const history = hasVersions && mode === "history";
+  const viewedVersion = hasVersions && viewed?.segmentId === segmentId ? viewed.version : null;
+  const versions = useResourceVersions(projectName, resourceType, segmentId, history || viewedVersion !== null);
+  const viewedInfo =
+    viewedVersion !== null ? (versions.data?.versions.find((v) => v.version === viewedVersion) ?? null) : null;
+  // the picked version is shown only while it isn't the current one
+  const showingOld = viewedInfo !== null && !viewedInfo.is_current;
+  const track = useTrackWrite();
+  const [restoringVersion, setRestoringVersion] = useState<number | null>(null);
+  const restore = async (version: number) => {
+    if (resourceBusy || restoringVersion !== null) return;
+    if (freshBusy()) {
+      useAppStore.getState().pushToast(t("version_restore_busy_hint"), "error");
+      return;
+    }
+    setRestoringVersion(version);
+    setRestoreBusy(true);
+    try {
+      await track(
+        (async () => {
+          const result = await API.restoreVersion(projectName, resourceType, segmentId, version);
+          invalidateResourceVersions(projectName, resourceType, segmentId);
+          if (result.asset_fingerprints) useProjectsStore.getState().updateAssetFingerprints(result.asset_fingerprints);
+          await onRestore?.();
+          // the restored version is now the current one: the pane shows it as such
+          view(kind, null);
+        })(),
+      );
+    } catch (err) {
+      useAppStore.getState().pushToast(t("switch_version_failed", { message: errMsg(err) }), "error");
+    } finally {
+      setRestoringVersion(null);
+      setRestoreBusy(false);
+    }
+  };
   // Right-click menu on the storyboard image: the caller's items (note, edit region) plus upload and versions.
-  const [versionsOpen, setVersionsOpen] = useState(false);
   const menuUploadRef = useRef<HTMLInputElement>(null);
-  // The menu's Versions opens a second, controlled version list anchored to the image (a controlled
-  // VersionTimeMachine renders no button of its own, so the title row's Versions button stays as it is).
-  const imageAnchorRef = useRef<HTMLDivElement>(null);
   const menuItems =
     kind === "storyboard" && contextMenuItems ? (
       <>
         {onRestore && !demoReadOnly && (
-          // opened after the menu has closed, or the menu's closing focus move would dismiss it at once
-          <DropdownMenuItem onClick={() => window.setTimeout(() => setVersionsOpen(true), 0)}>
+          <DropdownMenuItem onClick={() => setMode(kind, "history")}>
             <History aria-hidden />
             {t("version_mgmt")}
           </DropdownMenuItem>
@@ -169,8 +222,40 @@ export function MediaCard({
   return (
     <div>
       <div className="mb-2 flex min-h-7 items-center gap-1.5">
-        <Icon aria-hidden className="size-3.5 text-muted-foreground" />
-        <h3 className="text-xs font-medium text-subtle-foreground">{title}</h3>
+        {/* Side by side (wide media column): the title only. Tabs (narrow): the storyboard / video view icons, and
+            the title itself switches to the other one. */}
+        <Icon aria-hidden className={cn("size-3.5 text-muted-foreground", tabsOnly)} />
+        <h3 className={cn("text-xs font-medium text-subtle-foreground", tabsOnly)}>{title}</h3>
+        <ToggleGroup
+          aria-label={t("media_tabs")}
+          variant="outline"
+          size="sm"
+          className={tabsHidden}
+          value={[kind]}
+          onValueChange={(next: string[]) => {
+            if (next[0]) setTab(next[0] as ShotMediaKind);
+          }}
+        >
+          {(["storyboard", "video"] as const).map((value) => {
+            const label = t(value === "storyboard" ? "media_storyboard_title" : "media_video_title");
+            return (
+              <Tooltip key={value}>
+                <TooltipTrigger render={<ToggleGroupItem value={value} aria-label={label} />}>
+                  {value === "storyboard" ? <ImageIcon aria-hidden /> : <Film aria-hidden />}
+                </TooltipTrigger>
+                <TooltipContent>{label}</TooltipContent>
+              </Tooltip>
+            );
+          })}
+        </ToggleGroup>
+        <button
+          type="button"
+          className={cn("focus-ring rounded-sm text-xs font-medium text-subtle-foreground hover:text-foreground", tabsHidden)}
+          title={t("media_switch_to", { name: otherTitle })}
+          onClick={() => setTab(kind === "storyboard" ? "video" : "storyboard")}
+        >
+          {title}
+        </button>
         {centerContent ? (
           <div className="flex min-w-0 flex-1 flex-wrap items-center justify-center gap-x-2 gap-y-1">{centerContent}</div>
         ) : (
@@ -200,32 +285,55 @@ export function MediaCard({
             busy={resourceBusy}
           />
         )}
-        {onRestore && !demoReadOnly && (
-          <VersionTimeMachine
-            projectName={projectName}
-            resourceType={resourceType}
-            resourceId={segmentId}
-            onRestore={onRestore}
-            busy={resourceBusy}
-            checkBusy={freshBusy}
-            onRestoringChange={setRestoreBusy}
-          />
+        {hasVersions && (
+          <ToggleGroup
+            aria-label={t("media_pane_mode")}
+            variant="outline"
+            size="sm"
+            value={[mode]}
+            onValueChange={(next: string[]) => {
+              if (next[0]) setMode(kind, next[0] as ShotMediaMode);
+            }}
+          >
+            {(["preview", "history"] as const).map((value) => {
+              const label = t(value === "preview" ? "media_pane_preview" : "media_pane_history");
+              return (
+                <Tooltip key={value}>
+                  <TooltipTrigger render={<ToggleGroupItem value={value} aria-label={label} />}>
+                    {value === "preview" ? <Eye aria-hidden /> : <History aria-hidden />}
+                  </TooltipTrigger>
+                  <TooltipContent>{label}</TooltipContent>
+                </Tooltip>
+              );
+            })}
+          </ToggleGroup>
         )}
       </div>
 
-      {menuItems && onRestore && !demoReadOnly && (
-        <VersionTimeMachine
-          projectName={projectName}
-          resourceType={resourceType}
-          resourceId={segmentId}
-          onRestore={onRestore}
-          busy={resourceBusy}
-          checkBusy={freshBusy}
-          onRestoringChange={setRestoreBusy}
-          open={versionsOpen}
-          onOpenChange={setVersionsOpen}
-          anchor={imageAnchorRef}
-        />
+      {showingOld && !history && (
+        <div className="mb-1.5 flex flex-wrap items-center gap-x-2 gap-y-1 rounded-md bg-warn/15 px-2 py-1 text-xs">
+          <span className="min-w-0 flex-1">
+            <span className="num font-medium">{t("version_viewing", { version: viewedInfo.version })}</span>
+            <span className="text-subtle-foreground">
+              {" · "}
+              {[versionTime(viewedInfo), versionOrigin(viewedInfo, t), viewedInfo.generation?.model, versionCost(viewedInfo)]
+                .filter(Boolean)
+                .join(" · ")}
+            </span>
+          </span>
+          {!demoReadOnly && viewedInfo.restorable !== false && (
+            <Button
+              size="xs"
+              disabled={resourceBusy || restoringVersion !== null}
+              onClick={() => void restore(viewedInfo.version)}
+            >
+              {restoringVersion === viewedInfo.version ? t("switching_version") : t("version_make_current")}
+            </Button>
+          )}
+          <Button size="xs" variant="ghost" onClick={() => view(kind, null)}>
+            {t("version_back_to_current")}
+          </Button>
+        </div>
       )}
       {menuItems && onUpload && (
         <input
@@ -240,9 +348,60 @@ export function MediaCard({
           }}
         />
       )}
-      {assetUrl ? (
+      {history ? (
+        <VersionHistoryPanel
+          kind={kind}
+          aspectRatio={aspectRatio}
+          versions={versions.data?.versions ?? null}
+          loading={versions.loading}
+          error={versions.error}
+          viewingVersion={viewedVersion}
+          onView={(version) => view(kind, { segmentId, version })}
+          onRestore={demoReadOnly ? undefined : (version) => void restore(version)}
+          restoringVersion={restoringVersion}
+          restoreDisabled={resourceBusy}
+        />
+      ) : showingOld && viewedInfo.file_url ? (
         kind === "storyboard" ? (
-          <div ref={imageAnchorRef}>
+          <ImageContextMenu items={menuItems}>
+            <PreviewableImageFrame src={viewedInfo.file_url} alt={t("version_preview_alt", { version: viewedInfo.version })}>
+              <AspectFrame ratio={aspectRatio} className="ring-2 ring-warn">
+                <img
+                  src={viewedInfo.file_url}
+                  alt={t("version_preview_alt", { version: viewedInfo.version })}
+                  decoding="async"
+                  className="size-full object-cover"
+                />
+              </AspectFrame>
+            </PreviewableImageFrame>
+          </ImageContextMenu>
+        ) : (
+          <div className="overflow-hidden rounded-lg ring-2 ring-warn">
+            <AspectFrame ratio={aspectRatio}>
+              {viewedInfo.presentation_available === true ? (
+                <PresentationPlayer
+                  key={`${segmentId}:v${viewedInfo.version}`}
+                  projectName={projectName}
+                  resourceType="videos"
+                  resourceId={segmentId}
+                  videoVersion={viewedInfo.version}
+                />
+              ) : (
+                // eslint-disable-next-line jsx-a11y/media-has-caption -- an older version without the shared reader shows the raw file
+                <video
+                  src={viewedInfo.file_url}
+                  aria-label={t("version_preview_alt", { version: viewedInfo.version })}
+                  className="size-full bg-black object-contain"
+                  controls
+                  playsInline
+                  preload="metadata"
+                />
+              )}
+            </AspectFrame>
+          </div>
+        )
+      ) : assetUrl ? (
+        kind === "storyboard" ? (
           <ImageContextMenu items={menuItems}>
             <PreviewableImageFrame src={assetUrl} alt={`${itemLabel} ${title}`}>
               <AspectFrame ratio={aspectRatio}>
@@ -258,7 +417,6 @@ export function MediaCard({
               </AspectFrame>
             </PreviewableImageFrame>
           </ImageContextMenu>
-          </div>
         ) : (
           <div className="overflow-hidden rounded-lg ring-1 ring-border">
             <AspectFrame ratio={aspectRatio}>

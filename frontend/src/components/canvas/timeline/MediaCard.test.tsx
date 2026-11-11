@@ -1,5 +1,7 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { API } from "@/api";
+import { useShotMediaStore } from "@/stores/shot-media-store";
 import { DEMO_PROJECT_NAME } from "@/onboarding/demo-project";
 import { useProjectsStore } from "@/stores/projects-store";
 import { MediaCard } from "./MediaCard";
@@ -111,5 +113,52 @@ describe("MediaCard in the demo workbench", () => {
     expect(getByRole("button", { name: /版本/ })).toBeInTheDocument();
     expect(getByRole("button", { name: /局部修改/ })).toBeInTheDocument();
     expect(getByRole("button", { name: /重新生成分镜/ })).toBeInTheDocument();
+  });
+});
+
+describe("MediaCard version history", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+    useShotMediaStore.setState({ mode: { storyboard: "preview", video: "preview" }, viewing: { storyboard: null, video: null } });
+  });
+
+  it("lists the versions in History mode and previews a picked one with Make current", async () => {
+    useProjectsStore.setState({ currentProjectName: "demo" });
+    vi.spyOn(API, "getVersions").mockResolvedValue({
+      resource_type: "storyboards",
+      resource_id: "E1S01",
+      current_version: 2,
+      versions: [
+        { version: 1, filename: "a", created_at: "2026-11-10T06:02:00Z", file_size: 2048, is_current: false, file_url: "/v1.png",
+          generation: { provider: "runware", model: "seedream", cost_amount: 0.04, currency: "USD" } },
+        { version: 2, filename: "b", created_at: "2026-11-11T06:02:00Z", file_size: 2048, is_current: true, file_url: "/v2.png", source: "manual_upload" },
+      ],
+    } as never);
+    const restore = vi.spyOn(API, "restoreVersion").mockResolvedValue({ success: true } as never);
+    renderCard({ assetPath: "storyboards/E1S01.png", onRestore: vi.fn() });
+
+    fireEvent.click(screen.getByRole("button", { name: "版本历史" }));
+    expect(await screen.findByText(/seedream/)).toBeInTheDocument();
+    expect(screen.getByText(/\$0\.04/)).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "预览 v1" }));
+    expect(await screen.findByText("正在查看 v1")).toBeInTheDocument();
+    expect(screen.getByRole("img", { name: /v1/ })).toHaveAttribute("src", "/v1.png");
+
+    await act(async () => fireEvent.click(screen.getByRole("button", { name: "设为当前" })));
+    expect(restore).toHaveBeenCalledWith("demo", "storyboards", "E1S01", 1);
+  });
+});
+
+describe("MediaCard storyboard / video tabs", () => {
+  afterEach(() => useShotMediaStore.setState({ tab: "storyboard" }));
+
+  it("switches to the other pane from the title and from the view icons", () => {
+    renderCard();
+    fireEvent.click(screen.getByTitle("切换到视频"));
+    expect(useShotMediaStore.getState().tab).toBe("video");
+    useShotMediaStore.setState({ tab: "storyboard" });
+    fireEvent.click(screen.getByRole("button", { name: "视频" }));
+    expect(useShotMediaStore.getState().tab).toBe("video");
   });
 });

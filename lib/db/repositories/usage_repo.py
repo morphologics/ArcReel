@@ -675,6 +675,40 @@ class UsageRepository(BaseRepository):
             result.setdefault(key, {}).setdefault(call_type, {})[currency] = round(total, 6)
         return result
 
+    async def list_successful_calls_for_output(self, project_name: str, output_path: str) -> list[dict[str, Any]]:
+        """Successful generation calls that wrote this project file, oldest first (for the version history's model
+        and cost: each generated version is the output of the call that finished just before it was recorded)."""
+        stmt = (
+            select(
+                ApiCall.finished_at,
+                ApiCall.provider,
+                ApiCall.model,
+                ApiCall.cost_amount,
+                ApiCall.currency,
+                ApiCall.call_type,
+            )
+            .where(
+                ApiCall.project_name == project_name,
+                ApiCall.output_path == output_path,
+                ApiCall.status == CallStatus.SUCCESS,
+                ApiCall.finished_at.is_not(None),
+            )
+            .order_by(ApiCall.finished_at)
+        )
+        stmt = self._scope_query(stmt, ApiCall)
+        rows = (await self.session.execute(stmt)).all()
+        return [
+            {
+                "finished_at": finished_at if finished_at.tzinfo else finished_at.replace(tzinfo=UTC),
+                "provider": provider,
+                "model": model,
+                "cost_amount": cost_amount,
+                "currency": currency,
+                "call_type": call_type,
+            }
+            for finished_at, provider, model, cost_amount, currency, call_type in rows
+        ]
+
     async def get_unpriced_calls_by_model(self, project_name: str) -> list[tuple[str, str, str, int]]:
         """成功但未定价（``cost_amount`` 为 NULL）的媒体调用，按 (call_type, provider, model) 计数。
 

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useId, useMemo, useState, type RefObject } from "react";
+import { useCallback, useEffect, useId, useMemo, useRef, useState, type RefObject } from "react";
 import { useTranslation } from "react-i18next";
 import { AlertTriangle, Film, ImageIcon, StickyNote, Timer, Wand2 } from "lucide-react";
 import { DropdownMenuItem } from "@/components/ui/dropdown-menu";
@@ -58,6 +58,7 @@ import { useAppStore } from "@/stores/app-store";
 import { isResourceBusy, isScriptFileBusy } from "@/stores/tasks-store";
 import { useCostStore } from "@/stores/cost-store";
 import { useProjectsStore } from "@/stores/projects-store";
+import { useShotMediaStore } from "@/stores/shot-media-store";
 import { speakerCandidates } from "@/utils/plan-new-assets";
 import { durationIncompatibleLabel } from "@/components/canvas/shared/duration-incompatible";
 import { errMsg } from "@/utils/async";
@@ -969,6 +970,25 @@ export function ShotDetail({
 
   // 有未保存修改时生成按钮先保存再生成；保存失败不生成
   const generateLabel = dirty ? t("common:save_and_generate") : undefined;
+  // The strip's right-click Generate on this shot goes through here, so unsaved edits are saved first.
+  const stripGenerate = useRef<{ storyboard?: () => void; video?: () => void }>({});
+  useEffect(() => {
+    stripGenerate.current = {
+      storyboard: onGenerateStoryboard
+        ? () => void unit.saveAndGenerate(() => onGenerateStoryboard(segmentId))
+        : undefined,
+      video: onGenerateVideo ? () => void unit.saveAndGenerate(() => onGenerateVideo(segmentId)) : undefined,
+    };
+  });
+  useEffect(() => {
+    const setOpenShot = useShotMediaStore.getState().setOpenShot;
+    setOpenShot({
+      segmentId,
+      generateStoryboard: () => stripGenerate.current.storyboard?.(),
+      generateVideo: () => stripGenerate.current.video?.(),
+    });
+    return () => setOpenShot(null);
+  }, [segmentId]);
   const savingHint = saving ? t("common:save_status_saving") : undefined;
 
   // 重排在途也要锁定切镜：ShotSplitView 在移动完成回调里按当前 selectedIndex 偏移，

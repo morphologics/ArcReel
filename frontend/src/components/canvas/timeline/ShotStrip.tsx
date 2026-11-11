@@ -10,7 +10,7 @@ import {
   type WheelEvent,
 } from "react";
 import { useTranslation } from "react-i18next";
-import { ArrowDownUp, ArrowLeft, ArrowRight, Eye, EyeOff, ParkingSquare, Scissors, Undo2 } from "lucide-react";
+import { ArrowDownUp, ArrowLeft, ArrowRight, Eye, EyeOff, Film, ImageIcon, ParkingSquare, Scissors, Undo2 } from "lucide-react";
 import { ContextMenu } from "@base-ui/react/context-menu";
 import { useLocation, useSearchParams } from "wouter";
 import { cn } from "cn";
@@ -24,11 +24,14 @@ import { statusFromAssets } from "@/components/canvas/timeline/shot-status";
 import { StatusBadge } from "@/components/canvas/timeline/StatusBadge";
 import { useAppStore } from "@/stores/app-store";
 import { useProjectsStore } from "@/stores/projects-store";
+import { useShotMediaStore, type ShotMediaKind } from "@/stores/shot-media-store";
+import { isResourceBusy } from "@/stores/tasks-store";
 import type { EpisodeMeta } from "@/types";
 import { episodeDisplayName } from "@/utils/episode-display";
 import { getScriptItemId, getScriptItems, type EditorContentMode, type ScriptItem } from "@/utils/script-shape";
 import { leaveShotOutOfCut, leaveShotOutOfLoadedCut, restoreShotToCut, useEpisodeCut } from "./leave-out-of-cut";
 import { InsertShotButton, type InsertShotHandler } from "./ShotStructureActions";
+import { ShotVersionsMenu } from "./ShotVersionsMenu";
 
 const NO_EPISODES: EpisodeMeta[] = [];
 
@@ -53,6 +56,9 @@ interface ShotStripProps {
   /** Move a shot of the current episode one place left / right (right-click menu); without it the items are off. */
   onMoveStep?: (shotId: string, direction: "earlier" | "later") => void;
   moveDisabled?: boolean;
+  /** Generate / regenerate a shot's storyboard image or video (right-click menu, current episode). */
+  onGenerateStoryboard?: (segmentId: string) => void;
+  onGenerateVideo?: (segmentId: string) => void | Promise<void>;
 }
 
 interface StripEpisode {
@@ -100,6 +106,8 @@ export function ShotStrip({
   onReorderMode,
   onMoveStep,
   moveDisabled = false,
+  onGenerateStoryboard,
+  onGenerateVideo,
 }: ShotStripProps) {
   const { t } = useTranslation("dashboard");
   // The episode records themselves (not the display ledger): the strip needs each one's script file.
@@ -146,6 +154,24 @@ export function ShotStrip({
     );
     node?.scrollIntoView?.({ inline: "center", block: "nearest" });
   }, [selectedId]);
+
+  // Generate from the menu: the open shot goes through its detail pane (which saves unsaved edits first)
+  const generate = (kind: ShotMediaKind, shotId: string) => {
+    const open = useShotMediaStore.getState().openShot;
+    if (open?.segmentId === shotId) {
+      (kind === "storyboard" ? open.generateStoryboard : open.generateVideo)?.();
+      return;
+    }
+    if (kind === "storyboard") onGenerateStoryboard?.(shotId);
+    else void onGenerateVideo?.(shotId);
+  };
+  // A version picked in the menu: open the shot, preview the version in its pane (or show the pane's history)
+  const showVersion = (target: StripEpisode, shotId: string, index: number, kind: ShotMediaKind, version: number | null) => {
+    if (target.current) onSelect(index);
+    else openShot(target, shotId, index);
+    if (version === null) useShotMediaStore.getState().setMode(kind, "history");
+    else useShotMediaStore.getState().view(kind, { segmentId: shotId, version });
+  };
 
   const openShot = (target: StripEpisode, shotId: string, index: number) => {
     if (target.current) {
@@ -333,6 +359,31 @@ export function ShotStrip({
                         </DropdownMenuContent>
                       ) : (
                       <DropdownMenuContent className="w-auto min-w-40">
+                        {group.current && (onGenerateStoryboard || onGenerateVideo) && (
+                          <>
+                            <DropdownMenuItem
+                              disabled={!onGenerateStoryboard || isResourceBusy("storyboard", projectName, id)}
+                              onClick={() => generate("storyboard", id)}
+                            >
+                              <ImageIcon aria-hidden />
+                              {t(imagePath ? "media_regenerate_storyboard" : "media_generate_storyboard")}
+                            </DropdownMenuItem>
+                            <DropdownMenuItem
+                              disabled={!onGenerateVideo || !imagePath || isResourceBusy("video", projectName, id)}
+                              onClick={() => generate("video", id)}
+                            >
+                              <Film aria-hidden />
+                              {t(seg.generated_assets?.video_clip ? "media_regenerate_video" : "media_generate_video")}
+                            </DropdownMenuItem>
+                          </>
+                        )}
+                        <ShotVersionsMenu
+                          projectName={projectName}
+                          segmentId={id}
+                          onPick={(kind, version) => showVersion(group, id, index, kind, version)}
+                          onShowHistory={(kind) => showVersion(group, id, index, kind, null)}
+                        />
+                        <DropdownMenuSeparator />
                         <DropdownMenuItem
                           disabled={!group.current || !onMoveStep || moveDisabled || index === 0}
                           onClick={() => onMoveStep?.(id, "earlier")}

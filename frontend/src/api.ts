@@ -270,6 +270,7 @@ export type {
   UsageSessionsQuery,
   UsageSummaryQuery,
   VersionInfo,
+  VersionGeneration,
   VideoCapabilitiesQuery,
 } from "./api/types";
 export { setApiReadOnly } from "./api/transport";

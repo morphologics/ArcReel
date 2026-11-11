@@ -250,6 +250,8 @@ export function ShotSplitView({
           onReorderMode={handleMoveShot ? () => setReorderMode(true) : undefined}
           onMoveStep={handleMoveStep}
           moveDisabled={structurePending || movePending}
+          onGenerateStoryboard={onGenerateStoryboard}
+          onGenerateVideo={onGenerateVideo}
         />
       )}
       {/* the detail fills what the strip leaves (strip mode) or its grid cell (reorder mode) */}

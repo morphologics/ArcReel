@@ -4,6 +4,7 @@ import { useTranslation } from "react-i18next";
 import { cn } from "cn";
 import { Button } from "@/components/ui/button";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
+import { useShotMediaStore } from "@/stores/shot-media-store";
 
 /**
  * 分镜详情的栏位：页头在上，中间是「编辑栏 + 媒体栏」两栏，各自滚动，未保存提示条在最下方。
@@ -108,8 +109,8 @@ export function ShotSourceCollapsible({ children }: { children: ReactNode }) {
 }
 
 /**
- * 媒体栏：媒体栏够宽时分镜图与视频并排（竖屏 440px、横屏 720px 起），否则上下排；
- * 配音卡在下方横跨整栏。
+ * 媒体栏：媒体栏够宽时分镜图与视频并排（竖屏 440px、横屏 720px 起），否则一次只显示一个，
+ * 由卡片标题行切换（标题本身与两个视图图标）；配音卡在下方横跨整栏。
  */
 export function ShotMediaGrid({
   aspectRatio,
@@ -123,6 +124,8 @@ export function ShotMediaGrid({
   audio?: ReactNode;
 }) {
   const portrait = aspectRatio === "9:16";
+  // Too narrow for both side by side: one at a time, switched from the cards' title rows (no scrolling between them)
+  const tab = useShotMediaStore((s) => s.tab);
   return (
     <div
       className={cn(
@@ -130,8 +133,22 @@ export function ShotMediaGrid({
         portrait ? "@min-[440px]/shot-media:grid-cols-2" : "@min-[720px]/shot-media:grid-cols-2",
       )}
     >
-      <div className="min-w-0">{storyboard}</div>
-      <div className="flex min-w-0 flex-col">{video}</div>
+      <div
+        className={cn(
+          "min-w-0",
+          tab !== "storyboard" && (portrait ? "hidden @min-[440px]/shot-media:block" : "hidden @min-[720px]/shot-media:block"),
+        )}
+      >
+        {storyboard}
+      </div>
+      <div
+        className={cn(
+          "flex min-w-0 flex-col",
+          tab !== "video" && (portrait ? "hidden @min-[440px]/shot-media:flex" : "hidden @min-[720px]/shot-media:flex"),
+        )}
+      >
+        {video}
+      </div>
       {audio ? (
         <div
           className={cn(

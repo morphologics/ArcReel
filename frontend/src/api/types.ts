@@ -108,6 +108,19 @@ export interface VersionInfo {
   restored_from?: number;
   /** 版本来源标记；"manual_upload" 表示用户手动上传 */
   source?: string;
+  /** The generation call that produced this version (from the usage ledger); null for uploads, restores and
+   * versions without a matching call. */
+  generation?: VersionGeneration | null;
+  duration_seconds?: number;
+  aspect_ratio?: string;
+  seed?: number | string;
+}
+
+export interface VersionGeneration {
+  provider: string;
+  model: string;
+  cost_amount: number | null;
+  currency: string;
 }
 
 /** 分镜/视频单元媒体上传的统一响应。 */

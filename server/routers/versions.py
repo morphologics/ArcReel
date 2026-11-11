@@ -22,13 +22,16 @@ from lib.artifacts.artifact_activation import (
 )
 from lib.artifacts.artifact_version_provenance import parse_image_version_basis
 from lib.artifacts.formal_write import project_metadata_lock
+from lib.artifacts.version_generation import attach_version_generations
 from lib.artifacts.version_manager import MANUAL_UPLOAD_VERSION_SOURCE, VersionManager
+from lib.db import async_session_factory
+from lib.db.repositories.usage_repo import UsageRepository
 from lib.infra.api_errors import BadRequestError
 from lib.infra.async_thread import run_sync_transaction
 from lib.project.asset_derivatives import DerivativeSheetTarget, derivative_artifact_id, split_derivative_artifact_id
 from lib.project.project_change_hints import project_change_source
 from lib.project.project_manager import get_project_manager
-from lib.project.resource_paths import CHARACTER_DERIVATIVE_RESOURCE_TYPE
+from lib.project.resource_paths import CHARACTER_DERIVATIVE_RESOURCE_TYPE, resource_relative_path
 from lib.script.grid.grid_access import ensure_grid_writable
 from server.services.currency.artifact_version_restore import (
     is_typed_media_restore_resource,
@@ -333,12 +336,30 @@ async def read_resource_versions(project_name: str, resource_type: str, resource
                     record["presentation_available"] = is_presentation_version_available(resource_type, record)
             return {"resource_type": resource_type, "resource_id": resource_id, **versions_info}
 
-        return await asyncio.to_thread(_sync)
+        result = await asyncio.to_thread(_sync)
+        await _attach_generations(project_name, resource_type, resource_id, result.get("versions", []))
+        return result
 
     except ValueError as e:
         # 非法项目名 / 损坏的 versions.json 等坏请求，str(e) 可能含路径只进日志
         logger.warning("版本查询请求非法: %s", e)
         raise BadRequestError("request_invalid") from e
+
+
+async def _attach_generations(
+    project_name: str, resource_type: str, resource_id: str, versions: list[dict[str, Any]]
+) -> None:
+    """Model and cost of each generated version, from the usage ledger; the list still loads when that fails."""
+    if not versions:
+        return
+    try:
+        output_path = resource_relative_path(resource_type, resource_id)
+        async with async_session_factory() as session:
+            calls = await UsageRepository(session).list_successful_calls_for_output(project_name, output_path)
+    except Exception:
+        logger.warning("版本生成记录读取失败 %s/%s/%s", project_name, resource_type, resource_id, exc_info=True)
+        calls = []
+    attach_version_generations(versions, calls)
 
 
 # ==================== 版本还原 ====================
