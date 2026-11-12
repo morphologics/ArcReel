@@ -1,9 +1,9 @@
 import { useTranslation } from "react-i18next";
 import {
   CheckCheck,
-  CircleArrowRight,
   Circle,
   CloudOff,
+  ListTodo,
   LoaderCircle,
   MessageSquareWarning,
   OctagonAlert,
@@ -22,7 +22,7 @@ export type ProgressStatusKind = ProgressHeadlineKind | "loading" | "unavailable
 
 const STATUS: Record<ProgressStatusKind, { icon: LucideIcon; className: string; spin?: boolean }> = {
   complete: { icon: CheckCheck, className: "text-good" },
-  next: { icon: CircleArrowRight, className: "text-primary" },
+  next: { icon: ListTodo, className: "text-primary" },
   running: { icon: RefreshCw, className: "text-primary", spin: true },
   warn: { icon: MessageSquareWarning, className: "text-warn" },
   danger: { icon: OctagonAlert, className: "text-destructive" },
