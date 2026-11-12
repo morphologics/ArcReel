@@ -121,7 +121,7 @@ export function EpisodeHead({
           </PopoverTrigger>
           <PopoverContent side="bottom" align="start" className="w-auto min-w-48">
             <PopoverTitle>{t("episode_head_stats")}</PopoverTitle>
-            <ul className="num m-0 flex list-none flex-col gap-1 p-0 text-xs whitespace-nowrap">
+            <ul className="num m-0 mt-1 flex list-none flex-col gap-2.5 p-0 text-xs whitespace-nowrap">
               {facts.map((fact) => (
                 <li key={fact}>{fact}</li>
               ))}
