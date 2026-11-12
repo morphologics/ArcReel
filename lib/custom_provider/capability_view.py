@@ -107,6 +107,14 @@ def overridable_keys(media_type: str) -> frozenset[str]:
     return keys | CHANNEL_FACT_OVERRIDE_KEYS if media_type == "video" else keys
 
 
+def _editable_image_keys(keys: set[str], implemented: frozenset[ImageCapability] | set[ImageCapability]) -> set[str]:
+    """The image dimensions offered for editing: text-to-image / image-to-image where the channel implements them.
+
+    ``sizes`` (a fixed-size model's allowed sizes) is set by tooling, not in the settings form: never listed.
+    """
+    return {key for key in keys if (cap := _IMAGE_CAPABILITY_BY_KEY.get(key)) is not None and cap in implemented}
+
+
 def _ordered(keys: frozenset[str] | set[str]) -> tuple[str, ...]:
     return tuple(key for key in OVERRIDE_KEY_ORDER if key in keys)
 
@@ -199,7 +207,7 @@ def custom_capability_view(
                 "text_to_image": image.text_to_image is not False and ImageCapability.TEXT_TO_IMAGE in implemented,
                 "image_to_image": image.image_to_image is not False and ImageCapability.IMAGE_TO_IMAGE in implemented,
             }
-            editable = {key for key in editable if _IMAGE_CAPABILITY_BY_KEY[key] in implemented}
+            editable = _editable_image_keys(editable, implemented)
         case "video":
             video = video_model_facts(model_id, None, entry_binding=entry_binding)
             base = {
@@ -280,7 +288,7 @@ def builtin_capability_view(
     editable = set(overridable_keys(media_type))
     if media_type == "image":
         implemented = _image_channel(provider_id)
-        editable = {key for key in editable if _IMAGE_CAPABILITY_BY_KEY[key] in implemented}
+        editable = _editable_image_keys(editable, implemented)
     return CapabilityView(
         media_type, editable=_ordered(editable), base=base, overrides=_normalized_overrides(overrides)
     )
