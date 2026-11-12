@@ -56,6 +56,8 @@ export function BatchFillButton({
 }) {
   const { t } = useTranslation("dashboard");
   const done = count === 0;
+  // storyboards / videos: once complete, the header shows a green indicator beside the status icon instead
+  if (done && kind !== "narration") return null;
   const label = done
     ? t(`batch_fill_${kind}_done`)
     : count === null

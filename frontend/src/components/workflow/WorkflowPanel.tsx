@@ -2,6 +2,7 @@ import { useCallback, useEffect, useId, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { ListChecks } from "lucide-react";
 import { ProgressStatusIcon, type ProgressStatusKind } from "./ProgressStatusIcon";
+import { ArtifactDoneIcon } from "./ArtifactDoneIcon";
 import { useLocation } from "wouter";
 import { API } from "@/api";
 import {
@@ -523,6 +524,9 @@ export function WorkflowPanel({ projectName, episode, onViewUnit, onRegenerate, 
           )}
         </PopoverContent>
       </Popover>
+      {/* storyboards / videos all generated: green indicators left of the status icon (faint grey until then) */}
+      <ArtifactDoneIcon kind="storyboards" collection={shown?.status.artifacts.storyboards} />
+      <ArtifactDoneIcon kind="videos" collection={shown?.status.artifacts.videos} />
       <ProgressStatusIcon kind={status.kind} title={status.title} detail={status.detail} />
       {assetBatchEpisode !== null && (
         <AssetSheetBatchDialog

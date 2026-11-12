@@ -223,7 +223,8 @@ describe("TimelineCanvas", () => {
     );
 
     expect(screen.getByRole("button", { name: "补齐分镜图 · 2" })).toBeEnabled();
-    expect(screen.getByRole("button", { name: "视频已齐" })).toBeDisabled();
+    // complete: no button here, the header's progress shows a green indicator instead
+    expect(screen.queryByRole("button", { name: "视频已齐" })).not.toBeInTheDocument();
     // 本项目不涉及配音产物时数不出缺口：不写数量，确认与否交给入队
     expect(screen.getByRole("button", { name: "补齐旁白配音" })).toBeEnabled();
   });

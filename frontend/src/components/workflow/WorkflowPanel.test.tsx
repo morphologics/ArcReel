@@ -328,6 +328,24 @@ describe("WorkflowPanel 剪辑", () => {
     expect(useAssistantStore.getState().input).toContain("节奏快一点");
   });
 
+  it("视频齐了：状态图标左边显示绿色的「视频已齐」，分镜图仍缺时其指示留在原位、淡灰", async () => {
+    await renderExpanded(
+      scenario({
+        next: nextAction("create_edit_timeline"),
+        status: {
+          ...videosReady,
+          artifacts: { ...videosReady.artifacts, storyboards: { current_ids: [], stale_ids: [], missing_ids: ["E1S01"] } },
+        },
+      }),
+    );
+    expect(screen.getByTestId("workflow-done-videos")).toHaveAccessibleName("视频已齐");
+    expect(screen.getByTestId("workflow-done-videos")).toHaveAttribute("data-done", "true");
+    // not complete: keeps its place, faint grey
+    expect(screen.getByTestId("workflow-done-storyboards")).toHaveAccessibleName("分镜图未齐");
+    expect(screen.getByTestId("workflow-done-storyboards")).toHaveAttribute("data-done", "false");
+    expect(screen.getByTestId("workflow-done-storyboards")).toHaveTextContent("1");
+  });
+
   it("新建剪辑时间线按脚本机械新建，集内已有「完整版」时依次加序号，然后刷新项目与计划", async () => {
     vi.spyOn(API, "listEditTimelines").mockResolvedValue({
       timelines: [timelineSummary("tl-1", "完整版")],
