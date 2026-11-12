@@ -1160,11 +1160,13 @@ class API {
   static async generateCharacterDerivative(
     projectName: string,
     charName: string,
-    derivativeName: string
+    derivativeName: string,
+    /** "provider/model" for this request only ("Generate with …") */
+    imageModel?: string,
   ): Promise<{ success: boolean; task_id: string; deduped: boolean; message: string }> {
     return this.request(
       `/projects/${encodeURIComponent(projectName)}/generate/character/${encodeURIComponent(charName)}/derivatives/${encodeURIComponent(derivativeName)}`,
-      { method: "POST" }
+      imageModel ? { method: "POST", body: JSON.stringify({ image_model: imageModel }) } : { method: "POST" }
     );
   }
 

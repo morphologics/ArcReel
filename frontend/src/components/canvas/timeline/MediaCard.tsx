@@ -3,7 +3,7 @@ import { cn } from "cn";
 import { ContextMenu } from "@base-ui/react/context-menu";
 import { DropdownMenuContent, DropdownMenuItem } from "@/components/ui/dropdown-menu";
 import { isResourceBusy } from "@/stores/tasks-store";
-import { Sparkles, ImageIcon, Film, History, Eye, Upload } from "lucide-react";
+import { ImageIcon, Film, History, Eye, Upload } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useTranslation } from "react-i18next";
 import { API, type VersionInfo } from "@/api";
@@ -32,7 +32,8 @@ import { errMsg } from "@/utils/async";
 import { VersionHistoryPanel } from "./VersionHistoryPanel";
 import { versionCost, versionOrigin, versionTime } from "./version-summary";
 import { MEDIA_SIDE_BY_SIDE_QUERY, useMediaQuery } from "@/hooks/useMediaQuery";
-import { GenerateLabel, generateDetail } from "@/components/canvas/shared/GenerateLabel";
+import { GenerateButton } from "@/components/canvas/shared/GenerateButton";
+import { generateDetail } from "@/components/canvas/shared/GenerateLabel";
 
 type MediaKind = "storyboard" | "video";
 
@@ -78,6 +79,8 @@ interface MediaCardProps {
   /** Items of the right-click menu on the image or video (DropdownMenuItem elements); no menu when absent. */
   /** The configured model's name, shown with the estimated cost on the Generate button. */
   generateModelName?: string | null;
+  /** The Generate button's model choices (its ▾), the same items as the right-click menu's. */
+  generateMenu?: ReactNode;
   /** Under the preview, above the Generate button (the video's end frame). */
   belowPreview?: ReactNode;
   /** Make current also puts back the prompt the version was made from (and, for videos, its length). */
@@ -114,6 +117,7 @@ export function MediaCard({
   unsavedEdits,
   belowPreview,
   generateModelName,
+  generateMenu,
   uploading,
   uploadDisabled,
   editScriptFile,
@@ -477,7 +481,7 @@ export function MediaCard({
       {belowPreview && <div className="mt-2.5">{belowPreview}</div>}
 
       {onGenerate && !demoReadOnly && (
-        <Button
+        <GenerateButton
           className="mt-2.5 w-full"
           size="lg"
           onClick={onGenerate}
@@ -487,16 +491,13 @@ export function MediaCard({
               ? (generateDisabledHint ?? t("media_generate_video_disabled_hint"))
               : undefined
           }
-        >
-          <Sparkles aria-hidden data-icon="inline-start" />
-          <GenerateLabel
-            label={generateLabel}
-            detail={generateDetail(
-              generateModelName,
-              estimatedCost && Object.values(estimatedCost).some((v) => v > 0) ? `~${formatCost(estimatedCost)}` : null,
-            )}
-          />
-        </Button>
+          label={generateLabel}
+          detail={generateDetail(
+            generateModelName,
+            estimatedCost && Object.values(estimatedCost).some((v) => v > 0) ? `~${formatCost(estimatedCost)}` : null,
+          )}
+          menu={generateMenu}
+        />
       )}
     </div>
   );

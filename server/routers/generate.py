@@ -966,6 +966,7 @@ async def generate_character_derivative(
     derivative_name: str,
     user: CurrentUser,
     _t: Translator,
+    req: GenerateAssetRequest | None = None,
 ):
     """提交角色衍生资产图生成任务到队列，立即返回 task_id。
 
@@ -984,12 +985,19 @@ async def generate_character_derivative(
         raise NotFoundError("character_not_found", name=char_name) from exc
 
     provider_id = await _require_i2i_image_provider_configured(project)
+    # a model chosen for this request ("Generate with …"): a derivative is an image edit, so the i2i lane
+    extra_payload = (
+        await _chosen_image_model_payload(project, "i2i", req.image_model) if req and req.image_model else None
+    )
+    if extra_payload:
+        provider_id = str(extra_payload["image_provider"])
 
     spec = TaskSpec.from_request(
         task_type=DERIVATIVE_TASK_TYPE,
         media_type="image",
         resource_id=source.target.artifact_id,
         prompt=build_derivative_sheet_instruction(source.description),
+        **({"extra_payload": extra_payload} if extra_payload else {}),
     )
     result = await get_generation_queue().enqueue_task(
         project_name=project_name,

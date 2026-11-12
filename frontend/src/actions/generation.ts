@@ -229,11 +229,15 @@ export async function enqueueCharacterDerivative(
   projectName: string,
   characterName: string,
   derivativeName: string,
+  imageModel?: string,
 ): Promise<EnqueueResult> {
   const resourceId = derivativeResourceId(characterName, derivativeName);
   const res = await submit(
     [markResource(projectName, "character_derivative", resourceId, "character_derivative")],
-    () => API.generateCharacterDerivative(projectName, characterName, derivativeName),
+    () =>
+      imageModel
+        ? API.generateCharacterDerivative(projectName, characterName, derivativeName, imageModel)
+        : API.generateCharacterDerivative(projectName, characterName, derivativeName),
     oneTaskId,
   );
   notifyEnqueued(res.deduped, res.message);

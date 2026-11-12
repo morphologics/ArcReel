@@ -395,3 +395,41 @@ export function useImageLaneModel(
   );
 }
 
+/** A character derivative's items: the enabled image-to-image models, priced for an edit with one reference. */
+export function DerivativeGenerateItems({
+  projectName,
+  hasImage,
+  disabled,
+  onGenerate,
+}: {
+  projectName: string;
+  hasImage: boolean;
+  disabled: boolean;
+  onGenerate: (imageModel: string | null) => void;
+}) {
+  const { t } = useTranslation(["dashboard", "assets"]);
+  const load = useCallback(async (): Promise<ModelOptions> => {
+    const candidates = await loadCandidates();
+    const pairs = candidates.image.buckets.i2i ?? candidates.image.default;
+    const quotes = await API.quoteImageLaneModels(projectName, { lane: "i2i", reference_count: 1, models: pairs });
+    return {
+      current: quotes.current,
+      models: pairs.map((pair) => {
+        const quote = quotes.quotes[pair];
+        const reason = quote && "unavailable" in quote ? t("image_model_unavailable_for_asset") : null;
+        return { pair, ...describe(candidates, pair), cost: quote && "cost" in quote ? costText(quote.cost) : null, reason };
+      }),
+    };
+  }, [projectName, t]);
+  return (
+    <ModelGenerateItems
+      icon={ImageIcon}
+      label={t(hasImage ? "assets:derivative_regenerate" : "assets:derivative_generate")}
+      withLabel={t(hasImage ? "storyboard_regenerate_with" : "storyboard_generate_with")}
+      disabled={disabled}
+      load={load}
+      onGenerate={onGenerate}
+    />
+  );
+}
+

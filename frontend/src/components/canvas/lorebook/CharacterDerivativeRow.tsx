@@ -44,10 +44,10 @@ import { isAssetBusy, rejectIfAssetBusy } from "./assetBusyGuard";
 import { hasUsableDescription } from "./AssetSheetStatusBadge";
 import type { GalleryMarker } from "./gallery-model";
 import { GalleryStatusMarker } from "./GalleryStatusMarker";
-import { GenerateButton } from "./GenerateButton";
+import { GenerateButton } from "@/components/canvas/shared/GenerateButton";
 import { useTrackWrite } from "./useAssetWrites";
 import { useStaleRegenerateConfirm } from "./useStaleRegenerateConfirm";
-import { useImageLaneModel } from "@/components/canvas/timeline/VideoRegenerateItems";
+import { DerivativeGenerateItems, useImageLaneModel } from "@/components/canvas/timeline/VideoRegenerateItems";
 import { generateDetail } from "@/components/canvas/shared/GenerateLabel";
 
 /** 脚本正文里引用衍生的记号。 */
@@ -171,7 +171,8 @@ export function CharacterDerivativeRow({
     );
   };
 
-  const handleGenerate = async () => {
+  /** `imageModel`: a model chosen for this request; none = the configured one. */
+  const handleGenerate = async (imageModel?: string) => {
     if (
       isAssetBusy("character", projectName, characterName) ||
       isResourceBusy("character_derivative", projectName, resourceId)
@@ -180,7 +181,7 @@ export function CharacterDerivativeRow({
       return;
     }
     try {
-      await enqueueCharacterDerivative(projectName, characterName, name);
+      await enqueueCharacterDerivative(projectName, characterName, name, imageModel);
     } catch (err) {
       useAppStore.getState().pushToast(errMsg(err), "error");
     }
@@ -205,12 +206,12 @@ export function CharacterDerivativeRow({
     onGenerate: () => void handleGenerate(),
   });
 
-  const generate = () => {
+  const generate = (imageModel: string | null = null) => {
     // 提交前复核：从渲染到点击之间，本体或这条衍生可能刚被别处占用
     if (rejectIfBusy()) return;
     // 衍生图由外观变化生成：改了它，保存后这张图就会过期，服务端此刻的判定还看不到
     const willBeStale = unit.value !== unit.savedValue;
-    void unit.saveAndGenerate(handleGenerate, {
+    void unit.saveAndGenerate(() => handleGenerate(imageModel ?? undefined), {
       confirm: async () => {
         if (!(await staleConfirm.confirm({ willBeStale }))) return false;
         return !rejectIfBusy();
@@ -439,7 +440,7 @@ export function CharacterDerivativeRow({
           <UnsavedChangesBar unit={unit} />
           <div className="flex flex-wrap items-center gap-1.5">
             <GenerateButton
-              onClick={generate}
+              onClick={() => generate()}
               loading={generating}
               disabled={rowBusy || saving || !ownerHasSheet || !describable}
               label={
@@ -450,6 +451,14 @@ export function CharacterDerivativeRow({
                     : t("assets:derivative_generate")
               }
               detail={generateDetail(derivativeModel?.name, derivativeModel?.cost)}
+              menu={
+                <DerivativeGenerateItems
+                  projectName={projectName}
+                  hasImage={Boolean(sheetPath)}
+                  disabled={rowBusy || saving || !ownerHasSheet || !describable}
+                  onGenerate={(imageModel) => generate(imageModel)}
+                />
+              }
               size="sm"
               variant="outline"
             />

@@ -118,7 +118,11 @@ export function NarrationAudioCard({
           <Sparkles aria-hidden data-icon="inline-start" />
           <GenerateLabel
             label={generateLabel}
-            detail={estimatedCost && Object.values(estimatedCost).some((v) => v > 0) ? `~${formatCost(estimatedCost)}` : null}
+            detail={
+              estimatedCost && Object.values(estimatedCost).some((v) => v > 0)
+                ? { cost: `~${formatCost(estimatedCost)}` }
+                : null
+            }
           />
         </Button>
       )}

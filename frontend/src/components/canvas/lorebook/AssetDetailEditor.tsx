@@ -35,7 +35,7 @@ import { CharacterVoiceField } from "./CharacterVoiceField";
 import { EditableAssetName } from "./EditableAssetName";
 import { markerOf, toGalleryAsset, type GalleryAssetSource } from "./gallery-model";
 import { GalleryStatusMarker } from "./GalleryStatusMarker";
-import { GenerateButton } from "./GenerateButton";
+import { GenerateButton } from "@/components/canvas/shared/GenerateButton";
 import { AssetWriteProvider, useAssetWrites } from "./useAssetWrites";
 import { useStaleRegenerateConfirm } from "./useStaleRegenerateConfirm";
 import { ContextMenu } from "@base-ui/react/context-menu";
@@ -297,6 +297,14 @@ export function AssetDetailEditor({
                   disabled={!describable || busy}
                   label={generateLabel}
                   detail={generateDetailText}
+                  menu={
+                    <AssetSheetGenerateItems
+                      options={modelOptions}
+                      hasImage={Boolean(gallery.sheetPath)}
+                      disabled={!describable || busy}
+                      onGenerate={(imageModel) => generate(imageModel)}
+                    />
+                  }
                   className="w-full"
                 />
                 {describable ? null : (

@@ -1105,6 +1105,35 @@ export function ShotDetail({
     </>
   );
 
+  // the model choices of the storyboard image and the video: the right-click menu and the Generate button's ▾
+  const storyboardGenerateItems =
+    !readOnly && scriptFile && onGenerateStoryboard ? (
+      <StoryboardGenerateItems
+        projectName={projectName}
+        segmentId={segmentId}
+        scriptFile={scriptFile}
+        hasImage={Boolean(assets?.storyboard_image)}
+        disabled={Boolean(generatingStoryboard) || editBusy || refreshPending}
+        onGenerate={(imageModel) =>
+          void unit.saveAndGenerate(() => onGenerateStoryboard(segmentId, undefined, imageModel ?? undefined))
+        }
+      />
+    ) : null;
+  const videoGenerateItems =
+    !readOnly && scriptFile && onGenerateVideo ? (
+      <VideoRegenerateItems
+        projectName={projectName}
+        segmentId={segmentId}
+        scriptFile={scriptFile}
+        durationSeconds={fields.duration_seconds || 4}
+        hasVideo={Boolean(assets?.video_clip)}
+        disabled={generatingVideo || !hasStoryboard || editBusy || refreshPending}
+        onGenerate={(videoModel) =>
+          void unit.saveAndGenerate(() => onGenerateVideo(segmentId, undefined, videoModel ?? undefined))
+        }
+      />
+    ) : undefined;
+
   const storyboardMedia = (
     <MediaCard
       kind="storyboard"
@@ -1119,6 +1148,7 @@ export function ShotDetail({
       }
       generateLabel={generateLabel}
       generateModelName={storyboardModel?.name}
+      generateMenu={storyboardGenerateItems}
       restoring={restoringMedia}
       onRestoringChange={setRestoringMedia}
       checkBusy={() => uploadingKind !== null || saving || isScriptFileBusy("grid", scriptFile, projectName)}
@@ -1133,18 +1163,7 @@ export function ShotDetail({
       contextMenuItems={
         readOnly ? undefined : (
           <>
-            {scriptFile && onGenerateStoryboard && (
-              <StoryboardGenerateItems
-                projectName={projectName}
-                segmentId={segmentId}
-                scriptFile={scriptFile}
-                hasImage={Boolean(assets?.storyboard_image)}
-                disabled={Boolean(generatingStoryboard) || editBusy || refreshPending}
-                onGenerate={(imageModel) =>
-                  void unit.saveAndGenerate(() => onGenerateStoryboard(segmentId, undefined, imageModel ?? undefined))
-                }
-              />
-            )}
+            {storyboardGenerateItems}
             {imageMenuItems}
           </>
         )
@@ -1178,6 +1197,7 @@ export function ShotDetail({
         onGenerate={onGenerateVideo ? () => void unit.saveAndGenerate(() => onGenerateVideo(segmentId)) : undefined}
         generateLabel={generateLabel}
         generateModelName={videoModel?.name}
+        generateMenu={videoGenerateItems}
         restoring={restoringMedia}
         onRestoringChange={setRestoringMedia}
         checkBusy={() => uploadingKind !== null || saving || endFrameSubmitting || isScriptFileBusy("grid", scriptFile, projectName)}
@@ -1206,19 +1226,7 @@ export function ShotDetail({
           ) : undefined
         }
         contextMenuItems={
-          !readOnly && scriptFile && onGenerateVideo ? (
-            <VideoRegenerateItems
-              projectName={projectName}
-              segmentId={segmentId}
-              scriptFile={scriptFile}
-              durationSeconds={fields.duration_seconds || 4}
-              hasVideo={Boolean(assets?.video_clip)}
-              disabled={generatingVideo || !hasStoryboard || editBusy || refreshPending}
-              onGenerate={(videoModel) =>
-                void unit.saveAndGenerate(() => onGenerateVideo(segmentId, undefined, videoModel ?? undefined))
-              }
-            />
-          ) : undefined
+          videoGenerateItems
         }
       />
     </>

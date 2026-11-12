@@ -2203,6 +2203,7 @@ export default {
   'asset_generate_image': '生成图片',
   'asset_regenerate_image': '重新生成图片',
   'image_model_unavailable_for_asset': '无法生成此图',
+  'generate_choose_model': '选择模型',
   'media_tabs': '分镜图或视频',
   'media_switch_to': '切换到{{name}}',
 

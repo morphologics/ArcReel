@@ -2194,6 +2194,7 @@ export default {
   'asset_generate_image': 'Tạo ảnh',
   'asset_regenerate_image': 'Tạo lại ảnh',
   'image_model_unavailable_for_asset': 'Không tạo được ảnh này',
+  'generate_choose_model': 'Chọn mô hình',
   'media_tabs': 'Phân cảnh hoặc video',
   'media_switch_to': 'Chuyển sang {{name}}',
 
