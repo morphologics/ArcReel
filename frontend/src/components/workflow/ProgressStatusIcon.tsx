@@ -55,9 +55,10 @@ export function ProgressStatusIcon({
         closeDelay={150}
         data-testid="workflow-status"
         data-status={kind}
-        render={<Button variant="ghost" size="icon-xs" aria-label={t("status_icon_aria", { title })} />}
+        render={<Button variant="ghost" size="icon-lg" aria-label={t("status_icon_aria", { title })} />}
       >
-        <Icon aria-hidden className={cn(className, spin && "animate-spin")} />
+        {/* twice the header's other icons: the status is read at a glance */}
+        <Icon aria-hidden className={cn("size-6", className, spin && "animate-spin")} />
       </PopoverTrigger>
       <PopoverContent side="bottom" align="end" className="w-auto max-w-xs">
         <PopoverTitle>{title}</PopoverTitle>
