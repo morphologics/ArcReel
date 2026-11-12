@@ -15,6 +15,7 @@ export default {
   'import': 'Import',
   'upload': 'Upload',
   'loading': 'Loading...',
+  'backend_unreachable_retrying': 'Studio is restarting… retrying',
   'error': 'Error',
   'success': 'Success',
   'required': 'required',

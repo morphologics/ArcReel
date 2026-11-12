@@ -16,6 +16,7 @@ export default {
   'import': 'Nhập',
   'upload': 'Tải lên',
   'loading': 'Đang tải...',
+  'backend_unreachable_retrying': 'Studio đang khởi động lại… đang thử lại',
   'error': 'Lỗi',
   'success': 'Thành công',
   'required': 'bắt buộc',

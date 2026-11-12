@@ -7,7 +7,8 @@ import { useTranslation } from "react-i18next";
  * - `screen`：占满视口，用于登录态未确定、整页懒加载的 chunk 未到达。
  * - `pane`：占满父容器，用于工作区画布等局部区域的懒加载。
  */
-export function LoadingState({ variant }: { variant: "screen" | "pane" }) {
+/** `label`: shown instead of "Loading…" (e.g. while the backend is restarting). */
+export function LoadingState({ variant, label }: { variant: "screen" | "pane"; label?: string }) {
   const { t } = useTranslation("common");
   return (
     <div
@@ -20,7 +21,7 @@ export function LoadingState({ variant }: { variant: "screen" | "pane" }) {
       }
     >
       <Loader2 aria-hidden className="size-4 animate-spin" />
-      <span>{t("loading")}</span>
+      <span>{label ?? t("loading")}</span>
     </div>
   );
 }

@@ -106,10 +106,11 @@ function ConfigStatusLoader() {
 // ---------------------------------------------------------------------------
 
 function AuthGuard({ children }: { children: React.ReactNode }) {
-  const { isAuthenticated, isLoading } = useAuthStore();
+  const { isAuthenticated, isLoading, unreachable } = useAuthStore();
+  const { t } = useTranslation("common");
 
   if (isLoading) {
-    return <LoadingState variant="screen" />;
+    return <LoadingState variant="screen" label={unreachable ? t("backend_unreachable_retrying") : undefined} />;
   }
 
   if (!isAuthenticated) {

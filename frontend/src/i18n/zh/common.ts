@@ -16,6 +16,7 @@ export default {
   'import': '导入',
   'upload': '上传',
   'loading': '加载中…',
+  'backend_unreachable_retrying': '工作室正在重启…正在重试',
   'error': '错误',
   'success': '成功',
   'required': '必填',

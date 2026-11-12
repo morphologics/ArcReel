@@ -6,6 +6,9 @@ interface AuthState {
   username: string | null;
   isAuthenticated: boolean;
   isLoading: boolean;
+  /** The backend didn't answer /auth/status and last time it said the login is off: the app shows "restarting,
+   * retrying" and keeps asking, instead of falling back to the login page (a dead end there). */
+  unreachable: boolean;
   initialize: () => void;
   login: (token: string, username: string) => void;
   logout: () => void;
@@ -14,12 +17,25 @@ interface AuthState {
 
 /** Delays before each /auth/status attempt: the first at once, then retries over about 7 s. */
 const AUTH_STATUS_RETRY_MS = [0, 1000, 2000, 4000];
+/** After those, while the backend stays unreachable: one more attempt every this many ms. */
+const AUTH_STATUS_UNREACHABLE_RETRY_MS = 5000;
+/** The backend's last answer to "is the login on?" in this browser ("true" / "false"). */
+const AUTH_ENABLED_KEY = "arcreel:auth-enabled";
+
+function lastAuthEnabled(): string | null {
+  try {
+    return localStorage.getItem(AUTH_ENABLED_KEY);
+  } catch {
+    return null;
+  }
+}
 
 export const useAuthStore = create<AuthState>((set) => ({
   token: null,
   username: null,
   isAuthenticated: false,
   isLoading: true,
+  unreachable: false,
 
   initialize: () => {
     const token = getToken();
@@ -46,24 +62,39 @@ export const useAuthStore = create<AuthState>((set) => ({
         ) {
           throw new Error("invalid /auth/status payload");
         }
-        return !(payload as { enabled: boolean }).enabled;
+        const enabled = (payload as { enabled: boolean }).enabled;
+        try {
+          localStorage.setItem(AUTH_ENABLED_KEY, String(enabled));
+        } catch {
+          // storage blocked: an outage then falls back to the login page, as before
+        }
+        return !enabled;
       } finally {
         clearTimeout(timeoutId);
       }
     };
     void (async () => {
-      for (const delay of AUTH_STATUS_RETRY_MS) {
+      // The quick retries; then, if the backend said last time that the login is off, keep asking every
+      // AUTH_STATUS_UNREACHABLE_RETRY_MS (shown as "restarting, retrying"); otherwise (login on, or never heard)
+      // fall back to the login page as before. Nothing is unlocked while it's unreachable.
+      for (let tries = 0; ; tries++) {
+        const delay = AUTH_STATUS_RETRY_MS[tries] ?? AUTH_STATUS_UNREACHABLE_RETRY_MS;
         if (delay) await new Promise((resolve) => setTimeout(resolve, delay));
         try {
           if (await attempt()) set({ isAuthenticated: true });
-          set({ isLoading: false });
+          set({ isLoading: false, unreachable: false });
           return;
         } catch (err) {
           console.warn("[auth] /auth/status fetch failed", err);
+          if (tries < AUTH_STATUS_RETRY_MS.length - 1) continue;
+          if (lastAuthEnabled() !== "false") {
+            console.warn("[auth] /auth/status unavailable; defaulting to login");
+            set({ isLoading: false });
+            return;
+          }
+          set({ unreachable: true });
         }
       }
-      console.warn("[auth] /auth/status unavailable; defaulting to login");
-      set({ isLoading: false });
     })();
   },
 
