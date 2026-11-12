@@ -3877,6 +3877,8 @@ export default {
   'edit_view_track_subtitles': 'Phụ đề',
   'edit_view_track_bgm': 'BGM',
   'edit_view_playhead': 'Đầu phát',
+  'edit_view_speed': 'Tốc độ phát',
+  'edit_view_speed_normal': 'Bình thường',
   'edit_view_narration_title': 'Thuyết minh của {{unit}}, gắn vào {{clip}}: {{start}}–{{end}}s',
   'edit_view_narration_missing': '{{unit}} chưa có âm thanh thuyết minh, gắn vào {{clip}}',
   'edit_view_narration_post_production': 'Thuyết minh của {{unit}} được lồng tiếng ở khâu hậu kỳ nên bản xem trước không phát tiếng, gắn vào {{clip}}',

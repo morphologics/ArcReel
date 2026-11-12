@@ -14,6 +14,7 @@ import { transitionOpacity, type PlaybackPlan } from "./playback-schedule";
 import { unitPositionLabel } from "./timeline-view";
 import { subtitleAt, subtitleLayout, type PlacedSubtitle } from "./preview-tracks";
 import { formatClock } from "./timeline-view";
+import { SpeedControl } from "./SpeedControl";
 import type { TimelinePlayback } from "./useTimelinePlayback";
 
 /** Menu items built when the menu opens: they act on the clip on screen at that moment. */
@@ -66,7 +67,9 @@ export function EditTimelinePlayer({
 
   return (
     <div className="flex h-full min-h-0 flex-col gap-2">
-      <div className="@container-size relative flex min-h-0 flex-1 items-center justify-center">
+      {/* the picture, and the speed slider to its right */}
+      <div className="flex min-h-0 flex-1 gap-2">
+      <div className="@container-size relative flex min-h-0 min-w-0 flex-1 items-center justify-center">
         <ContextMenu.Root disabled={!clipMenu}>
         <ContextMenu.Trigger
           render={
@@ -178,6 +181,10 @@ export function EditTimelinePlayer({
           </DropdownMenuContent>
         )}
         </ContextMenu.Root>
+      </div>
+      <div className="flex shrink-0 items-center">
+        <SpeedControl speed={playback.speed} onChange={playback.setSpeed} />
+      </div>
       </div>
       {(playback.blocked || hasTransitions) && (
         <div className="flex shrink-0 flex-col gap-1 text-xs">

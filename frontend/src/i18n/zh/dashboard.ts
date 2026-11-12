@@ -3876,6 +3876,8 @@ export default {
   'edit_view_track_subtitles': '字幕',
   'edit_view_track_bgm': 'BGM',
   'edit_view_playhead': '播放头',
+  'edit_view_speed': '播放速度',
+  'edit_view_speed_normal': '正常',
   'edit_view_narration_title': '{{unit}} 的旁白，挂在 {{clip}} 上：{{start}}～{{end}}s',
   'edit_view_narration_missing': '{{unit}} 还没有旁白配音，挂在 {{clip}} 上',
   'edit_view_narration_post_production': '{{unit}} 的旁白由后期配音，预览不出声，挂在 {{clip}} 上',

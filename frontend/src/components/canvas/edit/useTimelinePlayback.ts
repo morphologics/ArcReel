@@ -36,6 +36,22 @@ export interface TimelinePlayback {
   pause: () => void;
   toggle: () => void;
   seek: (t: number) => void;
+  /** Playback speed (1 = normal; PLAYBACK_SPEEDS), remembered in this browser. */
+  speed: number;
+  setSpeed: (speed: number) => void;
+}
+
+/** The speeds offered by the player's speed control. */
+export const PLAYBACK_SPEEDS = [0.5, 0.75, 1, 1.5, 2, 5] as const;
+const SPEED_STORAGE_KEY = "arcreel:edit-view-speed";
+
+function storedSpeed(): number {
+  try {
+    const value = Number(localStorage.getItem(SPEED_STORAGE_KEY));
+    return (PLAYBACK_SPEEDS as readonly number[]).includes(value) ? value : 1;
+  } catch {
+    return 1;
+  }
 }
 
 /** 动画帧停摆时推进播放头的兜底间隔。 */
@@ -56,6 +72,8 @@ interface Runtime {
   /** 播放过一次后为 true；此前不为下一段预载。 */
   started: boolean;
   lastFrame: number;
+  /** Playback speed: the video's playbackRate, the wall clock's pace (holds, gaps) and the audio's base rate. */
+  speed: number;
   /** 每个元素当前装载的片段 ID。 */
   loaded: [string | null, string | null];
   /** 每个元素等待元数据到达后要定位到的时间；换装载时作废。 */
@@ -104,6 +122,7 @@ export function useTimelinePlayback(
   const refB = useRef<HTMLVideoElement>(null);
   const [t, setT] = useState(0);
   const [playing, setPlaying] = useState(false);
+  const [speed, setSpeedState] = useState(storedSpeed);
   const [started, setStarted] = useState(false);
   const [index, setIndex] = useState(-1);
   const [visibleSlot, setVisibleSlot] = useState<Slot>(0);
@@ -117,6 +136,7 @@ export function useTimelinePlayback(
     playing: false,
     started: false,
     lastFrame: 0,
+    speed: storedSpeed(),
     loaded: [null, null],
     pendingSeek: [null, null],
     preloadedAfter: -1,
@@ -164,6 +184,10 @@ export function useTimelinePlayback(
 
   const startMedia = useCallback(
     (media: HTMLMediaElement | null) => {
+      // videos play at the chosen speed; audio gets its rate from syncAudioTo
+      if (media instanceof HTMLVideoElement && media.playbackRate !== runtime.current.speed) {
+        media.playbackRate = runtime.current.speed;
+      }
       void media?.play()?.catch(onPlayRejected);
     },
     [onPlayRejected],
@@ -255,7 +279,9 @@ export function useTimelinePlayback(
         ended: media.ended,
       });
       if (directive.seekTo !== null) media.currentTime = directive.seekTo;
-      if (Math.abs(media.playbackRate - directive.playbackRate) > 1e-3) media.playbackRate = directive.playbackRate;
+      // the drift nudge is around 1: scaled by the playback speed
+      const rate = directive.playbackRate * runtime.current.speed;
+      if (Math.abs(media.playbackRate - rate) > 1e-3) media.playbackRate = rate;
       if (Math.abs(media.volume - directive.volume) > 1e-3) media.volume = directive.volume;
       if (directive.play && media.paused) startMedia(media);
       else if (!directive.play && !media.paused) media.pause();
@@ -409,9 +435,11 @@ export function useTimelinePlayback(
       const currentPlan = planRef.current;
       const segment = currentPlan.segments[state.index];
       if (!state.playing || !segment) return;
-      const elapsed = Math.max(0, (now - state.lastFrame) / 1000);
+      // wall-clock time on the timeline's scale: holds and video-less stretches pass at the playback speed too
+      const elapsed = Math.max(0, (now - state.lastFrame) / 1000) * state.speed;
       state.lastFrame = now;
       const video = element(state.slot);
+      if (video && video.playbackRate !== state.speed) video.playbackRate = state.speed;
       const holding = locate(currentPlan, state.t)?.holding ?? false;
       const inPicture =
         segment.hasVideo && !holding && video !== null && state.loaded[state.slot] === segment.clipId;
@@ -515,6 +543,21 @@ export function useTimelinePlayback(
     };
   }, []);
 
+  const setSpeed = useCallback(
+    (next: number) => {
+      runtime.current.speed = next;
+      setSpeedState(next);
+      const video = element(runtime.current.slot);
+      if (video) video.playbackRate = next;
+      try {
+        localStorage.setItem(SPEED_STORAGE_KEY, String(next));
+      } catch {
+        // storage blocked: the speed still applies to this session
+      }
+    },
+    [element],
+  );
+
   return {
     t,
     playing,
@@ -528,5 +571,7 @@ export function useTimelinePlayback(
     pause,
     toggle: () => (runtime.current.playing ? pause() : play()),
     seek,
+    speed,
+    setSpeed,
   };
 }

@@ -3877,6 +3877,8 @@ export default {
   'edit_view_track_subtitles': 'Subtitles',
   'edit_view_track_bgm': 'BGM',
   'edit_view_playhead': 'Playhead',
+  'edit_view_speed': 'Playback speed',
+  'edit_view_speed_normal': 'Normal',
   'edit_view_narration_title': '{{unit}} narration, attached to {{clip}}: {{start}}–{{end}}s',
   'edit_view_narration_missing': '{{unit}} has no narration audio yet, attached to {{clip}}',
   'edit_view_narration_post_production': '{{unit}} narration is dubbed in post-production and is silent in the preview, attached to {{clip}}',
