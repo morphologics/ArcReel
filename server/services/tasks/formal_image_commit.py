@@ -21,8 +21,10 @@ from lib.artifacts.artifact_activation import (
 )
 from lib.artifacts.artifact_manifest import ArtifactBasis, ArtifactBasisDescriptor
 from lib.artifacts.artifact_version_provenance import IMAGE_ARTIFACT_BASIS_FIELD
+from lib.artifacts.asset_reference_snapshots import snapshot_reference_image
 from lib.artifacts.generation_input import ASSET_SHEET_CANVAS_RATIO, FrozenGenerationInput
 from lib.artifacts.image_reference_snapshot import FrozenImageReferences
+from lib.artifacts.version_manager import SCRIPT_PROMPT_VERSION_FIELD
 from lib.artifacts.video_visual_provenance import resolve_video_aspect_ratio
 from lib.generation.generation_queue import ensure_dispatch_provider
 from lib.infra.async_thread import run_noninterruptible_sync, run_sync_transaction
@@ -490,6 +492,20 @@ async def run_asset_sheet_image_task(
 
     bucket_key = ASSET_SPECS[asset_type].bucket_key
     sheet_path = f"{bucket_key}/{resource_id}.png"
+    # the asset's description this sheet is made from, kept on its version so Make current can bring it back
+    entry = (project.get(bucket_key) or {}).get(resource_id)
+    description = entry.get("description") if isinstance(entry, dict) else None
+    version_metadata: dict[str, Any] = (
+        {SCRIPT_PROMPT_VERSION_FIELD: description} if isinstance(description, str) and description else {}
+    )
+    # and a copy of its reference image (characters, props), so Make current can bring that back too
+    version_metadata.update(
+        await asyncio.to_thread(
+            lambda: snapshot_reference_image(
+                Path(project_manager.get_project_path(project_name)), project, asset_type, resource_id
+            )
+        )
+    )
 
     def _build_commit(generator: Any, outcome_box: list[FormalImageCommitOutcome]) -> StagedImageCommit:
         return asset_sheet_formal_image_callback(
@@ -520,6 +536,7 @@ async def run_asset_sheet_image_task(
             prompt=frozen.prompt,
             aspect_ratio=get_aspect_ratio(project, bucket_key),
             build_commit_callback=_build_commit,
+            version_metadata=version_metadata,
             warnings=frozen.warnings,
         ),
     )

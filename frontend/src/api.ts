@@ -3064,6 +3064,18 @@ class API {
    * @param resourceId - 资源 ID
    * @param version - 要还原的版本号
    */
+  /** Make a character's or prop's reference image the one its sheet version was made from. */
+  static async restoreVersionReferenceImage(
+    projectName: string,
+    resourceType: "characters" | "props",
+    resourceId: string,
+    version: number,
+  ): Promise<SuccessResponse & { reference: "restored" | "cleared" | "unchanged" | "unavailable" }> {
+    return this.request(`${versionsResourcePath(projectName, resourceType, resourceId)}/reference-image/${version}`, {
+      method: "POST",
+    });
+  }
+
   static async restoreVersion(
     projectName: string,
     resourceType: string,

@@ -1,17 +1,23 @@
 import { useCallback, useId, useMemo, useState, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
+import { Eye, History } from "lucide-react";
 import { cn } from "cn";
-import { API } from "@/api";
+import { API, type VersionInfo } from "@/api";
 import { CrossfadeImage } from "@/components/canvas/shared/CrossfadeImage";
 import { useLeaveGuard } from "@/components/shared/edit-unit/LeaveGuard";
 import { UnsavedChangesBar } from "@/components/shared/edit-unit/UnsavedChangesBar";
 import { useEditUnit } from "@/components/shared/edit-unit/useEditUnit";
 import { PromptPreviewButton } from "@/components/shared/PromptPreviewButton";
 import { TruncatedText } from "@/components/shared/TruncatedText";
+import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { SheetBody, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { Textarea } from "@/components/ui/textarea";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { invalidateResourceVersions, useResourceVersions } from "@/hooks/useResourceVersions";
+import { VersionHistoryPanel } from "@/components/canvas/timeline/VersionHistoryPanel";
+import { versionCost, versionOrigin, versionTime } from "@/components/canvas/timeline/version-summary";
 import { useProjectsStore } from "@/stores/projects-store";
 import { DEFAULT_CHARACTER_VOICE_BINDING } from "@/types";
 import type { AssetSheetStatusRow, AssetSheetType, Character, Product, Prop } from "@/types";
@@ -33,7 +39,7 @@ import {
 import { CharacterDerivativesField } from "./CharacterDerivativesField";
 import { CharacterVoiceField } from "./CharacterVoiceField";
 import { EditableAssetName } from "./EditableAssetName";
-import { markerOf, toGalleryAsset, type GalleryAssetSource } from "./gallery-model";
+import { VERSION_RESOURCE, markerOf, toGalleryAsset, type GalleryAssetSource } from "./gallery-model";
 import { GalleryStatusMarker } from "./GalleryStatusMarker";
 import { GenerateButton } from "@/components/canvas/shared/GenerateButton";
 import { AssetWriteProvider, useAssetWrites } from "./useAssetWrites";
@@ -76,6 +82,14 @@ function EditorSection({
   );
 }
 
+/** The description a sheet version was made from: recorded on the version, else in its generation basis. */
+function versionDescription(info: VersionInfo | undefined): string | null {
+  if (typeof info?.script_prompt === "string" && info.script_prompt) return info.script_prompt;
+  const basis = info?.artifact_image_basis as { inputs?: { asset?: { description?: unknown } } } | undefined;
+  const fromBasis = basis?.inputs?.asset?.description;
+  return typeof fromBasis === "string" && fromBasis ? fromBasis : null;
+}
+
 export interface AssetDetailEditorProps {
   projectName: string;
   assetType: AssetSheetType;
@@ -113,6 +127,8 @@ export function AssetDetailEditor({
   navigation,
 }: AssetDetailEditorProps) {
   const { t } = useTranslation(["assets", "dashboard", "common"]);
+  // the version summary helpers read the shot history's own (dashboard) strings
+  const { t: tVersions } = useTranslation("dashboard");
   const descriptionId = useId();
   const brandId = useId();
   const sellingPointsId = useId();
@@ -201,6 +217,71 @@ export function AssetDetailEditor({
     });
   };
 
+  // Preview / History, as on a shot's media: the image box shows the current sheet, a version picked from the
+  // history (with Make current / Back to current), or the version list in its place
+  const [historyMode, setHistoryMode] = useState(false);
+  const [viewing, setViewing] = useState<{ name: string; version: number } | null>(null);
+  const [restoringVersion, setRestoringVersion] = useState<number | null>(null);
+  const versionResource = VERSION_RESOURCE[assetType];
+  const viewingVersion = viewing?.name === name ? viewing.version : null;
+  const versions = useResourceVersions(projectName, versionResource, name, historyMode || viewingVersion !== null);
+  const viewedInfo =
+    viewingVersion !== null ? (versions.data?.versions.find((v) => v.version === viewingVersion) ?? null) : null;
+  const showingOld = viewedInfo !== null && !viewedInfo.is_current;
+  const historyLabel = t("assets:sheet_history");
+  const viewVersion = (version: number) => {
+    setViewing({ name, version });
+    setHistoryMode(false);
+  };
+
+  /** Make a version the current sheet, with the description it was made from and (characters, props) its
+   * reference image. */
+  const restoreVersion = async (version: number) => {
+    if (busy || restoringVersion !== null) return;
+    if (rejectIfAssetBusy(assetType, projectName, name, t, "dashboard:version_restore_busy_hint")) return;
+    const info = versions.data?.versions.find((v) => v.version === version);
+    const description = versionDescription(info);
+    const restoresDescription = description !== null && description !== unit.savedValue.description;
+    if (restoresDescription && unit.dirty) {
+      useAppStore.getState().pushToast(t("assets:version_restore_unsaved"), "error");
+      return;
+    }
+    setRestoringVersion(version);
+    try {
+      await writes.track(
+        (async () => {
+          const result = await API.restoreVersion(projectName, versionResource, name, version);
+          invalidateResourceVersions(projectName, versionResource, name);
+          if (result.asset_fingerprints) useProjectsStore.getState().updateAssetFingerprints(result.asset_fingerprints);
+          if (restoresDescription) {
+            try {
+              await updateAssetFields(projectName, assetType, name, { description });
+            } catch (err) {
+              useAppStore.getState().pushToast(t("assets:version_description_restore_failed", { message: errMsg(err) }), "error");
+            }
+          }
+          if (versionResource === "characters" || versionResource === "props") {
+            try {
+              const { reference } = await API.restoreVersionReferenceImage(projectName, versionResource, name, version);
+              if (reference === "unavailable") {
+                useAppStore.getState().pushToast(t("assets:version_reference_unavailable", { version }), "warning");
+              }
+            } catch (err) {
+              useAppStore.getState().pushToast(t("assets:version_reference_restore_failed", { message: errMsg(err) }), "error");
+            }
+          }
+          await refreshAfterWrite(projectName, t);
+          // the restored version is now the current one: the box shows it as such
+          setViewing(null);
+        })(),
+      );
+    } catch (err) {
+      useAppStore.getState().pushToast(t("dashboard:switch_version_failed", { message: errMsg(err) }), "error");
+    } finally {
+      setRestoringVersion(null);
+    }
+  };
+
   const setField = <K extends keyof AssetFields>(key: K, next: AssetFields[K]) =>
     setValue((prev) => ({ ...prev, [key]: next }));
 
@@ -249,6 +330,67 @@ export function AssetDetailEditor({
       <SheetBody>
         <div className="flex flex-col gap-6">
           <section aria-label={t("assets:sheet_section")} className="flex flex-col gap-3">
+            {gallery.sheetPath && !readOnly ? (
+              // shows where it goes: History from the image, the image (eye) from the history
+              <div className="-mb-1.5 flex min-h-7 items-center justify-between gap-2">
+                <h3 className="text-sm font-medium">{historyMode ? historyLabel : t("assets:sheet_section")}</h3>
+                <Tooltip>
+                  <TooltipTrigger
+                    render={
+                      <Button
+                        variant="ghost"
+                        size="icon-sm"
+                        aria-label={historyMode ? t("dashboard:media_back_to_preview") : historyLabel}
+                        onClick={() => setHistoryMode((h) => !h)}
+                      />
+                    }
+                  >
+                    {historyMode ? <Eye aria-hidden /> : <History aria-hidden />}
+                  </TooltipTrigger>
+                  <TooltipContent>{historyMode ? t("dashboard:media_back_to_preview") : historyLabel}</TooltipContent>
+                </Tooltip>
+              </div>
+            ) : null}
+            {showingOld && !historyMode && (
+              <div className="-mb-1.5 flex flex-wrap items-center gap-x-2 gap-y-1 rounded-md bg-warn/15 px-2 py-1 text-xs">
+                <span className="min-w-0 flex-1">
+                  <span className="num font-medium">{t("dashboard:version_viewing", { version: viewedInfo.version })}</span>
+                  <span className="text-subtle-foreground">
+                    {" · "}
+                    {[versionTime(viewedInfo), versionOrigin(viewedInfo, tVersions), viewedInfo.generation?.model, versionCost(viewedInfo)]
+                      .filter(Boolean)
+                      .join(" · ")}
+                  </span>
+                </span>
+                {viewedInfo.restorable !== false && (
+                  <Button
+                    size="xs"
+                    disabled={busy || restoringVersion !== null}
+                    onClick={() => void restoreVersion(viewedInfo.version)}
+                  >
+                    {restoringVersion === viewedInfo.version ? t("dashboard:switching_version") : t("dashboard:version_make_current")}
+                  </Button>
+                )}
+                <Button size="xs" variant="ghost" onClick={() => setViewing(null)}>
+                  {t("dashboard:version_back_to_current")}
+                </Button>
+              </div>
+            )}
+            {historyMode && gallery.sheetPath && !readOnly ? (
+              <VersionHistoryPanel
+                kind="sheet"
+                aspectRatio="16:9"
+                versions={versions.data?.versions ?? null}
+                loading={versions.loading}
+                error={versions.error}
+                viewingVersion={viewingVersion}
+                onView={viewVersion}
+                onRestore={(version) => void restoreVersion(version)}
+                restoringVersion={restoringVersion}
+                restoreDisabled={busy}
+                summaryOf={(v) => versionDescription(v)}
+              />
+            ) : (
             <SheetContextMenu
               items={
                 readOnly ? null : (
@@ -261,8 +403,20 @@ export function AssetDetailEditor({
                 )
               }
             >
-            <div className="relative aspect-video overflow-hidden rounded-lg border border-border bg-muted/40">
-              {imageUrl ? (
+            <div
+              className={cn(
+                "relative aspect-video overflow-hidden rounded-lg border border-border bg-muted/40",
+                showingOld && "ring-2 ring-warn",
+              )}
+            >
+              {showingOld && viewedInfo.file_url ? (
+                <img
+                  src={viewedInfo.file_url}
+                  alt={t("dashboard:version_preview_alt", { version: viewedInfo.version })}
+                  decoding="async"
+                  className="size-full object-contain"
+                />
+              ) : imageUrl ? (
                 <button
                   type="button"
                   onClick={() => setViewingSheet(true)}
@@ -289,6 +443,7 @@ export function AssetDetailEditor({
               />
             </div>
             </SheetContextMenu>
+            )}
             {readOnly ? null : (
               <div className="flex flex-col gap-1.5">
                 <GenerateButton

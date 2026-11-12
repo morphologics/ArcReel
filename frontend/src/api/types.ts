@@ -117,6 +117,8 @@ export interface VersionInfo {
   /** The shot's editable prompt (image_prompt / video_prompt) this version was generated from; absent on
    * versions made before it was recorded, uploads and restores. */
   script_prompt?: unknown;
+  /** What an image version was generated from (an asset sheet's description, reference digests, style). */
+  artifact_image_basis?: unknown;
 }
 
 /** Per image model ("provider/model"): the price of one storyboard image of the shot, or why the model can't make

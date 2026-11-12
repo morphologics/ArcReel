@@ -3,28 +3,34 @@ import { API, type VersionInfo } from "@/api";
 import { useProjectsStore } from "@/stores/projects-store";
 
 export type ShotMediaResource = "storyboards" | "videos";
+/** An asset sheet's resource type (``{bucket}/{name}.png``). */
+export type AssetSheetResource = "characters" | "scenes" | "props" | "products";
+export type VersionedResource = ShotMediaResource | AssetSheetResource;
 
 export interface ResourceVersions {
   versions: VersionInfo[];
   currentVersion: number;
 }
 
-/** Project file of a shot's current media, whose fingerprint changes with each new or restored version. */
-export function shotMediaPath(resourceType: ShotMediaResource, segmentId: string): string {
-  return resourceType === "storyboards" ? `storyboards/scene_${segmentId}.png` : `videos/scene_${segmentId}.mp4`;
+/** Project file of a shot's current media or an asset's sheet, whose fingerprint changes with each new or restored
+ * version. */
+export function shotMediaPath(resourceType: VersionedResource, segmentId: string): string {
+  if (resourceType === "storyboards") return `storyboards/scene_${segmentId}.png`;
+  if (resourceType === "videos") return `videos/scene_${segmentId}.mp4`;
+  return `${resourceType}/${segmentId}.png`;
 }
 
 // One version list per resource and fingerprint: the strip's menu, the pane's history and its preview share it, and
 // a new or restored version (new fingerprint) reads it again.
 const cache = new Map<string, Promise<ResourceVersions>>();
 
-function cacheKey(projectName: string, resourceType: ShotMediaResource, segmentId: string, fp: number | null): string {
+function cacheKey(projectName: string, resourceType: VersionedResource, segmentId: string, fp: number | null): string {
   return `${projectName}\0${resourceType}\0${segmentId}\0${fp ?? ""}`;
 }
 
 export function loadResourceVersions(
   projectName: string,
-  resourceType: ShotMediaResource,
+  resourceType: VersionedResource,
   segmentId: string,
 ): Promise<ResourceVersions> {
   const fp = useProjectsStore.getState().getAssetFingerprint(shotMediaPath(resourceType, segmentId));
@@ -42,15 +48,15 @@ export function loadResourceVersions(
 }
 
 /** Forget a resource's lists (after a restore, before its new fingerprint arrives). */
-export function invalidateResourceVersions(projectName: string, resourceType: ShotMediaResource, segmentId: string) {
+export function invalidateResourceVersions(projectName: string, resourceType: VersionedResource, segmentId: string) {
   const prefix = `${projectName}\0${resourceType}\0${segmentId}\0`;
   for (const key of cache.keys()) if (key.startsWith(prefix)) cache.delete(key);
 }
 
-/** A shot's version list, newest first; loads when `enabled`. */
+/** A shot's (or an asset sheet's) version list, newest first; loads when `enabled`. */
 export function useResourceVersions(
   projectName: string,
-  resourceType: ShotMediaResource,
+  resourceType: VersionedResource,
   segmentId: string,
   enabled = true,
 ): { data: ResourceVersions | null; loading: boolean; error: boolean; reload: () => void } {

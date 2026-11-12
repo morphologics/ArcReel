@@ -7,7 +7,8 @@ import { AspectFrame } from "@/components/canvas/shared/AspectFrame";
 import { promptSummary, versionCost, versionOrigin, versionSize, versionTime } from "./version-summary";
 
 interface VersionHistoryPanelProps {
-  kind: "storyboard" | "video";
+  /** sheet: an asset's image (thumbnails like a storyboard's). */
+  kind: "storyboard" | "video" | "sheet";
   aspectRatio: "9:16" | "16:9";
   versions: VersionInfo[] | null;
   loading: boolean;
@@ -19,6 +20,8 @@ interface VersionHistoryPanelProps {
   onRestore?: (version: number) => void;
   restoringVersion: number | null;
   restoreDisabled: boolean;
+  /** The line under each version; default: the start of its prompt. */
+  summaryOf?: (version: VersionInfo) => string | null;
 }
 
 /**
@@ -37,6 +40,7 @@ export function VersionHistoryPanel({
   onRestore,
   restoringVersion,
   restoreDisabled,
+  summaryOf,
 }: VersionHistoryPanelProps) {
   const { t } = useTranslation(["dashboard", "common"]);
   return (
@@ -56,7 +60,7 @@ export function VersionHistoryPanel({
             {versions.map((v) => {
               const cost = versionCost(v);
               const size = versionSize(v);
-              const summary = promptSummary(v.prompt);
+              const summary = summaryOf ? summaryOf(v) : promptSummary(v.prompt);
               return (
                 <li
                   key={v.version}
@@ -71,7 +75,7 @@ export function VersionHistoryPanel({
                     onClick={() => onView(v.version)}
                     aria-label={t("version_history_view", { version: v.version })}
                   >
-                    {kind === "storyboard" && v.file_url ? (
+                    {kind !== "video" && v.file_url ? (
                       <img
                         src={`${v.file_url}?w=160`}
                         alt=""
@@ -98,7 +102,7 @@ export function VersionHistoryPanel({
                           .join(" · ")}
                       </span>
                       {summary && (
-                        <span className="line-clamp-1 text-xs text-subtle-foreground" title={v.prompt}>
+                        <span className="line-clamp-1 text-xs text-subtle-foreground" title={summaryOf ? summary : v.prompt}>
                           {summary}
                         </span>
                       )}

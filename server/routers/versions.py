@@ -21,12 +21,13 @@ from lib.artifacts.artifact_activation import (
     register_current_resource_artifact,
 )
 from lib.artifacts.artifact_version_provenance import parse_image_version_basis
+from lib.artifacts.asset_reference_snapshots import restore_reference_image
 from lib.artifacts.formal_write import project_metadata_lock
 from lib.artifacts.version_generation import attach_version_generations
 from lib.artifacts.version_manager import MANUAL_UPLOAD_VERSION_SOURCE, VersionManager
 from lib.db import async_session_factory
 from lib.db.repositories.usage_repo import UsageRepository
-from lib.infra.api_errors import BadRequestError
+from lib.infra.api_errors import BadRequestError, NotFoundError
 from lib.infra.async_thread import run_sync_transaction
 from lib.project.asset_derivatives import DerivativeSheetTarget, derivative_artifact_id, split_derivative_artifact_id
 from lib.project.project_change_hints import project_change_source
@@ -384,6 +385,46 @@ async def restore_version(
         version: 要还原的版本号
     """
     return await restore_resource_version(project_name, resource_type, resource_id, version)
+
+
+_SINGLE_REFERENCE_RESOURCES = {"characters": "character", "props": "prop"}
+
+
+@router.post("/projects/{project_name}/versions/{resource_type}/{resource_id}/reference-image/{version}")
+async def restore_version_reference_image(
+    project_name: str,
+    resource_type: str,
+    resource_id: str,
+    version: int,
+):
+    """Make a character's or prop's reference image the one its sheet version ``version`` was made from.
+
+    ``reference``: restored, cleared (the version had none), unchanged, or unavailable (an older version whose
+    reference image was replaced before versions kept a copy).
+    """
+    asset_type = _SINGLE_REFERENCE_RESOURCES.get(resource_type)
+    if asset_type is None:
+        raise BadRequestError("unsupported_resource_type", resource_type=resource_type)
+
+    def _sync():
+        vm = get_version_manager(project_name)
+        record = next(
+            (r for r in vm.get_versions(resource_type, resource_id).get("versions", []) if r.get("version") == version),
+            None,
+        )
+        if record is None:
+            raise NotFoundError("version_not_found", version=version)
+        with project_change_source("webui"):
+            outcome = restore_reference_image(get_project_manager(), project_name, asset_type, resource_id, record)
+        return {"success": True, "reference": outcome}
+
+    try:
+        return await run_sync_transaction(_sync)
+    except KeyError as e:
+        raise NotFoundError(f"{asset_type}_not_found", name=resource_id) from e
+    except ValueError as e:
+        logger.warning("参考图还原请求非法: %s", e)
+        raise BadRequestError("request_invalid") from e
 
 
 async def restore_resource_version(
