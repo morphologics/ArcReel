@@ -225,6 +225,39 @@ export function useTimelinePlayback(
     [cancelPendingSeek, element, sourceUrl],
   );
 
+  /**
+   * Pre-roll: the browser takes a few frames (50–200 ms) to get a paused clip moving, which showed as a hitch at
+   * every shot boundary. So once the next clip is loaded into the idle element, play it muted for an instant, then
+   * pause and rewind it to its in-point: the pipeline is warm and the boundary only swaps which element is shown.
+   * Done seconds before the boundary; skipped if that element has become the playing one meanwhile.
+   */
+  const warmUp = useCallback(
+    (slot: Slot, clipId: string, sourceTime: number) => {
+      const video = element(slot);
+      if (!video) return;
+      const go = () => {
+        const state = runtime.current;
+        if (state.slot === slot || state.loaded[slot] !== clipId || !state.playing) return;
+        video.muted = true;
+        video
+          .play()
+          .then(() => {
+            if (runtime.current.slot !== slot) {
+              video.pause();
+              video.currentTime = sourceTime;
+            }
+            video.muted = false;
+          })
+          .catch(() => {
+            video.muted = false;
+          });
+      };
+      if (video.readyState >= HTMLMediaElement.HAVE_FUTURE_DATA) go();
+      else video.addEventListener("canplay", go, { once: true });
+    },
+    [element],
+  );
+
   const preloadAfter = useCallback(
     (current: number) => {
       const state = runtime.current;
@@ -234,9 +267,13 @@ export function useTimelinePlayback(
       const idle: Slot = state.slot === 0 ? 1 : 0;
       element(idle)?.pause();
       const target = preloadTarget(planRef.current, current);
-      if (target) load(idle, planRef.current.segments[target.index], target.sourceTime);
+      if (target) {
+        const segment = planRef.current.segments[target.index];
+        load(idle, segment, target.sourceTime);
+        if (segment.hasVideo) warmUp(idle, segment.clipId, target.sourceTime);
+      }
     },
-    [element, load],
+    [element, load, warmUp],
   );
 
   /** 当前片段有了画面才把它显示出来，并在此之后为下一段预载。 */
