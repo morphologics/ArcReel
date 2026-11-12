@@ -76,6 +76,8 @@ interface MediaCardProps {
   leadingActions?: ReactNode;
   /** Centred in the title row between the title and the buttons (the shot's position and facts). */
   centerContent?: ReactNode;
+  /** Storyboard: shown in the current image's top-right corner (above its full-size button). */
+  previewCorner?: ReactNode;
   /** Items of the right-click menu on the image or video (DropdownMenuItem elements); no menu when absent. */
   /** The configured model's name, shown with the estimated cost on the Generate button. */
   generateModelName?: string | null;
@@ -112,6 +114,7 @@ export function MediaCard({
   onUpload,
   leadingActions,
   centerContent,
+  previewCorner,
   contextMenuItems,
   onRestorePrompt,
   unsavedEdits,
@@ -436,7 +439,7 @@ export function MediaCard({
       ) : assetUrl ? (
         kind === "storyboard" ? (
           <ImageContextMenu items={menuItems}>
-            <PreviewableImageFrame src={assetUrl} alt={`${itemLabel} ${title}`}>
+            <PreviewableImageFrame src={assetUrl} alt={`${itemLabel} ${title}`} corner={previewCorner}>
               <AspectFrame ratio={aspectRatio}>
                 <img
                   src={assetUrl}

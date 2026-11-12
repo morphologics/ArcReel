@@ -38,7 +38,11 @@ function renderView(onUpdatePrompt = vi.fn().mockResolvedValue(true), onMoveShot
   return onUpdatePrompt;
 }
 
-const position = () => screen.getByText(/^\d \/ 2$/).textContent;
+// the open shot: the strip's current card (the "N / T" text above the preview is hidden for now)
+const position = () => {
+  const id = document.querySelector('[aria-current="true"]')?.closest("li")?.getAttribute("data-shot-id");
+  return id ? `${["E1S01", "E1S02"].indexOf(id) + 1} / 2` : null;
+};
 
 describe("ShotSplitView 切换拦截与快捷键", () => {
   it("改了提示词后按 K 先询问，放弃修改后切到下一个分镜且不提交", async () => {

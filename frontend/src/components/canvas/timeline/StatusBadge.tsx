@@ -11,6 +11,15 @@ const CONFIG: Record<ShotStatus, { className: string; labelKey: string }> = {
 export function StatusBadge({ status }: { status: ShotStatus }) {
   const { t } = useTranslation("dashboard");
   const cfg = CONFIG[status];
+  // done: the green dot alone (the word stays for screen readers); the other states keep their label
+  if (status === "ready") {
+    return (
+      <span className="inline-flex shrink-0 items-center px-1.5 py-0.5 text-good">
+        <span aria-hidden="true" className="size-1.5 rounded-full bg-current" />
+        <span className="sr-only">{t(cfg.labelKey)}</span>
+      </span>
+    );
+  }
   return (
     <span
       className={cn(

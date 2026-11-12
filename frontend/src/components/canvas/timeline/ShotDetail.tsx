@@ -21,7 +21,7 @@ import { DialogueListEditor } from "./DialogueListEditor";
 import { UtteranceListEditor } from "./UtteranceListEditor";
 import { SourceTextReadonly } from "@/components/shared/SourceTextReadonly";
 import { TruncatedText } from "@/components/shared/TruncatedText";
-import { ItemPositionOfTotal } from "@/components/shared/episode-item/ItemPositionOfTotal";
+// import { ItemPositionOfTotal } from "@/components/shared/episode-item/ItemPositionOfTotal"; (the hidden "N / T" position)
 import { ShotDetailLayout, ShotGroup, ShotMediaGrid, ShotSection, ShotSourceCollapsible } from "./ShotDetailLayout";
 import { ShotDetailHeader } from "./ShotDetailHeader";
 import { Badge } from "@/components/ui/badge";
@@ -1079,6 +1079,18 @@ export function ShotDetail({
       )}
     </>
   );
+  // the scene (chapter) break switch: in the storyboard image's top-right corner, on a half-transparent chip so it reads over
+  // any picture
+  const segmentBreak =
+    (isNarration || isDrama) && !readOnly ? (
+      <span className="rounded-md bg-popover/50 px-2 py-0.5 whitespace-nowrap shadow-overlay">
+        <SegmentBreakToggle
+          checked={fields.segment_break === true}
+          onChange={(next) => setField("segment_break", next)}
+          disabled={durationBusy}
+        />
+      </span>
+    ) : null;
   // The shot's facts (duration, status, chapter break): in the shot header, or (minimal header, under the
   // storyboard strip) with the position, centred in the storyboard image's title row.
   const shotMeta = (
@@ -1095,13 +1107,8 @@ export function ShotDetail({
         busy={durationBusy}
       />
       <StatusBadge status={status} />
-      {(isNarration || isDrama) && !readOnly && (
-        <SegmentBreakToggle
-          checked={fields.segment_break === true}
-          onChange={(next) => setField("segment_break", next)}
-          disabled={durationBusy}
-        />
-      )}
+      {/* no storyboard image yet: the scene break switch stays with the shot's facts */}
+      {!hasStoryboard && segmentBreak}
     </>
   );
 
@@ -1173,10 +1180,12 @@ export function ShotDetail({
       }
       onRestorePrompt={restorePrompt}
       unsavedEdits={dirty}
+      previewCorner={segmentBreak}
       centerContent={
         minimalHeader ? (
           <>
-            <ItemPositionOfTotal itemId={segmentId} kind="shot" position={selectedIndex + 1} total={totalCount} />
+            {/* the "N / T" shot position, hidden for now (operator 2026-11-12); restore with its import:
+            <ItemPositionOfTotal itemId={segmentId} kind="shot" position={selectedIndex + 1} total={totalCount} /> */}
             {shotMeta}
           </>
         ) : undefined
