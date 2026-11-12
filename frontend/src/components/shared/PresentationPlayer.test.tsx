@@ -109,8 +109,8 @@ describe("PresentationPlayer", () => {
     expect(video).toHaveProperty("muted", true);
     expect(video).toHaveProperty("volume", 0.5);
     expect(video.querySelector("track")).toHaveAttribute("kind", "captions");
-    expect(screen.getByText("当前版本")).toBeInTheDocument();
-    expect(screen.getByText("比当前内容旧")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "当前版本" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "比当前内容旧" })).toBeInTheDocument();
     expect(screen.getByText("机械字幕")).toBeInTheDocument();
     expect(API.getPresentation).toHaveBeenCalledWith(
       "demo",
@@ -131,8 +131,8 @@ describe("PresentationPlayer", () => {
     await user.click(screen.getByRole("button", { name: "TTS 叠加" }));
     const video = await screen.findByLabelText("分镜 2 成片预览");
     const audio = await screen.findByLabelText("分镜 2 TTS 音轨");
-    expect(screen.getByText("当前版本")).toBeInTheDocument();
-    expect(screen.getByText("与当前内容一致")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "当前版本" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "与当前内容一致" })).toBeInTheDocument();
     expect(video).toHaveProperty("muted", false);
     expect(audio).toHaveAttribute(
       "src",
@@ -268,7 +268,8 @@ describe("PresentationPlayer", () => {
 
     await user.click(screen.getByRole("button", { name: "TTS 叠加" }));
     expect(await screen.findByRole("alert")).toHaveTextContent("TTS unavailable");
-    await user.click(screen.getByRole("button", { name: "原音成片" }));
+    // back to the original audio: release the TTS toggle
+    await user.click(screen.getByRole("button", { name: "TTS 叠加", pressed: true }));
 
     expect(await screen.findByLabelText("分镜 2 成片预览")).toBeInTheDocument();
   });
@@ -346,7 +347,8 @@ describe("PresentationPlayer", () => {
     await screen.findByLabelText("分镜 2 TTS 音轨");
     pause.mockClear();
 
-    await user.click(screen.getByRole("button", { name: "原音成片" }));
+    // back to the original audio: release the TTS toggle
+    await user.click(screen.getByRole("button", { name: "TTS 叠加", pressed: true }));
 
     expect(pause).toHaveBeenCalledTimes(2);
   });

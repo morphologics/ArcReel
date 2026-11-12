@@ -195,6 +195,8 @@ export function MediaCard({
   const showingOld = viewedInfo !== null && !viewedInfo.is_current;
   const track = useTrackWrite();
   const [restoringVersion, setRestoringVersion] = useState<number | null>(null);
+  // the title row's slot for the video player's status icons
+  const [statusSlot, setStatusSlot] = useState<HTMLDivElement | null>(null);
   const restore = async (version: number) => {
     if (resourceBusy || restoringVersion !== null) return;
     if (freshBusy()) {
@@ -318,7 +320,8 @@ export function MediaCard({
         {centerContent ? (
           <div className="flex min-w-0 flex-1 flex-wrap items-center justify-center gap-x-2 gap-y-1">{centerContent}</div>
         ) : (
-          <span className="flex-1" />
+          // the video's status icons (version, up to date, timing) land here from the player below
+          <div ref={setStatusSlot} className="flex min-w-0 flex-1 items-center justify-center gap-0.5" />
         )}
         {leadingActions}
         {onUpload && !demoReadOnly && (
@@ -417,6 +420,7 @@ export function MediaCard({
               {viewedInfo.presentation_available === true ? (
                 <PresentationPlayer
                   key={`${segmentId}:v${viewedInfo.version}`}
+                  statusSlot={statusSlot}
                   projectName={projectName}
                   resourceType="videos"
                   resourceId={segmentId}
@@ -459,6 +463,7 @@ export function MediaCard({
             <AspectFrame ratio={aspectRatio}>
               <PresentationPlayer
                 key={`${segmentId}:${assetFp ?? "current"}`}
+                statusSlot={statusSlot}
                 projectName={projectName}
                 resourceType="videos"
                 resourceId={segmentId}

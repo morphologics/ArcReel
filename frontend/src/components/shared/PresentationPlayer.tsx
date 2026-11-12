@@ -1,9 +1,21 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Download, Loader2 } from "lucide-react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { createPortal } from "react-dom";
+import {
+  BadgeCheck,
+  CircleCheck,
+  CircleHelp,
+  Download,
+  History,
+  Loader2,
+  Timer,
+  TriangleAlert,
+  type LucideIcon,
+} from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { API } from "@/api";
 import { Button } from "@/components/ui/button";
 import { Toggle } from "@/components/ui/toggle";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useAppStore } from "@/stores/app-store";
 import { useProjectsStore } from "@/stores/projects-store";
 import type {
@@ -31,6 +43,11 @@ interface PresentationPlayerProps {
   /** `startAt` 生效后回调，参数为该请求的 `requestId`。 */
   onStartApplied?: (requestId: string) => void;
   className?: string;
+  /**
+   * Where the status icons (version, provenance, up to date, mechanical timing) go: e.g. the card's title row above
+   * the preview. Without it they sit over the picture's top-left corner.
+   */
+  statusSlot?: HTMLElement | null;
 }
 
 /** 起始位置离可播放范围末尾至少留出这么多，免得一播放就撞上边界停住。 */
@@ -55,6 +72,7 @@ export function PresentationPlayer({
   startAt,
   onStartApplied,
   className = "",
+  statusSlot = null,
 }: PresentationPlayerProps) {
   const { t } = useTranslation("dashboard");
   const itemLabel = useItemPositionLabel(resourceId);
@@ -374,6 +392,39 @@ export function PresentationPlayer({
     );
   }
 
+  // the presentation's status as icons with tooltips (the words for screen readers)
+  const historical = presentation.selection !== "current";
+  const statusIcons = (
+    <>
+      <StatusIcon
+        icon={historical ? History : BadgeCheck}
+        label={t(`presentation_selection_${presentation.selection}`)}
+        className={historical ? "text-warn" : undefined}
+      />
+      {presentation.provenance === "unavailable" && (
+        <StatusIcon icon={CircleHelp} label={t("presentation_provenance_unavailable")} className="text-warn" />
+      )}
+      {presentation.currency && (
+        <StatusIcon
+          icon={presentation.currency === "current" ? CircleCheck : TriangleAlert}
+          label={t(`presentation_currency_${presentation.currency}`)}
+          className={presentation.currency === "current" ? "text-good" : "text-warn"}
+        />
+      )}
+      {presentation.timing === "mechanical" && (
+        <StatusIcon icon={Timer} label={t("presentation_mechanical_timing")} />
+      )}
+      {presentation.speech_mode === "narrator_voiceover" && (
+        <VariantControls
+          variant={variant}
+          postProductionLabel={t("presentation_post_production")}
+          useTtsLabel={t("presentation_use_tts")}
+          onChoose={chooseVariant}
+        />
+      )}
+    </>
+  );
+
   return (
     <div className={`dark relative h-full w-full bg-black ${className}`}>
       <video
@@ -436,37 +487,8 @@ export function PresentationPlayer({
       )}
 
       <div className="absolute inset-x-2 top-2 flex flex-wrap items-center gap-1.5">
-        <span className="rounded-sm bg-black/70 px-1.5 py-0.5 text-xs font-medium text-white/85">
-          {t(`presentation_selection_${presentation.selection}`)}
-        </span>
-        {presentation.provenance === "unavailable" && (
-          <span className="rounded-sm bg-black/70 px-1.5 py-0.5 text-xs font-medium text-warn">
-            {t("presentation_provenance_unavailable")}
-          </span>
-        )}
-        {presentation.currency && (
-          <span
-            className={`rounded-sm bg-black/70 px-1.5 py-0.5 text-xs font-medium ${
-              presentation.currency === "current" ? "text-good" : "text-warn"
-            }`}
-          >
-            {t(`presentation_currency_${presentation.currency}`)}
-          </span>
-        )}
-        {presentation.timing === "mechanical" && (
-          <span className="rounded-sm bg-black/70 px-1.5 py-0.5 text-xs text-white/70">
-            {t("presentation_mechanical_timing")}
-          </span>
-        )}
+        {statusSlot ? createPortal(statusIcons, statusSlot) : <div className="flex rounded-md bg-black/70 px-1">{statusIcons}</div>}
         <span className="flex-1" />
-        {presentation.speech_mode === "narrator_voiceover" && (
-          <VariantControls
-            variant={variant}
-            postProductionLabel={t("presentation_post_production")}
-            useTtsLabel={t("presentation_use_tts")}
-            onChoose={chooseVariant}
-          />
-        )}
         <Button
           variant="secondary"
           size="icon-xs"
@@ -481,6 +503,10 @@ export function PresentationPlayer({
   );
 }
 
+/**
+ * Original audio vs. TTS overlay as one "TTS" toggle: pressed = the TTS overlay, released = the original audio; the
+ * tooltip names the one playing.
+ */
 function VariantControls({
   variant,
   postProductionLabel,
@@ -492,26 +518,34 @@ function VariantControls({
   useTtsLabel: string;
   onChoose: (variant: PresentationVariant) => void;
 }) {
+  const tts = variant === "use_tts";
   return (
-    <div className="flex rounded-md bg-black/70 p-0.5 text-white">
-      <VariantButton
-        active={variant === "post_production"}
-        label={postProductionLabel}
-        onClick={() => onChoose("post_production")}
-      />
-      <VariantButton
-        active={variant === "use_tts"}
-        label={useTtsLabel}
-        onClick={() => onChoose("use_tts")}
-      />
-    </div>
+    <Tooltip>
+      <TooltipTrigger
+        render={
+          <Toggle
+            size="sm"
+            pressed={tts}
+            onPressedChange={(pressed) => onChoose(pressed ? "use_tts" : "post_production")}
+            aria-label={useTtsLabel}
+          />
+        }
+      >
+        TTS
+      </TooltipTrigger>
+      <TooltipContent>{tts ? useTtsLabel : postProductionLabel}</TooltipContent>
+    </Tooltip>
   );
 }
 
-function VariantButton({ active, label, onClick }: { active: boolean; label: string; onClick: () => void }) {
+/** One status as an icon; hovering, focusing or tapping it shows the words (a button only so it can take focus). */
+function StatusIcon({ icon: Icon, label, className }: { icon: LucideIcon; label: string; className?: string }): ReactNode {
   return (
-    <Toggle size="sm" pressed={active} onPressedChange={() => onClick()}>
-      {label}
-    </Toggle>
+    <Tooltip>
+      <TooltipTrigger render={<Button variant="ghost" size="icon-sm" aria-label={label} />}>
+        <Icon aria-hidden className={className ?? "text-muted-foreground"} size={16} />
+      </TooltipTrigger>
+      <TooltipContent>{label}</TooltipContent>
+    </Tooltip>
   );
 }

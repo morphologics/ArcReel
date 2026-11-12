@@ -433,7 +433,7 @@ describe("VersionTimeMachine", () => {
       "E1S01",
       expect.objectContaining({ videoVersion: 1 }),
     );
-    expect(screen.getByText("来源不可用")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "来源不可用" })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /切换到此版本/ })).not.toBeInTheDocument();
   });
 
