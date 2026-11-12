@@ -1,6 +1,6 @@
 import { useCallback, useId, useMemo, useState, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
-import { Eye, History } from "lucide-react";
+import { ChevronLeft, ChevronRight, Eye, History } from "lucide-react";
 import { cn } from "cn";
 import { API, type VersionInfo } from "@/api";
 import { CrossfadeImage } from "@/components/canvas/shared/CrossfadeImage";
@@ -9,6 +9,7 @@ import { UnsavedChangesBar } from "@/components/shared/edit-unit/UnsavedChangesB
 import { useEditUnit } from "@/components/shared/edit-unit/useEditUnit";
 import { PromptPreviewButton } from "@/components/shared/PromptPreviewButton";
 import { TruncatedText } from "@/components/shared/TruncatedText";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -224,11 +225,25 @@ export function AssetDetailEditor({
   const [restoringVersion, setRestoringVersion] = useState<number | null>(null);
   const versionResource = VERSION_RESOURCE[assetType];
   const viewingVersion = viewing?.name === name ? viewing.version : null;
-  const versions = useResourceVersions(projectName, versionResource, name, historyMode || viewingVersion !== null);
-  const viewedInfo =
-    viewingVersion !== null ? (versions.data?.versions.find((v) => v.version === viewingVersion) ?? null) : null;
+  // loaded whenever there is a sheet: the ‹ › steps and the line under the image read it
+  const versions = useResourceVersions(projectName, versionResource, name, Boolean(gallery.sheetPath));
+  const versionList = versions.data?.versions ?? [];
+  const viewedInfo = viewingVersion !== null ? (versionList.find((v) => v.version === viewingVersion) ?? null) : null;
   const showingOld = viewedInfo !== null && !viewedInfo.is_current;
-  const historyLabel = t("assets:sheet_history");
+  const currentInfo = versionList.find((v) => v.is_current) ?? null;
+  // the version the image box shows: a picked older one, else the current one
+  const shownInfo = showingOld ? viewedInfo : currentInfo;
+  const shownIndex = shownInfo ? versionList.findIndex((v) => v.version === shownInfo.version) : -1;
+  // newest first: ‹ = the next older version, › = the next newer one (back at the current one = no pick)
+  const olderVersion = shownIndex >= 0 ? versionList[shownIndex + 1] : undefined;
+  const newerVersion = shownIndex > 0 ? versionList[shownIndex - 1] : undefined;
+  const stepTo = (info: VersionInfo | undefined) => {
+    if (!info) return;
+    setHistoryMode(false);
+    setViewing(info.is_current ? null : { name, version: info.version });
+  };
+  const sheetTitle = t(`assets:sheet_title_${assetType}`);
+  const historyLabel = t("assets:sheet_history_title", { title: sheetTitle });
   const viewVersion = (version: number) => {
     setViewing({ name, version });
     setHistoryMode(false);
@@ -271,8 +286,9 @@ export function AssetDetailEditor({
             }
           }
           await refreshAfterWrite(projectName, t);
-          // the restored version is now the current one: the box shows it as such
+          // the restored version is now the current one: the box shows it as such (back to Preview from History)
           setViewing(null);
+          setHistoryMode(false);
         })(),
       );
     } catch (err) {
@@ -330,10 +346,45 @@ export function AssetDetailEditor({
       <SheetBody>
         <div className="flex flex-col gap-6">
           <section aria-label={t("assets:sheet_section")} className="flex flex-col gap-3">
-            {gallery.sheetPath && !readOnly ? (
-              // shows where it goes: History from the image, the image (eye) from the history
-              <div className="-mb-1.5 flex min-h-7 items-center justify-between gap-2">
-                <h3 className="text-sm font-medium">{historyMode ? historyLabel : t("assets:sheet_section")}</h3>
+            <div className="-mb-1.5 flex min-h-7 items-center gap-1">
+              <h3 className="text-sm font-medium">{historyMode ? historyLabel : sheetTitle}</h3>
+              {gallery.sheetPath && versionList.length > 1 && !historyMode ? (
+                // step through the versions: ‹ older, › newer
+                <>
+                  <Button
+                    variant="ghost"
+                    size="icon-sm"
+                    aria-label={t("assets:sheet_version_older")}
+                    title={t("assets:sheet_version_older")}
+                    disabled={!olderVersion}
+                    onClick={() => stepTo(olderVersion)}
+                  >
+                    <ChevronLeft aria-hidden />
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    size="icon-sm"
+                    aria-label={t("assets:sheet_version_newer")}
+                    title={t("assets:sheet_version_newer")}
+                    disabled={!newerVersion}
+                    onClick={() => stepTo(newerVersion)}
+                  >
+                    <ChevronRight aria-hidden />
+                  </Button>
+                </>
+              ) : null}
+              <span className="flex-1" />
+              {showingOld && !historyMode && !readOnly && viewedInfo.restorable !== false ? (
+                <Button
+                  size="xs"
+                  disabled={busy || restoringVersion !== null}
+                  onClick={() => void restoreVersion(viewedInfo.version)}
+                >
+                  {restoringVersion === viewedInfo.version ? t("dashboard:switching_version") : t("dashboard:version_make_current")}
+                </Button>
+              ) : null}
+              {gallery.sheetPath && !readOnly ? (
+                // shows where it goes: History from the image, the image (eye) from the history
                 <Tooltip>
                   <TooltipTrigger
                     render={
@@ -349,33 +400,8 @@ export function AssetDetailEditor({
                   </TooltipTrigger>
                   <TooltipContent>{historyMode ? t("dashboard:media_back_to_preview") : historyLabel}</TooltipContent>
                 </Tooltip>
-              </div>
-            ) : null}
-            {showingOld && !historyMode && (
-              <div className="-mb-1.5 flex flex-wrap items-center gap-x-2 gap-y-1 rounded-md bg-warn/15 px-2 py-1 text-xs">
-                <span className="min-w-0 flex-1">
-                  <span className="num font-medium">{t("dashboard:version_viewing", { version: viewedInfo.version })}</span>
-                  <span className="text-subtle-foreground">
-                    {" · "}
-                    {[versionTime(viewedInfo), versionOrigin(viewedInfo, tVersions), viewedInfo.generation?.model, versionCost(viewedInfo)]
-                      .filter(Boolean)
-                      .join(" · ")}
-                  </span>
-                </span>
-                {viewedInfo.restorable !== false && (
-                  <Button
-                    size="xs"
-                    disabled={busy || restoringVersion !== null}
-                    onClick={() => void restoreVersion(viewedInfo.version)}
-                  >
-                    {restoringVersion === viewedInfo.version ? t("dashboard:switching_version") : t("dashboard:version_make_current")}
-                  </Button>
-                )}
-                <Button size="xs" variant="ghost" onClick={() => setViewing(null)}>
-                  {t("dashboard:version_back_to_current")}
-                </Button>
-              </div>
-            )}
+              ) : null}
+            </div>
             {historyMode && gallery.sheetPath && !readOnly ? (
               <VersionHistoryPanel
                 kind="sheet"
@@ -444,6 +470,19 @@ export function AssetDetailEditor({
             </div>
             </SheetContextMenu>
             )}
+            {!historyMode && shownInfo ? (
+              // the shown version: when, which model, what it cost, and whether it is the current one
+              <div className="-mt-1.5 flex flex-wrap items-center gap-x-1.5 gap-y-1 text-xs text-subtle-foreground">
+                <span className="num">{versionTime(shownInfo)}</span>
+                <span>· {shownInfo.generation?.model ?? versionOrigin(shownInfo, tVersions)}</span>
+                {versionCost(shownInfo) && <span className="num font-medium text-foreground">· {versionCost(shownInfo)}</span>}
+                <Badge variant={shownInfo.is_current ? "secondary" : "outline"}>
+                  <span className="num">v{shownInfo.version}</span>
+                  {" · "}
+                  {shownInfo.is_current ? t("dashboard:current_version_badge") : t("assets:sheet_version_not_current")}
+                </Badge>
+              </div>
+            ) : null}
             {readOnly ? null : (
               <div className="flex flex-col gap-1.5">
                 <GenerateButton
@@ -470,21 +509,6 @@ export function AssetDetailEditor({
             )}
           </section>
 
-          {readOnly && originals.length === 0
-            ? null
-            : (character || prop || product) && (
-                <EditorSection title={product ? t("dashboard:product_reference_images") : t("assets:original_section")}>
-                  <AssetOriginalsField
-                    projectName={projectName}
-                    name={name}
-                    assetType={product ? "product" : prop ? "prop" : "character"}
-                    paths={originals}
-                    readOnly={readOnly}
-                    busy={busy}
-                  />
-                </EditorSection>
-              )}
-
           <EditorSection
             title={t("assets:field.description")}
             htmlFor={descriptionId}
@@ -510,6 +534,21 @@ export function AssetDetailEditor({
               placeholder={t(DESCRIPTION_PLACEHOLDER[assetType])}
             />
           </EditorSection>
+
+          {readOnly && originals.length === 0
+            ? null
+            : (character || prop || product) && (
+                <EditorSection title={product ? t("dashboard:product_reference_images") : t("assets:original_section")}>
+                  <AssetOriginalsField
+                    projectName={projectName}
+                    name={name}
+                    assetType={product ? "product" : prop ? "prop" : "character"}
+                    paths={originals}
+                    readOnly={readOnly}
+                    busy={busy}
+                  />
+                </EditorSection>
+              )}
 
           {product && (
             <>
