@@ -14,8 +14,7 @@ import { transitionOpacity, type PlaybackPlan } from "./playback-schedule";
 import { unitPositionLabel } from "./timeline-view";
 import { subtitleAt, subtitleLayout, type PlacedSubtitle } from "./preview-tracks";
 import { formatClock } from "./timeline-view";
-import { SpeedControl } from "./SpeedControl";
-import { SPEED_BESIDE_PLAYER_QUERY, useMediaQuery } from "@/hooks/useMediaQuery";
+import { SpeedPopover } from "./SpeedControl";
 import type { TimelinePlayback } from "./useTimelinePlayback";
 
 /** Menu items built when the menu opens: they act on the clip on screen at that moment. */
@@ -58,7 +57,6 @@ export function EditTimelinePlayer({
   clipMenu,
 }: EditTimelinePlayerProps) {
   const { t } = useTranslation("dashboard");
-  const speedBeside = useMediaQuery(SPEED_BESIDE_PLAYER_QUERY);
   const segment = plan.segments[playback.index];
   const showVideo = Boolean(segment?.hasVideo);
   const opacity = segment ? transitionOpacity(segment, playback.t) : 1;
@@ -69,8 +67,7 @@ export function EditTimelinePlayer({
 
   return (
     <div className="flex h-full min-h-0 flex-col gap-2">
-      {/* the picture, and the speed slider to its right (from 1200px; narrower: a row under the picture) */}
-      <div className={cn("flex min-h-0 flex-1 gap-2", speedBeside ? "flex-row" : "flex-col")}>
+      <div className="flex min-h-0 flex-1 gap-2">
       <div className="@container-size relative flex min-h-0 min-w-0 flex-1 items-center justify-center">
         <ContextMenu.Root disabled={!clipMenu}>
         <ContextMenu.Trigger
@@ -162,7 +159,10 @@ export function EditTimelinePlayer({
             <span className="text-xs text-muted-foreground">
               {t("edit_view_clip_count", { count: plan.segments.length })}
             </span>
-            <Toggle size="sm" pressed={showSubtitles} onPressedChange={onToggleSubtitles} className="ml-auto">
+            <span className="ml-auto">
+              <SpeedPopover speed={playback.speed} onChange={playback.setSpeed} />
+            </span>
+            <Toggle size="sm" pressed={showSubtitles} onPressedChange={onToggleSubtitles}>
               <Captions data-icon="inline-start" aria-hidden />
               {t("edit_view_subtitles_toggle")}
             </Toggle>
@@ -183,9 +183,6 @@ export function EditTimelinePlayer({
           </DropdownMenuContent>
         )}
         </ContextMenu.Root>
-      </div>
-      <div className={cn("flex shrink-0 justify-center", speedBeside && "items-center")}>
-        <SpeedControl speed={playback.speed} onChange={playback.setSpeed} vertical={speedBeside} />
       </div>
       </div>
       {(playback.blocked || hasTransitions) && (
