@@ -36,12 +36,12 @@ function SpeedControl({ speed, onChange }: { speed: number; onChange: (speed: nu
       role="radiogroup"
       aria-label={t("edit_view_speed")}
       title={t("edit_view_speed")}
-      className="relative flex h-full flex-col items-start justify-between py-1"
+      className="relative flex h-full w-36 flex-col"
     >
       {/* the track behind the dots (drawn first, so the dots sit on it without a z-index) */}
       <span
         aria-hidden
-        className="absolute inset-y-3 left-[0.5rem] w-0.5 rounded-full bg-border"
+        className="absolute top-[calc(100%/12)] bottom-[calc(100%/12)] left-[0.875rem] w-0.5 rounded-full bg-border"
       />
       {order.map(({ value, index }) => (
         <button
@@ -56,7 +56,8 @@ function SpeedControl({ speed, onChange }: { speed: number; onChange: (speed: nu
           tabIndex={index === current ? 0 : -1}
           onClick={() => onChange(value)}
           onKeyDown={onKeyDown}
-          className="focus-ring relative flex items-center gap-1.5 rounded-sm px-1 text-xs"
+          // each speed is a whole row (equal share of the height): click anywhere in it
+          className="focus-ring relative flex w-full flex-1 items-center gap-2.5 rounded-sm px-2.5 text-xs hover:bg-muted"
         >
           <span
             aria-hidden
