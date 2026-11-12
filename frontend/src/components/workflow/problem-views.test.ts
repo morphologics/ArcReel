@@ -1,11 +1,12 @@
 import { describe, expect, it } from "vitest";
 import type { TFunction } from "i18next";
 import enWorkflow from "@/i18n/en/workflow";
+import ruWorkflow from "@/i18n/ru/workflow";
 import viWorkflow from "@/i18n/vi/workflow";
 import zhWorkflow from "@/i18n/zh/workflow";
 import { admissionUnitViews, problemViews } from "./problem-views";
 
-const CATALOGS = { en: enWorkflow, vi: viWorkflow, zh: zhWorkflow } as const;
+const CATALOGS = { en: enWorkflow, ru: ruWorkflow, vi: viWorkflow, zh: zhWorkflow } as const;
 
 function translatorFor(catalog: Record<string, string>) {
   return ((key: string, options?: { defaultValue?: string }) =>

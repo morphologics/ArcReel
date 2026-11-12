@@ -37,7 +37,7 @@ from lib.project.asset_types import ASSET_SPECS
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 VOCAB_TS = "frontend/src/i18n/{locale}/{namespace}.ts"
-LOCALES = ("zh", "en", "vi")
+LOCALES = ("zh", "en", "vi", "ru")
 
 TEXT_TASK_TYPES = frozenset(
     {

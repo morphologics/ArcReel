@@ -11,6 +11,11 @@ from lib.i18n.en import errors as en_errors
 from lib.i18n.en import events as en_events
 from lib.i18n.en import system as en_system
 from lib.i18n.en import templates as en_templates
+from lib.i18n.ru import emails as ru_emails
+from lib.i18n.ru import errors as ru_errors
+from lib.i18n.ru import events as ru_events
+from lib.i18n.ru import system as ru_system
+from lib.i18n.ru import templates as ru_templates
 from lib.i18n.vi import emails as vi_emails
 from lib.i18n.vi import errors as vi_errors
 from lib.i18n.vi import events as vi_events
@@ -71,13 +76,14 @@ def test_templates_module_keys_match():
 
 
 def test_templates_cover_all_style_template_ids():
-    """每个风格模版 id 都必须在 zh/en/vi templates 里有 name 与 tagline key。"""
+    """每个风格模版 id 都必须在 zh/en/vi/ru templates 里有 name 与 tagline key。"""
     required_name_keys = {f"template_name_{tid}" for tid in list_template_ids()}
     required_tagline_keys = {f"template_tagline_{tid}" for tid in list_template_ids()}
     for module_name, msgs in (
         ("zh", zh_templates.MESSAGES),
         ("en", en_templates.MESSAGES),
         ("vi", vi_templates.MESSAGES),
+        ("ru", ru_templates.MESSAGES),
     ):
         missing_names = required_name_keys - set(msgs.keys())
         missing_taglines = required_tagline_keys - set(msgs.keys())
@@ -115,6 +121,38 @@ def test_vi_templates_module_keys_match():
     vi_keys = set(vi_templates.MESSAGES.keys())
     assert en_keys == vi_keys, (
         f"en-vi templates key mismatch: missing_in_vi={en_keys - vi_keys}, missing_in_en={vi_keys - en_keys}"
+    )
+
+
+def test_ru_errors_module_keys_match():
+    en_keys = set(en_errors.MESSAGES.keys())
+    ru_keys = set(ru_errors.MESSAGES.keys())
+    assert en_keys == ru_keys, (
+        f"en-ru errors key mismatch: missing_in_ru={en_keys - ru_keys}, missing_in_en={ru_keys - en_keys}"
+    )
+
+
+def test_ru_system_module_keys_match():
+    en_keys = set(en_system.MESSAGES.keys())
+    ru_keys = set(ru_system.MESSAGES.keys())
+    assert en_keys == ru_keys, (
+        f"en-ru system key mismatch: missing_in_ru={en_keys - ru_keys}, missing_in_en={ru_keys - en_keys}"
+    )
+
+
+def test_ru_emails_module_keys_match():
+    en_keys = set(en_emails.MESSAGES.keys())
+    ru_keys = set(ru_emails.MESSAGES.keys())
+    assert en_keys == ru_keys, (
+        f"en-ru emails key mismatch: missing_in_ru={en_keys - ru_keys}, missing_in_en={ru_keys - en_keys}"
+    )
+
+
+def test_ru_templates_module_keys_match():
+    en_keys = set(en_templates.MESSAGES.keys())
+    ru_keys = set(ru_templates.MESSAGES.keys())
+    assert en_keys == ru_keys, (
+        f"en-ru templates key mismatch: missing_in_ru={en_keys - ru_keys}, missing_in_en={ru_keys - en_keys}"
     )
 
 
@@ -201,9 +239,11 @@ def test_events_module_keys_match():
     en_keys = set(en_events.MESSAGES.keys())
     zh_keys = set(zh_events.MESSAGES.keys())
     vi_keys = set(vi_events.MESSAGES.keys())
-    assert en_keys == zh_keys == vi_keys, (
+    ru_keys = set(ru_events.MESSAGES.keys())
+    assert en_keys == zh_keys == vi_keys == ru_keys, (
         f"events key mismatch: missing_in_zh={en_keys - zh_keys}, "
-        f"missing_in_vi={en_keys - vi_keys}, missing_in_en={(zh_keys | vi_keys) - en_keys}"
+        f"missing_in_vi={en_keys - vi_keys}, missing_in_ru={en_keys - ru_keys}, "
+        f"missing_in_en={(zh_keys | vi_keys | ru_keys) - en_keys}"
     )
 
 
@@ -250,7 +290,7 @@ def test_frontend_dashboard_covers_prompt_template_axes_and_categories():
         f"prompt_templates_category_{category}" for category in categories
     }
     i18n_dir = Path(__file__).resolve().parents[4] / "frontend" / "src" / "i18n"
-    for locale in ("zh", "en", "vi"):
+    for locale in ("zh", "en", "vi", "ru"):
         source = (i18n_dir / locale / "dashboard.ts").read_text(encoding="utf-8")
         defined = set(re.findall(r"""['"]([a-z0-9_]+)['"]\s*:""", source))
         missing = required - defined
