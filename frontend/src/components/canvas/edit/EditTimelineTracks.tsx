@@ -4,6 +4,7 @@ import {
   cloneElement,
   memo,
   useCallback,
+  useEffect,
   useRef,
   useState,
   type ChangeEvent,
@@ -40,6 +41,10 @@ const MIN_PIXELS_PER_SECOND = 14;
 /** Pointer travel (px) before a mouse press on the tracks counts as a drag-scroll rather than a click. */
 const DRAG_THRESHOLD = 4;
 const LABEL_WIDTH = 64;
+/** The tracks scroll on when the playhead gets this close (px) to the right edge of the view… */
+const FOLLOW_EDGE_PX = 24;
+/** …so that it sits this far (px) right of the track labels afterwards. */
+const FOLLOW_LEAD_PX = 32;
 /** While the playhead handle is dragged, the player seeks at most this often (ms). */
 const SCRUB_SEEK_MS = 100;
 
@@ -143,6 +148,22 @@ export function EditTimelineTracks({
     onSeek(Math.min(duration, Math.max(0, t + step * (event.shiftKey ? 5 : 1))));
   };
   const playheadAt = scrub ?? Math.min(t, duration);
+
+  // Follow the playhead page by page: when it reaches the right edge of the visible tracks (or is behind the left
+  // one), scroll so it sits near the start again. Only when the playhead moves (not while scrubbing or drag-scrolling),
+  // so scrolling the paused tracks by hand stays put.
+  useEffect(() => {
+    const box = scrollRef.current;
+    const track = trackRef.current;
+    if (!box || !track || scrub !== null || drag.current?.moved || duration <= 0) return;
+    if (box.scrollWidth <= box.clientWidth) return;
+    const x = track.offsetLeft + (Math.min(t, duration) / duration) * track.clientWidth;
+    const left = box.scrollLeft + LABEL_WIDTH;
+    const right = box.scrollLeft + box.clientWidth - FOLLOW_EDGE_PX;
+    if (x > right || x < left) {
+      box.scrollTo({ left: Math.max(0, x - LABEL_WIDTH - FOLLOW_LEAD_PX), behavior: "smooth" });
+    }
+  }, [t, duration, scrub]);
   // where a right-click landed on the tracks: the clip menu's "Play from here" starts there
   const menuAt = useRef<number | null>(null);
   const clipMenuAt = useCallback(
