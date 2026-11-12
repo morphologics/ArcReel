@@ -3960,6 +3960,7 @@ export default {
   'episode_view_units': 'Видеоблоки',
   'episode_view_needs_script': 'Доступно после генерации сценария',
   'episode_head_more': 'Другие действия с этим эпизодом',
+  'episode_head_stats': 'Статистика эпизода',
   'episode_head_duration': 'Длительность {{duration}}',
   'episode_head_videos': 'Видео {{available}}/{{total}}',
   'episode_head_cost': 'Оценка {{cost}}',

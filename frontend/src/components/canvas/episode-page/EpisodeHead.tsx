@@ -1,6 +1,6 @@
 import { useTranslation } from "react-i18next";
 import { useLocation } from "wouter";
-import { MoreHorizontal, Trash2 } from "lucide-react";
+import { ChartBar, MoreHorizontal, Trash2 } from "lucide-react";
 
 import { useConfirmLeave } from "@/components/shared/edit-unit/LeaveGuard";
 import { Badge } from "@/components/ui/badge";
@@ -11,7 +11,7 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { InfoTip, InfoTipContent, InfoTipTrigger } from "@/components/ui/info-tip";
+import { Popover, PopoverContent, PopoverTitle, PopoverTrigger } from "@/components/ui/popover";
 import { useEpisodeLedger } from "@/hooks/useEpisodeLedger";
 import { useCostStore } from "@/stores/cost-store";
 import type { EpisodeCost, EpisodeMeta } from "@/types";
@@ -48,8 +48,10 @@ function episodeCostSummary(cost: EpisodeCost) {
 }
 
 /**
- * 集页页头第一行的集头：集徽标、可编辑的集标题、条目数 · 时长 · 视频进度 · 预估费用（已花与剩余在提示里），
- * 以及「⋯」菜单。数据都来自项目详情与费用估算，画布不参与。
+ * 集页页头第一行的集头：集徽标、可编辑的集标题、统计图标（条目数、时长、视频进度、预估费用与已花 / 剩余，收在它打开的
+ * 弹层里，不占这一行），以及「⋯」菜单。数据都来自项目详情与费用估算，画布不参与。
+ * The stats open on hover, click or tap; a hover-opened one closes when the pointer leaves, a clicked one on a click
+ * outside or Esc (Base UI Popover, as InfoTip).
  */
 export function EpisodeHead({
   projectName,
@@ -107,20 +109,32 @@ export function EpisodeHead({
           onSave={onSaveTitle}
         />
       </div>
-      <p className="num flex min-w-0 shrink-[2] items-center gap-1.5 text-xs whitespace-nowrap text-muted-foreground">
-        <span className="min-w-0 truncate">{facts.join(" · ")}</span>
-        {costSummary ? (
-          <>
-            {facts.length > 0 ? <span aria-hidden>·</span> : null}
-            <InfoTip>
-              <InfoTipTrigger render={<button type="button" className="inline-flex min-h-6 shrink-0 items-center rounded-sm" />}>
-                {t("episode_head_cost", { cost: costSummary.estimate })}
-              </InfoTipTrigger>
-              <InfoTipContent title={t("episode_head_cost", { cost: costSummary.estimate })}>{costDetail}</InfoTipContent>
-            </InfoTip>
-          </>
-        ) : null}
-      </p>
+      {facts.length > 0 || costSummary ? (
+        <Popover>
+          <PopoverTrigger
+            openOnHover
+            delay={150}
+            closeDelay={150}
+            render={<Button variant="ghost" size="icon-xs" aria-label={t("episode_head_stats")} title={t("episode_head_stats")} />}
+          >
+            <ChartBar aria-hidden />
+          </PopoverTrigger>
+          <PopoverContent side="bottom" align="start" className="w-auto min-w-48">
+            <PopoverTitle>{t("episode_head_stats")}</PopoverTitle>
+            <ul className="num m-0 flex list-none flex-col gap-1 p-0 text-xs whitespace-nowrap">
+              {facts.map((fact) => (
+                <li key={fact}>{fact}</li>
+              ))}
+              {costSummary ? (
+                <>
+                  <li>{t("episode_head_cost", { cost: costSummary.estimate })}</li>
+                  <li className="text-muted-foreground">{costDetail}</li>
+                </>
+              ) : null}
+            </ul>
+          </PopoverContent>
+        </Popover>
+      ) : null}
       {canDelete ? (
         <>
           <DropdownMenu>

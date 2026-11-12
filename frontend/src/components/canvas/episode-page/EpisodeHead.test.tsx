@@ -40,9 +40,9 @@ function renderHead(meta: EpisodeMeta = FIRST, overrides: Partial<Parameters<typ
   );
 }
 
-/** 已花与剩余在花费摘要的说明弹层里：点开摘要，返回弹层。 */
-async function openCostDetail(summary: string) {
-  fireEvent.click(screen.getByRole("button", { name: summary }));
+/** The facts and the cost sit in the stats popup on the icon right of the title: open it, return the popup. */
+async function openStats() {
+  fireEvent.click(screen.getByRole("button", { name: "本集统计" }));
   return screen.findByRole("dialog");
 }
 
@@ -53,7 +53,7 @@ describe("EpisodeHead", () => {
     useAppStore.setState(useAppStore.getInitialState(), true);
   });
 
-  it("names an untitled episode by its position and lists its facts", () => {
+  it("names an untitled episode by its position and lists its facts", async () => {
     const blank: EpisodeMeta = {
       episode: 7,
       title: "",
@@ -68,7 +68,12 @@ describe("EpisodeHead", () => {
 
     expect(screen.getByText("EP · 02")).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "第 2 集" })).toBeInTheDocument();
-    expect(screen.getByText("12 分镜 · 时长 2:05 · 视频 3/12")).toBeInTheDocument();
+    const stats = await openStats();
+    expect(within(stats).getAllByRole("listitem").map((item) => item.textContent)).toEqual([
+      "12 分镜",
+      "时长 2:05",
+      "视频 3/12",
+    ]);
     fireEvent.click(screen.getByRole("button", { name: "编辑分集标题" }));
     expect(screen.getByRole("textbox", { name: "编辑分集标题" })).toHaveAttribute("placeholder", "第 2 集");
   });
@@ -79,7 +84,9 @@ describe("EpisodeHead", () => {
     renderHead();
 
     // 已花含历史支出；剩余仍是整笔预估——那 $10 花在已被替换掉的旧剧本上，当前剧本的工作一件也没做
-    expect(await openCostDetail("预估 $10.00")).toHaveAccessibleDescription("已花 $10.00，剩余 $10.00");
+    const stats = await openStats();
+    expect(within(stats).getByText("预估 $10.00")).toBeInTheDocument();
+    expect(within(stats).getByText("已花 $10.00，剩余 $10.00")).toBeInTheDocument();
   });
 
   it("deducts current-script spend from the remaining estimate", async () => {
@@ -87,7 +94,7 @@ describe("EpisodeHead", () => {
 
     renderHead();
 
-    expect(await openCostDetail("预估 $10.00")).toHaveAccessibleDescription("已花 $4.00，剩余 $6.00");
+    expect(within(await openStats()).getByText("已花 $4.00，剩余 $6.00")).toBeInTheDocument();
   });
 
   it("leaves the cost out until this project's estimate has loaded", () => {
