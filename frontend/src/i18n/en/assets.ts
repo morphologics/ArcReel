@@ -109,7 +109,7 @@ export default {
   "derivative_rename_confirm": "Confirm rename",
   "derivative_referenced": "Referenced in the script",
   "derivative_unreferenced": "Not referenced in the script yet",
-  "derivative_generate": "Generate sheet",
+  "derivative_generate": "Generate Sheet",
   "derivative_regenerate": "Regenerate",
   "derivative_no_sheet": "No derivative sheet yet",
   "derivative_owner_sheet_required": "Generating needs the base sheet first, or upload a derivative sheet instead",

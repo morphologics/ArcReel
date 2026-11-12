@@ -108,7 +108,7 @@ async function confirmBatchPreview(name: RegExp = BATCH_START_CTA) {
 
 // 单元预览面板的生成 CTA。锚定行首把批量入口「补齐视频」排除在外——两者都含
 // 「生成视频」，不锚定会按 DOM 顺序先匹配到批量按钮，测到的就不是这条提交路径。
-const UNIT_GENERATE_CTA = /^(Generate video|生成视频)/;
+const UNIT_GENERATE_CTA = /^(Generate video|生成视频)/i;
 
 /** 与应用根部一致：画布挂在离开拦截之下，未保存的修改由它拦截。 */
 function render(ui: ReactElement) {
@@ -407,7 +407,7 @@ describe("ReferenceVideoCanvas", () => {
     vi.spyOn(API, "listReferenceVideoUnits").mockResolvedValue({ units: [mkUnit("E1U1")], unit_capabilities: {} });
     render(<ReferenceVideoCanvas {...BOARD} projectName="proj" episode={1} />);
     await waitFor(() => {
-      expect(screen.getByRole("button", { name: /Generate video|生成视频/ })).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: /Generate video|生成视频/i })).toBeInTheDocument();
     });
   });
 
@@ -626,7 +626,7 @@ describe("ReferenceVideoCanvas", () => {
       render(<ReferenceVideoCanvas {...BOARD} projectName="proj" episode={1} />);
 
       fireEvent.change(await screen.findByRole("combobox"), { target: { value: "推门而入。" } });
-      fireEvent.click(screen.getByRole("button", { name: /^(Save and generate|保存并生成)$/ }));
+      fireEvent.click(screen.getByRole("button", { name: /^(Save and generate|保存并生成)$/i }));
 
       await waitFor(() => expect(genSpy).toHaveBeenCalled());
       expect(patchSpy).toHaveBeenCalledWith("proj", 1, "E1U1", { prompt: "推门而入。" });
@@ -680,7 +680,7 @@ describe("ReferenceVideoCanvas", () => {
       render(<ReferenceVideoCanvas {...BOARD} projectName="proj" episode={1} />);
 
       fireEvent.change(await screen.findByRole("combobox"), { target: { value: "推门而入。" } });
-      fireEvent.click(screen.getByRole("button", { name: /^(Save and generate|保存并生成)$/ }));
+      fireEvent.click(screen.getByRole("button", { name: /^(Save and generate|保存并生成)$/i }));
 
       expect(await screen.findByText(/磁盘已满/)).toBeInTheDocument();
       expect(genSpy).not.toHaveBeenCalled();
@@ -745,7 +745,7 @@ describe("ReferenceVideoCanvas", () => {
     fireEvent.change(ta, { target: { value: "@[查无此人] 推门而入。" } });
 
     expect(await screen.findByRole("button", { name: /^(Save|保存)$/ })).toBeEnabled();
-    expect(screen.getByRole("button", { name: /^(Save and generate|保存并生成)$/ })).toBeEnabled();
+    expect(screen.getByRole("button", { name: /^(Save and generate|保存并生成)$/i })).toBeEnabled();
   });
 
   // 时长是 unit 级单一真相：下拉档位来自服务端逐单元结论，选中即单独 PATCH（不牵连正文草稿）
@@ -1337,7 +1337,7 @@ describe("ReferenceVideoCanvas", () => {
     );
     render(<ReferenceVideoCanvas {...BOARD} projectName="proj" episode={1} />);
 
-    const regenerate = await screen.findByRole("button", { name: /Regenerate video|重新生成视频/ });
+    const regenerate = await screen.findByRole("button", { name: /Regenerate video|重新生成视频/i });
     fireEvent.click(regenerate);
     await waitFor(() => expect(genSpy).toHaveBeenCalled());
 

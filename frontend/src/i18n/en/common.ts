@@ -52,7 +52,7 @@ export default {
   'keep_editing': 'Keep editing',
   'save_and_leave': 'Save and leave',
   'save_and_switch': 'Save and switch',
-  'save_and_generate': 'Save and generate',
+  'save_and_generate': 'Save and Generate',
   'updated_by_agent': 'The Agent updated this content',
   'adopt_new_content': 'Use new content',
   'leave_dialog_description': 'Discarded changes can\'t be recovered.',
