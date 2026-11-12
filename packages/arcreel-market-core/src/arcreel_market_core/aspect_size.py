@@ -19,6 +19,7 @@ from __future__ import annotations
 import logging
 import math
 import re
+from collections.abc import Sequence
 
 logger = logging.getLogger(__name__)
 
@@ -159,3 +160,24 @@ def short_edge_to_resolution(short_edge: int, *, tier_map: dict[str, int]) -> st
         if edge == short_edge:
             return tier
     return f"{short_edge}px"
+
+
+def closest_size(width: int, height: int, sizes: Sequence[tuple[int, int]]) -> tuple[int, int]:
+    """The allowed size nearest to ``width`` × ``height``: the closest aspect ratio first, then the closest area.
+
+    For models that accept only a fixed list of sizes (Runware 400 ``unsupportedDimensions`` otherwise). Ratios
+    within 2% of the best one count as equal, so a slightly different shape at the right size beats an exact
+    shape at a far smaller or larger one. An empty list returns the size unchanged.
+    """
+    if not sizes:
+        return width, height
+    target_ratio = math.log(width / height)
+    target_area = math.log(width * height)
+
+    def ratio_gap(size: tuple[int, int]) -> float:
+        return abs(math.log(size[0] / size[1]) - target_ratio)
+
+    best = min(ratio_gap(size) for size in sizes)
+    shaped = [size for size in sizes if ratio_gap(size) <= best + 0.02]
+    return min(shaped, key=lambda size: abs(math.log(size[0] * size[1]) - target_area))
+

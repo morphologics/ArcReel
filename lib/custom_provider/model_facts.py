@@ -17,6 +17,7 @@ ComfyUI 视频模型行的可选时长，它是用户在 workflow 原生时长�
 from __future__ import annotations
 
 import logging
+import re
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 
@@ -29,7 +30,7 @@ logger = logging.getLogger(__name__)
 #: 每种媒体类型可以覆盖的模型事实维度。音频没有模型事实维度。
 MODEL_FACT_OVERRIDE_KEYS: Mapping[str, frozenset[str]] = {
     "text": frozenset({"image_input", "structured_output", "max_output_tokens"}),
-    "image": frozenset({"text_to_image", "image_to_image"}),
+    "image": frozenset({"text_to_image", "image_to_image", "sizes"}),
     "video": frozenset({"durations", "resolutions", "duration_constraints"}),
     "audio": frozenset(),
 }
@@ -80,7 +81,21 @@ def model_fact_value_matches(key: str, value: object) -> bool:
         return isinstance(value, list) and bool(value) and all(isinstance(r, str) and r.strip() for r in value)
     if key == "duration_constraints":
         return _is_constraints(value)
+    if key == "sizes":
+        return isinstance(value, list) and bool(value) and all(_parse_size(item) is not None for item in value)
     return False
+
+
+_SIZE_RE = re.compile(r"^\s*(\d+)\s*[xX×]\s*(\d+)\s*$")
+
+
+def _parse_size(value: object) -> tuple[int, int] | None:
+    """``"1408x768"`` → ``(1408, 768)``; None when it isn't one."""
+    match = _SIZE_RE.match(value) if isinstance(value, str) else None
+    if match is None:
+        return None
+    width, height = int(match.group(1)), int(match.group(2))
+    return (width, height) if width > 0 and height > 0 else None
 
 
 _TYPE_NAMES: Mapping[str, str] = {
@@ -88,6 +103,7 @@ _TYPE_NAMES: Mapping[str, str] = {
     "durations": "list[int > 0]（非空）",
     "resolutions": "list[str]（非空）",
     "duration_constraints": "{by_resolution: {str: list[int > 0]}, with_reference_images: list[int > 0]}",
+    "sizes": "list[\"<width>x<height>\"]（非空）",
 }
 
 
@@ -127,6 +143,9 @@ class ImageModelFacts:
 
     text_to_image: bool | None = None
     image_to_image: bool | None = None
+    #: The only sizes the model accepts (a fixed-size model), from the row's ``sizes`` override; ``None`` = any
+    #: size. Requests take the allowed size closest to the one derived from aspect ratio and resolution.
+    sizes: tuple[tuple[int, int], ...] | None = None
 
 
 @dataclass(frozen=True)
@@ -166,7 +185,15 @@ def image_model_facts(model_id: str, overrides: object | None, *, entry_binding:
     return ImageModelFacts(
         text_to_image=_bool_fact(applied, "text_to_image", None if facts is None else facts.text_to_image),
         image_to_image=_bool_fact(applied, "image_to_image", None if facts is None else facts.image_to_image),
+        sizes=_sizes_fact(applied.get("sizes")),
     )
+
+
+def _sizes_fact(value: object) -> tuple[tuple[int, int], ...] | None:
+    if not isinstance(value, list):
+        return None
+    sizes = tuple(size for size in (_parse_size(item) for item in value) if size is not None)
+    return sizes or None
 
 
 def video_model_facts(model_id: str, overrides: object | None, *, entry_binding: str | None = None) -> VideoModelFacts:

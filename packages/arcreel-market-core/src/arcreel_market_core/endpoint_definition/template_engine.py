@@ -15,6 +15,7 @@ from arcreel_market_core.aspect_size import (
     IMAGE_TIER_SHORT_EDGE,
     VIDEO_TIER_SHORT_EDGE,
     aspect_size,
+    closest_size,
     resolution_to_short_edge,
 )
 from arcreel_market_core.definition_diagnostics import DefinitionErrorCode, message_key
@@ -123,7 +124,29 @@ def build_context(
             round_to=64,
             max_long_edge=2048,
         )
+        # a model that accepts only a fixed list of sizes (``sizes``: [(w, h), …], from its row's override): the
+        # allowed size nearest to the derived one, for both forms
+        sizes = _allowed_sizes(context.get("sizes"))
+        if sizes:
+            context["width"], context["height"] = closest_size(width, height, sizes)
+            context["width_64"], context["height_64"] = context["width"], context["height"]
     return context
+
+
+def _allowed_sizes(value: object) -> list[tuple[int, int]]:
+    """``[(w, h), …]`` from a ``sizes`` parameter; anything malformed is dropped."""
+    if not isinstance(value, Sequence) or isinstance(value, str):
+        return []
+    sizes: list[tuple[int, int]] = []
+    for item in value:
+        if (
+            isinstance(item, Sequence)
+            and not isinstance(item, str)
+            and len(item) == 2
+            and all(isinstance(n, int) and not isinstance(n, bool) and n > 0 for n in item)
+        ):
+            sizes.append((item[0], item[1]))
+    return sizes
 
 
 def render_request(

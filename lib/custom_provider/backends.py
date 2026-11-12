@@ -71,19 +71,29 @@ class CustomImageBackend:
         delegate: ImageBackend,
         model: str,
         model_capabilities: frozenset[ImageCapability] | None = None,
+        sizes: tuple[tuple[int, int], ...] | None = None,
     ) -> None:
         self._provider_id = provider_id
         self._delegate = delegate
         self._model = model
         self._model_capabilities = model_capabilities
+        self._sizes = sizes
 
-    def with_model_capabilities(self, model_capabilities: frozenset[ImageCapability] | None) -> CustomImageBackend:
-        """返回注入了模型事实一侧能力的新实例（工厂按模型行的条目与能力覆盖算出）。"""
+    def with_model_capabilities(
+        self,
+        model_capabilities: frozenset[ImageCapability] | None,
+        sizes: tuple[tuple[int, int], ...] | None = None,
+    ) -> CustomImageBackend:
+        """返回注入了模型事实一侧能力的新实例（工厂按模型行的条目与能力覆盖算出）。
+
+        ``sizes``: the only sizes the model accepts (its row's ``sizes`` override), sent with every request.
+        """
         return CustomImageBackend(
             provider_id=self._provider_id,
             delegate=self._delegate,
             model=self._model,
             model_capabilities=model_capabilities,
+            sizes=sizes,
         )
 
     @property
@@ -113,6 +123,8 @@ class CustomImageBackend:
         return await self._delegate.reference_image_limit()
 
     async def generate(self, request: ImageGenerationRequest) -> ImageGenerationResult:
+        if self._sizes and request.sizes is None:
+            request = replace(request, sizes=self._sizes)
         result = await self._delegate.generate(request)
         # 没有声明计量的通道（ComfyUI、声明式图片、OpenAI Chat 出图）按通用口径上报张数；内置调用通道自己带的
         # 计量原样保留并补上张数，计价交给对应条目的价目表（docs/adr/0100）。

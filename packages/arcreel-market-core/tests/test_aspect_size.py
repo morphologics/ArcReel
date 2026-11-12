@@ -202,3 +202,30 @@ def test_the_tier_table_decides_the_vocabulary():
     # 同一个短边在图像档位表里命中的是另一个词，在视频表里一档都不命中。
     assert short_edge_to_resolution(1024, tier_map=IMAGE_TIER_SHORT_EDGE) == "1K"
     assert short_edge_to_resolution(1024, tier_map=VIDEO_TIER_SHORT_EDGE) == "1024px"
+
+
+# ── closest_size: fixed-size models ──────────────────────────────────────────────
+
+GROK_SIZES = [(1024, 1024), (896, 1280), (1280, 896), (768, 1408), (1408, 768), (576, 1280), (1280, 576)]
+
+
+def test_closest_size_takes_the_nearest_shape():
+    from arcreel_market_core.aspect_size import closest_size
+
+    assert closest_size(1280, 720, GROK_SIZES) == (1408, 768)
+    assert closest_size(720, 1280, GROK_SIZES) == (768, 1408)
+    assert closest_size(1024, 1024, GROK_SIZES) == (1024, 1024)
+
+
+def test_closest_size_prefers_the_nearest_area_among_equal_shapes():
+    from arcreel_market_core.aspect_size import closest_size
+
+    presets = [(1376, 768), (2752, 1536), (5504, 3072)]
+    assert closest_size(2560, 1440, presets) == (2752, 1536)
+    assert closest_size(1280, 720, presets) == (1376, 768)
+
+
+def test_closest_size_without_a_list_keeps_the_size():
+    from arcreel_market_core.aspect_size import closest_size
+
+    assert closest_size(1280, 720, []) == (1280, 720)

@@ -271,3 +271,15 @@ def test_width_and_height_follow_the_resolution_tiers_of_the_media_type(
     context = build_context({"aspect_ratio": "1:1", "resolution": resolution}, {}, media_type=media_type)
 
     assert (context["width"], context["height"]) == size
+
+
+def test_build_context_snaps_width_and_height_to_allowed_sizes():
+    context = _context(aspect_ratio="16:9", sizes=[[1024, 1024], [1408, 768], [768, 1408]])
+    assert (context["width"], context["height"]) == (1408, 768)
+    assert (context["width_64"], context["height_64"]) == (1408, 768)
+
+
+def test_build_context_ignores_malformed_sizes():
+    context = _context(aspect_ratio="16:9", sizes=["1408x768", [0, 5], [True, 2]])
+    assert (context["width"], context["height"]) == (1280, 720)
+

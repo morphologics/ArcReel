@@ -88,6 +88,9 @@ class ImageGenerationRequest:
     image_size: str | None = None
     project_name: str | None = None
     seed: int | None = None
+    #: The only sizes the model accepts ((width, height), …), for fixed-size models; the backend sends the one
+    #: closest to the size derived from ``aspect_ratio`` and ``image_size``. ``None`` = any size.
+    sizes: tuple[tuple[int, int], ...] | None = None
     #: 供应商响应的诊断回调，与 ``VideoGenerationRequest`` 同形。只有需要逐阶段留痕的调用方
     #: （端点测试）会给它；生产的出图路径不收集留痕，保持 ``None``。
     on_provider_response: Callable[[ProviderResponseStage, object], Awaitable[None]] | None = None

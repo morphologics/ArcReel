@@ -156,6 +156,19 @@ class TestCustomImageBackend:
         assert result.usage == Usage(quantities={"output_images": 1, "input_images": 0, "output_tokens": 1290})
         delegate.generate.assert_awaited_once_with(request)
 
+    async def test_fixed_size_model_sends_its_allowed_sizes(self, tmp_path: Path):
+        output_path = tmp_path / "output.png"
+        delegate = AsyncMock()
+        delegate.generate = AsyncMock(
+            return_value=ImageGenerationResult(image_path=output_path, provider="custom-img", model="grok")
+        )
+        delegate.capabilities = {ImageCapability.TEXT_TO_IMAGE}
+        backend = CustomImageBackend(provider_id="custom-img", delegate=delegate, model="grok").with_model_capabilities(
+            None, ((1408, 768), (1024, 1024))
+        )
+        await backend.generate(ImageGenerationRequest(prompt="p", output_path=output_path))
+        assert delegate.generate.await_args.args[0].sizes == ((1408, 768), (1024, 1024))
+
     async def test_channel_without_usage_reports_one_output_and_the_reference_count(self, tmp_path: Path):
         output_path = tmp_path / "output.png"
         delegate = AsyncMock()

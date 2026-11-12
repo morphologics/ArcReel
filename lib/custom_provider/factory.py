@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+from arcreel_market_core.endpoint_definition import COMFYUI_KIND
 from lib.backends.image_capabilities import custom_image_model_capabilities
 from lib.custom_provider.backends import (
     CustomAudioBackend,
@@ -13,6 +14,7 @@ from lib.custom_provider.backends import (
 )
 from lib.custom_provider.capabilities import synthesize_video_capabilities_with_overrides
 from lib.custom_provider.endpoints import EndpointSpec, get_endpoint_spec
+from lib.custom_provider.model_facts import image_model_facts
 from lib.custom_provider.path_overrides import effective_path_overrides
 
 if TYPE_CHECKING:
@@ -60,9 +62,16 @@ def create_custom_backend(
         # 据此比对协议是否已被换掉（docs/adr/0054、docs/adr/0101）。
         return backend.with_endpoint(endpoint, path_overrides=paths).with_video_capabilities(merged, overrides=applied)
     if isinstance(backend, CustomImageBackend):
+        # a fixed-size model's allowed sizes (its row's ``sizes`` override); ComfyUI endpoints size from the workflow
+        sizes = (
+            None
+            if spec.kind == COMFYUI_KIND
+            else image_model_facts(model_id, capability_overrides, entry_binding=entry_binding).sizes
+        )
         return backend.with_model_capabilities(
             custom_image_model_capabilities(
                 model_id, overrides=capability_overrides, endpoint_kind=spec.kind, entry_binding=entry_binding
-            )
+            ),
+            sizes,
         )
     return backend

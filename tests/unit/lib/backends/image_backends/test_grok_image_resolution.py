@@ -58,5 +58,5 @@ async def test_image_size_passed_through_as_is(tmp_path):
     with pytest.raises(RuntimeError):
         await backend.generate(req)
 
-    # 直接透传标准 token（不再经过 _map_image_size_to_resolution 小写映射）
-    assert captured["resolution"] == "2K"
+    # the standard token, lowercased as xai_sdk expects
+    assert captured["resolution"] == "2k"

@@ -184,6 +184,8 @@ class DeclarativeImageBackend:
                 "aspect_ratio": request.aspect_ratio,
                 "resolution": request.image_size,
                 "seed": request.seed,
+                # a fixed-size model's allowed sizes: build_context picks the closest
+                "sizes": [list(size) for size in request.sizes] if request.sizes else None,
             },
             {"reference_images": [Path(ref.path) for ref in references]},
             require_declared_inputs=True,

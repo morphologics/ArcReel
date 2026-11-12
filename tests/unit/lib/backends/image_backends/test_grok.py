@@ -124,12 +124,12 @@ class TestGenerateT2I:
             )
             result = await grok_backend.generate(request)
 
-        # 验证 SDK 调用参数（image_size 透传，不再做小写映射）
+        # SDK call parameters: the resolution goes lowercased ("2k"), as xai_sdk expects
         grok_backend._client.image.sample.assert_awaited_once_with(
             prompt="A beautiful sunset",
             model="grok-imagine-image",
             aspect_ratio="16:9",
-            resolution="2K",
+            resolution="2k",
         )
         assert result.image_path == output
         assert result.provider == "grok"
@@ -337,7 +337,7 @@ class TestResolutionPassthrough:
         with pytest.raises(RuntimeError):
             await grok_backend.generate(request)
 
-        assert captured["resolution"] == "2K"
+        assert captured["resolution"] == "2k"
 
 
 # ---------------------------------------------------------------------------

@@ -138,3 +138,13 @@ class TestOverrideValues:
         assert model_fact_overrides(overrides, "video") == {"durations": [5]}
         assert model_fact_overrides(overrides, "image") == {"text_to_image": True}
         assert model_fact_overrides(overrides, "text") == {}
+
+
+def test_image_sizes_override_parses_width_x_height():
+    facts = image_model_facts("relay-image-x", {"sizes": ["1408x768", "768 x 1408"]})
+    assert facts.sizes == ((1408, 768), (768, 1408))
+    assert model_fact_value_matches("sizes", ["1024x1024"])
+    assert not model_fact_value_matches("sizes", [])
+    assert not model_fact_value_matches("sizes", ["1024"])
+    assert image_model_facts("relay-image-x", {"sizes": "1024x1024"}).sizes is None
+

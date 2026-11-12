@@ -61,6 +61,7 @@ class TestOverrideFieldSchema:
             "max_output_tokens",
             "text_to_image",
             "image_to_image",
+            "sizes",
             "durations",
             "resolutions",
             "duration_constraints",
