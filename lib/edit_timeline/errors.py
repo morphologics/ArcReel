@@ -30,7 +30,9 @@ class EditTimelineError(Exception):
         self.params = params
 
 
-# 会展示给创作者的错误码 → 译文 key：项目与集复用通用 key。批量编辑的错误只回给 Agent，不在此登记；回滚的 revision_unchanged 两边都会遇到。
+# 会展示给创作者的错误码 → 译文 key：项目与集复用通用 key。回滚的 revision_unchanged 两边都会遇到。
+# Batch-edit errors (revision_conflict, operation_invalid, revision_summary_invalid) reach creators too since the
+# web UI writes operations (the Edit view's clip menu, the shots strip's leave-out): their messages are generic.
 _MESSAGE_KEYS: dict[str, str] = {
     "project_not_found": "project_not_found",
     "episode_not_found": "episode_not_found",
@@ -41,6 +43,9 @@ _MESSAGE_KEYS: dict[str, str] = {
     "timeline_name_invalid": "edit_timeline_name_invalid",
     "script_invalid": "edit_timeline_script_invalid",
     "timeline_invalid": "edit_timeline_invalid",
+    "revision_conflict": "edit_timeline_revision_conflict",
+    "operation_invalid": "edit_timeline_operation_invalid",
+    "revision_summary_invalid": "edit_timeline_operation_invalid",
 }
 
 

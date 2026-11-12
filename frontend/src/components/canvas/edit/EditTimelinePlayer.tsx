@@ -1,9 +1,11 @@
-import type { CSSProperties } from "react";
+import type { CSSProperties, ReactNode } from "react";
+import { ContextMenu } from "@base-ui/react/context-menu";
 import { cn } from "cn";
 import { AlertTriangle, Captions, Loader2, Pause, Play } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
 import { Button } from "@/components/ui/button";
+import { DropdownMenuContent } from "@/components/ui/dropdown-menu";
 import { Toggle } from "@/components/ui/toggle";
 import type { EditClip } from "@/types/edit-timeline";
 import type { PreviewAspect } from "@/utils/preview-aspect";
@@ -13,6 +15,11 @@ import { unitPositionLabel } from "./timeline-view";
 import { subtitleAt, subtitleLayout, type PlacedSubtitle } from "./preview-tracks";
 import { formatClock } from "./timeline-view";
 import type { TimelinePlayback } from "./useTimelinePlayback";
+
+/** Menu items built when the menu opens: they act on the clip on screen at that moment. */
+function LazyItems({ render }: { render: () => ReactNode }) {
+  return <>{render()}</>;
+}
 
 interface EditTimelinePlayerProps {
   plan: PlaybackPlan;
@@ -26,6 +33,8 @@ interface EditTimelinePlayerProps {
   subtitles: readonly PlacedSubtitle[];
   showSubtitles: boolean;
   onToggleSubtitles: () => void;
+  /** Right-click on the picture: menu items for the clip on screen (built when the menu opens); none = no menu. */
+  clipMenu?: () => ReactNode;
 }
 
 /**
@@ -44,6 +53,7 @@ export function EditTimelinePlayer({
   subtitles,
   showSubtitles,
   onToggleSubtitles,
+  clipMenu,
 }: EditTimelinePlayerProps) {
   const { t } = useTranslation("dashboard");
   const segment = plan.segments[playback.index];
@@ -57,15 +67,20 @@ export function EditTimelinePlayer({
   return (
     <div className="flex h-full min-h-0 flex-col gap-2">
       <div className="@container-size relative flex min-h-0 flex-1 items-center justify-center">
-        <div
-          role="region"
-          aria-label={t("edit_view_player_aria")}
-          className={cn(
-            "group/player @container-size relative overflow-hidden rounded-lg bg-black",
-            portrait
-              ? "aspect-[9/16] w-[min(100cqw,calc(100cqh*9/16))]"
-              : "aspect-video w-[min(100cqw,calc(100cqh*16/9))]",
-          )}
+        <ContextMenu.Root disabled={!clipMenu}>
+        <ContextMenu.Trigger
+          render={
+            <div
+                role="region"
+                aria-label={t("edit_view_player_aria")}
+                className={cn(
+                  "group/player @container-size relative overflow-hidden rounded-lg bg-black",
+                  portrait
+                    ? "aspect-[9/16] w-[min(100cqw,calc(100cqh*9/16))]"
+                    : "aspect-video w-[min(100cqw,calc(100cqh*16/9))]",
+                )}
+            />
+          }
         >
           {playback.videoRefs.map((ref, slot) => {
             const visible = showVideo && playback.visibleSlot === slot;
@@ -156,7 +171,13 @@ export function EditTimelinePlayer({
               {t("edit_view_buffering")}
             </span>
           )}
-        </div>
+        </ContextMenu.Trigger>
+        {clipMenu && (
+          <DropdownMenuContent className="w-auto min-w-44">
+            <LazyItems render={clipMenu} />
+          </DropdownMenuContent>
+        )}
+        </ContextMenu.Root>
       </div>
       {(playback.blocked || hasTransitions) && (
         <div className="flex shrink-0 flex-col gap-1 text-xs">

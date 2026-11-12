@@ -734,6 +734,8 @@ MESSAGES = {
     "edit_timeline_script_invalid": "集（id={episode}）的脚本无法解析，无法按脚本新建剪辑时间线",
     "edit_timeline_invalid": "剪辑时间线文件已损坏，无法读取：{file}",
     "edit_timeline_revision_unchanged": "修订 {revision} 的内容与最新修订相同，无需回滚",
+    "edit_timeline_revision_conflict": "修订 {base_revision} 之后剪辑时间线已被改到修订 {latest_revision}：请重新读取后再改",
+    "edit_timeline_operation_invalid": "这项修改无法应用到剪辑时间线",
     "edit_timeline_render_in_progress": "这条剪辑时间线还有成片或剪映草稿的渲染任务在排队或执行（{task_id}），任务结束后再删除",
     # Final cut
     "final_cut_narration_unavailable": "只有 TTS 配音项目可以渲染带旁白版本的成片",

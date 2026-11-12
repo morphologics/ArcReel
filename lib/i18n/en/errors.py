@@ -795,6 +795,8 @@ MESSAGES = {
     "edit_timeline_script_invalid": "The script of episode (id={episode}) cannot be parsed, so no edit timeline can be created from it",
     "edit_timeline_invalid": "The edit timeline file is corrupted and cannot be read: {file}",
     "edit_timeline_revision_unchanged": "Revision {revision} has the same content as the latest revision, so there is nothing to restore",
+    "edit_timeline_revision_conflict": "The edit timeline changed since revision {base_revision} (now revision {latest_revision}): read it again and retry",
+    "edit_timeline_operation_invalid": "This change cannot be applied to the edit timeline",
     "edit_timeline_render_in_progress": "A final-cut or Jianying draft render is queued or running for this edit timeline ({task_id}); delete it after the render finishes",
     # Final cut
     "final_cut_narration_unavailable": "Only TTS voiceover projects can render the final cut version with narration",

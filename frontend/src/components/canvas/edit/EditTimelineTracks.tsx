@@ -1,20 +1,25 @@
 import { cn } from "cn";
 import { AlertTriangle, Loader2, Upload } from "lucide-react";
 import {
+  cloneElement,
   memo,
+  useCallback,
   useRef,
   useState,
   type ChangeEvent,
   type CSSProperties,
+  type KeyboardEvent,
   type MouseEvent,
   type PointerEvent,
   type ReactNode,
   type WheelEvent,
 } from "react";
 import { useTranslation } from "react-i18next";
+import { ContextMenu } from "@base-ui/react/context-menu";
 
 import { API } from "@/api";
 import { Button } from "@/components/ui/button";
+import { DropdownMenuContent } from "@/components/ui/dropdown-menu";
 import { useAppStore } from "@/stores/app-store";
 import { useProjectsStore } from "@/stores/projects-store";
 import { errMsg } from "@/utils/async";
@@ -35,6 +40,8 @@ const MIN_PIXELS_PER_SECOND = 14;
 /** Pointer travel (px) before a mouse press on the tracks counts as a drag-scroll rather than a click. */
 const DRAG_THRESHOLD = 4;
 const LABEL_WIDTH = 64;
+/** While the playhead handle is dragged, the player seeks at most this often (ms). */
+const SCRUB_SEEK_MS = 100;
 
 
 interface EditTimelineTracksProps {
@@ -53,6 +60,9 @@ interface EditTimelineTracksProps {
   bgm: readonly AudioPlacement[];
   onSelectClip: (clipId: string) => void;
   onSeek: (t: number) => void;
+  /** A clip's right-click menu items (Play / Pause, Shot view, move, leave out) for the time the menu was opened
+   * at; none = no menu. Also on the playhead's handle, for the clip under it. Keep it stable. */
+  clipMenu?: (clip: EditClip, at: number | null) => ReactNode;
 }
 
 /**
@@ -74,6 +84,7 @@ export function EditTimelineTracks({
   bgm,
   onSelectClip,
   onSeek,
+  clipMenu,
 }: EditTimelineTracksProps) {
   const { t: translate } = useTranslation("dashboard");
   const trackRef = useRef<HTMLDivElement>(null);
@@ -82,6 +93,67 @@ export function EditTimelineTracks({
 
   const scrollRef = useRef<HTMLDivElement>(null);
   const drag = useRef<{ x: number; scrollLeft: number; moved: boolean } | null>(null);
+  // Dragging the playhead's handle: where it is while held (drawn at once); the player seeks along with it,
+  // debounced (SCRUB_SEEK_MS), and exactly once more on release.
+  const [scrub, setScrub] = useState<number | null>(null);
+  const scrubSeek = useRef<{ timer: ReturnType<typeof setTimeout> | null; at: number }>({ timer: null, at: 0 });
+  const seekSoon = (at: number) => {
+    scrubSeek.current.at = at;
+    if (scrubSeek.current.timer !== null) return;
+    scrubSeek.current.timer = setTimeout(() => {
+      scrubSeek.current.timer = null;
+      onSeek(scrubSeek.current.at);
+    }, SCRUB_SEEK_MS);
+  };
+  const stopSeekSoon = () => {
+    if (scrubSeek.current.timer !== null) clearTimeout(scrubSeek.current.timer);
+    scrubSeek.current.timer = null;
+  };
+  const timeAt = (clientX: number) => {
+    const box = trackRef.current?.getBoundingClientRect();
+    if (!box || box.width <= 0) return null;
+    return Math.min(duration, Math.max(0, ((clientX - box.left) / box.width) * duration));
+  };
+  const onHandleDown = (event: PointerEvent<HTMLSpanElement>) => {
+    // not a drag-scroll of the tracks, nor a seek-on-release of the track under it
+    event.stopPropagation();
+    if (event.button !== 0) return; // right-click: the handle's menu
+    event.preventDefault();
+    event.currentTarget.setPointerCapture?.(event.pointerId);
+    setScrub(timeAt(event.clientX) ?? t);
+  };
+  const onHandleMove = (event: PointerEvent<HTMLSpanElement>) => {
+    if (scrub === null) return;
+    const at = timeAt(event.clientX);
+    if (at === null) return;
+    setScrub(at);
+    seekSoon(at);
+  };
+  const onHandleUp = (event: PointerEvent<HTMLSpanElement>) => {
+    event.stopPropagation();
+    if (scrub === null) return;
+    stopSeekSoon();
+    onSeek(timeAt(event.clientX) ?? scrub);
+    setScrub(null);
+  };
+  const onHandleKey = (event: KeyboardEvent<HTMLSpanElement>) => {
+    const step = event.key === "ArrowLeft" ? -1 : event.key === "ArrowRight" ? 1 : 0;
+    if (!step) return;
+    event.preventDefault();
+    onSeek(Math.min(duration, Math.max(0, t + step * (event.shiftKey ? 5 : 1))));
+  };
+  const playheadAt = scrub ?? Math.min(t, duration);
+  // where a right-click landed on the tracks: the clip menu's "Play from here" starts there
+  const menuAt = useRef<number | null>(null);
+  const clipMenuAt = useCallback(
+    (clip: EditClip) => clipMenu?.(clip, menuAt.current) ?? null,
+    [clipMenu],
+  );
+  const playheadClip = clipMenu
+    ? readout.clips.find(
+        (clip) => clip.status !== "unit_deleted" && playheadAt >= clip.start && playheadAt < clip.start + clip.duration,
+      )
+    : undefined;
 
   // A click or tap on the tracks seeks (on release); a swipe (touch, natively: the browser cancels the pointer) or a
   // mouse drag scrolls them sideways, like the shots strip, without moving the playhead.
@@ -147,6 +219,9 @@ export function EditTimelineTracks({
             ref={trackRef}
             className="relative cursor-pointer"
             onPointerUp={seekOnRelease}
+            onContextMenuCapture={(event) => {
+              menuAt.current = timeAt(event.clientX);
+            }}
             aria-label={translate("edit_view_track_aria")}
             role="group"
           >
@@ -159,6 +234,7 @@ export function EditTimelineTracks({
                 trimIgnored={trimIgnored}
                 positions={positions}
                 onSelectClip={onSelectClip}
+                clipMenu={clipMenu ? clipMenuAt : undefined}
               />
             </TrackRow>
             <TrackRow label={translate("edit_view_track_narration")} height="h-8 edit-short:h-7">
@@ -181,12 +257,49 @@ export function EditTimelineTracks({
               )}
             </TrackRow>
             <div
-              aria-hidden
               data-testid="edit-playhead"
               className="pointer-events-none absolute -top-1 bottom-0 left-(--at) w-px bg-foreground"
-              style={{ "--at": percent(Math.min(t, duration)) } as CSSProperties}
+              style={{ "--at": percent(playheadAt) } as CSSProperties}
             >
-              <span className="absolute -top-1 -left-1 size-2 rotate-45 bg-foreground" />
+              <span aria-hidden className="absolute -top-1 -left-1 size-2 rotate-45 bg-foreground" />
+              {/* the handle, half way up: drag to scrub (seeks on release); arrow keys step 1 s (Shift: 5 s) */}
+              {(() => {
+                const handle = (
+                  <span
+                    role="slider"
+                    tabIndex={0}
+                    aria-label={translate("edit_view_playhead")}
+                    aria-valuemin={0}
+                    aria-valuemax={Math.round(duration * 10) / 10}
+                    aria-valuenow={Math.round(playheadAt * 10) / 10}
+                    aria-valuetext={formatSeconds(playheadAt)}
+                    data-testid="edit-playhead-handle"
+                    onPointerDown={onHandleDown}
+                    onPointerMove={onHandleMove}
+                    onPointerUp={onHandleUp}
+                    onPointerCancel={() => {
+                      stopSeekSoon();
+                      setScrub(null);
+                    }}
+                    onKeyDown={onHandleKey}
+                    className={cn(
+                      "focus-ring pointer-events-auto absolute top-1/2 left-0 h-6 w-3 -translate-x-1/2 -translate-y-1/2 touch-none rounded-sm border border-background bg-foreground",
+                      scrub === null ? "cursor-grab" : "cursor-grabbing",
+                    )}
+                  />
+                );
+                // right-click on the handle: the menu of the clip under the playhead, "Play from here" = the playhead
+                return clipMenu && playheadClip ? (
+                  <ContextMenu.Root>
+                    <ContextMenu.Trigger render={handle} />
+                    <DropdownMenuContent className="w-auto min-w-44">
+                      <LazyItems render={() => clipMenu(playheadClip, playheadAt)} />
+                    </DropdownMenuContent>
+                  </ContextMenu.Root>
+                ) : (
+                  handle
+                );
+              })()}
             </div>
           </div>
         </div>
@@ -334,6 +447,7 @@ interface VideoClipsProps {
   trimIgnored: ReadonlySet<string>;
   positions: ReadonlyMap<string, number>;
   onSelectClip: (clipId: string) => void;
+  clipMenu?: (clip: EditClip) => ReactNode;
 }
 
 /**
@@ -348,6 +462,7 @@ const VideoClips = memo(function VideoClips({
   trimIgnored,
   positions,
   onSelectClip,
+  clipMenu,
 }: VideoClipsProps) {
   const { t } = useTranslation("dashboard");
   const percent = (seconds: number) => percentOf(seconds, duration);
@@ -367,6 +482,7 @@ const VideoClips = memo(function VideoClips({
           trimIgnored={trimIgnored.has(clip.id)}
           position={positions.get(clip.unit_id) ?? null}
           onSelect={() => onSelectClip(clip.id)}
+          menu={clipMenu}
         />
       ))}
       {live.map(
@@ -412,6 +528,11 @@ const VideoClips = memo(function VideoClips({
   );
 });
 
+/** Menu items built when the menu opens (not when the clip renders), so they read the time it was opened at. */
+function LazyItems({ render }: { render: () => ReactNode }) {
+  return <>{render()}</>;
+}
+
 interface ClipBlockProps {
   clip: EditClip;
   left: string;
@@ -422,13 +543,15 @@ interface ClipBlockProps {
   /** 片段所用单元在本集里的当前位置。 */
   position: number | null;
   onSelect: () => void;
+  /** Its right-click menu items. */
+  menu?: (clip: EditClip) => ReactNode;
 }
 
-function ClipBlock({ clip, left, width, selected, active, trimIgnored, position, onSelect }: ClipBlockProps) {
+function ClipBlock({ clip, left, width, selected, active, trimIgnored, position, onSelect, menu }: ClipBlockProps) {
   const { t } = useTranslation("dashboard");
   const missingVideo = clip.status === "video_missing";
   const unit = itemPositionLabel(episodeItemKind(clip.unit_id), position, t);
-  return (
+  const block = (
     <button
       type="button"
       onClick={onSelect}
@@ -451,20 +574,31 @@ function ClipBlock({ clip, left, width, selected, active, trimIgnored, position,
         selected ? "ring-2 ring-foreground" : active && "ring-1 ring-primary",
       )}
       style={{ "--at": left, "--span": width, "--unit-hue": unitHue(clip.unit_id) } as CSSProperties}
-    >
-      <span className="flex h-full flex-col justify-between p-1 text-xs leading-none text-white">
-        <span className="flex items-center gap-1 whitespace-nowrap">
-          <b>{clip.id}</b>
-          <span className="sr-only">{unit}</span>
-          <span className="num" aria-hidden>
-            {position ?? t("common:deleted")}
-          </span>
-          {trimIgnored && <AlertTriangle aria-hidden className="size-3 shrink-0 text-warn" />}
+    />
+  );
+  const content = (
+    <span className="flex h-full flex-col justify-between p-1 text-xs leading-none text-white">
+      <span className="flex items-center gap-1 whitespace-nowrap">
+        <b>{clip.id}</b>
+        <span className="sr-only">{unit}</span>
+        <span className="num" aria-hidden>
+          {position ?? t("common:deleted")}
         </span>
-        {/* 视图矮时轨道变矮，只留第一行；时长仍在悬停提示里 */}
-        <span className="tabular-nums edit-short:hidden">{t("edit_view_seconds", { value: formatSeconds(clip.duration) })}</span>
+        {trimIgnored && <AlertTriangle aria-hidden className="size-3 shrink-0 text-warn" />}
       </span>
-    </button>
+      {/* 视图矮时轨道变矮，只留第一行；时长仍在悬停提示里 */}
+      <span className="tabular-nums edit-short:hidden">{t("edit_view_seconds", { value: formatSeconds(clip.duration) })}</span>
+    </span>
+  );
+  if (!menu) return cloneElement(block, undefined, content);
+  // right-click: the clip's menu (selects it too, so the details column follows)
+  return (
+    <ContextMenu.Root onOpenChange={(open) => open && onSelect()}>
+      <ContextMenu.Trigger render={block}>{content}</ContextMenu.Trigger>
+      <DropdownMenuContent className="w-auto min-w-44">
+        <LazyItems render={() => menu(clip)} />
+      </DropdownMenuContent>
+    </ContextMenu.Root>
   );
 }
 

@@ -10,12 +10,13 @@ import {
   type WheelEvent,
 } from "react";
 import { useTranslation } from "react-i18next";
-import { ArrowDownUp, ArrowLeft, ArrowRight, Eye, EyeOff, Film, ImageIcon, ParkingSquare, Scissors, Undo2 } from "lucide-react";
+import { ArrowDownUp, ArrowLeft, ArrowRight, Eye, EyeOff, Film, ImageIcon, ParkingSquare, Scissors, SquarePlay, Undo2 } from "lucide-react";
 import { ContextMenu } from "@base-ui/react/context-menu";
 import { useLocation, useSearchParams } from "wouter";
 import { cn } from "cn";
 import { API } from "@/api";
-import { EPISODE_VIEW_PARAM, WORKSPACE_ROUTE_EPISODES } from "@/app-routes";
+import { EPISODE_VIEW_EDIT, EPISODE_VIEW_PARAM, WORKSPACE_ROUTE_EPISODES } from "@/app-routes";
+import { LINK_UNIT_PARAM } from "@/utils/app-link";
 import { Button } from "@/components/ui/button";
 import { DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator } from "@/components/ui/dropdown-menu";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -183,6 +184,12 @@ export function ShotStrip({
     const query = view ? `?${new URLSearchParams({ [EPISODE_VIEW_PARAM]: view }).toString()}` : "";
     startTransition(() => navigate(`/${WORKSPACE_ROUTE_EPISODES}/${target.episode}${query}`));
     useAppStore.getState().triggerScrollTo({ type: "segment", id: shotId });
+  };
+
+  // "Edit view": the episode's Edit view with the playhead on this shot's first clip (selected there).
+  const openInEditView = (target: StripEpisode, shotId: string) => {
+    const query = new URLSearchParams({ [EPISODE_VIEW_PARAM]: EPISODE_VIEW_EDIT, [LINK_UNIT_PARAM]: shotId });
+    startTransition(() => navigate(`/${WORKSPACE_ROUTE_EPISODES}/${target.episode}?${query.toString()}`));
   };
 
   // Mouse drag scrolls the strip (touch and pens scroll natively). A press that moved past the threshold
@@ -377,6 +384,10 @@ export function ShotStrip({
                             </DropdownMenuItem>
                           </>
                         )}
+                        <DropdownMenuItem onClick={() => openInEditView(group, id)}>
+                          <SquarePlay aria-hidden />
+                          {t("shot_strip_edit_view")}
+                        </DropdownMenuItem>
                         <ShotVersionsMenu
                           projectName={projectName}
                           segmentId={id}

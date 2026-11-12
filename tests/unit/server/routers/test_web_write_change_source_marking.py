@@ -44,6 +44,11 @@ _EXEMPT: dict[str, str] = {
     "episode_planning:start_replan": _TASK,
     "episode_planning:stop_planning": _TASK,
     "generate:edit_image": _TASK,
+    # price quotes: POST only to carry a model list in the body
+    "generate:quote_asset_sheet_models": _NO_WRITE,
+    "generate:quote_image_lane_models": _NO_WRITE,
+    "generate:quote_storyboard_image_models": _NO_WRITE,
+    "generate:quote_video_models": _NO_WRITE,
     "generate:generate_character": _TASK,
     "generate:generate_character_derivative": _TASK,
     "generate:generate_character_voice_sample": _TASK,

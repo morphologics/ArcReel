@@ -119,6 +119,9 @@ _ERROR_STATUS: dict[str, int] = {
     "timeline_name_invalid": 422,
     "script_invalid": 422,
     "timeline_invalid": 422,
+    "revision_conflict": 409,
+    "operation_invalid": 422,
+    "revision_summary_invalid": 422,
 }
 
 

@@ -30,7 +30,7 @@ import type {
   EditTimelineReadout,
   EditTimelineSummary,
 } from "@/types/edit-timeline";
-import { LINK_TIME_PARAM, LINK_TIMELINE_PARAM, parseSeconds } from "@/utils/app-link";
+import { LINK_TIME_PARAM, LINK_TIMELINE_PARAM, LINK_UNIT_PARAM, parseSeconds } from "@/utils/app-link";
 import { errMsg } from "@/utils/async";
 import { formatRelativeTime, isJustNow } from "@/utils/date-format";
 import type { PreviewAspect } from "@/utils/preview-aspect";
@@ -39,6 +39,7 @@ import { ClipInspector, ISSUE_LIST_HEADING_ID, IssueList } from "./EditTimelineD
 import { EditTimelineMenu } from "./EditTimelineMenu";
 import { EditTimelinePlayer } from "./EditTimelinePlayer";
 import { EditTimelineTracks } from "./EditTimelineTracks";
+import { useClipMenu } from "./ClipContextMenu";
 import { buildPlaybackPlan, locate, type PlaybackPlan, type PlaybackSegment } from "./playback-schedule";
 import {
   bgmPlacements,
@@ -85,12 +86,17 @@ interface EditTimelineViewProps {
   renderActions?: (context: EditTimelineActionsContext) => ReactNode;
   /** 本集没有剪辑时间线时的空状态。 */
   renderEmptyState: (context: EditTimelineEmptyStateContext) => ReactNode;
+  /** Open a shot in the episode's Shot view (a clip's right-click "Shot view"); absent = no such entry. */
+  onViewUnit?: (unitId: string) => void;
 }
 
 /** 应用内链接带来的一次性定位：打开哪条剪辑时间线（缺省为当前选中的）、定位到全局时间的哪一秒（缺省为不动播放头）。 */
 interface LinkJump {
   timelineId: string | null;
   seconds: number | null;
+  /** A shot / video unit to show: the playhead goes to its first clip, which is selected (the shots strip's
+   * "Edit view"). */
+  unitId?: string | null;
 }
 
 type Loaded<T> = { key: string; value: T } | { key: string; error: string };
@@ -107,6 +113,7 @@ export function EditTimelineView({
   ttsNarration,
   renderActions,
   renderEmptyState,
+  onViewUnit,
 }: EditTimelineViewProps) {
   const { t, i18n } = useTranslation("dashboard");
   const snapshotRevision = useProjectsStore((s) => s.projectSnapshotRevisions[projectName] ?? 0);
@@ -124,20 +131,22 @@ export function EditTimelineView({
   const linkForOtherProject = routeProject !== undefined && routeProject !== projectName;
   const linkTimeline = searchParams.get(LINK_TIMELINE_PARAM);
   const linkTime = searchParams.get(LINK_TIME_PARAM);
+  const linkUnit = searchParams.get(LINK_UNIT_PARAM);
   const [jump, setJump] = useState<LinkJump | null>(null);
   useEffect(() => {
-    if (linkForOtherProject || (linkTimeline === null && linkTime === null)) return;
+    if (linkForOtherProject || (linkTimeline === null && linkTime === null && linkUnit === null)) return;
     // eslint-disable-next-line react-hooks/set-state-in-effect -- 订阅地址栏的一次性参数：读入后清掉，再点同一条链接才能重新触发
-    setJump({ timelineId: linkTimeline || null, seconds: parseSeconds(linkTime) });
+    setJump({ timelineId: linkTimeline || null, seconds: parseSeconds(linkTime), unitId: linkUnit || null });
     setSearchParams(
       (params) => {
         params.delete(LINK_TIMELINE_PARAM);
         params.delete(LINK_TIME_PARAM);
+        params.delete(LINK_UNIT_PARAM);
         return params;
       },
       { replace: true },
     );
-  }, [linkForOtherProject, linkTimeline, linkTime, setSearchParams]);
+  }, [linkForOtherProject, linkTimeline, linkTime, linkUnit, setSearchParams]);
   // 删除后选中的标签回落到默认那条（最近修改的）。
   const handleDeleted = useCallback(() => {
     setChosenId(null);
@@ -328,6 +337,10 @@ export function EditTimelineView({
             seekRequest={jump && (jump.timelineId === null || jump.timelineId === selected.id) ? jump : null}
             onSeekHandled={handleJumpApplied}
             issuesRequest={issuesRequest}
+            timelineId={selected.id}
+            timelineName={selected.name}
+            onTimelineChanged={reload}
+            onViewUnit={onViewUnit}
           />
         ) : current && "error" in current ? (
           <LoadFailed message={current.error} onRetry={reload} />
@@ -341,6 +354,11 @@ export function EditTimelineView({
 
 interface TimelinePreviewProps {
   projectName: string;
+  timelineId: string;
+  timelineName: string;
+  /** The timeline was changed from here (a clip moved / left out): read it again. */
+  onTimelineChanged: () => void;
+  onViewUnit?: (unitId: string) => void;
   ttsNarration: boolean;
   readout: EditTimelineReadout;
   media: EditTimelinePreviewMedia | null;
@@ -465,6 +483,10 @@ function TimelinePreview({
   seekRequest,
   onSeekHandled,
   issuesRequest,
+  timelineId,
+  timelineName,
+  onTimelineChanged,
+  onViewUnit,
 }: TimelinePreviewProps) {
   const { t } = useTranslation("dashboard");
   const [selectedClipId, setSelectedClipIdState] = useState<string | null>(null);
@@ -553,15 +575,19 @@ function TimelinePreview({
   const { seek } = playback;
   useEffect(() => {
     if (!seekRequest) return;
-    if (seekRequest.seconds !== null) {
+    const unitClip = seekRequest.unitId ? readout.clips.find((clip) => clip.unit_id === seekRequest.unitId) : undefined;
+    if (unitClip) {
+      seek(unitClip.start);
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- 一次性的链接定位：移动播放头的同时选中对应片段
+      setSelectedClipId(unitClip.id);
+    } else if (seekRequest.seconds !== null) {
       seek(seekRequest.seconds);
       const location = locate(plan, seekRequest.seconds);
-      // eslint-disable-next-line react-hooks/set-state-in-effect -- 一次性的链接定位：移动播放头的同时选中对应片段
       if (location) setSelectedClipId(plan.segments[location.index].clipId);
     }
     // 处理完立即作废，plan 随后的刷新不会再把播放头拉回去。
     onSeekHandled();
-  }, [seekRequest, seek, plan, onSeekHandled, setSelectedClipId]);
+  }, [seekRequest, seek, plan, readout, onSeekHandled, setSelectedClipId]);
 
   const trimIgnored = useMemo(() => issueClipIds(readout, "trim_ignored"), [readout]);
   const unused = useMemo(() => unusedUnitIds(readout), [readout]);
@@ -571,6 +597,19 @@ function TimelinePreview({
   const currentClip = readout.clips.find((clip) => clip.id === activeClipId);
   const selectedClip = readout.clips.find((clip) => clip.id === selectedClipId);
   const clipIds = useMemo(() => new Set(readout.clips.map((clip) => clip.id)), [readout]);
+  const { playing, play, pause } = playback;
+  const clipMenu = useClipMenu({
+    projectName,
+    timelineId,
+    timelineName,
+    readout,
+    playing,
+    play,
+    pause,
+    seek,
+    onViewUnit,
+    onChanged: onTimelineChanged,
+  });
 
   // Player on the left, the details column (280px or 340px with the canvas width, or folded to a thin rail)
   // on the right; the tracks run full width below, behind a splitter that sets their height.
@@ -594,6 +633,7 @@ function TimelinePreview({
             subtitles={subtitles}
             showSubtitles={showSubtitles}
             onToggleSubtitles={() => setShowSubtitles((shown) => !shown)}
+            clipMenu={currentClip ? () => clipMenu(currentClip, playback.t, { compact: true }) : undefined}
           />
         </div>
         {detailsOpen ? (
@@ -672,6 +712,7 @@ function TimelinePreview({
           bgm={bgm}
           onSelectClip={setSelectedClipId}
           onSeek={playback.seek}
+          clipMenu={clipMenu}
         />
       </div>
     </div>
