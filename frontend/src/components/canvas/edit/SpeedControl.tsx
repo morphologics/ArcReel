@@ -7,10 +7,20 @@ import { PLAYBACK_SPEEDS } from "./useTimelinePlayback";
 const speedLabel = (speed: number) => `${speed}×`;
 
 /**
- * The player's speed control, a vertical slider beside the picture: a dot per speed on a track, fastest at the top
- * (5× … 0.5×; 1× = Normal). Click a dot, or use ↑/↓ (←/→) on the focused one.
+ * The player's speed control: a dot per speed on a track. From 1200px a vertical slider beside the picture, fastest
+ * at the top (5× … 0.5×; 1× = Normal); narrower, a row under it, slowest on the left, without the Normal label.
+ * Click a dot, or use ↑/↓ (←/→) on the focused one.
  */
-export function SpeedControl({ speed, onChange }: { speed: number; onChange: (speed: number) => void }) {
+export function SpeedControl({
+  speed,
+  onChange,
+  vertical,
+}: {
+  speed: number;
+  onChange: (speed: number) => void;
+  /** beside the picture (wide screens); otherwise a row under it */
+  vertical: boolean;
+}) {
   const { t } = useTranslation("dashboard");
   const dots = useRef<(HTMLButtonElement | null)[]>([]);
   const current = Math.max(0, PLAYBACK_SPEEDS.indexOf(speed as (typeof PLAYBACK_SPEEDS)[number]));
@@ -32,10 +42,20 @@ export function SpeedControl({ speed, onChange }: { speed: number; onChange: (sp
       role="radiogroup"
       aria-label={t("edit_view_speed")}
       title={t("edit_view_speed")}
-      className="relative flex h-full max-h-80 flex-col items-start justify-between py-1"
+      className={cn(
+        "relative flex items-start justify-between",
+        vertical ? "h-full max-h-80 flex-col py-1" : "w-full max-w-md flex-row-reverse px-1",
+      )}
     >
-      {/* the track behind the dots (drawn first, so the dots sit on it without a z-index) */}
-      <span aria-hidden className="absolute inset-y-3 left-[0.6875rem] w-0.5 rounded-full bg-border" />
+      {/* the track behind the dots (drawn first, so the dots sit on it without a z-index): horizontal under the
+          picture, vertical beside it */}
+      <span
+        aria-hidden
+        className={cn(
+          "absolute rounded-full bg-border",
+          vertical ? "inset-y-3 left-[0.6875rem] w-0.5" : "inset-x-6 top-[0.4375rem] h-0.5",
+        )}
+      />
       {order.map(({ value, index }) => (
         <button
           key={value}
@@ -49,7 +69,10 @@ export function SpeedControl({ speed, onChange }: { speed: number; onChange: (sp
           tabIndex={index === current ? 0 : -1}
           onClick={() => onChange(value)}
           onKeyDown={onKeyDown}
-          className="focus-ring relative flex items-center gap-1.5 rounded-sm px-1 text-xs"
+          className={cn(
+            "focus-ring relative flex items-center rounded-sm px-1 text-xs",
+            vertical ? "gap-1.5" : "flex-col gap-1",
+          )}
         >
           <span
             aria-hidden
@@ -67,7 +90,7 @@ export function SpeedControl({ speed, onChange }: { speed: number; onChange: (sp
             className={cn("num whitespace-nowrap", index === current ? "font-medium" : "text-muted-foreground")}
           >
             {speedLabel(value)}
-            {value === 1 && <span className="text-muted-foreground"> {t("edit_view_speed_normal")}</span>}
+            {value === 1 && vertical && <span className="text-muted-foreground"> {t("edit_view_speed_normal")}</span>}
           </span>
         </button>
       ))}
