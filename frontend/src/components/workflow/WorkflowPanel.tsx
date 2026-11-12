@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useId, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { ListChecks } from "lucide-react";
+import { ProgressStatusIcon, type ProgressStatusKind } from "./ProgressStatusIcon";
 import { useLocation } from "wouter";
 import { API } from "@/api";
 import {
@@ -416,6 +417,18 @@ export function WorkflowPanel({ projectName, episode, onViewUnit, onRegenerate, 
       : loading
         ? t("plan_loading")
         : t("plan_unavailable");
+  // the status icon beside the button: repair needs (blockers) first, then the episode's own headline; without a
+  // step list, the backend's next action, loading or unavailable
+  const status: { kind: ProgressStatusKind; title: string; detail: string | null } =
+    blockers.length > 0
+      ? { kind: "danger", title: t("blockers_title", { count: blockers.length }), detail: view?.headline.title ?? null }
+      : view
+        ? view.headline
+        : shown
+          ? { kind: "next", title: headline, detail: null }
+          : loading
+            ? { kind: "loading", title: t("plan_loading"), detail: null }
+            : { kind: "unavailable", title: t("headline_unavailable"), detail: t("plan_unavailable") };
 
   return (
     <>
@@ -434,12 +447,7 @@ export function WorkflowPanel({ projectName, episode, onViewUnit, onRegenerate, 
           }
         >
           <ListChecks aria-hidden data-icon={phone ? undefined : "inline-start"} />
-          {!phone && (
-            <>
-              <span className="shrink-0 font-medium text-foreground">{t("panel_title")}</span>
-              <span className="min-w-0 truncate text-muted-foreground">{headline}</span>
-            </>
-          )}
+          {!phone && <span className="shrink-0 font-medium text-foreground">{t("panel_title")}</span>}
           {blockers.length > 0 && (
             <Badge variant="destructive">
               <span aria-hidden>{blockers.length}</span>
@@ -515,6 +523,7 @@ export function WorkflowPanel({ projectName, episode, onViewUnit, onRegenerate, 
           )}
         </PopoverContent>
       </Popover>
+      <ProgressStatusIcon kind={status.kind} title={status.title} detail={status.detail} />
       {assetBatchEpisode !== null && (
         <AssetSheetBatchDialog
           projectName={projectName}

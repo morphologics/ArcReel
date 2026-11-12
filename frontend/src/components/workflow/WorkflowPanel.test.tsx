@@ -100,7 +100,9 @@ describe("WorkflowPanel 页头入口", () => {
       { onAuthorPrompts: vi.fn() },
     );
     expect(toggle).toHaveAttribute("aria-expanded", "false");
-    await waitFor(() => expect(toggle).toHaveTextContent("提示词：共 2 个，1 个待编写"));
+    // the button is the title only; the status is the icon beside it (its popup holds the detail line)
+    await waitFor(() => expect(screen.getByTestId("workflow-status")).toHaveAttribute("data-status", "next"));
+    expect(screen.getByTestId("workflow-status")).toHaveAccessibleName("状态：下一步：提示词");
     expect(screen.queryByRole("button", { name: "交给 Agent" })).not.toBeInTheDocument();
     expect(screen.queryByTestId("workflow-row-prompts")).not.toBeInTheDocument();
 
@@ -131,7 +133,8 @@ describe("WorkflowPanel 页头入口", () => {
         steps: [makeStep({ id: "edit", state: "completed" })],
       }),
     );
-    expect(await screen.findByText("本集已完成")).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByTestId("workflow-status")).toHaveAttribute("data-status", "complete"));
+    expect(screen.getByTestId("workflow-status")).toHaveAccessibleName("状态：本集已完成");
     expect(screen.queryByRole("button", { name: "交给 Agent" })).not.toBeInTheDocument();
   });
 });

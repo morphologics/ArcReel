@@ -109,11 +109,20 @@ export interface NextStepView {
   hint: StepNote | null;
 }
 
+/** The episode's status at a glance (the header's status icon and its popup): what kind, a title, a detail line. */
+export type ProgressHeadlineKind = "complete" | "next" | "running" | "warn" | "danger" | "none";
+export interface ProgressHeadline {
+  kind: ProgressHeadlineKind;
+  title: string;
+  detail: string | null;
+}
+
 export interface StepListView {
   rows: StepRowView[];
   next: NextStepView | null;
   /** 收起时的一句话现状。 */
   summary: string;
+  headline: ProgressHeadline;
   /** 广告/短片标题行的「总时长 / 目标时长」；`over` 为超出目标 10% 以上。 */
   adDuration: { total: number | null; target: number; over: boolean } | null;
 }
@@ -1032,5 +1041,29 @@ export function buildStepList(plan: WorkflowPlan, ctx: StepListContext): StepLis
     const flagged = rows.find((row) => row.tone === "danger" || row.tone === "warn");
     summary = flagged ? t("workflow:summary_row", { title: flagged.title, status: flagged.status }) : "";
   }
-  return { rows, next, summary, adDuration: adDuration(facts, ctx) };
+  return { rows, next, summary, headline: progressHeadline(rows, next, editDone, t), adDuration: adDuration(facts, ctx) };
+}
+
+/** Running beats a next step (something is already happening); a flagged row speaks only when nothing is next. */
+function progressHeadline(
+  rows: StepRowView[],
+  next: NextStepView | null,
+  complete: boolean,
+  t: TFunction,
+): ProgressHeadline {
+  const running = rows.find((row) => row.tone === "running");
+  if (running) return { kind: "running", title: t("workflow:headline_running", { title: running.title }), detail: running.status };
+  if (next) {
+    const row = rows.find((candidate) => candidate.key === next.rowKey);
+    return row
+      ? { kind: "next", title: t("workflow:headline_next", { title: row.title }), detail: row.status }
+      : { kind: "next", title: next.title, detail: null };
+  }
+  if (complete) return { kind: "complete", title: t("workflow:summary_complete"), detail: null };
+  const flagged = rows.find((row) => row.tone === "danger") ?? rows.find((row) => row.tone === "warn");
+  if (flagged) {
+    const kind = flagged.tone === "danger" ? "danger" : "warn";
+    return { kind, title: t(`workflow:headline_${kind}`, { title: flagged.title }), detail: flagged.status };
+  }
+  return { kind: "none", title: t("workflow:headline_none"), detail: null };
 }
