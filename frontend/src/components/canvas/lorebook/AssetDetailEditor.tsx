@@ -299,6 +299,7 @@ export function AssetDetailEditor({
                   detail={generateDetailText}
                   menu={
                     <AssetSheetGenerateItems
+                      flat
                       options={modelOptions}
                       hasImage={Boolean(gallery.sheetPath)}
                       disabled={!describable || busy}

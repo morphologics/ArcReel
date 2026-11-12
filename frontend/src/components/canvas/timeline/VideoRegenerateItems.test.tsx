@@ -87,4 +87,38 @@ describe("VideoRegenerateItems", () => {
     fireEvent.click(await screen.findByRole("menuitem", { name: /生成分镜.*Seedream 4\.5.*0\.04/ }));
     expect(onGenerate).toHaveBeenCalledWith(null);
   });
+
+  it("flat (the Generate button's ▾): only the other models, no repeat of the configured one", async () => {
+    vi.spyOn(API, "getModelCandidates").mockResolvedValue(CANDIDATES as never);
+    vi.spyOn(API, "quoteVideoModels").mockResolvedValue({
+      current: "runware/minimax",
+      quotes: {
+        "runware/minimax": { cost: { amount: 0.5, currency: "USD", unpriced_reason: null }, duration_supported: true, supported_durations: [6] },
+        "runware/seedance": { cost: { amount: 0.3, currency: "USD", unpriced_reason: null }, duration_supported: true, supported_durations: [6] },
+      },
+    });
+    const onGenerate = vi.fn();
+    render(
+      <ContextMenu.Root open>
+        <ContextMenu.Trigger render={<div />}>video</ContextMenu.Trigger>
+        <DropdownMenuContent>
+          <VideoRegenerateItems
+            projectName="demo"
+            segmentId="E1S01"
+            scriptFile="episode_1.json"
+            durationSeconds={6}
+            hasVideo
+            disabled={false}
+            onGenerate={onGenerate}
+            flat
+          />
+        </DropdownMenuContent>
+      </ContextMenu.Root>,
+    );
+
+    fireEvent.click(await screen.findByRole("menuitem", { name: /Seedance.*0\.30/ }));
+    expect(onGenerate).toHaveBeenCalledWith("runware/seedance");
+    expect(screen.queryByRole("menuitem", { name: /MiniMax H3/ })).not.toBeInTheDocument();
+    expect(screen.getAllByRole("menuitem")).toHaveLength(1);
+  });
 });

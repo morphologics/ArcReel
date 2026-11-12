@@ -1105,10 +1105,12 @@ export function ShotDetail({
     </>
   );
 
-  // the model choices of the storyboard image and the video: the right-click menu and the Generate button's ▾
-  const storyboardGenerateItems =
+  // the model choices of the storyboard image and the video: the right-click menu, and (flat: only the other
+  // models) the Generate button's ▾
+  const storyboardGenerateItems = (flat = false) =>
     !readOnly && scriptFile && onGenerateStoryboard ? (
       <StoryboardGenerateItems
+        flat={flat}
         projectName={projectName}
         segmentId={segmentId}
         scriptFile={scriptFile}
@@ -1119,9 +1121,10 @@ export function ShotDetail({
         }
       />
     ) : null;
-  const videoGenerateItems =
+  const videoGenerateItems = (flat = false) =>
     !readOnly && scriptFile && onGenerateVideo ? (
       <VideoRegenerateItems
+        flat={flat}
         projectName={projectName}
         segmentId={segmentId}
         scriptFile={scriptFile}
@@ -1148,7 +1151,7 @@ export function ShotDetail({
       }
       generateLabel={generateLabel}
       generateModelName={storyboardModel?.name}
-      generateMenu={storyboardGenerateItems}
+      generateMenu={storyboardGenerateItems(true)}
       restoring={restoringMedia}
       onRestoringChange={setRestoringMedia}
       checkBusy={() => uploadingKind !== null || saving || isScriptFileBusy("grid", scriptFile, projectName)}
@@ -1163,7 +1166,7 @@ export function ShotDetail({
       contextMenuItems={
         readOnly ? undefined : (
           <>
-            {storyboardGenerateItems}
+            {storyboardGenerateItems()}
             {imageMenuItems}
           </>
         )
@@ -1197,7 +1200,7 @@ export function ShotDetail({
         onGenerate={onGenerateVideo ? () => void unit.saveAndGenerate(() => onGenerateVideo(segmentId)) : undefined}
         generateLabel={generateLabel}
         generateModelName={videoModel?.name}
-        generateMenu={videoGenerateItems}
+        generateMenu={videoGenerateItems(true)}
         restoring={restoringMedia}
         onRestoringChange={setRestoringMedia}
         checkBusy={() => uploadingKind !== null || saving || endFrameSubmitting || isScriptFileBusy("grid", scriptFile, projectName)}
@@ -1225,9 +1228,7 @@ export function ShotDetail({
             />
           ) : undefined
         }
-        contextMenuItems={
-          videoGenerateItems
-        }
+        contextMenuItems={videoGenerateItems()}
       />
     </>
   );

@@ -453,6 +453,7 @@ export function CharacterDerivativeRow({
               detail={generateDetail(derivativeModel?.name, derivativeModel?.cost)}
               menu={
                 <DerivativeGenerateItems
+                  flat
                   projectName={projectName}
                   hasImage={Boolean(sheetPath)}
                   disabled={rowBusy || saving || !ownerHasSheet || !describable}

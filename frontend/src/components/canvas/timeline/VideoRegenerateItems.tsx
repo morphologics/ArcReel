@@ -3,6 +3,7 @@ import { useTranslation } from "react-i18next";
 import { Film, ImageIcon, Sparkles } from "lucide-react";
 import { API } from "@/api";
 import {
+  DropdownMenuGroup,
   DropdownMenuItem,
   DropdownMenuSeparator,
   DropdownMenuSub,
@@ -54,6 +55,8 @@ function describe(candidates: ModelCandidatesResponse, pair: string): Pick<Model
  * Right-click items that (re)generate a shot's media: "<Generate|Regenerate> — <configured model> (~cost)" and
  * "<…> with ›" listing the enabled models with their estimated cost for this shot; models that can't be used are
  * shown disabled with the reason. The options load when the menu opens.
+ * `flat`: the Generate button's ▾ menu — the button itself is the configured model, so only the other models,
+ * under a "<…> with" heading, without the submenu.
  */
 function ModelGenerateItems({
   icon: Icon,
@@ -62,6 +65,7 @@ function ModelGenerateItems({
   disabled,
   load,
   onGenerate,
+  flat = false,
 }: {
   icon: typeof Film;
   label: string;
@@ -70,6 +74,7 @@ function ModelGenerateItems({
   load: (signal: AbortSignal) => Promise<ModelOptions>;
   /** null: the configured model. */
   onGenerate: (model: string | null) => void;
+  flat?: boolean;
 }) {
   const { t } = useTranslation(["dashboard", "common"]);
   const [options, setOptions] = useState<ModelOptions | null>(null);
@@ -86,6 +91,27 @@ function ModelGenerateItems({
 
   const current = options?.models.find((m) => m.pair === options.current);
   const others = options?.models.filter((m) => m.pair !== options.current) ?? [];
+  const otherItems = failed ? (
+    <DropdownMenuItem disabled>{t("generate_models_load_failed")}</DropdownMenuItem>
+  ) : !options ? (
+    <DropdownMenuItem disabled>{t("common:loading")}</DropdownMenuItem>
+  ) : others.length === 0 ? (
+    <DropdownMenuItem disabled>{t("generate_models_none_other")}</DropdownMenuItem>
+  ) : (
+    others.map((m) => (
+      <DropdownMenuItem key={m.pair} disabled={disabled || m.reason !== null} onClick={() => onGenerate(m.pair)}>
+        <span className="flex min-w-0 flex-1 flex-col">
+          <span className="text-sm">
+            {m.name}
+            <span className="text-xs text-muted-foreground"> · {m.provider}</span>
+          </span>
+          {m.reason && <span className="text-xs text-muted-foreground">{m.reason}</span>}
+        </span>
+        <span className="num ml-3 text-xs text-muted-foreground">{m.cost ?? (m.reason ? "" : "—")}</span>
+      </DropdownMenuItem>
+    ))
+  );
+  if (flat) return <DropdownMenuGroup label={withLabel}>{otherItems}</DropdownMenuGroup>;
   return (
     <>
       <DropdownMenuItem disabled={disabled} onClick={() => onGenerate(null)}>
@@ -101,28 +127,7 @@ function ModelGenerateItems({
           <Icon aria-hidden />
           {withLabel}
         </DropdownMenuSubTrigger>
-        <DropdownMenuSubContent className="relative max-h-[70vh] min-w-64 overflow-y-auto">
-          {failed ? (
-            <DropdownMenuItem disabled>{t("generate_models_load_failed")}</DropdownMenuItem>
-          ) : !options ? (
-            <DropdownMenuItem disabled>{t("common:loading")}</DropdownMenuItem>
-          ) : others.length === 0 ? (
-            <DropdownMenuItem disabled>{t("generate_models_none_other")}</DropdownMenuItem>
-          ) : (
-            others.map((m) => (
-              <DropdownMenuItem key={m.pair} disabled={m.reason !== null} onClick={() => onGenerate(m.pair)}>
-                <span className="flex min-w-0 flex-1 flex-col">
-                  <span className="text-sm">
-                    {m.name}
-                    <span className="text-xs text-muted-foreground"> · {m.provider}</span>
-                  </span>
-                  {m.reason && <span className="text-xs text-muted-foreground">{m.reason}</span>}
-                </span>
-                <span className="num ml-3 text-xs text-muted-foreground">{m.cost ?? (m.reason ? "" : "—")}</span>
-              </DropdownMenuItem>
-            ))
-          )}
-        </DropdownMenuSubContent>
+        <DropdownMenuSubContent className="relative max-h-[70vh] min-w-64 overflow-y-auto">{otherItems}</DropdownMenuSubContent>
       </DropdownMenuSub>
       <DropdownMenuSeparator />
     </>
@@ -138,6 +143,7 @@ export function VideoRegenerateItems({
   hasVideo,
   disabled,
   onGenerate,
+  flat,
 }: {
   projectName: string;
   segmentId: string;
@@ -146,6 +152,8 @@ export function VideoRegenerateItems({
   hasVideo: boolean;
   disabled: boolean;
   onGenerate: (videoModel: string | null) => void;
+  /** the Generate button's ▾ menu: only the other models (see ModelGenerateItems) */
+  flat?: boolean;
 }) {
   const { t } = useTranslation("dashboard");
   const load = useCallback(async (signal: AbortSignal): Promise<ModelOptions> => {
@@ -183,6 +191,7 @@ export function VideoRegenerateItems({
       disabled={disabled}
       load={load}
       onGenerate={onGenerate}
+      flat={flat}
     />
   );
 }
@@ -196,6 +205,7 @@ export function StoryboardGenerateItems({
   hasImage,
   disabled,
   onGenerate,
+  flat,
 }: {
   projectName: string;
   segmentId: string;
@@ -203,6 +213,8 @@ export function StoryboardGenerateItems({
   hasImage: boolean;
   disabled: boolean;
   onGenerate: (imageModel: string | null) => void;
+  /** the Generate button's ▾ menu: only the other models (see ModelGenerateItems) */
+  flat?: boolean;
 }) {
   const { t } = useTranslation("dashboard");
   const load = useCallback(async (signal: AbortSignal): Promise<ModelOptions> => {
@@ -232,6 +244,7 @@ export function StoryboardGenerateItems({
       disabled={disabled}
       load={load}
       onGenerate={onGenerate}
+      flat={flat}
     />
   );
 }
@@ -290,11 +303,14 @@ export function AssetSheetGenerateItems({
   hasImage,
   disabled,
   onGenerate,
+  flat,
 }: {
   options: ModelOptions | null;
   hasImage: boolean;
   disabled: boolean;
   onGenerate: (imageModel: string | null) => void;
+  /** the Generate button's ▾ menu: only the other models (see ModelGenerateItems) */
+  flat?: boolean;
 }) {
   const { t } = useTranslation("dashboard");
   const load = useCallback(
@@ -309,6 +325,7 @@ export function AssetSheetGenerateItems({
       disabled={disabled}
       load={load}
       onGenerate={onGenerate}
+      flat={flat}
     />
   );
 }
@@ -401,11 +418,14 @@ export function DerivativeGenerateItems({
   hasImage,
   disabled,
   onGenerate,
+  flat,
 }: {
   projectName: string;
   hasImage: boolean;
   disabled: boolean;
   onGenerate: (imageModel: string | null) => void;
+  /** the Generate button's ▾ menu: only the other models (see ModelGenerateItems) */
+  flat?: boolean;
 }) {
   const { t } = useTranslation(["dashboard", "assets"]);
   const load = useCallback(async (): Promise<ModelOptions> => {
@@ -429,6 +449,7 @@ export function DerivativeGenerateItems({
       disabled={disabled}
       load={load}
       onGenerate={onGenerate}
+      flat={flat}
     />
   );
 }
