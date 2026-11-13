@@ -2221,6 +2221,8 @@ export default {
   'project_switcher_load_failed': '项目列表加载失败：{{message}}',
   'project_switcher_all': '全部项目',
   'global_settings': '全局设置',
+  'full_screen': '全屏',
+  'exit_full_screen': '退出全屏',
   'notifications_session_hint': '通知只在当前会话中保留',
   'remove_notification': '移除这条通知',
   'workspace_not_found_title': '这个页面不存在',

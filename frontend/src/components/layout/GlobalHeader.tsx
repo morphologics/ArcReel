@@ -22,6 +22,7 @@ import { ProjectStatusBar } from "./ProjectStatusBar";
 import { useProjectExport } from "./useProjectExport";
 import { WorkspaceNotifications } from "./WorkspaceNotificationsDrawer";
 import { DownloadsIndicator } from "./DownloadsIndicator";
+import { FullScreenToggle } from "./FullScreenToggle";
 import { GenerationQueueIndicator } from "./GenerationQueueIndicator";
 import { RenderQueueIndicator } from "./RenderQueueIndicator";
 import { COMPACT_HEADER_QUERY, useMediaQuery } from "@/hooks/useMediaQuery";
@@ -121,6 +122,8 @@ export function GlobalHeader() {
         <span aria-hidden className="h-4 w-px shrink-0 bg-border" />
         <ProjectMenu />
         {demoMode && <DemoReadOnlyBadge />}
+        {/* the whole app full screen (like F11); while on, an "Exit full screen" link here */}
+        <FullScreenToggle />
       </div>
 
       <div className="flex min-w-0 justify-center overflow-hidden">

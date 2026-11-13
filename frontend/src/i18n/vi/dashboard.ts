@@ -2588,6 +2588,8 @@ export default {
   'project_switcher_load_failed': 'Không tải được danh sách dự án: {{message}}',
   'project_switcher_all': 'Tất cả dự án',
   'global_settings': 'Cài đặt chung',
+  'full_screen': 'Toàn màn hình',
+  'exit_full_screen': 'Thoát toàn màn hình',
   'notifications_session_hint': 'Thông báo chỉ được giữ trong phiên hiện tại',
   'remove_notification': 'Xóa thông báo này',
   'workspace_not_found_title': 'Trang này không tồn tại',

@@ -2292,6 +2292,8 @@ export default {
   'project_switcher_load_failed': 'Не удалось загрузить проекты: {{message}}',
   'project_switcher_all': 'Все проекты',
   'global_settings': 'Общие настройки',
+  'full_screen': 'Полноэкранный режим',
+  'exit_full_screen': 'Выйти из полноэкранного режима',
   'notifications_session_hint': 'Уведомления хранятся только в течение этого сеанса',
   'remove_notification': 'Удалить уведомление',
   'workspace_not_found_title': 'Такой страницы нет',

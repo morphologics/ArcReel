@@ -2222,6 +2222,8 @@ export default {
   'project_switcher_load_failed': 'Couldn\'t load projects: {{message}}',
   'project_switcher_all': 'All projects',
   'global_settings': 'Global settings',
+  'full_screen': 'Full screen',
+  'exit_full_screen': 'Exit full screen',
   'notifications_session_hint': 'Notifications are kept for this session only',
   'remove_notification': 'Remove notification',
   'workspace_not_found_title': 'This page doesn\'t exist',
