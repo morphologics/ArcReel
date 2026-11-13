@@ -1,9 +1,11 @@
 import { useId, type ReactNode } from "react";
+import { Focus, Minimize } from "lucide-react";
+import { cn } from "cn";
 import { useTranslation } from "react-i18next";
 
+import { Button } from "@/components/ui/button";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { FullScreenToggle } from "@/components/layout/FullScreenToggle";
 
 import { episodeViewTabId, type EpisodeView, type EpisodeViewTab } from "./episode-view";
 
@@ -44,6 +46,7 @@ export function EpisodePageHeader({
   boardLabel,
   onActionsSlot,
   compact = false,
+  focus = null,
 }: {
   head: ReactNode;
   /** 制作进度入口；演示项目没有。 */
@@ -56,6 +59,11 @@ export function EpisodePageHeader({
   onActionsSlot: (node: HTMLDivElement | null) => void;
   /** One row instead of two (see above). */
   compact?: boolean;
+  /**
+   * Edit view focus mode (compact only): a Focus button right of the tabs; while `on`, the row holds only the episode
+   * switcher and "Exit focus" (head, tabs, actions and progress hidden).
+   */
+  focus?: { on: boolean; onEnter: () => void; onExit: () => void; switcher: ReactNode } | null;
 }) {
   const { t } = useTranslation("dashboard");
   const label: Record<EpisodeView, string> = {
@@ -84,11 +92,20 @@ export function EpisodePageHeader({
   // the right-hand group (Edit view: its actions such as Render, then Production progress; other views: Production
   // progress). The tabs keep their full width; the head shrinks first (its title truncates).
   const centredTabs = <div className="flex flex-1 justify-center">{viewTabs}</div>;
-  // Edit view: the whole-app full screen (same as the top bar's) also right of the tabs, where the player work is
-  const centredTabsWithFullScreen = (
+  // Edit view: right of the tabs, the button into focus mode (the Edit view alone, full screen, no app chrome)
+  const centredTabsWithFocus = (
     <div className="flex flex-1 items-center justify-center gap-1">
       {viewTabs}
-      <FullScreenToggle />
+      {focus && (
+        <Tooltip>
+          <TooltipTrigger
+            render={<Button variant="ghost" size="icon-sm" aria-label={t("edit_focus")} onClick={focus.onEnter} />}
+          >
+            <Focus aria-hidden />
+          </TooltipTrigger>
+          <TooltipContent side="bottom">{t("edit_focus_hint")}</TooltipContent>
+        </Tooltip>
+      )}
     </div>
   );
   const headSlot = <div className="flex min-w-0 shrink">{head}</div>;
@@ -96,12 +113,20 @@ export function EpisodePageHeader({
     return (
       <header className="shrink-0 border-b border-border">
         <div className="flex h-11 items-center gap-3 px-3">
-          {headSlot}
-          {centredTabsWithFullScreen}
-          <div className="relative flex min-w-0 shrink overflow-x-auto">
+          {focus?.on ? focus.switcher : headSlot}
+          {focus?.on ? <span className="flex-1" /> : centredTabsWithFocus}
+          {/* the actions slot stays mounted (the Edit view portals its Render button into it), hidden in focus mode */}
+          <div className={cn("relative flex min-w-0 shrink overflow-x-auto", focus?.on && "hidden")}>
             <div ref={onActionsSlot} className="ml-auto flex shrink-0 items-center gap-1.5" />
           </div>
-          {progress}
+          {focus?.on ? (
+            <Button variant="ghost" size="sm" onClick={focus.onExit}>
+              <Minimize aria-hidden data-icon="inline-start" />
+              {t("edit_focus_exit")}
+            </Button>
+          ) : (
+            progress
+          )}
         </div>
       </header>
     );

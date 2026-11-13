@@ -18,6 +18,7 @@ import {
   useAppStore,
 } from "@/stores/app-store";
 import { GlobalHeader } from "./GlobalHeader";
+import { useEditFocusStore } from "@/stores/edit-focus-store";
 import { AssetSidebar } from "./AssetSidebar";
 import { TaskFailureListener } from "./TaskFailureListener";
 import { ScriptGenerationNoticeListener } from "./ScriptGenerationNoticeListener";
@@ -55,6 +56,25 @@ interface StudioLayoutProps {
  * - 尺寸容器：侧栏 `@container/sidebar`，画布 `@container/canvas`（宽度查询），Agent 面板
  *   `@container-size/agent`（宽高都可查询，输入框的 `40cqh` 按面板高度计算）。
  */
+/**
+ * Run a panel resize / collapse now, or on the next frames if the panel library hasn't registered the panel yet (it
+ * throws "Panel constraints not found" for a panel that just remounted, e.g. after the Edit view's focus mode).
+ * Returns a cleanup that cancels a pending retry.
+ */
+function applyWhenRegistered(apply: () => void, attempts = 5): () => void {
+  let frame = 0;
+  const run = (left: number) => {
+    try {
+      apply();
+    } catch (err) {
+      if (left <= 0) throw err;
+      frame = requestAnimationFrame(() => run(left - 1));
+    }
+  };
+  run(attempts);
+  return () => cancelAnimationFrame(frame);
+}
+
 export function StudioLayout({ children }: StudioLayoutProps) {
   const { t } = useTranslation("dashboard");
   const [location] = useLocation();
@@ -73,6 +93,8 @@ export function StudioLayout({ children }: StudioLayoutProps) {
 
   const compact = useCompactTier();
   const storeOpen = useAppStore((s) => s.assistantPanelOpen);
+  // Edit view focus mode: no top bar, sidebar or Agent panel (the canvas takes the whole window)
+  const focusOn = useEditFocusStore((s) => s.on);
   const toggleAssistantPanel = useAppStore((s) => s.toggleAssistantPanel);
   const agentWidth = useAppStore((s) => s.assistantPanelWidth);
   // 演示面板不可收起，也不覆盖画布：引导后面几步要在画布上高亮
@@ -117,19 +139,27 @@ export function StudioLayout({ children }: StudioLayoutProps) {
 
   // 面板的 defaultSize 是双击手柄复位到的默认宽度；挂载时与之后的开合、折叠都在这里按记住的宽度落到面板上。
   useLayoutEffect(() => {
-    const panel = sidebarPanelRef.current;
-    if (!panel) return;
-    if (sidebarCollapsed) panel.collapse();
-    else panel.resize(sidebarWidthRef.current);
-  }, [sidebarCollapsed, sidebarPanelRef]);
+    // focusOn: the panel comes back after focus mode and gets its remembered state again; right after it remounts
+    // the library may not have registered it yet ("Panel constraints not found"), so retry on the next frames
+    return applyWhenRegistered(() => {
+      const panel = sidebarPanelRef.current;
+      if (!panel) return;
+      if (sidebarCollapsed) panel.collapse();
+      else panel.resize(sidebarWidthRef.current);
+    });
+  }, [sidebarCollapsed, sidebarPanelRef, focusOn]);
 
-  useLayoutEffect(() => {
-    const panel = agentPanelRef.current;
-    if (!panel) return;
-    // 开合时宽度瞬时切换，不做宽度动画：给宽度做动画会让画布逐帧重新排版
-    if (agentOpen) panel.resize(latest.current.agentWidth);
-    else panel.collapse();
-  }, [agentOpen, agentPanelRef]);
+  useLayoutEffect(
+    () =>
+      applyWhenRegistered(() => {
+        const panel = agentPanelRef.current;
+        if (!panel) return;
+        // 开合时宽度瞬时切换，不做宽度动画：给宽度做动画会让画布逐帧重新排版
+        if (agentOpen) panel.resize(latest.current.agentWidth);
+        else panel.collapse();
+      }),
+    [agentOpen, agentPanelRef, focusOn],
+  );
 
   const rememberSidebarWidth = useCallback((width: number) => {
     if (width < SIDEBAR_MIN_WIDTH) return;
@@ -244,27 +274,32 @@ export function StudioLayout({ children }: StudioLayoutProps) {
     <div ref={shellRef} className="relative flex h-dvh flex-col overflow-hidden text-foreground">
       <TaskFailureListener projectName={sseProjectName} />
       <ScriptGenerationNoticeListener />
-      <GlobalHeader />
+      {!focusOn && <GlobalHeader />}
       <ResizablePanelGroup className="min-h-0 flex-1" onLayoutChanged={handleLayoutChanged}>
-        <ResizablePanel
-          id="workspace-sidebar"
-          panelRef={sidebarPanelRef}
-          collapsible
-          collapsedSize={SIDEBAR_RAIL_WIDTH}
-          minSize={SIDEBAR_MIN_WIDTH}
-          maxSize={SIDEBAR_MAX_WIDTH}
-          defaultSize={SIDEBAR_DEFAULT_WIDTH}
-          groupResizeBehavior="preserve-pixel-size"
-        >
-          <AssetSidebar collapsed={sidebarCollapsed} onCollapsedChange={setSidebarCollapsed} />
-        </ResizablePanel>
-        <WorkspaceResizeHandle
-          panelRef={sidebarPanelRef}
-          panelSide="before"
-          onKeyboardResize={(width) => resizeByKeyboard(sidebarPanelRef, width)}
-          label={t("resize_sidebar")}
-          disabled={sidebarCollapsed}
-        />
+        {/* focus mode (Edit view): no sidebar */}
+        {!focusOn && (
+          <>
+          <ResizablePanel
+            id="workspace-sidebar"
+            panelRef={sidebarPanelRef}
+            collapsible
+            collapsedSize={SIDEBAR_RAIL_WIDTH}
+            minSize={SIDEBAR_MIN_WIDTH}
+            maxSize={SIDEBAR_MAX_WIDTH}
+            defaultSize={SIDEBAR_DEFAULT_WIDTH}
+            groupResizeBehavior="preserve-pixel-size"
+          >
+            <AssetSidebar collapsed={sidebarCollapsed} onCollapsedChange={setSidebarCollapsed} />
+          </ResizablePanel>
+          <WorkspaceResizeHandle
+            panelRef={sidebarPanelRef}
+            panelSide="before"
+            onKeyboardResize={(width) => resizeByKeyboard(sidebarPanelRef, width)}
+            label={t("resize_sidebar")}
+            disabled={sidebarCollapsed}
+          />
+          </>
+        )}
         <ResizablePanel
           id="workspace-canvas"
           minSize={overlay ? 0 : CANVAS_MIN_WIDTH}
@@ -282,43 +317,48 @@ export function StudioLayout({ children }: StudioLayoutProps) {
             {children}
           </main>
         </ResizablePanel>
-        {/* 面板收起时手柄贴在分栏右缘，命中区会伸出外壳，因此隐藏；手柄仍留在 DOM 里并禁用，库就不在这条边界上生成拖动区域 */}
-        <WorkspaceResizeHandle
-          panelRef={agentPanelRef}
-          panelSide="after"
-          onKeyboardResize={(width) => resizeByKeyboard(agentPanelRef, width)}
-          label={t("resize_assistant_panel")}
-          disabled={!agentOpen || demoMode}
-          hidden={!agentOpen}
-        />
-        <ResizablePanel
-          id="workspace-agent"
-          panelRef={agentPanelRef}
-          collapsible
-          collapsedSize={0}
-          minSize={ASSISTANT_PANEL_MIN_WIDTH}
-          maxSize={ASSISTANT_PANEL_MAX_WIDTH}
-          defaultSize={ASSISTANT_PANEL_DEFAULT_WIDTH}
-          groupResizeBehavior="preserve-pixel-size"
-          onResize={handleAgentResize}
-          // 收起后宽度为 0，内容保持最小宽度挂载在原处、不可见，由这一层裁掉
-          // eslint-disable-next-line shadcn/no-inline-styles -- 覆盖库写在内层的内联 overflow
-          style={{ overflow: "hidden" }}
-        >
-          <aside
-            ref={agentFrameRef}
-            id={AGENT_PANEL_ID}
-            aria-label={t("agent_panel_label")}
-            inert={!agentOpen}
-            className={cn(
-              "@container-size/agent relative h-full w-full min-w-80 transition-opacity duration-fast",
-              overlay ? "bg-popover shadow-overlay" : "bg-card",
-              !agentOpen && "invisible opacity-0",
-            )}
+        {/* focus mode (Edit view): no Agent panel */}
+        {!focusOn && (
+          <>
+          {/* 面板收起时手柄贴在分栏右缘，命中区会伸出外壳，因此隐藏；手柄仍留在 DOM 里并禁用，库就不在这条边界上生成拖动区域 */}
+          <WorkspaceResizeHandle
+            panelRef={agentPanelRef}
+            panelSide="after"
+            onKeyboardResize={(width) => resizeByKeyboard(agentPanelRef, width)}
+            label={t("resize_assistant_panel")}
+            disabled={!agentOpen || demoMode}
+            hidden={!agentOpen}
+          />
+          <ResizablePanel
+            id="workspace-agent"
+            panelRef={agentPanelRef}
+            collapsible
+            collapsedSize={0}
+            minSize={ASSISTANT_PANEL_MIN_WIDTH}
+            maxSize={ASSISTANT_PANEL_MAX_WIDTH}
+            defaultSize={ASSISTANT_PANEL_DEFAULT_WIDTH}
+            groupResizeBehavior="preserve-pixel-size"
+            onResize={handleAgentResize}
+            // 收起后宽度为 0，内容保持最小宽度挂载在原处、不可见，由这一层裁掉
+            // eslint-disable-next-line shadcn/no-inline-styles -- 覆盖库写在内层的内联 overflow
+            style={{ overflow: "hidden" }}
           >
-            {demoMode ? <DemoAssistantPanel /> : <AgentCopilot />}
-          </aside>
-        </ResizablePanel>
+            <aside
+              ref={agentFrameRef}
+              id={AGENT_PANEL_ID}
+              aria-label={t("agent_panel_label")}
+              inert={!agentOpen}
+              className={cn(
+                "@container-size/agent relative h-full w-full min-w-80 transition-opacity duration-fast",
+                overlay ? "bg-popover shadow-overlay" : "bg-card",
+                !agentOpen && "invisible opacity-0",
+              )}
+            >
+              {demoMode ? <DemoAssistantPanel /> : <AgentCopilot />}
+            </aside>
+          </ResizablePanel>
+          </>
+        )}
       </ResizablePanelGroup>
     </div>
   );

@@ -39,6 +39,8 @@ import {
 import { EpisodeHead } from "./EpisodeHead";
 import { EpisodeHeaderActions, EpisodeHeaderSlotProvider } from "./EpisodeHeaderActions";
 import { EpisodePageHeader } from "./EpisodePageHeader";
+import { EpisodeSwitcher } from "./EpisodeSwitcher";
+import { useEditFocusStore } from "@/stores/edit-focus-store";
 import { EpisodeViewFactsProvider } from "./EpisodeViewScope";
 import { StorySettingView } from "./StorySettingView";
 
@@ -105,6 +107,14 @@ function EpisodePageContent({
   );
   const tabs = useMemo(() => episodeViewTabs(facts), [facts]);
   const view = resolveEpisodeView(searchParams.get(EPISODE_VIEW_PARAM), facts);
+  // Edit view focus mode (useEditFocusStore): ends when leaving the Edit view or this page
+  const focusOn = useEditFocusStore((s) => s.on);
+  const enterFocus = useEditFocusStore((s) => s.enter);
+  const exitFocus = useEditFocusStore((s) => s.exit);
+  useEffect(() => {
+    if (view !== "edit") exitFocus();
+  }, [view, exitFocus]);
+  useEffect(() => () => exitFocus(), [exitFocus]);
 
   // 切到不可选的视图不生效；切到当前视图不写历史。
   const changeView = useCallback(
@@ -233,6 +243,18 @@ function EpisodePageContent({
           onActionsSlot={setActionsSlot}
           // the Edit view needs the height for its player
           compact={view === "edit"}
+          focus={
+            view === "edit"
+              ? {
+                  on: focusOn,
+                  onEnter: enterFocus,
+                  onExit: exitFocus,
+                  switcher: (
+                    <EpisodeSwitcher projectName={projectName} episodes={projectData?.episodes ?? []} current={episode} />
+                  ),
+                }
+              : null
+          }
         />
         {/* Render shortcut on the views other than Edit (the Edit view places its own via EditTimelineView) */}
         {!demo && view !== "edit" && (
