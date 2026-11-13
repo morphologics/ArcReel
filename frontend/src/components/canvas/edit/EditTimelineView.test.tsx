@@ -105,6 +105,7 @@ function renderView(ttsNarration = true) {
 
 describe("EditTimelineView", () => {
   beforeEach(() => {
+    localStorage.removeItem("arcreel.editTimeline.detailsOpen");
     useProjectsStore.setState({ projectSnapshotRevisions: {} });
     stubMediaElementPlayback();
     vi.spyOn(API, "getEditTimelinePreviewMedia").mockResolvedValue({
@@ -400,9 +401,27 @@ describe("EditTimelineView", () => {
     fireEvent.click(screen.getByRole("button", { name: "收起片段详情与问题" }));
     expect(screen.queryByRole("heading", { name: "问题（0）" })).not.toBeInTheDocument();
 
-    // selecting a clip opens it again, on the clip's details
+    // selecting a clip leaves it as the viewer left it (closed)
     fireEvent.click(screen.getByTestId("edit-clip-c3"));
-    expect(screen.getByTestId("edit-clip-inspector")).toBeInTheDocument();
+    expect(screen.queryByTestId("edit-clip-inspector")).not.toBeInTheDocument();
+    expect(localStorage.getItem("arcreel.editTimeline.detailsOpen")).toBe("0");
+  });
+
+  it("opens the column once for issues, then keeps the viewer's choice in every later view", async () => {
+    vi.spyOn(API, "listEditTimelines").mockResolvedValue({
+      timelines: [summary("tl-00000002", "初剪", "2026-09-30T10:00:00Z", 3)],
+    });
+    vi.spyOn(API, "getEditTimeline").mockResolvedValue(INITIAL_CUT);
+
+    const first = renderView();
+    await screen.findByTestId("edit-clip-c3");
+    expect(screen.getByRole("heading", { name: /^问题（/ })).toBeInTheDocument();   // issues: opened once
+    fireEvent.click(screen.getByRole("button", { name: "收起片段详情与问题" }));
+    first.unmount();
+
+    renderView();   // same issues, a new view: the viewer closed it, so it stays closed
+    await screen.findByTestId("edit-clip-c3");
+    expect(screen.queryByRole("heading", { name: /^问题（/ })).not.toBeInTheDocument();
   });
 
   it("keeps the last preview when a refresh fails", async () => {

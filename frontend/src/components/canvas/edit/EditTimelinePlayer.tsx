@@ -1,4 +1,4 @@
-import type { CSSProperties, ReactNode } from "react";
+import type { CSSProperties, MouseEvent, ReactNode } from "react";
 import { ContextMenu } from "@base-ui/react/context-menu";
 import { cn } from "cn";
 import { AlertTriangle, Captions, Loader2, Pause, Play } from "lucide-react";
@@ -6,6 +6,7 @@ import { useTranslation } from "react-i18next";
 
 import { Button } from "@/components/ui/button";
 import { DropdownMenuContent } from "@/components/ui/dropdown-menu";
+import { useEditFocusStore } from "@/stores/edit-focus-store";
 import { Toggle } from "@/components/ui/toggle";
 import type { EditClip } from "@/types/edit-timeline";
 import type { PreviewAspect } from "@/utils/preview-aspect";
@@ -65,6 +66,14 @@ export function EditTimelinePlayer({
   const layout = subtitleLayout(aspect);
   const portrait = aspect === "9:16";
 
+  const toggleFocusFromPicture = (event: MouseEvent) => {
+    // double-clicks on the player's own controls (Play, speed, subtitles) are theirs
+    if ((event.target as Element).closest("button, input, [role=slider], [role=radiogroup], a")) return;
+    const focus = useEditFocusStore.getState();
+    if (focus.on) focus.exit();
+    else focus.enter();
+  };
+
   return (
     <div className="flex h-full min-h-0 flex-col gap-2">
       <div className="flex min-h-0 flex-1 gap-2">
@@ -75,6 +84,9 @@ export function EditTimelinePlayer({
             <div
                 role="region"
                 aria-label={t("edit_view_player_aria")}
+                // double-click on the picture: into focus mode, or back out (like Esc); the Focus button beside the
+                // view tabs is the keyboard way
+                onDoubleClick={toggleFocusFromPicture}
                 className={cn(
                   "group/player @container-size relative overflow-hidden rounded-lg bg-black",
                   portrait

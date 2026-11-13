@@ -387,6 +387,26 @@ const TIMELINE_MIN_HEIGHT = 72;
 const PLAYER_MIN_HEIGHT = 160;
 const TIMELINE_KEY_STEP = 16;
 
+/** The details / issues column's open state as the viewer last left it: "1" open, "0" closed, absent = never set. */
+const DETAILS_OPEN_KEY = "arcreel.editTimeline.detailsOpen";
+
+function readDetailsOpen(): boolean | null {
+  try {
+    const raw = localStorage.getItem(DETAILS_OPEN_KEY);
+    return raw === "1" ? true : raw === "0" ? false : null;
+  } catch {
+    return null;
+  }
+}
+
+function saveDetailsOpen(open: boolean) {
+  try {
+    localStorage.setItem(DETAILS_OPEN_KEY, open ? "1" : "0");
+  } catch {
+    // storage blocked: the column state simply isn't remembered
+  }
+}
+
 function readTimelineHeight(): number | null {
   try {
     const raw = localStorage.getItem(TIMELINE_HEIGHT_KEY);
@@ -489,23 +509,34 @@ function TimelinePreview({
   onViewUnit,
 }: TimelinePreviewProps) {
   const { t } = useTranslation("dashboard");
-  const [selectedClipId, setSelectedClipIdState] = useState<string | null>(null);
-  // The details column folds away to give the player the width. It starts open only when the timeline has
-  // issues to read, opens when a clip is selected, and otherwise stays as the viewer left it (it does not
-  // fold by itself when a refresh clears the issues).
-  // On a phone it starts folded and stays folded on a clip selection (it would cover the player); an "Issues" link
-  // above the preview opens it over the player.
+  const [selectedClipId, setSelectedClipId] = useState<string | null>(null);
+  // The details column folds away to give the player the width. Its open / closed state is the viewer's: kept in this
+  // browser and restored in every episode and view (DETAILS_OPEN_KEY). The only automatic opening: when the timeline
+  // has issues and the viewer has never closed the column, it opens once (and is remembered open); once closed, it
+  // stays closed until the viewer opens it. Selecting a clip doesn't open it.
+  // On a phone it starts folded (it would cover the player); an "Issues" link above the preview opens it over the
+  // player.
   const phone = useMediaQuery(PHONE_QUERY);
-  const [detailsOpen, setDetailsOpen] = useState(() => readout.issues.length > 0 && !isPhoneWidth());
-  const setSelectedClipId = useCallback((clipId: string | null) => {
-    setSelectedClipIdState(clipId);
-    if (clipId !== null && !isPhoneWidth()) setDetailsOpen(true);
+  const [detailsOpen, setDetailsOpenState] = useState(() => {
+    if (isPhoneWidth()) return false;
+    return readDetailsOpen() ?? readout.issues.length > 0;
+  });
+  const setDetailsOpen = useCallback((open: boolean) => {
+    setDetailsOpenState(open);
+    if (!isPhoneWidth()) saveDetailsOpen(open);
   }, []);
+  const hasIssues = readout.issues.length > 0;
+  useEffect(() => {
+    // issues found after the view opened (a refresh): open once, unless the viewer has set the column themselves
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- one-off: issues arrived with a refresh and the viewer has never set the column
+    if (hasIssues && readDetailsOpen() === null && !isPhoneWidth()) setDetailsOpen(true);
+  }, [hasIssues, setDetailsOpen]);
   useEffect(() => {
     if (issuesRequest === 0) return;
-    // eslint-disable-next-line react-hooks/set-state-in-effect -- one-off request from the actions area: unfold the details column so the issue list can take focus
+    // the viewer asked for the issues (the actions area's "show issues"): unfold the column so the list can take focus
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- one-off request from the actions area
     setDetailsOpen(true);
-  }, [issuesRequest]);
+  }, [issuesRequest, setDetailsOpen]);
   // Focus once per request, as soon as the column is open (not again when the viewer later reopens it).
   const handledIssuesRequest = useRef(0);
   useEffect(() => {
