@@ -23,6 +23,11 @@ export interface TimelinePlayback {
   playing: boolean;
   /** 是否已经开始播放过。此前 `<video>` 只需拉元数据与首帧，之后才需要整段缓冲与预载下一段。 */
   started: boolean;
+  /**
+   * The user has moved the playhead (a click or drag on the timeline): from then on the clip there is buffered in
+   * full (`preload="auto"`), so a Play that follows starts at once instead of only then fetching the video data.
+   */
+  primed: boolean;
   /** 当前片段在播放计划里的下标；没有可播放片段时为 -1。 */
   index: number;
   /** 正在显示的 `<video>`。切到下一个片段时，新片段有了画面才换过去，之前停在上一个片段的末帧上。 */
@@ -102,6 +107,50 @@ function bufferAudio({ element: media, url }: AudioEntry, placement: AudioPlacem
   else if (preload === "none" && src !== null && src !== url) media.removeAttribute("src");
 }
 
+/** Bytes fetched from the start of each clip ahead of time: about 1–2 s of these clips' video (fast-start MP4s). */
+const CLIP_START_BYTES = 256 * 1024;
+/** Wait this long after the Edit view opens, so its own requests (timeline, preview data) go first. */
+const CLIP_START_DELAY_MS = 1500;
+/** Clip starts already in this browser's cache this session (the files are immutable: the URL carries a digest). */
+const clipStartsFetched = new Set<string>();
+
+/**
+ * Fetch the first bytes of every clip, one at a time and at low priority, so a jump anywhere on the timeline can start
+ * from the browser cache (the files are served cacheable, with byte ranges) instead of a fresh download. Stopped when
+ * the clips change or the view closes.
+ */
+function useClipStartPrefetch(urls: readonly string[]): void {
+  const key = urls.join("\n");
+  useEffect(() => {
+    const pending = [...new Set(key.split("\n"))].filter((url) => url && !clipStartsFetched.has(url));
+    if (pending.length === 0) return;
+    const controller = new AbortController();
+    const run = async () => {
+      for (const url of pending) {
+        if (controller.signal.aborted) return;
+        try {
+          const response = await fetch(url, {
+            headers: { Range: `bytes=0-${CLIP_START_BYTES - 1}` },
+            credentials: "same-origin",
+            signal: controller.signal,
+            priority: "low",
+          });
+          await response.arrayBuffer();
+          if (response.ok) clipStartsFetched.add(url);
+        } catch {
+          if (controller.signal.aborted) return;
+          // one failed clip doesn't stop the others; it simply loads when played
+        }
+      }
+    };
+    const timer = window.setTimeout(() => void run(), CLIP_START_DELAY_MS);
+    return () => {
+      window.clearTimeout(timer);
+      controller.abort();
+    };
+  }, [key]);
+}
+
 function blockedByPolicy(error: unknown): boolean {
   return (error as { name?: unknown } | null)?.name === "NotAllowedError";
 }
@@ -124,6 +173,7 @@ export function useTimelinePlayback(
   const [playing, setPlaying] = useState(false);
   const [speed, setSpeedState] = useState(storedSpeed);
   const [started, setStarted] = useState(false);
+  const [primed, setPrimed] = useState(false);
   const [index, setIndex] = useState(-1);
   const [visibleSlot, setVisibleSlot] = useState<Slot>(0);
   const [buffering, setBuffering] = useState(false);
@@ -150,6 +200,13 @@ export function useTimelinePlayback(
   const unlocked = useRef(new WeakSet<HTMLMediaElement>());
 
   const element = useCallback((slot: Slot) => (slot === 0 ? refA.current : refB.current), []);
+
+  useClipStartPrefetch(
+    plan.segments.flatMap((segment) => {
+      const url = segment.hasVideo ? sourceUrl(segment) : null;
+      return url ? [url] : [];
+    }),
+  );
 
   const pauseAudio = useCallback(() => {
     audioPool.current.forEach(({ element: audioElement }) => audioElement.pause());
@@ -599,6 +656,7 @@ export function useTimelinePlayback(
     t,
     playing,
     started,
+    primed,
     index,
     visibleSlot,
     videoRefs: [refA, refB],
@@ -607,7 +665,11 @@ export function useTimelinePlayback(
     play,
     pause,
     toggle: () => (runtime.current.playing ? pause() : play()),
-    seek,
+    // the exported seek is the user's (timeline click / drag); play() and pause() use the inner one
+    seek: (to: number) => {
+      setPrimed(true);
+      seek(to);
+    },
     speed,
     setSpeed,
   };

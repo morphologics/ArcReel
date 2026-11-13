@@ -1,1 +1,7 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><title>YouReel Studio</title><rect width="512" height="512" rx="112" fill="#6d5fd3"/><circle cx="256" cy="256" r="160" fill="none" stroke="#ffffff" stroke-width="36"/><path fill="#ffffff" d="M218 186 L334 256 L218 326 Z" stroke="#ffffff" stroke-width="20" stroke-linejoin="round"/></svg>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="300 302 420 420"><title>YouReel</title>
+  <defs><mask id="yr-cut" maskUnits="userSpaceOnUse" x="0" y="0" width="1024" height="1024">
+    <rect width="1024" height="1024" fill="#fff"/>
+    <path fill="#000" d="M480 395 A117 117 0 0 0 597 512 A117 117 0 0 0 480 629 A117 117 0 0 0 363 512 A117 117 0 0 0 480 395 Z"/>
+  </mask></defs>
+  <g mask="url(#yr-cut)" fill="#5A1BB0" stroke="#5A1BB0" stroke-width="116" stroke-linejoin="round"><path d="M384 370 L384 655 L637 512 Z"/></g>
+</svg>

@@ -23,6 +23,7 @@ from lib.jianying_draft.basis import DraftNarration, default_draft_narration, dr
 from lib.project.project_manager import ProjectManager
 from lib.project.resource_paths import resource_relative_path
 from lib.speech.narration_delivery import USE_TTS
+from server.services.presentation.project_state_cache import PROJECT_STATE_CACHE
 from server.services.presentation.presentation_read_model import (
     PresentationReadModelService,
     PresentationUnavailableError,
@@ -107,7 +108,18 @@ class TimelinePreviewService:
         self._presentations = presentation_reader or PresentationReadModelService(projects)
 
     async def media(self, project_name: str, timeline_id: str) -> TimelinePreviewMedia:
-        """按最新修订取素材层；已从脚本删除的视频单元不在结果里。"""
+        """按最新修订取素材层；已从脚本删除的视频单元不在结果里。
+
+        Reused unchanged while the project's files are unchanged (``project_state_cache``): building it re-reads the
+        project's records for every clip, seconds for a long episode."""
+        project_dir = await asyncio.to_thread(self._projects.get_project_path, project_name)
+        return await PROJECT_STATE_CACHE.get_or_compute(
+            project_dir,
+            ("preview-media", project_name, timeline_id),
+            lambda: self._media(project_name, timeline_id),
+        )
+
+    async def _media(self, project_name: str, timeline_id: str) -> TimelinePreviewMedia:
         document = await asyncio.to_thread(lambda: EditTimelineStore(self._projects, project_name).find(timeline_id))
         project = await asyncio.to_thread(self._projects.load_project, project_name)
         project_dir = await asyncio.to_thread(self._projects.get_project_path, project_name)

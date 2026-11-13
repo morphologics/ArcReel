@@ -2,12 +2,17 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 import tempfile
+import threading
+import time
+from collections import OrderedDict
 from pathlib import Path
 
 from lib.infra.async_thread import run_noninterruptible_sync, run_sync_transaction
+from lib.infra.content_digest import FILE_DIGEST_RACY_WINDOW_NS, FileIdentity, file_identity
 from lib.infra.ffmpeg import FfmpegUnavailableError
 from lib.infra.media_probe import MediaProbe, MediaProbeError, probe_media
 from lib.infra.path_safety import safe_resolve
@@ -69,12 +74,71 @@ def resolve_stale_reference_audio(
     return resolved_old
 
 
+class _ProbeCache:
+    """Process-wide LRU of successful probes of files on disk, keyed like the file digest cache by the file's stat
+    identity (device, inode, size, mtime in ns): a regenerated, replaced or restored file has a new identity and is
+    probed again. Thread-safe."""
+
+    def __init__(self, capacity: int) -> None:
+        self._capacity = capacity
+        self._entries: OrderedDict[FileIdentity, MediaProbe] = OrderedDict()
+        self._lock = threading.Lock()
+
+    def get(self, identity: FileIdentity) -> MediaProbe | None:
+        with self._lock:
+            probe = self._entries.get(identity)
+            if probe is not None:
+                self._entries.move_to_end(identity)
+            return probe
+
+    def put(self, identity: FileIdentity, probe: MediaProbe) -> None:
+        with self._lock:
+            self._entries[identity] = probe
+            self._entries.move_to_end(identity)
+            while len(self._entries) > self._capacity:
+                self._entries.popitem(last=False)
+
+    def clear(self) -> None:
+        with self._lock:
+            self._entries.clear()
+
+
+#: Every clip's video and narration file is probed for its duration by several read endpoints on each Edit view
+#: load (preview media, presentations, timeline issues); one ffprobe subprocess each made a 17-clip episode take
+#: seconds per endpoint. MediaProbe is immutable, so a cached one can be shared.
+_PROBE_CACHE = _ProbeCache(4096)
+
+
+def reset_probe_cache_for_tests() -> None:
+    """Empty the probe cache (test isolation)."""
+
+    _PROBE_CACHE.clear()
+
+
 async def _probe_or_none(path: Path) -> MediaProbe | None:
-    """探测已落盘文件；随包 ffmpeg 不可用或文件无法解析时返回 None。"""
+    """探测已落盘文件；随包 ffmpeg 不可用或文件无法解析时返回 None。
+
+    Successful probes are cached by the file's stat identity (``_PROBE_CACHE``), entered only when the file did not
+    change during the probe and is older than the digest cache's racy window, as for file digests."""
     try:
-        return await probe_media(path)
+        before = await asyncio.to_thread(path.stat)
+    except OSError:
+        return None
+    identity = file_identity(before)
+    cached = _PROBE_CACHE.get(identity)
+    if cached is not None:
+        return cached
+    try:
+        probe = await probe_media(path)
     except (FfmpegUnavailableError, MediaProbeError, OSError):
         return None
+    try:
+        after = await asyncio.to_thread(path.stat)
+    except OSError:
+        return probe
+    if file_identity(after) == identity and time.time_ns() - before.st_mtime_ns >= FILE_DIGEST_RACY_WINDOW_NS:
+        _PROBE_CACHE.put(identity, probe)
+    return probe
 
 
 def _write_probe_temp_file(content: bytes, suffix: str, created: list[Path]) -> Path:

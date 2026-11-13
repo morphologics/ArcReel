@@ -92,8 +92,9 @@ export function EditTimelinePlayer({
                 key={slot}
                 ref={ref}
                 playsInline
-                // 播放过之前只拉元数据与定位处的画面；开始播放后整段缓冲，切换片段才能无缝
-                preload={playback.started ? "auto" : "metadata"}
+                // 播放过之前只拉元数据与定位处的画面；开始播放后整段缓冲，切换片段才能无缝。A click on the timeline
+                // (primed) also buffers the clip there, so the Play that follows doesn't wait for its data
+                preload={playback.started || playback.primed ? "auto" : "metadata"}
                 data-testid={`edit-player-video-${slot}`}
                 className="absolute inset-0 size-full object-contain opacity-(--stage-opacity)"
                 style={{ "--stage-opacity": visible ? opacity : 0 } as CSSProperties}

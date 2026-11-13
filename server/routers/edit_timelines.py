@@ -10,6 +10,7 @@ import asyncio
 import shutil
 from collections.abc import Awaitable, Callable
 from functools import partial
+from pathlib import Path
 from typing import TYPE_CHECKING, Annotated, Any, Literal
 
 import jwt
@@ -41,6 +42,7 @@ from lib.jianying_draft.errors import JianyingDraftError
 from lib.jianying_draft.results import JianyingDraftStatus
 from lib.project.project_change_hints import project_change_source
 from lib.project.project_manager import get_project_manager
+from server.services.presentation.project_state_cache import PROJECT_STATE_CACHE
 from lib.workflow.operation_admission import AdmissionState
 from lib.workflow.workflow_state import WorkflowActionType, WorkflowRequestError, WorkflowStateService
 from server.auth import CurrentUser, verify_download_token
@@ -264,15 +266,31 @@ async def create_edit_timeline(
         raise edit_timeline_api_error(exc) from exc
 
 
+async def _project_dir(project_name: str) -> Path | None:
+    """The project's directory for the answer cache; ``None`` (no caching: the endpoint reports the problem itself)
+    when it can't be resolved."""
+    try:
+        return await asyncio.to_thread(get_project_manager().get_project_path, project_name)
+    except Exception:
+        return None
+
+
 @router.get("/projects/{project_name}/episodes/{episode}/edit-overview")
 async def read_episode_edit_overview(
     project_name: str,
     episode: Annotated[int, PathParam(ge=1)],
     read_overview: EpisodeEditOverviewDep,
 ) -> EpisodeEditOverview:
-    """一集的剪辑概况：剪辑时间线条数、最近修改那条的问题数，以及成片已落后的几条。"""
+    """一集的剪辑概况：剪辑时间线条数、最近修改那条的问题数，以及成片已落后的几条。
+
+    Reused while the project's files are unchanged (``project_state_cache``): computing the issue count rebuilds every
+    clip's presentation."""
     try:
-        return await read_overview(project_name, episode)
+        return await PROJECT_STATE_CACHE.get_or_compute(
+            await _project_dir(project_name),
+            ("edit-overview", project_name, episode),
+            lambda: read_overview(project_name, episode),
+        )
     except EditTimelineError as exc:
         raise edit_timeline_api_error(exc) from exc
 
@@ -285,7 +303,13 @@ async def read_edit_timeline(
     revision: int | None = Query(None, ge=1),
 ) -> EditTimelineReadout:
     try:
-        return await service.read(project_name, timeline_id, revision=revision)
+        # reused while the project's files are unchanged (``project_state_cache``): the readout's issues rebuild every
+        # clip's presentation
+        return await PROJECT_STATE_CACHE.get_or_compute(
+            await _project_dir(project_name),
+            ("edit-timeline", project_name, timeline_id, revision),
+            lambda: service.read(project_name, timeline_id, revision=revision),
+        )
     except EditTimelineError as exc:
         raise edit_timeline_api_error(exc) from exc
 
