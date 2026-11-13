@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, type RefObject } from "react";
 
 import { API } from "@/api";
 import type { EditTimelineStream } from "@/types/edit-timeline";
@@ -13,13 +13,14 @@ const STREAM_POLL_MS = 2500;
  * can't play it, or when the timeline can't be rendered (the player keeps its clip-by-clip playback). Asking the
  * server also makes it prepare the missing pieces; after an edit only the touched ones are rebuilt. `planKey` is the
  * player's plan (any string that changes with it): a new shot video changes the plan, not the revision, and the
- * stream is asked for again.
+ * stream is asked for again. `playhead` (seconds) tells the server which missing piece to build first.
  */
 export function useTimelineStream(
   projectName: string,
   timelineId: string | null,
   revision: number | null,
   planKey = "",
+  playhead?: RefObject<number>,
 ): ReadyStream | null {
   // the stream found for a (project, timeline, revision, plan); a different request key shows nothing until its own
   // arrives
@@ -33,7 +34,10 @@ export function useTimelineStream(
     const ask = async () => {
       let stream: EditTimelineStream;
       try {
-        stream = await API.getEditTimelineStream(projectName, timelineId, { signal: controller.signal });
+        stream = await API.getEditTimelineStream(projectName, timelineId, {
+          signal: controller.signal,
+          at: playhead?.current,
+        });
       } catch {
         if (controller.signal.aborted) return;
         timer = window.setTimeout(() => void ask(), STREAM_POLL_MS * 4);   // server busy or restarting: try later
@@ -64,7 +68,7 @@ export function useTimelineStream(
       controller.abort();
       window.clearTimeout(timer);
     };
-  }, [projectName, timelineId, revision, requestKey]);
+  }, [projectName, timelineId, revision, requestKey, playhead]);
 
   return found?.key === requestKey ? found.stream : null;
 }

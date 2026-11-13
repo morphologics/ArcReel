@@ -60,6 +60,8 @@ export interface TimelinePlayback {
    */
   streamElement: RefObject<HTMLVideoElement | null>;
   streamActive: boolean;
+  /** Every piece of the current stream is loaded (the network is free for prefetching other episodes). */
+  streamLoaded: boolean;
   /** Playback speed (1 = normal; PLAYBACK_SPEEDS), remembered in this browser. */
   speed: number;
   setSpeed: (speed: number) => void;
@@ -199,6 +201,7 @@ export function useTimelinePlayback(
   /** Points the attached stream's loader at a new playhead (a seek), so the piece there comes next. */
   const focusStream = useRef<((t: number) => void) | null>(null);
   const [streamActive, setStreamActive] = useState(false);
+  const [loadedStreamId, setLoadedStreamId] = useState<string | null>(null);
   const refB = useRef<HTMLVideoElement>(null);
   const [t, setT] = useState(0);
   const [playing, setPlaying] = useState(false);
@@ -611,7 +614,10 @@ export function useTimelinePlayback(
     const attached = attachStream(streamVideo, stream, { startAt: runtime.current.t, onProgress: progress });
     focusStream.current = attached.focus;
     attached.ready
-      .then(progress)
+      .then(() => {
+        progress();
+        if (live) setLoadedStreamId(stream.id);
+      })
       .catch(() => {
         // the stream can't be played here: stay on the clip elements
       });
@@ -851,6 +857,7 @@ export function useTimelinePlayback(
     videoRefs: [refA, refB],
     streamElement: refS,
     streamActive,
+    streamLoaded: stream !== null && loadedStreamId === stream.id,
     buffering,
     blocked,
     play,

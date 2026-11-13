@@ -546,10 +546,16 @@ async def lifespan(app: FastAPI):
     from server.services.project.trash_expiry import start_trash_expiry, stop_trash_expiry
 
     trash_expiry = start_trash_expiry(layout)
+    # 剪辑视图的流片段提前生成：每分钟扫一遍各时间线，按空闲优先级补齐缺的片段；随应用关停取消
+    from lib.project.project_manager import get_project_manager
+    from server.services.presentation.timeline_stream import start_stream_prebuild, stop_stream_prebuild
+
+    stream_prebuild = start_stream_prebuild(get_project_manager())
     try:
         async with remote_mcp_host.run():
             yield
     finally:
+        await stop_stream_prebuild(stream_prebuild)
         await stop_trash_expiry(trash_expiry)
         await stop_official_sync(catalog_sync)
         # 运行期异常或关停被取消时同样停掉探针，免得收尾阶段把关停工作误报成卡顿。

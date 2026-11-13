@@ -13,7 +13,7 @@ from lib.final_cut.errors import FinalCutError
 from lib.final_cut.render_plan import OutputProfile, RenderMedia, plan_render, render_clips, stream_profile
 from server.services.presentation import timeline_stream
 from server.services.presentation.project_state_cache import PROJECT_STATE_CACHE
-from server.services.presentation.timeline_stream import TimelineStreamService
+from server.services.presentation.timeline_stream import TimelineStreamService, _next_missing
 
 PROFILE = OutputProfile(width=1080, height=1920, fps=30)
 
@@ -129,3 +129,49 @@ async def test_a_timeline_that_cannot_render_has_no_stream(setup) -> None:
     stream = await service.stream("demo", "tl-1")
 
     assert not stream.available and stream.reason == "final_cut_empty" and stream.pieces == ()
+
+
+def test_the_next_piece_is_the_missing_one_at_the_playhead_then_onwards_then_earlier() -> None:
+    plan = _plan([2_000_000, 1_000_000, 3_000_000])   # segments 0-2 s, 2-3 s, 3-6 s
+    keys = ["a", "b", "c"]
+    assert _next_missing(plan, keys, set(), 2.5) == 1
+    assert _next_missing(plan, keys, {"b"}, 2.5) == 2
+    assert _next_missing(plan, keys, {"b", "c"}, 2.5) == 0
+    assert _next_missing(plan, keys, {"a", "b", "c"}, 2.5) is None
+    assert _next_missing(plan, keys, set(), 0) == 0
+
+
+async def test_the_viewers_playhead_decides_the_build_order(setup) -> None:
+    service, final_cuts, rendered, _ = setup
+    final_cuts.plan = _plan([2_000_000, 1_000_000, 3_000_000])
+
+    await service.stream("demo", "tl-1", at=4.0)
+    await _settle()
+
+    assert rendered == [90, 0, 60]   # frames: the piece at 4 s (from frame 90), then the earlier ones
+
+
+async def test_the_background_sweep_builds_every_timeline_ahead(monkeypatch: pytest.MonkeyPatch) -> None:
+    built: list[tuple[str, bool]] = []
+
+    class _Store:
+        def __init__(self, projects: object, name: str) -> None:
+            self.name = name
+
+        def list_documents(self) -> list[Any]:
+            return [type("Doc", (), {"id": f"tl-{self.name}"})()]
+
+    async def fake_stream(self, project_name, timeline_id, *, at=None, watched=True):
+        built.append((timeline_id, watched))
+        if len(built) == 2:
+            raise asyncio.CancelledError   # end the endless loop after one pass
+
+    monkeypatch.setattr(timeline_stream, "EditTimelineStore", _Store)
+    monkeypatch.setattr(TimelineStreamService, "stream", fake_stream)
+    monkeypatch.setattr(timeline_stream, "PREBUILD_FIRST_DELAY_SECONDS", 0)
+    projects = type("P", (), {"list_projects": lambda self: ["one", "two"]})()
+
+    with pytest.raises(asyncio.CancelledError):
+        await timeline_stream._prebuild_loop(projects)  # type: ignore[arg-type]
+
+    assert built == [("tl-one", False), ("tl-two", False)]

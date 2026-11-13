@@ -95,6 +95,14 @@ function EpisodePageContent({
   const [actionsSlot, setActionsSlot] = useState<HTMLDivElement | null>(null);
 
   const meta = projectData?.episodes?.find((entry) => entry.episode === episode);
+  // the Edit view prefetches these episodes' streams (list order = play order): the next one first, then the previous
+  const episodeOrder = projectData?.episodes;
+  const neighbourEpisodes = useMemo(() => {
+    const order = episodeOrder ?? [];
+    const at = order.findIndex((entry) => entry.episode === episode);
+    if (at < 0) return [];
+    return [order[at + 1], order[at - 1]].flatMap((entry) => (entry ? [entry.episode] : []));
+  }, [episodeOrder, episode]);
   const isAd = projectData?.content_mode === "ad";
   const route = normalizeRoute(projectData?.generation_mode);
   const hasScript = Boolean(script);
@@ -171,6 +179,7 @@ function EpisodePageContent({
           aspect={previewAspect(projectData)}
           ttsNarration={ttsNarration}
           onViewUnit={viewUnit}
+          neighbourEpisodes={neighbourEpisodes}
           renderActions={({ timelineId, timelineName, issues, showIssues }) =>
             // 读取完成前不知道有没有阻断级 issue，先不给出片入口。
             issues === null ? null : (

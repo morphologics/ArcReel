@@ -459,13 +459,19 @@ async def read_edit_timeline_stream(
     project_name: str,
     timeline_id: str,
     service: TimelineStreamServiceDep,
+    at: Annotated[
+        float | None, Query(ge=0, description="The viewer's playhead (s): missing pieces are built from here")
+    ] = None,
+    prefetch: Annotated[
+        bool, Query(description="Asked ahead (a neighbouring episode), not by a viewer: builds at idle priority")
+    ] = False,
 ) -> TimelineStream:
     """The latest revision as gapless stream pieces for the Edit view's player; starts preparing the missing ones.
 
     ``available`` is false (with the final cut's reason) when the timeline can't be rendered; the player then keeps its
     clip-by-clip playback."""
     try:
-        return await service.stream(project_name, timeline_id)
+        return await service.stream(project_name, timeline_id, at=at, watched=not prefetch)
     except EditTimelineError as exc:
         raise edit_timeline_api_error(exc) from exc
 

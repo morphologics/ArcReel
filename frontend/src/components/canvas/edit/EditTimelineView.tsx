@@ -57,6 +57,7 @@ import {
   unitVideoPath,
   unusedUnitIds,
 } from "./timeline-view";
+import { useNeighbourStreamPrefetch } from "./useNeighbourStreamPrefetch";
 import { useTimelineStream } from "./useTimelineStream";
 import { useTimelinePlayback } from "./useTimelinePlayback";
 
@@ -75,6 +76,8 @@ export interface EditTimelineEmptyStateContext {
   reload: () => void;
 }
 
+const NO_EPISODES: readonly number[] = [];
+
 interface EditTimelineViewProps {
   projectName: string;
   episode: number;
@@ -89,6 +92,8 @@ interface EditTimelineViewProps {
   renderEmptyState: (context: EditTimelineEmptyStateContext) => ReactNode;
   /** Open a shot in the episode's Shot view (a clip's right-click "Shot view"); absent = no such entry. */
   onViewUnit?: (unitId: string) => void;
+  /** Episodes to prefetch the stream of once this one's is loaded, next first (absent: none). */
+  neighbourEpisodes?: readonly number[];
 }
 
 /** 应用内链接带来的一次性定位：打开哪条剪辑时间线（缺省为当前选中的）、定位到全局时间的哪一秒（缺省为不动播放头）。 */
@@ -115,6 +120,7 @@ export function EditTimelineView({
   renderActions,
   renderEmptyState,
   onViewUnit,
+  neighbourEpisodes = NO_EPISODES,
 }: EditTimelineViewProps) {
   const { t, i18n } = useTranslation("dashboard");
   const snapshotRevision = useProjectsStore((s) => s.projectSnapshotRevisions[projectName] ?? 0);
@@ -342,6 +348,7 @@ export function EditTimelineView({
             timelineName={selected.name}
             onTimelineChanged={reload}
             onViewUnit={onViewUnit}
+            neighbourEpisodes={neighbourEpisodes}
           />
         ) : current && "error" in current ? (
           <LoadFailed message={current.error} onRetry={reload} />
@@ -370,6 +377,7 @@ interface TimelinePreviewProps {
   onSeekHandled: () => void;
   /** Counter from the actions area's "show issues": open the details column and focus the issue list. */
   issuesRequest: number;
+  neighbourEpisodes: readonly number[];
 }
 
 /** Scroll to the issue list heading and focus it; false when the list is not rendered (details folded away). */
@@ -508,6 +516,7 @@ function TimelinePreview({
   timelineName,
   onTimelineChanged,
   onViewUnit,
+  neighbourEpisodes,
 }: TimelinePreviewProps) {
   const { t } = useTranslation("dashboard");
   const [selectedClipId, setSelectedClipId] = useState<string | null>(null);
@@ -599,13 +608,20 @@ function TimelinePreview({
     };
   }, [audioSourcesJson, projectName]);
   // gapless playback: the server's stream of the latest revision, used by the player once all its pieces are ready
+  // the player's position, for the server to build a missing piece there first (read when the stream is asked for)
+  const playhead = useRef(0);
   const stream = useTimelineStream(
     projectName,
     readout.timeline.id,
     readout.revision === readout.latest_revision ? readout.revision : null,
     planJson,
+    playhead,
   );
   const playback = useTimelinePlayback(plan, sourceUrl, audio, audioUrl, stream);
+  useEffect(() => {
+    playhead.current = playback.t;
+  }, [playback.t]);
+  useNeighbourStreamPrefetch(projectName, neighbourEpisodes, playback.streamLoaded);
   const narration = useMemo(() => narrationSpans(readout, ttsNarration), [readout, ttsNarration]);
   const subtitles = useMemo(() => placeSubtitles(readout, plan, media), [readout, plan, media]);
   const bgm = useMemo(() => audio.filter((placement) => placement.kind === "bgm"), [audio]);

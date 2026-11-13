@@ -972,9 +972,15 @@ class API {
   static async getEditTimelineStream(
     projectName: string,
     timelineId: string,
-    options: { signal?: AbortSignal } = {},
+    options: { signal?: AbortSignal; at?: number; prefetch?: boolean } = {},
   ): Promise<EditTimelineStream> {
-    return this.request(`${this.editTimelinePath(projectName, timelineId)}/stream`, { signal: options.signal });
+    // at: the viewer's playhead (s), missing pieces are built from there first; prefetch: asked ahead, not by a
+    // viewer (missing pieces build at idle priority)
+    const params = new URLSearchParams();
+    if (options.at !== undefined) params.set("at", String(Math.max(0, Math.round(options.at * 100) / 100)));
+    if (options.prefetch) params.set("prefetch", "true");
+    const query = params.size > 0 ? `?${params}` : "";
+    return this.request(`${this.editTimelinePath(projectName, timelineId)}/stream${query}`, { signal: options.signal });
   }
 
   /** 上传一首 BGM：服务端实测响度并登记为项目级素材，各集的剪辑时间线都能用。 */
