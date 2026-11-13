@@ -19,7 +19,30 @@ const ABOUT_DATE_OPTS: Intl.DateTimeFormatOptions = {
   minute: "2-digit",
 };
 
+/**
+ * This fork shows only the legally required part of About for now (owner's policy 2026-11-13: minimal exposure
+ * until things settle): the source offer, the "Powered by ArcReel" credit and the copyright line. The upstream
+ * version card (version, update check against ArcReel's releases, release notes) and the diagnostics download are
+ * hidden, and the version / update request is not made. Set to false to bring upstream's full page back.
+ */
+const ABOUT_LEGAL_ONLY = true;
+
 export function AboutSection() {
+  return ABOUT_LEGAL_ONLY ? <AboutLegalOnly /> : <UpstreamAboutSection />;
+}
+
+function AboutLegalOnly() {
+  const { t } = useTranslation("dashboard");
+  return (
+    <div className="flex flex-col gap-6">
+      <h2 className="text-lg font-medium">{t("about")}</h2>
+      <AboutLegal />
+    </div>
+  );
+}
+
+/** Upstream's full About page (hidden while ABOUT_LEGAL_ONLY is on). */
+export function UpstreamAboutSection() {
   const { t, i18n } = useTranslation("dashboard");
   const [data, setData] = useState<GetSystemVersionResponse | null>(null);
   const [loading, setLoading] = useState(true);
@@ -185,36 +208,44 @@ export function AboutSection() {
         )}
       </section>
 
-      {/* Copyright & attribution — NOTICE §7(b) 要求的署名句与仓库链接，逐字保留，不走品牌占位 */}
-      <section className="flex flex-col gap-2 rounded-lg border border-border bg-card p-4">
-        <h3 className="text-sm font-medium">{t("about_legal_title")}</h3>
-        <div className="flex flex-col gap-1 text-sm text-muted-foreground">
-          <p>Copyright © 2026 Pollo3470 and ArcReel contributors</p>
-          {/* AGPLv3 §13: this is a modified version, so its source is offered here too */}
-          <p>
-            {t("about_modified_version")}{" "}
-            <a
-              href={MODIFIED_SOURCE_URL}
-              target="_blank"
-              rel="noreferrer"
-              className="break-all text-primary underline-offset-4 hover:underline"
-            >
-              {MODIFIED_SOURCE_URL}
-            </a>
-          </p>
-          <p>
-            Powered by ArcReel —{" "}
-            <a
-              href="https://github.com/ArcReel/ArcReel"
-              target="_blank"
-              rel="noreferrer"
-              className="break-all text-primary underline-offset-4 hover:underline"
-            >
-              https://github.com/ArcReel/ArcReel
-            </a>
-          </p>
-        </div>
-      </section>
+      <AboutLegal />
     </div>
+  );
+}
+
+/** Copyright & attribution: what the AGPL and ArcReel's NOTICE require us to show (source offer, credit, link). */
+function AboutLegal() {
+  const { t } = useTranslation("dashboard");
+  // Copyright & attribution — NOTICE §7(b) 要求的署名句与仓库链接，逐字保留，不走品牌占位
+  return (
+    <section className="flex flex-col gap-2 rounded-lg border border-border bg-card p-4">
+      <h3 className="text-sm font-medium">{t("about_legal_title")}</h3>
+      <div className="flex flex-col gap-1 text-sm text-muted-foreground">
+        <p>Copyright © 2026 Pollo3470 and ArcReel contributors</p>
+        {/* AGPLv3 §13: this is a modified version, so its source is offered here too */}
+        <p>
+          {t("about_modified_version")}{" "}
+          <a
+            href={MODIFIED_SOURCE_URL}
+            target="_blank"
+            rel="noreferrer"
+            className="break-all text-primary underline-offset-4 hover:underline"
+          >
+            {MODIFIED_SOURCE_URL}
+          </a>
+        </p>
+        <p>
+          Powered by ArcReel —{" "}
+          <a
+            href="https://github.com/ArcReel/ArcReel"
+            target="_blank"
+            rel="noreferrer"
+            className="break-all text-primary underline-offset-4 hover:underline"
+          >
+            https://github.com/ArcReel/ArcReel
+          </a>
+        </p>
+      </div>
+    </section>
   );
 }

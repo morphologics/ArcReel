@@ -2,7 +2,7 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { API } from "@/api";
-import { AboutSection } from "./AboutSection";
+import { AboutSection, UpstreamAboutSection } from "./AboutSection";
 import type { GetSystemVersionResponse } from "@/types/system";
 
 globalThis.URL.createObjectURL ??= vi.fn();
@@ -30,7 +30,7 @@ describe("AboutSection diagnostics download", () => {
     });
 
     // 先用真实定时器渲染完成，避免 findByRole/waitFor 的内部轮询与 fake timers 相互卡死
-    render(<AboutSection />);
+    render(<UpstreamAboutSection />);
     // 接口被调用时版本信息还在加载，按钮要等加载结束才渲染
     const button = await screen.findByRole("button", { name: "下载诊断日志" });
 
@@ -70,7 +70,7 @@ describe("AboutSection diagnostics download", () => {
       return el;
     });
 
-    render(<AboutSection />);
+    render(<UpstreamAboutSection />);
     await waitFor(() => expect(API.getSystemVersion).toHaveBeenCalled());
 
     const button = await screen.findByRole("button", { name: "下载诊断日志" });
@@ -86,7 +86,21 @@ describe("AboutSection diagnostics download", () => {
   });
 });
 
-describe("AboutSection release notes", () => {
+describe("AboutSection (legal only in this fork)", () => {
+  it("shows only the copyright, source offer and credit, and asks for no version or update", async () => {
+    const getVersion = vi.spyOn(API, "getSystemVersion");
+    render(<AboutSection />);
+
+    expect(await screen.findByText(/Powered by ArcReel/)).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "https://github.com/ArcReel/ArcReel" })).toBeInTheDocument();
+    expect(screen.getByText(/Pollo3470 and ArcReel contributors/)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /检查更新/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /诊断|diagnostic/i })).not.toBeInTheDocument();
+    expect(getVersion).not.toHaveBeenCalled();
+  });
+});
+
+describe("UpstreamAboutSection release notes (upstream page, hidden in this fork)", () => {
   it("收起最新一条发布说明，展开后显示正文与 Release 链接", async () => {
     vi.spyOn(API, "getSystemVersion").mockResolvedValue({
       ...VERSION_RESPONSE,
@@ -101,7 +115,7 @@ describe("AboutSection release notes", () => {
       has_update: true,
     });
     const user = userEvent.setup();
-    render(<AboutSection />);
+    render(<UpstreamAboutSection />);
 
     const toggle = await screen.findByRole("button", { name: /发布说明/ });
     expect(toggle).toHaveAttribute("aria-expanded", "false");
