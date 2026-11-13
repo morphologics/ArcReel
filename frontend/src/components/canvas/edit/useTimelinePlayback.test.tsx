@@ -1,7 +1,10 @@
 import { act, renderHook } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { PlaybackPlan, PlaybackSegment } from "./playback-schedule";
+import { attachStream, type ReadyStream } from "./stream-source";
 import { useTimelinePlayback } from "./useTimelinePlayback";
+
+vi.mock("./stream-source", () => ({ attachStream: vi.fn(), streamSupported: () => true }));
 
 function segment(clipId: string, start: number, hasVideo = true): PlaybackSegment {
   return {
@@ -60,5 +63,87 @@ describe("useTimelinePlayback ahead-of-time loading", () => {
     expect(result.current.primed).toBe(false);
     act(() => result.current.seek(12));
     expect(result.current.primed).toBe(true);
+  });
+});
+
+describe("useTimelinePlayback gapless stream", () => {
+  const stream: ReadyStream = {
+    id: "3:a,b",
+    codecs: 'video/mp4; codecs="avc1.640028, mp4a.40.2"',
+    duration: 20,
+    pieces: [
+      { start: 0, duration: 10, url: "/a.mp4" },
+      { start: 10, duration: 10, url: "/b.mp4" },
+    ],
+  };
+
+  function setup(initial: ReadyStream | null = stream) {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(null, { status: 206 }));
+    vi.spyOn(HTMLMediaElement.prototype, "play").mockResolvedValue(undefined);
+    vi.spyOn(HTMLMediaElement.prototype, "pause").mockImplementation(() => {});
+    const dispose = vi.fn();
+    vi.mocked(attachStream).mockReturnValue({ ready: Promise.resolve(), dispose });
+    const video = document.createElement("video");
+    const hook = renderHook(
+      ({ current, s }: { current: PlaybackPlan; s: ReadyStream | null }) =>
+        useTimelinePlayback(current, urlOf, [], () => null, s),
+      { initialProps: { current: plan, s: null as ReadyStream | null } },
+    );
+    (hook.result.current.streamElement as { current: HTMLVideoElement | null }).current = video;
+    hook.rerender({ current: plan, s: initial });
+    return { ...hook, video, dispose };
+  }
+
+  it("takes over at once while paused, and seeks move the stream", async () => {
+    const { result, video } = setup();
+    expect(attachStream).toHaveBeenCalledWith(video, stream);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(result.current.streamActive).toBe(true);
+
+    act(() => result.current.seek(12.5));
+    expect(video.currentTime).toBe(12.5);
+    expect(result.current.t).toBe(12.5);
+  });
+
+  it("is not attached when its length doesn't match the plan (another revision's stream)", () => {
+    setup({ ...stream, duration: 18 });
+    expect(attachStream).not.toHaveBeenCalled();
+  });
+
+  it("goes back to the clip elements when the plan changes, and releases the stream when it goes away", async () => {
+    const { result, rerender, dispose } = setup();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(result.current.streamActive).toBe(true);
+
+    const edited: PlaybackPlan = { ...plan, segments: [...plan.segments] };
+    rerender({ current: edited, s: stream });
+    expect(result.current.streamActive).toBe(false);
+    rerender({ current: edited, s: null });
+    expect(dispose).toHaveBeenCalled();
+  });
+
+  it("while playing, hands over at the next cut instead of jumping mid-shot", async () => {
+    const { result, rerender, video } = setup(null);
+    act(() => result.current.play());
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1000);
+    });
+    rerender({ current: plan, s: stream });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1000);
+    });
+    expect(result.current.streamActive).toBe(false);   // still in shot c1
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(3500);
+    });
+    expect(result.current.streamActive).toBe(true);   // at the cut to c2 (5 s)
+    expect(video.currentTime).toBeGreaterThanOrEqual(5);
+    expect(video.currentTime).toBeLessThan(5.2);
+    expect(HTMLMediaElement.prototype.play).toHaveBeenCalled();
   });
 });

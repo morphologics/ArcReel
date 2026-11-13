@@ -60,6 +60,18 @@ def output_profile_for_aspect_ratio(aspect_ratio: str) -> OutputProfile:
     return OutputProfile(width=width, height=height, fps=FINAL_CUT_FPS)
 
 
+def stream_profile(profile: OutputProfile, short_edge: int = 720) -> OutputProfile:
+    """The Edit view's stream canvas: the final cut's, scaled to a ``short_edge`` short edge (even sides), same fps."""
+    scale = Fraction(short_edge, min(profile.width, profile.height))
+    if scale >= 1:
+        return profile
+    return OutputProfile(
+        width=round(profile.width * scale / 2) * 2,
+        height=round(profile.height * scale / 2) * 2,
+        fps=profile.fps,
+    )
+
+
 @dataclass(frozen=True, slots=True)
 class RenderMedia:
     """一个视频单元 current 视频的渲染素材：路径、版本、实测时长与是否带音频流。"""
@@ -196,6 +208,12 @@ class RenderSegment:
     @property
     def frames(self) -> int:
         return sum(planned.frames for planned in self.clips)
+
+    def at_zero(self) -> RenderSegment:
+        """The same segment starting at frame 0: what it looks and sounds like, wherever it sits on the timeline."""
+        start = self.start_frame
+        clips = tuple(replace(planned, start_frame=planned.start_frame - start) for planned in self.clips)
+        return replace(self, clips=clips)
 
 
 @dataclass(frozen=True, slots=True)

@@ -139,11 +139,18 @@ def _bgm_chain(index: int, bgm: BgmInput, start_sample: int) -> str:
 
 
 def segment_args(
-    ffmpeg: str, segment: RenderSegment, plan: RenderPlan, output: Path, *, burn_subtitles: bool = False
+    ffmpeg: str,
+    segment: RenderSegment,
+    plan: RenderPlan,
+    output: Path,
+    *,
+    burn_subtitles: bool = False,
+    extra_video_args: Sequence[str] = (),
 ) -> list[str]:
     """一段片段的画面渲染参数：只含画面，按帧数精确截止。
 
     ``burn_subtitles`` 时按相对路径引用工作目录里的 ASS 文档与字体，须以工作目录为当前目录运行。
+    ``extra_video_args`` go after the encoder settings (the Edit view's stream pieces turn B-frames off).
     """
     fps = plan.profile.fps
     inputs: list[str] = []
@@ -194,6 +201,7 @@ def segment_args(
         "yuv420p",
         "-r",
         str(fps),
+        *extra_video_args,
         "-f",
         "mp4",
         str(output),
@@ -433,6 +441,79 @@ async def accept_final_cut(path: Path, plan: RenderPlan, *, spawn: Spawner | Non
     return acceptance
 
 
+
+STREAM_FRAGMENT_FLAGS = "+frag_keyframe+empty_moov+default_base_moof+delay_moov"
+"""Fragmented MP4 for Media Source Extensions: the Edit view appends the pieces to one ``<video>``. ``delay_moov``
+keeps the picture on its exact frame times: without it the packager shifts the video to make room for the AAC
+encoder's 1024-sample start-up delay (frame 1 at 0.0547 s instead of 0.0333 s), every piece ran 21 ms long and its
+last frame fell outside its slot: one frame lost at every cut."""
+
+
+def stream_piece_mux_args(ffmpeg: str, video: Path, audio: Path, output: Path) -> list[str]:
+    """Package one stream piece: its picture and its audio, copied, as fragmented MP4."""
+    return [
+        *_base_args(ffmpeg),
+        *local_file_input(video),
+        *local_file_input(audio),
+        "-map",
+        "0:v:0",
+        "-map",
+        "1:a:0",
+        "-c",
+        "copy",
+        "-movflags",
+        STREAM_FRAGMENT_FLAGS,
+        "-f",
+        "mp4",
+        str(output),
+    ]
+
+
+async def render_stream_piece(
+    ffmpeg: str,
+    segment: RenderSegment,
+    plan: RenderPlan,
+    output: Path,
+    workspace: Path,
+    *,
+    deadlines: RenderDeadlines = DEFAULT_RENDER_DEADLINES,
+    spawn: Spawner | None = None,
+) -> None:
+    """Render one segment of ``plan`` as a self-contained stream piece for the Edit view's gapless playback.
+
+    The picture is the final cut's segment (same trims, holds, fades and crossfades) without B-frames, so every piece
+    starts exactly at its first frame (a leading timestamp offset left holes in Firefox's buffer). The audio is the
+    final cut's mix of the segment's own clips (original sound at the clips' volumes, frame-aligned, padded with
+    silence to the segment's length); narration and BGM stay with the player. Pieces rendered with one plan share
+    their encoder settings, so the browser's decoder runs through them without restarting.
+    """
+    fps = plan.profile.fps
+    alone = RenderPlan(profile=plan.profile, segments=(segment.at_zero(),), total_frames=segment.frames)
+    seconds = segment.frames / fps
+    video = workspace / "video.mp4"
+    audio = workspace / "audio.m4a"
+    await _run(
+        segment_args(ffmpeg, alone.segments[0], alone, video, extra_video_args=("-bf", "0")),
+        deadline=deadlines.for_seconds(seconds),
+        grace=deadlines.grace,
+        spawn=spawn,
+        output=video,
+    )
+    await _run(
+        audio_mix_args(ffmpeg, alone, audio),
+        deadline=deadlines.for_seconds(seconds),
+        grace=deadlines.grace,
+        spawn=spawn,
+        output=audio,
+    )
+    await _run(
+        stream_piece_mux_args(ffmpeg, video, audio, output),
+        deadline=deadlines.for_seconds(seconds / 10),
+        grace=deadlines.grace,
+        spawn=spawn,
+        output=output,
+    )
+
 __all__ = [
     "ACCEPTANCE_TOLERANCE_SECONDS",
     "AUDIO_SAMPLE_RATE",
@@ -441,9 +522,12 @@ __all__ = [
     "FinalCutAcceptance",
     "NarrationInput",
     "RenderDeadlines",
+    "STREAM_FRAGMENT_FLAGS",
     "accept_final_cut",
     "audio_mix_args",
     "mux_args",
     "render_plan_to_file",
+    "render_stream_piece",
     "segment_args",
+    "stream_piece_mux_args",
 ]

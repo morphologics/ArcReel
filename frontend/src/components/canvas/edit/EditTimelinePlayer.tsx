@@ -1,4 +1,4 @@
-import type { CSSProperties, MouseEvent, ReactNode } from "react";
+import type { CSSProperties, MouseEvent, ReactNode, RefObject } from "react";
 import { ContextMenu } from "@base-ui/react/context-menu";
 import { cn } from "cn";
 import { AlertTriangle, Captions, Loader2, Pause, Play } from "lucide-react";
@@ -97,7 +97,7 @@ export function EditTimelinePlayer({
           }
         >
           {playback.videoRefs.map((ref, slot) => {
-            const visible = showVideo && playback.visibleSlot === slot;
+            const visible = showVideo && !playback.streamActive && playback.visibleSlot === slot;
             return (
               // react-doctor-disable-next-line react-doctor/media-has-caption -- 字幕由剪辑时间线的字幕轨叠加显示，不走 <track>
               <video // eslint-disable-line jsx-a11y/media-has-caption -- 字幕由字幕轨叠加显示
@@ -113,7 +113,9 @@ export function EditTimelinePlayer({
               />
             );
           })}
-          {segment && !segment.hasVideo && (
+          {/* gapless mode: the timeline's prepared stream in one element (fades and holds are in the picture) */}
+          <StreamVideo element={playback.streamElement} active={playback.streamActive} />
+          {segment && !segment.hasVideo && !playback.streamActive && (
             <div
               className="absolute inset-0 flex items-center justify-center text-sm text-muted-foreground opacity-(--stage-opacity)"
               style={{ "--stage-opacity": opacity } as CSSProperties}
@@ -209,5 +211,21 @@ export function EditTimelinePlayer({
         </div>
       )}
     </div>
+  );
+}
+
+/** The gapless stream's `<video>` (useTimelinePlayback attaches the stream and drives it); shown only while active. */
+function StreamVideo({ element, active }: { element: RefObject<HTMLVideoElement | null>; active: boolean }) {
+  return (
+    // react-doctor-disable-next-line react-doctor/media-has-caption -- 字幕由剪辑时间线的字幕轨叠加显示，不走 <track>
+    <video // eslint-disable-line jsx-a11y/media-has-caption -- 字幕由字幕轨叠加显示
+      ref={element}
+      playsInline
+      preload="auto"
+      data-testid="edit-player-stream"
+      data-active={active || undefined}
+      className="absolute inset-0 size-full object-contain opacity-(--stage-opacity)"
+      style={{ "--stage-opacity": active ? 1 : 0 } as CSSProperties}
+    />
   );
 }

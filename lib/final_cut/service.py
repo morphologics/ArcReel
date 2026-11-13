@@ -13,6 +13,7 @@ BGM 按片段起点混入整集音频，音量是登记时缓存的响度增益�
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Callable
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
@@ -59,7 +60,7 @@ from lib.final_cut.ffmpeg_render import (
     accept_final_cut,
     render_plan_to_file,
 )
-from lib.final_cut.render_plan import RenderMedia, plan_render, render_clips
+from lib.final_cut.render_plan import OutputProfile, RenderMedia, RenderPlan, plan_render, render_clips
 from lib.final_cut.subtitles import BurnedSubtitle
 from lib.infra.ffmpeg import FfmpegUnavailableError, ffmpeg_executable
 from lib.infra.media_probe import MediaProbeError, probe_media
@@ -74,6 +75,7 @@ from lib.jianying_draft.placement import (
     place_timeline,
 )
 from lib.project.project_manager import ProjectManager
+from lib.speech.audio_utils import probe_existing_media
 from lib.speech.narration_config import project_narration_delivery
 from lib.speech.narration_delivery import USE_TTS
 
@@ -297,7 +299,9 @@ class FinalCutService:
         )
         return inputs
 
-    async def _render_media(self, inputs: FinalCutInputs) -> dict[str, RenderMedia]:
+    async def _render_media(self, inputs: FinalCutInputs, *, cached: bool = False) -> dict[str, RenderMedia]:
+        """``cached``: take probes from the process-wide probe cache (the Edit view asks on every edit and a probe reads
+        the whole file); a failed or missing one is probed again here for its reason."""
         media: dict[str, RenderMedia] = {}
         for item in inputs.clips:
             video = item.video
@@ -305,7 +309,8 @@ class FinalCutService:
                 continue
             path = video.snapshot
             try:
-                probe = await probe_media(path, spawn=self._spawn)
+                probe = await probe_existing_media(path) if cached else None
+                probe = probe or await probe_media(path, spawn=self._spawn)
             except MediaProbeError as exc:
                 raise FinalCutError(
                     "final_cut_render_failed", f"视频单元 {video.unit_id} 的视频无法探测：{exc}", unit_id=video.unit_id
@@ -401,6 +406,17 @@ class FinalCutService:
                 )
             )
         return tuple(items)
+
+    async def stream_plan(
+        self, project_name: str, timeline_id: str, profile_for: Callable[[OutputProfile], OutputProfile]
+    ) -> tuple[int, int, RenderPlan]:
+        """The latest revision's render plan on another canvas (the Edit view's stream pieces): the same checks, media
+        and plan as a final cut. Returns (episode, revision, plan); raises like :meth:`check` when it can't render."""
+        checked = await self._checked(project_name, timeline_id, None, None, None)
+        inputs = await asyncio.to_thread(self._snapshot, project_name, checked)
+        media = await self._render_media(inputs, cached=True)
+        plan = plan_render(render_clips([item.clip for item in inputs.clips], media), profile_for(inputs.profile))
+        return checked.check.episode, checked.check.revision, plan
 
     async def render(
         self,

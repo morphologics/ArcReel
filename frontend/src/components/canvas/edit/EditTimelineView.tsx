@@ -57,6 +57,7 @@ import {
   unitVideoPath,
   unusedUnitIds,
 } from "./timeline-view";
+import { useTimelineStream } from "./useTimelineStream";
 import { useTimelinePlayback } from "./useTimelinePlayback";
 
 /** 标签行右侧操作区拿到的当前剪辑时间线。 */
@@ -597,7 +598,14 @@ function TimelinePreview({
       return source ? API.getFileUrl(projectName, source.path, source.version) : null;
     };
   }, [audioSourcesJson, projectName]);
-  const playback = useTimelinePlayback(plan, sourceUrl, audio, audioUrl);
+  // gapless playback: the server's stream of the latest revision, used by the player once all its pieces are ready
+  const stream = useTimelineStream(
+    projectName,
+    readout.timeline.id,
+    readout.revision === readout.latest_revision ? readout.revision : null,
+    planJson,
+  );
+  const playback = useTimelinePlayback(plan, sourceUrl, audio, audioUrl, stream);
   const narration = useMemo(() => narrationSpans(readout, ttsNarration), [readout, ttsNarration]);
   const subtitles = useMemo(() => placeSubtitles(readout, plan, media), [readout, plan, media]);
   const bgm = useMemo(() => audio.filter((placement) => placement.kind === "bgm"), [audio]);

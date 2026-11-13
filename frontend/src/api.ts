@@ -160,6 +160,7 @@ import type {
 } from "@/types/workflow";
 import type {
   EditTimelinePreviewMedia,
+  EditTimelineStream,
   EditTimelineReadout,
   EditTimelineSummary,
   EpisodeEditOverview,
@@ -965,6 +966,15 @@ class API {
       `${this.editTimelinePath(projectName, timelineId)}/preview-media`,
       { signal: options.signal },
     );
+  }
+
+  /** The latest revision as gapless stream pieces for the Edit view's player; asking also starts preparing them. */
+  static async getEditTimelineStream(
+    projectName: string,
+    timelineId: string,
+    options: { signal?: AbortSignal } = {},
+  ): Promise<EditTimelineStream> {
+    return this.request(`${this.editTimelinePath(projectName, timelineId)}/stream`, { signal: options.signal });
   }
 
   /** 上传一首 BGM：服务端实测响度并登记为项目级素材，各集的剪辑时间线都能用。 */

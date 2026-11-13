@@ -43,6 +43,7 @@ from lib.jianying_draft.results import JianyingDraftStatus
 from lib.project.project_change_hints import project_change_source
 from lib.project.project_manager import get_project_manager
 from server.services.presentation.project_state_cache import PROJECT_STATE_CACHE
+from server.services.presentation.timeline_stream import TimelineStream, TimelineStreamService
 from lib.workflow.operation_admission import AdmissionState
 from lib.workflow.workflow_state import WorkflowActionType, WorkflowRequestError, WorkflowStateService
 from server.auth import CurrentUser, verify_download_token
@@ -92,6 +93,13 @@ def get_episode_edit_overview() -> EpisodeEditOverviewReader:
 
 
 EpisodeEditOverviewDep = Annotated[EpisodeEditOverviewReader, Depends(get_episode_edit_overview)]
+
+
+def get_timeline_stream_service() -> TimelineStreamService:
+    return TimelineStreamService(get_project_manager())
+
+
+TimelineStreamServiceDep = Annotated[TimelineStreamService, Depends(get_timeline_stream_service)]
 
 
 def get_workflow_state_service() -> WorkflowStateService:
@@ -442,6 +450,22 @@ async def read_edit_timeline_preview_media(
 ) -> TimelinePreviewMedia:
     try:
         return await service.media(project_name, timeline_id)
+    except EditTimelineError as exc:
+        raise edit_timeline_api_error(exc) from exc
+
+
+@router.get("/projects/{project_name}/edit-timelines/{timeline_id}/stream")
+async def read_edit_timeline_stream(
+    project_name: str,
+    timeline_id: str,
+    service: TimelineStreamServiceDep,
+) -> TimelineStream:
+    """The latest revision as gapless stream pieces for the Edit view's player; starts preparing the missing ones.
+
+    ``available`` is false (with the final cut's reason) when the timeline can't be rendered; the player then keeps its
+    clip-by-clip playback."""
+    try:
+        return await service.stream(project_name, timeline_id)
     except EditTimelineError as exc:
         raise edit_timeline_api_error(exc) from exc
 

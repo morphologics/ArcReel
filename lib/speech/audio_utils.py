@@ -196,6 +196,12 @@ async def probe_existing_media_duration_seconds(path: Path) -> float | None:
     return probe.duration_seconds if probe is not None else None
 
 
+async def probe_existing_media(path: Path) -> MediaProbe | None:
+    """The whole probe of a file on disk, from the same cache; None when ffmpeg is missing or the probe fails (callers
+    that need the reason probe again with :func:`lib.infra.media_probe.probe_media`)."""
+    return await _probe_or_none(path)
+
+
 async def probe_existing_video_duration_seconds(path: Path) -> float | None:
     """探测首个视频流的可播放时长；没有视频流或探测失败时返回 None。
 

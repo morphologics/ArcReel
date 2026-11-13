@@ -164,6 +164,29 @@ export interface EditTimelinePreviewMedia {
   bgm: EditPreviewBgm[];
 }
 
+/** One piece of the Edit view's gapless stream (server/services/presentation/timeline_stream.py). */
+export interface EditStreamPiece {
+  index: number;
+  /** Seconds on the timeline. */
+  start: number;
+  duration: number;
+  /** Project-relative path once rendered; null while it is being prepared. */
+  path: string | null;
+  key: string;
+}
+
+/** The latest revision as gapless stream pieces; `ready` once every piece is rendered. */
+export interface EditTimelineStream {
+  available: boolean;
+  reason: string | null;
+  timeline_id: string;
+  revision: number | null;
+  duration: number | null;
+  codecs: string;
+  ready: boolean;
+  pieces: EditStreamPiece[];
+}
+
 /** 项目里的一首 BGM（`GET /projects/{name}/bgm` 与上传结果）；`gain` 是把响度统一到 −16 LUFS 的线性增益。 */
 export interface ProjectBgm {
   id: string;

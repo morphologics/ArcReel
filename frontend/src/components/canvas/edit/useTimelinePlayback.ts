@@ -7,6 +7,7 @@
 import { useCallback, useEffect, useRef, useState, type RefObject } from "react";
 
 import { audioPreload, mediaWaiting, syncAudio, trackStall } from "./audio-sync";
+import { attachStream, type ReadyStream } from "./stream-source";
 import {
   advancePlayhead,
   locate,
@@ -41,6 +42,13 @@ export interface TimelinePlayback {
   pause: () => void;
   toggle: () => void;
   seek: (t: number) => void;
+  /**
+   * Gapless mode: the third `<video>` plays the timeline's prepared stream (one element, no switch at the cuts)
+   * instead of the two clip elements. Entered when the stream for the shown revision is ready (at once while paused,
+   * at the next cut while playing); left at once when the timeline changes.
+   */
+  streamElement: RefObject<HTMLVideoElement | null>;
+  streamActive: boolean;
   /** Playback speed (1 = normal; PLAYBACK_SPEEDS), remembered in this browser. */
   speed: number;
   setSpeed: (speed: number) => void;
@@ -87,6 +95,10 @@ interface Runtime {
   preloadedAfter: number;
   stallSince: number | null;
   stalled: boolean;
+  /** "stream": the stream element plays and drives the clock; "clips": the two clip elements do. */
+  mode: "clips" | "stream";
+  /** The stream for the current plan is fully attached and can take over. */
+  streamReady: boolean;
 }
 
 interface AudioEntry {
@@ -166,8 +178,11 @@ export function useTimelinePlayback(
   sourceUrl: (segment: PlaybackSegment) => string | null,
   audio: readonly AudioPlacement[],
   audioUrl: (placement: AudioPlacement) => string | null,
+  stream: ReadyStream | null = null,
 ): TimelinePlayback {
   const refA = useRef<HTMLVideoElement>(null);
+  const refS = useRef<HTMLVideoElement>(null);
+  const [streamActive, setStreamActive] = useState(false);
   const refB = useRef<HTMLVideoElement>(null);
   const [t, setT] = useState(0);
   const [playing, setPlaying] = useState(false);
@@ -192,6 +207,8 @@ export function useTimelinePlayback(
     preloadedAfter: -1,
     stallSince: null,
     stalled: false,
+    mode: "clips",
+    streamReady: false,
   });
   const planRef = useRef(plan);
   const audioRef = useRef(audio);
@@ -226,6 +243,7 @@ export function useTimelinePlayback(
     clearStall();
     element(0)?.pause();
     element(1)?.pause();
+    refS.current?.pause();
     pauseAudio();
   }, [clearStall, element, pauseAudio]);
 
@@ -388,6 +406,19 @@ export function useTimelinePlayback(
       const currentPlan = planRef.current;
       const location = locate(currentPlan, to);
       state.stallSince = null;
+      const streamVideo = refS.current;
+      if (state.mode === "stream" && streamVideo) {
+        // gapless mode: the stream's clock is the timeline's; one element, just reposition it
+        state.t = Math.min(Math.max(to, 0), currentPlan.duration);
+        streamVideo.currentTime = state.t;
+        if (state.playing) startMedia(streamVideo);
+        else streamVideo.pause();
+        state.index = location?.index ?? -1;
+        preloadAudioAround(state.t);
+        setIndex(state.index);
+        setT(state.t);
+        return;
+      }
       if (!location) {
         state.index = -1;
         state.t = 0;
@@ -437,6 +468,31 @@ export function useTimelinePlayback(
     [element, load, refreshVisible, startMedia],
   );
 
+  /** Hand playback to the stream element at the current time (paused: at once; playing: called at a cut). */
+  const enterStream = useCallback(() => {
+    const state = runtime.current;
+    const streamVideo = refS.current;
+    if (!streamVideo || !state.streamReady || state.mode === "stream") return;
+    state.mode = "stream";
+    streamVideo.playbackRate = state.speed;
+    streamVideo.currentTime = state.t;
+    if (state.playing) startMedia(streamVideo);
+    element(0)?.pause();
+    element(1)?.pause();
+    setStreamActive(true);
+  }, [element, startMedia]);
+
+  /** Back to the clip elements at the current time (the timeline changed, or the stream went away). */
+  const leaveStream = useCallback(() => {
+    const state = runtime.current;
+    state.streamReady = false;
+    if (state.mode !== "stream") return;
+    state.mode = "clips";
+    refS.current?.pause();
+    state.loaded = [null, null];
+    setStreamActive(false);
+  }, []);
+
   const stopAtEnd = useCallback(() => {
     const state = runtime.current;
     halt();
@@ -459,8 +515,10 @@ export function useTimelinePlayback(
     // 趁这次点击把其余媒体元素各播一下再停住：Safari 之后才允许它们在切换片段、旁白开始时自动出声。
     // 还没进预载窗口的音频没有地址，同样在这里解锁；解锁跟着元素走，之后挂上地址仍可自动出声。
     const idle = element(state.slot === 0 ? 1 : 0);
+    const streamVideo = refS.current;
     const others: HTMLMediaElement[] = [
       ...(idle?.getAttribute("src") ? [idle] : []),
+      ...(streamVideo?.getAttribute("src") && state.mode !== "stream" ? [streamVideo] : []),
       ...Array.from(audioPool.current.values(), (entry) => entry.element),
     ];
     for (const media of others) {
@@ -480,9 +538,38 @@ export function useTimelinePlayback(
 
   useEffect(() => {
     planRef.current = plan;
+    // an edit: the stream shows the previous revision, so play from the clips until the new one is ready
+    leaveStream();
     runtime.current.loaded = [null, null];
     seek(runtime.current.t);
-  }, [plan, seek]);
+  }, [plan, seek, leaveStream]);
+
+  // attach the stream for the shown revision; it takes over when fully appended
+  useEffect(() => {
+    const streamVideo = refS.current;
+    if (!stream || !streamVideo) return;
+    if (Math.abs(stream.duration - planRef.current.duration) > 0.1) return;   // not this plan's stream
+    const attached = attachStream(streamVideo, stream);
+    let live = true;
+    attached.ready
+      .then(() => {
+        if (!live) return;
+        const state = runtime.current;
+        state.streamReady = true;
+        // paused: switch at once (invisible); playing: the frame loop switches at the next cut
+        if (!state.playing) enterStream();
+      })
+      .catch(() => {
+        // the stream can't be played here: stay on the clip elements
+      });
+    const state = runtime.current;
+    return () => {
+      live = false;
+      leaveStream();
+      if (state.mode === "clips") seek(state.t);
+      attached.dispose();
+    };
+  }, [stream, enterStream, leaveStream, seek]);
 
   useEffect(() => {
     audioRef.current = audio;
@@ -524,8 +611,45 @@ export function useTimelinePlayback(
   useEffect(() => {
     if (!playing) return;
     let frame = 0;
+    const streamStep = (now: number) => {
+      const state = runtime.current;
+      const currentPlan = planRef.current;
+      const streamVideo = refS.current;
+      if (!streamVideo) return;
+      state.lastFrame = now;
+      if (streamVideo.playbackRate !== state.speed) streamVideo.playbackRate = state.speed;
+      const waiting = mediaWaiting({
+        readyState: streamVideo.readyState,
+        seeking: streamVideo.seeking,
+        errored: streamVideo.error !== null,
+        ended: false,
+      });
+      const stall = trackStall(state.stallSince, waiting, now);
+      state.stallSince = stall.since;
+      if (stall.stalled !== state.stalled) {
+        state.stalled = stall.stalled;
+        setBuffering(stall.stalled);
+      }
+      const t = streamVideo.currentTime;
+      if (streamVideo.ended || t >= currentPlan.duration - 0.02) {
+        stopAtEnd();
+        return;
+      }
+      state.t = t;
+      const index = locate(currentPlan, t)?.index ?? state.index;
+      if (index !== state.index) {
+        state.index = index;
+        setIndex(index);
+      }
+      syncAudioTo(t, !state.stalled);
+      setT(t);
+    };
     const step = (now: number) => {
       const state = runtime.current;
+      if (state.mode === "stream") {
+        streamStep(now);
+        return;
+      }
       const currentPlan = planRef.current;
       const segment = currentPlan.segments[state.index];
       if (!state.playing || !segment) return;
@@ -591,6 +715,13 @@ export function useTimelinePlayback(
       state.t = result.t;
       if (result.index !== state.index) {
         switchTo(result.index);
+        // the stream is ready: hand over at this cut (where the clip elements would switch anyway)
+        if (state.streamReady) {
+          enterStream();
+          syncAudioTo(result.t, true);
+          setT(result.t);
+          return;
+        }
       } else {
         if (result.holding && video && !video.paused) {
           // 画面到出点后停在末帧，定格延长期间按墙钟推进。
@@ -617,7 +748,7 @@ export function useTimelinePlayback(
       cancelAnimationFrame(frame);
       window.clearInterval(fallback);
     };
-  }, [element, playing, refreshVisible, startMedia, stopAtEnd, switchTo, syncAudioTo]);
+  }, [element, enterStream, playing, refreshVisible, startMedia, stopAtEnd, switchTo, syncAudioTo]);
 
   useEffect(() => {
     const videos = [refA.current, refB.current];
@@ -660,6 +791,8 @@ export function useTimelinePlayback(
     index,
     visibleSlot,
     videoRefs: [refA, refB],
+    streamElement: refS,
+    streamActive,
     buffering,
     blocked,
     play,
