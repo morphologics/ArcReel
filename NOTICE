@@ -99,5 +99,8 @@ This is a modified version of ArcReel, published at
 https://github.com/morphologics/ArcReel (branch "studio").
 Modified by Morphologics, 2026. The changes are the commits on that branch
 after the upstream tag v0.35.0; each commit message describes its change.
+This modified version is presented as "YouReel Studio" (its own name and
+logo); it does not use the ArcReel name or logo as its product name, and keeps
+the "Powered by ArcReel" notice and the link to the original project above.
 
 ==== End of Notices ====

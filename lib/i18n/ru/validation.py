@@ -392,7 +392,7 @@ MESSAGES = {
     ),
     "val_ce_infer_note_batch_size_above_one": (
         "Вход {input} узла {node} ({class_type}) равен {value}, поэтому одна отправка даёт несколько изображений; "
-        "ArcReel не меняет это значение"
+        "YouReel Studio не меняет это значение"
     ),
     "val_ce_infer_note_manual_only_node": (
         "Узел {node} — это {class_type}; {binding_keys} в нём нельзя определить автоматически, привяжите их вручную"

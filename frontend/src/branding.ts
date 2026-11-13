@@ -4,8 +4,8 @@
 //
 // Source code references BRAND.name (or the [[brand]] placeholder in i18n
 // resources) so the displayed product name is not hardcoded across files.
-// Defaults preserve the upstream brand; downstream distributions can override
-// via frontend/.env without code changes.
+// Upstream defaults to "ArcReel"; this fork defaults to YouReel Studio (the ArcReel name and logo are not
+// licensed under AGPL-3.0, see NOTICE). The "Powered by ArcReel" credit is separate and must stay.
 
 const env = import.meta.env as Record<string, string | undefined>;
 
@@ -18,11 +18,11 @@ function fallback(value: string | undefined, defaultValue: string): string {
 }
 
 export const BRAND = {
-  name: fallback(env.VITE_BRAND_NAME, "ArcReel"),
-  tagline: fallback(env.VITE_BRAND_TAGLINE, "Agent 驱动的 AI 视频创作工作台"),
+  name: fallback(env.VITE_BRAND_NAME, "YouReel Studio"),
+  tagline: fallback(env.VITE_BRAND_TAGLINE, "AI video creation studio"),
   description: fallback(
     env.VITE_BRAND_DESCRIPTION,
-    "AI 视频创作工作台，统一管理项目、脚本、分镜、视频生成与 Agent 对话。",
+    "AI video creation studio: projects, scripts, storyboards, video generation and the agent in one place.",
   ),
 } as const;
 

@@ -133,7 +133,7 @@ describe("SystemConfigPage", () => {
       ]);
     expect(groups).toEqual([
       ["生成", ["供应商", "默认模型", "调用端点"]],
-      ["Agent", ["ArcReel Agent", "Agent 记忆", "外部 Agent 接入", "访问令牌"]],
+      ["Agent", ["YouReel Studio Agent", "Agent 记忆", "外部 Agent 接入", "访问令牌"]],
       [null, ["市场", "使用记录"]],
       ["系统", ["通用", "提示词模版", "关于"]],
     ]);
@@ -169,7 +169,7 @@ describe("SystemConfigPage", () => {
     await waitFor(() => expect(usage).toHaveAttribute("aria-current", "page"));
   });
 
-  it("只缺内嵌 Agent 时，提示与侧栏标记只在「ArcReel Agent」分区，大厅的配置完整状态不受影响", async () => {
+  it("只缺内嵌 Agent 时，提示与侧栏标记只在「YouReel Studio Agent」分区，大厅的配置完整状态不受影响", async () => {
     const user = userEvent.setup();
     vi.spyOn(API, "getSystemConfig").mockResolvedValue(
       makeConfigResponse({ anthropic_api_key: { is_set: false, masked: null } }),
@@ -178,13 +178,13 @@ describe("SystemConfigPage", () => {
 
     renderPage("/app/settings", "section=arcreel-agent");
 
-    expect(await screen.findByRole("note", { name: "ArcReel Agent 尚未配置" })).toBeInTheDocument();
+    expect(await screen.findByRole("note", { name: "YouReel Studio Agent 尚未配置" })).toBeInTheDocument();
     const nav = screen.getByRole("navigation", { name: "设置" });
     const flagged = within(nav)
       .getAllByRole("link")
       .filter((link) => within(link).queryByRole("img", { name: "配置不完整" }))
       .map((link) => link.textContent);
-    expect(flagged).toEqual(["ArcReel Agent"]);
+    expect(flagged).toEqual(["YouReel Studio Agent"]);
     expect(useConfigStatusStore.getState().isComplete).toBe(true);
 
     await user.click(within(nav).getByRole("link", { name: "供应商" }));
