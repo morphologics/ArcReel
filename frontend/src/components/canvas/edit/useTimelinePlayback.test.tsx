@@ -109,7 +109,7 @@ describe("useTimelinePlayback gapless stream", () => {
     expect(result.current.t).toBe(12.5);
   });
 
-  it("takes over once the frame at the playhead is loaded, and a seek points the loader at the new spot", async () => {
+  it("takes over once the frame at the playhead is loaded; a seek to an unloaded spot plays the clips meanwhile", async () => {
     vi.mocked(bufferedAhead).mockReturnValue(0);
     const { result, focus } = setup();
     vi.mocked(bufferedAhead).mockReturnValue(0);
@@ -125,9 +125,22 @@ describe("useTimelinePlayback gapless stream", () => {
 
     vi.mocked(bufferedAhead).mockReturnValue(0);
     act(() => result.current.seek(15));
-    expect(result.current.streamActive).toBe(true);   // stays on the stream: its piece at 15 s comes next
-    expect(focus).toHaveBeenCalledWith(15);
+    expect(result.current.streamActive).toBe(false);   // the clip elements start at 15 s at once
+    expect(focus).toHaveBeenCalledWith(15);   // and the stream's piece there comes next
     expect(result.current.t).toBe(15);
+
+    vi.mocked(bufferedAhead).mockReturnValue(3);
+    act(() => options?.onProgress?.());
+    expect(result.current.streamActive).toBe(true);   // paused: back on the stream once it has the spot
+    act(() => result.current.seek(16));
+    expect(result.current.streamActive).toBe(true);   // a loaded spot: the stream just moves
+
+    vi.mocked(bufferedAhead).mockReturnValue(0);
+    act(() => result.current.seek(2));
+    expect(result.current.streamActive).toBe(false);
+    vi.mocked(bufferedAhead).mockReturnValue(5);
+    act(() => result.current.seek(3));
+    expect(result.current.streamActive).toBe(true);   // seeking to a spot the stream has: straight onto it
   });
 
   it("is not attached when its length doesn't match the plan (another revision's stream)", () => {
@@ -168,14 +181,5 @@ describe("useTimelinePlayback gapless stream", () => {
     expect(video.currentTime).toBeGreaterThanOrEqual(5);
     expect(video.currentTime).toBeLessThan(5.2);
     expect(HTMLMediaElement.prototype.play).toHaveBeenCalled();
-  });
-
-  it("doesn't prefetch clip starts while a stream is there", async () => {
-    setup();
-    const fetchMock = vi.mocked(globalThis.fetch);
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(3000);
-    });
-    expect(fetchMock).not.toHaveBeenCalled();
   });
 });

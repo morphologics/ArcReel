@@ -194,6 +194,8 @@ export function useTimelinePlayback(
 ): TimelinePlayback {
   const refA = useRef<HTMLVideoElement>(null);
   const refS = useRef<HTMLVideoElement>(null);
+  /** `enterStream` for `seek`, which is defined before it. */
+  const enterStreamRef = useRef<((lead: number) => boolean) | null>(null);
   /** Points the attached stream's loader at a new playhead (a seek), so the piece there comes next. */
   const focusStream = useRef<((t: number) => void) | null>(null);
   const [streamActive, setStreamActive] = useState(false);
@@ -232,9 +234,8 @@ export function useTimelinePlayback(
 
   const element = useCallback((slot: Slot) => (slot === 0 ? refA.current : refB.current), []);
 
-  // not while a stream is there: its pieces need the bandwidth, and it plays every cut without the clip files
   useClipStartPrefetch(
-    stream ? [] : plan.segments.flatMap((segment) => {
+    plan.segments.flatMap((segment) => {
       const url = segment.hasVideo ? sourceUrl(segment) : null;
       return url ? [url] : [];
     }),
@@ -422,9 +423,22 @@ export function useTimelinePlayback(
       const location = locate(currentPlan, to);
       state.stallSince = null;
       const streamVideo = refS.current;
+      const target = Math.min(Math.max(to, 0), currentPlan.duration);
+      // the stream's loader fetches the piece there next
+      focusStream.current?.(target);
+      if (state.mode === "clips" && state.streamReady && streamVideo && bufferedAhead(streamVideo, target) > 0) {
+        // a seek is a jump anyway: land on the stream where it already has the spot
+        state.t = target;
+        enterStreamRef.current?.(0);
+      }
+      if (state.mode === "stream" && streamVideo && bufferedAhead(streamVideo, target) === 0) {
+        // a spot the stream hasn't loaded yet: the clip elements start there at once (their starts are prefetched),
+        // and the stream takes over again at a cut once it has it
+        state.mode = "clips";
+        streamVideo.pause();
+        setStreamActive(false);
+      }
       if (state.mode === "stream" && streamVideo) {
-        // the stream fetches the piece there next (it shows Buffering until it arrives)
-        focusStream.current?.(Math.min(Math.max(to, 0), currentPlan.duration));
         // gapless mode: the stream's clock is the timeline's; one element, just reposition it
         state.t = Math.min(Math.max(to, 0), currentPlan.duration);
         streamVideo.currentTime = state.t;
@@ -487,7 +501,7 @@ export function useTimelinePlayback(
 
   /** Hand playback to the stream element at the current time if it holds `lead` seconds there (see
    * STREAM_LEAD_SECONDS). Returns whether it took over. The clip elements are unloaded: in the background they would
-   * keep downloading and take the stream's bandwidth. */
+   * keep downloading and take the stream's bandwidth (a seek to a spot the stream lacks loads them again). */
   const enterStream = useCallback((lead: number) => {
     const state = runtime.current;
     const streamVideo = refS.current;
@@ -514,6 +528,9 @@ export function useTimelinePlayback(
     setStreamActive(true);
     return true;
   }, [cancelPendingSeek, element, startMedia]);
+  useEffect(() => {
+    enterStreamRef.current = enterStream;
+  }, [enterStream]);
 
   /** Back to the clip elements at the current time (the timeline changed, or the stream went away). */
   const leaveStream = useCallback(() => {

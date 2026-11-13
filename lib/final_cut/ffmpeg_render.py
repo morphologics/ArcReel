@@ -442,11 +442,12 @@ async def accept_final_cut(path: Path, plan: RenderPlan, *, spawn: Spawner | Non
 
 
 
-STREAM_VIDEO_ARGS = ("-bf", "0", "-crf", "23", "-maxrate", "2M", "-bufsize", "4M")
+STREAM_VIDEO_ARGS = ("-bf", "0", "-crf", "23", "-maxrate", "2M", "-bufsize", "4M", "-g", "15")
 """Stream pieces' picture: no B-frames (every piece starts exactly at its first frame), and preview weight. At the
 final cut's quality a piece averaged 6.8 Mbit/s (up to 10): on a 3 Mbit/s link the stream downloaded slower than it
-plays, and the downloads starved the clip player meanwhile. These options come last, so they override the final
-cut's ``-crf``."""
+plays, and the downloads starved the clip player meanwhile. A keyframe every half second: with x264's default (one
+per \~8 s) a seek decoded up to 8 s of frames first, 25-490 ms depending on where it landed. These options come
+last, so they override the final cut's ``-crf``."""
 STREAM_FRAGMENT_FLAGS = "+frag_keyframe+empty_moov+default_base_moof+delay_moov"
 """Fragmented MP4 for Media Source Extensions: the Edit view appends the pieces to one ``<video>``. ``delay_moov``
 keeps the picture on its exact frame times: without it the packager shifts the video to make room for the AAC
