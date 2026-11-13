@@ -7,6 +7,7 @@
 import { useCallback, useEffect, useRef, useState, type RefObject } from "react";
 
 import { audioPreload, mediaWaiting, syncAudio, trackStall } from "./audio-sync";
+import { traceSeek, tracePlayback } from "./playback-trace";
 import { attachStream, bufferedAhead, type ReadyStream } from "./stream-source";
 import {
   advancePlayhead,
@@ -437,6 +438,7 @@ export function useTimelinePlayback(
       if (state.mode === "stream" && streamVideo && bufferedAhead(streamVideo, target) === 0) {
         // a spot the stream hasn't loaded yet: the clip elements start there at once (their starts are prefetched),
         // and the stream takes over again at a cut once it has it
+        tracePlayback(`seek to ${target.toFixed(2)} s: not in the stream yet, clip elements play`);
         state.mode = "clips";
         streamVideo.pause();
         setStreamActive(false);
@@ -445,6 +447,7 @@ export function useTimelinePlayback(
         // gapless mode: the stream's clock is the timeline's; one element, just reposition it
         state.t = Math.min(Math.max(to, 0), currentPlan.duration);
         streamVideo.currentTime = state.t;
+        traceSeek(streamVideo, state.t, "stream");
         if (state.playing) startMedia(streamVideo);
         else streamVideo.pause();
         state.index = location?.index ?? -1;
@@ -471,6 +474,7 @@ export function useTimelinePlayback(
       state.visible = state.slot;
       setVisibleSlot(state.slot);
       if (location.sourceTime !== null) load(state.slot, segment, location.sourceTime);
+      if (location.sourceTime !== null) traceSeek(active, location.sourceTime, `clips, ${segment.clipId}`);
       if (state.playing && segment.hasVideo && !location.holding) startMedia(active);
       else active?.pause();
       preloadAfter(location.index);
@@ -510,6 +514,7 @@ export function useTimelinePlayback(
     const streamVideo = refS.current;
     if (!streamVideo || !state.streamReady || state.mode === "stream") return false;
     if (!streamCovers(streamVideo, state.t, planRef.current.duration, lead)) return false;
+    tracePlayback(`stream takes over at ${state.t.toFixed(2)} s (${state.playing ? "playing" : "paused"})`);
     state.mode = "stream";
     streamVideo.playbackRate = state.speed;
     streamVideo.currentTime = state.t;

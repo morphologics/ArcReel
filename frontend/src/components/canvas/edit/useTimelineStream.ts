@@ -5,6 +5,17 @@ import type { EditTimelineStream } from "@/types/edit-timeline";
 
 import { streamSupported, type ReadyStream } from "./stream-source";
 
+/** `localStorage.setItem("arcreel.playback.stream", "off")` + reload: the old clip-by-clip playback only (A/B tests). */
+const STREAM_SWITCH_KEY = "arcreel.playback.stream";
+
+function streamSwitchedOff(): boolean {
+  try {
+    return localStorage.getItem(STREAM_SWITCH_KEY) === "off";
+  } catch {
+    return false;
+  }
+}
+
 /** How often to ask while the server is still preparing pieces. */
 const STREAM_POLL_MS = 2500;
 
@@ -28,7 +39,7 @@ export function useTimelineStream(
   const requestKey = `${projectName}|${timelineId ?? ""}|${revision ?? ""}|${planKey}`;
 
   useEffect(() => {
-    if (!timelineId || revision === null) return;
+    if (!timelineId || revision === null || streamSwitchedOff()) return;
     const controller = new AbortController();
     let timer = 0;
     const ask = async () => {
