@@ -3,6 +3,7 @@ import { useTranslation } from "react-i18next";
 
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { FullScreenToggle } from "@/components/layout/FullScreenToggle";
 
 import { episodeViewTabId, type EpisodeView, type EpisodeViewTab } from "./episode-view";
 
@@ -83,13 +84,20 @@ export function EpisodePageHeader({
   // the right-hand group (Edit view: its actions such as Render, then Production progress; other views: Production
   // progress). The tabs keep their full width; the head shrinks first (its title truncates).
   const centredTabs = <div className="flex flex-1 justify-center">{viewTabs}</div>;
+  // Edit view: the whole-app full screen (same as the top bar's) also right of the tabs, where the player work is
+  const centredTabsWithFullScreen = (
+    <div className="flex flex-1 items-center justify-center gap-1">
+      {viewTabs}
+      <FullScreenToggle />
+    </div>
+  );
   const headSlot = <div className="flex min-w-0 shrink">{head}</div>;
   if (compact) {
     return (
       <header className="shrink-0 border-b border-border">
         <div className="flex h-11 items-center gap-3 px-3">
           {headSlot}
-          {centredTabs}
+          {centredTabsWithFullScreen}
           <div className="relative flex min-w-0 shrink overflow-x-auto">
             <div ref={onActionsSlot} className="ml-auto flex shrink-0 items-center gap-1.5" />
           </div>
