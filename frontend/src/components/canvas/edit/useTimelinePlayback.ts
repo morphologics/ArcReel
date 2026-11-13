@@ -7,7 +7,7 @@
 import { useCallback, useEffect, useRef, useState, type RefObject } from "react";
 
 import { audioPreload, mediaWaiting, syncAudio, trackStall } from "./audio-sync";
-import { attachStream, type ReadyStream } from "./stream-source";
+import { attachStream, bufferedAhead, type ReadyStream } from "./stream-source";
 import {
   advancePlayhead,
   locate,
@@ -18,6 +18,17 @@ import {
 import type { AudioPlacement } from "./preview-tracks";
 
 type Slot = 0 | 1;
+
+/** How much picture the stream must hold ahead of the playhead to take over from clip elements that are playing
+ * fine (at a cut). Paused, or with the clips stalled, the frame at the playhead is enough: the stream is far lighter
+ * than the source clips, and on a slow link the clips can't keep up anyway. */
+const STREAM_LEAD_SECONDS = 4;
+
+/** The stream holds `t` and `lead` seconds after it (or the rest of the timeline, if shorter); `lead` 0: the frame. */
+function streamCovers(video: HTMLVideoElement, t: number, duration: number, lead: number): boolean {
+  const ahead = bufferedAhead(video, t);
+  return ahead > 0 && ahead >= Math.min(lead, duration - t - 0.1);
+}
 
 export interface TimelinePlayback {
   t: number;
@@ -97,7 +108,8 @@ interface Runtime {
   stalled: boolean;
   /** "stream": the stream element plays and drives the clock; "clips": the two clip elements do. */
   mode: "clips" | "stream";
-  /** The stream for the current plan is fully attached and can take over. */
+  /** The stream for the current plan is attached (its pieces may still be arriving) and can take over wherever
+   * enough of it is buffered (`streamCovers`). */
   streamReady: boolean;
 }
 
@@ -182,6 +194,8 @@ export function useTimelinePlayback(
 ): TimelinePlayback {
   const refA = useRef<HTMLVideoElement>(null);
   const refS = useRef<HTMLVideoElement>(null);
+  /** Points the attached stream's loader at a new playhead (a seek), so the piece there comes next. */
+  const focusStream = useRef<((t: number) => void) | null>(null);
   const [streamActive, setStreamActive] = useState(false);
   const refB = useRef<HTMLVideoElement>(null);
   const [t, setT] = useState(0);
@@ -218,8 +232,9 @@ export function useTimelinePlayback(
 
   const element = useCallback((slot: Slot) => (slot === 0 ? refA.current : refB.current), []);
 
+  // not while a stream is there: its pieces need the bandwidth, and it plays every cut without the clip files
   useClipStartPrefetch(
-    plan.segments.flatMap((segment) => {
+    stream ? [] : plan.segments.flatMap((segment) => {
       const url = segment.hasVideo ? sourceUrl(segment) : null;
       return url ? [url] : [];
     }),
@@ -408,6 +423,8 @@ export function useTimelinePlayback(
       state.stallSince = null;
       const streamVideo = refS.current;
       if (state.mode === "stream" && streamVideo) {
+        // the stream fetches the piece there next (it shows Buffering until it arrives)
+        focusStream.current?.(Math.min(Math.max(to, 0), currentPlan.duration));
         // gapless mode: the stream's clock is the timeline's; one element, just reposition it
         state.t = Math.min(Math.max(to, 0), currentPlan.duration);
         streamVideo.currentTime = state.t;
@@ -468,19 +485,35 @@ export function useTimelinePlayback(
     [element, load, refreshVisible, startMedia],
   );
 
-  /** Hand playback to the stream element at the current time (paused: at once; playing: called at a cut). */
-  const enterStream = useCallback(() => {
+  /** Hand playback to the stream element at the current time if it holds `lead` seconds there (see
+   * STREAM_LEAD_SECONDS). Returns whether it took over. The clip elements are unloaded: in the background they would
+   * keep downloading and take the stream's bandwidth. */
+  const enterStream = useCallback((lead: number) => {
     const state = runtime.current;
     const streamVideo = refS.current;
-    if (!streamVideo || !state.streamReady || state.mode === "stream") return;
+    if (!streamVideo || !state.streamReady || state.mode === "stream") return false;
+    if (!streamCovers(streamVideo, state.t, planRef.current.duration, lead)) return false;
     state.mode = "stream";
     streamVideo.playbackRate = state.speed;
     streamVideo.currentTime = state.t;
     if (state.playing) startMedia(streamVideo);
-    element(0)?.pause();
-    element(1)?.pause();
+    for (const slot of [0, 1] as const) {
+      const clipVideo = element(slot);
+      if (!clipVideo) continue;
+      cancelPendingSeek(slot);
+      clipVideo.pause();
+      clipVideo.removeAttribute("src");
+      clipVideo.load();
+    }
+    state.loaded = [null, null];
+    if (state.stalled) {
+      state.stalled = false;
+      state.stallSince = null;
+      setBuffering(false);
+    }
     setStreamActive(true);
-  }, [element, startMedia]);
+    return true;
+  }, [cancelPendingSeek, element, startMedia]);
 
   /** Back to the clip elements at the current time (the timeline changed, or the stream went away). */
   const leaveStream = useCallback(() => {
@@ -544,27 +577,31 @@ export function useTimelinePlayback(
     seek(runtime.current.t);
   }, [plan, seek, leaveStream]);
 
-  // attach the stream for the shown revision; it takes over when fully appended
+  // attach the stream for the shown revision, loading from the current time on; it takes over as soon as enough lies
+  // ahead (paused: at once, invisibly; playing: the frame loop switches at the next cut), not when all is loaded
   useEffect(() => {
     const streamVideo = refS.current;
     if (!stream || !streamVideo) return;
     if (Math.abs(stream.duration - planRef.current.duration) > 0.1) return;   // not this plan's stream
-    const attached = attachStream(streamVideo, stream);
     let live = true;
+    const progress = () => {
+      if (!live) return;
+      const state = runtime.current;
+      state.streamReady = true;
+      // paused: switch at once (invisible); playing clips that are stalled: switch now; playing fine: at the next cut
+      if (!state.playing || state.stalled) enterStream(0);
+    };
+    const attached = attachStream(streamVideo, stream, { startAt: runtime.current.t, onProgress: progress });
+    focusStream.current = attached.focus;
     attached.ready
-      .then(() => {
-        if (!live) return;
-        const state = runtime.current;
-        state.streamReady = true;
-        // paused: switch at once (invisible); playing: the frame loop switches at the next cut
-        if (!state.playing) enterStream();
-      })
+      .then(progress)
       .catch(() => {
         // the stream can't be played here: stay on the clip elements
       });
     const state = runtime.current;
     return () => {
       live = false;
+      focusStream.current = null;
       leaveStream();
       if (state.mode === "clips") seek(state.t);
       attached.dispose();
@@ -693,6 +730,11 @@ export function useTimelinePlayback(
           video?.pause();
           syncAudioTo(state.t, false);
         }
+        // the clips can't keep up (slow link): the lighter stream takes over as soon as it has this spot
+        if (state.streamReady && enterStream(0)) {
+          syncAudioTo(state.t, true);
+          return;
+        }
         refreshVisible();
         return;
       }
@@ -715,9 +757,8 @@ export function useTimelinePlayback(
       state.t = result.t;
       if (result.index !== state.index) {
         switchTo(result.index);
-        // the stream is ready: hand over at this cut (where the clip elements would switch anyway)
-        if (state.streamReady) {
-          enterStream();
+        // the stream holds this spot: hand over at this cut (where the clip elements would switch anyway)
+        if (state.streamReady && enterStream(STREAM_LEAD_SECONDS)) {
           syncAudioTo(result.t, true);
           setT(result.t);
           return;

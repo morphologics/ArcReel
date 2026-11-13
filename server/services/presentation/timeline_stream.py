@@ -40,7 +40,7 @@ from server.services.presentation.project_state_cache import PROJECT_STATE_CACHE
 logger = logging.getLogger(__name__)
 
 #: Bump when the piece encoding changes: every piece gets a new name and is rebuilt.
-STREAM_ENCODING_VERSION = 3
+STREAM_ENCODING_VERSION = 4
 STREAM_DIRNAME = "stream"
 #: The stream's codecs for ``MediaSource.addSourceBuffer`` (H.264 High, AAC-LC); browsers read the exact profile and
 #: level from each piece's own header.

@@ -442,6 +442,11 @@ async def accept_final_cut(path: Path, plan: RenderPlan, *, spawn: Spawner | Non
 
 
 
+STREAM_VIDEO_ARGS = ("-bf", "0", "-crf", "23", "-maxrate", "2M", "-bufsize", "4M")
+"""Stream pieces' picture: no B-frames (every piece starts exactly at its first frame), and preview weight. At the
+final cut's quality a piece averaged 6.8 Mbit/s (up to 10): on a 3 Mbit/s link the stream downloaded slower than it
+plays, and the downloads starved the clip player meanwhile. These options come last, so they override the final
+cut's ``-crf``."""
 STREAM_FRAGMENT_FLAGS = "+frag_keyframe+empty_moov+default_base_moof+delay_moov"
 """Fragmented MP4 for Media Source Extensions: the Edit view appends the pieces to one ``<video>``. ``delay_moov``
 keeps the picture on its exact frame times: without it the packager shifts the video to make room for the AAC
@@ -493,7 +498,7 @@ async def render_stream_piece(
     video = workspace / "video.mp4"
     audio = workspace / "audio.m4a"
     await _run(
-        segment_args(ffmpeg, alone.segments[0], alone, video, extra_video_args=("-bf", "0")),
+        segment_args(ffmpeg, alone.segments[0], alone, video, extra_video_args=STREAM_VIDEO_ARGS),
         deadline=deadlines.for_seconds(seconds),
         grace=deadlines.grace,
         spawn=spawn,

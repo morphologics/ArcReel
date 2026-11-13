@@ -1,10 +1,10 @@
 import { act, renderHook } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { PlaybackPlan, PlaybackSegment } from "./playback-schedule";
-import { attachStream, type ReadyStream } from "./stream-source";
+import { attachStream, bufferedAhead, type ReadyStream } from "./stream-source";
 import { useTimelinePlayback } from "./useTimelinePlayback";
 
-vi.mock("./stream-source", () => ({ attachStream: vi.fn(), streamSupported: () => true }));
+vi.mock("./stream-source", () => ({ attachStream: vi.fn(), bufferedAhead: vi.fn(), streamSupported: () => true }));
 
 function segment(clipId: string, start: number, hasVideo = true): PlaybackSegment {
   return {
@@ -82,7 +82,9 @@ describe("useTimelinePlayback gapless stream", () => {
     vi.spyOn(HTMLMediaElement.prototype, "play").mockResolvedValue(undefined);
     vi.spyOn(HTMLMediaElement.prototype, "pause").mockImplementation(() => {});
     const dispose = vi.fn();
-    vi.mocked(attachStream).mockReturnValue({ ready: Promise.resolve(), dispose });
+    const focus = vi.fn();
+    vi.mocked(attachStream).mockReturnValue({ ready: Promise.resolve(), dispose, focus });
+    vi.mocked(bufferedAhead).mockReturnValue(100);   // everything loaded unless a test says otherwise
     const video = document.createElement("video");
     const hook = renderHook(
       ({ current, s }: { current: PlaybackPlan; s: ReadyStream | null }) =>
@@ -91,12 +93,12 @@ describe("useTimelinePlayback gapless stream", () => {
     );
     (hook.result.current.streamElement as { current: HTMLVideoElement | null }).current = video;
     hook.rerender({ current: plan, s: initial });
-    return { ...hook, video, dispose };
+    return { ...hook, video, dispose, focus };
   }
 
   it("takes over at once while paused, and seeks move the stream", async () => {
     const { result, video } = setup();
-    expect(attachStream).toHaveBeenCalledWith(video, stream);
+    expect(attachStream).toHaveBeenCalledWith(video, stream, expect.objectContaining({ startAt: 0 }));
     await act(async () => {
       await vi.advanceTimersByTimeAsync(0);
     });
@@ -105,6 +107,27 @@ describe("useTimelinePlayback gapless stream", () => {
     act(() => result.current.seek(12.5));
     expect(video.currentTime).toBe(12.5);
     expect(result.current.t).toBe(12.5);
+  });
+
+  it("takes over once the frame at the playhead is loaded, and a seek points the loader at the new spot", async () => {
+    vi.mocked(bufferedAhead).mockReturnValue(0);
+    const { result, focus } = setup();
+    vi.mocked(bufferedAhead).mockReturnValue(0);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(result.current.streamActive).toBe(false);   // nothing buffered at 0 yet
+
+    const options = vi.mocked(attachStream).mock.calls[0][2];
+    vi.mocked(bufferedAhead).mockReturnValue(2);
+    act(() => options?.onProgress?.());
+    expect(result.current.streamActive).toBe(true);   // paused: the first piece is enough
+
+    vi.mocked(bufferedAhead).mockReturnValue(0);
+    act(() => result.current.seek(15));
+    expect(result.current.streamActive).toBe(true);   // stays on the stream: its piece at 15 s comes next
+    expect(focus).toHaveBeenCalledWith(15);
+    expect(result.current.t).toBe(15);
   });
 
   it("is not attached when its length doesn't match the plan (another revision's stream)", () => {
@@ -145,5 +168,14 @@ describe("useTimelinePlayback gapless stream", () => {
     expect(video.currentTime).toBeGreaterThanOrEqual(5);
     expect(video.currentTime).toBeLessThan(5.2);
     expect(HTMLMediaElement.prototype.play).toHaveBeenCalled();
+  });
+
+  it("doesn't prefetch clip starts while a stream is there", async () => {
+    setup();
+    const fetchMock = vi.mocked(globalThis.fetch);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(3000);
+    });
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 });
