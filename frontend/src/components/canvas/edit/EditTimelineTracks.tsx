@@ -176,22 +176,13 @@ export function EditTimelineTracks({
       )
     : undefined;
 
-  // A mouse press on the tracks seeks at once (as upstream: waiting for the release added the length of the click,
-  // 0.1–0.2 s, to every seek); if the press turns into a drag, which scrolls the tracks sideways like the shots strip,
-  // the playhead goes back to where it was. A tap seeks on release: a swipe (touch, natively: the browser cancels the
-  // pointer) must scroll without moving the playhead.
-  const pressSeekFrom = useRef<number | null>(null);
-  const seekOnPress = (event: PointerEvent<HTMLDivElement>) => {
-    if (event.pointerType !== "mouse" || event.button !== 0) return;
-    const at = timeAt(event.clientX);
-    if (at === null) return;
-    pressSeekFrom.current = t;
-    onSeek(at);
-  };
+  // A click or tap on the tracks seeks (on release); a swipe (touch, natively: the browser cancels the pointer) or a
+  // mouse drag scrolls them sideways, like the shots strip, without moving the playhead.
   const seekOnRelease = (event: PointerEvent<HTMLDivElement>) => {
-    if (event.pointerType === "mouse" || event.button !== 0 || drag.current?.moved) return;
-    const at = timeAt(event.clientX);
-    if (at !== null) onSeek(at);
+    if (event.button !== 0 || drag.current?.moved) return;
+    const box = trackRef.current?.getBoundingClientRect();
+    if (!box || box.width <= 0) return;
+    onSeek(((event.clientX - box.left) / box.width) * duration);
   };
   const onPointerDown = (event: PointerEvent<HTMLDivElement>) => {
     if (event.pointerType !== "mouse" || event.button !== 0 || !scrollRef.current) return;
@@ -206,14 +197,10 @@ export function EditTimelineTracks({
     if (!state.moved) {
       state.moved = true;
       box.setPointerCapture?.(event.pointerId);
-      // a drag, not a click: undo the press's seek
-      if (pressSeekFrom.current !== null) onSeek(pressSeekFrom.current);
-      pressSeekFrom.current = null;
     }
     box.scrollLeft = state.scrollLeft - dx;
   };
   const onPointerUp = () => {
-    pressSeekFrom.current = null;
     // keep `moved` until the click that follows has been swallowed
     if (drag.current && !drag.current.moved) drag.current = null;
   };
@@ -252,7 +239,6 @@ export function EditTimelineTracks({
           <div
             ref={trackRef}
             className="relative cursor-pointer"
-            onPointerDown={seekOnPress}
             onPointerUp={seekOnRelease}
             onContextMenuCapture={(event) => {
               menuAt.current = timeAt(event.clientX);
@@ -456,8 +442,7 @@ function BgmUploadButton({ projectName }: { projectName: string }) {
         title={label}
         disabled={uploading}
         data-testid="edit-bgm-upload"
-        // the tracks seek on press (mouse) or release (touch); uploading isn't a seek
-        onPointerDown={(event) => event.stopPropagation()}
+        // the tracks seek on release; uploading isn't a seek
         onPointerUp={(event) => event.stopPropagation()}
         onClick={() => input.current?.click()}
       >
