@@ -385,6 +385,7 @@ exclude = [
     "frontend",
     "projects",
     "agent_runtime_profile",
+    "agent_runtime_profile_en",
     "vertex_keys",
     "build",
     "dist",

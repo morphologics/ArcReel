@@ -1,0 +1,74 @@
+[
+  {
+    "query": "I have an urban mystery novel, about 50,000 characters, and I want to turn it into vertical short videos for Douyin, help me do it from the start",
+    "should_trigger": true
+  },
+  {
+    "query": "Continue, the characters should be extracted by now, what's next",
+    "should_trigger": true
+  },
+  {
+    "query": "Turn that xianxia novel in the source directory into videos for me, storyteller mode, about 1000 characters per episode",
+    "should_trigger": true
+  },
+  {
+    "query": "That project my_novel_01 I was halfway through last time, check how far along it is",
+    "should_trigger": true
+  },
+  {
+    "query": "Next step",
+    "should_trigger": true
+  },
+  {
+    "query": "Open a new project called test_romance, I'll upload the novel text in a bit",
+    "should_trigger": true
+  },
+  {
+    "query": "Show me what projects there are now and how far along each one is",
+    "should_trigger": true
+  },
+  {
+    "query": "Split my period-drama screenplay into 800 characters per episode, then automatically run all the remaining steps",
+    "should_trigger": true
+  },
+  {
+    "query": "A few storyboard images in episode 3 have the wrong character faces, regenerate E3S02 and E3S05 separately for me",
+    "should_trigger": false
+  },
+  {
+    "query": "Video generation was interrupted halfway, continue the remaining items of episode 2 for me",
+    "should_trigger": false
+  },
+  {
+    "query": "Add an intro and an outro to the final video for me",
+    "should_trigger": false
+  },
+  {
+    "query": "What does the content_mode field in project.json mean? What's the difference between narration and drama",
+    "should_trigger": false
+  },
+  {
+    "query": "Fix the _parse_response method in lib/script/script_generator.py for me, the JSON parsing has a bug",
+    "should_trigger": false
+  },
+  {
+    "query": "Show me how the --scene-ids argument of the generate_storyboard.py script is implemented",
+    "should_trigger": false
+  },
+  {
+    "query": "The database migration errored, alembic upgrade head failed",
+    "should_trigger": false
+  },
+  {
+    "query": "State updates in useProjectStore in the frontend zustand store are delayed, take a look for me",
+    "should_trigger": false
+  },
+  {
+    "query": "Write a new API endpoint for me that lets users batch-delete projects",
+    "should_trigger": false
+  },
+  {
+    "query": "Redraw the design sheets for all characters in episode 1, the style from last time's generation was inconsistent",
+    "should_trigger": false
+  }
+]

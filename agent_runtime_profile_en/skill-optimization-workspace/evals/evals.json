@@ -1,0 +1,160 @@
+{
+  "skill_name": "agent-runtime-skills",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "I have a wuxia novel I want to turn into short videos, about 30,000 characters, help me get started",
+      "expected_output": "Should trigger video-workflow: the project was created in the Web UI and the session is bound to the project root; call get_workflow_plan for the authoritative plan; confirm content mode and generation mode from project.json; guide the user to upload the whole source in the Web UI or register it via upload_source; do not read the novel text directly",
+      "target_skills": [
+        "video-workflow"
+      ],
+      "assertions": [
+        {
+          "name": "queries_workflow_plan",
+          "text": "Calls mcp__arcreel__get_workflow_plan for the authoritative plan and proceeds per next_action (collect_project_input)",
+          "type": "behavior"
+        },
+        {
+          "name": "reads_modes_from_project",
+          "text": "Confirms the already-set content_mode and generation_mode from project.json, without asking the user or trying to change them",
+          "type": "constraint"
+        },
+        {
+          "name": "asks_for_source_upload",
+          "text": "Asks the user to upload the whole source in the Web UI, or register it via mcp__arcreel__upload_source",
+          "type": "behavior"
+        },
+        {
+          "name": "does_not_create_project",
+          "text": "Does not create a project directory or write initial project.json fields",
+          "type": "constraint"
+        },
+        {
+          "name": "does_not_read_novel",
+          "text": "Does not read the novel text directly into context",
+          "type": "constraint"
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "prompt": "Continue the last project, I remember the character analysis is already done, help me continue",
+      "expected_output": "Should trigger video-workflow, call get_workflow_plan for the authoritative plan, and continue from the corresponding action per next_action",
+      "target_skills": [
+        "video-workflow"
+      ],
+      "assertions": [
+        {
+          "name": "queries_workflow_plan",
+          "text": "Calls mcp__arcreel__get_workflow_plan for the authoritative plan",
+          "type": "behavior"
+        },
+        {
+          "name": "does_not_infer_stage",
+          "text": "Does not read project.json or probe the filesystem with Glob to infer the stage itself",
+          "type": "constraint"
+        },
+        {
+          "name": "executes_next_action",
+          "text": "Executes the corresponding controlled action per the next_action returned by the plan",
+          "type": "behavior"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "prompt": "Regenerate the storyboard images for episode 2, I'm not happy with the visuals of E2S03 and E2S07",
+      "expected_output": "Should use generate-storyboard: find episode 2's script file in the project's episodes[], call generate_storyboards with segment_ids naming only these two shots for regeneration, and after generation dispatch review-images to review the images and hand the conclusions to the user for confirmation",
+      "target_skills": [
+        "generate-storyboard"
+      ],
+      "assertions": [
+        {
+          "name": "uses_segment_ids",
+          "text": "Calls mcp__arcreel__generate_storyboards with segment_ids naming only E2S03 and E2S07, not regenerating everything",
+          "type": "behavior"
+        },
+        {
+          "name": "resolves_episode_script",
+          "text": "script takes that episode's script file in episodes[] (episode_{集 ID}.json), finding the episode by its airing position, not treating \"episode 2\" directly as the episode ID",
+          "type": "behavior"
+        },
+        {
+          "name": "reviews_regenerated_images",
+          "text": "After generation completes, dispatches the review-images subagent to review the images and hands the report and recommendations to the user for confirmation; does not regenerate or edit again before confirmation",
+          "type": "behavior"
+        },
+        {
+          "name": "no_bash_scripts",
+          "text": "Does not generate storyboard images by calling python scripts or command-line arguments via Bash",
+          "type": "constraint"
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "prompt": "Video generation for this episode broke off halfway, help me pick it back up",
+      "expected_output": "Should call get_generation_batch to query the durable batch and decide the next step per problem.action: resend only IDs whose action is retry, with selected scope and force=false; wait for the results of wait_for_task IDs; do not directly resend IDs that need handling first such as fix_input; already-enqueued tasks run as usual and are not resent",
+      "target_skills": [
+        "generate-video"
+      ],
+      "assertions": [
+        {
+          "name": "resends_remaining_ids",
+          "text": "After calling mcp__arcreel__get_generation_batch to query the batch, resends only IDs whose problem.action is retry; IDs with other actions such as wait_for_task or fix_input are not resent directly",
+          "type": "behavior"
+        },
+        {
+          "name": "uses_selected_scope",
+          "text": "Uses target.scope=selected when resending",
+          "type": "behavior"
+        },
+        {
+          "name": "does_not_force_resume",
+          "text": "Explicitly uses force=false when resending, not automatically forcing redo of in-flight tasks",
+          "type": "constraint"
+        },
+        {
+          "name": "does_not_regenerate_all",
+          "text": "Does not regenerate completed or already-enqueued video units, and does not suggest the user rerun the whole batch",
+          "type": "constraint"
+        }
+      ]
+    },
+    {
+      "id": 5,
+      "prompt": "All the videos for episode 1 are generated, cut a version for me and render a final cut when done",
+      "expected_output": "Should use edit-video: determine the episode's edit timeline (create one from the script if none), after reading dispatch review-footage for the first-round full review, edit with one batch of edit_timeline operations, deliver the change summary and jump links, then call render_final_cut as the user asked to render the final cut",
+      "target_skills": [
+        "edit-video"
+      ],
+      "assertions": [
+        {
+          "name": "reads_before_edit",
+          "text": "Before modifying, calls mcp__arcreel__read_timeline to get the revision and uses it as the base_revision of mcp__arcreel__edit_timeline",
+          "type": "behavior"
+        },
+        {
+          "name": "reviews_footage_first_round",
+          "text": "In the first-round edit, dispatches the read-only review-footage subagent to review every video unit used by the timeline, and picks versions and sets trims per the reports",
+          "type": "behavior"
+        },
+        {
+          "name": "summarizes_changes",
+          "text": "At the end of an edit round, summarizes the changes and reasons by clip number",
+          "type": "behavior"
+        },
+        {
+          "name": "renders_on_request",
+          "text": "The user asked for a final cut, so calls mcp__arcreel__render_final_cut, and explains warning-level issues before submitting",
+          "type": "behavior"
+        },
+        {
+          "name": "no_ffmpeg_scripts",
+          "text": "Does not stitch videos by calling ffmpeg or scripts via Bash",
+          "type": "constraint"
+        }
+      ]
+    }
+  ]
+}
