@@ -455,16 +455,15 @@ encoder's 1024-sample start-up delay (frame 1 at 0.0547 s instead of 0.0333 s), 
 last frame fell outside its slot: one frame lost at every cut."""
 
 
-def stream_piece_mux_args(ffmpeg: str, video: Path, audio: Path, output: Path) -> list[str]:
-    """Package one stream piece: its picture and its audio, copied, as fragmented MP4."""
+def stream_piece_mux_args(ffmpeg: str, video: Path, audio: Path | None, output: Path) -> list[str]:
+    """Package one stream piece: its picture and its audio (none: picture only), copied, as fragmented MP4."""
     return [
         *_base_args(ffmpeg),
         *local_file_input(video),
-        *local_file_input(audio),
+        *(local_file_input(audio) if audio is not None else []),
         "-map",
         "0:v:0",
-        "-map",
-        "1:a:0",
+        *(["-map", "1:a:0"] if audio is not None else []),
         "-c",
         "copy",
         "-movflags",
@@ -484,6 +483,7 @@ async def render_stream_piece(
     *,
     deadlines: RenderDeadlines = DEFAULT_RENDER_DEADLINES,
     spawn: Spawner | None = None,
+    with_sound: bool = True,
 ) -> None:
     """Render one segment of ``plan`` as a self-contained stream piece for the Edit view's gapless playback.
 
@@ -491,7 +491,8 @@ async def render_stream_piece(
     starts exactly at its first frame (a leading timestamp offset left holes in Firefox's buffer). The audio is the
     final cut's mix of the segment's own clips (original sound at the clips' volumes, frame-aligned, padded with
     silence to the segment's length); narration and BGM stay with the player. Pieces rendered with one plan share
-    their encoder settings, so the browser's decoder runs through them without restarting.
+    their encoder settings, so the browser's decoder runs through them without restarting. ``with_sound`` False
+    (the whole timeline has no clip sound): picture only, so the browser runs no audio output for the stream.
     """
     fps = plan.profile.fps
     alone = RenderPlan(profile=plan.profile, segments=(segment.at_zero(),), total_frames=segment.frames)
@@ -505,15 +506,16 @@ async def render_stream_piece(
         spawn=spawn,
         output=video,
     )
+    if with_sound:
+        await _run(
+            audio_mix_args(ffmpeg, alone, audio),
+            deadline=deadlines.for_seconds(seconds),
+            grace=deadlines.grace,
+            spawn=spawn,
+            output=audio,
+        )
     await _run(
-        audio_mix_args(ffmpeg, alone, audio),
-        deadline=deadlines.for_seconds(seconds),
-        grace=deadlines.grace,
-        spawn=spawn,
-        output=audio,
-    )
-    await _run(
-        stream_piece_mux_args(ffmpeg, video, audio, output),
+        stream_piece_mux_args(ffmpeg, video, audio if with_sound else None, output),
         deadline=deadlines.for_seconds(seconds / 10),
         grace=deadlines.grace,
         spawn=spawn,

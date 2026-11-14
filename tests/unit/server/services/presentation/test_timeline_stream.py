@@ -18,7 +18,7 @@ from server.services.presentation.timeline_stream import TimelineStreamService, 
 PROFILE = OutputProfile(width=1080, height=1920, fps=30)
 
 
-def _plan(durations_us: list[int], *, trim_first_end_us: int | None = None):
+def _plan(durations_us: list[int], *, trim_first_end_us: int | None = None, has_audio: bool = True):
     clips = [
         EditClip.model_validate(
             {"id": f"c{i + 1}", "unit_id": f"U{i}", "source_volume": 1.0}
@@ -31,7 +31,7 @@ def _plan(durations_us: list[int], *, trim_first_end_us: int | None = None):
         for i in range(len(durations_us))
     ]
     media = {
-        f"U{i}": RenderMedia(path=Path(f"/p/videos/u{i}.mp4"), video_version=1, duration_us=d, has_audio=True)
+        f"U{i}": RenderMedia(path=Path(f"/p/videos/u{i}.mp4"), video_version=1, duration_us=d, has_audio=has_audio)
         for i, d in enumerate(durations_us)
     }
     return plan_render(render_clips(clips, media), stream_profile(PROFILE))
@@ -61,8 +61,8 @@ def setup(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     (tmp_path / "demo").mkdir()
     rendered: list[int] = []
 
-    async def fake_render(ffmpeg, segment, plan, output, workspace, **_: Any) -> None:
-        rendered.append(segment.start_frame)
+    async def fake_render(ffmpeg, segment, plan, output, workspace, *, with_sound=True, **_: Any) -> None:
+        rendered.append(segment.start_frame if with_sound else -segment.start_frame - 1)
         await asyncio.to_thread(output.write_bytes, b"piece")
 
     monkeypatch.setattr(timeline_stream, "render_stream_piece", fake_render)
@@ -175,3 +175,17 @@ async def test_the_background_sweep_builds_every_timeline_ahead(monkeypatch: pyt
         await timeline_stream._prebuild_loop(projects)  # type: ignore[arg-type]
 
     assert built == [("tl-one", False), ("tl-two", False)]
+
+
+async def test_a_timeline_without_clip_sound_gets_picture_only_pieces(setup) -> None:
+    service, final_cuts, rendered, _ = setup
+    final_cuts.plan = _plan([2_000_000], has_audio=False)
+    silent = await service.stream("demo", "tl-1")
+    await _settle()
+    final_cuts.plan = _plan([2_000_000])
+    heard = await service.stream("demo", "tl-1")
+
+    assert silent.codecs == 'video/mp4; codecs="avc1.640028"'
+    assert heard.codecs == 'video/mp4; codecs="avc1.640028, mp4a.40.2"'
+    assert silent.pieces[0].key != heard.pieces[0].key
+    assert rendered == [-1]   # rendered without sound

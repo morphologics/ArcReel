@@ -54,6 +54,8 @@ STREAM_DIRNAME = "stream"
 #: The stream's codecs for ``MediaSource.addSourceBuffer`` (H.264 High, AAC-LC); browsers read the exact profile and
 #: level from each piece's own header.
 STREAM_CODECS = 'video/mp4; codecs="avc1.640028, mp4a.40.2"'
+#: A timeline without any clip sound gets picture-only pieces (no audio output for the browser to run and reset).
+STREAM_CODECS_PICTURE_ONLY = 'video/mp4; codecs="avc1.640028"'
 
 #: One ffmpeg at a time per server process: the members' studios share the box's CPU.
 _BUILD_SLOTS = asyncio.Semaphore(1)
@@ -138,13 +140,20 @@ class TimelineStream(BaseModel):
     pieces: tuple[StreamPiece, ...] = ()
 
 
+def _with_sound(plan: RenderPlan) -> bool:
+    """Whether any clip of the timeline is heard (has sound, volume above zero)."""
+    return any(planned.clip.has_audio and planned.clip.source_volume > 0 for planned in plan.clips)
+
+
 def _piece_key(segment: RenderSegment, plan: RenderPlan) -> str:
-    spec = {
+    spec: dict[str, object] = {
         "encoding": STREAM_ENCODING_VERSION,
         "profile": dataclasses.asdict(plan.profile),
         # position-independent: an edit earlier in the timeline moves a piece without changing it
         "segment": dataclasses.asdict(segment.at_zero()),
     }
+    if not _with_sound(plan):
+        spec["sound"] = False   # only then: the names of pieces with sound stay as they were
     canonical = json.dumps(spec, sort_keys=True, default=str, separators=(",", ":"))
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:32]
 
@@ -192,6 +201,7 @@ class TimelineStreamService:
             timeline_id=timeline_id,
             revision=revision,
             duration=plan.total_frames / fps,
+            codecs=STREAM_CODECS if _with_sound(plan) else STREAM_CODECS_PICTURE_ONLY,
             ready=ready,
             pieces=pieces,
         )
@@ -252,7 +262,9 @@ async def _build(build: tuple[str, str]) -> None:
                 await asyncio.to_thread(workspace.mkdir, exist_ok=True)
                 try:
                     partial = workspace / "piece.mp4"
-                    await render_stream_piece(ffmpeg, segment, plan, partial, workspace, spawn=_spawner(watched))
+                    await render_stream_piece(
+                        ffmpeg, segment, plan, partial, workspace, spawn=_spawner(watched), with_sound=_with_sound(plan)
+                    )
                     await asyncio.to_thread(os.replace, partial, stream_dir / f"{key}.mp4")
                 finally:
                     await asyncio.to_thread(shutil.rmtree, workspace, True)
