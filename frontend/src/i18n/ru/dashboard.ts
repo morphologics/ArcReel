@@ -501,6 +501,8 @@ export default {
   'edit_view_empty_description': 'Поручите монтаж агенту или создайте ленту по сценарию: каждый видеоблок используется целиком, между клипами — прямые склейки.',
   'edit_timeline_create_failed': 'Не удалось создать монтажную ленту: {{message}}',
   'edit_render_button': 'Рендер',
+  'edit_open_in_openreel': 'Открыть в OpenReel',
+  'edit_open_in_openreel_hint': 'Открыть эту монтажную ленту в OpenReel (эксперимент): эпизод скачивается вместе с медиа и открывается там как отдельный проект',
   'edit_render_blocked_reason': 'На монтажной ленте есть блокирующие проблемы: {{count}}. Устраните их перед рендером.',
   'edit_render_blocked_reason_units': 'На монтажной ленте есть блокирующие проблемы ({{count}}) в {{units}}. Устраните их перед рендером.',
   'edit_render_blocked_view_issues': 'Показать проблемы ({{count}})',

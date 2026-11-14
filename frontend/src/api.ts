@@ -786,6 +786,11 @@ class API {
     return `/projects/${encodeURIComponent(projectName)}/edit-timelines/${encodeURIComponent(timelineId)}`;
   }
 
+  /** The latest revision as an OpenReel project backup (.oreelpack), for the experimental "Open in OpenReel". */
+  static getEditTimelineOreelpackUrl(projectName: string, timelineId: string): string {
+    return `${API_BASE}${this.editTimelinePath(projectName, timelineId)}/oreelpack`;
+  }
+
   /** 成片现状；旁白版本省略时按项目默认，字幕省略时烧入。 */
   static async getFinalCutStatus(
     projectName: string,

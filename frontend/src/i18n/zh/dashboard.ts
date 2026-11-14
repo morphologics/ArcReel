@@ -481,6 +481,8 @@ export default {
   'edit_view_empty_description': '可以交给 Agent 剪一版，也可以按脚本新建一条：每个视频单元整段使用，片段之间全部硬切。',
   'edit_timeline_create_failed': '新建剪辑时间线失败：{{message}}',
   'edit_render_button': '出片',
+  'edit_open_in_openreel': '在 OpenReel 中打开',
+  'edit_open_in_openreel_hint': '在 OpenReel 中打开这条剪辑时间线（实验性）：下载本集及其素材，在 OpenReel 中作为单独的项目打开',
   'edit_render_blocked_reason': '当前剪辑时间线有 {{count}} 个问题阻断出片，处理后才能出片',
   'edit_render_blocked_reason_units': '当前剪辑时间线有 {{count}} 个问题阻断出片，涉及 {{units}}，处理后才能出片',
   'edit_render_blocked_view_issues': '查看问题（{{count}}）',

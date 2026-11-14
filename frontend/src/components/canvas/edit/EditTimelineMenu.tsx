@@ -1,6 +1,6 @@
 import { useId, useState, type FormEvent } from "react";
 import { useTranslation } from "react-i18next";
-import { Loader2, MoreHorizontal, Pencil, Trash2 } from "lucide-react";
+import { ExternalLink, Loader2, MoreHorizontal, Pencil, Trash2 } from "lucide-react";
 
 import { API } from "@/api";
 import {
@@ -33,6 +33,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import type { EditTimelineSummary } from "@/types/edit-timeline";
 import { errMsg } from "@/utils/async";
+import { useOpenReelHref } from "./open-in-openreel";
 
 /** 与服务端 `TIMELINE_NAME_MAX_LENGTH` 一致。 */
 const NAME_MAX_LENGTH = 40;
@@ -55,6 +56,7 @@ export function EditTimelineMenu({ projectName, timeline, onRenamed, onDeleted }
   const { t } = useTranslation("dashboard");
   const [dialog, setDialog] = useState<OpenDialog>(null);
   const label = t("edit_view_menu_aria", { name: timeline.name });
+  const openReel = useOpenReelHref(projectName, timeline.id);
 
   return (
     <>
@@ -62,7 +64,16 @@ export function EditTimelineMenu({ projectName, timeline, onRenamed, onDeleted }
         <DropdownMenuTrigger render={<Button variant="ghost" size="icon-sm" aria-label={label} />}>
           <MoreHorizontal aria-hidden />
         </DropdownMenuTrigger>
-        <DropdownMenuContent align="start" className="w-40">
+        <DropdownMenuContent align="start" className={openReel ? "w-56" : "w-40"}>
+          {openReel && (
+            <DropdownMenuItem
+              title={t("edit_open_in_openreel_hint")}
+              onClick={() => window.open(openReel, "_blank", "noopener,noreferrer")}
+            >
+              <ExternalLink aria-hidden />
+              {t("edit_open_in_openreel")}
+            </DropdownMenuItem>
+          )}
           <DropdownMenuItem onClick={() => setDialog("rename")}>
             <Pencil aria-hidden />
             {t("edit_view_menu_rename")}

@@ -483,6 +483,8 @@ export default {
   'edit_view_empty_description': 'Có thể giao cho Agent dựng một bản, hoặc tạo từ kịch bản: mỗi đơn vị video dùng trọn vẹn, các đoạn nối bằng cắt thẳng.',
   'edit_timeline_create_failed': 'Không tạo được dòng thời gian dựng: {{message}}',
   'edit_render_button': 'Xuất phim',
+  'edit_open_in_openreel': 'Mở trong OpenReel',
+  'edit_open_in_openreel_hint': 'Mở dòng thời gian dựng này trong OpenReel (thử nghiệm): tải tập phim cùng tư liệu và mở ở đó như một dự án riêng',
   'edit_render_blocked_reason': 'Dòng thời gian dựng này có {{count}} vấn đề chặn việc xuất phim. Hãy xử lý trước khi xuất.',
   'edit_render_blocked_reason_units': 'Dòng thời gian dựng này có {{count}} vấn đề chặn việc xuất phim ở {{units}}. Hãy xử lý trước khi xuất.',
   'edit_render_blocked_view_issues': 'Xem vấn đề ({{count}})',

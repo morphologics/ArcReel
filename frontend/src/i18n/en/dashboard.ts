@@ -481,6 +481,8 @@ export default {
   'edit_view_empty_description': 'Let the Agent make a cut, or create one from the script: every video unit is used in full, with hard cuts between clips.',
   'edit_timeline_create_failed': 'Couldn’t create the edit timeline: {{message}}',
   'edit_render_button': 'Render',
+  'edit_open_in_openreel': 'Open in OpenReel',
+  'edit_open_in_openreel_hint': 'Open this edit timeline in OpenReel (experimental): it downloads the episode with its media and opens it there as a separate project',
   'edit_render_blocked_reason': 'This edit timeline has {{count}} blocking issue(s). Resolve them before rendering.',
   'edit_render_blocked_reason_units': 'This edit timeline has {{count}} blocking issue(s) in {{units}}. Resolve them before rendering.',
   'edit_render_blocked_view_issues': 'View issues ({{count}})',

@@ -16,7 +16,7 @@ from typing import TYPE_CHECKING, Annotated, Any, Literal
 import jwt
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from fastapi import Path as PathParam
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field
 from starlette.background import BackgroundTask
 
@@ -43,6 +43,7 @@ from lib.jianying_draft.results import JianyingDraftStatus
 from lib.project.project_change_hints import project_change_source
 from lib.project.project_manager import get_project_manager
 from server.services.presentation.project_state_cache import PROJECT_STATE_CACHE
+from server.services.presentation.timeline_oreelpack import TimelineOreelPackService
 from server.services.presentation.timeline_stream import TimelineStream, TimelineStreamService
 from lib.workflow.operation_admission import AdmissionState
 from lib.workflow.workflow_state import WorkflowActionType, WorkflowRequestError, WorkflowStateService
@@ -100,6 +101,13 @@ def get_timeline_stream_service() -> TimelineStreamService:
 
 
 TimelineStreamServiceDep = Annotated[TimelineStreamService, Depends(get_timeline_stream_service)]
+
+
+def get_timeline_oreelpack_service() -> TimelineOreelPackService:
+    return TimelineOreelPackService(get_project_manager())
+
+
+TimelineOreelPackServiceDep = Annotated[TimelineOreelPackService, Depends(get_timeline_oreelpack_service)]
 
 
 def get_workflow_state_service() -> WorkflowStateService:
@@ -474,6 +482,32 @@ async def read_edit_timeline_stream(
         return await service.stream(project_name, timeline_id, at=at, watched=not prefetch)
     except EditTimelineError as exc:
         raise edit_timeline_api_error(exc) from exc
+
+
+@router.get("/projects/{project_name}/edit-timelines/{timeline_id}/oreelpack")
+async def download_edit_timeline_oreelpack(
+    project_name: str,
+    timeline_id: str,
+    service: TimelineOreelPackServiceDep,
+) -> StreamingResponse:
+    """The latest revision as an OpenReel project backup (``.oreelpack``: timeline + media), for the Edit view's
+    experimental "Open in OpenReel" (deploy/studio/OPENREEL.md)."""
+    try:
+        pack = await service.build(project_name, timeline_id)
+    except EditTimelineError as exc:
+        raise edit_timeline_api_error(exc) from exc
+    return StreamingResponse(
+        pack.chunks(),
+        media_type="application/octet-stream",
+        headers={
+            "Content-Disposition": f'attachment; filename="{pack.filename}"',
+            "Content-Length": str(pack.size),
+            "Cache-Control": "no-store",
+            # already compressed media: keeps the response gzip-free (the compression middleware skips responses that
+            # declare an encoding), so no CPU spent on it and the length reaches the browser
+            "Content-Encoding": "identity",
+        },
+    )
 
 
 @router.post("/projects/{project_name}/edit-timelines/{timeline_id}/final-cut", status_code=202)
