@@ -68,7 +68,12 @@ export function EditTimelineMenu({ projectName, timeline, onRenamed, onDeleted }
           {openReel && (
             <DropdownMenuItem
               title={t("edit_open_in_openreel_hint")}
-              onClick={() => window.open(openReel, "_blank", "noopener,noreferrer")}
+              onClick={() => {
+                // a new tab next to the studio (a features string, even "noopener", makes Chromium open a popup
+                // window instead); cut the link back to this page by hand
+                const tab = window.open(openReel, "_blank");
+                if (tab) tab.opener = null;
+              }}
             >
               <ExternalLink aria-hidden />
               {t("edit_open_in_openreel")}
