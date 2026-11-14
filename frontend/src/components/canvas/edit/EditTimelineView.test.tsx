@@ -755,6 +755,30 @@ describe("EditTimelineView", () => {
     await waitFor(() => expect(playheadSeconds()).toBeCloseTo(3.9, 1));
   });
 
+  it("seeks as soon as the mouse is pressed on the tracks, and takes it back when the press becomes a drag", async () => {
+    vi.spyOn(API, "listEditTimelines").mockResolvedValue({
+      timelines: [summary("tl-00000002", "初剪", "2026-09-30T10:00:00Z", 3)],
+    });
+    vi.spyOn(API, "getEditTimeline").mockResolvedValue(INITIAL_CUT);
+
+    renderView();
+
+    await screen.findByTestId("edit-clip-c1");
+    const tracks = screen.getByRole("group", { name: "时间线轨道，点击跳到对应时间" });
+    vi.spyOn(tracks, "getBoundingClientRect").mockReturnValue(new DOMRect(0, 0, 780, 100));
+
+    fireEvent.pointerDown(tracks, { button: 0, clientX: 390, pointerType: "mouse" });
+    await waitFor(() => expect(playheadSeconds()).toBeCloseTo(3.9, 1));   // on the press, before any release
+    fireEvent.pointerUp(tracks, { button: 0, clientX: 390, pointerType: "mouse" });
+    expect(playheadSeconds()).toBeCloseTo(3.9, 1);
+
+    fireEvent.pointerDown(tracks, { button: 0, clientX: 585, pointerType: "mouse" });
+    await waitFor(() => expect(playheadSeconds()).toBeCloseTo(5.85, 1));
+    fireEvent.pointerMove(tracks, { clientX: 520, pointerType: "mouse" });   // a drag: the tracks scroll instead
+    await waitFor(() => expect(playheadSeconds()).toBeCloseTo(3.9, 1));
+    fireEvent.pointerUp(tracks, { button: 0, clientX: 520, pointerType: "mouse" });
+  });
+
   describe("链接参数 tl / t", () => {
     const OTHER_CUT: EditTimelineReadout = {
       ...INITIAL_CUT,
