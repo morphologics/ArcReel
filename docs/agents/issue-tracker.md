@@ -26,25 +26,25 @@ When set to `yes`, PRs run through the same labels and states as issues, using t
 
 GitHub shares one number space across issues and PRs, so a bare `#42` may be either: resolve with `gh pr view 42` and fall back to `gh issue view 42`.
 
-## Spec 与 ticket
+## Specs and tickets
 
-Spec 和按 Spec 拆出的 ticket 在**列表视图**即可区分与溯源：
+Specs and the tickets split out from a Spec can be told apart and traced back right in the **list view**:
 
 ### Spec
 
-- 标题以 `Spec: ` 开头
-- 只打 `Spec` 标签；可认领的是拆出的 ticket
+- Title starts with `Spec: `
+- Labelled only `Spec`; what can be claimed is the tickets split out from it
 
 ### Ticket
 
-- 标题**末尾**加归属尾缀 `[Spec #<父编号>]`
-- 正文保留 `## Parent` 一节引用父 Spec
-- 挂为父 Spec 的 **GitHub 原生 sub-issue**：创建时用 `gh issue create --parent <父编号> ...`，已有 ticket 用 `gh issue edit <父编号> --add-sub-issue <ticket 编号>`
+- Add the ownership suffix `[Spec #<parent number>]` at the **end** of the title
+- Keep a `## Parent` section in the body referencing the parent Spec
+- Attach it as a **GitHub native sub-issue** of the parent Spec: when creating, use `gh issue create --parent <parent number> ...`; for existing tickets, use `gh issue edit <parent number> --add-sub-issue <ticket number>`
 
-## 认领
+## Claiming
 
-- 开始处理前先 assign 给自己，triage 标签保持不变：`gh issue edit <n> --add-assignee @me`
-- 可认领 = `ready-for-agent` 且无 assignee：`gh issue list --label ready-for-agent --state open --search "no:assignee"`
+- Before starting work, assign it to yourself, leaving the triage labels unchanged: `gh issue edit <n> --add-assignee @me`
+- Claimable = `ready-for-agent` and no assignee: `gh issue list --label ready-for-agent --state open --search "no:assignee"`
 
 ## When a skill says "publish to the issue tracker"
 

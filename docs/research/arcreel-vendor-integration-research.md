@@ -1,303 +1,303 @@
-# ArcReel 三家厂商接入调研报告（阿里百炼 / 可灵 Kling / MiniMax）
+# ArcReel Integration Research Report for Three Vendors (Alibaba Bailian / Kling / MiniMax)
 
-**调研日期**：2026-05-29
-**用途**：作为后续 PRD 与设计文档的输入素材，评估三家作为 ArcReel 预设供应商接入（文本 / 图片 / 视频）
-**币种**：中国内地站人民币定价为准，国际站差异已标注
-**定价说明**：各家价格随促销波动，本报告价格供选型参考，标注了官方来源与第三方来源的区别；上线前应以各官方控制台为准
+**Research date**: 2026-05-29
+**Purpose**: Input material for the follow-up PRD and design documents; evaluates onboarding the three vendors as ArcReel preset providers (text / image / video)
+**Currency**: Mainland China site prices in RMB are authoritative; differences on the international sites are noted
+**Pricing note**: Each vendor's prices fluctuate with promotions. Prices in this report are for selection reference only, and official sources are distinguished from third-party sources; before launch, the official consoles must be treated as authoritative
 
-**信息来源与可信度声明**：
-- 阿里百炼：模型清单已对照[官方"模型大全"页](https://help.aliyun.com/zh/model-studio/models)（页面更新时间 2026-05-21）逐条核对，模型 ID 以官方页为准。
-- MiniMax：模型清单已对照[官方"模型发布"页](https://platform.minimaxi.com/docs/release-notes/models)核对发布时间线，旗舰判断准确。
-- 可灵 Kling：模型清单与定价均已对照可灵官方文档（[视频模型](https://klingai.com/document-api/apiReference/model/videoModels) / [图像模型](https://klingai.com/document-api/apiReference/model/imageModels)）与[官方定价页](https://klingai.com/dev/pricing)一手核对，模型 ID、能力矩阵、积分单价（视频 1 积分=¥1、图像 1 积分=¥0.025）以官方为准。
-- 阿里"按张"的 `qwen-image-2.0` / `wan2.7-image` 精确单价、登录墙后的细分档位仍需控制台确认；标注"控制台核对"的为未一手确认项。
-
----
-
-## 0. 调研范围与定位
-
-本报告是**调研性质**的素材汇编，覆盖三家厂商**当前最新优质模型**的能力、API 协议、官方定价，聚焦 ArcReel 中文网文转视频工作流（剧本→角色/场景设计图→分镜图→视频→合成）的实际需求。
-
-**不在范围内**（属 PRD / 设计文档阶段决策）：接入次序、阶段划分、成本熔断/降级规则、backend 类设计、数据库 schema。
-
-模型筛选原则：只收录适合 ArcReel 接入的最新优质模型，过时或被取代的旧版本仅在必要处标注"已被取代"，不展开。
+**Information sources and reliability statement**:
+- Alibaba Bailian: the model list has been checked item by item against the [official "Model Catalog" page](https://help.aliyun.com/zh/model-studio/models) (page updated 2026-05-21); model IDs follow the official page.
+- MiniMax: the model list has been checked against the release timeline on the [official "Model Releases" page](https://platform.minimaxi.com/docs/release-notes/models); the flagship assessment is accurate.
+- Kling: the model list and pricing have been verified first-hand against Kling's official documentation ([video models](https://klingai.com/document-api/apiReference/model/videoModels) / [image models](https://klingai.com/document-api/apiReference/model/imageModels)) and the [official pricing page](https://klingai.com/dev/pricing); model IDs, capability matrix, and credit unit prices (video 1 credit = ¥1, image 1 credit = ¥0.025) follow the official sources.
+- Alibaba's exact per-image prices for `qwen-image-2.0` / `wan2.7-image` and the detailed tiers behind the login wall still need console confirmation; items marked "check in console" have not been confirmed first-hand.
 
 ---
 
-## 1. 结论先行：推荐评估的模型清单
+## 0. Research Scope and Positioning
 
-| 厂商 | 模态 | 模型 | 模型 ID | 官方定价 | 协议 |
+This report is a **research-oriented** compilation of material covering the capabilities, API protocols, and official pricing of the **current latest high-quality models** from the three vendors, focused on the practical needs of ArcReel's Chinese web-novel-to-video workflow (script → character/scene design images → storyboard images → video → compositing).
+
+**Out of scope** (decisions for the PRD / design document stage): onboarding order, phase split, cost circuit-breaker/degradation rules, backend class design, database schema.
+
+Model selection principle: only include the latest high-quality models suitable for ArcReel integration; outdated or superseded old versions are only marked "superseded" where necessary, without further detail.
+
+---
+
+## 1. Conclusion First: Recommended Models for Evaluation
+
+| Vendor | Modality | Model | Model ID | Official pricing | Protocol |
 |---|---|---|---|---|---|
-| 阿里百炼 | text | Qwen-Plus（量产均衡） | `qwen-plus` | 阶梯 0-128K：¥0.8 入 / ¥2 出（百万 token） | OpenAI 兼容 ✅ |
-| 阿里百炼 | text | Qwen3.6-Plus（最新视觉语言 Plus） | `qwen3.6-plus` | ¥2 入 / ¥12 出；缓存命中 ¥0.2 | OpenAI 兼容 ✅ |
-| 阿里百炼 | text | Qwen3-Max（稳定旗舰） | `qwen3-max` | 阶梯 0-32K：¥2.5 入 / ¥10 出 | OpenAI 兼容 ✅ |
-| 阿里百炼 | text | Qwen3.7-Max（最新旗舰，Agent） | `qwen3.7-max` | ¥12 入 / ¥36 出（256K-1M）；限时 5 折至 ¥6/¥18（2026-06-22 止） | OpenAI 兼容 ✅ |
-| 阿里百炼 | image | Qwen-Image-2.0-Pro（官方推荐，漫画/分镜/文字渲染） | `qwen-image-2.0-pro` / `qwen-image-2.0`（加速版） | 按张（控制台核对） | DashScope 同步 |
-| 阿里百炼 | image | 万相 2.7 图像（人像真实感/组图） | `wan2.7-image` / `-image-pro` | 按张（控制台核对，失败不扣） | DashScope 同步/异步 |
-| 阿里百炼 | video | HappyHorse 1.0 首帧生视频 | `happyhorse-1.0-i2v` | 720P ¥0.9/s、1080P ¥1.6/s | DashScope 异步 |
-| 阿里百炼 | video | HappyHorse 1.0 参考生视频（R2V） | `happyhorse-1.0-r2v` | 720P ¥0.9/s、1080P ¥1.6/s | DashScope 异步 |
-| 阿里百炼 | video | HappyHorse 1.0 文生视频 | `happyhorse-1.0-t2v` | 720P ¥0.9/s、1080P ¥1.6/s | DashScope 异步 |
-| 阿里百炼 | video | 万相 2.7 图生视频（首尾帧/续写/音频） | `wan2.7-i2v-2026-04-25` | 按秒分辨率档（控制台核对） | DashScope 异步 |
-| 可灵 Kling | image | Kling Omni Image O1（多参考角色一致，IP/漫画/连载） | `kling-image-o1`（1-10 图参考）/ `kling-v3-omni`（4K+组图） | ¥0.2/张（1K-2K）；v3-omni 4K ¥0.4 | JWT + 异步 |
-| 可灵 Kling | video | 可灵 v3 / v3-omni（旗舰，多镜头+4K+主体控制） | `kling-v3` / `kling-v3-omni` | std ¥0.6/s、pro ¥0.8/s、4K ¥3/s（无声原价） | JWT + 异步 |
-| 可灵 Kling | video | 可灵 v2-6（唯一支持视频内人声控制） | `kling-v2-6` | pro 有声 ¥1.0/s、无声 ¥0.8/s | JWT + 异步 |
-| 可灵 Kling | video | 可灵 2.5 Turbo（性价比主力） | `kling-v2-5-turbo` | std 无声 ¥0.6/s、pro 有声 ¥1.0/s | JWT + 异步 |
-| MiniMax | text | MiniMax-M2.7（旗舰） | `MiniMax-M2.7` | ¥2.1 入 / ¥8.4 出；缓存读 ¥0.42 | OpenAI/Anthropic 双兼容 ✅ |
-| MiniMax | image | image-01（含角色一致性） | `image-01` | ¥0.025/张（成功才扣） | 自有 REST（单步取 URL） |
-| MiniMax | video | Hailuo 2.3（T2V+I2V 高质量） | `MiniMax-Hailuo-2.3` | 768P 6s ¥2 / 10s ¥4；1080P 6s ¥3.5 | 自有 REST（两步 file_id） |
-| MiniMax | video | Hailuo 2.3-Fast（仅 I2V，半价） | `MiniMax-Hailuo-2.3-Fast` | 768P 6s ¥1.35 / 10s ¥2.25；1080P 6s ¥2.31 | 同上 |
-| MiniMax | video | S2V-01（角色一致性 R2V 专项） | `S2V-01` | 资源包 1.5 积分/视频（约 ¥3） | 同上，`subject_reference` |
+| Alibaba Bailian | text | Qwen-Plus (balanced, production volume) | `qwen-plus` | Tier 0-128K: ¥0.8 in / ¥2 out (per million tokens) | OpenAI-compatible ✅ |
+| Alibaba Bailian | text | Qwen3.6-Plus (latest vision-language Plus) | `qwen3.6-plus` | ¥2 in / ¥12 out; cache hit ¥0.2 | OpenAI-compatible ✅ |
+| Alibaba Bailian | text | Qwen3-Max (stable flagship) | `qwen3-max` | Tier 0-32K: ¥2.5 in / ¥10 out | OpenAI-compatible ✅ |
+| Alibaba Bailian | text | Qwen3.7-Max (latest flagship, agent) | `qwen3.7-max` | ¥12 in / ¥36 out (256K-1M); limited-time 50% off to ¥6/¥18 (until 2026-06-22) | OpenAI-compatible ✅ |
+| Alibaba Bailian | image | Qwen-Image-2.0-Pro (officially recommended, comics/storyboards/text rendering) | `qwen-image-2.0-pro` / `qwen-image-2.0` (accelerated version) | Per image (check in console) | DashScope sync |
+| Alibaba Bailian | image | Wan 2.7 Image (portrait realism/image sets) | `wan2.7-image` / `-image-pro` | Per image (check in console, failures not charged) | DashScope sync/async |
+| Alibaba Bailian | video | HappyHorse 1.0 first-frame-to-video | `happyhorse-1.0-i2v` | 720P ¥0.9/s, 1080P ¥1.6/s | DashScope async |
+| Alibaba Bailian | video | HappyHorse 1.0 reference-to-video (R2V) | `happyhorse-1.0-r2v` | 720P ¥0.9/s, 1080P ¥1.6/s | DashScope async |
+| Alibaba Bailian | video | HappyHorse 1.0 text-to-video | `happyhorse-1.0-t2v` | 720P ¥0.9/s, 1080P ¥1.6/s | DashScope async |
+| Alibaba Bailian | video | Wan 2.7 image-to-video (first/last frame/continuation/audio) | `wan2.7-i2v-2026-04-25` | Per second by resolution tier (check in console) | DashScope async |
+| Kling | image | Kling Omni Image O1 (multi-reference character consistency, IP/comics/serials) | `kling-image-o1` (1-10 reference images) / `kling-v3-omni` (4K + image sets) | ¥0.2/image (1K-2K); v3-omni 4K ¥0.4 | JWT + async |
+| Kling | video | Kling v3 / v3-omni (flagship, multi-shot + 4K + subject control) | `kling-v3` / `kling-v3-omni` | std ¥0.6/s, pro ¥0.8/s, 4K ¥3/s (silent, list price) | JWT + async |
+| Kling | video | Kling v2-6 (the only one supporting in-video voice control) | `kling-v2-6` | pro with audio ¥1.0/s, silent ¥0.8/s | JWT + async |
+| Kling | video | Kling 2.5 Turbo (value workhorse) | `kling-v2-5-turbo` | std silent ¥0.6/s, pro with audio ¥1.0/s | JWT + async |
+| MiniMax | text | MiniMax-M2.7 (flagship) | `MiniMax-M2.7` | ¥2.1 in / ¥8.4 out; cache read ¥0.42 | OpenAI/Anthropic dual-compatible ✅ |
+| MiniMax | image | image-01 (with character consistency) | `image-01` | ¥0.025/image (charged only on success) | Proprietary REST (single step returns URL) |
+| MiniMax | video | Hailuo 2.3 (T2V + I2V, high quality) | `MiniMax-Hailuo-2.3` | 768P 6s ¥2 / 10s ¥4; 1080P 6s ¥3.5 | Proprietary REST (two-step file_id) |
+| MiniMax | video | Hailuo 2.3-Fast (I2V only, half price) | `MiniMax-Hailuo-2.3-Fast` | 768P 6s ¥1.35 / 10s ¥2.25; 1080P 6s ¥2.31 | Same as above |
+| MiniMax | video | S2V-01 (dedicated character-consistency R2V) | `S2V-01` | Resource pack 1.5 credits/video (about ¥3) | Same as above, `subject_reference` |
 
-**协议归属概览**：文本三家中阿里、MiniMax 都走 OpenAI 兼容（可复用现有 backend），可灵无文本模型；图片与视频阿里走 DashScope（图片以同步为主——Qwen-Image-2.0 仅同步、Wan-Image 同步/异步皆可；视频统一异步任务），可灵走 JWT，MiniMax 走自有 REST（图片单步取 URL、视频两步 file_id）。
+**Protocol overview**: For text, Alibaba and MiniMax both use OpenAI-compatible APIs (the existing backend can be reused); Kling has no text model. For images and video, Alibaba uses DashScope (images are mainly sync — Qwen-Image-2.0 is sync only, Wan-Image supports both sync and async; video is uniformly async tasks), Kling uses JWT, and MiniMax uses its own REST (images return a URL in one step, video uses a two-step file_id).
 
 ---
 
-## 2. R2V（参考生视频 / 角色一致性）能力对比
+## 2. R2V (Reference-to-Video / Character Consistency) Capability Comparison
 
-> R2V = 用一张或多张参考图，在新场景中保持**角色/主体一致性**生成视频，是网文转视频"主角串戏"的核心能力。各家字段名、参考图数量、模型支持差异大，单列对比。
+> R2V = using one or more reference images to generate video that keeps **character/subject consistency** in a new scene. It is the core capability for "the protagonist appearing across scenes" in web-novel-to-video. Field names, number of reference images, and model support differ greatly between vendors, so it is compared separately here.
 
-### 2.1 横向对比
+### 2.1 Side-by-side Comparison
 
-| 厂商 | R2V 模型 ID | 参考字段名 | 参考图上限 | 一致性对象 | 音频 | 备注 |
+| Vendor | R2V model ID | Reference field name | Reference image limit | Consistency target | Audio | Notes |
 |---|---|---|---|---|---|---|
-| 阿里 HappyHorse | `happyhorse-1.0-r2v` | DashScope input 参考图字段 | 多角色 | 角色 + 主体 | ✅ 有声 | 720P/1080P，3-15s，原生音画 |
-| 阿里 Wan 2.7 | `wan2.7-r2v` | 图N/视频N 引用格式 | 多角色（图+视频混合引用） | 角色 + 主体 | ✅ 可传音色/视频主体 | 720P/1080P，2-10s，**唯一支持视频参考主体** |
-| 阿里 Wan 2.6 | `wan2.6-r2v` / `wan2.6-r2v-flash` | 同上 | 多角色 | 角色 | ✅ | flash 版快速生成 |
-| 可灵 v3 / v3-omni | `kling-v3` / `kling-v3-omni` | 主体控制参数 | 视频角色主体 + 多图主体 | 角色 + 主体 | 官方标 ❌ 人声 | 官方"主体控制"最强；v3-omni 另支持视频参考（3-10s）|
-| 可灵 O1 | `kling-video-o1` | 多图主体 + 视频参考 | 多图主体 | 角色 + 视频驱动 | ❌ | 含视频参考（视频编辑），3-10s |
-| 可灵 v1-6（旧） | `kling-v1-6` | `image_list[]` | 多图参考生视频（旧版） | 多主体融合 | 视模型 | 多图参考 + 多模态视频编辑 |
-| MiniMax S2V-01 | `S2V-01` | `subject_reference[]` | 1 张（仅人脸） | 单角色人脸 | — | 业界首创单图驱动；环境可能轻度变形 |
+| Alibaba HappyHorse | `happyhorse-1.0-r2v` | DashScope input reference image field | Multiple characters | Character + subject | ✅ With audio | 720P/1080P, 3-15s, native audio-video |
+| Alibaba Wan 2.7 | `wan2.7-r2v` | Image N / Video N reference format | Multiple characters (mixed image + video references) | Character + subject | ✅ Can pass voice timbre/video subject | 720P/1080P, 2-10s, **the only one supporting video-referenced subjects** |
+| Alibaba Wan 2.6 | `wan2.6-r2v` / `wan2.6-r2v-flash` | Same as above | Multiple characters | Character | ✅ | flash version for fast generation |
+| Kling v3 / v3-omni | `kling-v3` / `kling-v3-omni` | Subject control parameters | Video character subject + multi-image subject | Character + subject | Officially marked ❌ voice | Strongest official "subject control"; v3-omni additionally supports video reference (3-10s) |
+| Kling O1 | `kling-video-o1` | Multi-image subject + video reference | Multi-image subject | Character + video-driven | ❌ | Includes video reference (video editing), 3-10s |
+| Kling v1-6 (old) | `kling-v1-6` | `image_list[]` | Multi-image reference-to-video (old version) | Multi-subject fusion | Depends on model | Multi-image reference + multimodal video editing |
+| MiniMax S2V-01 | `S2V-01` | `subject_reference[]` | 1 image (face only) | Single-character face | — | Industry first single-image driving; environment may be slightly distorted |
 
-### 2.2 关键边界
+### 2.2 Key Boundaries
 
-- **可灵 R2V 已升级到"主体控制"**（官方一手）：当前最强是 `kling-v3` / `kling-v3-omni` 的"主体控制（视频角色主体 + 多图主体）"，`kling-video-o1` 支持多图主体 + 视频参考；老 `kling-v1-6` 的多图参考生视频是早期能力，已被 v3/o1 超越。
-- **MiniMax Hailuo 2.3 / 2.3-Fast 不支持 R2V**。Hailuo 2.3 只有 T2V + I2V，2.3-Fast 仅 I2V。MiniMax 的角色一致性 R2V 必须用独立的 **S2V-01** 模型，且仅支持单张人脸参考。
-- **阿里 R2V 能力最全**：HappyHorse-1.0-r2v 与 Wan2.7-r2v 都支持**多角色**参考且带原生音频；Wan2.7-r2v 是阿里侧**唯一支持"视频参考主体"**的模型，可灵 v3-omni/o1 也支持视频参考。
+- **Kling R2V has been upgraded to "subject control"** (official, first-hand): currently the strongest is the "subject control (video character subject + multi-image subject)" in `kling-v3` / `kling-v3-omni`; `kling-video-o1` supports multi-image subject + video reference; the multi-image reference-to-video of the old `kling-v1-6` is an early capability, now surpassed by v3/o1.
+- **MiniMax Hailuo 2.3 / 2.3-Fast do not support R2V**. Hailuo 2.3 only has T2V + I2V, and 2.3-Fast is I2V only. MiniMax's character-consistency R2V requires the separate **S2V-01** model, which only supports a single face reference.
+- **Alibaba has the most complete R2V capability**: both HappyHorse-1.0-r2v and Wan2.7-r2v support **multi-character** references with native audio; Wan2.7-r2v is the **only model on the Alibaba side supporting "video-referenced subjects"**, and Kling v3-omni/o1 also support video reference.
 
-### 2.3 网文场景 R2V 适配
+### 2.3 R2V Fit for Web-novel Scenarios
 
-- 主角单人串戏：MiniMax `S2V-01`（单图人脸驱动，一致性最稳）或 `happyhorse-1.0-r2v`
-- 多角色同框对手戏：阿里 `wan2.7-r2v` / `happyhorse-1.0-r2v`（多角色 + 音频），或可灵 `kling-v3-omni`（视频角色主体 + 多图主体）
-- 视频参考驱动（以参考视频带动作/主体）：阿里 `wan2.7-r2v`、可灵 `kling-v3-omni` / `kling-video-o1`
+- Single protagonist across scenes: MiniMax `S2V-01` (single-image face driving, most stable consistency) or `happyhorse-1.0-r2v`
+- Multiple characters interacting in the same frame: Alibaba `wan2.7-r2v` / `happyhorse-1.0-r2v` (multi-character + audio), or Kling `kling-v3-omni` (video character subject + multi-image subject)
+- Video-reference driven (using a reference video to drive motion/subject): Alibaba `wan2.7-r2v`, Kling `kling-v3-omni` / `kling-video-o1`
 
 ---
 
-## 3. 阿里百炼（DashScope / Model Studio）
+## 3. Alibaba Bailian (DashScope / Model Studio)
 
-> **地域**：北京 `dashscope.aliyuncs.com` / 新加坡 `dashscope-intl.aliyuncs.com` / 弗吉尼亚 `dashscope-us.aliyuncs.com`，三地 API Key 独立不可跨域。
+> **Regions**: Beijing `dashscope.aliyuncs.com` / Singapore `dashscope-intl.aliyuncs.com` / Virginia `dashscope-us.aliyuncs.com`; API keys for the three regions are independent and cannot be used across regions.
 
-### 3.1 文本：Qwen 系列（含最新 Qwen3.7-Max）
+### 3.1 Text: Qwen Series (including the latest Qwen3.7-Max)
 
-#### 模型与官方定价（中国内地，元/百万 token，阶梯按单次请求输入总量计费整单）
+#### Models and Official Pricing (Mainland China, RMB per million tokens; tiers are determined by the total input of a single request, and the whole request is billed at that tier)
 
-| 模型 ID | 定位 | 输入 | 输出 | 上下文 | 说明 |
+| Model ID | Positioning | Input | Output | Context | Notes |
 |---|---|---|---|---|---|
-| `qwen3.7-max` | **最新旗舰**，面向 Agent 时代，对位 GPT-5.5 / Claude Opus 4.7 | ¥12 | ¥36 | 256K-1M | 限时 5 折至 ¥6/¥18（至 2026-06-22）；缓存命中输入 ¥1.2；AA 榜 56.6 分全球第五国产第一；纯文本能力开放 |
-| `qwen3-max` | 稳定旗舰（快照 `qwen3-max-2025-09-23` / `-2026-01-23`） | ¥2.5（0-32K） | ¥10 | 256K | 32-128K ¥4/¥16；128-256K ¥7/¥28；原生 search agent；思考模式输出翻数倍 |
-| `qwen3.6-plus` | 最新视觉语言 Plus（2026-04-02 快照，官方千问首推之一） | ¥2 | ¥12 | — | 缓存命中 ¥0.2；代码/OCR/多模态超 3.5 系列 |
-| `qwen3.6-flash` | 最新 Flash（官方千问首推之一，高频低成本档） | 控制台核对 | 控制台核对 | — | 官方模型大全页千问首推三款之一；适合 ArcReel 最高频的 prompt 改写/标签提取 |
-| `qwen-plus` | 量产均衡（稳定别名，可指向 qwen3.5-plus） | ¥0.8（0-128K） | ¥2 | 1M | 128-256K ¥2/—；超长上下文低成本一梯队 |
-| `qwen-long` | 超长文档低成本 | ¥0.5 | ¥2 | 10M | 长章节理解/长文摘要最省 |
+| `qwen3.7-max` | **Latest flagship**, aimed at the agent era, positioned against GPT-5.5 / Claude Opus 4.7 | ¥12 | ¥36 | 256K-1M | Limited-time 50% off to ¥6/¥18 (until 2026-06-22); cache-hit input ¥1.2; AA leaderboard score 56.6, fifth globally and first among Chinese models; text-only capability available |
+| `qwen3-max` | Stable flagship (snapshots `qwen3-max-2025-09-23` / `-2026-01-23`) | ¥2.5 (0-32K) | ¥10 | 256K | 32-128K ¥4/¥16; 128-256K ¥7/¥28; native search agent; thinking mode multiplies output |
+| `qwen3.6-plus` | Latest vision-language Plus (2026-04-02 snapshot, one of the official top Qwen recommendations) | ¥2 | ¥12 | — | Cache hit ¥0.2; code/OCR/multimodal exceed the 3.5 series |
+| `qwen3.6-flash` | Latest Flash (one of the official top Qwen recommendations, high-frequency low-cost tier) | Check in console | Check in console | — | One of the three top Qwen recommendations on the official Model Catalog page; suitable for ArcReel's most frequent prompt rewriting/tag extraction |
+| `qwen-plus` | Balanced for production volume (stable alias, may point to qwen3.5-plus) | ¥0.8 (0-128K) | ¥2 | 1M | 128-256K ¥2/—; top tier for low-cost ultra-long context |
+| `qwen-long` | Low-cost ultra-long documents | ¥0.5 | ¥2 | 10M | Cheapest for long-chapter understanding/long-text summarisation |
 
-> 阿里官方"模型大全"页（2026-05-21）的**千问文本首推三款**为 `qwen3.7-max` / `qwen3.6-plus` / `qwen3.6-flash`；`qwen-plus` / `qwen-long` 是稳定别名档，仍可用但已非首推位。
+> On Alibaba's official "Model Catalog" page (2026-05-21), the **three top-recommended Qwen text models** are `qwen3.7-max` / `qwen3.6-plus` / `qwen3.6-flash`; `qwen-plus` / `qwen-long` are stable-alias tiers, still usable but no longer in the top-recommended slots.
 
-**选型分工建议**：旗舰关键剧情/复杂推理用 `qwen3.7-max` 或 `qwen3-max`；高频分镜 prompt 改写、角色卡、配音脚本提取用 `qwen-plus` 或 `qwen3.6-plus`（性价比）；超长网文章节整本理解用 `qwen-long`。简单任务用 Qwen3.7-Max 属"大炮打蚊子"。
+**Suggested division of work**: use `qwen3.7-max` or `qwen3-max` for flagship key plot points/complex reasoning; use `qwen-plus` or `qwen3.6-plus` (value) for high-frequency storyboard prompt rewriting, character cards, and voice-over script extraction; use `qwen-long` for whole-book understanding of ultra-long web-novel chapters. Using Qwen3.7-Max for simple tasks is "using a cannon to swat a mosquito".
 
-**API**：OpenAI 兼容 ✅ — `base_url=https://dashscope.aliyuncs.com/compatible-mode/v1`，端点 `/chat/completions`，Bearer Key。支持流式、`tool_calls`、`response_format={"type":"json_object"}`。非标参数 `enable_thinking` / `thinking_budget` 走 `extra_body` 透传。中文复杂 schema 结构化输出用 `tool_choice` 强制工具调用比 `response_format` 稳。
+**API**: OpenAI-compatible ✅ — `base_url=https://dashscope.aliyuncs.com/compatible-mode/v1`, endpoint `/chat/completions`, Bearer key. Supports streaming, `tool_calls`, `response_format={"type":"json_object"}`. Non-standard parameters `enable_thinking` / `thinking_budget` are passed through via `extra_body`. For structured output with complex Chinese schemas, forcing a tool call with `tool_choice` is more stable than `response_format`.
 
-**阶梯计费规则**：单次请求输入 Token 总量决定整单档位单价（不是超出部分才涨价）。
+**Tiered billing rule**: the total input tokens of a single request determine the per-unit price tier for the whole request (it is not only the excess that costs more).
 
-> 已被取代的旧版（`qwen-turbo` / Qwen2.x 系列）不展开；存量稳定接口仍可用。
+> Superseded old versions (`qwen-turbo` / Qwen2.x series) are not covered; existing stable interfaces remain usable.
 
-#### 百炼三方模型代理（一个接入点覆盖多家）
+#### Bailian Third-party Model Proxy (one endpoint covering multiple vendors)
 
-阿里官方模型大全页显示，百炼除千问外还以**与千问完全一致的 OpenAI 兼容格式**代理了多家第三方文本模型，ArcReel 接入百炼一个 `dashscope` provider + OpenAI backend 即可顺带拿到这些（model 字段切换）：
+Alibaba's official Model Catalog page shows that, besides Qwen, Bailian also proxies several third-party text models **in exactly the same OpenAI-compatible format as Qwen**. By onboarding a single Bailian `dashscope` provider + OpenAI backend, ArcReel gets these as well (switching the model field):
 
-- `deepseek-v4-pro` / `deepseek-v4-flash`（DeepSeek V4）
-- `kimi-k2.6`（月之暗面 Kimi）
-- `glm-5.1`（智谱 GLM）
-- `MiniMax-M2.7`（百炼代理路径 `MiniMax/MiniMax-M2.7`，享隐式缓存 20% 折扣）
-- `mimo-v2.5-pro`（小米 MiMo）
+- `deepseek-v4-pro` / `deepseek-v4-flash` (DeepSeek V4)
+- `kimi-k2.6` (Moonshot AI Kimi)
+- `glm-5.1` (Zhipu GLM)
+- `MiniMax-M2.7` (Bailian proxy path `MiniMax/MiniMax-M2.7`, with a 20% implicit-cache discount)
+- `mimo-v2.5-pro` (Xiaomi MiMo)
 
-对 ArcReel 的价值：若不想分别对接 MiniMax/DeepSeek 等官方站，可统一走百炼一个接入点；代价是这些三方模型在百炼的定价可能与其官方站略有差异，精确价以百炼控制台为准。
+Value for ArcReel: if we don't want to integrate the official MiniMax/DeepSeek sites separately, everything can go through a single Bailian endpoint; the trade-off is that Bailian's pricing for these third-party models may differ slightly from their official sites, and the exact price should be taken from the Bailian console.
 
-### 3.2 图像：Qwen-Image 与 万相 2.7 图像（两条平行产品线）
+### 3.2 Image: Qwen-Image and Wan 2.7 Image (two parallel product lines)
 
-阿里有两套图像生成产品线，**定位互补**，网文场景都值得评估：
+Alibaba has two image generation product lines with **complementary positioning**; both are worth evaluating for web-novel scenarios:
 
-#### ① Qwen-Image 系列（通义千问团队，文字渲染 + 漫画分镜 SOTA）
+#### ① Qwen-Image Series (Qwen team, SOTA in text rendering + comic storyboards)
 
-- **模型 ID**：
-  - `qwen-image-2.0-pro` / `qwen-image-2.0-pro-2026-03-03`（**官方推荐**，图像生成与编辑融合模型，文字渲染/真实质感/语义遵循最强，仅同步接口）
-  - `qwen-image-2.0` / `qwen-image-2.0-2026-03-03`（加速版，效果与性能平衡，仅同步接口）
-  - `qwen-image-edit`（图像编辑/局部修改专用，content 含 1-3 张图 + 一条编辑指令）
-  - 前代 `qwen-image-max` / `qwen-image-plus`（已被 2.0 系列取代，不展开）
-- **发布**：Qwen-Image-2.0 于 2026-02-10 发布（与字节 Seedream 5.0 同日），千问首个图像生成模型 2.0 迭代，7B 参数（较初版 20B MMDiT 大幅瘦身）
-- **核心能力（网文契合度高）**：
-  - **复杂文本渲染 SOTA**：支持最长 1000 token（约 800-1000 汉字）长指令，准确处理复杂排版、多字体（楷书/瘦金体/小楷等）、多介质文字（玻璃/衣物/杂志等）；官方演示成功生成《兰亭集序》324 字全文配图
-  - **多格漫画生成 + 跨格角色一致性稳定** —— 直接对应分镜场景
-  - **原生 2K 分辨率**（2048×2048）输出，细腻刻画人物皮肤/植被/建筑纹理；支持写实、水墨、手绘、动漫、油画等十余种风格
-  - **生图编辑二合一**：统一架构在同一模型内完成文生图 + 图生图编辑（题词、换背景、合成多图、跨次元融合），物体级编辑不损周围细节
-  - AI Arena 文生图 + 图像编辑双榜第一；DPG-Bench 88.32 分超 FLUX.1（12B）的 83.84 分
-- **API**：DashScope，文生图与图像编辑分端点；2.0 系列仅同步接口；图像编辑 `messages` 仅含一个 user 对象（image 1-3 张 + 一条 text 指令），建议图像宽高 384-3072px、单张 ≤10MB，返回 OSS 临时 URL
-- **定价**：按成功生成张数计费，失败不扣费、不耗免费额度；精确单价以百炼控制台"模型列表与价格"为准（官方称商用价预计约为 Midjourney 三分之一）
-- **语言**：正式支持简体中文、英文
+- **Model IDs**:
+  - `qwen-image-2.0-pro` / `qwen-image-2.0-pro-2026-03-03` (**officially recommended**, fused image generation and editing model, strongest text rendering/realistic texture/semantic adherence, sync interface only)
+  - `qwen-image-2.0` / `qwen-image-2.0-2026-03-03` (accelerated version, balance of quality and performance, sync interface only)
+  - `qwen-image-edit` (dedicated to image editing/local modification; content contains 1-3 images + one editing instruction)
+  - Previous generation `qwen-image-max` / `qwen-image-plus` (superseded by the 2.0 series, not covered)
+- **Release**: Qwen-Image-2.0 was released on 2026-02-10 (the same day as ByteDance Seedream 5.0); the 2.0 iteration of Qwen's first image generation model, 7B parameters (substantially slimmed down from the original 20B MMDiT)
+- **Core capabilities (high fit for web novels)**:
+  - **SOTA complex text rendering**: supports long instructions of up to 1000 tokens (about 800-1000 Chinese characters), accurately handles complex layouts, multiple fonts (regular script/Slender Gold script/small regular script, etc.), and text on multiple media (glass/clothing/magazines, etc.); the official demo successfully generated an illustration containing the full 324-character text of the "Lanting Xu" (Preface to the Orchid Pavilion Poems)
+  - **Multi-panel comic generation + stable cross-panel character consistency** — maps directly to the storyboard scenario
+  - **Native 2K resolution** (2048×2048) output, finely rendering skin/vegetation/architectural textures; supports more than ten styles including realistic, ink wash, hand-drawn, anime, and oil painting
+  - **Generation and editing in one**: a unified architecture performs text-to-image + image-to-image editing (adding inscriptions, changing backgrounds, compositing multiple images, cross-dimension fusion) in the same model; object-level editing doesn't damage surrounding detail
+  - First on both the AI Arena text-to-image and image editing leaderboards; DPG-Bench score 88.32, beating FLUX.1 (12B) at 83.84
+- **API**: DashScope, separate endpoints for text-to-image and image editing; the 2.0 series has sync interfaces only; image editing `messages` contain only one user object (1-3 images + one text instruction); recommended image width/height 384-3072px, single image ≤10MB; returns temporary OSS URLs
+- **Pricing**: billed per successfully generated image; failures are not charged and don't consume free quota; the exact unit price should be taken from the Bailian console "Model list and pricing" (officially the commercial price is expected to be about one third of Midjourney)
+- **Languages**: officially supports Simplified Chinese and English
 
-#### ② 万相 2.7 图像（万相团队，人像真实感 + 组图）
+#### ② Wan 2.7 Image (Wan team, portrait realism + image sets)
 
-- **模型 ID**：`wan2.7-image`（标准）/ `wan2.7-image-pro`（大规模，复杂场景更稳）；发布 2026-04-01
-- **核心能力**：
-  - 人物多样性"千人千面"捏脸，告别同质 AI 脸（人像真实感强）
-  - **组图生成单次最多 12 张**，保持同角色/同风格/同调色 → 分镜参考
-  - 超长文字渲染（最多 4000 字符 / 3K tokens，12 种语言印刷级中文排版）
-  - Hex 色值精确控制；多参考图最多 9 图合影保持角色一致
-  - 支持自然语言在线修改画面与剧情
-- **API**：DashScope 同步 HTTP `POST /api/v1/services/aigc/multimodal-generation/generation`（wan2.6 起支持同步）或异步 + `X-DashScope-Async: enable`
-- **定价**：按成功张数计费，失败不扣；精确单价以控制台为准
+- **Model IDs**: `wan2.7-image` (standard) / `wan2.7-image-pro` (large-scale, more stable in complex scenes); released 2026-04-01
+- **Core capabilities**:
+  - Diverse characters with "a thousand faces for a thousand people" face customisation, no more homogeneous AI faces (strong portrait realism)
+  - **Image set generation of up to 12 images per call**, keeping the same character/style/colour grading → storyboard reference
+  - Ultra-long text rendering (up to 4000 characters / 3K tokens, print-grade Chinese typesetting in 12 languages)
+  - Precise hex colour control; up to 9 reference images for group photos with consistent characters
+  - Supports online modification of the image and plot in natural language
+- **API**: DashScope sync HTTP `POST /api/v1/services/aigc/multimodal-generation/generation` (sync supported since wan2.6) or async + `X-DashScope-Async: enable`
+- **Pricing**: billed per successful image, failures not charged; exact unit price per the console
 
-**两线选型**：分镜/漫画/带文字海报优先 Qwen-Image-2.0-Pro（跨格角色一致 + 文字 SOTA + 原生 2K）；写实人像/角色多样性/单次组图优先 wan2.7-image。两者均按张计费、走 DashScope。
+**Choosing between the two lines**: for storyboards/comics/posters with text, prefer Qwen-Image-2.0-Pro (cross-panel character consistency + SOTA text + native 2K); for realistic portraits/character diversity/single-call image sets, prefer wan2.7-image. Both are billed per image and go through DashScope.
 
-### 3.3 视频：HappyHorse 1.0 系列（主推）与 万相 Wan 2.7
+### 3.3 Video: HappyHorse 1.0 Series (primary) and Wan 2.7
 
-> HappyHorse（快乐小马）是阿里 2026-04 正式官宣的视频大模型族，**Artificial Analysis Video Arena 盲测文生/图生"无音频"赛道双第一、有音频赛道居全球第二（紧随 Seedance 2.0）**。150 亿参数单流 Transformer，原生音视频同步生成，单 H100 生成 5s 1080P 仅 38s（同类 2-3 倍速度）。**全开源可商用**，对 ArcReel 开源项目尤其友好。
+> HappyHorse (快乐小马) is a family of large video models officially announced by Alibaba in 2026-04. **In the Artificial Analysis Video Arena blind tests it ranked first in both the text-to-video and image-to-video "no audio" tracks, and second globally in the audio track (just behind Seedance 2.0)**. A 15-billion-parameter single-stream Transformer with native synchronised audio-video generation; a single H100 generates 5s of 1080P in just 38s (2-3x faster than comparable models). **Fully open source and commercially usable**, which is especially friendly for the open-source ArcReel project.
 
-#### HappyHorse 1.0 全族（官方定价：720P ¥0.9/秒、1080P ¥1.6/秒）
+#### The Full HappyHorse 1.0 Family (official pricing: 720P ¥0.9/second, 1080P ¥1.6/second)
 
-| 模型 ID | 类型 | 特性 | 输出规格 |
+| Model ID | Type | Features | Output spec |
 |---|---|---|---|
-| `happyhorse-1.0-t2v` | 文生视频 | 有声、7 语言唇形、多镜头 | 720P/1080P，3-15s，24fps MP4 |
-| `happyhorse-1.0-i2v` | 首帧生视频 | 有声、1080P | 720P/1080P，3-15s，24fps MP4 |
-| `happyhorse-1.0-r2v` | 参考生视频 | 有声、多角色一致性 | 720P/1080P，3-15s，24fps MP4 |
-| `happyhorse-1.0-video-edit` | 视频编辑 | 有声、风格转换 | 720P/1080P，3-15s，24fps MP4 |
+| `happyhorse-1.0-t2v` | Text-to-video | Audio, lip sync in 7 languages, multi-shot | 720P/1080P, 3-15s, 24fps MP4 |
+| `happyhorse-1.0-i2v` | First-frame-to-video | Audio, 1080P | 720P/1080P, 3-15s, 24fps MP4 |
+| `happyhorse-1.0-r2v` | Reference-to-video | Audio, multi-character consistency | 720P/1080P, 3-15s, 24fps MP4 |
+| `happyhorse-1.0-video-edit` | Video editing | Audio, style transfer | 720P/1080P, 3-15s, 24fps MP4 |
 
-唇形语言：中、英、日、韩、德、法、粤 七种。最长 15 秒多镜头叙事，电影级光影/运镜/人物一致性。
+Lip-sync languages: Mandarin, English, Japanese, Korean, German, French, Cantonese — seven in total. Multi-shot narrative up to 15 seconds, with cinematic lighting/camera movement/character consistency.
 
-#### 阿里官方推荐的 HappyHorse / Wan 分工
+#### Alibaba's Officially Recommended Division between HappyHorse / Wan
 
-| 场景 | 官方推荐 | 备选 |
+| Scenario | Official recommendation | Alternative |
 |---|---|---|
-| 文生视频（有声） | `happyhorse-1.0-t2v` | `wan2.7-t2v-2026-04-25`（需自定义音频文件时） |
-| 首帧生视频 | `happyhorse-1.0-i2v` | — |
-| 首尾帧 / 视频续写 / 长视频串联 | `wan2.7-i2v-2026-04-25` | — |
-| 参考生视频（角色一致） | `happyhorse-1.0-r2v` | `wan2.7-r2v`（需视频参考主体/自定义音色） |
-| 视频编辑 | `happyhorse-1.0-video-edit` | `wan2.7-videoedit`（特效/运镜复刻） |
+| Text-to-video (with audio) | `happyhorse-1.0-t2v` | `wan2.7-t2v-2026-04-25` (when a custom audio file is needed) |
+| First-frame-to-video | `happyhorse-1.0-i2v` | — |
+| First/last frame / video continuation / chaining long videos | `wan2.7-i2v-2026-04-25` | — |
+| Reference-to-video (character consistency) | `happyhorse-1.0-r2v` | `wan2.7-r2v` (when video-referenced subjects/custom voice timbre are needed) |
+| Video editing | `happyhorse-1.0-video-edit` | `wan2.7-videoedit` (effects/camera-movement replication) |
 
-#### Wan 2.7 全族（720P/1080P，2-15s，30fps）
+#### The Full Wan 2.7 Family (720P/1080P, 2-15s, 30fps)
 
-| 模型 ID | 类型 | 特性 |
+| Model ID | Type | Features |
 |---|---|---|
-| `wan2.7-t2v` / `wan2.7-t2v-2026-04-25` | 文生视频 | 音频同步、多镜头叙事 |
-| `wan2.7-i2v` / `wan2.7-i2v-2026-04-25` | 图生视频 | 首帧、首尾帧、视频续写、音频驱动 |
-| `wan2.7-r2v` | 视频引用 | 多角色、图N/视频N 引用格式（唯一支持视频参考主体），2-10s |
-| `wan2.7-videoedit` | 视频编辑 | 指令编辑、视频迁移、特效/运镜复刻，最长 10s |
+| `wan2.7-t2v` / `wan2.7-t2v-2026-04-25` | Text-to-video | Audio sync, multi-shot narrative |
+| `wan2.7-i2v` / `wan2.7-i2v-2026-04-25` | Image-to-video | First frame, first/last frame, video continuation, audio-driven |
+| `wan2.7-r2v` | Video reference | Multi-character, Image N / Video N reference format (the only one supporting video-referenced subjects), 2-10s |
+| `wan2.7-videoedit` | Video editing | Instruction editing, video transfer, effects/camera-movement replication, up to 10s |
 
-> 万相 2.5（`wan2.5-t2v-preview` / `wan2.5-i2v-preview`）是唯一可传自定义音频文件（`audio_url`）的版本，480P/720P/1080P，5s/10s 固定档。Wan 2.1/2.2 等更早版本已被 2.6/2.7 取代，不展开。
+> Wan 2.5 (`wan2.5-t2v-preview` / `wan2.5-i2v-preview`) is the only version that accepts a custom audio file (`audio_url`), 480P/720P/1080P, fixed 5s/10s tiers. Earlier versions such as Wan 2.1/2.2 have been superseded by 2.6/2.7 and are not covered.
 
-**Wan / HappyHorse 视频 API**（统一 DashScope 异步）：
-- 提交：`POST /api/v1/services/aigc/video-generation/video-synthesis` + `X-DashScope-Async: enable` → `output.task_id`
-- 轮询：`GET /api/v1/tasks/{task_id}` → `PENDING → RUNNING → SUCCEEDED/FAILED`
-- 取结果：`output.video_url`（OSS 公网，24h 有效，需立即转存）
+**Wan / HappyHorse video API** (uniformly DashScope async):
+- Submit: `POST /api/v1/services/aigc/video-generation/video-synthesis` + `X-DashScope-Async: enable` → `output.task_id`
+- Poll: `GET /api/v1/tasks/{task_id}` → `PENDING → RUNNING → SUCCEEDED/FAILED`
+- Fetch result: `output.video_url` (public OSS, valid 24h, must be re-stored immediately)
 
 ---
 
-## 4. 可灵 Kling（快手）
+## 4. Kling (Kuaishou)
 
-> **无文本模型**。**API**：`https://api.klingai.com/v1`，**JWT HS256** 鉴权（AK 作 iss、SK 签名，30 分钟过期，需自动续签）。阿里云百炼也代理了可灵图像/视频（走 DashScope 异步，仅北京地域），如不想写 JWT 可走百炼代理路径。
+> **No text model**. **API**: `https://api.klingai.com/v1`, **JWT HS256** authentication (AK as iss, SK for signing, 30-minute expiry, automatic renewal required). Alibaba Cloud Bailian also proxies Kling image/video (via DashScope async, Beijing region only); if you don't want to write JWT, you can use the Bailian proxy path.
 >
-> 本节模型清单已对照可灵官方文档 `klingai.com/document-api/apiReference/model/{video,image}Models` 一手核对。**精确灵感值定价仍需登录 app.klingai.com 控制台确认**（官方文档列能力矩阵，不列每档灵感值数值）。
+> The model list in this section has been verified first-hand against Kling's official documentation `klingai.com/document-api/apiReference/model/{video,image}Models`. **Exact Inspiration-credit pricing still needs to be confirmed by logging in to the app.klingai.com console** (the official docs list the capability matrix, not the credit values for each tier).
 
-### 4.1 图像（可图 Kolors 系 + 新一代 Omni 图像）
+### 4.1 Image (Kolors family + new-generation Omni image)
 
-可灵官方图像模型谱系（一手核对）：`kling-v1` / `kling-v1-5` / `kling-v2` / `kling-v2-new` / `kling-v2-1` / `kling-v3` / `kling-v3-omni` / `kling-image-o1`。
+Kling's official image model lineup (verified first-hand): `kling-v1` / `kling-v1-5` / `kling-v2` / `kling-v2-new` / `kling-v2-1` / `kling-v3` / `kling-v3-omni` / `kling-image-o1`.
 
-#### 网文场景最值得评估的两款
+#### The Two Most Worth Evaluating for Web-novel Scenarios
 
-- **`kling-image-o1`（Kling Omni Image O1，强烈推荐）**：可灵新一代多参考图像模型，基于 MVL（多模态视觉语言）框架，**支持 1-10 张参考图同时输入**、跨图角色一致性，官方定位即"IP 角色设计、漫画/连载、品牌物料"——**这是可灵当前对网文角色串戏/分镜最强的图像模型**，远超老 Kolors。支持自定义长宽比（1K/2K）+ 智能长宽比，文生图/图生图/主体控制（多图主体）。训练数据截至 2025-12。
-- **`kling-v3-omni`（图像能力）**：自定义长宽比 1K/2K/**4K** + 智能长宽比，文生图/图生图/**组图生成**/主体控制（多图主体）。是 3.0 统一多模态架构的图像组件，4K + 组图对分镜批量产出有价值。
+- **`kling-image-o1` (Kling Omni Image O1, strongly recommended)**: Kling's new-generation multi-reference image model, based on the MVL (multimodal visual language) framework, **supports 1-10 reference images as simultaneous input** with cross-image character consistency. Its official positioning is "IP character design, comics/serials, brand materials" — **this is currently Kling's strongest image model for web-novel characters across scenes/storyboards**, far beyond the old Kolors. Supports custom aspect ratios (1K/2K) + smart aspect ratio, text-to-image/image-to-image/subject control (multi-image subject). Training data up to 2025-12.
+- **`kling-v3-omni` (image capability)**: custom aspect ratios 1K/2K/**4K** + smart aspect ratio, text-to-image/image-to-image/**image set generation**/subject control (multi-image subject). It is the image component of the 3.0 unified multimodal architecture; 4K + image sets are valuable for batch storyboard output.
 
-#### 旧版（按需，已被 o1/v3 取代）
+#### Old Versions (as needed, superseded by o1/v3)
 
-- `kling-v1`：文生图/图生图通用垫图，1K，8 种长宽比
-- `kling-v1-5`：图生图含**角色特征 + 人物长相**保持，1K
-- `kling-v2` / `kling-v2-1`：含多图参考生图、风格转绘；v2-1 最全（通用垫图+角色特征+人物长相+多图参考+风格转绘）
-- 中文写字是 Kolors 系传统强项（ChatGLM3 文本编码器）；新一代 o1/v3-omni 文字渲染进一步增强
+- `kling-v1`: text-to-image/image-to-image general reference-image (垫图) generation, 1K, 8 aspect ratios
+- `kling-v1-5`: image-to-image with **character features + facial likeness** preservation, 1K
+- `kling-v2` / `kling-v2-1`: include multi-image reference generation, style transfer; v2-1 is the most complete (general reference image + character features + facial likeness + multi-image reference + style transfer)
+- Chinese lettering is a traditional strength of the Kolors family (ChatGLM3 text encoder); the new-generation o1/v3-omni further improve text rendering
 
-**API**：JWT + 异步，`POST /v1/images/generations` → `GET /v1/images/generations/{task_id}`（image_url 24h）
-**关键参数**：`model_name`、`prompt`、`negative_prompt`、`image`、`image_fidelity`、`human_fidelity`、`n`、`aspect_ratio`；多图参考用 image 数组（o1 最多 10 图）
+**API**: JWT + async, `POST /v1/images/generations` → `GET /v1/images/generations/{task_id}` (image_url valid 24h)
+**Key parameters**: `model_name`, `prompt`, `negative_prompt`, `image`, `image_fidelity`, `human_fidelity`, `n`, `aspect_ratio`; multi-image reference uses an image array (o1 up to 10 images)
 
-**官方图像定价（一手，`klingai.com/dev/pricing`，图像积分 1 积分 = ¥0.025）**：
+**Official image pricing (first-hand, `klingai.com/dev/pricing`, image credits 1 credit = ¥0.025)**:
 
-| 模型 | 能力 | 规格 | 单价/张 |
+| Model | Capability | Spec | Price/image |
 |---|---|---|---|
-| `kling-image-o1` | 文生图/图生图/图片编辑 | 各长宽比 | ¥0.2（8 积分）|
-| `kling-v3-omni` | 文生图/图生图/图片编辑 | 1K/2K | ¥0.2 |
-| `kling-v3-omni` | 同上 | 4K | ¥0.4（16 积分）|
-| `kling-v3` | 文生图/图生图 | 1K/2K | ¥0.2 |
-| `kling-v2-1` | 文生图 | — | ¥0.1（4 积分）|
-| `kling-v2-1` | 图生图 | — | ¥0.2 |
-| `kling-v2` | 文生图 | — | ¥0.1 |
-| `kling-v2` | 图生图-多图参考 | — | ¥0.4（16 积分）|
-| `kling-v1-5` | 图生图-角色特征/人物长相 | — | ¥0.2 |
-| `kling-v1` | 文生图/图生图 | — | ¥0.025（1 积分，最便宜）|
-| 功能模型 | 扩图 | — | ¥0.2 |
-| 功能模型 | 智能补全主体图 | — | ¥0.5（20 积分）|
+| `kling-image-o1` | Text-to-image/image-to-image/image editing | All aspect ratios | ¥0.2 (8 credits) |
+| `kling-v3-omni` | Text-to-image/image-to-image/image editing | 1K/2K | ¥0.2 |
+| `kling-v3-omni` | Same as above | 4K | ¥0.4 (16 credits) |
+| `kling-v3` | Text-to-image/image-to-image | 1K/2K | ¥0.2 |
+| `kling-v2-1` | Text-to-image | — | ¥0.1 (4 credits) |
+| `kling-v2-1` | Image-to-image | — | ¥0.2 |
+| `kling-v2` | Text-to-image | — | ¥0.1 |
+| `kling-v2` | Image-to-image, multi-image reference | — | ¥0.4 (16 credits) |
+| `kling-v1-5` | Image-to-image, character features/facial likeness | — | ¥0.2 |
+| `kling-v1` | Text-to-image/image-to-image | — | ¥0.025 (1 credit, cheapest) |
+| Utility model | Outpainting | — | ¥0.2 |
+| Utility model | Smart subject-image completion | — | ¥0.5 (20 credits) |
 
-即 `kling-image-o1` / `kling-v3-omni`（推荐）为 ¥0.2/张（1K-2K），与 MiniMax image-01 的 ¥0.025/张相比偏贵，但多图参考一致性更强。
+So `kling-image-o1` / `kling-v3-omni` (recommended) cost ¥0.2/image (1K-2K), which is expensive compared with MiniMax image-01 at ¥0.025/image, but their multi-image reference consistency is stronger.
 
-### 4.2 视频
+### 4.2 Video
 
-可灵官方视频模型谱系（一手核对）：`kling-v1` / `kling-v1-5` / `kling-v1-6` / `kling-v2-master` / `kling-v2-1` / `kling-v2-1-master` / `kling-v2-5-turbo` / `kling-v2-6` / `kling-v3` / `kling-v3-omni` / `kling-video-o1`。
+Kling's official video model lineup (verified first-hand): `kling-v1` / `kling-v1-5` / `kling-v1-6` / `kling-v2-master` / `kling-v2-1` / `kling-v2-1-master` / `kling-v2-5-turbo` / `kling-v2-6` / `kling-v3` / `kling-v3-omni` / `kling-video-o1`.
 
-**官方视频定价（一手，`klingai.com/dev/pricing`，1 积分 = ¥1 原价，按维度组合计费 ¥/秒）**：
+**Official video pricing (first-hand, `klingai.com/dev/pricing`, 1 credit = ¥1 list price, billed by combination of dimensions in ¥/second)**:
 
-| 规格 | 无声 | 有声 | 有参考视频（无声） |
+| Spec | Silent | With audio | With reference video (silent) |
 |---|---|---|---|
-| 标准 std × 1s | ¥0.6 | ¥0.8 | ¥0.9 |
-| 高品质 pro × 1s | ¥0.8 | ¥1.0 | ¥1.2 |
+| Standard std × 1s | ¥0.6 | ¥0.8 | ¥0.9 |
+| High quality pro × 1s | ¥0.8 | ¥1.0 | ¥1.2 |
 | 4K × 1s | ¥3.0 | ¥3.0 | — |
 
-即可灵视频按"模式 × 时长 × 是否参考视频 × 是否有声"四维组合计费，例如 pro 有声 5s = ¥1.0×5 = ¥5；std 无声 5s = ¥3。资源包阶梯：试用 0.7 元/积分（首购 7 折），标准 1 元/积分，大额 0.9 元/积分。
+That is, Kling video is billed by a four-dimensional combination of "mode × duration × reference video or not × audio or not"; for example, pro with audio 5s = ¥1.0×5 = ¥5; std silent 5s = ¥3. Resource pack tiers: trial ¥0.7/credit (30% off first purchase), standard ¥1/credit, bulk ¥0.9/credit.
 
-社区评测：可灵在动作物理感、运镜稳定性、复杂指令拆解为全球第一档。Artificial Analysis T2V (with-audio) Leaderboard（2026-05-28）Kling 3.0 Omni 1080p Pro Elo 1099 排名第四（前三 Dreamina Seedance 2.0、HappyHorse-1.0、Veo 3.1）。
+Community evaluations: Kling is in the global top tier for motion physics, camera stability, and breaking down complex instructions. On the Artificial Analysis T2V (with-audio) Leaderboard (2026-05-28), Kling 3.0 Omni 1080p Pro has Elo 1099 and ranks fourth (the top three are Dreamina Seedance 2.0, HappyHorse-1.0, Veo 3.1).
 
-> 与模型版本无关的平台能力（官方）：数字人（单张照片生成播报视频）、对口型（文案/音频驱动口型）、视频生音效（为可灵生成或用户上传视频加音效）。
+> Platform capabilities independent of model version (official): digital human (a presenter video generated from a single photo), lip sync (mouth movement driven by text/audio), video-to-sound-effects (adding sound effects to Kling-generated or user-uploaded videos).
 
-#### ① kling-v3 / kling-v3-omni（旗舰，多镜头 + 4K + 主体控制）
+#### ① kling-v3 / kling-v3-omni (flagship, multi-shot + 4K + subject control)
 
-- **能力（官方一手）**：std/pro/**4K**，时长 3-15s；文生视频含**单镜头 + 多镜头视频生成**；图生视频含单镜头（仅首帧）+ 多镜头 + **首尾帧（一镜到底）** + **主体控制（视频角色主体 + 多图主体）**；v3-omni 额外支持视频参考（仅 3-10s，4K 档不支持视频参考）；v3 还支持动作控制（std/pro，4K 不支持）
-- **重要更正**：官方能力表中 v3 / v3-omni 的**"声音控制（人声控制）"标注为 ❌**。这与部分第三方"v3 原生音画同步"的说法**不一致**——以官方为准，v3/v3-omni 视频本身的人声控制能力按官方标注为不支持，音效可走平台级"视频生音效"能力补充。接入前务必在官方文档二次确认。
-- **主体控制是网文关键**：v3/v3-omni 的"视频角色主体 + 多图主体"控制，是比老 v1-6 多图参考更强的角色一致性能力
+- **Capabilities (official, first-hand)**: std/pro/**4K**, duration 3-15s; text-to-video includes **single-shot + multi-shot video generation**; image-to-video includes single-shot (first frame only) + multi-shot + **first/last frame (one continuous take)** + **subject control (video character subject + multi-image subject)**; v3-omni additionally supports video reference (3-10s only; the 4K tier does not support video reference); v3 also supports motion control (std/pro, not 4K)
+- **Important correction**: in the official capability table, **"sound control (voice control)" for v3 / v3-omni is marked ❌**. This is **inconsistent** with some third-party claims of "v3 native audio-video sync" — follow the official source: the voice control capability of v3/v3-omni video itself is, per the official marking, not supported; sound effects can be supplemented via the platform-level "video-to-sound-effects" capability. Be sure to double-check the official docs before integration.
+- **Subject control is key for web novels**: the "video character subject + multi-image subject" control of v3/v3-omni is a stronger character-consistency capability than the old v1-6 multi-image reference
 
-#### ② kling-v2-6（唯一明确支持人声控制的视频版本）
+#### ② kling-v2-6 (the only video version explicitly supporting voice control)
 
-- **能力（官方一手）**：std/pro，5s/10s + 其他时长；文生/图生视频（std 仅无声视频，pro 含声）；首尾帧（pro，仅无声）；**声音控制（人声控制）仅 pro 支持 ✅**；动作控制（其他时长档）
-- 是官方视频模型里**唯一在能力表明确标注"声音控制 ✅"的版本**（pro 档），需要视频内人声时优先评估它
+- **Capabilities (official, first-hand)**: std/pro, 5s/10s + other durations; text-to-video/image-to-video (std silent video only, pro includes audio); first/last frame (pro, silent only); **sound control (voice control) supported only in pro ✅**; motion control (other-duration tiers)
+- It is the **only version among the official video models explicitly marked "sound control ✅" in the capability table** (pro tier); prioritise evaluating it when in-video voice is needed
 
-#### ③ kling-v2-5-turbo（性价比主力）
+#### ③ kling-v2-5-turbo (value workhorse)
 
-- **能力（官方一手）**：std/pro，5s/10s；文生视频 + 图生视频（全档）；首尾帧（仅 pro）；分辨率 pro 1080p、24fps
-- **官方定价**：按上表维度组合，std 5s 无声 = ¥3、pro 5s 有声 = ¥5（pro 1080p 24fps）；快手 IR 2025-09-24 曾公告其每段 5s 1080P 较 2.1 降约 30%
-- 无多图主体/声音控制等高级能力，纯性价比走量档
+- **Capabilities (official, first-hand)**: std/pro, 5s/10s; text-to-video + image-to-video (all tiers); first/last frame (pro only); resolution pro 1080p, 24fps
+- **Official pricing**: per the dimension combination in the table above, std 5s silent = ¥3, pro 5s with audio = ¥5 (pro 1080p 24fps); a Kuaishou IR announcement on 2025-09-24 stated that each 5s 1080P clip is about 30% cheaper than 2.1
+- No advanced capabilities such as multi-image subject/sound control; purely a value tier for volume
 
-#### ④ kling-video-o1（视频参考 + 主体控制专项）
+#### ④ kling-video-o1 (dedicated to video reference + subject control)
 
-- **能力（官方一手）**：std/pro，3-10s（文生/图生仅 5s、10s）；图生视频含首尾帧（一镜到底）+ **主体控制（仅多图主体）** + **视频参考（含视频编辑）**；声音控制 ❌
-- 适合需要"以参考视频驱动"或多图主体一致性的场景
+- **Capabilities (official, first-hand)**: std/pro, 3-10s (text-to-video/image-to-video only 5s, 10s); image-to-video includes first/last frame (one continuous take) + **subject control (multi-image subject only)** + **video reference (including video editing)**; sound control ❌
+- Suited to scenarios that need "driving by a reference video" or multi-image subject consistency
 
-#### ⑤ kling-v1-6 / v1-5 / v1（旧版按需）
+#### ⑤ kling-v1-6 / v1-5 / v1 (old versions, as needed)
 
-- `kling-v1-6`：文生/图生视频全档，首尾帧（pro）、**多图参考生视频** + 多模态视频编辑 + 视频续写 + 双图特效（拥抱/亲吻/比心）；pro 1080p
-- `kling-v1-5`：图生视频为主，首尾帧/仅尾帧/运动笔刷（pro）；含视频续写
-- `kling-v1`：文生/图生视频，运镜控制、首尾帧、运动笔刷、视频续写、双图特效；720p
-- `kling-v2-master` / `kling-v2-1` / `kling-v2-1-master`：v2 代各档，v2-1 图生视频含首尾帧（pro）
+- `kling-v1-6`: text-to-video/image-to-video all tiers, first/last frame (pro), **multi-image reference-to-video** + multimodal video editing + video continuation + two-image effects (hug/kiss/heart gesture); pro 1080p
+- `kling-v1-5`: mainly image-to-video, first/last frame/last frame only/motion brush (pro); includes video continuation
+- `kling-v1`: text-to-video/image-to-video, camera control, first/last frame, motion brush, video continuation, two-image effects; 720p
+- `kling-v2-master` / `kling-v2-1` / `kling-v2-1-master`: the v2-generation tiers; v2-1 image-to-video includes first/last frame (pro)
 
-**关键能力分布速查**（官方一手）：
-- 多镜头叙事：仅 `v3` / `v3-omni`
-- 视频内人声控制：仅 `kling-v2-6`（pro）
-- 主体控制（角色一致性）：`v3` / `v3-omni`（视频主体+多图主体最强）、`o1`（多图主体+视频参考）、`v1-6`（多图参考生视频）
-- 4K：仅 `v3` / `v3-omni`
-- 视频参考（含编辑）：`v3-omni`（3-10s）、`o1`
+**Quick reference of key capability distribution** (official, first-hand):
+- Multi-shot narrative: only `v3` / `v3-omni`
+- In-video voice control: only `kling-v2-6` (pro)
+- Subject control (character consistency): `v3` / `v3-omni` (video subject + multi-image subject, strongest), `o1` (multi-image subject + video reference), `v1-6` (multi-image reference-to-video)
+- 4K: only `v3` / `v3-omni`
+- Video reference (including editing): `v3-omni` (3-10s), `o1`
 
-**可灵视频接入要点**（JWT）：
+**Kling video integration notes** (JWT):
 
 ```python
 import jwt, time
@@ -312,149 +312,149 @@ def kling_token(ak, sk):
     )
 ```
 
-建议封装 JWT 鉴权类，30 分钟内复用 token、过期前 60 秒自动刷新。
+Recommend wrapping JWT authentication in a class that reuses the token within 30 minutes and refreshes automatically 60 seconds before expiry.
 
 ---
 
-## 5. MiniMax 海螺
+## 5. MiniMax Hailuo
 
-> 全模态最便宜、协议最一致。所有 API 走 `https://api.minimaxi.com/v1`（国内）/ `https://api.minimax.io/v1`（国际），Bearer Key，文本同时兼容 OpenAI 和 Anthropic SDK。
+> Cheapest across all modalities, with the most consistent protocol. All APIs go through `https://api.minimaxi.com/v1` (China) / `https://api.minimax.io/v1` (international), Bearer key; text is compatible with both the OpenAI and Anthropic SDKs.
 
-### 5.1 文本：MiniMax-M2.7
+### 5.1 Text: MiniMax-M2.7
 
-- **模型 ID**：`MiniMax-M2.7`（旗舰）/ `MiniMax-M2.7-highspeed`（2 倍速，2 倍价）；百炼代理 `MiniMax/MiniMax-M2.7`
-- **发布**：2026-03-18，当前最新旗舰（取代 M2.5 / abab 7）
-- **能力**：SWE-Pro 56.22%（官方称 matching GPT-5.3-Codex）；MoE 230B 总参/10B 激活；200K 上下文；中文文学创作第一档；思考模式 + Function Calling + Toolathon 46.3%
-- **API**：OpenAI 兼容 `base_url=https://api.minimaxi.com/v1`；或百炼代理享隐式缓存 20% 折扣；Anthropic SDK 同样兼容
-- **官方定价**（国内站，元/百万 token，来源 platform.minimaxi.com pricing-paygo）：
+- **Model IDs**: `MiniMax-M2.7` (flagship) / `MiniMax-M2.7-highspeed` (2x speed, 2x price); Bailian proxy `MiniMax/MiniMax-M2.7`
+- **Release**: 2026-03-18, the current latest flagship (supersedes M2.5 / abab 7)
+- **Capabilities**: SWE-Pro 56.22% (officially described as matching GPT-5.3-Codex); MoE 230B total params/10B active; 200K context; top tier for Chinese literary writing; thinking mode + Function Calling + Toolathon 46.3%
+- **API**: OpenAI-compatible `base_url=https://api.minimaxi.com/v1`; or via the Bailian proxy with a 20% implicit-cache discount; the Anthropic SDK is also compatible
+- **Official pricing** (China site, RMB per million tokens, source platform.minimaxi.com pricing-paygo):
 
-  | 模型 | 输入 | 输出 | 缓存命中读 | 缓存写入 |
+  | Model | Input | Output | Cache-hit read | Cache write |
   |---|---|---|---|---|
-  | M2.7 | ¥2.1 | ¥8.4 | ¥0.42（20%） | ¥2.625（125%） |
+  | M2.7 | ¥2.1 | ¥8.4 | ¥0.42 (20%) | ¥2.625 (125%) |
   | M2.7-highspeed | ¥4.2 | ¥16.8 | ¥0.42 | ¥2.625 |
 
-- **国际站**：M2.7 输入 $0.30/M、输出 $1.20/M（约 Claude Sonnet 1/8 价）
-- **定位**：与 Qwen 配对的第二文本模型——M2.7 做人设/情感细腻文本与中文创作，Qwen-Plus 做结构化 JSON
+- **International site**: M2.7 input $0.30/M, output $1.20/M (about 1/8 of the Claude Sonnet price)
+- **Positioning**: the second text model paired with Qwen — M2.7 for persona/emotionally nuanced text and Chinese creative writing, Qwen-Plus for structured JSON
 
-> abab 6.5 / M2.5 / abab 7 等旧版仍可调用但已被 M2.7 取代，不展开。
+> Old versions such as abab 6.5 / M2.5 / abab 7 can still be called but have been superseded by M2.7; not covered.
 
-### 5.2 图像：image-01
+### 5.2 Image: image-01
 
-- **模型 ID**：`image-01`
-- **能力**：文生图 + 图生图统一；`subject_reference` 单张人脸参考驱动多场景（角色卡→多场景立绘）；`aspect_ratio` 或 `width`/`height`（512-2048，8 倍数）；`prompt_optimizer`；`n` 1-9
-- **API**：`POST https://api.minimaxi.com/v1/image_generation`，Bearer + JSON，单步直接返回 `url`（24h）或 base64
-- **官方定价**：¥0.025/张（成功才扣费）；国际站约 $0.0035-0.005/张
-- **风格**：电影级人像 + 真实材质 SOTA，角色一致性三家中最稳；纯动漫略逊 Kolors / Qwen-Image
+- **Model ID**: `image-01`
+- **Capabilities**: unified text-to-image + image-to-image; `subject_reference` with a single face reference drives multiple scenes (character card → multi-scene character art); `aspect_ratio` or `width`/`height` (512-2048, multiples of 8); `prompt_optimizer`; `n` 1-9
+- **API**: `POST https://api.minimaxi.com/v1/image_generation`, Bearer + JSON, returns `url` (24h) or base64 directly in a single step
+- **Official pricing**: ¥0.025/image (charged only on success); international site about $0.0035-0.005/image
+- **Style**: SOTA for cinematic portraits + realistic materials, the most stable character consistency of the three; slightly weaker than Kolors / Qwen-Image for pure anime
 
-### 5.3 视频：Hailuo 2.3 系列
+### 5.3 Video: Hailuo 2.3 Series
 
-> 能力边界：Hailuo 2.3 = T2V + I2V；Hailuo 2.3-Fast = 仅 I2V；角色一致性 R2V 用独立的 S2V-01（仅单图人脸）。
+> Capability boundary: Hailuo 2.3 = T2V + I2V; Hailuo 2.3-Fast = I2V only; character-consistency R2V uses the separate S2V-01 (single face image only).
 
-#### ① MiniMax-Hailuo-2.3（T2V + I2V，高质量）
+#### ① MiniMax-Hailuo-2.3 (T2V + I2V, high quality)
 
-- **模型 ID**：`MiniMax-Hailuo-2.3`（2025-10-28 发布，当前旗舰视频模型）
-- **能力**：T2V + I2V；1080P 原生输出；极致物理感（NCR 架构）；85% 复杂指令响应；运镜控制（prompt 内嵌 `[左摇,上升]` 等，≤3 组合）；**擅长动漫/插画/游戏 CG 风格化**（网文契合）
-- **支持档**：6s（768P/1080P）、10s（768P，10s 不支持 1080P）
-- **官方定价**（国内，元/视频）：768P 6s ¥2 / 10s ¥4；1080P 6s ¥3.5
-- **国际站**：768P $0.045/s、1080P Pro $0.08/s
+- **Model ID**: `MiniMax-Hailuo-2.3` (released 2025-10-28, the current flagship video model)
+- **Capabilities**: T2V + I2V; native 1080P output; excellent physics (NCR architecture); 85% response to complex instructions; camera control (embedded in the prompt as `[左摇,上升]` (pan left, rise), etc., ≤3 combined); **good at stylised anime/illustration/game CG** (fits web novels)
+- **Supported tiers**: 6s (768P/1080P), 10s (768P; 10s does not support 1080P)
+- **Official pricing** (China, RMB per video): 768P 6s ¥2 / 10s ¥4; 1080P 6s ¥3.5
+- **International site**: 768P $0.045/s, 1080P Pro $0.08/s
 
-#### ② MiniMax-Hailuo-2.3-Fast（仅 I2V，约半价）
+#### ② MiniMax-Hailuo-2.3-Fast (I2V only, about half price)
 
-- **模型 ID**：`MiniMax-Hailuo-2.3-Fast`
-- **能力**：仅图生视频（I2V），不支持 T2V；同生成质量、约半价；给 I2V 快速迭代用
-- **官方定价**：768P 6s ¥1.35 / 10s ¥2.25；1080P 6s ¥2.31
+- **Model ID**: `MiniMax-Hailuo-2.3-Fast`
+- **Capabilities**: image-to-video (I2V) only, no T2V; same generation quality at about half the price; for fast I2V iteration
+- **Official pricing**: 768P 6s ¥1.35 / 10s ¥2.25; 1080P 6s ¥2.31
 
-#### ③ S2V-01（角色一致性 R2V 专项）
+#### ③ S2V-01 (dedicated character-consistency R2V)
 
-- **模型 ID**：`S2V-01`
-- **能力**：MiniMax 首创 Subject-to-Video，单张人脸参考图驱动整段视频角色一致性（脸/姿态/表情/光照可 prompt 独立调整）；尤其适合多分镜/回归角色
-- **参数**：`subject_reference=[{"type":"character","image":["url"]}]`
-- **限制**：仅单张人脸；环境可能轻度变形；prompt 遵循度略低于 T2V/I2V
-- **定价**：资源包扣 1.5 积分/视频（约 ¥3）
+- **Model ID**: `S2V-01`
+- **Capabilities**: MiniMax's pioneering Subject-to-Video; a single face reference image drives character consistency across a whole video (face/pose/expression/lighting can be adjusted independently via the prompt); especially suited to multiple storyboard shots/recurring characters
+- **Parameters**: `subject_reference=[{"type":"character","image":["url"]}]`
+- **Limitations**: single face image only; the environment may be slightly distorted; prompt adherence is slightly lower than T2V/I2V
+- **Pricing**: resource pack deducts 1.5 credits/video (about ¥3)
 
-> Hailuo-02（`MiniMax-Hailuo-02`）保留 512P 草稿档（512P 6s ¥0.6），其余被 2.3 取代；T2V-01-Director 等旧版仅向后兼容，不展开。
+> Hailuo-02 (`MiniMax-Hailuo-02`) keeps a 512P draft tier (512P 6s ¥0.6); the rest is superseded by 2.3. Old versions such as T2V-01-Director are only kept for backward compatibility and are not covered.
 
-**MiniMax 视频接入要点**（两步取 URL）：
+**MiniMax video integration notes** (two steps to get the URL):
 1. `POST /v1/video_generation` → `task_id`
-2. 轮询 `GET /v1/query/video_generation?task_id=xxx` → `status=Success` 返回 `file_id`
-3. `GET /v1/files/retrieve?file_id=xxx` → `download_url`（短期有效，建议配 `callback_url`，先响应 challenge 校验）
+2. Poll `GET /v1/query/video_generation?task_id=xxx` → `status=Success` returns `file_id`
+3. `GET /v1/files/retrieve?file_id=xxx` → `download_url` (short-lived; recommend configuring `callback_url`, which must first respond to the challenge verification)
 
 ---
 
-## 6. 接入可行性评估
+## 6. Integration Feasibility Assessment
 
-### 6.1 协议归属
+### 6.1 Protocol Mapping
 
-| 模态 / 厂商 | 阿里百炼 | 可灵 Kling | MiniMax |
+| Modality / vendor | Alibaba Bailian | Kling | MiniMax |
 |---|---|---|---|
-| 文本 | ✅ OpenAI 兼容，复用现有 backend | ❌ 无 | ✅ OpenAI/Anthropic 双兼容 |
-| 图像 | DashScope 同步/异步 | JWT + 异步 | 自有 REST（单步取 URL） |
-| 视频 | DashScope 异步（统一端点） | JWT + 异步（多端点） | 自有 REST（两步 file_id） |
+| Text | ✅ OpenAI-compatible, reuse the existing backend | ❌ None | ✅ OpenAI/Anthropic dual-compatible |
+| Image | DashScope sync/async | JWT + async | Proprietary REST (single step returns URL) |
+| Video | DashScope async (unified endpoint) | JWT + async (multiple endpoints) | Proprietary REST (two-step file_id) |
 
-### 6.2 ArcReel backend 工作量
+### 6.2 ArcReel Backend Workload
 
-| 复用度 | 模型 |
+| Reuse level | Models |
 |---|---|
-| 复用 OpenAI text backend | `qwen3.7-max`、`qwen3.6-plus`、`qwen3.6-flash`、`qwen3-max`、`qwen-plus`、`MiniMax-M2.7`；以及百炼代理的 `deepseek-v4-pro/flash`、`kimi-k2.6`、`glm-5.1`、`mimo-v2.5-pro`（均同一 OpenAI 兼容格式） |
-| 新写 DashScope backend（一个覆盖全部，需同时支持同步与异步任务两种调用路径） | 图片 `qwen-image-2.0-pro` / `qwen-image-2.0` / `qwen-image-edit`（同步）、`wan2.7-image`（同步/异步）；视频 `happyhorse-1.0-*` / `wan2.7-*` / `wan2.5-*`（异步）；可灵百炼代理 |
-| 新写 Kling JWT backend | 视频 `kling-v3` / `kling-v3-omni` / `kling-v2-6` / `kling-v2-5-turbo` / `kling-video-o1`；图像 `kling-image-o1` / `kling-v3-omni`（统一 `/v1/images` 与 `/v1/videos` 两类端点 + JWT 续签） |
-| 新写 MiniMax backend（两步取 URL） | `MiniMax-Hailuo-2.3/-Fast`、`S2V-01`；`image-01` 单步更简单 |
+| Reuse the OpenAI text backend | `qwen3.7-max`, `qwen3.6-plus`, `qwen3.6-flash`, `qwen3-max`, `qwen-plus`, `MiniMax-M2.7`; plus the Bailian-proxied `deepseek-v4-pro/flash`, `kimi-k2.6`, `glm-5.1`, `mimo-v2.5-pro` (all in the same OpenAI-compatible format) |
+| New DashScope backend (one covering everything, must support both sync and async task call paths) | Images `qwen-image-2.0-pro` / `qwen-image-2.0` / `qwen-image-edit` (sync), `wan2.7-image` (sync/async); video `happyhorse-1.0-*` / `wan2.7-*` / `wan2.5-*` (async); the Bailian Kling proxy |
+| New Kling JWT backend | Video `kling-v3` / `kling-v3-omni` / `kling-v2-6` / `kling-v2-5-turbo` / `kling-video-o1`; image `kling-image-o1` / `kling-v3-omni` (unified `/v1/images` and `/v1/videos` endpoint families + JWT renewal) |
+| New MiniMax backend (two steps to get the URL) | `MiniMax-Hailuo-2.3/-Fast`, `S2V-01`; `image-01` is simpler with a single step |
 
-### 6.3 鉴权特殊性
+### 6.3 Authentication Specifics
 
-- 阿里：Bearer + 多地域 Key 不可混用，异步需 `X-DashScope-Async: enable` 头
-- 可灵：JWT HS256，30 分钟过期，需 token 缓存 + 提前刷新
-- MiniMax：Bearer 简单；视频 file_id 两步下载或配 callback_url（先响应 challenge）
+- Alibaba: Bearer + keys for different regions cannot be mixed; async requires the `X-DashScope-Async: enable` header
+- Kling: JWT HS256, 30-minute expiry; needs token caching + early refresh
+- MiniMax: simple Bearer; video uses a two-step file_id download or a configured callback_url (must first respond to the challenge)
 
-### 6.4 网文场景契合度评分
+### 6.4 Fit Scores for Web-novel Scenarios
 
-| 维度 | 阿里百炼 | 可灵 | MiniMax |
+| Dimension | Alibaba Bailian | Kling | MiniMax |
 |---|---|---|---|
-| 中文剧本理解/结构化输出 | ★★★★★ | — | ★★★★★ |
-| 中文字渲染（封面/海报） | ★★★★★ (Qwen-Image-2.0) | ★★★★ (image-o1/v3-omni 文字渲染增强) | ★★★ |
-| 漫画/分镜跨格角色一致（图） | ★★★★★ (Qwen-Image-2.0 多格漫画) | ★★★★★ (image-o1 最多 10 图参考，专为漫画/连载) | ★★★★ (image-01) |
-| 角色一致性（视频 R2V） | ★★★★★（happyhorse-r2v / wan2.7-r2v 多角色+音频+视频参考） | ★★★★★（v3-omni 视频主体+多图主体，o1 视频参考） | ★★★★（S2V-01 单图人脸，最稳但仅单人） |
-| 视频画面物理感 | ★★★★★（HappyHorse 双榜第一/第二） | ★★★★★（Omni 物理引擎） | ★★★★（NCR 1080P 原生，动漫强） |
-| 视频多镜头叙事 | ★★★★★（wan2.7 + happyhorse 多镜头主体一致） | ★★★★★（v3/v3-omni 官方多镜头视频生成） | ★★★ |
-| 视频音画一体 | ★★★★★（HappyHorse 原生音画 7 语言唇形 / wan2.5 audio_url） | ★★★（官方仅 v2-6 pro 支持人声控制；v3/v3-omni 标 ❌，音效走平台级"视频生音效"） | ★★★（需外挂 TTS） |
-| 价格性价比 | ★★★★（HappyHorse 720P ¥0.9/s） | ★★★（视频 std ¥0.6/s 起、pro 有声 ¥1.0/s、4K ¥3/s；图像 ¥0.2/张） | ★★★★★（Hailuo-2.3-Fast 768P 6s ¥1.35） |
+| Chinese script understanding/structured output | ★★★★★ | — | ★★★★★ |
+| Chinese text rendering (covers/posters) | ★★★★★ (Qwen-Image-2.0) | ★★★★ (image-o1/v3-omni improved text rendering) | ★★★ |
+| Comic/storyboard cross-panel character consistency (image) | ★★★★★ (Qwen-Image-2.0 multi-panel comics) | ★★★★★ (image-o1 up to 10 reference images, built for comics/serials) | ★★★★ (image-01) |
+| Character consistency (video R2V) | ★★★★★ (happyhorse-r2v / wan2.7-r2v multi-character + audio + video reference) | ★★★★★ (v3-omni video subject + multi-image subject, o1 video reference) | ★★★★ (S2V-01 single face image, most stable but single person only) |
+| Video physics | ★★★★★ (HappyHorse first/second on both leaderboards) | ★★★★★ (Omni physics engine) | ★★★★ (NCR native 1080P, strong at anime) |
+| Video multi-shot narrative | ★★★★★ (wan2.7 + happyhorse multi-shot subject consistency) | ★★★★★ (v3/v3-omni official multi-shot video generation) | ★★★ |
+| Integrated audio-video | ★★★★★ (HappyHorse native audio-video, lip sync in 7 languages / wan2.5 audio_url) | ★★★ (officially only v2-6 pro supports voice control; v3/v3-omni marked ❌, sound effects via platform-level "video-to-sound-effects") | ★★★ (requires external TTS) |
+| Price/value | ★★★★ (HappyHorse 720P ¥0.9/s) | ★★★ (video from std ¥0.6/s, pro with audio ¥1.0/s, 4K ¥3/s; images ¥0.2/image) | ★★★★★ (Hailuo-2.3-Fast 768P 6s ¥1.35) |
 
 ---
 
-## 7. 关键风险与不确定性
+## 7. Key Risks and Uncertainties
 
-1. **价格波动**：三家均有限时折扣（Qwen3.7-Max 限时 5 折至 2026-06-22、Qwen3.6 全模型 4.5 折、HappyHorse 限时 8 折、可灵套餐活动）。ArcReel `PROVIDER_REGISTRY` 价格字段应配置化，不写死。
-2. **官方价已核实项**：HappyHorse 1.0 全族 720P ¥0.9/s、1080P ¥1.6/s（阿里云上线公告）；Qwen 系列阶梯价与 Qwen3.7-Max ¥12/¥36（阿里云价格页/产品页）；MiniMax M2.7 ¥2.1/¥8.4、image-01 ¥0.025/张、Hailuo 2.3 各档（platform.minimaxi.com）；**可灵全系视频/图像积分单价**（官方定价页 klingai.com/dev/pricing：视频 1 积分=¥1 按"模式×时长×参考视频×有声"四维计费、图像 1 积分=¥0.025，image-o1/v3-omni ¥0.2/张）。
-3. **仍需控制台核对项**：`qwen-image-2.0-pro/2.0` 与 `wan2.7-image` 精确每张 RMB 单价、`qwen3.6-flash` 精确 token 单价（阿里官方价格页未直接列出每张/每档数值）；百炼代理的三方模型（DeepSeek/Kimi/GLM/MiMo）在百炼侧定价。可灵定价已一手核实，无需再核对。
-4. **模型 ID 更新**：Qwen 每月发快照，优先用稳定别名 + 定期回归；阿里官方千问文本首推 `qwen3.7-max`/`qwen3.6-plus`/`qwen3.6-flash`，图像视频首推 `wan2.7-image-pro`/`qwen-image-2.0-pro`/`happyhorse-1.0-*`（均据官方模型大全页 2026-05-21）；MiniMax 当前 M2.7 / Hailuo 2.3 / image-01（据官方发布页）。
-5. **能力边界（官方一手）**：可灵角色一致性当前最强是 `kling-v3`/`v3-omni` 的"主体控制（视频角色主体+多图主体）"，非旧版 v1-6 多图参考；可灵 `v3`/`v3-omni` 视频"人声控制"官方标 ❌，仅 `kling-v2-6` pro 支持视频内人声。Hailuo 2.3 不支持 R2V（只 T2V+I2V），2.3-Fast 仅 I2V，MiniMax 的 R2V 走 S2V-01（仅单图人脸）。
-6. **阿里两条图像产品线**：Qwen-Image-2.0（文字渲染/漫画分镜）与 Wan-Image（人像真实感）定位不同，需按场景分别评估，不是替代关系。
-7. **HappyHorse 开源可商用**：基础模型/蒸馏/超分/推理代码全开源，对 ArcReel 友好；但网上有大量同名第三方站点，接入认准阿里云百炼官方 API。
-8. **国际站差异**：MiniMax minimaxi.com（国内）vs minimax.io（国际）Key 不互通；阿里三地域 Key 独立；可灵 app.klingai.com（中国）vs klingai.com（全球）。
-9. **榜单谨慎**：Artificial Analysis 更新快，国产模型中文专项优势不等于全球通用基准领先，选型以"中文+网文"实测为准。
-10. **可灵已一手核对模型清单，但定价仍需控制台**：可灵视频/图像模型清单已对照官方文档逐条核对（v3/v3-omni/v2-6/v2-5-turbo/o1/image-o1 等），能力矩阵以官方为准。两点务必注意：① 官方能力表标注 **v3/v3-omni 视频"声音控制（人声控制）"为 ❌**，仅 `kling-v2-6` pro 支持视频内人声，这与部分第三方"v3 原生音画"说法冲突，以官方为准；② 各模型每档精确灵感值官方文档未列，需登录 app.klingai.com 控制台确认。
-
----
-
-## 8. 参考资料（一手官方来源）
-
-- 阿里云百炼模型大全（首推清单，2026-05-21 更新）：https://help.aliyun.com/zh/model-studio/models
-- 阿里云百炼视频模型大全：https://help.aliyun.com/zh/model-studio/video-generate-edit-model/
-- 阿里云百炼模型价格：https://help.aliyun.com/zh/model-studio/model-pricing
-- 千问 Qwen-Image 文生图 API：https://help.aliyun.com/zh/model-studio/qwen-image-api
-- 千问 Qwen-Image-Edit 图像编辑：https://help.aliyun.com/zh/model-studio/qwen-image-edit-guide
-- 通义万相文生视频 API：https://help.aliyun.com/zh/model-studio/text-to-video-api-reference
-- 千问大模型产品页（Qwen3.7-Max / Qwen-Image / Wan2.7）：https://www.aliyun.com/product/tongyi
-- 可灵官方视频模型清单（一手）：https://klingai.com/document-api/apiReference/model/videoModels
-- 可灵官方图像模型清单（一手）：https://klingai.com/document-api/apiReference/model/imageModels
-- 可灵官方定价页（一手）：https://klingai.com/dev/pricing
-- 可灵开放平台开发文档：https://app.klingai.com/cn/dev/document-api
-- MiniMax 价格（pricing-paygo）：https://platform.minimaxi.com/docs/guides/pricing-paygo
-- MiniMax 模型发布动态：https://platform.minimaxi.com/docs/release-notes/models
-- MiniMax 图生视频 API：https://platform.minimaxi.com/docs/api-reference/video-generation-i2v
-- MiniMax S2V-01：https://platform.minimax.io/docs/api-reference/video-generation-s2v
-- MiniMax Hailuo 2.3 发布：https://www.minimax.io/news/minimax-hailuo-23
+1. **Price volatility**: all three have limited-time discounts (Qwen3.7-Max 50% off until 2026-06-22, all Qwen3.6 models 55% off, HappyHorse limited-time 20% off, Kling package promotions). Price fields in ArcReel's `PROVIDER_REGISTRY` should be configurable, not hard-coded.
+2. **Official prices verified**: the full HappyHorse 1.0 family 720P ¥0.9/s, 1080P ¥1.6/s (Alibaba Cloud launch announcement); Qwen series tiered prices and Qwen3.7-Max ¥12/¥36 (Alibaba Cloud pricing page/product page); MiniMax M2.7 ¥2.1/¥8.4, image-01 ¥0.025/image, Hailuo 2.3 tiers (platform.minimaxi.com); **Kling credit unit prices for all video/image models** (official pricing page klingai.com/dev/pricing: video 1 credit = ¥1, billed by the four dimensions "mode × duration × reference video × audio"; image 1 credit = ¥0.025, image-o1/v3-omni ¥0.2/image).
+3. **Still to be checked in the console**: exact per-image RMB prices for `qwen-image-2.0-pro/2.0` and `wan2.7-image`, exact token prices for `qwen3.6-flash` (Alibaba's official pricing page does not directly list per-image/per-tier values); Bailian-side pricing for the Bailian-proxied third-party models (DeepSeek/Kimi/GLM/MiMo). Kling pricing has been verified first-hand and needs no further checking.
+4. **Model ID updates**: Qwen publishes snapshots monthly; prefer stable aliases + regular regression testing; Alibaba's official top Qwen text recommendations are `qwen3.7-max`/`qwen3.6-plus`/`qwen3.6-flash`, and for image/video `wan2.7-image-pro`/`qwen-image-2.0-pro`/`happyhorse-1.0-*` (all per the official Model Catalog page, 2026-05-21); MiniMax currently M2.7 / Hailuo 2.3 / image-01 (per the official releases page).
+5. **Capability boundaries (official, first-hand)**: Kling's strongest character consistency is currently the "subject control (video character subject + multi-image subject)" of `kling-v3`/`v3-omni`, not the old v1-6 multi-image reference; Kling `v3`/`v3-omni` video "voice control" is officially marked ❌, and only `kling-v2-6` pro supports in-video voice. Hailuo 2.3 does not support R2V (T2V + I2V only), 2.3-Fast is I2V only, and MiniMax R2V goes through S2V-01 (single face image only).
+6. **Alibaba's two image product lines**: Qwen-Image-2.0 (text rendering/comic storyboards) and Wan-Image (portrait realism) are positioned differently and must be evaluated separately per scenario; they are not substitutes.
+7. **HappyHorse is open source and commercially usable**: base model/distillation/super-resolution/inference code are all open source, which is friendly for ArcReel; however, there are many third-party sites online with the same name, so integrate only with the official Alibaba Cloud Bailian API.
+8. **International site differences**: MiniMax minimaxi.com (China) vs minimax.io (international) keys are not interchangeable; Alibaba's three regions have independent keys; Kling app.klingai.com (China) vs klingai.com (global).
+9. **Treat leaderboards with caution**: Artificial Analysis updates quickly, and a Chinese model's advantage on Chinese-specific tasks does not equal leadership on global general benchmarks; base selection on hands-on "Chinese + web novel" testing.
+10. **Kling's model list has been verified first-hand, but pricing still needs the console**: Kling's video/image model lists have been checked item by item against the official docs (v3/v3-omni/v2-6/v2-5-turbo/o1/image-o1, etc.), and the capability matrix follows the official source. Two points to note: ① the official capability table marks **v3/v3-omni video "sound control (voice control)" as ❌**, and only `kling-v2-6` pro supports in-video voice, which conflicts with some third-party claims of "v3 native audio-video" — follow the official source; ② the exact Inspiration-credit values for each tier of each model are not listed in the official docs and must be confirmed by logging in to the app.klingai.com console.
 
 ---
 
-**对齐架构**：ArcReel `PROVIDER_REGISTRY` 预置供应商 + `lib/backends/{text,image,video}_backends/`
+## 8. References (first-hand official sources)
+
+- Alibaba Cloud Bailian Model Catalog (top recommendations, updated 2026-05-21): https://help.aliyun.com/zh/model-studio/models
+- Alibaba Cloud Bailian video model catalog: https://help.aliyun.com/zh/model-studio/video-generate-edit-model/
+- Alibaba Cloud Bailian model pricing: https://help.aliyun.com/zh/model-studio/model-pricing
+- Qwen Qwen-Image text-to-image API: https://help.aliyun.com/zh/model-studio/qwen-image-api
+- Qwen Qwen-Image-Edit image editing: https://help.aliyun.com/zh/model-studio/qwen-image-edit-guide
+- Tongyi Wanxiang text-to-video API: https://help.aliyun.com/zh/model-studio/text-to-video-api-reference
+- Qwen large model product page (Qwen3.7-Max / Qwen-Image / Wan2.7): https://www.aliyun.com/product/tongyi
+- Kling official video model list (first-hand): https://klingai.com/document-api/apiReference/model/videoModels
+- Kling official image model list (first-hand): https://klingai.com/document-api/apiReference/model/imageModels
+- Kling official pricing page (first-hand): https://klingai.com/dev/pricing
+- Kling open platform developer docs: https://app.klingai.com/cn/dev/document-api
+- MiniMax pricing (pricing-paygo): https://platform.minimaxi.com/docs/guides/pricing-paygo
+- MiniMax model release updates: https://platform.minimaxi.com/docs/release-notes/models
+- MiniMax image-to-video API: https://platform.minimaxi.com/docs/api-reference/video-generation-i2v
+- MiniMax S2V-01: https://platform.minimax.io/docs/api-reference/video-generation-s2v
+- MiniMax Hailuo 2.3 release: https://www.minimax.io/news/minimax-hailuo-23
+
+---
+
+**Architecture alignment**: ArcReel `PROVIDER_REGISTRY` preset providers + `lib/backends/{text,image,video}_backends/`

@@ -2,13 +2,13 @@
 status: accepted
 ---
 
-# 数据根分层：项目收进 `projects/`，数据根内不再以前缀区分项目
+# Layered data root: projects move into `projects/`, and prefixes are no longer used inside the data root to distinguish projects
 
-数据根起初只是项目目录，引入可配置数据根时直接把它当成了数据根：项目与数据库、全局资产库、用户记忆等系统状态平铺在同一层，靠 `.` / `_` 前缀声明「这不是项目」。放不进来的日志与 Vertex 凭证被推到代码目录和数据根的上一级；忘了加前缀的目录先后被当成项目列出且删不掉；「什么是项目」在多处各自判定且口径不一。我们决定把数据根分层：项目收进 `<数据根>/projects/<项目名>/`，其余运行数据以无前缀的名字与之并列，ArcReel 自行管理的运行数据全部落在数据根内（Claude SDK 自身的配置目录不在此列，见 `docs/adr/0074`）。
+The data root was originally just the projects directory, and when a configurable data root was introduced it was simply treated as the data root: projects sat on the same level as system state such as the database, the global asset library and user memory, relying on a `.` / `_` prefix to declare "this is not a project". Logs and Vertex credentials, which did not fit, were pushed into the code directory and the parent of the data root; directories that forgot the prefix were at various times listed as projects and could not be deleted; and "what is a project" was determined in several places, each with its own rule. We decided to layer the data root: projects move into `<data root>/projects/<project name>/`, the remaining runtime data sits alongside it under unprefixed names, and all runtime data managed by ArcReel itself lands inside the data root (the Claude SDK's own configuration directory is excluded; see `docs/adr/0074`).
 
 ```
-<数据根>/
-├── projects/<项目名>/
+<data root>/
+├── projects/<project name>/
 ├── global_assets/
 ├── users/<user_id>/memory/
 ├── arcreel.db
@@ -18,16 +18,16 @@ status: accepted
 └── runtime/
 ```
 
-- **原地嵌套**：数据根仍是部署者已配置、已挂载、已备份的那个目录，升级不改部署配置。默认数据根因此仍是仓库内被 git 忽略的 `projects/`，项目落在 `<仓库根>/projects/projects/`。
-- **项目只有一处判定**：`projects/` 下名称合法且带 `project.json` 的目录才是项目，数据根其余条目一概不是。
-- **Agent 对数据根的读访问默认拒绝**：只放行当前项目与当前用户的记忆，新增的系统目录无须登记即受保护（`docs/adr/0026`）。
-- **不支持降级**：旧版本会把数据根下新增的目录当成项目。
+- **Nested in place**: the data root is still the directory the deployer has already configured, mounted and backed up, and upgrading does not change deployment configuration. The default data root is therefore still the git-ignored `projects/` in the repository, and projects land in `<repository root>/projects/projects/`.
+- **Projects are determined in only one place**: only directories under `projects/` with a valid name and a `project.json` are projects; nothing else in the data root is.
+- **Agent read access to the data root is denied by default**: only the current project and the current user's memory are allowed, and new system directories are protected without needing registration (`docs/adr/0026`).
+- **Downgrade is not supported**: older versions would treat the new directories under the data root as projects.
 
-本 ADR 取代 `docs/adr/0074` 中「用户记忆落 `<数据根>/.arcreel/users/…`」「数据根下 `_` 前缀目录表示跨项目共享素材库」与「用户记忆目录由 `projects_root` 派生」三处：用户记忆改由数据根派生；项目内部的 `.arcreel/` 不变。
+This ADR supersedes three points in `docs/adr/0074`: "user memory lives in `<data root>/.arcreel/users/…`", "`_`-prefixed directories under the data root denote cross-project shared asset libraries", and "the user memory directory is derived from `projects_root`": user memory is now derived from the data root; `.arcreel/` inside a project is unchanged.
 
-## 明确不采用
+## Explicitly rejected
 
-- **维持平铺，只集中项目判定**：仍要求每个新系统目录记得加前缀；日志与凭证依旧无处安放，代码目录继续承载运行数据，而在安装目录只读的部署形态下它不可写。
-- **换一个新的默认数据根（如 `<仓库根>/data/`）**：每个 Docker 与自定义部署都得改卷挂载，漏改即表现为「项目全部消失」。
-- **系统状态收进数据根下的隐藏目录（如 `.arcreel/trial_runs/`）**：延续前缀约定，只是把同一个问题藏得更深。
-- **保留 `_global_assets`、`.arcreel.db` 等现有名字**：分层后前缀已不承担区分作用，留着会让「前缀有含义」的旧约定继续被照搬。
+- **Keep the flat layout and only centralise project determination**: every new system directory would still have to remember the prefix; logs and credentials would still have nowhere to go, and the code directory would keep holding runtime data, which is not writable in deployments where the install directory is read-only.
+- **Switch to a new default data root (e.g. `<repository root>/data/`)**: every Docker and custom deployment would have to change its volume mounts, and missing one would show up as "all projects disappeared".
+- **Put system state into hidden directories under the data root (e.g. `.arcreel/trial_runs/`)**: this continues the prefix convention and only hides the same problem deeper.
+- **Keep existing names such as `_global_assets` and `.arcreel.db`**: after layering, prefixes no longer serve to distinguish anything, and keeping them would let the old convention that "prefixes have meaning" keep being copied.

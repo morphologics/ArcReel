@@ -3,75 +3,75 @@ paths:
   - "**"
 ---
 
-# 通用
+# General
 
-## 代码与文档
+## Code and documentation
 
-### 注释只陈述代码现在的行为与约束
+### Comments state only the code's current behavior and constraints
 
-读注释的人手里只有这份代码。变更原因、issue 与 PR 编号、「最近」「本次」「实测」这类时间性措辞属于 commit message 与 PR 描述；写进注释后，代码一改它就变成错误陈述，而且没有人会去更新它。修改文件时，顺手把已有的这类引用改写成对当前行为的陈述。
+The person reading a comment has only this code in hand. Reasons for a change, issue and PR numbers, and time-bound wording such as "recently", "this time" and "measured in practice" belong in the commit message and PR description; written into a comment, they become false statements as soon as the code changes, and nobody will update them. When modifying a file, rewrite any existing references of this kind into statements about current behavior while you're at it.
 
-放行条件：这条规则约束代码与测试中的注释；`docs/` 下的专题文档（ADR、runbook 等）之间可以互相引用 spec 编号。
+Allowed when: this rule constrains comments in code and tests; topic documents under `docs/` (ADRs, runbooks, etc.) may reference spec numbers to one another.
 
-### 防御只针对常规可达的场景
+### Defend only against normally reachable scenarios
 
-常规可达指程序在常规操作下能走到：产品界面与 Agent 的正常流程；受支持的部署形态，包括并发请求与优雅停止后的重启；可预期的外部失败，如网络、供应商报错与限流、磁盘写满。只在任意时刻强杀、断电、用户手改项目文件或权限、硬件故障时才走到的路径，不为它加检查、兜底或补偿；审查意见以此驳回时，回复写明它依赖哪一种非常规条件。每条防御都是要维护和测试的分支，审查循环也会围着同一类意见往复。
+Normally reachable means the program can get there under normal operation: the normal flows of the product UI and the agent; supported deployment shapes, including concurrent requests and restart after a graceful shutdown; foreseeable external failures, such as network errors, provider errors and rate limits, and a full disk. For paths reached only through a hard kill at an arbitrary moment, power loss, the user hand-editing project files or permissions, or hardware failure, do not add checks, fallbacks or compensation; when rejecting a review comment on this basis, the reply states which kind of abnormal condition it depends on. Every defense is a branch that has to be maintained and tested, and review loops keep circling around the same kind of comment.
 
-放行条件：在已有的单一边界从根源保证、不新增分支，例如原子写入时补 fsync。
+Allowed when: the guarantee comes from the root at an existing single boundary without adding a branch, for example adding fsync to an atomic write.
 
-### 工具报出的问题改代码；豁免只给确认过的工具误报
+### When a tool reports a problem, change the code; exemptions only for confirmed tool false positives
 
-这条规则适用于闸门里的工具：lint、类型检查、依赖检查和 audit 脚本。它们报错时修改代码，不加 baseline、计数阈值，也不关闭整条规则；这些做法会把以后同类的真实问题一并放过。豁免只用于确认过的误报。行内豁免是否在同一行写了理由，由 `scripts/audit_conventions.py` 的 `SUPPRESSION-REASON` 检查；review 只判断理由是否成立。审查机器人附带的文风或语法提示（如 LanguageTool）不属于闸门工具，不按这条规则处理。
+This rule applies to the tools in the gate: lint, type checking, dependency checks and audit scripts. When they report an error, change the code; do not add a baseline or a count threshold, and do not turn off the whole rule; those approaches let future real problems of the same kind through as well. Exemptions are only for confirmed false positives. Whether an inline exemption states its reason on the same line is checked by `SUPPRESSION-REASON` in `scripts/audit_conventions.py`; review only judges whether the reason holds. Style or grammar hints attached by review bots (such as LanguageTool) are not gate tools and are not handled under this rule.
 
-行内语法不可用时，豁免写在配置条目旁，每个条目旁用一行注释写明理由：
+When inline syntax is not available, the exemption goes next to the configuration entry, with a one-line comment stating the reason next to each entry:
 
-- actionlint：写在 `.github/actionlint.yaml` 的 `paths.<文件>.ignore`，按错误消息正则精确匹配。
-- deptry 的 `DEP002` / `DEP004`：写在 `[tool.deptry.per_rule_ignores]`，按包名逐项列出。
-- ESLint 的文件级关闭：经 `eslint.config.js` 的 `files` override。
+- actionlint: in `paths.<file>.ignore` of `.github/actionlint.yaml`, matched exactly by error-message regex.
+- deptry's `DEP002` / `DEP004`: in `[tool.deptry.per_rule_ignores]`, listed one package name at a time.
+- ESLint file-level disabling: via a `files` override in `eslint.config.js`.
 
-策略阈值类的发现（如 Dependabot 冷却期天数）按工具要求调整配置，同样不走豁免。
+Policy-threshold findings (such as the number of Dependabot cooldown days) are handled by adjusting the configuration as the tool requires, and likewise do not go through exemptions.
 
-理由要说明「为什么这里工具判错了」或「为什么这里只能这样写」。「太麻烦」「暂时这样」「later fix」不成立；「React setter 引用稳定」「mount-only 初始化」「第三方库未提供类型」成立。
+The reason should explain "why the tool is wrong here" or "why it can only be written this way here". "Too much hassle", "temporary" and "later fix" don't hold; "React setter reference is stable", "mount-only initialization" and "third-party library provides no types" do.
 
-放行条件：import-linter 的 `ignore_imports`（`[tool.importlinter]`）是存量违规的 baseline。每条 ignore 都让分层契约在这一处失效，同方向的依赖会沿着它继续增加，所以新增条目前先尝试消除对应的依赖边；确实无法消除时才允许新增，并在条目上方用注释写明原因或对应的 ADR。
+Allowed when: import-linter's `ignore_imports` (`[tool.importlinter]`) is the baseline for existing violations. Each ignore disables the layering contract at that point, and dependencies in the same direction keep growing along it, so before adding an entry, first try to remove the corresponding dependency edge; only when it really cannot be removed is a new entry allowed, with a comment above the entry stating the reason or the corresponding ADR.
 
-### 功能变更与对应文档在同一个 PR 里
+### Feature changes and their documentation go in the same PR
 
-下列变更同步修改 `website/docs/` 中的对应页面（各页职责见 `CONTRIBUTING.md`「各页职责」）。文档落后于代码的那段时间里，用户按文档操作会失败。
+The following changes update the corresponding pages in `website/docs/` at the same time (for each page's responsibilities, see "各页职责" (Page responsibilities) in `CONTRIBUTING.md`). While the docs lag behind the code, users following the docs will fail.
 
-- 新增创作类型或生成模式。
-- 新增供应商或媒体能力。
-- 部署目录、端口、环境变量变化。
-- 数据目录、备份方式、迁移行为变化。
-- 对外 API、许可证或商业使用方式变化。
-- 外部 Agent 的安装方式变化：同步 `public/agent-installation-guide.md`。
+- A new creation type or generation mode.
+- A new provider or media capability.
+- Changes to the deployment directory, ports or environment variables.
+- Changes to the data directory, backup method or migration behavior.
+- Changes to the external API, license or commercial-use terms.
+- Changes to how external agents are installed: update `public/agent-installation-guide.md` too.
 
-### 预填与默认值从实际生效的上下文中取合法值
+### Pre-filled and default values take a valid value from the context where they actually apply
 
-默认值只对某个供应商、模型或类型成立时（如音色只属于某个语音模型，媒体类型只在部分供应商可用），按它实际生效的那个上下文取值并校验：最终写入的模型、当前选中的供应商，而不是全局默认或一份固定集合。它依附的值可能被自动推断或由用户改成别家，固定默认值在那里必然无效：新建项目写入合成必失败的组合，或表单提交在后端第二步失败、留下孤立条目。
+When a default value only holds for a particular provider, model or type (for example a voice belongs to only one speech model, or a media type is available only from some providers), take and validate the value in the context where it actually applies: the model that is finally written, the currently selected provider, not a global default or a fixed set. The value it depends on may be inferred automatically or changed by the user to another vendor, and a fixed default is bound to be invalid there: a new project gets written with a combination that is certain to fail synthesis, or a form submission fails at the backend's second step and leaves an orphaned entry.
 
-### 改变某个能力维度的来源或处理口径时，列出全部读点一起改
+### When changing the source or handling policy of a capability dimension, list all read points and change them together
 
-同一能力维度在多处被读取：各后端的请求载荷构造、执行期闸门、测试连接、提交前费用预估（内置与自定义供应商各一条路径）和结算计量。把能力来源切换为叠加用户覆盖后的有效能力，或把一类处理口径统一改掉（如静默丢弃改为报错）时，先按维度名搜出全部读点，在 PR 里列明，再一起改。只改显眼的几处，其余读点仍按旧口径工作：缺失的首帧或参考图被跳过后照常出片计费，用户收窄的能力在测试连接里放行并真实扣费，按无声预估、按有声结算让费用准入放过超预算请求。
+The same capability dimension is read in many places: each backend's request payload construction, the runtime gate, connection testing, pre-submission cost estimation (one path each for built-in and custom providers) and settlement metering. When switching a capability source to the effective capability with user overrides layered on, or changing a class of handling policy across the board (e.g. silent dropping changed to raising an error), first search for every read point by the dimension name, list them in the PR, then change them together. If only the conspicuous few are changed, the other read points keep working under the old policy: a missing first frame or reference image is skipped and the render is produced and billed as usual; a capability the user narrowed is let through by connection testing and charged for real; estimating as silent and settling as with-audio lets the cost admission check pass an over-budget request.
 
-放行条件：PR 有意只改一部分读点时，写明其余读点保持旧口径的理由与负责的 issue。
+Allowed when: the PR intentionally changes only some read points, and states the reason the remaining read points keep the old policy and the responsible issue.
 
-### 一个值的格式或取值范围只在一处定义，产出方、校验方与消费方都引用它
+### A value's format or value range is defined in one place only, and producers, validators and consumers all reference it
 
-同一个值往往被几方各自解读：发号或输出函数产出它，schema 与违约检查校验它，请求构造、能力解析、比较逻辑与界面消费它。各方各写一份口径（正则位数、整数类型、算法前缀、条目种类）时，改动一方后其余几方仍按旧口径工作：服务端发出的编号被自己的校验拒绝；校验放行 `1.0`，能力解析仍只认整数；读取出口加了前缀，回传入口仍按裸值比较，判成并发冲突；允许分享新类型的条目，安装弹窗仍只认旧类型。新增或改动这类值时，各方引用同一处定义（常量、类型或解析函数）；做不到时在 PR 里列出全部读写点，并加一条往返测试，用产出方在边界上的真实输出驱动每个校验方与消费方。
+The same value is often interpreted by several parties on their own: an ID-issuing or output function produces it, schemas and violation checks validate it, and request construction, capability resolution, comparison logic and the UI consume it. When each party writes its own policy (regex digit count, integer type, algorithm prefix, entry kinds), after one party changes the others keep working under the old policy: an ID issued by the server is rejected by its own validation; validation lets `1.0` through while capability resolution still accepts only integers; the read exit adds a prefix while the write-back entry still compares against the bare value, so it is judged a concurrency conflict; entries of a new type are allowed to be shared while the install dialog still accepts only the old type. When adding or changing such a value, all parties reference the same definition (a constant, type or parsing function); when that's not possible, list all read and write points in the PR and add a round-trip test that drives every validator and consumer with the producer's real output at the boundaries.
 
-### 按名称或路径匹配的静态守卫，用例覆盖到达同一目标的每种写法
+### Static guards that match by name or path have test cases covering every way of reaching the same target
 
-lint 规则与 `scripts/audit_conventions.py` 这类守卫按源码文本识别被拦的模块或函数，而同一个目标往往有多种写法：导入路径有 `@/` 别名、相对路径、`..` 段与转导出；删除函数有 `from os import remove as rm`、`import os as fs` 与 `aiofiles.os`。守卫只认一种写法时，其余写法照样到达目标，还让人以为已经拦住。新增或修改守卫时，列出能到达目标的全部写法，每种写法各有一条应当报错的用例。
+Guards like lint rules and `scripts/audit_conventions.py` identify the blocked module or function from source text, and the same target often has several spellings: import paths have the `@/` alias, relative paths, `..` segments and re-exports; deleting functions have `from os import remove as rm`, `import os as fs` and `aiofiles.os`. When a guard recognizes only one spelling, the others still reach the target, and it also creates the impression that it's been blocked. When adding or changing a guard, list every spelling that can reach the target, with one should-fail test case for each.
 
-## 文案
+## Copy
 
-### 用户可见文本写成翻译 key，覆盖全部已支持语言
+### User-visible text is written as translation keys, covering all supported languages
 
-前端界面文本写进 `frontend/src/i18n/`，后端返回给用户的错误、事件等消息写进 `lib/i18n/`，各自的语言目录就是语言清单。写死在代码里的文本会在其他语言的界面里原样显示，用户看到混杂的语言。各语言 key 集合是否一致由 typecheck 与 `tests/unit/lib/i18n/` 校验，review 只判断这段文本该不该走翻译 key。
+Frontend UI text goes into `frontend/src/i18n/`, and errors, events and other messages the backend returns to users go into `lib/i18n/`; each one's language directories are the language list. Text hard-coded in the code shows up as-is in UIs in other languages, and users see mixed languages. Whether the key sets match across languages is verified by typecheck and `tests/unit/lib/i18n/`; review only judges whether a piece of text should go through a translation key.
 
-放行条件：只给开发者看的日志与异常消息；模型显示名等来自目录数据的名称以数据条目为准，不建翻译 key。
+Allowed when: logs and exception messages meant only for developers; names that come from catalog data, such as model display names, follow the data entry and get no translation key.
 
-### 失败提示先说原因和下一步，原文折叠
+### Failure messages state the cause and next step first; the raw text is collapsed
 
-摘要用本地化文案说明原因与出路，不出现问题码、内部 ID 或服务端原文；原文放进可展开的详情。没有已知原因可说时，原文就是摘要。
+The summary uses localized copy to explain the cause and the way out, without problem codes, internal IDs or raw server text; the raw text goes into an expandable details section. When there is no known cause to state, the raw text is the summary.

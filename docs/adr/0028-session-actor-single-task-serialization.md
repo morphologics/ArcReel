@@ -2,23 +2,23 @@
 status: accepted
 ---
 
-# SessionActor：每会话单 asyncio task 串行化全部 ClaudeSDKClient 调用，消息调度交给 CLI
+# SessionActor: a single asyncio task per session serialises all ClaudeSDKClient calls; message scheduling is left to the CLI
 
-ClaudeSDKClient 不能安全并发调用，且其内部运行在 anyio 上，跨 task 持锁调用易死锁、破坏 SDK 内部状态机假设。决定每个 agent 会话配置一个专属 actor task，独占该会话的 ClaudeSDKClient：query/interrupt/撤回排队消息/disconnect 全部经 command queue 投递、在 actor task 内串行执行；消息流在会话存续期间持续读取，用 `asyncio.wait` 与命令队列交错（中断不必等待整轮流式结束）；消息流终止（CLI 退出）时 actor 随之退出，由会话层按终态收尾；对外只通过 `on_message` 回调推送消息。否决了「调用方各自加锁」与「直接并发调用」。
+ClaudeSDKClient cannot safely be called concurrently, and internally it runs on anyio; calling across tasks while holding a lock easily deadlocks and breaks the SDK's internal state machine assumptions. We decided to give each agent session a dedicated actor task that exclusively owns the session's ClaudeSDKClient: query/interrupt/withdraw queued message/disconnect are all delivered via a command queue and executed serially inside the actor task; the message stream is read continuously for the lifetime of the session, interleaved with the command queue using `asyncio.wait` (an interrupt doesn't have to wait for the whole turn's streaming to finish); when the message stream terminates (CLI exits) the actor exits with it, and the session layer wraps up according to the terminal state; externally messages are pushed only through the `on_message` callback. "Each caller adds its own lock" and "call concurrently directly" were rejected.
 
-消息调度只有 CLI 一层。CLI 自带消息队列：轮次进行中收到的用户消息在工具边界并入当前轮，或在本轮结束后与其他排队消息合并为新一轮；后台任务的完成通知走同一个队列，并会不经 query 开启自主轮次。因此：
+There is only one layer of message scheduling: the CLI. The CLI has its own message queue: user messages received while a turn is in progress are merged into the current turn at a tool boundary, or merged with other queued messages into a new turn after this turn ends; completion notifications from background tasks go through the same queue and can open autonomous turns without a query. Therefore:
 
-- **用户消息一律立即交给 CLI**，不按「有轮次在跑」拦截或暂存；每条消息带服务端分配的 uuid，「立即发送」以 `now` 优先级送入，由 CLI 打断当前轮先处理。
-- **actor 不撮合 query 与 result**：result 只代表一轮结束，不对应任何一条 query。
-- **会话状态以 CLI 报告的 session state 为准**：消息送达即为 running，CLI 报 `idle`（队列排空、后台等待结束后才发出）或 actor 退出时才离开 running；result 不切换状态。
-- **排队消息的去向以 CLI 的 `command_lifecycle` 帧为准**（`started` 即被接纳，`cancelled` 即被丢弃）。Python SDK 的消息解析会丢弃这类帧，actor 因此直接读 `client._query.receive_messages()` 的原始帧，自行处理 `command_lifecycle`，其余帧交给 SDK 的 `parse_message`。
+- **User messages are always handed to the CLI immediately**, not blocked or held back because "a turn is running"; each message carries a server-assigned uuid, and "send now" is delivered with `now` priority, with the CLI interrupting the current turn to handle it first.
+- **The actor does not match queries with results**: a result only means a turn ended, and does not correspond to any particular query.
+- **Session state follows the session state reported by the CLI**: it becomes running as soon as a message is delivered, and only leaves running when the CLI reports `idle` (only emitted after the queue drains and background waits end) or the actor exits; a result does not switch the state.
+- **The fate of queued messages follows the CLI's `command_lifecycle` frames** (`started` means accepted, `cancelled` means discarded). The Python SDK's message parsing discards these frames, so the actor reads the raw frames from `client._query.receive_messages()` directly, handles `command_lifecycle` itself, and passes the remaining frames to the SDK's `parse_message`.
 
 ## Considered Options
 
-- **ArcReel 在 CLI 之上再叠一层调度**（一条用户消息对应一轮、对应一个 result；有轮次在跑时拒收新消息；按 query/result 切换状态、清空回显登记）：CLI 不保证这种一一对应，排队消息被并入当前轮或合并为一轮、自主轮次插在中间时，result 会被算给错误的 query，回显登记被提前清空导致重复落库，状态被覆写。两层调度对不上，竞态只能逐个打补丁。
+- **ArcReel stacking another layer of scheduling on top of the CLI** (one user message corresponds to one turn and one result; rejecting new messages while a turn is running; switching state and clearing echo registration by query/result): the CLI doesn't guarantee this one-to-one correspondence; when queued messages are merged into the current turn or combined into one turn, or autonomous turns are interleaved, results get attributed to the wrong query, echo registration is cleared early causing duplicate persistence, and state gets overwritten. The two layers of scheduling don't line up, and race conditions can only be patched one by one.
 
 ## Consequences
 
-- 任何新增的 SDK 操作必须走 command queue 进 actor，不得在外部 task 直接操作 client。
-- actor 是会话常驻内存的主体，生命周期（驱逐/巡检/恢复）由 SessionManager 管理（见 `docs/adr/0029`）。
-- actor 依赖 SDK 的三个私有入口：`client._query.receive_messages()`、`parse_message` 与 `_query._send_control_request`（撤回排队消息用的 `cancel_async_message`，SDK 未公开）。升级 SDK 时由测试锁住这三处。
+- Any new SDK operation must go through the command queue into the actor; the client must not be operated directly from an external task.
+- The actor is the main resident-memory body of a session; its lifecycle (eviction/sweep/resume) is managed by SessionManager (see `docs/adr/0029`).
+- The actor depends on three private SDK entry points: `client._query.receive_messages()`, `parse_message` and `_query._send_control_request` (`cancel_async_message`, used to withdraw queued messages, is not public in the SDK). These three are locked down by tests when upgrading the SDK.

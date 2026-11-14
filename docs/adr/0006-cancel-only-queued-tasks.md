@@ -2,38 +2,38 @@
 status: accepted
 ---
 
-# 取消只对排队中的任务开放，执行中的任务总是跑到终态
+# Cancellation is only available for queued tasks; running tasks always run to a terminal state
 
-生成任务的取消只对 `queued` 开放。任务一旦被 worker 认领进入 `running`，就不可取消：已发出的供应商调用照常跑完，结果照常成为产物。对执行中的任务发起取消一律被拒绝，任务状态不变。这与术语表（`GLOSSARY.md`「取消」）的定义一致。
+Cancellation of generation tasks is only available for `queued`. Once a task has been claimed by a worker and entered `running`, it cannot be cancelled: provider calls already sent run to completion as usual, and the results become outputs as usual. Cancellation requests for running tasks are always rejected, and the task state is unchanged. This is consistent with the glossary definition (`GLOSSARY.md` "取消" (Cancel)).
 
-我们这样定的理由是费用模型。ArcReel 的媒体生成按**供应商 API 调用次数**计费，调用一旦发出，供应商侧就会继续生成并收费。本地中断连接只能丢掉结果，省不下费用；用户为这次调用付了钱，却拿不到产物。排队中的任务还没发出任何调用，取消它才真正省钱。执行中的任务跑完后，产物留在版本历史里，不满意可以换回旧版本，或重新生成。
+Our reason for this is the cost model. ArcReel's media generation is billed per **provider API call**, and once a call is sent, the provider side keeps generating and charging. Interrupting the connection locally can only throw away the result and saves no cost; the user paid for the call but gets no output. A queued task has not sent any call yet, so cancelling it is what actually saves money. After a running task finishes, its output stays in the version history; if unsatisfied, the user can switch back to an older version or regenerate.
 
-## 曾实现过「取消执行中的任务」，后撤回
+## "Cancelling running tasks" was once implemented, then withdrawn
 
-此前的实现允许取消执行中的任务：cancel API 把任务写成 `cancelling` 中间态，经 worker 内存里的「任务 id → asyncio.Task」回调 `cancel()` 在跑协程，worker 收尾时再从 `cancelling` 推到 `cancelled`。围绕这条路径长出了三套配套机制：
+The earlier implementation allowed cancelling running tasks: the cancel API wrote the task into a `cancelling` intermediate state, called `cancel()` on the running coroutine via the worker's in-memory "task id → asyncio.Task" map, and when the worker wrapped up it pushed it from `cancelling` to `cancelled`. Three supporting mechanisms grew around this path:
 
-- **`cancelling` 中间态**：任务状态、批次成员状态与统计、去重部分索引都多了一个活动态。
-- **「0-rows 即转 cancelled」协议**：`mark_task_succeeded` / `mark_task_failed` 以 `WHERE status='running'` 守卫，任务已被改成 `cancelling` 时写入影响 0 行，worker 各出口据此改调 `mark_task_cancelled` 兜底。
-- **取消回执**：协程被取消时产物可能已写了一半或已写完，于是从产物登记、正式写入到任务执行入口一路透传「回执」，任务终态落成 `cancelled` 时据此回滚已写入的产物。
+- **The `cancelling` intermediate state**: task state, batch member state and statistics, and the dedup partial index all gained an extra active state.
+- **The "0 rows means switch to cancelled" protocol**: `mark_task_succeeded` / `mark_task_failed` are guarded by `WHERE status='running'`; when the task had already been changed to `cancelling`, the write affected 0 rows, and each worker exit used that to fall back to calling `mark_task_cancelled`.
+- **Cancellation receipts**: when the coroutine was cancelled, the output might already be half-written or fully written, so a "receipt" was threaded all the way from output registration and the actual write to the task execution entry point, and when the task's terminal state landed as `cancelled` the already-written outputs were rolled back based on it.
 
-撤回的原因：
+Reasons for withdrawal:
 
-- **它和费用模型相悖。** 取消执行中的任务省不下已发出的调用费用，却回滚掉用户已付费的产物。
-- **维护成本不对等。** 回执要沿每一条产物写入路径透传，任何一条新的写入路径漏掉回执，取消后就会留下半套产物；每个新增的终态出口也要记得遵守 0-rows 协议。这些约束靠调用方自觉，难以用测试穷尽。
-- **需求本身很窄。** 用户想停下的通常是还没开始的任务，全部取消本来就只清排队中的任务。
+- **It contradicts the cost model.** Cancelling a running task doesn't save the cost of calls already sent, yet rolls back outputs the user has already paid for.
+- **Maintenance cost is disproportionate.** The receipt had to be threaded along every output write path; any new write path that missed the receipt would leave half a set of outputs after cancellation; every new terminal-state exit also had to remember to honour the 0-rows protocol. These constraints relied on callers' discipline and were hard to cover exhaustively with tests.
+- **The need itself is narrow.** What users want to stop is usually tasks that haven't started yet, and cancel-all only ever clears queued tasks anyway.
 
 ## Consequences
 
-- 状态机为 `queued → running → succeeded | failed`，外加 `queued → cancelled`（用户取消，`cancelled_by='user'`；依赖它的排队中下游一并取消，`cancelled_by='cascade'`）。活动态只有 `queued` 与 `running`，去重部分索引的 WHERE 同为这两值。升级迁移把库里残留的 `cancelling` 行收敛为 `cancelled`，其排队中的下游按 `cascade` 一并取消。
-- 取消入口的行为：
-  - 单任务取消与取消预览：任务执行中时，以 409 拒绝，返回三语错误文案。
-  - 项目级全部取消：只取 `queued`，执行中的任务不受影响、也不计数；`skipped_running_count` 只统计请求期间刚被 worker 认领、没能取消的排队任务。
-  - 批次取消（创作 Agent 工具与远端 MCP）：取消仍在排队的成员，执行中的成员照常跑完，归入 `skipped_running`。
-  - 前端：只给排队中的任务显示取消按钮。
-- 级联取消只涉及排队中的下游：下游在上游跑完前不会被认领，所以取消一个排队中的任务时，它的下游也必然在排队。
-- 服务关停不取消在跑任务：`worker.stop()` 等在跑任务跑完再退出主循环。
-- **进程级打断的兜底保留。** 在跑协程若因进程级原因（事件循环拆除等）收到 `CancelledError`，worker 用 `asyncio.shield` 调 `mark_task_interrupted`，把任务从 `running` 直接落为 `cancelled`。这不是用户取消，只是避免任务停在 `running`、在下次重启时被当作孤儿重新处置（见 `docs/adr/0007`）。它目前写入的取消来源是 `user`，与术语表「系统内部回收不算取消」不符，是否改为独立来源另行决定。
-- 终态写入仍以 `WHERE status=...` 守卫防止越权转移，但写入影响 0 行只记日志，不再改判为取消。
-- 成功事件发出失败时不回滚产物：已写入的产物保持有效，异常照常上抛。提交失败时的补偿（非取消）保留。
-- 执行中任务的超时仍由各 video backend 在 `poll_with_retry` 中按各自 `max_wait` 兜底，超时抛 `TimeoutError`，任务标 `failed`；worker 不另包外层超时。
-- 不要为「让用户能停下昂贵的生成」重新开放取消执行中的任务。真出现这个需求，应先解决供应商侧的取消与退费语义，而不是在本地中断连接。
+- The state machine is `queued → running → succeeded | failed`, plus `queued → cancelled` (user cancellation, `cancelled_by='user'`; queued downstream tasks that depend on it are cancelled along with it, `cancelled_by='cascade'`). The only active states are `queued` and `running`, and the WHERE of the dedup partial index is likewise these two values. The upgrade migration converges leftover `cancelling` rows in the database to `cancelled`, and their queued downstream tasks are cancelled along with them as `cascade`.
+- Behaviour of the cancellation entry points:
+  - Single-task cancel and cancel preview: when the task is running, rejected with 409, returning a trilingual error message.
+  - Project-level cancel-all: only takes `queued`; running tasks are unaffected and not counted; `skipped_running_count` only counts queued tasks that were claimed by a worker during the request and could not be cancelled.
+  - Batch cancel (creative agent tools and remote MCP): cancels members still queued; running members run to completion as usual and are put under `skipped_running`.
+  - Frontend: only shows a cancel button for queued tasks.
+- Cascade cancellation only involves queued downstream tasks: a downstream task won't be claimed before its upstream finishes, so when a queued task is cancelled, its downstream is necessarily also queued.
+- Service shutdown does not cancel running tasks: `worker.stop()` waits for running tasks to finish before exiting the main loop.
+- **The fallback for process-level interruption is kept.** If a running coroutine receives `CancelledError` for process-level reasons (event loop teardown etc.), the worker uses `asyncio.shield` to call `mark_task_interrupted`, landing the task directly from `running` to `cancelled`. This is not a user cancellation; it just keeps the task from being stuck in `running` and being handled as an orphan on the next restart (see `docs/adr/0007`). The cancellation source it currently writes is `user`, which does not match the glossary's "internal system reclamation does not count as cancellation"; whether to change it to a separate source will be decided separately.
+- Terminal-state writes are still guarded by `WHERE status=...` to prevent unauthorised transitions, but a write affecting 0 rows is only logged and is no longer reinterpreted as a cancellation.
+- When emitting the success event fails, outputs are not rolled back: written outputs remain valid and the exception is raised as usual. Compensation on commit failure (not cancellation) is kept.
+- Timeouts for running tasks are still backstopped by each video backend in `poll_with_retry` according to its own `max_wait`; on timeout it raises `TimeoutError` and the task is marked `failed`; the worker does not wrap an extra outer timeout.
+- Do not reopen cancellation of running tasks in order to "let users stop expensive generations". If that need really arises, first solve provider-side cancellation and refund semantics rather than interrupting the connection locally.

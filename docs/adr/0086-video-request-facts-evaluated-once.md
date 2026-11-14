@@ -2,25 +2,25 @@
 status: accepted
 ---
 
-# 视频请求事实只求值一次：读侧与执行侧只差身份来源
+# Video request facts are evaluated only once: the read side and execution side differ only in identity source
 
-一次视频生成请求的执行事实——执行模型、下发的分辨率、收窄后的可选时长及成因、时长是否由端点固定、音轨形态——曾由报价、预检、剧本规划、界面、Agent 与执行各自推算，彼此分叉：预检要求确认的秒数与执行实际申请的不同，报价按一个分辨率而扣费按另一个。我们决定把它们收成「视频请求事实」，按「项目 × 路线 × 任务类型桶 × 身份来源」对每次请求求值一次，各消费方只读结果；读侧以当前配置解析出的执行模型为身份，执行侧以实际构造的调用通道为身份（`docs/adr/0049` ③），其余求值相同。
+The execution facts of a video generation request (the execution model, the resolution sent, the narrowed selectable durations and why, whether duration is fixed by the endpoint, the audio-track form) used to be worked out separately by quoting, pre-check, script planning, the UI, the agent and execution, and they diverged: the seconds that pre-check asked to confirm differed from what execution actually requested, and quoting used one resolution while charging used another. We decided to gather them into "video request facts", evaluated once per request by "project × route × task type bucket × identity source", with every consumer only reading the result; the read side uses the execution model resolved from the current configuration as its identity, the execution side uses the invocation channel actually constructed as its identity (`docs/adr/0049` (3)), and the rest of the evaluation is identical.
 
-随之确定三条口径：
+Three rules follow from this:
 
-- **分辨率未设置即不下发，两条视频路线同口径**：参考生视频路线不再下发兜底分辨率；时长约束与报价按请求实际下发的分辨率求值（`docs/adr/0019`、`docs/adr/0056`）。
-- **i2v 桶不可用即「未知」**：参考生视频项目中无参考图单元的档位只取自 i2v 桶；该桶解析不出时如实呈现为「未知」并给出原因，不回退到 r2v 模型的档位。
-- **执行期不再空值放行**：时长这一维在执行期解析失败或收成空集时阻断并记录失败码（时长由端点固定的合法空集不在此列，`docs/adr/0082`），不再按「能力查询失败即空值放行」交给供应商以付费失败暴露。
+- **If resolution is not set, it is not sent, with the same rule for both video routes**: the reference-to-video route no longer sends a fallback resolution; duration constraints and quoting are evaluated against the resolution the request actually sends (`docs/adr/0019`, `docs/adr/0056`).
+- **If the i2v bucket is unavailable, the result is "unknown"**: in reference-to-video projects, the tiers for units without reference images come only from the i2v bucket; when that bucket cannot be resolved, it is presented honestly as "unknown" with a reason given, rather than falling back to the r2v model's tiers.
+- **Execution no longer lets empty values through**: when the duration dimension fails to resolve at execution or narrows to an empty set, execution blocks and records a failure code (the legitimate empty set for duration fixed by the endpoint is excluded; see `docs/adr/0082`), instead of following "capability lookup failed, so let the empty value through" and leaving it to the provider to surface as a paid failure.
 
-## 明确不采用
+## Explicitly rejected
 
-- **i2v 桶不可用时软回退到 r2v 档位**（不挡创作流）：执行期这类单元必然被阻断，回退只会让规划阶段放行一份执行不了的方案。
-- **参考生视频路线保留按供应商的兜底分辨率**：该例外的成因已不存在，兜底值会覆盖 ComfyUI workflow 的字面尺寸（`docs/adr/0082`）、在只接受特定档位的端点上失败，并让报价与扣费各取一值。
-- **读侧与执行侧各自组装、只共享底层规则**：两份组装各自补缺省值，分叉在字段缺失时悄然发生。
-- **界面保留「单元是否带参考图」的镜像判定**：它只看声明引用不看可用参考图，会与服务端的定桶结果相左。
+- **Soft fallback to r2v tiers when the i2v bucket is unavailable** (so as not to block the creative flow): at execution, such units will inevitably be blocked, so falling back would only let the planning stage approve a plan that cannot be executed.
+- **Keep the per-provider fallback resolution for the reference-to-video route**: the reason for that exception no longer exists; the fallback value would override the literal size of a ComfyUI workflow (`docs/adr/0082`), fail on endpoints that only accept specific tiers, and let quoting and charging each take a different value.
+- **Have the read side and execution side assemble separately, sharing only the underlying rules**: each assembly fills in its own defaults, and divergence happens quietly when fields are missing.
+- **Keep a mirror check of "does the unit have reference images" in the UI**: it looks only at declared references, not at usable reference images, and would contradict the server's bucket decision.
 
 ## Consequences
 
-- 参考生视频未设分辨率的项目改为不下发后，执行指纹随之改变，已选视频不再命中同档免费复用；产物时效不受影响（`docs/adr/0062`）。
-- `docs/adr/0049` 中 video lane 的兜底分辨率与时长这一维的空值放行由本 ADR 取代；`docs/adr/0019` 对参考生视频路线不再有例外。
-- 测试：报价、预检、执行等消费方的测试用 `tests/factories.py` 的 `make_video_request_facts` 构造结果、直接构造 `VideoRequestFactsFailure` 作失败对象，不在能力解析器层造假，也不手搭能力 dict；能力求值本身用真实 `ConfigResolver` 加测试数据库测。
+- After reference-to-video projects without a resolution set switch to not sending one, the execution fingerprint changes accordingly, and already selected videos no longer hit free reuse at the same tier; artifact currency is unaffected (`docs/adr/0062`).
+- The video lane's fallback resolution and the empty-value pass-through for the duration dimension in `docs/adr/0049` are superseded by this ADR; `docs/adr/0019` no longer has an exception for the reference-to-video route.
+- Testing: tests for consumers such as quoting, pre-check and execution construct results with `make_video_request_facts` from `tests/factories.py` and construct `VideoRequestFactsFailure` directly as the failure object, rather than faking at the capability resolver layer or hand-building capability dicts; capability evaluation itself is tested with a real `ConfigResolver` plus a test database.

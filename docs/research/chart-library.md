@@ -1,187 +1,187 @@
-# 图表库选型：设置页趋势图与顶栏迷你图
+# Chart Library Selection: Settings-page Trend Chart and Top-bar Sparkline
 
-> 状态：调研完成，结论供地图 [#2286](https://github.com/ArcReel/ArcReel/issues/2286) 汇总。
-> 现状：本文推荐 visx，最终落地的是备选 Recharts——前端随 shadcn/ui 重构采用其 Chart 组件（`frontend/src/components/ui/chart.tsx`，基于 Recharts），使用记录趋势图由它绘制。下文保留调研时的结论。
-> 关联：[#2393](https://github.com/ArcReel/ArcReel/issues/2393)（本票）、[#2290](https://github.com/ArcReel/ArcReel/issues/2290)（设置页使用记录原型，手绘 SVG 趋势图）。
-> 数据日期：2026-09-07。版本、发布日期、许可证来自 npm registry（`npm view`）；仓库活跃度来自 GitHub REST / Search API（`gh api`）；整包体积来自 bundlephobia API；tree-shaken 体积来自本机 Vite 8.2.2 + rolldown 实测（见 §3.2）；API 事实来自各库官方文档（Context7）与安装到 `node_modules` 的源码 / 类型定义。
+> Status: research complete; conclusions to be rolled up in the map issue [#2286](https://github.com/ArcReel/ArcReel/issues/2286).
+> Current state: this document recommends visx, but what was eventually adopted was the runner-up, Recharts — as part of the shadcn/ui refactor the frontend adopted its Chart component (`frontend/src/components/ui/chart.tsx`, based on Recharts), which draws the usage records trend chart. The conclusions below are kept as they were at research time.
+> Related: [#2393](https://github.com/ArcReel/ArcReel/issues/2393) (this ticket), [#2290](https://github.com/ArcReel/ArcReel/issues/2290) (settings-page usage records prototype, hand-drawn SVG trend chart).
+> Data date: 2026-09-07. Versions, release dates, and licences come from the npm registry (`npm view`); repository activity from the GitHub REST / Search API (`gh api`); full bundle sizes from the bundlephobia API; tree-shaken sizes from local measurement with Vite 8.2.2 + rolldown (see §3.2); API facts from each library's official docs (Context7) and the source / type definitions installed in `node_modules`.
 
-## 结论一句话
+## Conclusion in One Sentence
 
-**推荐 visx（`@visx/shape` 等按包引入）：SVG + React 原生、不注入任何字体 / 颜色 / 动画、堆叠柱 + tooltip 实测 28.5 KB gzip，dataviz 四条标记规范全部原生可做，且与原型手绘结构一一对应，迁移约半天到一天；备选 Recharts 3：声明式、键盘无障碍内建，但 125.5 KB gzip，且顶端圆角与段间隙两条规范都要走自定义 `shape`。**
+**Recommend visx (imported per package, e.g. `@visx/shape`): SVG + React native, injects no fonts / colours / animation, stacked bars + tooltip measured at 28.5 KB gzip, all four dataviz mark rules achievable natively, and it maps one-to-one onto the structure of the hand-drawn prototype, with migration taking about half a day to a day; runner-up Recharts 3: declarative, keyboard accessibility built in, but 125.5 KB gzip, and both the top-corner rounding and segment-gap rules require a custom `shape`.**
 
-## 结论速览
+## Conclusions at a Glance
 
-| 问题 | 一行结论 |
+| Question | One-line conclusion |
 |---|---|
-| 1 硬约束筛选 | 七个候选都能在 React 19 + Vite 8 + TS 下跑；echarts-for-react（供应链事件 + React 19 类型 issue 未关）与 uPlot（无官方 React 封装、堆叠柱靠示例插件）在「React 生态」这一条上最弱。 |
-| 2 体积（堆叠柱 + tooltip，gzip） | uPlot 26.8 KB + 0.8 KB CSS < visx 28.5 KB < Chart.js 57.0 KB < Plot 94.6 KB < nivo 97.8 KB < Recharts 125.5 KB < ECharts 203.7 KB。 |
-| 3 标记规范原生程度（≤ 24px / 顶端圆角 / 段间隙 / 图例四条） | visx 4/4（段间隙靠 render-prop 减高度）；Chart.js、uPlot、Plot 各 3/4；Recharts、nivo、ECharts 各 2/4。明细见 §3.3。 |
-| 4 推荐 / 备选 | 推荐 visx，备选 Recharts；若将来体积成为唯一决定因素再考虑 Chart.js（canvas，与 oklch CSS 变量体系不兼容，需手工解析色值）。 |
-| 5 迁移工作量 | 原型 → visx：0.5–1 人日；原型 → Recharts：约 1 人日；两者都要另加「表格替代」与测试，这部分与库无关。 |
+| 1 Hard-constraint screening | All seven candidates run under React 19 + Vite 8 + TS; echarts-for-react (supply-chain incident + an open React 19 typing issue) and uPlot (no official React wrapper, stacked bars rely on an example plugin) are weakest on the "React ecosystem" criterion. |
+| 2 Size (stacked bars + tooltip, gzip) | uPlot 26.8 KB + 0.8 KB CSS < visx 28.5 KB < Chart.js 57.0 KB < Plot 94.6 KB < nivo 97.8 KB < Recharts 125.5 KB < ECharts 203.7 KB. |
+| 3 How natively the mark rules are supported (≤ 24px / rounded top / segment gap / legend, four rules) | visx 4/4 (segment gap by reducing height in the render-prop); Chart.js, uPlot, Plot 3/4 each; Recharts, nivo, ECharts 2/4 each. Details in §3.3. |
+| 4 Recommendation / runner-up | Recommend visx, runner-up Recharts; if size ever becomes the only deciding factor, consider Chart.js (canvas, incompatible with the oklch CSS variable system, colour values must be resolved manually). |
+| 5 Migration effort | Prototype → visx: 0.5–1 person-day; prototype → Recharts: about 1 person-day; both additionally need a "table alternative" and tests, which are independent of the library. |
 
-## 1. 环境事实（仓库核实）
+## 1. Environment Facts (verified in the repository)
 
-- `frontend/pnpm-lock.yaml`：`react@19.2.8`、`react-dom@19.2.8`、`vite@8.2.2`、`tailwindcss@4.3.3`、`typescript@6.0.3`；`frontend/package.json` 没有任何图表 / d3 依赖。
-- `frontend/src/index.css`：Tailwind v4 `@theme` 定义 oklch 色板（`--color-hairline*`、`--color-text*`、`--color-accent*` 等）与字体（`--font-sans` Inter、`--font-mono` JetBrains Mono），`.num` 类使用 mono 字体；`@custom-variant dark` 存在但产品是暗色单主题。
-- `frontend/src/main.tsx`：`createRoot` 直接挂载，**没有** `<StrictMode>` 包裹，也没有 `hydrateRoot` / SSR。因此 SSR 是非需求；StrictMode 兼容只影响将来是否能开启。
-- 手绘原型 `frontend/src/components/pages/settings/prototype/UsageTrendChart.tsx`（分支 `prototype/2290-usage-records-settings`，201 行）：自己算 `niceMax` / 刻度 / `scaleBand` 等价的 slot 宽度、`ResizeObserver` 测宽、`<pattern>` 斜线填充「已取消」、路径手绘顶端 4px 圆角、段间 2px 间隙、整桶 hover 的 HTML tooltip、`role="img"` + `aria-label`。
-- dataviz skill `references/marks-and-anatomy.md`（bundled-skills 2.1.263）：柱 ≤ 24px、4px 圆角只在数据端、基线处方角；段间 2px **面色间隙**而不是描边；网格 hairline 1px 实线；≥ 2 个序列图例常驻；文字用文字 token 不用序列色。`interaction.md`：柱状图每根柱 / 段自带 hover tooltip，tooltip 列出该 X 的全部序列。
+- `frontend/pnpm-lock.yaml`: `react@19.2.8`, `react-dom@19.2.8`, `vite@8.2.2`, `tailwindcss@4.3.3`, `typescript@6.0.3`; `frontend/package.json` has no chart / d3 dependencies at all.
+- `frontend/src/index.css`: Tailwind v4 `@theme` defines an oklch palette (`--color-hairline*`, `--color-text*`, `--color-accent*`, etc.) and fonts (`--font-sans` Inter, `--font-mono` JetBrains Mono); the `.num` class uses the mono font; `@custom-variant dark` exists, but the product is single-theme dark.
+- `frontend/src/main.tsx`: `createRoot` mounts directly, **without** a `<StrictMode>` wrapper, and there is no `hydrateRoot` / SSR. SSR is therefore a non-requirement; StrictMode compatibility only affects whether it can be turned on in the future.
+- Hand-drawn prototype `frontend/src/components/pages/settings/prototype/UsageTrendChart.tsx` (branch `prototype/2290-usage-records-settings`, 201 lines): computes `niceMax` / ticks / a `scaleBand`-equivalent slot width itself, measures width with `ResizeObserver`, uses a `<pattern>` diagonal-hatch fill for "cancelled", hand-draws a 4px rounded top in the path, 2px gaps between segments, an HTML tooltip on whole-bucket hover, `role="img"` + `aria-label`.
+- dataviz skill `references/marks-and-anatomy.md` (bundled-skills 2.1.263): bars ≤ 24px, 4px rounding only at the data end, square corners at the baseline; 2px **surface-colour gaps** between segments rather than strokes; hairline 1px solid grid; legend always shown for ≥ 2 series; text uses text tokens, not series colours. `interaction.md`: each bar / segment in a bar chart has its own hover tooltip, and the tooltip lists all series for that X.
 
-## 2. 候选逐一核实
+## 2. Candidates Verified One by One
 
-各库「维护状态」四个数字：最新版发布日、仓库最后一次 commit、2026-06-01 以来新开 / 关闭的 issue 数（GitHub Search API，`is:issue`）。
+The four "maintenance status" numbers for each library: latest release date, the repository's last commit, and the number of issues opened / closed since 2026-06-01 (GitHub Search API, `is:issue`).
 
-### 2.1 Recharts 3.10.1（MIT）
+### 2.1 Recharts 3.10.1 (MIT)
 
-- 维护：3.10.1 发布 2026-07-25；最后 commit 2026-09-07；2026-06 以来 issue 新开 39 / 关闭 56；27.5k stars。peerDeps 明确列出 React 19。
-- React 19 / StrictMode：无未关闭的 React 19 兼容 issue；StrictMode 相关只有 2022 年已关闭的 ResponsiveContainer 问题（#2878）。
-- 无障碍：`accessibilityLayer` 在 3.x 默认为 `true`（`es6/state/rootPropsSlice.js`），根 `<svg>` 得到 `role="application"` + `tabIndex=0`（`es6/container/RootSurface.js`），键盘左右键驱动 tooltip（`es6/state/keyboardEventsMiddleware.js`）；图表接受 `title` / `desc` prop 渲染 `<title>` / `<desc>`；也可自行覆盖 `role`。表格替代需自写。—— [storybook Accessibility.mdx](https://github.com/recharts/recharts/blob/main/storybook/stories/API/Accessibility.mdx)
-- 样式可定制：SVG 文字不注入字体；`CartesianGrid` 的 `stroke` / `strokeDasharray` 都是 prop（默认取主题 `theme.grid`，dark 主题只定义 `stroke: '#3f3f46'`，标记为 `@experimental`）；tooltip 用 `content` prop 换成自家 HTML；动画需每个 `<Bar>` 传 `isAnimationActive={false}`。
-- 堆叠 / tooltip：`stackId` 堆叠；BarChart 的 tooltip 默认 `axis` 触发即整桶（`es6/chart/BarChart.js: defaultTooltipEventType: "axis"`）；`maxBarSize` 限宽；`radius` 支持 `[tl, tr, br, bl]` 四角（`src/cartesian/Bar.tsx`）；`shape` prop 接受自定义组件（[Customise.mdx](https://github.com/recharts/recharts/blob/main/storybook/stories/Customise.mdx)）；`<defs><pattern>` 可作为子元素直接写入。
-- 体积：整包 147.5 KB gzip（bundlephobia）；tree-shaken 堆叠柱 + tooltip 125.5 KB gzip（内含 redux toolkit、d3 子集、react-smooth 等）。
+- Maintenance: 3.10.1 released 2026-07-25; last commit 2026-09-07; since 2026-06, 39 issues opened / 56 closed; 27.5k stars. peerDeps explicitly list React 19.
+- React 19 / StrictMode: no open React 19 compatibility issues; the only StrictMode-related one is a ResponsiveContainer problem closed in 2022 (#2878).
+- Accessibility: `accessibilityLayer` defaults to `true` in 3.x (`es6/state/rootPropsSlice.js`); the root `<svg>` gets `role="application"` + `tabIndex=0` (`es6/container/RootSurface.js`), and the left/right arrow keys drive the tooltip (`es6/state/keyboardEventsMiddleware.js`); charts accept `title` / `desc` props that render `<title>` / `<desc>`; `role` can also be overridden. The table alternative must be written ourselves. — [storybook Accessibility.mdx](https://github.com/recharts/recharts/blob/main/storybook/stories/API/Accessibility.mdx)
+- Style customisation: SVG text has no injected font; `CartesianGrid`'s `stroke` / `strokeDasharray` are both props (defaulting to the theme's `theme.grid`; the dark theme only defines `stroke: '#3f3f46'`, marked `@experimental`); the tooltip can be replaced with our own HTML via the `content` prop; animation must be disabled by passing `isAnimationActive={false}` to each `<Bar>`.
+- Stacking / tooltip: stacking via `stackId`; BarChart's tooltip defaults to `axis` triggering, i.e. the whole bucket (`es6/chart/BarChart.js: defaultTooltipEventType: "axis"`); `maxBarSize` caps width; `radius` supports four corners `[tl, tr, br, bl]` (`src/cartesian/Bar.tsx`); the `shape` prop accepts a custom component ([Customise.mdx](https://github.com/recharts/recharts/blob/main/storybook/stories/Customise.mdx)); `<defs><pattern>` can be written directly as a child element.
+- Size: full bundle 147.5 KB gzip (bundlephobia); tree-shaken stacked bars + tooltip 125.5 KB gzip (includes redux toolkit, a d3 subset, react-smooth, etc.).
 
-### 2.2 visx 4.0.0（MIT，Airbnb）
+### 2.2 visx 4.0.0 (MIT, Airbnb)
 
-- 维护：4.0.0 发布 2026-06-11（"v4 official with React 19 support?" #2005 已关闭）；最后 commit 2026-06-22；2026-06 以来 issue 新开 4 / 关闭 5；21k stars。peerDeps `react ^18 || ^19`。
-- React 19 / StrictMode：`@visx/tooltip`、`@visx/responsive` 源码中已无 `findDOMNode`（早年 StrictMode issue #883/#1009 已关闭）。
-- 无障碍：visx 只产出 `<rect>` / `<path>`，`<svg>` 是我们自己写的，`role` / `aria-label` / `<title>` 随意加；表格替代自写。
-- 样式可定制：`@visx/shape`、`@visx/scale`、`@visx/grid`、`@visx/pattern` 不带任何字体 / 颜色默认值；只有 `@visx/axis` 的刻度文字默认 `fill:#222; fontFamily:'Arial'; fontSize:10`（`esm/axis/AxisBottom.js`），用 `tickLabelProps` 覆盖或干脆沿用原型自己画刻度；`@visx/tooltip` 有 `defaultStyles`，传 `unstyled` 即无样式（`esm/tooltips/Tooltip.js`）。没有动画。
-- 堆叠 / tooltip：`BarStack` 基于 d3-shape stack，children render-prop 给出每段 `x/y/width/height/color/bar.data`（`packages/visx-shape/src/shapes/BarStack.tsx`）；`BarRounded` 原生支持 `top` / `topLeft` 等单边圆角（`esm/shapes/BarRounded.js`）；`PatternLines` 输出 `<pattern>`（[visx-pattern README](https://github.com/airbnb/visx/blob/master/packages/visx-pattern/Readme.md)）；`useTooltip` + `TooltipWithBounds` / `useTooltipInPortal` 管 tooltip 位置（[visx-tooltip README](https://github.com/airbnb/visx/blob/master/packages/visx-tooltip/Readme.md)）；`ParentSize` 管响应式。
-- 体积：`@visx/shape` 整包 10.7 KB gzip；tree-shaken 堆叠柱 + 网格 + 双轴 + tooltip + pattern + ParentSize 合计 28.5 KB gzip；迷你图（`LinePath` + `scaleLinear`）单独 15.2 KB，与堆叠柱共用后增量 1.7 KB。
+- Maintenance: 4.0.0 released 2026-06-11 ("v4 official with React 19 support?" #2005 closed); last commit 2026-06-22; since 2026-06, 4 issues opened / 5 closed; 21k stars. peerDeps `react ^18 || ^19`.
+- React 19 / StrictMode: the `@visx/tooltip` and `@visx/responsive` source no longer contain `findDOMNode` (the earlier StrictMode issues #883/#1009 are closed).
+- Accessibility: visx only produces `<rect>` / `<path>`; the `<svg>` is written by us, so `role` / `aria-label` / `<title>` can be added freely; the table alternative must be written ourselves.
+- Style customisation: `@visx/shape`, `@visx/scale`, `@visx/grid`, `@visx/pattern` carry no font / colour defaults; only `@visx/axis` tick labels default to `fill:#222; fontFamily:'Arial'; fontSize:10` (`esm/axis/AxisBottom.js`), which can be overridden with `tickLabelProps`, or we can simply keep the prototype's own tick drawing; `@visx/tooltip` has `defaultStyles`, and passing `unstyled` removes them (`esm/tooltips/Tooltip.js`). No animation.
+- Stacking / tooltip: `BarStack` is based on d3-shape stack, and its children render-prop provides each segment's `x/y/width/height/color/bar.data` (`packages/visx-shape/src/shapes/BarStack.tsx`); `BarRounded` natively supports single-side rounding such as `top` / `topLeft` (`esm/shapes/BarRounded.js`); `PatternLines` outputs a `<pattern>` ([visx-pattern README](https://github.com/airbnb/visx/blob/master/packages/visx-pattern/Readme.md)); `useTooltip` + `TooltipWithBounds` / `useTooltipInPortal` handle tooltip positioning ([visx-tooltip README](https://github.com/airbnb/visx/blob/master/packages/visx-tooltip/Readme.md)); `ParentSize` handles responsiveness.
+- Size: `@visx/shape` full bundle 10.7 KB gzip; tree-shaken stacked bars + grid + two axes + tooltip + pattern + ParentSize total 28.5 KB gzip; the sparkline (`LinePath` + `scaleLinear`) alone is 15.2 KB, with a 1.7 KB increment when shared with the stacked bars.
 
-### 2.3 nivo 0.99.0（MIT）
+### 2.3 nivo 0.99.0 (MIT)
 
-- 维护：0.99.0 发布 2025-05-23，此后 15 个月无新版本；最后 commit 2026-07-21；2026-06 以来 issue 新开 2 / 关闭 3；14k stars。peerDeps 含 React 19。
-- React 19 / StrictMode：React 19 支持 issue #2678 已关闭；仍有一个 React 19 key 警告 issue 开着（#2801，Choropleth 图例，不影响 bar）。
-- 无障碍：`@nivo/bar` 类型定义原生有 `role`、`ariaLabel`、`ariaLabelledBy`、`ariaDescribedBy`、`isFocusable`、`barAriaLabel`、`barAriaHidden`（`dist/types/types.d.ts` 178–197 行），是七个候选里 SVG 级无障碍属性最全的。表格替代自写。
-- 样式可定制：`theme` 对象覆盖 `text.fontFamily/fontSize`、`grid.line`、`axis.ticks`、`tooltip`（`@nivo/theming/dist/types/types.d.ts`）；`animate={false}` 关动画，但 react-spring 仍在包里；`tooltip` prop 换自家组件。
-- 堆叠 / tooltip：`groupMode="stacked"`；`defs` + `fill` 规则（`patternLinesDef`）原生图案；`innerPadding` 在堆叠模式下同样作用于段间（源码 `nivo-bar.mjs` 堆叠生成器读取 `innerPadding`）；`borderRadius` 是单个数字、四角同时圆（`types.d.ts` 152 行）；tooltip 是**每段**触发，但回调拿到的 `ComputedDatum.data` 是整行原始数据，可自行渲染整桶；无 `maxBarWidth`，柱宽由容器宽 × `padding` 决定。
-- 体积：整包 79.9 KB gzip（`sideEffects: true`）；tree-shaken 堆叠柱 + pattern + tooltip 97.8 KB gzip（含 `@nivo/core`、react-spring、d3 子集）。
+- Maintenance: 0.99.0 released 2025-05-23, no new release in the 15 months since; last commit 2026-07-21; since 2026-06, 2 issues opened / 3 closed; 14k stars. peerDeps include React 19.
+- React 19 / StrictMode: the React 19 support issue #2678 is closed; one React 19 key-warning issue remains open (#2801, Choropleth legend, does not affect bar).
+- Accessibility: the `@nivo/bar` type definitions natively have `role`, `ariaLabel`, `ariaLabelledBy`, `ariaDescribedBy`, `isFocusable`, `barAriaLabel`, `barAriaHidden` (`dist/types/types.d.ts` lines 178–197), the most complete SVG-level accessibility attributes of the seven candidates. The table alternative must be written ourselves.
+- Style customisation: a `theme` object overrides `text.fontFamily/fontSize`, `grid.line`, `axis.ticks`, `tooltip` (`@nivo/theming/dist/types/types.d.ts`); `animate={false}` turns off animation, but react-spring is still in the bundle; the `tooltip` prop swaps in our own component.
+- Stacking / tooltip: `groupMode="stacked"`; native patterns via `defs` + `fill` rules (`patternLinesDef`); `innerPadding` also applies between segments in stacked mode (the stacked generator in the source `nivo-bar.mjs` reads `innerPadding`); `borderRadius` is a single number, rounding all four corners at once (`types.d.ts` line 152); the tooltip triggers **per segment**, but the `ComputedDatum.data` received by the callback is the whole raw row, so the whole bucket can be rendered ourselves; no `maxBarWidth`, bar width is determined by container width × `padding`.
+- Size: full bundle 79.9 KB gzip (`sideEffects: true`); tree-shaken stacked bars + pattern + tooltip 97.8 KB gzip (including `@nivo/core`, react-spring, a d3 subset).
 
-### 2.4 react-chartjs-2 5.3.1 + Chart.js 4.5.1（MIT，canvas）
+### 2.4 react-chartjs-2 5.3.1 + Chart.js 4.5.1 (MIT, canvas)
 
-- 维护：Chart.js 4.5.1 发布 2025-10-13，最后 commit 2026-05-27，2026-06 以来 issue 新开 10 / 关闭 2；react-chartjs-2 5.3.1 发布 2025-10-27，最后 commit 2026-05-26，2026-06 以来 issue 0 / 0。React 19 peer 已加（#1235 / #1238 / #1308 已关闭）。
-- React 19 / StrictMode：无相关 issue；封装层只是 `useEffect` 建销实例。
-- 无障碍：canvas 只能在 `<canvas>` 上放 `role="img"` + `aria-label` 与 fallback 内容（[accessibility.html](https://www.chartjs.org/docs/latest/general/accessibility.html)），没有逐段语义；表格替代自写。
-- 样式可定制：`Chart.defaults.font.family` 全局字体；`animation: false`；canvas **不能直接用 CSS 变量**，Darkroom 的 oklch token 需要 `getComputedStyle` 解析后再喂给 `backgroundColor`；hover tooltip 用 `external` 回调改为 HTML。
-- 堆叠 / tooltip：`scales.x/y.stacked`；`interaction.mode: 'index', intersect: false` 整桶 tooltip（[interactions.html](https://www.chartjs.org/docs/latest/configuration/interactions.html)）；`maxBarThickness` 限宽；`borderRadius` + `borderSkipped: 'middle'` 在堆叠时只圆最外层段（源码 `dist/chart.js` `setBorderSkipped`：`edge === 'middle' && stack` 时按 `stack._top` / `_bottom` 决定）；图案填充要自己用 `ctx.createPattern` 造 `CanvasPattern`（[colors.html](https://www.chartjs.org/docs/latest/general/colors.html)）；段间隙没有原生选项。
-- 体积：整包 68.4 KB gzip；tree-shaken 只注册 `BarController/BarElement/CategoryScale/LinearScale/Tooltip` 57.0 KB gzip；加折线迷你图 62.1 KB。
+- Maintenance: Chart.js 4.5.1 released 2025-10-13, last commit 2026-05-27, since 2026-06 10 issues opened / 2 closed; react-chartjs-2 5.3.1 released 2025-10-27, last commit 2026-05-26, since 2026-06 issues 0 / 0. React 19 peer added (#1235 / #1238 / #1308 closed).
+- React 19 / StrictMode: no related issues; the wrapper layer just creates and destroys the instance in `useEffect`.
+- Accessibility: with canvas, only `role="img"` + `aria-label` and fallback content can be placed on the `<canvas>` ([accessibility.html](https://www.chartjs.org/docs/latest/general/accessibility.html)); no per-segment semantics; the table alternative must be written ourselves.
+- Style customisation: `Chart.defaults.font.family` for a global font; `animation: false`; canvas **cannot use CSS variables directly**, so Darkroom's oklch tokens must be resolved with `getComputedStyle` before being fed to `backgroundColor`; the hover tooltip can be switched to HTML via the `external` callback.
+- Stacking / tooltip: `scales.x/y.stacked`; `interaction.mode: 'index', intersect: false` for a whole-bucket tooltip ([interactions.html](https://www.chartjs.org/docs/latest/configuration/interactions.html)); `maxBarThickness` caps width; `borderRadius` + `borderSkipped: 'middle'` rounds only the outermost segment when stacked (source `dist/chart.js` `setBorderSkipped`: when `edge === 'middle' && stack`, decided by `stack._top` / `_bottom`); pattern fills require building a `CanvasPattern` ourselves with `ctx.createPattern` ([colors.html](https://www.chartjs.org/docs/latest/general/colors.html)); no native option for segment gaps.
+- Size: full bundle 68.4 KB gzip; tree-shaken registering only `BarController/BarElement/CategoryScale/LinearScale/Tooltip` 57.0 KB gzip; 62.1 KB with a line sparkline added.
 
-### 2.5 uPlot 1.6.32（MIT，canvas）
+### 2.5 uPlot 1.6.32 (MIT, canvas)
 
-- 维护：1.6.32 发布 2025-03-14，此后 18 个月无新版本；最后 commit 2026-04-22；2026-06 以来 issue 新开 5 / 关闭 2；单一作者维护。无官方 React 封装，社区 `uplot-react@1.2.4`（2025-07-05）；官方文档建议自己在 effect 里 `new uPlot()` / `setData()` / `destroy()`（[llms.txt](https://context7.com/leeoniya/uplot/llms.txt)）。
-- 无障碍：canvas，同 Chart.js；图例是 DOM 元素。
-- 样式可定制：必须引入 `uPlot.min.css`（gzip 0.8 KB）；`series.fill` 类型是 `CanvasRenderingContext2D['fillStyle'] | (self, idx) => fillStyle`（`dist/uPlot.d.ts` 794 行），可返回 `CanvasPattern`；无动画。
-- 堆叠 / tooltip：**没有堆叠概念**，官方 `stacked-series.html` / `bars-grouped-stacked.html` 示例靠预先累加数据 + `bands` + 200 行 `seriesBarsPlugin`；`uPlot.paths.bars({ size: [factor, maxPx], radius, gap })`，`radius` 可按序列返回 `[top, bottom]`（`high-low-bands.html` 示例只圆顶层）；`gap` 是相邻柱之间不是段之间；没有 tooltip，需用 `setCursor` hook 写插件（`legendAsTooltipPlugin` 示例）。
-- 体积：整包 21.9 KB gzip；实测堆叠柱 + uplot-react 26.8 KB gzip + 0.8 KB CSS。定位是万点级时序折线，类目堆叠柱是「能做但要写插件」。
+- Maintenance: 1.6.32 released 2025-03-14, no new release in the 18 months since; last commit 2026-04-22; since 2026-06, 5 issues opened / 2 closed; maintained by a single author. No official React wrapper; community `uplot-react@1.2.4` (2025-07-05); the official docs suggest calling `new uPlot()` / `setData()` / `destroy()` yourself in an effect ([llms.txt](https://context7.com/leeoniya/uplot/llms.txt)).
+- Accessibility: canvas, same as Chart.js; the legend is a DOM element.
+- Style customisation: `uPlot.min.css` must be imported (0.8 KB gzip); the type of `series.fill` is `CanvasRenderingContext2D['fillStyle'] | (self, idx) => fillStyle` (`dist/uPlot.d.ts` line 794), which can return a `CanvasPattern`; no animation.
+- Stacking / tooltip: **no concept of stacking**; the official `stacked-series.html` / `bars-grouped-stacked.html` examples rely on pre-accumulated data + `bands` + a 200-line `seriesBarsPlugin`; `uPlot.paths.bars({ size: [factor, maxPx], radius, gap })`, where `radius` can return `[top, bottom]` per series (the `high-low-bands.html` example rounds only the top layer); `gap` is between adjacent bars, not between segments; no tooltip, requiring a plugin written with the `setCursor` hook (the `legendAsTooltipPlugin` example).
+- Size: full bundle 21.9 KB gzip; measured stacked bars + uplot-react 26.8 KB gzip + 0.8 KB CSS. It is positioned for time-series lines with tens of thousands of points; categorical stacked bars are "doable, but you have to write a plugin".
 
-### 2.6 @observablehq/plot 0.6.17（ISC，SVG）
+### 2.6 @observablehq/plot 0.6.17 (ISC, SVG)
 
-- 维护：0.6.17 发布 2025-02-14，此后 19 个月无新版本；最后 commit 2026-09-01（main 上持续有提交）；2026-06 以来 issue 新开 9 / 关闭 3，open issue 251。
-- React：命令式，`useEffect` 里 `Plot.plot()` 返回 SVG 后 `append` 到 ref，卸载 `remove()`（[getting-started.md](https://github.com/observablehq/plot/blob/main/docs/getting-started.md)）；SSR 需传虚拟 `document`。不走 React 协调，hover 由 Plot 自己的 DOM 事件驱动。
-- 无障碍：顶层 `ariaLabel` / `ariaDescription` 写到根 SVG（[accessibility.md](https://github.com/observablehq/plot/blob/main/docs/features/accessibility.md)）。
-- 样式可定制：根 SVG 硬编码 `font-family="system-ui, sans-serif"` 属性（`src/plot.js` 254 行），需用 `style` 选项或 `className` + CSS 覆盖；无动画。
-- 堆叠 / tooltip：`barY` + 隐式 `stackY`；`ry2` / `rx1y1` 等单边圆角原生（[rect.md](https://github.com/observablehq/plot/blob/main/docs/marks/rect.md)）；`inset` / `insetTop` 原生段间隙；`tip` + `pointerX` 只显示最近**一个** datum 的通道，整桶需先把数据 pivot 成每桶一行再用 `channels` 列出（[tip.md](https://github.com/observablehq/plot/blob/main/docs/marks/tip.md)）；`fill` 字面量只接受 CSS 颜色（[marks.md](https://github.com/observablehq/plot/blob/main/docs/features/marks.md)），`url(#pattern)` 不是颜色，图案填充要在渲染后改 DOM。
-- 体积：整包 128.0 KB gzip；tree-shaken 实测 94.6 KB gzip（d3 全家桶随包）。
+- Maintenance: 0.6.17 released 2025-02-14, no new release in the 19 months since; last commit 2026-09-01 (ongoing commits on main); since 2026-06, 9 issues opened / 3 closed, 251 open issues.
+- React: imperative; in `useEffect`, `Plot.plot()` returns an SVG which is `append`ed to a ref and `remove()`d on unmount ([getting-started.md](https://github.com/observablehq/plot/blob/main/docs/getting-started.md)); SSR needs a virtual `document` passed in. It bypasses React reconciliation; hover is driven by Plot's own DOM events.
+- Accessibility: top-level `ariaLabel` / `ariaDescription` are written to the root SVG ([accessibility.md](https://github.com/observablehq/plot/blob/main/docs/features/accessibility.md)).
+- Style customisation: the root SVG hard-codes a `font-family="system-ui, sans-serif"` attribute (`src/plot.js` line 254), which must be overridden with the `style` option or `className` + CSS; no animation.
+- Stacking / tooltip: `barY` + implicit `stackY`; single-side rounding such as `ry2` / `rx1y1` is native ([rect.md](https://github.com/observablehq/plot/blob/main/docs/marks/rect.md)); `inset` / `insetTop` give native segment gaps; `tip` + `pointerX` only show the channels of the nearest **single** datum, so a whole-bucket tooltip requires first pivoting the data into one row per bucket and then listing them with `channels` ([tip.md](https://github.com/observablehq/plot/blob/main/docs/marks/tip.md)); `fill` literals only accept CSS colours ([marks.md](https://github.com/observablehq/plot/blob/main/docs/features/marks.md)), `url(#pattern)` is not a colour, so pattern fills require modifying the DOM after rendering.
+- Size: full bundle 128.0 KB gzip; tree-shaken measured 94.6 KB gzip (the whole d3 family comes along).
 
-### 2.7 echarts-for-react 3.0.6 + ECharts 6.1.0（MIT / Apache-2.0）
+### 2.7 echarts-for-react 3.0.6 + ECharts 6.1.0 (MIT / Apache-2.0)
 
-- 维护：ECharts 6.1.0 发布 2026-05-19，最后 commit 2026-09-04，2026-06 以来 issue 新开 40 / 关闭 195，极活跃。echarts-for-react 3.0.6 发布 2026-01-21，最后 commit 2026-01-21，2026-06 以来 issue 1 / 0。
-- **供应链事件**：2026-05-20 issue #625 记录 2026-05-19 "Mini Shai-Hulud" npm 攻击中，维护者账号被盗，恶意版本 `echarts-for-react 3.0.7 / 3.1.7 / 3.2.7` 与 `size-sensor 1.0.4 / 1.1.4 / 1.2.4` 被发布；维护者回复已全部 deprecated 并请 npm 删除。另有 React 19 JSX 命名空间类型错误 #628（2026-07-03，open）和 StrictMode 下 ref / effect 拿不到实例 #608（open）。若选 ECharts 应直接用 `echarts/core` 自写 hook，不引入这层封装。
-- 无障碍：`aria.enabled` 后自动在图表 DOM 上生成 `aria-label`（`lib/visual/aria.js` 134/206 行），`aria.label.description` 可自定义；`aria.decal` 内建图案（[aria.md](https://github.com/apache/echarts-handbook/blob/master/contents/en/best-practices/aria.md)）。
-- 样式可定制：`textStyle.fontFamily` 全局；`animation: false`；`SVGRenderer` 可选；ECharts 6 自带新默认主题，所有颜色需显式覆盖。
-- 堆叠 / tooltip：`stack` 原生；`tooltip.trigger: 'axis'` 整桶；`barMaxWidth` 限宽；`itemStyle.borderRadius` 逐项设置（`lib/chart/bar/BarView.js` 700 行 `el.setShape('r', ...)`），顶层才圆需按桶逐 datum 写 `itemStyle`；段间隙只能用 `borderColor` = 面色 + `borderWidth: 2` 的描边模拟；`itemStyle.decal` 原生图案。
-- 体积：整包 368 KB gzip；tree-shaken（`echarts/core` + BarChart + Tooltip + Grid + Aria + SVGRenderer + `echarts-for-react/lib/core`）203.7 KB gzip，加折线 214.8 KB。
+- Maintenance: ECharts 6.1.0 released 2026-05-19, last commit 2026-09-04, since 2026-06 40 issues opened / 195 closed, extremely active. echarts-for-react 3.0.6 released 2026-01-21, last commit 2026-01-21, since 2026-06 issues 1 / 0.
+- **Supply-chain incident**: issue #625 of 2026-05-20 records that in the 2026-05-19 "Mini Shai-Hulud" npm attack, the maintainer's account was compromised and malicious versions `echarts-for-react 3.0.7 / 3.1.7 / 3.2.7` and `size-sensor 1.0.4 / 1.1.4 / 1.2.4` were published; the maintainer replied that all have been deprecated and npm was asked to remove them. There is also a React 19 JSX namespace typing error #628 (2026-07-03, open) and an issue where the ref / effect can't get the instance under StrictMode, #608 (open). If ECharts is chosen, write our own hook directly on `echarts/core` rather than pulling in this wrapper layer.
+- Accessibility: with `aria.enabled`, an `aria-label` is generated automatically on the chart DOM (`lib/visual/aria.js` lines 134/206), customisable via `aria.label.description`; `aria.decal` provides built-in patterns ([aria.md](https://github.com/apache/echarts-handbook/blob/master/contents/en/best-practices/aria.md)).
+- Style customisation: `textStyle.fontFamily` globally; `animation: false`; `SVGRenderer` optional; ECharts 6 ships a new default theme, so all colours must be overridden explicitly.
+- Stacking / tooltip: native `stack`; `tooltip.trigger: 'axis'` for the whole bucket; `barMaxWidth` caps width; `itemStyle.borderRadius` is set per item (`lib/chart/bar/BarView.js` line 700 `el.setShape('r', ...)`), so rounding only the top layer requires writing `itemStyle` per datum per bucket; segment gaps can only be simulated with a stroke of `borderColor` = surface colour + `borderWidth: 2`; native patterns via `itemStyle.decal`.
+- Size: full bundle 368 KB gzip; tree-shaken (`echarts/core` + BarChart + Tooltip + Grid + Aria + SVGRenderer + `echarts-for-react/lib/core`) 203.7 KB gzip, 214.8 KB with line added.
 
-## 3. 横向对比
+## 3. Side-by-side Comparison
 
-### 3.1 硬约束与维护
+### 3.1 Hard Constraints and Maintenance
 
-| 库 | 渲染 | React 19 peer | StrictMode 已知问题 | 最新版发布 | 最后 commit | issue 新开 / 关闭（2026-06 起） | 许可证 |
+| Library | Rendering | React 19 peer | Known StrictMode issues | Latest release | Last commit | Issues opened / closed (since 2026-06) | Licence |
 |---|---|---|---|---|---|---|---|
-| Recharts 3.10.1 | SVG | ✅ 明确 | 无 | 2026-07-25 | 2026-09-07 | 39 / 56 | MIT |
-| visx 4.0.0 | SVG | ✅ 明确 | 无 | 2026-06-11 | 2026-06-22 | 4 / 5 | MIT |
-| nivo 0.99.0 | SVG | ✅ 明确 | 无（#2801 是 key 警告） | 2025-05-23 | 2026-07-21 | 2 / 3 | MIT |
-| react-chartjs-2 5.3.1 / Chart.js 4.5.1 | canvas | ✅ 明确 | 无 | 2025-10-27 / 2025-10-13 | 2026-05-26 / 2026-05-27 | 0 / 0 与 10 / 2 | MIT |
-| uPlot 1.6.32 | canvas | 无 peer（自写 effect） | 无 | 2025-03-14 | 2026-04-22 | 5 / 2 | MIT |
-| Plot 0.6.17 | SVG（命令式） | 无 peer（自写 effect） | 无 | 2025-02-14 | 2026-09-01 | 9 / 3 | ISC |
-| echarts-for-react 3.0.6 / ECharts 6.1.0 | canvas 或 SVG | `>=16`（类型 issue #628 open） | #608 open | 2026-01-21 / 2026-05-19 | 2026-01-21 / 2026-09-04 | 1 / 0 与 40 / 195 | MIT / Apache-2.0 |
+| Recharts 3.10.1 | SVG | ✅ Explicit | None | 2026-07-25 | 2026-09-07 | 39 / 56 | MIT |
+| visx 4.0.0 | SVG | ✅ Explicit | None | 2026-06-11 | 2026-06-22 | 4 / 5 | MIT |
+| nivo 0.99.0 | SVG | ✅ Explicit | None (#2801 is a key warning) | 2025-05-23 | 2026-07-21 | 2 / 3 | MIT |
+| react-chartjs-2 5.3.1 / Chart.js 4.5.1 | canvas | ✅ Explicit | None | 2025-10-27 / 2025-10-13 | 2026-05-26 / 2026-05-27 | 0 / 0 and 10 / 2 | MIT |
+| uPlot 1.6.32 | canvas | No peer (own effect) | None | 2025-03-14 | 2026-04-22 | 5 / 2 | MIT |
+| Plot 0.6.17 | SVG (imperative) | No peer (own effect) | None | 2025-02-14 | 2026-09-01 | 9 / 3 | ISC |
+| echarts-for-react 3.0.6 / ECharts 6.1.0 | canvas or SVG | `>=16` (typing issue #628 open) | #608 open | 2026-01-21 / 2026-05-19 | 2026-01-21 / 2026-09-04 | 1 / 0 and 40 / 195 | MIT / Apache-2.0 |
 
-### 3.2 体积（gzip，KB）
+### 3.2 Size (gzip, KB)
 
-实测方法：草稿目录建 Vite 8.2.2 项目，`build.lib` 单入口 ES 输出，`react` / `react-dom` / `react/jsx-runtime` 设为 external，oxc 压缩，对输出 JS 做 gzip。入口只引用堆叠柱（三个序列）+ tooltip + 网格 + 轴所需模块；「迷你图」入口只引折线；「合并」是两者同时引用。bundlephobia 一列是整包不 tree-shake 的参考值。
+Measurement method: create a Vite 8.2.2 project in a scratch directory, `build.lib` single-entry ES output, with `react` / `react-dom` / `react/jsx-runtime` set as external, oxc minification, and gzip the output JS. The entry only imports the modules needed for stacked bars (three series) + tooltip + grid + axes; the "sparkline" entry only imports the line; "combined" imports both. The bundlephobia column is a reference value for the whole package without tree-shaking.
 
-| 库 | 堆叠柱 + tooltip | 迷你图单独 | 合并 | bundlephobia 整包 |
+| Library | Stacked bars + tooltip | Sparkline alone | Combined | bundlephobia full package |
 |---|---|---|---|---|
-| visx | **28.5** | 15.2 | 30.2 | 10.7（仅 `@visx/shape`） |
-| uPlot（+uplot-react） | 26.8 + 0.8 CSS | — | 26.9 | 21.9 |
+| visx | **28.5** | 15.2 | 30.2 | 10.7 (`@visx/shape` only) |
+| uPlot (+uplot-react) | 26.8 + 0.8 CSS | — | 26.9 | 21.9 |
 | Chart.js + react-chartjs-2 | 57.0 | 53.2 | 62.1 | 68.4 + 1.0 |
 | Observable Plot | 94.6 | — | 102.0 | 128.0 |
-| nivo | 97.8 | — | — | 79.9（仅 `@nivo/bar`） |
+| nivo | 97.8 | — | — | 79.9 (`@nivo/bar` only) |
 | Recharts | 125.5 | 101.0 | 130.1 | 147.5 |
-| ECharts（SVG renderer）+ echarts-for-react/lib/core | 203.7 | 195.6 | 214.8 | 368.0 + 3.6 |
+| ECharts (SVG renderer) + echarts-for-react/lib/core | 203.7 | 195.6 | 214.8 | 368.0 + 3.6 |
 
-对照：原型手绘 SVG 为 0 KB 依赖。顶栏悬浮层迷你图若用同一库，增量只有「合并 − 堆叠柱」一列（visx 1.7 KB，Recharts 4.6 KB）。
+For comparison: the prototype's hand-drawn SVG has 0 KB of dependencies. If the top-bar popover sparkline uses the same library, the increment is only the "combined − stacked bars" figure (visx 1.7 KB, Recharts 4.6 KB).
 
-### 3.3 dataviz 标记规范逐条核对
+### 3.3 Checking the dataviz Mark Rules One by One
 
-「原生」= 一个 prop / 选项；「半原生」= 库给几何数据、我们自己画；「hack」= 要绕开库的抽象。
+"Native" = one prop / option; "semi-native" = the library provides the geometry and we draw it ourselves; "hack" = we have to work around the library's abstraction.
 
-| 规范 | Recharts | visx | nivo | Chart.js | uPlot | Plot | ECharts |
+| Rule | Recharts | visx | nivo | Chart.js | uPlot | Plot | ECharts |
 |---|---|---|---|---|---|---|---|
-| 柱 ≤ 24px | 原生 `maxBarSize` | 半原生 `Math.min(24, bandwidth)` | hack（无 maxWidth，按容器宽反推 `padding`） | 原生 `maxBarThickness` | 原生 `size: [f, 24]` | hack（无 maxWidth，反推 `padding`） | 原生 `barMaxWidth` |
-| 顶端 4px 圆角、只在堆叠顶层 | hack（`radius` 只按序列；顶层为 0 的桶要自定义 `shape`） | 原生 `BarRounded top` + render-prop 判断顶层 | hack（`borderRadius` 四角同圆，需自定义 `barComponent`） | 原生 `borderRadius` + `borderSkipped:'middle'` | 原生 `radius` 函数按序列返回 `[top, 0]` | 原生 `ry2` / `rx1y1`（顶层为 0 的桶仍要 pivot 处理） | hack（逐 datum `itemStyle.borderRadius`） |
-| 段间 2px 面色间隙 | hack（自定义 `shape` 减高度） | 半原生（render-prop 减 2px 高度） | 原生 `innerPadding` | hack（`borderWidth` 面色描边） | hack（预堆叠时减值） | 原生 `insetTop` | hack（`borderColor` 面色描边） |
-| 「已取消」图案填充 | 原生（子元素 `<defs><pattern>` + `fill="url()"`） | 原生 `PatternLines` | 原生 `defs` + `fill` 规则 | hack（手造 `CanvasPattern`） | 半原生（`fill` 函数返回 `CanvasPattern`） | hack（`fill` 只认 CSS 颜色，渲染后改 DOM） | 原生 `decal` |
-| 整桶 tooltip | 原生（axis 触发） | 半原生（自写，桶数据在手） | 半原生（每段触发，`data` 是整行） | 原生 `mode:'index'` | hack（插件） | hack（pivot + `channels`） | 原生 `trigger:'axis'` |
-| 图例常驻 | 原生 `<Legend>` | 自写 HTML（原型已有） | 原生 legends | 需注册 Legend 插件（canvas 内） | DOM 图例 | `color.legend` | 原生 `legend` |
-| 网格 hairline 实线 / 字体 / 色板 | prop 逐个覆盖 | 无默认可覆盖（Axis 例外） | `theme` 一处覆盖 | 全局 defaults + 解析 CSS 变量 | CSS 变量可用（DOM 部分）| `style` / `className` 覆盖内联 `font-family` | `textStyle` 全局覆盖 |
-| 去掉动画 | 每个元素 `isAnimationActive={false}` | 无动画 | `animate={false}` | `animation:false` | 无动画 | 无动画 | `animation:false` |
+| Bars ≤ 24px | Native `maxBarSize` | Semi-native `Math.min(24, bandwidth)` | Hack (no maxWidth, back-calculate `padding` from container width) | Native `maxBarThickness` | Native `size: [f, 24]` | Hack (no maxWidth, back-calculate `padding`) | Native `barMaxWidth` |
+| 4px rounded top, only on the top layer of the stack | Hack (`radius` is per series only; buckets whose top layer is 0 need a custom `shape`) | Native `BarRounded top` + render-prop decides the top layer | Hack (`borderRadius` rounds all four corners, needs a custom `barComponent`) | Native `borderRadius` + `borderSkipped:'middle'` | Native `radius` function returns `[top, 0]` per series | Native `ry2` / `rx1y1` (buckets whose top layer is 0 still need pivot handling) | Hack (per-datum `itemStyle.borderRadius`) |
+| 2px surface-colour gap between segments | Hack (custom `shape` reduces height) | Semi-native (reduce height by 2px in the render-prop) | Native `innerPadding` | Hack (`borderWidth` surface-colour stroke) | Hack (subtract value when pre-stacking) | Native `insetTop` | Hack (`borderColor` surface-colour stroke) |
+| "Cancelled" pattern fill | Native (child `<defs><pattern>` + `fill="url()"`) | Native `PatternLines` | Native `defs` + `fill` rules | Hack (hand-built `CanvasPattern`) | Semi-native (`fill` function returns `CanvasPattern`) | Hack (`fill` only accepts CSS colours, modify the DOM after rendering) | Native `decal` |
+| Whole-bucket tooltip | Native (axis trigger) | Semi-native (write it ourselves, bucket data at hand) | Semi-native (triggers per segment, `data` is the whole row) | Native `mode:'index'` | Hack (plugin) | Hack (pivot + `channels`) | Native `trigger:'axis'` |
+| Legend always shown | Native `<Legend>` | Own HTML (already in the prototype) | Native legends | Requires registering the Legend plugin (inside canvas) | DOM legend | `color.legend` | Native `legend` |
+| Hairline solid grid / font / palette | Override prop by prop | No defaults to override (Axis is the exception) | Override in one place via `theme` | Global defaults + resolve CSS variables | CSS variables usable (DOM parts) | Override the inline `font-family` via `style` / `className` | Override globally via `textStyle` |
+| Remove animation | `isAnimationActive={false}` on every element | No animation | `animate={false}` | `animation:false` | No animation | No animation | `animation:false` |
 
-## 4. 推荐与取舍
+## 4. Recommendation and Trade-offs
 
-**推荐：visx。** 理由：
+**Recommendation: visx.** Reasons:
 
-1. 标记规范是决定性的：dataviz 的四条硬规范里，只有 visx（和 Plot）做到不 hack；而 Plot 的 React 集成是命令式、tooltip 与图案都要绕。
-2. 「Darkroom 程度」的可定制性：visx 不注入字体、颜色、动画、CSS，所有像素都由我们的 JSX 决定，Tailwind 类和 oklch token 直接用；Recharts / nivo 要逐 prop 关默认值，canvas 三家要解析 CSS 变量。
-3. 体积：28.5 KB gzip 是 SVG 方案里最小的，迷你图增量 1.7 KB。
-4. 与原型同构：原型已经是「scale + stack + path + HTML tooltip」结构，visx 只是把手写的 `niceMax` / slot 计算 / 堆叠累加 / ResizeObserver / tooltip 定位换成 d3-scale、BarStack、ParentSize、useTooltip，JSX 几乎不动。
-5. 维护：Airbnb 出品，4.0.0 明确支持 React 19，issue 量少且有回应。
+1. The mark rules are decisive: of dataviz's four hard rules, only visx (and Plot) achieve them without hacks; and Plot's React integration is imperative, with workarounds needed for both tooltips and patterns.
+2. "Darkroom-level" customisability: visx injects no fonts, colours, animation, or CSS; every pixel is determined by our JSX, and Tailwind classes and oklch tokens can be used directly; Recharts / nivo require switching off defaults prop by prop, and the three canvas libraries require resolving CSS variables.
+3. Size: 28.5 KB gzip is the smallest of the SVG options, with a 1.7 KB increment for the sparkline.
+4. Same structure as the prototype: the prototype is already a "scale + stack + path + HTML tooltip" structure; visx merely replaces the hand-written `niceMax` / slot calculation / stack accumulation / ResizeObserver / tooltip positioning with d3-scale, BarStack, ParentSize, and useTooltip, and the JSX barely changes.
+5. Maintenance: made by Airbnb, 4.0.0 explicitly supports React 19, few issues and they get responses.
 
-代价：visx 不是「配一下就出图」，轴、图例、tooltip 视觉都要自己写（原型已写）；将来若要饼图 / 雷达等其他形态，每种都要再拼一次。
+Cost: visx is not "configure it and get a chart"; axes, legend, and tooltip visuals all have to be written ourselves (already written in the prototype); if we later need pie / radar or other forms, each one has to be assembled again.
 
-**备选：Recharts 3。** 若团队更看重声明式写法与开箱即用的键盘导航 / `role="application"` 无障碍层，Recharts 是最活跃、React 19 最稳的选择；代价是体积约为 visx 的 4.4 倍，且圆角与段间隙（含顶层判断）都要塞进一个自定义 `shape` 组件，最终「手写量」与 visx 相当。
+**Runner-up: Recharts 3.** If the team values declarative code and out-of-the-box keyboard navigation / the `role="application"` accessibility layer more, Recharts is the most active and most stable choice for React 19; the cost is a size about 4.4 times visx, and both rounding and segment gaps (including top-layer detection) have to be crammed into a custom `shape` component, so the final "amount of hand-written code" is comparable to visx.
 
-**不推荐的原因**：nivo 15 个月未发版、无 `maxBarWidth`、圆角四角同圆；Chart.js 与 uPlot 的 canvas 与 oklch CSS 变量体系、per-segment 语义、Tailwind tooltip 不兼容；Plot 19 个月未发版、命令式集成、图案与整桶 tooltip 都要绕；ECharts 体积 200 KB+ 且封装层刚经历供应链事件。
+**Reasons for not recommending the others**: nivo hasn't released in 15 months, has no `maxBarWidth`, and rounds all four corners; Chart.js and uPlot (canvas) are incompatible with the oklch CSS variable system, per-segment semantics, and Tailwind tooltips; Plot hasn't released in 19 months, has imperative integration, and requires workarounds for both patterns and whole-bucket tooltips; ECharts is 200 KB+ and its wrapper layer has just been through a supply-chain incident.
 
-## 5. 迁移工作量估算（原型 → 推荐库）
+## 5. Migration Effort Estimate (prototype → recommended library)
 
-原型 `UsageTrendChart.tsx` 201 行，含 `mergeWeeks` / `niceMax` / 手绘路径 / tooltip / `TrendLegend`。
+The prototype `UsageTrendChart.tsx` is 201 lines, including `mergeWeeks` / `niceMax` / hand-drawn paths / tooltip / `TrendLegend`.
 
-原型 → visx（0.5–1 人日）：
+Prototype → visx (0.5–1 person-day):
 
-| 原型代码 | 替换为 | 备注 |
+| Prototype code | Replace with | Notes |
 |---|---|---|
-| `niceMax` + `divisions` 刻度 | `scaleLinear({ domain, range, nice: true })` + `scale.ticks(4)` | 去掉约 15 行 |
+| `niceMax` + `divisions` ticks | `scaleLinear({ domain, range, nice: true })` + `scale.ticks(4)` | Removes about 15 lines |
 | `slot` / `barW` | `scaleBand({ domain, range, padding })` + `Math.min(24, bandwidth)` | |
-| 手写堆叠累加 | `BarStack keys={...} value={...}` render-prop | 顶层判断保留（`segs.slice(idx+1).every(v===0)`） |
-| 手绘圆角 path | `BarRounded top radius={4}` 或保留原路径 | 段间 2px 仍在 render-prop 里减 |
-| `<pattern>` | `PatternLines` | 或保留原 `<pattern>` |
+| Hand-written stack accumulation | `BarStack keys={...} value={...}` render-prop | Keep the top-layer check (`segs.slice(idx+1).every(v===0)`) |
+| Hand-drawn rounded path | `BarRounded top radius={4}` or keep the original path | The 2px segment gap is still subtracted in the render-prop |
+| `<pattern>` | `PatternLines` | Or keep the original `<pattern>` |
 | `ResizeObserver` | `ParentSize` | |
-| `hover` state + `tipLeft` | `useTooltip` + `TooltipWithBounds unstyled` | tooltip 内容 JSX 原样保留 |
-| 轴刻度 `<text>` | 保留手写（避开 `@visx/axis` 的 Arial 默认） | |
-| 新增 | 视觉隐藏的 `<table>` 表格替代、i18n key、vitest 渲染测试 | 与库无关，都要做 |
+| `hover` state + `tipLeft` | `useTooltip` + `TooltipWithBounds unstyled` | Tooltip content JSX kept as is |
+| Axis tick `<text>` | Keep hand-written (avoids `@visx/axis`'s Arial default) | |
+| New | Visually hidden `<table>` table alternative, i18n keys, vitest render tests | Independent of the library; needed either way |
 
-迷你图（顶栏悬浮层）：`LinePath` + `curveMonotoneX` + 两个 `scaleLinear`，约 30 行，可与趋势图共用 `@visx/scale`。
+Sparkline (top-bar popover): `LinePath` + `curveMonotoneX` + two `scaleLinear`, about 30 lines, can share `@visx/scale` with the trend chart.
 
-原型 → Recharts（约 1 人日）：数据要 reshape 成每桶一行；写一个 `StackedSegment` shape 组件承担圆角 / 顶层判断 / 段间隙 / 图案；`Tooltip content` 换原型 tooltip；每个 `<Bar>` 关动画；`ResponsiveContainer` 需固定高度父容器；无障碍层免费获得。
+Prototype → Recharts (about 1 person-day): data must be reshaped into one row per bucket; write a `StackedSegment` shape component that handles rounding / top-layer detection / segment gaps / patterns; replace `Tooltip content` with the prototype tooltip; turn off animation on each `<Bar>`; `ResponsiveContainer` needs a fixed-height parent container; the accessibility layer comes for free.
 
-## 6. 数据来源清单
+## 6. List of Data Sources
 
-- npm registry：`npm view <pkg> version license time`，2026-09-07。
-- GitHub：`gh api repos/<r>`、`repos/<r>/releases`、`repos/<r>/commits`、`search/issues?q=repo:<r>+is:issue+created:>2026-06-01`，2026-09-07。
-- bundlephobia：`https://bundlephobia.com/api/size?package=<pkg>@<ver>`，2026-09-07。
-- tree-shaken 体积：本机草稿项目，Vite 8.2.2 / rolldown 1.2.7 / React 19.2.8，入口见 §3.2 描述。
-- 文档：Context7 拉取的各库官方文档 / 仓库 Markdown（链接见各小节）。
-- 源码：`node_modules` 中 recharts 3.10.1、@visx/* 4.0.0、@nivo/bar 0.99.0、chart.js 4.5.1、uplot 1.6.32、@observablehq/plot 0.6.17、echarts 6.1.0 的 dist / 类型文件（路径见各小节）。
-- echarts-for-react 供应链事件：[hustcc/echarts-for-react#625](https://github.com/hustcc/echarts-for-react/issues/625)。
+- npm registry: `npm view <pkg> version license time`, 2026-09-07.
+- GitHub: `gh api repos/<r>`, `repos/<r>/releases`, `repos/<r>/commits`, `search/issues?q=repo:<r>+is:issue+created:>2026-06-01`, 2026-09-07.
+- bundlephobia: `https://bundlephobia.com/api/size?package=<pkg>@<ver>`, 2026-09-07.
+- Tree-shaken sizes: local scratch project, Vite 8.2.2 / rolldown 1.2.7 / React 19.2.8, entries as described in §3.2.
+- Docs: each library's official docs / repository Markdown fetched via Context7 (links in each subsection).
+- Source: dist / type files of recharts 3.10.1, @visx/* 4.0.0, @nivo/bar 0.99.0, chart.js 4.5.1, uplot 1.6.32, @observablehq/plot 0.6.17, echarts 6.1.0 in `node_modules` (paths in each subsection).
+- echarts-for-react supply-chain incident: [hustcc/echarts-for-react#625](https://github.com/hustcc/echarts-for-react/issues/625).

@@ -2,16 +2,16 @@
 status: accepted
 ---
 
-# 资产以 name 为身份，重命名走级联重写而非引入稳定 id
+# Assets use name as identity; renaming goes through a cascading rewrite rather than introducing stable ids
 
-资产（character/scene/prop/product）以 name 作唯一标识，剧本、prompt 渲染与 `@[名称]` mention 都以专名为介质——剧本是 LLM 读写的文档，专名直读是核心可用性。重命名因此定义为原子级联事务：一次改齐资产桶 key、全部剧集剧本引用（引用数组、speaker、mention）、按名命名的关联文件及路径字段（不变式「文件 stem = 资产名」），以及宫格记录冻结的参考图名字与路径（宫格与切格分镜的依据按它重放，见 `docs/adr/0062`「分镜图与宫格的依据不记资产名」）。
+Assets (character/scene/prop/product) use name as their unique identifier, and scripts, prompt rendering, and `@[名称]` (`@[name]`) mentions all use the proper name as the medium — the script is a document read and written by the LLM, and reading proper names directly is core usability. Renaming is therefore defined as an atomic cascading transaction: in one go it updates the asset bucket key, all script references across all episodes (reference arrays, speaker, mentions), associated files named by name and their path fields (invariant "file stem = asset name"), and the reference-image names and paths frozen in grid records (the basis of grids and cut-cell storyboards is replayed from them, see `docs/adr/0062` "分镜图与宫格的依据不记资产名" (The basis of storyboard images and grids does not record asset names)).
 
-## 明确不采用
+## Explicitly not adopted
 
-- **引入稳定资产 id，剧本引用改存 id**：改名退化为改显示字段、永不级联，但需全量剧本 schema 迁移与存量项目迁移，且 LLM 生成剧本、mention、prompt 渲染各层都要加解引用，专名可读性受损。否决——id 化把复杂度摊到每次生成/渲染的高频路径，级联把复杂度集中在低频的重命名操作。
+- **Introducing stable asset ids, with script references storing ids instead**: renaming would reduce to changing a display field and never cascade, but it would need a full script schema migration and migration of existing projects, and every layer — LLM-generated scripts, mentions, prompt rendering — would need dereferencing added, hurting proper-name readability. Rejected — id-ification spreads complexity across the high-frequency paths of every generation/render, while cascading concentrates complexity in the low-frequency rename operation.
 
 ## Consequences
 
-- 目标名与既有同类型资产冲突（NFC 坐标系）即拒绝；合并是另一种语义，不由重命名承载。
-- 全局资产库与项目是快照复制关系，重命名不联动。
-- 重命名不与进行中的生成任务互斥：改名瞬间在跑的任务可能按旧名出片或失败，重跑即可（单用户部署下发生率与防护成本不成比例）。
+- If the target name conflicts with an existing asset of the same type (in the NFC coordinate system), the rename is rejected; merging is a different semantics and is not carried by renaming.
+- The global asset library and projects are in a snapshot-copy relationship, and renaming does not propagate between them.
+- Renaming is not mutually exclusive with in-progress generation tasks: a task running at the moment of renaming may render under the old name or fail, and rerunning fixes it (under single-user deployment the probability is out of proportion to the cost of protection).

@@ -2,20 +2,20 @@
 status: accepted
 ---
 
-# 安装记录是独立实体，已安装端点可原地编辑、不锁定
+# The installation record is a separate entity; installed endpoints can be edited in place and are not locked
 
-从市场安装一个调用端点，落地的是一行普通的自定义调用端点，外加一条「它来自哪个市场源的哪个条目」的绑定。我们决定**这条绑定作为独立实体存放、与端点一对一，记来源市场源的规范键、条目 slug、安装时的版本与定义摘要**，不放在 `custom_endpoint` 表上：该表的不变式是「除 `definition` 外的列都是由定义派生的只读镜像」（`docs/adr/0067`），安装记录不是镜像，是有独立生命周期的事实。来源用规范键字符串而非外键，删除市场源不抹掉已安装端点的来源。「已安装」只认安装记录：本地存在同作者、同名的定义不算已安装；覆盖既有定义只对没有安装记录的端点开放，不做安装记录的跨来源转移。
+Installing an invocation endpoint from the market produces an ordinary custom invocation endpoint row, plus a binding saying "which entry of which market source it came from". We decided that **this binding is stored as a separate entity, one-to-one with the endpoint, recording the source market source's canonical key, the entry slug, and the version and definition digest at install time**, and is not placed on the `custom_endpoint` table: that table's invariant is "every column other than `definition` is a read-only mirror derived from the definition" (`docs/adr/0067`), and an installation record is not a mirror but a fact with its own lifecycle. The source is a canonical key string rather than a foreign key, so deleting a market source does not erase the origin of installed endpoints. "Installed" recognises only installation records: a local definition with the same author and the same name does not count as installed; overwriting an existing definition is open only to endpoints without an installation record, and installation records are never transferred across sources.
 
-**已安装端点可原地编辑，不锁定。** 内置调用端点是只读加「复制为我的」，副本不跟随上游；市场端点不沿用，因为改一个请求头就得复制再重挂模型行。代价是本地修改会被更新覆盖，由「已修改」状态承接：安装摘要与当前定义不一致即标已修改，更新前警告并可先导出。状态因此是两个正交的轴，市场轴（最新 / 可更新 / 市场中不可用）与本地轴（是否已修改）。**不提供解除安装记录的动作**，已安装端点只有更新、删除或带着徽标继续用。
+**Installed endpoints can be edited in place and are not locked.** Built-in invocation endpoints are read-only plus "copy as mine", and the copy does not follow upstream; market endpoints do not follow that pattern, because changing one request header would mean copying and then re-attaching the model rows. The cost is that local modifications get overwritten by updates; this is handled by a "modified" state: if the install digest differs from the current definition, the endpoint is marked modified, and before updating the user is warned and can export first. Status is therefore two orthogonal axes: the market axis (latest / update available / unavailable in market) and the local axis (modified or not). **There is no action to detach the installation record**; an installed endpoint can only be updated, deleted, or kept in use with its badge.
 
-**可更新只比较安装记录里的版本与索引版本是否相等**，不看本地定义的版本号，也不比内容：刷新只读索引、不逐条抓定义，索引也不放载荷摘要。同版本改内容不会被判可更新，这是有意的；官方仓靠投稿审查要求内容变更必升版本，第三方源由用户自担。
+**"Update available" only compares whether the version in the installation record equals the version in the index**; it does not look at the local definition's version number, nor compare content: refreshing reads only the index rather than fetching each definition, and the index does not carry a payload digest. Changing content under the same version will not be judged as an available update; this is intentional. The official repository requires a version bump for content changes through submission review; for third-party sources, users bear the risk.
 
-## 对此前导入决议的修订
+## Revision of the earlier import decision
 
-分享文件格式定稿时曾定「导入后不记来源」。本 ADR 修订为：**安装来源要记，但记在端点定义之外**，定义本体仍是协议唯一真相、导出字节不变。从本地文件导入维持不记来源。
+When the share file format was finalised, it was decided that "imports do not record their origin". This ADR revises that: **the install origin is recorded, but outside the endpoint definition**; the definition itself remains the sole truth of the protocol, and exported bytes are unchanged. Imports from local files continue not to record an origin.
 
 ## Consequences
 
-- 安装是服务端单事务接口，不由前端分步编排：安装记录的唯一性与「记录里的摘要就是落库的定义」只有单事务能保证。
-- 卸载就是删除端点，安装记录级联删除。
-- 提示词 / 风格模板将来进入市场时另起安装记录，不复用端点的这一张。
+- Installation is a single-transaction server interface, not orchestrated step by step by the frontend: only a single transaction can guarantee uniqueness of the installation record and that "the digest in the record is the definition that was stored".
+- Uninstalling means deleting the endpoint; the installation record is cascade-deleted.
+- When prompt / style templates enter the market in future, they will have their own installation records rather than reusing the endpoint's.

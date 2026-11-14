@@ -2,19 +2,19 @@
 status: accepted
 ---
 
-# 文本 backend 按任务档位配置：简单 / 复杂两档 + 默认回退
+# Text backends are configured per task tier: simple / complex tiers + default fallback
 
-文本管道（TextGenerator）的调用点覆盖剧本生成、分集规划、script_plan 内容抽取 / 拆分（drama / narration / reference_video）、项目概述、风格图分析，且随功能演进持续新增。若模型设置项与调用点一一对应，配置面随调用点线性膨胀，新增调用点要么再开一项、要么落在既有设置之外成为用户不可见的模型来源。决定按**任务档位**配置：每个调用点在代码里固定归属 **简单** / **复杂** 一档（简单 = 项目概述、风格图分析；复杂 = 剧本生成、分集规划、全部 script_plan），用户只配置「每档用哪个文本 backend」+ 一个「默认模型」兜底；档位未设置回退默认模型，默认模型未设置走自动推断。解析顺序**项目优先**：项目档位 > 项目默认模型 > 全局档位 > 全局默认模型 > 自动推断——「项目默认模型」读作「本项目整体用它」，可被更具体的项目档位覆盖，但遮蔽全局配置。
+The call sites of the text pipeline (TextGenerator) cover script generation, episode planning, script_plan content extraction / splitting (drama / narration / reference_video), project overview, and style-image analysis, and new ones keep being added as features evolve. If model settings mapped one-to-one to call sites, the configuration surface would grow linearly with call sites, and each new call site would either need another setting or fall outside existing settings and become a model source invisible to the user. We decided to configure by **task tier**: each call site is fixed in code to the **simple** or **complex** tier (simple = project overview, style-image analysis; complex = script generation, episode planning, all script_plan), and the user only configures "which text backend each tier uses" + one "default model" as a fallback; an unset tier falls back to the default model, and an unset default model goes to automatic inference. Resolution order is **project first**: project tier > project default model > global tier > global default model > automatic inference — "project default model" reads as "this project uses it overall"; it can be overridden by the more specific project tier, but it shadows global configuration.
 
-## 明确不采用
+## Explicitly not adopted
 
-- **按任务类型逐键配置**：设置项随调用点增多失控；实践中新增调用点并不会同步开设置项，最终漂移为部分调用点模型来源不可配置、不可见。
-- **简单 / 中等 / 复杂三档**：现有调用点在「中等」与「复杂」之间没有稳定的区分度，两档已覆盖全部实际决策需要；档位数本身就是配置面，从紧不从宽。
-- **档位同时映射 Claude Agent SDK 的模型**：Agent SDK 仅接受 Anthropic 协议兼容凭证，而档位可指向任意 text_backends 供应商，二者合并会产生「档位选了 agent 用不了的模型」的非法状态。Agent 对话与 subagent 推理的模型仍由 Agent 供应商配置决定（见 `docs/adr/0017`），设置页在文本档位旁注明这一边界。
-- **维度优先的解析顺序**（项目档位 > 全局档位 > 项目默认 > 全局默认）：全局档位一旦配置齐全，项目默认模型永远不生效，该字段形同虚设。
+- **Per-key configuration by task type**: settings get out of control as call sites multiply; in practice, new call sites don't get settings added in step, eventually drifting into some call sites having unconfigurable, invisible model sources.
+- **Simple / medium / complex three tiers**: existing call sites have no stable distinction between "medium" and "complex", and two tiers already cover all actual decision needs; the number of tiers is itself configuration surface, so err on the tight side.
+- **Tiers also mapping the Claude Agent SDK's model**: the Agent SDK accepts only Anthropic-protocol-compatible credentials, while tiers can point at any text_backends provider; merging the two would create the illegal state of "a tier selected a model the agent can't use". The model for agent conversations and subagent reasoning is still determined by the agent provider configuration (see `docs/adr/0017`), and the settings page notes this boundary next to the text tiers.
+- **Dimension-first resolution order** (project tier > global tier > project default > global default): once the global tiers are fully configured, the project default model would never take effect, making the field useless.
 
 ## Consequences
 
-- 档位映射是代码事实、用户不可改：新增文本调用点必须显式归档（TextTaskType → 档位映射带穷举校验），不允许出现绕过档位解析的文本生成调用。
-- 简单档承载风格图分析，该档模型须支持图像输入（vision）；解析时能力不满足直接报错，不做静默换模型。
-- 每档覆盖的调用点清单在设置页以常驻说明呈现（全局设置 / 项目设置 / 创建向导三处同源组件）；覆盖范围变更须同步更新说明文案（zh / en / vi）。
+- The tier mapping is a code fact that users cannot change: new text call sites must be explicitly assigned a tier (the TextTaskType → tier mapping has an exhaustiveness check), and no text-generation call bypassing tier resolution is allowed.
+- The simple tier carries style-image analysis, so its model must support image input (vision); if the capability isn't met at resolution time, it errors directly with no silent model switch.
+- The list of call sites covered by each tier is shown on the settings page as a persistent description (the same component in three places: global settings / project settings / creation wizard); changes in coverage must update the description copy in step (zh / en / vi).

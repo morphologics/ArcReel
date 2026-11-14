@@ -2,11 +2,11 @@
 status: accepted
 ---
 
-# 运行时状态合并为单一异步 ORM 数据库
+# Runtime state merged into a single async ORM database
 
-原本 3 个独立的同步 SQLite 库（任务队列 / API 用量 / Agent 会话）无法靠单个 `DATABASE_URL` 切到 PostgreSQL，跨库也无法使用外键/事务，且同步驱动在 async FastAPI 路由里阻塞 event loop。决定硬切换合并为单一 SQLAlchemy 异步数据库，由一个 `DATABASE_URL` 决定 SQLite（开发）或 PostgreSQL（生产），提供一次性迁移、不保留旧手写 SQL 路径——硬切换避免中间双写态，换来统一事务语义与数据库可切换。
+The original 3 independent synchronous SQLite databases (task queue / API usage / agent sessions) could not be switched to PostgreSQL with a single `DATABASE_URL`, could not use foreign keys/transactions across databases, and the synchronous drivers blocked the event loop in async FastAPI routes. We decided on a hard cut-over, merging them into a single SQLAlchemy async database, with one `DATABASE_URL` determining SQLite (development) or PostgreSQL (production), providing a one-time migration and not keeping the old hand-written SQL path — the hard cut-over avoids an intermediate dual-write state, in exchange for unified transaction semantics and a switchable database.
 
 ## Consequences
 
-- 迁移不可回滚；一旦所有 Repository/Worker 都 async 化并依赖单库事务语义，退回多库或同步驱动需重写整个数据访问层。
-- 存储边界明确分层：运行时状态进 DB，项目数据（project.json / 剧本 / 媒体文件）仍留文件系统。
+- The migration cannot be rolled back; once all Repositories/Workers are async and depend on single-database transaction semantics, going back to multiple databases or synchronous drivers would require rewriting the whole data access layer.
+- The storage boundary is clearly layered: runtime state goes into the DB; project data (project.json / scripts / media files) stays on the file system.

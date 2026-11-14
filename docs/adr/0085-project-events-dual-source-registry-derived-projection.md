@@ -2,24 +2,24 @@
 status: accepted
 ---
 
-# 项目事件保留显式事件与快照差分两个来源，项目状态投影按注册表派生、轮询只读
+# Project events keep two sources, explicit events and snapshot diffing; the project state projection is derived from the registry and polling is read-only
 
-浏览器只靠项目事件得知项目变了：每收到一批就整体重新拉取项目，Agent 一轮结束后也不另行刷新。快照差分的快照原先是一份手挑字段的影子 schema，只认角色、场景、道具的少数字段和剧本条目的少数字段；商品、衍生、项目设置、集的 `source_range` / `hook`、旁白原文、台词、`scene_description`、备注的变化都比不出来，Agent 改完之后界面一直停在旧状态。每加一种资产或骨架都得回来手改（9e4298a9、a0152134、9c208728），商品和衍生上线时一次都没改到。另外，轮询会顺带同步集索引、回写剧本迁移，读路径在写盘，而且只在有浏览器订阅时才写。
+The browser learns that a project changed only through project events: each time it receives a batch it re-fetches the whole project, and it does not refresh separately after an agent turn ends. The snapshot used for diffing was originally a hand-picked shadow schema that recognised only a few fields of characters, scenes and props and a few fields of script entries; changes to products, derivatives, project settings, an episode's `source_range` / `hook`, narration source text, dialogue, `scene_description` and notes could not be detected, so after the agent made changes the UI stayed on the old state. Every new asset or skeleton type required coming back to edit it by hand (9e4298a9, a0152134, 9c208728), and when products and derivatives launched it was not updated at all. In addition, polling also synchronised the episode index and wrote back script migrations, so the read path was writing to disk, and only when a browser was subscribed.
 
-我们决定：
+We decided:
 
-- **两个来源并存。** 显式事件负责快照看不见的事实（同路径字节替换、任务语义），快照差分兜底其余一切落进项目状态的变化；两路之间的去重与补扫协调（2ed330d2）保持不变。
-- **项目状态投影按注册表派生，整条目比对。** 资产按资产类型表的每一行取整条（含商品），集条目、概述、剧本条目、剧本层字段都取整条，项目设置取 `project.json` 去掉资产表、集、概述与 `metadata` 后的全部内容。只排除两类：每次写盘都会变的 `metadata`；剧本条目的 `generated_assets`，它只用于判定分镜图 / 视频就绪，其余变化归显式事件，否则每次生成都会与任务完成事件各报一次。
-- **衍生单独成事件，身份写作 `本体/衍生`。** 这与生成任务完成事件的身份一致，补扫能把同一件事让给那一批；本体条目比对时排除衍生表。机制按资产类型表的衍生能力派生，不写死角色。
-- **轮询只读。** 事件服务不再同步集索引，剧本与项目都按只读方式加载。
+- **Both sources coexist.** Explicit events handle facts the snapshot cannot see (same-path byte replacement, task semantics), and snapshot diffing is the fallback for every other change that lands in project state; deduplication and catch-up-scan coordination between the two paths (2ed330d2) stays unchanged.
+- **The project state projection is derived from the registry and compares whole entries.** Assets take the whole entry for each row of the asset type table (including products); episode entries, the overview, script entries and script-level fields are all taken whole; project settings take the entire contents of `project.json` minus the asset tables, episodes, overview and `metadata`. Only two things are excluded: `metadata`, which changes on every write; and script entries' `generated_assets`, which is used only to determine storyboard image / video readiness, with other changes belonging to explicit events, since otherwise every generation would be reported once by it and once by the task completion event.
+- **Derivatives get their own events, with identity written as `base/derivative`.** This matches the identity used by generation task completion events, so the catch-up scan can cede the same change to that batch; when comparing base entries, the derivative table is excluded. The mechanism is derived from the derivative capability in the asset type table, not hard-coded to characters.
+- **Polling is read-only.** The event service no longer synchronises the episode index, and both scripts and projects are loaded read-only.
 
-## 明确不采用
+## Explicitly rejected
 
-- **每个写入口自报改前 / 改后，淘汰快照轮询。** 这会成为第三个事件来源，与显式事件、补扫之间重新出现基线对账问题，也就是 2ed330d2 刚修掉的漏播与误报删除。
-- **按声明字段白名单比对**（字段从资产类型表、`PROJECT_SETTINGS`、条目模型推出）。系统自己戳写的字段（如 `voice_updated_at`、`end_frame_image`、`planning_cursor`）不在任何声明里，白名单仍会漏，也仍要长期维护；而多报一条的代价只是一次多余提示，漏报一条则是界面停在旧状态。
-- **在轮询里同步集索引。** Agent 的 Write / Edit / Bash 碰不到 `scripts/*.json` 与 `project.json`，项目管理器的每条剧本写入路径本身就会同步集绑定；这段同步只在有浏览器订阅时运行，说明没有任何流程依赖它。应用外直接改剧本文件不是支持的场景。
+- **Have every write entry point report before / after itself, retiring snapshot polling.** This would become a third event source and reintroduce baseline reconciliation problems with explicit events and the catch-up scan, i.e. exactly the missed broadcasts and false deletion reports that 2ed330d2 just fixed.
+- **Compare against a whitelist of declared fields** (fields derived from the asset type table, `PROJECT_SETTINGS` and entry models). Fields stamped by the system itself (such as `voice_updated_at`, `end_frame_image`, `planning_cursor`) are not in any declaration, so a whitelist would still miss things and would still need long-term maintenance; whereas the cost of one extra report is just a redundant notice, and one missed report means the UI stays on the old state.
+- **Synchronise the episode index during polling.** The agent's Write / Edit / Bash cannot touch `scripts/*.json` and `project.json`, and every script write path in the project manager already synchronises episode bindings itself; this synchronisation ran only when a browser was subscribed, which shows that no flow depends on it. Editing script files directly outside the application is not a supported scenario.
 
 ## Consequences
 
-- 新增资产类型或骨架种类时，快照差分自动覆盖，不需要回到事件服务手改；前端仍需为新资产类型补路由映射与文案，由遍历资产类型表的穷尽性测试兜底。
-- 在应用外放进一个 `episode_N.json`，它的条目会进入快照，但集列表不会自动登记这一集。
+- When a new asset type or skeleton kind is added, snapshot diffing covers it automatically with no need to go back and edit the event service by hand; the frontend still needs route mappings and copy for new asset types, backstopped by an exhaustiveness test that iterates the asset type table.
+- If an `episode_N.json` is placed in from outside the application, its entries will enter the snapshot, but the episode list will not automatically register that episode.

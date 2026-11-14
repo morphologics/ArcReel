@@ -1,6 +1,6 @@
 # openai-video
 
-- 协议：[OpenAI video generation](https://developers.openai.com/api/docs/guides/video-generation)
-- 计费：[API pricing](https://developers.openai.com/api/docs/pricing)
-- 代码：`lib/custom_provider/endpoints.py::ENDPOINT_REGISTRY["openai-video"]`、`lib/backends/video_backends/openai.py::OpenAIVideoBackend`
-- 任务状态：官方 Sora 只发协议文档列出的状态串，代理网关转发非 Sora 型号时会透传底层厂商的写法，故过共享归一 `packages/arcreel-market-core/src/arcreel_market_core/video_backend_contract.py::normalize_provider_status`
+- Protocol: [OpenAI video generation](https://developers.openai.com/api/docs/guides/video-generation)
+- Billing: [API pricing](https://developers.openai.com/api/docs/pricing)
+- Code: `lib/custom_provider/endpoints.py::ENDPOINT_REGISTRY["openai-video"]`, `lib/backends/video_backends/openai.py::OpenAIVideoBackend`
+- Task status: official Sora only emits the status strings listed in the protocol docs, but proxy gateways forwarding non-Sora models pass through the underlying vendor's spelling, so statuses go through the shared normalizer `packages/arcreel-market-core/src/arcreel_market_core/video_backend_contract.py::normalize_provider_status`

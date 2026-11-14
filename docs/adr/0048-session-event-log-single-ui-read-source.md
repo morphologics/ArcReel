@@ -2,28 +2,28 @@
 status: accepted
 ---
 
-# 会话事件日志：UI 时间线唯一读源，与 SDK transcript 职责分离
+# Session event log: the single read source for the UI timeline, with responsibilities separated from the SDK transcript
 
-Agent 对话的 UI 真相若分散在多个来源（SDK transcript、内存 buffer、流式预览）且各来源没有共享的消息身份，一致性就只能靠内容比对启发式缝合，消息丢失/重复与渲染不一致会随边界情形持续渗漏。决定新增**会话事件日志**（每会话单调 seq 的持久化独立表）作为 UI 时间线唯一读源：
+If the UI truth of agent conversations is scattered across several sources (the SDK transcript, an in-memory buffer, the streaming preview) and the sources share no message identity, consistency can only be stitched together by content-comparison heuristics, and message loss/duplication and rendering inconsistencies keep leaking through edge cases. We decided to add a **session event log** (a persisted, independent table with a monotonic seq per session) as the single read source for the UI timeline:
 
-- 条目在**写入点定型**——task 通知、中断、skill 调用、subagent 归属等语义识别只在入日志一处发生并持久化；skill 条目只记名与入参，注入全文不进日志。
-- **用户消息的身份在发送时分配，在被 Agent 接纳时入日志**：POST 由服务端分配消息 uuid 并随消息交给 CLI，消息先成为**排队消息**——与 draft 同为服务端内存态、随会话清理、不入日志，经 POST 响应与 entry 流下发；CLI 报告开始处理它（`command_lifecycle` 的 `started`）时才写入日志、分配 seq，位置即它实际进入对话的时刻。CLI 的用户消息回放只按 uuid 关联 transcript 身份，不产生条目。前端不渲染任何本地合成消息，重试靠请求侧幂等键（排队期间由内存表承担，入日志后由日志承担）。新会话的首条消息例外：它在 CLI 报告 `init` 时写入 seq 0，不经排队，沿用建会话的幂等与 seq 0 携带幂等键的日志兜底；新会话在它之前没有任何输出，写入位置与接纳位置一致。
-- **SSE 推 entry 流**（SSE 事件的 `id` 字段即 seq，断线按 cursor 续传），流的生命周期跟随会话而非轮次：状态变化只推 `status` 事件、不关流；turn 结构组装（合并连续 assistant、tool_result 回填、task 就地更新）是前端投影层的纯函数。
-- **流式预览（draft）是服务端内存态**，身份为消息的 `message_id`，消息完成时被同 `message_id` 的日志条目精确替换；不入日志，崩溃即丢（与 agent 记忆一致）。
-- **subagent 消息全量收录**为带 parent_tool_use_id 的条目，前端按 parent 归组为可折叠子任务卡片，主时间线只显示卡片。
-- 日志是 transcript 的**物化视图**：可从 transcript 重放重建，旧会话首次访问时懒生成；漂移的修复手段是重建，不做双向同步。
-- **SDK transcript 职责限于 SDK resume**（agent 记忆），不得混入 UI 专有条目（会被 resume 喂回 agent）。
+- Entries are **typed at the write point** — semantic recognition such as task notifications, interrupts, skill invocations, and subagent attribution happens only at the single point of writing into the log and is persisted; skill entries record only the name and input arguments, and the injected full text does not enter the log.
+- **A user message's identity is assigned at send time, and it enters the log when accepted by the agent**: on POST the server assigns a message uuid and hands it to the CLI with the message; the message first becomes a **queued message** — like a draft, it is server-side in-memory state, cleaned up with the session, not in the log, and delivered via the POST response and the entry stream; only when the CLI reports that it has started processing it (`started` of `command_lifecycle`) is it written to the log and assigned a seq, so its position is the moment it actually entered the conversation. The CLI's replay of user messages only associates the transcript identity by uuid and produces no entry. The frontend renders no locally synthesized messages, and retries rely on a request-side idempotency key (borne by the in-memory table while queued, and by the log once in the log). The first message of a new session is an exception: it is written at seq 0 when the CLI reports `init`, without queueing, reusing session creation's idempotency and the log fallback of seq 0 carrying the idempotency key; a new session has no output before it, so its write position coincides with its acceptance position.
+- **SSE pushes the entry stream** (the SSE event's `id` field is the seq; on disconnect it resumes by cursor), and the stream's lifecycle follows the session rather than the turn: status changes push only a `status` event and do not close the stream; turn-structure assembly (merging consecutive assistant messages, back-filling tool_result, updating tasks in place) is a pure function of the frontend projection layer.
+- **The streaming preview (draft) is server-side in-memory state**, identified by the message's `message_id`, and when the message completes it is replaced exactly by the log entry with the same `message_id`; it does not enter the log and is lost on crash (consistent with agent memory).
+- **Subagent messages are recorded in full** as entries carrying parent_tool_use_id; the frontend groups them by parent into collapsible sub-task cards, and the main timeline shows only the cards.
+- The log is a **materialized view** of the transcript: it can be rebuilt by replaying the transcript, and is generated lazily on first access for old sessions; the remedy for drift is rebuilding, not two-way sync.
+- **The SDK transcript's responsibility is limited to SDK resume** (agent memory), and UI-specific entries must not be mixed into it (they would be fed back to the agent by resume).
 
-## 明确不采用
+## Explicitly not adopted
 
-- **收敛去重逻辑而不统一消息身份**：内容比对的边界渗漏无法消除。
-- **POST 时即写日志、按发送时刻定位**：CLI 会把轮次进行中送达的消息延后到工具边界并入，或排到本轮之后；按发送时刻定位会让发送之后、接纳之前的 Agent 输出排在这条消息后面，读起来像是在回应它，也与从 transcript 重建出的位置不一致。
-- **以 CLI 回放为接纳时刻**：一轮的首条消息要到 Agent 首次输出前才回放，空闲会话发出的消息会在排队状态停留整个启动与首字延迟。
-- **直接以 transcript 为 UI 日志**：写入时机由 SDK 控制，无法在用户发送消息时分配身份；UI 专有条目污染 resume；subagent 独立 subpath 与 UI 时序不同构。
-- **新旧协议 feature flag 双轨**：前端须并行维护两套 store 逻辑。
+- **Consolidating dedup logic without unifying message identity**: edge-case leakage from content comparison cannot be eliminated.
+- **Writing to the log at POST time, positioned by send time**: the CLI defers messages delivered mid-turn to a tool boundary to merge them in, or queues them after the current turn; positioning by send time would place agent output produced after sending but before acceptance after this message, reading as if it were responding to it, and would also disagree with the position rebuilt from the transcript.
+- **Using the CLI replay as the acceptance moment**: the first message of a turn is only replayed just before the agent's first output, so a message sent to an idle session would sit in the queued state through the whole startup and first-token latency.
+- **Using the transcript directly as the UI log**: write timing is controlled by the SDK, so an identity cannot be assigned when the user sends a message; UI-specific entries would pollute resume; subagents' independent subpath is not isomorphic with UI ordering.
+- **Dual-track old/new protocols behind a feature flag**: the frontend would have to maintain two sets of store logic in parallel.
 
 ## Consequences
 
-- 新增 UI 事件类型必须在写入点定型；渲染端与读取端不做语义嗅探、不做去重——UI 一致性问题的修复手段是修正写入点定型逻辑或重放重建日志。
-- 事件日志表与 transcript 表并存是有意双写：前者是 UI 读模型、后者是 agent 记忆，二者内容重叠但协议与时序不同构，合表即回到本 ADR 要消除的耦合。
-- transcript 的 eager flush（`docs/adr/0029`）仅为崩溃后 SDK resume 不丢上下文服务；UI 重连快照由事件日志承担。
+- New UI event types must be typed at the write point; the rendering and reading sides do no semantic sniffing and no deduplication — the remedy for UI consistency problems is fixing the typing logic at the write point or rebuilding the log by replay.
+- The coexistence of the event log table and the transcript table is intentional double writing: the former is the UI read model, the latter is agent memory; their content overlaps but their protocols and timing are not isomorphic, and merging the tables would bring back exactly the coupling this ADR removes.
+- The transcript's eager flush (`docs/adr/0029`) serves only to keep SDK resume from losing context after a crash; UI reconnect snapshots are borne by the event log.

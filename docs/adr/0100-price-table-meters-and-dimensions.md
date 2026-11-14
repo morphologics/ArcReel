@@ -2,40 +2,40 @@
 status: accepted
 ---
 
-# 价目表用「计量项 × 选择维度」的通用结构，单币种不换算，查不到单价记为未定价
+# Price tables use a general "meter × selection dimension" structure, a single currency with no conversion, and a missing unit price is recorded as unpriced
 
-> 本 ADR 中「查不到单价时记为未定价」一条已由文末「计量项分类与全部落空的未定价（修订，2026-10-15）」细化，选择维度「由代码定义」一条补充了可随代码新增的说明，其余内容仍然有效。
+> In this ADR, the rule "a missing unit price is recorded as unpriced" has been refined by "Meter classification and unpriced when everything misses (revision, 2026-10-15)" at the end, and the rule that selection dimensions are "defined by code" has been supplemented with a note that they can be added along with code; everything else remains in effect.
 
-模型条目的价目表不再分成若干种定价形状，而是统一为一份结构：一个币种，加上若干计量项，每个计量项给出按选择维度取值的单价，可带单请求免费额度。计算器只按计量项求和：费用 = 倍率 × Σ 计量项 max(用量 − 免费额度, 0) × 单价(选择维度)，不按定价形状或媒体类型分派。主流厂商的计价都能落到这个公式上，而「按秒计价 + 参考图按张加价 + 按次基价」这类混合计价，用固定形态只能拼接。
+A model entry's price table is no longer split into several pricing shapes, but unified into one structure: one currency, plus a number of meters, each giving unit prices keyed by selection dimension values, optionally with a per-request free allowance. The calculator only sums over meters: cost = multiplier × Σ over meters max(usage − free allowance, 0) × unit price(selection dimensions), with no dispatch by pricing shape or media type. Mainstream vendors' pricing all fits this formula, whereas mixed pricing such as "per second + surcharge per reference image + base price per call" could only be patched together from fixed shapes.
 
-## 规则
+## Rules
 
-- 请求级阶梯和服务档都按选择维度处理，不另设机制：上下文档按输入 token 总量落档，服务档不建模为乘数。
-- 选择维度由代码定义，目录数据不能自创维度。选择维度的取值来自真正发给供应商的请求字段（见 `docs/adr/0056`）。代码可以随需要新增维度（例如区分是否参考生视频的 `reference_to_video`），新增时一并加入维度的封闭集合并补校验。
-- 各计量项的用量互不重叠：未缓存输入、缓存读、各档缓存写之和等于总输入。各家 usage 的语义差异由调用侧在上报前处理，计算器不识别具体供应商。
-- 每个条目只有一份价目表，币种取模型厂商主站的币种，不做汇率换算。
-- 渠道价差只用倍率表达，分两级相乘：供应商倍率是用户偏好；供应商模型倍率在官方收录的供应商模型上随官方数据下发，在用户负责的供应商模型上由用户填写。倍率作用在整笔费用上，不按计量项分别设置。
-- 查不到单价时记为未定价，不回落到其他模型或其他档的价格。
-- 倍率为 0 时费用记 0，不查价，因此也不会出现未定价。
+- Request-level tiers and service tiers are both handled as selection dimensions, with no separate mechanism: context tiers are bucketed by total input tokens, and service tiers are not modelled as multipliers.
+- Selection dimensions are defined by code; catalog data cannot invent dimensions. Selection dimension values come from the request fields actually sent to the provider (see `docs/adr/0056`). Code can add dimensions as needed (e.g. `reference_to_video` to distinguish whether it is reference-to-video), adding them to the closed set of dimensions and adding validation at the same time.
+- Usage of different meters does not overlap: uncached input, cache reads and the cache writes of each tier sum to total input. Differences in vendors' usage semantics are handled by the calling side before reporting; the calculator does not recognise specific providers.
+- Each entry has only one price table, in the currency of the model vendor's main site, with no exchange-rate conversion.
+- Channel price differences are expressed only by multipliers, multiplied across two levels: the provider multiplier is a user preference; the provider model multiplier comes with official data on officially listed provider models, and is filled in by the user on user-responsible provider models. The multiplier applies to the whole cost, not set per meter.
+- A missing unit price is recorded as unpriced, with no fallback to prices of other models or other tiers.
+- When the multiplier is 0, the cost is recorded as 0 without looking up prices, so unpriced cannot occur either.
 
 ## Considered Options
 
-- **合并为按 token、按张、按秒、按次、按字符 5 种固定形态**：表单简单，但混合计价要跨形态拼接，每遇到一种新组合都要改计算器。这 5 种形态可以作为自定义模型表单的预设，由预设生成通用结构。
-- **一个条目按站点带多份价目表**：多家国内厂商的国内站和国际站各有一套价格，两套之间不是汇率关系。但为少数国际站用户引入「供应商模型选用哪份价目表」的概念，代价过高；LiteLLM、new-api 也都只有一套价格。国际站用户可以修改条目。
-- **统一为单一币种，在快照中按固定汇率折算**：方舟等只有人民币价的模型会带上汇率误差，汇率由谁维护、多久更新也会变成新的同步问题。
-- **查不到单价时回落到默认模型或最接近的档**：这是旧做法。算出的金额看起来正常，实际上是另一个模型或另一档的价格，比显示「未定价」更容易误导用户。
+- **Merge into 5 fixed shapes: per token, per image, per second, per call, per character**: the form is simple, but mixed pricing would need patching across shapes, and every new combination would require changing the calculator. These 5 shapes can serve as presets for the custom model form, with the preset generating the general structure.
+- **Let one entry carry multiple price tables by site**: several Chinese vendors have different prices on their domestic and international sites, and the two are not related by exchange rate. But introducing the concept of "which price table a provider model uses" for a small number of international-site users costs too much; LiteLLM and new-api also have only one set of prices. International-site users can modify the entry.
+- **Unify into a single currency, converting at a fixed exchange rate in the snapshot**: models with only RMB prices, such as Ark, would carry exchange-rate error, and who maintains the rate and how often it updates would become a new sync problem.
+- **Fall back to the default model or the nearest tier when the unit price is missing**: this was the old approach. The computed amount looks normal but is actually the price of another model or tier, which misleads users more than showing "unpriced".
 
 ## Consequences
 
-- `api_calls` 的费用要能表示未定价，与 0 区分；使用记录和费用汇总要单独显示未定价调用。
+- Cost in `api_calls` must be able to represent unpriced, distinct from 0; usage records and cost summaries must show unpriced calls separately.
 
-## 计量项分类与全部落空的未定价（修订，2026-10-15）
+## Meter classification and unpriced when everything misses (revision, 2026-10-15)
 
-「查不到单价时记为未定价」对所有计量项一刀切，会让视频调用几乎都整笔未定价：通道如实上报输出秒数、参考图张数、调用次数后，只按秒收费的条目也会收到参考图张数。通道不应该知道条目怎么定价，因此按计量项类别区分：
+Applying "a missing unit price is recorded as unpriced" uniformly to all meters would make almost every video call wholly unpriced: once channels faithfully report output seconds, reference image count and call count, even entries that charge only per second would receive a reference image count. Channels should not need to know how an entry is priced, so meters are distinguished by class:
 
-- 计量项在词汇表里分为 token 类和计数类。计算器只读这个声明，不写死列表。
-- token 类：上报的用量大于 0、价目表里却没有这一项的单价时，整笔记为未定价。这些用量是同一份 token 总量拆出的部分，缺一项就不能把它按 0 计。
-- 计数类（秒数、张数、次数、字符数、视频 token 等）：价目表里没有这一项，表示厂商不按它收费，这一项不计费。
-- 结算时，价目表里的计量项全部没有上报用量，整笔记为未定价，不记 0。例如拿不到 usage 的调用。估算时缺数量的计量项仍给出估算而不是未定价。
+- Meters are classified in the vocabulary as token-type or count-type. The calculator reads only this declaration, with no hard-coded list.
+- Token-type: when reported usage is greater than 0 but the price table has no unit price for that meter, the whole call is recorded as unpriced. These usages are parts split from the same token total, and one missing part cannot be counted as 0.
+- Count-type (seconds, images, calls, characters, video tokens, etc.): if the price table has no such meter, the vendor does not charge by it, and it is not billed.
+- At settlement, if none of the meters in the price table have reported usage, the whole call is recorded as unpriced, not 0; for example, calls where usage cannot be obtained. During estimation, meters missing a quantity still get an estimate rather than unpriced.
 
-查不到单价不回落到其他模型或其他档的决定不变。
+The decision not to fall back to other models or tiers when a unit price is missing is unchanged.

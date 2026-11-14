@@ -2,53 +2,53 @@
 status: accepted
 ---
 
-# 分集规划由服务端工具内文本模型分批滚动执行，drama 账本即分集大纲
+# Episode planning is executed in rolling batches by the text model inside a server-side tool; the drama ledger is the episode outline
 
-旧流程由主 agent 多步执行机械脚本（peek 阅读单位口径 → 换算字符口径 → 选锚点 → dry-run → split）：切分点零剧情语义留不住钩子，多步约定押在 agent 的流程遵循上，且逐集滚动使规划时看不到下一集内容。决定把拆分点判断交给 LLM、流程交给确定性工具：新增 plan 服务端 MCP 工具，内部读源文窗口（数万字级）调项目配置的文本模型，一次规划出窗口内所有剧情弧完整的集（标题/钩子/范围），每批只提交到最后一个高置信切分点、尾巴留给下一批；Pydantic schema 强约束，锚点存在性与范围连续性做机械校验、失败在工具层自动重试，重试附带上一轮校验失败原因（schema 错误/锚点不存在/范围不连续）引导针对性修正而非原样重发。主 agent 只调一次工具收摘要，不再承载切分过程。drama 模式账本条目加厚为分集大纲（故事节点、钩子、下集预告语 + 软素材范围）；narration 账本保持薄（精确切分点 + 钩子）。
+The old flow had the main agent execute mechanical scripts in multiple steps (peek in reading-unit terms → convert to character terms → choose an anchor → dry-run → split): the cut points had zero plot semantics and couldn't preserve hooks, the multi-step convention relied on the agent's process adherence, and rolling episode by episode meant the next episode's content wasn't visible during planning. We decided to give cut-point judgement to the LLM and the flow to deterministic tools: add a plan server-side MCP tool that internally reads a source text window (tens of thousands of characters) and calls the project's configured text model, planning in one go all episodes in the window whose plot arcs are complete (title/hook/range); each batch only commits up to the last high-confidence cut point, leaving the tail for the next batch; a Pydantic schema strongly constrains output, anchor existence and range continuity are mechanically validated, failures are automatically retried at the tool layer, and retries carry the previous round's validation failure reasons (schema error/anchor not found/range not contiguous) to guide targeted correction rather than resending as-is. The main agent calls the tool only once and receives a summary, no longer carrying the splitting process. In drama mode, ledger entries are thickened into episode outlines (story beats, hook, next-episode teaser + soft material range); the narration ledger stays thin (exact cut point + hook).
 
-窗口字数与每批集数上限不是创作者参数，Web、Agent 与项目设置都不能覆盖；每批集数由系统按当前文本模型登记的输出上限决定（见 `docs/adr/0044`）。窗口须大到足以看清跨集的剧情弧；在此之上，窗口大小主要影响调用次数与每批产出的集数，每批只提交剧情弧完整的集，尾巴留给下一批。
+The window size in characters and the per-batch episode cap are not creator parameters, and neither the web, the agent nor project settings can override them; the per-batch episode count is decided by the system based on the output limit registered for the current text model (see `docs/adr/0044`). The window must be large enough to see plot arcs across episodes; beyond that, window size mainly affects the number of calls and the number of episodes produced per batch; each batch only commits episodes whose plot arcs are complete, leaving the tail for the next batch.
 
-## 调整已有规划：重新规划与手工切分
+## Adjusting existing planning: re-planning and manual splitting
 
-分集规划有两种做法：AI 规划与手工切分（创作者在整本源文上直接划定集的边界）。两者切出的集同属「切自整本源文」，共用连续性与 stale 标记规则。面向创作者的调整动作里没有重置，`reset_episode_planning` 是底层服务命令。
+There are two ways to plan episodes: AI planning and manual splitting (the creator directly draws episode boundaries on the whole-book source text). Episodes cut by either both count as "cut from the whole-book source text", sharing the continuity and stale-marking rules. There is no reset among the creator-facing adjustment actions; `reset_episode_planning` is an underlying service command.
 
-- 首次规划与接续规划不覆盖任何内容，直接提交。接续规划从按源文位置排在最后的那个切出集的结尾读起，起点由账本推导，不另存游标。
-- 最后一个切出集之前的未切分原文（第一个切出集之前或切出集之间的空段）由 AI 规划这一段：以空段的结尾为终点，其余与接续规划相同，不替换任何集，直接提交。
-- AI 对已有规划的调整是重新规划：AI 从某一集起产出候选规划，分集账本不动；创作者看过候选的集与变更摘要后采纳，才一次性替换，放弃则什么都不变。整本源文被改动不要求重新规划，受影响的切出集按 `docs/adr/0097` 重映射。
-- 重新规划中途停止时，已完成的部分仍是候选，可以继续、采纳或放弃；采纳时替换起点及以后所有切出集，接续规划随之从候选结尾读起。
-- 候选里的集一律是新集，分配新的集 ID（见 `docs/adr/0096`）：新旧切法多半不同，按位置把旧产物挂到新集上没有依据。被替换的旧切出集有产物的转为无原文的集、标 stale，产物仍归它（见 `docs/adr/0062`），删不删由创作者决定；没有产物的直接移除。
-- 手工切分由创作者亲手给出结果，直接写入账本，不经候选。它改的是同一集的边界，所以保留集 ID：移动分界时两侧集保留集 ID，拆分时前一段保留、后一段分配新集 ID，与下一集合并时前一集保留、后一集按被替换的旧集处理；原文范围变了且已有产物的集标 stale。移除切分时，有产物的集按被替换的旧集处理。
+- First-time planning and continued planning don't overwrite anything and commit directly. Continued planning reads from the end of the cut episode that comes last by source position; the starting point is derived from the ledger, with no separately stored cursor.
+- Unsplit source text before the last cut episode (the gap before the first cut episode or between cut episodes) is planned by AI for that stretch: with the end of the gap as the end point, otherwise the same as continued planning, replacing no episodes and committing directly.
+- AI adjustment of existing planning is re-planning: AI produces candidate planning starting from some episode while the episode ledger stays untouched; only after the creator has reviewed the candidate episodes and the change summary and adopts them are they replaced in one go; if abandoned, nothing changes. Changes to the whole-book source text don't require re-planning; affected cut episodes are remapped per `docs/adr/0097`.
+- When re-planning stops midway, the completed part is still a candidate and can be continued, adopted or abandoned; adopting replaces all cut episodes from the starting point onward, and continued planning then reads from the end of the candidate.
+- Episodes in the candidate are always new episodes and are assigned new episode IDs (see `docs/adr/0096`): the new and old cuts are mostly different, and there is no basis for attaching old outputs to new episodes by position. Replaced old cut episodes that have outputs become episodes without source text and are marked stale, and the outputs still belong to them (see `docs/adr/0062`); whether to delete them is up to the creator; those without outputs are removed directly.
+- Manual splitting is a result given by the creator's own hand, written directly to the ledger without going through a candidate. It changes the boundaries of the same episodes, so episode IDs are kept: when moving a boundary, the episodes on both sides keep their episode IDs; when splitting, the first part keeps it and the second part is assigned a new episode ID; when merging with the next episode, the earlier episode keeps it and the later one is treated as a replaced old episode; episodes whose source range changed and that already have outputs are marked stale. When removing a split, episodes with outputs are treated as replaced old episodes.
 
-### 切出集变动时的播出顺序
+### Airing order when cut episodes change
 
-切出集之间锁定源文顺序，其他集的位置由创作者安排（见 `docs/adr/0096`）。规划改动切出集时按下面的规则落位，采纳确认清单与变更摘要点名所有被移动的集：
+Between cut episodes the source order is locked; the positions of other episodes are arranged by the creator (see `docs/adr/0096`). When planning changes cut episodes they land by the rules below, and the adoption confirmation list and change summary name every episode that is moved:
 
-- 首次规划与接续规划的新集紧接在最后一个切出集之后，排在末尾那些其他来源的集之前；账本里还没有切出集时排在播出顺序末尾。规划未切分原文的新集按源文位置插在空段两侧的切出集之间（空段在最前面时插在第一个切出集之前），夹在那里的其他来源集按下面重新规划的锚点规则落位，新集视同候选集。
-- 手工切分不移动其他集：拆分出的后一段紧接在前一段之后，合并时夹在两集之间的集留在合并后的集之后，移动分界不改变任何集的位置。
-- 重新规划的范围里夹有自带原文或无原文的集时照常执行，起点任意（含第 1 集），这些集跟着剧情落位：锚点取播出顺序中它前面最近的切出集的原文结尾（前面没有切出集时取源文开头），采纳时排在第一个原文结尾不早于锚点的候选集之后，即讲到锚点处剧情的那一集；锚点不在重新规划起点之后时排在全部候选集之前，在候选结尾之后（重新规划中途停止）时排在最后一个候选集之后；落到同一位置的多集保持原相对顺序。锚点只在采纳时计算，不另存。
-- 锚点所在的切出集没有原文范围（旧拆分流程的存量集，此时只能从第 1 集起重新规划，见 `docs/adr/0031`）时，锚点失效，这些集按原相对顺序排到全部新切出集之后。
-- 退下的集（被重新规划替换、被移除切分，或原文所在的文件被删除、原文被整段删除，有产物而转为无原文的旧切出集）按原相对顺序移到播出顺序末尾。
+- New episodes from first-time and continued planning go right after the last cut episode, before the other-origin episodes at the end; when the ledger has no cut episodes yet they go at the end of the airing order. New episodes from planning unsplit source text are inserted by source position between the cut episodes on either side of the gap (when the gap is at the very beginning, before the first cut episode); other-origin episodes sandwiched there land by the re-planning anchor rule below, with the new episodes treated as candidate episodes.
+- Manual splitting doesn't move other episodes: the second part of a split goes right after the first part; when merging, episodes sandwiched between the two stay after the merged episode; moving a boundary doesn't change any episode's position.
+- When episodes with their own source text or no source text sit within the range of re-planning, it runs as usual from any starting point (including episode 1), and these episodes land following the plot: the anchor is the source-text end of the nearest cut episode before it in airing order (the beginning of the source text if there is no cut episode before it); on adoption it is placed after the first candidate episode whose source-text end is not earlier than the anchor, i.e. the episode that tells the plot up to the anchor; when the anchor is not after the re-planning starting point it is placed before all candidate episodes, and when it is after the end of the candidate (re-planning stopped midway) it is placed after the last candidate episode; multiple episodes landing in the same position keep their original relative order. The anchor is only computed at adoption time and is not stored separately.
+- When the cut episode at the anchor has no source range (existing episodes from the old splitting flow, in which case re-planning can only start from episode 1, see `docs/adr/0031`), the anchor is invalid, and these episodes are placed in their original relative order after all newly cut episodes.
+- Retired episodes (old cut episodes replaced by re-planning, removed by removing a split, or whose source file was deleted or whose source text was deleted as a whole stretch, which have outputs and became episodes without source text) are moved in their original relative order to the end of the airing order.
 
 ## Considered Options
 
-- 规划 SubAgent（Claude 读窗口产账本）：多轮迭代能力在此用不上（钩子质量取决于 prompt 与全局视野），流程遵循靠 prompt、难单测，token 走 agent 凭证。
-- 全本一次性规划：百万字级成本前置；用户常只做前几集试水，中途改风格后账本大面积作废。
-- 逐集拆分（现状改良）：跨集节奏视野缺失，钩子质量天花板低，接续仍依赖滚动状态。
-- drama 一步直出剧本：与分批规划冲突（一批几十集无法一次写完），调任何切分点都要重写整集剧本。
-- 单独存储规划游标：切出集之间有了空段、文件可以增删调序以后，游标会指向已不存在的文件或落在错误位置，与账本不一致。
-- 空段只能手工切分或从这里重新规划：重新规划会替换空段之后的所有切出集，包括后面文件里没有改动的集。
-- 重置与规划合成一步：破坏性，规划失败或结果更差时旧账本不可恢复。
-- 重新规划沿用旧集号、按位置把旧产物标 stale 挂回新集：新旧切法不一致时，挂回的产物与新集内容无关。
-- 重新规划的范围里夹有其他来源的集就拒绝执行：创作者为了调整切分，得先删掉或挪走自己安排好的集。
-- 其他来源的集保持原来在播出顺序中的位置序号：集数一变，序号就落到与剧情无关的位置。
-- 退下的集留在原处、接续规划的新集追加到末尾：退下的集讲的是已被新集重讲的原文，留在正片中间会重复剧情。
-- 固定批次、截断即报错让创作者换模型：批次大小由系统决定，截断是系统一次要了超出模型能力的输出，补救不该推给创作者，很多创作者也换不了模型。
-- 截断后自动缩批：每次运行要浪费打满输出的调用，且掩盖了模型能力这一根因。
-- 窗口覆盖只留给 Agent：Web 用户碰到截断只能打开 Agent，两端能力不对等；旋钮挂在项目上，也对不准模型能力这一根因。
+- A planning SubAgent (Claude reads the window and produces the ledger): multi-round iteration capability is of no use here (hook quality depends on the prompt and the global view), process adherence relies on the prompt and is hard to unit-test, and tokens go through agent credentials.
+- Plan the whole book in one go: front-loaded cost at the million-character scale; users often only try the first few episodes, and after a mid-way style change large parts of the ledger become void.
+- Split episode by episode (improving the status quo): lacks a cross-episode pacing view, low ceiling on hook quality, and continuing still depends on rolling state.
+- Drama outputs the script directly in one step: conflicts with batched planning (a batch of dozens of episodes can't be written at once), and adjusting any cut point would require rewriting the whole episode script.
+- Store a planning cursor separately: once there are gaps between cut episodes and files can be added, deleted and reordered, the cursor would point to files that no longer exist or land in the wrong position, inconsistent with the ledger.
+- Gaps can only be manually split or re-planned from there: re-planning would replace all cut episodes after the gap, including unchanged episodes in later files.
+- Combine reset and planning into one step: destructive; when planning fails or the result is worse, the old ledger can't be recovered.
+- Re-planning keeps old episode numbers and attaches old outputs, marked stale, back to new episodes by position: when the new and old cuts differ, the attached outputs have nothing to do with the new episode content.
+- Refuse to run re-planning when other-origin episodes sit within its range: to adjust the split, the creator would first have to delete or move episodes they had arranged.
+- Other-origin episodes keep their original position index in the airing order: once the episode count changes, the index lands in a position unrelated to the plot.
+- Retired episodes stay in place and new episodes from continued planning are appended at the end: retired episodes tell source text that has already been retold by new episodes, and leaving them in the middle of the main sequence would repeat the plot.
+- Fixed batches, erroring on truncation and having the creator switch models: batch size is decided by the system; truncation means the system asked for more output in one go than the model can produce, and the remedy shouldn't be pushed onto the creator — many creators can't switch models anyway.
+- Automatically shrinking batches after truncation: each run wastes calls that max out the output, and it masks the root cause of model capability.
+- Leaving window overrides only to the agent: web users hitting truncation could only open the agent, making the two sides' capabilities unequal; and a knob on the project doesn't target the root cause of model capability either.
 
 ## Consequences
 
-- `peek_split_point.py` / `split_episode.py` / `_text_utils.py` 删除，manage-project SKILL.md 切分章节与 CLAUDE.*.md 阶段 2 指令改写为单工具调用。
-- v1 质量保障 = 全局窗口视野 + hook 字段显式化 + 候选审阅，不加 LLM judge 验证环。
-- 规划质量依赖项目配置的文本模型能力，schema 与机械校验只兜形式正确性。
-- 账本的 hook 与下集预告进入剧本生成输入，并以集级元数据字段落入剧本 JSON（钩子设计落地到成片末场）。剧本生成的输入包含本集大纲与下集大纲，下集取播出顺序中紧接的那一集，它没有大纲时只给标题。场次/景别/画外音等更重的剧本结构升级是独立项，不在本决策内。
+- `peek_split_point.py` / `split_episode.py` / `_text_utils.py` are deleted; the splitting section of manage-project SKILL.md and the stage 2 instructions of CLAUDE.*.md are rewritten as a single tool call.
+- v1 quality assurance = global window view + explicit hook field + candidate review, with no LLM judge validation loop added.
+- Planning quality depends on the capability of the project's configured text model; the schema and mechanical validation only guarantee formal correctness.
+- The ledger's hook and next-episode teaser go into script generation input, and land in the script JSON as episode-level metadata fields (the hook design is realised in the final scene of the final cut). Script generation input includes this episode's outline and the next episode's outline, where the next episode is the one immediately following in airing order; if it has no outline, only its title is given. Heavier script structure upgrades such as scenes/shot sizes/voice-over are a separate item and not part of this decision.

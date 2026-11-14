@@ -2,18 +2,18 @@
 status: accepted
 ---
 
-# project.json 文件级 schema 版本化 + 启动时逐级幂等迁移
+# project.json file-level schema versioning + step-by-step idempotent migration at startup
 
-> 本 ADR 原先把目录交换窗口内进程被强杀的恢复交给启动期扫描（runner 遍历项目前认领 rollback 目录，项目目录缺失时改回）。这条恢复路径已移除：强杀属于 `docs/standards/general.md`「防御只针对常规可达的场景」列出的非常规条件，不为它加兜底；它也不满足该规范的放行条件，认领是在单一边界之外新增的一条分支。现场的人工恢复方式见部署文档「项目结构迁移」一节。
+> This ADR originally handed recovery from the process being force-killed within the directory swap window to a startup scan (the runner claimed rollback directories before iterating projects and renamed them back when the project directory was missing). That recovery path has been removed: a force kill is one of the abnormal conditions listed under "防御只针对常规可达的场景" (Defend only against normally reachable scenarios) in `docs/standards/general.md`, and no fallback is added for it; it also doesn't meet that standard's exemption conditions — claiming was a new branch added outside the single boundary. For manual recovery on site, see the "项目结构迁移" (Project structure migration) section of the deployment docs.
 
-不版本化、靠读时即时兼容旧字段虽零迁移成本，但旧形状字段会无限期残留、读路径分支越积越多。决定为 project.json 引入顶层 `schema_version` + `lib/project/project_migrations` 注册表，启动时扫各项目逐级跑纯函数 migrator（迁移前备份、原子写回、级联迁移剧本），单项目失败隔离不中断启动——显式版本化换取数据形状收敛与一次性改写，胜过读路径无限累积兼容分支。
+Not versioning, and relying on read-time on-the-fly compatibility with old fields, has zero migration cost, but old-shape fields linger indefinitely and read-path branches keep accumulating. We decided to introduce a top-level `schema_version` + the `lib/project/project_migrations` registry for project.json; at startup each project is scanned and pure-function migrators are run step by step (back up before migrating, write back atomically, cascade-migrate scripts), with per-project failure isolation that doesn't interrupt startup — explicit versioning in exchange for data shape convergence and one-time rewrites beats endlessly accumulating compatibility branches on the read path.
 
 ## Consequences
 
-- 引入备份 / 原子写 / 失败隔离 / 幂等机制复杂度，且迁移就地改写文件不可逆（如 v0→v1 拆 clue 为 scene/prop 并删 importance；v1→v2 归一化 provider）。
-- 同一迁移链不只在启动期跑：项目归档**导入**路径也复用 `migrate_project_dir`，因为启动期 runner 只覆盖启动时已存在的项目，启动后导入的旧归档需在导入入口补跑完整链。
-- 涉及多文件级联的迁移不能只依赖 `project.json` 的单文件原子写；schema v6 先在同父目录 staging 树完成资产名、剧本/草稿引用、媒体与版本历史改写，全部成功后再整目录替换，任一阶段失败保留原项目树。
-- 目录替换是两次改名（原目录 → `.<项目名>.v6-rollback-<hex>`，staging 树 `.<项目名>.v6-<hex>` → 项目目录）。迁移器进程内失败时把原目录改回；窗口内进程被强杀时项目目录不存在、rollback 目录残留，不自动恢复，由人工把 rollback 目录改回项目名。
-- 两类中间目录的名字由同一个模块生成与反解、后缀同构：命名端与反解端分家会让清理静默失效。
-- 项目目录在位时 rollback 目录只是备份，与遗留 staging 树一并按版本化备份的年龄闸口清理；项目目录缺失期间不清理，它是唯一的项目数据。这条约束防的是清理代码自己误删数据，不属于强杀防御。
-- staging 树是整个项目目录的副本，因此 v5→v6 带一道按项目体量核磁盘容量的只读预检。迁移器的只读预检由 runner 在写下版本化备份之前跑，预检拒绝时项目目录一个字节都没被动过。
+- Introduces the complexity of backup / atomic write / failure isolation / idempotency mechanisms, and migrations rewrite files in place irreversibly (e.g. v0→v1 splits clue into scene/prop and deletes importance; v1→v2 normalises provider).
+- The same migration chain doesn't only run at startup: the project archive **import** path also reuses `migrate_project_dir`, because the startup runner only covers projects that exist at startup, and old archives imported after startup need the full chain run at the import entry point.
+- Migrations involving multi-file cascades cannot rely only on the single-file atomic write of `project.json`; schema v6 first completes rewriting asset names, script/draft references, media and version history in a staging tree under the same parent directory, and only after all of it succeeds replaces the whole directory; if any stage fails, the original project tree is kept.
+- Directory replacement is two renames (original directory → `.<project name>.v6-rollback-<hex>`, staging tree `.<project name>.v6-<hex>` → project directory). When the migrator fails in-process, it renames the original directory back; if the process is force-killed within the window, the project directory doesn't exist and the rollback directory is left behind; it is not recovered automatically, and a human renames the rollback directory back to the project name.
+- The names of both kinds of intermediate directory are generated and parsed by the same module, with isomorphic suffixes: splitting the naming side from the parsing side would make cleanup silently fail.
+- While the project directory is in place, the rollback directory is only a backup and is cleaned up together with leftover staging trees by the age gate for versioned backups; while the project directory is missing it is not cleaned up, as it is the only copy of the project data. This constraint guards against the cleanup code itself deleting data by mistake; it is not a defence against force kills.
+- The staging tree is a copy of the entire project directory, so v5→v6 has a read-only pre-check of disk capacity against the project's size. The migrator's read-only pre-check is run by the runner before writing the versioned backup; when the pre-check refuses, not a single byte of the project directory has been touched.

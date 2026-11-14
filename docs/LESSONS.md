@@ -1,487 +1,487 @@
-# 教训库
+# Lessons Library
 
-记录值得改进环境的错，由定期巡检维护、计数与晋升；候选经 PR 上的 `lesson-candidate` 评论提交。条目格式、计数、阈值与退出规则见 [`docs/agents/lessons.md`](agents/lessons.md)。
+Records mistakes worth improving the environment over; maintained, counted and promoted by periodic sweeps; candidates are submitted via `lesson-candidate` comments on PRs. For entry format, counting, thresholds and exit rules see [`docs/agents/lessons.md`](agents/lessons.md).
 
 <!-- reviewed-through: 740cd892c3052000d4b2900464be8643c1927ea0 2026-11-01 -->
 
-## 异步任务的结果与异常在每条路径上都有人接
-
-### actor 命令在每条退出路径上都由 `SessionActor._dispatch` 或 `_closed_error()` 完成，取消换成 `_ActorClosed`
-模式：在 actor 处理器或退出路径里另写一套 complete 逻辑，漏掉取消、同轮取出或退出后入队的分支；或把 `CancelledError` 原样交给调用方
-代价：等待 `cmd.done` 的调用方永久挂住，或 `CancelledError` 越过 `except Exception` 穿出 HTTP 请求，排队消息与幂等键残留（严重度：常规）
-判定方式：需要判断
-- #3139 · 2026-10-13 · 复盘发现（Spec #3101）：actor 被取消时在途、排队与退出后入队的命令拿到 CancelledError 或假成功；同一改动的审查（#3138）又发现与消息流异常同轮取出的命令拿错完成值；没拦住：没有对应规则
-- 降级 · 2026-10-19 · 自 docs/standards/agent-runtime.md「actor 命令的完成只在 `SessionActor._dispatch` 收口」
-
-### 脱离调用方的共享任务自己取走异常
-模式：用 `create_task` 起一份共享计算，调用方只经 `asyncio.shield` 等它；请求全部取消（客户端断开）后计算出错，没有人再取这个任务的异常
-代价：每到高峰期日志里留下 "Task exception was never retrieved" 这类误导性的未处理异常（严重度：常规）
-判定方式：需要判断
-- #3304 · 2026-10-19 · 合并后修复：`server/routers/_coalesce.py` 的 `RequestCoalescer.run` 在请求全部断开后计算出错，异常无人取走；由 #3321 的性能基准测出（#3320），2b887a16 补 `add_done_callback` 取走异常；没拦住：没有对应规则
-
-### 依赖库吞掉取消时，后台循环在自己的检查点上恢复取消，不靠停止方反复补发
-模式：后台循环只收到一次原生取消，依赖库（如 anyio 任务组）把它与自身的取消合并后吞掉，循环继续进入长睡眠；停止方改为反复 `Task.cancel()` 补发，又会打断依赖库在 `shield` 里的资源收尾
-代价：应用关停挂起到超时兜底，测试偶发卡住；或停止方先于连接归还返回（严重度：常规）
-判定方式：需要判断
-- #3346 · 2026-10-25 · 合并后修复：模型目录官方同步的取消与 anyio 建连时的域取消同轮到达、被任务组吞掉，同步睡进一天的间隔，`TestAuthIntegration` 关停偶发挂起 120 秒（#3420，#3454 的 187e1a5a8 修复；#3557 的 c0232c7e0 让 lifespan 用例不再启动官方同步，#3479）；该 PR 的初版改为反复补发取消，打断 SQLAlchemy 会话在 shield 里的收尾，审查指出后改为任务内检查点恢复；没拦住：没有对应规则
-
-### 给执行中的任务加取消入口时，已越过供应商返回点的任务拒绝取消
-模式：取消入口只看任务是否还登记着，不看它是否已经拿到供应商结果；收尾段（终态标记、写盘、让出名额）可以被打断，结果按在途取消删除；后端吞掉落盘期间的取消、照常收尾时，取消方等任务结束后也不复核终态
-代价：已计费的生成结果丢失，账本记为成功却没有产物（严重度：数据·安全·真实花费）
-判定方式：需要判断
-- #2185 · 2026-10-25 · 合并后修复：端点试跑在写盘窗口内收到取消，结果目录被删、账本仍为成功（#3442，#3494 的 e546d674a 修复）；集成审查又复现后端吞掉落盘期间的取消后 cancel 与 shutdown 仍删成功结果（ef29215c0）；没拦住：没有对应规则（取消入口早于 backend.md「供应商返回之后的落账段不可中断」加入取消入口的要求，#3181 加规则时没有回查存量入口）
-- 评审未晋升 · 2026-10-27 · backend.md「供应商返回之后的落账段不可中断」已要求新增 `cancel()` 前把整段收进 `run_noninterruptible_async`；这次是规则之前的存量入口，已按规则补齐。lib 与 server 里执行中任务的取消入口只有试跑这一处，再补规则在审查期没有可命中的改动
-- #3494 · 2026-10-26 · 合并后修复：试跑拒绝晚到的取消后返回 404，前端仍按「404 即 run 已不存在」清空状态、显示已取消，用户看不到服务端保留的已计费结果（#3498，#3530 的 d251541dd 修复，11ab19aac 补非终态恢复轮询与代次核对）；没拦住：没有对应规则
-- 评审未晋升 · 2026-11-01 · 新记录是取消接口给 404 加了「来晚了、结果仍保留」的含义，前端调用方没跟上，属于 general.md「一个值的格式或取值范围只在一处定义，产出方、校验方与消费方都引用它」（2026-10-30 晋升，晚于 #3494）的范围；lib 与 server 里执行中任务的取消入口仍只有试跑一处
-
-## 改动没有覆盖全部同类位点
-
-### 一致性检查从成员本身枚举，标记与登记都缺的新成员也能被发现
-模式：检查只比对「带标记的成员」与「登记表」两份清单，新成员同时漏了标记和登记时，两边都看不到它
-代价：入队方法绕开 action 层，提交时没有忙碌标记，重复提交也没有去重提示（严重度：常规）
-判定方式：机械（拟用 `api.enqueue-methods.test.ts`，按请求形态识别入队方法，不只认 `@enqueue` 标记）
-- #2872 · 2026-10-22 · 合并后修复：`submitAssetSheetBatch` 既没有 `@enqueue` 也不在 `ENQUEUE_METHODS`，`AssetSheetBatchDialog` 直调绕开 action 层（721d2bd5 引入，#3356 审查发现，#3357 跟进，#3372 修复）；没拦住：检查没接上
-
-### 判定文件「未引用」的索引，从会读取文件的全部入口枚举，按文件身份比对路径
-模式：新建引用索引时只枚举正式产物登记表，漏掉工作流草稿与隔离文件、排队中的任务记录、旧版兼容路径；或按请求路径字符串比对，大小写不敏感或做 Unicode 归一的文件系统上，同一文件的别名被判为未引用
-代价：通用删除入口把在用文件移进项目回收站，项目引用随即失效，后续任务报文件不存在（严重度：常规）
-判定方式：需要判断
-- #3418 · 2026-10-25 · 审查发现：文件视图的引用索引先后漏了 NFC/NFD 与大小写别名、`write_quarantine` 写出的规划草稿、排队中的 `grids/<id>.json`、旧版 `script_plan_*.md` 四类，分多轮修补（d554c9657、c55bf3e96、61f63de53）；别名回归测试在大小写敏感、不做归一的文件系统上跳过，Linux CI 不执行；没拦住：没有对应规则
-
-### 续跑回放提交时的上下文，叠在 client 上的各层按同一份上下文工作
-模式：续跑把 client 的 base 换回提交时的值，叠在 transport 上、按当下 base 前缀识别请求的路径覆盖层没有同步，认不出请求就原样发出
-代价：任务在途时只改了 base 路径，重启续跑后请求发到原始路径被判过期，付费生成的视频取不回（严重度：数据·安全·真实花费）
-判定方式：需要判断
-- #3189 · 2026-10-25 · 合并后修复：自定义供应商只改 base 路径后，续跑请求没命中路径覆盖，返回 404 判为过期（#3443，#3494 的 c45b2aa95 修复）；没拦住：没有对应规则
-- 评审未晋升 · 2026-10-27 · 按 base 改写请求的只有 `lib/custom_provider/path_overrides.py` 一层，修复后按提交时的 base 匹配并有续跑用例；需要同时满足自定义供应商、任务在途、只改 base 路径、发生续跑四个条件，写成规范在审查期难有可命中的改动
-
-### 同一流程在不同模式下各有一份页面实现时，新增或改动一侧对照另一侧的交互
-模式：参考生视频的确认页与剧情演绎的内容确认页各自实现，可编辑字段与确认后的去向各写一套，一侧补上的交互另一侧没有
-代价：参考模式确认页的原文只读，原文不合格时用户只能重新规划；确认拆分后自动展开 Agent 面板并预填续写消息，与 Web 全流程的设计相反（严重度：常规）
-判定方式：需要判断
-- #1546 · 2026-10-25 · 合并后修复：参考脚本确认页把 `source_text` 渲染为只读，剧情演绎的 `ScriptReviewGate` 可以编辑原文（#3448，#3492 的 3308325ea 修复）；没拦住：没有对应规则
-- #2872 · 2026-10-26 · 合并后修复：参考脚本确认页的 `handleConfirmed` 无条件 `prefillAssistant`，`ScriptReviewGate` 只在「交给 Agent」按钮上预填（#3496，#3512 的 dfae750b6 修复）；没拦住：没有对应规则
-
-## 异常的捕获范围与传递
-
-### 带用户指引的结构化异常，在既有宽捕获之前单独放行，传到每个入口
-模式：新增一个带用户指引的异常（如继承 `ValueError` 的 `ModelNotInCatalogError`），只在部分入口处理，其余调用链上已有的 `except Exception` 把它吞成笼统错误
-代价：用户看不到「去供应商设置重新选择模型」这类指引（严重度：常规）
-判定方式：需要判断
-- #3248 · 2026-10-19 · 合并后修复：Agent 工具查视频能力、草稿晋升、上传后生成概览、图生图检查四条路径吞掉 ModelNotInCatalogError（#3300，#3314 的 c6040abf 修复）；没拦住：没有对应规则
-
-### 宽捕获兜底的意外异常按任务失败上报，不包装成表示预期拒绝的异常类型
-模式：handler 末尾用 `except Exception` 把所有异常包进「预期拒绝」类，下游按拒绝映射成修改输入；内部错误和供应商真拒绝走同一条出路
-代价：用户与外部 Agent 被引去修改输入，其实重试就能成功（严重度：常规）
-判定方式：需要判断
-- #2085 · 2026-10-30 · 合并后修复：文本任务的 handler 把任意异常包成 `TextGenerationError`，问题码落成 `generation_refused`，读侧再补成 `fix_input`（#2109 加的补全），backend 构造失败也提示「请修改输入」（#3483，#3548 的 eb8d5bda1 修复）；没拦住：没有对应规则
-
-### 共享解析函数的「不存在」只用约定的一种异常表达，修补放在解析函数里
-模式：给共享解析函数加新的资源分支时，下层工具对格式错误抛出别的异常类型（如 `ValueError`），调用方只捕获约定的 `KeyError`；发现后又只在一个调用方补捕获，其余调用方仍被击穿
-代价：一条坏 ID 让整批落成 `internal_error`，同批合法条目一起失败（严重度：常规）
-判定方式：需要判断
-- #2361 · 2026-10-30 · 合并后修复：衍生分支经 `split_derivative_artifact_id` 抛 `ValueError`，`edit_images` 只捕获 `KeyError`，整批落成 internal_error；#3487 只在 `inspect_images` 调用方补了捕获，另开 #3488，#3548 的 448f71cb6 改在共享解析里转成 `KeyError`；没拦住：没有对应规则
-
-## 仓库约定与自动化没有接上检查
-
-### skill 脚本自带的回归测试接入闸门与 CI
-模式：`.agents/skills/*/scripts/test_*.sh` 这类脚本测试不属于 `scripts/gate.py` 或 CI 的任何域，改动被测脚本后只跑了直接相关的那一个测试，其余抽取同一函数的测试已经坏了，闸门和 CI 照样通过
-代价：skill 脚本的回归测试悄悄失效，到下一次修改时才发现（严重度：常规）
-判定方式：机械（拟用 `scripts/gate.py` 新增一个域，覆盖 `.agents/skills/**/scripts/test_*.sh`，并接入 CI）
-- #3393 · 2026-10-22 · 自查：02445565 给 `cr_walkthrough_rest` 新增 `cr_review_skipped_body` 依赖，`test_quota_alerts.sh` 抽取该函数时 jq 报未定义（退出码 3）；`gate.py --changed` 只命中 tests、conventions 两个域，CI 全绿，0efd7d2b 才补上；没拦住：检查没接上
-
-### 外部 skill 只在 `.agents/skills/` 保留一份正本，`.claude/skills/` 下只放指向它的符号链接
-模式：用工具自带的安装命令（如 `react-doctor install`、`skills add -a claude-code`）安装 skill 时，工具在 `.claude/skills/` 写入实体目录拷贝、覆盖已有的符号链接，或在命令执行时所在的子目录（如 `frontend/`）里再装一份，同一 skill 出现多份内容
-代价：正本与拷贝内容不一致，agent 读到的 skill 版本不确定，跟进上游时漏改（严重度：常规）
-判定方式：机械（拟用 `scripts/audit_conventions.py`：`.claude/skills/*` 是指向 `../../.agents/skills/<同名>` 的符号链接，只在开发态使用的 skill 列入白名单；`.agents/skills/` 只出现在仓库根目录）
-- #3407 · 2026-10-24 · 自查：`.claude/skills/react-doctor` 是实体拷贝，`frontend/.agents/skills/react-doctor` 是多余副本，按建议重装后 CLI 又一次用拷贝覆盖了符号链接；根因：安装工具默认写拷贝且不感知本仓库约定；没拦住：检查没接上，`audit_conventions.py` 不检查 skill 目录形态
-
-### 给工作流生成的 PR 新增写入步骤时，同步更新针对该 PR 的完整性检查，并用会产生改动的数据演练一次
-模式：给 Release PR 等由工作流生成的 PR 增加会提交新文件的步骤，只验证了步骤本身，没有更新该 PR 的变更白名单，也没有让该 PR 带着真实改动跑一遍 CI；问题到第一次真正产生改动时才暴露（见 #3411）
-代价：发版被阻塞，需要临时开修复 PR（严重度：常规）
-判定方式：机械（拟用工作流静态检查：工作流在发版分支上 `git add` 的路径须被 `release-integrity` 白名单覆盖）
-- #3346 · 2026-10-24 · 合并后修复：发版 PR 自动刷新的目录快照不在 `release-integrity` 白名单内，且新快照下架了测试写死的方舟型号，Release PR #3114 两项检查失败（#3409 放行快照路径，#3410 改为从目录取默认模型）；根因：快照刷新步骤合入时没有在会产生快照改动的 Release PR 上演练；没拦住：没有对应规则
-
-### 共享契约样例改动时，触发所有读取方的验证域
-模式：前后端测试共用一份输入样例，闸门按路径选域只覆盖样例所在目录；单独改样例时只跑一侧，另一侧读取它的契约测试漏跑
-代价：前后端契约不一致时闸门与 CI 照样放行（严重度：常规）
-判定方式：机械（拟用 `tests/unit/scripts/test_gate.py`：共享样例路径同时选中 frontend 与 backend 域）
-- #3492 · 2026-10-26 · 集成审查发现：新增的 `frontend/src/test/contracts/reference-unit-add-requests.json` 只触发 frontend 域，后端读取它的用例在单改样例时不跑，2700f4a31 给 `scripts/gate.py` 与 CI 的 domain-filter 补上路径；没拦住：检查没接上
-
-### 用脚本批量改写测试文件后，核对被删除的用例都是有意删除的
-模式：按锚点切片整段替换测试代码时，范围夹住了插入点以外的测试类；被删的用例不再被收集，完整测试照样全绿
-代价：已有的回归用例静默消失，覆盖下降却看不出来（严重度：常规）
-判定方式：机械（拟用闸门比较 base 与 HEAD 的 `pytest --collect-only` 节点 ID，列出消失的节点，移动或有意删除的由 PR 说明；只比较数量会放过「删一个、加一个」）
-- #3543 · 2026-10-30 · 自查：切片替换误删 `tests/unit/server/test_auth.py` 的 TestCreateAndVerifyToken、TestCheckCredentials、TestEnsureAuthPassword 三个类，对比各文件收集结果后恢复（终版 249b7e622 三类俱在）；没拦住：没有对应规则（闸门不比较收集数）
-
-## 前端异步状态在作用域切换与重叠操作下归属不清
-
-### 两份数据作废时机不同，就各用一个 AbortController
-模式：请求挂错取消域：项目级数据（会话列表、技能列表）和会话级加载共用一个 controller，一次会话操作把慢响应的项目级数据当成过期丢弃；或项目级请求没纳入项目取消域，项目切换后迟到的响应覆盖新项目的数据
-代价：界面停在旧列表上，或显示另一个项目的数据（严重度：常规）
-判定方式：需要判断
-- #1280 · 2026-07-24 · 合并后修复：终态会话列表刷新未纳入项目取消域，项目切换后迟到的响应覆盖新项目的会话列表；没拦住：没有对应规则
-- 降级 · 2026-10-19 · 自 docs/standards/frontend-async.md「取消域按数据生命周期划分」
-
-### 列表界面的写操作占用挂在不随视图切换卸载的一层，成功结果立即回写本地列表
-模式：列表型界面用组件局部状态记录写操作占用，写入成功后只触发重拉；重叠操作、慢重拉或切换分区卸载组件时，占用被提前释放或丢失，已完成或在途的记录重新可操作
-代价：重复发出恢复或删除请求，成功提示之后又报失败（严重度：常规）
-判定方式：需要判断
-- #3418 · 2026-10-24 · 审查发现：项目回收站的占用改了 5 轮：按记录分桶（d554c9657）、恢复中禁用清空（f62c8fa84）、成功后先从本地列表移除再解除占用（ffb419671、325a6921d）、切换分区不卸载（bb1f14414）；根因：占用与写入结果没有统一的归属层，逐条修补；没拦住：前两轮有规则但没被执行（frontend.md「保护状态按完整作用域分桶，可叠加的用计数」「随资源占用禁用的控件，在打开时和提交时校验占用态，并同步禁用兄弟控件」），组件卸载丢失占用没有对应规则
-
-## 对象身份的判定与分配
-
-### 按名称派生文件名并据此认领文件时，认领规则不与其他合法名称的派生名重叠
-模式：文件按 `<名称>_<n>` 派生命名，而名称本身允许以 `_数字` 结尾；认领时把「stem 等于名称」的文件也算作自己的，另一个对象的序号文件被当成自己的来改名、删除或恢复
-代价：另一个对象的原图被搬走成为孤儿文件、引用悬空，存量损坏不会自动复原（严重度：数据·安全·真实花费）
-判定方式：需要判断
-- #1730 · 2026-10-26 · 合并后修复：同时有商品 `Cup` 与 `Cup_1` 时，改名、删除、恢复 `Cup_1` 会带走 `Cup` 的 `Cup_1.png`（#3431，#3472 的 914ee4f11 修复：`renamed_file_stem` 在 `allow_sequence` 时只认 `名_<n>`）；没拦住：没有对应规则
-- 评审未晋升 · 2026-10-26 · 序号文件的认领已收口在 `renamed_file_stem` 一处，改名、删除、恢复都经它，单元用例覆盖名称以 `_数字` 结尾的情形；仓库里没有第二处按名称派生文件名再认领的逻辑，写成规范在审查期没有可命中的改动
-
-### 条目编号只分配不复用，「用过」以持久高水位为准
-模式：取新编号时只避开现存条目，或以回收站、版本历史这类会被正常清理的记录判断编号是否用过；删除或清理之后旧编号重新分配，按编号挂接的剪辑片段、裁切与历史接到新内容上
-代价：旧剪辑片段重新显示为就绪，旧裁切静默套在新视频上（严重度：常规）
-判定方式：需要判断
-- #2876 · 2026-10-26 · 合并后修复：`new_item_id` 只避开现存条目，删除最后一个单元后新增、Agent 插入分段、覆盖正式剧本三条路径都会拿回旧编号（#3430，#3471 的 b50f34c1a 修复）；该 PR 内又以可清理的删除记录决定能否沿用规划编号，审查发现清空回收站后再确认仍复用旧编号；没拦住：没有对应规则
-
-### 按字段值判定路径归属前，先把值归一成项目相对路径
-模式：审查指出一种写法（点段、绝对路径、Windows 盘符、大小写）就补一种，没有先把字段值归一成项目相对路径再判断；或先接受只在手改项目文件时才会出现的防御，下一轮再撤回
-代价：同一个判定函数连改 4 轮，每轮都要跑完整闸门，审查预算耗尽（严重度：常规）
-判定方式：需要判断
-- #3500 · 2026-10-26 · 自查：共用参考复制的归属判定连续 4 轮各补一种路径写法，期间接受又撤回了目录符号链接判定，最后在 2497ed391 改为先归一再判断；没拦住：有规则但没被执行（general.md「防御只针对常规可达的场景」）
-
-## 测试没有触达真实契约
-
-### 前后端对同一请求的口径由一份共享样例约束，不各自固定
-模式：前端测试只断言「发出了请求」或固定前端自己的限制，后端测试固定另一种口径；两侧各自变绿，契约却相反
-代价：用户可见功能在 main 上整体不可用，或前端挡住后端与 Spec 都允许的操作（严重度：常规）
-判定方式：需要判断
-- #1956 · 2026-10-25 · 合并后修复：参考生视频新增单元固定发空正文，后端以 409 needs_replan 拒绝，空白开始的集建不出第一个单元（#3437，#3492 的 4c50d24ae 修复，请求体样例改放 `frontend/src/test/contracts/`，前后端共用）；没拦住：没有对应规则
-- #2535 · 2026-10-25 · 合并后修复：前端在只剩一个分镜时禁用删除并由前端用例固定，后端允许删到零个并由集成用例覆盖（#3438，#3492 的 bfd1a695c 修复）；没拦住：没有对应规则
-
-### 改变 backend 构造所处的线程或上下文时，用真实 SDK 客户端覆盖每个内置 backend 的构造
-模式：把构造挪进工作线程等别的执行上下文，现有构造用例都替换了 SDK 客户端工厂，测不出 SDK 构造本身对线程或事件循环的要求
-代价：某个供应商的全部生成在发请求前失败，直到验收才发现（严重度：常规）
-判定方式：机械（拟用 pytest：经 `assemble_backend` 不替换 SDK 客户端，参数化构造全部内置 backend）
-- #3170 · 2026-10-26 · 合并后修复：4aae99f2e 起内置 backend 在 `asyncio.to_thread` 中构造，`xai_sdk.AsyncClient` 拿不到事件循环，Grok 文本、图片、视频全部失败（#3482，#3494 的 ce46d4f44 修复并补上参数化构造用例）；没拦住：检查没接上（Grok 用例全部替换了 `create_grok_client`）
-
-### 预览接口的只读用例比对项目文件的字节与文件集合
-模式：预览复用提交路径的加载器，加载器读取时会做兼容迁移并回写；用例只断言没有入队任务，测不出预览写了正式文件
-代价：打开或取消确认框就发生用户没有确认的项目写入（严重度：常规）
-判定方式：机械（拟用测试：临时项目的全部文件在预览前后逐字节一致）
-- #3512 · 2026-10-27 · 审查发现：参考模式「补齐视频」的批量预览经 `load_script` 回写时长兼容迁移（#3503 的实现，c04716750 修复）；没拦住：没有对应规则
-
-### async 入口的每个分支至少有一条用例按真实文件走通，阻塞护栏才能覆盖到它
-模式：入口的某个分支在测试里全靠替身或没有用例，分支里的同步文件 I/O、取摘要留在事件循环上，lint 与阻塞护栏都不报
-代价：批量出片时事件循环被占住，接口耗时几十秒，前端 502（严重度：常规）
-判定方式：需要判断（I/O 部分由阻塞护栏机械判定，前提是分支有真实文件用例；纯 CPU 段护栏判定不了）
-- #1892 · 2026-10-29 · 合并后修复：`WorkflowPlanner._video_admission` 的参考生视频分支在事件循环上同步读产物清单、取摘要，连同费用估算逐单元解析（#1786）、联系表逐帧解码（#2911）占住事件循环，接口耗时 27～88 秒（#3520，#3532 的 e0c4887b8 放进工作线程，985c4bf5f 补真实文件用例）；没拦住：检查没接上（阻塞护栏只拦用例走到的调用链，该分支没有真实文件用例）
-
-### 叠层编辑器的镜像层与输入层共用一组排版类，测试断言两层排版一致
-模式：着色镜像层（`pre`）与透明输入层（`textarea`）各写各的排版类，删掉其中某个类之后，浏览器默认样式或 preflight 让两层的字体分叉；用例只断言没有某个类
-代价：光标与选区偏离可见文字，越往行尾偏得越多（严重度：常规）
-判定方式：机械（拟用 vitest 断言两层共用同一排版常量，或在页面级用例里比对计算样式）
-- #3067 · 2026-11-01 · 合并后修复：参考生视频提示词编辑框去掉 `font-mono` 后，`pre` 吃到 preflight 的等宽字体、`textarea` 继承比例字体，光标与着色文字错位（#3516 的 740cd892c 修复）；没拦住：检查没接上（用例只断言两层都没有 `font-mono`）
-
-## 项目迁移把输入当作已稳定、已校验
-
-### 改写清单登记的迁移步，同时用上一发行版导出的带信封归档验证导入路径
-模式：迁移步平移产物依据时只在原地升级的项目上验证；归档导入时迁移链跑在没有清单的暂存目录上，信封里的登记原样恢复，依据口径变化让存量产物导入即过期；补上导入路径后，又按换键、搬图、同字节逐条补丁
-代价：旧版导出的归档导入后，引用资产的分镜图与宫格整体判为过期；同一处修复来回改了 3 轮（严重度：常规）
-判定方式：机械（拟用迁移测试约定：返回 `ArtifactBackfillOutcome` 的迁移步须有一条「上一发行版 schema 导出的带信封归档 → 当前代码导入」的时效断言）
-- #3472 · 2026-10-26 · 审查发现：v18→v19 改写分镜图与宫格的依据，schema 18 带信封归档导入后宫格与分镜图全部 stale，改为导入前把信封登记落成暂存清单、随迁移链平移；之后又因链首规整换键丢内容摘要、同字节衍生无法唯一配对各返工一轮（41581966a）；没拦住：没有对应规则（`docs/agents/project-migrations.md` 当时的迁移用例要求只覆盖 `migrate_project_dir` 原地升级）
-
-### 迁移复制前先冻结全部源内容，提交失败时源文件与引用一起回滚
-模式：多个对象交叉引用彼此的文件，迁移按对象顺序复制并覆盖目标，再从已被覆盖的路径读下一份源；只在内存里冻结、没有覆盖失败回滚时，提交失败后重试仍会串改内容
-代价：升级后对象指向别人的内容，原内容只剩保留副本（严重度：数据·安全·真实花费）
-判定方式：需要判断
-- #3500 · 2026-10-26 · 审查发现：Alice 与 Bob 双向共用参考文件时，迁移后 Bob 拿到自己的原内容，而不是它原来引用的 Alice 的内容；提交时注入 OSError 后重试又会串改（#3428 的实现，2497ed391 修复并补完整迁移链与失败重试用例）；合并后 #3530 把同一套复制扩到资产图时，集成审查又发现复制落点不在事务快照里，提交失败后落点已被副本覆盖、原内容只剩保留副本（11ab19aac 把落点与保留副本纳入事务并在失败时挪回）；没拦住：没有对应规则（原回归只断言项目与清单回滚）
-- 评审未晋升 · 2026-10-27 · 这是 v5 名称空间迁移里一次性的共用拆分，已有完整迁移链的回归用例；其余迁移步没有按对象顺序复制并覆盖的写法，写成规范在审查期没有可命中的改动
-
-### 迁移用项目文件里的名字或路径拼写入目标前，先当作不可信输入约束在项目目录内
-模式：迁移按 `project.json` 的资产名或字段值拼出复制、移动的目标，默认这些值已经校验过；导入包在校验之前就跑完迁移链，名字里的 `..` 段把写入带出项目目录。源路径做了越界检查，目标路径没有
-代价：导入一个构造过的项目包，就能在项目目录之外写入或挪走文件（严重度：数据·安全·真实花费）
-判定方式：需要判断
-- #3500 · 2026-10-26 · 审查发现：链首共用参考复制用未校验的资产名拼目标，schema 5 暂存树与链首规整两条路径都能写出项目目录（#3428 的实现，2497ed391 修复：名字含路径分隔符的资产不再复制）；合并后 #3530 的集成审查又发现共用文件复制先解析真实路径再判断是否链接，源链接按普通文件复制，目标目录是链接时副本写到项目外（11ab19aac 改为逐段查链接，目标目录是链接时拒绝）；没拦住：没有对应规则（backend.md「不可信路径缺少 `O_NOFOLLOW` 时，打开后校验文件身份」管打开方式，不管由字段值拼出的目标）
-- 评审未晋升 · 2026-10-27 · 只出现在这一个迁移步，已在入口拒绝含路径分隔符的名字并有用例；其余迁移步的写入目标都由服务端自己生成。先继续计数，再出现时考虑把导入包的名字校验挪到迁移链之前，从架构上消除
-
-## 用例在满载全量运行下不稳定
-
-### 依赖懒加载模块的用例先单独完成模块加载，再等待渲染结果
-模式：经懒加载图表验证数值格式时，冷模块的转换、加载与数据渲染都挤在查询的默认等待里；单文件能过，全量并行时首条断言超时
-代价：前端全量偶发失败，阻断无关改动交付，还把排查引向语言或 store 泄漏（严重度：常规）
-判定方式：需要判断
-- #2418 · 2026-10-26 · main 基线复现：`UsageRecordsSection.trend.test.tsx` 的趋势数值断言在 stage 完整闸门里两次超时，失败时数据、语言与计时都正常，表格仍在等懒加载的图表（#3500 的 2497ed391 在 `beforeAll` 预加载真实模块）；没拦住：没有对应规则
-
-
-### 用真实线程制造并发的用例，断言只取不随调度变化的结果，并在满载全量运行下确认耗时
-模式：真实忙线程加真实取栈的用例，用去重计数间接证明每次都取到了栈，结果随调度落点分裂；规模只在单独或定向循环里验证，全量并行时超时；审查按时序规则指出后，以「断言由假时钟决定」驳回
-代价：完整闸门偶发失败，阻断后续 stage，同一条用例改了 3 轮（严重度：常规）
-判定方式：需要判断
-- #3532 · 2026-10-30 · 合并后修复：忙线程取栈用例在全量并行下偶发失败，#3544 的 549c5e617 改为逐次断言、不依赖同一份栈，满载下又超时，#3545 的 bf6b83566 缩到 2 线程 × 20 轮；#3532 内已因只取一次栈改过一轮（bad1ebd28）；没拦住：有规则但没被执行（testing.md「等待、重试、超时经时钟 seam 或事件握手驱动」，审查引用后被驳回）
-
-## 未分组
-
-### 改写流程判据时，逐个交叉情形确认结论唯一，旧条件挡住的情形仍有着落
-模式：收紧或替换一组判据（分流表、收录与排除条件、超时规则）时，逐条看各自措辞，新增条件与既有条件、表格顺序或下游字段在交叉情形下互相矛盾；或删掉旧判据中的某个条件后，它原本挡住的情形落空
-代价：无人值守的流程对同一对象得出不同结论或无限期挂起；审查—修复往复多轮（严重度：常规）
-判定方式：需要判断
-- #3336 · 2026-10-21 · 审查发现：收尾自查的排除句与「数据·安全·真实花费」条冲突，修复又让「没拦住」的取值与字段名矛盾，同一问题改了 3 轮（e8a8e977、9ef829ba、02ac08e0）；零引用退出删掉「规则存在满 90 天」后，规则加入前的 PR 被计入统计窗口（175d0af9 修复）；没拦住：没有对应规则
-- #3342 · 2026-10-21 · 审查发现：triage 分流表的 `needs-info` 超时规则与按首个匹配执行的表格顺序、前置检查路径、活动判定、状态标签替换在交叉情形下矛盾，同一条超时规则改了 5 轮（71e1b126、e7014af5、aa38cf9c、b2346830、3a513b24）；没拦住：没有对应规则
-
-### 判断 CodeRabbit 是否已覆盖当前 HEAD，以本 HEAD 的审查完成信号为准，不只看 walkthrough
-模式：增量审查只在既有讨论串下回复、不发新 review 正文时，CodeRabbit 已把本 HEAD 的 commit status 置为 "Review completed"，walkthrough 却停在 "Currently processing"；poll.sh 只看 walkthrough，持续报 `is_in_progress=true`
-代价：审查循环空等到超时阈值，靠手动 `@coderabbitai review` 才拿到可判定的覆盖（严重度：常规）
-判定方式：机械（拟用 poll.sh 同时读取 CodeRabbit 在 HEAD 上的 commit status，并加 testdata 用例）
-- #3359 · 2026-10-22 · 审查循环自查：38bb81b0 推送后 CodeRabbit status 已是 success / "Review completed"，walkthrough 到手动触发后才更新；没拦住：检查没接上
-
-### 高频路径上按现状重算的派生结果，在输入未变时复用
-模式：认领、请求、轮询这类高频路径按现状重算派生结果（内容哈希、推算供应商、重建快照），没有先比对输入的廉价标识（文件 stat、修订号），开销随调用频率和输入规模相乘
-代价：事件循环被占满，同进程的全部 HTTP 请求排队，媒体下载卡顿被放大（严重度：常规）
-判定方式：需要判断
-- #3147 · 2026-10-13 · 事故复盘：worker 每个认领周期都对排队中的参考生视频任务按现状推算供应商、重算资产哈希，开销随排队数线性增长；没拦住：没有对应规则
-- 降级 · 2026-10-19 · 自 docs/standards/backend.md「派生结果在输入未变时复用」
-
-### 自定义 hook 的函数型 option 列进依赖数组，不用 ref 豁免
-模式：自定义 hook 接受 selector、回调等函数型 option 时，用 ref 保存最新值来绕开 exhaustive-deps，调用方传入的不稳定引用被静默吸收
-代价：回调可能捕获过期状态，且无从发现（严重度：常规）
-判定方式：需要判断
-- #1648 · 2026-08-05 · 批次复盘：hook 的函数型 option 存进 ref 豁免依赖；没拦住：没有对应规则
-- 降级 · 2026-10-19 · 自 docs/standards/frontend-async.md「Hook 的函数型 option 列入依赖，不存进 ref」
-
-### 按模型声明能判定发不出或用不了的请求，在计费请求前拒绝
-模式：新接入的后端只在请求构造或产物落盘时才对照模型目录声明（参考图张数上下限、输出格式），超限时截断、产物转不成位图时先计费再删除；编排层仍按端点固定上限编号「图N」，提示词指认没有发出的图
-代价：用户为必然偏离或必然不可用的结果付费（严重度：数据·安全·真实花费）
-判定方式：需要判断
-- #3361 · 2026-10-24 · 审查发现：`openrouter-images` 参考图超限在截断与报错之间改了 3 轮（d2a6e389 报错、3cc3210d 改由编排层按模型上限裁剪并保留后端截断兜底、8ea8f80e 兜底改为报错），参考图下限与「收录却未声明参考图」另修两轮（3943af66、3cc3210d）；只出 SVG 的模型先计费、转码失败再删产物（cd9a20b9、106308b0），a505a825 改为提交前拒绝；没拦住：没有对应规则
-- 评审未晋升 · 2026-10-24 · 待 #3405 裁决：编排层「参考图裁剪」是否保留为静默行为，决定这条规则的适用范围
-
-### i18n 插值参数名与文案占位符一致
-模式：调用 `t(key, { count })`，文案占位符却写成 `{{total}}`；typecheck 与 lint 都不报，页面直接显示未替换的占位符原文
-代价：界面出现未替换的占位符（严重度：常规）
-判定方式：机械（拟用 vitest 或 ESLint 检查，比对 `t()` 字面 key 的参数名与各语言文案的占位符）
-- #3418 · 2026-10-24 · 自查：回收站摘要文案的参数名 `count` 与占位符 `{{total}}` 不一致，页面级用例断言文本时发现；没拦住：没有对应规则
-
-### 并行 worktree 跑页面级套件时，预览服务不复用别人的进程
-模式：同一台机器上多个 worktree 并行，`pnpm e2e` 用默认端口，Playwright 的 `reuseExistingServer` 复用了别的 worktree 已启动的预览服务，测的是另一份构建
-代价：页面级套件对本分支给出假绿，界面回归漏检（严重度：常规）
-判定方式：机械（拟让 `frontend/playwright.config.ts` 只在显式设置环境变量时复用已有服务，端口被占时直接报错）
-- #3421 · 2026-10-25 · 自查：lobby 55 例在复用的旧构建上全部通过，加了依赖新按钮的场景才失败（ticket #3389）；根因：没设 `E2E_PORT`，复用了别的 worktree 的 4173；没拦住：有规则但没被执行（CONTRIBUTING「前端页面级测试」要求并行时用环境变量错开端口，AFK implementer 契约要求端口与其他 worktree 隔离）
-
-### 请求内复用安全检查的观察时，后续读取经受约束的描述符，不按路径重新打开
-模式：为减少重复打开，把一次经 `O_NOFOLLOW` 或身份校验的检查结果在请求内共享，后续步骤却按路径 stat 或读取；检查与读取之间路径被删除或换成符号链接时，读取跟随链接，判定沿用旧观察
-代价：本应判缺失或受阻的正式文件被判成现行或过期，读取还会跟随链接读到项目外的文件（严重度：数据·安全·真实花费）
-判定方式：需要判断
-- #3502 · 2026-10-27 · 审查发现：请求内共用文件观察后，视频内容证明仍按路径 stat 和取指纹，准入后文件被删判成 STALE，换成项目外的符号链接判成 CURRENT，两轮审查才收回到描述符读取（b8f9f85f4）；没拦住：没有对应规则（测试只覆盖正常路径与打开次数）
-- 评审未晋升 · 2026-10-27 · 请求内共用观察只在 `lib/artifacts/` 的时效判定里，修复后补了删除与换成符号链接的用例；backend.md「不可信路径缺少 `O_NOFOLLOW` 时，打开后校验文件身份」已要求打开后按身份校验，再加一条在审查期没有第二处可命中的改动
-
-### 给沙箱加放行项前，按各平台的编译方式核对它与已有拒绝项的叠加结果
-模式：在已整体 `denyRead` 的目录下给子目录加 `allowWrite`，以为只放开写；bwrap 把它编成可写绑定挂载，盖掉上层的读拒绝，Seatbelt 则读拒写放，两个平台的结果都与意图不符
-代价：Agent 的 Bash 越过内核沙箱的读边界，与系统提示不一致（严重度：数据·安全·真实花费）
-判定方式：需要判断（单元测试只能断言编译结果，叠加语义要在各平台实测）
-- #2348 · 2026-10-26 · 合并后修复：Linux 部署中 Agent 的 Bash 能读写当前用户的记忆目录，macOS 下能盲写（#3481，#3505 的 c4b3c6e1a 修复）；没拦住：没有对应规则
-- 评审未晋升 · 2026-10-27 · 沙箱设置只在 `server/agent_runtime/agent_access_policy.py` 一处组装，修复后去掉了这条放行；沙箱放行项的改动很少，写成规范在审查期难有可命中的改动
-
-### 提醒把含密钥的文件排除出版本控制时，同时处理已被 Git 跟踪的文件
-模式：只用 `git check-ignore` 判断并提醒加忽略规则；已跟踪的文件不会被它报告，忽略规则也挡不住它的修改被提交；只 `git rm --cached` 不加规则，下次 `git add .` 又会加回去
-代价：明文 API Key 仍可能随代码提交（严重度：数据·安全·真实花费）
-判定方式：需要判断
-- #3505 · 2026-10-27 · 审查发现：setup skill 的提醒只查忽略规则，漏了已跟踪的 `.mcp.json` 与 `.arcreel/settings.json`，修复中又漏了停止跟踪后的忽略规则，两轮才收敛（#3485 的实现，10965b85d）；没拦住：没有对应规则
-- 评审未晋升 · 2026-10-27 · 只出现在 setup skill 这一段说明文字里，已改为区分跟踪状态；仓库里没有第二处引导用户处理密钥文件的流程
-
-### 生成任务的预检失败按界面上的称呼说明原因，问题码按出路归类
-模式：任务在调用模型前因输入不合格失败，提示沿用内部前缀与内部编号，问题码落成 `internal_error` / `retry`；只补缺的空操作提交后没有任何反馈
-代价：用户找不到出问题的是哪一条，按重试处理也不会好，或以为 AI 编写失效了（严重度：常规）
-判定方式：需要判断
-- #2531 · 2026-10-30 · 合并后修复：参考单元的提示词编写预检、草稿晋升与内容确认对不合格单元抛裸 `ValueError`，提示带「generate_episode_script 失败」前缀与内部 unit ID（界面上叫「视频单元 N」），问题码落成 `internal_error` / `draft_promote_failed` / 通用的 `conversion_refused`；空操作只显示「已提交」。先后经 #3497（#3512 的 93bb56e07）、#3508 与 #3509（#3547 的 4b11617be、ae82d9e89）、#3551（#3556 的 8b418ab5f、288b407e9）修复；没拦住：没有对应规则（general.md「失败提示先说原因和下一步，原文折叠」2026-10-08 才加入，晚于引入）
-
-### 生产里常驻的诊断探针只用持 GIL、线程安全的取栈方式
-模式：用官方标注为「尽力而为」的转储接口（faulthandler 的延时或全线程转储）做线上看门狗；它不持 GIL 遍历其他线程的帧，别的线程繁忙时读到半更新的帧就崩溃
-代价：一次本该只写诊断日志的卡顿让进程段错误退出，反复重启并清空进程内缓存（严重度：常规）
-判定方式：机械（拟用 ruff banned-api 禁止 `server/`、`lib/` 调用 `faulthandler.dump_traceback_later`，测试插件放行）
-- #3163 · 2026-10-29 · 合并后修复：卡顿探针的 faulthandler 延时转储在其他线程繁忙时段错误，生产容器两天重启 11 次（#3520，#3532 的 e0c4887b8 改为守护线程持 GIL、经 `sys._current_frames` 只取事件循环线程的栈）；没拦住：没有对应规则
-
-### 给已有系列新增型号时，每项能力按该型号自己的官方文档声明
-模式：新型号按系列前缀或兄弟型号整体继承能力（参考图、尾帧等），官方文档只为其他型号写明的能力也被声明
-代价：该型号进入它用不了的桶，选中后任务全部失败，报价也按它给出（严重度：常规）
-判定方式：需要判断
-- #2989 · 2026-10-30 · 合并后修复：`grok-imagine-video-1.5-lite` 沿用系列的参考图上限 7，被选进参考生视频桶后真实出片全部被 INVALID_ARGUMENT 拒绝（#3495，#3542 的 0017df8f3 修复）；没拦住：没有对应规则
-
-### 判断配置项是否已设置时，把进程环境里的空串当作未设置；自动生成的凭据持久化后沿用
-模式：容器把模板里留空的键注入为空串，dotenv 默认不覆盖已存在的变量，挂载文件里后写入的值进不来；启动逻辑把空串当作缺失，重新生成并回写，或者每次启动都随机生成签名密钥
-代价：重启后密码被改写、已登录会话全部失效，用户被锁在门外（严重度：常规）
-判定方式：需要判断
-- #28 · 2026-10-29 · 合并后修复：compose 的 `env_file` 把 `AUTH_PASSWORD` 注入为空串，restart 后重新生成密码并改写 `.env`；未设 `AUTH_TOKEN_SECRET` 时每次重启全员掉线（#3524，#3543 的 249b7e622 修复）；没拦住：没有对应规则
-
-### 一致性证明对正常操作能到达的每种版本状态都有着落，只拒绝真正无法自证的登记
-模式：导出或导入的证明假定派生登记（字幕、呈现）总是跟着当前选中的媒体版本；用户上传、重新生成或切换版本后，系统自己留下的合法登记被判为不可证明，异常经兜底变成 500
-代价：该集的整包导出与剪映草稿下载持续失败，用户无法自行恢复（严重度：常规）
-判定方式：机械（拟用往返测试：经真实入口执行上传、重新生成、切换版本后，跑导出令牌、整包导出与导入保全）
-- #1866 · 2026-10-29 · 合并后修复：单元换了选中视频后，按旧视频物化的字幕与呈现登记被判为 unprovable formal claims，导出令牌与整包导出报 500（社区反馈 #3521，#3541 的 f3e54ef45 修复）；只重新生成配音的同类 500 留作后续；没拦住：没有对应规则
-
-### 对外结果里的路径在产生处就用项目相对路径，成功值与错误一视同仁
-模式：只在出口适配层改写错误消息，成功值里的原因文本原样带出；事后做字符串替换时按字面拼写匹配，漏掉 `OSError` 按 `repr` 引用文件名的转义写法、正斜杠写法与路径两侧边界，逐轮补写法
-代价：远程宿主看到服务端文件系统布局，或持久化的定位信息被改写坏；修复反复返工（严重度：常规）
-判定方式：机械（拟用远程 MCP 集成测试：扫描每个工具的成功与错误返回，断言不含数据根绝对路径）
-- #2085 · 2026-10-30 · 合并后修复：远程 MCP 的错误消息（#3484）与 `get_workflow_plan` 成功值里的迁移失败原因（#3507）带服务端绝对路径；#3505 只改写错误，#3548 的 fa0e58c79 改在失败记录处相对化，PR 内又为 Windows `repr` 转义、单引号转义与左边界补了两轮（69e34f99d）；没拦住：没有对应规则
-
-### 按 ID 给条目加类型称呼时，只给能识别的类型加
-模式：给字段值加类型前缀时没有核对字段可能装的全部条目类型，分类函数把无法识别的值默认归成某一类
-代价：界面把宫格称为分镜（严重度：常规）
-判定方式：需要判断
-- #2418 · 2026-10-30 · 合并后修复：使用记录筛选芯片对所有 segment 加「分镜」前缀，宫格显示为「分镜 E3G01」；#3489 区分视频单元时其余 ID 仍默认归为分镜（#3491，#3549 的 c8a2ae950 修复）；没拦住：没有对应规则
-
-## 已晋升
-
-### Web 写路由把写入标成 webui，Web 端调用的写入出口写盘后立即按上下文来源发 hint
-去向：`tests/unit/server/routers/test_web_write_change_source_marking.py`（随 #3548 落地）：按 AST 检查每条 Web 写路由设了 `project_change_source("webui")`、没有写死别的来源；写入出口的 hint 时序由集成用例覆盖
-模式：来源靠每条路由手写上下文，新增或改动的写路由漏标或写死别的来源；写入出口只写盘不发 hint，变更被轮询或补扫按 `filesystem` 结算
-代价：用户自己的保存触发误通知、聚焦与自动跳转（严重度：常规）
-判定方式：机械
-- #216 · 2026-10-30 · 合并后修复：旧草稿保存端点写死 `source="worker"`，一集草稿的保存与丢弃（#2872）、源文件未登记与非整本源文分支（#2876、#2904）没标 webui，草稿与回收站写入不发 hint；#3512 的集成审查实查时当场修了内容确认与资产应用（c04716750），其余开成 #3510，由 #3548 的 287bfd9b6、69e34f99d 修复并加路由来源检查；没拦住：没有对应规则
-
-### 操作前的影响预览与实际判定走同一套依据计算
-去向：`tests/integration/lib/project/test_asset_merge.py` 的对照测试：同一项目先取合并预览、再执行合并，断言预览计数与合并后逐条的实际时效一致，覆盖名称、宫格冻结参考图、衍生迁移、手动上传分镜图与视频各子类（随 #3544、#3556 落地；去掉 487ca1110 的修复后 `test_a_selected_uploaded_video_is_not_counted_as_outdated[True]` 报错）
-模式：判定依据改了口径（如去掉名称），操作前的影响预览仍按旧口径推算；或只对普通条目改用新口径，漏了依据来源不同的子类
-代价：预览报出的过期数与实际不符，用户据此误判操作影响（严重度：常规）
-判定方式：机械
-- #3472 · 2026-10-26 · 审查发现：资产合并预览按名称推算，同图异名时报过期而实际保持现行；改为按实际时效计数后，又漏了切格分镜按宫格冻结的参考图路径判定、衍生图迁走即过期的情形，再改一轮（41581966a）；没拦住：没有对应规则
-
-- #2904 · 2026-10-30 · 合并后修复：资产合并预览把选中手动上传的分镜图与视频计为过期，合并后它们实际保持现行（上传依据只含上传字节）；#3544 审查只补了分镜图一支（c29a3dc28），视频一支漏到 main，由 #3550 跟进、#3556 的 487ca1110 修复；没拦住：没有对应规则
-
-### 按名称或路径写的静态守卫覆盖到达同一目标的全部写法
-去向：docs/standards/general.md「按名称或路径匹配的静态守卫，用例覆盖到达同一目标的每种写法」（守卫本身就是检查，它是否覆盖了全部写法无法再由检查判定，所以写成审查规则；守卫分布在 ESLint 配置、`scripts/audit_conventions.py` 与各自的测试里，放进通用规范）
-模式：lint 守卫或 audit 检查按源码文本识别被拦的模块或函数，只认一种写法：导入只匹配 `@/` 别名，相对路径、`..` 段、转导出照样到达；删除调用只认 `os.remove`，`from os import remove as …`、`import os as fs`、`aiofiles.os` 都不报
-代价：守卫形同虚设，还给人已经拦住的错觉（严重度：常规）
-判定方式：机械
-- #3310 · 2026-10-19 · 审查发现：toast 守卫与原语目录依赖边界只匹配 `@/` 别名，相对路径、`..` 段、转导出被连续三轮指出（bd66ff6a、29ff3121、ec553f95）；没拦住：没有对应规则
-- #3418 · 2026-10-24 · 审查发现：HARD-DELETE 审计先漏函数别名导入，再漏 `import os as fs` 与 `aiofiles.os` 模块别名，两轮补齐（051004b5e）；没拦住：没有对应规则
-
-### Agent 写保护表从媒体的唯一定义处枚举
-去向：`tests/unit/server/agent_runtime/test_agent_access_policy.py` 新增 `test_protected_media_covers_every_public_media_location`：公开端点可读的媒体目录与项目根目录的媒体文件都在 `AGENT_PROTECTED_MEDIA_DIRS` / `AGENT_PROTECTED_MEDIA_FILES` 里
-模式：按媒体目录手写 Agent 写保护表，遗漏目录之外的正式媒体，hook 与沙箱一起留出旁路
-代价：Agent 可以直接覆盖或删除被引用的风格图，绕过项目回收站（严重度：数据·安全·真实花费）
-判定方式：机械
-- #3421 · 2026-10-25 · 集成审查发现：根目录 `style_reference.*` 四种格式仍允许 Write/Edit，sandbox 的 denyWrite 也没覆盖，829e07d02 补上 `AGENT_PROTECTED_MEDIA_FILES` 与用例（ticket #3390）；根因：保护范围只枚举目录，没有对照实际上传路径；没拦住：没有对应规则
-
-### 锁内核验过、释放锁后又重新加锁写入时，在写入的锁内再核验一次
-去向：docs/standards/backend.md「await 之后重新核对状态前提，前提已过时就补写当前状态或跳过副作用」补上释放锁再加锁的同步形态；恢复流水线已在落地前的锁内统一复核（`_require_unchanged`），各类对象从架构上收口
-模式：检查与执行分在两次加锁里，中间释放锁去跑耗时步骤（如项目迁移），写入前没有重新确认前提，并发操作在两次加锁之间改掉了这个前提
-代价：项目里留下指向不存在文件的对象，或重复插入的条目（严重度：数据·安全·真实花费）
-判定方式：需要判断
-- #3421 · 2026-10-25 · 合并后修复：两次并发恢复同一条删除记录，后到的一次以新名落地，留下幽灵资产或分镜（ticket #3383 引入，#3423 跟进，#3426 的 6b993016a 修复）；同一 PR 内恢复剪辑时间线前核对所属集，也是先在取出时核对（f5a7c91e9）、再补到落地锁内（c6de50f1d）；没拦住：有规则但没被执行（backend.md「await 之后重新核对状态前提…」，字面只写了 await）
-
-### 删除记录收下对象本身与恢复后可用所需的元数据，文件只收对象独占的
-去向：docs/standards/backend.md「删除记录收下对象本身与恢复后可用所需的元数据，文件只收对象独占的」
-模式：删除时以附属文件列表非空为建记录的前提，或只把识别对象的几个字段写进记录，或把仍被其他现存对象引用的文件一并移走
-代价：没有媒体的集与分镜的标题、hook、提示词永久丢失；恢复出的历史版本无法再选回；删一个角色让另一个角色的参考音频消失（严重度：数据·安全·真实花费）
-判定方式：需要判断
-- #3421 · 2026-10-25 · 审查发现：历史版本的删除记录只存 prompt，恢复后视频、音频版本不可选，829e07d02 改为保存原版本 metadata（ticket #3381）；没拦住：没有对应规则
-- #3426 · 2026-10-25 · 审查发现：新建无原文、未生成内容的集删除后项目回收站为空（ticket #3384），覆盖正式剧本时无媒体的旧条目不建记录，删除角色时把其他角色仍在用的文件移进记录，ba1e82f7f 修复；共用参考图换名后的指向由 open 的 #3428 跟踪；没拦住：没有对应规则（ADR 0107 要求一切删除都建记录，规范里没有落到实现的规则）
-
-### 恢复出的对象满足读取方的前提、关联整体提交后，才消耗删除记录
-去向：docs/standards/backend.md「恢复出的对象满足读取方的前提、关联整体提交后，才消耗删除记录」；「所属对象仍在回收站时阻断恢复」由 open 的 #3427 跟踪
-模式：恢复只核对对象自身的身份冲突，不核对所属的集或项目是否还在；或文件落地后先消耗记录，再在锁的退出段或锁外回调里写回对象关联；或降级后什么也没加回仍消耗记录
-代价：恢复「成功」但对象打不开或没接回，记录已经消失，用户无法重试（严重度：数据·安全·真实花费）
-判定方式：需要判断
-- #3421 · 2026-10-25 · 审查发现：所属集已删除的剪辑时间线恢复后报 `episode_not_found`，记录已被消耗（ticket #3382）；没拦住：没有对应规则
-- #3426 · 2026-10-25 · 审查发现：尾帧恢复遇到正式文件写入失败时记录已消失、分镜尾帧字段仍为空，参考音频有同样的次序（ticket #3388）；无文件的结构记录降级时消耗记录却什么都没加回；ba1e82f7f 改为在落地事务内放置文件并写回；没拦住：没有对应规则
-
-### 一次删除或恢复跨目录、数据库与多个结构文件时，失败与取消的补偿覆盖全部改动
-去向：docs/standards/backend.md「一次删除或恢复跨目录、数据库与多个结构文件时，失败与取消的补偿覆盖全部改动」
-模式：先移动目录、再提交或改写数据库记录，失败时只回滚数据库，目录停在新位置；线程返回值因取消被丢弃，补偿拿不到落点；结构文件的回滚事务漏掉本次改写的某个文件
-代价：项目目录与任务、会话记录对不上，同名新项目继承旧记录；登记失败时版本历史永久丢失（严重度：数据·安全·真实花费）
-判定方式：需要判断
-- #3421 · 2026-10-25 · 审查发现：项目删除的记录提交失败时目录不回迁，829e07d02 补 `move_back`；恢复已删除项目时 move_out 被取消会丢失落点，23d212624 用 `run_noninterruptible_async` 收进不可中断边界（ticket #3389）；没拦住：提交失败没有对应规则，取消的一半有规则但没被执行（backend.md「线程里写入正式文件或创建临时产物时，用 `run_sync_transaction`」）
-- #3426 · 2026-10-25 · 审查发现：删集的回滚事务不含 `versions/versions.json`，登记失败时版本历史永久丢失，ba1e82f7f 修复；没拦住：没有对应规则
-
-### 文件移入删除记录后，只移走记录里的文件，不对原目录 `rmtree`
-去向：docs/standards/backend.md「文件移入删除记录后，只移走记录里的文件，不对原目录 `rmtree`」
-模式：先枚举文件移进回收站，再递归删除原目录；枚举之后新写入的文件没有进入记录，却被一并硬删
-代价：并发写入的项目记忆不可恢复地丢失（严重度：数据·安全·真实花费）
-判定方式：需要判断
-- #3421 · 2026-10-25 · 集成审查发现：项目记忆清空回收后 `rmtree` 会硬删刚写入的新文件，829e07d02 改为不再删除原目录，并加真实写入的边界用例（ticket #3381）；没拦住：有规则但没被执行（HARD-DELETE 检查要求标注，`# hard-delete` 写的「只剩空目录与符号链接」在并发写入下不成立）
-
-### 供应商返回之后的落盘与转码走不可中断段，公共助手也不例外
-去向：已晋升，见 #3413（让公共落盘助手默认满足不可中断要求，从架构上消除；规范里的文字规则已存在却没被执行）
-模式：后端复用 `save_image_from_response_item` 这类公共落盘助手，或自己用 `run_sync_transaction` 转码；写盘本身跑完，取消照常向外传播，其后的转码与产物提交被跳过
-代价：已计费的产物在取消或事件循环拆除时丢失（严重度：数据·安全·真实花费）
-判定方式：需要判断
-- #3361 · 2026-10-24 · 审查发现：`openrouter-images` 首版经 `save_image_from_response_item` 落盘、用 `run_sync_transaction` 转 PNG，248abe7e 改为在 `run_noninterruptible_sync` 内解码、写盘并转码；公共助手本身仍用 `run_sync_transaction`；没拦住：有规则但没被执行（docs/standards/backend.md「供应商返回之后的落账段不可中断」）
-
-### 等异步过程完成，以它的最后一步为信号，不轮询中途就可见的状态
-去向：docs/standards/testing.md「等待异步过程时，以它的最后一步为就绪信号」
-模式：异步过程分多步执行（切内存 → 落库 → 广播，或渲染 → effect 订阅，或数据到达 → 防抖刷新），测试在第一步可见时就继续，与后续步骤交错；只修出过失败的那个用例，同类用例保留同一等待写法
-代价：CI 偶发红，同一根因跨 issue 复发（严重度：常规）
-判定方式：需要判断
-- #3330 · 2026-10-21 · main CI 失败：集页场景 `waitForEntrance` 返回后计划刷新才经防抖发生，axe 在按钮淡入途中取色报 color-contrast（#3347 的 0202c760 修复）；没拦住：没有对应规则
-- #3331 · 2026-10-21 · main CI 失败：TestQueuedMessages 轮询内存 completed 后建流，CLI idle 结算的落库与广播尚未完成，多收一帧迟到的 completed（#3347 的 d97c9a6b 修复）；没拦住：没有对应规则
-- #3352 · 2026-10-22 · main CI 失败：原文框经 findByRole 等到时订阅聚焦请求的 effect 尚未提交，随后投递的请求被丢掉（#3359 的 2a79befe 修复）；没拦住：没有对应规则
-- #3353 · 2026-10-22 · main CI 失败：TestSendQueuedMessageNow 轮询日志条目后读托盘快照，读到已入日志、未出队的插队消息（#3359 的 f7d1ca13 修复）；没拦住：没有对应规则
-
-### 判断 CodeRabbit 是否已覆盖当前 HEAD，排除跳过审查的 walkthrough
-去向：`.agents/skills/pr-ai-review-loop/scripts/poll.sh` 新增 `is_review_skipped`，跳过通知不计入 `reviewed_current_head`；`test_walkthrough_head.sh` 加真实跳过通知的用例；reviewers.md 写明跳过时发送 `@coderabbitai review`
-模式：PR 以 draft 创建或作者是 bot 时，CodeRabbit 发出跳过审查的 walkthrough；poll.sh 对它仍报 `reviewed_current_head=true`、`is_in_progress=false`，不核对正文就会把未审记作通过
-代价：可能漏掉一家 reviewer 的覆盖（严重度：常规）
-判定方式：机械（poll.sh 识别跳过审查标记）
-- #3347 · 2026-10-21 · 审查循环自查：转 ready 后 poll 显示 CodeRabbit 已覆盖，读正文才发现是 draft 跳过通知，手动触发后才真正审查；没拦住：检查没接上
-- #3359 · 2026-10-22 · 审查循环自查：draft 时期 poll 报 CodeRabbit `reviewed_current_head=true`，没有任何 review，`walkthrough_head` 为空，正文是 draft 跳过通知；没拦住：检查没接上
-
-### 跨后端或跨路径改变同一能力维度的来源或处理口径时，先列出全部读点再改
-去向：docs/standards/general.md「改变某个能力维度的来源或处理口径时，列出全部读点一起改」（读点跨 `lib/backends`、`lib/generation`、`server/services` 等多个规范的适用路径，所以放进通用规范）
-模式：把能力来源切换为叠加用户覆盖后的有效能力，或把静默丢弃统一改为报错时，只改了显眼的几处，同一维度的其他读点（其余后端的载荷构造、测试连接、提交前预估、结算计量）仍按旧口径工作
-代价：缺失的首帧或参考图被跳过后照常出片计费；用户收窄的能力在测试连接里放行并真实扣费（严重度：数据·安全·真实花费）
-判定方式：需要判断
-- #3264 · 2026-10-19 · 合并后修复：内置供应商下用户添加模型的能力覆盖只接进规划层，执行闸门（#3302，#3312 修复）、DashScope 与可灵请求构造和首帧闸（#3323）、计量与预估及 Veo 音频开关（#3324，#3327 修复）仍读后端自身档案；没拦住：有规则但没被执行（ADR 0104、docs/standards/providers.md「每个能力维度只认一个来源，不在别处另写一份能力数值」）
-- #3312 · 2026-10-19 · 合并后修复：「后端发不出的输入改为报错」漏了 DashScope 首帧静默丢弃、OpenAI/Grok 用 `exists()` 跳过缺失文件、Sora 超发（#3313，#3314 修复）；执行闸门叠加了用户覆盖，测试连接 `trial_run` 没有同步（#3326，#3327 修复）；没拦住：没有对应规则
-
-### 递归删除来自参数或配置的目录前，先确认目录归属
-去向：docs/standards/backend.md「递归删除来自参数或配置的目录前，先确认归属」
-模式：脚本或工具接受 `--data-root` 一类的路径参数，重建时直接对其中的子目录 `rmtree`，不核对这个目录是不是自己建的
-代价：误指到真实数据目录时删掉全部用户项目（严重度：数据·安全·真实花费）
-判定方式：需要判断
-- #3304 · 2026-10-19 · 审查发现：性能基准 `scripts/perf/harness.py` 在 `--rebuild` 或缺少构建标记时 `rmtree(data_root()/"projects")`，`--data-root` 可指向任意目录，22f796f6 改为只接受空目录或带 `.arcreel-perf-bench` 哨兵的目录；没拦住：没有对应规则
-
-### 预填或默认值取自它实际生效的上下文中的合法取值
-去向：docs/standards/general.md「预填与默认值从实际生效的上下文中取合法值」
-模式：默认值只对某个供应商或模型成立，而它依附的值（所选模型、当前供应商）可能被推断或改成别家；默认值按全局或固定集合给出，没按实际生效的上下文校验
-代价：新建项目写入必然合成失败的组合；手动填写模型的提交必然失败并留下孤立条目，其他供应商的同名模型按它的价格计费（严重度：数据·安全·真实花费）
-判定方式：需要判断
-- #3283 · 2026-10-19 · 审查发现：修复首版按全局默认语音模型校正预填音色，没按显式指定的模型校正，cf672f7b 改为按实际写入的模型；没拦住：没有对应规则
-- #3264 · 2026-10-19 · 合并后修复：ManualEntryDialog 固定 4 种媒体类型、默认 text，可灵、Vidu 等没有 text 的供应商提交必失败并留下孤立条目（#3301，#3314 的 9f0a77e4 修复）；没拦住：没有对应规则
-
-### 拼进 `:path` 路由参数的 ID 在服务端拒绝 `.` 与 `..` 段
-去向：docs/standards/backend.md「拼进 `:path` 路由参数的 ID 在服务端拒绝点段」
-模式：把用户输入或第三方返回的 ID 拼进 `/{id:path}` 路由，只校验长度；WHATWG URL 把 `%2e` 也当点段规范化，前端编码挡不住
-代价：`a/../b` 读、改、删到同一供应商下的另一个模型（严重度：数据·安全·真实花费）
-判定方式：需要判断
-- #3264 · 2026-10-19 · 合并后修复：provider_models 的添加与改名只校验长度，含 `..` 段的模型 ID 操作到别的模型（#3299，#3314 的 7095518b 修复）；没拦住：没有对应规则
-
-### 改变对象标识时，按旧标识键控或引用的记录一起改写
-去向：docs/standards/backend.md「改变对象标识时，按旧标识键控或引用的记录一起改写」（四次出现分布在 `lib/agent`、`lib/project`、`server/routers`、`server/services`，都在 backend.md 的适用路径内）
-模式：换名恢复、换号恢复、改模型 ID、数据根搬迁这类改变对象标识的路径，只改了对象本身和显眼的一两处引用；按旧标识派生键的记录（SDK 会话的 `project_key`、产物清单登记）或引用旧标识的设置（项目模型设置）留在旧值下
-代价：Agent 续聊报找不到对话；已有产物读作缺失，界面引导重新生成；项目悬空引用旧模型 ID，之后同 ID 的新模型被静默接管（严重度：常规）
-判定方式：需要判断
-- #451 · 2026-10-26 · 合并后修复：SDK 会话记录的 `project_key` 由项目目录的绝对路径派生，数据根换了绝对路径（桌面端换机器、白标改名、改 `ARCREEL_DATA_DIR`）后全部会话续聊失败，启动时没有改键（#3436，#3473 的 247db4556 修复）；没拦住：没有对应规则
-- #3264 · 2026-10-26 · 合并后修复：自定义供应商的模型改 ID 或删除时只处理了全局设置，项目里引用它的 10 个模型设置键与 `model_settings` 没有同步（#3433，#3476 的 9ff036906 修复）；没拦住：没有对应规则
-- #3421 · 2026-10-26 · 合并后修复：已删除项目换名恢复为 `demo-2` 后，会话归属改了，SDK transcript 仍留在旧路径的 key 下，续聊报 `No conversation found`（#3435，#3473 的 f9016f61d 修复）；没拦住：没有对应规则
-- #3471 · 2026-10-26 · 自查：分镜与视频单元换号恢复只搬媒体文件与版本历史，产物清单登记没有换到新编号下，恢复后的产物读作 missing，合并前改为随新编号补录登记（b50f34c1a）；没拦住：没有对应规则
-
-### 跨作用域的交互态收为一个带代号的会话，异步写入只在代号仍有效时落地
-去向：docs/standards/frontend.md「切换作用域时，旧作用域的交互态整体作废，异步写入只在代号仍有效时落地」（三次都是需要判断的遗漏，分别出在 hook 的确认态、store 的分页状态与会话错误，没有能统一判定的检查）
-模式：hook 或 store 的交互态（确认请求、在途、失败原因、分页游标与总数）分散在多个 state 里，作用域切换只靠 abort 一个请求或清空其中一部分；abort 管不到切换后才返回的其他异步写入，几条并列的请求源各自作废也挡不住彼此，旧作用域的结果写进新作用域，或旧状态留到新作用域
-代价：在一个项目里点确认，实际取消的是另一个项目的任务，或界面显示另一个项目的失败信息（严重度：常规）
-判定方式：需要判断
-- #3412 · 2026-10-24 · 审查发现：`useTaskCancellation` 先后补了作用域归属（45e77af90）、渲染期清空（bf9e5c5c6），第三轮（31270f1ca）才把确认态收为带 `gen` 的单一会话；根因：每轮只修 reviewer 指出的那条写入路径，没有先列出作用域切换后仍会落地的全部异步写入；没拦住：没有对应规则
-- #3258 · 2026-10-25 · 合并后修复：使用记录两个视图各用一个刷新协调器、共写 `total`、`nextCursor`、`pageIndex`，切换视图后旧视图的请求晚到，改写总数，下一页把生成记录的游标发给会话接口返回 422（#3439，#3492 的 77b54be96 修复，改为共用一个协调器）；没拦住：没有对应规则
-- #3441 · 2026-10-25 · 合并后修复：切换项目和新建会话只重置时间线、不清错误，上一会话的错误提示留在新项目或新会话里，只有 `switchSession` 会清（#3492 的 e0e3b0dc0、2700f4a31 修复）；没拦住：没有对应规则
-
-### 一个值的格式或取值范围只在一处定义，产出方、校验方与消费方都引用它
-去向：docs/standards/general.md「一个值的格式或取值范围只在一处定义，产出方、校验方与消费方都引用它」（四次分属编号、定义数值、条目类型与 revision，各自已补往返测试；没有一项检查能统一判定不同值的口径，所以写成审查规则，要求改动时补同样的往返测试；跨前端、后端与子包，放进通用规范）
-模式：产出方放宽或改变了一个值的格式或取值范围（序号位数、数值类型、条目类型、算法前缀），校验方或消费方仍按旧口径写死，系统自己产出的合法值被自己拒绝或误读
-代价：编号过百的集无法完成内容确认；合法端点定义无法生成视频；市场条目装不上；外部 Agent 的合法编辑被判成并发冲突（严重度：常规）
-判定方式：机械（拟用往返测试：产出方在边界上的真实输出驱动每个校验方与消费方）
-- #3471 · 2026-10-26 · 审查发现：`format_item_id` 能发出 `E1S100`，`NarrationScriptPlanSegment.segment_id` 与 `collect_narration_violations` 只接受两位序号，c54fc1698 改为 `\d{2,}`；没拦住：没有对应规则
-- #2163 · 2026-10-25 · 合并后修复：声明式端点定义的 `max_reference_images: 1.0` 通过 JSON Schema，能力一致性校验只认 `int` 而误拒（#3447，#3494 的 0ea7b2976 修复）；修复初版只改了校验，集成审查又发现视频能力解析抛 ValueError、图片参考图上限读作 0（ef29215c0）；没拦住：没有对应规则
-- #2778 · 2026-10-25 · 合并后修复：828502274 起允许把 ComfyUI 端点分享到官方市场，安装弹窗仍要求定义带 `submit` 与 `poll`，合法的 ComfyUI 条目无法安装或更新（#3440，#3492 的 0de8c34f9 修复）；没拦住：没有对应规则
-- #3484 · 2026-10-26 · 验收发现：远程 MCP 的 `get_script_plan_content` 返回带 `sha256-v1:` 前缀的 revision，`open_draft` 与 `get_workflow_plan` 返回裸 hex；修复初版只兼容正式草稿基线与 stale rebuild，集成审查发现其余回传入口与覆盖回执仍只认一种写法（#3505 的 757d94853、10965b85d 修复）；没拦住：没有对应规则
+## Results and exceptions of async tasks are picked up on every path
+
+### Actor commands are completed by `SessionActor._dispatch` or `_closed_error()` on every exit path, with cancellation turned into `_ActorClosed`
+Pattern: writing a separate complete logic in an actor handler or exit path, missing the branches for cancellation, commands dequeued in the same round, or commands enqueued after exit; or handing `CancelledError` to the caller as-is
+Cost: callers waiting on `cmd.done` hang forever, or `CancelledError` slips past `except Exception` and escapes the HTTP request, leaving queued messages and idempotency keys behind (severity: routine)
+Detection: judgement required
+- #3139 · 2026-10-13 · Found in retrospective (Spec #3101): when the actor was cancelled, in-flight, queued and post-exit-enqueued commands got CancelledError or a false success; review of the same change (#3138) also found that commands dequeued in the same round as a message stream exception got the wrong completion value; not caught: no corresponding rule
+- Demoted · 2026-10-19 · from docs/standards/agent-runtime.md "Completion of actor commands is funnelled only through `SessionActor._dispatch`"
+
+### Shared tasks detached from their callers retrieve their own exceptions
+Pattern: starting a shared computation with `create_task`, with callers only waiting on it via `asyncio.shield`; after all requests are cancelled (client disconnects) the computation errors, and nobody retrieves this task's exception any more
+Cost: at every peak, misleading unhandled exceptions such as "Task exception was never retrieved" are left in the logs (severity: routine)
+Detection: judgement required
+- #3304 · 2026-10-19 · Post-merge fix: `RequestCoalescer.run` in `server/routers/_coalesce.py` errored after all requests disconnected, and the exception was never retrieved; detected by #3321's performance benchmark (#3320), 2b887a16 added `add_done_callback` to retrieve the exception; not caught: no corresponding rule
+
+### When a dependency swallows cancellation, the background loop restores cancellation at its own checkpoint rather than relying on the stopper to resend repeatedly
+Pattern: the background loop receives a native cancellation only once, the dependency (e.g. an anyio task group) merges it with its own cancellation and swallows it, and the loop goes on into a long sleep; the stopper switches to repeatedly resending `Task.cancel()`, which in turn interrupts the dependency's resource teardown inside `shield`
+Cost: application shutdown hangs until the timeout backstop, tests occasionally get stuck; or the stopper returns before the connection is returned (severity: routine)
+Detection: judgement required
+- #3346 · 2026-10-25 · Post-merge fix: cancellation of the model catalogue's official sync arrived in the same round as anyio's scope cancellation during connection setup and was swallowed by the task group, so the sync slept into its one-day interval and `TestAuthIntegration` shutdown occasionally hung for 120 seconds (#3420, fixed by #3454's 187e1a5a8; #3557's c0232c7e0 stopped the lifespan tests from starting the official sync, #3479); the first version of that PR switched to repeatedly resending the cancellation, which interrupted the SQLAlchemy session's teardown inside shield; after review pointed this out it was changed to restoring cancellation at a checkpoint inside the task; not caught: no corresponding rule
+
+### When adding a cancel entry point for running tasks, reject cancellation of tasks that have already passed the provider return point
+Pattern: the cancel entry point only checks whether the task is still registered, not whether it has already received the provider result; the wrap-up phase (terminal-state marking, writing to disk, releasing the slot) can be interrupted, and the result is deleted as an in-flight cancellation; when the backend swallows a cancellation during the write to disk and wraps up as usual, the canceller doesn't re-check the terminal state after the task finishes either
+Cost: billed generation results are lost; the ledger records success but there is no output (severity: data · security · real spend)
+Detection: judgement required
+- #2185 · 2026-10-25 · Post-merge fix: an endpoint trial run received a cancellation within the write-to-disk window, the result directory was deleted, and the ledger still showed success (#3442, fixed by #3494's e546d674a); integration review then reproduced that after the backend swallowed a cancellation during the write to disk, cancel and shutdown still deleted the successful result (ef29215c0); not caught: no corresponding rule (the cancel entry point predates the requirement in backend.md "The accounting phase after the provider returns is non-interruptible" covering cancel entry points; when #3181 added the rule, existing entry points weren't re-checked)
+- Reviewed, not promoted · 2026-10-27 · backend.md "The accounting phase after the provider returns is non-interruptible" already requires the whole phase to be wrapped in `run_noninterruptible_async` before adding `cancel()`; this was an existing entry point predating the rule and has been brought into line with it. The trial run is the only cancel entry point for running tasks in lib and server, so adding another rule would have no change to hit during review
+- #3494 · 2026-10-26 · Post-merge fix: after the trial run rejected a late cancellation it returned 404, and the frontend still cleared its state per "404 means the run no longer exists" and showed it as cancelled, so the user couldn't see the billed result the server had kept (#3498, fixed by #3530's d251541dd; 11ab19aac added non-terminal resume polling and generation checks); not caught: no corresponding rule
+- Reviewed, not promoted · 2026-11-01 · The new record is that the cancel interface gave 404 the meaning "too late, the result is still kept" and the frontend caller didn't follow; this falls under general.md "A value's format or range is defined in only one place, and producers, validators and consumers all reference it" (promoted 2026-10-30, later than #3494); the trial run is still the only cancel entry point for running tasks in lib and server
+
+## Changes don't cover all sites of the same kind
+
+### Consistency checks enumerate from the members themselves, so new members missing both the marker and the registration are also found
+Pattern: the check only compares two lists, "members with the marker" and "the registry", so when a new member misses both the marker and the registration, neither side sees it
+Cost: enqueue methods bypass the action layer; there is no busy marker on submit and no dedup hint for duplicate submissions (severity: routine)
+Detection: mechanical (proposed `api.enqueue-methods.test.ts`, identifying enqueue methods by request shape rather than only by the `@enqueue` marker)
+- #2872 · 2026-10-22 · Post-merge fix: `submitAssetSheetBatch` had neither `@enqueue` nor an entry in `ENQUEUE_METHODS`, and `AssetSheetBatchDialog` called it directly, bypassing the action layer (introduced by 721d2bd5, found in #3356 review, followed up in #3357, fixed by #3372); not caught: check not wired up
+
+### An index that decides a file is "unreferenced" enumerates from every entry point that reads files, and compares paths by file identity
+Pattern: when building a new reference index, only the formal output registry is enumerated, missing workflow drafts and quarantined files, queued task records and legacy compatibility paths; or paths are compared by request path string, so on case-insensitive or Unicode-normalising file systems an alias of the same file is judged unreferenced
+Cost: the generic delete entry point moves in-use files into the project recycle bin, project references immediately break, and later tasks report file not found (severity: routine)
+Detection: judgement required
+- #3418 · 2026-10-25 · Found in review: the file view's reference index successively missed four categories — NFC/NFD and case aliases, planning drafts written by `write_quarantine`, queued `grids/<id>.json`, and legacy `script_plan_*.md` — patched over several rounds (d554c9657, c55bf3e96, 61f63de53); the alias regression tests are skipped on case-sensitive, non-normalising file systems and don't run on Linux CI; not caught: no corresponding rule
+
+### Resume replays the submit-time context, and the layers stacked on the client work from the same context
+Pattern: resume switches the client's base back to the submit-time value, but the path override layer stacked on the transport, which recognises requests by the current base prefix, isn't kept in sync and sends requests it doesn't recognise unchanged
+Cost: when only the base path was changed while a task was in flight, after restart-resume the request goes to the original path and is judged expired, and the paid video generation can't be retrieved (severity: data · security · real spend)
+Detection: judgement required
+- #3189 · 2026-10-25 · Post-merge fix: after a custom provider changed only its base path, resume requests didn't hit the path override, returned 404 and were judged expired (#3443, fixed by #3494's c45b2aa95); not caught: no corresponding rule
+- Reviewed, not promoted · 2026-10-27 · Only one layer, `lib/custom_provider/path_overrides.py`, rewrites requests by base; after the fix it matches on the submit-time base and has a resume test; it requires all four conditions — custom provider, task in flight, only the base path changed, resume happening — so a standard written for it would hardly have any change to hit during review
+
+### When the same flow has a separate page implementation per mode, adding or changing one side is checked against the other side's interactions
+Pattern: the reference-to-video confirmation page and the drama content confirmation page are implemented separately, each with its own editable fields and post-confirmation destination, and interactions added on one side are missing on the other
+Cost: on the reference mode confirmation page the source text is read-only, so when the source text isn't acceptable the user can only re-plan; after confirming the split it automatically expands the agent panel and prefills a continuation message, the opposite of the web full-flow design (severity: routine)
+Detection: judgement required
+- #1546 · 2026-10-25 · Post-merge fix: the reference script confirmation page rendered `source_text` as read-only, while drama's `ScriptReviewGate` allows editing the source text (#3448, fixed by #3492's 3308325ea); not caught: no corresponding rule
+- #2872 · 2026-10-26 · Post-merge fix: the reference script confirmation page's `handleConfirmed` unconditionally called `prefillAssistant`, while `ScriptReviewGate` only prefills on the "交给 Agent" (Hand to agent) button (#3496, fixed by #3512's dfae750b6); not caught: no corresponding rule
+
+## Scope of exception catching and propagation
+
+### Structured exceptions carrying user guidance are let through separately before existing broad catches, and propagated to every entry point
+Pattern: adding an exception carrying user guidance (e.g. `ModelNotInCatalogError`, inheriting `ValueError`) and handling it only at some entry points, while existing `except Exception` clauses on the other call chains swallow it into a generic error
+Cost: the user doesn't see guidance like "go to provider settings and reselect the model" (severity: routine)
+Detection: judgement required
+- #3248 · 2026-10-19 · Post-merge fix: four paths — agent tool video capability lookup, draft promotion, post-upload generation overview, and image-to-image check — swallowed ModelNotInCatalogError (#3300, fixed by #3314's c6040abf); not caught: no corresponding rule
+
+### Unexpected exceptions caught by a broad catch-all are reported as task failures, not wrapped in an exception type meaning an expected rejection
+Pattern: at the end of a handler, `except Exception` wraps all exceptions in an "expected rejection" class, and downstream maps rejections to "modify the input"; internal errors and genuine provider rejections take the same exit
+Cost: users and external agents are directed to modify their input when a retry would actually succeed (severity: routine)
+Detection: judgement required
+- #2085 · 2026-10-30 · Post-merge fix: the text task handler wrapped any exception as `TextGenerationError`, the problem code landed as `generation_refused`, the read side then completed it as `fix_input` (the completion added by #2109), and even backend construction failures prompted "please modify the input" (#3483, fixed by #3548's eb8d5bda1); not caught: no corresponding rule
+
+### A shared resolver expresses "not found" with only the one agreed exception, and the fix goes in the resolver
+Pattern: when adding a new resource branch to a shared resolver, a lower-level tool throws a different exception type (e.g. `ValueError`) for malformed input while callers only catch the agreed `KeyError`; once found, the catch is added in only one caller, and the other callers are still blown through
+Cost: one bad ID turns the whole batch into `internal_error`, and the legitimate entries in the same batch fail along with it (severity: routine)
+Detection: judgement required
+- #2361 · 2026-10-30 · Post-merge fix: the derivative branch threw `ValueError` via `split_derivative_artifact_id`, `edit_images` only caught `KeyError`, and the whole batch landed as internal_error; #3487 only added the catch in the `inspect_images` caller, #3488 was opened separately, and #3548's 448f71cb6 changed the shared resolver to convert it to `KeyError`; not caught: no corresponding rule
+
+## Repository conventions and automation not wired up to checks
+
+### Regression tests bundled with skill scripts are wired into the gate and CI
+Pattern: script tests such as `.agents/skills/*/scripts/test_*.sh` don't belong to any domain of `scripts/gate.py` or CI; after changing the script under test, only the one directly related test was run, other tests extracting the same function were already broken, and the gate and CI passed anyway
+Cost: skill script regression tests silently stop working and this is only discovered at the next change (severity: routine)
+Detection: mechanical (proposed: add a domain to `scripts/gate.py` covering `.agents/skills/**/scripts/test_*.sh`, and wire it into CI)
+- #3393 · 2026-10-22 · Self-check: 02445565 added a `cr_review_skipped_body` dependency to `cr_walkthrough_rest`, and when `test_quota_alerts.sh` extracted that function jq reported it undefined (exit code 3); `gate.py --changed` only hit the tests and conventions domains, CI was all green, and only 0efd7d2b fixed it; not caught: check not wired up
+
+### External skills keep a single master copy only in `.agents/skills/`; `.claude/skills/` holds only symlinks pointing to it
+Pattern: when installing a skill with the tool's own install command (e.g. `react-doctor install`, `skills add -a claude-code`), the tool writes a physical directory copy into `.claude/skills/`, overwriting the existing symlink, or installs another copy in the subdirectory the command runs from (e.g. `frontend/`), so the same skill exists with multiple contents
+Cost: master and copies diverge, the skill version the agent reads is indeterminate, and updates are missed when following upstream (severity: routine)
+Detection: mechanical (proposed `scripts/audit_conventions.py`: `.claude/skills/*` are symlinks pointing to `../../.agents/skills/<same name>`, with skills used only in development allowlisted; `.agents/skills/` appears only at the repository root)
+- #3407 · 2026-10-24 · Self-check: `.claude/skills/react-doctor` was a physical copy and `frontend/.agents/skills/react-doctor` a redundant copy; after reinstalling as recommended, the CLI again overwrote the symlink with a copy; root cause: the install tool writes copies by default and is unaware of this repository's conventions; not caught: check not wired up — `audit_conventions.py` doesn't check the shape of skill directories
+
+### When adding a write step to a workflow-generated PR, update the integrity check for that PR at the same time, and rehearse it once with data that produces changes
+Pattern: adding a step that commits new files to a workflow-generated PR such as the Release PR, verifying only the step itself, without updating that PR's change allowlist or having that PR run through CI with real changes; the problem only surfaced the first time it actually produced changes (see #3411)
+Cost: the release is blocked and a fix PR has to be opened ad hoc (severity: routine)
+Detection: mechanical (proposed workflow static check: paths that the workflow `git add`s on the release branch must be covered by the `release-integrity` allowlist)
+- #3346 · 2026-10-24 · Post-merge fix: the catalogue snapshot automatically refreshed by the release PR wasn't in the `release-integrity` allowlist, and the new snapshot delisted an Ark model hard-coded in tests, so two checks failed on Release PR #3114 (#3409 allowed the snapshot path, #3410 switched to taking the default model from the catalogue); root cause: when the snapshot refresh step was merged, it wasn't rehearsed on a Release PR that would produce snapshot changes; not caught: no corresponding rule
+
+### When a shared contract sample changes, trigger the validation domains of all readers
+Pattern: frontend and backend tests share one input sample, and the gate, selecting domains by path, only covers the directory the sample lives in; when only the sample is changed, only one side runs, and the other side's contract tests that read it are skipped
+Cost: when the frontend and backend contracts diverge, the gate and CI still let it through (severity: routine)
+Detection: mechanical (proposed `tests/unit/scripts/test_gate.py`: shared sample paths select both the frontend and backend domains)
+- #3492 · 2026-10-26 · Found in integration review: the newly added `frontend/src/test/contracts/reference-unit-add-requests.json` only triggered the frontend domain, and the backend tests reading it didn't run when only the sample was changed; 2700f4a31 added the path to the domain-filter of `scripts/gate.py` and CI; not caught: check not wired up
+
+### After bulk-rewriting test files with a script, verify that every deleted test was deleted intentionally
+Pattern: when replacing whole stretches of test code by anchor slicing, the range captured test classes beyond the insertion point; the deleted tests are no longer collected, and the full test run is still all green
+Cost: existing regression tests silently disappear, and the drop in coverage is invisible (severity: routine)
+Detection: mechanical (proposed: the gate compares `pytest --collect-only` node IDs between base and HEAD and lists the disappeared nodes, with moved or intentionally deleted ones explained in the PR; comparing only counts would let "delete one, add one" through)
+- #3543 · 2026-10-30 · Self-check: slice replacement accidentally deleted three classes in `tests/unit/server/test_auth.py` — TestCreateAndVerifyToken, TestCheckCredentials, TestEnsureAuthPassword — restored after comparing each file's collection results (the final version 249b7e622 has all three classes); not caught: no corresponding rule (the gate doesn't compare collection counts)
+
+## Unclear ownership of frontend async state under scope switches and overlapping operations
+
+### When two pieces of data are invalidated at different times, each uses its own AbortController
+Pattern: requests attached to the wrong cancellation scope: project-level data (session list, skill list) and session-level loading share one controller, so one session operation discards slow-responding project-level data as stale; or project-level requests aren't included in the project cancellation scope, and after a project switch late responses overwrite the new project's data
+Cost: the UI stays on the old list, or shows another project's data (severity: routine)
+Detection: judgement required
+- #1280 · 2026-07-24 · Post-merge fix: the terminal-state session list refresh wasn't included in the project cancellation scope, and after a project switch a late response overwrote the new project's session list; not caught: no corresponding rule
+- Demoted · 2026-10-19 · from docs/standards/frontend-async.md "Cancellation scopes are divided by data lifecycle"
+
+### In list UIs, write-operation occupancy lives in a layer that isn't unmounted by view switches, and successful results are written back to the local list immediately
+Pattern: list-type UIs record write-operation occupancy in component-local state and only trigger a refetch after a successful write; with overlapping operations, slow refetches or switching sections unmounting the component, occupancy is released early or lost, and records that are completed or in flight become operable again
+Cost: restore or delete requests are sent again, and a failure is reported after a success message (severity: routine)
+Detection: judgement required
+- #3418 · 2026-10-24 · Found in review: the project recycle bin's occupancy was changed over 5 rounds: bucketed per record (d554c9657), clearing disabled while restoring (f62c8fa84), removed from the local list first after success and then occupancy released (ffb419671, 325a6921d), switching sections doesn't unmount (bb1f14414); root cause: occupancy and write results had no unified owning layer and were patched item by item; not caught: the first two rounds had rules that weren't followed (frontend.md "Protection state is bucketed by full scope; stackable ones use counts", "Controls disabled with resource occupancy check occupancy on open and on submit, and disable sibling controls at the same time"); the loss of occupancy on component unmount had no corresponding rule
+
+## Determining and assigning object identity
+
+### When deriving file names from names and claiming files on that basis, the claiming rule doesn't overlap with the derived names of other valid names
+Pattern: files are named by derivation as `<name>_<n>`, while the name itself may end in `_digits`; when claiming, files whose "stem equals the name" are also counted as one's own, so another object's sequence-numbered file is treated as one's own and renamed, deleted or restored
+Cost: another object's original image is carried off and becomes an orphan file, references dangle, and existing damage doesn't self-repair (severity: data · security · real spend)
+Detection: judgement required
+- #1730 · 2026-10-26 · Post-merge fix: with both products `Cup` and `Cup_1` present, renaming, deleting or restoring `Cup_1` would take `Cup`'s `Cup_1.png` with it (#3431, fixed by #3472's 914ee4f11: `renamed_file_stem` only recognises `name_<n>` when `allow_sequence`); not caught: no corresponding rule
+- Reviewed, not promoted · 2026-10-26 · Claiming of sequence-numbered files is now funnelled through the single point `renamed_file_stem`, which rename, delete and restore all go through, and unit tests cover names ending in `_digits`; there is no second piece of logic in the repository that derives file names from names and then claims them, so a standard written for it would have no change to hit during review
+
+### Entry numbers are only assigned, never reused; "used" is determined by a persistent high-water mark
+Pattern: when taking a new number, only existing entries are avoided, or whether a number has been used is judged from records that are normally cleaned up, such as the recycle bin or version history; after deletion or cleanup an old number is reassigned, and edit clips, crops and history attached by number get hooked onto new content
+Cost: old edit clips show as ready again, and old crops are silently applied to the new video (severity: routine)
+Detection: judgement required
+- #2876 · 2026-10-26 · Post-merge fix: `new_item_id` only avoided existing entries, so three paths — adding after deleting the last unit, the agent inserting a segment, and overwriting the formal script — would all get an old number back (#3430, fixed by #3471's b50f34c1a); within that PR, whether a planned number could be kept was then decided by cleanable deletion records, and review found that confirming again after emptying the recycle bin still reused the old number; not caught: no corresponding rule
+
+### Before deciding path ownership by field value, normalise the value into a project-relative path first
+Pattern: each time review pointed out one form of writing (dot segments, absolute paths, Windows drive letters, case), one more was patched, without first normalising the field value into a project-relative path and then deciding; or a defence that only arises when project files are hand-edited was accepted first and withdrawn in the next round
+Cost: the same decision function was changed for 4 rounds in a row, each round requiring the full gate run, exhausting the review budget (severity: routine)
+Detection: judgement required
+- #3500 · 2026-10-26 · Self-check: the ownership decision for shared reference copying patched one path form per round for 4 rounds in a row, accepting and then withdrawing a directory symlink check along the way, and finally in 2497ed391 changed to normalising first and then deciding; not caught: there was a rule but it wasn't followed (general.md "Defend only against normally reachable scenarios")
+
+## Tests don't reach the real contract
+
+### The frontend and backend's interpretation of the same request is constrained by one shared sample, not fixed separately by each
+Pattern: frontend tests only assert "a request was sent" or pin the frontend's own restriction, while backend tests pin a different interpretation; each side goes green on its own, but the contracts are opposite
+Cost: a user-visible feature is wholly unusable on main, or the frontend blocks an operation that both the backend and the Spec allow (severity: routine)
+Detection: judgement required
+- #1956 · 2026-10-25 · Post-merge fix: adding a unit in reference-to-video always sent an empty body, the backend rejected it with 409 needs_replan, and an episode started blank couldn't create its first unit (#3437, fixed by #3492's 4c50d24ae; the request body samples were moved to `frontend/src/test/contracts/`, shared by frontend and backend); not caught: no corresponding rule
+- #2535 · 2026-10-25 · Post-merge fix: the frontend disabled deletion when only one storyboard frame was left, pinned by a frontend test, while the backend allowed deleting down to zero, covered by an integration test (#3438, fixed by #3492's bfd1a695c); not caught: no corresponding rule
+
+### When changing the thread or context in which backends are constructed, cover the construction of every built-in backend with real SDK clients
+Pattern: moving construction into another execution context such as a worker thread, while the existing construction tests all replace the SDK client factory, so they can't detect the SDK construction's own requirements on the thread or event loop
+Cost: all generation for some provider fails before the request is sent, only discovered at acceptance (severity: routine)
+Detection: mechanical (proposed pytest: via `assemble_backend` without replacing SDK clients, parameterised construction of all built-in backends)
+- #3170 · 2026-10-26 · Post-merge fix: from 4aae99f2e on, built-in backends were constructed in `asyncio.to_thread`, `xai_sdk.AsyncClient` couldn't get an event loop, and Grok text, image and video all failed (#3482, fixed by #3494's ce46d4f44, which also added the parameterised construction test); not caught: check not wired up (the Grok tests all replaced `create_grok_client`)
+
+### Read-only tests of preview endpoints compare the bytes and file set of project files
+Pattern: preview reuses the submit path's loader, which performs a compatibility migration and writes back when reading; the test only asserts that no task was enqueued, so it can't detect that the preview wrote formal files
+Cost: merely opening or cancelling the confirmation dialog causes project writes the user didn't confirm (severity: routine)
+Detection: mechanical (proposed test: all files of a temporary project are byte-identical before and after preview)
+- #3512 · 2026-10-27 · Found in review: the batch preview of reference mode "补齐视频" (Fill in videos) wrote back a duration compatibility migration via `load_script` (#3503's implementation, fixed by c04716750); not caught: no corresponding rule
+
+### Every branch of an async entry point has at least one test that runs through with real files, so the blocking guard can cover it
+Pattern: some branch of the entry point relies entirely on test doubles in tests or has no test, and the synchronous file I/O and digest computation in the branch stay on the event loop; neither lint nor the blocking guard reports it
+Cost: during batch rendering the event loop is occupied, the endpoint takes tens of seconds, and the frontend gets 502 (severity: routine)
+Detection: judgement required (the I/O part is judged mechanically by the blocking guard, provided the branch has a real-file test; the guard can't judge pure-CPU stretches)
+- #1892 · 2026-10-29 · Post-merge fix: the reference-to-video branch of `WorkflowPlanner._video_admission` synchronously read the output inventory and computed digests on the event loop, which together with per-unit parsing in cost estimation (#1786) and per-frame decoding of the contact sheet (#2911) occupied the event loop, and the endpoint took 27–88 seconds (#3520, #3532's e0c4887b8 moved it into a worker thread, 985c4bf5f added a real-file test); not caught: check not wired up (the blocking guard only intercepts call chains the tests reach, and this branch had no real-file test)
+
+### The mirror layer and input layer of an overlay editor share one set of typography classes, and tests assert both layers' typography match
+Pattern: the coloured mirror layer (`pre`) and the transparent input layer (`textarea`) each have their own typography classes; after removing one of the classes, browser default styles or preflight make the two layers' fonts diverge; the test only asserts the absence of a certain class
+Cost: the caret and selection drift from the visible text, more and more towards the end of the line (severity: routine)
+Detection: mechanical (proposed: vitest asserts both layers share the same typography constant, or compare computed styles in a page-level test)
+- #3067 · 2026-11-01 · Post-merge fix: after removing `font-mono` from the reference-to-video prompt editor, `pre` picked up preflight's monospace font while `textarea` inherited a proportional font, misaligning the caret with the coloured text (fixed by #3516's 740cd892c); not caught: check not wired up (the test only asserted that neither layer had `font-mono`)
+
+## Project migrations treat input as already stable and validated
+
+### Migration steps that rewrite inventory registrations also validate the import path with an enveloped archive exported by the previous release
+Pattern: when a migration step shifts the basis of outputs, it is only validated on projects upgraded in place; on archive import the migration chain runs on a staging directory with no inventory, registrations in the envelope are restored as-is, and the change in basis interpretation makes existing outputs stale immediately on import; after the import path was added, it was then patched item by item for key changes, image moves and identical bytes
+Cost: after importing an archive exported by an old version, storyboard images and grids referencing assets are all judged stale; the same fix went back and forth for 3 rounds (severity: routine)
+Detection: mechanical (proposed migration test convention: a migration step returning `ArtifactBackfillOutcome` must have a freshness assertion "enveloped archive exported with the previous release's schema → imported by current code")
+- #3472 · 2026-10-26 · Found in review: v18→v19 rewrote the basis for storyboard images and grids, and after importing a schema 18 enveloped archive the grids and storyboard images were all stale; changed to materialise the envelope registrations into a staging inventory before import and shift it along with the migration chain; afterwards there was one more round of rework each for the chain-head normalisation's key change losing content digests and for identical-byte derivatives being impossible to pair uniquely (41581966a); not caught: no corresponding rule (the migration test requirements in `docs/agents/project-migrations.md` at the time only covered in-place upgrade via `migrate_project_dir`)
+
+### Freeze all source content before migration copying, and roll back source files together with references when the commit fails
+Pattern: multiple objects cross-reference each other's files, the migration copies and overwrites targets in object order, then reads the next source from a path that has already been overwritten; when freezing happens only in memory and there's no rollback for overwrites on failure, retrying after a commit failure still cross-contaminates content
+Cost: after the upgrade, objects point to someone else's content, and the original content survives only as a retained copy (severity: data · security · real spend)
+Detection: judgement required
+- #3500 · 2026-10-26 · Found in review: when Alice and Bob shared reference files bidirectionally, after migration Bob got its own original content rather than Alice's content it originally referenced; after injecting an OSError at commit time, a retry cross-contaminated again (#3428's implementation, fixed by 2497ed391, which also added full migration chain and failure-retry tests); after merge, when #3530 extended the same copying to asset images, integration review found again that the copy destination wasn't in the transaction snapshot, so after a commit failure the destination had been overwritten by the copy and the original content survived only as a retained copy (11ab19aac brought the destination and retained copy into the transaction and moved them back on failure); not caught: no corresponding rule (the original regression only asserted rollback of the project and inventory)
+- Reviewed, not promoted · 2026-10-27 · This was a one-off splitting of shared files in the v5 namespace migration, which already has full migration chain regression tests; no other migration step copies and overwrites in object order, so a standard written for it would have no change to hit during review
+
+### Before a migration uses names or paths from project files to build write targets, constrain them within the project directory as untrusted input
+Pattern: the migration builds copy and move targets from asset names or field values in `project.json`, assuming these values have already been validated; the import package runs the migration chain before validation, and `..` segments in names carry writes out of the project directory. The source path had an out-of-bounds check; the target path didn't
+Cost: importing a crafted project package can write or move files outside the project directory (severity: data · security · real spend)
+Detection: judgement required
+- #3500 · 2026-10-26 · Found in review: chain-head shared reference copying built targets from unvalidated asset names, and both the schema 5 staging tree and chain-head normalisation paths could write outside the project directory (#3428's implementation, fixed by 2497ed391: assets whose names contain path separators are no longer copied); after merge, #3530's integration review found again that shared file copying resolved the real path before checking whether it was a link, so source links were copied as ordinary files, and when the target directory was a link the copy was written outside the project (11ab19aac changed to checking links segment by segment and rejecting when the target directory is a link); not caught: no corresponding rule (backend.md "When an untrusted path lacks `O_NOFOLLOW`, verify file identity after opening" governs how files are opened, not targets built from field values)
+- Reviewed, not promoted · 2026-10-27 · This only occurs in this one migration step, which now rejects names containing path separators at the entry point and has tests; all other migration steps' write targets are generated by the server itself. Keep counting first; if it occurs again, consider moving name validation of import packages ahead of the migration chain to eliminate it architecturally
+
+## Tests unstable under full-load complete runs
+
+### Tests depending on lazy-loaded modules finish loading the module separately first, then wait for the rendered result
+Pattern: when verifying number formatting via a lazy-loaded chart, the cold module's transform, loading and data rendering are all squeezed into the query's default wait; a single file passes, but under full parallel runs the first assertion times out
+Cost: the full frontend suite fails intermittently, blocking delivery of unrelated changes and steering investigation towards language or store leaks (severity: routine)
+Detection: judgement required
+- #2418 · 2026-10-26 · Reproduced on main baseline: the trend value assertion in `UsageRecordsSection.trend.test.tsx` timed out twice in the stage full gate; on failure the data, language and timing were all normal, and the table was still waiting for the lazy-loaded chart (#3500's 2497ed391 preloads the real module in `beforeAll`); not caught: no corresponding rule
+
+
+### Tests that create concurrency with real threads assert only results that don't vary with scheduling, and confirm timing under full-load complete runs
+Pattern: a test with real busy threads plus real stack sampling used a deduplicated count to indirectly prove the stack was captured every time, and the result split depending on where scheduling landed; the scale was only validated alone or in targeted loops, and timed out under full parallel runs; when review pointed it out per the timing rule, it was dismissed on the grounds that "the assertion is determined by a fake clock"
+Cost: the full gate fails intermittently, blocking later stages; the same test was changed over 3 rounds (severity: routine)
+Detection: judgement required
+- #3532 · 2026-10-30 · Post-merge fix: the busy-thread stack sampling test failed intermittently under full parallel runs; #3544's 549c5e617 switched to per-iteration assertions not depending on the same stack, which then timed out under full load, and #3545's bf6b83566 shrank it to 2 threads × 20 rounds; within #3532 it had already been changed one round for only sampling the stack once (bad1ebd28); not caught: there was a rule but it wasn't followed (testing.md "Waits, retries and timeouts are driven through a clock seam or an event handshake", dismissed after review cited it)
+
+## Ungrouped
+
+### When rewriting flow criteria, confirm for each cross case that the conclusion is unique, and that cases blocked by old conditions still have somewhere to land
+Pattern: when tightening or replacing a set of criteria (triage tables, inclusion and exclusion conditions, timeout rules), each is read on its own wording, and new conditions contradict existing conditions, table order or downstream fields in cross cases; or after removing a condition from the old criteria, the cases it used to block have nowhere to go
+Cost: unattended flows reach different conclusions about the same object or hang indefinitely; review–fix goes back and forth for several rounds (severity: routine)
+Detection: judgement required
+- #3336 · 2026-10-21 · Found in review: the exclusion sentence of the wrap-up self-check conflicted with the "data · security · real spend" item, and the fix in turn made the values of "not caught" contradict the field name; the same issue was changed over 3 rounds (e8a8e977, 9ef829ba, 02ac08e0); after the zero-reference exit removed "the rule has existed for a full 90 days", PRs from before the rule was added were counted in the statistics window (fixed by 175d0af9); not caught: no corresponding rule
+- #3342 · 2026-10-21 · Found in review: the `needs-info` timeout rule in the triage table contradicted, in cross cases, the first-match table order, the pre-check path, the activity determination and the status label replacement; the same timeout rule was changed over 5 rounds (71e1b126, e7014af5, aa38cf9c, b2346830, 3a513b24); not caught: no corresponding rule
+
+### To judge whether CodeRabbit has covered the current HEAD, go by this HEAD's review-completed signal, not just the walkthrough
+Pattern: when an incremental review only replies under existing discussion threads and doesn't post a new review body, CodeRabbit has already set this HEAD's commit status to "Review completed", but the walkthrough is stuck at "Currently processing"; poll.sh only looks at the walkthrough and keeps reporting `is_in_progress=true`
+Cost: the review loop waits idly until the timeout threshold, and decidable coverage is only obtained by a manual `@coderabbitai review` (severity: routine)
+Detection: mechanical (proposed: poll.sh also reads CodeRabbit's commit status on HEAD, with testdata cases added)
+- #3359 · 2026-10-22 · Review loop self-check: after pushing 38bb81b0, the CodeRabbit status was already success / "Review completed", and the walkthrough only updated after a manual trigger; not caught: check not wired up
+
+### Derived results recomputed from current state on high-frequency paths are reused when inputs haven't changed
+Pattern: high-frequency paths such as claiming, requests and polling recompute derived results from current state (content hashes, inferred providers, rebuilt snapshots) without first comparing cheap identifiers of the inputs (file stat, revision number), so the cost multiplies with call frequency and input size
+Cost: the event loop is saturated, all HTTP requests in the same process queue up, and media download stalls are amplified (severity: routine)
+Detection: judgement required
+- #3147 · 2026-10-13 · Incident retrospective: on every claim cycle the worker inferred the provider from current state and recomputed asset hashes for queued reference-to-video tasks, with cost growing linearly with the queue length; not caught: no corresponding rule
+- Demoted · 2026-10-19 · from docs/standards/backend.md "Derived results are reused when inputs haven't changed"
+
+### Function-type options of custom hooks go into the dependency array, not exempted via ref
+Pattern: when a custom hook accepts function-type options such as selectors and callbacks, it stores the latest value in a ref to get around exhaustive-deps, silently absorbing unstable references passed in by callers
+Cost: callbacks may capture stale state, with no way of noticing (severity: routine)
+Detection: judgement required
+- #1648 · 2026-08-05 · Batch retrospective: a hook's function-type options were stored in a ref to exempt them from dependencies; not caught: no corresponding rule
+- Demoted · 2026-10-19 · from docs/standards/frontend-async.md "Hook function-type options go into dependencies, not into refs"
+
+### Requests that the model declaration shows can't be sent or can't be used are rejected before the billed request
+Pattern: a newly integrated backend only checks against the model catalogue declaration (reference image count bounds, output format) when constructing the request or writing the output to disk; over the limit it truncates, and when the output can't be converted to a bitmap it bills first and then deletes; the orchestration layer still numbers "图N" (image N) by the endpoint's fixed cap, and the prompt points at images that weren't sent
+Cost: the user pays for results that are bound to deviate or bound to be unusable (severity: data · security · real spend)
+Detection: judgement required
+- #3361 · 2026-10-24 · Found in review: `openrouter-images` reference images over the limit went back and forth between truncation and erroring over 3 rounds (d2a6e389 errors, 3cc3210d changed to the orchestration layer trimming by model cap while keeping backend truncation as a fallback, 8ea8f80e changed the fallback to erroring); the reference image lower bound and "included but no reference images declared" took two more rounds (3943af66, 3cc3210d); models that only output SVG were billed first and the output deleted after transcoding failed (cd9a20b9, 106308b0), and a505a825 changed it to rejecting before submit; not caught: no corresponding rule
+- Reviewed, not promoted · 2026-10-24 · Pending #3405's ruling: whether the orchestration layer's "reference image trimming" stays a silent behaviour decides the scope of this rule
+
+### i18n interpolation parameter names match the copy placeholders
+Pattern: calling `t(key, { count })` while the copy placeholder is written as `{{total}}`; neither typecheck nor lint reports it, and the page displays the unreplaced placeholder text directly
+Cost: unreplaced placeholders appear in the UI (severity: routine)
+Detection: mechanical (proposed: a vitest or ESLint check comparing the parameter names of `t()` literal keys with each language's copy placeholders)
+- #3418 · 2026-10-24 · Self-check: the parameter name `count` of the recycle bin summary copy didn't match the placeholder `{{total}}`, found when a page-level test asserted the text; not caught: no corresponding rule
+
+### When running page-level suites in parallel worktrees, the preview server doesn't reuse someone else's process
+Pattern: with multiple worktrees running in parallel on the same machine, `pnpm e2e` uses the default port, and Playwright's `reuseExistingServer` reuses a preview server already started by another worktree, testing a different build
+Cost: the page-level suite gives a false green for this branch, and UI regressions are missed (severity: routine)
+Detection: mechanical (proposed: make `frontend/playwright.config.ts` reuse an existing server only when an environment variable is explicitly set, and error directly when the port is taken)
+- #3421 · 2026-10-25 · Self-check: all 55 lobby cases passed on the reused old build, and only failed after scenarios depending on the new button were added (ticket #3389); root cause: `E2E_PORT` wasn't set, so another worktree's 4173 was reused; not caught: there was a rule but it wasn't followed (CONTRIBUTING "Frontend page-level tests" requires staggering ports via environment variables when running in parallel, and the AFK implementer contract requires ports isolated from other worktrees)
+
+### When reusing a security check's observation within a request, subsequent reads go through the constrained descriptor rather than reopening by path
+Pattern: to reduce repeated opens, the result of a check done via `O_NOFOLLOW` or identity verification is shared within the request, but later steps stat or read by path; when the path is deleted or replaced with a symlink between the check and the read, the read follows the link and the decision reuses the old observation
+Cost: formal files that should be judged missing or blocked are judged current or stale, and reads also follow links to files outside the project (severity: data · security · real spend)
+Detection: judgement required
+- #3502 · 2026-10-27 · Found in review: after sharing file observations within the request, video content proof still did stat and fingerprinting by path, so a file deleted after admission was judged STALE and one replaced by a symlink outside the project was judged CURRENT; it took two rounds of review to bring it back to descriptor reads (b8f9f85f4); not caught: no corresponding rule (tests only covered the normal path and the number of opens)
+- Reviewed, not promoted · 2026-10-27 · Sharing observations within a request only occurs in the freshness decisions of `lib/artifacts/`, and after the fix tests for deletion and replacement with a symlink were added; backend.md "When an untrusted path lacks `O_NOFOLLOW`, verify file identity after opening" already requires identity verification after opening, and another rule would have no second change to hit during review
+
+### Before adding an allow entry to the sandbox, check, per each platform's compilation method, the result of stacking it with existing deny entries
+Pattern: adding `allowWrite` for a subdirectory under a directory that is wholly `denyRead`, thinking it only opens up writes; bwrap compiles it into a writable bind mount that overrides the upper-level read deny, while Seatbelt denies reads and allows writes; neither platform's result matches the intent
+Cost: the agent's Bash crosses the kernel sandbox's read boundary, inconsistent with the system prompt (severity: data · security · real spend)
+Detection: judgement required (unit tests can only assert the compiled result; the stacking semantics must be tested on each platform)
+- #2348 · 2026-10-26 · Post-merge fix: in Linux deployments the agent's Bash could read and write the current user's memory directory, and on macOS it could write blind (#3481, fixed by #3505's c4b3c6e1a); not caught: no corresponding rule
+- Reviewed, not promoted · 2026-10-27 · Sandbox settings are assembled in only one place, `server/agent_runtime/agent_access_policy.py`, and the fix removed this allow entry; changes to sandbox allow entries are rare, so a standard written for it would hardly have any change to hit during review
+
+### When reminding to exclude files containing secrets from version control, also handle files already tracked by Git
+Pattern: only using `git check-ignore` to decide and remind about adding an ignore rule; tracked files aren't reported by it, and an ignore rule doesn't stop their changes from being committed; only doing `git rm --cached` without adding a rule means the next `git add .` adds it back
+Cost: plaintext API keys may still be committed with the code (severity: data · security · real spend)
+Detection: judgement required
+- #3505 · 2026-10-27 · Found in review: the setup skill's reminder only checked ignore rules, missing the tracked `.mcp.json` and `.arcreel/settings.json`, and the fix in turn missed the ignore rule after untracking; it took two rounds to converge (#3485's implementation, 10965b85d); not caught: no corresponding rule
+- Reviewed, not promoted · 2026-10-27 · This only occurs in this one passage of explanatory text in the setup skill, now changed to distinguish tracking state; there is no second flow in the repository guiding users to handle secret files
+
+### Pre-check failures of generation tasks explain the cause using the names shown in the UI, and problem codes are classified by way out
+Pattern: a task fails before calling the model because the input is unacceptable, the message keeps internal prefixes and internal numbers, and the problem code lands as `internal_error` / `retry`; a no-op submission that only fills gaps gives no feedback at all
+Cost: users can't find which item has the problem, retrying won't help, or they think AI writing is broken (severity: routine)
+Detection: judgement required
+- #2531 · 2026-10-30 · Post-merge fix: the prompt-writing pre-check, draft promotion and content confirmation for reference units threw bare `ValueError` for unacceptable units, with messages carrying the prefix "generate_episode_script 失败" (generate_episode_script failed) and internal unit IDs (called "视频单元 N" (video unit N) in the UI), and problem codes landing as `internal_error` / `draft_promote_failed` / the generic `conversion_refused`; no-ops only showed "已提交" (Submitted). Fixed successively via #3497 (#3512's 93bb56e07), #3508 and #3509 (#3547's 4b11617be, ae82d9e89), #3551 (#3556's 8b418ab5f, 288b407e9); not caught: no corresponding rule (general.md "Failure messages state the cause and next step first, with the raw text collapsed" was only added on 2026-10-08, after this was introduced)
+
+### Diagnostic probes resident in production only use stack-sampling methods that hold the GIL and are thread-safe
+Pattern: using a dump interface officially labelled "best effort" (faulthandler's delayed or all-threads dump) as an online watchdog; it traverses other threads' frames without holding the GIL, and crashes when it reads a half-updated frame while another thread is busy
+Cost: a stall that should only have written a diagnostic log makes the process exit with a segfault, restarting repeatedly and clearing in-process caches (severity: routine)
+Detection: mechanical (proposed: ruff banned-api forbids `server/` and `lib/` from calling `faulthandler.dump_traceback_later`, with the test plugin exempted)
+- #3163 · 2026-10-29 · Post-merge fix: the stall probe's faulthandler delayed dump segfaulted while other threads were busy, and the production container restarted 11 times in two days (#3520, #3532's e0c4887b8 changed to a daemon thread holding the GIL that takes only the event loop thread's stack via `sys._current_frames`); not caught: no corresponding rule
+
+### When adding a model to an existing series, declare each capability according to that model's own official documentation
+Pattern: a new model inherits capabilities (reference images, last frame, etc.) wholesale from the series prefix or sibling models, and capabilities the official documentation states only for other models are declared too
+Cost: the model enters buckets it can't serve, all tasks fail once it's selected, and quotes are also given based on it (severity: routine)
+Detection: judgement required
+- #2989 · 2026-10-30 · Post-merge fix: `grok-imagine-video-1.5-lite` inherited the series' reference image cap of 7, and after being selected into the reference-to-video bucket all real renders were rejected with INVALID_ARGUMENT (#3495, fixed by #3542's 0017df8f3); not caught: no corresponding rule
+
+### When deciding whether a config item is set, treat an empty string in the process environment as unset; auto-generated credentials are persisted and then reused
+Pattern: the container injects keys left blank in the template as empty strings, dotenv by default doesn't override existing variables, so values written later in the mounted file don't get in; startup logic treats the empty string as missing, regenerates and writes back, or randomly generates the signing key on every startup
+Cost: after a restart the password is rewritten, all logged-in sessions are invalidated, and users are locked out (severity: routine)
+Detection: judgement required
+- #28 · 2026-10-29 · Post-merge fix: compose's `env_file` injected `AUTH_PASSWORD` as an empty string, so after restart the password was regenerated and `.env` rewritten; without `AUTH_TOKEN_SECRET` set, everyone was logged out on every restart (#3524, fixed by #3543's 249b7e622); not caught: no corresponding rule
+
+### Consistency proofs have a landing for every version state reachable by normal operations, and only reject registrations that genuinely can't prove themselves
+Pattern: proofs for export or import assume derived registrations (subtitles, presentation) always follow the currently selected media version; after the user uploads, regenerates or switches versions, legitimate registrations left by the system itself are judged unprovable, and the exception becomes a 500 via the catch-all
+Cost: whole-package export and Jianying (CapCut) draft download for the episode keep failing, and the user can't recover on their own (severity: routine)
+Detection: mechanical (proposed round-trip test: after performing upload, regenerate and version switch through the real entry points, run the export token, whole-package export and import preservation)
+- #1866 · 2026-10-29 · Post-merge fix: after a unit switched its selected video, the subtitle and presentation registrations materialised from the old video were judged unprovable formal claims, and the export token and whole-package export returned 500 (community report #3521, fixed by #3541's f3e54ef45); the similar 500 from only regenerating the voice-over is left as follow-up; not caught: no corresponding rule
+
+### Paths in external results use project-relative paths at the point of production, treating success values and errors alike
+Pattern: rewriting only error messages in the exit adapter layer, while cause text in success values is carried out as-is; when doing string replacement after the fact, matching literal spellings misses the escaped form of `OSError` quoting file names via `repr`, forward-slash forms and boundaries on both sides of paths, patching forms round by round
+Cost: remote hosts see the server's file system layout, or persisted location information gets corrupted; the fix is repeatedly reworked (severity: routine)
+Detection: mechanical (proposed remote MCP integration test: scan every tool's success and error returns and assert they contain no absolute path of the data root)
+- #2085 · 2026-10-30 · Post-merge fix: remote MCP error messages (#3484) and the migration failure cause in `get_workflow_plan`'s success value (#3507) carried server absolute paths; #3505 only rewrote errors, #3548's fa0e58c79 changed to relativising at the point where failures are recorded, and within the PR two more rounds were added for Windows `repr` escaping, single-quote escaping and the left boundary (69e34f99d); not caught: no corresponding rule
+
+### When adding a type label to entries by ID, only add it for types that can be recognised
+Pattern: when adding a type prefix to a field value, not checking all the entry types the field may hold, and the classification function defaults unrecognised values into some category
+Cost: the UI calls grids storyboards (severity: routine)
+Detection: judgement required
+- #2418 · 2026-10-30 · Post-merge fix: the usage-record filter chips added the "分镜" (Storyboard) prefix to every segment, and grids displayed as "分镜 E3G01" (Storyboard E3G01); when #3489 distinguished video units, the remaining IDs were still classified as storyboard by default (#3491, fixed by #3549's c8a2ae950); not caught: no corresponding rule
+
+## Promoted
+
+### Web write routes mark writes as webui, and write exits called from the web send a hint by context source immediately after writing to disk
+Destination: `tests/unit/server/routers/test_web_write_change_source_marking.py` (landed with #3548): checks via AST that every web write route sets `project_change_source("webui")` and doesn't hard-code another source; the hint timing of write exits is covered by integration tests
+Pattern: the source relies on each route hand-writing the context, and new or changed write routes miss the marking or hard-code another source; write exits only write to disk without sending a hint, and the change is settled by polling or a catch-up scan as `filesystem`
+Cost: the user's own saves trigger false notifications, focusing and automatic navigation (severity: routine)
+Detection: mechanical
+- #216 · 2026-10-30 · Post-merge fix: the old draft save endpoint hard-coded `source="worker"`; saving and discarding an episode draft (#2872) and the unregistered source file and non-whole-book source text branches (#2876, #2904) weren't marked webui, and draft and recycle bin writes sent no hint; #3512's integration review fixed content confirmation and asset application on the spot during inspection (c04716750), the rest were opened as #3510 and fixed by #3548's 287bfd9b6 and 69e34f99d, which also added the route source check; not caught: no corresponding rule
+
+### The pre-operation impact preview and the actual decision are computed from the same basis
+Destination: the comparison test in `tests/integration/lib/project/test_asset_merge.py`: on the same project, take the merge preview first, then perform the merge, and assert that the preview counts match the actual per-item freshness after the merge, covering the subclasses of names, grid-frozen reference images, derivative migration, and manually uploaded storyboard images and videos (landed with #3544, #3556; with 487ca1110's fix removed, `test_a_selected_uploaded_video_is_not_counted_as_outdated[True]` fails)
+Pattern: the decision basis changes its interpretation (e.g. dropping names), but the pre-operation impact preview still estimates by the old interpretation; or the new interpretation is applied only to ordinary entries, missing subclasses whose basis comes from a different source
+Cost: the stale count reported by the preview doesn't match reality, and users misjudge the operation's impact based on it (severity: routine)
+Detection: mechanical
+- #3472 · 2026-10-26 · Found in review: the asset merge preview estimated by name, so with the same image under different names it reported stale while it actually stayed current; after changing to count by actual freshness, it then missed cut-cell storyboards being judged by the grid's frozen reference image path, and derivative images becoming stale once moved away, requiring another round (41581966a); not caught: no corresponding rule
+
+- #2904 · 2026-10-30 · Post-merge fix: the asset merge preview counted selected manually uploaded storyboard images and videos as stale, but after the merge they actually stayed current (the upload basis contains only the uploaded bytes); #3544's review only fixed the storyboard image branch (c29a3dc28), the video branch leaked onto main, followed up by #3550 and fixed by #3556's 487ca1110; not caught: no corresponding rule
+
+### Static guards written by name or path cover every way of reaching the same target
+Destination: docs/standards/general.md "Static guards that match by name or path have tests covering every way of reaching the same target" (the guard is itself the check, and whether it covers every form can't be decided by another check, so it is written as a review rule; guards are spread across the ESLint config, `scripts/audit_conventions.py` and their respective tests, so it goes in the general standard)
+Pattern: lint guards or audit checks identify blocked modules or functions by source text and only recognise one form: imports only match the `@/` alias, while relative paths, `..` segments and re-exports still get there; delete calls only recognise `os.remove`, and `from os import remove as …`, `import os as fs` and `aiofiles.os` are not reported
+Cost: the guard is useless in practice and also gives the illusion that it's already blocked (severity: routine)
+Detection: mechanical
+- #3310 · 2026-10-19 · Found in review: the toast guard and the primitives directory dependency boundary only matched the `@/` alias, and relative paths, `..` segments and re-exports were pointed out over three consecutive rounds (bd66ff6a, 29ff3121, ec553f95); not caught: no corresponding rule
+- #3418 · 2026-10-24 · Found in review: the HARD-DELETE audit first missed function alias imports, then missed the `import os as fs` and `aiofiles.os` module aliases, completed over two rounds (051004b5e); not caught: no corresponding rule
+
+### The agent write protection table is enumerated from the single definition of media
+Destination: `tests/unit/server/agent_runtime/test_agent_access_policy.py` adds `test_protected_media_covers_every_public_media_location`: media directories readable by public endpoints and media files at the project root are all in `AGENT_PROTECTED_MEDIA_DIRS` / `AGENT_PROTECTED_MEDIA_FILES`
+Pattern: the agent write protection table is hand-written per media directory, missing formal media outside those directories, and the hook and sandbox leave a bypass together
+Cost: the agent can directly overwrite or delete referenced style images, bypassing the project recycle bin (severity: data · security · real spend)
+Detection: mechanical
+- #3421 · 2026-10-25 · Found in integration review: the four formats of root-level `style_reference.*` still allowed Write/Edit, and the sandbox's denyWrite didn't cover them either; 829e07d02 added `AGENT_PROTECTED_MEDIA_FILES` and tests (ticket #3390); root cause: the protection scope only enumerated directories without checking against actual upload paths; not caught: no corresponding rule
+
+### When verified under a lock, then the lock is released and re-acquired for writing, verify again inside the writing lock
+Destination: docs/standards/backend.md "After an await, re-check the state preconditions; if a precondition is outdated, write the current state or skip the side effect" gained the synchronous form of releasing and re-acquiring a lock; the restore pipeline now re-checks uniformly inside the lock before landing (`_require_unchanged`), funnelling all object kinds architecturally
+Pattern: the check and the execution are split across two lock acquisitions, the lock is released in between to run a slow step (such as a project migration), the precondition isn't reconfirmed before writing, and a concurrent operation changes the precondition between the two acquisitions
+Cost: the project is left with objects pointing to non-existent files, or duplicated inserted entries (severity: data · security · real spend)
+Detection: judgement required
+- #3421 · 2026-10-25 · Post-merge fix: two concurrent restores of the same deletion record, with the later one landing under a new name, leaving a ghost asset or storyboard frame (introduced by ticket #3383, followed up in #3423, fixed by #3426's 6b993016a); within the same PR, checking the owning episode before restoring an edit timeline was also first checked at retrieval (f5a7c91e9) and then added inside the landing lock (c6de50f1d); not caught: there was a rule but it wasn't followed (backend.md "After an await, re-check the state preconditions…", which literally only mentions await)
+
+### Deletion records take in the object itself and the metadata needed for it to be usable after restore; files only those exclusive to the object
+Destination: docs/standards/backend.md "Deletion records take in the object itself and the metadata needed for it to be usable after restore; files only those exclusive to the object"
+Pattern: on deletion, a non-empty attached file list is made a precondition for creating a record, or only a few fields identifying the object are written into the record, or files still referenced by other existing objects are moved away too
+Cost: titles, hooks and prompts of episodes and storyboard frames without media are permanently lost; restored historical versions can no longer be selected back; deleting one character makes another character's reference audio disappear (severity: data · security · real spend)
+Detection: judgement required
+- #3421 · 2026-10-25 · Found in review: deletion records for historical versions only stored the prompt, so after restore video and audio versions couldn't be selected; 829e07d02 changed it to save the original version metadata (ticket #3381); not caught: no corresponding rule
+- #3426 · 2026-10-25 · Found in review: after deleting a newly created episode with no source text and no generated content, the project recycle bin was empty (ticket #3384); when overwriting the formal script, old entries without media got no record; deleting a character moved files still used by other characters into the record; fixed by ba1e82f7f; the target of shared reference images after renaming is tracked by the open #3428; not caught: no corresponding rule (ADR 0107 requires every deletion to create a record, but the standards had no rule carrying that into implementation)
+
+### Only consume the deletion record after the restored object meets readers' preconditions and its associations are committed as a whole
+Destination: docs/standards/backend.md "Only consume the deletion record after the restored object meets readers' preconditions and its associations are committed as a whole"; "block restore while the owning object is still in the recycle bin" is tracked by the open #3427
+Pattern: restore only checks the object's own identity conflicts, not whether the owning episode or project still exists; or after the file lands, the record is consumed first, and object associations are written back in the lock's exit section or a callback outside the lock; or after degrading, nothing was added back but the record was still consumed
+Cost: restore "succeeds" but the object can't be opened or isn't reconnected, the record is already gone, and the user can't retry (severity: data · security · real spend)
+Detection: judgement required
+- #3421 · 2026-10-25 · Found in review: an edit timeline whose owning episode had been deleted reported `episode_not_found` after restore, and the record had already been consumed (ticket #3382); not caught: no corresponding rule
+- #3426 · 2026-10-25 · Found in review: when restoring a last frame hit a failure writing the formal file, the record was already gone and the storyboard frame's last-frame field was still empty; reference audio had the same ordering (ticket #3388); when a structural record with no file degraded, it consumed the record but added nothing back; ba1e82f7f changed it to place the file and write back within the landing transaction; not caught: no corresponding rule
+
+### When one deletion or restore spans directories, the database and multiple structural files, compensation for failure and cancellation covers all changes
+Destination: docs/standards/backend.md "When one deletion or restore spans directories, the database and multiple structural files, compensation for failure and cancellation covers all changes"
+Pattern: moving the directory first, then committing or rewriting database records; on failure only the database is rolled back and the directory stays in its new location; the thread's return value is discarded due to cancellation, so compensation can't get the landing location; the rollback transaction for structural files misses some file rewritten this time
+Cost: the project directory and task and session records don't match, and a new project with the same name inherits the old records; when registration fails, version history is permanently lost (severity: data · security · real spend)
+Detection: judgement required
+- #3421 · 2026-10-25 · Found in review: when the record commit for a project deletion failed, the directory wasn't moved back, and 829e07d02 added `move_back`; when restoring a deleted project, cancelling move_out lost the landing location, and 23d212624 put it inside a non-interruptible boundary with `run_noninterruptible_async` (ticket #3389); not caught: commit failure had no corresponding rule; for the cancellation half there was a rule but it wasn't followed (backend.md "When writing formal files or creating temporary outputs in a thread, use `run_sync_transaction`")
+- #3426 · 2026-10-25 · Found in review: the rollback transaction for deleting an episode didn't include `versions/versions.json`, so when registration failed the version history was permanently lost; fixed by ba1e82f7f; not caught: no corresponding rule
+
+### After moving files into a deletion record, move only the files in the record; don't `rmtree` the original directory
+Destination: docs/standards/backend.md "After moving files into a deletion record, move only the files in the record; don't `rmtree` the original directory"
+Pattern: first enumerate files and move them into the recycle bin, then recursively delete the original directory; files newly written after enumeration don't enter the record but are hard-deleted along with it
+Cost: concurrently written project memory is irrecoverably lost (severity: data · security · real spend)
+Detection: judgement required
+- #3421 · 2026-10-25 · Found in integration review: after project memory was cleared and recycled, `rmtree` would hard-delete newly written files; 829e07d02 changed it to no longer delete the original directory and added a boundary test with real writes (ticket #3381); not caught: there was a rule but it wasn't followed (the HARD-DELETE check requires an annotation, and the `# hard-delete` claim "only empty directories and symlinks remain" doesn't hold under concurrent writes)
+
+### Writing to disk and transcoding after the provider returns go in a non-interruptible section, and shared helpers are no exception
+Destination: promoted, see #3413 (make the shared write-to-disk helper satisfy the non-interruptible requirement by default, eliminating it architecturally; the written rule in the standards already existed but wasn't followed)
+Pattern: a backend reuses a shared write-to-disk helper such as `save_image_from_response_item`, or transcodes itself with `run_sync_transaction`; the disk write itself completes, cancellation propagates outward as usual, and the subsequent transcoding and output commit are skipped
+Cost: billed outputs are lost on cancellation or event loop teardown (severity: data · security · real spend)
+Detection: judgement required
+- #3361 · 2026-10-24 · Found in review: the first version of `openrouter-images` wrote to disk via `save_image_from_response_item` and converted to PNG with `run_sync_transaction`; 248abe7e changed it to decode, write to disk and transcode inside `run_noninterruptible_sync`; the shared helper itself still uses `run_sync_transaction`; not caught: there was a rule but it wasn't followed (docs/standards/backend.md "The accounting phase after the provider returns is non-interruptible")
+
+### When waiting for an async process to complete, use its last step as the signal; don't poll state that is already visible midway
+Destination: docs/standards/testing.md "When waiting for an async process, use its last step as the readiness signal"
+Pattern: an async process runs in multiple steps (switch memory → persist → broadcast, or render → effect subscription, or data arrives → debounced refresh), and the test continues as soon as the first step is visible, interleaving with later steps; only the test that has failed is fixed, and similar tests keep the same waiting style
+Cost: CI goes red intermittently, and the same root cause recurs across issues (severity: routine)
+Detection: judgement required
+- #3330 · 2026-10-21 · main CI failure: in the episode page scenario, the plan refresh only happened via debounce after `waitForEntrance` returned, and axe sampled colours while the button was fading in and reported color-contrast (fixed by #3347's 0202c760); not caught: no corresponding rule
+- #3331 · 2026-10-21 · main CI failure: TestQueuedMessages built the stream after polling in-memory completed, while the persistence and broadcast of the CLI idle settlement hadn't finished yet, receiving one extra late completed frame (fixed by #3359's d97c9a6b); not caught: no corresponding rule
+- #3352 · 2026-10-22 · main CI failure: when the source text box was found via findByRole, the effect subscribing to focus requests hadn't committed yet, and the request delivered right after was dropped (fixed by #3359's 2a79befe); not caught: no corresponding rule
+- #3353 · 2026-10-22 · main CI failure: TestSendQueuedMessageNow read the tray snapshot after polling log entries, and read a jump-the-queue message that was already in the log but not yet dequeued (fixed by #3359's f7d1ca13); not caught: no corresponding rule
+
+### To judge whether CodeRabbit has covered the current HEAD, exclude walkthroughs that skipped review
+Destination: `.agents/skills/pr-ai-review-loop/scripts/poll.sh` adds `is_review_skipped`, and skip notices don't count towards `reviewed_current_head`; `test_walkthrough_head.sh` adds a case with a real skip notice; reviewers.md states that `@coderabbitai review` is sent when skipped
+Pattern: when a PR is created as a draft or its author is a bot, CodeRabbit posts a walkthrough that skips review; poll.sh still reports `reviewed_current_head=true`, `is_in_progress=false` for it, and without checking the body, unreviewed is recorded as passed
+Cost: one reviewer's coverage may be missed (severity: routine)
+Detection: mechanical (poll.sh recognises the skipped-review marker)
+- #3347 · 2026-10-21 · Review loop self-check: after switching to ready, poll showed CodeRabbit as having covered it; only reading the body revealed it was a draft skip notice, and real review only happened after a manual trigger; not caught: check not wired up
+- #3359 · 2026-10-22 · Review loop self-check: during the draft period poll reported CodeRabbit `reviewed_current_head=true`, there was no review at all, `walkthrough_head` was empty, and the body was a draft skip notice; not caught: check not wired up
+
+### When changing the source or handling interpretation of the same capability dimension across backends or paths, list all read points first, then change
+Destination: docs/standards/general.md "When changing the source or handling interpretation of a capability dimension, list all read points and change them together" (the read points span the applicable paths of several standards — `lib/backends`, `lib/generation`, `server/services`, etc. — so it goes in the general standard)
+Pattern: when switching the capability source to the effective capability with user overrides layered on, or uniformly changing silent discarding to erroring, only the conspicuous few places are changed, while other read points of the same dimension (the payload construction of other backends, test connection, pre-submit estimation, settlement metering) still work by the old interpretation
+Cost: missing first frames or reference images are skipped and rendering is billed as usual; capabilities the user narrowed are let through in test connection and real charges incurred (severity: data · security · real spend)
+Detection: judgement required
+- #3264 · 2026-10-19 · Post-merge fix: capability overrides for user-added models under built-in providers were only wired into the planning layer, while the execution gate (#3302, fixed by #3312), DashScope and Kling request construction and first-frame gate (#3323), and metering, estimation and the Veo audio switch (#3324, fixed by #3327) still read the backend's own profile; not caught: there was a rule but it wasn't followed (ADR 0104, docs/standards/providers.md "Each capability dimension recognises only one source; don't write another copy of capability values elsewhere")
+- #3312 · 2026-10-19 · Post-merge fix: "inputs the backend can't send now error" missed DashScope's silent first-frame discard, OpenAI/Grok skipping missing files via `exists()`, and Sora over-sending (#3313, fixed by #3314); the execution gate layered user overrides on, but test connection `trial_run` wasn't synchronised (#3326, fixed by #3327); not caught: no corresponding rule
+
+### Before recursively deleting a directory that comes from a parameter or configuration, confirm the directory's ownership first
+Destination: docs/standards/backend.md "Before recursively deleting a directory that comes from a parameter or configuration, confirm ownership first"
+Pattern: a script or tool accepts a path parameter such as `--data-root`, and when rebuilding directly does `rmtree` on a subdirectory of it, without checking whether it created that directory itself
+Cost: when mistakenly pointed at a real data directory, all user projects are deleted (severity: data · security · real spend)
+Detection: judgement required
+- #3304 · 2026-10-19 · Found in review: the performance benchmark `scripts/perf/harness.py` did `rmtree(data_root()/"projects")` on `--rebuild` or when the build marker was missing, and `--data-root` could point anywhere; 22f796f6 changed it to only accept an empty directory or one with the `.arcreel-perf-bench` sentinel; not caught: no corresponding rule
+
+### Prefilled or default values are taken from the valid values in the context where they actually take effect
+Destination: docs/standards/general.md "Prefilled and default values take valid values from the context where they actually take effect"
+Pattern: a default value only holds for a certain provider or model, while the value it depends on (the selected model, the current provider) may be inferred or changed to another vendor; the default is given globally or from a fixed set, not validated against the context where it actually takes effect
+Cost: new projects are written with combinations that are bound to fail synthesis; submissions with a manually entered model are bound to fail and leave orphan entries, and same-named models from other providers are billed at its price (severity: data · security · real spend)
+Detection: judgement required
+- #3283 · 2026-10-19 · Found in review: the first version of the fix corrected the prefilled voice by the global default speech model rather than by the explicitly specified model; cf672f7b changed it to use the model actually written; not caught: no corresponding rule
+- #3264 · 2026-10-19 · Post-merge fix: ManualEntryDialog fixed 4 media types with text as the default, so submissions for providers without text, such as Kling and Vidu, were bound to fail and leave orphan entries (#3301, fixed by #3314's 9f0a77e4); not caught: no corresponding rule
+
+### IDs spliced into `:path` route parameters have `.` and `..` segments rejected on the server
+Destination: docs/standards/backend.md "IDs spliced into `:path` route parameters have dot segments rejected on the server"
+Pattern: splicing IDs from user input or third-party responses into a `/{id:path}` route, validating only length; the WHATWG URL spec also normalises `%2e` as a dot segment, so frontend encoding can't stop it
+Cost: `a/../b` reads, modifies or deletes another model under the same provider (severity: data · security · real spend)
+Detection: judgement required
+- #3264 · 2026-10-19 · Post-merge fix: adding and renaming provider_models only validated length, and model IDs containing `..` segments operated on other models (#3299, fixed by #3314's 7095518b); not caught: no corresponding rule
+
+### When changing an object's identifier, rewrite records keyed by or referencing the old identifier together
+Destination: docs/standards/backend.md "When changing an object's identifier, rewrite records keyed by or referencing the old identifier together" (the four occurrences are spread across `lib/agent`, `lib/project`, `server/routers` and `server/services`, all within backend.md's applicable paths)
+Pattern: paths that change an object's identifier — restore under a new name, restore under a new number, changing a model ID, relocating the data root — only change the object itself and one or two conspicuous references; records with keys derived from the old identifier (the SDK session's `project_key`, output inventory registrations) or settings referencing the old identifier (project model settings) stay under the old value
+Cost: agent conversation resume reports the conversation can't be found; existing outputs read as missing, and the UI guides the user to regenerate; the project dangles a reference to the old model ID, and later a new model with the same ID silently takes over (severity: routine)
+Detection: judgement required
+- #451 · 2026-10-26 · Post-merge fix: the `project_key` of SDK session records was derived from the absolute path of the project directory, so after the data root's absolute path changed (desktop app on a new machine, white-label rename, changing `ARCREEL_DATA_DIR`) all session resumes failed, and keys weren't changed at startup (#3436, fixed by #3473's 247db4556); not caught: no corresponding rule
+- #3264 · 2026-10-26 · Post-merge fix: when a custom provider's model changed ID or was deleted, only global settings were handled, and the 10 model setting keys and `model_settings` in projects referencing it weren't synchronised (#3433, fixed by #3476's 9ff036906); not caught: no corresponding rule
+- #3421 · 2026-10-26 · Post-merge fix: after a deleted project was restored under the new name `demo-2`, session ownership changed but the SDK transcript stayed under the old path's key, and resume reported `No conversation found` (#3435, fixed by #3473's f9016f61d); not caught: no corresponding rule
+- #3471 · 2026-10-26 · Self-check: restoring storyboard frames and video units under new numbers only moved media files and version history, and output inventory registrations weren't moved to the new numbers, so restored outputs read as missing; before merge it was changed to re-register along with the new numbers (b50f34c1a); not caught: no corresponding rule
+
+### Cross-scope interaction state is gathered into a single session with a generation token, and async writes only land while the token is still valid
+Destination: docs/standards/frontend.md "When switching scope, the old scope's interaction state is invalidated as a whole, and async writes only land while the token is still valid" (all three were judgement-required omissions, occurring respectively in a hook's confirmation state, a store's pagination state and session errors, with no check able to decide them uniformly)
+Pattern: a hook's or store's interaction state (confirmation request, in-flight, failure reason, pagination cursor and total) is scattered across multiple states, and scope switches rely only on aborting one request or clearing part of it; abort can't reach other async writes that return after the switch, several parallel request sources each invalidating on their own can't stop each other, and results from the old scope are written into the new scope, or old state lingers into the new scope
+Cost: clicking confirm in one project actually cancels another project's task, or the UI shows another project's failure message (severity: routine)
+Detection: judgement required
+- #3412 · 2026-10-24 · Found in review: `useTaskCancellation` successively added scope ownership (45e77af90) and render-time clearing (bf9e5c5c6), and only in the third round (31270f1ca) gathered the confirmation state into a single session with `gen`; root cause: each round only fixed the write path the reviewer pointed out, without first listing all async writes that would still land after a scope switch; not caught: no corresponding rule
+- #3258 · 2026-10-25 · Post-merge fix: the two usage-record views each used their own refresh coordinator while jointly writing `total`, `nextCursor` and `pageIndex`; after switching views, the old view's request arrived late and rewrote the total, and the next page sent the generation-records cursor to the session endpoint, returning 422 (#3439, fixed by #3492's 77b54be96, changed to share one coordinator); not caught: no corresponding rule
+- #3441 · 2026-10-25 · Post-merge fix: switching projects and creating a new session only reset the timeline without clearing errors, so the previous session's error message lingered in the new project or new session; only `switchSession` cleared it (fixed by #3492's e0e3b0dc0, 2700f4a31); not caught: no corresponding rule
+
+### A value's format or range is defined in only one place, and producers, validators and consumers all reference it
+Destination: docs/standards/general.md "A value's format or range is defined in only one place, and producers, validators and consumers all reference it" (the four occurrences concern numbering, definition values, entry types and revision respectively, each now with round-trip tests added; no single check can uniformly decide the interpretation of different values, so it is written as a review rule requiring the same round-trip tests to be added when changing; it spans the frontend, backend and subpackages, so it goes in the general standard)
+Pattern: a producer loosens or changes a value's format or range (number of sequence digits, numeric type, entry type, algorithm prefix), while validators or consumers still hard-code the old interpretation, so valid values produced by the system itself are rejected or misread by itself
+Cost: episodes numbered past 100 can't complete content confirmation; valid endpoint definitions can't generate video; marketplace entries can't be installed; legitimate edits by external agents are judged as concurrency conflicts (severity: routine)
+Detection: mechanical (proposed round-trip test: the producer's real output at the boundary drives every validator and consumer)
+- #3471 · 2026-10-26 · Found in review: `format_item_id` could emit `E1S100`, while `NarrationScriptPlanSegment.segment_id` and `collect_narration_violations` only accepted two-digit sequence numbers; c54fc1698 changed it to `\d{2,}`; not caught: no corresponding rule
+- #2163 · 2026-10-25 · Post-merge fix: a declarative endpoint definition's `max_reference_images: 1.0` passed the JSON Schema, but the capability consistency check only accepted `int` and wrongly rejected it (#3447, fixed by #3494's 0ea7b2976); the first version of the fix only changed the check, and integration review then found that video capability resolution threw ValueError and the image reference image cap read as 0 (ef29215c0); not caught: no corresponding rule
+- #2778 · 2026-10-25 · Post-merge fix: from 828502274 on, ComfyUI endpoints could be shared to the official marketplace, but the install dialog still required the definition to have `submit` and `poll`, so valid ComfyUI entries couldn't be installed or updated (#3440, fixed by #3492's 0de8c34f9); not caught: no corresponding rule
+- #3484 · 2026-10-26 · Found in acceptance: remote MCP's `get_script_plan_content` returned a revision with the `sha256-v1:` prefix, while `open_draft` and `get_workflow_plan` returned bare hex; the first version of the fix was only compatible with the formal draft baseline and stale rebuild, and integration review found that the remaining round-trip entry points and the overwrite receipt still only accepted one form (fixed by #3505's 757d94853, 10965b85d); not caught: no corresponding rule

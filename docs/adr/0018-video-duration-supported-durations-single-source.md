@@ -2,13 +2,13 @@
 status: accepted
 ---
 
-# 视频时长以 per-model supported_durations 为单一真相源，原值透传、解析不到即 fail loud
+# Video duration uses per-model supported_durations as the single source of truth; values are passed through as-is, and failing to resolve fails loud
 
-backend 内的桶映射（把 6 静默改成 8）和 `or [4,6,8]` 隐性 fallback 是「选 6s 却被改成 8s、再被对端拒为非法」事故的根因。决定每个视频模型声明一个非空离散 `supported_durations`，三个消费点（剧本 prompt / 前端选择器 / 视频请求体）同源消费；各 backend 删除 duration 桶映射与归一化、请求体原值透传、越界由对端以 400 反馈；resolver 拿到空集时抛 `ValueError`、删除所有隐性 fallback——宁可 fail loud 引导用户在配置页修正，也不静默篡改用户/LLM 的选择或掩盖配置缺陷。
+Bucket mapping inside backends (silently turning 6 into 8) and the implicit `or [4,6,8]` fallback were the root cause of the incident "chose 6s but it was changed to 8s, then rejected by the other end as invalid". We decided each video model declares a non-empty discrete `supported_durations`, and the three consumption points (script prompt / frontend picker / video request body) consume it from the same source; each backend removes duration bucket mapping and normalisation, the request body passes the value through as-is, and out-of-range values are reported back by the other end with a 400; when the resolver gets an empty set it raises `ValueError`, and all implicit fallbacks are removed — better to fail loud and guide the user to fix it on the configuration page than to silently tamper with the user's/LLM's choice or mask a configuration defect.
 
 ## Consequences
 
-- schema 层不引入连续区间类型，改用 list 全展开 + 前端检测连续性的折中。
-- 自定义供应商缺省时由 model_id 启发式预设表预填（未命中回退保守默认），Alembic 回填迁移内联复制预设快照而非 import 模块，以保历史迁移确定性。
-- 一处受限例外：Vidu 因 API 按 endpoint 列出差异很大的合法时长集，保留 `_coerce_duration` 端点级就近校正 + warning，与 model 级单一真相源是不同维度。
-- fail loud 守的是「型号声明缺失」，不是「时长这一维在该端点上不存在」。ComfyUI 端点的 `frames` 未绑定或读不到帧率来源时，时长整维不由 ArcReel 驱动（见 `docs/adr/0082`），空集是合法状态：它带独立标志与声明缺失区分，全部消费点按该标志放行，本决定的 fail loud 立场不因此放宽。
+- The schema layer does not introduce a continuous-range type; instead the compromise is fully expanded lists + continuity detection in the frontend.
+- When a custom provider omits it, it is prefilled from a model_id heuristic preset table (falling back to a conservative default on a miss); the Alembic backfill migration inlines a copy of the preset snapshot rather than importing the module, to keep historical migrations deterministic.
+- One restricted exception: because Vidu's API lists widely differing valid duration sets per endpoint, it keeps `_coerce_duration` endpoint-level nearest-value correction + a warning; this is a different dimension from the model-level single source of truth.
+- Fail loud guards against "missing model declarations", not "the duration dimension doesn't exist on this endpoint". When a ComfyUI endpoint's `frames` is unbound or the frame-rate source can't be read, the entire duration dimension is not driven by ArcReel (see `docs/adr/0082`), and the empty set is a valid state: it carries a separate flag distinguishing it from a missing declaration, all consumption points let it through based on that flag, and this decision's fail-loud stance is not relaxed because of it.

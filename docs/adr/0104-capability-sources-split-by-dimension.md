@@ -2,31 +2,31 @@
 status: accepted
 ---
 
-# 模型能力按维度只有一个来源：模型事实记在条目上，通道事实由代码声明，渠道限制记在供应商模型上
+# Each dimension of model capability has only one source: model facts are recorded on entries, channel facts are declared by code, and channel restrictions are recorded on provider models
 
-模型目录把模型的能力随官方同步下发，但有一部分能力不是模型本身的事实，而取决于调用通道怎样打包请求，并且会随执行子路径分叉：同一个视频模型走图生视频和参考生视频时，音轨形态可能不同；可灵在 pro 档才放开尾帧。我们按维度划分来源，每个维度只有一个来源，不拿一侧去校验另一侧。
+The model catalog delivers model capabilities with official sync, but some capabilities are not facts about the model itself; they depend on how the invocation channel packages requests, and they fork by execution sub-path: the same video model may have a different audio-track form under image-to-video and reference-to-video; Kling only enables the last frame at the pro tier. We split sources by dimension, each dimension has only one source, and neither side is used to validate the other.
 
-- **模型事实记在模型条目上，随官方同步下发**：文本是否接受图片输入、是否支持结构化输出、最大输出 token；图片是否支持文生图与图生图；视频的可选时长、分辨率，以及时长与分辨率、参考图之间的联动约束。
-- **通道事实由内置调用通道或调用端点在代码中声明**：视频的输入模式（文生视频、首帧、尾帧）、参考图与参考音频上限、提示词长度上限、音轨形态，以及图片调用端点实现了文生图还是图生图。
+- **Model facts are recorded on model entries and delivered with official sync**: for text, whether image input is accepted, whether structured output is supported, and maximum output tokens; for images, whether text-to-image and image-to-image are supported; for video, selectable durations, resolutions, and the linked constraints between duration, resolution and reference images.
+- **Channel facts are declared in code by built-in invocation channels or invocation endpoints**: video input modes (text-to-video, first frame, last frame), reference image and reference audio caps, prompt length cap, audio-track form, and whether an image invocation endpoint implements text-to-image or image-to-image.
 
-## 规则
+## Rules
 
-- 能力按模型声明。供应商一级没有自己的能力声明，供应商支持哪些媒体类型和能力，由其下的供应商模型聚合得出。
-- 图片的文生图与图生图在两侧各是一个维度，含义不同：模型条目说模型接不接受，通道声明说这条通道实现了没有。生效能力取两者都满足的部分，任务类型桶的候选和执行时的校验都用这一个结果。
-- 调用通道不另带与模型条目重复的时长或分辨率检查，时长原样透传，超出上游范围时由上游拒绝。`docs/adr/0018` 保留的 Vidu 端点级时长校正不在此列：它校正的是同一模型在不同 API 端点上的合法时长差异，属于通道事实。
-- 调用通道遇到不认识的模型时，先按名字族匹配同一代的能力，名字取供应商模型所对应条目的官方模型名与模型别名，对应不上条目时取 API 模型名（见 `docs/adr/0105`）；匹配不到时统一回落为只支持文生视频与首帧，不开尾帧，参考图与参考音频上限为 0。
-- 渠道与模型条目、通道声明不一致时，用供应商模型上的能力覆盖表达，不修改模型条目；只有模型本身的事实有误时才修改条目。能力覆盖两类维度都可以覆盖，包括音轨形态，每个维度整体替换，优先级最高。
-- 只有用户负责的供应商模型带能力覆盖，即自定义供应商的供应商模型，以及内置供应商下用户添加的供应商模型。官方收录的供应商模型不带能力覆盖（见 `docs/adr/0099`）。
-- ComfyUI 端点的能力只从节点绑定推导，不接受能力覆盖（见 `docs/adr/0082`）。唯一的例外是 ComfyUI 视频模型的可选时长：它是 `docs/adr/0082` 允许用户在 workflow 原生时长之外增删的偏好，不是能力声明，存为可选时长这一维的能力覆盖；端点驱动不了时长时这一维不存在，覆盖不生效。
+- Capabilities are declared per model. The provider level has no capability declaration of its own; which media types and capabilities a provider supports is aggregated from its provider models.
+- For images, text-to-image and image-to-image are each a dimension on both sides, with different meanings: the model entry says whether the model accepts it, the channel declaration says whether this channel implements it. The effective capability is the part both satisfy, and both the candidates for task type buckets and validation at execution use this one result.
+- Invocation channels do not carry their own duration or resolution checks duplicating the model entry; durations are passed through as-is, and the upstream rejects them when out of range. The Vidu endpoint-level duration correction retained by `docs/adr/0018` is not covered by this: it corrects differences in legal durations of the same model across different API endpoints, which is a channel fact.
+- When an invocation channel meets an unknown model, it first matches the capabilities of the same generation by name family, taking names from the official model name and model aliases of the entry the provider model maps to, or the API model name when no entry matches (see `docs/adr/0105`); when nothing matches, it uniformly falls back to supporting only text-to-video and first frame, no last frame, and reference image and reference audio caps of 0.
+- When a channel disagrees with the model entry or the channel declaration, it is expressed with a capability override on the provider model, without modifying the model entry; the entry is modified only when a fact about the model itself is wrong. Capability overrides can override both kinds of dimension, including audio-track form; each dimension is replaced as a whole and has the highest priority.
+- Only user-responsible provider models carry capability overrides, i.e. provider models of custom providers and provider models added by users under built-in providers. Officially listed provider models do not carry capability overrides (see `docs/adr/0099`).
+- ComfyUI endpoint capabilities are derived only from node bindings and do not accept capability overrides (see `docs/adr/0082`). The only exception is the selectable durations of ComfyUI video models: this is a preference that `docs/adr/0082` lets users add to or remove from beyond the workflow's native duration, not a capability declaration, and it is stored as a capability override on the selectable-duration dimension; when the endpoint cannot drive duration, that dimension does not exist and the override has no effect.
 
 ## Considered Options
 
-- **输入模式等通道事实也记在模型条目上**：新一代模型不必发版就能用上全部能力。但条目表达不了按执行子路径的分叉；第三方数据源也没有这类数据，等于人工维护一份与调用通道代码强耦合的数据。
-- **不认识的模型乐观回落到同一供应商最新一代的能力**：用户不必手动打开就能用参考图，但新一代改了请求参数时，提交会被上游拒绝。保守回落仍能走图生视频这条主路线，时长和分辨率也来自条目，不受回落影响。
-- **官方数据给供应商模型下发能力覆盖**：可以表达官方渠道之间的差异，也能让老版本实例抢先用上新一代模型的全部能力。但目前同一模型在不同内置供应商下的能力完全一致，没有用例；日后需要时只是新增字段。
-- **在官方收录的供应商模型上叠加一层用户能力覆盖，不影响同步**：可以照顾把内置供应商接到中转站的用户。但内置供应商代表官方渠道，中转站应该用自定义供应商（见 `docs/adr/0099`）。
+- **Record channel facts such as input modes on model entries as well**: a new generation of models could use all capabilities without a release. But entries cannot express forks by execution sub-path; third-party data sources also have no such data, so it would amount to manually maintaining data tightly coupled to invocation channel code.
+- **Optimistically fall back to the capabilities of the same provider's newest generation for unknown models**: users could use reference images without opening them up manually, but when a new generation changes request parameters, submission would be rejected by the upstream. A conservative fallback still allows the main image-to-video route, and duration and resolution also come from the entry, unaffected by the fallback.
+- **Have official data deliver capability overrides for provider models**: could express differences between official channels and let older instances use a new generation's full capabilities early. But currently the same model has identical capabilities under different built-in providers, so there is no use case; if needed later, it is just a new field.
+- **Layer user capability overrides on officially listed provider models without affecting sync**: would cater to users who point built-in providers at relay services. But built-in providers represent official channels, and relay services should use custom providers (see `docs/adr/0099`).
 
 ## Consequences
 
-- 新一代视频模型在调用通道支持之前，即使已列入内置供应商清单，也只有保守能力。目录数据仓库宜在调用通道支持之后再列入，并标上最低应用版本（见 `docs/adr/0103`）。
-- 自定义供应商的供应商模型不再单独存可选时长，可选时长来自对应的条目，渠道限制写进能力覆盖。按模型名推断时长的预设只用于新建模型条目时预填，以及对应不上条目的供应商模型在运行时回落（见 `docs/adr/0105`）。
+- Before an invocation channel supports a new generation of video model, it has only conservative capabilities even if already in a built-in provider list. The catalog data repository should list it only after the invocation channel supports it, marked with a minimum application version (see `docs/adr/0103`).
+- Provider models of custom providers no longer store selectable durations separately; selectable durations come from the corresponding entry, and channel restrictions are written into capability overrides. Presets that infer duration from the model name are used only for pre-filling when creating a model entry, and as the runtime fallback for provider models that do not match an entry (see `docs/adr/0105`).

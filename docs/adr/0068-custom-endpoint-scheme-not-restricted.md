@@ -2,12 +2,12 @@
 status: accepted
 ---
 
-# 自定义供应商端点不限 scheme
+# Custom provider endpoints are not restricted by scheme
 
-自定义供应商的 `base_url` 与自定义调用端点定义里的请求 URL 都不限定 scheme，`http://` 与 `https://` 一样接受。自建服务、局域网内的中转端点与 `http://localhost` 上的本地网关是明确支持的使用场景，对它们要求 TLS 会让这一类端点整体不可用。
+Neither a custom provider's `base_url` nor the request URL in a custom call endpoint definition is restricted by scheme; `http://` is accepted just like `https://`. Self-hosted services, relay endpoints within a LAN, and local gateways on `http://localhost` are explicitly supported use cases, and requiring TLS for them would make this whole class of endpoints unusable.
 
-用户把凭证配给一个 `http://` 端点时，该凭证（`auth` 节渲染出的请求头或 query 参数）在链路上以明文传输。这一风险由用户对其所配置端点自担：ArcReel 不代替用户判断某个内网地址是否需要 TLS。
+When a user configures credentials for an `http://` endpoint, those credentials (request headers or query parameters rendered from the `auth` section) travel in plaintext over the link. This risk is borne by the user for the endpoints they configure: ArcReel does not judge on the user's behalf whether a given intranet address needs TLS.
 
-行为在全产品各路径上一致——创建与更新供应商、模型发现、连接测试、声明式运行时的提交 / 轮询 / 二次取件与产物下载，都不因 scheme 而分流。不在其中任何单一路径上设闸：只在一处拒绝 `http://` 会造成「发现模型能过、真跑视频被拒」这类同一配置在不同入口给出不同结论的分裂。
+The behavior is consistent across all paths in the product — creating and updating providers, model discovery, connection tests, and the declarative runtime's submit / poll / second fetch and artifact download are never routed differently by scheme. No gate is placed on any single one of these paths: rejecting `http://` in only one place would cause splits like "model discovery passes but actually running a video is rejected", where the same configuration yields different conclusions at different entry points.
 
-凭证的传播范围仍受同源约束：跨源重定向一律卸掉 `auth` 节渲染出的请求头与 query 凭证，产物地址只在与本次已携带凭证访问过的端点同源时才附凭证。该约束与 scheme 无关，两种 scheme 下都成立。
+The propagation scope of credentials is still bound by same-origin constraints: cross-origin redirects always strip the request headers and query credentials rendered from the `auth` section, and artifact URLs get credentials attached only when they are same-origin with an endpoint already accessed with credentials in this call. This constraint is independent of scheme and holds under both schemes.

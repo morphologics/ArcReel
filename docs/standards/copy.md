@@ -9,70 +9,70 @@ paths:
   - "**/CLAUDE.md"
 ---
 
-# 中文文案
+# Chinese copy
 
-写法、事实保真和排版以 `tech-doc-style-chinese` skill 为准，本文件只记录 ArcReel 在此基础上的覆盖和补充。文案类别按段落区分，同一份文件里可以同时有界面文案、用户文档和 Agent 文档。i18n 包的标点由 `frontend/src/i18n/locale-wording.test.ts` 和 `tests/unit/lib/i18n/test_locale_wording.py` 检查，审查标点时只需关注测试覆盖不到的文档正文。
+Writing style, factual fidelity and typography follow the `tech-doc-style-chinese` skill; this file only records ArcReel's overrides and additions on top of it. Copy categories are determined per paragraph: one file can contain UI copy, user documentation and agent documentation at the same time. Punctuation in the i18n bundles is checked by `frontend/src/i18n/locale-wording.test.ts` and `tests/unit/lib/i18n/test_locale_wording.py`; when reviewing punctuation, only the documentation prose the tests don't cover needs attention.
 
-## 通用
+## General
 
-### 领域概念使用 `GLOSSARY.md` 中的中文术语，`_Avoid_` 列出的说法不出现在界面上
+### Domain concepts use the Chinese terms in `GLOSSARY.md`; terms listed under `_Avoid_` do not appear in the UI
 
-同一概念用了不同叫法，用户会以为是两个不同的功能，去找并不存在的另一个入口；各语言的译文也会随之不一致。
+When the same concept goes by different names, users assume they are two different features and go looking for another entry point that doesn't exist; translations into each language become inconsistent as well.
 
-### 数值范围用「～」连接，单位相同时只写一次，百分数两端都写
+### Numeric ranges are joined with "～"; when the unit is the same, write it once; percentages are written on both ends
 
-例如 `2～10 秒`、`10%～20%`。连字符容易与负号、连接号混淆。
+For example `2～10 秒` (2–10 seconds), `10%～20%`. A hyphen is easily confused with a minus sign or an en dash.
 
-放行条件：需要用户原样输入的语法保持不变，例如时长档位的区间简写 `3-15`。
+Allowed when: syntax the user must type verbatim stays unchanged, for example the range shorthand for duration tiers `3-15`.
 
-### 占位符前的字段名和引号内的原始取值保持原样
+### Field names before a placeholder and the quotes around raw values stay as they are
 
-例如 `{field}: 引用路径越界：{path}` 中的 `{field}:`，以及 `'{value}'` 两侧的引号。这些内容是数据中的字段名和原始值，用户和开发者需要据此对照项目文件；改用全角标点后，就难以分辨哪些是原文。
+For example the `{field}:` in `{field}: 引用路径越界：{path}` ("reference path out of bounds: {path}"), and the quotes on both sides of `'{value}'`. These are field names and raw values from the data, which users and developers need to match against project files; if they are changed to full-width punctuation, it becomes hard to tell what is original text.
 
-### 用户文档和 Agent 文档使用书面中文，避开翻译腔、口语化和 AI 腔
+### User documentation and agent documentation use written Chinese, avoiding translationese, colloquialism and AI-speak
 
-- **翻译腔**：照搬英文结构的句式，如名词化堆叠、抽象名词作主语、「对……进行……」、被字句连用、层层叠加的「的」。改成以动词为主干的中文短句，例如「保留机器字面量的写法」改为「保持原样」，「多占一次注意力」改为「增加阅读负担」。
-- **口语化**：聊天式的说法，例如「换着叫」「不进界面」，改为「用不同叫法」「不出现在界面上」。
-- **AI 腔**：没有实际信息、只是读起来像样的套路，如四字词排比、以「随着……的发展」开头、套话收尾、滥用粗体、装饰性标题。删掉套路，直接陈述信息。
+- **Translationese**: sentence patterns copied from English structure, such as stacked nominalizations, abstract nouns as subjects, "对……进行……" ("to carry out … on …"), consecutive passive "被" sentences, and layer upon layer of "的". Rewrite as short Chinese sentences built around verbs; for example change "保留机器字面量的写法" ("preserve the written form of machine literals") to "保持原样" ("keep as is"), and "多占一次注意力" ("take up one more unit of attention") to "增加阅读负担" ("add to the reading burden").
+- **Colloquialism**: chat-style phrasing, such as "换着叫" ("call it this and that") and "不进界面" ("doesn't go into the UI"); change to "用不同叫法" ("use different names") and "不出现在界面上" ("does not appear in the UI").
+- **AI-speak**: formulas that carry no actual information and merely read well, such as parallel four-character phrases, openings like "随着……的发展" ("with the development of …"), stock closing phrases, overuse of bold, and decorative headings. Delete the formula and state the information directly.
 
-套用写作原则时同样保持常规中文：`writing-for-agents` 的正向表述等原则在符合中文表达习惯的前提下适用，「不加句号」这类常规说法照常使用。
+Keep to normal Chinese when applying writing principles too: principles such as positive phrasing from `writing-for-agents` apply as long as they fit Chinese usage; ordinary phrases such as "不加句号" ("no full stop") are used as usual.
 
-放行条件：四字词、被动句和正式语境中的「进行」本身都不算错误，原文清楚时不必修改；改写时不能丢掉事实、条件和确定程度。界面文案篇幅短、语气可以偏口语，不适用本条。
+Allowed when: four-character phrases, passive sentences and "进行" in formal contexts are not errors in themselves, and need not be changed when the original is clear; rewriting must not drop facts, conditions or degree of certainty. UI copy is short and its tone may be more colloquial; this rule does not apply to it.
 
-## 界面文案
+## UI copy
 
-适用于用户在操作过程中快速浏览的文字，包括按钮、标签、提示、状态、错误和事件消息，位于 `frontend/src/i18n/zh` 和 `lib/i18n/zh`。好的界面文案让用户一眼看懂下一步该做什么，翻译成其他语言后意思不变。
+Applies to text users skim while working, including buttons, labels, hints, statuses, errors and event messages, located in `frontend/src/i18n/zh` and `lib/i18n/zh`. Good UI copy lets users see at a glance what to do next, and keeps its meaning when translated into other languages.
 
-### 默认省略主语，需要指明由谁操作时称用户为「你」
+### Omit the subject by default; when it's necessary to say who acts, address the user as "你" (you)
 
-例如写「保存后生效」，不写「你保存后生效」。操作者默认就是用户，写出主语反而增加阅读负担。需要区分用户和系统时再写主语，例如「你取消了任务」「系统已取消任务」。称呼用户统一用「你」，与英文界面的 you 对应。
+For example write "保存后生效" ("takes effect after saving"), not "你保存后生效" ("takes effect after you save"). The actor is the user by default; writing out the subject only adds to the reading burden. Write the subject when the user and the system need to be distinguished, for example "你取消了任务" ("You canceled the task") and "系统已取消任务" ("The system canceled the task"). Always address the user as "你", corresponding to "you" in the English UI.
 
-### 只在要求用户执行操作、且省略后语气生硬时使用「请」
+### Use "请" (please) only when asking the user to perform an action and omitting it would sound abrupt
 
-占位符、Tooltip、空状态和状态文字直接陈述，例如占位符写「输入项目名称」。如果每句都带「请」，真正需要用户操作的提示反而不够醒目。
+Placeholders, tooltips, empty states and status text state things directly; for example a placeholder reads "输入项目名称" ("Enter project name"). If every sentence carries "请", the prompts that really need the user to act no longer stand out.
 
-### 按钮、标签、Tooltip 和输入框提示不加句号
+### No full stop on buttons, labels, tooltips and input hints
 
-这些位置的文字是名称或简短指令，加句号只会增加视觉干扰。由多个句子组成的说明和错误消息照常使用句号。
+Text in these places is a name or a short instruction; a full stop only adds visual noise. Explanations and error messages made up of several sentences use full stops as usual.
 
-### 确认按钮直接写出操作结果
+### Confirm buttons state the result of the action directly
 
-确认框的主按钮使用「删除」「发布」「覆盖」这类表示结果的词。用户只看按钮就能知道点击后会发生什么，危险操作尤其需要这样写。
+The primary button of a confirmation dialog uses words that state the result, such as "删除" (Delete), "发布" (Publish) and "覆盖" (Overwrite). Users can tell what will happen on click just by looking at the button; dangerous actions especially need this.
 
-### 操作无法完成时用「无法…」表述，「抱歉」只用于 ArcReel 自身造成的问题
+### When an action cannot be completed, phrase it as "无法…" (cannot …); use "抱歉" (sorry) only for problems ArcReel itself caused
 
-「无法连接供应商」说明了当前状态，也自然引出下一步操作；用户输入不符合要求时，直接说明要求即可。失败提示的结构见 `general.md` 中「失败提示先说原因和下一步，原文折叠」一条。
+"无法连接供应商" ("Cannot connect to provider") states the current situation and naturally leads to the next step; when user input does not meet requirements, simply state the requirement. For the structure of failure messages, see the rule "Failure messages state the cause and next step first; the raw text is collapsed" in `general.md`.
 
-放行条件：「生成失败」这类任务状态名属于状态标签，照常使用。
+Allowed when: task status names such as "生成失败" ("Generation failed") are status labels and are used as usual.
 
-### 进行中的状态和需要继续输入的菜单项使用单个「…」
+### In-progress states and menu items that need further input use a single "…"
 
-例如「生成中…」「导出…」。界面中不使用 skill 规定的「……」：单个字符不会在行中断开，占用的空间也更小。
+For example "生成中…" ("Generating…"), "导出…" ("Export…"). The UI does not use the "……" prescribed by the skill: a single character doesn't break across lines and takes up less space.
 
-## 用户文档
+## User documentation
 
-适用于用户带着任务或问题来查阅的段落，位于 `website/docs`、README 和 CONTRIBUTING。好的用户文档让读者能找到所需内容、照着步骤能完成操作、完成后能确认结果，对能力的描述不超出产品实际。称呼方式与界面文案相同。
+Applies to paragraphs users consult when they come with a task or a question, located in `website/docs`, the README and CONTRIBUTING. Good user documentation lets readers find what they need, complete the task by following the steps, and confirm the result afterwards, without describing capabilities beyond what the product actually does. The form of address is the same as for UI copy.
 
-## Agent 文档
+## Agent documentation
 
-适用于开发者或 Agent 据以做决策的段落，位于 `docs/**` 和各级 `CLAUDE.md`。写法以 `writing-for-agents` skill 为准。
+Applies to paragraphs that developers or agents base decisions on, located in `docs/**` and `CLAUDE.md` at every level. Writing style follows the `writing-for-agents` skill.

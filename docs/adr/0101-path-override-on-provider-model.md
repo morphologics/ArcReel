@@ -2,33 +2,33 @@
 status: accepted
 ---
 
-# 路径覆盖记在供应商模型上，按端点的每条请求整条替换路径
+# Path overrides are recorded on the provider model, replacing the whole path per request of the endpoint
 
-有些中转站沿用官方协议，只在路径上加前缀、改版本段或换路径名，同一家的不同协议还常挂在不同前缀下。以往这类差异只能靠在 base_url 中写不同的 `/vN` 来调整，Python 端点的其余路径由 SDK 固定。现在改为在自定义供应商的供应商模型上记录路径覆盖：调用端点发出的每条请求都可以单独整条替换路径，例如声明式定义的提交、轮询、取结果。路径覆盖放在供应商模型这一层，是因为实际挂接的模型不多，按模型配置最灵活。
+Some relay services keep the official protocol and only add a prefix to the path, change the version segment or rename the path, and different protocols of the same vendor are often mounted under different prefixes. Previously, such differences could only be adjusted by writing a different `/vN` into the base_url, and the remaining paths of Python endpoints were fixed by the SDK. Now path overrides are recorded on provider models of custom providers: each request sent by an invocation endpoint can have its whole path replaced individually, e.g. submit, poll and fetch result of a declarative definition. Path overrides live at the provider model level because the number of models actually attached is small, and configuring per model is most flexible.
 
-## 规则
+## Rules
 
-- 路径覆盖只对自定义供应商开放，适用于 Python 端点和声明式端点，不适用于 ComfyUI 端点。
-- 每个调用端点为自己发出的请求命名并给出默认路径；路径覆盖按请求名记录。路径中可用的占位符仅限该请求本身已有的值，例如 API 模型名、任务 id。
-- 路径覆盖相对于供应商填写的 base_url 原样值。设置了覆盖的请求不再经过该端点的 base_url 归一化（例如自动补 `/v1`）；没有覆盖时行为不变。
-- 路径覆盖只换路径。如果中转站连请求或响应 schema 一起改写，用声明式定义描述。
-- 覆盖路径带 query 时整体替换原请求的 query，不与原 query 合并；原请求中需要保留的参数（例如 Gemini 下载地址的 `alt=media`）要写进覆盖路径。
-- 续跑按提交时的 base_url 回放轮询与取件，路径覆盖也按它认出请求。落库的是归一化后的 base_url，覆盖所相对的原样路径按当下配置「原样值 → 归一化值」的差量还原。仅在该差量不变时支持修改路径前缀，例如原样 `/old` 改为 `/new`，两者均由端点补上 `/v1`。
-- 原样路径没有单独持久化，归一化差量变化时无法无歧义还原提交时的覆盖地址。例如原样 `/old/v1` 改为 `/new`，提交值与原样 `/old` 的归一化结果相同，续跑可能丢失原样版本段。百炼归一化会保留普通路径前缀，并剥去已知后缀后接上 `/api/v1`；普通前缀修改同样受上述差量条件约束，并非全部原样路径都会丢失。
-- Python 端点统一在 HTTP transport 层按请求名改写路径，不改用合成 base_url 的方式。
-- 路径覆盖属于自定义调用端点协议的一部分，随它冻结在 execution checkpoint 中；续跑时覆盖已被修改，按 `docs/adr/0007` 的协议漂移处理。
-- 模型发现和连通性检查不使用路径覆盖，仍按供应商的 base_url 与发现格式发出请求。
-- 新挂接端点的供应商模型没有路径覆盖，也不从同级模型带出；改挂端点时原有覆盖丢弃。端点定义更新后路径覆盖仍然优先，定义中已经不存在的请求名对应的覆盖会被忽略。
+- Path overrides are open only to custom providers, apply to Python endpoints and declarative endpoints, and do not apply to ComfyUI endpoints.
+- Each invocation endpoint names the requests it sends and gives default paths; path overrides are recorded by request name. Placeholders usable in a path are limited to values that the request itself already has, such as the API model name or task id.
+- Path overrides are relative to the raw base_url value the provider entered. Requests with an override no longer go through the endpoint's base_url normalisation (e.g. automatically appending `/v1`); without an override, behaviour is unchanged.
+- Path overrides only replace the path. If the relay service also rewrites the request or response schema, describe it with a declarative definition.
+- When an override path carries a query, it replaces the original request's query entirely rather than merging with it; parameters of the original request that need to be kept (e.g. `alt=media` on Gemini download URLs) must be written into the override path.
+- Resumption replays polling and fetching against the base_url at submission time, and path overrides also recognise requests by it. What is persisted is the normalised base_url, and the raw path that overrides are relative to is restored from the current configuration's "raw value → normalised value" delta. Changing the path prefix is supported only when that delta is unchanged, e.g. raw `/old` changed to `/new`, with the endpoint appending `/v1` to both.
+- The raw path is not persisted separately, so when the normalisation delta changes, the override URL at submission cannot be restored unambiguously. For example, if raw `/old/v1` is changed to `/new`, the submitted value equals the normalised result of raw `/old`, and resumption may lose the raw version segment. Bailian normalisation keeps ordinary path prefixes, strips known suffixes and then appends `/api/v1`; changes to ordinary prefixes are likewise subject to the delta condition above, and not all raw paths are lost.
+- Python endpoints uniformly rewrite paths by request name at the HTTP transport layer, rather than switching to a synthesised base_url.
+- Path overrides are part of the custom invocation endpoint protocol and are frozen with it in the execution checkpoint; if the override has been changed at resumption, it is handled as protocol drift per `docs/adr/0007`.
+- Model discovery and connectivity checks do not use path overrides; they still send requests using the provider's base_url and discovery format.
+- A provider model newly attached to an endpoint has no path overrides and does not inherit them from sibling models; when switching to a different endpoint, existing overrides are discarded. After an endpoint definition is updated, path overrides still take precedence, and overrides for request names that no longer exist in the definition are ignored.
 
 ## Considered Options
 
-- **按「供应商 × 调用端点」记一份**：同一供应商下挂接同一端点的模型不必重复配置，调研也是这样建议的。但同一端点下的模型如果需要不同路径，只能拆成两个供应商。
-- **「复制为我的」端点定义**：Python 端点没有定义可以复制。自定义调用端点是全局的，每接一个中转站就会多出一份几乎相同的定义。
-- **只加前缀，或给端点单独配一个 base_url**：无法修改路径名，异步协议的各条请求也不能分别调整。
-- **新建或改挂端点时从同级模型带出覆盖**：同级模型的覆盖不一致时，没有可以依据的值；新建和改挂两个入口的规则也难以统一。
-- **能合成 base_url 时就合成，合成不了再改写 transport**：两套机制并存，每条请求都要先判断走哪一条。
+- **Record one per "provider × invocation endpoint"**: models under the same provider attached to the same endpoint would not need repeated configuration, and the research also suggested this. But if models under the same endpoint need different paths, they could only be split into two providers.
+- **"Copy as mine" endpoint definitions**: Python endpoints have no definition to copy. Custom invocation endpoints are global, so every relay service connected would add another nearly identical definition.
+- **Only add a prefix, or give the endpoint its own base_url**: cannot change path names, and the individual requests of an async protocol cannot be adjusted separately.
+- **Inherit overrides from sibling models when creating or re-attaching an endpoint**: when sibling models' overrides disagree, there is no value to go by; the rules for the two entry points, creation and re-attachment, would also be hard to unify.
+- **Synthesise a base_url when possible, and rewrite at the transport only when not**: two mechanisms coexist, and every request would first have to decide which one to take.
 
 ## Consequences
 
-- 同一中转站下的多个模型需要各自填写相同的覆盖。
-- 声明式定义中不以 `{{ base_url }}` 开头的请求 URL（例如从响应中取得的下载地址）没有可以替换的路径，不接受路径覆盖。
+- Multiple models under the same relay service each need the same override filled in.
+- Request URLs in declarative definitions that do not start with `{{ base_url }}` (e.g. download URLs taken from a response) have no path to replace and do not accept path overrides.

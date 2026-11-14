@@ -1,63 +1,63 @@
-# 教训的记录与晋升
+# Recording and promoting lessons
 
-[`docs/LESSONS.md`](../LESSONS.md) 是教训库：记录值得改进环境的错，同类问题重复到阈值再晋升。编码与流程问题都可以收录，记录时不预判去向。
+[`docs/LESSONS.md`](../LESSONS.md) is the lessons log: it records mistakes worth improving the environment over, and promotes a kind of problem once it has recurred up to the threshold. Both coding and process problems can be included, and when recording, do not prejudge where an entry will end up.
 
-教训库在实现与审查阶段都不读。唯一写入者是 [`lessons-sweep`](../../.agents/skills/lessons-sweep/SKILL.md) 巡检；用户手动运行 `/retro` 时也可以直接修改。其余 agent 只经下面的收尾自查提交候选。
+The lessons log is not read during implementation or review. Its only writer is the [`lessons-sweep`](../../.agents/skills/lessons-sweep/SKILL.md) sweep; the user can also edit it directly when running `/retro` manually. All other agents only submit candidates through the end-of-task self-check below.
 
-## 收尾自查
+## End-of-task self-check
 
-凡最终要提 PR 的工作都在收尾时自查一次，包括交互式会话和小修复；AFK 批次中的 implementer、stage-reviewer、review-looper 各自查一次。
+Any work that will ultimately become a PR gets one self-check at the end, including interactive sessions and small fixes; in AFK batches, the implementer, stage-reviewer and review-looper each do one self-check.
 
-自问：这次有没有出过值得改进环境的错？符合任一条就算：
+Ask yourself: did this work involve a mistake worth improving the environment over? It counts if any of the following holds:
 
-- **漏到了 main**：合并后修复、revert、main CI 失败。
-- **数据·安全·真实花费**：按实际后果判断，看这个错最终会不会丢失或损坏用户数据、突破安全边界，或让用户为不期望的模型调用付出真实费用，例如测试连接真的调用了模型。在 PR 内被抓到也算。ArcReel 自己的费用记录和预估是参考值，记错本身不算，只有最终导致真实花费时才算。
-- **机械可判**：lint、类型检查、脚本或测试能判定这类错，现有检查却没报出。在 PR 内被抓到也算，去向是新检查。
-- **返工代价大**：推翻已写的代码，或同一个问题来回改了 2 轮以上。
+- **Leaked into main**: a post-merge fix, a revert, a main CI failure.
+- **Data · security · real spend**: judge by actual consequences, i.e. whether the mistake would ultimately lose or corrupt user data, break a security boundary, or make the user pay real money for unexpected model calls, for example a test connection that actually called a model. Being caught within the PR still counts. ArcReel's own cost records and estimates are reference values; recording them wrongly does not count by itself, only when it ultimately leads to real spend.
+- **Mechanically detectable**: lint, type checks, scripts or tests could detect this kind of mistake, but the existing checks did not report it. Being caught within the PR still counts, and the destination is a new check.
+- **Expensive rework**: overturning code already written, or going back and forth on the same problem for 2 or more rounds.
 
-四条都不符合的不算教训，常见的有：需要判断的错在 PR 内被审查指出、一次改好，这说明审查在正常工作；现有检查报出或审查引用现有规范指出的错；被驳回的审查意见；纯措辞修改。
+Anything matching none of the four is not a lesson; common examples: a judgement mistake pointed out by review within the PR and fixed in one go, which shows review is working normally; mistakes reported by existing checks, or pointed out by review citing existing standards; rejected review comments; pure wording changes.
 
-有这类错时，在 PR 创建后于该 PR 上发一条评论：首行是 `<!-- lesson-candidate -->`，其后按[条目格式](#条目格式)写一个条目，出现记录在「没拦住」前补上 `根因：<…>`。同一 PR 上已发过的候选不再重复发。
+When there is such a mistake, after the PR is created post a comment on that PR: the first line is `<!-- lesson-candidate -->`, followed by one entry in the [entry format](#entry-format), with `Root cause: <…>` added to the occurrence record before "not caught". Do not post the same candidate again on a PR where it has already been posted.
 
-问题出在更早的 PR 里时，评论仍发在当前 PR，编号按「计数与晋升」的计数单位写。
+When the problem originated in an earlier PR, the comment still goes on the current PR, and the number is written according to the counting unit in "Counting and promotion".
 
-AFK 角色还没有自己的 PR 时（implementer，以及 stage PR 创建前的 stage-reviewer），把候选按同一格式写进 handoff，由 team-lead 在 stage PR 上统一发评论。
+When an AFK role does not have its own PR yet (the implementer, and the stage-reviewer before the stage PR is created), it writes the candidate in the same format into its handoff, and the team-lead posts the comments together on the stage PR.
 
-## 条目格式
+## Entry format
 
 ```markdown
-### <一句话规则，正面表述>
-模式：<在什么情况下会犯，表现是什么>
-代价：<后果>（严重度：常规 / 数据·安全·真实花费）
-判定方式：机械（拟用 <工具>）/ 需要判断
-- #3101 · 2026-10-13 · 审查发现：<一句现象>；没拦住：<原因>
-- #3139 · 2026-10-14 · 合并后修复：<一句现象>；没拦住：<…>
+### <One-sentence rule, stated positively>
+Pattern: <in what situation it happens, and how it shows up>
+Cost: <consequence> (severity: routine / data · security · real spend)
+Detection: mechanical (planned via <tool>) / judgement required
+- #3101 · 2026-10-13 · Found in review: <one-sentence symptom>; not caught: <reason>
+- #3139 · 2026-10-14 · Post-merge fix: <one-sentence symptom>; not caught: <…>
 ```
 
-- 出现次数与最后出现日期从出现记录统计，不另设字段。
-- 规则、模式与代价写长期成立的做法和后果，SHA、行号、文件路径这类会过时的细节只写在出现记录里。
-- 来源写发现途径，例如自查、审查发现、合并后修复、revert、main CI 失败。
-- 「没拦住」取三者之一：没有对应规则；有规则但没被执行；检查没接上。错已被现有检查或规范在 PR 内拦下时写「无，已被 <检查或规则> 拦下」，晋升评审时先确认这项拦截是否已经足够。
+- Occurrence count and last occurrence date are derived from the occurrence records; there are no separate fields for them.
+- The rule, pattern and cost describe practices and consequences that hold long-term; details that go stale, such as SHAs, line numbers and file paths, go only in the occurrence records.
+- The source states how it was found, e.g. self-check, found in review, post-merge fix, revert, main CI failure.
+- "Missed because" takes one of three values: no corresponding rule; a rule exists but was not followed; the check was not wired in. When the mistake was already stopped within the PR by an existing check or standard, write "none, stopped by <check or rule>", and at promotion review first confirm whether that interception is already sufficient.
 
-## 分组
+## Grouping
 
-- 按失败模式分组。按代码位置分组会把同一模式拆到几处，计数永远凑不够阈值。
-- 组用二级标题，条目用三级标题。不预设分类表：条目归入最接近的组；归不进的先放在「未分组」，累积到两条以上同类条目时新建组；组可以合并、拆分。
-- 文末的「已晋升」区记录移走的条目，写明去向并保留出现记录。
+- Group by failure pattern. Grouping by code location splits the same pattern into several places, and the count never reaches the threshold.
+- Groups use level-2 headings, entries use level-3 headings. There is no predefined taxonomy: an entry goes into the closest group; those that fit nowhere go into "Ungrouped" first, and a new group is created once two or more similar entries accumulate; groups can be merged and split.
+- The "Promoted" section at the end records entries that were moved out, stating where they went and keeping their occurrence records.
 
-## 信息边界
+## Information boundary
 
-本仓库公开。条目只写技术事实（PR 与 commit 号、现象），客户、渠道与商业信息不进教训库；涉及私有实现的教训不写进本仓库。
+This repository is public. Entries contain only technical facts (PR and commit numbers, symptoms); customer, channel and business information does not go into the lessons log; lessons involving private implementations are not written into this repository.
 
-## 计数与晋升
+## Counting and promotion
 
-- **计数单位**：不同的 PR 或 issue。同一 PR 内反复出现只算 1 次。一起事故只记一条出现记录，编号写引入问题的 PR，找不到时写发现问题的 PR；从多个来源收集到同一起事故时合并成一条，修复 PR 号可附在现象里作证据。
-- **晋升阈值**：机械可判的满 2 次做成检查；需要判断的满 3 次写成规则；严重度为数据·安全·真实花费的出现 1 次就进入晋升评审。
-- **去向**：可以是检查、规范、skill、导航指针或架构文档，按 [`CODING_STANDARDS.md`](../../CODING_STANDARDS.md)「维护」的判据裁决。出现记录里有「有规则但没被执行」的，说明文字规则不够，优先做成检查或从架构上消除。未通过准入判据的留在教训库继续计数，并追加一行 `评审未晋升 · <日期> · <一行理由>`（不计入出现次数）；这行之后出现新记录才重新评审。跨领域的模式写进 `docs/standards/general.md`。
-- **过期**：最后一次出现超过 30 天的条目删除，git 历史即归档。注有 open issue 号的条目与「已晋升」区不过期。
+- **Counting unit**: distinct PRs or issues. Repeated occurrences within the same PR count as 1. One incident gets only one occurrence record, numbered with the PR that introduced the problem, or the PR that found it if that cannot be determined; when the same incident is collected from multiple sources, merge them into one, and the fix PR number can be attached in the symptom as evidence.
+- **Promotion thresholds**: mechanically detectable ones become a check at 2 occurrences; judgement ones become a rule at 3; anything with severity data · security · real spend enters promotion review after 1 occurrence.
+- **Destination**: can be a check, a standard, a skill, a navigation pointer or architecture docs, decided by the criteria in "Maintenance" in [`CODING_STANDARDS.md`](../../CODING_STANDARDS.md). If the occurrence records include "a rule exists but was not followed", a written rule is not enough, and a check or an architectural elimination is preferred. Entries that fail the admission criteria stay in the lessons log and keep counting, with a line `Reviewed, not promoted · <date> · <one-line reason>` appended (not counted as an occurrence); only new records after that line trigger another review. Cross-domain patterns go into `docs/standards/general.md`.
+- **Expiry**: entries whose last occurrence is more than 30 days ago are deleted; git history serves as the archive. Entries noting an open issue number, and the "Promoted" section, do not expire.
 
-## 规范退出
+## Retiring standards
 
-- 规则已做成检查，或那类错误在架构上已不可能发生：删除规则。
-- 改动命中规则适用路径的最近 30 个合并 PR 中，审查评论都没有引用过它，是删除候选，用准入判据中的反事实检验裁决。统计起点取以下三者中最晚的一个：教训库首个 reviewed-through（`486a901`，2026-10-19）、规则加入规范的 PR 合并时、上次裁定保留它的巡检 PR 合并时；起点之后命中的 PR 不满 30 个时不裁决。每次巡检最多裁决 5 条。
-- 有事故来源的规则降级回教训库：附上「已晋升」区中的已知出现记录，再追加一条 `降级 · <日期> · 自 <规范文件 + 规则标题>`，过期从这条记录起算；重新晋升只计这条记录之后的出现，之前的记录只作背景。
+- The rule has been turned into a check, or that kind of mistake has become architecturally impossible: delete the rule.
+- If none of the review comments on the last 30 merged PRs whose changes hit the rule's applicable paths cited it, it is a deletion candidate, decided by the counterfactual test in the admission criteria. The counting starts from the latest of the following three: the lessons log's first reviewed-through (`486a901`, 2026-10-19), the merge of the PR that added the rule to the standards, and the merge of the last sweep PR that ruled to keep it; if fewer than 30 PRs have hit it since the starting point, no ruling is made. Each sweep rules on at most 5 rules.
+- Rules that originated from incidents are demoted back to the lessons log: attach the known occurrence records from the "Promoted" section, then append a line `Demoted · <date> · from <standard file + rule title>`; expiry counts from this line; re-promotion counts only occurrences after this line, with earlier records serving only as background.

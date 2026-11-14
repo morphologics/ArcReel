@@ -1,6 +1,6 @@
-# Endpoint 官方文档索引
+# Endpoint official docs index
 
-文件名与 `lib.custom_provider.endpoints.ENDPOINT_REGISTRY` 的 endpoint id 一致。Endpoint 是协议端口，不是 provider 身份。
+File names match the endpoint ids in `lib.custom_provider.endpoints.ENDPOINT_REGISTRY`. An endpoint is a protocol port, not a provider identity.
 
 - [anthropic-messages](anthropic-messages.md)
 - [ark-seedance](ark-seedance.md)

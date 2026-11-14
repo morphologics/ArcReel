@@ -2,19 +2,19 @@
 status: accepted
 ---
 
-# 文本后端重试只包单次网络调用，降级编排在重试范围外、自带一层重试
+# Text backend retries wrap only the single network call; fallback orchestration sits outside the retry scope and has its own retry layer
 
-结构化输出的降级机制（`docs/adr/0014`）让一次 `generate` 可能包含多次计费调用：原生调用 + 复验失败后的降级尝试若干次。此前三个文本后端（gemini / openai / ark）的 `generate` 整体被 `@with_retry_async` 装饰、降级调用在重试范围内——这曾是有意设计（「无论原生还是降级路径遇到瞬态错误，都统一由外层重试处理」），但它有两个代价：**叠乘重放**——降级尝试的瞬态失败触发外层重试时，会连带重放已成功（已计费）的原生调用，最坏情形是外层重试 × 降级尝试 × 内层重试的几何放大；**字符串误匹配**——`lib/infra/retry.py` 的重试判定除类型匹配外还按消息文本匹配瞬态模式（"429" / "500" / "timeout" 等），降级穷尽抛出的异常插值模型侧动态文本（校验失败原因、模型输出片段），可能误中模式触发整体重放。
+The structured-output fallback mechanism (`docs/adr/0014`) means one `generate` may involve several billed calls: the native call + several fallback attempts after re-validation fails. Previously, the whole `generate` of all three text backends (gemini / openai / ark) was decorated with `@with_retry_async`, and the fallback calls were inside the retry scope — this was once intentional ("whether the native or the fallback path hits a transient error, the outer retry handles it uniformly"), but it had two costs: **multiplicative replay** — when a transient failure in a fallback attempt triggers the outer retry, it also replays the native call that already succeeded (and was already billed); in the worst case this amplifies geometrically as outer retries × fallback attempts × inner retries; **string mismatching** — the retry decision in `lib/infra/retry.py`, besides type matching, also matches transient patterns by message text ("429" / "500" / "timeout", etc.), and the exception thrown when fallbacks are exhausted interpolates dynamic model-side text (validation failure reasons, model output fragments), which could accidentally match a pattern and trigger a full replay.
 
-我们决定三后端统一拆分：`generate` 为**无装饰编排层**（复验 + 降级调度），`@with_retry_async` 只装饰**单次网络调用方法**（gemini `_generate_native`、openai `_generate_native`、ark `_call_chat_completions`）；降级路径自带一层同配置重试（gemini 降级循环直调带重试的单次调用方法；openai / ark 的 Instructor 降级函数带装饰器——`instructor_fallback_*` 的契约是自身不做瞬态重试、由调用方提供）。复验与降级编排产生的异常不再穿过任何重试判定。新增文本后端应遵循同一结构：重试装饰器只出现在单次网络调用方法上。
+We decided to split all three backends uniformly: `generate` is an **undecorated orchestration layer** (re-validation + fallback scheduling), and `@with_retry_async` decorates only the **single network call method** (gemini `_generate_native`, openai `_generate_native`, ark `_call_chat_completions`); the fallback path has its own retry layer with the same configuration (gemini's fallback loop calls the retrying single-call method directly; openai / ark's Instructor fallback functions carry the decorator — the contract of `instructor_fallback_*` is that it does no transient retrying itself and the caller provides it). Exceptions produced by re-validation and fallback orchestration no longer pass through any retry decision. New text backends should follow the same structure: the retry decorator appears only on single network call methods.
 
-两个配套细节：openai 的 schema 不兼容以 `None` 信号（而非异常）从带重试的单次调用方法传出——代理可能把上游 schema 错误包装成 429 等状态码，若以异常穿过装饰器会被字符串模式误判为瞬态错误白白重试，`None` 信号维持「schema 错误零重试、立即降级」的语义；ark 原生结构化调用的 `except Exception` 全捕获降级是既有语义（覆盖空 choices 等无法按错误文案白名单预判的中转形态），不随本决策收窄。
+Two accompanying details: openai's schema incompatibility is passed out of the retrying single-call method as a `None` signal (not an exception) — a proxy may wrap an upstream schema error in a status code such as 429, and if it passed through the decorator as an exception it would be misjudged as transient by the string patterns and retried for nothing; the `None` signal keeps the semantics of "schema errors get zero retries and fall back immediately"; ark's native structured call's catch-all `except Exception` fallback is existing semantics (covering relay shapes such as empty choices that can't be anticipated by an error-text allow-list) and is not narrowed by this decision.
 
-**明确不采用**：维持单一外层重试包整个流程。「降级路径的瞬态错误也能重试」的收益由降级层自带重试等价承接，而叠乘重放已计费调用与字符串误匹配这两个代价只有拆分能消除。
+**Explicitly not adopted**: keeping a single outer retry wrapping the whole flow. The benefit of "transient errors on the fallback path can also be retried" is taken over equivalently by the fallback layer's own retries, while the two costs, multiplicative replay of billed calls and string mismatching, can only be eliminated by splitting.
 
 ## Consequences
 
-- 各层重试预算独立且有界：最坏调用次数 = 原生重试上限 + 降级尝试数 × 降级层重试上限，不再几何叠乘。
-- 三后端各有「降级瞬态失败不重放原生调用」回归测试锁定该结构。
-- ark 的原生结构化调用由此获得单次调用层的瞬态重试（此前瞬态失败直接降级 Instructor），降级次数因而减少。
-- 残余风险：Instructor 库内校验穷尽的异常消息若恰含瞬态模式字样，仍可能重放降级路径自身（校验在库内、拆不出重试范围），但不再波及已成功的原生调用。
+- Each layer's retry budget is independent and bounded: worst-case call count = native retry limit + fallback attempts × fallback-layer retry limit, no longer a geometric product.
+- Each of the three backends has a "fallback transient failure does not replay the native call" regression test locking in this structure.
+- ark's native structured call thereby gains transient retries at the single-call layer (previously a transient failure fell straight back to Instructor), so the number of fallbacks drops.
+- Residual risk: if the exception message from validation exhaustion inside the Instructor library happens to contain transient-pattern text, it may still replay the fallback path itself (validation is inside the library and cannot be split out of the retry scope), but it no longer affects the native call that already succeeded.

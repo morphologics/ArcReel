@@ -2,26 +2,26 @@
 status: accepted
 ---
 
-# 分享提交经官方服务转为市场源 PR：不需账号、PR 是审批的唯一容器
+# Share submissions become market-source PRs via the official service: no account needed, and the PR is the only container for approval
 
-向官方市场源投稿原本只有手工向官方仓提 PR 一条路（`docs/adr/0078`），要求用户会用 GitHub 并自己组织条目目录。我们决定在客户端提供**分享提交**：用户把一个自定义调用端点提交给官方服务，官方服务预检后以 GitHub App 身份向官方市场源仓库开 PR，审批仍在 GitHub 上完成。
+Submitting to the official market source originally had only one path, manually opening a PR against the official repository (`docs/adr/0078`), which required the user to know GitHub and organise the entry directory themselves. We decided to offer **share submission** in the client: the user submits a custom invocation endpoint to the official service, which pre-checks it and opens a PR against the official market source repository as a GitHub App; approval still happens on GitHub.
 
-- **不需账号**：提交者以实例标识（`docs/adr/0093`）加官方服务签发的提交令牌识别；客户端凭令牌查询状态与 PR 链接。可选填写 GitHub 用户名，仅用于在 PR 中提及，不做验证。
-- **PR 是审批的唯一容器**：官方服务不设审批台、不保存条目内容，只记 PR 号与终态；合并即采纳、关闭即拒绝，状态由 webhook 回写为 `open` → `merged` | `closed`。CI 与人工审核沿用手工投稿路径。
-- **同实例重复提交更新同一分支**：PR 开着时同一实例对同一 slug 再次提交，推新提交到原分支、令牌不变；PR 关闭后再提交开新 PR。
-- **异实例同 slug 不拦截**：照常开 PR 并打 `conflict` 标签，由审核者裁决。
-- **载荷从首日按类型建模**：`{type, slug, files, meta}`，`files` 是相对路径到内容的映射，PR 落到该类型的目录下；首批只接受调用端点，其余类型返回「类型暂不支持」。预检按类型分派到与市场仓 CI 同一份校验器，不过即返回诊断 code，不开 PR。
-- 反滥用在官方服务一处实现：每实例开放中的提交数、每 IP 每日提交数与文件包大小均设上限。
+- **No account needed**: submitters are identified by the instance ID (`docs/adr/0093`) plus a submission token issued by the official service; the client uses the token to query status and the PR link. A GitHub username can optionally be provided, used only for mentioning in the PR, and not verified.
+- **The PR is the only container for approval**: the official service has no approval console and does not store entry content, only the PR number and terminal state; merge means accepted, close means rejected, and status is written back via webhook as `open` → `merged` | `closed`. CI and manual review follow the manual submission path.
+- **Repeat submissions from the same instance update the same branch**: while the PR is open, a new submission from the same instance for the same slug pushes a new commit to the original branch and the token stays the same; after the PR is closed, a new submission opens a new PR.
+- **Same slug from a different instance is not blocked**: a PR is opened as usual and labelled `conflict`, for the reviewer to decide.
+- **The payload is modelled by type from day one**: `{type, slug, files, meta}`, where `files` is a mapping from relative path to content and the PR lands in that type's directory; the first batch accepts only invocation endpoints, and other types return "type not yet supported". Pre-check dispatches by type to the same validator as the market repository's CI; on failure it returns a diagnostic code and does not open a PR.
+- Anti-abuse is implemented in one place, the official service: open submissions per instance, submissions per IP per day, and file package size are all capped.
 
 ## Considered Options
 
-- **官方服务先入库待审，审批台批准后再开 PR**：多出一个与 GitHub 并行的审批状态，且需要管理员登录。
-- **要求提交者登录 GitHub**：回到账号问题，把不熟悉 GitHub 的用户挡在外面，而这正是本路径要服务的人。
-- **异实例同 slug 直接拒绝**：先到者可以抢注 slug；交给审核者更稳妥。
-- **载荷只为调用端点设计**：新增条目类型时要改接口与客户端；泛化的文件包代价很低。
+- **The official service stores submissions for review first, and opens the PR after approval in an approval console**: adds an approval state parallel to GitHub's, and requires administrator login.
+- **Require submitters to log in to GitHub**: back to the account problem, shutting out users unfamiliar with GitHub, who are exactly the people this path is meant to serve.
+- **Reject the same slug from a different instance outright**: the first to arrive could squat on a slug; leaving it to the reviewer is safer.
+- **Design the payload only for invocation endpoints**: adding entry types would require changing the interface and the client; a generalised file package costs very little.
 
 ## Consequences
 
-- 分享提交不产生安装记录，也不改变本地端点与任何市场条目的绑定（`docs/adr/0079` 不变）。
-- 手工 PR 投稿路径保留，与分享提交并存，市场源仓库的 CI 对两者一视同仁。
-- 结果告知首期只靠客户端凭令牌查询，无邮件与站内通知。
+- Share submission produces no installation record and does not change the binding between local endpoints and any market entry (`docs/adr/0079` unchanged).
+- The manual PR submission path is kept and coexists with share submission; the market source repository's CI treats both the same.
+- In the first phase, results are communicated only via client token queries, with no email or in-app notifications.

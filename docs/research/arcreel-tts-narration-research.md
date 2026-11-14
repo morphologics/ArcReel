@@ -1,131 +1,131 @@
-# ArcReel TTS（旁白配音）选型与接入调研报告
+# ArcReel TTS (Narration Voice-over) Selection and Integration Research Report
 
-> 调研日期：2026-06-02。所有单价/模型名/接口细节均为该日 fetch，TTS 定价变动频繁，工程决策前须复核 live 文档。
-> 不确定项一律标注 **UNVERIFIED**，不编造（遵循"不猜外部供应商数据"原则）。
-> 本报告对应的本期接入决策见 `docs/adr/0010-tts-audio-through-generation-queue.md` 与 `GLOSSARY.md`「媒体类型与配音（TTS）」。
+> Research date: 2026-06-02. All unit prices / model names / API details were fetched on that date; TTS pricing changes frequently, so re-check the live docs before making engineering decisions.
+> Uncertain items are always marked **UNVERIFIED** and never invented (following the "don't guess external provider data" principle).
+> The integration decisions for this phase that correspond to this report are in `docs/adr/0010-tts-audio-through-generation-queue.md` and `GLOSSARY.md` "Media types and voice-over (TTS)".
 
-## 0. 调研范围与定位
+## 0. Scope and positioning
 
-为 ArcReel（中文小说→短视频）选型 TTS，**本期用于说书（narration）模式的旁白配音**。
+Selecting TTS for ArcReel (Chinese novel → short video), **used in this phase for narration voice-over in storytelling (narration) mode**.
 
-- **评选第一标准**：中文旁白质量（朗读式长文本的语气/停顿/情感/连贯性）。架构不绑定语言，逐家标注语种覆盖，最终由用户自选。
-- **两条接入路径都覆盖**：A. 云 API 供应商（主接入路径）；B. 自托管/端侧开源模型（隐私/成本对比）。
-- **ArcReel 接入约束**：① 自定义供应商凭证固定为单字段 `api_key` + `base_url`（`docs/adr/0008`），多字段鉴权只能内置 preset；② OpenAI 兼容 `/v1/audio/speech` 可复用现有 OpenAI 客户端工厂、走中转；③ 声明式定价按 `kind` 声明（`docs/adr/0009`）；④ 同步 vs 异步决定 backend 仿 `text_backends` 还是 `video_backends`；⑤ 已接入供应商（Gemini / 火山 Ark / OpenAI / Grok / Vidu / 阿里百炼 DashScope）若 TTS 能复用凭证则接入成本最低。
+- **Primary selection criterion**: quality of Chinese narration (tone / pauses / emotion / continuity in read-aloud long-form text). The architecture is not tied to a language; language coverage is noted per provider, and the final choice is left to the user.
+- **Both integration paths are covered**: A. cloud API providers (main integration path); B. self-hosted / on-device open-source models (privacy / cost comparison).
+- **ArcReel integration constraints**: ① custom provider credentials are fixed to a single `api_key` field + `base_url` (`docs/adr/0008`); multi-field auth is only possible via a built-in preset; ② OpenAI-compatible `/v1/audio/speech` can reuse the existing OpenAI client factory and go through relays; ③ declarative pricing is declared per `kind` (`docs/adr/0009`); ④ sync vs. async decides whether the backend mimics `text_backends` or `video_backends`; ⑤ if TTS can reuse the credentials of an already integrated provider (Gemini / Volcengine Ark / OpenAI / Grok / Vidu / Alibaba Bailian DashScope), integration cost is lowest.
 
-调研方法：两轮对抗式 deep-research（109 + 9 agent）+ 专项补洞（时长错位 / 已接入供应商规格 / 水印）。结论标注置信度与投票（如 3-0 = 三票确认，2-1 = 多数确认，0-3/1-2 = 被否决）。
+Method: two rounds of adversarial deep-research (109 + 9 agents) + targeted gap-filling (duration mismatch / specs of already integrated providers / watermarks). Conclusions are labelled with confidence and votes (e.g. 3-0 = confirmed by three votes, 2-1 = confirmed by majority, 0-3/1-2 = rejected).
 
-## 1. 结论先行
+## 1. Conclusions first
 
-### 1.1 分层推荐
+### 1.1 Tiered recommendations
 
-| 档位 | 首选 | 理由 | 代价 |
+| Tier | First choice | Rationale | Cost |
 |---|---|---|---|
-| **最低接入成本** | **阿里 DashScope Qwen-TTS** | 复用 ArcReel 已有 DashScope 单字段 sk- 凭证（配置零新增表单）；低摩擦档里中文最佳；Qwen-TTS 同步 HTTP 契合同步 backend | TTS 走原生 `/api/v1` 路径（非 OpenAI 兼容），需写同步适配器；单价 UNVERIFIED |
-| **可扩展/自助** | **自定义供应商 OpenAI 兼容 audio 通路** | 单字段 + 真 OpenAI 兼容；用户自助接 Fish / 自托管 IndexTTS（套 shim）/ 中转，ArcReel 不必逐家写码 | 需新增 audio `EndpointSpec` + `CustomAudioBackend` + `infer_endpoint` audio 模式 |
-| **最佳中文质量** | **火山豆包 大模型语音合成** / ElevenLabs | 豆包：325 音色、原生中文方言、声音复刻 2.0、情感连贯；ElevenLabs：Multilingual v2/v3 中文口碑优 | 豆包多字段鉴权（appid+access_token+resource_id）须内置 preset，**Ark key 不能复用**（Seed Speech 是独立服务）；均非 OpenAI 兼容 |
-| **自托管隐私** | **CosyVoice2** / **VoxCPM-0.5B** | 均 Apache 2.0 可商用；VoxCPM 中文 CER 0.93% 开源最佳 | 需 GPU；无官方 OpenAI 兼容封装；显存/RTF UNVERIFIED |
+| **Lowest integration cost** | **Alibaba DashScope Qwen-TTS** | Reuses ArcReel's existing single-field sk- DashScope credential (zero new config forms); best Chinese in the low-friction tier; Qwen-TTS synchronous HTTP fits a synchronous backend | TTS uses the native `/api/v1` path (not OpenAI-compatible), so a synchronous adapter must be written; unit price UNVERIFIED |
+| **Extensible / self-service** | **Custom provider OpenAI-compatible audio path** | Single field + genuinely OpenAI-compatible; users can hook up Fish / self-hosted IndexTTS (behind a shim) / relays themselves, so ArcReel doesn't have to write code per provider | Requires a new audio `EndpointSpec` + `CustomAudioBackend` + an audio mode in `infer_endpoint` |
+| **Best Chinese quality** | **Volcengine Doubao large-model speech synthesis** / ElevenLabs | Doubao: 325 voices, native Chinese dialects, Voice Cloning 2.0, emotional continuity; ElevenLabs: Multilingual v2/v3 has a good reputation for Chinese | Doubao uses multi-field auth (appid+access_token+resource_id) so it needs a built-in preset; **the Ark key cannot be reused** (Seed Speech is a separate service); neither is OpenAI-compatible |
+| **Self-hosted privacy** | **CosyVoice2** / **VoxCPM-0.5B** | Both Apache 2.0, commercially usable; VoxCPM's Chinese CER of 0.93% is the best among open-source models | Needs a GPU; no official OpenAI-compatible wrapper; VRAM/RTF UNVERIFIED |
 
-### 1.2 本期决策（v1）
+### 1.2 Decision for this phase (v1)
 
-**DashScope Qwen-TTS preset（复用凭证、按字符计费、同步原生适配器）+ 自定义供应商 OpenAI 兼容 audio 通路（`openai-tts` → `/v1/audio/speech` + `CustomAudioBackend`）。** Fish / 自托管 IndexTTS（套 shim）/ 中转走自定义通路。详见 `docs/adr/0010`。
+**DashScope Qwen-TTS preset (reused credential, per-character billing, synchronous native adapter) + custom provider OpenAI-compatible audio path (`openai-tts` → `/v1/audio/speech` + `CustomAudioBackend`).** Fish / self-hosted IndexTTS (behind a shim) / relays go through the custom path. See `docs/adr/0010` for details.
 
-## 2. 云 API 供应商对比
+## 2. Cloud API provider comparison
 
-### 2.1 主对比表
+### 2.1 Main comparison table
 
-| 供应商 | 中文 | OpenAI 兼容 `/v1/audio/speech` | 同步/异步 | 鉴权 | 计费维度 | ArcReel 已接入 | 置信 |
+| Provider | Chinese | OpenAI-compatible `/v1/audio/speech` | Sync/async | Auth | Billing unit | Already integrated in ArcReel | Confidence |
 |---|---|---|---|---|---|---|---|
-| **OpenAI** tts-1 / tts-1-hd / gpt-4o-mini-tts | 英文优、中文弱 | ✅ 是（业界标准形态） | 同步直返字节 + chunked 流式 | 单字段 | 按字符（tts-1 $15、tts-1-hd $30 /1M chars） | 文本/图像已接（TTS 未接） | 3-0；单价 2-1 |
-| **ElevenLabs** Multilingual v2/v3, Flash/Turbo | 优 | ❌ 私有 | 同步（`/stream` chunked，仍是一次性请求） | 单字段 | 按字符（Flash/Turbo $0.05、Multilingual $0.10 /1K chars） | 否 | 3-0 |
-| **阿里 DashScope** Qwen-TTS / CosyVoice | 强 | ❌ TTS **不在**兼容路径（兼容路径仅 chat） | Qwen-TTS 同步 HTTP；CosyVoice realtime = WebSocket | 单字段 Bearer（sk-） | 按字符 / 万字符（CosyVoice ~¥2/万字符 **UNVERIFIED**） | ✅ 凭证可复用 | 3-0；单价 UNVERIFIED |
-| **火山豆包** 大模型语音合成（Seed-TTS） | 强（原生方言） | ❌ 私有（openspeech.bytedance.com） | 同步 HTTP + WSS 流式 + **异步长文本**（submit→query ≤10万字，音频存 7 天） | **多字段**（appid+access_token+resource_id） | 按字符 / 字数包 + 音色按年 | ❌ Ark key 不复用 | 3-0 |
-| **MiniMax** T2A async | 强 | ❌ 私有（`t2a_async_v2`） | **异步**（建任务→轮询→取 file_id，URL 9h 过期） | 单字段 **被否决**（1-2，勿假定可走自定义） | credit 订阅档 **被否决**（0-3） | 否 | 接口 3-0 |
-| **Fish Audio**（OpenAudio S1） | 良 | ✅ 是（原生 `/v1/audio/speech`） | 同步流式（TTFB<150ms） | 单字段 Bearer | 按 **UTF-8 字节**（$15/1M bytes） | 否（最佳自定义通路候选） | 补洞单轮 |
-| **Gemini** 原生音频 TTS | 良（cmn） | ❌ `generateContent` 内联 base64、**无流式** | 同步 | 单字段（x-goog-api-key） | 按 **token** | ✅ 凭证可复用 | 补洞单轮 |
-| **Google Cloud TTS**（Chirp3/Neural2/WaveNet） | 良（cmn-CN） | ❌ `synthesize` REST | 同步；长音频异步 LRO | **多字段**（GCP service-account） | 按字符（$4–$160/1M） | 凭证族同 Vertex（需开通 API） | 补洞单轮 |
-| **Azure AI Speech** | 良（zh-CN+方言） | ❌ | 同步实时 + 异步 batch | **多字段**（subscription key + region） | 按字符（$16/1M std） | 否 | 补洞单轮 |
-| **腾讯云 TTS** | 强 | ❌ 签名 API | 同步 + 流式 | **多字段**（AppID+SecretId+SecretKey 签名） | 按字符分档 | 否 | 补洞单轮 |
-| **科大讯飞 TTS** | 顶级 | ❌ WSS | 流式 WebSocket | **多字段**（APPID+APIKey+APISecret HMAC 签名） | 按字符 / 套餐 | 否 | 补洞单轮 |
+| **OpenAI** tts-1 / tts-1-hd / gpt-4o-mini-tts | Strong in English, weak in Chinese | ✅ Yes (the industry-standard shape) | Synchronous, returns bytes directly + chunked streaming | Single field | Per character (tts-1 $15, tts-1-hd $30 /1M chars) | Text/image integrated (TTS not) | 3-0; unit price 2-1 |
+| **ElevenLabs** Multilingual v2/v3, Flash/Turbo | Excellent | ❌ Proprietary | Synchronous (`/stream` chunked, still a one-shot request) | Single field | Per character (Flash/Turbo $0.05, Multilingual $0.10 /1K chars) | No | 3-0 |
+| **Alibaba DashScope** Qwen-TTS / CosyVoice | Strong | ❌ TTS is **not** on the compatible path (compatible path is chat only) | Qwen-TTS synchronous HTTP; CosyVoice realtime = WebSocket | Single-field Bearer (sk-) | Per character / per 10K characters (CosyVoice ~¥2/10K chars **UNVERIFIED**) | ✅ Credential reusable | 3-0; unit price UNVERIFIED |
+| **Volcengine Doubao** large-model speech synthesis (Seed-TTS) | Strong (native dialects) | ❌ Proprietary (openspeech.bytedance.com) | Synchronous HTTP + WSS streaming + **async long text** (submit→query ≤100K characters, audio kept for 7 days) | **Multi-field** (appid+access_token+resource_id) | Per character / character bundles + voices billed yearly | ❌ Ark key not reusable | 3-0 |
+| **MiniMax** T2A async | Strong | ❌ Proprietary (`t2a_async_v2`) | **Async** (create task → poll → fetch file_id, URL expires in 9h) | Single field **rejected** (1-2, do not assume it can use the custom path) | Credit subscription tiers **rejected** (0-3) | No | API 3-0 |
+| **Fish Audio** (OpenAudio S1) | Good | ✅ Yes (native `/v1/audio/speech`) | Synchronous streaming (TTFB<150ms) | Single-field Bearer | Per **UTF-8 byte** ($15/1M bytes) | No (best candidate for the custom path) | Gap-fill, single round |
+| **Gemini** native audio TTS | Good (cmn) | ❌ `generateContent` inline base64, **no streaming** | Synchronous | Single field (x-goog-api-key) | Per **token** | ✅ Credential reusable | Gap-fill, single round |
+| **Google Cloud TTS** (Chirp3/Neural2/WaveNet) | Good (cmn-CN) | ❌ `synthesize` REST | Synchronous; long audio via async LRO | **Multi-field** (GCP service-account) | Per character ($4–$160/1M) | Same credential family as Vertex (API must be enabled) | Gap-fill, single round |
+| **Azure AI Speech** | Good (zh-CN + dialects) | ❌ | Synchronous realtime + async batch | **Multi-field** (subscription key + region) | Per character ($16/1M std) | No | Gap-fill, single round |
+| **Tencent Cloud TTS** | Strong | ❌ Signed API | Synchronous + streaming | **Multi-field** (AppID+SecretId+SecretKey signature) | Per character, tiered | No | Gap-fill, single round |
+| **iFlytek TTS** | Top-tier | ❌ WSS | Streaming WebSocket | **Multi-field** (APPID+APIKey+APISecret HMAC signature) | Per character / bundles | No | Gap-fill, single round |
 
-### 2.2 关键边界
+### 2.2 Key boundaries
 
-- **OpenAI 计费口径分裂**：主定价页已转向 realtime 按 token，专用按字符 TTS 模型（tts-1 $15、tts-1-hd $30 /1M chars）**不在主表**，须查 `developers.openai.com/api/docs/models/tts-1`。"定价已转向 token"结论被验证者判为略夸大（2-1）。
-- **DashScope 凭证可复用但 TTS 非兼容路径**：单字段 Bearer 可复用，但 OpenAI 兼容接口只暴露 chat completions，TTS 走原生 `/api/v1/services/aigc/multimodal-generation/generation` —— 不能复用 OpenAI 客户端工厂/中转，须写原生适配器。
-- **豆包"凭证陷阱"**：豆包语音（Seed-TTS）是独立于 Ark 的服务，多字段鉴权，**ArcReel 现有 Ark key 不能复用**，须内置 preset + 新建多字段凭证表单。
-- **MiniMax 两条 claim 被否决**：单字段鉴权（1-2）与 credit 订阅档（0-3）均未通过验证——**不可据此断言 MiniMax 可走自定义供应商路径**。
-- **声明式定价 kind**：跨厂分裂为 **按字符**（OpenAI/ElevenLabs/DashScope/GCloud/Azure/腾讯/讯飞）、**按 token**（Gemini）、**按 UTF-8 字节**（Fish）三类。`docs/adr/0009` 声明式定价本期至少需 `per_character` kind。
+- **OpenAI billing is split**: the main pricing page has moved to per-token realtime pricing; the dedicated per-character TTS models (tts-1 $15, tts-1-hd $30 /1M chars) are **not in the main table** — check `developers.openai.com/api/docs/models/tts-1`. The conclusion "pricing has moved to tokens" was judged slightly overstated by the verifiers (2-1).
+- **DashScope credential is reusable but TTS is not on the compatible path**: the single-field Bearer can be reused, but the OpenAI-compatible interface only exposes chat completions; TTS uses the native `/api/v1/services/aigc/multimodal-generation/generation` — it cannot reuse the OpenAI client factory / relays, so a native adapter is needed.
+- **Doubao "credential trap"**: Doubao Speech (Seed-TTS) is a service separate from Ark with multi-field auth; **ArcReel's existing Ark key cannot be reused** — it needs a built-in preset + a new multi-field credential form.
+- **Two MiniMax claims were rejected**: single-field auth (1-2) and credit subscription tiers (0-3) both failed verification — **do not use them to assert that MiniMax can go through the custom provider path**.
+- **Declarative pricing kind**: across vendors this splits into three categories: **per character** (OpenAI/ElevenLabs/DashScope/GCloud/Azure/Tencent/iFlytek), **per token** (Gemini), and **per UTF-8 byte** (Fish). The `docs/adr/0009` declarative pricing needs at least a `per_character` kind in this phase.
 
-## 3. 自托管/端侧开源 TTS（隐私档，含授权陷阱）
+## 3. Self-hosted / on-device open-source TTS (privacy tier, including licensing traps)
 
-| 模型 | 中文质量 | 许可证 / 商用 | 备注 | 置信 |
+| Model | Chinese quality | License / commercial use | Notes | Confidence |
 |---|---|---|---|---|
-| **CosyVoice2-0.5B** | 强（CER 1.38%） | ✅ Apache 2.0，代码+权重均可商用、无版税 | FunAudioLLM；声音复刻 | 3-0 |
-| **VoxCPM-0.5B** | **开源最佳（CER 0.93%）** | ✅ Apache 2.0 可商用 | tokenizer-free，1.8M 小时中英；超 IndexTTS2/CosyVoice2 | 3-0（arXiv 预印本作者自报，未同行评审） |
-| **IndexTTS2** | 强（CER 1.03%，开源第二） | ⚠️ 权重商用须 bilibili 授权（v1 须书面授权；**v2 阈值制**：>1亿 MAU 或 >10亿 RMB 年营收才需单独许可，中小商用大概率免） | bilibili；情感控制强；论文有**时长控制**但 GitHub 标注"本版本尚未启用"；**无官方 API server / 无 OpenAI 兼容端点**，接 ArcReel 须自套 shim；GPU 显存/RTF UNVERIFIED | 许可 2-1 |
-| **F5-TTS** | 良 | ⚠️ base 权重 **CC-BY-NC 禁商用**（Emilia 数据集，finetune 后仍禁；代码 MIT）；须自有商用数据从头训练 | 商用陷阱 | 3-0 |
+| **CosyVoice2-0.5B** | Strong (CER 1.38%) | ✅ Apache 2.0, both code and weights commercially usable, royalty-free | FunAudioLLM; voice cloning | 3-0 |
+| **VoxCPM-0.5B** | **Best open-source (CER 0.93%)** | ✅ Apache 2.0, commercially usable | Tokenizer-free, 1.8M hours of Chinese and English; beats IndexTTS2/CosyVoice2 | 3-0 (self-reported by the authors in an arXiv preprint, not peer-reviewed) |
+| **IndexTTS2** | Strong (CER 1.03%, second among open-source) | ⚠️ Commercial use of weights requires bilibili authorization (v1 requires written authorization; **v2 uses a threshold**: a separate license is needed only above 100M MAU or above RMB 1B annual revenue, so small and medium commercial use is most likely exempt) | bilibili; strong emotion control; the paper has **duration control** but GitHub notes "not yet enabled in this version"; **no official API server / no OpenAI-compatible endpoint**, so connecting it to ArcReel requires your own shim; GPU VRAM/RTF UNVERIFIED | License 2-1 |
+| **F5-TTS** | Good | ⚠️ Base weights are **CC-BY-NC, no commercial use** (Emilia dataset; still prohibited after fine-tuning; code is MIT); commercial use requires training from scratch on your own commercial data | Commercial-use trap | 3-0 |
 
-**结论**：自托管隐私档首选 **CosyVoice2 / VoxCPM**（均 Apache 2.0 干净可商用）。IndexTTS / F5-TTS 有商用授权陷阱，选用前必须逐版本核对许可。所有自托管模型接 ArcReel 的干净方式 = 自托管时在前面套 OpenAI 兼容 `/v1/audio/speech` 服务，走自定义供应商 audio 通路插入。
+**Conclusion**: for the self-hosted privacy tier, first choice is **CosyVoice2 / VoxCPM** (both Apache 2.0, cleanly commercially usable). IndexTTS / F5-TTS have commercial licensing traps; check the license version by version before choosing them. The clean way to connect any self-hosted model to ArcReel = put an OpenAI-compatible `/v1/audio/speech` service in front of it when self-hosting, and plug it in through the custom provider audio path.
 
-## 4. 关键风险与未知点
+## 4. Key risks and unknowns
 
-### 4.1 时长错位（最关键；本期暂缓但记录解法）
+### 4.1 Duration mismatch (most critical; deferred in this phase but the solution is recorded)
 
-TTS 真实语音时长 ≠ 旁白脚本 `NarrationSegment.duration_seconds`（该预设时长同时驱动视频片段长度与字幕时间轴）。**业界标准解法：反转契约——音频驱动时间轴，`duration_seconds` 降级为生成提示。**
+The real TTS speech duration ≠ the narration script's `NarrationSegment.duration_seconds` (this preset duration drives both the video clip length and the subtitle timeline). **Industry-standard solution: invert the contract — the audio drives the timeline, and `duration_seconds` is demoted to a generation hint.**
 
-- ArcReel 既有 `server/services/presentation/jianying_draft_service.py` **本就按真实素材时长排版**（视频与字幕 `trange` 都用 `actual_duration_us = material.duration`），"最长真实素材赢"已是现有设计。
-- 音频比视频长 → **拉伸视频**（`setpts`/`tpad` 冻帧，无质量损失），**绝不加速旁白**。
-- 字幕**从真实音频生成**：优先供应商字符级时间戳（ElevenLabs `with-timestamps`，中文可用、零额外基建）；兜底 WhisperX 强制对齐（中文仅社区模型 `jonatasgrosman/wav2vec2-large-xlsr-53-chinese-zh-cn`，精度偏弱）。
-- ⚠️ **别指望"等时 TTS"**（target_duration 参数）：商用中文云 API 无一暴露，仅研究级（Amazon ICASSP'22、VideoDubber AAAI'23 明说中文更难因 token 数≠语音时长）。自托管 IndexTTS2 论文有时长控制但当前版本未启用。
-- ⚠️ 语速参数控时不可靠：各家区间不一（ElevenLabs 0.7–1.2、OpenAI 0.25–4.0、豆包 0.8–2.0、MiniMax 0.5–2.0），且 **OpenAI `gpt-4o-mini-tts` 历史上忽略 speed**（官方称文档 bug）；只可作 ±10% 次级微调。`ffmpeg atempo` 仅 0.5–2.0x 干净，语音超 ~10–15% 拉伸即可闻劣化。
+- ArcReel's existing `server/services/presentation/jianying_draft_service.py` **already lays things out by real material duration** (both video and subtitle `trange` use `actual_duration_us = material.duration`); "the longest real material wins" is already the existing design.
+- Audio longer than video → **stretch the video** (`setpts`/`tpad` freeze frame, no quality loss), **never speed up the narration**.
+- Subtitles are **generated from the real audio**: prefer provider character-level timestamps (ElevenLabs `with-timestamps`, works for Chinese, zero extra infrastructure); fallback is WhisperX forced alignment (for Chinese only the community model `jonatasgrosman/wav2vec2-large-xlsr-53-chinese-zh-cn`, with weaker accuracy).
+- ⚠️ **Don't count on "isochronous TTS"** (a target_duration parameter): no commercial Chinese cloud API exposes it; it exists only at research level (Amazon ICASSP'22, VideoDubber AAAI'23 explicitly say Chinese is harder because token count ≠ speech duration). The self-hosted IndexTTS2 paper has duration control but the current version doesn't enable it.
+- ⚠️ Controlling duration via the speed parameter is unreliable: ranges differ by vendor (ElevenLabs 0.7–1.2, OpenAI 0.25–4.0, Doubao 0.8–2.0, MiniMax 0.5–2.0), and **OpenAI `gpt-4o-mini-tts` has historically ignored speed** (officially called a documentation bug); it can only be used for secondary ±10% fine-tuning. `ffmpeg atempo` is clean only at 0.5–2.0x, and stretching speech beyond ~10–15% causes audible degradation.
 
-> 本期决策：**简单附带剪映音轨（每段独立、不对齐，用户手动精调）**，不做自动重定时/字幕重排（暂缓）。上述解法供后续启用时参考。
+> Decision for this phase: **simply attach a Jianying (CapCut) audio track (each segment independent, not aligned, user fine-tunes manually)**; no automatic re-timing / subtitle reflow (deferred). The solution above is for reference when this is enabled later.
 
-### 4.2 其他
+### 4.2 Other
 
-- **长文本**：MiniMax 内联 text 上限 50K 字符、文件路径达 1M（2-1）；豆包异步长文本 ≤10万字。按 segment 旁白短，本期无须分块。
-- **音色一致性**：固定单一音色即可跨段一致；声音复刻（豆包 2.0 / CosyVoice）可进一步锁音色（本期用预置音色，克隆留后续）。
-- **流式 vs 整文件**：ArcReel 需落地可版本化音频文件 + 喂剪映音轨，**整文件接收即可，流式反增复杂度**（同步 backend 一次性取字节）。
-- **水印 / 合规**：所选供应商**均不对预置音色强制不可关水印**（MiniMax `aigc_watermark` 默认 false）。ArcReel 为开源项目，AI 标识合规义务不在本项目（用户决策，本报告不展开）。
+- **Long text**: MiniMax inline text is capped at 50K characters, the file path allows up to 1M (2-1); Doubao async long text ≤100K characters. Per-segment narration is short, so no chunking is needed in this phase.
+- **Voice consistency**: a single fixed voice is enough for cross-segment consistency; voice cloning (Doubao 2.0 / CosyVoice) can lock the voice further (this phase uses preset voices; cloning is left for later).
+- **Streaming vs. whole file**: ArcReel needs to land a versionable audio file + feed the Jianying (CapCut) audio track, **so receiving the whole file is enough; streaming only adds complexity** (the synchronous backend fetches the bytes in one go).
+- **Watermark / compliance**: **none** of the selected providers forces a non-removable watermark on preset voices (MiniMax `aigc_watermark` defaults to false). ArcReel is an open-source project; AI-labelling compliance obligations do not fall on this project (user decision; not expanded on in this report).
 
-## 5. 本期接入决策与实现面（摘要）
+## 5. Integration decisions and implementation surface for this phase (summary)
 
-完整决策记录见 `docs/adr/0010` 与 `GLOSSARY.md`。要点：
+The full decision record is in `docs/adr/0010` and `GLOSSARY.md`. Key points:
 
-- **媒体类型**：新增第 4 个 `media_type` = `audio`（capability = `text_to_speech`），与 image/video/text 平级。
-- **调度**：走 GenerationQueue/Worker（audio lane），像 image/video；**backend 同步**（仿 `text_backends`，秒回，无 submit-poll-resume）。`enqueue_tts(segment_ids?)`。
-- **后端**：新增 `lib/backends/audio_backends/`；DashScope 同步原生适配器 + 自定义 OpenAI 兼容 audio 通路。
-- **音色**：可配置字符串 id（全局默认 + `project.json` `settings.narration_voice` 覆盖，不内置目录，可选语速）。
-- **版本化**：是（resource_paths/VersionManager，目录 `audio/`，文件 `segment_{id}.mp3`）。
-- **数据模型**：`GeneratedAssets.narration_audio: str | None`（project.json，无 DB 表）；文本源 = `NarrationSegment.novel_text` 原样。
-- **计费**：`per_character` pricing kind（DashScope preset）；自定义供应商用 DB 内用户填单价。
+- **Media type**: add a 4th `media_type` = `audio` (capability = `text_to_speech`), on a par with image/video/text.
+- **Scheduling**: goes through GenerationQueue/Worker (audio lane), like image/video; **the backend is synchronous** (mimics `text_backends`, returns in seconds, no submit-poll-resume). `enqueue_tts(segment_ids?)`.
+- **Backend**: add `lib/backends/audio_backends/`; DashScope synchronous native adapter + custom OpenAI-compatible audio path.
+- **Voice**: configurable string id (global default + `project.json` `settings.narration_voice` override, no built-in catalog, optional speech rate).
+- **Versioning**: yes (resource_paths/VersionManager, directory `audio/`, file `segment_{id}.mp3`).
+- **Data model**: `GeneratedAssets.narration_audio: str | None` (project.json, no DB table); text source = `NarrationSegment.novel_text` as is.
+- **Billing**: `per_character` pricing kind (DashScope preset); custom providers use the unit price the user enters in the DB.
 
-## 6. 实现前必须核实（UNVERIFIED 清单）
+## 6. Must verify before implementation (UNVERIFIED list)
 
-外部供应商数据，**不猜不硬编码**，编码前逐项查一手文档：
+External provider data — **don't guess, don't hard-code**; check the primary docs item by item before coding:
 
-1. DashScope TTS **确切模型 id**（qwen-tts / qwen3-tts-flash / cosyvoice-v2?）与哪个是**纯同步 HTTP**（CosyVoice realtime 是 WebSocket，不契合同步 backend → 倾向 Qwen-TTS）。
-2. DashScope TTS **同步 REST 端点 + 请求/响应 schema**、**按字符单价 + 币种**、**可用音色 id**、输出格式/采样率。
-3. OpenAI 兼容 `/v1/audio/speech` 请求 schema（model/voice/input/response_format/speed），用于自定义 audio `EndpointSpec`。
-4. 自定义供应商 `price_unit` 是否支持按字符单位（audio）。
-5. Fish Audio 是否对 OpenAudio S1 云端强制水印（UNVERIFIED）。
-6. 自托管模型显存/RTF/是否有官方 OpenAI 兼容封装（CosyVoice2 / VoxCPM / IndexTTS2）。
+1. DashScope TTS **exact model ids** (qwen-tts / qwen3-tts-flash / cosyvoice-v2?) and which one is **purely synchronous HTTP** (CosyVoice realtime is WebSocket, which doesn't fit a synchronous backend → leaning towards Qwen-TTS).
+2. DashScope TTS **synchronous REST endpoint + request/response schema**, **per-character unit price + currency**, **available voice ids**, output format/sample rate.
+3. OpenAI-compatible `/v1/audio/speech` request schema (model/voice/input/response_format/speed), for the custom audio `EndpointSpec`.
+4. Whether the custom provider `price_unit` supports a per-character unit (audio).
+5. Whether Fish Audio forces a watermark on cloud OpenAudio S1 (UNVERIFIED).
+6. Self-hosted model VRAM/RTF/whether there is an official OpenAI-compatible wrapper (CosyVoice2 / VoxCPM / IndexTTS2).
 
-## 7. 参考资料（一手官方来源，2026-06-02 fetch）
+## 7. References (primary official sources, fetched 2026-06-02)
 
-- OpenAI TTS 指南：https://developers.openai.com/api/docs/guides/text-to-speech
-- OpenAI tts-1 模型/定价：https://developers.openai.com/api/docs/models/tts-1
-- ElevenLabs 定价：https://elevenlabs.io/pricing/api ；流式：https://elevenlabs.io/docs/api-reference/text-to-speech/stream ；字符级时间戳：https://elevenlabs.io/docs/api-reference/text-to-speech/convert-with-timestamps
-- 火山豆包 大模型语音合成：https://www.volcengine.com/docs/6561/1257543 ；异步长文本：https://www.volcengine.com/docs/6561/1829010 ；声音复刻 2.0：https://www.volcengine.com/docs/6561/1305191
-- 阿里 DashScope OpenAI 兼容：https://www.alibabacloud.com/help/en/model-studio/compatibility-of-openai-with-dashscope ；Qwen-TTS：https://www.alibabacloud.com/help/en/model-studio/qwen-tts ；定价：https://help.aliyun.com/zh/model-studio/model-pricing
-- MiniMax T2A async：https://platform.minimax.io/docs/guides/speech-t2a-async
-- Fish Audio 定价/限流：https://docs.fish.audio/developer-guide/models-pricing/pricing-and-rate-limits
-- Gemini 语音生成：https://ai.google.dev/gemini-api/docs/speech-generation
-- Google Cloud TTS 定价：https://cloud.google.com/text-to-speech/pricing
-- Azure Speech 定价：https://azure.microsoft.com/en-us/pricing/details/cognitive-services/speech-services/
-- 腾讯云 TTS：https://cloud.tencent.com/document/product/1073/37995 ；讯飞 TTS：https://www.xfyun.cn/doc/tts/online_tts/API.html
-- CosyVoice LICENSE：https://github.com/FunAudioLLM/CosyVoice/blob/main/LICENSE
-- VoxCPM 论文：https://arxiv.org/html/2509.24650v1 ；权重：https://huggingface.co/openbmb/VoxCPM-0.5B
-- IndexTTS：https://github.com/index-tts/index-tts ；许可：https://huggingface.co/spaces/IndexTeam/IndexTTS-2-Demo/blob/main/INDEX_MODEL_LICENSE_EN.txt ；许可讨论：https://github.com/index-tts/index-tts/issues/228
-- F5-TTS 商用限制：https://github.com/SWivid/F5-TTS/discussions/997
-- 时长对齐：WhisperX https://github.com/m-bain/whisperX ；自动配音时长建模 https://arxiv.org/html/2211.16934v2 ；语音翻译到自动配音 https://aclanthology.org/2020.iwslt-1.31/ ；ffmpeg atempo https://ayosec.github.io/ffmpeg-filters-docs/7.1/Filters/Audio/atempo.html
-- 自托管套 OpenAI 兼容 shim 范式：https://github.com/matatonic/openedai-speech
+- OpenAI TTS guide: https://developers.openai.com/api/docs/guides/text-to-speech
+- OpenAI tts-1 model/pricing: https://developers.openai.com/api/docs/models/tts-1
+- ElevenLabs pricing: https://elevenlabs.io/pricing/api ; streaming: https://elevenlabs.io/docs/api-reference/text-to-speech/stream ; character-level timestamps: https://elevenlabs.io/docs/api-reference/text-to-speech/convert-with-timestamps
+- Volcengine Doubao large-model speech synthesis: https://www.volcengine.com/docs/6561/1257543 ; async long text: https://www.volcengine.com/docs/6561/1829010 ; Voice Cloning 2.0: https://www.volcengine.com/docs/6561/1305191
+- Alibaba DashScope OpenAI compatibility: https://www.alibabacloud.com/help/en/model-studio/compatibility-of-openai-with-dashscope ; Qwen-TTS: https://www.alibabacloud.com/help/en/model-studio/qwen-tts ; pricing: https://help.aliyun.com/zh/model-studio/model-pricing
+- MiniMax T2A async: https://platform.minimax.io/docs/guides/speech-t2a-async
+- Fish Audio pricing/rate limits: https://docs.fish.audio/developer-guide/models-pricing/pricing-and-rate-limits
+- Gemini speech generation: https://ai.google.dev/gemini-api/docs/speech-generation
+- Google Cloud TTS pricing: https://cloud.google.com/text-to-speech/pricing
+- Azure Speech pricing: https://azure.microsoft.com/en-us/pricing/details/cognitive-services/speech-services/
+- Tencent Cloud TTS: https://cloud.tencent.com/document/product/1073/37995 ; iFlytek TTS: https://www.xfyun.cn/doc/tts/online_tts/API.html
+- CosyVoice LICENSE: https://github.com/FunAudioLLM/CosyVoice/blob/main/LICENSE
+- VoxCPM paper: https://arxiv.org/html/2509.24650v1 ; weights: https://huggingface.co/openbmb/VoxCPM-0.5B
+- IndexTTS: https://github.com/index-tts/index-tts ; license: https://huggingface.co/spaces/IndexTeam/IndexTTS-2-Demo/blob/main/INDEX_MODEL_LICENSE_EN.txt ; license discussion: https://github.com/index-tts/index-tts/issues/228
+- F5-TTS commercial-use restriction: https://github.com/SWivid/F5-TTS/discussions/997
+- Duration alignment: WhisperX https://github.com/m-bain/whisperX ; duration modelling for automatic dubbing https://arxiv.org/html/2211.16934v2 ; from speech translation to automatic dubbing https://aclanthology.org/2020.iwslt-1.31/ ; ffmpeg atempo https://ayosec.github.io/ffmpeg-filters-docs/7.1/Filters/Audio/atempo.html
+- Pattern for wrapping self-hosted models in an OpenAI-compatible shim: https://github.com/matatonic/openedai-speech

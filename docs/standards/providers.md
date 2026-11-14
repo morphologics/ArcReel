@@ -10,22 +10,22 @@ paths:
   - "docs/api-docs/**"
 ---
 
-# 供应商能力与契约
+# Provider capabilities and contracts
 
-## 能力数据
+## Capability data
 
-### 每个能力维度只认一个来源，不在别处另写一份能力数值
+### Each capability dimension has exactly one source; do not write a second copy of capability values elsewhere
 
-能力按维度划分来源（`docs/adr/0104`）：
+Capabilities take their source per dimension (`docs/adr/0104`):
 
-- 模型事实记在模型目录条目上，包括可选时长、分辨率、时长与分辨率及参考图之间的联动约束，以及文本与图片能力位。`supported_durations` 缺失时直接报错，不做隐式回退（`docs/adr/0018`）。
-- 通道事实由调用通道或调用端点在代码中声明，与请求构造、执行期判定同源（`docs/adr/0054`、`docs/adr/0056`）。这类事实包括视频输入模式、参考图与参考音频上限、提示词长度上限和音轨形态。
-- 渠道限制只用用户负责的供应商模型上的能力覆盖表达，不修改条目。
+- Model facts are recorded on the model catalog entry, including the selectable durations, resolutions, the linked constraints between duration, resolution and reference images, and the text and image capability flags. When `supported_durations` is missing, raise an error directly; do not fall back implicitly (`docs/adr/0018`).
+- Channel facts are declared in code by the calling channel or calling endpoint, from the same source as request construction and runtime checks (`docs/adr/0054`, `docs/adr/0056`). These facts include video input mode, reference image and reference audio limits, prompt length limit and audio track shape.
+- Channel restrictions are expressed only as capability overrides on provider models the user is responsible for; the entry is not modified.
 
-以下写法都是在来源之外另写一份能力数值：另起常量重复某个档位；调用方或配置界面在来源缺值时自行补默认值；调用通道再写一份与条目重复的时长或分辨率检查；`agent_runtime_profile/` 与 `lib/prompts/` 的模板硬编码时长、分辨率档位，而不是由编排层从上述来源注入。供应商或目录数据调整后，两份数据迟早不一致：用户能选的档位与实际请求不符，或者 Agent 按旧档位规划出执行期申请不到的时长。
+The following all write a second copy of capability values outside the source: a separate constant that duplicates a tier; a caller or configuration UI filling in its own default when the source has no value; a calling channel writing a duration or resolution check that duplicates the entry; templates in `agent_runtime_profile/` and `lib/prompts/` hard-coding durations or resolution tiers instead of having the orchestration layer inject them from the sources above. After the provider or catalog data changes, the two copies sooner or later disagree: the tiers the user can select don't match the actual request, or the agent plans with old tiers and asks for durations it cannot get at runtime.
 
-放行条件：
+Allowed when:
 
-- ADR 明列的例外：`docs/adr/0018` 的 Vidu 端点级时长校正，`docs/adr/0104` 与 `docs/adr/0105` 规定的不认识模型保守回落、新建条目时按模型名预填时长预设。
-- 过渡期保留的副本：有一致性测试锁定两份数据，且 PR 写明负责删除它的 issue。
-- 提示词里描述节奏的经验秒数（如「全片平均 3–5 秒/分镜」）不是能力档位。
+- Exceptions listed explicitly in an ADR: the Vidu endpoint-level duration correction in `docs/adr/0018`; the conservative fallback for unrecognized models and the duration presets pre-filled from the model name when creating a new entry, as specified in `docs/adr/0104` and `docs/adr/0105`.
+- Copies kept during a transition period: a consistency test locks the two copies together, and the PR names the issue responsible for deleting it.
+- Rule-of-thumb seconds describing pacing in prompts (e.g. "全片平均 3–5 秒/分镜" ("3–5 seconds per storyboard on average across the whole film")) are not capability tiers.

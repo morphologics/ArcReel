@@ -2,30 +2,30 @@
 status: accepted
 ---
 
-# 模型目录按模型建共用条目，渠道价差只用倍率，出厂快照、官方同步与用户修改三层合成
+# The model catalog builds shared entries per model; channel price differences use multipliers only; factory snapshot, official sync and user modifications are composed in three layers
 
-模型的元信息与价格由模型目录统一承载，内置供应商、自定义供应商与 Agent 都从这里查。模型条目按模型建，身份是「模型厂商/官方模型名」，各供应商共用同一条；供应商名下的供应商模型只记录渠道相关的事实（调用端点、API 模型名、能力覆盖，以及用户的条目绑定），渠道之间的价差只用倍率表达，供应商模型不带自己的价格。ArcReel 的费用是参考费用，用户是创作者，中转站多按倍率计费：一个模型只有一处价格可改、渠道价差只用倍率表达，比追求逐渠道精确更合适。
+Model metadata and prices are carried uniformly by the model catalog, which built-in providers, custom providers and the agent all look up. Model entries are built per model, with identity "model vendor/official model name", shared by all providers; provider models under a provider record only channel-related facts (invocation endpoint, API model name, capability overrides, and the user's entry binding); price differences between channels are expressed only through multipliers, and provider models carry no prices of their own. ArcReel's costs are reference costs, its users are creators, and relay services mostly bill by multiplier: having only one place to change a model's price and expressing channel differences only through multipliers is more appropriate than pursuing per-channel precision.
 
-## 规则
+## Rules
 
-- 模型目录由三层合成：出厂快照随版本发布，官方同步取回更新的数据，用户修改存为整个条目的副本。同步开着时，在官方同步与出厂快照中取版本较新的一份；用户一修改就自动关闭同步，此后只用用户副本；重新打开同步即丢弃副本。没有外网时目录只由出厂快照和用户修改构成。
-- 供应商模型没有官方同步开关，按由谁负责分两种。内置供应商下官方收录的供应商模型，全部字段跟随官方数据，用户只能启用和停用。内置供应商下用户添加的、以及自定义供应商的供应商模型，全部字段由用户负责。官方数据日后收录了用户添加的同一 API 模型名，这个供应商模型就换成官方版本，只保留启用状态，不另作提示。
-- 内置供应商每种媒体类型的默认模型由官方数据指定，用户不能修改。用户选模型靠全局与项目的默认模型设置，供应商一级的默认只在这些设置都没有时用于自动挑选，在内置供应商上让用户设置没有意义。自定义供应商没有官方数据，仍由用户设为默认。
-- 内置供应商代表官方渠道，凭证上的 base_url 只用于反向代理、网关这类透明转发。经中转站调用一律用自定义供应商。
-- 目录中没有的模型由用户新建条目，新建的条目不跟随官方。日后官方数据出现同一身份的条目时不自动合并，用户新建的条目上出现「改用官方数据」，确认后丢弃用户副本、改用官方数据（与恢复官方数据是同一个操作）。
-- 出厂快照与官方同步同时下发模型条目和内置供应商的供应商模型清单。内置供应商的「获取模型」只作补充：返回的 id 按该供应商清单中的 API 模型名匹配，未匹配的标为未收录，可手动添加；获取结果因账号、地域而异，不用来判断模型不可用。没有列表接口的内置供应商只能按 id 手动添加。
-- 统一只到模型层。内置供应商的凭证形态与调用通道实现仍按供应商写在代码里；能力哪些记在条目上、哪些由代码声明，见 `docs/adr/0104`。
-- 两栖模型仍拆成两个条目（见 `docs/adr/0038`）。两者的模型厂商与官方模型名相同，条目身份再以媒体类型区分；只有两栖模型需要这一项。
-- 生成费用在供应商调用完成时按当时的目录计算并冻结，不随目录变化重算，所以目录只需覆盖当前可选的模型，不保留历史价格。
+- The model catalog is composed of three layers: the factory snapshot ships with each release, official sync fetches updated data, and user modifications are stored as a copy of the whole entry. While sync is on, whichever of the official sync and the factory snapshot has the newer version is used; as soon as the user modifies an entry, sync is turned off automatically and only the user copy is used thereafter; turning sync back on discards the copy. Without internet access, the catalog consists only of the factory snapshot and user modifications.
+- Provider models have no official sync switch, and are split into two kinds by who is responsible. Provider models officially listed under built-in providers have all fields following official data; users can only enable and disable them. Provider models added by users under built-in providers, and provider models of custom providers, have all fields under the user's responsibility. If official data later lists the same API model name a user added, that provider model is replaced by the official version, keeping only its enabled state, with no separate notice.
+- The default model for each media type of a built-in provider is specified by official data and cannot be changed by users. Users choose models through global and project default model settings; the provider-level default is used for automatic selection only when none of those settings exist, so letting users set it on built-in providers is meaningless. Custom providers have no official data, so users still set their defaults.
+- Built-in providers represent official channels, and the base_url on credentials is used only for transparent forwarding such as reverse proxies and gateways. Calls via relay services always use custom providers.
+- Models not in the catalog get entries created by the user, and user-created entries do not follow official data. If official data later contains an entry with the same identity, they are not merged automatically; the user-created entry shows "switch to official data", and on confirmation the user copy is discarded and official data is used (the same operation as restoring official data).
+- The factory snapshot and official sync deliver both model entries and the provider model lists of built-in providers. A built-in provider's "fetch models" is only supplementary: returned ids are matched against the API model names in that provider's list, unmatched ones are marked as unlisted and can be added manually; fetch results vary by account and region and are not used to judge a model unavailable. Built-in providers without a list endpoint can only add models manually by id.
+- Unification goes only as far as the model layer. Built-in providers' credential forms and invocation channel implementations are still written per provider in code; which capabilities are recorded on entries and which are declared by code, see `docs/adr/0104`.
+- Amphibious models are still split into two entries (see `docs/adr/0038`). Both have the same model vendor and official model name, and the entry identity is further distinguished by media type; only amphibious models need this.
+- Generation cost is computed from the catalog at the time the provider call completes and then frozen, not recomputed when the catalog changes, so the catalog only needs to cover currently selectable models and keeps no historical prices.
 
 ## Considered Options
 
-- **按渠道建条目（LiteLLM 的做法）**：同一模型经 AI Studio、Vertex、中转站各占一条，渠道价格可以各不相同。代价是同一个模型的能力要在多处重复维护，中转站上的模型也难以归到原厂条目。
-- **供应商模型可带一份完整价目表，作为倍率之外的出口**：能表达计价结构与原厂不同的渠道。但每多一个价格入口，用户就要多想「到底谁生效」。而要出问题，得同一个模型经两个渠道使用、且两个渠道计价结构不同，这种情况很少；遇到时直接修改条目即可。日后真有需求再加，只是新增字段。
-- **内置供应商改为预置的供应商模板**：概念上最统一，但要把凭证形态做成可扩展类型、迁移供应商身份，还要把各家的专有协议改写成调用端点，成本的大头都不在模型层。本轮的产品收益全部来自模型层，模型层统一后再做这一步也不受阻挡。
-- **供应商模型也设官方同步开关，用户修改即关闭**：用户可以在官方收录的供应商模型上修正能力或倍率。但一改就收不到之后的 API 模型名与倍率更新，而需要修正的场景多半是把内置供应商接到了中转站上，这本该用自定义供应商。
-- **用户修改按字段存差异**：未修改的字段还能继续接收同步，但「关了同步但部分字段仍在变」很难解释。存整份副本，关闭同步就意味着这个条目完全由用户负责。
+- **Build entries per channel (LiteLLM's approach)**: the same model via AI Studio, Vertex and relay services each gets its own entry, and channel prices can all differ. The cost is that the same model's capabilities have to be maintained in multiple places, and models on relay services are hard to map back to the original vendor's entry.
+- **Let provider models carry a complete price table as an outlet beyond multipliers**: this can express channels whose pricing structure differs from the original vendor. But every additional price entry point makes users think about "which one actually applies". And for a problem to arise, the same model must be used via two channels with different pricing structures, which is rare; when it happens, just modify the entry. If there is a real need later, it can be added, just as a new field.
+- **Turn built-in providers into preset provider templates**: conceptually the most unified, but it would require making credential forms an extensible type, migrating provider identities, and rewriting each vendor's proprietary protocol as invocation endpoints, with the bulk of the cost not in the model layer. All product gains in this round come from the model layer, and unifying the model layer does not block doing this step later.
+- **Give provider models an official sync switch too, turned off when the user modifies**: users could correct capabilities or multipliers on officially listed provider models. But once changed, they would stop receiving later API model name and multiplier updates, and the scenarios needing correction are mostly built-in providers pointed at relay services, which should use custom providers instead.
+- **Store user modifications as per-field diffs**: unmodified fields could keep receiving sync, but "sync is off yet some fields are still changing" is hard to explain. Storing a whole copy means turning off sync makes the entry entirely the user's responsibility.
 
 ## Consequences
 
-- 内置模型的价格与元信息不再写在代码里，改价不必重新发布版本。
+- Built-in models' prices and metadata are no longer written in code, and price changes do not require a new release.

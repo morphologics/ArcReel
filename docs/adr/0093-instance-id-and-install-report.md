@@ -2,25 +2,25 @@
 status: accepted
 ---
 
-# 实例标识与安装上报：随机可重置标识、只报官方源、默认开启且首次告知
+# Instance ID and install reporting: a random resettable ID, report only the official source, on by default with a first-time notice
 
-官方服务要统计每个市场条目被多少个 ArcReel 实例安装，并据此限定谁能评分，就需要一个能去重的主体；而 ArcReel 不设账号（`docs/adr/0078`）。我们决定以**实例标识**作为唯一主体：
+For the official service to count how many ArcReel instances have installed each market entry, and to restrict who can rate on that basis, it needs a principal that can be deduplicated; but ArcReel has no accounts (`docs/adr/0078`). We decided to use the **instance ID** as the sole principal:
 
-- 实例标识是本地首次需要时生成的随机 UUID，存在系统设置里，与机器、用户、账号均无关联；用户可在设置页重置，重置后官方服务把它当作新实例。
-- 对官方服务的每个请求以请求头携带实例标识；官方服务只存其加盐哈希，不存原值，IP 只用于限流、不落库。
-- 只在从**官方市场源**完成安装后上报一次（市场源规范键、类型、slug、版本、应用版本）；更新与卸载不上报，第三方市场源的安装永不上报。同一实例对同一条目的重复上报是幂等的，安装量不扣减。
-- 上报默认开启；首次进入市场页时说明上报了什么、在哪里关闭，确认后不再提示。
-- 官方服务地址随版内置，可由环境变量覆盖；用户可见的总开关存系统设置。地址为空或开关关闭即视为关闭：市场页不展示任何官方服务元素，本地服务端对官方服务零出站。
-- 上报在安装事务提交之后发出，失败不影响安装、不重试；前端只与本地服务端通信，由本地服务端代理官方服务的全部调用。
+- The instance ID is a random UUID generated locally the first time it is needed and stored in system settings, unrelated to the machine, the user or any account; the user can reset it on the settings page, after which the official service treats it as a new instance.
+- Every request to the official service carries the instance ID in a request header; the official service stores only its salted hash, never the original value, and IP is used only for rate limiting and never persisted.
+- A report is sent only once, after an install from the **official market source** completes (market source canonical key, type, slug, version, application version); updates and uninstalls are not reported, and installs from third-party market sources are never reported. Repeated reports from the same instance for the same entry are idempotent, and install counts are not decremented.
+- Reporting is on by default; the first time the user enters the market page, it explains what is reported and where to turn it off, and after confirmation it does not prompt again.
+- The official service URL is built into each release and can be overridden by an environment variable; the user-visible master switch is stored in system settings. An empty URL or the switch turned off counts as off: the market page shows no official service elements, and the local server makes zero outbound connections to the official service.
+- The report is sent after the install transaction commits; failure does not affect the install and is not retried; the frontend communicates only with the local server, which proxies all calls to the official service.
 
 ## Considered Options
 
-- **账号或设备指纹**：账号要长期运营账号体系；指纹无法由用户重置，且越过了匿名计数所需的信息量。
-- **默认关闭（opt-in）**：统计几乎没有样本，评分的「已安装」前提也形同虚设；以默认开启加首次告知与一键关闭换取可用的数据。
-- **第三方市场源也上报**：官方服务会得知用户私下添加的源地址，且这些条目的计数对官方市场没有意义。
+- **Accounts or device fingerprints**: accounts require long-term operation of an account system; fingerprints cannot be reset by the user, and exceed the amount of information anonymous counting needs.
+- **Off by default (opt-in)**: statistics would have almost no samples, and the "installed" precondition for rating would be meaningless; on by default plus a first-time notice and one-click disable is the trade for usable data.
+- **Also report third-party market sources**: the official service would learn the source URLs users added privately, and counts for those entries mean nothing to the official market.
 
 ## Consequences
 
-- 安装记录（`docs/adr/0079`）不变；上报是安装事务之后的旁路，官方服务不可达时安装照常。
-- 评分以「该实例已上报过此条目的安装」为前提；重置实例标识等于放弃此前的评分身份。
-- 白标或自部署发行版把地址覆盖为空即可整体关闭官方服务。
+- Installation records (`docs/adr/0079`) are unchanged; reporting is a side path after the install transaction, and installs proceed as usual when the official service is unreachable.
+- Rating requires that "this instance has reported an install of this entry"; resetting the instance ID means giving up the previous rating identity.
+- White-label or self-hosted distributions can turn off the official service entirely by overriding the URL to empty.

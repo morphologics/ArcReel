@@ -2,19 +2,19 @@
 status: accepted
 ---
 
-# Agent 工具集单源声明，宿主差异只允许两轴
+# The agent toolset is declared from a single source; host differences are allowed on only two axes
 
-Agent 工具集的每个工具只有一份宿主无关声明：名字、中文完整描述（参数说明写在请求模型字段上）、由 pydantic 请求模型派生的 schema、迁移阻断策略（必填，不设默认）、domain key 与 handler。ArcReel Agent 与外部 Agent 两个宿主各持一个薄 adapter，只把这份声明投影成各自的注册形式与结果信封。两宿主之间允许的差异只有两轴：项目如何确定（仅对作用于某个既有项目的工具：ArcReel Agent 由会话决定、schema 不暴露 `project`；外部 Agent 每次显式指定。`list_projects`、`create_project` 没有目标项目，两宿主都不带 `project`）与长任务是否等待结果（ArcReel Agent 等到终态；外部 Agent 立即拿到批次句柄，描述里的轮询说明由「长任务」标记派生）。其余一律同源：adapter 不改写 problem code、不另起 domain key、不增删结果字段——同一个 `ToolOutcome` 在两宿主编码出相同的 JSON，ArcReel Agent 拿到的是摘要文本加上这份 JSON，而不是只给摘要。长任务因第二轴而例外：两宿主拿到的是不同阶段的 `ToolOutcome`（ArcReel Agent 是终态生成结果，外部 Agent 首次是批次句柄），一致性落在外部 Agent 轮询到终态时的批次查询结果上，其中附带的生成结果与 ArcReel Agent 拿到的同形。
+Each tool in the agent toolset has exactly one host-independent declaration: name, full Chinese description (parameter descriptions are written on the request model fields), the schema derived from the pydantic request model, the migration-blocking policy (required, no default), the domain key, and the handler. The two hosts, the ArcReel agent and external agents, each hold a thin adapter that only projects this declaration into its own registration form and result envelope. The only differences allowed between the two hosts are two axes: how the project is determined (only for tools that act on an existing project: for the ArcReel agent it is determined by the session and the schema does not expose `project`; external agents specify it explicitly each time. `list_projects` and `create_project` have no target project, and neither host carries `project` for them) and whether long tasks wait for results (the ArcReel agent waits until the terminal state; external agents immediately get a batch handle, and the polling instructions in the description are derived from the "long task" marker). Everything else shares one source: adapters do not rewrite problem codes, do not create their own domain keys, and do not add or remove result fields; the same `ToolOutcome` encodes to identical JSON on both hosts, and the ArcReel agent receives a summary text plus this JSON, rather than only the summary. Long tasks are the exception due to the second axis: the two hosts receive `ToolOutcome`s from different stages (for the ArcReel agent, the terminal generation result; for external agents, initially a batch handle), and consistency lies in the batch query result that the external agent gets when polling reaches the terminal state, where the attached generation result has the same shape as what the ArcReel agent receives.
 
-曾经两个宿主各写一份声明，漂移在一个月内就出现了：错误码被改写成 `internal_error`、同一工具两个 domain key、迁移拒绝三种形状、四个入口漏声明迁移阻断，而领域测试挂在一个会被 SDK 丢弃字段的信封上。
+When each host previously had its own declaration, drift appeared within a month: error codes were rewritten to `internal_error`, the same tool had two domain keys, migration refusals came in three shapes, four entry points failed to declare migration blocking, and domain tests were attached to an envelope whose fields the SDK would discard.
 
 ## Considered Options
 
-- **按宿主取长补短**（外部 Agent 用英文短描述省 token、ArcReel Agent 只给摘要省上下文）：否决。每一处「宿主专属」都会变成下一次漂移的入口，而两宿主服务的是同一类创作 Agent，契约没有理由不同。
-- **保留手写的 `MIGRATION_BLOCKED_TOOL_IDS` 集合，让外部 Agent 的 adapter 也读它**：否决。集合对新工具没有强制力；把阻断策略做成声明的必填字段，才是 ADR 0062「阻断以入口声明为准」的落实方式。
+- **Take the best of each host** (short English descriptions for external agents to save tokens, summary only for the ArcReel agent to save context): rejected. Every "host-specific" point becomes the entry for the next drift, and both hosts serve the same kind of creative agent, so there is no reason for the contracts to differ.
+- **Keep the hand-written `MIGRATION_BLOCKED_TOOL_IDS` set and have the external agent adapter read it too**: rejected. The set has no enforcement over new tools; making the blocking policy a required field of the declaration is how ADR 0062's "blocking follows the entry-point declaration" is actually implemented.
 
 ## Consequences
 
-- 领域行为在 handler（`ToolOutcome`）层测一次；adapter 不承载领域断言，只有一个按声明表驱动的双宿主一致性测试与少量信封测试。
-- `ARCREEL_MCP_TOOL_IDS` 与迁移阻断集合都由声明派生，名字保留给既有消费方（profile lint、前端工具显示名 i18n 测试）。
-- 迁移阻断策略为「阻断」的工具，描述末尾的迁移拒绝说明同样由策略派生、不写在声明文本里；两宿主读到的描述经同一个派生函数得到，声明的描述字段因此不等于最终描述。
+- Domain behaviour is tested once at the handler (`ToolOutcome`) layer; adapters carry no domain assertions, only a dual-host consistency test driven by the declaration table plus a few envelope tests.
+- `ARCREEL_MCP_TOOL_IDS` and the migration-blocking set are both derived from the declarations; the names are kept for existing consumers (profile lint, the frontend tool display-name i18n test).
+- For tools whose migration-blocking policy is "block", the migration refusal note at the end of the description is likewise derived from the policy and not written in the declaration text; the descriptions both hosts read come from the same derivation function, so the declaration's description field is not equal to the final description.

@@ -2,11 +2,11 @@
 status: accepted
 ---
 
-# 图像端点按能力拆分为 T2I/I2I 双槽，运行时严格 gating 不做隐式 fallback
+# Image endpoints are split by capability into T2I/I2I dual slots; runtime gating is strict, with no implicit fallback
 
-NewAPI/OneAPI 中转生态里很多模型只暴露 generations（不支持 edits），给「只有 generations 的模型」传参考图会被路由到 edit 调用、远端 404 且归因模糊。决定把 OpenAI 图像端点从单条通配拆为「通配 / 仅 T2I / 仅 I2I」三条，默认配置按能力分槽（`default_image_backend_t2i` / `default_image_backend_i2i`——单一默认模型之上的可选能力桶覆盖键，未配置的槽回退默认模型，见 `docs/adr/0054`）；运行时严格按是否携带参考图选择路径，能力不匹配直接抛出带稳定 code 的 `ImageCapabilityError`，**不再做**「参考图无法读取就回退 T2I」之类的隐式 fallback——失败前置且错误清晰，胜过自动派发后远端模糊报错。
+In the NewAPI/OneAPI relay ecosystem many models expose only generations (no edits support); passing reference images to a "generations-only model" gets routed to an edit call, which 404s remotely with ambiguous attribution. We decided to split the OpenAI image endpoint from a single wildcard into three — "wildcard / T2I only / I2I only" — with default configuration slotted by capability (`default_image_backend_t2i` / `default_image_backend_i2i` — optional capability-bucket override keys on top of the single default model; an unconfigured slot falls back to the default model, see `docs/adr/0054`); at runtime the path is chosen strictly by whether reference images are present, and a capability mismatch directly raises `ImageCapabilityError` with a stable code, **no longer doing** implicit fallbacks such as "fall back to T2I if the reference image can't be read" — failing early with a clear error beats ambiguous remote errors after automatic dispatch.
 
 ## Consequences
 
-- 配置粒度变细，t2i / i2i 可各自指定模型；前端双下拉、数据迁移随之。两槽按 `docs/adr/0054` 的能力桶形态呈现，不强制逐个填写；本 ADR 的端点三拆与运行时 gating 与该形态无关，两槽为空时同样按能力严格 gating。
-- 与 `docs/adr/0001`（capability 执行时解析）正交：那条讲「请求形态决定 t2i/i2i」，这条讲「按能力拆默认配置槽 + 不 fallback」。同一三 mode + 错误码已被 dashscope / vidu 等图像后端复用。
+- Configuration becomes finer-grained: t2i / i2i can each specify a model; dual frontend dropdowns and a data migration follow. The two slots are presented in the capability-bucket form of `docs/adr/0054` and need not be filled in individually; this ADR's three-way endpoint split and runtime gating are independent of that form, and with both slots empty, gating is still strictly by capability.
+- Orthogonal to `docs/adr/0001` (capability resolved at execution time): that one says "request shape determines t2i/i2i", this one says "split default configuration slots by capability + no fallback". The same three modes + error codes are reused by image backends such as dashscope / vidu.

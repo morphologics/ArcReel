@@ -2,24 +2,24 @@
 status: accepted
 ---
 
-# 资产识别并入逐集脚本规划：全书资产提取与资产清单闸门退役
+# Asset identification folds into per-episode script planning: whole-book asset extraction and the asset list gate are retired
 
-全书资产提取让长篇源文整本进入一个上下文，源文改动一个字节就让整份清单过期、挡住下游全部操作，且与逐集自带原文、无源文的自由创作都不相适配。决定把资产识别放进**逐集的 AI 规划脚本**：以已登记资产的名字、别名与描述为上下文，本集未登记的资产与外观变化（衍生）随规划一并产出，每个新增项的处理（新建、归到已有、衍生、不登记）由读过本集原文的 AI 决定并附依据，创作者在内容确认时可改，确认即随正式脚本登记。全书提取与资产清单闸门随之退役。
+Whole-book asset extraction put an entire long source text into one context; changing a single byte of the source made the whole list stale and blocked all downstream actions; and it fitted neither episodes that bring their own source text nor free creation without source text. We decided to put asset identification into **per-episode AI script planning**: with the names, aliases and descriptions of registered assets as context, assets not yet registered in this episode and appearance changes (derivatives) are produced together with planning; the handling of each new item (create new, assign to existing, derivative, do not register) is decided, with justification, by the AI that has read this episode's source text; the creator can change it at content confirmation, and confirmation registers them together with the formal script. Whole-book extraction and the asset list gate are retired accordingly.
 
-AI 认出同一资产靠称呼，而资产描述写的是外貌，所以资产带**别名**，只供 AI 参考、不参与程序匹配；程序只做一处归并：登记时与已登记同类资产名字完全一致的新增项归到已有资产。
+The AI recognises the same asset by how it is referred to, whereas asset descriptions describe appearance, so assets carry **aliases**, which are only for the AI's reference and do not take part in programmatic matching; the program does only one merge: at registration, a new item whose name exactly matches an already registered asset of the same type is assigned to the existing asset.
 
-广告/短片没有脚本规划，资产识别同样并入它的整份生成，处理决定写入即生效、不经内容确认：内容确认是为在提示词编写前把关，而整份生成一步写完视觉层，这道关无可拦之物；不识别则只凭商品与创作灵感开局的项目，分镜没有人物与场景可引用。
+Ads/shorts have no script plan, so asset identification likewise folds into their whole-script generation, and handling decisions take effect on write without content confirmation: content confirmation exists to gate before prompt authoring, while whole-script generation writes the visual layer in one step, so that gate has nothing to stop; and without identification, projects that start only from product information and creative inspiration would have no characters or scenes for storyboards to reference.
 
 ## Considered Options
 
-- **并入分集规划**：只覆盖整本源文，自带原文的集仍需第二条识别路径。
-- **逐集识别之外保留全书提取作可选操作**：两条路径的重复与冲突要长期各自处理。
-- **由创作者在内容确认时逐项选择处理**：把判断交给多半没读过原文的人。
-- **别名参与程序匹配**：泛称（如「大哥」）在不同集可能指不同的人，程序会误配。
-- **广告/短片维持资产须预先登记，或新增资产也经内容确认**：前者让典型开局无资产可引用，后者只多一步操作。
+- **Fold into episode planning**: covers only whole-book source text; episodes with their own source text would still need a second identification path.
+- **Keep whole-book extraction as an optional action alongside per-episode identification**: duplication and conflicts between the two paths would have to be handled separately in the long run.
+- **Have the creator choose the handling item by item at content confirmation**: hands the judgement to someone who most likely has not read the source text.
+- **Aliases take part in programmatic matching**: generic terms of address (such as 「大哥」 ("big brother")) may refer to different people in different episodes, and the program would mismatch.
+- **For ads/shorts, keep requiring assets to be registered in advance, or also put new assets through content confirmation**: the former leaves a typical start with no assets to reference; the latter just adds one more step.
 
 ## Consequences
 
-- AI 认错、创作者也没发现时，同一资产会被登记成两个，出路是在项目资产中把两者合并。
-- 规划与生成从不修改已登记资产的描述：首次出场写下的描述不全只能由创作者补，外观变化走衍生。
-- 手写的脚本不经 AI 生成，其资产照旧手工登记。
+- When the AI misidentifies and the creator does not notice either, the same asset gets registered twice; the way out is to merge the two in the project's assets.
+- Planning and generation never modify the descriptions of registered assets: if the description written at first appearance is incomplete, only the creator can complete it, and appearance changes go through derivatives.
+- Hand-written scripts are not AI-generated, so their assets are still registered manually.

@@ -2,30 +2,30 @@
 status: accepted
 ---
 
-> 「未登记的 `@[名称]` 只警告、不阻断」与「没有资产图就用它的全部原图」两段已由 `docs/adr/0073` 取代，其余内容仍有效。
+> The two passages "unregistered `@[名称]` (`@[name]`) only warn and don't block" and "if there is no asset image, use all of its original images" have been superseded by `docs/adr/0073`; the rest remains in effect.
 
-> 本 ADR 中「任一文件损坏时项目目录零写入并落『需要修复』裁决」的范围已由 `docs/adr/0098` 收窄：只有项目文件或剧本读不出才落裁决；损坏的脚本规划草稿原样保留、不改写，其余文件照常迁移。
+> The scope of "when any file is corrupted, zero writes to the project directory and a 'needs repair' verdict is recorded" in this ADR has been narrowed by `docs/adr/0098`: a verdict is recorded only when the project file or a script can't be read; a corrupted script-plan draft is kept as-is and not rewritten, and the remaining files are migrated as usual.
 
-# 视频单元以自由文本为唯一真相，参考图与发声读时派生
+# A video unit's free text is the only truth; reference images and voicing are derived on read
 
-参考生视频路线（`generation_mode=reference_video`）的一个视频单元就是一次视频生成调用。它落盘的内容只有**一段自由文本正文**与**一个编排时长**（外加转场、备注、产物与 `needs_replan` 这类非内容字段）。正文里的书写层记号——`@[名称]` 提及资产、`@[角色]{台词}` 表示该角色发声、`{台词}` 表示画外音——可写在任意位置；参考图集合、发声条目与说话人绑定全部在读时从正文机械派生：不落盘、不作为单元字段经 REST 读写、不进 LLM 输出；预览端点按同一份正文现算一遍返回派生结果，那是读时产物，不构成第二份真相。
+A video unit on the reference-to-video route (`generation_mode=reference_video`) is exactly one video generation call. What it writes to disk is only **one free-text body** and **one orchestrated duration** (plus non-content fields such as transition, notes, artifacts, and `needs_replan`). Writing-layer markers in the body — `@[名称]` (`@[name]`) mentions an asset, `@[角色]{台词}` (`@[character]{line}`) means that character speaks, `{台词}` (`{line}`) means voiceover — can be written anywhere; the reference image set, voicing entries, and speaker bindings are all derived mechanically from the body on read: not written to disk, not read or written as unit fields via REST, not in LLM output; the preview endpoint computes the derived results from the same body on the spot and returns them — that is a read-time product, not a second truth.
 
-**派生物落盘就会与正文分叉。** 正文是作者写的、可随时改的；派生物是机器算的。两者同时持久化，就必然存在「谁改了正文但没重算派生物」的窗口——编辑器、批量编辑、Agent 工具、迁移、归档导入，每一条写路径都得记得重派生一次，漏掉一处就生成一条用陈旧参考图渲染的视频，而用户在界面上看到的正文明明是新的。把派生物移到读时，这个窗口在结构上不存在：能读到正文的地方就能算出当前的参考图与发声，算不出别的。
+**Once derived data is written to disk, it diverges from the body.** The body is written by the author and can be changed at any time; derived data is computed by the machine. If both are persisted, there will inevitably be a window of "someone changed the body but didn't recompute the derived data" — the editor, batch editing, agent tools, migrations, archive import: every write path must remember to re-derive, and missing one produces a video rendered with stale reference images, while the body the user sees in the UI is clearly the new one. Moving derived data to read time makes this window structurally impossible: anywhere that can read the body can compute the current reference images and voicing, and nothing else.
 
-参考图的解析规则是一条，不按资产类型分叉：正文里 `@[名称]` 的**首次提及顺序**即参考图顺序（也即提示词里 `图N` 的编号）；每个被提及且已登记的资产，有资产图就用资产图，没有就用它的全部原图。商品与角色、场景、道具同规则——不排最前、不全量注入、不因类型获得优先级。同一名字在多张资产表里都登记时按 product → character → scene → prop 归属。只出现在 `{}` 之前的角色（即台词记号的说话人位）只绑定音色，不产生参考图：它是「谁在说」，不是「画面里有谁」。
+The resolution rule for reference images is a single one, not forked by asset type: the **order of first mention** of `@[名称]` (`@[name]`) in the body is the reference image order (i.e. the numbering of `图N` (Image N) in the prompt); for each mentioned and registered asset, use its asset image if it has one, otherwise all of its original images. Products follow the same rule as characters, scenes, and props — not placed first, not injected in full, no priority by type. When the same name is registered in several asset tables, ownership goes product → character → scene → prop. A character that appears only before `{}` (i.e. in the speaker position of a dialogue marker) only binds a voice and produces no reference image: it is "who is speaking", not "who is in the frame".
 
-未登记的 `@[名称]` **只警告、不阻断**。正文是人写的文本，一个还没建的资产名不是格式错误，把它升级成阻断只会逼作者在写作时先去补资产表。未解析的提及不产生参考图，其余提及照常解析，生成照常发生。机器产物这条路（拆分工具、prompt_authoring 展开）另有更严的闸——那里的正文是模型写的，没有可保护的作者意图。
+Unregistered `@[名称]` (`@[name]`) **only warn and don't block**. The body is human-written text; an asset name that hasn't been created yet is not a format error, and escalating it to blocking would only force the author to fill in the asset table first while writing. An unresolved mention produces no reference image, other mentions resolve as usual, and generation happens as usual. The machine-artifact path (split tools, prompt_authoring expansion) has a stricter gate — there the body was written by the model, and there is no author intent to protect.
 
-## 明确不采用
+## Explicitly not adopted
 
-- **保留 `shots[]` 作为正文的结构化切分**：镜头数组既不是创作单位（一个 unit 一次生成调用，镜头之间没有独立的时长、产物或可寻址 ID），也不是供应商契约（backend 收的是一整段提示词）。它唯一的作用是让同一段正文有两种形态，于是每条写路径都要在两种形态之间来回换算。`镜头N：` 前缀随之失去语法含义——迁移把它作为普通正文逐字保留，不删不改：那是作者写下的字。
-- **保留 `references[]` 作为可手工编辑的引用列表**：让用户在正文之外另选参考图，等于承认正文说了不算。真正的编辑动作是改正文里的 `@` 引用，界面因此不再提供引用清单。
-- **按类型给参考图排序或补足**：商品排最前、无提及时注入全部商品图，都是「机器比作者更懂这一镜要什么」的假设。作者提了什么就发什么，顺序按他写的顺序。
-- **未解析提及阻断生成**：见上。
+- **Keeping `shots[]` as a structured split of the body**: the shot array is neither a creative unit (one unit is one generation call, and shots have no independent duration, artifact, or addressable ID) nor a provider contract (the backend receives one whole prompt). Its only effect is to give the same body two forms, so every write path has to convert back and forth between them. The `镜头N：` (Shot N:) prefix thus loses its syntactic meaning — the migration keeps it verbatim as ordinary body text, neither deleted nor changed: those are words the author wrote.
+- **Keeping `references[]` as a manually editable reference list**: letting the user choose reference images outside the body amounts to admitting the body isn't authoritative. The real editing action is changing the `@` references in the body, so the UI no longer offers a reference list.
+- **Ordering or padding reference images by type**: putting products first, or injecting all product images when there's no mention, both assume "the machine knows better than the author what this shot needs". Whatever the author mentions is what gets sent, in the order they wrote it.
+- **Blocking generation on unresolved mentions**: see above.
 
 ## Consequences
 
-- 项目 schema 升到 v9。迁移把 `shots[*].text` 按数组顺序换行拼回 `text`、删除 `references[]` 与只服务镜头结构的 `migration_requires_content_replan`（它蕴含的 `needs_replan` 原样保留）。剧集脚本与 script_plan 草稿同批改写；启动扫描与归档导入共用 `migrate_project_dir` 这一个入口，任一文件损坏时项目目录零写入并落「需要修复」裁决。
-- 视频产物的时效依据从「按镜头分组的画面行」变成「正文的画面行」（发声记号仍被剔除，改台词不让已生成的视频过期）。依据形状变了，存量参考视频因此判为陈旧一次——这是结构迁移的必然代价，不自动重生。
-- 单 unit 的参考图上限对应「正文里去重后的提及数」上限；超限仍是机器产物路径上的阻断违约，出路是把次要角色写进背景描述而不用 `@` 引用。
-- 分镜路线的商品机制不受本 ADR 影响：那条路上商品参考在分镜生成阶段注入并烘焙进画面（见 `docs/adr/0034`），与视频单元正文无关。
+- The project schema goes up to v9. The migration joins `shots[*].text` back into `text` with line breaks in array order, and deletes `references[]` and `migration_requires_content_replan`, which only served the shot structure (the `needs_replan` it implied is kept as-is). Episode scripts and script_plan drafts are rewritten in the same batch; startup scanning and archive import share the single entry point `migrate_project_dir`, and when any file is corrupted, there are zero writes to the project directory and a "needs repair" verdict is recorded.
+- The currency basis of video artifacts changes from "visual lines grouped by shot" to "visual lines of the body" (voicing markers are still stripped, so changing dialogue doesn't expire generated videos). Since the shape of the basis changed, existing reference videos are judged stale once — an unavoidable cost of the structural migration, with no automatic regeneration.
+- The per-unit reference image limit corresponds to a limit on "the number of deduplicated mentions in the body"; exceeding it is still a blocking violation on the machine-artifact path, and the way out is to write secondary characters into the background description instead of using `@` references.
+- The product mechanism of the storyboard route is unaffected by this ADR: on that route, product references are injected at the storyboard generation stage and baked into the image (see `docs/adr/0034`), unrelated to the video unit body.

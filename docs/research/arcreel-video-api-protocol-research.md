@@ -1,519 +1,519 @@
-# ArcReel 视频 API 协议适配调研报告
+# ArcReel Video API Protocol Adaptation Research Report
 
-**调研截止日期**：2026-05-27
-**用途**：作为后续 PRD 与设计文档撰写的输入素材
-**作者**：协助调研（Claude）
-**关联背景**：ArcReel 视频供应商体系扩展、自定义供应商生态对接
-
----
-
-## 0. 调研范围与定位
-
-本报告是**调研性质**的素材汇编，**不包含**具体的目录结构、Adapter 类设计、实施计划。这些内容应在后续 PRD 和设计文档阶段，基于 ArcReel 当前 `lib/backends/video_backends/` + `lib/custom_provider/` 架构产出。
-
-调研覆盖的问题：
-1. 中转站视频 API 端口格式有哪些事实标准
-2. 主流官方视频生成平台的 API 规格
-3. 各协议的能力支持矩阵（文生 / 图生 / 首尾帧 / 参考生 / 视频续写 / 音频 / 对口型 / 角色一致性）
-4. 各协议的可行性评估和优先级建议
-5. 最优先协议的完整 API 规格细节
-6. 自定义供应商接入方案选型（plugin vs 声明式）
-7. 运行时 plugin 机制的可行性与设计选项（支撑已规划的社区化协议分享功能）
-
-不在调研范围：
-- ArcReel 代码层面的目录组织 / 类继承 / 文件命名
-- 数据库 schema 变更 / Alembic 迁移
-- 前端 UI 改动
-- 具体的实施时间线
+**Research cut-off date**: 2026-05-27
+**Purpose**: Input material for writing the follow-up PRD and design documents
+**Author**: Research assistance (Claude)
+**Related background**: Expansion of ArcReel's video provider system, integration with the custom provider ecosystem
 
 ---
 
-## 1. ArcReel 架构调研基线（重要：已对齐现状）
+## 0. Research Scope and Positioning
 
-> 这一节是**理解后续调研结论的前提**，所有协议适配建议都必须套在这套架构上。
+This report is a **research-oriented** compilation of material and **does not include** a concrete directory structure, Adapter class design, or implementation plan. Those should be produced in the later PRD and design document stages, based on ArcReel's current `lib/backends/video_backends/` + `lib/custom_provider/` architecture.
 
-### 1.1 视频 backend 抽象层
+Questions covered by the research:
+1. What de facto standards exist for relay-station (API proxy) video API endpoint formats
+2. API specifications of the mainstream official video generation platforms
+3. The capability support matrix for each protocol (text-to-video / image-to-video / first and last frame / reference-to-video / video continuation / audio / lip sync / character consistency)
+4. Feasibility assessment and priority recommendations for each protocol
+5. Full API specification details for the highest-priority protocols
+6. Choice of approach for custom provider integration (plugin vs declarative)
+7. Feasibility and design options for a runtime plugin mechanism (supporting the planned community protocol-sharing feature)
 
-ArcReel 已在 `lib/backends/video_backends/` 建立成熟的视频生成抽象：
+Out of scope:
+- ArcReel code-level directory organisation / class inheritance / file naming
+- Database schema changes / Alembic migrations
+- Frontend UI changes
+- A concrete implementation timeline
 
-| 关键元素 | 位置 | 说明 |
+---
+
+## 1. ArcReel Architecture Research Baseline (important: aligned with the current state)
+
+> This section is the **prerequisite for understanding the later research conclusions**; every protocol adaptation recommendation must fit within this architecture.
+
+### 1.1 Video Backend Abstraction Layer
+
+ArcReel has already built a mature video generation abstraction in `lib/backends/video_backends/`:
+
+| Key element | Location | Description |
 |---|---|---|
-| `VideoBackend` Protocol | `lib/backends/video_backend_contract.py` | 鸭子类型契约，要求 `name` / `model` / `capabilities` / `generate()` |
-| `VideoCapability` 枚举 | `lib/backends/video_backend_contract.py` | 能力位图：`TEXT_TO_VIDEO` / `IMAGE_TO_VIDEO` / `GENERATE_AUDIO` / `NEGATIVE_PROMPT` / `VIDEO_EXTEND` / `SEED_CONTROL` / `FLEX_TIER` |
-| `VideoGenerationRequest` / `VideoGenerationResult` | 同上 | 统一请求/响应数据类 |
-| `register_backend(name, factory)` | `lib/backends/video_backends/registry.py` | 注册机制 |
-| 已有 backend 实现 | `gemini.py` / `ark.py` / `grok.py` / `openai.py` / `newapi.py` / `vidu.py` | 6 家供应商 |
+| `VideoBackend` Protocol | `lib/backends/video_backend_contract.py` | Duck-typed contract requiring `name` / `model` / `capabilities` / `generate()` |
+| `VideoCapability` enum | `lib/backends/video_backend_contract.py` | Capability bitmap: `TEXT_TO_VIDEO` / `IMAGE_TO_VIDEO` / `GENERATE_AUDIO` / `NEGATIVE_PROMPT` / `VIDEO_EXTEND` / `SEED_CONTROL` / `FLEX_TIER` |
+| `VideoGenerationRequest` / `VideoGenerationResult` | Same as above | Unified request/response data classes |
+| `register_backend(name, factory)` | `lib/backends/video_backends/registry.py` | Registration mechanism |
+| Existing backend implementations | `gemini.py` / `ark.py` / `grok.py` / `openai.py` / `newapi.py` / `vidu.py` | 6 providers |
 
-**ArcReel 词汇表约定**：用 **backend**（按 provider + model 构造、真正调用 API 的客户端对象）指代生成后端，术语表 `_Avoid` 标注避免使用 `adapter` 一词。其本质是 Ports & Adapters 范式中的 Adapter 角色，但 ArcReel 统称 backend 以保持与 provider 派生语义、frontend 对仗、三套媒体后端的命名一致（与 SQLAlchemy / Django 用 backend 命名同类角色的惯例一致）。架构对齐的讨论见 9.1。
+**ArcReel glossary convention**: **backend** (the client object constructed per provider + model that actually calls the API) is used to refer to generation backends; the glossary's `_Avoid` marks the word `adapter` as one to avoid. In essence it plays the Adapter role of the Ports & Adapters paradigm, but ArcReel calls it backend throughout to stay consistent with the provider-derivation semantics, the parallel with frontend, and the naming of the three media backends (consistent with the convention of SQLAlchemy / Django naming the same kind of role "backend"). For the discussion of architectural alignment see 9.1.
 
-### 1.2 自定义供应商体系
+### 1.2 Custom Provider System
 
-`lib/custom_provider/` 已经支持用户接入任意 OpenAI/Google 兼容的中转站：
+`lib/custom_provider/` already lets users connect any OpenAI/Google-compatible relay station:
 
-| 关键元素 | 作用 |
+| Key element | Role |
 |---|---|
-| `CustomProvider` ORM（DB 表） | `discovery_format` ∈ {openai, google} + `base_url` + `api_key` |
-| `CustomProviderModel` ORM（DB 表） | 每个模型挂一个 `endpoint`（ENDPOINT_REGISTRY key） |
-| `ENDPOINT_REGISTRY` | 协议归属的单一真相源 |
-| `infer_endpoint()` | 启发式从 model_id 推断 endpoint |
-| `create_custom_backend()` factory | 按 endpoint 派发到对应 VideoBackend |
-| 前端 UI | 在设置页 CRUD，自动 `/v1/models` 发现 |
+| `CustomProvider` ORM (DB table) | `discovery_format` ∈ {openai, google} + `base_url` + `api_key` |
+| `CustomProviderModel` ORM (DB table) | Each model is attached to one `endpoint` (an ENDPOINT_REGISTRY key) |
+| `ENDPOINT_REGISTRY` | Single source of truth for protocol ownership |
+| `infer_endpoint()` | Heuristically infers the endpoint from model_id |
+| `create_custom_backend()` factory | Dispatches to the matching VideoBackend by endpoint |
+| Frontend UI | CRUD on the settings page, automatic `/v1/models` discovery |
 
-**当前 ENDPOINT_REGISTRY 已有 6 条**（不含 anthropic-messages 等本轮调研不涉及的）：
+**The current ENDPOINT_REGISTRY already has 6 entries** (excluding ones not covered in this research round, such as anthropic-messages):
 
-| Endpoint Key | media_type | family | 状态 |
+| Endpoint Key | media_type | family | Status |
 |---|---|---|---|
-| `openai-chat` | text | openai | 已实现 |
-| `gemini-generate` | text | google | 已实现 |
-| `openai-images` | image | openai | 已实现 |
-| `gemini-image` | image | google | 已实现 |
-| `openai-video` | video | openai | 已实现（**OpenAI Sora `/v1/videos` 兼容**） |
-| `newapi-video` | video | newapi | 已实现（**NewAPI `/v1/video/generations` 自有协议**） |
+| `openai-chat` | text | openai | Implemented |
+| `gemini-generate` | text | google | Implemented |
+| `openai-images` | image | openai | Implemented |
+| `gemini-image` | image | google | Implemented |
+| `openai-video` | video | openai | Implemented (**OpenAI Sora `/v1/videos` compatible**) |
+| `newapi-video` | video | newapi | Implemented (**NewAPI's own `/v1/video/generations` protocol**) |
 
-### 1.3 预置供应商
+### 1.3 Preset Providers
 
-`lib/config/registry.py` 的 `PROVIDER_REGISTRY` 已有 5 家预置：
+`PROVIDER_REGISTRY` in `lib/config/registry.py` already has 5 presets:
 
-- `gemini-aistudio` / `gemini-vertex` — Veo 3.1 全系
-- `ark` — 火山方舟（Seedance 1.5 Pro / 2.0 / 2.0 Fast 已注册）
+- `gemini-aistudio` / `gemini-vertex` — the full Veo 3.1 family
+- `ark` — Volcano Engine Ark (Seedance 1.5 Pro / 2.0 / 2.0 Fast registered)
 - `grok` — xAI Grok Imagine Video
 - `openai` — Sora 2 / Sora 2 Pro
-- `vidu` — Vidu Q3 全系（含参考生视频）
+- `vidu` — the full Vidu Q3 family (including reference-to-video)
 
-### 1.4 协议绑定到模型级别（架构决策）
+### 1.4 Protocols Bound at the Model Level (architectural decision)
 
-ArcReel 已在 `2026-04-26-custom-provider-model-endpoint-design` 中明确确认：
+ArcReel has explicitly confirmed in `2026-04-26-custom-provider-model-endpoint-design`:
 
-> 一个中转站 = 一个 provider；同一个 provider 下不同模型可以走完全不同的协议；
-> 协议归属下沉到模型层（`CustomProviderModel.endpoint` 字段）；
-> provider 层 `discovery_format` 只用于模型发现，与调用协议解耦。
+> One relay station = one provider; different models under the same provider may use completely different protocols;
+> protocol ownership is pushed down to the model layer (the `CustomProviderModel.endpoint` field);
+> the provider-level `discovery_format` is only used for model discovery and is decoupled from the calling protocol.
 
-**所有后续协议适配设计必须遵守这一架构约束。**
+**All subsequent protocol adaptation designs must respect this architectural constraint.**
 
 ---
 
-## 2. 中转站协议生态格局（事实标准归纳）
+## 2. Relay-station Protocol Ecosystem Landscape (summary of de facto standards)
 
-调研覆盖了 15+ 主流中转站（NewAPI 主仓库、AiHubMix、七牛云、Wisdom Gate、AI/ML API、APIMart、EvoLink、CometAPI、Kie.ai、PiAPI、useapi.net、kazhang.ai、apiyi、burn.hair、closeai 等）后，归纳出**四大流派并存**的事实：
+After covering 15+ mainstream relay stations (the main NewAPI repository, AiHubMix, Qiniu Cloud, Wisdom Gate, AI/ML API, APIMart, EvoLink, CometAPI, Kie.ai, PiAPI, useapi.net, kazhang.ai, apiyi, burn.hair, closeai, etc.), the research concludes that **four major schools coexist**:
 
-### 2.1 流派 A：OpenAI Sora `/v1/videos`
+### 2.1 School A: OpenAI Sora `/v1/videos`
 
-**端点**：`POST /v1/videos` + `GET /v1/videos/{video_id}` + `GET /v1/videos/{video_id}/content`
-**形态**：multipart/form-data 或 JSON
-**参数**：`model` + `prompt` + `seconds`（字符串）+ `size`（"1280x720"）+ `input_reference`
-**鉴权**：`Authorization: Bearer`
-**代表实例**：OpenAI 官方、AiHubMix、七牛云 sora 路径、Wisdom Gate、Azure OpenAI、ArcReel 已有 `openai-video` endpoint
+**Endpoints**: `POST /v1/videos` + `GET /v1/videos/{video_id}` + `GET /v1/videos/{video_id}/content`
+**Format**: multipart/form-data or JSON
+**Parameters**: `model` + `prompt` + `seconds` (string) + `size` ("1280x720") + `input_reference`
+**Auth**: `Authorization: Bearer`
+**Representative instances**: OpenAI official, AiHubMix, the Qiniu Cloud sora path, Wisdom Gate, Azure OpenAI, ArcReel's existing `openai-video` endpoint
 
-**关键事实**：
-- OpenAI 官方公告 **Sora 2 / Sora 2 Pro 将于 2026-09-24 退役**（developer notification 2026-03-24 发出）
-- 路径事实标准会保留，中转站惯性沿用承载其他模型
-- 七牛云兼容路径在 query 响应里直接返回 `task_result.videos[0].url`，而 OpenAI 官方需二次 GET `/content`
+**Key facts**:
+- OpenAI has officially announced that **Sora 2 / Sora 2 Pro will be retired on 2026-09-24** (developer notification sent 2026-03-24)
+- The path will remain a de facto standard; relay stations will keep using it out of inertia to host other models
+- The Qiniu Cloud compatible path returns `task_result.videos[0].url` directly in the query response, whereas OpenAI official requires a second GET to `/content`
 
-### 2.2 流派 B：NewAPI 自有 `/v1/video/generations`
+### 2.2 School B: NewAPI's Own `/v1/video/generations`
 
-**端点**：`POST /v1/video/generations`（注意复数）+ `GET /v1/video/generations/{task_id}`
-**形态**：纯 JSON
-**参数**：`model` + `prompt` + `image` + `duration`（数字）+ `width`/`height` + `metadata`（对象）
-**鉴权**：`Authorization: Bearer`
-**代表实例**：所有基于 NewAPI / OneAPI 部署的中转站（DMXAPI、closeai、burn.hair 等数十家）；ArcReel 已有 `newapi-video` endpoint
+**Endpoints**: `POST /v1/video/generations` (note the plural) + `GET /v1/video/generations/{task_id}`
+**Format**: pure JSON
+**Parameters**: `model` + `prompt` + `image` + `duration` (number) + `width`/`height` + `metadata` (object)
+**Auth**: `Authorization: Bearer`
+**Representative instances**: all relay stations deployed on NewAPI / OneAPI (dozens, including DMXAPI, closeai, burn.hair); ArcReel's existing `newapi-video` endpoint
 
-**关键事实**：
-- `metadata{}` 字段是 vendor-specific 透传的黑盒（NewAPI 文档明确列出的只有 Kling 的 `image_tail`/`negative_prompt`/`seed` 和 Jimeng 的 `req_key`/`image_urls`/`aspect_ratio`，其他完全靠中转站中间件）
-- 中转站之间 metadata 透传完整度差异极大，同一个 Kling `camera_control` 在 DMXAPI 能用、在某些自部署 NewAPI 上丢失
-- 状态机：`queued / in_progress / completed / failed`
+**Key facts**:
+- The `metadata{}` field is a black box for vendor-specific pass-through (the only ones explicitly listed in the NewAPI docs are Kling's `image_tail`/`negative_prompt`/`seed` and Jimeng's `req_key`/`image_urls`/`aspect_ratio`; everything else depends entirely on the relay station's middleware)
+- Completeness of metadata pass-through varies greatly between relay stations; the same Kling `camera_control` works on DMXAPI but is lost on some self-deployed NewAPI instances
+- State machine: `queued / in_progress / completed / failed`
 
-### 2.3 流派 C：v2 通用 generations（一个端点全部模型）
+### 2.3 School C: v2 Generic Generations (one endpoint for all models)
 
-**端点**：`POST /v2/video/generations` 或 `/v2/videos/generations`（各家细微差异）
-**形态**：纯 JSON
-**核心特征**：**单端点 + model 字段切换**，承载几十上百个模型（Kling/Veo/Sora/Hailuo/Wan/Seedance 全在一个 URL 下）
-**鉴权**：`Authorization: Bearer`
-**代表实例**：
-- **AI/ML API**（aimlapi.com）`/v2/video/generations` — 流派 C 最典型代表
+**Endpoints**: `POST /v2/video/generations` or `/v2/videos/generations` (subtle differences between vendors)
+**Format**: pure JSON
+**Core feature**: **single endpoint + model field switching**, hosting dozens to hundreds of models (Kling/Veo/Sora/Hailuo/Wan/Seedance all under one URL)
+**Auth**: `Authorization: Bearer`
+**Representative instances**:
+- **AI/ML API** (aimlapi.com) `/v2/video/generations` — the most typical representative of School C
 - **getimg.ai** `/v2/videos/generations`
 - **APIMart** `/v1/videos/generations`
 - **EvoLink** `/v1/videos/generations`
-- **七牛云 veo** 路径 `/v1/videos/generations`
-- **xAI 官方** `/v1/videos/generations`（**官方就是这个形态**）
-- **CometAPI** `/volc/v3/contents/generations/tasks`（路径细节有差异但思想一致）
+- **Qiniu Cloud veo** path `/v1/videos/generations`
+- **xAI official** `/v1/videos/generations` (**the official API itself has this shape**)
+- **CometAPI** `/volc/v3/contents/generations/tasks` (path details differ but the idea is the same)
 
-**关键事实**：
-- 实际是 **discriminated union by model**：单 URL 接受 60+ model id，但每个 model 的可选字段集合完全不同
-- 例：同一端点下 Kling 接 `cfg_scale` / `negative_prompt` / `image_url` / `last_image_url`；Veo 3.1 接 `image_urls[]`；Seedance 接 `reference_images[]` / `reference_audios[]` / `reference_videos[]` / `generate_audio`；Sora 接 `resolution` / `image_url`
-- model 命名碎片化严重：AIMLAPI 用 `kling-video/v1/standard/text-to-video`，APIMart 用 `sora-2-vip`，getimg.ai 用 `happyhorse-1`（自有品牌名）
-- **被很多中转站采用**，是流派 B 之外的主流事实标准
-- 在 ArcReel 当前 ENDPOINT_REGISTRY 中**尚未覆盖**
+**Key facts**:
+- It is effectively a **discriminated union by model**: a single URL accepts 60+ model IDs, but each model's set of optional fields is completely different
+- Example: under the same endpoint Kling takes `cfg_scale` / `negative_prompt` / `image_url` / `last_image_url`; Veo 3.1 takes `image_urls[]`; Seedance takes `reference_images[]` / `reference_audios[]` / `reference_videos[]` / `generate_audio`; Sora takes `resolution` / `image_url`
+- Model naming is badly fragmented: AIMLAPI uses `kling-video/v1/standard/text-to-video`, APIMart uses `sora-2-vip`, getimg.ai uses `happyhorse-1` (its own brand name)
+- **Adopted by many relay stations**; it is the mainstream de facto standard besides School B
+- **Not yet covered** in ArcReel's current ENDPOINT_REGISTRY
 
-### 2.4 流派 D：动词 create/submit 风格
+### 2.4 School D: Verb-style create/submit
 
-**端点**：`POST /api/v1/jobs/createTask`、`POST /api/v1/task`、`POST /v1/videos/create` 等（create + query 拆分）
-**形态**：纯 JSON，参数嵌套在 `input{}` 子对象
-**代表实例**：
+**Endpoints**: `POST /api/v1/jobs/createTask`, `POST /api/v1/task`, `POST /v1/videos/create`, etc. (split into create + query)
+**Format**: pure JSON, parameters nested in an `input{}` sub-object
+**Representative instances**:
 - **Kie.ai** `/api/v1/jobs/createTask` + `/api/v1/jobs/recordInfo`
 - **PiAPI** `/api/v1/task` + `/api/v1/task/{task_id}`
 - **useapi.net** `/v1/{vendor}/videos/create`
-- **速创** `/api/sora2/submit`
+- **Suchuang (速创)** `/api/sora2/submit`
 - **laozhang.ai** `/veo/v1/api/video/submit`
 
-**关键事实**：
-- 流派 D 内部不统一，每家路径和参数细节差异巨大，无法用一个 backend 复用
-- PiAPI 有非标状态码（外层 `status: "completed"` 字符串 + 内层 `output.status: 99` 整数表完成），需双层判断
+**Key facts**:
+- School D is not internally consistent; paths and parameter details differ hugely between vendors, so a single backend cannot be reused
+- PiAPI has non-standard status codes (outer `status: "completed"` string + inner `output.status: 99` integer meaning done), requiring a two-level check
 
-### 2.5 流派分布观察
+### 2.5 Observations on School Distribution
 
-按调研覆盖的中转站数量统计（**非严格市场占有率**）：
+Counted by the number of relay stations covered in the research (**not strict market share**):
 
-- 流派 A（OpenAI Sora 兼容）：覆盖度高，海外/合规客户必备
-- 流派 B（NewAPI 自有）：**国内自部署中转站事实垄断**，覆盖度最高
-- 流派 C（v2 通用 generations）：**被很多中转站采用**，海外聚合站和 xAI 官方采用，覆盖度位居第二
-- 流派 D（动词风格）：内部分散，各家自定义为主，单家覆盖度有限
+- School A (OpenAI Sora compatible): high coverage, essential for overseas/compliance-sensitive customers
+- School B (NewAPI's own): **de facto monopoly among self-deployed relay stations in China**, the highest coverage
+- School C (v2 generic generations): **adopted by many relay stations**, used by overseas aggregators and xAI official, second in coverage
+- School D (verb style): fragmented internally, mostly vendor-specific, limited coverage per vendor
 
 ---
 
-## 3. 主流官方视频平台 API 调研
+## 3. Research on Mainstream Official Video Platform APIs
 
-### 3.1 已被 ArcReel 接入的平台
+### 3.1 Platforms Already Integrated into ArcReel
 
-| 平台 | 当前状态 | 协议归属 | 备注 |
+| Platform | Current status | Protocol | Notes |
 |---|---|---|---|
-| Google Veo 3.1 | 已实现 | Vertex AI + AI Studio 双后端 | 文生/图生/续写/音频/负面提示 |
-| 火山 Ark Seedance 2.0 | 已实现 | Ark SDK | 2.0 已注册但**未启用多模态参考、视频延长** |
-| xAI Grok Imagine | 已实现 | xAI SDK | 文生/图生/参考生 |
-| OpenAI Sora 2 | 已实现 | openai SDK | 含 `create_and_poll` |
-| Vidu Q3 | 已实现 | httpx | 文生/图生/**参考生视频**（已应用于 reference-to-video 模式） |
+| Google Veo 3.1 | Implemented | Vertex AI + AI Studio dual backend | Text-to-video/image-to-video/continuation/audio/negative prompt |
+| Volcano Ark Seedance 2.0 | Implemented | Ark SDK | 2.0 is registered but **multimodal reference and video extension are not enabled** |
+| xAI Grok Imagine | Implemented | xAI SDK | Text-to-video/image-to-video/reference-to-video |
+| OpenAI Sora 2 | Implemented | openai SDK | Includes `create_and_poll` |
+| Vidu Q3 | Implemented | httpx | Text-to-video/image-to-video/**reference-to-video** (already used in reference-to-video mode) |
 
-### 3.2 调研但尚未接入的官方平台
+### 3.2 Official Platforms Researched but Not Yet Integrated
 
-#### 可灵 Kling 官方
+#### Kling Official
 
-- **Base URL**：`https://api.klingai.com`
-- **鉴权**：JWT HS256，payload `{iss: ak, exp: now+1800, nbf: now-5}`，30 分钟过期
-- **端点**：按 intent 多端点 — `/v1/videos/text2video`、`/image2video`、`/multi-image2video`、`/video-extend`、`/lip-sync`
-- **能力**：T2V / I2V / FLF（pro 模式 `image_tail`）/ R2V（`elements[]` 1.6）/ Extend / Audio（2.6 pro `enable_audio`）/ LipSync
-- **关键坑点**：
-  - status 字符串是 `succeed` 不是 `succeeded`
-  - 视频 URL 在 `$.data.task_result.videos[0].url`
-  - 500 表示内容审核拒绝（用 error 字段判断，不是 message）
-  - `kling-2.1-master` 不支持 `mode` 字段；2.x 模型不支持 `cfg_scale`
-- **网文场景价值**：国内最强视频模型之一，工作室自部署必备直连选项
+- **Base URL**: `https://api.klingai.com`
+- **Auth**: JWT HS256, payload `{iss: ak, exp: now+1800, nbf: now-5}`, 30-minute expiry
+- **Endpoints**: multiple endpoints by intent — `/v1/videos/text2video`, `/image2video`, `/multi-image2video`, `/video-extend`, `/lip-sync`
+- **Capabilities**: T2V / I2V / FLF (pro mode `image_tail`) / R2V (`elements[]` in 1.6) / Extend / Audio (2.6 pro `enable_audio`) / LipSync
+- **Key pitfalls**:
+  - The status string is `succeed`, not `succeeded`
+  - The video URL is at `$.data.task_result.videos[0].url`
+  - 500 means a content moderation rejection (check the error field, not message)
+  - `kling-2.1-master` does not support the `mode` field; 2.x models don't support `cfg_scale`
+- **Value for web-novel scenarios**: one of the strongest video models in China; an essential direct-connection option for self-deployed studios
 
-#### 阿里 DashScope 通义万相
+#### Alibaba DashScope Tongyi Wanxiang
 
-- **Base URL（北京）**：`https://dashscope.aliyuncs.com/api/v1`
-- **Base URL（新加坡）**：`https://dashscope-intl.aliyuncs.com/api/v1`
-- **鉴权**：`Authorization: Bearer` + 强制 `X-DashScope-Async: enable` header
-- **端点**：`POST /services/aigc/video-generation/video-synthesis`（wan2.5+ 多模态）/ `POST /services/aigc/image2video/video-synthesis/`（wan2.1 / wan2.2-s2v）+ `GET /tasks/{task_id}`
-- **能力**：T2V / I2V / FLF（wan2.1-kf2v）/ R2V（`ref_image_urls[]`）/ Extend / Audio / 数字人 LipSync（wan2.2-s2v）
-- **同协议覆盖多模型**：wan2.7-t2v / wan2.6-i2v-flash / wan2.1-kf2v-plus / wan2.2-s2v
-- **关键坑点**：
-  - 漏 `X-DashScope-Async: enable` 会同步等死
-  - wan2.7 用 `resolution`+`ratio`，wan2.6 用 `size`（"1280*720"，星号）
-  - 状态机全大写：`PENDING / RUNNING / SUCCEEDED / FAILED / CANCELED / SUSPENDED / UNKNOWN`
-  - OSS 临时 URL **24h** 有效期，task_id 也是 24h
-  - `IPInfringementSuspect` / `DataInspectionFailed` 是内容审核错误
-- **网文场景价值**：
-  - wan2.7 中文 prompt 长度极长，单次可塞下完整分镜脚本（5 镜头 1500 字 OK）
-  - `shot_type: multi` 原生多镜头叙事
+- **Base URL (Beijing)**: `https://dashscope.aliyuncs.com/api/v1`
+- **Base URL (Singapore)**: `https://dashscope-intl.aliyuncs.com/api/v1`
+- **Auth**: `Authorization: Bearer` + mandatory `X-DashScope-Async: enable` header
+- **Endpoints**: `POST /services/aigc/video-generation/video-synthesis` (wan2.5+ multimodal) / `POST /services/aigc/image2video/video-synthesis/` (wan2.1 / wan2.2-s2v) + `GET /tasks/{task_id}`
+- **Capabilities**: T2V / I2V / FLF (wan2.1-kf2v) / R2V (`ref_image_urls[]`) / Extend / Audio / digital human LipSync (wan2.2-s2v)
+- **One protocol covering multiple models**: wan2.7-t2v / wan2.6-i2v-flash / wan2.1-kf2v-plus / wan2.2-s2v
+- **Key pitfalls**:
+  - Omitting `X-DashScope-Async: enable` makes the call block synchronously until it dies
+  - wan2.7 uses `resolution`+`ratio`, wan2.6 uses `size` ("1280*720", with an asterisk)
+  - The state machine is all upper case: `PENDING / RUNNING / SUCCEEDED / FAILED / CANCELED / SUSPENDED / UNKNOWN`
+  - Temporary OSS URLs are valid for **24h**, and so is the task_id
+  - `IPInfringementSuspect` / `DataInspectionFailed` are content moderation errors
+- **Value for web-novel scenarios**:
+  - wan2.7 allows extremely long Chinese prompts; a single call can hold a complete storyboard script (5 shots, 1500 characters is fine)
+  - `shot_type: multi` native multi-shot narrative
 
-#### MiniMax Hailuo 官方
+#### MiniMax Hailuo Official
 
-- **Base URL（全球）**：`https://api.minimax.io/v1`
-- **Base URL（国内）**：`https://api.minimaxi.com/v1`
-- **鉴权**：`Authorization: Bearer`
-- **端点**：`POST /video_generation` + `GET /query/video_generation?task_id={id}` + **`GET /files/retrieve?file_id={id}`**（两步取 URL）
-- **能力**：T2V / I2V / FLF / R2V（S2V-01 的 `subject_reference`）/ Audio（Hailuo 2.3）/ Director 模型支持 prompt 内嵌镜头指令
-- **关键坑点**：
-  - **两步取 URL**：query 不返回视频 URL，只返回 `file_id`，需再调 File API
-  - **下载 URL 仅 9 小时有效**（32,400 秒，官方公告原文）— 全平台最短
-  - status 首字母大写：`Preparing / Queueing / Processing / Success / Fail`
-  - Webhook 注册需 echo `challenge`，3 秒超时
-  - 国内 / 全球 endpoint 不同，API Key 独立
-  - `base_resp.status_code != 0` 表示业务错误（HTTP 200 也可能内部失败）
-- **网文场景价值**：性价比之王，物理表现强
+- **Base URL (global)**: `https://api.minimax.io/v1`
+- **Base URL (China)**: `https://api.minimaxi.com/v1`
+- **Auth**: `Authorization: Bearer`
+- **Endpoints**: `POST /video_generation` + `GET /query/video_generation?task_id={id}` + **`GET /files/retrieve?file_id={id}`** (two steps to get the URL)
+- **Capabilities**: T2V / I2V / FLF / R2V (S2V-01's `subject_reference`) / Audio (Hailuo 2.3) / Director models support shot instructions embedded in the prompt
+- **Key pitfalls**:
+  - **Two steps to get the URL**: the query does not return the video URL, only a `file_id`; the File API must then be called
+  - **The download URL is valid for only 9 hours** (32,400 seconds, per the official announcement) — the shortest of all platforms
+  - Status values are capitalised: `Preparing / Queueing / Processing / Success / Fail`
+  - Webhook registration must echo `challenge`, with a 3-second timeout
+  - China / global endpoints differ, and API keys are independent
+  - `base_resp.status_code != 0` indicates a business error (even an HTTP 200 may have failed internally)
+- **Value for web-novel scenarios**: king of value, strong physics
 
 #### Runway Gen-3 / Gen-4 / Gen-4.5
 
-- **Base URL**：`https://api.dev.runwayml.com/v1`
-- **鉴权**：`Authorization: Bearer` + 强制 `X-Runway-Version: 2024-11-06` header
-- **端点**：`/image_to_video` / `/text_to_video` / `/video_to_video` + `/tasks/{id}`
-- **能力**：T2V（gen4.5）/ I2V / R2V（gen4_image `@mention`）/ Aleph 视频编辑 / Act-Two LipSync
-- **关键坑点**：
-  - 无 webhook，必须轮询
-  - 文件上传走 ephemeral upload URI
-  - duration 仅 `5 | 10`
-- **业务价值**：海外广告/电商需求强，Gen-4.5 在 Arena 第 1
+- **Base URL**: `https://api.dev.runwayml.com/v1`
+- **Auth**: `Authorization: Bearer` + mandatory `X-Runway-Version: 2024-11-06` header
+- **Endpoints**: `/image_to_video` / `/text_to_video` / `/video_to_video` + `/tasks/{id}`
+- **Capabilities**: T2V (gen4.5) / I2V / R2V (gen4_image `@mention`) / Aleph video editing / Act-Two LipSync
+- **Key pitfalls**:
+  - No webhook; polling is mandatory
+  - File uploads use an ephemeral upload URI
+  - duration only `5 | 10`
+- **Business value**: strong demand from overseas advertising/e-commerce; Gen-4.5 is #1 in the Arena
 
 #### Luma Dream Machine (Ray-2)
 
-- **Base URL**：`https://api.lumalabs.ai/dream-machine/v1`
-- **鉴权**：`Authorization: Bearer`
-- **端点**：**单一 `POST /generations`** + `GET /generations/{id}`
-- **能力**：T2V / I2V / FLF / Extend / Loop（**用 `keyframes.frame0/frame1` 双槽位优雅表达所有 intent**）
-- **关键设计**：keyframes 联合类型 `{type: "image"|"generation", url|id}`，frame0 用 generation id 即 Extend
-- **关键坑点**：keyframes 联合类型必须特殊建模，不能复用 `image_url` 字段
+- **Base URL**: `https://api.lumalabs.ai/dream-machine/v1`
+- **Auth**: `Authorization: Bearer`
+- **Endpoints**: **a single `POST /generations`** + `GET /generations/{id}`
+- **Capabilities**: T2V / I2V / FLF / Extend / Loop (**elegantly expresses every intent with the two `keyframes.frame0/frame1` slots**)
+- **Key design**: keyframes union type `{type: "image"|"generation", url|id}`; using a generation id in frame0 means Extend
+- **Key pitfall**: the keyframes union type must be modelled specially and cannot reuse the `image_url` field
 
 #### Pika 2.2
 
-- **官方 API 不自助**，仅对 B2B partner 开放
-- **唯一接入路径**：通过 fal.ai `queue.fal.run/fal-ai/pika/v2.2/{capability}`
-- **独家能力**：Pikaframes（2-5 keyframes 多帧插值）、Pikascenes（多图融合，`ingredients_mode: creative|precise`）
+- **The official API is not self-service**; it is only open to B2B partners
+- **The only integration path**: via fal.ai `queue.fal.run/fal-ai/pika/v2.2/{capability}`
+- **Exclusive capabilities**: Pikaframes (2-5 keyframe multi-frame interpolation), Pikascenes (multi-image fusion, `ingredients_mode: creative|precise`)
 
 #### PixVerse
 
-- **Base URL**：`https://app-api.pixverse.ai`
-- **鉴权**：`API-KEY:` 自定义 header + 强制 `Ai-trace-id` 幂等键
-- **端点**：`/openapi/v2/video/{text|img|transition|extend|fusion|lipsync}/generate`
-- **能力**：T2V / I2V / FLF（Transition）/ R2V（Fusion）/ Extend / Audio（V5.5+）/ LipSync
-- **NewAPI 无原生 channel**，必须官方直连
+- **Base URL**: `https://app-api.pixverse.ai`
+- **Auth**: custom `API-KEY:` header + mandatory `Ai-trace-id` idempotency key
+- **Endpoints**: `/openapi/v2/video/{text|img|transition|extend|fusion|lipsync}/generate`
+- **Capabilities**: T2V / I2V / FLF (Transition) / R2V (Fusion) / Extend / Audio (V5.5+) / LipSync
+- **NewAPI has no native channel**; must connect directly to the official API
 
-#### 字节即梦 Jimeng（火山引擎 CV）
+#### ByteDance Jimeng (Volcano Engine CV)
 
-- **Base URL**：`https://visual.volcengineapi.com`
-- **鉴权**：**AWS V4 风格签名**（火山 SigV4）
-- **端点**：`?Action=CVSync2AsyncSubmitTask` / `?Action=CVSync2AsyncGetResult`
-- **复杂度极高**，建议走中转层而非直连
+- **Base URL**: `https://visual.volcengineapi.com`
+- **Auth**: **AWS V4-style signing** (Volcano SigV4)
+- **Endpoints**: `?Action=CVSync2AsyncSubmitTask` / `?Action=CVSync2AsyncGetResult`
+- **Extremely complex**; recommend going through a relay layer rather than connecting directly
 
 #### fal.ai
 
-- **Base URL**：`queue.fal.run/{vendor}/{model}/{capability}`
-- **鉴权**：fal.ai Key
-- **特点**：原生 Webhook 支持（`?fal_webhook=URL`）+ JWKS 签名验证
-- **价值**：是 Pika 2.2 的唯一可行接入路径；同时可接 Luma / Veo / Kling 等多模型
+- **Base URL**: `queue.fal.run/{vendor}/{model}/{capability}`
+- **Auth**: fal.ai key
+- **Features**: native webhook support (`?fal_webhook=URL`) + JWKS signature verification
+- **Value**: the only viable integration path for Pika 2.2; can also connect Luma / Veo / Kling and other models
 
 ---
 
-## 4. 能力矩阵（横向对比）
+## 4. Capability Matrix (side-by-side comparison)
 
-### 4.1 能力维度定义
+### 4.1 Capability Dimension Definitions
 
-- **T2V**：文生视频，仅 prompt
-- **I2V 首帧**：图生视频（首帧约束）
-- **FLF**：首尾帧（First-and-Last-Frame）
-- **R2V**：参考生视频（多张参考图保持角色/物体一致性，**不是首帧**）
-- **Extend**：视频续写/扩展
-- **Audio**：原生音视频联合生成
-- **LipSync**：对口型
-- **Character**：角色一致性（命名实体注册）
+- **T2V**: text-to-video, prompt only
+- **I2V first frame**: image-to-video (first-frame constraint)
+- **FLF**: first and last frame (First-and-Last-Frame)
+- **R2V**: reference-to-video (multiple reference images to keep character/object consistency, **not a first frame**)
+- **Extend**: video continuation/extension
+- **Audio**: native joint audio-video generation
+- **LipSync**: lip sync
+- **Character**: character consistency (named entity registration)
 
-### 4.2 中转站流派 × 能力
+### 4.2 Relay-station Schools × Capabilities
 
-✅ 原生 ｜ 🟡 部分支持/限定模型 ｜ ❌ 不支持
+✅ Native ｜ 🟡 Partial support/specific models ｜ ❌ Not supported
 
-| 流派 / 平台 | T2V | I2V | FLF | R2V | Extend | Audio | LipSync | Character |
+| School / platform | T2V | I2V | FLF | R2V | Extend | Audio | LipSync | Character |
 |---|---|---|---|---|---|---|---|---|
-| **流派 A** OpenAI Sora `/v1/videos` | ✅ | ✅ | ❌ | 🟡 characters API | ✅ extensions | ✅ | ❌ | ✅ |
-| **流派 B** NewAPI `/v1/video/generations` | ✅ | ✅ | 🟡 metadata.image_tail | 🟡 metadata 透传 | ❌ | 🟡 透传 | ❌ | ❌ |
-| **流派 C** AIMLAPI `/v2/video/generations` | ✅ | ✅ | ✅ | ✅ | 🟡 vendor-specific | ✅ | ❌ | ✅ |
-| **流派 C** APIMart `/v1/videos/generations` | ✅ | ✅ | ❌ | 🟡 prompt-mention | 🟡 sora ref | ✅ Sora2 | ❌ | 🟡 prompt-mention |
-| **流派 D** Kie.ai `jobs/createTask` | ✅ | ✅ | 🟡 model-specific | ✅ character_id_list ≤5 | 🟡 veo extend | ✅ veo/sora2/wan2.7 | ❌ | ✅ |
-| **流派 D** PiAPI `task` | ✅ | ✅ | ✅ image_tail_url | ✅ elements | ✅ task_type=extend | ✅ Seedance 2.0 | ✅ 独立 task | ✅ |
+| **School A** OpenAI Sora `/v1/videos` | ✅ | ✅ | ❌ | 🟡 characters API | ✅ extensions | ✅ | ❌ | ✅ |
+| **School B** NewAPI `/v1/video/generations` | ✅ | ✅ | 🟡 metadata.image_tail | 🟡 metadata pass-through | ❌ | 🟡 pass-through | ❌ | ❌ |
+| **School C** AIMLAPI `/v2/video/generations` | ✅ | ✅ | ✅ | ✅ | 🟡 vendor-specific | ✅ | ❌ | ✅ |
+| **School C** APIMart `/v1/videos/generations` | ✅ | ✅ | ❌ | 🟡 prompt-mention | 🟡 sora ref | ✅ Sora2 | ❌ | 🟡 prompt-mention |
+| **School D** Kie.ai `jobs/createTask` | ✅ | ✅ | 🟡 model-specific | ✅ character_id_list ≤5 | 🟡 veo extend | ✅ veo/sora2/wan2.7 | ❌ | ✅ |
+| **School D** PiAPI `task` | ✅ | ✅ | ✅ image_tail_url | ✅ elements | ✅ task_type=extend | ✅ Seedance 2.0 | ✅ separate task | ✅ |
 
-### 4.3 官方平台 × 能力
+### 4.3 Official Platforms × Capabilities
 
-| 平台 | T2V | I2V | FLF | R2V | Extend | Audio | LipSync | Character |
+| Platform | T2V | I2V | FLF | R2V | Extend | Audio | LipSync | Character |
 |---|---|---|---|---|---|---|---|---|
 | OpenAI Sora 2 | ✅ | ✅ | ❌ | 🟡 characters | ✅ 6×20s=120s | ✅ | ❌ | ✅ |
 | Google Veo 3.1 | ✅ | ✅ | ✅ | ✅ | 🟡 /extend | ✅ 48kHz | ❌ | 🟡 |
-| 火山 Seedance 2.0 | ✅ | ✅ first_frame | ✅ last_frame | ✅ 9 图 + 3 视频 + 3 音频 | ✅ | ✅ | ✅ phoneme 8 语言 | ✅ omni-ref |
-| 可灵 Kling 2.6 / 3.0 | ✅ | ✅ | ✅ pro 模式 | ✅ elements ≤4 | ✅ extend | ✅ 2.6 pro | ✅ lip-sync task | ✅ multi-image |
+| Volcano Seedance 2.0 | ✅ | ✅ first_frame | ✅ last_frame | ✅ 9 images + 3 videos + 3 audios | ✅ | ✅ | ✅ phoneme, 8 languages | ✅ omni-ref |
+| Kling 2.6 / 3.0 | ✅ | ✅ | ✅ pro mode | ✅ elements ≤4 | ✅ extend | ✅ 2.6 pro | ✅ lip-sync task | ✅ multi-image |
 | MiniMax Hailuo 02 / 2.3 | ✅ | ✅ | ✅ | ✅ subject_reference | ❌ | ✅ 2.3 | ❌ | ✅ S2V-01 |
-| PixVerse V5.5 / V6 | ✅ | ✅ | ✅ Transition | ✅ Fusion | ✅ extend | ✅ V5.5+ | ✅ | ✅ ≤3 图融合 |
+| PixVerse V5.5 / V6 | ✅ | ✅ | ✅ Transition | ✅ Fusion | ✅ extend | ✅ V5.5+ | ✅ | ✅ ≤3-image fusion |
 | Vidu Q3 | ✅ | ✅ | ✅ | ✅ ref_image_urls ≤7 | 🟡 | ✅ + bgm | ❌ | ✅ |
 | Runway Gen-4.5 | ✅ | ✅ | ❌ | ✅ gen4_image @mention ≤3 | 🟡 expand | ❌ | ✅ Act-Two | ✅ |
 | Pika 2.2 | ✅ | ✅ | ✅ Pikaframes | ✅ Pikascenes ≤5 | 🟡 | ❌ | ❌ | ✅ |
 | Luma Ray-2 | ✅ | ✅ keyframes.frame0 | ✅ frame0+frame1 | ❌ | ✅ generation id | ❌ | ❌ | 🟡 chain |
-| 阿里 Wan 2.7 | ✅ | ✅ | ✅ | ✅ Image1..5 占位 | ✅ | ✅ | ✅ s2v 数字人 | ✅ |
+| Alibaba Wan 2.7 | ✅ | ✅ | ✅ | ✅ Image1..5 placeholders | ✅ | ✅ | ✅ s2v digital human | ✅ |
 | xAI Grok Imagine | ✅ | ✅ image:{url} | ❌ | ✅ reference_images ≤7 | ✅ extensions | ❌ | ❌ | 🟡 |
 
-### 4.4 关键观察
+### 4.4 Key Observations
 
-- **R2V 字段名共 7 种命名**：`characters` / `reference_images` / `image_urls` / `reference_image_urls` / `elements` / Wan 2.7 prompt 占位符 / `subject_reference`
-- **FLF 字段名共 4 种**：`last_frame_image` / `image_tail` / `last_image_url` / `keyframes.frame1`
-- **duration 表达**全平台不一：字符串 `"5"` / 整数 `5` / 帧数 / 枚举 `6|10` / Luma `"5s"` / Sora `"4"|"8"|"12"|"16"|"20"` 字符串枚举
-- **音视频同步生成**语义重叠：联合生成（Veo/Sora/Seedance/Vidu Q3）vs 显式开关（Kling 2.6 pro `enable_audio` / Vidu `generate_audio`）vs 自动（Hailuo 2.3）
+- **R2V field names come in 7 variants**: `characters` / `reference_images` / `image_urls` / `reference_image_urls` / `elements` / Wan 2.7 prompt placeholders / `subject_reference`
+- **FLF field names come in 4 variants**: `last_frame_image` / `image_tail` / `last_image_url` / `keyframes.frame1`
+- **Duration is expressed** inconsistently across platforms: string `"5"` / integer `5` / frame count / enum `6|10` / Luma `"5s"` / Sora `"4"|"8"|"12"|"16"|"20"` string enum
+- **Synchronised audio-video generation** has overlapping semantics: joint generation (Veo/Sora/Seedance/Vidu Q3) vs explicit switch (Kling 2.6 pro `enable_audio` / Vidu `generate_audio`) vs automatic (Hailuo 2.3)
 
 ---
 
-## 5. 参数对齐表（横向 15 维度）
+## 5. Parameter Alignment Table (15 dimensions side by side)
 
-| 维度 | OpenAI Sora 2 | xAI Grok | Kling | MiniMax | Veo 3.1 | Wan 2.7 | Runway | Luma | Vidu Q3 | Pika 2.2 | Seedance 2.0 | NewAPI 流派 B | aimlapi 流派 C | Kie.ai 流派 D | PiAPI 流派 D |
+| Dimension | OpenAI Sora 2 | xAI Grok | Kling | MiniMax | Veo 3.1 | Wan 2.7 | Runway | Luma | Vidu Q3 | Pika 2.2 | Seedance 2.0 | NewAPI School B | aimlapi School C | Kie.ai School D | PiAPI School D |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
 | **prompt** | `prompt` | `prompt` | `prompt` | `prompt` | `prompt` | `prompt` | `promptText` | `prompt` | `prompt` | `prompt` | `content[].text` | `prompt` | `prompt` | `input.prompt` | `input.prompt` |
 | **negative_prompt** | — | — | `negative_prompt` | — | `negative_prompt` | `negative_prompt` ≤500 | — | — | — | `negative_prompt` | — | `metadata.negative_prompt` | `negative_prompt` | `input.negative_prompt` | `input.negative_prompt` |
-| **duration** | `seconds: "4\|8\|12\|16\|20"` | `duration: 1-15` | `duration: "5"\|"10"` | `duration: 6\|10` | `seconds: "8"` | `duration: 2-15` | `duration: 5\|10` | `duration: "5s"\|"9s"` | `duration: 1-16` | `duration: 5\|10` | `duration: 4\|5\|6\|8\|10\|12\|15` | `duration: 5` int | `duration` 字符串 | `input.n_frames`/`input.duration` | `input.duration: 5` |
+| **duration** | `seconds: "4\|8\|12\|16\|20"` | `duration: 1-15` | `duration: "5"\|"10"` | `duration: 6\|10` | `seconds: "8"` | `duration: 2-15` | `duration: 5\|10` | `duration: "5s"\|"9s"` | `duration: 1-16` | `duration: 5\|10` | `duration: 4\|5\|6\|8\|10\|12\|15` | `duration: 5` int | `duration` string | `input.n_frames`/`input.duration` | `input.duration: 5` |
 | **resolution** | `size: "1280x720"` | `resolution: "720p"` | `aspect_ratio` | `resolution: "1080P"` | `aspectRatio` | `resolution: "720P"` + `ratio` | `ratio: "1280:720"` | `resolution: "540p..4k"` | `resolution: "540p"\|"720p"\|"1080p"` | `aspect_ratio` + `resolution` | `ratio: "16:9"` + `resolution` | `size: "1920x1080"` | model decides | `input.size: "standard"\|"hd"` | `input.aspect_ratio` |
-| **seed** | — | **无** | (旧版) | — | — | `seed` | `seed` | — | `seed: -1` random | `seed` | `seed` | `metadata.seed` | `seed` | — | `input.seed` |
-| **首帧** | `input_reference` | `image:{url}` | `image_url` | `first_frame_image` | `image_url` | `first_frame_url` | `promptImage` | `keyframes.frame0` | `image` | `image_url` | `first_frame_url` | `image` | `image_url` | `input.image_urls[0]` | `input.image_url` |
-| **尾帧** | ❌ | ❌ | `image_tail` | `last_frame_image` | ❌ | `last_frame_url` | ❌ | `keyframes.frame1` | `last_image` | `images[1]` (Pikaframes) | `last_frame_url` | `metadata.image_tail` | `last_image_url` | (部分 model) | `input.image_tail_url` |
-| **参考数组** | `characters:[{id}]` | `reference_images:[{url}]` ≤7 | `elements:[]` ≤4 | `subject_reference` 单 | `image_urls:[]` | `Image1..5` 占位 | `referenceImages` ≤3 | — | `reference_image_urls:[]` ≤7 | `images:[]` ≤5 | `reference_images:[]` ≤9 | `metadata.image_urls:[]` | `image_urls`/`reference_images` | `input.character_id_list` | `input.elements:[]` |
-| **音频开关** | (自动) | — | `enable_audio` (2.6 pro) | (2.3 自动) | (自动) | (自动) | — | — | `generate_audio` + `bgm` | — | `generate_audio` | (透传) | (model 决定) | `input.sound` (2.6) | `input.enable_audio` |
-| **回调** | — 轮询 | — 轮询 | 轮询 | 轮询 | LRO | DashScope async | 轮询 | 轮询 | 轮询 | 轮询 | `callback_url` | `webhook_url`（部分） | 轮询 | `callBackUrl` | `config.webhook_config` |
-| **模式/质量** | model 决定 | — | `mode: "std"\|"pro"` | `prompt_optimizer` | model variant | — | model variant | model variant | `movement_amplitude` | `ingredients_mode` | model variant `-fast` | — | model id 含 mode | `input.size: "standard"\|"hd"` | `input.mode: "std"\|"pro"` |
-| **CFG** | — | — | `cfg_scale: 0-1` (v1) | — | — | — | — | — | — | `cfg_scale` (legacy) | — | (透传) | `cfg_scale` | — | `input.cfg_scale` |
-| **特殊 header** | — | — | JWT 30min | — | OAuth2 | `X-DashScope-Async` | `X-Runway-Version` | — | — | — | — | — | — | — | — |
-| **task_id 路径** | `$.id` | `$.request_id` | `$.data.task_id` | `$.task_id` | LRO operation | `$.output.task_id` | `$.id` | `$.id` | `$.task_id` | `$.request_id` | `$.id` | `$.task_id` | `$.id` | `$.data.taskId` | `$.task_id` |
-| **视频 URL 路径** | 二次 GET /content | `$.video.url` | `$.data.task_result.videos[0].url` | 二次 file_id | `$.video.uri` | `$.output.video_url` | `$.output[0]` | `$.assets.video` | `$.creations[0].url` | `$.video.url` | `$.content.video_url` | `$.url` | `$.video.url` / `$.assets.video` | `$.data.response.resultUrls[0]` | `$.output.works[0].video.url` |
+| **seed** | — | **none** | (old versions) | — | — | `seed` | `seed` | — | `seed: -1` random | `seed` | `seed` | `metadata.seed` | `seed` | — | `input.seed` |
+| **first frame** | `input_reference` | `image:{url}` | `image_url` | `first_frame_image` | `image_url` | `first_frame_url` | `promptImage` | `keyframes.frame0` | `image` | `image_url` | `first_frame_url` | `image` | `image_url` | `input.image_urls[0]` | `input.image_url` |
+| **last frame** | ❌ | ❌ | `image_tail` | `last_frame_image` | ❌ | `last_frame_url` | ❌ | `keyframes.frame1` | `last_image` | `images[1]` (Pikaframes) | `last_frame_url` | `metadata.image_tail` | `last_image_url` | (some models) | `input.image_tail_url` |
+| **reference array** | `characters:[{id}]` | `reference_images:[{url}]` ≤7 | `elements:[]` ≤4 | `subject_reference` single | `image_urls:[]` | `Image1..5` placeholders | `referenceImages` ≤3 | — | `reference_image_urls:[]` ≤7 | `images:[]` ≤5 | `reference_images:[]` ≤9 | `metadata.image_urls:[]` | `image_urls`/`reference_images` | `input.character_id_list` | `input.elements:[]` |
+| **audio switch** | (automatic) | — | `enable_audio` (2.6 pro) | (2.3 automatic) | (automatic) | (automatic) | — | — | `generate_audio` + `bgm` | — | `generate_audio` | (pass-through) | (model decides) | `input.sound` (2.6) | `input.enable_audio` |
+| **callback** | — polling | — polling | polling | polling | LRO | DashScope async | polling | polling | polling | polling | `callback_url` | `webhook_url` (some) | polling | `callBackUrl` | `config.webhook_config` |
+| **mode/quality** | model decides | — | `mode: "std"\|"pro"` | `prompt_optimizer` | model variant | — | model variant | model variant | `movement_amplitude` | `ingredients_mode` | model variant `-fast` | — | model id contains mode | `input.size: "standard"\|"hd"` | `input.mode: "std"\|"pro"` |
+| **CFG** | — | — | `cfg_scale: 0-1` (v1) | — | — | — | — | — | — | `cfg_scale` (legacy) | — | (pass-through) | `cfg_scale` | — | `input.cfg_scale` |
+| **special header** | — | — | JWT 30min | — | OAuth2 | `X-DashScope-Async` | `X-Runway-Version` | — | — | — | — | — | — | — | — |
+| **task_id path** | `$.id` | `$.request_id` | `$.data.task_id` | `$.task_id` | LRO operation | `$.output.task_id` | `$.id` | `$.id` | `$.task_id` | `$.request_id` | `$.id` | `$.task_id` | `$.id` | `$.data.taskId` | `$.task_id` |
+| **video URL path** | second GET /content | `$.video.url` | `$.data.task_result.videos[0].url` | second step via file_id | `$.video.uri` | `$.output.video_url` | `$.output[0]` | `$.assets.video` | `$.creations[0].url` | `$.video.url` | `$.content.video_url` | `$.url` | `$.video.url` / `$.assets.video` | `$.data.response.resultUrls[0]` | `$.output.works[0].video.url` |
 
-### 5.1 状态机映射差异
+### 5.1 State Machine Mapping Differences
 
-各家终态字符串完全不一致，必须各家映射：
+Terminal-state strings are completely inconsistent between vendors and must be mapped per vendor:
 
-| 平台 | queued | running | succeeded | failed |
+| Platform | queued | running | succeeded | failed |
 |---|---|---|---|---|
 | OpenAI Sora | `queued` | `in_progress` | `completed` | `failed` |
-| NewAPI 流派 B | `queued` | `in_progress` | `completed` | `failed` |
-| 阿里 DashScope | `PENDING`（**全大写**） | `RUNNING` | `SUCCEEDED` | `FAILED` |
-| 火山 Ark Seedance | `queued` | `running` | `succeeded` | `failed` |
-| 可灵 Kling | `submitted` | `processing` | **`succeed`（不是 succeeded）** | `failed` |
-| MiniMax Hailuo | `Queueing` / `Preparing` | `Processing` | **`Success`（首字母大写）** | `Fail` |
-| PiAPI 内层 | — | — | `output.status: 99`（**整数**） | `output.status: <99` |
+| NewAPI School B | `queued` | `in_progress` | `completed` | `failed` |
+| Alibaba DashScope | `PENDING` (**all upper case**) | `RUNNING` | `SUCCEEDED` | `FAILED` |
+| Volcano Ark Seedance | `queued` | `running` | `succeeded` | `failed` |
+| Kling | `submitted` | `processing` | **`succeed` (not succeeded)** | `failed` |
+| MiniMax Hailuo | `Queueing` / `Preparing` | `Processing` | **`Success` (capitalised)** | `Fail` |
+| PiAPI inner level | — | — | `output.status: 99` (**integer**) | `output.status: <99` |
 | Runway | `PENDING` | `RUNNING` | `SUCCEEDED` | `FAILED` |
 
-### 5.2 视频 URL 过期时间（OSS 临时链接）
+### 5.2 Video URL Expiry (temporary OSS links)
 
-**所有官方平台均使用临时 URL，必须立即转存**：
+**All official platforms use temporary URLs, which must be re-stored immediately**:
 
-| 平台 | 过期时间 | 风险等级 |
+| Platform | Expiry | Risk level |
 |---|---|---|
-| **MiniMax Hailuo** | **9 小时**（32,400 秒） | 🔴 全平台最短 |
-| OpenAI Sora 2 | 文档与实测不符（文档 24h，部分用户报告 1h） | 🟠 |
-| Vertex AI Veo | LRO operation 完成后短期 | 🟠 |
-| 火山 Ark Seedance | 24 小时（TOS 临时 URL） | 🟡 |
-| 阿里 DashScope Wan | 24 小时 | 🟡 |
-| Runway | 24-48 小时 | 🟡 |
-| Luma Ray-2 | 较长 | 🟢 |
-| 可灵 Kling | 30 天（推断自 lip-sync 端点约束） | 🟢 |
-| 七牛云 sora 兼容 | 7 天 | 🟢 |
+| **MiniMax Hailuo** | **9 hours** (32,400 seconds) | 🔴 Shortest of all platforms |
+| OpenAI Sora 2 | Docs and tests disagree (docs say 24h, some users report 1h) | 🟠 |
+| Vertex AI Veo | Short period after the LRO operation completes | 🟠 |
+| Volcano Ark Seedance | 24 hours (TOS temporary URL) | 🟡 |
+| Alibaba DashScope Wan | 24 hours | 🟡 |
+| Runway | 24-48 hours | 🟡 |
+| Luma Ray-2 | Relatively long | 🟢 |
+| Kling | 30 days (inferred from the lip-sync endpoint constraints) | 🟢 |
+| Qiniu Cloud sora-compatible | 7 days | 🟢 |
 
 ---
 
-## 6. 协议优先级建议
+## 6. Protocol Priority Recommendations
 
-> 优先级评分维度（每项 1-5）：中转站生态覆盖度 / 模型能力覆盖 / 文档完整性 / 实现复杂度（越简单越高）/ 长期稳定性 / ArcReel 网文场景需求度
+> Priority scoring dimensions (1-5 each): relay-station ecosystem coverage / model capability coverage / documentation completeness / implementation complexity (simpler scores higher) / long-term stability / demand in ArcReel's web-novel scenarios
 
-### 6.1 已实现协议（保持）
+### 6.1 Implemented Protocols (keep)
 
-| 协议 | ArcReel endpoint | 状态 | 备注 |
+| Protocol | ArcReel endpoint | Status | Notes |
 |---|---|---|---|
-| OpenAI Sora 兼容 | `openai-video` | ✅ 已实现 | 注意 2026-09-24 deprecation |
-| NewAPI 自有 | `newapi-video` | ✅ 已实现 | metadata 透传需扩展 vendor 映射表 |
-| Veo 3.1 全系 | gemini-* provider | ✅ 已实现 | — |
-| Seedance 1.5/2.0 | ark provider | ✅ 已实现 | 2.0 多模态参考 + Extend 未启用 |
-| Grok Imagine | grok provider | ✅ 已实现 | — |
-| Vidu Q3 全系 | vidu provider | ✅ 已实现 | reference-to-video 模式已上线 |
+| OpenAI Sora compatible | `openai-video` | ✅ Implemented | Mind the 2026-09-24 deprecation |
+| NewAPI's own | `newapi-video` | ✅ Implemented | metadata pass-through needs an extended vendor mapping table |
+| Full Veo 3.1 family | gemini-* provider | ✅ Implemented | — |
+| Seedance 1.5/2.0 | ark provider | ✅ Implemented | 2.0 multimodal reference + Extend not enabled |
+| Grok Imagine | grok provider | ✅ Implemented | — |
+| Full Vidu Q3 family | vidu provider | ✅ Implemented | reference-to-video mode is live |
 
-### 6.2 P0 — v1.0 建议补齐
+### 6.2 P0 — Recommended to Fill in for v1.0
 
-| 协议 | 加入 P0 理由 | 复杂度 |
+| Protocol | Reason for P0 | Complexity |
 |---|---|---|
-| **流派 C `/v2/video/generations`** | **被很多中转站采用**（AIMLAPI / xAI 官方 / getimg.ai / APIMart / EvoLink / 七牛 veo / CometAPI 等），是流派 B 之外的第二大事实标准 | 中（discriminated union by model，需 model-specific schema 分支） |
-| **可灵 Kling 官方协议** | 国内小说转视频用户首选模型；工作室自部署需要直连保证稳定性；JWT 鉴权特殊 | 中-高（JWT HS256 + 30min token cache，按 intent 多端点） |
-| **阿里 DashScope（通义万相 Wan）** | 网文场景**独特价值**：wan2.7 中文长 prompt + `shot_type: multi` 多镜头叙事原生支持；同协议覆盖 wan2.7/2.6/2.1-kf2v/2.2-s2v 多模型 | 中（X-DashScope-Async + input/parameters 嵌套 + 多 model 路由） |
-| **MiniMax Hailuo 官方** | 物理表现强、性价比之王；File API 两步取 URL 模型与其他平台不同；9h URL 转存最紧急 | 中-高（File API 两步流程 + webhook challenge） |
+| **School C `/v2/video/generations`** | **Adopted by many relay stations** (AIMLAPI / xAI official / getimg.ai / APIMart / EvoLink / Qiniu veo / CometAPI, etc.); the second-largest de facto standard after School B | Medium (discriminated union by model, needs model-specific schema branches) |
+| **Kling official protocol** | The preferred model for Chinese novel-to-video users; self-deployed studios need a direct connection for stability; special JWT auth | Medium-high (JWT HS256 + 30min token cache, multiple endpoints by intent) |
+| **Alibaba DashScope (Tongyi Wanxiang Wan)** | **Unique value** for web-novel scenarios: wan2.7 long Chinese prompts + native `shot_type: multi` multi-shot narrative; one protocol covers wan2.7/2.6/2.1-kf2v/2.2-s2v | Medium (X-DashScope-Async + input/parameters nesting + multi-model routing) |
+| **MiniMax Hailuo official** | Strong physics, king of value; the two-step File API URL model differs from other platforms; the 9h URL makes re-storage most urgent | Medium-high (two-step File API flow + webhook challenge) |
 
-### 6.3 P1 — v1.x 补充
+### 6.3 P1 — Additions for v1.x
 
-| 协议 | 理由 |
+| Protocol | Reason |
 |---|---|
-| **Kie.ai 流派 D** `/api/v1/jobs/createTask` | 海外动词风格代表，可覆盖部分小众中转站 |
-| **Runway Gen-3/4 官方** | 广告/电商需求；`X-Runway-Version` header；无 webhook 必轮询 |
-| **Seedance 2.0 多模态参考扩展** | 已注册模型但未启用 reference_images / video_extend，提升现有 ark provider 能力位图 |
+| **Kie.ai School D** `/api/v1/jobs/createTask` | Representative of the overseas verb style; can cover some niche relay stations |
+| **Runway Gen-3/4 official** | Advertising/e-commerce demand; `X-Runway-Version` header; no webhook, polling required |
+| **Seedance 2.0 multimodal reference extension** | Model is registered but reference_images / video_extend are not enabled; improves the existing ark provider's capability bitmap |
 
-### 6.4 P2 — 等用户反馈
+### 6.4 P2 — Wait for User Feedback
 
-| 协议 | 理由 |
+| Protocol | Reason |
 |---|---|
-| PixVerse 官方 | NewAPI 无原生 channel，必须官方直连；`API-KEY` 自定义 header |
-| fal.ai queue API | 是 Pika 2.2 唯一接入路径；统一队列协议价值 |
-| Luma Dream Machine | keyframes 联合类型独特，但中文场景需求度低 |
+| PixVerse official | NewAPI has no native channel, direct official connection required; custom `API-KEY` header |
+| fal.ai queue API | The only integration path for Pika 2.2; value of a unified queue protocol |
+| Luma Dream Machine | Unique keyframes union type, but low demand in Chinese scenarios |
 
-### 6.5 P3 — 不主动做
+### 6.5 P3 — Not Proactively Pursued
 
-| 协议 | 理由 |
+| Protocol | Reason |
 |---|---|
-| 字节即梦 Jimeng 直连 | 火山 SigV4 签名复杂度极高；建议走中转层（流派 B/C 普遍代理） |
-| PiAPI 单独适配 | 与 Kie.ai 重叠度高，覆盖到 P1 即可 |
-| Replicate predictions | ArcReel 用户群体重叠度低 |
-| Together AI | 同上 |
+| ByteDance Jimeng direct connection | Volcano SigV4 signing is extremely complex; recommend going through a relay layer (commonly proxied by Schools B/C) |
+| Separate PiAPI adaptation | High overlap with Kie.ai; covering up to P1 is enough |
+| Replicate predictions | Low overlap with ArcReel's user base |
+| Together AI | Same as above |
 
 ---
 
-## 7. 自定义供应商接入方案选型（结论）
+## 7. Choice of Custom Provider Integration Approach (conclusion)
 
-> **修订注（2026-08）**：本章选型已由 `docs/adr/0067` 取代：自定义调用端点采用声明式 JSON 定义，定位为「JSON in/out + 提交/轮询」流派的统一形态——覆盖长尾聚合站，并收编可整体表达的 HTTP 式内置 backend 为随版声明式定义（首批 newapi / v2_video_generations / minimax）；签名类鉴权、SDK 式接入等不可表达协议仍留 Python 内置 endpoint。7.1–7.2 以「表达全部协议」为标尺的结论不再作为决策依据；7.5 的运行时 plugin 路线不受影响（归 #872）。本章正文保留原貌。
+> **Revision note (2026-08)**: the choice in this chapter has been superseded by `docs/adr/0067`: custom call endpoints use declarative JSON definitions, positioned as the unified form for the "JSON in/out + submit/poll" school — covering long-tail aggregators, and absorbing the HTTP-style built-in backends that can be expressed as a whole into declarative definitions shipped with releases (first batch newapi / v2_video_generations / minimax); protocols that cannot be expressed, such as signature-based auth and SDK-style integration, remain as built-in Python endpoints. The conclusions of 7.1–7.2, which used "expressing every protocol" as the yardstick, are no longer a basis for decisions; the runtime plugin route in 7.5 is unaffected (belongs to #872). The body of this chapter is kept as it was.
 
-### 7.1 选型对比
+### 7.1 Comparison
 
-经过详细评估，**Plugin（Python 代码扩展）方案优于声明式 YAML 方案**：
+After detailed evaluation, **the plugin approach (Python code extension) is better than the declarative YAML approach**:
 
-| 维度 | Python plugin | 声明式 YAML | 谁赢 |
+| Dimension | Python plugin | Declarative YAML | Winner |
 |---|---|---|---|
-| 协议覆盖率 | 100%（兜底） | 50-60%（JWT/SigV4/multipart/两步流程无法表达） | plugin |
-| 接入难度 | 写 backend 类 + 测试 | 写 YAML + 调试模板 | 表面打平，实际 plugin 更易调试 |
-| ArcReel 维护成本 | 每个 backend 独立，已有体系 | 需要新增 Jinja2 + JSONPath + state mapping + probe + 文档 | plugin（重大优势） |
-| 调试体验 | 标准 Python traceback | YAML schema 错误 / 模板渲染错误 / 字段路径错误 | plugin 大胜 |
-| AI 辅助代码生成 | Cursor/Claude Code 30 秒出完整 backend | 需要先理解自创 YAML schema | plugin（2024+ 关键反转） |
-| ArcReel 用户画像匹配度 | 全员开发者，会 Python | 适合非程序员 | plugin |
+| Protocol coverage | 100% (fallback) | 50-60% (JWT/SigV4/multipart/two-step flows cannot be expressed) | plugin |
+| Integration difficulty | Write a backend class + tests | Write YAML + debug templates | A tie on the surface; in practice plugins are easier to debug |
+| ArcReel maintenance cost | Each backend is independent, existing system | Needs new Jinja2 + JSONPath + state mapping + probe + docs | plugin (major advantage) |
+| Debugging experience | Standard Python traceback | YAML schema errors / template rendering errors / field path errors | plugin wins by far |
+| AI-assisted code generation | Cursor/Claude Code produces a complete backend in 30 seconds | Must first understand a home-grown YAML schema | plugin (the key reversal since 2024) |
+| Fit with ArcReel's user profile | All developers who know Python | Suited to non-programmers | plugin |
 
-### 7.2 关键决策依据
+### 7.2 Key Decision Basis
 
-**视频 API 生态有 10 类能力必须 Python 实现**（声明式无法表达）：
+**The video API ecosystem has 10 kinds of capability that must be implemented in Python** (cannot be expressed declaratively):
 
-1. Kling 官方 JWT 签名（HS256，30 分钟过期，需 token cache）
-2. 火山 Ark SigV4-like 签名（AKSK + canonical request + HMAC）
-3. DashScope 双步 + 区域 base URL 切换（北京/新加坡/美西 credential 不通用）
-4. OpenAI Sora multipart 上传（本地文件 base64 时）
-5. MiniMax 两步下载（`file_id → /files/{file_id}` 获取 download_url）
-6. Luma keyframes 联合类型（`type: image|generation`）
-7. Vertex AI Veo（service account JSON + OAuth2 token 刷新 + LRO 双轮询）
-8. Runway header version 校验
-9. OpenAI Sora 内容下载分 variants（`?variant=video|thumbnail|spritesheet`）
-10. PiAPI 状态码非标（外层字符串 + 内层 `output.status: 99` 整数）
+1. Kling official JWT signing (HS256, 30-minute expiry, needs a token cache)
+2. Volcano Ark SigV4-like signing (AKSK + canonical request + HMAC)
+3. DashScope two-step + regional base URL switching (Beijing/Singapore/US West credentials are not interchangeable)
+4. OpenAI Sora multipart upload (when local files are base64)
+5. MiniMax two-step download (`file_id → /files/{file_id}` to get the download_url)
+6. Luma keyframes union type (`type: image|generation`)
+7. Vertex AI Veo (service account JSON + OAuth2 token refresh + LRO double polling)
+8. Runway header version validation
+9. OpenAI Sora content download split into variants (`?variant=video|thumbnail|spritesheet`)
+10. PiAPI non-standard status codes (outer string + inner `output.status: 99` integer)
 
-**声明式 YAML 能覆盖的场景**正好是 ArcReel 已经在 V1 内置 backend 里覆盖的（NewAPI、OpenAI 兼容、Kie.ai 等纯 JSON in/out 流派），用户用声明式接入的动机被消除。
+**The scenarios declarative YAML can cover** are exactly the ones ArcReel already covers in its V1 built-in backends (pure JSON in/out schools such as NewAPI, OpenAI-compatible, Kie.ai), which removes users' motivation to integrate declaratively.
 
-### 7.3 ArcReel 现状适配
+### 7.3 Fit with ArcReel's Current State
 
-ArcReel 当前**自定义供应商接入流程已经存在且不需要重新设计**：
+ArcReel's current **custom provider integration flow already exists and does not need to be redesigned**:
 
-1. 用户 → 设置页 → 添加自定义供应商
-2. 填 `display_name` + `discovery_format` + `base_url` + `api_key`
-3. 点 [获取模型列表] → 调 `/api/v1/custom-providers/discover`
-4. UI 自动推断 endpoint
-5. 用户勾选启用 / 手工调整 endpoint / 填价格
-6. 保存到 `custom_provider` + `custom_provider_model` 表
+1. User → settings page → add custom provider
+2. Fill in `display_name` + `discovery_format` + `base_url` + `api_key`
+3. Click [Fetch model list] → calls `/api/v1/custom-providers/discover`
+4. The UI infers the endpoint automatically
+5. The user ticks models to enable / manually adjusts the endpoint / enters prices
+6. Saved to the `custom_provider` + `custom_provider_model` tables
 
-**新增协议（如 Kling 官方、DashScope）的工程动作**：
-1. 在 `lib/backends/video_backends/` 新建 backend 类（实现 `VideoBackend` Protocol）
-2. 在 `ENDPOINT_REGISTRY` 注册新 endpoint key 和 build_backend 闭包
-3. 在 `infer_endpoint()` 加启发式规则
-4. 在 i18n 文件加 `endpoint_xxx_display` 三语
-5. 加 mock httpx 单测
+**Engineering steps for adding a new protocol (e.g. Kling official, DashScope)**:
+1. Create a new backend class in `lib/backends/video_backends/` (implementing the `VideoBackend` Protocol)
+2. Register the new endpoint key and build_backend closure in `ENDPOINT_REGISTRY`
+3. Add heuristic rules to `infer_endpoint()`
+4. Add `endpoint_xxx_display` in three languages to the i18n files
+5. Add unit tests with mocked httpx
 
-**用户无需写代码**，无需修改任何配置文件，只需在前端 UI 添加自定义供应商时挂上对应 endpoint。
+**Users don't need to write code** or modify any configuration file; they just attach the corresponding endpoint when adding a custom provider in the frontend UI.
 
-### 7.4 两种"新增 backend"场景的区分（前置概念）
+### 7.4 Distinguishing Two "New Backend" Scenarios (prerequisite concept)
 
-需严格区分两种用户场景，它们的接入路径完全不同：
+Two user scenarios must be strictly distinguished; their integration paths are completely different:
 
-| 场景 | 描述 | 当前支持度 |
+| Scenario | Description | Current support |
 |---|---|---|
-| **场景 A：协议已支持，接新中转站** | 用户找到一家新的 NewAPI / 流派 C 聚合站 / OpenAI 兼容站 | ✅ 纯 UI 操作，零代码（7.3 已述） |
-| **场景 B：协议未支持，需新增协议适配** | 用户想接 Kling 官方（JWT）/ DashScope（特殊 header）/ 某个全新的私有中转协议 | ⚠️ 当前需改 `lib/backends/video_backends/` + `ENDPOINT_REGISTRY` 源码 |
+| **Scenario A: protocol already supported, connecting a new relay station** | The user finds a new NewAPI / School C aggregator / OpenAI-compatible site | ✅ Pure UI operation, zero code (described in 7.3) |
+| **Scenario B: protocol not supported, a new protocol adaptation is needed** | The user wants to connect Kling official (JWT) / DashScope (special header) / some brand-new private relay protocol | ⚠️ Currently requires changing the `lib/backends/video_backends/` + `ENDPOINT_REGISTRY` source |
 
-**场景 A 占绝大多数用户需求**，体验已经很顺畅。**场景 B 当前存在体验断层**——接新协议必须改源码、重新构建、走 PR 或本地 fork。运行时 plugin 功能正是为了消除场景 B 的断层、支持社区化协议分享。
+**Scenario A accounts for the vast majority of user needs**, and the experience is already smooth. **Scenario B currently has a gap in the experience** — connecting a new protocol requires changing source code, rebuilding, and going through a PR or a local fork. The runtime plugin feature is meant precisely to close the Scenario B gap and support community protocol sharing.
 
 ---
 
-## 7.5 运行时 Plugin 机制调研（功能规划支撑材料）
+## 7.5 Runtime Plugin Mechanism Research (supporting material for feature planning)
 
-> 本节为 ArcReel 已规划的「运行时 plugin」功能提供可行性与设计选项的调研信息。目标：让用户无需修改 ArcReel 源码、无需重新构建镜像，即可加载第三方贡献的视频协议 backend，从而支持社区化分享、降低自定义协议接入门槛。本节**不替 PRD 做决策**，仅汇总可行路径、业界做法、与 ArcReel 现有架构的契合点和待解决问题。
+> This section provides research on feasibility and design options for ArcReel's planned "runtime plugin" feature. Goal: let users load third-party-contributed video protocol backends without modifying ArcReel source or rebuilding the image, thereby supporting community sharing and lowering the barrier to integrating custom protocols. This section **does not make decisions for the PRD**; it only summarises viable paths, industry practice, points of fit with ArcReel's existing architecture, and open problems.
 
-### 7.5.1 ArcReel 现有注册机制现状（运行时 plugin 的改造起点）
+### 7.5.1 Current State of ArcReel's Registration Mechanism (the starting point for runtime plugins)
 
-调研 ArcReel 源码后确认的现状（这是设计运行时 plugin 必须基于的事实）：
+The current state confirmed after studying ArcReel's source (these are the facts a runtime plugin design must build on):
 
-1. **backend 注册是进程内静态字典**。三套 media backend（`video_backends` / `image_backends` / `text_backends`）各有一个 `registry.py`，模式完全一致：
+1. **Backend registration is an in-process static dictionary**. The three media backends (`video_backends` / `image_backends` / `text_backends`) each have a `registry.py` with exactly the same pattern:
 
    ```python
    _BACKEND_FACTORIES: dict[str, Callable[..., VideoBackend]] = {}
@@ -529,212 +529,212 @@ ArcReel 当前**自定义供应商接入流程已经存在且不需要重新设�
        return _BACKEND_FACTORIES[name](**kwargs)
    ```
 
-2. **注册时机是模块 import**。`lib/backends/video_backends/__init__.py` 在加载时显式 `register_backend(PROVIDER_GROK, GrokVideoBackend)` 等，把所有内置 backend 注册进字典。`register_backend()` 本身已经是公开 API，**运行时再调一次完全合法**——这是运行时 plugin 的天然切入点。
+2. **Registration happens at module import**. `lib/backends/video_backends/__init__.py` explicitly calls `register_backend(PROVIDER_GROK, GrokVideoBackend)` etc. at load time, registering all built-in backends into the dictionary. `register_backend()` itself is already a public API, and **calling it again at runtime is perfectly legal** — this is the natural entry point for runtime plugins.
 
-3. **协议归属在 `ENDPOINT_REGISTRY`（静态字典）**。`CustomProviderModel.endpoint` 字段只能取 `ENDPOINT_REGISTRY` 已注册的 key。这是当前最大的运行时扩展障碍：**用户即使运行时注册了新 backend，也无法注册新的 endpoint key 供模型挂载**。
+3. **Protocol ownership lives in `ENDPOINT_REGISTRY` (a static dictionary)**. The `CustomProviderModel.endpoint` field can only take keys already registered in `ENDPOINT_REGISTRY`. This is currently the biggest obstacle to runtime extension: **even if a user registers a new backend at runtime, they cannot register a new endpoint key for models to attach to**.
 
-4. **backend 构造参数从 DB 配置注入**。`create_text_backend_for_task()` 等工厂从 `ConfigResolver.provider_config()` 读 DB 取 `api_key` 等显式传入 backend 构造器，不再依赖环境变量 fallback（`2026-05-12-agent-sandbox-design` 已清理所有 env fallback）。运行时 plugin 的 backend 必须同样接受显式配置注入，不能读环境变量。
+4. **Backend constructor parameters are injected from DB configuration**. Factories such as `create_text_backend_for_task()` read the DB via `ConfigResolver.provider_config()` to get `api_key` etc. and pass them explicitly to the backend constructor, no longer relying on environment variable fallback (`2026-05-12-agent-sandbox-design` removed all env fallbacks). Runtime plugin backends must likewise accept explicit configuration injection and must not read environment variables.
 
-**结论**：ArcReel 的 `register_backend()` + Protocol 鸭子类型设计**天然适合运行时扩展**，核心改造点是让 `ENDPOINT_REGISTRY` 从静态字典变为「内置 + plugin 动态注入」两层结构，并补上 plugin 发现、加载、安全、生命周期管理。
+**Conclusion**: ArcReel's `register_backend()` + duck-typed Protocol design is **naturally suited to runtime extension**. The core change is turning `ENDPOINT_REGISTRY` from a static dictionary into a two-layer "built-in + dynamically injected plugin" structure, and adding plugin discovery, loading, security, and lifecycle management.
 
-### 7.5.2 业界运行时 plugin 机制对标
+### 7.5.2 Benchmarking Industry Runtime Plugin Mechanisms
 
-| 方案 | 发现机制 | 注册方式 | 适合 ArcReel 之处 | 不适合之处 |
+| Approach | Discovery mechanism | Registration | What suits ArcReel | What doesn't |
 |---|---|---|---|---|
-| **Python entry_points**（PEP 621） | `importlib.metadata.entry_points(group=...)` | 用户 `pip install arcreel-plugin-xxx` 后自动可见 | 标准、零三方依赖、契合"社区分享 pip 包"愿景 | 必须打包成 wheel，本地裸文件不行；Docker 环境用户加包要重建镜像或挂载 |
-| **目录扫描 + importlib** | 扫描指定目录下 `*_backend.py`，`importlib.util.spec_from_file_location` 动态加载 | 文件落地即生效，配合 `__subclasses__()` 自动捕获 | 自部署用户挂载 volume 即可加载，无需重建镜像；本地开发友好 | 需要自己处理重复加载、命名冲突、错误隔离 |
-| **pluggy**（pytest 插件系统） | hook 规范 + setuptools entry_points | hook 多播（1:N） | 成熟稳定 | ArcReel 是 1:1 路由（一个 model → 一个 backend），不需要 hook 多播；pluggy 缺生命周期管理（token 缓存/连接池），属过度设计 |
-| **LiteLLM `custom_provider_map`** | 配置文件中声明 `{provider, custom_handler}` | 模块路径 + 实例变量 | 直接对标"用户注册自定义 provider"场景 | LiteLLM 视频端点目前不支持 CustomLLM（连 embedding 都还在 issue 阶段），无法直接复用其视频路径 |
+| **Python entry_points** (PEP 621) | `importlib.metadata.entry_points(group=...)` | Automatically visible after the user runs `pip install arcreel-plugin-xxx` | Standard, zero third-party dependencies, fits the "community sharing of pip packages" vision | Must be packaged as a wheel, bare local files don't work; Docker users must rebuild the image or mount to add packages |
+| **Directory scan + importlib** | Scan `*_backend.py` in a given directory and load dynamically with `importlib.util.spec_from_file_location` | Takes effect as soon as the file lands; combined with `__subclasses__()` for automatic capture | Self-deployed users can load by mounting a volume without rebuilding the image; friendly for local development | Must handle duplicate loading, name conflicts, and error isolation ourselves |
+| **pluggy** (pytest plugin system) | Hook specs + setuptools entry_points | Hook multicast (1:N) | Mature and stable | ArcReel routes 1:1 (one model → one backend) and doesn't need hook multicast; pluggy lacks lifecycle management (token cache/connection pool), so it would be over-engineering |
+| **LiteLLM `custom_provider_map`** | Declare `{provider, custom_handler}` in a config file | Module path + instance variable | Directly matches the "user registers a custom provider" scenario | LiteLLM's video endpoints currently don't support CustomLLM (even embeddings are still at the issue stage), so its video path can't be reused directly |
 
-**业界共识**：entry_points（已发布插件）+ 目录扫描（本地开发/自部署）双轨制是当代 Python 应用插件发现的主流组合。ArcReel 的 Docker 部署形态决定了**目录扫描 + volume 挂载**对自部署用户更友好，而 entry_points 更适合"发布到 PyPI 供社区一键安装"的成熟插件。
+**Industry consensus**: a dual track of entry_points (published plugins) + directory scanning (local development/self-deployment) is the mainstream combination for plugin discovery in modern Python applications. ArcReel's Docker deployment form means **directory scanning + volume mounting** is friendlier for self-deployed users, while entry_points better suit mature plugins "published to PyPI for one-click community installation".
 
-**LiteLLM 的演进轨迹（直接参考价值）**：LiteLLM 最初只支持手工 `litellm.custom_provider_map = [{"provider": ..., "custom_handler": ...}]` 运行时赋值；社区在 issue #7733 提出希望用 entry_points 让第三方包自动注册（当时只能用 `.pth` hack），随后 PR #15881 实现了通过 `pyproject.toml` 的 `[project.entry-points.litellm]` 声明 CustomLLM 子类、由 `importlib.metadata` 自动发现注册。这条"手工注册 → entry_points 自动发现"的演进路径与 ArcReel 现状（`register_backend()` 手工调用）高度吻合,可作为分阶段实现的直接蓝本。
+**LiteLLM's evolution (direct reference value)**: LiteLLM originally only supported manual runtime assignment `litellm.custom_provider_map = [{"provider": ..., "custom_handler": ...}]`; in issue #7733 the community asked for entry_points so third-party packages could register automatically (at the time only a `.pth` hack worked), and PR #15881 then implemented declaring CustomLLM subclasses via `[project.entry-points.litellm]` in `pyproject.toml`, discovered and registered automatically by `importlib.metadata`. This "manual registration → automatic entry_points discovery" path closely matches ArcReel's current state (manual `register_backend()` calls) and can serve as a direct blueprint for a phased implementation.
 
-**一个必须规避的 LiteLLM 已知缺陷**：issue #23352 报告，当 plugin 注册的 model 名（剥离前缀后）与某个内置 provider 的已知 model 撞名时，请求会被**静默路由到内置 provider 而非 plugin handler**，且不报错。对 ArcReel 的启示：plugin endpoint 的派发优先级和命名空间隔离必须在设计时就明确，**显式注册的 plugin 应优先于启发式推断**，避免同名静默劫持。
+**A known LiteLLM defect that must be avoided**: issue #23352 reports that when a model name registered by a plugin (after stripping the prefix) collides with a known model of a built-in provider, requests are **silently routed to the built-in provider instead of the plugin handler**, without any error. Lesson for ArcReel: dispatch priority and namespace isolation for plugin endpoints must be defined at design time; **explicitly registered plugins should take priority over heuristic inference**, to avoid silent hijacking by identically named models.
 
-### 7.5.3 运行时 Plugin 需要解决的设计问题（待 PRD 决策）
+### 7.5.3 Design Questions Runtime Plugins Must Resolve (pending PRD decisions)
 
-以下是从现有架构推导出的、运行时 plugin 必须回答的问题清单，作为 PRD 的输入：
+The following is a list of questions, derived from the existing architecture, that runtime plugins must answer, as input to the PRD:
 
-**A. 发现与加载**
-- plugin 来源：PyPI 包（entry_points）/ 本地目录（volume 挂载）/ 两者皆支持？
-- 加载时机：进程启动时一次性加载，还是支持热加载（运行中新增 plugin 无需重启）？
-- 加载失败隔离：单个 plugin 抛异常不能拖垮整个 backend registry，需要 try-except 包裹 + 降级日志（参考现状 `register_backend` 缺 key 不影响启动的设计哲学）。
+**A. Discovery and loading**
+- Plugin source: PyPI packages (entry_points) / local directory (volume mount) / support both?
+- Load timing: load once at process start, or support hot loading (adding plugins while running without a restart)?
+- Load failure isolation: an exception from a single plugin must not bring down the whole backend registry; needs try-except wrapping + degraded logging (following the current design philosophy where a missing key in `register_backend` doesn't affect startup).
 
-**B. ENDPOINT_REGISTRY 的可扩展化（核心改造）**
-- plugin 是否能注册新的 endpoint key？如果能，需要把 `ENDPOINT_REGISTRY` 从模块级静态字典改为支持运行时注入。
-- 新 endpoint key 的命名空间隔离：是否给 plugin endpoint 加前缀（如 `plugin:kling-official`）防止与内置 key 冲突？
-- `infer_endpoint()` 启发式如何容纳 plugin endpoint：plugin 是否能声明自己的启发式规则（model_id 匹配模式 → 自己的 endpoint）？
+**B. Making ENDPOINT_REGISTRY extensible (core change)**
+- Can plugins register new endpoint keys? If so, `ENDPOINT_REGISTRY` needs to change from a module-level static dictionary to one that supports runtime injection.
+- Namespace isolation for new endpoint keys: should plugin endpoints get a prefix (e.g. `plugin:kling-official`) to prevent conflicts with built-in keys?
+- How the `infer_endpoint()` heuristics accommodate plugin endpoints: can a plugin declare its own heuristic rules (model_id match pattern → its own endpoint)?
 
-**C. plugin 契约（backend 接口约束）**
-- plugin backend 必须实现 `VideoBackend` Protocol（`name` / `model` / `capabilities` / `generate()`），这点现有 Protocol 已就绪。
-- plugin 是否需要声明元数据：支持的 model 列表、能力位图、必填凭证字段（`required_keys` / `secret_keys`，参考 `ProviderMeta`）、显示名称（i18n）？
-- plugin 的配置注入：如何让 plugin backend 拿到用户在 UI 填的 api_key / base_url？需要复用现有 `CustomProvider` 的凭证存储 + `mask_secret()` 掩蔽。
+**C. Plugin contract (backend interface constraints)**
+- Plugin backends must implement the `VideoBackend` Protocol (`name` / `model` / `capabilities` / `generate()`); the existing Protocol is ready for this.
+- Do plugins need to declare metadata: supported model list, capability bitmap, required credential fields (`required_keys` / `secret_keys`, see `ProviderMeta`), display name (i18n)?
+- Plugin configuration injection: how does a plugin backend get the api_key / base_url the user entered in the UI? Needs to reuse the existing `CustomProvider` credential storage + `mask_secret()` masking.
 
-**D. 安全（运行时执行第三方代码的核心风险）**
-- plugin 是任意 Python 代码，运行在 ArcReel 进程内，拥有完整文件系统/网络访问权限。
-- 是否需要沙箱？ArcReel 已有 agent sandbox（bubblewrap/seatbelt，见 `2026-05-12-agent-sandbox-design`），但那是针对 Agent SDK 的 Bash 子进程隔离，**backend plugin 运行在主进程**，无法直接复用同一沙箱。
-- **进程内 Python 沙箱不可行（调研明确结论）**：RestrictedPython 官方自述"is not a sandbox system or a secured environment"，业界共识是 CPython 进程内沙箱因 Python 动态特性（`__import__` 滥用、introspection 逃逸、反序列化攻击）几乎无法做到真正安全（pysandbox 作者已宣告此路不通）。真正的隔离只能靠进程/容器边界（seccomp、namespace、micro-VM 如 Firecracker、WASM 编译），但这些都与"plugin 作为 backend 在主进程被调用"的形态冲突。**因此 ArcReel 的 plugin 安全不应寄望于代码级沙箱，而应走"来源信任"路线。**
-- 缓解方向（来源信任路线）：plugin 来源审核（仅信任 PyPI 签名包 / 仅信任白名单 GitHub 仓库）、安装时人工确认、社区评分机制、官方维护的已审核 plugin 清单、安装前代码静态扫描（依赖/危险调用检测）——具体取舍待 PRD 决策。
-- 凭证泄漏风险：恶意 plugin 可读取其他 provider 的 api_key。需要评估是否限制 plugin 只能访问挂载到自己的凭证。
+**D. Security (the core risk of executing third-party code at runtime)**
+- A plugin is arbitrary Python code running inside the ArcReel process with full file system/network access.
+- Is a sandbox needed? ArcReel already has an agent sandbox (bubblewrap/seatbelt, see `2026-05-12-agent-sandbox-design`), but that isolates the Agent SDK's Bash subprocesses; **backend plugins run in the main process** and cannot directly reuse the same sandbox.
+- **An in-process Python sandbox is not feasible (a clear research conclusion)**: RestrictedPython states officially that it "is not a sandbox system or a secured environment"; the industry consensus is that an in-process CPython sandbox can hardly be made truly secure because of Python's dynamic features (`__import__` abuse, introspection escapes, deserialisation attacks) (the pysandbox author declared this path a dead end). Real isolation can only come from process/container boundaries (seccomp, namespaces, micro-VMs such as Firecracker, WASM compilation), but these all conflict with the form of "a plugin called as a backend in the main process". **Therefore ArcReel's plugin security should not rely on a code-level sandbox, but follow a "source trust" route.**
+- Mitigation directions (source trust route): plugin source review (trust only signed PyPI packages / only allow-listed GitHub repositories), manual confirmation at install time, a community rating mechanism, an officially maintained list of reviewed plugins, static code scanning before install (dependency/dangerous-call detection) — the specific trade-offs are pending PRD decisions.
+- Credential leakage risk: a malicious plugin could read other providers' api_keys. Need to evaluate whether to restrict plugins to accessing only the credentials attached to them.
 
-**E. 生命周期管理**
-- 连接池 / token 缓存：Kling JWT 30 分钟过期、连接池复用等有状态资源，plugin 实例的生命周期如何管理（单例 vs 每次请求新建）？现有 backend 通过 `(provider_name, model)` 缓存策略复用实例，plugin 应沿用。
-- 卸载 / 更新：用户禁用或更新 plugin 时，如何清理已注册的 backend 和 endpoint？
+**E. Lifecycle management**
+- Connection pools / token caches: how is the lifecycle of plugin instances managed for stateful resources such as Kling's 30-minute JWT expiry and connection pool reuse (singleton vs new per request)? Existing backends reuse instances via a `(provider_name, model)` caching strategy, which plugins should follow.
+- Uninstall / update: when a user disables or updates a plugin, how are the registered backends and endpoints cleaned up?
 
-**F. 分发与社区化**
-- 社区分享形态：GitHub 仓库 / PyPI 包 / ArcReel 官方 plugin 市场？
-- 版本兼容：plugin 声明兼容的 ArcReel 版本范围（Protocol 接口变更时的兼容策略）。
-- 文档与脚手架：提供 `arcreel backend scaffold` 类工具 + AI prompt 模板，让用户用 Cursor/Claude Code 快速生成符合 Protocol 的 plugin 骨架（7.1 已论证 AI 辅助生成是 plugin 方案相比声明式的关键优势）。
+**F. Distribution and community**
+- Form of community sharing: GitHub repositories / PyPI packages / an official ArcReel plugin marketplace?
+- Version compatibility: plugins declare the range of ArcReel versions they are compatible with (compatibility strategy when the Protocol interface changes).
+- Docs and scaffolding: provide an `arcreel backend scaffold`-style tool + AI prompt templates so users can quickly generate a Protocol-compliant plugin skeleton with Cursor/Claude Code (7.1 already argued that AI-assisted generation is the key advantage of the plugin approach over the declarative one).
 
-### 7.5.4 与现有架构的契合度评估
+### 7.5.4 Assessment of Fit with the Existing Architecture
 
-| 改造点 | 现有基础 | 改造量 |
+| Change point | Existing foundation | Amount of change |
 |---|---|---|
-| backend 运行时注册 | `register_backend()` 已是公开 API，鸭子类型 Protocol 就绪 | 小（加 plugin 加载器调用即可） |
-| ENDPOINT_REGISTRY 可扩展 | 当前静态字典 | **中**（需改为两层结构 + 命名空间隔离） |
-| `infer_endpoint()` 容纳 plugin | 现有启发式硬编码 | 中（需开放 plugin 声明启发式规则的接口） |
-| 凭证存储/掩蔽 | `CustomProvider` + `mask_secret()` 就绪 | 小（plugin 复用即可） |
-| i18n endpoint 显示名 | `endpoint_xxx_display` 三语机制就绪 | 小（plugin 需提供自己的显示名，可能需 fallback 到英文） |
-| 安全模型 | agent sandbox 不覆盖主进程 backend；进程内 Python 沙箱已证不可行 | **大/未知**（无法靠代码沙箱，只能走来源信任 + 审核机制,属产品/安全决策） |
-| 生命周期/缓存 | `(provider, model)` 实例缓存就绪 | 小（plugin 沿用） |
+| Runtime backend registration | `register_backend()` is already a public API, duck-typed Protocol ready | Small (just add plugin loader calls) |
+| Extensible ENDPOINT_REGISTRY | Currently a static dictionary | **Medium** (needs a two-layer structure + namespace isolation) |
+| `infer_endpoint()` accommodating plugins | Existing heuristics are hard-coded | Medium (needs an interface for plugins to declare heuristic rules) |
+| Credential storage/masking | `CustomProvider` + `mask_secret()` ready | Small (plugins just reuse it) |
+| i18n endpoint display names | `endpoint_xxx_display` three-language mechanism ready | Small (plugins must provide their own display names, may need an English fallback) |
+| Security model | The agent sandbox doesn't cover main-process backends; an in-process Python sandbox has been shown infeasible | **Large/unknown** (can't rely on a code sandbox, only source trust + review, which is a product/security decision) |
+| Lifecycle/caching | `(provider, model)` instance cache ready | Small (plugins follow it) |
 
-**总评**：`register_backend()` + Protocol 的设计让运行时 plugin 的**功能实现**契合度高、改造量可控；真正的难点集中在两处——**ENDPOINT_REGISTRY 的动态化**（工程问题，中等）和**主进程执行第三方代码的安全模型**（产品 + 安全决策，需 PRD 重点论证）。由于代码级沙箱已被调研证明不可行，安全设计的重心应放在"来源信任 + 审核 + 社区治理"而非"技术隔离"。
+**Overall assessment**: the `register_backend()` + Protocol design gives a high fit and a manageable amount of change for the **functional implementation** of runtime plugins; the real difficulty is concentrated in two places — **making ENDPOINT_REGISTRY dynamic** (an engineering problem, medium) and **the security model for executing third-party code in the main process** (a product + security decision that the PRD must argue in depth). Since the research has shown a code-level sandbox to be infeasible, the focus of the security design should be "source trust + review + community governance" rather than "technical isolation".
 
-### 7.5.5 可参考的渐进式落地思路（供 PRD 取舍，非定论）
+### 7.5.5 Possible Incremental Rollout Approaches (for the PRD to choose from, not final)
 
-调研发现的几种渐进路径，按改造从小到大排列：
+Several incremental paths found in the research, ordered from smallest to largest change:
 
-1. **最小可用（仅自部署）**：目录扫描 + volume 挂载，仅支持自部署用户在受信环境加载自己写的 plugin，不解决安全问题（信任用户自己）。改造量最小，可快速验证机制。
-2. **社区分享（PyPI + 审核）**：entry_points + PyPI 包发布，配合官方维护的"已审核 plugin 清单"，社区贡献需经过审核才进入推荐列表。平衡了开放性和安全性。
-3. **官方 plugin 市场**：ArcReel 维护 plugin 注册表 + 版本兼容声明 + 社区评分，用户在 UI 内一键安装。体验最好，但需要市场基础设施和持续运营投入。
+1. **Minimum viable (self-deployment only)**: directory scanning + volume mounting, only supporting self-deployed users loading plugins they wrote themselves in a trusted environment, without addressing security (the user trusts themselves). Smallest change, allows the mechanism to be validated quickly.
+2. **Community sharing (PyPI + review)**: entry_points + PyPI package publishing, combined with an officially maintained "list of reviewed plugins"; community contributions must be reviewed before entering the recommended list. Balances openness and security.
+3. **Official plugin marketplace**: ArcReel maintains a plugin registry + version compatibility declarations + community ratings, and users install with one click in the UI. Best experience, but needs marketplace infrastructure and ongoing operational investment.
 
-这三条路径不互斥，可作为功能演进的三个阶段。
+These three paths are not mutually exclusive and can serve as three stages of the feature's evolution.
 
 ---
 
-## 8. 关键风险与坑点汇总
+## 8. Summary of Key Risks and Pitfalls
 
 ### 8.1 OpenAI Sora 2 Deprecation
 
-- 官方发布通告 2026-03-24，**Sora 2 / Sora 2 Pro 及 Videos API 将于 2026-09-24 关停**
-- 影响 model id：`sora-2`、`sora-2-pro`、`sora-2-2025-10-06`、`sora-2-2025-12-08`、`sora-2-pro-2025-10-06`
-- ArcReel 必须在 2026-Q3 前完成 sora-3 或替代模型迁移评估
-- `/v1/videos` 路径事实标准会保留，中转站惯性沿用
+- Official notice issued 2026-03-24: **Sora 2 / Sora 2 Pro and the Videos API will be shut down on 2026-09-24**
+- Affected model IDs: `sora-2`, `sora-2-pro`, `sora-2-2025-10-06`, `sora-2-2025-12-08`, `sora-2-pro-2025-10-06`
+- ArcReel must complete a migration assessment to sora-3 or an alternative model before 2026-Q3
+- The `/v1/videos` path will remain a de facto standard; relay stations will keep using it out of inertia
 
-### 8.2 NewAPI metadata 透传完整度不可控
+### 8.2 NewAPI metadata Pass-through Completeness Is Uncontrollable
 
-- 同一个 Kling `camera_control` 在 DMXAPI 能用，在某些自部署 NewAPI 上可能丢失
-- ArcReel `newapi-video` backend 需要在 channel 配置或文档层面标注实测透传的字段集
-- 部分高级能力（motion brush / camera control）建议在 UI 中标注"可能在某些中转站不可用"
+- The same Kling `camera_control` works on DMXAPI but may be lost on some self-deployed NewAPI instances
+- ArcReel's `newapi-video` backend needs to note, at the channel configuration or documentation level, the set of fields verified to pass through
+- For some advanced capabilities (motion brush / camera control), recommend marking in the UI that they "may not be available on some relay stations"
 
-### 8.3 视频 URL 过期统一陷阱
+### 8.3 The Universal Video URL Expiry Trap
 
-- 所有平台都用临时 URL，最危险的 MiniMax 仅 **9 小时**
-- ArcReel 必须在 SUCCEEDED 后 **10 秒内启动转存**到本地或对象存储
-- 不要依赖 vendor URL 作为前端展示链接
+- All platforms use temporary URLs; the most dangerous, MiniMax, lasts only **9 hours**
+- ArcReel must **start re-storing within 10 seconds** of SUCCEEDED, to local or object storage
+- Don't rely on vendor URLs as frontend display links
 
-### 8.4 状态字符串差异
+### 8.4 Status String Differences
 
-- Kling `succeed`（不是 `succeeded`）
-- MiniMax `Success`（首字母大写）
-- DashScope 全大写 `SUCCEEDED`
-- PiAPI 内层 `output.status: 99`（整数）
-- 各家 backend 必须自己维护状态映射表，不能复用
+- Kling `succeed` (not `succeeded`)
+- MiniMax `Success` (capitalised)
+- DashScope all upper case `SUCCEEDED`
+- PiAPI inner `output.status: 99` (integer)
+- Each backend must maintain its own status mapping table; they cannot be reused
 
-### 8.5 model id 命名碎片化
+### 8.5 Fragmented Model ID Naming
 
-流派 C `/v2/video/generations` 同一模型在不同中转站命名完全不同：
-- AIMLAPI：`kling-video/v1/standard/text-to-video`
-- APIMart：`sora-2-vip`
-- getimg.ai：`happyhorse-1`（自有品牌名）
-- xAI 官方：`grok-imagine-video`
+In School C `/v2/video/generations`, the same model is named completely differently on different relay stations:
+- AIMLAPI: `kling-video/v1/standard/text-to-video`
+- APIMart: `sora-2-vip`
+- getimg.ai: `happyhorse-1` (its own brand name)
+- xAI official: `grok-imagine-video`
 
-ArcReel 需要在 channel 配置层维护 model name 别名映射，或者在 `infer_endpoint()` 启发式中接受用户手工修正。
+ArcReel needs to maintain a model name alias mapping at the channel configuration layer, or accept manual user correction in the `infer_endpoint()` heuristics.
 
-### 8.6 流派 C v2 的 discovery 局限
+### 8.6 Discovery Limitations of School C v2
 
-`/v1/models` 列表无法可靠区分 `/v1/video/generations` vs `/v2/video/generations` 的目标端点，因为两者 model id 命名完全一致。
+The `/v1/models` list cannot reliably distinguish whether the target endpoint is `/v1/video/generations` or `/v2/video/generations`, because model ID naming is identical for both.
 
-**自动启发式只能给一个默认值**（建议 `newapi-video` 更常见），用户在 UI 上按实际中转站文档手工切换。这是 NewAPI / OneAPI 衍生中转站生态的固有限制，不是 ArcReel 的设计缺陷。
+**Automatic heuristics can only provide a default** (suggest `newapi-video`, which is more common); users switch manually in the UI according to the actual relay station's docs. This is an inherent limitation of the NewAPI / OneAPI-derived relay ecosystem, not a design flaw of ArcReel.
 
-### 8.7 Seedance 2.0 国内/海外 model ID 不通用
+### 8.7 Seedance 2.0 Model IDs Differ Between China and Overseas
 
-- 国内：`doubao-seedance-2-0-260128`
-- 海外：`dreamina-seedance-2-0-260128`
-- 跨区调用必然 404
-- ArcReel 已有 ark / ark-agent-plan 双 provider 设计可参考
+- China: `doubao-seedance-2-0-260128`
+- Overseas: `dreamina-seedance-2-0-260128`
+- Cross-region calls will always return 404
+- ArcReel's existing ark / ark-agent-plan dual-provider design can serve as a reference
 
-### 8.8 内容审核错误码
+### 8.8 Content Moderation Error Codes
 
-各平台审核拒绝错误码完全不同：
-- OpenAI Sora：`error.code: "moderation_blocked"`
-- 阿里 DashScope：`IPInfringementSuspect` / `DataInspectionFailed`
-- 可灵 Kling：HTTP 500 + `error: "...violate the community guidelines (CM_EXT.POther)"`（**用 error 字段而非 message**）
+Moderation rejection error codes differ completely between platforms:
+- OpenAI Sora: `error.code: "moderation_blocked"`
+- Alibaba DashScope: `IPInfringementSuspect` / `DataInspectionFailed`
+- Kling: HTTP 500 + `error: "...violate the community guidelines (CM_EXT.POther)"` (**use the error field, not message**)
 
-不应作为可重试错误处理，需要在 backend 层做特殊识别。
-
----
-
-## 9. 后续 PRD / 设计文档需要解决的问题
-
-本报告作为输入素材，后续 PRD 阶段需要明确以下问题。按"架构层 → 协议实现层 → 运行时 plugin 层"三组归类。
-
-### 9.1 架构对齐评估（先于具体协议接入决策）
-
-> 这一组是**比单个协议接入更高层的决策**：在大规模新增协议之前，先评估当前 `lib/backends/video_backends/` + `lib/custom_provider/` 架构是否需要对齐业内成熟实现做调整。**重要前提：避免被命名带偏。**
-
-**关于命名（先澄清，避免误导）**：
-- ArcReel 当前的 `VideoBackend` Protocol + 各 `XxxVideoBackend` 实现，**本质上已经是业内推崇的 Ports & Adapters（六边形架构）范式**——Protocol 即 Port，各 backend 即 Adapter。架构骨架已对齐优秀实践。
-- 术语表（GLOSSARY.md）选择 `backend` 而非 `adapter` 命名，理由是：backend 与 provider 的"派生"语义契合（一个 provider 派生多个 backend）、与 frontend 对仗、以及 video/image/text 三套媒体后端命名一致。**SQLAlchemy / Django 等成熟项目同样用 backend 而非 adapter 命名同类角色**，命名本身不构成"未对齐业内"的问题。
-- **结论倾向**：不建议以"对齐 adapter 命名"为目标做重构；命名是表层，真正该评估的是下面的能力缺口。
-
-**真正需要 PRD 评估的架构缺口（与命名无关）**：
-
-1. **统一异步任务抽象是否需要提取为一等公民**。本次调研确认：9 家官方平台 + 4 大中转流派**全部是异步任务模型**（submit → poll → 状态映射 → URL 转存），且状态机字符串、URL 过期窗口、两步取 URL 等各不相同。
-   - **真信号判断点**：当前各 backend 是否在重复实现 poll 循环 / 状态映射 / URL 转存？若重复度高，应在 `VideoBackend` 之上抽出 `AsyncVideoTask` 类抽象（可参考 fal.ai queue 模型）。若已有共享 poll 基础设施，则不必动。
-   - 这是该对齐业内的实质点，与命名无关。
-
-2. **新增协议的耦合度审查**。理想状态：加一个新协议（如 Kling）只需新增一个 backend 类 + 在 `ENDPOINT_REGISTRY` 注册一行。
-   - **真信号判断点**：若加新协议需同时改 `resolver` / `cost_calculator` / `media_generator` / 多个 enum，说明耦合过紧，需解耦——但解耦方案与命名无关。
-
-3. **ENDPOINT_REGISTRY 静态字典的可扩展化**。这是运行时 plugin 的硬阻塞（详见 7.5.1），也是与业内可扩展注册机制（entry_points / pluggy）的主要差距。属于明确该对齐的点（具体见 9.3）。
-
-**驱动原则**：让真实痛点（加协议改文件多、异步轮询代码重复、plugin 卡静态字典）驱动重构，而非让"业内都叫 adapter"这一观察驱动重构。如无上述实质痛点，当前架构保持即可，只做增量扩展。
-
-### 9.2 协议实现层（P0 协议接入的具体问题）
-
-1. **P0 协议适配的具体接入次序**（建议先 v2-video-generations 流派 C → Kling 官方 → DashScope → MiniMax）
-2. **每个新增 endpoint 在 `ENDPOINT_REGISTRY` 的 key 命名**（如 `v2-video-generations` / `kling-official` / `dashscope-async` / `minimax-video`）
-3. **`infer_endpoint()` 启发式扩展规则**（如何区分新增 endpoint 与现有 endpoint）
-4. **视频 URL 转存中间件设计**（针对 MiniMax 9h、Sora 1h 等短期 URL）
-5. **MiniMax File API 两步流程在 backend 内部如何封装**（对外暴露统一的 video_url）
-6. **Kling JWT token 缓存策略**（asyncio.Lock + dict TTL）
-7. **DashScope 区域配置**（base_url 与 api_key 绑定关系）
-8. **NewAPI backend 的 metadata profile 设计**（按 vendor 维护字段映射表）
-9. **统一异步任务状态机抽象**（是否在 VideoBackend 层引入还是各自实现；与 9.1 第 1 点联动决策）
-10. **Sora 2 deprecation 应对**（迁移评估窗口与 fallback 策略）
-
-### 9.3 运行时 Plugin 层
-
-1. **运行时 plugin 的 ENDPOINT_REGISTRY 动态化方案**（静态字典 → 内置+plugin 两层结构；与 9.1 第 3 点同源）
-2. **运行时 plugin 的安全模型**（代码级沙箱已证不可行，重心放在来源信任 + 审核机制）
-3. **运行时 plugin 的发现与加载机制选型**（entry_points / 目录扫描 / 两者）
-4. **运行时 plugin 的契约定义**（元数据声明、凭证注入、i18n、启发式规则）
-5. **运行时 plugin 的渐进式落地阶段划分**（最小可用 → 社区分享 → 官方市场）
+These should not be treated as retryable errors and need special recognition at the backend layer.
 
 ---
 
-## 10. 参考资料
+## 9. Questions for the Follow-up PRD / Design Documents
 
-### 一手 API 文档
+As input material, this report leaves the following questions for the PRD stage to settle. They are grouped into three sets: "architecture layer → protocol implementation layer → runtime plugin layer".
+
+### 9.1 Architecture Alignment Assessment (before decisions on specific protocol integrations)
+
+> This group consists of **decisions at a higher level than integrating any single protocol**: before adding protocols at scale, first assess whether the current `lib/backends/video_backends/` + `lib/custom_provider/` architecture needs adjusting to align with mature industry implementations. **Important precondition: don't be misled by naming.**
+
+**On naming (clarified first to avoid misdirection)**:
+- ArcReel's current `VideoBackend` Protocol + the various `XxxVideoBackend` implementations **are in essence already the industry-favoured Ports & Adapters (hexagonal architecture) paradigm** — the Protocol is the Port and each backend is an Adapter. The architectural skeleton is already aligned with best practice.
+- The glossary (GLOSSARY.md) chose `backend` rather than `adapter` because: backend fits the "derivation" semantics with provider (one provider derives multiple backends), parallels frontend, and keeps naming consistent across the video/image/text media backends. **Mature projects such as SQLAlchemy / Django likewise name the same kind of role backend rather than adapter**, so the naming itself is not a case of "not aligned with industry".
+- **Leaning conclusion**: refactoring with "align on the adapter name" as the goal is not recommended; naming is superficial, and what really needs assessing are the capability gaps below.
+
+**Architectural gaps the PRD really needs to assess (unrelated to naming)**:
+
+1. **Whether a unified async task abstraction should be extracted as a first-class citizen**. This research confirmed: 9 official platforms + 4 major relay schools **all use an async task model** (submit → poll → status mapping → URL re-storage), and the state-machine strings, URL expiry windows, two-step URL retrieval, etc. all differ.
+   - **Real-signal check**: are the current backends each re-implementing the poll loop / status mapping / URL re-storage? If duplication is high, an `AsyncVideoTask` abstraction should be extracted above `VideoBackend` (the fal.ai queue model can serve as a reference). If shared poll infrastructure already exists, nothing needs to change.
+   - This is the substantive point to align with industry, unrelated to naming.
+
+2. **Coupling review for adding protocols**. Ideal state: adding a new protocol (e.g. Kling) only requires a new backend class + one registration line in `ENDPOINT_REGISTRY`.
+   - **Real-signal check**: if adding a new protocol requires changing `resolver` / `cost_calculator` / `media_generator` / several enums at the same time, coupling is too tight and needs decoupling — but the decoupling approach is unrelated to naming.
+
+3. **Making the ENDPOINT_REGISTRY static dictionary extensible**. This is a hard blocker for runtime plugins (see 7.5.1) and the main gap versus industry extensible registration mechanisms (entry_points / pluggy). It is a point that clearly should be aligned (see 9.3).
+
+**Guiding principle**: let real pain points (adding a protocol touches many files, duplicated async polling code, plugins blocked by the static dictionary) drive refactoring, not the observation that "the industry calls it adapter". Without the substantive pain points above, keep the current architecture and only extend it incrementally.
+
+### 9.2 Protocol Implementation Layer (concrete questions for P0 protocol integration)
+
+1. **The concrete integration order for P0 protocol adaptations** (suggest School C v2-video-generations first → Kling official → DashScope → MiniMax)
+2. **The key name for each new endpoint in `ENDPOINT_REGISTRY`** (e.g. `v2-video-generations` / `kling-official` / `dashscope-async` / `minimax-video`)
+3. **Extension rules for the `infer_endpoint()` heuristics** (how to distinguish new endpoints from existing ones)
+4. **Design of a video URL re-storage middleware** (for short-lived URLs such as MiniMax 9h, Sora 1h)
+5. **How the MiniMax File API two-step flow is encapsulated inside the backend** (exposing a unified video_url externally)
+6. **Kling JWT token caching strategy** (asyncio.Lock + dict TTL)
+7. **DashScope region configuration** (binding between base_url and api_key)
+8. **Design of metadata profiles for the NewAPI backend** (field mapping tables maintained per vendor)
+9. **A unified async task state-machine abstraction** (introduce it at the VideoBackend layer or implement per backend; decided together with item 1 of 9.1)
+10. **Response to the Sora 2 deprecation** (migration assessment window and fallback strategy)
+
+### 9.3 Runtime Plugin Layer
+
+1. **Approach for making ENDPOINT_REGISTRY dynamic for runtime plugins** (static dictionary → built-in + plugin two-layer structure; same root as item 3 of 9.1)
+2. **The security model for runtime plugins** (a code-level sandbox has been shown infeasible; focus on source trust + review)
+3. **Choice of discovery and loading mechanism for runtime plugins** (entry_points / directory scanning / both)
+4. **Contract definition for runtime plugins** (metadata declaration, credential injection, i18n, heuristic rules)
+5. **Phasing of the incremental rollout of runtime plugins** (minimum viable → community sharing → official marketplace)
+
+---
+
+## 10. References
+
+### First-hand API Documentation
 
 - OpenAI Sora 2: https://platform.openai.com/docs/guides/video-generation
 - OpenAI Deprecations: https://developers.openai.com/api/docs/deprecations
-- NewAPI 文档: https://doc.newapi.pro/api/generate-video/ 和 https://doc.newapi.pro/api/kling-jimeng/
-- 可灵 Kling: https://app.klingai.com/cn/dev/document-api
-- 火山 Ark Seedance: https://www.volcengine.com/docs/82379
-- 阿里 DashScope: https://help.aliyun.com/zh/model-studio/text-to-video-api-reference
+- NewAPI docs: https://doc.newapi.pro/api/generate-video/ and https://doc.newapi.pro/api/kling-jimeng/
+- Kling: https://app.klingai.com/cn/dev/document-api
+- Volcano Ark Seedance: https://www.volcengine.com/docs/82379
+- Alibaba DashScope: https://help.aliyun.com/zh/model-studio/text-to-video-api-reference
 - MiniMax Hailuo: https://platform.minimax.io/docs/api-reference/video-generation-t2v
 - AI/ML API: https://docs.aimlapi.com/api-references/video-models
 - xAI Grok: https://docs.x.ai/developers/model-capabilities/video/generation
@@ -744,21 +744,21 @@ ArcReel 需要在 channel 配置层维护 model name 别名映射，或者在 `i
 - Luma: https://docs.lumalabs.ai/docs/video-generation
 - PixVerse: https://docs.platform.pixverse.ai/
 
-### ArcReel 现有设计文档（背景对齐）
+### Existing ArcReel Design Documents (background alignment)
 
-- `docs/adr/` — VideoBackend 分层、自定义供应商与 endpoint、duration 真相源等架构决策
-- `GLOSSARY.md` — 词汇表（backend 而非 adapter）
+- `docs/adr/` — architectural decisions such as VideoBackend layering, custom providers and endpoints, the duration source of truth
+- `GLOSSARY.md` — glossary (backend rather than adapter)
 
-### 中转站文档（事实标准来源）
+### Relay-station Documentation (sources of de facto standards)
 
 - AiHubMix: https://docs.aihubmix.com/en/api/Video-Gen
 - APIMart: https://docs.apimart.ai/en/api-reference/videos/
-- 七牛云 AI 推理: https://developer.qiniu.com/aitokenapi
+- Qiniu Cloud AI inference: https://developer.qiniu.com/aitokenapi
 - useapi.net Kling: https://useapi.net/docs/api-kling-v1/
 - fal.ai: https://fal.ai/models/
 
 ---
 
-**报告版本**：v1（最终调研版）
-**对齐架构**：ArcReel `lib/backends/video_backends/` + `lib/custom_provider/` + `ENDPOINT_REGISTRY`
-**下一步**：基于本报告撰写具体 endpoint 接入的 PRD 和设计文档
+**Report version**: v1 (final research version)
+**Architecture alignment**: ArcReel `lib/backends/video_backends/` + `lib/custom_provider/` + `ENDPOINT_REGISTRY`
+**Next step**: write the PRD and design documents for specific endpoint integrations based on this report

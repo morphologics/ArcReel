@@ -2,27 +2,27 @@
 status: accepted
 ---
 
-# Agent 费用按请求由 token 与模型目录自算，不采用 SDK 回报的费用
+# Agent cost is computed per request from tokens and the model catalog, not taken from the cost the SDK reports
 
-内嵌 Agent 的费用与生成费用同一口径：按模型目录的价目表与倍率，从 token 用量算出参考费用。SDK 回报的 `total_cost_usd` 与各模型的 `costUSD` 是 CLI 按内置的 Claude 价格表在本地估算的，遇到非 Claude 模型会套用 Claude 的价格；在常驻的 `ClaudeSDKClient` 下它们还是会话累计值。ArcReel 的 Agent 多经第三方网关调用非 Claude 模型，这个数字既对不上模型，也对不上轮次。
+The embedded agent's cost uses the same rules as generation cost: a reference cost computed from token usage according to the model catalog's price tables and multipliers. The `total_cost_usd` and per-model `costUSD` reported by the SDK are estimated locally by the CLI from its built-in Claude price table, applying Claude prices even to non-Claude models; under a persistent `ClaudeSDKClient` they are also cumulative session values. ArcReel's agent mostly calls non-Claude models via third-party gateways, so this number matches neither the model nor the turn.
 
-## 规则
+## Rules
 
-- 按请求计价：每个 API 请求的用量取自 `AssistantMessage.usage`（按 `message_id` 去重，含子智能体），各自落上下文档，缓存写按 5 分钟与 1 小时两档分别计价。流中看不到的调用（如压缩）由本轮 `model_usage` 的差分减去流内合计得出，差额按一次请求计价。
-- 按轮记账：每轮每个模型写一条供应商调用记录，费用是该模型本轮各请求的费用之和。这是供应商调用按请求记账的例外，计价仍按请求；本轮没有用量的模型不写。缓存读与两档缓存写单列记录，总输入的口径不变。
-- usage 一律按 Anthropic 口径解读（`input_tokens` 不含缓存），不逐网关修正。口径不同的网关带来的偏差，在参考费用的定位下接受。
-- Agent 调用的渠道价差只用 Agent 凭证倍率表达，只此一级，默认 1，属于用户偏好；不按预设判断是否订阅制。倍率与条目绑定取会话启动时注入的那个 Agent 凭证，不取记账时的活动凭证（见 `docs/adr/0017`）。
-- 模型名对应不到模型条目时记为未定价（见 `docs/adr/0100`）。SDK 回报的费用不存储，也不作为对照值。
+- Price per request: each API request's usage is taken from `AssistantMessage.usage` (deduplicated by `message_id`, including subagents), each bucketed into its own context tier, with cache writes priced separately for the 5-minute and 1-hour tiers. Calls not visible in the stream (such as compaction) are derived as the difference between this turn's `model_usage` delta and the in-stream total, and the difference is priced as one request.
+- Account per turn: one provider call record is written per model per turn, with cost being the sum of that model's request costs in the turn. This is an exception to provider calls being accounted per request; pricing is still per request; models with no usage in the turn get no record. Cache reads and the two tiers of cache writes are recorded in separate columns, and the definition of total input is unchanged.
+- Usage is always interpreted per Anthropic's definition (`input_tokens` excludes cache), with no per-gateway correction. Deviations from gateways with different definitions are accepted given the reference-cost positioning.
+- Channel price differences for agent calls are expressed only by the agent credential multiplier, a single level, default 1, a user preference; there is no judging from presets whether it is a subscription. The multiplier and entry binding come from the agent credential injected when the session started, not the active credential at accounting time (see `docs/adr/0017`).
+- When a model name cannot be matched to a model entry, it is recorded as unpriced (see `docs/adr/0100`). The cost reported by the SDK is not stored, nor used as a comparison value.
 
 ## Considered Options
 
-- **采用 `total_cost_usd` 或各模型 `costUSD` 之和（旧做法）**：非 Claude 模型得到的是 Claude 的价格；累计值还要差分才能落到每轮。
-- **通过 `modelPricing` 让 CLI 直接算对**：只在 managed settings 或宿主模式下生效，Python SDK 没有公开对应参数；缓存写只能单一定价，仍然需要差分。
-- **按轮用 `model_usage` 差分计价**：实现简单，但一轮内各请求的输入量不同，上下文档无从确定，按输入长度分档的模型会被低估；缓存写也拿不到两档拆分。
-- **由预设声明各网关的 usage 口径并逐家修正**：缺少可实测的真实凭证，费用又只是参考，维护这些声明不值得。
+- **Use `total_cost_usd` or the sum of per-model `costUSD` (the old approach)**: non-Claude models get Claude prices; cumulative values also need differencing to attribute to each turn.
+- **Have the CLI compute correctly directly via `modelPricing`**: only effective in managed settings or host mode, and the Python SDK exposes no corresponding parameter; cache writes can only have a single price, and differencing is still needed.
+- **Price per turn using the `model_usage` delta**: simple to implement, but input size differs across requests in a turn, so the context tier cannot be determined and models tiered by input length would be underestimated; cache writes also cannot be split into the two tiers.
+- **Have presets declare each gateway's usage definition and correct per vendor**: there are no real credentials to measure against, and the cost is only a reference, so maintaining these declarations is not worth it.
 
 ## Consequences
 
-- 每个会话要维护 `model_usage` 的差分基线：恢复会话时以恢复后第一条结果为起点，收到会话重置时清零，累计值回落时把本轮值当作单轮值。
-- 后台子智能体的花费记到它结束时所在的那一轮，而不是它启动的那一轮。
-- 流中看不到的调用按差额计价是近似：一轮里有多次这类调用时，上下文档按它们的合计落档，可能偏高；恢复会话后的第一轮没有差分基线，这类调用不计入。
+- Each session must maintain a `model_usage` delta baseline: when resuming a session, the first result after resumption is the starting point; it is reset to zero on a session reset; when the cumulative value drops, the current turn's value is treated as a single-turn value.
+- A background subagent's spending is recorded to the turn in which it finishes, not the turn in which it started.
+- Pricing calls not visible in the stream by difference is an approximation: when a turn has several such calls, the context tier is bucketed by their total, which may be too high; the first turn after resuming a session has no delta baseline, and such calls are not counted.

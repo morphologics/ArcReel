@@ -2,27 +2,27 @@
 status: accepted
 ---
 
-# 成片在本地渲染车道上用随包 ffmpeg 渲染，成片与剪映草稿落盘登记为产物
+# The final cut is rendered on a local render lane with the bundled ffmpeg; the final cut and Jianying (CapCut) draft are written to disk and registered as artifacts
 
-> 带定格延长的剪映草稿要用随包 ffmpeg 取出片段出点帧，BGM 登记时的响度测量也用随包 ffmpeg；随包 ffmpeg 无法运行时，这两者与成片渲染一样不可用。下文「剪映草稿导出不受影响」只适用于不带定格延长的剪映草稿。
+> Jianying (CapCut) drafts with hold extensions need the bundled ffmpeg to extract the clip's out-point frame, and loudness measurement at BGM registration also uses the bundled ffmpeg; when the bundled ffmpeg cannot run, these two are unavailable just like final cut rendering. "Jianying draft export is unaffected" below applies only to Jianying drafts without hold extensions.
 
-成片由服务端以子进程调用 ffmpeg 渲染。渲染成片与导出剪映草稿都是生成队列里的任务，走一条不绑定供应商的本地车道 `render`，全局并发固定为 1、不开放配置：渲染的峰值内存以 GB 计，并发一高就会撑爆 Docker 容器。它们不调用供应商，因此不写用量记录（`docs/adr/0076`）。
+The final cut is rendered by the server calling ffmpeg as a subprocess. Rendering the final cut and exporting the Jianying (CapCut) draft are both tasks in the generation queue, going through a local lane `render` not bound to any provider, with global concurrency fixed at 1 and not configurable: peak rendering memory is measured in GB, and higher concurrency would blow up a Docker container. They do not call providers, so they do not write usage records (`docs/adr/0076`).
 
-**成片固定使用 `imageio-ffmpeg` 随包分发的 ffmpeg，不看系统 PATH，也不提供路径配置。** 受支持的部署形态是 Docker 镜像（x86_64 与 aarch64）与 Windows、macOS 直接运行，`imageio-ffmpeg` 对这几者都有自带含 libx264、libass 与 xfade 的静态构建。系统里的 ffmpeg 能力参差：Homebrew 默认构建没有 libass，烧不了字幕；Windows 上通常根本没装。固定用随包的那一个，所有环境渲染出的成片一致，不需要能力挑选与逐项降级。随包 ffmpeg 在当前环境无法运行时，成片渲染不可用并报明原因，剪映草稿导出不受影响。仓库里其他调用 ffmpeg 的地方经同一个查找器取用它；它不带 ffprobe，媒体探测另行处理。字幕字体同样随仓库自带一款 OFL 许可的中文字体，不依赖系统字体。
+**The final cut always uses the ffmpeg bundled with `imageio-ffmpeg`, does not look at the system PATH, and offers no path configuration.** The supported deployment forms are Docker images (x86_64 and aarch64) and running directly on Windows and macOS, and `imageio-ffmpeg` ships its own static builds with libx264, libass and xfade for all of these. System ffmpeg capabilities vary: Homebrew's default build has no libass and cannot burn subtitles; on Windows it is usually not installed at all. Always using the bundled one makes final cuts rendered in every environment consistent, with no need for capability selection or item-by-item degradation. When the bundled ffmpeg cannot run in the current environment, final cut rendering is unavailable with the reason stated, and Jianying draft export is unaffected. Other places in the repository that call ffmpeg obtain it through the same locator; it does not include ffprobe, so media probing is handled separately. Likewise, an OFL-licensed Chinese font is bundled in the repository for subtitles, with no dependence on system fonts.
 
-**成片与剪映草稿落盘在项目目录内，并登记进产物清单。** 产物身份是「集 + 剪辑时间线 + 旁白版本」，成片再加上是否烧入字幕（`docs/adr/0089`、`docs/adr/0090`）。生成依据按开始渲染时指定的修订取快照，渲染期间剪辑时间线被改动时，产物一出来就如实判为 stale。用户本机的剪映草稿目录、剪映版本这类只影响落到用户机器上的形态的参数，在下载时才套用，不进产物身份与生成依据。每个产物身份只保留最新文件；项目归档不包含成片与剪映草稿，导入后判 missing，重新渲染即可。
+**The final cut and Jianying (CapCut) draft are written to disk inside the project directory and registered in the artifact manifest.** The artifact identity is "episode + edit timeline + narration version", with the final cut additionally keyed by whether subtitles are burned in (`docs/adr/0089`, `docs/adr/0090`). The generation basis snapshots the revision specified when rendering starts; if the edit timeline is changed during rendering, the artifact is honestly judged stale as soon as it comes out. Parameters that only affect the form landing on the user's machine, such as the user's local Jianying draft directory and Jianying version, are applied only at download and are not part of the artifact identity or generation basis. Each artifact identity keeps only the latest file; project archives do not include final cuts or Jianying drafts, which are judged missing after import and can simply be re-rendered.
 
-## 明确不采用
+## Explicitly rejected
 
-- **按「显式配置 → PATH → 随包二进制」查找并按能力挑选**：为几乎不存在的需求（自选更新版本、硬件编码）引入能力探测与不一致的出片结果。
-- **缺什么能力就逐项降级**（没有 libass 就改用图片叠加字幕、没有 xfade 就退化为硬切）：成片会静默地与剪映草稿不一致，违背两者同源。
-- **MoviePy、MLT、GES、Remotion 与浏览器端渲染**：分别因依赖冲突与性能、无法经 pip 安装、许可证与按次计费、编码能力与性能而排除。
-- **成片按供应商车道调度或并发可配**：没有供应商可挂靠，而内存峰值决定了并发只能是 1。
-- **剪映草稿维持现场生成、下载即删**：无法判定时效，也不符合产物的定义。
-- **保留成片的历史版本文件**：成片由剪辑时间线修订与素材在本地重新渲染即可得到，不花钱，体积却以百 MB 计；视频单元的视频是付费生成的，才保留全部版本。
+- **Look up "explicit configuration → PATH → bundled binary" and select by capability**: introduces capability probing and inconsistent output for a need that barely exists (choosing a newer version yourself, hardware encoding).
+- **Degrade item by item for missing capabilities** (overlay subtitles as images when there is no libass, fall back to hard cuts when there is no xfade): the final cut would silently diverge from the Jianying draft, violating the same-source principle for the two.
+- **MoviePy, MLT, GES, Remotion and browser-side rendering**: excluded respectively for dependency conflicts and performance, not being installable via pip, licensing and per-render billing, and encoding capability and performance.
+- **Schedule the final cut on a provider lane or make concurrency configurable**: there is no provider to attach to, and peak memory dictates that concurrency can only be 1.
+- **Keep generating Jianying drafts on the fly and deleting them after download**: currency cannot be determined, and it does not fit the definition of an artifact.
+- **Keep historical version files of the final cut**: a final cut can be re-rendered locally from the edit timeline revision and material at no cost, while its size is in the hundreds of MB; video unit videos are paid generations, which is why all their versions are kept.
 
 ## Consequences
 
-- `imageio-ffmpeg` 停在 FFmpeg 7.x，且 2025-01 之后没有发新版；需要更换时只改查找器一处。随包 ffmpeg 与字体都是再分发，发布时附上对应的许可证声明与源码获取方式。
-- 随包 libass 不对中文换行，整句会冲出画面；生成 ASS 时按可用宽度与字号为中文字幕显式插入换行，英文与越南语交给 libass 在空格处换行。剪映端自动换行，两端的换行位置不要求一致。
-- 渲染出的成片以剪辑时间线为准：转场不改变总时长（`docs/adr/0090`），两端视觉效果逐项实测，不一致的转场从词表剔除。
+- `imageio-ffmpeg` is stuck at FFmpeg 7.x and has had no new release since 2025-01; replacing it only requires changing the locator. The bundled ffmpeg and font are both redistributions, and releases include the corresponding license notices and how to obtain the source code.
+- The bundled libass does not wrap Chinese lines, so whole sentences run off the screen; when generating ASS, line breaks are inserted explicitly into Chinese subtitles based on available width and font size, while English and Vietnamese are left to libass to wrap at spaces. Jianying wraps automatically, and the two sides are not required to break lines at the same positions.
+- The rendered final cut follows the edit timeline: transitions do not change the total duration (`docs/adr/0090`), the visual effects of the two sides are tested item by item, and transitions that do not match are removed from the vocabulary.

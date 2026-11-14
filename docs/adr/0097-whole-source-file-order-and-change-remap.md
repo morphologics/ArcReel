@@ -2,37 +2,37 @@
 status: accepted
 ---
 
-# 整本源文的文件顺序显式记录，改动按文件、按文本对齐重映射切出集
+# The file order of the whole-book source is recorded explicitly; changes remap cut episodes per file, by text alignment
 
-整本源文可以由多个文件接成。决定：文件顺序由项目显式记录、创作者可调，文件名不决定先后；切出集的原文范围沿这个顺序连续，起止各记一个「文件 + 文件内偏移」，可以跨文件；一个文件被增删、替换、编辑或调序，只影响原文范围触及这个文件的切出集；文件内容改动时，用改动前后的文本对齐把这些集的边界映射到新文本上，只有范围内的文字真的变了的集才标 stale。整本源文被改动不要求从第 1 集起重新规划。最常见的项目只有一个源文件，改一个错字就作废全书的切分，代价与改动不成比例。
+The whole-book source can be made up of multiple files joined together. Decision: the file order is recorded explicitly by the project and adjustable by the creator, and file names do not determine order; a cut episode's source range is contiguous along this order, with start and end each recorded as "file + offset within file", and may span files; adding, removing, replacing, editing or reordering a file affects only the cut episodes whose source ranges touch that file; when a file's content changes, text alignment between before and after the change maps those episodes' boundaries onto the new text, and only episodes whose in-range text actually changed are marked stale. Changes to the whole-book source do not require re-planning from episode 1. The most common project has only one source file, and invalidating the whole book's cuts for one typo fix would be a cost out of all proportion to the change.
 
-## 规则
+## Rules
 
-- 整本源文的文件清单与顺序记在项目里。新上传的文件接在末尾，创作者可以调序；存量项目按原来的文件名顺序补记一次。
-- 文件的身份是清单里的那一项。替换保留它的位置、文件名与源文件类型，类型在替换时可以改（见 `docs/adr/0036`）。
-- 原文范围可以跨文件，文件边界不是集的边界。AI 规划的窗口沿文件顺序读，遇源文件类型切换截断；切出集的类型取原文范围起点所在文件的类型，改类型不动账本（见 `docs/adr/0036`）。
-- 替换或编辑一个文件时，用改动前后的规范化文本做对齐，逐集映射原文范围的边界：
-  - 范围内文字未变的集只平移偏移，状态不变；
-  - 范围内文字有变化的集取映射后的范围并标 stale：已有的产物，以及还没有产物时的标题、钩子与分集大纲，都是按旧文字做的；
-  - 范围内文字整段被删除的集按移除切分处理：有产物的转为无原文的集、标 stale，没有产物的直接移除（见 `docs/adr/0032`）。
-  - 恰好插在两集分界上的新文字归前一集；落在任何切出集之外的新文字（第一个切出集之前、最后一个之后、切出集之间的空段里）是未切分的原文。
-- 删除一个文件等同于删掉它的全部文字，按上面的规则处理：只在这个文件里的切出集按移除切分处理，跨进这个文件的集保留其余部分、标 stale。
-- 插入新文件时，插入处是两集的分界或落在切出集之外，新文件是未切分的原文，不改动任何集；插入处落在一个跨文件的集内部，新文件归这一集，标 stale。
-- 调序时，移动的文件里的切出集在播出顺序中整块跟着移动，保持切出集之间的源文顺序；其他来源的集按 `docs/adr/0032` 的锚点规则跟着剧情落位。内容没有变的集不标 stale。跨过被移动文件边界的集，只保留起点所在文件里、调序后仍相连的部分，其余部分成为未切分的原文，标 stale。
-- 每个登记过切出集的文件都在项目内部保留一份规范化文本快照。文件在服务之外被改动、指纹与记录不一致时，以快照为改动前的文本，走同一套对齐映射，并提示创作者哪些集受了影响。
-- Agent 对 `source/` 的写入与 Web 走同一个服务命令，不能用文件工具或 Bash 直写（见 `docs/adr/0026`）。
+- The file list and order of the whole-book source are recorded in the project. Newly uploaded files are appended at the end, and the creator can reorder them; existing projects have them recorded once in the original file-name order.
+- A file's identity is its item in the list. Replacement keeps its position, file name and source file type, and the type can be changed on replacement (see `docs/adr/0036`).
+- Source ranges can span files; file boundaries are not episode boundaries. The AI planning window reads along the file order and is truncated at a change of source file type; a cut episode's type is the type of the file where its source range starts, and changing the type does not touch the ledger (see `docs/adr/0036`).
+- When a file is replaced or edited, the normalised text before and after the change is aligned, and the boundaries of each episode's source range are mapped:
+  - episodes whose in-range text has not changed only have their offsets shifted, and their status is unchanged;
+  - episodes whose in-range text has changed take the mapped range and are marked stale: existing artifacts, and, where there are no artifacts yet, the title, hook and episode outline, were all made from the old text;
+  - episodes whose entire in-range text has been deleted are handled as a removed cut: those with artifacts become episodes without source text and are marked stale, those without artifacts are removed directly (see `docs/adr/0032`).
+  - New text inserted exactly at the boundary between two episodes belongs to the earlier episode; new text that falls outside any cut episode (before the first cut episode, after the last, or in empty stretches between cut episodes) is uncut source text.
+- Deleting a file is equivalent to deleting all its text and is handled by the rules above: cut episodes entirely within this file are handled as removed cuts, and episodes extending into this file keep their remaining parts and are marked stale.
+- When a new file is inserted at the boundary between two episodes or outside cut episodes, the new file is uncut source text and no episode changes; when the insertion point falls inside an episode that spans files, the new file belongs to that episode, which is marked stale.
+- On reordering, the cut episodes in a moved file move as a block in the airing order, keeping the source order among cut episodes; episodes from other sources follow the story into place by the anchor rules of `docs/adr/0032`. Episodes whose content has not changed are not marked stale. An episode that spans the boundary of a moved file keeps only the part in the file where it starts that is still contiguous after reordering; the rest becomes uncut source text, and the episode is marked stale.
+- Every file that has had cut episodes registered keeps a normalised text snapshot inside the project. When a file is changed outside the service and its fingerprint does not match the record, the snapshot is used as the pre-change text, the same alignment mapping is applied, and the creator is told which episodes were affected.
+- The agent's writes to `source/` go through the same service command as the web, and cannot write directly with file tools or Bash (see `docs/adr/0026`).
 
 ## Considered Options
 
-- **任何已登记文件变了都从第 1 集起重新规划**：只有一个源文件时，改一个错字也要全书重来。
-- **内容改动时释放这个文件里的全部切出集**：规则简单，但单文件项目同样等于全书重来。
-- **原文范围不跨文件**：影响范围最好算，但文件边界成了强制的集边界；按章节拆分的小说里，剧情弧常常跨章，只能在章末硬切。
-- **按文件名排序**：`第10章.txt` 会排到 `第2章.txt` 前面；上传一个排在已切出范围之前的文件，只能从第 1 集重来。
-- **切出集所在的文件禁止调序**：调序不改变任何一集的内容，逼创作者先释放、再重新切分没有必要。
-- **不存快照，服务之外的改动让整个文件的切出集标 stale 并阻断规划**：桌面版用户直接改文件并不少见，而对齐映射本来就要实现，存快照只多一个写入时机。
+- **Re-plan from episode 1 whenever any registered file changes**: with only one source file, even a single typo fix would mean redoing the whole book.
+- **Release all cut episodes in a file when its content changes**: simple rule, but for single-file projects it equally means redoing the whole book.
+- **Source ranges do not span files**: the affected range is easiest to compute, but file boundaries become mandatory episode boundaries; in novels split by chapter, story arcs often span chapters and could only be hard-cut at chapter ends.
+- **Sort by file name**: `第10章.txt` (Chapter 10) would sort before `第2章.txt` (Chapter 2); uploading a file that sorts before already cut ranges would mean starting again from episode 1.
+- **Forbid reordering files containing cut episodes**: reordering does not change any episode's content, so forcing the creator to release and re-cut first is unnecessary.
+- **Store no snapshots, and have changes outside the service mark all cut episodes of the whole file stale and block planning**: desktop users editing files directly is not uncommon, and the alignment mapping has to be implemented anyway; storing snapshots adds only one more write point.
 
 ## Consequences
 
-- 源文指纹的用途是发现服务之外的改动，发现后触发对齐映射，不再拒绝规划。
-- 对齐是近似的：大段重写之后映射出的范围不一定剧情弧完整，这些集已标 stale，由创作者复查边界。
-- 快照让源文占用的空间翻倍，对文本可以忽略。
+- The purpose of the source fingerprint is to detect changes made outside the service; detection triggers the alignment mapping and no longer rejects planning.
+- Alignment is approximate: after large rewrites the mapped ranges may not contain complete story arcs; those episodes have been marked stale, and the creator reviews the boundaries.
+- Snapshots double the space used by the source, which is negligible for text.

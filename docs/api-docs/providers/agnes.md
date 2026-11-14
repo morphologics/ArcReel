@@ -1,9 +1,9 @@
 # agnes
 
-Agnes OpenAI-compatible 文本、图片与视频媒体 provider。
+Agnes OpenAI-compatible text, image and video media provider.
 
-- 总入口：[Agnes AI official model catalog](https://github.com/AgnesAI-Labs/AgnesAI-Models)
-- 接口与能力：[Model catalog](https://github.com/AgnesAI-Labs/AgnesAI-Models/blob/main/MODEL_CATALOG.md) 及其中的官方模型文档链接
-- 计费：[Pricing](https://wiki.agnes-ai.com/en/docs/pricing.md)（官方定价页；促销价格以平台公告和账户账单为准）
-- 限流与配额：[Current rate limits](https://github.com/AgnesAI-Labs/AgnesAI-Models/blob/main/MODEL_CATALOG.md#current-rate-limits)、[Current subscription quotas](https://github.com/AgnesAI-Labs/AgnesAI-Models/blob/main/MODEL_CATALOG.md#current-subscription-quotas)
-- 代码：`lib/config/registry.py::PROVIDER_REGISTRY["agnes"]`、`lib/backends/text_backends/agnes.py::AgnesTextBackend`、`lib/backends/image_backends/agnes.py::AgnesImageBackend`、`lib/backends/video_backends/agnes.py::AgnesVideoBackend`、`lib/backends/agnes_shared.py::agnes_base_url`
+- Main entry: [Agnes AI official model catalog](https://github.com/AgnesAI-Labs/AgnesAI-Models)
+- APIs and capabilities: [Model catalog](https://github.com/AgnesAI-Labs/AgnesAI-Models/blob/main/MODEL_CATALOG.md) and the official model doc links in it
+- Billing: [Pricing](https://wiki.agnes-ai.com/en/docs/pricing.md) (official pricing page; promotional prices are as stated in platform announcements and account bills)
+- Rate limits and quotas: [Current rate limits](https://github.com/AgnesAI-Labs/AgnesAI-Models/blob/main/MODEL_CATALOG.md#current-rate-limits), [Current subscription quotas](https://github.com/AgnesAI-Labs/AgnesAI-Models/blob/main/MODEL_CATALOG.md#current-subscription-quotas)
+- Code: `lib/config/registry.py::PROVIDER_REGISTRY["agnes"]`, `lib/backends/text_backends/agnes.py::AgnesTextBackend`, `lib/backends/image_backends/agnes.py::AgnesImageBackend`, `lib/backends/video_backends/agnes.py::AgnesVideoBackend`, `lib/backends/agnes_shared.py::agnes_base_url`

@@ -1,9 +1,9 @@
 # ark
 
-火山方舟标准 `/api/v3` 媒体 provider。
+Volcengine Ark standard `/api/v3` media provider.
 
-- 总入口：[火山方舟文档](https://www.volcengine.com/docs/82379/?lang=zh)
-- 接口与能力：[对话 Chat API](https://api.volcengine.com/api-docs/view?action=ChatCompletions&serviceCode=ark&version=2024-01-01)、[图片生成 API](https://www.volcengine.com/docs/82379/1666946?lang=zh)、[模型列表](https://www.volcengine.com/docs/82379/1330310?lang=zh)、[创建视频生成任务](https://www.volcengine.com/docs/82379/1520757?lang=zh)
-- 计费：[火山方舟定价](https://www.volcengine.com/pricing?product=ark_bd&tab=1)、[模型价格](https://www.volcengine.com/docs/82379/1544106)；出厂快照价目表见 `lib/catalog/snapshot/catalog.json`。Seedance 视频按视频 token 计费：结算取回报的 `usage.completion_tokens`，提交前预估按模型价格页公布的公式 (输入视频秒数 + 输出秒数) × 宽 × 高 × 24 / 1024 换算（`ArkVideoBackend.estimate_video_tokens`）
-- 下线：[模型下线公告](https://docs.volcengine.com/docs/ark/model-deprecation-notice?lang=zh)
-- 代码：`lib/config/registry.py::PROVIDER_REGISTRY["ark"]`、`lib/backends/text_backends/ark.py::ArkTextBackend`、`lib/backends/image_backends/ark.py::ArkImageBackend`、`lib/backends/video_backends/ark.py::ArkVideoBackend`（计量：`ArkVideoBackend.metered_usage`）
+- Main entry: [Volcengine Ark documentation](https://www.volcengine.com/docs/82379/?lang=zh)
+- APIs and capabilities: [Chat API](https://api.volcengine.com/api-docs/view?action=ChatCompletions&serviceCode=ark&version=2024-01-01), [Image generation API](https://www.volcengine.com/docs/82379/1666946?lang=zh), [Model list](https://www.volcengine.com/docs/82379/1330310?lang=zh), [Create a video generation task](https://www.volcengine.com/docs/82379/1520757?lang=zh)
+- Billing: [Volcengine Ark pricing](https://www.volcengine.com/pricing?product=ark_bd&tab=1), [Model prices](https://www.volcengine.com/docs/82379/1544106); the factory snapshot price list is in `lib/catalog/snapshot/catalog.json`. Seedance video is billed by video tokens: settlement uses the reported `usage.completion_tokens`, and the pre-submit estimate is converted using the formula published on the model pricing page, (input video seconds + output seconds) × width × height × 24 / 1024 (`ArkVideoBackend.estimate_video_tokens`)
+- Deprecation: [Model deprecation notice](https://docs.volcengine.com/docs/ark/model-deprecation-notice?lang=zh)
+- Code: `lib/config/registry.py::PROVIDER_REGISTRY["ark"]`, `lib/backends/text_backends/ark.py::ArkTextBackend`, `lib/backends/image_backends/ark.py::ArkImageBackend`, `lib/backends/video_backends/ark.py::ArkVideoBackend` (metering: `ArkVideoBackend.metered_usage`)

@@ -2,23 +2,23 @@
 status: accepted
 ---
 
-# 提示词保留结构化与纯文本两种形态，实发文本只有一个渲染出口
+# Prompts keep two forms, structured and plain text, and the text actually sent has only one rendering exit
 
-分镜图与分镜生视频的视觉提示词允许保存为结构化 JSON 或纯文本。结构化形态让系统能按字段投影和补充内容；纯文本形态保留创作者已经写定的整体表达，不要求为了进入生成链路再拆回结构。两者都是正式提示词内容，不把纯文本降格为预览缓存或结构化形态的临时渲染结果，也不承诺两种形态可以无损互换。
+The visual prompts for storyboard images and storyboard image-to-video may be saved as structured JSON or plain text. The structured form lets the system project and supplement content by field; the plain-text form preserves an overall expression the creator has already finalized, without requiring it to be split back into structure to enter the generation pipeline. Both are formal prompt content: plain text is not demoted to a preview cache or a temporary rendering of the structured form, and no promise is made that the two forms can be converted into each other losslessly.
 
-无论保存为何种形态，送给供应商的最终文本都只经该媒体类型的一个渲染出口（分镜图 `lib/prompts/prompt_builders.py` 的 `render_storyboard_image_prompt`，分镜生视频 `lib/prompts/prompt_utils.py` 的 `render_storyboard_video_prompt`）。纯文本虽然已经可读，仍需与结构化形态一样接受项目画风、反向约束、参考图类型声明（含商品保真要求）或发声声明等系统派生内容；若预览、准入和执行各自拼装，同一条提示词会因入口不同而得到不同请求，重复渲染也可能叠加声明。单一出口因此是「预览所见即执行所得」和幂等渲染的边界，而不是要求所有提示词先转成同一种存储形态。
+Whatever form it is saved in, the final text sent to the provider goes through only the one rendering exit for that media type (for storyboard images `render_storyboard_image_prompt` in `lib/prompts/prompt_builders.py`, for storyboard image-to-video `render_storyboard_video_prompt` in `lib/prompts/prompt_utils.py`). Although plain text is already readable, it still needs to receive the same system-derived content as the structured form, such as the project art style, negative constraints, reference image type declarations (including product fidelity requirements), or voicing declarations; if preview, admission, and execution each assembled it themselves, the same prompt would yield different requests depending on the entry point, and repeated rendering could also stack declarations. The single exit is therefore the boundary for "what you see in preview is what gets executed" and for idempotent rendering, not a requirement that all prompts first be converted to the same storage form.
 
-两种形态都按 `docs/adr/0062` 的正式内容口径进入产物依据（`lib/artifacts/visual_artifact_provenance.py`）：正文变化会使对应产物 stale，在结构化与纯文本之间切换也视为正式内容变化。产物依据保留提示词的内容与形态，不收最终供应商文本中由渲染器派生的包装，也不收渲染器版本；否则仅调整注入措辞就会追溯性地把已有视觉产物判旧。精确请求复用可以另行记录实发文本，但不改变产物时效的这一口径。
+Both forms enter the artifact basis under the formal-content approach of `docs/adr/0062` (`lib/artifacts/visual_artifact_provenance.py`): a change in body makes the corresponding artifact stale, and switching between structured and plain text is also treated as a change in formal content. The artifact basis keeps the prompt's content and form, and captures neither the renderer-derived wrapping in the final provider text nor the renderer version; otherwise merely adjusting injected wording would retroactively judge existing visual artifacts stale. Exact request reuse can separately record the text actually sent, but that doesn't change this approach to artifact currency.
 
-## 明确不采用
+## Explicitly not adopted
 
-- **纯文本绕过渲染直接发送**：会漏掉系统派生约束，并让纯文本与结构化形态获得不同的生成边界。
-- **把纯文本解析回结构化 JSON**：解析无法保证无损，会把创作者写定的表达改造成系统猜测的字段。
-- **以最终实发文本作为产物时效依据**：渲染器措辞变化会让正式内容未变的既有产物集体 stale，与 `docs/adr/0062` 对生成意图和正式内容的分界冲突。
+- **Plain text bypassing rendering and being sent directly**: it would miss system-derived constraints and give plain text and the structured form different generation boundaries.
+- **Parsing plain text back into structured JSON**: parsing can't be guaranteed lossless and would turn the creator's finalized expression into fields guessed by the system.
+- **Using the final text actually sent as the artifact currency basis**: changes in renderer wording would make existing artifacts whose formal content hasn't changed go stale wholesale, conflicting with the dividing line `docs/adr/0062` draws between generation intent and formal content.
 
 ## Consequences
 
-- 新增预览、准入或执行入口时必须复用对应媒体类型的渲染出口，不能另写纯文本拼装分支。
-- 新增系统派生声明时只在共享渲染出口实现，并保证对已渲染纯文本重复调用不会重复注入。
-- 提示词模版（`docs/adr/0077`）是渲染器派生包装的来源，同样不进产物依据：内置模版随版本升级改写措辞，或后期系统级编辑改写措辞，都不使既有产物 stale。
-- 产物时效比较继续针对正式提示词内容；需要判断精确供应商请求是否相同的场景使用独立的执行敏感摘要（`lib/artifacts/video_visual_provenance.py`），它收实发文本与供应商请求配置，与产物清单的视觉内容依据不共用。
+- New preview, admission, or execution entry points must reuse the rendering exit of the corresponding media type and must not write a separate plain-text assembly branch.
+- New system-derived declarations are implemented only in the shared rendering exit, ensuring that calling it repeatedly on already rendered plain text doesn't inject them twice.
+- Prompt templates (`docs/adr/0077`) are the source of renderer-derived wrapping and likewise don't enter the artifact basis: neither wording rewrites of built-in templates with version upgrades nor later system-level edits to wording make existing artifacts stale.
+- Artifact currency comparison continues to target formal prompt content; scenarios that need to judge whether the exact provider request is the same use a separate execution-sensitive digest (`lib/artifacts/video_visual_provenance.py`), which captures the text actually sent and the provider request configuration, and is not shared with the artifact manifest's visual content basis.

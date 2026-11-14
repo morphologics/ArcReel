@@ -3,213 +3,213 @@ paths:
   - "frontend/src/**"
 ---
 
-# 前端
+# Frontend
 
-## 资源占用与入队
+## Resource occupancy and queueing
 
-### 随资源占用禁用的控件，在打开时和提交时校验占用态，并同步禁用兄弟控件
+### Controls disabled by resource occupancy check occupancy when opened and when submitted, and disable sibling controls in sync
 
-编辑、重生成、上传、入库、版本恢复这类随资源占用而禁用的控件，新增或改动时完成三项检查：
+For controls that are disabled while a resource is occupied, such as edit, regenerate, upload, add to library and version restore, complete three checks when adding or changing them:
 
-1. 弹窗或面板打开时校验当前占用态。
-2. 提交时用 `frontend/src/stores/tasks-store.ts` 的 `isResourceBusy(kind, projectName, resourceId)` 复核最新占用态。打开之后占用态可能已经变化，只在打开时校验会留下竞态窗口。
-3. 同一资源卡片上的兄弟控件同步绑定占用态。
+1. Check the current occupancy state when the dialog or panel opens.
+2. On submit, re-check the latest occupancy state with `isResourceBusy(kind, projectName, resourceId)` from `frontend/src/stores/tasks-store.ts`. The occupancy state may have changed after opening; checking only on open leaves a race window.
+3. Sibling controls on the same resource card bind to the occupancy state in sync.
 
-占用态不只来自队列任务：卡片自身发出的在途写请求（保存中、上传中、改名中）由组件本地 state 承载，`isResourceBusy` 读不到它们，本地 state 同样参与这三项检查。
+Occupancy does not come only from queued tasks: in-flight write requests issued by the card itself (saving, uploading, renaming) are carried by component-local state, which `isResourceBusy` cannot read; local state takes part in these three checks as well.
 
-确认框打开后占用发生变化时，一键破坏性确认（删除、合并、改名的确认按钮）实时禁用；输入表单保持可编辑，由提交时的复核说明原因。
+When occupancy changes after a confirmation dialog opens, one-click destructive confirmations (the confirm button for delete, merge, rename) are disabled in real time; input forms stay editable, and the re-check on submit explains the reason.
 
-## 首次使用引导
+## First-use onboarding
 
-### 改动带 `data-onboarding` 的元素，引导链路随之核对
+### When changing elements with `data-onboarding`, check the onboarding chain along with them
 
-引导高亮点靠元素上的 `data-onboarding` 属性定位：锚点名登记在 `frontend/src/onboarding/anchors.ts`，步骤大纲在 `steps.ts`，文案在 `frontend/src/i18n/*/onboarding.ts`。锚点名由 typecheck 校验，`anchors.test.tsx` 只校验已登记锚点在挂载场景下存在。下面三项没有任何编译期或测试约束，出错时引导只在运行期降级为居中气泡，或把用户指向界面上不存在的名称：
+Onboarding highlights locate elements via the `data-onboarding` attribute: anchor names are registered in `frontend/src/onboarding/anchors.ts`, the step outline is in `steps.ts`, and the copy is in `frontend/src/i18n/*/onboarding.ts`. Anchor names are checked by typecheck, and `anchors.test.tsx` only checks that registered anchors exist in the mount scenario. The three items below have no compile-time or test constraint at all; when they go wrong, onboarding only degrades at runtime to a centered bubble, or points the user at a name that doesn't exist in the UI:
 
-- **属性仍在，且元素仍无条件渲染。** 挂载点落进条件分支（空态才渲染、数据就绪才渲染、某个 tab 激活才渲染），该步在常见路径上就找不到锚点：引导不中止，等待 `ANCHOR_WAIT_MS` 后降级为居中气泡，只在 console 留一条 warn。需要迁移时，移到同一屏内无条件挂载的容器上，并同步 `anchors.ts` 中该条目的说明。
-- **步骤文案描述的仍是这个元素。** 元素承载的功能、字段或按钮可用条件变了，对应步骤正文各语言一并修改。
-- **文案里的入口名与界面标签一致。** 步骤提到的侧栏项、tab、按钮一律用用户在界面上看到的标签；标签改名时同步各语言文案。
+- **The attribute is still there, and the element is still rendered unconditionally.** If the mount point falls into a conditional branch (rendered only in the empty state, only when data is ready, only when a certain tab is active), the step can't find its anchor on the common path: onboarding doesn't abort, but after waiting `ANCHOR_WAIT_MS` it degrades to a centered bubble, leaving only a warn in the console. When migration is needed, move it to an unconditionally mounted container on the same screen, and update that entry's description in `anchors.ts`.
+- **The step copy still describes this element.** If the function, fields or button availability conditions carried by the element change, update the corresponding step text in every language.
+- **Entry names in the copy match the UI labels.** Sidebar items, tabs and buttons mentioned in steps always use the labels the user sees in the UI; when a label is renamed, update the copy in every language.
 
-删除带锚点的元素时整条链一起清理：`anchors.ts` 的条目、`steps.ts` 的步骤、各语言文案 key、`steps.test.ts` 与 `anchors.test.tsx` 的断言。
+When deleting an element with an anchor, clean up the whole chain together: the entry in `anchors.ts`, the step in `steps.ts`, the copy keys in each language, and the assertions in `steps.test.ts` and `anchors.test.tsx`.
 
-## 原语与 shadcn 生成文件
+## Primitives and shadcn-generated files
 
-### `components/ui/` 中偏离上游的有意改动，在改动处写一行注释说明原因
+### Intentional deviations from upstream in `components/ui/` get a one-line comment at the change explaining why
 
-为满足本仓库规范而改变原语的行为或样式时（例如给 Dialog 增加限高的 Body、把遮罩改为不透明），在改动处写一行注释说明原因。原语升级时要用 `pnpm exec shadcn add <组件> --diff` 对照上游手动合并，没有注释的本地改动无法和上游代码区分，合并时容易被冲掉。这类注释解释的是偏离上游的原因，不按删除历史描述类注释的通用规则处理。
+When changing a primitive's behavior or style to meet this repository's standards (for example adding a height-limited Body to Dialog, or making the overlay opaque), write a one-line comment at the change explaining why. When upgrading primitives, merge manually against upstream with `pnpm exec shadcn add <component> --diff`; local changes without a comment can't be distinguished from upstream code and are easily overwritten during the merge. These comments explain the reason for deviating from upstream and are not handled under the general rule about removing history-describing comments.
 
-单纯的 lint 修复不加注释；确认是误报的，用行内 `eslint-disable-next-line <规则> -- 理由` 豁免。
+Pure lint fixes get no comment; for confirmed false positives, exempt with an inline `eslint-disable-next-line <rule> -- reason`.
 
-### 代码类输入框用 `Input` 与 `Textarea` 的 `mono`，不手写等宽字体
+### Code-type input fields use `mono` on `Input` and `Textarea`; do not hand-write a monospace font
 
-`mono` 只管字体，`variant` 只管外观，两者可以同时使用。`InputGroupInput` 与 `InputGroupTextarea` 透传 `mono`。不要在输入框或它的外层元素上写 `font-mono`：外层的字体经继承进入输入框，`@shadcn/lint` 查不到，规范也就无从核对。
+`mono` controls only the font and `variant` only the appearance; the two can be used together. `InputGroupInput` and `InputGroupTextarea` pass `mono` through. Do not write `font-mono` on an input field or its outer element: the outer font enters the input through inheritance, `@shadcn/lint` can't detect it, and so the standard can't be checked.
 
-适用 `mono` 的输入框：
+Input fields that use `mono`:
 
-- JSON、代码与请求体编辑区：端点的 JSON 视图、请求体模板、导入时粘贴的定义、测试时粘贴的响应、Agent 记忆的 Markdown 原文。
-- 模型 ID。
-- 令牌：API Key、密钥这类凭据输入框。
-- 请求路径与模板：端点的请求、查询、取件地址模板，请求头名称与内容，变量名，取值路径，状态值。
+- JSON, code and request body editing areas: an endpoint's JSON view, request body templates, definitions pasted on import, responses pasted when testing, the raw Markdown of agent memory.
+- Model IDs.
+- Tokens: credential inputs such as API keys and secrets.
+- Request paths and templates: an endpoint's request, query and fetch URL templates, request header names and values, variable names, value paths, status values.
 
-保持比例字体的输入框：
+Input fields that keep a proportional font:
 
-- 接口地址（URL），如供应商与端点的默认接口地址、代理地址。不需要拼写检查的值写 `spellCheck={false}`，不用换字体来表达。
-- 名称、版本、提示词等正文。登录密码不是令牌，同样保持比例字体。
+- API URLs, such as the default API URLs of providers and endpoints, and proxy addresses. For values that don't need spell checking write `spellCheck={false}`; don't express it by changing the font.
+- Body text such as names, versions and prompts. A login password is not a token and likewise keeps a proportional font.
 
-### 带候选的文本输入：只能选候选项用 Combobox，允许填写候选之外的值用 Base UI Autocomplete
+### Text input with suggestions: use Combobox when only suggestions can be chosen; use Base UI Autocomplete when values outside the suggestions are allowed
 
-Base UI 的 Combobox 只接受候选项，不能提交候选之外的文字；模型 ID 这类网关列表常常不全、必须允许自由填写的字段，用 `@base-ui/react/autocomplete`。shadcn 的 base-nova registry 没有 Autocomplete，参考 `components/agent/ModelIdField` 的写法：输入框用 `components/ui/input-group`，弹层表面沿用 `bg-popover`、`shadow-overlay` 与 `z-overlay`。
+Base UI's Combobox only accepts suggestions and cannot submit text outside them; for fields like model ID, where gateway lists are often incomplete and free entry must be allowed, use `@base-ui/react/autocomplete`. shadcn's base-nova registry has no Autocomplete; follow the approach in `components/agent/ModelIdField`: the input uses `components/ui/input-group`, and the popup surface reuses `bg-popover`, `shadow-overlay` and `z-overlay`.
 
-### 放宽样式与布局守卫时，在 PR 描述中逐条列出放宽项
+### When relaxing style and layout guards, list each relaxation in the PR description
 
-`frontend/src/` 下除测试以外的源码都受 `@shadcn/lint` 样式规则、滚动与响应式守卫和类名守卫约束（定义在 `frontend/eslint.config.js`）。每条放宽都让一类写法在登记范围内重新合法，在 diff 里却只是配置中的一行，审查容易放过。因此在 PR 描述中逐条列出，由审查判断理由是否成立：
+All non-test source under `frontend/src/` is constrained by `@shadcn/lint` style rules, the scroll and responsive guards and the class name guards (defined in `frontend/eslint.config.js`). Each relaxation makes a class of code legal again within the registered scope, yet in the diff it's just one line of configuration, which review easily lets through. So list them one by one in the PR description, and review judges whether the reasons hold:
 
-- 新增的组件变体，`@shadcn/lint` 的 `allow` 或 `contracts` 条目。
-- 登记进 `VIEWPORT_BREAKPOINT_ALLOWLIST` 的文件。只放行外壳切换标准档与紧凑档、弹层宽度这类确需按视口判断的场景；外壳内组件的可用宽度随侧栏与分栏变化，一律用容器查询。
-- 新增或扩大 `restrictSyntax(...)` 豁免的配置块。
+- New component variants, `allow` or `contracts` entries for `@shadcn/lint`.
+- Files registered in `VIEWPORT_BREAKPOINT_ALLOWLIST`. Only allow scenarios that genuinely need to judge by viewport, such as the shell switching between the standard and compact tiers, or popup widths; the available width of components inside the shell changes with the sidebar and split panes, so always use container queries.
+- Configuration blocks that add or widen `restrictSyntax(...)` exemptions.
 
-配置块的组合方式（flat config 对 `no-restricted-syntax` 整体替换选项）见配置文件头注释，由 `src/lint-class-guards.test.ts` 校验。
+How configuration blocks combine (flat config replaces the options of `no-restricted-syntax` as a whole) is described in the configuration file's header comment and verified by `src/lint-class-guards.test.ts`.
 
-### Sheet、DropdownMenu、Command、Chart 的本仓库用法
+### This repository's usage of Sheet, DropdownMenu, Command and Chart
 
-- **Sheet**：左右两侧默认宽度为 `w-md`。调整右侧宽度写 `data-[side=right]:w-*`，直接写 `w-*` 会被原语里带 `data-[side=right]:` 前缀的默认宽度盖住。
-- **DropdownMenu**：删除等不可逆的菜单项用 `DropdownMenuItem` 的 `variant="destructive"`。
-- **Command**（常放在 Popover 里做可搜索的选择列表）：`CommandList` 是 listbox，传入本地化 `label` 覆盖默认英文名称，里面只放 `CommandEmpty`、`CommandGroup`、`CommandItem`。分隔线、加载中和加载失败的提示放在 `CommandList` 之外，否则 axe 报 `aria-required-children`；不随搜索词过滤的固定入口（如「全部项目」）写成 Command 之外的 `Button` 或 `Link`。Popover 打开时用 `initialFocus` 把焦点交给 `CommandInput`。
-- **Chart**：图表外层包一层 `role="img"`，以图表名称作 `aria-label`，紧随其后放一张 `sr-only` 表格列出同样的数据，读屏用户才拿得到图表里的数值（先例：`components/usage/UsageTrendChart.tsx`）。系列颜色引用 `index.css` 的 token，提示内容的表面与弹层一致（`bg-popover`、`shadow-overlay`）。
+- **Sheet**: the default width for both the left and right sides is `w-md`. To adjust the right-side width write `data-[side=right]:w-*`; writing `w-*` directly is overridden by the default width with the `data-[side=right]:` prefix in the primitive.
+- **DropdownMenu**: irreversible menu items such as delete use `variant="destructive"` on `DropdownMenuItem`.
+- **Command** (often placed in a Popover as a searchable selection list): `CommandList` is a listbox; pass a localized `label` to override the default English name, and put only `CommandEmpty`, `CommandGroup` and `CommandItem` inside it. Separators and loading and load-failure messages go outside `CommandList`, otherwise axe reports `aria-required-children`; fixed entries not filtered by the search term (such as "全部项目" (All projects)) are written as a `Button` or `Link` outside Command. When the Popover opens, use `initialFocus` to hand focus to `CommandInput`.
+- **Chart**: wrap the chart in an outer `role="img"` with the chart name as `aria-label`, immediately followed by a `sr-only` table listing the same data, so that screen reader users can get the values in the chart (precedent: `components/usage/UsageTrendChart.tsx`). Series colors reference tokens from `index.css`, and the tooltip surface matches popups (`bg-popover`, `shadow-overlay`).
 
-## 颜色与文字层级
+## Color and text hierarchy
 
-### 颜色只用 `index.css` 的语义 token，深浅用透明度修饰表达
+### Colors use only the semantic tokens from `index.css`; lightness is expressed with opacity modifiers
 
-原始色值和内联颜色由 `@shadcn/lint` 的 `no-raw-colors`、`no-inline-styles` 拦截。以下几点 lint 判断不了，由审查核对：
+Raw color values and inline colors are blocked by `@shadcn/lint`'s `no-raw-colors` and `no-inline-styles`. The following points can't be judged by lint and are checked by review:
 
-- 浅底、描边、选中态写成基色加透明度修饰（`bg-primary/15`、`border-border/50`），不为某种深浅新增变体 token：变体 token 会让同一语义出现多个近似色，旧色板的变体色已按这一原则删除。CSS 中需要透明度时写 `color-mix(in oklab, var(--primary) 15%, transparent)`。
-- 表单控件的描边用 `border-input`，不加透明度修饰：`--input` 在浅色与深色下对页面底、卡片和弹层都不低于 3:1（WCAG 1.4.11），半透明会让对比度随底色漂移。填充可以用 `bg-input/12` 这类透明度，不要把控件填充调到让占位符低于 4.5:1。卡片、分隔线等装饰性描边仍用 `border`。
-- 语义不混用：危险操作用 `destructive`，琥珀色 `warn` 只表示警告与过期。
-- 文字只分 `foreground`、`subtle-foreground`、`muted-foreground` 三档。`muted-foreground` 上不再叠加透明度或 `opacity`：它在页面底色上的对比度浅色与深色下都只略高于 5:1，再降就低于 WCAG AA 要求的 4.5:1。
-- 按集、按视频单元、按资产类型着色时用身份色 token（`episode`、`unit-clip`、`unit-narration`、`asset-*`），色相和配色经 `episodeHue`、`unitHue`、`assetColor` 取值，不在调用处另算颜色。
+- Light backgrounds, borders and selected states are written as the base color plus an opacity modifier (`bg-primary/15`, `border-border/50`); don't add a variant token for a particular shade: variant tokens produce several near-identical colors for the same meaning, and the old palette's variant colors have been deleted on this principle. When opacity is needed in CSS, write `color-mix(in oklab, var(--primary) 15%, transparent)`.
+- Form control borders use `border-input` without an opacity modifier: in both light and dark, `--input` is no lower than 3:1 against the page background, cards and popups (WCAG 1.4.11), and translucency would make the contrast drift with the background. Fills may use opacity like `bg-input/12`, but don't tune a control's fill so that the placeholder drops below 4.5:1. Decorative borders such as cards and dividers still use `border`.
+- Don't mix semantics: dangerous actions use `destructive`; amber `warn` means only warnings and expiry.
+- Text has only three tiers: `foreground`, `subtle-foreground` and `muted-foreground`. Don't layer opacity or `opacity` on top of `muted-foreground`: its contrast against the page background is only slightly above 5:1 in both light and dark, and lowering it further drops below the 4.5:1 required by WCAG AA.
+- When coloring by episode, video unit or asset type, use identity color tokens (`episode`, `unit-clip`, `unit-narration`, `asset-*`); hue and color scheme are obtained via `episodeHue`, `unitHue` and `assetColor`, without computing colors separately at the call site.
 
-## 弹层与提示
+## Popups and notifications
 
-### Dialog、Sheet、AlertDialog 按 Header、Body、Footer 组合，长度不定的内容只放 Body
+### Dialog, Sheet and AlertDialog are composed of Header, Body and Footer; content of indeterminate length goes only in Body
 
-弹层由原语限高。`DialogHeader`、`DialogFooter` 固定在两端，`DialogBody`（Sheet、AlertDialog 中为 `SheetBody`、`AlertDialogBody`）是唯一的滚动区。错误信息、影响说明、长列表这类长度不定的内容如果放在 Header 或 Footer 里，矮窗口或较长译文会把它们连同主操作一起裁掉，而且滚动不到，因此一律放进 Body。
+Popups are height-limited by the primitive. `DialogHeader` and `DialogFooter` are fixed at the two ends, and `DialogBody` (`SheetBody` and `AlertDialogBody` in Sheet and AlertDialog) is the only scroll area. If content of indeterminate length, such as error messages, impact explanations and long lists, is placed in the Header or Footer, a short window or a longer translation clips it along with the main action, and it can't be scrolled to, so it always goes in Body.
 
-- 宽度用 `size` 选择，调用处不写 `max-w-*`。多步向导用 `size="wizard"`，各步骤共用一个 `DialogBody`，进入新步骤时把它的 `scrollTop` 置 0。
-- 每个弹层都有 Title；没有可见标题时给 Title 加 `sr-only`，否则读屏无法播报弹层名称。
-- Body 里没有可聚焦元素、内容又可能超高时，给 Body 加 `tabIndex={0}`、`role="region"` 与 `aria-label`，否则键盘无法滚动。
-- Footer 已有「关闭」按钮时，Content 传 `showCloseButton={false}`，避免出现两个关闭入口。
+- Width is chosen with `size`; the call site does not write `max-w-*`. Multi-step wizards use `size="wizard"`; all steps share one `DialogBody`, and on entering a new step its `scrollTop` is set to 0.
+- Every popup has a Title; when there is no visible title, add `sr-only` to the Title, otherwise screen readers can't announce the popup's name.
+- When Body has no focusable elements and its content may overflow, give Body `tabIndex={0}`, `role="region"` and `aria-label`, otherwise it can't be scrolled with the keyboard.
+- When the Footer already has a "关闭" (Close) button, pass `showCloseButton={false}` to Content, to avoid two close entry points.
 
-### 不可逆操作先确认：弹层用 AlertDialog，列表行内原地确认；可撤销操作直接执行并在提示里提供「撤销」
+### Confirm irreversible actions first: popups use AlertDialog, list rows confirm inline; reversible actions execute directly and offer "撤销" (Undo) in the notification
 
-AlertDialog 打开时焦点落在「取消」上，误按 Enter 不会执行操作。确认按钮用 `variant="destructive"`；提交中禁用两个按钮，并在 `onOpenChange` 中忽略关闭请求，Esc 不会在请求未完成时关掉对话框。
+When an AlertDialog opens, focus lands on "取消" (Cancel), so an accidental Enter doesn't execute the action. The confirm button uses `variant="destructive"`; while submitting, disable both buttons and ignore close requests in `onOpenChange`, so Esc doesn't close the dialog before the request completes.
 
-列表行内的轻量对象（如托盘里的排队消息）原地确认：该行换成提示文字、`variant="destructive"` 的确认按钮与 `outline` 的「取消」，焦点落在「取消」按钮上，Esc 或取消退出确认并把焦点交还触发它的按钮，焦点离开确认区域也退出确认。先例是 `QueuedMessageTray` 的删除。
+Lightweight objects in list rows (such as queued messages in the tray) are confirmed inline: the row is replaced with prompt text, a `variant="destructive"` confirm button and an `outline` "取消" (Cancel), with focus on the "取消" button; Esc or Cancel exits confirmation and returns focus to the button that triggered it, and focus leaving the confirmation area also exits confirmation. The precedent is deletion in `QueuedMessageTray`.
 
-移除、移动、隐藏这类可以恢复的操作不弹确认，执行后调用 `pushToast(text, tone, { action: { label: t("common:undo"), onClick } })`。点击「撤销」会执行回调并关闭这条提示。
+Recoverable actions such as remove, move and hide don't pop up a confirmation; after executing, call `pushToast(text, tone, { action: { label: t("common:undo"), onClick } })`. Clicking "撤销" (Undo) runs the callback and closes the notification.
 
-提示按钮也可用于打开刚完成的结果：耗时操作（如导入项目）完成时用户已经离开发起页，就不强行跳转，改推带「打开项目」这类按钮的提示。「已离开」在 await 之后复核卸载时 abort 的 `signal.aborted` 判断，发起的写入请求本身不接这个 signal。已离开时每个结果分支（成功、失败、需确认）都要有提示，不能因为对话框随页面卸载而静默丢失。参考实现：`frontend/src/components/pages/lobby/useProjectImport.tsx`。
+Notification buttons can also be used to open a just-completed result: when a long-running operation (such as importing a project) completes after the user has left the originating page, don't force a navigation; instead push a notification with a button like "打开项目" (Open project). "Has left" is judged after the await by re-checking `signal.aborted` of the signal aborted on unmount; the write request that was issued is not itself attached to this signal. When the user has left, every result branch (success, failure, needs confirmation) must have a notification, and must not be silently lost because the dialog unmounted with the page. Reference implementation: `frontend/src/components/pages/lobby/useProjectImport.tsx`.
 
-## 按钮
+## Buttons
 
-### 按钮使用 `components/ui/button` 的 `Button`，按操作语义选择变体
+### Buttons use `Button` from `components/ui/button`, with the variant chosen by the action's semantics
 
-- `default`：区域内的主操作，同一区域最多一个。
-- `outline`：次要操作，如「取消」「重新渲染」。
-- `ghost`：工具栏按钮与图标按钮。
-- `destructive`：删除、覆盖等不可逆操作。
-- `secondary`、`link`：低强调操作与行内链接式操作。
+- `default`: the primary action within an area; at most one per area.
+- `outline`: secondary actions, such as "取消" (Cancel) and "重新渲染" (Re-render).
+- `ghost`: toolbar buttons and icon buttons.
+- `destructive`: irreversible actions such as delete and overwrite.
+- `secondary`, `link`: low-emphasis actions and inline link-style actions.
 
-尺寸用 `size`：`xs`、`sm`、`default`、`lg`，只有图标时用 `icon`、`icon-xs`、`icon-sm`、`icon-lg`。按钮内的图标加 `data-icon="inline-start"` 或 `data-icon="inline-end"`，不写尺寸 class。`Button` 没有 loading 属性；加载时禁用按钮，并把前置图标换成带 `animate-spin` 的 `Loader2`。
+Size uses `size`: `xs`, `sm`, `default`, `lg`; icon-only buttons use `icon`, `icon-xs`, `icon-sm`, `icon-lg`. Icons inside a button get `data-icon="inline-start"` or `data-icon="inline-end"`, with no size classes. `Button` has no loading prop; while loading, disable the button and replace the leading icon with `Loader2` with `animate-spin`.
 
-整行条目（列表行、集目录行）、缩略图触发器与拖放区不是操作按钮，用原生 `<button>` 配 `focus-ring`：换成 `Button` 要在调用处改写它的样式，`no-restyle` 不允许。外观像按钮的导航入口用 `Link` 套 `buttonVariants`，不用 `Button` 调用 `navigate`：读屏按链接播报，也能在新标签页打开。
+Whole-row items (list rows, episode directory rows), thumbnail triggers and drop zones are not action buttons; use a native `<button>` with `focus-ring`: switching to `Button` would require restyling it at the call site, which `no-restyle` doesn't allow. Navigation entries that look like buttons use `Link` with `buttonVariants`, not a `Button` that calls `navigate`: screen readers announce it as a link, and it can be opened in a new tab.
 
-## 滚动与横向溢出
+## Scrolling and horizontal overflow
 
-### 滚动区的高度沿 flex 链传下来，会出现滚动条的主栏预留槽位
+### A scroll area's height is passed down the flex chain; main columns that can show a scrollbar reserve the gutter
 
-文档本身不滚动，滚动只发生在外壳指定的容器里：侧栏、限宽与铺满档的外壳主体、全出血区段的各栏。滚动容器必须是定位元素、不用视口高度定高，这两点由 lint 守卫；文档滚动和内容被裁切由 e2e 溢出探针在已有场景上兜底，新组件和未覆盖的宽度仍靠审查。审查新写或改动的滚动区时确认两点：
+The document itself does not scroll; scrolling happens only in containers designated by the shell: the sidebar, the shell body in the constrained-width and full-width tiers, and the columns of full-bleed sections. Scroll containers must be positioned elements and must not use viewport height for fixed heights; these two points are guarded by lint; document scrolling and content clipping are backstopped by the e2e overflow probe in existing scenarios, while new components and uncovered widths still rely on review. When reviewing a newly written or changed scroll area, confirm two points:
 
-- **高度沿 flex 链传下来。** 从外壳到滚动容器之间的每一层 flex 子项都写 `min-h-0`（横向是 `min-w-0`），全出血区段的根节点写 `flex min-h-0 flex-1`。缺一层时，flex 子项的最小高度等于内容高度，滚动容器被内容撑开而不滚动，超出部分被外壳裁掉、滚动不到。不用 `sticky` 模拟独立滚动的栏。
-- **会随内容出现滚动条的主栏写 `[scrollbar-gutter:stable]`。** 外壳主体已经写了；全出血区段、画布窄断点下新增的主滚动栏同样要写。不写时，内容变长出现滚动条，整栏会横向跳动（#3067）。
+- **Height is passed down the flex chain.** Every flex child layer between the shell and the scroll container gets `min-h-0` (`min-w-0` horizontally), and the root node of a full-bleed section gets `flex min-h-0 flex-1`. If one layer is missing, the flex child's minimum height equals its content height, the scroll container is stretched by its content instead of scrolling, and the overflow is clipped by the shell and can't be scrolled to. Don't use `sticky` to simulate an independently scrolling column.
+- **Main columns where a scrollbar can appear with content get `[scrollbar-gutter:stable]`.** The shell body already has it; full-bleed sections and new main scroll columns at the canvas's narrow breakpoint need it too. Without it, when content grows and a scrollbar appears, the whole column jumps horizontally (#3067).
 
-放行：弹层里的短列表、不与内容区并排的小型滚动区可以不预留槽位。
+Allowed: short lists in popups and small scroll areas not side by side with the content area may skip reserving the gutter.
 
-### 横向放不下的内容按类型处理：长串折行、条目滚动加渐隐、表格固定列宽、单行文字截断
+### Content that doesn't fit horizontally is handled by type: long strings wrap, items scroll with a fade, tables fix column widths, single-line text truncates
 
-只写了 `overflow-y-auto` 的滚动区（弹层 Body、画布各栏、Agent 面板里的托盘），内容宽于容器时会被浏览器变成横向滚动，而不是裁切或报错，按钮行和长串会被挤到视野之外。e2e 溢出探针只覆盖已有场景，新组件、长文本和窄宽度要靠审查。新增或改动文字、按钮行与列表时，按类型确认它在最窄的受支持宽度下（如 Agent 面板最小宽度）放得下：
+In a scroll area with only `overflow-y-auto` (popup Body, canvas columns, the tray in the agent panel), content wider than the container is turned into horizontal scrolling by the browser rather than being clipped or raising an error, and button rows and long strings get pushed out of view. The e2e overflow probe covers only existing scenarios; new components, long text and narrow widths rely on review. When adding or changing text, button rows and lists, confirm by type that they fit at the narrowest supported width (such as the agent panel's minimum width):
 
-- **长串**（URL、无空格的 token、旧数据里的长台词）：写 `wrap-break-word` 这类折行类。`whitespace-pre-wrap` 不会强制断开长串。
-- **按钮行、确认行**：允许折行或收窄，不写不可收缩的固定组（#3139）。
-- **可横向滚动的条目**（标签、缩略图带）：容器写 `overflow-x-auto scroll-fade-x`，被裁掉的一侧显示渐隐。
-- **表格**：用 `table-fixed` 和 `<colgroup>` 给状态、时间、操作这类短列固定宽度，并加 `whitespace-nowrap`；主文字列的单元格用 `TruncatedText`。
-- **单行文字**（名称、路径、模型 ID）：用 `components/shared/TruncatedText`，父级写 `min-w-0`。不用 `title` 属性代替，键盘用户看不到它。放在按钮等可聚焦元素里时传 `focusable={false}`，全文由外层的可访问名称提供。带编号的名称把编号作为不截断的前缀单独渲染。
+- **Long strings** (URLs, tokens without spaces, long lines of dialogue in old data): use a wrapping class like `wrap-break-word`. `whitespace-pre-wrap` does not force long strings to break.
+- **Button rows, confirmation rows**: allow wrapping or shrinking; don't write non-shrinkable fixed groups (#3139).
+- **Horizontally scrollable items** (tags, thumbnail strips): the container gets `overflow-x-auto scroll-fade-x`, which shows a fade on the clipped side.
+- **Tables**: use `table-fixed` and `<colgroup>` to give short columns such as status, time and actions fixed widths, plus `whitespace-nowrap`; cells in the main text column use `TruncatedText`.
+- **Single-line text** (names, paths, model IDs): use `components/shared/TruncatedText`, with `min-w-0` on the parent. Don't substitute the `title` attribute; keyboard users can't see it. When placed inside a focusable element such as a button, pass `focusable={false}`, and the full text is provided by the outer accessible name. Numbered names render the number separately as a non-truncated prefix.
 
-确需横向滚动的区域写 `overflow-x-auto` 声明，探针按这个类名识别；未声明的横向滚动报为缺陷。
+Areas that genuinely need horizontal scrolling declare `overflow-x-auto`, which the probe uses to recognize them; undeclared horizontal scrolling is reported as a defect.
 
-## 编辑单元与保存
+## Edit units and saving
 
-### 编辑单元有未保存修改时，生成经 `unit.saveAndGenerate`，保存成功后才生成
+### When an edit unit has unsaved changes, generation goes through `unit.saveAndGenerate` and generates only after saving succeeds
 
-编辑单元的结构（字段与动作的划分、保存栏位置）见 `website/docs/dev/architecture.md`「编辑单元与离开拦截」。生成读取的是已保存内容，并按输入计费。编辑单元有未保存修改时，生成按钮写「保存并生成」（`common:save_and_generate`），点击时调用 `unit.saveAndGenerate(generate, { confirm })`：先 `discard()` 会丢掉创作者的修改，直接提交生成会按旧输入生成并计费（#3045、#3049）。`confirm` 是「重新生成会让下游失效」这类确认：取消时什么都不保存，保存失败时不生成。离开拦截兜不住这里，因为生成不会触发离开。
+For the structure of edit units (how fields and actions are divided, where the save bar is), see "编辑单元与离开拦截" (Edit units and leave guard) in `website/docs/dev/architecture.md`. Generation reads the saved content and is billed by input. When an edit unit has unsaved changes, the generate button reads "保存并生成" ("Save and generate") (`common:save_and_generate`), and clicking it calls `unit.saveAndGenerate(generate, { confirm })`: calling `discard()` first would throw away the creator's changes, and submitting generation directly would generate and bill against the old input (#3045, #3049). `confirm` is a confirmation such as "regenerating will invalidate downstream": on cancel nothing is saved, and on save failure nothing is generated. The leave guard can't cover this, because generation doesn't trigger leaving.
 
-放行条件：没有未保存修改时直接生成。
+Allowed when: there are no unsaved changes; generate directly.
 
-### 离开与切换交给离开拦截，不自建未保存确认框或 `beforeunload`
+### Leaving and switching are handled by the leave guard; don't build your own unsaved-changes confirmation dialog or `beforeunload`
 
-`AppRoutes` 根部的 `LeaveGuardProvider` 是唯一的离开拦截，机制见架构文档「编辑单元与离开拦截」。页面自建的确认框或 `beforeunload` 会与它重复弹出，或在它放行之后再拦一次；漏接拦截则让未保存修改随跳转或卸载静默丢失。这类遗漏在新增切换动作和自管表单时反复出现（#3040、#3044、#3049、#3052、#3264）。审查改动可编辑内容或切换动作的 diff 时逐项确认：
+`LeaveGuardProvider` at the root of `AppRoutes` is the only leave guard; for the mechanism, see "编辑单元与离开拦截" (Edit units and leave guard) in the architecture doc. A page's own confirmation dialog or `beforeunload` pops up in duplicate with it, or blocks again after it lets the user through; failing to hook into the guard lets unsaved changes be silently lost on navigation or unmount. Such omissions recur when adding switching actions and self-managed forms (#3040, #3044, #3049, #3052, #3264). When reviewing a diff that changes editable content or switching actions, confirm item by item:
 
-- **自管表单如实登记。** 不经 `useEditUnit` 的表单调用 `useLeaveGuard({ dirty, saving, save, discard })`。`save` 如实返回是否成功：总返回 `true` 会让保存失败的修改随跳转丢失。`saving` 如实反映保存或创建请求在途：漏报时，「放弃修改」会放走已发出的保存，「保存并离开」会重复提交。
-- **不经路由的切换包进 `useConfirmLeave()`。** 分镜、记忆文件、资产的上一个与下一个、关闭 Sheet 都算；被包住的动作要同步完成切换。含多步的切换（先切视图再选中）放进同一个动作，离开拦截只保留最近一次请求。
-- **二次确认的动作包住确认，不包住打开。** 删除、移除时包住确认框里的确认动作；包住打开确认框会让「先放弃修改再取消删除」白丢修改。可能失败的动作返回 `Promise<boolean>`，如实报告结果，修改保留到动作成功才丢弃。
-- **即时提交的字段**除 `useLeaveGuard` 外，还用 `useRetainWhile` 参与外部移除保留。
-- **非用户发起的切换不弹拦截。** Agent 改动带来的自动定位、跳转先查 `useHasUnsavedChanges()`，有未保存修改时直接略过。
-- **跳转经 wouter。** 不直接调用 `window.history`，也不改写 `window.location`，否则跳转绕过拦截。
+- **Self-managed forms register truthfully.** Forms that don't go through `useEditUnit` call `useLeaveGuard({ dirty, saving, save, discard })`. `save` truthfully returns whether it succeeded: always returning `true` lets changes whose save failed be lost on navigation. `saving` truthfully reflects whether a save or create request is in flight: if under-reported, "放弃修改" ("Discard changes") lets through a save that has already been sent, and "保存并离开" ("Save and leave") submits twice.
+- **Switches that don't go through the router are wrapped in `useConfirmLeave()`.** Previous and next for storyboards, memory files and assets, and closing a Sheet all count; the wrapped action must complete the switch synchronously. Multi-step switches (switch view first, then select) go into the same action; the leave guard keeps only the most recent request.
+- **For actions with a second confirmation, wrap the confirmation, not the opening.** For delete and remove, wrap the confirm action inside the confirmation dialog; wrapping the opening of the dialog would make "discard changes first, then cancel the deletion" throw away changes for nothing. Actions that may fail return `Promise<boolean>` and report the result truthfully; changes are kept until the action succeeds before being discarded.
+- **Fields that submit immediately** also use `useRetainWhile` to participate in retention against external removal, in addition to `useLeaveGuard`.
+- **Switches not initiated by the user don't show the guard.** Automatic focusing and navigation brought by agent changes first check `useHasUnsavedChanges()`, and are simply skipped when there are unsaved changes.
+- **Navigation goes through wouter.** Don't call `window.history` directly or rewrite `window.location`, otherwise navigation bypasses the guard.
 
-放行：不会卸载编辑单元的跳转（同一编辑单元的分页切换）在登记时用 `allowNavigation(to)` 放行；整页刷新前的 `beforeunload` 由 `utils/lazy-component.ts` 统一处理。
+Allowed: navigation that doesn't unmount the edit unit (page switches within the same edit unit) is let through with `allowNavigation(to)` at registration; `beforeunload` before a full page reload is handled centrally by `utils/lazy-component.ts`.
 
-### 依赖新数据的后续动作只在刷新结算为 `success` 后提供
+### Follow-up actions that depend on new data are offered only after the refresh settles as `success`
 
-写入后的刷新经 `refreshAfterWrite`（结构见架构文档「项目数据刷新」）。撤销、切到新条目、定位到新建的集、「成功」提示这类依赖新数据的后续动作，只在结算值为 `success` 后提供；刷新失败时只留刷新失败的提示，不同时报告成功，否则创作者看到成功提示却停在旧数据上。参考 `frontend/src/components/canvas/episodes/CreateEpisodeDialog.tsx`。
+Refresh after a write goes through `refreshAfterWrite` (for its structure, see "项目数据刷新" (Project data refresh) in the architecture doc). Follow-up actions that depend on new data, such as undo, switching to the new entry, navigating to a newly created episode and a "成功" (Success) notification, are offered only after the settled value is `success`; when the refresh fails, show only the refresh-failure notification and don't report success at the same time, otherwise the creator sees a success notification while stuck on old data. See `frontend/src/components/canvas/episodes/CreateEpisodeDialog.tsx`.
 
-放行条件：关闭编辑框、离开已删除条目的页面这类写入本身的收尾。
+Allowed when: the wrap-up of the write itself, such as closing the edit dialog or leaving the page of a deleted entry.
 
-## 异步：取消与补拉
+## Async: cancellation and catch-up fetching
 
-处理「await 之后数据可能已过期」时，按场景采用下面几种机制，不靠手工传播闭包标志。
+When handling "data may be stale after an await", use the mechanisms below according to the scenario, rather than manually propagating closure flags.
 
-### 跨函数边界的异步链用 AbortSignal 取消
+### Async chains that cross function boundaries cancel with AbortSignal
 
-调用链一旦跨出单个函数（effect 调用异步函数、异步函数里再发请求），取消就通过 AbortSignal 传播。`cancelled` 闭包标志只拦得住所在函数自己的 await，传不到被调函数里：被调函数 await 之后照常写 store、建 SSE 连接，迟到的响应就会覆盖新状态。
+Once a call chain leaves a single function (an effect calls an async function, an async function makes further requests), cancellation propagates via AbortSignal. A `cancelled` closure flag only guards its own function's awaits and can't reach into called functions: the called function writes to the store and opens SSE connections as usual after its await, and a late response overwrites the new state.
 
-- API 层方法接受 `options?: { signal?: AbortSignal }` 并原样传给 `fetch`。网络 await 点被 abort 后自动 reject。
-- 非网络 await 点之后、执行副作用（写 store、建 SSE 连接等）之前复核 `signal.aborted`，覆盖「abort 发生在响应已 resolve 之后」的窗口。
-- 接管方轮换 controller：新一轮加载先 `abort()` 上一个 controller，再新建。
-- 收尾（如 loading 复位）由接管方负责。被 abort 方在 `finally` 中先检查 `signal.aborted`，已作废就不动共享状态，否则会打断接管方正在进行的加载。
+- API-layer methods accept `options?: { signal?: AbortSignal }` and pass it unchanged to `fetch`. Network await points reject automatically after abort.
+- After non-network await points and before executing side effects (writing the store, opening SSE connections, etc.), re-check `signal.aborted`, covering the window where "the abort happens after the response has already resolved".
+- The taker-over rotates controllers: a new round of loading first calls `abort()` on the previous controller, then creates a new one.
+- Wrap-up (such as resetting loading) is the taker-over's responsibility. The aborted side first checks `signal.aborted` in `finally`; if it has been invalidated, it doesn't touch shared state, otherwise it would interrupt the taker-over's in-progress load.
 
-放行条件：所有 await 都在同一个函数内、不需要把取消传给被调函数时（如 `frontend/src/router.tsx` 的配置状态轮询），`cancelled` 标志可以保留。用户触发、不属于数据加载的一次性动作（如导出），离开页面后允许继续完成，不在本条范围内。
+Allowed when: all awaits are in the same function and cancellation doesn't need to reach called functions (such as the configuration status polling in `frontend/src/router.tsx`); the `cancelled` flag may stay. One-off user-triggered actions that are not data loading (such as export) may continue to completion after leaving the page and are outside the scope of this rule.
 
-参考实现：`frontend/src/hooks/useAssistantSession.ts`（init 自动选择与 `loadSession` 加载链）。
+Reference implementation: `frontend/src/hooks/useAssistantSession.ts` (the init auto-selection and the `loadSession` loading chain).
 
-### 作废一次性事件触发的请求，必须补拉
+### Invalidating a request triggered by a one-off event requires a catch-up fetch
 
-由一次性事件（SSE 通知、用户确认）触发的在途请求被 abort 后，这个事件已经消费掉，数据不会再来一次。作废方（或接管方）在 abort 之后自己发起一轮拉取补上缺口，否则界面永远停在旧数据。「取消」与「补偿」成对出现：diff 里只有 abort 没有补拉，就要问这份数据之后由谁带回来。
+After an in-flight request triggered by a one-off event (an SSE notification, a user confirmation) is aborted, the event has already been consumed and the data won't come again. The invalidating side (or the taker-over) itself starts a round of fetching after the abort to fill the gap, otherwise the UI stays on old data forever. "Cancellation" and "compensation" come in pairs: if a diff has only the abort and no catch-up fetch, ask who will bring this data back afterwards.
 
-参考实现：`frontend/src/hooks/useScriptReviewDraft.ts`（采纳写入时作废在途拉取并补拉）。
+Reference implementation: `frontend/src/hooks/useScriptReviewDraft.ts` (invalidates the in-flight fetch and re-fetches when an adoption is written).
 
-### 切换作用域时，旧作用域的交互态整体作废，异步写入只在代号仍有效时落地
+### When switching scope, the old scope's interaction state is invalidated as a whole, and async writes land only while their generation is still valid
 
-交互态（确认请求、在途标记、错误提示、分页游标与总数）属于某个作用域（项目、会话、视图）时，把它们收进一个带代号的会话：切换作用域时换新代号并整体重置，每个异步写入落地前核对自己发出时的代号仍是当前代号。只 abort 一个请求或只清空其中几个字段，切换后才返回的其他写入与漏清的字段会把旧作用域的结果带进新作用域：在一个项目里确认，取消的是另一个项目的任务；切换视图后，旧视图的游标被发给另一个接口；切换项目后仍显示上一个会话的错误。几条并列的请求源写同一组共享字段时，共用一个作废边界（同一个刷新协调器或同一个代号），不各自作废。
+When interaction state (confirmation requests, in-flight markers, error messages, pagination cursors and totals) belongs to a scope (project, session, view), gather it into a session with a generation number: on scope switch, take a new generation and reset everything, and before each async write lands, check that the generation at which it was issued is still the current one. Aborting just one request or clearing just a few of the fields lets other writes that return after the switch, and fields that were missed, carry the old scope's results into the new scope: confirming in one project cancels a task in another project; after switching views, the old view's cursor is sent to a different API; after switching projects, the previous session's error is still shown. When several parallel request sources write the same set of shared fields, they share one invalidation boundary (the same refresh coordinator or the same generation number), instead of invalidating separately.
 
-参考实现：`frontend/src/components/usage/use-task-cancellation.ts`（确认会话的 `gen`）、`frontend/src/stores/usage-records-store.ts`（两个视图共用一个分页协调器）。
+Reference implementations: `frontend/src/components/usage/use-task-cancellation.ts` (the confirmation session's `gen`), `frontend/src/stores/usage-records-store.ts` (two views share one pagination coordinator).
 
-## 异步：主动跳过的补偿
+## Async: compensation for deliberate skips
 
-### 跳过的补偿要记账，保护窗口关闭时补做
+### Skipped compensation is recorded and made up when the protection window closes
 
-保护条件成立时主动跳过一次补偿动作（补拉、对账、收尾切换），被跳过的补偿不会自己再发生。跳过方按触发它的 key 记下来，保护窗口关闭的一侧负责补做；补做放在 `finally` 这类同时覆盖成功与失败的位置，否则失败路径上保护窗口永不关闭，记下的补偿永远不会执行。
+When a protection condition holds and a compensating action (catch-up fetch, reconciliation, wrap-up switch) is deliberately skipped once, the skipped compensation will not happen again on its own. The skipping side records it under the key that triggered it, and the side that closes the protection window is responsible for making it up; the make-up goes in a place like `finally` that covers both success and failure, otherwise on the failure path the protection window never closes and the recorded compensation never runs.
 
-### 保护状态按完整作用域分桶，可叠加的用计数
+### Protection state is bucketed by the full scope; stackable state uses a count
 
-跨请求存活的保护状态（在途计数、跳过标志）按语义上的完整作用域（请求、项目、会话）分桶。少一个维度，不同操作就共享一个桶：并行的另一次操作解除了本次的保护，或者别的作用域上迟迟不结束的操作一直挡住本该发生的补偿。会并发叠加的状态用计数，不用布尔。
+Protection state that survives across requests (in-flight counts, skip flags) is bucketed by its full semantic scope (request, project, session). With one dimension missing, different operations share a bucket: another operation running in parallel lifts this operation's protection, or a long-running operation in another scope keeps blocking compensation that should have happened. State that can stack concurrently uses a count, not a boolean.
 
-参考实现：`frontend/src/hooks/useAssistantSession.ts` 的 `deletingCurrentRef`（项目 × 会话计数分桶）与 `deferredRefreshRef`（记录跳过的列表补拉，删除收尾后补做）。
+Reference implementation: `deletingCurrentRef` (count bucketed by project × session) and `deferredRefreshRef` (records skipped list catch-up fetches, made up after the deletion wraps up) in `frontend/src/hooks/useAssistantSession.ts`.

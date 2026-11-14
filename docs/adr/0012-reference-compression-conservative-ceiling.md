@@ -2,24 +2,24 @@
 status: accepted
 ---
 
-# 参考图压缩用保守通用上限 + 被动 413，只动上传副本
+# Reference image compression uses a conservative universal ceiling + passive 413, touching only upload copies
 
-I2I / I2V / R2V 场景常把多张体积较大的资产图（character/scene/prop sheet、上一张分镜图、参考图）作为参考图发送给供应商，base64 内嵌后总请求体易超出各家上限而调用失败。决定在 `media_generator` 咽喉层（所有生成的唯一汇流点）对**参考上传副本**做主动压缩 + 预检降档，并保留一道被动 413 兜底；压缩逻辑集中在 `lib/references/reference_compression.py`，只处理发送后即删除的临时副本。
+I2I / I2V / R2V scenarios often send several large asset images (character/scene/prop sheets, the previous storyboard image, reference images) to the provider as reference images; after base64 embedding the total request body easily exceeds each vendor's limit and the call fails. We decided to do active compression + pre-flight downgrading on **reference upload copies** at the `media_generator` choke-point layer (the single convergence point for all generation), keeping one passive 413 fallback; the compression logic is concentrated in `lib/references/reference_compression.py` and only handles temporary copies that are deleted after sending.
 
-## 决定
+## Decision
 
-- **只压参考上传副本**：源资产文件与生成产出保持全质量不变（产出无任何保存时压缩）。因此「生成 4K 却拿不到 4K」在此机制下不可能发生——参考图分辨率不决定输出分辨率。
-- **不用每家精确字节上限，用单一保守通用上限**：默认总请求 ≤8MB / 单图 ≤4MB（清除所有内置供应商已知文档上限），存放于 ConfigService、可 per-provider 覆盖；**被动捕获 HTTP 413 → 降一档重试**以应对「未知/可能变动的上限」（如中转站、文档缺失或过期）。
-- **统一 JPEG q92 + 4:4:4**：所有供应商均接受 JPEG，零格式分支；q92/4:4:4 是「视觉无损」档，把「我方压一道 + 供应商内部再压一道」的代际损伤压到最小，并保护带文字 sheet 的边缘。
-- **基线主降分辨率**（长边 ≤2048、有条件透传，超限才处理）；降档阶梯同样分辨率优先、质量下限 q80。研究表明分辨率是第一杠杆且低风险，降质量引入的高频伪影才会损伤条件效果（尤以 i2v 首帧敏感）。
-- **按角色区分**：多图参考数组走完整基线 + 降档阶梯；单张首/尾帧仅超字节时重编码、**永不缩尺寸**，以保护敏感首帧并避免破坏 Sora 的输入图像素精确匹配。
+- **Compress only reference upload copies**: source asset files and generation outputs keep full quality unchanged (outputs have no compression on save). So "generated 4K but didn't get 4K" cannot happen under this mechanism — reference image resolution does not determine output resolution.
+- **Don't use each vendor's exact byte limit; use a single conservative universal ceiling**: by default total request ≤8MB / single image ≤4MB (clearing all built-in providers' known documented limits), stored in ConfigService and overridable per provider; **passively catch HTTP 413 → drop one tier and retry** to deal with "unknown/possibly changing limits" (e.g. relays, missing or outdated documentation).
+- **Uniform JPEG q92 + 4:4:4**: every provider accepts JPEG, zero format branching; q92/4:4:4 is the "visually lossless" tier, minimising generational damage from "we compress once + the provider compresses again internally", and protecting edges of sheets with text.
+- **The baseline primarily downscales resolution** (long edge ≤2048, conditional pass-through, only processed when over the limit); the downgrade ladder is likewise resolution-first, with a quality floor of q80. Research shows resolution is the first lever and low-risk; it is the high-frequency artefacts introduced by lowering quality that damage conditioning (i2v first frames are especially sensitive).
+- **Differentiated by role**: multi-image reference arrays go through the full baseline + downgrade ladder; a single first/last frame is only re-encoded when over the byte limit and is **never downscaled**, to protect the sensitive first frame and avoid breaking Sora's exact pixel matching of the input image.
 
-## 为何不用每家精确字节限
+## Why not each vendor's exact byte limit
 
-逐家硬编码请求体上限违反「不猜/不硬编码外部供应商数据」原则（多数供应商总体上限无明文、且经常变动；中转站每家各异、无从查证）。保守通用上限是 ArcReel 侧的安全策略常量（类比 timeout 默认），不声称任何一家的真实数字；被动 413 负责自我纠正。代价：偶发「上限配置偏大」会多一次 413 失败调用——但 413 在 ingress 即被拒绝、不计费，仅增加延迟，且实际服务图像的中转站基本都已调大 body 限制，触发极少。
+Hard-coding each vendor's request body limit violates the principle of "don't guess/hard-code external provider data" (most providers don't state an overall limit explicitly, and it changes often; relays each differ and can't be verified). The conservative universal ceiling is an ArcReel-side safety policy constant (analogous to a timeout default) and doesn't claim to be any vendor's real number; the passive 413 handles self-correction. The cost: occasionally "ceiling configured too high" leads to one extra failed 413 call — but a 413 is rejected at ingress and isn't billed, only adding latency, and relays that actually serve images have basically all raised their body limits, so it rarely triggers.
 
 ## Consequences
 
-- 各 backend 错误路径需让 413 可被识别：`vidu`/`dashscope` 现把 `httpx.HTTPStatusError` 包成 `RuntimeError`、丢了状态码，需规整为保留状态码。
-- R2V 原有的 per-task 压缩（`_compress_references_to_tempfiles`）与那段从未被 raise、因而是死代码的 `except RequestPayloadTooLargeError` 一并撤除/迁移；压缩统一由咽喉层负责，避免双压。
-- Sora 输入图像素精确匹配是先于本需求存在的独立缺口（首帧未做 pad/resize 到合法档），不在本设计范围；本设计保证不使其恶化。
+- Each backend's error path needs to let 413 be recognisable: `vidu`/`dashscope` currently wrap `httpx.HTTPStatusError` in `RuntimeError`, losing the status code, and need to be normalised to keep the status code.
+- R2V's original per-task compression (`_compress_references_to_tempfiles`) and the `except RequestPayloadTooLargeError` block that was never raised — and was therefore dead code — are removed/migrated together; compression is handled uniformly by the choke-point layer, avoiding double compression.
+- Sora's exact pixel matching of the input image is an independent gap that predates this requirement (the first frame isn't padded/resized to a valid tier) and is outside the scope of this design; this design guarantees it doesn't make it worse.

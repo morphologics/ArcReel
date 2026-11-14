@@ -2,10 +2,10 @@
 status: accepted
 ---
 
-# 使用记录是供应商调用的投影，任务与调用为一对多
+# The usage record is a projection of provider calls; tasks and calls are one-to-many
 
-「使用记录」页面要把排队中 / 进行中的生成任务与已结束的供应商调用放进同一条时间线，直觉做法是让两者共用一个存储实体：要么在任务入队时就开一条 `api_calls` 行，要么在读侧把两表拼成带复合主键的统一行。我们决定两者都不做：`api_calls` 只记录真实发生过的对外请求（费用与用量的最小单位，经可空 `task_id` 指向它服务的任务，经 `purpose` 说明来源），`tasks` 只负责意图与调度，「使用记录」是读模型而非实体。进行中区由任务提供、终态记录由调用提供，两者在前端拼成一列，各自保留自己的状态词汇与刷新机制。
+The "Usage records" page needs to put queued / in-progress generation tasks and completed provider calls on the same timeline. The intuitive approach is to have both share one storage entity: either open an `api_calls` row as soon as a task is enqueued, or join the two tables on the read side into unified rows with a composite primary key. We decided to do neither: `api_calls` records only outbound requests that actually happened (the smallest unit of cost and usage, pointing via the nullable `task_id` to the task it served, with `purpose` describing its origin), `tasks` is responsible only for intent and scheduling, and "usage records" is a read model, not an entity. The in-progress section is supplied by tasks and terminal records by calls; the two are stitched into one list on the frontend, each keeping its own status vocabulary and refresh mechanism.
 
-理由：钱按请求花，不按意图花；一个任务未来会对应多次调用（真实重试、参考生视频多单元），把记录焊在任务上等于断言一对一，并让账本出现从未请求过供应商的「排队即取消」行。读侧统一行则需要复合主键和「进行中区特例」，是在给写侧缺陷打补丁。
+Rationale: money is spent per request, not per intent; a task will in future map to multiple calls (real retries, multiple units for reference-to-video), so welding records to tasks amounts to asserting one-to-one, and would put "queued then cancelled" rows into the ledger for requests that never reached a provider. Unified rows on the read side would need a composite primary key and an "in-progress section special case", which is patching over a write-side defect.
 
-后果：`api_calls` 需补 `task_id`、`purpose`、`session_id` 并让文本调用透传 `user_id`；`tasks.payload_json.api_call_id` 由 `api_calls.task_id` 取代；调用状态增加 `cancelled` 以免用户取消被计为失败。
+Consequences: `api_calls` needs `task_id`, `purpose` and `session_id` added, and text calls need to pass `user_id` through; `tasks.payload_json.api_call_id` is replaced by `api_calls.task_id`; call status gains `cancelled` so that user cancellations are not counted as failures.

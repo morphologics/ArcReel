@@ -2,22 +2,22 @@
 status: accepted
 ---
 
-# 删除可恢复，恢复只新增，删除记录借项目迁移链跨版本恢复
+# Deletion is recoverable, restore only adds, and deletion records are restored across versions via the project migration chain
 
-项目内的删除过去都是硬删除，结构移除按 `docs/adr/0003` 把媒体留在盘上，`docs/adr/0080` 为项目回收站留了位置。决定：项目内的一切删除，无论由创作者还是 Agent 发起，都成为项目回收站中的删除记录；整体删除的项目成为已删除项目。恢复只新增、不覆盖、不阻塞：被恢复的对象原身份空闲则沿用、被占用则换新身份，不与现有内容合并，也不因冲突拒绝。删除记录保存删除前的项目结构状态，旧记录恢复时与归档导入一样经项目迁移链升级到当前 schema 再取出对象，因此跨版本仍可恢复，迁移步也无需知道项目回收站存在。
+Deletions within a project used to be hard deletes; structural removal left media on disk per `docs/adr/0003`, and `docs/adr/0080` left room for a project trash. Decision: every deletion within a project, whether initiated by the creator or the agent, becomes a deletion record in the project trash; a project deleted as a whole becomes a deleted project. Restore only adds, never overwrites, never blocks: a restored object keeps its original identity if that is free, and gets a new identity if it is taken; it is not merged with existing content, nor rejected because of conflicts. A deletion record saves the project's structural state before deletion; when an old record is restored, it is upgraded to the current schema through the project migration chain, just like archive import, before the object is taken out, so restoring still works across versions, and migration steps need not know the project trash exists.
 
 ## Considered Options
 
-- **把领域对象恢复回原位**：每类对象都要一套冲突规则（集原文范围已被重新规划占用、资产已同名重建、剧本已被多轮修改），恢复结果可能比删除前更乱。
-- **只回收文件**：结构删除实际找不回来，项目回收站形同虚设。
-- **原地软删除**：每条读取路径都要过滤被删对象，被删对象还继续占着资产名与整本源文的范围。
-- **删除记录只存摘下的结构片段**：项目 schema 几乎每个发行版都变，跨版本后要么只能恢复文件，要么每个迁移步都要额外改写片段；迁移链只能处理完整项目。
-- **删除记录自定一套与版本无关的格式**：等于另造一套随项目 schema 演进的序列化。
+- **Restore domain objects back to their original place**: every kind of object would need its own set of conflict rules (the episode's source range has been taken by re-planning, an asset has been recreated with the same name, the script has been modified over many rounds), and the result of restoring might be messier than before deletion.
+- **Recycle files only**: structural deletions could not actually be recovered, making the project trash useless.
+- **Soft delete in place**: every read path would have to filter deleted objects, and deleted objects would keep occupying asset names and ranges of the whole-book source.
+- **Deletion records store only the removed structural fragment**: the project schema changes in almost every release, so across versions either only files could be restored, or every migration step would have to rewrite fragments too; the migration chain can only handle complete projects.
+- **Deletion records define their own version-independent format**: amounts to building another serialisation that evolves with the project schema.
 
 ## Consequences
 
-- 被删的集恢复为自带原文的集，即使原本切自整本源文，也不再占用整本源文的范围。
-- `docs/adr/0003`「结构 remove 只移除剧本引用，项目内已有文件继续保留」由本 ADR 取代；删除资产也不再把资产图留在原位。
-- 被覆盖产生的旧版本留在版本历史，不进项目回收站。
-- 分镜与视频单元例外：编号只分配、不复用（`docs/adr/0090`），恢复时一律取新编号，原编号即使空闲也不沿用，免得仍引用原编号的剪辑片段与裁切接到恢复回来的条目上。
-- Agent 只能经由项目回收站删除项目内容，不能直接删除媒体与版本历史；清空与彻底删除只属于创作者。
+- A deleted episode is restored as an episode with its own source text; even if it was originally cut from the whole-book source, it no longer occupies a range of the whole-book source.
+- `docs/adr/0003`'s "structural remove only removes script references, and existing files in the project are kept" is superseded by this ADR; deleting an asset also no longer leaves its asset images in place.
+- Old versions produced by overwriting stay in version history and do not go to the project trash.
+- Storyboards and video units are an exception: numbers are only allocated, never reused (`docs/adr/0090`), so they always take new numbers on restore, and the original number is not reused even if free, so that clips and trims still referencing the original number do not attach to the restored entries.
+- The agent can delete project content only through the project trash, and cannot directly delete media or version history; emptying the trash and permanent deletion belong to the creator alone.

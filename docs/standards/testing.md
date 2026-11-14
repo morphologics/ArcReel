@@ -8,75 +8,75 @@ paths:
   - "frontend/e2e/**"
 ---
 
-# 测试
+# Testing
 
-结构类规则由 `scripts/audit_tests.py --check` 强制（规则清单见该脚本的模块 docstring），命中时它给出修复指引；这里只收它无法判定的部分。
+Structural rules are enforced by `scripts/audit_tests.py --check` (the rule list is in that script's module docstring), which gives fix guidance when a rule is hit; this document covers only what it cannot decide.
 
-## 分档与位置
+## Tiers and location
 
-### 按用例实际触达的依赖确定档位
+### Choose the tier by the dependencies a test case actually touches
 
-| 档位 | 允许触达 |
+| Tier | Allowed to touch |
 |---|---|
-| `unit` | 内存对象、`tmp_path`，以及只读访问仓库内已提交的文件；写文件只落在 `tmp_path`；不触达真实 DB、子进程、网络 |
-| `integration` | 真实 DB、运行时文件系统读写（数据根、用户目录等）、随包 ffmpeg 子进程 |
-| `e2e` | 真实外部服务（远程 API、大模型调用）；CI 默认跳过 |
+| `unit` | In-memory objects, `tmp_path`, and read-only access to files committed in the repo; file writes land only in `tmp_path`; no real DB, subprocesses or network |
+| `integration` | Real DB, runtime file system reads/writes (data root, user directories, etc.), bundled ffmpeg subprocesses |
+| `e2e` | Real external services (remote APIs, LLM calls); skipped in CI by default |
 
-档位目录缺失，或者 unit 档用例使用了 `tests/conftest.py` 的数据库 fixture（被注入 `uses_db`），收集期就会拒绝；不经这些 fixture 自行连接真实 DB、拉起子进程和访问网络都没有机械校验，由审查判断。unit 档的用例拉起子进程（git、ffmpeg）或访问网络时，`-m unit` 快速循环会变慢，还会开始依赖本机环境；反过来，什么都不触达的用例放在 integration 档，会被挤出快速循环，也会落进错误的 CI 分片。读取仓库内已提交的文件（prompt 规则、技能文本、文档等）既快，又随 checkout 确定存在，不会拖慢快速循环，也不依赖本机环境，因此留在 unit 档。
+A missing tier directory, or a unit-tier test using the database fixtures from `tests/conftest.py` (which get `uses_db` injected), is rejected at collection time; connecting to a real DB, spawning subprocesses or accessing the network on one's own without those fixtures has no mechanical check and is left to review. When a unit-tier test spawns subprocesses (git, ffmpeg) or accesses the network, the `-m unit` fast loop slows down and starts depending on the local environment; conversely, a test that touches nothing but sits in the integration tier gets pushed out of the fast loop and lands in the wrong CI shard. Reading files committed in the repo (prompt rules, skill text, docs, etc.) is fast and guaranteed to exist with the checkout, so it neither slows the fast loop nor depends on the local environment, and therefore stays in the unit tier.
 
-位置约定：alembic 迁移测试每个迁移脚本一个文件，放在 `tests/integration/lib/db/migrations/`，继续用 SQLite；workspace 子包的测试放在 `packages/<子包>/tests/`，按子包源码的目录结构排布、不分档位；断言子包输出渲染成自然语言之后的结果的用例，放在主仓 `tests/unit/lib/i18n/`。
+Location conventions: alembic migration tests use one file per migration script, live in `tests/integration/lib/db/migrations/`, and keep using SQLite; tests for workspace sub-packages go in `packages/<sub-package>/tests/`, laid out following the sub-package's source directory structure, without tiers; tests that assert on sub-package output after it has been rendered into natural language go in the main repo's `tests/unit/lib/i18n/`.
 
-## 替身
+## Test doubles
 
-### 替身按优先级取用，只替换仓库边界
+### Use test doubles in priority order, and replace only repository boundaries
 
-真实对象（内存 SQLite、`tmp_path`）＞ `tests/fakes.py` 手写替身 ＞ 带 `spec` / `autospec` 的 Mock ＞ 裸 `MagicMock` / `AsyncMock`。Mock 只替换仓库边界：第三方 SDK、网络传输、子进程、文件系统、时钟。仓库内的依赖用真实实例。仓库内对象一旦换成替身，它和被测对象之间的契约就没有测试覆盖，生产实现改坏了用例也照样通过。
+Real objects (in-memory SQLite, `tmp_path`) > hand-written doubles in `tests/fakes.py` > Mocks with `spec` / `autospec` > bare `MagicMock` / `AsyncMock`. Mocks replace only repository boundaries: third-party SDKs, network transport, subprocesses, the file system, the clock. Dependencies inside the repo use real instances. Once an in-repo object is replaced with a double, the contract between it and the object under test has no test coverage, and tests still pass even if the production implementation is broken.
 
-前端同理：内部子组件默认真实渲染，只 mock 重量级组件（虚拟化、动画、canvas）、有副作用的组件（发请求、启动定时器），以及与本测试无关的纯展示组件。承载被测交互的子组件被 mock 掉之后，测试只剩渲染外壳。
+The same applies on the frontend: internal child components render for real by default; only mock heavyweight components (virtualization, animation, canvas), components with side effects (sending requests, starting timers), and purely presentational components unrelated to the test. Once the child component that carries the interaction under test is mocked out, the test is left with only the rendered shell.
 
-放行条件：替身替换的是上述边界之一，或者用来触发真实对象触发不了的分支（异常、超时、外部失败）。
+Exception: the double replaces one of the boundaries above, or is used to trigger a branch a real object cannot trigger (exception, timeout, external failure).
 
-### 需要控制内部行为时加 seam，seam 是带生产默认值的显式参数
+### Add a seam when you need to control internal behaviour; a seam is an explicit parameter with a production default
 
-seam 是构造参数或关键字参数，带生产默认值，不改变生产行为，例如 `retry_async(operation, *, clock=..., jitter=...)`。适用于轮询时钟、间隔、退避、HTTP 探测客户端、文件系统与子进程。模块级可替换全局不算 seam：它让测试之间共享可变状态。可测性改造同样不得改变生产行为，前端只允许抽取纯函数和做 hook 级的结构性拆分。
+A seam is a constructor parameter or keyword argument with a production default that does not change production behaviour, e.g. `retry_async(operation, *, clock=..., jitter=...)`. It applies to polling clocks, intervals, backoff, HTTP probe clients, the file system and subprocesses. A replaceable module-level global does not count as a seam: it makes tests share mutable state. Testability refactors likewise must not change production behaviour; on the frontend only extracting pure functions and hook-level structural splits are allowed.
 
-### 进程级缓存的重置钩子是公开函数 `reset_for_tests()` / `reset_<名称>_for_tests()`
+### Reset hooks for process-level caches are the public functions `reset_for_tests()` / `reset_<name>_for_tests()`
 
-生产模块用 `functools.cache` 这类进程级缓存时，暴露公开的重置钩子（如 `lib.infra.app_data_dir.reset_for_tests`），只清缓存、不改生产行为。这是过渡形态：新代码优先把缓存依赖做成参数注入。
+When a production module uses a process-level cache such as `functools.cache`, expose a public reset hook (e.g. `lib.infra.app_data_dir.reset_for_tests`) that only clears the cache and does not change production behaviour. This is a transitional form: new code should prefer injecting cached dependencies as parameters.
 
-### 出站 HTTP 用 respx 拦截，FastAPI 依赖用 `dependency_overrides`
+### Intercept outbound HTTP with respx; use `dependency_overrides` for FastAPI dependencies
 
-respx 保留真实 httpx 客户端、在 transport 层拦截（`AsyncOpenAI` 的流量同样被捕获），断言的是真实序列化后的请求。路由依赖用 `app.dependency_overrides` 替换，不 patch。
+respx keeps the real httpx client and intercepts at the transport layer (traffic from `AsyncOpenAI` is captured too), so assertions are on the real serialized request. Route dependencies are replaced with `app.dependency_overrides`, not patched.
 
-### 前端页面级套件的接口替身从真实后端录制
+### Interface doubles for frontend page-level suites are recorded from the real backend
 
-`frontend/e2e/fixtures/recorded/` 下的响应只由 `pnpm e2e:record` 对真实后端录制生成，不手写协议桩，也不手改录制文件；改动接口形状的后端 PR 要同时重录，让形状变化体现在替身文件的 diff 里。手写的替身只反映作者对接口的理解：后端实际的字段、帧序或查询形状变了，页面级套件仍然通过，回归要到运行时才暴露。长文本、多条目等压力变体写在场景的 `api` 字段里。
+Responses under `frontend/e2e/fixtures/recorded/` are generated only by `pnpm e2e:record` against the real backend; do not hand-write protocol stubs, and do not hand-edit recorded files. A backend PR that changes an interface shape must re-record at the same time, so the shape change shows up in the diff of the double files. Hand-written doubles only reflect the author's understanding of the interface: if the backend's actual fields, frame order or query shape change, the page-level suite still passes and the regression only surfaces at runtime. Stress variants such as long text or many items are written in the scenario's `api` field.
 
-放行条件：没有改动接口形状的 PR 不必重录。录制文件只要有改动，仍须来自 `pnpm e2e:record`。
+Exception: PRs that do not change interface shapes need not re-record. Any change to a recorded file must still come from `pnpm e2e:record`.
 
-## 断言价值
+## Assertion value
 
-### 每条用例保护一个可观察的契约
+### Each test case protects one observable contract
 
-断言落在真实产出上：返回值的类型与属性、respx 捕获的真实请求、可观察状态。`audit_tests` 已经拦下只断言替身调用记录、patch 私有符号和同文件重复用例；下面四种形态它判定不了，由审查指出：
+Assertions land on real output: the type and attributes of return values, the real request captured by respx, observable state. `audit_tests` already blocks tests that assert only on double call records, patch private symbols, or duplicate a case in the same file; it cannot detect the following four forms, which are for review to point out:
 
-- **重复弱化**：与另一条用例覆盖同一路径，断言却是它的真子集。
-- **过度表征**：断言日志文本、字典键序、私有属性等实现细节，而不是契约。
-- **setup 与断言严重失衡**：几十行准备，最后只断言一个调用发生过。
-- **断言辅助函数里只断言替身调用记录**：把 `audit_tests` 的判据藏进了 helper。
+- **Duplicated and weakened**: covers the same path as another test, but its assertions are a strict subset of that one's.
+- **Over-specification**: asserts implementation details such as log text, dictionary key order or private attributes, rather than the contract.
+- **Severely unbalanced setup and assertion**: dozens of lines of preparation, ending with an assertion only that some call happened.
+- **Assertion helpers that only assert on double call records**: hiding the `audit_tests` criterion inside a helper.
 
-这类用例不保护行为，重构时却会成片变红，价值为负。命中后建议删除或改造，不建议补写断言凑覆盖：行为已有其他用例实质覆盖的，或者没有真实分支与契约约束的，直接删除；值得保护的改为断言契约，需要在生产代码加 seam 的另开批次。
+Such tests do not protect behaviour, yet turn red en masse during refactors; their value is negative. When one is found, delete or rework it rather than adding assertions to pad coverage: if the behaviour is already substantively covered by other tests, or there is no real branch or contract constraint, delete it outright; if it is worth protecting, rework it to assert the contract, and if that needs a seam in production code, do it in a separate batch.
 
-覆盖率与变异得分只是信号：不为数字或杀死 mutant 写测试，删除无意义测试造成的覆盖率下降可以放行。变异测试的批次流程见 `docs/testing/mutmut-runbook.md`。
+Coverage and mutation scores are only signals: do not write tests for the numbers or to kill mutants, and a coverage drop caused by deleting meaningless tests is acceptable. The batch process for mutation testing is in `docs/testing/mutmut-runbook.md`.
 
-## 时序
+## Timing
 
-### 等待、重试、超时经时钟 seam 或事件握手驱动
+### Drive waits, retries and timeouts through a clock seam or an event handshake
 
-真实时间等待（`time.sleep`、固定 `setTimeout`）让用例变慢，并在负载高时偶发失败。偶发失败视同普通缺陷，就地改成时钟 seam 或事件握手；修不了或不值得修的按「每条用例保护一个可观察的契约」删除或改造。不引入自动重试（pytest-rerunfailures、CI job 级 retry），它会掩盖本应暴露的失败。前端用例沿用 vitest 默认 5 秒超时，个别慢用例显式覆写并写明原因。
+Real-time waits (`time.sleep`, fixed `setTimeout`) make tests slow and cause intermittent failures under high load. Treat intermittent failures as ordinary defects and fix them on the spot with a clock seam or event handshake; those that cannot be fixed or are not worth fixing are deleted or reworked per "Each test case protects one observable contract". Do not introduce automatic retries (pytest-rerunfailures, CI job-level retry); they mask failures that should be exposed. Frontend tests keep vitest's default 5-second timeout; individual slow tests explicitly override it and state the reason.
 
-放行条件：概率性 stress 用例（真实并发 + 真实时间）在这里登记后才允许存在。当前唯一登记的是 `tests/integration/lib/project/test_project_manager_concurrent_save.py` 的原子写压力用例。
+Exception: probabilistic stress tests (real concurrency + real time) may exist only once registered here. The only one currently registered is the atomic-write stress test in `tests/integration/lib/project/test_project_manager_concurrent_save.py`.
 
-### 等待异步过程时，以它的最后一步为就绪信号
+### When waiting for an async process, use its last step as the readiness signal
 
-异步过程常分多步完成，例如切内存状态、落库、广播，或元素渲染后 effect 才订阅、数据到达后防抖刷新才落定。用例在其中某一步刚可见时就继续，后续步骤会与断言或下一个操作交错，负载高时偶发失败。等待条件取这一过程的最后一步：终态广播、出队事件、订阅生效、刷新结算。同一过程的其他用例若用同一种等待写法，一并改掉。
+Async processes often complete in several steps, e.g. switching in-memory state, persisting to the DB, broadcasting; or an effect subscribing only after the element renders, or a debounced refresh settling only after data arrives. If a test proceeds as soon as one of these steps becomes visible, the later steps interleave with the assertion or the next action and fail intermittently under high load. Take the wait condition from the last step of the process: the final-state broadcast, the dequeue event, the subscription taking effect, the refresh settling. If other tests of the same process use the same waiting pattern, fix them too.

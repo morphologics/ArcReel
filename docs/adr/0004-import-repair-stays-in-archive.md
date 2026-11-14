@@ -2,21 +2,21 @@
 status: accepted
 ---
 
-# 导入修复留在 archive，不走保存统一入口；泄漏的形状常量收敛到既有真相源
+# Import repair stays in archive and does not go through the unified save entry point; leaked shape constants converge onto existing sources of truth
 
-> 本 ADR 中导入契约「缺资产定义则拦截」的部分已由 `docs/adr/0098` 取代：剧本引用的未定义角色、场景、道具一律补占位，记入迁移报告。导入修复留在 archive 的决定不变。
+> The part of this ADR about the import contract "block if asset definitions are missing" has been superseded by `docs/adr/0098`: undefined characters, scenes and props referenced by a script are always filled with placeholders and recorded in the migration report. The decision that import repair stays in archive is unchanged.
 
-`project_archive` 的导入路径会对用户上传的、可能残缺/错乱的归档做大量「急救式修复」：从 `versions/` 回溯旧版本文件、把任意布局里的路径猜回正确位置、按文件名建索引匹配、缺资产定义则拦截。一次架构走查建议新增 `ProjectManager.restore_from_staging()` 独占这些修复，让「导入路径 = 保存路径 = 同套保证」。我们**否决**该建议：这些急救逻辑是导入特有的 I/O，不是 ProjectManager 的领域知识（PM 只操作已安装、规整的项目目录）；导入的契约（使劲修 + 缺定义就拦截）与保存统一入口 `_write_script_unlocked` 的「不更坏」语义（ADR-0002，接受改前就坏的旧剧本）本就不同，强行合一会把两种契约搅在一起，还会往候选 6 要瘦身的 94 方法 PM 上帝模块里再塞约 580 行。
+The `project_archive` import path performs a lot of "first-aid repair" on user-uploaded archives that may be incomplete or scrambled: recovering old version files from `versions/`, guessing paths in arbitrary layouts back to their correct locations, building a filename index for matching, and blocking if asset definitions are missing. An architecture walkthrough suggested adding `ProjectManager.restore_from_staging()` to own these repairs exclusively, so that "import path = save path = same guarantees". We **rejected** that suggestion: this first-aid logic is import-specific I/O, not ProjectManager's domain knowledge (PM only operates on installed, well-formed project directories); the import contract (try hard to repair + block if definitions are missing) is inherently different from the "no worse" semantics of the unified save entry point `_write_script_unlocked` (ADR-0002, which accepts old scripts that were already broken before the change), and forcing them together would mix the two contracts and also stuff roughly another 580 lines into the 94-method PM god module that candidate 6 aims to slim down.
 
-`project_archive` 真正的领域知识泄漏只有「重复的形状常量」：
+The only real domain-knowledge leak in `project_archive` is "duplicated shape constants":
 
-- **canonical 资源路径**（`resource_type` → 项目内相对路径，如 `characters/{id}.png`、`videos/scene_{id}.mp4`）此前三处各抄一份——`MediaGenerator.OUTPUT_PATTERNS`（写侧）、`versions.py::_resolve_resource_path`（回溯侧）、`project_archive._canonical_resource_path`（导入侧）。收敛为单一函数，三处统一消费。
-- **content_mode → 剧本字段名分派**（narration 用 `segments`/`segment_id`、drama 用 `scenes`/`scene_id`）此前 archive 手写 `if/else` 重抄了模型层已声明的字段。收敛到 `lib/script/script_skeleton` 的骨架注册表（`SKELETONS` / `resolve_declared_kind` / `resolve_kind_items`），archive 调用而非自推导。
+- **Canonical resource paths** (`resource_type` → path relative to the project, e.g. `characters/{id}.png`, `videos/scene_{id}.mp4`) were previously copied in three places — `MediaGenerator.OUTPUT_PATTERNS` (write side), `versions.py::_resolve_resource_path` (recovery side), `project_archive._canonical_resource_path` (import side). Converged into a single function consumed by all three.
+- **content_mode → script field name dispatch** (narration uses `segments`/`segment_id`, drama uses `scenes`/`scene_id`) — archive previously re-copied, with a hand-written `if/else`, fields already declared in the model layer. Converged onto the skeleton registry in `lib/script/script_skeleton` (`SKELETONS` / `resolve_declared_kind` / `resolve_kind_items`); archive calls it instead of deriving it itself.
 
-`generated_assets` 模板已委托 `PM.create_generated_assets`（非副本），无需处理。
+The `generated_assets` template is already delegated to `PM.create_generated_assets` (not a copy) and needs no handling.
 
 ## Consequences
 
-- 与候选 6（拆分 PM 上帝模块）**解耦**：本决策不动 PM，可独立随时落地，不必等 PM 拆分。走查原文说「与候选 6 天然配套」在此反转。
-- 保存统一入口仍是剧本写入的单一守卫点（ADR-0002/0003）；导入是**刻意的例外**——它在装入项目目录前先急救脏归档，这层修复发生在统一入口之外。记此 ADR 即为拦住未来「把导入也并进统一入口」的好心改动。
-- canonical 路径函数实际跨两个家族：媒体资源（storyboards/videos/grids/reference_videos）与角色/场景/道具 sheet——两个家族的路径模式现已统一注册在 `lib/project/resource_paths.py` 的 `_PATTERNS` 一张表内，经 `resource_relative_path` 供 MediaGenerator、versions router 与 project_archive 消费；另有 `characters/refs/{name}.png`（reference_image）不在该表内。
+- **Decoupled** from candidate 6 (splitting the PM god module): this decision does not touch PM, can land independently at any time, and need not wait for the PM split. The walkthrough's original statement that it "naturally pairs with candidate 6" is reversed here.
+- The unified save entry point remains the single guard point for script writes (ADR-0002/0003); import is a **deliberate exception** — it does first aid on dirty archives before installing them into the project directory, and this layer of repair happens outside the unified entry point. This ADR is recorded precisely to stop future well-meaning changes that "merge import into the unified entry point as well".
+- The canonical path function actually spans two families: media resources (storyboards/videos/grids/reference_videos) and character/scene/prop sheets — the path patterns of both families are now registered in a single table, `_PATTERNS` in `lib/project/resource_paths.py`, and consumed via `resource_relative_path` by MediaGenerator, the versions router and project_archive; additionally, `characters/refs/{name}.png` (reference_image) is not in that table.

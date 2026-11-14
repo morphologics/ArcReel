@@ -2,10 +2,10 @@
 status: accepted
 ---
 
-# 远程 MCP 直接信任现有 API Key，不另建细粒度授权层
+# Remote MCP trusts existing API keys directly, without a separate fine-grained authorization layer
 
-远程 MCP 始终要求并只接受现有 `arc-` API Key；即使 WebUI 配置为关闭认证，也不接受匿名调用、会话 JWT 或下载 token。API Key 在当前单用户产品中继续代表完全受信任的高权限自动化主体：不增加 project allowlist、能力 scope、Key 级任务所有权、配额或独立确认凭据，工具调用沿用 `DEFAULT_USER_ID`，任务来源记为 `mcp`。
+Remote MCP always requires and accepts only existing `arc-` API keys; even when the WebUI is configured with authentication off, it does not accept anonymous calls, session JWTs, or download tokens. In the current single-user product, an API key continues to represent a fully trusted, high-privilege automation principal: no project allowlist, capability scopes, key-level task ownership, quotas, or separate confirmation credentials are added; tool calls use `DEFAULT_USER_ID`, and the task source is recorded as `mcp`.
 
-远程工具清单排除供应商、Agent、API Key、系统凭证配置与删除项目，也不向工具结果返回 secret，但这只是 MCP 的创作能力边界，不是 API Key 的安全权限边界。同一 Key 仍保有现有 REST API 的广泛权限，只应交给受信任的外部 Agent；细粒度 API Key 权限若成为需求，另行设计。远程工具必须继续复用项目参数校验、事务式写入口、revision 并发校验和迁移门禁等既有服务端不变量。
+The remote tool list excludes provider, agent, API key, and system credential configuration as well as project deletion, and does not return secrets in tool results, but this is only MCP's creative-capability boundary, not a security permission boundary of the API key. The same key still holds the broad permissions of the existing REST API and should only be given to trusted external agents; if fine-grained API key permissions become a requirement, they will be designed separately. Remote tools must continue to reuse existing server-side invariants such as project parameter validation, transactional write entry points, revision concurrency checks, and migration gates.
 
-审核、计费档位和有损内容操作保持与内置 Agent 相同的确认体验：skill 手册负责展示影响并征得用户同意，用户显式授权全自主时可以继续；服务端沿用现有确认参数，不验证额外的人类凭据。任意有效 API Key 可查询或取消任意项目的任务；带 `project` 的任务工具只校验任务确属该项目，并沿用现有全局队列、并发准入和费用记录。
+Review, billing tiers, and lossy content operations keep the same confirmation experience as the built-in agent: the skill manual is responsible for showing the impact and obtaining the user's consent, and when the user explicitly authorizes full autonomy it may proceed; the server uses the existing confirmation parameters and does not verify additional human credentials. Any valid API key can query or cancel tasks of any project; task tools with `project` only verify that the task really belongs to that project, and use the existing global queue, concurrency admission, and cost records.
