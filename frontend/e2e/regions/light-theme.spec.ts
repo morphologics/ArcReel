@@ -25,13 +25,13 @@ defineRegionScenarios("浅色主题", [
     screenshot: { name: "light-lobby" },
   },
   {
-    name: "设置的通用分区",
-    path: "/app/settings?section=general",
+    name: "设置的选项分区",
+    path: "/app/settings?section=options",
     colorScheme: "light",
     ready: async (page) => {
       await page.getByRole("combobox", { name: "主题" }).waitFor();
     },
-    screenshot: { name: "light-settings-general" },
+    screenshot: { name: "light-settings-options" },
   },
   {
     name: "工作区的剧集页",

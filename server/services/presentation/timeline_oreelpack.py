@@ -1,5 +1,5 @@
 """An edit timeline as an OpenReel project backup (``.oreelpack``), for the experimental "Open in OpenReel" of the
-Edit view (YouReel Studio hosts an OpenReel fork next to the studio; deploy/studio/OPENREEL.md).
+Edit view (YouReel Studio hosts an OpenReel fork next to the studio).
 
 The pack is OpenReel's own backup format: a 16-byte header (``OREELPACK01\\n`` + the manifest length, uint32 little
 endian), a JSON manifest ``{version: 1, projectJson, assets: [{id, size, type}]}`` and the media bytes in asset order.

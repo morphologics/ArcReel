@@ -25,6 +25,8 @@ export const SETTINGS_SECTIONS = [
   "general",
   "prompt-templates",
   "about",
+  "options",
+  "hotkeys",
 ] as const;
 export type SettingsSection = (typeof SETTINGS_SECTIONS)[number];
 

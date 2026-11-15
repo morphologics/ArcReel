@@ -56,6 +56,7 @@ const RECORDINGS: Recording[] = [
   { file: "custom-providers", method: "GET", path: "/api/v1/custom-providers" },
   { file: "custom-providers-endpoints", method: "GET", path: "/api/v1/custom-providers/endpoints" },
   { file: "onboarding-status", method: "GET", path: "/api/v1/onboarding/status" },
+  { file: "user-options", method: "GET", path: "/api/v1/user-options" },
   { file: "projects", method: "GET", path: "/api/v1/projects" },
   { file: "deleted-projects", method: "GET", path: "/api/v1/deleted-projects" },
   { file: "project-demo", method: "GET", path: `/api/v1/projects/${DEMO_PROJECT}` },

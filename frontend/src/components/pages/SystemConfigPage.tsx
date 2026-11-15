@@ -8,9 +8,11 @@ import {
   Cable,
   Film,
   Info,
+  Keyboard,
   KeyRound,
   Plug,
   ScrollText,
+  Settings2,
   SlidersHorizontal,
   Store,
   Waypoints,
@@ -35,8 +37,10 @@ import { ExternalAgentSection } from "./settings/agent-access/ExternalAgentSecti
 import { ConfigIssueNotice } from "./settings/ConfigIssueNotice";
 import { EndpointsSection } from "./settings/endpoints/EndpointsSection";
 import { GeneralSection } from "./settings/GeneralSection";
+import { HotkeysSection } from "./settings/HotkeysSection";
 import { MarketSection } from "./settings/market/MarketSection";
 import { MediaModelSection } from "./settings/MediaModelSection";
+import { OptionsSection } from "./settings/OptionsSection";
 import { PromptTemplatesSection } from "./settings/PromptTemplatesSection";
 
 interface SectionDef {
@@ -58,6 +62,8 @@ const SECTIONS: Record<SettingsSection, SectionDef> = {
   general: { labelKey: "dashboard:settings_general", icon: SlidersHorizontal, tier: "constrained" },
   "prompt-templates": { labelKey: "dashboard:prompt_templates", icon: ScrollText, tier: "constrained" },
   about: { labelKey: "dashboard:about", icon: Info, tier: "constrained" },
+  options: { labelKey: "dashboard:settings_options", icon: Settings2, tier: "constrained" },
+  hotkeys: { labelKey: "dashboard:settings_hotkeys", icon: Keyboard, tier: "constrained" },
 };
 
 /** Sidebar groups and order. Market and usage records are each their own item, with no group heading. / 侧栏分组与顺序。市场与使用记录各自单独成项，不设分组标题。 */
@@ -70,6 +76,8 @@ const SECTION_GROUPS: { id: string; labelKey?: string; sections: SettingsSection
   },
   { id: "standalone", sections: ["market", "usage"] },
   { id: "system", labelKey: "dashboard:settings_group_system", sections: ["general", "prompt-templates", "about"] },
+  // The member's own preferences, after the studio-wide configuration above
+  { id: "personal", labelKey: "dashboard:settings_group_personal", sections: ["options", "hotkeys"] },
 ];
 
 /** Sidebar entries targeted by onboarding steps 4 and 5. / 引导第 4、5 步指向的侧栏入口。 */
@@ -167,5 +175,9 @@ function SectionContent({ section }: { section: SettingsSection }) {
       return <PromptTemplatesSection />;
     case "about":
       return <AboutSection />;
+    case "options":
+      return <OptionsSection />;
+    case "hotkeys":
+      return <HotkeysSection />;
   }
 }

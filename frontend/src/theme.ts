@@ -43,13 +43,16 @@ export function setThemePreference(preference: ThemePreference) {
   applyAndNotify();
 }
 
-function subscribe(listener: () => void) {
+/** Listen for theme preference changes (this tab or, after `initTheme`, another tab); returns the unsubscribe. */
+export function subscribeThemePreference(listener: () => void): () => void {
   listeners.add(listener);
-  return () => listeners.delete(listener);
+  return () => {
+    listeners.delete(listener);
+  };
 }
 
 export function useThemePreference(): ThemePreference {
-  return useSyncExternalStore(subscribe, getThemePreference);
+  return useSyncExternalStore(subscribeThemePreference, getThemePreference);
 }
 
 /** Call once at startup: apply the current preference, switch live with the system light/dark when following the system, and follow preference changes made in other tabs. / 启动时调用一次：应用当前偏好，在跟随系统时随系统明暗实时切换，并跟随其他标签页改的偏好。 */

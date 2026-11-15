@@ -506,7 +506,7 @@ async def download_edit_timeline_oreelpack(
     service: TimelineOreelPackServiceDep,
 ) -> StreamingResponse:
     """The latest revision as an OpenReel project backup (``.oreelpack``: timeline + media), for the Edit view's
-    experimental "Open in OpenReel" (deploy/studio/OPENREEL.md)."""
+    experimental "Open in OpenReel"."""
     try:
         pack = await service.build(project_name, timeline_id)
     except EditTimelineError as exc:

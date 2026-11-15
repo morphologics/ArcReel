@@ -101,6 +101,18 @@ export interface OnboardingStatus {
   seen: boolean;
 }
 
+/**
+ * Options saved for the studio on the server (`/user-options`), shared by the member's devices. Only keys the member
+ * has set are present; the option registry in `preferences/user-options.ts` holds the defaults. `null` in an update
+ * removes the key (back to its default).
+ */
+export interface StudioUserOptions {
+  default_editor?: "arcreel" | "openreel";
+  mode?: "easy" | "advanced";
+}
+
+export type StudioUserOptionsPatch = { [K in keyof StudioUserOptions]?: StudioUserOptions[K] | null };
+
 export interface SystemConfigPatch {
   default_video_backend?: string;
   default_video_backend_i2v?: string;

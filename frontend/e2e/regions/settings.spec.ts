@@ -143,7 +143,7 @@ defineRegionScenarios("全局设置", [
     path: settings("general"),
     ready: async (page) => {
       await settingsReady(page);
-      await page.getByRole("combobox", { name: "界面语言" }).waitFor();
+      await page.getByRole("button", { name: "重看引导" }).waitFor();
     },
     act: async (page) => {
       await expect(page.getByRole("button", { name: "保存" })).toHaveCount(0);
@@ -152,7 +152,7 @@ defineRegionScenarios("全局设置", [
   },
   {
     name: "打开界面语言下拉，选项留在视口内",
-    path: settings("general"),
+    path: settings("options"),
     ready: async (page) => {
       await settingsReady(page);
       await page.getByRole("combobox", { name: "界面语言" }).waitFor();

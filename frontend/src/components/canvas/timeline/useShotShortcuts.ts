@@ -1,68 +1,31 @@
-import { useEffect, type RefObject } from "react";
+import type { RefObject } from "react";
+import { useHotkeys } from "@/preferences/hotkeys";
 
-/** Focus is in an input control: J / K are characters to type, not shortcuts. / 焦点在可输入的控件里：J / K 是要输入的字符，不当作快捷键。 */
-function isTypingTarget(target: Element): boolean {
-  if (target instanceof HTMLTextAreaElement || target instanceof HTMLSelectElement) return true;
-  if (target instanceof HTMLInputElement) {
-    return !["button", "checkbox", "radio", "range", "reset", "submit", "color", "file"].includes(target.type);
-  }
-  if (target instanceof HTMLElement && target.isContentEditable) return true;
-  const role = target.getAttribute("role");
-  return role === "textbox" || role === "combobox" || role === "searchbox";
-}
-
-export function isApplePlatform(): boolean {
-  return typeof navigator !== "undefined" && /Mac|iPhone|iPad/.test(navigator.userAgent);
-}
+export { isApplePlatform } from "@/preferences/hotkeys";
 
 interface ShotShortcutsOptions {
   /** Shortcuts only work when focus is inside this container (or the page has no focused element); they do not steal keys from the Agent panel, header or popovers. / 快捷键只在焦点位于这个容器内（或页面没有焦点元素）时生效，不抢 Agent 面板、页头与弹层的按键。 */
   rootRef: RefObject<HTMLElement | null>;
-  /** Callbacks must be stable references (useCallback). / 回调需传稳定引用（useCallback）。 */
   onPrev: () => void;
   onNext: () => void;
-  /** ⌘S / Ctrl+S; when passed, the browser's save shortcut is intercepted page-wide; when not passed, nothing is intercepted. / ⌘S / Ctrl+S；传入时整页拦下浏览器的保存快捷键，不传时不拦截。 */
+  /** Save the current shot; when passed, its key is intercepted page-wide; when not passed, nothing is intercepted. / 保存当前分镜；传入时整页拦下它的按键，不传时不拦截。 */
   onSave?: () => void;
   /** Shot switching is temporarily unavailable (reorder, add/remove in flight). / 切换分镜暂不可用（改序、增删在途）。 */
   navDisabled: boolean;
 }
 
 /**
- * Shot view shortcuts: J / K switch to the next and previous shot, ignored while focus is in an input; ⌘S (Ctrl+S on Windows) saves the current shot,
- * also inside inputs. Popovers render outside the container; while one is open nothing responds, only the browser default of ⌘S is blocked; keys during IME composition and
- * combinations with other modifiers pass through.
- *
- * 分镜视图的快捷键：J / K 切到下一个与上一个分镜，焦点在输入框里时不响应；⌘S（Windows 为 Ctrl+S）保存当前分镜，
- * 在输入框里也可用。弹层渲染在容器之外，打开时不响应，只拦下 ⌘S 的浏览器默认行为；输入法组合输入中的按键与
- * 带其他修饰键的组合都放行。
+ * Storyboard shortcuts on the hot key registry (`storyboard` scope; defaults J / K switch to the previous and next
+ * shot, ⌘S / Ctrl+S saves the current shot, also inside text fields). Bindings come from this device's Hot keys
+ * settings; the rules (popovers, IME composition, typing targets, modifiers) are the dispatcher's, see `useHotkeys`.
  */
 export function useShotShortcuts({ rootRef, onPrev, onNext, onSave, navDisabled }: ShotShortcutsOptions): void {
-  useEffect(() => {
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.defaultPrevented || event.isComposing || event.key === "Process") return;
-      const target = event.target;
-      if (!(target instanceof Element)) return;
-      const inScope = target === document.body || Boolean(rootRef.current?.contains(target));
-      const key = event.key.toLowerCase();
-
-      if ((event.metaKey || event.ctrlKey) && !event.altKey && !event.shiftKey && key === "s") {
-        if (!onSave) return;
-        // With focus in a popover or the Agent panel the shot is not saved, but the browser's "Save page" is still blocked
-        // 焦点在弹层或 Agent 面板里时不保存分镜，但浏览器的「保存网页」同样拦下
-        event.preventDefault();
-        if (inScope) onSave();
-        return;
-      }
-      if (!inScope) return;
-      if (event.metaKey || event.ctrlKey || event.altKey || event.shiftKey) return;
-      if (key !== "j" && key !== "k") return;
-      if (isTypingTarget(target) || navDisabled) return;
-      event.preventDefault();
-      // K = next shot, J = previous (the strip runs left to right: J is the left-hand key)
-      if (key === "k") onNext();
-      else onPrev();
-    };
-    document.addEventListener("keydown", onKeyDown);
-    return () => document.removeEventListener("keydown", onKeyDown);
-  }, [rootRef, onSave, onNext, onPrev, navDisabled]);
+  useHotkeys("storyboard", {
+    rootRef,
+    handlers: {
+      "storyboard.prev_shot": navDisabled ? undefined : onPrev,
+      "storyboard.next_shot": navDisabled ? undefined : onNext,
+      "storyboard.save_shot": onSave,
+    },
+  });
 }

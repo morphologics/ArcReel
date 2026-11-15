@@ -48,6 +48,8 @@ import type {
   PromptTemplatePartial,
   ModelCandidatesResponse,
   OnboardingStatus,
+  StudioUserOptions,
+  StudioUserOptionsPatch,
   SystemConfigPatch,
   ApiKeyInfo,
   CreateApiKeyResponse,
@@ -515,6 +517,18 @@ class API {
 
   static async markOnboardingSeen(): Promise<OnboardingStatus> {
     return this.request("/onboarding/seen", { method: "POST" });
+  }
+
+  // ==================== User options ====================
+
+  /** Studio options the member has set (keys left at their default are absent). */
+  static async getUserOptions(options: { signal?: AbortSignal } = {}): Promise<StudioUserOptions> {
+    return this.request("/user-options", { signal: options.signal });
+  }
+
+  /** Merge the given keys into the studio options; `null` resets a key. Returns all options set after the merge. */
+  static async updateUserOptions(patch: StudioUserOptionsPatch): Promise<StudioUserOptions> {
+    return this.request("/user-options", { method: "PUT", body: JSON.stringify(patch) });
   }
 
   static async downloadDiagnostics(): Promise<{ blob: Blob; filename: string }> {

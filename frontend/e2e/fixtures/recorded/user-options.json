@@ -1,0 +1,9 @@
+{
+  "method": "GET",
+  "path": "/api/v1/user-options",
+  "status": 200,
+  "body": {
+    "default_editor": "arcreel",
+    "mode": "advanced"
+  }
+}

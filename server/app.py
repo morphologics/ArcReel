@@ -132,6 +132,7 @@ from server.routers import (
     system_config,
     tasks,
     usage,
+    user_options,
     versions,
 )
 from server.routers import auth as auth_router
@@ -980,6 +981,7 @@ app.include_router(
     tags=["Agent 记忆"],
 )
 app.include_router(onboarding.router, prefix="/api/v1", dependencies=[Depends(get_current_user)], tags=["首次使用引导"])
+app.include_router(user_options.router, prefix="/api/v1", dependencies=[Depends(get_current_user)], tags=["User options"])
 app.include_router(
     prompt_templates.router, prefix="/api/v1", dependencies=[Depends(get_current_user)], tags=["提示词模版"]
 )

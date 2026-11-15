@@ -119,7 +119,7 @@ describe("SystemConfigPage", () => {
     vi.spyOn(API, "listCredentials").mockResolvedValue({ credentials: [] });
   });
 
-  it("按生成、Agent、市场与使用记录、系统分组列出分区，无法识别的分区落在供应商", () => {
+  it("按生成、Agent、市场与使用记录、系统、个人分组列出分区，无法识别的分区落在供应商", () => {
     renderPage("/app/settings", "section=media");
     const nav = screen.getByRole("navigation", { name: "设置" });
 
@@ -136,6 +136,7 @@ describe("SystemConfigPage", () => {
       ["Agent", ["YouReel Studio Agent", "Agent 记忆", "外部 Agent 接入", "访问令牌"]],
       [null, ["市场", "使用记录"]],
       ["系统", ["通用", "提示词模版", "关于"]],
+      ["个人", ["选项", "快捷键"]],
     ]);
     expect(within(nav).getByRole("link", { name: "供应商" })).toHaveAttribute("aria-current", "page");
   });
