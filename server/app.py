@@ -85,6 +85,7 @@ from server.remote_mcp import mount_remote_mcp, remote_mcp_host
 from server.routers import (
     ad_script,
     agent_config,
+    agent_llm,
     agent_memory,
     api_keys,
     asset_sheets,
@@ -940,6 +941,8 @@ app.include_router(system_config.router, prefix="/api/v1", dependencies=[Depends
 app.include_router(system.router, prefix="/api/v1", dependencies=[Depends(get_current_user)], tags=["系统"])
 app.include_router(api_keys.router, prefix="/api/v1", dependencies=[Depends(get_current_user)], tags=["API Key 管理"])
 app.include_router(agent_config.router, prefix="/api/v1", dependencies=[Depends(get_current_user)], tags=["Agent 配置"])
+# The studio agent's model for the editor's AI chat (OpenReel next to the studio)
+app.include_router(agent_llm.router, prefix="/api/v1", dependencies=[Depends(get_current_user)])
 app.include_router(
     custom_providers.router, prefix="/api/v1", dependencies=[Depends(get_current_user)], tags=["自定义供应商"]
 )
