@@ -129,6 +129,13 @@ class OreelPack:
             await asyncio.to_thread(self.workdir.cleanup)
 
 
+def _shot_label(shots: dict[str, dict], unit_id: str) -> str:
+    """A friendly name for a shot: its place in the episode and where it happens, e.g. "Shot 2 · Dining Room"."""
+    position = list(shots).index(unit_id) + 1
+    places = shots[unit_id].get("scenes") or []
+    return f"Shot {position} · {places[0]}" if places else f"Shot {position}"
+
+
 def _clip(clip_id: str, media_id: str, track_id: str, start: float, duration: float, in_point: float, **extra: Any):
     return {
         "id": clip_id,
@@ -264,7 +271,8 @@ class TimelineOreelPackService:
                     "project": project_name, "timeline_id": readout.timeline.id, "revision": readout.revision,
                     "clip_id": clip.id, "unit_id": clip.unit_id, "video_version": clip.video_version,
                     "reason": clip.reason, "episode": readout.timeline.episode,
-                    **({"shot": (shots or {})[clip.unit_id]} if clip.unit_id in (shots or {}) else {}),
+                    **({"shot": (shots or {})[clip.unit_id], "shot_label": _shot_label(shots or {}, clip.unit_id)}
+                       if clip.unit_id in (shots or {}) else {}),
                 }},
             )))
             # the clip's subtitles, on the timeline (as the Edit view places them)

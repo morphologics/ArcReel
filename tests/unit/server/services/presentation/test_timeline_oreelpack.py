@@ -75,7 +75,7 @@ def service(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> TimelineOreelPac
             assert filename == "scripts/episode_3.json"
             return {"scenes": [
                 {"scene_id": "E3S01", "scene_description": "A hallway", "image_prompt": {"composition": {"lighting": "dim"}}},
-                {"scene_id": "E3S02", "scene_description": "A door"},
+                {"scene_id": "E3S02", "scene_description": "A door", "scenes": ["Hallway"]},
             ]}
 
     async def read(self, project_name, timeline_id, *, revision=None):
@@ -157,5 +157,6 @@ async def test_clips_carry_their_shot_from_the_episode_script(service: TimelineO
     assert first["episode"] == 3
     assert first["shot"]["image_prompt"]["composition"]["lighting"] == "dim"
     assert second["shot"]["scene_description"] == "A door"
+    assert (first["shot_label"], second["shot_label"]) == ("Shot 1", "Shot 2 · Hallway")
     # E3S03 has no script entry: the clip keeps its link without a shot
     assert "shot" not in video["clips"][3]["metadata"]["arcreel"]
