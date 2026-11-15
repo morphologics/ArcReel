@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { API } from "@/api";
+import { pickDefaultTimeline } from "./timeline-view";
 
 /** Where YouReel Studio serves its OpenReel fork, next to the studio. */
 const OPENREEL_PAGE = "/reel/index.html";
@@ -44,4 +45,33 @@ export function useOpenReelHref(projectName: string, timelineId: string): string
   if (!served) return null;
   const pack = API.getEditTimelineOreelpackUrl(projectName, timelineId);
   return `${OPENREEL_PAGE}#/arcreel?pack=${encodeURIComponent(pack)}`;
+}
+
+/** The browser tab the studio keeps OpenReel in (one, reused). */
+const OPENREEL_TAB = "youreel-openreel";
+
+/**
+ * Open an episode in OpenReel, in its own reused tab: when that tab already shows OpenReel, it switches to the
+ * episode there (OpenReel's `youreelOpenPack`, as its episode selector does) instead of reloading; otherwise the tab
+ * loads OpenReel with the episode. Must be called from the click itself (the tab opens before the timeline list
+ * arrives, so pop-up blockers allow it).
+ */
+export function openEpisodeInOpenReel(projectName: string, episode: number): void {
+  const tab = window.open("", OPENREEL_TAB);
+  if (!tab) return;
+  void API.listEditTimelines(projectName, episode)
+    .then(({ timelines }) => {
+      const timelineId = pickDefaultTimeline(timelines);
+      if (!timelineId) {
+        tab.close();
+        return;
+      }
+      const pack = API.getEditTimelineOreelpackUrl(projectName, timelineId);
+      const packUrl = new URL(pack, window.location.href).href;
+      const open = (tab as Window & { youreelOpenPack?: (url: string) => void }).youreelOpenPack;
+      if (typeof open === "function") open(packUrl);
+      else tab.location.href = `${OPENREEL_PAGE}#/arcreel?pack=${encodeURIComponent(pack)}`;
+      tab.focus();
+    })
+    .catch(() => tab.close());
 }

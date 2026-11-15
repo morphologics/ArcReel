@@ -40,6 +40,8 @@ import { EpisodeHead } from "./EpisodeHead";
 import { EpisodeHeaderActions, EpisodeHeaderSlotProvider } from "./EpisodeHeaderActions";
 import { EpisodePageHeader } from "./EpisodePageHeader";
 import { EpisodeSwitcher } from "./EpisodeSwitcher";
+import { openEpisodeInOpenReel } from "@/components/canvas/edit/open-in-openreel";
+import { useDefaultEditor } from "@/preferences/user-options";
 import { useEditFocusStore } from "@/stores/edit-focus-store";
 import { EpisodeViewFactsProvider } from "./EpisodeViewScope";
 import { StorySettingView } from "./StorySettingView";
@@ -144,12 +146,25 @@ function EpisodePageContent({
   }, [linkedShot, hasScript, onViewUnit, setSearchParams]);
 
   // Switching to an unselectable view has no effect; switching to the current view writes no history. / 切到不可选的视图不生效；切到当前视图不写历史。
+  // With OpenReel as the default editor (Settings → Options), the Edit tab opens the episode in OpenReel's own tab
+  const { editor: defaultEditor, ready: defaultEditorReady } = useDefaultEditor();
   const changeView = useCallback(
     (next: EpisodeView, options?: EpisodeViewChangeOptions) => {
       if (next === view || !tabs.some((tab) => tab.view === next && !tab.disabled)) return;
       setSearchParams((params) => withEpisodeView(params, next, facts), { replace: options?.replace });
     },
     [view, tabs, facts, setSearchParams],
+  );
+  // The Edit tab itself (not links that open the Edit view for a purpose, e.g. "Show issues")
+  const selectTab = useCallback(
+    (next: EpisodeView, options?: EpisodeViewChangeOptions) => {
+      if (next === "edit" && defaultEditorReady && defaultEditor === "openreel") {
+        openEpisodeInOpenReel(projectName, episode);
+        return;
+      }
+      changeView(next, options);
+    },
+    [changeView, defaultEditor, defaultEditorReady, projectName, episode],
   );
 
   // "View" in workflow progress: shots and video units can only be selected in the shot view. When not in that view, switching view and locating are combined into one leave guard,
@@ -270,7 +285,7 @@ function EpisodePageContent({
           }
           tabs={tabs}
           view={view}
-          onViewChange={changeView}
+          onViewChange={selectTab}
           boardLabel={t(route === "reference_video" ? "episode_view_units" : "episode_view_board")}
           onActionsSlot={setActionsSlot}
           // the Edit view needs the height for its player
