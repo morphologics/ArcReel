@@ -48,6 +48,7 @@ def serialize_value(value: Any) -> Any:
     if isinstance(value, (list, tuple)):
         return [serialize_value(item) for item in value]
 
+    # Pydantic models: mode="json" produces a JSON-safe structure in one pass, avoiding another recursion
     # Pydantic models — mode="json" 一次产出 JSON 安全结构，避免再次递归
     if hasattr(value, "model_dump"):
         return value.model_dump(mode="json")
@@ -67,7 +68,13 @@ def infer_message_type(message: Any) -> str | None:
 
 
 def is_main_turn_activity(message: Any) -> bool:
-    """主线程正在产出一轮回复，与 SDK 判定「轮次进行中」的口径一致。接受 SDK 消息或其 dict 形式。
+    """The main thread is producing a reply turn, consistent with how the SDK judges "turn in progress". Accepts an SDK
+    message or its dict form.
+
+    Subagent messages, task progress and system frames after result do not count: judging by them would mistake an
+    ended session for one with a turn in flight, with no result to close it.
+
+    主线程正在产出一轮回复，与 SDK 判定「轮次进行中」的口径一致。接受 SDK 消息或其 dict 形式。
 
     子代理消息、任务进度与 result 之后的 system 帧都不算：拿它们判定会把已结束的
     会话错当成有一轮在途，又没有 result 来收尾。

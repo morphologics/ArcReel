@@ -1,4 +1,11 @@
-"""项目数据升级的 Web 入口：重试升级，确认升级报告。
+"""Web entry point for project data upgrades: retry the upgrade, acknowledge the upgrade report.
+
+Retry calls the same service command as the Agent's ``retry_project_migration``; the route only maps the result to
+HTTP. When an upgrade fails, the project's other write entry points are all blocked and retrying is exactly how the
+block is lifted, so ``require_project_migration_ok`` is not attached; acknowledging the report only records that the
+user has seen it, so it is not attached either.
+
+项目数据升级的 Web 入口：重试升级，确认升级报告。
 
 重试与 Agent 的 ``retry_project_migration`` 调用同一个服务命令，路由只把结果映射成 HTTP。升级失败时项目的
 其余写入入口都被阻断，重试正是解除阻断的途径，所以不挂 ``require_project_migration_ok``；确认报告只记下
@@ -46,6 +53,9 @@ async def retry_migration(name: str, user: CurrentUser):
                 Services.defaults(pm),
             )
         finally:
+            # The upgrade chain rewrites project.json and scripts directly without sending hints; send them here, so
+            # changes from the upgrade are broadcast as webui instead of being found by timed polling and broadcast as
+            # filesystem.
             # 升级链直接改写 project.json 与剧本，不发 hint；在这里补发，升级带来的变更按 webui 广播，
             # 而不是等定时轮询发现、按 filesystem 广播。
             emit_project_change_hint(name)
@@ -58,6 +68,8 @@ async def retry_migration(name: str, user: CurrentUser):
 
 
 class AcknowledgeReportRequest(BaseModel):
+    #: Generation time of the report the user saw. If the report on disk has been replaced by another one (upgraded
+    #: again since), do not acknowledge, and the new report is shown as usual.
     #: 用户看过的那份报告的生成时间。盘上已换成另一份报告（之后又升级过）时不确认，新报告照常提示。
     migrated_at: str
 

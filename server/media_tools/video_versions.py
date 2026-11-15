@@ -38,7 +38,9 @@ class SelectVideoVersionRequest(BaseModel):
 
 
 def project_video_unit_ids(projects: ProjectManager, project_name: str, project: dict[str, Any]) -> set[str]:
-    """项目全部剧本里的视频单元 ID：分镜图生视频为分镜 ID，参考生视频为 unit_id。"""
+    """Video unit IDs across all scripts of the project: shot IDs for storyboard mode, unit_id for reference-to-video.
+
+    项目全部剧本里的视频单元 ID：分镜图生视频为分镜 ID，参考生视频为 unit_id。"""
     kind = "video_units" if is_reference_video_project(project) else None
     found: set[str] = set()
     for script_name in sorted(projects.list_scripts(project_name)):
@@ -46,7 +48,7 @@ def project_video_unit_ids(projects: ProjectManager, project_name: str, project:
             script = projects.load_script_readonly(project_name, script_name)
             items, id_field, _kind = resolve_items(script, kind=kind)
         except (ScriptEditError, ValueError, OSError):
-            # 读不出的剧本无法证明单元存在，跳过；其余剧本照常判定
+            # Unreadable scripts cannot prove a unit exists, so skip them; other scripts are checked as usual / 读不出的剧本无法证明单元存在，跳过；其余剧本照常判定
             logger.warning("查找视频单元时跳过无法读取的剧本: %s", script_name, exc_info=True)
             continue
         found.update(str(item.get(id_field)) for item in items if isinstance(item, dict) and item.get(id_field))
@@ -54,7 +56,10 @@ def project_video_unit_ids(projects: ProjectManager, project_name: str, project:
 
 
 def _api_problem(exc: ApiError, *, unit_id: str, versions: VersionManager, resource_type: str) -> ToolOutcome[Any]:
-    """服务的领域异常按默认语言转述给 Agent，问题码沿用异常的 i18n key。"""
+    """Domain exceptions of the service are relayed to the Agent in the default language; the issue code reuses the
+    exception's i18n key.
+
+    服务的领域异常按默认语言转述给 Agent，问题码沿用异常的 i18n key。"""
     detail = translate(exc.key, DEFAULT_LOCALE, **exc.params)
     params: dict[str, Any] | None = None
     if exc.key == "version_not_found":

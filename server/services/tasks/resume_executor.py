@@ -1,4 +1,10 @@
-"""Resume executor：`VideoResumeRunner.run` 直接调用的入口。
+"""Resume executor: the entry point called directly by `VideoResumeRunner.run`.
+
+Does not go through the `execute_video_task` / `execute_reference_video_task` pipeline: the provider-side job is
+already running, and whether the local storyboard images / reference images exist should not affect resumed polling.
+Only reuses the service layer's finalize helpers to write back scene/unit assets.
+
+Resume executor：`VideoResumeRunner.run` 直接调用的入口。
 
 不走 `execute_video_task` / `execute_reference_video_task` 流水线——provider 端
 job 已经在跑，本地分镜图 / 参考图是否存在不该影响接续轮询。仅复用 service
@@ -74,7 +80,22 @@ def _validate_resolved_checkpoint_identity(checkpoint: VideoSubmissionCheckpoint
 
 
 def _submitted_base_url(task: dict[str, Any]) -> str | None:
-    """提交本供应商任务时的请求域名，供 backend 回放轮询；未记录时 None。
+    """Request domain used when this provider task was submitted, for the backend to replay polling; None when not
+    recorded.
+
+    The domain does not depend on provider type and always goes into ``submitted_base_url`` (``provider_endpoint``
+    only carries the protocol identifier). The call site is after ``_ensure_checkpoint_endpoint_unchanged``: the
+    protocol identifier and the built-in/custom ownership are already literally equal to those at submission, so the
+    stored domain necessarily belongs to the current set of credentials and can be replayed directly. When the
+    column is empty (existing tasks that never stored this value, providers whose submit domain does not vary with
+    config) fall back to None, and the backend polls the currently configured domain.
+
+    The http(s) form check is a fallback assertion on the stored value: the write side only puts request domains in
+    this column, so any other form means the row has an unknown origin (manual DB edit, a malformed row with both
+    columns set before migration); rather fall back to the currently configured domain than build a polling URL from
+    it.
+
+    提交本供应商任务时的请求域名，供 backend 回放轮询；未记录时 None。
 
     域名不分供应商类型，一律落 ``submitted_base_url``（``provider_endpoint`` 只承载协议标识）。
     调用点在 ``_ensure_checkpoint_endpoint_unchanged`` 之后：协议标识与内置/自定义的归属已经与
@@ -95,7 +116,17 @@ async def execute_resume_video_task(
     *,
     job_id: str,
 ) -> dict[str, Any]:
-    """重启自愈入口：`VideoResumeRunner.run` 直接调。
+    """Restart self-heal entry point: called directly by `VideoResumeRunner.run`.
+
+    1. Resolve the project + build MediaGenerator (payload.video_provider locked by task["provider_id"])
+    2. Call `generator.resume_video_async(job_id=..., ...)`, which internally goes through backend.resume_video
+    3. finalize: write the scene asset / unit assets, extract a thumbnail, return the result dict
+
+    Does not read storyboard / reference local images and does not call assert_duration_supported: if these
+    prechecks failed, missing local assets would leave a job already submitted to the provider "stuck" (a ghost
+    task).
+
+    重启自愈入口：`VideoResumeRunner.run` 直接调。
 
     1. 解析项目 + 构造 MediaGenerator（受 task["provider_id"] 锁定 payload.video_provider）
     2. 调 `generator.resume_video_async(job_id=..., ...)`——内部走 backend.resume_video
@@ -167,6 +198,8 @@ async def execute_resume_video_task(
             prompt=prompt_text,
         )
 
+        #: Non-blocking notices produced by the backend during resume go into the task result through the same channel
+        #: as the first run.
         #: 续跑期 backend 产生的非阻断提示，与首跑同一条通道落进任务 result。
         warnings: list[dict[str, Any]] = []
         with project_change_source("worker"):
@@ -190,6 +223,8 @@ async def execute_resume_video_task(
                     **optional_kwargs,
                 )
             except GenerationTargetDeletedError as deleted:
+                # The result went into the project trash and the task succeeds as usual; no resource was written back,
+                # so no generation success event is emitted.
                 # 结果已进项目回收站，任务照常成功；没有写回任何资源，不发生成成功事件。
                 return deleted.result
             output_path, version, _, video_uri = resumed

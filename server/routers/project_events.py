@@ -40,7 +40,7 @@ async def _project_events_service(
     except FileNotFoundError as exc:
         raise NotFoundError("project_not_found", name=project_name) from exc
     except ValueError as exc:
-        # 非法项目名(路径穿越等)是坏请求,不是「不存在」。
+        # An invalid project name (path traversal etc.) is a bad request, not "does not exist". / 非法项目名(路径穿越等)是坏请求,不是「不存在」。
         raise BadRequestError("invalid_project_name", name=project_name) from exc
     return service
 
@@ -57,6 +57,9 @@ async def stream_project_events(
     try:
         async with service.stream_events(project_name, idle_timeout=PROJECT_EVENTS_SSE_POLL_SECONDS) as stream:
             async for item in stream:
+                # Check for disconnect at the top of every iteration; _idle is only a wake-up fallback so it "also
+                # wakes once while the queue is idle", and no longer owns the timing of disconnect detection --
+                # disconnects are detected immediately even under a sustained high-frequency event stream.
                 # 每轮迭代顶部都查断线;_idle 仅作为「队列空闲时也要醒一次」的唤醒兜底,
                 # 不再独占断线检测的时机——持续高频事件流下断线一样能立刻发现。
                 if await request.is_disconnected():

@@ -1,4 +1,8 @@
-"""项目回收站：列出删除记录、恢复、下载记录里的文件、彻底删除与清空。彻底删除与清空只开放给创作者：不给 Agent 工具，服务端也拒绝内嵌 Agent 的令牌。"""
+"""Project trash: list deletion records, restore, download files in a record, permanently delete and empty. Permanent
+delete and empty are only open to creators: not given to Agent tools, and the server also rejects the embedded
+Agent's token.
+
+项目回收站：列出删除记录、恢复、下载记录里的文件、彻底删除与清空。彻底删除与清空只开放给创作者：不给 Agent 工具，服务端也拒绝内嵌 Agent 的令牌。"""
 
 from __future__ import annotations
 

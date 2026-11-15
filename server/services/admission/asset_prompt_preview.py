@@ -1,4 +1,13 @@
-"""资产图草稿提示词预览：草稿描述替换进生成输入后走执行期同一渲染出口，不提交生成或保存描述。
+"""Draft prompt preview for asset sheets: the draft description is swapped into the generation input and goes through
+the same rendering exit as execution, without submitting generation or saving the description.
+
+Takes the same generation input as the executor (``lib.artifacts.generation_input``): when generation would be
+rejected (empty description, original image unreadable, a derivative's base-look sheet unavailable) the preview is
+unavailable and carries a gap code; otherwise it is rendered after trimming to the same image backend reference
+image limit as the executor, and when trimming happens it carries a warning of the same shape as the execution task
+result.
+
+资产图草稿提示词预览：草稿描述替换进生成输入后走执行期同一渲染出口，不提交生成或保存描述。
 
 与执行器取同一份生成输入（``lib.artifacts.generation_input``）：生成会被拒时（描述为空、原图读不到、
 衍生的本体资产图不可用）预览不可用并带缺口码；否则按与执行器相同的图像后端参考图上限裁剪后渲染，
@@ -32,7 +41,10 @@ def _with_draft_description(
     derivative_key: str | None,
     description: str,
 ) -> dict[str, Any]:
-    """项目载荷的副本，目标条目的描述换成草稿；只复制草稿所在的那条路径。"""
+    """A copy of the project payload with the target entry's description replaced by the draft; only the path where the
+    draft sits is copied.
+
+    项目载荷的副本，目标条目的描述换成草稿；只复制草稿所在的那条路径。"""
 
     bucket_key = ASSET_SPECS[asset_type].bucket_key
     draft = dict(project)
@@ -56,7 +68,12 @@ async def render_asset_prompt(
     derivative_key: str | None,
     description: str,
 ) -> RenderedPrompt:
-    """按资产执行口径渲染草稿描述：衍生只编辑本体外观，画风由本体图承载。
+    """Render the draft description by the asset execution rules: a derivative only edits the base look's appearance,
+    and the art style is carried by the base-look image.
+
+    ``asset_key`` / ``derivative_key`` are the real on-disk names in the asset table and derivative table.
+
+    按资产执行口径渲染草稿描述：衍生只编辑本体外观，画风由本体图承载。
 
     ``asset_key`` / ``derivative_key`` 是资产表与衍生表里的落盘真名。
     """

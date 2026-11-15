@@ -1,4 +1,12 @@
-"""引用准入结论与生成输入拒绝 → 服务端契约：路由的领域异常与整批的逐目标生成问题。
+"""Reference admission conclusions and generation input refusals -> server contract: domain exceptions of routes and
+per-target generation problems of whole batches.
+
+Entry admission is decided in :mod:`lib.references.reference_admission`, and execution-time generation input
+refusals come from :mod:`lib.artifacts.generation_input`; this module only translates conclusions into receipt
+shapes, so single submissions, whole-batch admission and execution-time refusals do not each implement the check
+again because of differing receipt shapes.
+
+引用准入结论与生成输入拒绝 → 服务端契约：路由的领域异常与整批的逐目标生成问题。
 
 入口准入的判定在 :mod:`lib.references.reference_admission`，执行期的生成输入拒绝来自
 :mod:`lib.artifacts.generation_input`；本模块只把结论翻成回执形状，让单条提交、整批准入与
@@ -27,7 +35,7 @@ from lib.references.reference_admission import (
 )
 from lib.references.reference_catalog import build_reference_catalog
 
-#: 语义缺口的对象在各自文案里的参数名。
+#: Parameter names of the subject of a semantic gap in each message text. / 语义缺口的对象在各自文案里的参数名。
 _SUBJECT_PARAMS: dict[str, str] = {
     PROMPT_PENDING_CODE: "segment_id",
     ASSET_DESCRIPTION_REQUIRED_CODE: "name",
@@ -43,7 +51,14 @@ def _gap_text(gap: InputGap) -> str:
 
 
 def input_refusal_error(refused: InputRefused) -> BadRequestError:
-    """生成输入拒绝的唯一翻译：第一个缺口码作错误码，全部缺口放进错误详情。
+    """The single translation of generation input refusals: the first gap code becomes the error code, and all gaps go
+    into the error details.
+
+    ``missing_text`` lists all reference gaps in assembly order, so the user can fill them in one go; ``gaps`` is
+    the machine form of the same gaps (code, asset type, name), saved with the task failure reason for the Agent to
+    handle one by one.
+
+    生成输入拒绝的唯一翻译：第一个缺口码作错误码，全部缺口放进错误详情。
 
     ``missing_text`` 按装配序列出全部引用缺口，用户一次就能补齐；``gaps`` 是同一份缺口的
     机器形态（码、资产类型、名字），随任务失败原因落库，供 Agent 逐项处理。
@@ -60,7 +75,19 @@ def input_refusal_error(refused: InputRefused) -> BadRequestError:
 
 
 def require_admitted_storyboard_references(project: dict, items: Iterable[object]) -> None:
-    """分镜路线生成入口预检：引用未登记、或角色 / 场景 / 道具没有资产图即拒绝。
+    """Pre-check at the generation entry of the shot route: refuse when references are unregistered, or a character /
+    scene / prop has no sheet.
+
+    Single submissions of storyboard images, grid images and image-to-video share this function; the same check for
+    reference-to-video is in :class:`lib.script.reference_video.request_projection.ReferenceUnitRequestProjector`.
+    Previously these references were silently dropped: the user paid for a storyboard image missing a character, or
+    a video that could not reference the person, without seeing which name caused the problem.
+
+    The two axes are reported separately: unregistered means registering the asset or changing the name, no sheet
+    means generating the sheet; the actions differ, and a merged message could not say which to do. When several are
+    passed, all gaps are reported at once, so the user does not have to submit repeatedly to see them all.
+
+    分镜路线生成入口预检：引用未登记、或角色 / 场景 / 道具没有资产图即拒绝。
 
     分镜图、宫格图与图生视频的单条提交共用本函数，参考生视频的同一判定在
     :class:`lib.script.reference_video.request_projection.ReferenceUnitRequestProjector` 里。
@@ -79,7 +106,13 @@ def require_admitted_storyboard_references(project: dict, items: Iterable[object
 
 
 def reference_admission_problems(admission: ReferenceAdmission, *, unit_id: str) -> tuple[GenerationProblem, ...]:
-    """把引用准入的缺口抬进逐目标的生成问题契约。
+    """Lift reference admission gaps into the per-target generation problem contract.
+
+    Same source as the check of single-submission ``require_admitted_storyboard_references``, except a whole batch
+    cannot short-circuit: with per-target records the user sees at once which ones to change, instead of fixing one,
+    submitting, and hitting the next.
+
+    把引用准入的缺口抬进逐目标的生成问题契约。
 
     与单条提交的 ``require_admitted_storyboard_references`` 判定同源，只是整批不能短路：
     逐目标记名后用户一次就能看全该改哪几条，而不是修一条、提交一次、再撞下一条。

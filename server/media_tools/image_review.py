@@ -72,8 +72,10 @@ class InspectedImage:
     id: str
     version: int | None
     status: ImageStatus
-    #: 该项现有的全部版本号，用来发现还没看过的历史版本。
+    #: All existing version numbers of this item, used to find historical versions not yet viewed. / 该项现有的全部版本号，用来发现还没看过的历史版本。
     available_versions: tuple[int, ...] = ()
+    #: The prompt registered when this version was generated; None for versions without a registered prompt, such as
+    #: manual uploads.
     #: 生成该版本时登记的提示词；手动上传等没有登记提示词的版本为 None。
     prompt: str | None = None
     detail: str | None = None
@@ -87,14 +89,17 @@ class InspectImagesResult:
 
 
 def _storyboard_images(services: Services, project_name: str) -> dict[str, str | None]:
-    """项目全部剧本里的分镜 ID 与登记的当前图；参考生视频的剧本没有分镜。"""
+    """Shot IDs and registered current images across all scripts of the project; reference-to-video scripts have no
+    shots.
+
+    项目全部剧本里的分镜 ID 与登记的当前图；参考生视频的剧本没有分镜。"""
     found: dict[str, str | None] = {}
     for script_name in sorted(services.projects.list_scripts(project_name)):
         try:
             script = services.projects.load_script_readonly(project_name, script_name)
             items, id_field, *_ = get_storyboard_items(script)
         except (ScriptEditError, ValueError, OSError):
-            # 读不出的剧本无法证明分镜存在，跳过；其余剧本照常判定
+            # Unreadable scripts cannot prove a shot exists, so skip them; other scripts are checked as usual / 读不出的剧本无法证明分镜存在，跳过；其余剧本照常判定
             logger.warning("查找分镜时跳过无法读取的剧本: %s", script_name, exc_info=True)
             continue
         for item in items:
@@ -107,7 +112,9 @@ def _storyboard_images(services: Services, project_name: str) -> dict[str, str |
 def _resolve_ids(
     services: Services, project_name: str, resource_type: str, ids: list[str]
 ) -> tuple[list[tuple[str, str | None]], list[str]]:
-    """返回归一后的 ID 与登记的当前图，以及不存在的请求 ID。"""
+    """Return the normalized IDs with their registered current images, and the requested IDs that do not exist.
+
+    返回归一后的 ID 与登记的当前图，以及不存在的请求 ID。"""
     if resource_type == "storyboard":
         known = _storyboard_images(services, project_name)
         return [(item_id, known[item_id]) for item_id in ids if item_id in known], [
@@ -120,7 +127,7 @@ def _resolve_ids(
         try:
             resolved.append(resolve_current_image_pointer(project, resource_type, item_id, None))
         except KeyError:
-            # 包括不合「本体名/衍生名」格式的衍生 ID
+            # Including derivative IDs that do not match the "base name/derivative name" format / 包括不合「本体名/衍生名」格式的衍生 ID
             missing.append(item_id)
     return resolved, missing
 
@@ -134,7 +141,9 @@ def _available_versions(versions: VersionManager, resource_type: str, resource_i
 
 
 def _read_image(path: Path) -> tuple[bytes | None, str | None]:
-    """读快照并缩成 JPEG；读不出或解不开时返回原因。"""
+    """Read the snapshot and shrink it to JPEG; return the reason when it cannot be read or decoded.
+
+    读快照并缩成 JPEG；读不出或解不开时返回原因。"""
     try:
         return compress_image_bytes(path.read_bytes(), max_long_edge=MAX_IMAGE_EDGE, quality=_JPEG_QUALITY), None
     except OSError as exc:
@@ -193,6 +202,8 @@ async def inspect_images(
                     if version is not None
                     else None
                 )
+                # Only archives of current artifacts may omit history; with no versions, only read the registered
+                # current image and do not write a version record.
                 # 仅当前产物归档可省略历史；无版本时只读登记的当前图，不补写版本记录。
                 if version is None and pointer:
                     current_path = try_safe_join(project_path, pointer, require_file=True)

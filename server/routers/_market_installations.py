@@ -1,4 +1,6 @@
-"""安装记录的响应投影，供市场与端点 API 共用。"""
+"""Response projection of install records, shared by the market and endpoint APIs.
+
+安装记录的响应投影，供市场与端点 API 共用。"""
 
 from collections.abc import Iterable
 from datetime import UTC
@@ -23,7 +25,7 @@ class EntryInstallationResponse(BaseModel):
     endpoint_key: str
     endpoint_display_name: str
     installed_version: str
-    #: 条目就在眼前，市场轴只会是 current / update_available。
+    #: The entry is right here, so the market axis can only be current / update_available. / 条目就在眼前，市场轴只会是 current / update_available。
     state: Literal["current", "update_available"]
     modified: bool
 
@@ -32,7 +34,7 @@ class EndpointInstallationResponse(BaseModel):
     source_key: str
     source_id: int | None
     source_display_name: str | None
-    #: 来源已删除时为空。
+    #: Empty when the source has been deleted. / 来源已删除时为空。
     source_enabled: bool | None
     slug: str
     installed_version: str
@@ -53,7 +55,13 @@ def _status(record: MarketInstallation, endpoint: CustomEndpoint, entry: MarketI
 async def entry_installations(
     session: AsyncSession, entries: Iterable[SourcedEntry]
 ) -> dict[tuple[str, str], EntryInstallationResponse]:
-    """按条目所在源的 ``(canonical_key, slug)`` 索引给定条目的安装记录；没有记录的条目不出现。
+    """Index the install records of the given entries by ``(canonical_key, slug)`` of the entry's source; entries
+    without records do not appear.
+
+    Records belong to the source identity, so after a source is deleted, re-adding it with a GitHub address
+    differing in case still links them up.
+
+    按条目所在源的 ``(canonical_key, slug)`` 索引给定条目的安装记录；没有记录的条目不出现。
 
     记录按来源身份归属，源被删除后以大小写不同的 GitHub 地址重新添加仍能接上。
     """
@@ -94,7 +102,10 @@ async def entry_installation(session: AsyncSession, sourced: SourcedEntry) -> En
 async def endpoint_installations(
     session: AsyncSession, where: ColumnElement[bool] | None = None
 ) -> dict[int, EndpointInstallationResponse]:
-    """按端点 id 索引；``where`` 缺省时取全部记录。源被删除时来源字段为空、市场轴为 unavailable。"""
+    """Indexed by endpoint id; when ``where`` is omitted all records are taken. When the source has been deleted the
+    source fields are empty and the market axis is unavailable.
+
+    按端点 id 索引；``where`` 缺省时取全部记录。源被删除时来源字段为空、市场轴为 unavailable。"""
     rows = (
         await session.execute(
             select(MarketInstallation, CustomEndpoint).join(CustomEndpoint).where(true() if where is None else where)
@@ -118,7 +129,7 @@ async def endpoint_installations(
             source_enabled=source.is_enabled if source else None,
             slug=record.slug,
             installed_version=record.installed_version,
-            # SQLite 读回的时间不带时区，库内一律按 UTC 存。
+            # Times read back from SQLite have no time zone; everything in the DB is stored as UTC. / SQLite 读回的时间不带时区，库内一律按 UTC 存。
             installed_at=(
                 record.installed_at if record.installed_at.tzinfo else record.installed_at.replace(tzinfo=UTC)
             ).isoformat(),

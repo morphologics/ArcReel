@@ -82,7 +82,13 @@ _EXPORT_SNAPSHOT_ATTEMPTS = 3
 
 
 class CurrentExportVersionRetention(Enum):
-    """仅当前版本导出时，一类资源的版本历史在包里保留什么。
+    """For a current-version-only export, what is kept of one resource type's version history in the package.
+
+    Current content is always exported from the canonical path. Kept version records go into the package together
+    with the snapshots they point to; other records and snapshots are left out, so versions.json and snapshot files
+    in the package correspond one to one.
+
+    仅当前版本导出时，一类资源的版本历史在包里保留什么。
 
     当前内容一律从正式路径导出。保留的版本记录连同它指向的快照一起入包，其余记录与
     快照都不入包，包里的 versions.json 与快照文件因此一一对应。
@@ -98,6 +104,11 @@ class CurrentExportVersionRetention(Enum):
     """只保留选中记录是手动上传的资源：规划器凭这条记录与快照按上传本身判定时效。"""
 
 
+#: Retention rule of current-version-only export for each resource type's version history, covering all types of
+#: ``RESOURCE_TYPES``.
+#: Sheets (each bucket of ``ASSET_SPECS``) and character derivative sheets have their freshness judged by the planner
+#: from the selected manual upload record, so upload evidence is kept. Every type whose freshness check reads the
+#: selected manual upload record must be classified as ``MANUAL_UPLOAD`` or ``SELECTED``.
 #: 仅当前版本导出对每一类资源版本历史的保留口径，覆盖 ``RESOURCE_TYPES`` 的全部类型。
 #: 资产图（``ASSET_SPECS`` 的各个桶）与角色衍生资产图由规划器按选中的手动上传记录判定
 #: 时效，因此保留上传证据。凡是时效判定读取选中手动上传记录的类型，都须归为
@@ -117,7 +128,14 @@ CURRENT_EXPORT_VERSION_RETENTION: Mapping[str, CurrentExportVersionRetention] = 
 
 
 def _resolve_existing_asset(name: str, candidates: set[str]) -> str:
-    """把剧本里的资产名解析为 *candidates* 中等价的真实名字；未命中原样返回。
+    """Resolve an asset name in the script to the equivalent real name in *candidates*; returned as-is if not matched.
+
+    An imported script and project.json may each be in either NFC or NFD form (the registration gate stores NFC;
+    existing archives are not migrated); membership can only be judged correctly after resolving in the comparison
+    coordinate system of ``lib.project.asset_types``. Otherwise the repair phase would add a visually identically
+    named placeholder definition for an already registered asset, or report it as a blocking missing asset.
+
+    把剧本里的资产名解析为 *candidates* 中等价的真实名字；未命中原样返回。
 
     导入的剧本与 project.json 可以各自是 NFC/NFD 中的任一形态（登记闸口落 NFC，
     存量归档不迁移），按 ``lib.project.asset_types`` 的比对坐标系解析后才判得准成员关系：
@@ -133,14 +151,19 @@ def _resolve_existing_asset(name: str, candidates: set[str]) -> str:
 
 
 def _failure_location(exc: BaseException) -> str | None:
-    """迁移拒绝点名的文件与集，作为诊断的定位。"""
+    """Files and episodes named by a migration rejection, used to locate the diagnostic.
+
+    迁移拒绝点名的文件与集，作为诊断的定位。"""
     if not isinstance(exc, ProjectMigrationError) or exc.file is None:
         return None
     return exc.file if exc.episode is None else f"{exc.file} (episode {exc.episode})"
 
 
 def _take_placeholder_adjustments(diagnostics: ArchiveDiagnostics) -> list[MigrationAdjustment]:
-    """把修复期补的资产占位从诊断里取出，作为迁移报告的「已调整」。"""
+    """Take the asset placeholders added during repair out of the diagnostics, as the "adjusted" part of the migration
+    report.
+
+    把修复期补的资产占位从诊断里取出，作为迁移报告的「已调整」。"""
     adjustments: list[MigrationAdjustment] = []
     kept: list[ArchiveDiagnostic] = []
     for item in diagnostics.auto_fixed:
@@ -167,7 +190,10 @@ class ArchiveMember:
 
 @dataclass(frozen=True)
 class ArchiveDiagnostic:
-    """一条归档诊断。``message`` 是 locale-neutral 的结构化消息，渲染发生在消费边界。"""
+    """One archive diagnostic. ``message`` is a locale-neutral structured message; rendering happens at the consumption
+    boundary.
+
+    一条归档诊断。``message`` 是 locale-neutral 的结构化消息，渲染发生在消费边界。"""
 
     code: str
     message: ValidationMessage
@@ -202,6 +228,9 @@ class ArchiveDiagnostics:
         *,
         location: str | None = None,
     ) -> None:
+        # Dedup compares text rendered in the default language: the same key with different params are different
+        # diagnostics and must each be kept; params may contain unhashable values such as lists / sets, and the
+        # rendered result is a stable, hashable equivalent fingerprint.
         # 判重按默认语言渲染文本比对：同 key 不同 params 是不同诊断，须各自保留；
         # params 可能含列表 / 集合等不可哈希值，渲染结果是稳定且可哈希的等价指纹。
         key = (bucket, code, message.render(default_translate), location)
@@ -259,7 +288,10 @@ class ProjectImportResult:
 
 
 class ProjectArchiveValidationError(ValueError):
-    """归档导入/导出的用户可见失败。``detail`` / ``errors`` / ``warnings`` 均为结构化消息，
+    """User-visible failure of archive import/export. ``detail`` / ``errors`` / ``warnings`` are all structured
+    messages, rendered by the router in the request language.
+
+    归档导入/导出的用户可见失败。``detail`` / ``errors`` / ``warnings`` 均为结构化消息，
     由 router 按请求语言渲染。"""
 
     def __init__(
@@ -287,7 +319,10 @@ class ProjectArchiveValidationError(ValueError):
         return [warning.render(translate or default_translate) for warning in self.warnings]
 
     def diagnostics_payload(self, translate: Callable[..., str] | None = None) -> dict[str, list[dict[str, Any]]]:
-        """导入失败响应里的诊断三桶；无诊断来源时给空桶，保持响应形状恒定。"""
+        """The three diagnostic buckets in the import failure response; empty buckets when there is no diagnostic
+        source, keeping the response shape constant.
+
+        导入失败响应里的诊断三桶；无诊断来源时给空桶，保持响应形状恒定。"""
         if self.diagnostics is None:
             return {"blocking": [], "auto_fixable": [], "warnings": []}
         return self.diagnostics.to_import_error_payload(translate)
@@ -304,7 +339,16 @@ def _registry_bucket_durations(
 
 
 def _registry_supported_durations(project: dict[str, Any]) -> list[int] | None:
-    """归档自报的视频模型在 registry 声明的时长全集；未声明型号或不在 registry 时为 None。
+    """Full set of durations declared in the registry for the video model the archive reports; None for undeclared
+    models or ones not in the registry.
+
+    Reads only project.json and the registry, with no capability synthesis or narrowing: import runs in a thread
+    without a config DB session and cannot get video request facts; this full set is only used to pick duration
+    options when normalizing existing per-shot durations. Units of a reference-to-video project go to r2v or i2v
+    depending on available reference images, so take the union of both buckets' declared sets; None if either bucket
+    cannot be looked up, same rule as online content review.
+
+    归档自报的视频模型在 registry 声明的时长全集；未声明型号或不在 registry 时为 None。
 
     只读 project.json 与 registry，不经能力合成也不收窄：导入在没有配置库会话的线程里跑，
     取不到视频请求事实，这份全集只用于给存量 per-shot 时长收编取档。参考生视频项目的单元按
@@ -320,13 +364,18 @@ def _registry_supported_durations(project: dict[str, Any]) -> list[int] | None:
 
 
 class ProjectArchiveService:
+    # Render artifacts (final cut etc.) can be re-rendered from project content at any time and are not archived;
+    # their manifest entries are removed too, and read as missing after import.
     # 渲染产物（成片等）随时可从项目内容重新渲染，不进归档；它们的清单条目也一并剔除，导入后读 missing。
     _ARCHIVE_EXCLUDED_ROOTS = frozenset({RENDERS_DIRNAME})
     _ROOT_VISIBLE_ENTRIES = frozenset(DataValidator.ALLOWED_ROOT_ENTRIES - _ARCHIVE_EXCLUDED_ROOTS)
     _AGENT_RUNTIME_EXCLUDES = frozenset({".claude", "CLAUDE.md"})
 
     def __init__(self, project_manager: ProjectManager, *, retire_project: RetireProject | None = None):
-        """``retire_project`` 收尾覆盖导入替换掉的现有项目，覆盖现有项目时必需。"""
+        """``retire_project`` finalizes the existing project replaced by an overwrite import; required when overwriting
+        an existing project.
+
+        ``retire_project`` 收尾覆盖导入替换掉的现有项目，覆盖现有项目时必需。"""
         self.project_manager = project_manager
         self._retire_project = retire_project
         self.validator = DataValidator(projects_dir=str(project_manager.projects_dir))
@@ -387,7 +436,7 @@ class ProjectArchiveService:
                     scope=scope,
                 )
         except Exception:
-            archive_path.unlink(missing_ok=True)  # hard-delete: temp -- 导出失败的半成品归档
+            archive_path.unlink(missing_ok=True)  # hard-delete: temp -- partial archive of a failed export / 导出失败的半成品归档
             raise
         finally:
             if temp_dir is not None:
@@ -425,7 +474,14 @@ class ProjectArchiveService:
 
     @staticmethod
     def _raise_migration_validation_error(diagnostics: ArchiveDiagnostics, cause: Exception) -> NoReturn:
-        """导入包的数据升级没能走完：带着原因拒绝导入，staging 随临时目录丢弃。
+        """The import package's data upgrade could not complete: reject the import with the reason; staging is
+        discarded with the temp directory.
+
+        When the data itself is rejected (unreadable, structural violation), it is returned as a validation failure;
+        when the upgrade itself could not be completed (disk, writes, program bugs), the reason is included too but
+        it is returned as a server error.
+
+        导入包的数据升级没能走完：带着原因拒绝导入，staging 随临时目录丢弃。
 
         数据本身被拒（读不出、结构违约）按校验失败返回；升级本身没能做完（磁盘、写入、程序缺陷）
         同样带原因，但按服务端错误返回。
@@ -455,7 +511,10 @@ class ProjectArchiveService:
         confirm_report: bool = False,
         translate: Callable[..., str] | None = None,
     ) -> ProjectImportResult:
-        """导入归档。迁移报告非空且 ``confirm_report`` 为假时以 409 返回报告、不留下任何项目数据。"""
+        """Import an archive. When the migration report is non-empty and ``confirm_report`` is false, return the report
+        with 409 and leave no project data behind.
+
+        导入归档。迁移报告非空且 ``confirm_report`` 为假时以 409 返回报告、不留下任何项目数据。"""
         if conflict_policy not in {"prompt", "rename", "overwrite"}:
             raise ProjectArchiveValidationError(
                 ValidationMessage("arch_invalid_conflict_policy"),
@@ -478,9 +537,24 @@ class ProjectArchiveService:
                         staging_dir,
                     )
 
+                    # Version history is settled before repair and migration: later steps that read versions.json only
+                    # see validated snapshot paths.
                     # 版本历史先于修复与迁移收口：后续步骤读取 versions.json 时只见到已校验的快照路径。
                     self._confine_version_history(staging_dir)
                     diagnostics = self._repair_project_tree(staging_dir)
+                    # Before validation, run the full migration chain on the staging copy (normalize legacy provider
+                    # names / split image_backend / re-encode generation mode): the startup run_project_migrations
+                    # only covers projects existing at startup; old archives imported after startup must be migrated
+                    # here, otherwise the resolve chain no longer reads legacy fields and the project would silently
+                    # fall back to the global default, and the validator asserts the latest schema shape (e.g.
+                    # generation_mode required and binary), so an unmigrated old archive would be wrongly rejected.
+                    # Placed **before** install -> if migration raises, the staging temp directory is discarded with
+                    # TemporaryDirectory, leaving no half-migrated dirty project directory, and no rollback of an
+                    # already saved install is needed.
+                    # Encoding migration comes before schema migration: sources are all converted to UTF-8 first, so
+                    # every chain that reads sources as UTF-8 afterwards has uniform input. A conversion failure = the
+                    # file itself cannot be decoded (no path can read it); it surfaces as an import warning rather
+                    # than aborting, since a locally corrupted file should not block importing the whole project.
                     # 在校验前对 staging 副本跑完整迁移链（归一化 legacy provider 名 / 拆分 image_backend /
                     # 生成模式重编码）：启动期 run_project_migrations 只覆盖启动时已存在的项目，启动后导入的
                     # 旧归档需在此补跑，否则解析链不再读 legacy 字段会让该项目静默回退全局默认，且校验器按
@@ -497,6 +571,12 @@ class ProjectArchiveService:
                             "source_encoding_unconverted",
                             ValidationMessage("arch_source_encoding_unconverted", {"name": failed_name}),
                         )
+                    # The Artifact Manifest is a hidden sidecar and not an archive member. The official export puts
+                    # the full claim snapshot into the visible archive envelope; old hand-made archives lack this
+                    # field and still use self-proving reconstruction. Before migration, write the claims from the
+                    # envelope into a staged manifest; the migration chain carries them over as in an in-place upgrade
+                    # (e.g. v18->v19 rewrites the basis rules for storyboard images and grids), and on activation they
+                    # are restored by content evidence.
                     # Artifact Manifest 是 hidden sidecar，不进入归档成员。官方导出把完整
                     # claim snapshot 放进 visible archive envelope；旧的手工归档没有该字段，
                     # 仍走 self-proving reconstruction。迁移前先把信封里的 claim 落成暂存清单，
@@ -522,6 +602,8 @@ class ProjectArchiveService:
                             preserved_manifest = take_migrated_artifact_claims(staging_dir, preserved_manifest)
                         except _ARTIFACT_ACTIVATION_ERRORS as exc:
                             self._raise_artifact_activation_validation_error(diagnostics, exc)
+                    # Mention self-healing runs after migration: the bodies of existing archives are folded out by
+                    # migration, so running earlier would find no body.
                     # 提及自愈跑在迁移之后：存量归档的正文是迁移折出来的，早跑读不到正文。
                     self._repair_unit_mentions_tree(staging_dir, diagnostics)
                     diagnostics.extend_validation(self.validator.validate_project_tree(staging_dir))
@@ -532,7 +614,7 @@ class ProjectArchiveService:
                             warnings=diagnostics.warning_messages(),
                             diagnostics=diagnostics,
                         )
-                    # 有无信封的两条路径均在 staging 一次性提交。
+                    # Both paths, with and without an envelope, commit in staging in one go. / 有无信封的两条路径均在 staging 一次性提交。
                     try:
                         import_skipped = ensure_imported_artifact_target_state(
                             staging_dir,
@@ -541,6 +623,11 @@ class ProjectArchiveService:
                     except _ARTIFACT_ACTIVATION_ERRORS as exc:
                         self._raise_artifact_activation_validation_error(diagnostics, exc)
 
+                    # Placeholders added during repair, artifacts that import activation could not register, and the
+                    # results of the migration chain all go into the report, regardless of the archive's schema
+                    # version: ask the user to confirm once before import (ADR 0098). Placeholders move from
+                    # diagnostics into the report, and the diagnostics after a successful import no longer list them
+                    # again.
                     # 修复期补的占位、导入激活没能登记的产物与迁移链的结果一起进报告，不分归档的
                     # schema 版本：导入前请用户确认一次（ADR 0098）。占位从诊断移进报告，导入成功
                     # 后的诊断不再重复列出。
@@ -560,10 +647,14 @@ class ProjectArchiveService:
                                 extra={
                                     "confirmation_required": True,
                                     "migration_report": report.model_dump(mode="json"),
+                                    # The report refers to episodes by episode ID; the confirmation dialog shows
+                                    # episode names from it.
                                     # 报告按集 ID 指称；确认窗据此显示集名。
                                     "episodes": self._ledger_titles(staging_dir),
                                 },
                             )
+                        # The user already confirmed the report before import, so the project page does not show the
+                        # same one again.
                         # 用户已在导入前确认过报告，项目页不再提示同一份。
                         acknowledge_migration_report(staging_dir)
 
@@ -620,10 +711,14 @@ class ProjectArchiveService:
         source_manifest_entries = self._capture_stable_visible_tree(source_dir, snapshot_dir)
 
         diagnostics = self._repair_project_tree(snapshot_dir)
+        # The source project is already on the current schema and the body is in place; shares the same mention
+        # self-healing pass as the import path.
         # 源项目已在当前 schema 上，正文就位，与导入路径共用同一遍提及自愈。
         self._repair_unit_mentions_tree(snapshot_dir, diagnostics)
         diagnostics.extend_validation(self.validator.validate_project_tree(snapshot_dir))
 
+        # Collect non-standard top-level entries from the source directory and record them in the diagnostics (even if
+        # they were filtered out and not exported)
         # 从源目录收集非标准顶层条目，记录到诊断中（即使已被过滤不导出）
         excluded_entries = self._collect_pass_through_entries(source_dir)
         for entry in excluded_entries:
@@ -643,6 +738,8 @@ class ProjectArchiveService:
                 snapshot_preserved_artifact_manifest(
                     snapshot_dir,
                     source_manifest_entries,
+                    # A current-version-only package carries only the snapshots of selected versions
+                    # (CURRENT_EXPORT_VERSION_RETENTION)
                     # 仅当前版本的包只带选中版本的快照（CURRENT_EXPORT_VERSION_RETENTION）
                     ships_unselected_versions=scope == "full",
                 )
@@ -651,6 +748,9 @@ class ProjectArchiveService:
             project_name,
             snapshot_project,
             scope=scope,
+            # The diagnostic snapshot inside the archive is data distributed with the package and is rendered in the
+            # default language; the importer and exporter may use different languages, and request-facing rendering
+            # only happens at the router boundary.
             # 归档内的诊断快照是随包分发的数据，按默认语言渲染——导入方与导出方的语言未必相同，
             # 面向请求的渲染只发生在 router 边界。
             diagnostics=diagnostics.to_export_payload(),
@@ -851,7 +951,7 @@ class ProjectArchiveService:
         for _attempt in range(_EXPORT_SNAPSHOT_ATTEMPTS):
             with project_metadata_lock(source_dir):
                 if target_dir.exists():
-                    shutil.rmtree(target_dir)  # hard-delete: temp -- 导出用的目录快照
+                    shutil.rmtree(target_dir)  # hard-delete: temp -- directory snapshot used for export / 导出用的目录快照
                 try:
                     manifest_before = self._source_manifest_entries(source_dir)
                     copied = self._copy_visible_tree(source_dir, target_dir)
@@ -863,14 +963,23 @@ class ProjectArchiveService:
             if manifest_before == manifest_after and source_after == copied:
                 return manifest_before
         if target_dir.exists():
-            shutil.rmtree(target_dir)  # hard-delete: temp -- 导出用的目录快照
+            shutil.rmtree(target_dir)  # hard-delete: temp -- directory snapshot used for export / 导出用的目录快照
         raise ArtifactManifestError("project changed repeatedly while creating an archive snapshot") from last_missing
 
     def _source_manifest_entries(
         self,
         source_dir: Path,
     ) -> dict[ArtifactKey, ArtifactManifestEntry] | None:
-        """源项目的完整 claim 快照；尚未进入清单体系的项目返回 ``None``。
+        """Full claim snapshot of the source project; returns ``None`` for projects not yet in the manifest system.
+
+        This gate decides "does this project have a manifest to preserve", not the artifact-reading rule, and uses
+        the same criterion as where the envelope is written. A project not in the system necessarily has an empty
+        manifest, and in the envelope an empty manifest looks exactly like "this project has no artifacts at all":
+        on seeing an envelope the importer saves it as-is via the fidelity path, and all generated artifacts in the
+        project would be judged missing at once, requiring the user to pay to regenerate them. Archives of such
+        projects carry no envelope, and the import side migrates and self-proves them as usual.
+
+        源项目的完整 claim 快照；尚未进入清单体系的项目返回 ``None``。
 
         这道闸判的是「该项目有没有清单可保全」，不是产物读取口径，与写信封那处同判据。
         未进入体系的项目清单必然为空，而空清单与「这个项目一件产物都没有」在信封里长得
@@ -1001,6 +1110,9 @@ class ProjectArchiveService:
                     diagnostics=diagnostics,
                 ):
                     project_changed = True
+                # reference_audio, unlike reference_image, does not enforce a uniform extension (no transcoding); the
+                # extension is derived from the existing field value, consistent with the upload saving convention
+                # (characters/refs_audio/{name}<ext>)
                 # reference_audio 不像 reference_image 强制统一扩展名（不转码），扩展名从
                 # 现有字段值推导，与上传落盘约定（characters/refs_audio/{name}<ext>）一致
                 audio_raw = char_data.get("reference_audio")
@@ -1104,6 +1216,11 @@ class ProjectArchiveService:
                 script_path = project_dir / script_path_rel
                 if not script_path.exists():
                     if parse_positive_episode_num(episode_meta.get("episode")) is not None:
+                        # The script_file of a ledger entry is a forward-looking contract (the real value is
+                        # backfilled when the script is generated); a split existing before the script is a designed
+                        # state and does not block the archive round trip; ledger_status does not take part in the
+                        # check: the v2->v3 migration no longer backfills that field, so entries of upgraded old
+                        # projects may never have ledger_status, and a valid shape is treated as a normal ledger entry
                         # 账本条目的 script_file 是前瞻性契约（剧本生成时回填真实值），
                         # 拆分先于剧本存在是设计内状态，不阻断归档往返；ledger_status 不
                         # 参与判定——v2→v3 迁移不再回填该字段，老项目升级后的条目可能永远
@@ -1191,7 +1308,7 @@ class ProjectArchiveService:
                 location=f"{script_path_rel}:novel.source_file",
             )
 
-        # 剥离废弃的 episode 级聚合字段
+        # Strip obsolete episode-level aggregate fields / 剥离废弃的 episode 级聚合字段
         for deprecated_field in ("characters_in_episode", "clues_in_episode"):
             if deprecated_field in script_payload:
                 script_payload.pop(deprecated_field)
@@ -1203,6 +1320,12 @@ class ProjectArchiveService:
                     location=f"{script_path_rel}:{deprecated_field}",
                 )
 
+        # The fallback chain script stamp -> project declaration is kept; the final narration fallback at the end of
+        # the chain is removed: project-level content_mode is required and validated, and missing in both places (or a
+        # non-string dirty value) means data corruption, so fail loud directly instead of silently falling to drama.
+        # Do not normalize with str(...): it would turn a missing None into the literal string "None", which would
+        # both let the reference branch get a fake value that bypasses fail-loud and distort the error semantics of
+        # the non-reference branches.
         # 剧本戳 → 项目声明的回退链保留；链尾 narration 终兜底删除——项目级 content_mode
         # 必填且被校验，两处皆缺（或非字符串脏值）即数据损坏，直接 fail-loud，不静默落 drama。
         # 不用 str(...) 归一：会把缺失的 None 变成字面量 "None" 字符串，既让 reference 分支拿到
@@ -1213,10 +1336,14 @@ class ProjectArchiveService:
         content_mode = raw_content_mode
         generation_mode = project_payload.get("generation_mode")
 
+        # Repair dispatch follows the skeleton kind from canonical parsing: all reference-to-video uses video_units,
+        # and storyboard mode uses segments/scenes/shots by content mode.
         # 修复分流按规范解析的骨架种类走：所有参考生视频都使用 video_units，storyboard
         # 分镜图生视频按创作类型使用 segments/scenes/shots。
         kind = resolve_declared_kind(content_mode, generation_mode)
 
+        # The video_units skeleton organizes assets by references, a different structure from the
+        # characters/scenes/props of the storyboard skeleton, so it goes through a dedicated repair branch.
         # video_units 骨架用 references 组织资产，结构与
         # storyboard 骨架的 characters/scenes/props 不同，单独走专用修复分支。
         if kind == "video_units":
@@ -1231,10 +1358,13 @@ class ProjectArchiveService:
             )
             return script_changed or units_changed, project_changed
 
+        # The storyboard skeleton (segments/scenes/shots, including ad's shots) completes fields and backfills assets
+        # entry by entry.
         # storyboard 骨架（segments/scenes/shots，含 ad 的 shots）逐条补全字段与资产回填。
         items_key = kind
         raw_items, id_field, _kind = resolve_kind_items(script_payload, kind=kind)
         chars_field = SKELETONS[kind].chars_field
+        # The storyboard skeleton always has chars_field; video_units already returned in the branch above.
         # storyboard 骨架必有 chars_field；video_units 已在上分支返回。
         assert chars_field is not None
 
@@ -1344,7 +1474,9 @@ class ProjectArchiveService:
         location_prefix: str,
         diagnostics: ArchiveDiagnostics,
     ) -> tuple[Any, bool]:
-        """补全 item.generated_assets 的缺失字段，返回 (assets, changed)。"""
+        """Complete the missing fields of item.generated_assets; returns (assets, changed).
+
+        补全 item.generated_assets 的缺失字段，返回 (assets, changed)。"""
         assets = item.get("generated_assets")
         changed = False
         if isinstance(assets, dict):
@@ -1354,6 +1486,7 @@ class ProjectArchiveService:
                 for key in missing_keys:
                     assets[key] = template[key]
                 changed = True
+                # Only report a diagnostic when the completed value is not None, avoiding noise from no-op completions
                 # 补全值非 None 的才报诊断，避免 no-op 补全产生噪音
                 non_null_keys = sorted(k for k in missing_keys if template[k] is not None)
                 if non_null_keys:
@@ -1367,6 +1500,9 @@ class ProjectArchiveService:
                         location=f"{location_prefix}.generated_assets",
                     )
         else:
+            # None = field missing; any other non-dict = corrupted by external editing (list/str etc.); both are reset
+            # to the template structure and only distinguished in the diagnostic, so the importer knows whether data
+            # was filled in or dirty data was discarded.
             # None = 字段缺失，其余非 dict = 外部编辑损坏（list/str 等）；两者同样重置为模板结构，
             # 只在诊断上区分，让导入方知道是补齐还是丢弃了脏数据。
             if assets is None:
@@ -1396,7 +1532,13 @@ class ProjectArchiveService:
         character_name: str,
         diagnostics: ArchiveDiagnostics,
     ) -> bool:
-        """为缺失的角色引用补占位定义，返回是否改动 project_payload。
+        """Add placeholder definitions for missing character references; returns whether project_payload was changed.
+
+        Membership is judged via :func:`_resolve_existing_asset`: another encoding form of an already registered
+        character is no longer treated as missing and given a second placeholder definition (last write wins would
+        overwrite the real sheet / voice metadata).
+
+        为缺失的角色引用补占位定义，返回是否改动 project_payload。
 
         成员判定经 :func:`_resolve_existing_asset`：已登记角色的另一种编码形式不再被
         当作缺失补进第二条占位定义（后写入胜出会盖掉真实的 sheet / 配音元数据）。
@@ -1421,6 +1563,8 @@ class ProjectArchiveService:
             # the owner is registered: its derivatives are its own business (an existing one needs
             # nothing; a missing one is not invented here, the derivative table has its own rules)
             return False
+        # Placeholder characters carry no description: the description is the input for generating the sheet, to be
+        # filled in by the user or replaced by uploading a sheet directly.
         # 占位角色不带描述：描述是生成资产图的输入，由用户补写或直接上传资产图。
         project_payload["characters"][character_name] = {"description": ""}
         project_characters.add(character_name)
@@ -1440,7 +1584,10 @@ class ProjectArchiveService:
         name: str,
         diagnostics: ArchiveDiagnostics,
     ) -> bool:
-        """剧本引用了未定义的场景或道具：补一条不带描述的占位定义，返回是否改动 project_payload。"""
+        """The script references undefined scenes or props: add a placeholder definition without a description; returns
+        whether project_payload was changed.
+
+        剧本引用了未定义的场景或道具：补一条不带描述的占位定义，返回是否改动 project_payload。"""
         if _resolve_existing_asset(name, pool) in pool:
             return False
         bucket_key = ASSET_SPECS[asset_type].bucket_key
@@ -1471,7 +1618,17 @@ class ProjectArchiveService:
         versions_payload: dict[str, Any],
         diagnostics: ArchiveDiagnostics,
     ) -> bool:
-        """修复 参考生视频剧本的 video_units，返回 script_changed。
+        """Repair the video_units of a reference-to-video script; returns script_changed.
+
+        Unit references are not stored; the body is the truth, so this method only touches structure and artifact
+        fields: per-unit duration normalization, generated_assets completion, video_clip / video_thumbnail path
+        canonicalization and version backtracking. Self-healing of ``@[name]`` in the body goes through
+        :meth:`_repair_unit_mentions_tree` instead; it has to wait until the schema migration folds the old
+        ``shots`` structure into the body before there is a body to read.
+        video_uri is a remote URL and is not treated as a local path (otherwise it would be overwritten by a
+        same-named canonical local file).
+
+        修复 参考生视频剧本的 video_units，返回 script_changed。
 
         单元的引用不落盘，正文才是真相，因此本方法只碰结构与产物字段：per-unit 时长收编、
         generated_assets 补全、video_clip / video_thumbnail 路径规范化与版本回溯。正文里
@@ -1483,6 +1640,21 @@ class ProjectArchiveService:
         if not isinstance(raw_units, list):
             return False
 
+        # Existing archives may still be in the pre-normalization shape (durations attached to shots, units lacking
+        # duration_seconds): downstream structural validation (DataValidator) requires unit-level duration_seconds
+        # within the structural range, so repair must run this migration before validation; this method runs before
+        # validate_project_tree, and the written-back result is saved by the caller according to script_changed,
+        # sharing the same disk write as other field repairs.
+        # The duration option table is looked up in the registry's declared set by the self-reported identity in the
+        # archive's own project.json (no DB access: import runs in to_thread, and at this point the custom provider's
+        # credentials/capabilities may not have been imported to this machine yet, so video request facts cannot be
+        # evaluated). When not found (undeclared model, or a custom provider not in the registry) it is None, falling
+        # back to clamping to the structural range; option drift is handled later by pre-check / execution tier
+        # selection.
+        # The provider is normalized on a copy first: this method runs before migrate_project_dir, existing archives
+        # may still contain legacy aliases (e.g. gemini/...), and a registry miss would leave option resolution empty,
+        # while migration is idempotent and after normalization there is no further chance to pick options.
+        # Normalization is a pure, idempotent function and does not affect the actual migration that follows.
         # 存量归档可能仍是收编前的形状（时长挂在 shots 上、unit 缺 duration_seconds）：
         # 下游的结构校验（DataValidator）要求 unit 级 duration_seconds 落在结构区间内，
         # 修复须先跑这道迁移再校验——本方法在 validate_project_tree 之前执行、写回结果
@@ -1500,6 +1672,8 @@ class ProjectArchiveService:
         )
         changed = migrated
         for message in migration_warnings:
+            # The migration message itself does not contain the script path; the origin is carried via location (so
+            # message templates are reused across call chains).
             # 迁移消息本身不含剧本路径，出处经 location 携带（消息模板因此对各调用链复用）。
             diagnostics.add(
                 "warnings",
@@ -1529,6 +1703,7 @@ class ProjectArchiveService:
             if not (isinstance(assets, dict) and resource_id):
                 continue
 
+            # video_clip has version history; the current file can be materialized by backtracking from versions/
             # video_clip 有版本历史，可从 versions/ 回溯物化当前文件
             if self._repair_path_to_canonical(
                 project_dir,
@@ -1543,6 +1718,7 @@ class ProjectArchiveService:
             ):
                 changed = True
 
+            # Thumbnails have no version history; the path is only canonicalized when the canonical file exists
             # 缩略图无版本历史，仅在 canonical 文件存在时规范化路径
             if self._repair_path_to_canonical(
                 project_dir,
@@ -1557,7 +1733,15 @@ class ProjectArchiveService:
         return changed
 
     def _repair_unit_mentions_tree(self, project_dir: Path, diagnostics: ArchiveDiagnostics) -> None:
-        """迁移之后再扫一遍全部 video_units 正文：说话人缺定义补占位，其余未解析提及只警告。
+        """After migration, scan all video_units bodies once more: add placeholders for speakers without definitions,
+        and only warn about other unresolved mentions.
+
+        Must run **after** :func:`migrate_project_dir`: units in existing archives attach their content to the old
+        ``shots`` structure, and the body is folded out by migration; running earlier would self-heal against an
+        empty body, producing neither placeholder characters nor diagnostics.
+        This pass only changes ``project.json`` (adding placeholder characters), not the script.
+
+        迁移之后再扫一遍全部 video_units 正文：说话人缺定义补占位，其余未解析提及只警告。
 
         必须跑在 :func:`migrate_project_dir` **之后**：存量归档的单元把内容挂在旧 ``shots`` 结构上，
         正文是迁移折出来的，早跑一遍等于对着空正文自愈，占位角色与诊断都不会产生。
@@ -1626,7 +1810,21 @@ class ProjectArchiveService:
         location_prefix: str,
         diagnostics: ArchiveDiagnostics,
     ) -> bool:
-        """自愈 video_unit 正文里的 ``@[名称]``：说话人缺定义补占位，其余未解析的只警告。
+        """Self-heal ``@[name]`` in video_unit bodies: add placeholders for speakers without definitions, and only warn
+        about other unresolved ones.
+
+        The body is the unit's single source of truth, and reference images are resolved only at execution time; an
+        unresolved mention just means "no reference image here" and does not block import. Speakers are the
+        exception: the position in ``@[character]{line}`` syntactically determines it is a character, and a missing
+        definition would make this dialogue line lose its voice binding, so a placeholder character is added, same
+        rule as narration/drama.
+
+        Names and the keys of the registered set may be in either NFC or NFD form; membership is always judged via
+        :func:`_resolve_existing_asset`, same rule as the narration/drama branches.
+
+        Returns whether a placeholder character was added (i.e. whether ``project_payload`` changed).
+
+        自愈 video_unit 正文里的 ``@[名称]``：说话人缺定义补占位，其余未解析的只警告。
 
         正文是单元的唯一真相，参考图执行期才解析，未解析的提及只是「这一处不出参考图」，
         不阻断导入。说话人是例外：``@[角色]{台词}`` 的位置在语法上就断定它是角色，缺定义会
@@ -1642,6 +1840,9 @@ class ProjectArchiveService:
             return False
 
         project_changed = False
+        # Speakers are added first: ``extract_mentions`` by design removes the speaker slot inside utterance markers
+        # (speakers do not get reference images), so characters appearing only before ``{}`` are not in the mention
+        # list, and adding placeholders requires a separate pass over speakers.
         # 说话人先补：``extract_mentions`` 按设计剔除了发声记号内的 speaker 位（说话人不进参考图），
         # 只出现在 ``{}`` 前的角色因此不在提及列表里，补占位必须另取一遍说话人。
         for speaker in dialogue_speakers(text):
@@ -1979,7 +2180,10 @@ class ProjectArchiveService:
         return None
 
     def _resolve_json_path(self, path: Path) -> Path | None:
-        """归档读写只允许落在项目目录或系统临时目录内；越界返回 None。"""
+        """Archive reads and writes may only fall inside the project directory or the system temp directory; returns
+        None when out of bounds.
+
+        归档读写只允许落在项目目录或系统临时目录内；越界返回 None。"""
         for base in (self.project_manager.projects_dir, tempfile.gettempdir()):
             resolved = try_safe_join(base, path)
             if resolved is not None:
@@ -2243,6 +2447,8 @@ class ProjectArchiveService:
 
         try:
             shutil.move(str(staging_dir), str(prepared_dir))
+            # profile sync is part of installation and is done next to the project directory: when it fails, the
+            # existing project and its records have not been touched yet.
             # profile sync 是安装的一部分，在项目目录旁做完：它失败时现有项目与其记录都还没动过。
             self.project_manager.sync_agent_profile(prepared_dir)
             if overwrite and target_dir.exists():
@@ -2251,10 +2457,18 @@ class ProjectArchiveService:
                 prepared_dir.rename(target_dir)
         finally:
             if prepared_dir.exists():
-                shutil.rmtree(prepared_dir, ignore_errors=True)  # hard-delete: temp -- 导入暂存目录
+                shutil.rmtree(prepared_dir, ignore_errors=True)  # hard-delete: temp -- import staging directory / 导入暂存目录
 
     def _replace_project_dir(self, prepared_dir: Path, target_dir: Path) -> None:
-        """覆盖导入等同于删除现有项目再导入：现有项目的记录按删除收尾，旧目录连同项目记忆成为已删除项目。
+        """An overwrite import equals deleting the existing project and then importing: the existing project's records
+        are finalized as a deletion, and the old directory together with project memory becomes a deleted project.
+
+        Finalization only does two renames, so the time the DB transaction is held does not grow with project size.
+        When replacing the directory or committing records fails, records are rolled back and the old directory is
+        restored as-is; restoring also only uses renames, so it cannot get stuck in deleted projects because the new
+        directory could not be fully removed.
+
+        覆盖导入等同于删除现有项目再导入：现有项目的记录按删除收尾，旧目录连同项目记忆成为已删除项目。
 
         收尾里只做两次改名，数据库事务持有的时间不随项目大小增长。替换目录或提交记录失败时，
         记录回滚，旧目录原样还原；还原也只用改名，不会因删不净新目录而卡在已删除项目里。
@@ -2272,7 +2486,7 @@ class ProjectArchiveService:
                 if target_dir.exists():
                     discarded_dir = target_dir.with_name(f".import-discard-{target_dir.name}-{secrets.token_hex(4)}")
                     target_dir.rename(discarded_dir)
-                    # hard-delete: rollback -- 交换失败时移除新装的导入
+                    # hard-delete: rollback -- remove the newly installed import when the swap fails / 交换失败时移除新装的导入
                     shutil.rmtree(discarded_dir, ignore_errors=True)
                 deleted_dir.rename(target_dir)
             raise

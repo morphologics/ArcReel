@@ -31,8 +31,13 @@ logger = logging.getLogger(__name__)
 
 
 def resolve_media_file(resource_type: str, resource_id: str, project_path: Path) -> tuple[Path, str]:
-    """返回 (current_file_absolute, relative_file_path)；资源 ID 越界时抛出领域异常。"""
+    """Return (current_file_absolute, relative_file_path); raise a domain exception when the resource ID escapes the
+    project.
+
+    返回 (current_file_absolute, relative_file_path)；资源 ID 越界时抛出领域异常。"""
     relative = resource_relative_path(resource_type, resource_id)
+    # Path traversal guard: the absolute path built from resource_id must not escape the project directory (aligned
+    # with MediaGenerator._get_output_path).
     # 路径遍历防护：resource_id 拼出的绝对路径不得逃出项目目录（与 MediaGenerator._get_output_path 对齐）。
     try:
         current_file = safe_join(project_path, relative)
@@ -42,14 +47,17 @@ def resolve_media_file(resource_type: str, resource_id: str, project_path: Path)
 
 
 def _clear_video_thumbnail(resource_type: str, resource_id: str, project_path: Path) -> tuple[str, int] | None:
-    """视频还原后内容已失效，同步删除缩略图；返回 (缩略图相对路径, fingerprint=0) 供前端置失效。"""
+    """After a video restore the content is invalid, so delete the thumbnail as well; return (thumbnail relative path,
+    fingerprint=0) for the frontend to invalidate it.
+
+    视频还原后内容已失效，同步删除缩略图；返回 (缩略图相对路径, fingerprint=0) 供前端置失效。"""
     if resource_type == "videos":
         thumbnail_key = f"thumbnails/scene_{resource_id}.jpg"
     elif resource_type == "reference_videos":
         thumbnail_key = f"reference_videos/thumbnails/{resource_id}.jpg"
     else:
         return None
-    # hard-delete: derived -- 版本还原时清掉视频缩略图，可从视频重新生成
+    # hard-delete: derived -- clear the video thumbnail on version restore; it can be regenerated from the video / 版本还原时清掉视频缩略图，可从视频重新生成
     (project_path / thumbnail_key).unlink(missing_ok=True)
     return thumbnail_key, 0
 
@@ -63,7 +71,13 @@ async def restore_typed_media_resource(
     resource_id: str,
     version: int,
 ) -> dict[str, Any]:
-    """把一个 typed 媒体资源（audio / videos / reference_videos）切回指定历史版本。
+    """Switch a typed media resource (audio / videos / reference_videos) back to the given historical version.
+
+    Raises ``NotFoundError`` when the version does not exist, ``BadRequestError`` for a historical version lacking a
+    complete provenance description, and ``ConflictError`` when the audio is in use by a task; on success returns
+    the restore info, ``file_path`` and ``asset_fingerprints``.
+
+    把一个 typed 媒体资源（audio / videos / reference_videos）切回指定历史版本。
 
     版本不存在抛 ``NotFoundError``，缺完整取证描述的历史版本抛 ``BadRequestError``，音频正被任务
     使用时抛 ``ConflictError``；成功返回还原信息、``file_path`` 与 ``asset_fingerprints``。
@@ -99,6 +113,8 @@ async def restore_typed_media_resource(
                 artifact_path=file_path,
             )
 
+            # Compute the fingerprint of the restored file; fingerprint=0 tells the frontend the file is invalid (the
+            # poster disappears until regenerated)
             # 计算还原后文件的 fingerprint；fingerprint=0 通知前端该文件已失效（poster 消失直到重新生成）
             asset_fingerprints: dict[str, int] = {}
             if current_file.exists():
@@ -107,6 +123,8 @@ async def restore_typed_media_resource(
                 asset_fingerprints[cleared[0]] = cleared[1]
 
             if video_kind is not None:
+                # When the current path is unchanged, snapshot diffing cannot detect the version change, so an
+                # explicit event makes the live preview refresh the media fingerprint.
                 # current 路径不变时快照差分无法识别换版，显式事件让在线预览刷新媒体指纹。
                 emit_project_change_batch(
                     project_name,
@@ -148,6 +166,8 @@ async def restore_typed_media_resource(
             return await run_noninterruptible_sync(_sync)
 
     except ValueError as e:
+        # Bad requests such as an invalid project name / out-of-bounds resource_id / missing complete provenance
+        # description: str(e) may contain paths, so it only goes to the log
         # 非法项目名 / 越界 resource_id / 缺完整取证描述等坏请求，str(e) 可能含路径只进日志
         logger.warning("版本还原请求非法: %s", e)
         raise BadRequestError("request_invalid") from e

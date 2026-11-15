@@ -28,7 +28,9 @@ _OPERATION = "render_final_cut"
 
 
 def final_cut_download_url(project_name: str, artifact_path: str, version: int) -> str:
-    """成片的下载地址；``v`` 随版本变化，旧版本的缓存不会遮住新文件。"""
+    """Download URL of the final cut; ``v`` changes with the version, so a cached old version never hides the new file.
+
+    成片的下载地址；``v`` 随版本变化，旧版本的缓存不会遮住新文件。"""
     return f"/api/v1/files/{quote(project_name, safe='')}/{quote(artifact_path)}?v={version}"
 
 

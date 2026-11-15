@@ -1,4 +1,19 @@
-"""app 级异常处理器：异常→状态码→detail 映射的单点。
+"""App-level exception handlers: the single point for the exception → status code → detail mapping.
+
+Route function bodies keep only the happy path; domain exceptions and lib-layer exceptions are handled here
+uniformly:
+
+- Status code mapping (``ApiError`` carries its own; lib exceptions are fixed by type)
+- Translation by the request's ``Accept-Language`` (reusing ``get_translator``), with provider and model IDs
+  replaced by display names
+- Redaction: apart from params explicitly declared by the i18n key, exception messages are never returned to the
+  client -- ``str(exc)`` of ``FileNotFoundError`` / unexpected exceptions may contain absolute server paths and only
+  goes to the log
+
+Gradual migration: routes that still do their own try/except are unaffected (the exception never propagates here);
+migrating an endpoint = deleting its except ladder and letting the exception propagate naturally.
+
+app 级异常处理器：异常→状态码→detail 映射的单点。
 
 路由函数体只保留 happy path，领域异常与 lib 层异常在此统一完成：
 
@@ -33,7 +48,14 @@ logger = logging.getLogger(__name__)
 
 
 def script_edit_detail(exc: ScriptEditError, _t: Callable[..., str]) -> str:
-    """``ScriptEditError`` → 用户可见 detail 的单点映射。
+    """Single-point mapping of ``ScriptEditError`` → user-visible detail.
+
+    reason is translated in the request language via ``exc.key``/``exc.params`` and does not embed ``str(exc)`` --
+    the latter has fixed Chinese text and would mix Chinese into en/vi responses. Routes that still do their own
+    ``except ScriptEditError`` share this function with this module's global handler, so the same expression is not
+    scattered around evolving separately.
+
+    ``ScriptEditError`` → 用户可见 detail 的单点映射。
 
     reason 走 ``exc.key``/``exc.params`` 按请求语言翻译，不嵌 ``str(exc)``——后者文案固定
     中文，会在 en/vi 响应里混入中文原文。仍自行 ``except ScriptEditError`` 的路由与本模块
@@ -48,7 +70,16 @@ def _cors_headers_for(
     allow_origins: Sequence[str],
     allow_credentials: bool,
 ) -> dict[str, str]:
-    """为兜底 500 响应手工补 CORS 头，逻辑对齐 Starlette ``CORSMiddleware.send()``。
+    """Manually add CORS headers to the fallback 500 response, logic aligned with Starlette ``CORSMiddleware.send()``.
+
+    When ``ServerErrorMiddleware`` sends the 500 response for an unexpected exception, it uses the outermost raw
+    ``send`` (closure parameter), bypassing every inner middleware's send wrapper -- including ``CORSMiddleware``
+    registered further inside. A cross-origin frontend therefore only sees a network error, not the real 500 body.
+    Reordering middleware registration does not help (``Exception``/500 always routes to ``ServerErrorMiddleware``),
+    so the only option is to compute and attach the headers by hand in the handler with the same CORS config as the
+    app.
+
+    为兜底 500 响应手工补 CORS 头，逻辑对齐 Starlette ``CORSMiddleware.send()``。
 
     ``ServerErrorMiddleware`` 发送未预期异常的 500 响应时用的是最外层原始
     ``send``（闭包参数），绕过所有内层中间件的 send 包装——包括注册在更内层的
@@ -81,7 +112,13 @@ def register_error_handlers(
     cors_allow_origins: Sequence[str] = ("*",),
     cors_allow_credentials: bool = False,
 ) -> None:
-    """注册全部 app 级异常处理器。测试中对 bare ``FastAPI()`` 同样适用。
+    """Register all app-level exception handlers. Also works on a bare ``FastAPI()`` in tests.
+
+    ``cors_allow_origins``/``cors_allow_credentials`` must match the ``CORSMiddleware`` config actually registered
+    on the app (see the notes in ``_handle_unexpected`` and the call site in ``server/app.py``); the defaults
+    correspond to the conservative "CORS not configured" case.
+
+    注册全部 app 级异常处理器。测试中对 bare ``FastAPI()`` 同样适用。
 
     ``cors_allow_origins``/``cors_allow_credentials`` 须与 app 上实际注册的
     ``CORSMiddleware`` 配置一致（见 ``_handle_unexpected`` 内的说明与
@@ -122,6 +159,8 @@ def register_error_handlers(
 
     @app.exception_handler(ModelNotInCatalogError)
     async def _handle_model_not_in_catalog(request: Request, exc: ModelNotInCatalogError) -> JSONResponse:
+        # A built-in model referenced in settings or the project is no longer in the provider's model list (delisted):
+        # prompt the user to choose again, do not treat it as a server error
         # 设置或项目里引用的内置模型已不在供应商的模型清单中（已下架）：提示用户重新选择，不当作服务器错误
         _t = get_translator(request)
         names = await request_display_names(request)
@@ -145,13 +184,14 @@ def register_error_handlers(
 
     @app.exception_handler(ScriptEditError)
     async def _handle_script_edit_error(request: Request, exc: ScriptEditError) -> JSONResponse:
-        # 脏脚本（分镜数组键损坏等）→ 4xx 客户端错误
+        # Dirty script (corrupted shot array key, etc.) → 4xx client error / 脏脚本（分镜数组键损坏等）→ 4xx 客户端错误
         _t = get_translator(request)
         detail = await present_request_diagnostics(script_edit_detail(exc, _t), request, _t)
         return JSONResponse(status_code=400, content={"detail": detail})
 
     @app.exception_handler(FileNotFoundError)
     async def _handle_file_not_found(request: Request, exc: FileNotFoundError) -> JSONResponse:
+        # Do not return str(exc): exception messages from load_script etc. contain absolute server paths, log only
         # 不回传 str(exc)：load_script 等异常消息含服务器绝对路径，只进日志
         logger.warning("资源不存在: %s %s (%s)", request.method, request.url.path, exc)
         _t = get_translator(request)
@@ -159,6 +199,13 @@ def register_error_handlers(
 
     @app.exception_handler(Exception)
     async def _handle_unexpected(request: Request, exc: Exception) -> JSONResponse:
+        # Messages of unexpected exceptions may contain internal details such as server paths, so always return a
+        # generic 500. Starlette re-raises after sending this response, and the stack is logged by
+        # request_logging_middleware / uvicorn, so it is not printed again here.
+        #
+        # ServerErrorMiddleware always sends this response with the outermost raw send, bypassing CORSMiddleware (see
+        # the _cors_headers_for docs) -- add the CORS headers by hand, otherwise a cross-origin frontend would treat
+        # this 500 as a network error.
         # 未预期异常的消息可能含服务器路径等内部细节，一律通用 500。
         # Starlette 发送本响应后会 re-raise，堆栈由 request_logging_middleware /
         # uvicorn 记录，此处不重复打印。

@@ -1,4 +1,24 @@
-"""GenerationContext —— 生成任务 provider 解析产物的单次收口入口（见 ``docs/adr/0049``）。
+"""GenerationContext -- the single convergence entry point for provider resolution results of generation tasks (see
+``docs/adr/0049``).
+
+``resolve_generation_context`` resolves all declared lanes and constructs their backends within a single
+ConfigResolver session, returning an immutable :class:`GenerationContext` (MediaGenerator + per-lane result value
+objects). Each lane follows a fixed resolution order: resolve the ProviderModel -> construct the backend via
+``assemble_backend`` (``docs/adr/0039``) -> look up the resolution and video request facts by the actual identity
+(``docs/adr/0086``).
+
+Lookup identity = (canonical registry provider_id, actual backend model): the provider cannot drift in the
+construction seam, while for family-alias providers (e.g. ark-agent-plan reusing the Ark backend) ``backend.name``
+is the family name, not a registry key, and cannot be used as a lookup key; model is the only real drift axis (when
+a custom provider's target model is disabled the loader silently falls back), so the backend's actual ``.model`` is
+used. Lane results expose both ``provider_model`` (the canonical registry identity) and ``backend_name`` /
+``backend_model`` (the actual identity reported by the backend).
+
+The backend instance cache lives in this module: caching is a concern of the server execution layer
+(``docs/adr/0039`` "the cache stays with the caller"), and the provider config change routes invalidate it uniformly
+via ``invalidate_backend_cache()``.
+
+GenerationContext —— 生成任务 provider 解析产物的单次收口入口（见 ``docs/adr/0049``）。
 
 ``resolve_generation_context`` 在单个 ConfigResolver session 内完成全部声明 lane 的解析与
 backend 构造，返回不可变的 :class:`GenerationContext`（MediaGenerator + 各 lane 结果值对象）。
@@ -54,7 +74,27 @@ _CacheKey = tuple[str, str, str | None, str | None]
 
 
 class _BackendCache:
-    """Backend 实例缓存：按 (media_type, provider_name, model, 任务类型桶) 复用实例，避免每次任务重建 API 客户端。
+    """Backend instance cache: reuses instances by (media_type, provider_name, model, task type bucket), avoiding
+    rebuilding the API client for every task.
+
+    The bucket is part of the key because it takes part in construction: a custom provider's default model is
+    slotted by bucket, so the same (media_type, provider, model=None) loads backends of two different models for t2i
+    and i2i.
+
+    Cache lookup/construction/write-back/invalidation are implemented here in one place, with two concurrency
+    disciplines hidden inside the implementation without widening the interface:
+
+    - **Generation invariant**: ``invalidate()`` increments the generation; the generation must be captured before
+      waiting for the lock (not after acquiring it), and the instance is written back only if the generation is
+      unchanged after construction. If the generation changed -- whether invalidation happened while this request
+      held the lock and was constructing, or this request queued for the lock before the invalidation boundary and
+      only got it afterwards -- the instance is discarded after use and not written back to shadow the new config;
+      that task still runs to completion with the config snapshot taken at enqueue time.
+    - **Per-key single-flight**: concurrent misses on the same key are serialized by a per-key lock, so construction
+      happens once and every caller gets the same instance, avoiding extra SDK clients nobody holds (there is no
+      backend close protocol anywhere in the codebase).
+
+    Backend 实例缓存：按 (media_type, provider_name, model, 任务类型桶) 复用实例，避免每次任务重建 API 客户端。
 
     桶进 key 是因为它参与构造：自定义供应商的默认模型按桶分槽，同一 (media_type, provider,
     model=None) 在 t2i 与 i2i 上装载出的是两个不同模型的 backend。
@@ -77,6 +117,10 @@ class _BackendCache:
     async def get_or_create(self, key: _CacheKey, factory: Callable[[], Awaitable[Any]]) -> Any:
         if key in self._entries:
             return self._entries[key]
+        # The generation must be captured before waiting for the lock: if it queued for the lock before the
+        # invalidation boundary, even if it gets the lock after the invalidation, the old generation from queueing
+        # time must be treated as not matching the current generation after invalidation, to avoid an instance built
+        # with the old resolver polluting the new generation's cache.
         # 代数须在等锁前捕获：若在失效边界前排队等锁，即使失效后才拿到锁，也要按排队时的
         # 旧代数与失效后的当前代数不符处理，避免用旧 resolver 构造的实例污染新代际缓存。
         generation = self._generation
@@ -98,12 +142,20 @@ _backend_cache = _BackendCache()
 
 
 def invalidate_backend_cache() -> None:
-    """清空 Backend 实例缓存。在供应商配置变更后调用。"""
+    """Clear the Backend instance cache. Call after a provider config change.
+
+    清空 Backend 实例缓存。在供应商配置变更后调用。"""
     _backend_cache.invalidate()
 
 
 def reset_backend_cache_for_tests() -> None:
-    """测试隔离用：清空 backend 实例缓存与 per-key 锁，不改变生产行为。
+    """For test isolation: clear the backend instance cache and per-key locks, without changing production behavior.
+
+    ``invalidate_backend_cache()`` by design only clears entries, not locks (in production the same event loop spans
+    the process lifetime). Tests switch event loops per test case, and a contended ``asyncio.Lock`` would be bound
+    to an already-closed old loop, so they are cleared too.
+
+    测试隔离用：清空 backend 实例缓存与 per-key 锁，不改变生产行为。
 
     ``invalidate_backend_cache()`` 按设计只清条目、不清锁（生产环境同一事件循环贯穿进程生命周期）。
     测试按用例切换事件循环，竞争过的 ``asyncio.Lock`` 会绑定在已关闭的旧循环上，所以一并清掉。
@@ -120,7 +172,9 @@ async def _get_or_create_backend(
     default_model: str | None,
     generation_type: str | None = None,
 ) -> Any:
-    """组 key + 提供 factory closure，缓存纪律统一委托 :class:`_BackendCache`。"""
+    """Build the key + provide the factory closure; cache discipline is delegated uniformly to :class:`_BackendCache`.
+
+    组 key + 提供 factory closure，缓存纪律统一委托 :class:`_BackendCache`。"""
     effective_model = provider_settings.get("model") or default_model or None
 
     async def _factory() -> Any:
@@ -143,7 +197,13 @@ async def _get_or_create_video_backend(
     *,
     default_video_model: str | None = None,
 ):
-    """获取或创建 VideoBackend 实例（带缓存）。
+    """Get or create a VideoBackend instance (cached).
+
+    provider_name can be the old format (gemini/seedance/grok) or the new format (gemini-aistudio/gemini-vertex).
+    Provider config is loaded on demand via the resolver.
+    default_video_model: global default video model, used as fallback when provider_settings has no model.
+
+    获取或创建 VideoBackend 实例（带缓存）。
 
     provider_name 可以是旧格式（gemini/seedance/grok）或新格式（gemini-aistudio/gemini-vertex）。
     通过 resolver 按需加载供应商配置。
@@ -160,7 +220,13 @@ async def _get_or_create_image_backend(
     default_image_model: str | None = None,
     generation_type: Literal["t2i", "i2i"] | None = None,
 ):
-    """获取或创建 ImageBackend 实例（带缓存）。
+    """Get or create an ImageBackend instance (cached).
+
+    generation_type is the task type bucket this call belongs to: a custom provider's default model is slotted by
+    bucket, the bucket is passed all the way through construction to ``load_custom_backend``, and it also goes into
+    the cache key (t2i and i2i do not hit each other).
+
+    获取或创建 ImageBackend 实例（带缓存）。
 
     generation_type 是本次调用所属的任务类型桶：自定义供应商的默认模型按桶分槽，桶随构造一路
     传到 ``load_custom_backend``，也进缓存 key（t2i 与 i2i 不互相命中）。
@@ -177,18 +243,27 @@ async def _get_or_create_audio_backend(
     *,
     default_audio_model: str | None = None,
 ):
-    """获取或创建 AudioBackend 实例（带缓存）。audio 无媒体特例：自定义 + 简单族统一经构造缝。"""
+    """Get or create an AudioBackend instance (cached). Audio has no media special case: custom + simple family both go
+    through the construction seam.
+
+    获取或创建 AudioBackend 实例（带缓存）。audio 无媒体特例：自定义 + 简单族统一经构造缝。"""
     return await _get_or_create_backend("audio", provider_name, provider_settings, resolver, default_audio_model)
 
 
 async def _audio_backend_for(provider_id: str, model_id: str, resolver: ConfigResolver):
-    """构造（或取缓存的）指定音频 backend。供应商未配置或模型不可用时原样抛出构造错误。"""
+    """Construct (or fetch from cache) the given audio backend. Construction errors are raised as is when the provider
+    is not configured or the model is unavailable.
+
+    构造（或取缓存的）指定音频 backend。供应商未配置或模型不可用时原样抛出构造错误。"""
     async with resolver.session() as r:
         return await _get_or_create_audio_backend(provider_id, {}, r, default_audio_model=model_id)
 
 
 async def audio_backend_capabilities(provider_id: str, model_id: str) -> frozenset[AudioCapability]:
-    """指定音频 backend 声明的能力，供设置页判断配音语速是否生效。"""
+    """Capabilities declared by the given audio backend, used by the settings page to decide whether the voiceover
+    speech rate takes effect.
+
+    指定音频 backend 声明的能力，供设置页判断配音语速是否生效。"""
     from lib.db import async_session_factory
 
     backend = await _audio_backend_for(provider_id, model_id, ConfigResolver(async_session_factory))
@@ -196,20 +271,40 @@ async def audio_backend_capabilities(provider_id: str, model_id: str) -> frozens
 
 
 async def audio_backend_voice_ids(provider_id: str, model_id: str, resolver: ConfigResolver) -> tuple[str, ...]:
-    """指定音频 backend 的音色 id，按 backend 给出的顺序，供新建项目预填与模型相符的音色。"""
+    """Voice ids of the given audio backend, in the order the backend gives, used to prefill a voice matching the model
+    when creating a project.
+
+    指定音频 backend 的音色 id，按 backend 给出的顺序，供新建项目预填与模型相符的音色。"""
     return tuple(v.id for v in (await _audio_backend_for(provider_id, model_id, resolver)).list_voices())
 
 
 @dataclass(frozen=True)
 class ImageLaneRequest:
-    """声明当前任务需要 image lane。``generation_type`` 决定 t2i / i2i 默认槽（``docs/adr/0001``）。"""
+    """Declare that the current task needs the image lane. ``generation_type`` decides the t2i / i2i default slot
+    (``docs/adr/0001``).
+
+    声明当前任务需要 image lane。``generation_type`` 决定 t2i / i2i 默认槽（``docs/adr/0001``）。"""
 
     generation_type: Literal["t2i", "i2i"] = "t2i"
 
 
 @dataclass(frozen=True)
 class VideoLaneRequest:
-    """声明当前任务需要 video lane。
+    """Declare that the current task needs the video lane.
+
+    ``generation_type`` decides the i2v / r2v task type bucket (``docs/adr/0054``): image-to-video / grid -> i2v;
+    reference-to-video is split by the actual reference images after resolving the video unit -- with reference
+    images -> r2v, a video unit without reference images is downgraded -> i2v (decided by the executor before
+    declaring, see ``lib.script.reference_video.units``). When both fields are None no bucket is set; it goes
+    through three-level resolution without the capability gate, for paths that drain by payload and promise no
+    capabilities.
+
+    When ``route`` is declared, the lane carries the execution-side video request facts of that route
+    (``docs/adr/0086``), and capabilities are only read through them; when no bucket is set explicitly, the bucket
+    is set by the project's generation mode to resolve the identity and evaluate. Lanes without a declared route
+    (resume draining by checkpoint) do not evaluate capabilities.
+
+    声明当前任务需要 video lane。
 
     ``generation_type`` 决定 i2v / r2v 任务类型桶（``docs/adr/0054``）：图生视频 / 宫格 → i2v；
     参考生视频按视频单元解析后的实际参考图分流——有参考图 → r2v，无参考图的视频单元降级
@@ -226,12 +321,24 @@ class VideoLaneRequest:
 
 @dataclass(frozen=True)
 class AudioLaneRequest:
-    """声明当前任务需要 audio lane（旁白配音）。"""
+    """Declare that the current task needs the audio lane (narration voiceover).
+
+    声明当前任务需要 audio lane（旁白配音）。"""
 
 
 @dataclass(frozen=True)
 class ImageLaneResult:
-    """image lane 解析产物。
+    """Image lane resolution result.
+
+    ``provider_model`` is the canonical registry identity; ``backend_name`` / ``backend_model`` are the actual
+    identity reported by the backend after construction -- when a custom provider's target model is disabled and
+    falls back, ``backend_model`` may differ from ``provider_model.model_id``. ``resolution`` None means the SDK
+    parameter is not passed at call time (``docs/adr/0019``). ``max_reference_images`` is the reference image limit
+    declared by the backend (0 = no trimming), which the orchestration layer uses to trim the reference image
+    sequence before rendering "image N" numbering. Unlike the same-named capability field of the video lane, it is a
+    constant attribute on the backend, not read through a capability lookup, so it has no degradation branch.
+
+    image lane 解析产物。
 
     ``provider_model`` 是规范 registry 身份；``backend_name`` / ``backend_model`` 是构造后
     backend 报告的实际身份——自定义供应商目标 model 被禁用回退时 ``backend_model`` 可能与
@@ -250,7 +357,15 @@ class ImageLaneResult:
 
 @dataclass(frozen=True)
 class VideoLaneResult:
-    """video lane 解析产物。
+    """Video lane resolution result.
+
+    Capability facts are only in ``request_facts``: the execution-side video request facts evaluated with the
+    identity of the actually constructed backend; when they cannot be resolved it is a typed failure, not a
+    degradation; None when the lane request declares no route. ``resolution`` is the request resolution resolved by
+    the actual identity, None meaning the parameter is not passed at call time (``docs/adr/0019``); the other
+    identity fields have the same semantics as :class:`ImageLaneResult`.
+
+    video lane 解析产物。
 
     能力事实只在 ``request_facts``：以实际构造的 backend 身份求值的执行侧视频请求事实，解析不出
     时是带类型的失败、不降级；lane 请求未声明路线时为 None。``resolution`` 是按实际身份解析的
@@ -263,8 +378,13 @@ class VideoLaneResult:
     backend_model: str
     resolution: str | None
     request_facts: VideoRequestFacts | VideoRequestFactsFailure | None = None
+    # A resume without a declared route keeps the user's audio intent; with a declared route only the video request
+    # facts are read.
     # 未声明路线的续跑保留用户音频意图；声明路线时只读视频请求事实。
     requested_generate_audio_fallback: bool = True
+    # Protocol identifier resolved for a custom provider (endpoint key, together with the path override if there is
+    # one, see CustomVideoBackend.endpoint_guard); built-in providers have no such dimension and it is None. Resume
+    # compares it with the identifier frozen in the execution checkpoint, see server.services.tasks.resume_executor.
     # 自定义供应商解析出的协议标识（endpoint 键，有路径覆盖时连同覆盖，见
     # CustomVideoBackend.endpoint_guard）；内置供应商无该维度，为 None。续跑据此与执行检查点
     # 冻结的标识比对，见 server.services.tasks.resume_executor。
@@ -279,7 +399,18 @@ class VideoLaneResult:
 
     @property
     def is_silent(self) -> bool:
-        """这一集是否听不到声音——模型不产音（C 类）或本集关闭了音频，两条路径同口径。
+        """Whether this episode is silent -- the model produces no sound (class C) or audio is turned off for this
+        episode; both paths use the same rule.
+
+        Voice consistency comes from the video request facts; when they cannot be resolved it is treated as "soft"
+        (only judged truly silent when there is a signal, see ``lib.config.resolver.derive_voice_consistency``).
+        Voice characteristic descriptions are left out along with this check: although they are prompt text rather
+        than audio payload, they describe an audible timbre, and injecting them into a silent final cut only makes
+        the model spend budget on constraints it cannot use. Dialogue lines ignore this bit -- in silent video the
+        dialogue text is still sent, and the provider can use it as a lip-sync reference. The same-named check for
+        reference-to-video is ``lib.script.reference_video.voice_settings.VoiceRenderSettings.is_silent``.
+
+        这一集是否听不到声音——模型不产音（C 类）或本集关闭了音频，两条路径同口径。
 
         声音一致性取自视频请求事实，解析不出时按 "soft"（有信号才判定为真无声，见
         ``lib.config.resolver.derive_voice_consistency``）。声音特征描述随该判据一并不注入：
@@ -296,7 +427,13 @@ class VideoLaneResult:
 
 @dataclass(frozen=True)
 class AudioLaneResult:
-    """audio lane 解析产物。音色目录与 backend 解析在同一 session 内交付。
+    """Audio lane resolution result. The voice catalog and backend resolution are delivered within the same session.
+
+    ``voices`` is a snapshot of the backend's voice enumeration (values, not the backend instance): the voice list
+    endpoint answers from it and synthesis tasks validate the requested voice against it, so neither needs to reach
+    the backend object again.
+
+    audio lane 解析产物。音色目录与 backend 解析在同一 session 内交付。
 
     ``voices`` 是该 backend 的音色枚举快照（值，非 backend 实例）：音色列表端点据此应答，
     合成任务据此校验请求音色，二者不必再触达 backend 对象。
@@ -316,7 +453,13 @@ def _lane_not_declared(lane: str, request_hint: str) -> RuntimeError:
 
 @dataclass(frozen=True)
 class GenerationContext:
-    """单次解析交付的全部产物：MediaGenerator + 各声明 lane 的结果值对象。
+    """All results delivered by one resolution: MediaGenerator + result value objects of each declared lane.
+
+    A lane field of None means that lane was not declared; accessing an undeclared lane through the same-named
+    property raises RuntimeError directly (fail-loud, the return type is not Optional). Tests can assemble a fake
+    context directly with this dataclass.
+
+    单次解析交付的全部产物：MediaGenerator + 各声明 lane 的结果值对象。
 
     lane 字段为 None 表示该 lane 未声明；经同名 property 访问未声明 lane 直接抛
     RuntimeError（fail-loud，返回类型非 Optional）。测试可用本 dataclass 直接拼装假 context。
@@ -357,7 +500,24 @@ async def resolve_generation_context(
     video: VideoLaneRequest | None = None,
     audio: AudioLaneRequest | None = None,
 ) -> GenerationContext:
-    """在单个 ConfigResolver session 内解析全部声明 lane、构造 backend 并组装 MediaGenerator。
+    """Resolve all declared lanes, construct backends and assemble the MediaGenerator within a single ConfigResolver
+    session.
+
+    Passing a lane declares it and None skips it, so a task only pays the config requirements and construction cost
+    for the lanes it uses. If resolving or constructing any declared lane fails, the error is raised as is and the
+    whole call fails -- no partial results, no cross-provider fallback; a failure evaluating video request facts is
+    handed to the executor as a failure object to handle by stage. ``project`` is the project snapshot the caller
+    has already loaded; ``project_path`` can be passed by a transaction that already holds the project path, to
+    avoid nested use of the default thread pool when a synchronous transaction resolves the current config. This
+    function does not read the project.
+
+    The video lane's bucket follows ``VideoLaneRequest.generation_type``: when None it is resolved by the project's
+    generation mode (see ``lib.config.resolver.caps_generation_mode``) -- the generation mode is fixed at creation
+    and the whole project generates in the same mode, so two-dimensional derived values such as voice consistency do
+    not need an episode number; when given explicitly it is resolved by the given bucket (callers splitting by video
+    unit within reference-to-video bring their own decision).
+
+    在单个 ConfigResolver session 内解析全部声明 lane、构造 backend 并组装 MediaGenerator。
 
     lane 传即声明、None 跳过，任务只为用到的 lane 付出配置要求与构造成本。任一声明 lane
     的解析或构造失败即原样上抛、整次调用失败——无部分结果、无跨 provider 兜底；视频请求事实
@@ -415,6 +575,9 @@ async def resolve_generation_context(
             request_facts: VideoRequestFacts | VideoRequestFactsFailure | None = None
             if video.route is not None:
                 assert generation_type is not None
+                # Include the bucket this task falls into: per-path capability bits such as the audio track shape fork
+                # by execution sub-path, and shots in reference-to-video downgraded to i2v are evaluated with the i2v
+                # bucket.
                 # 带上该任务落的桶：音轨形态等逐路径能力位按执行子路径分叉，参考生视频内降级到
                 # i2v 的镜头按 i2v 桶求值。
                 request_facts = await evaluate_video_request_facts(
@@ -439,6 +602,9 @@ async def resolve_generation_context(
                 resolution=resolution,
                 request_facts=request_facts,
                 requested_generate_audio_fallback=requested_generate_audio_fallback,
+                # Dispatch explicitly by type rather than probing with getattr: endpoint None happens to be the
+                # loosest branch, "skip the resume comparison"; if the attribute is ever renamed, probing would
+                # silently stop working with no signal at all.
                 # 显式按类型分流而非 getattr 探测：endpoint 为 None 恰好是「跳过续跑比对」
                 # 这条最宽松分支，属性一旦改名，探测式取值会静默失效且无任何信号。
                 endpoint=video_backend.endpoint_guard if isinstance(video_backend, CustomVideoBackend) else None,
@@ -460,6 +626,8 @@ async def resolve_generation_context(
             )
 
     if image_provider_model is not None:
+        # The reference image limit may require querying the provider's model catalog (e.g. OpenRouter), so it is done
+        # outside the resolver session, to keep an external request from holding a database connection.
         # 参考图上限可能要向供应商的模型目录查询（如 OpenRouter），放在 resolver session 之外，
         # 不让一次外部请求占着数据库连接。
         image_result = ImageLaneResult(

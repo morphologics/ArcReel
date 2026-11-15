@@ -1,4 +1,10 @@
-"""剪辑时间线引用的视频单元：按脚本取条目，决定每个单元按哪个呈现版本取用素材层，并取出素材层。
+"""Video units referenced by the edit timeline: take entries by script, decide which presentation version each unit
+uses for its material layer, and fetch the material layer.
+
+JianYing drafts, the final cut and the edit view preview share the rules here, so subtitles and narration of all
+three come from the same presentation model.
+
+剪辑时间线引用的视频单元：按脚本取条目，决定每个单元按哪个呈现版本取用素材层，并取出素材层。
 
 剪映草稿、成片与剪辑视图预览共用这里的口径，三者的字幕与旁白取自同一份呈现模型。
 """
@@ -29,7 +35,9 @@ from server.services.presentation.presentation_read_model import (
 def load_episode_items(
     projects: ProjectManager, project_name: str, project: Mapping[str, Any], episode: int
 ) -> tuple[str, dict[str, dict[str, Any]]]:
-    """一集脚本的条目形态与「视频单元 ID → 脚本条目」。"""
+    """Entry shape of an episode's script and "video unit ID -> script entry".
+
+    一集脚本的条目形态与「视频单元 ID → 脚本条目」。"""
     script_file = next(
         (
             entry.get("script_file")
@@ -51,7 +59,10 @@ def load_episode_items(
 def unit_rendition(
     versions: VersionManager, *, kind: str, item: Mapping[str, Any], unit_id: str, narration: DraftNarration
 ) -> RenditionVariant:
-    """视频单元在所选旁白版本下实际取用的呈现版本；带旁白只作用于已有旁白配音的画外音单元。"""
+    """The presentation version a video unit actually uses under the selected narration version; "with narration" only
+    applies to voiceover units that already have a narration voiceover.
+
+    视频单元在所选旁白版本下实际取用的呈现版本；带旁白只作用于已有旁白配音的画外音单元。"""
     return effective_unit_variant(
         narration,
         admit_script_unit(kind, item).mode,
@@ -67,7 +78,10 @@ def _cues(presented: MaterializedPresentation) -> tuple[UnitCue, ...]:
 
 
 def unit_material_and_basis(presented: MaterializedPresentation) -> tuple[UnitMaterial, DraftUnitBasis]:
-    """呈现模型投影成素材层与素材层指纹：有类型化来源的取呈现模型依据，手动上传的取版本号与内容摘要。"""
+    """Project the presentation model into a material layer and its fingerprint: those with a typed source take the
+    presentation model's basis, manual uploads take the version number and content digest.
+
+    呈现模型投影成素材层与素材层指纹：有类型化来源的取呈现模型依据，手动上传的取版本号与内容摘要。"""
     presentation = presented.presentation
     video = presentation.video
     narration = presentation.narration_audio
@@ -90,7 +104,10 @@ def unit_material_and_basis(presented: MaterializedPresentation) -> tuple[UnitMa
 
 
 class TimelineUnitMaterials:
-    """:class:`~lib.jianying_draft.placement.UnitMaterialSource` 的实现：物化各单元当前的呈现模型并投影成素材层。"""
+    """Implementation of :class:`~lib.jianying_draft.placement.UnitMaterialSource`: materialize each unit's current
+    presentation model and project it into a material layer.
+
+    :class:`~lib.jianying_draft.placement.UnitMaterialSource` 的实现：物化各单元当前的呈现模型并投影成素材层。"""
 
     def __init__(
         self, projects: ProjectManager, *, presentation_reader: PresentationReadModelService | None = None

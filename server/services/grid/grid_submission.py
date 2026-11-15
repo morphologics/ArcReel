@@ -1,4 +1,28 @@
-"""宫格提交：一次「生成多宫格分镜」请求的规划与落地，Web 路由与 Agent 工具共用。
+"""Grid submission: planning and landing one "generate multi-grid storyboard" request, shared by the Web route and the
+Agent tool.
+
+One request takes two steps:
+
+- :func:`plan_grid_submission` passes the gates, picks targets, groups and chunks by segment, and gives an action
+  for each grid: generate new, reuse the in-flight record, skip because the grid composite is not split yet, nothing
+  to generate, or blocked. Planning writes no grid record and enqueues nothing; the ``list_only`` preview renders
+  exactly this plan, so the preview and the actual submission come from the same source.
+- :func:`commit_grid_submission` only accepts an unblocked plan: it cleans up superseded old records, creates
+  records, and produces the task payload for each grid. Enqueueing and waiting, and projecting the outcome into an
+  HTTP response or a tool result, are left to each entry point.
+
+Submission only produces the grid composite; grid split is a separate action the user confirms after reviewing the
+grid composite (see :mod:`server.services.grid.grid_split`).
+
+Admission is for the whole batch: if any shot is blocked (named but missing, artifact status unreadable, partial
+overlap with an in-flight grid, reference gap, prompt pending generation), the whole request creates no task, and
+otherwise healthy shots carry ``generation_batch_admission_withheld``.
+
+Grid submissions for the same project run serially from planning to enqueueing inside
+:func:`grid_submission_section`, so the grid records and queue tasks the planning sees are always consistent: there
+is never another request that has written a record but not yet enqueued.
+
+宫格提交：一次「生成多宫格分镜」请求的规划与落地，Web 路由与 Agent 工具共用。
 
 一次请求分两步：
 
@@ -66,7 +90,10 @@ ActiveGridTaskProbe = Callable[[list[str]], Awaitable[Collection[str]]]
 def queue_active_grid_tasks(
     queue: GenerationQueue, *, project_name: str, script_file: str, user_id: str
 ) -> ActiveGridTaskProbe:
-    """按入队去重键在 ``queue`` 里探测宫格任务；与宫格入队用同一组 project / script_file / user。"""
+    """Probe grid tasks in ``queue`` by the enqueue dedup key; uses the same project / script_file / user as grid
+    enqueueing.
+
+    按入队去重键在 ``queue`` 里探测宫格任务；与宫格入队用同一组 project / script_file / user。"""
 
     async def probe(grid_ids: list[str]) -> list[str]:
         tasks = await queue.get_active_tasks_for_resources(
@@ -106,7 +133,16 @@ async def grid_is_in_flight(
 
 
 class GridSubmissionSection:
-    """同一项目宫格提交的临界区：从读记录规划，到写记录、入队，同一时刻只有一个请求在里面。
+    """Critical section for grid submissions of one project: from reading records and planning to writing records and
+    enqueueing, only one request is inside at a time.
+
+    Grid records are written in the project directory and tasks in the queue, and the two cannot land together
+    atomically; with both the record writes and the enqueueing inside the critical section, planning inside it can
+    confirm that a record "stuck at pending / generating without an active task" is no longer being handled by
+    anyone. :meth:`end` can be called as soon as enqueueing completes; waiting for the task to finish does not
+    occupy the critical section. The server runs as a single process, so an in-process lock is enough to serialize.
+
+    同一项目宫格提交的临界区：从读记录规划，到写记录、入队，同一时刻只有一个请求在里面。
 
     宫格记录写在项目目录、任务写在队列，两者无法原子地一起落地；把写记录与入队都关进临界区，
     区内规划就能把「停在 pending / generating 却没有活动任务」的记录确认为已无人处理。
@@ -130,13 +166,16 @@ class GridSubmissionSection:
         self.end()
 
     def end(self) -> None:
-        """提前离开临界区；重复调用无副作用。"""
+        """Leave the critical section early; repeated calls have no side effects.
+
+        提前离开临界区；重复调用无副作用。"""
 
         if self._held:
             self._held = False
             self._lock.release()
 
 
+# An asyncio.Lock can only be contended within one event loop, so the lock table is split by event loop
 # asyncio.Lock 只能在一个事件循环里争用，锁表按事件循环分开
 _SECTION_LOCKS: weakref.WeakKeyDictionary[asyncio.AbstractEventLoop, dict[str, asyncio.Lock]] = (
     weakref.WeakKeyDictionary()
@@ -144,14 +183,24 @@ _SECTION_LOCKS: weakref.WeakKeyDictionary[asyncio.AbstractEventLoop, dict[str, a
 
 
 def grid_submission_section(project_name: str) -> GridSubmissionSection:
-    """同一项目的宫格提交共用一个临界区；须在事件循环内调用。"""
+    """Grid submissions of the same project share one critical section; must be called inside the event loop.
+
+    同一项目的宫格提交共用一个临界区；须在事件循环内调用。"""
 
     locks = _SECTION_LOCKS.setdefault(asyncio.get_running_loop(), {})
     return GridSubmissionSection(locks.setdefault(project_name, asyncio.Lock()))
 
 
 def ensure_grid_submittable(project: dict[str, Any], script: dict[str, Any]) -> None:
-    """宫格出图入口的闸门：项目允许改写宫格，且剧本骨架属于项目生成模式。
+    """Gate for the grid image entry point: the project allows rewriting grids, and the script skeleton belongs to the
+    project's generation mode.
+
+    Raises:
+        BadRequestError: ad project or grid not enabled (see :func:`ensure_grid_writable`); script skeleton does not
+                         match the generation mode (``grid_script_route_mismatch``: the array the generation mode
+                         needs is not in the script, so no grid can be produced).
+
+    宫格出图入口的闸门：项目允许改写宫格，且剧本骨架属于项目生成模式。
 
     Raises:
         BadRequestError: 广告项目或未启用宫格（见 :func:`ensure_grid_writable`）；剧本骨架与生成模式
@@ -166,7 +215,9 @@ def ensure_grid_submittable(project: dict[str, Any], script: dict[str, Any]) -> 
 
 
 class GridChunkAction(StrEnum):
-    """规划给一张宫格的动作。"""
+    """The action planned for one grid.
+
+    规划给一张宫格的动作。"""
 
     GENERATE = "generate"
     """新建记录并入队。"""
@@ -182,7 +233,9 @@ class GridChunkAction(StrEnum):
 
 @dataclass(frozen=True, slots=True)
 class GridChunkPlan:
-    """一张宫格：它覆盖的全部分镜，以及本次请求要为之报告结果的分镜（``report_ids``）。"""
+    """One grid: all the shots it covers, and the shots this request reports results for (``report_ids``).
+
+    一张宫格：它覆盖的全部分镜，以及本次请求要为之报告结果的分镜（``report_ids``）。"""
 
     group_index: int
     scenes: tuple[dict[str, Any], ...]
@@ -200,7 +253,9 @@ class GridChunkPlan:
 
 @dataclass(frozen=True, slots=True)
 class BlockedScene:
-    """一个未创建任务的分镜及其机器可读结论。"""
+    """A shot for which no task was created, with its machine-readable verdict.
+
+    一个未创建任务的分镜及其机器可读结论。"""
 
     scene_id: str
     problem: GenerationProblem
@@ -247,7 +302,10 @@ class GridSubmissionPlan:
 
 @dataclass(frozen=True, slots=True)
 class GridSubmissionTask:
-    """一张待入队的宫格；``reused`` 为 True 时记录已在途，入队会去重到既有任务。"""
+    """A grid waiting to be enqueued; when ``reused`` is True the record is already in flight and enqueueing dedups to
+    the existing task.
+
+    一张待入队的宫格；``reused`` 为 True 时记录已在途，入队会去重到既有任务。"""
 
     grid: GridGeneration
     report_ids: tuple[str, ...]
@@ -267,7 +325,25 @@ async def plan_grid_submission(
     active_grid_tasks: ActiveGridTaskProbe,
     large_grid_gate: Callable[[dict[str, Any]], Awaitable[bool]] = resolve_large_grid_allowed,
 ) -> GridSubmissionPlan:
-    """规划一次宫格提交；``scene_ids`` 为 ``None`` 表示缺失即生成。
+    """Plan a grid submission; ``scene_ids`` of ``None`` means generate what is missing.
+
+    - Named: regenerate the grids containing these shots; IDs not in the script are blocked.
+    - Generate missing: only generate for groups that still lack storyboard images; shots in the group that are
+      already usable are recorded as skipped; grids whose grid composite is ready but not split are skipped and wait
+      for grid split; stale but usable old storyboard images are reused as usual.
+    - When covering the same set of shots as an in-flight grid, reuse the in-flight record; when only partially
+      overlapping, block, since the two grids would later fight over the same cells. In flight means the record is
+      stuck at pending / generating and ``active_grid_tasks`` reports it still has an active task. When a task is
+      cancelled, lost on restart or failed to enqueue, the executor never ran and the record stays in its original
+      state; such records are not in flight and are cleaned up as finished records on submission.
+
+    Must be called inside ``section``, landing and enqueueing in the same critical section.
+
+    Raises:
+        BadRequestError: see :func:`ensure_grid_submittable`.
+        ValueError: ``section`` is not held.
+
+    规划一次宫格提交；``scene_ids`` 为 ``None`` 表示缺失即生成。
 
     - 点名：重生成包含这些分镜的宫格；不在剧本里的 ID 受阻。
     - 缺失即生成：只为仍缺分镜图的分组出图，组内已可用的分镜记为跳过；联合图已就绪而未切分的
@@ -286,10 +362,14 @@ async def plan_grid_submission(
     if not section.held:
         raise ValueError("grid submission must be planned inside its submission section")
     ensure_grid_submittable(project, script)
+    # 4×4 / 5×5 are only allowed when the image resolution tier is 4K; the decision comes from the same source as cost
+    # estimation and the frontend preview
     # 4×4 / 5×5 只在图像分辨率档为 4K 时放行；判定与费用估算、前端预览同源
     allow_large_grid = await large_grid_gate(project)
 
     def episode_records() -> list[GridGeneration]:
+        # Planning writes no files: when the grid directory does not exist yet there are no records, so do not create
+        # the directory via GridManager
         # 规划不落任何文件：宫格目录尚不存在时即没有记录，不经 GridManager 建目录
         if not (project_path / "grids").is_dir():
             return []
@@ -302,12 +382,17 @@ async def plan_grid_submission(
     active: set[str] = set()
     if marked_ids:
         active = set(await active_grid_tasks(marked_ids))
+        # The executor writes the record to a final state before the task leaves the active set: re-read after
+        # probing, so a grid that finished just before the probe shows up in its final state and is not taken as an
+        # orphan
         # 执行器先把记录写成终态，任务才离开活动集：探测之后重读，探测前刚跑完的宫格以终态出现，不被当成孤儿
         records = await asyncio.to_thread(episode_records)
     marked = [g for g in records if g.status in GRID_IN_FLIGHT_STATUSES]
     in_flight = [g for g in marked if g.id in active]
     abandoned = frozenset(g.id for g in marked) - {g.id for g in in_flight}
 
+    # Planning is read-only: artifact freshness checks read manifests, compute digests and list directories, so the
+    # whole thing goes into a thread
     # 规划只读：产物时效判定会读清单、算摘要、列目录，整体放到线程里
     def _plan() -> GridSubmissionPlan:
         return _Planner(
@@ -327,7 +412,19 @@ async def plan_grid_submission(
 
 
 def commit_grid_submission(plan: GridSubmissionPlan, project_path: Path) -> tuple[GridSubmissionTask, ...]:
-    """落地一份未受阻的规划：逐张宫格清理被取代的旧记录、建记录，返回待入队的任务。
+    """Land an unblocked plan: per grid, clean up superseded old records and create records; return the tasks to
+    enqueue.
+
+    Cleanup is limited to this group and only deletes old records that intersect the grid being redrawn: in an
+    over-limit group, the old record of a grid that needs no redraw must stay; an old record spanning the redrawn
+    grid and other chunks (e.g. switching to smaller grids after the 4K tier is turned off) no longer fits the
+    current chunking and is deleted too. The returned tasks must be enqueued before the critical section in which
+    the plan was made ends.
+
+    Raises:
+        ValueError: the plan is blocked as a whole, or the critical section of the plan has ended.
+
+    落地一份未受阻的规划：逐张宫格清理被取代的旧记录、建记录，返回待入队的任务。
 
     清理限定在本组内、只删与本次重画那张有交集的旧记录：超上限分组里整张都无需重画的那张，
     旧记录必须留下；横跨重画那张与其余分块的旧记录（如 4K 档关闭后改切小宫格）已不合当前分块，一并删除。
@@ -373,6 +470,7 @@ def commit_grid_submission(plan: GridSubmissionPlan, project_path: Path) -> tupl
                 regenerated=set(chunk.scene_ids),
                 abandoned=plan.abandoned_grid_ids,
             )
+            # provider/model are filled in by execute_grid_task after the image lane is resolved
             # provider/model 由 execute_grid_task 在 image lane 解析之后回填
             grid = GridGeneration.create(
                 episode=plan.episode,
@@ -449,6 +547,8 @@ class _Planner:
         self._in_flight = in_flight
         self._abandoned = abandoned
         self._section = section
+        # list_all is sorted by created_at ascending and later writes override earlier ones: only the newest record is
+        # kept for the same set of shots
         # list_all 按 created_at 升序，后写覆盖前写：同一组分镜只留最新一条
         self._latest = {tuple(g.scene_ids): g for g in records}
         self._chunks: list[GridChunkPlan] = []
@@ -516,6 +616,8 @@ class _Planner:
 
     def _plan_missing_only(self, groups: list[list[dict[str, Any]]]) -> None:
         for index, group in enumerate(groups):
+            # A group's gap is judged by its member storyboard images: when all storyboard images of the group are
+            # still usable (including stale), no new grid is needed
             # 分组的缺口按成员分镜图判定：整组分镜图都还可用（含 stale）时无需再出一张宫格
             selection = select_generation_targets(
                 candidates=[
@@ -536,6 +638,9 @@ class _Planner:
                 unavailable_ids = sorted(state.unit_id for state in selection.unavailable)
                 for state in selection.unavailable:
                     self._blocked.append(self._blocked_state(state, artifact_state_problem(state)))
+                # The whole grid group shares one grid composite: if any cell in the group has an unreadable status
+                # the image cannot be generated safely, and shots in the group still lacking storyboard images are
+                # blocked too; give a verdict per shot.
                 # 宫格整组共用一张联合图：同组任一格状态不可读就无法安全出图，组内仍缺分镜图的
                 # 分镜同样受阻，逐分镜给结论。
                 for state in selection.targets:
@@ -625,6 +730,7 @@ class _Planner:
             self._append(index, chunk, layout, report_ids, GridChunkAction.UNSPLIT, latest)
             return
         self._admission_items.extend(chunk)
+        # One grid composite covers the whole chunk: if any shot has a reference gap, this image cannot be produced
         # 一张联合图覆盖整个 chunk：任一分镜的引用有缺口就出不了这张图
         admission = admit_storyboard_items(self._catalog, chunk)
         if not admission.admitted:
@@ -633,6 +739,8 @@ class _Planner:
                 self._blocked.append(self._blocked_scene(scene_id, problems[0]))
             self._append(index, chunk, layout, report_ids, GridChunkAction.BLOCKED)
             return
+        # The grid composite's prompt is assembled from each cell's image_prompt; if any cell is pending generation,
+        # the whole image cannot be produced
         # 联合图的提示词由每格的 image_prompt 拼成，任一格待生成整张图都出不了
         pending_ids = pending_grid_prompt_ids(chunk, self._id_field)
         if pending_ids:
@@ -647,7 +755,10 @@ class _Planner:
         self._append(index, chunk, layout, report_ids, GridChunkAction.GENERATE)
 
     def _composite_splittable(self, grid: GridGeneration) -> bool:
-        """联合图能否切分落格；与切分同一口径：产物清单登记在案且可用，盘上有图不算。"""
+        """Whether the grid composite can be split; same convention as splitting: registered in the artifact manifest
+        and usable; an image on disk does not count.
+
+        联合图能否切分落格；与切分同一口径：产物清单登记在案且可用，盘上有图不算。"""
 
         if not grid.grid_image_path:
             return False
@@ -667,7 +778,10 @@ class _Planner:
         self._append(index, chunk, layout, report_ids, GridChunkAction.BLOCKED)
 
     def _blocked_scene(self, scene_id: str, problem: GenerationProblem) -> BlockedScene:
-        """带上该分镜已登记的旧图路径与状态：下游据此分清「旧图还在」与「原本就没有」。"""
+        """Carry the old image path and status registered for this shot: downstream uses it to tell "the old image is
+        still there" from "there never was one".
+
+        带上该分镜已登记的旧图路径与状态：下游据此分清「旧图还在」与「原本就没有」。"""
 
         key = ArtifactKey.episode_storyboard(self._episode, scene_id)
         path = self._storyboard_paths.get(scene_id)

@@ -1,4 +1,27 @@
-"""资产图批量生成：Web 集层 / 画廊入口与 Agent 的 ``list_pending_assets`` / ``generate_assets`` 共用的服务命令。
+"""Batch generation of asset sheets: the service command shared by the Web episode-level / gallery entry points and the
+Agent's ``list_pending_assets`` / ``generate_assets``.
+
+One request selects targets by scope:
+
+- **Type scope** (each type page of the gallery): that type × the whole project; the character type includes its
+  derivatives.
+- **Episode scope** (episode-level next step, the Agent's ``episode_id``): assets and derivatives referenced by this
+  episode (:func:`lib.project.episode_asset_references.episode_referenced_assets`, the only place it is computed).
+- **Named** (the Agent's ``names``): explicit selection; those that already have asset sheets are regenerated as
+  usual.
+
+When nothing is named, only targets pending generation (judged missing by the artifact manifest) are selected; stale
+and current images do not enter the batch. Targets missing a description are not submitted and are reported item by
+item. Derivatives go into the same batch as their base look: when the base look's asset sheet is usable the
+derivative is submitted directly; when the base look is also in this batch, the derivative depends on it within the
+batch and the queue only runs it after the base look's task succeeds; if the base look fails, the derivative is
+never submitted to the provider. In other cases (base look missing a description, not in this batch) the derivative
+reports "base look asset sheet not generated".
+
+Planning is read-only: selecting targets, judging admission and estimating cost create no tasks; submission is done
+by the caller through the batch entry point.
+
+资产图批量生成：Web 集层 / 画廊入口与 Agent 的 ``list_pending_assets`` / ``generate_assets`` 共用的服务命令。
 
 一次请求按范围选出目标：
 
@@ -53,6 +76,8 @@ from lib.prompts.prompt_builders import build_character_derivative_prompt
 
 ASSET_BATCH_OPERATION = "generate_assets"
 
+#: The two reject codes for a missing description: one for base look and one for derivative, the same codes as when the
+#: single-image generation entry point rejects.
 #: 缺描述的两种拒绝码：本体与衍生各一，与单张生成入口拒绝时同码。
 ASSET_DESCRIPTION_REQUIRED = "asset_description_required"
 DERIVATIVE_DESCRIPTION_REQUIRED = "derivative_description_required"
@@ -61,7 +86,9 @@ DESCRIPTION_REQUIRED_CODES = frozenset({ASSET_DESCRIPTION_REQUIRED, DERIVATIVE_D
 
 
 class AssetBatchEpisodeNotFound(LookupError):
-    """集范围指向的集不在分集账本里。"""
+    """The episode pointed to by the episode scope is not in the episode ledger.
+
+    集范围指向的集不在分集账本里。"""
 
     def __init__(self, episode_id: int) -> None:
         self.episode_id = episode_id
@@ -69,7 +96,12 @@ class AssetBatchEpisodeNotFound(LookupError):
 
 
 def asset_unit_id(asset_type: str, name: str) -> str:
-    """资产图单元 ID：``<类型>/<名字>``；衍生的名字是 ``本体/衍生``。
+    """Asset sheet unit ID: ``<类型>/<名字>`` (``<type>/<name>``); a derivative's name is ``本体/衍生`` (base look/derivative).
+
+    One request may span four asset types, and names may repeat across types; the per-ID result contract requires
+    IDs to be globally unique within the batch.
+
+    资产图单元 ID：``<类型>/<名字>``；衍生的名字是 ``本体/衍生``。
 
     一次请求可跨四类资产，而类型之间可能重名，逐 ID 的结果契约要求批内 ID 全局唯一。
     """
@@ -78,32 +110,43 @@ def asset_unit_id(asset_type: str, name: str) -> str:
 
 
 def asset_name_of(unit_id: str) -> str:
-    """单元 ID 里的名字（衍生为 ``本体/衍生``）——:func:`asset_unit_id` 的逆。"""
+    """The name inside a unit ID (``本体/衍生``, base look/derivative, for a derivative): the inverse of
+    :func:`asset_unit_id`.
+
+    单元 ID 里的名字（衍生为 ``本体/衍生``）——:func:`asset_unit_id` 的逆。"""
 
     return unit_id.split("/", 1)[1]
 
 
 @dataclass(frozen=True, slots=True)
 class AssetSheetScope:
-    """一次批量生成的范围；三种范围互斥，都不给即全项目。"""
+    """Scope of one batch generation; the three scopes are mutually exclusive, and giving none means the whole project.
+
+    一次批量生成的范围；三种范围互斥，都不给即全项目。"""
 
     asset_type: str | None = None
     episode_id: int | None = None
+    #: Named asset names (a derivative is written ``本体/衍生``, base look/derivative); must go with ``asset_type``.
     #: 点名的资产名（衍生写作 ``本体/衍生``）；必须配合 ``asset_type``。
     names: tuple[str, ...] | None = None
 
 
 @dataclass(frozen=True, slots=True)
 class AssetSheetUnit:
-    """一张可生成的资产图：本体资产图或一套衍生的资产图。"""
+    """One generatable asset sheet: a base look's asset sheet or one derivative's asset sheet.
+
+    一张可生成的资产图：本体资产图或一套衍生的资产图。"""
 
     asset_type: str
-    #: 落盘真名；衍生为 ``本体/衍生``。
+    #: Real name on disk; for a derivative ``本体/衍生`` (base look/derivative). / 落盘真名；衍生为 ``本体/衍生``。
     name: str
-    #: 衍生所属本体的落盘真名；本体为 ``None``。
+    #: Real name on disk of the base look the derivative belongs to; ``None`` for a base look. / 衍生所属本体的落盘真名；本体为 ``None``。
     owner: str | None
+    #: Description with whitespace trimmed at both ends; for a derivative, the appearance change description. ``None``
+    #: if not filled in.
     #: 去掉两端空白后的描述；衍生是外观变化描述。未填写为 ``None``。
     description: str | None
+    #: Whether an original image is declared: asset sheets with a declared original image are generated image-to-image.
     #: 是否声明了原图：声明了原图的资产图按图生图生成。
     has_originals: bool
     candidate: GenerationCandidate
@@ -122,7 +165,9 @@ class AssetSheetUnit:
 
     @property
     def default_sheet_path(self) -> str:
-        """这张资产图的规范落盘路径，供任务结果缺路径时回填。"""
+        """Canonical disk path of this asset sheet, used to fill in when the task result lacks a path.
+
+        这张资产图的规范落盘路径，供任务结果缺路径时回填。"""
 
         if self.owner is not None:
             owner, derivative = split_derivative_artifact_id(self.name)
@@ -131,7 +176,10 @@ class AssetSheetUnit:
 
     @property
     def image_to_image(self) -> bool:
-        """衍生是对本体资产图的编辑，声明了原图的本体以原图为参考：两者都走图生图。"""
+        """A derivative is an edit of the base look's asset sheet, and a base look with a declared original image uses
+        it as reference: both go image-to-image.
+
+        衍生是对本体资产图的编辑，声明了原图的本体以原图为参考：两者都走图生图。"""
 
         return self.is_derivative or self.has_originals
 
@@ -152,7 +200,10 @@ def _declares_originals(entry: object, asset_type: str) -> bool:
 
 
 def project_asset_sheet_units(project: Mapping[str, Any], asset_type: str | None = None) -> list[AssetSheetUnit]:
-    """项目里全部可生成的资产图，按类型顺序排列，每个本体之后紧跟它的衍生。"""
+    """All generatable asset sheets in the project, ordered by type, with each base look immediately followed by its
+    derivatives.
+
+    项目里全部可生成的资产图，按类型顺序排列，每个本体之后紧跟它的衍生。"""
 
     units: list[AssetSheetUnit] = []
     for spec in ASSET_SPECS.values():
@@ -207,7 +258,10 @@ def project_asset_sheet_units(project: Mapping[str, Any], asset_type: str | None
 
 
 def _resolve_named_unit_id(project: Mapping[str, Any], asset_type: str, name: str) -> str:
-    """把点名的名字解析成规范单元 ID；解析不到时保留原拼写，让结果逐项报告「不存在」。"""
+    """Resolve named names into canonical unit IDs; when unresolvable, keep the original spelling so the result reports
+    "does not exist" item by item.
+
+    把点名的名字解析成规范单元 ID；解析不到时保留原拼写，让结果逐项报告「不存在」。"""
 
     bucket = project.get(ASSET_SPECS[asset_type].bucket_key)
     owner_name, separator, derivative_name = name.partition("/")
@@ -229,14 +283,19 @@ def _referenced_unit_ids(referenced: frozenset[ReferencedAsset]) -> frozenset[st
 
 @dataclass(frozen=True, slots=True)
 class AssetSheetBatchPlan:
-    """一次资产图批量生成的规划结果：要提交的目标、逐项拒绝与复用、批内依赖。"""
+    """Planning result of one asset sheet batch generation: targets to submit, per-item rejections and reuses, in-batch
+    dependencies.
+
+    一次资产图批量生成的规划结果：要提交的目标、逐项拒绝与复用、批内依赖。"""
 
     selection: GenerationSelectionMode
-    #: 要提交的目标，本体在前、衍生在后。
+    #: Targets to submit, base looks first, derivatives after. / 要提交的目标，本体在前、衍生在后。
     targets: tuple[GenerationTargetState, ...]
     units: Mapping[str, AssetSheetUnit]
-    #: 衍生单元 → 同批内的本体单元。
+    #: Derivative unit -> base look unit in the same batch. / 衍生单元 → 同批内的本体单元。
     dependencies: Mapping[str, str]
+    #: Units among the targets that already have an active task: merged into the original task on submission, not
+    #: charged again.
     #: 目标里已有活动任务的单元：提交时并入原任务，不再计费。
     generating: frozenset[str]
     preflight: GenerationBatchResult
@@ -248,7 +307,9 @@ class AssetSheetBatchPlan:
 
     @property
     def new_task_ids(self) -> list[str]:
-        """会新建付费任务的目标：扣掉已在生成中的。"""
+        """Targets that would create new paid tasks: minus those already being generated.
+
+        会新建付费任务的目标：扣掉已在生成中的。"""
 
         return [unit_id for unit_id in self.target_ids if unit_id not in self.generating]
 
@@ -301,7 +362,10 @@ def plan_asset_sheet_batch(
     *,
     referenced: frozenset[ReferencedAsset] | None = None,
 ) -> AssetSheetBatchPlan:
-    """按范围选出这一批的目标并逐项判准入；集范围由调用方传入本集引用的资产。"""
+    """Select this batch's targets by scope and judge admission item by item; for the episode scope, the caller passes
+    in the assets referenced by this episode.
+
+    按范围选出这一批的目标并逐项判准入；集范围由调用方传入本集引用的资产。"""
 
     if scope.names is not None and scope.asset_type is None:
         raise ValueError("names 必须配合 type 使用")
@@ -406,7 +470,10 @@ def _owner_status(
 
 
 def load_episode_script(projects: ProjectManager, project_name: str, episode_id: int) -> dict[str, Any] | None:
-    """集范围要读的正式脚本；集不存在抛 :class:`AssetBatchEpisodeNotFound`，还没有正式脚本返回 ``None``。"""
+    """The final script the episode scope reads; raises :class:`AssetBatchEpisodeNotFound` when the episode does not
+    exist, returns ``None`` when there is no final script yet.
+
+    集范围要读的正式脚本；集不存在抛 :class:`AssetBatchEpisodeNotFound`，还没有正式脚本返回 ``None``。"""
 
     project = projects.load_project(project_name)
     entry = find_episode(project, episode_id)
@@ -428,7 +495,9 @@ async def active_asset_unit_ids(
     units: Sequence[AssetSheetUnit],
     user_id: str,
 ) -> frozenset[str]:
-    """这些单元里已有活动任务（排队或执行中）的那些。"""
+    """Those among these units that already have an active task (queued or running).
+
+    这些单元里已有活动任务（排队或执行中）的那些。"""
 
     by_task_type: dict[str, dict[str, str]] = {}
     for unit in units:
@@ -457,7 +526,10 @@ async def load_asset_sheet_batch_plan(
     scope: AssetSheetScope,
     user_id: str,
 ) -> tuple[dict[str, Any], AssetSheetBatchPlan]:
-    """读取项目现状并规划一批；返回规划所依据的项目载荷与规划结果。"""
+    """Read the current project state and plan a batch; returns the project payload the plan is based on and the
+    planning result.
+
+    读取项目现状并规划一批；返回规划所依据的项目载荷与规划结果。"""
 
     def _read() -> tuple[dict[str, Any], ArtifactCurrencyResolver, frozenset[ReferencedAsset] | None]:
         project = projects.load_project(project_name)
@@ -481,7 +553,14 @@ async def load_asset_sheet_batch_plan(
 
 
 def asset_sheet_statuses(project: Mapping[str, Any], resolver: ArtifactCurrencyResolver | None) -> list[dict[str, Any]]:
-    """项目里每张资产图（含衍生）的产物清单状态与是否缺描述，供卡片状态与画廊筛选。
+    """Artifact manifest status and whether the description is missing for every asset sheet in the project (including
+    derivatives), for card status and gallery filters.
+
+    Status only takes the artifact manifest's verdict: a file that is registered but cannot be read is judged
+    missing (pending generation); ``blocked`` means the manifest itself cannot be read and is reported as is.
+    ``resolver`` of ``None`` means the whole manifest cannot be read, and every image reports ``blocked``.
+
+    项目里每张资产图（含衍生）的产物清单状态与是否缺描述，供卡片状态与画廊筛选。
 
     状态只取产物清单的判定：登记了文件却读不到的判 missing（待生成），``blocked`` 是清单本身
     读不出，原样报告。``resolver`` 为 ``None`` 表示整份清单读不出，每张图都报告 ``blocked``。
@@ -521,7 +600,10 @@ async def submit_asset_sheet_batch(
     source: str,
     user_id: str,
 ) -> tuple[GenerationBatchReadModel, list[EnqueuedTask]]:
-    """把一次规划作为一个持久批次提交，不等待结果；Web 入口据返回的成员任务跟踪整批终态。"""
+    """Submit one plan as a persistent batch without waiting for results; the Web entry point tracks the final state of
+    the whole batch from the returned member tasks.
+
+    把一次规划作为一个持久批次提交，不等待结果；Web 入口据返回的成员任务跟踪整批终态。"""
 
     requested, blocked = build_generation_batch_admission(
         preflight=plan.preflight,

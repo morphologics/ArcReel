@@ -1,4 +1,12 @@
-"""项目级视频能力解析的共享出口。
+"""Shared exit for project-level video capability resolution.
+
+Resolves model-level capabilities from "the video backend currently configured for the project", used by pre-enqueue
+prechecks (duration option selection, Voice_Profiles injection decision). At enqueue time the task's actual
+provider/model has not been resolved yet; that resolution is deferred to worker execution (see ADR-0001), so the
+execution layer should use the exact result of
+``server.services.tasks.generation_context.resolve_generation_context`` instead.
+
+项目级视频能力解析的共享出口。
 
 按「项目当前配置的视频后端」解析 model 粒度能力，供入队前的预检使用（时长取档、
 Voice_Profiles 注入判定）。入队时机尚未 resolve 任务实际的 provider/model——该解析
@@ -49,7 +57,13 @@ logger = logging.getLogger(__name__)
 async def storyboard_request_facts(
     project: dict, config_resolver: ConfigResolver | None = None
 ) -> VideoRequestFacts | VideoRequestFactsFailure:
-    """分镜路线读侧的视频请求事实：按项目生成模式定桶，以当前配置解析出的执行模型为身份。
+    """Video request facts on the read side of the storyboard route: the bucket is decided by the project generation
+    mode, with the execution model resolved from the current configuration as identity.
+
+    The script planning and split tools read selectable durations from here, the same narrowed result as the shot
+    precheck and execution.
+
+    分镜路线读侧的视频请求事实：按项目生成模式定桶，以当前配置解析出的执行模型为身份。
 
     剧本规划与拆分工具读这一处取可选时长，与分镜预检、执行同一份收窄结果。
     """
@@ -65,7 +79,10 @@ async def storyboard_request_facts(
 def reference_request_facts_lookup(
     project: dict, config_resolver: ConfigResolver | None = None
 ) -> ReferenceRequestFactsLookup:
-    """读侧按桶的视频请求事实查找；同一次请求内共用一份，每个桶至多求值一次。"""
+    """Per-bucket video request fact lookup on the read side; one shared copy per request, each bucket evaluated at
+    most once.
+
+    读侧按桶的视频请求事实查找；同一次请求内共用一份，每个桶至多求值一次。"""
     return configured_reference_request_facts(project, config_resolver or ConfigResolver(async_session_factory))
 
 
@@ -76,14 +93,23 @@ async def reference_unit_capabilities(
     *,
     request_facts: ReferenceRequestFactsLookup,
 ) -> dict[str, dict[str, object]]:
-    """按 ``unit_id`` 索引的逐单元定桶结论与所落桶档位（Web 与 Agent 同一份）。"""
+    """Per-unit bucket verdicts and the options of the bucket each falls into, indexed by ``unit_id`` (the same for Web
+    and Agent).
+
+    按 ``unit_id`` 索引的逐单元定桶结论与所落桶档位（Web 与 Agent 同一份）。"""
     return reference_unit_capability_payloads(
         await evaluate_reference_unit_capabilities(project, project_path, units, request_facts=request_facts)
     )
 
 
 def reference_script_units(projects: ProjectManager, project_name: str, project: dict) -> list[dict]:
-    """参考生视频项目全部已登记剧本的视频单元；非参考路线没有视频单元。
+    """Video units of all registered scripts of a reference-to-video project; non-reference routes have no video units.
+
+    Read only, no write-back of existing migrations. Episodes whose script file is missing are skipped: that means
+    the episode has not produced a script yet, not a capability problem; episodes that cannot be read or parsed are
+    likewise skipped and logged, so one corrupt episode does not bring down the whole capability query.
+
+    参考生视频项目全部已登记剧本的视频单元；非参考路线没有视频单元。
 
     只读取、不回写存量迁移。剧本文件缺失的分集跳过：那是分集尚未产出剧本，不是能力问题；读不出
     或解析不了的分集同样跳过并记日志，单集损坏不拖垮整份能力查询。
@@ -111,12 +137,18 @@ def video_facts_problem(failure: VideoRequestFactsFailure) -> dict:
 
 
 def facts_duration_endpoint_fixed(result: VideoRequestFacts | VideoRequestFactsFailure) -> bool:
-    """该桶的时长是否由端点固定；求值失败时为 False（未知不谎报）。"""
+    """Whether the duration of this bucket is fixed by the endpoint; False when evaluation fails (unknown is not
+    misreported).
+
+    该桶的时长是否由端点固定；求值失败时为 False（未知不谎报）。"""
     return isinstance(result, VideoRequestFacts) and result.duration_endpoint_fixed
 
 
 def duration_constraints_payload(facts: VideoRequestFacts) -> dict:
-    """能力载荷里的 ``duration_constraints``：该桶视频请求事实的请求分辨率、收窄档位与剔除成因。"""
+    """``duration_constraints`` in the capability payload: the requested resolution, narrowed options and exclusion
+    reasons of this bucket's video request facts.
+
+    能力载荷里的 ``duration_constraints``：该桶视频请求事实的请求分辨率、收窄档位与剔除成因。"""
     return {
         "resolution": facts.resolution,
         "uses_reference_images": facts.generation_type == "r2v",
@@ -132,7 +164,13 @@ async def capability_request_facts(
     config_resolver: ConfigResolver,
     resolution_override: ResolutionOverride | None = None,
 ) -> VideoRequestFacts:
-    """能力查询所答那个桶的视频请求事实（以当前配置解析执行模型），载荷的 ``duration_constraints`` 由它给出。
+    """Video request facts of the bucket the capability query answers for (execution model resolved from the current
+    configuration); the payload's ``duration_constraints`` comes from it.
+
+    ``resolution_override`` is only passed by the capability preview of the settings page and the creation wizard.
+    Evaluation failure raises :class:`~lib.generation.video_request_facts.VideoRequestFactsError`.
+
+    能力查询所答那个桶的视频请求事实（以当前配置解析执行模型），载荷的 ``duration_constraints`` 由它给出。
 
     ``resolution_override`` 只由设置页与创建向导的能力预览传入。求值失败抛
     :class:`~lib.generation.video_request_facts.VideoRequestFactsError`。
@@ -212,7 +250,16 @@ async def project_video_caps(
     degraded_to: str,
     generation_type: VideoGenerationType | None = None,
 ) -> dict:
-    """项目视频后端的 model 粒度能力；解析失败返回部分 dict（可能仅含 ``requested_generate_audio``），
+    """Model-level capabilities of the project video backend; on resolution failure a partial dict is returned
+    (possibly only ``requested_generate_audio``), and each caller degrades on its own.
+
+    ``degraded_to`` is only used for logging, saying what behavior this resolution failure makes the caller degrade
+    to. When ``generation_type`` is not given the bucket is decided by the project generation mode; when given, the
+    specified bucket is resolved (the read side that takes options / prices for video units without reference images
+    inside reference-to-video from the i2v bucket). ``requested_generate_audio`` is resolved independently of the
+    capability API (see the implementation comment below); on double failure that key is ``False``.
+
+    项目视频后端的 model 粒度能力；解析失败返回部分 dict（可能仅含 ``requested_generate_audio``），
     由调用方各自降级。
 
     ``degraded_to`` 只用于日志，说明这次解析失败会让调用方退化成什么行为。
@@ -226,6 +273,9 @@ async def project_video_caps(
     except (ValueError, SQLAlchemyError) as exc:
         logger.info("无法解析 video_capabilities，%s：%s", degraded_to, exc)
         caps: dict = {}
+        # requested_generate_audio does not depend on the capability API and is resolved independently: a capability
+        # resolution failure must not also drop the user's silent intent back to the default True, otherwise the
+        # preview would miss sending ref_warn_silent_episode and diverge from the execution layer.
         # requested_generate_audio 不依赖能力接口，独立解析：能力解析失败不能连带把用户的
         # 无声意图丢回默认值 True，否则预览会漏发 ref_warn_silent_episode、与执行层脱节。
         try:
@@ -237,7 +287,10 @@ async def project_video_caps(
 
 
 class AudioSwitchConflict(ValueError):
-    """关闭音频的意图落在成片恒有声的模型上；消息面向 Agent 转述，属性供界面按显示名渲染。"""
+    """The intent to turn audio off falls on a model whose final output always has sound; the message is for the Agent
+    to relay, and the attributes let the UI render by display name.
+
+    关闭音频的意图落在成片恒有声的模型上；消息面向 Agent 转述，属性供界面按显示名渲染。"""
 
     def __init__(self, provider_id: str, model_id: str) -> None:
         super().__init__(
@@ -249,7 +302,19 @@ class AudioSwitchConflict(ValueError):
 
 
 async def resolve_audio_switch_conflict(project: dict, generation_type: VideoGenerationType) -> tuple[str, str] | None:
-    """项目的「关闭音频」意图是否落在一个收不到音轨开关的模型上；冲突时返回 ``(provider, model)``。
+    """Whether the project's "audio off" intent falls on a model that cannot receive an audio track switch; returns
+    ``(provider, model)`` on conflict.
+
+    Models whose output always has sound (audio track form ``always_on``) have no audio switch to send in the
+    request, so the off intent cannot reach the provider, yet it makes the orchestration layer drop all voice
+    constraints along the silent path: the user gets a final cut with sound but without voice constraints. Each
+    video generation submission entry point rejects before enqueueing based on this; the WebUI and Agent paths share
+    this one criterion.
+
+    The criterion reads the video request facts of the given bucket. Resolution failure still lets it through, to be
+    handled by other capability prechecks.
+
+    项目的「关闭音频」意图是否落在一个收不到音轨开关的模型上；冲突时返回 ``(provider, model)``。
 
     成片恒有声（音轨形态 ``always_on``）的模型请求里没有音轨开关可下发，关闭意图无法抵达
     供应商，却会让编排层按无声路径裁掉全部音色约束——用户拿到的是失去音色约束的有声成片。
@@ -257,6 +322,8 @@ async def resolve_audio_switch_conflict(project: dict, generation_type: VideoGen
 
     判据读指定桶的视频请求事实。解析失败仍放行，由其他能力预检处理。
     """
+    # A module-level binding would fix the factory at import time; here it is deferred to call time and taken from
+    # lib.db so tests can replace it.
     # 模块级绑定在导入时就固化了 factory；这里延迟到调用时从 lib.db 取，测试才能替换它。
     from lib.db import async_session_factory
 
@@ -282,7 +349,13 @@ async def assert_audio_switch_supported(
     *,
     request_facts: VideoRequestFacts | VideoRequestFactsFailure | None = None,
 ) -> None:
-    """Agent 视频入队前的音频开关预检，冲突时抛 :class:`AudioSwitchConflict`。
+    """Audio switch precheck before the Agent enqueues video; raises :class:`AudioSwitchConflict` on conflict.
+
+    Same source of criterion as the WebUI entry point ``server.routers._validators.require_audio_switch_supported``
+    (:func:`resolve_audio_switch_conflict`); the only difference is the exit: the message here is for the Agent to
+    relay and does not go through Translator.
+
+    Agent 视频入队前的音频开关预检，冲突时抛 :class:`AudioSwitchConflict`。
 
     与 WebUI 入口的 ``server.routers._validators.require_audio_switch_supported`` 判据同源
     （:func:`resolve_audio_switch_conflict`），差别只在出口：这里的消息面向 Agent 转述，不走
@@ -300,7 +373,19 @@ async def assert_audio_switch_supported(
 
 
 async def resolve_project_is_silent(project: dict) -> bool:
-    """这一集是否听不到声音，供 drama Voice_Profiles 注入前的判定。
+    """Whether this episode is inaudible, used to decide before drama Voice_Profiles injection.
+
+    The two silent paths (class C tiers whose model produces no audio, audio turned off for this episode) are the
+    same in product terms; the criterion comes from ``VoiceRenderSettings.is_silent``, the same source as the
+    reference-to-video render layer and the execution layer
+    ``server.services.tasks.generation_context.VideoLaneResult.is_silent``.
+
+    When capability resolution fails, the tier degrades to ``soft`` on the principle "no signal is not judged truly
+    silent", while the silent switch is resolved independently by ``project_video_caps`` (only a double failure
+    lands on ``False``); that is, when resolution fails across the board it is treated as silent, preferring to
+    inject less voice style rather than treat audio the user turned off as audible.
+
+    这一集是否听不到声音，供 drama Voice_Profiles 注入前的判定。
 
     两条无声路径（模型不产音的 C 类档位、本集关闭音频）在产品口径上同形，判据取自
     ``VoiceRenderSettings.is_silent``，与参考生视频渲染层、执行层

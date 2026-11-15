@@ -1,4 +1,12 @@
-"""剪辑视图预览用的素材层：剪辑时间线最新修订引用的每个视频单元的旁白配音与字幕条目，以及 BGM 轨引用的 BGM 文件。
+"""Media layer for the editing view preview: narration audio and subtitle entries of each video unit referenced by the
+latest revision of the edit timeline, plus the BGM files referenced by the BGM track.
+
+The narration version takes the project default (TTS-voiced projects include narration); subtitles come from each
+unit's current presentation model, the same split result as the JianYing draft.
+Entry times are relative to the unit: subtitles that follow narration count from the narration start, the rest use
+the video source material time. Placing them on the global timeline per clip is done by the frontend.
+
+剪辑视图预览用的素材层：剪辑时间线最新修订引用的每个视频单元的旁白配音与字幕条目，以及 BGM 轨引用的 BGM 文件。
 
 旁白版本取项目默认值（TTS 配音项目带旁白），字幕取自各单元当前的呈现模型，与剪映草稿同一份切分结果。
 条目时间相对单元：跟随旁白的字幕从旁白起点算起，其余按视频源素材时间。按剪辑片段摆到全局时间由前端完成。
@@ -108,7 +116,9 @@ class TimelinePreviewService:
         self._presentations = presentation_reader or PresentationReadModelService(projects)
 
     async def media(self, project_name: str, timeline_id: str) -> TimelinePreviewMedia:
-        """按最新修订取素材层；已从脚本删除的视频单元不在结果里。
+        """Take the media layer by the latest revision; video units deleted from the script are not in the result.
+
+        按最新修订取素材层；已从脚本删除的视频单元不在结果里。
 
         Reused unchanged while the project's files are unchanged (``project_state_cache``): building it re-reads the
         project's records for every clip, seconds for a long episode."""

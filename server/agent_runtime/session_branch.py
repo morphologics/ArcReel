@@ -1,4 +1,10 @@
-"""分支会话服务：消息改写的单一入口（见 ``docs/adr/0058``）。
+"""Branch session service: the single entry point for message rewriting (see ``docs/adr/0058``).
+
+Given the original session and an anchor (a user message in that session), copy the transcript prefix before the
+anchor under a new session_id, mark the original session superseded and record a pointer to the new session. The
+caller only gets a new session_id ready to take the first input, unaware of how the prefix was assembled.
+
+分支会话服务：消息改写的单一入口（见 ``docs/adr/0058``）。
 
 给定原会话与锚点（该会话内某条用户消息），把锚点之前的 transcript 前缀复制
 到新 session_id 下，原会话标记 superseded 并记录指向新会话的指针。调用方只
@@ -23,11 +29,19 @@ logger = logging.getLogger(__name__)
 
 
 class SessionBranchError(RuntimeError):
-    """分支会话无法建立。"""
+    """The branch session could not be created.
+
+    分支会话无法建立。"""
 
 
 class BranchAnchorError(SessionBranchError):
-    """锚点不是该会话内一条可分叉的用户消息。
+    """The anchor is not a forkable user message in this session.
+
+    Kept separate from the other failures because it is a bad request the caller can correct: the event log cannot
+    resolve the anchor, or the resolved uuid is not found in the transcript / carries a tool_result and is refused
+    by slicing.
+
+    锚点不是该会话内一条可分叉的用户消息。
 
     与其余失败分开，是因为它是调用方能改正的坏请求：事件日志解析不出锚点，
     或解析出的 uuid 在 transcript 里查无此条 / 载有 tool_result 被切片拒绝。
@@ -36,7 +50,13 @@ class BranchAnchorError(SessionBranchError):
 
 @dataclass(frozen=True, slots=True)
 class BranchedSession:
-    """分支结果：一个已备好、等待首条输入的新会话。
+    """Branch result: a prepared new session waiting for its first input.
+
+    When ``resumable`` is true the prefix is persisted, start with ``resume=session_id``; when false the prefix is
+    empty (the first message was rewritten) and the new session is a brand-new session, started with ``session_id=``
+    presetting that id -- in both paths this field is the session identity.
+
+    分支结果：一个已备好、等待首条输入的新会话。
 
     ``resumable`` 为真时前缀已落库，以 ``resume=session_id`` 启动；为假即空前缀
     （改写的是第一条消息），新会话就是一个全新会话，以 ``session_id=`` 预指定
@@ -48,7 +68,9 @@ class BranchedSession:
 
 
 class SessionBranchService:
-    """把「从某条用户消息处分叉」收敛为一次调用。"""
+    """Collapse "fork at a given user message" into a single call.
+
+    把「从某条用户消息处分叉」收敛为一次调用。"""
 
     def __init__(
         self,
@@ -64,7 +86,13 @@ class SessionBranchService:
         self._resolve_project_cwd = resolve_project_cwd
 
     async def branch(self, session_id: str, anchor_user_entry_uuid: str) -> BranchedSession:
-        """从 ``anchor_user_entry_uuid`` 处分叉 ``session_id``，返回新会话。
+        """Fork ``session_id`` at ``anchor_user_entry_uuid`` and return the new session.
+
+        ``anchor_user_entry_uuid`` is the uuid of that user entry in the event log, resolved from the event log into
+        a transcript-domain anchor; if it cannot be resolved it is refused -- the anchor must be a user message of
+        this session itself. This service is unaware of the difference between the two uuid domains.
+
+        从 ``anchor_user_entry_uuid`` 处分叉 ``session_id``，返回新会话。
 
         ``anchor_user_entry_uuid`` 是事件日志里那条用户条目的 uuid，由事件日志
         解析成 transcript 域的锚点；解析不出即拒绝——锚点必须是本会话自己的
@@ -88,10 +116,15 @@ class SessionBranchService:
         if anchor_uuid is None:
             raise BranchAnchorError(f"anchor {anchor_user_entry_uuid} is not a user message of session {session_id}")
 
+        # The SDK uses session_id as a path component and checks the UUID shape; a non-UUID is silently treated as no
+        # such session, so the new id must be a canonical uuid4 string.
         # SDK 以 session_id 作路径分量并校验 UUID 形态，非 UUID 会被静默当作
         # 无此会话；新 id 必须是规范 uuid4 字符串。
         new_session_id = str(uuid4())
         project_key = make_project_key(project_cwd)
+        # From here until the pointer is written is one transition that either holds entirely or is rolled back
+        # entirely: each store append commits on its own, a failure midway leaves half a transcript, and transcript
+        # rows are visible to the store's session enumeration without depending on the metadata row.
         # 从这里到落指针为止是一次要么整体成立、要么整体撤回的转换：store 的每次
         # append 各自提交，中途失败会留下半份 transcript，而 transcript 行不依赖
         # 元数据行就能被 store 的会话枚举看见。
@@ -103,6 +136,10 @@ class SessionBranchService:
                 anchor_uuid=anchor_uuid,
                 new_session_id=new_session_id,
             )
+            # Create the new session row before writing the pointer, so the pointer always points to an existing
+            # session. The fork lineage is persisted with the row: it is an immutable fact at branch time, the inverse
+            # of "who superseded the original session" expressed by superseded_by; the latter can be rewritten by a
+            # deletion takeover, the former cannot.
             # 先建新会话行再落指针，指针任何时刻都指向已存在的会话。分叉血统随
             # 建行落库：它是 branch 时刻的不可变事实，与 superseded_by 表达的
             # 「原会话被谁取代」互为反向，后者可被删除接手改写，前者不会。
@@ -115,7 +152,7 @@ class SessionBranchService:
             if not await self._meta_store.mark_superseded(session_id, new_session_id):
                 raise SessionBranchError(f"session {session_id} has already been superseded by another branch")
         except InvalidAnchorError as exc:
-            # 锚点校验在任何写入之前，没有可撤回的东西。
+            # Anchor validation comes before any write, so there is nothing to roll back. / 锚点校验在任何写入之前，没有可撤回的东西。
             raise BranchAnchorError(
                 f"anchor {anchor_user_entry_uuid} is not a user message of session {session_id}: {exc}"
             ) from exc
@@ -133,7 +170,14 @@ class SessionBranchService:
         return BranchedSession(session_id=new_session_id, resumable=copied.entries_copied > 0)
 
     async def discard(self, origin_session_id: str, new_session_id: str) -> None:
-        """撤回一次已发布的分支，让原会话回到可再次改写的状态。
+        """Roll back a published branch so the original session can be rewritten again.
+
+        Used by the orchestration layer to clean up when "the branch is built but the rewritten message failed to
+        dispatch": that step failing means the whole rewrite failed, and the branch should not remain -- if the
+        original session's superseded pointer is not withdrawn, the user can never rewrite it again, and the idle
+        new session would replace it in the session list.
+
+        撤回一次已发布的分支，让原会话回到可再次改写的状态。
 
         供编排层在「分支已建好、改写后的消息却没能派发出去」时收尾：那一步失败
         即整次改写失败，分支不该留下——原会话的 superseded 指针不撤，用户就再也
@@ -152,7 +196,15 @@ class SessionBranchService:
     async def _discard(
         self, store: SessionStoreLike, project_key: str | None, origin_session_id: str, new_session_id: str
     ) -> None:
-        """撤回半成品分支：原会话的指针、新会话的 transcript 与元数据行都清掉。
+        """Roll back a half-built branch: clear the original session's pointer and the new session's transcript and
+        metadata row.
+
+        Failures of the cleanup itself are only logged and do not mask the original error that triggered the
+        rollback. Withdraw the pointer before deleting data: if the pointer was already persisted (e.g. cancelled
+        right after commit), keeping it would make the original session point to a session about to disappear, and
+        it would vanish from the session list itself.
+
+        撤回半成品分支：原会话的指针、新会话的 transcript 与元数据行都清掉。
 
         清理自身的失败只记日志，不掩盖触发撤回的原始错误。先撤指针再删数据：
         指针若已落库（例如提交后当场被取消），留着会让原会话指向一个即将不存在
@@ -163,12 +215,14 @@ class SessionBranchService:
         except Exception:
             logger.exception("failed to discard superseded pointer of session %s", origin_session_id)
         if project_key is None:
+            # The metadata row is gone, so the project_key the transcript belongs to cannot be located; the remaining
+            # rows become orphaned data and can only be traced through the log.
             # 元数据行已不在，定位不到 transcript 所属的 project_key；剩下的行成为
             # 无主数据，只能靠日志留痕。
             logger.warning("cannot locate transcript of incomplete branch %s: project key unresolved", new_session_id)
         else:
             try:
-                # 不带 subpath 的 delete 连子智能体子路径与 summary 一并清除。
+                # A delete without subpath also clears the subagent subpaths and summary. / 不带 subpath 的 delete 连子智能体子路径与 summary 一并清除。
                 await store.delete({"project_key": project_key, "session_id": new_session_id})
             except Exception:
                 logger.exception("failed to discard transcript of incomplete branch %s", new_session_id)

@@ -1,4 +1,18 @@
-"""ComfyUI 节点绑定的推断接口。
+"""Inference API for ComfyUI node bindings.
+
+Which node in a workflow takes the prompt and which produces the output is not declared by ComfyUI itself and can
+only be inferred externally. Inference runs entirely on the server and only produces **candidates**: each candidate
+carries a score and an explanation of matched signals, the frontend renders them, and nothing is saved until the
+user confirms (``docs/adr/0082``). Inference and re-import rematching are the same API: the rematch input is just
+"this workflow plus its existing node bindings", differing from the first import only in whether the existing
+bindings are empty.
+
+The request body has the same shape as the import entry: a body with ``kind`` is accepted as an endpoint definition,
+anything else as a raw ComfyUI API workflow, wrapped into a definition by ``media_type``. The admission bar only
+goes to the structural level: when re-importing a modified workflow, most nodes that existing entries point to no
+longer exist, which is exactly the input rematching has to handle.
+
+ComfyUI 节点绑定的推断接口。
 
 一份 workflow 里哪个节点承接提示词、哪个产出成片，ComfyUI 自己不声明，只能由外部推断。推断
 全部在服务端跑、只产出**候选**：每条候选带分数与命中信号说明，前端照着渲染，用户确认后才落盘
@@ -25,10 +39,12 @@ from server.i18n import Translator
 
 router = APIRouter(prefix="/comfyui", tags=["Custom Endpoints"])
 
+#: The request body is the payload as-is, same shape as the import entry; not declared as ``dict`` so that non-object
+#: input also gets structured diagnostics.
 #: 请求体即载荷原样，与导入入口同形；不声明成 ``dict`` 以便非对象输入也走结构化诊断。
 InferBody = Annotated[Any, Body()]
 
-#: 粘进来的是原始 workflow 时，由导入方指定它产图还是产视频。
+#: When a raw workflow is pasted in, the importer specifies whether it produces images or videos. / 粘进来的是原始 workflow 时，由导入方指定它产图还是产视频。
 ImportMediaType = Literal["image", "video"]
 
 
@@ -55,6 +71,8 @@ class CandidatePayload(BaseModel):
     signals: list[SignalPayload]
     selected: bool
     origin: str
+    # Length of the upstream chain of the output candidate, used to explain "why this one"; other semantic keys are
+    # null.
     # 产物候选的上游链长度，用于解释「为什么是这一个」；其余语义键为 null。
     depth: int | None = None
 
@@ -69,12 +87,16 @@ class KeyInferencePayload(BaseModel):
 
 class InferResponse(BaseModel):
     media_type: str
+    # Whether saving this result directly would pass validation: not if any key is ambiguous or pending confirmation,
+    # or the prompt or output has no assignment.
     # 照这份结果直接落盘能不能过校验：任何键歧义或待确认、提示词与产物没着落都不行。
     savable: bool
     bindings: dict[str, KeyInferencePayload]
     notes: list[NotePayload]
-    # 这份载荷被当成什么收的。
+    # What this payload was accepted as. / 这份载荷被当成什么收的。
     import_shape: ImportShape
+    # The wrapping result of a raw API workflow; null when the payload was already a definition, and the client keeps
+    # using the one it has.
     # 原始 API workflow 的包装结果；载荷本就是定义时为 null，客户端继续用手上那份。
     wrapped_definition: dict[str, Any] | None = None
 

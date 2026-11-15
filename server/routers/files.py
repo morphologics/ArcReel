@@ -1,4 +1,8 @@
 """
+File management routes
+
+Handle file uploads and static asset serving
+
 文件管理路由
 
 处理文件上传和静态资源服务
@@ -99,16 +103,28 @@ from server.services.project.script_review import ScriptReviewError, ScriptRevie
 
 router = APIRouter()
 
+#: How a source upload is registered: as a file of the whole source, or as an episode that carries its own episode
+#: source.
 #: 上传源文时的登记方式：整本源文的文件，或一集自带原文的集。
 SourceUploadRole = Literal["whole_source", "episode"]
 
 _IMAGE_EXTS: tuple[str, ...] = (".png", ".jpg", ".jpeg", ".webp")
 
+# Public endpoint: the frontend loads via <img src> / <video src> / <audio src>, and native browser requests cannot
+# carry an Authorization header. Per ADR 0071 "static media stays anonymously readable", the public endpoint only
+# serves media: the path is first confined to the root directory via safe_join, and must then satisfy both the
+# directory whitelist and the extension whitelist below.
 # 公开端点：前端经 <img src> / <video src> / <audio src> 加载，浏览器原生请求带不了
 # Authorization header。按 ADR 0071「静态媒体维持匿名可读」，公开端点只放行媒体：
 # 路径先经 safe_join 收在根目录内，再须同时满足下方的目录白名单与扩展名白名单。
 public_router = APIRouter()
 
+# The media scope readable through the public endpoint; this is the single place in the implementation that defines
+# "static media" from ADR 0071. Directories: subdirectories inside the project written by the generation/upload flows
+# and referenced directly by frontend media elements, including their nested subdirectories (characters/refs,
+# characters/refs_audio, characters/derivatives, products/refs, reference_videos/thumbnails, renders/episode_N/<edit
+# timeline>, etc.; bgm is the project-level BGM); under versions/ only the snapshot buckets of these directories are
+# allowed.
 # 公开端点可读的媒体范围，是 ADR 0071「静态媒体」在实现上的唯一定义处。
 # 目录：项目内由生成/上传流程写入、前端以媒体元素直接引用的子目录，含其嵌套子目录
 # （characters/refs、characters/refs_audio、characters/derivatives、products/refs、
@@ -131,17 +147,22 @@ PUBLIC_MEDIA_DIRS: frozenset[str] = frozenset(
     }
 )
 PUBLIC_VERSIONS_DIR = "versions"
-# 项目根目录下唯一的媒体文件：风格参考图（仅图片扩展名）
+# The only media file in the project root directory: the style reference image (image extensions only) / 项目根目录下唯一的媒体文件：风格参考图（仅图片扩展名）
 PUBLIC_ROOT_MEDIA_STEM = "style_reference"
+# Extensions: images / video / audio only, case-insensitive; metadata files such as .json in the same directories are
+#             not included. Directory names and root file names are case-sensitive.
 # 扩展名：仅图片 / 视频 / 音频，不区分大小写；同目录下的 .json 等元数据文件不在其列。
 # 目录名与根文件名区分大小写。
 PUBLIC_MEDIA_EXTENSIONS: frozenset[str] = frozenset({*_IMAGE_EXTS, ".mp4", ".wav", ".mp3", ".m4a"})
-# 公开端点的所有文件响应都禁止浏览器按内容嗅探 MIME
+# All file responses of the public endpoint forbid the browser from sniffing the MIME type from content / 公开端点的所有文件响应都禁止浏览器按内容嗅探 MIME
 _PUBLIC_FILE_HEADERS: dict[str, str] = {"X-Content-Type-Options": "nosniff"}
 
 
 def _regular_file_stat(path: Path) -> os.stat_result | None:
-    """返回普通文件的 stat；不存在或不是普通文件时返回 None（与 ``Path.is_file`` 同口径）。"""
+    """Return the stat of a regular file; None when it does not exist or is not a regular file (same convention as
+    ``Path.is_file``).
+
+    返回普通文件的 stat；不存在或不是普通文件时返回 None（与 ``Path.is_file`` 同口径）。"""
     try:
         stat_result = path.stat()
     except (OSError, ValueError):
@@ -150,7 +171,9 @@ def _regular_file_stat(path: Path) -> os.stat_result | None:
 
 
 def is_public_media_path(relative_parts: tuple[str, ...]) -> bool:
-    """项目内相对路径（按段拆分）是否属于公开端点可读的媒体。"""
+    """Whether a path relative to the project (split into segments) is media readable through the public endpoint.
+
+    项目内相对路径（按段拆分）是否属于公开端点可读的媒体。"""
     if not relative_parts or any(part.startswith(".") for part in relative_parts):
         return False
     name = Path(relative_parts[-1])
@@ -170,6 +193,11 @@ def _require_filename(file: UploadFile, _t: Callable[..., str]) -> str:
     return file.filename
 
 
+# File naming strategy on disk
+#   stable_png — stable single-image name `{name}.png` (actual suffix decided by the image normalization result)
+#   keep_ext   — stable single-image name, keeping the uploaded original extension (audio is not transcoded)
+#   sequenced  — multiple images accumulate, a unique name is taken by sequence number
+#   delegated  — the main flow takes no part in naming; that type's dedicated branch decides
 # 落盘文件名策略
 #   stable_png — 稳定单图名 `{name}.png`（实际后缀由图片归一化结果决定）
 #   keep_ext   — 稳定单图名，保留上传的原扩展名（音频不转码）
@@ -177,6 +205,11 @@ def _require_filename(file: UploadFile, _t: Callable[..., str]) -> str:
 #   delegated  — 主流程不参与命名，由该类型的专用分支决定
 Naming = Literal["stable_png", "keep_ext", "sequenced", "delegated"]
 
+# Content processing before writing to disk
+#   normalize_image — validate and compress by threshold, may rewrite the extension
+#   validate_image  — only check it decodes, keep the original bytes
+#   audio           — validate duration, no transcoding (size is checked separately by max_bytes)
+#   delegated       — the main flow does not process content; that type's dedicated branch decides
 # 落盘前的内容处理
 #   normalize_image — 校验并按阈值压缩，可能改写扩展名
 #   validate_image  — 仅校验可解码，保留原件字节
@@ -189,7 +222,18 @@ MetadataSetter = Callable[[ProjectManager, str, str, str], object]
 
 @dataclass(frozen=True)
 class UploadSpec:
-    """单个 upload_type 的落盘规则：目标目录、扩展名白名单、体积上限、后处理与元数据回写。
+    """Disk rules for one upload_type: target directory, extension whitelist, size limit, post-processing and metadata
+    write-back.
+
+    A new upload type only registers an entry in ``UPLOAD_SPECS`` and does not copy branch logic. ``source`` is the
+    only exception: it is fully taken over by ``_handle_source_upload``, and its entry only provides type validation
+    and the extension whitelist.
+
+    Uploads located by script entry (script_file + shot_id) that need to write back script metadata are not in this
+    table; they go through their own shot-level routes, and validation and saving share the helpers in
+    ``server.services.currency.upload_finalize``.
+
+    单个 upload_type 的落盘规则：目标目录、扩展名白名单、体积上限、后处理与元数据回写。
 
     新增上传类型只在 ``UPLOAD_SPECS`` 登记表项，不复制分支逻辑。``source`` 是唯一例外：
     它由 ``_handle_source_upload`` 全权接管，表项只提供类型校验与扩展名白名单。
@@ -203,18 +247,27 @@ class UploadSpec:
     naming: Naming
     content_check: ContentCheck
     unsupported_ext_key: str = "unsupported_image_type"
+    # Request body limit, None means unlimited; applies to all types, independent of content_check
     # 请求体上限，None 表示不限；对所有类型生效，与 content_check 无关
     max_bytes: int | None = None
     metadata_setter: MetadataSetter | None = None
+    # Non-empty means the file hangs under a field of the host asset and that field is the file's only pointer: reject
+    # if the host does not exist (including the window of a concurrent delete), to avoid leaving orphan files that are
+    # invisible in the UI. Single-image types have a fixed path and tolerate the asset being created later, so they do
+    # not set this constraint.
     # 非空表示文件挂在宿主资产的字段下、该字段是文件的唯一指针：宿主不存在就拒收
     # （含并发删除的窗口期），避免落下界面上不可见的孤儿文件。单图类型路径确定、
     # 可容忍资产后建，不设此约束。
     host_bucket: str | None = None
     host_not_found_key: str = ""
+    # Byte replacement and field write-back of reference audio must go through ProjectManager's project lock
+    # transaction; old-extension files are cleaned up after commit
     # 参考音频的字节替换与字段写回须走 ProjectManager 的项目锁事务；提交后再清理旧扩展名文件
     tracks_stale_audio: bool = False
 
     def __post_init__(self) -> None:
+        # The host constraint and its 404 message must be registered as a pair; otherwise the reject path would look
+        # up the translation with an empty key
         # 宿主约束与其 404 文案必须成对登记，否则拒收路径会拿空 key 去取翻译
         if (self.host_bucket is None) != (not self.host_not_found_key):
             raise ValueError("host_bucket 与 host_not_found_key 必须成对登记")
@@ -283,6 +336,8 @@ UPLOAD_SPECS: dict[str, UploadSpec] = {
         content_check="normalize_image",
         metadata_setter=ProjectManager.update_product_sheet,
     ),
+    # Project-level BGM: fully taken over by BgmLibraryService (measures loudness, writes atomically and registers by
+    # bytes); the entry only provides type validation and the extension whitelist.
     # 项目级 BGM：由 BgmLibraryService 全权接管（实测响度、原子落盘并按字节登记），表项只提供类型校验与扩展名白名单。
     "bgm": UploadSpec(
         allowed_exts=BGM_EXTENSIONS,
@@ -296,6 +351,9 @@ UPLOAD_SPECS: dict[str, UploadSpec] = {
         allowed_exts=_IMAGE_EXTS,
         subdir=(ASSET_SPECS["product"].subdir, "refs"),
         naming="sequenced",
+        # The product original image is the fidelity acceptance anchor (ADR 0034): only check it decodes, keep the
+        # original bytes and extension, no threshold compression/re-encoding. The request body limit is ensured
+        # separately by the reference compression step before generation sends it.
         # 商品原图是保真验收锚点（ADR 0034）：仅校验可解码，保留原件字节与扩展名，
         # 不做阈值压缩/重编码。请求体上限由生成发送前的参考压缩环节独立保障。
         content_check="validate_image",
@@ -307,6 +365,7 @@ UPLOAD_SPECS: dict[str, UploadSpec] = {
 
 _FORMAL_SHEET_UPLOAD_TYPES = frozenset(ASSET_SPECS)
 
+# Allowed file types (the frontend frontend/src/utils/source-files.ts mirrors the source entry)
 # 允许的文件类型（前端 frontend/src/utils/source-files.ts 镜像了 source 一项）
 ALLOWED_EXTENSIONS = {upload_type: list(spec.allowed_exts) for upload_type, spec in UPLOAD_SPECS.items()}
 
@@ -324,6 +383,8 @@ async def serve_project_file(project_name: str, path: str, request: Request, _t:
             project_manager = get_project_manager()
             project_dir = project_manager.get_project_path(project_name)
 
+            # The security check comes before the existence check: out-of-bounds paths always get 403, so the 404/403
+            # difference cannot become an existence probe for files outside the project directory
             # 安全检查先于存在性检查：越界路径一律 403，不让 404/403 的差异成为
             # 项目目录外的文件存在性探针
             try:
@@ -331,6 +392,8 @@ async def serve_project_file(project_name: str, path: str, request: Request, _t:
             except PathTraversalError as exc:
                 raise HTTPException(status_code=403, detail=_t("forbidden_access")) from exc
 
+            # The media scope is decided on the resolved real path (a symlink pointing to a non-media file is also
+            # rejected); non-media and missing files return the same 404
             # 媒体范围按解析后的真实路径判定（symlink 指向非媒体文件同样拒绝）；
             # 非媒体与文件不存在同形返回 404
             relative_parts = file_path.relative_to(os.path.realpath(project_dir)).parts
@@ -338,6 +401,9 @@ async def serve_project_file(project_name: str, path: str, request: Request, _t:
             if stat_result is None:
                 raise HTTPException(status_code=404, detail=_t("file_not_found", path=path))
 
+            # ?w= only applies to raster images: thumbnails are cached outside the project directory, keyed by the
+            # resolved real path; the original image is still returned when it is not wider than the target width or
+            # cannot be decoded
             # ?w= 只对栅格图生效：缩略图按解析后的真实路径缓存在项目目录之外；
             # 原图不宽于目标宽度或无法解码时仍返回原图
             if thumbnail_width is not None and is_thumbnail_source(file_path):
@@ -351,6 +417,8 @@ async def serve_project_file(project_name: str, path: str, request: Request, _t:
                 if thumbnail is not None:
                     thumbnail_path, thumbnail_stat = thumbnail
                     return thumbnail_path, thumbnail_stat, guess_media_type(thumbnail_path)
+                # The source file may have been replaced during generation: when falling back to the original image,
+                # compute length and ETag from the file as it is now
                 # 生成期间源文件可能已被替换：回退原图时按此刻的文件计算长度与 ETag
                 stat_result = _regular_file_stat(file_path)
                 if stat_result is None:
@@ -361,6 +429,7 @@ async def serve_project_file(project_name: str, path: str, request: Request, _t:
         thumbnail_width = snap_thumbnail_width(request.query_params.get("w"))
         file_path, stat_result, media_type = await asyncio.to_thread(_sync)
 
+        # Content-addressed cache: immutable with a ?v= parameter or a versions/ path, otherwise revalidate every time
         # 内容寻址缓存：带 ?v= 参数或 versions/ 路径时设 immutable，其余每次再验证
         immutable = bool(request.query_params.get("v")) or path.startswith("versions/")
         return cached_file_response(
@@ -385,6 +454,8 @@ async def serve_global_asset(asset_type: str, filename: str, request: Request, _
 
     def _sync() -> tuple[Path, os.stat_result, str]:
         root = get_project_manager().get_global_assets_root()
+        # Defensive check: even if filename passed the string validation, make sure the resolved path is still inside
+        # root (defends against edge cases such as symlinks / URL encoding)
         # 防御性检查：即使 filename 通过了字符串校验，也要确保解析后的路径仍在 root 之内
         # （防御 symlink / URL 编码等边界场景）
         try:
@@ -399,6 +470,8 @@ async def serve_global_asset(asset_type: str, filename: str, request: Request, _
 
     path, stat_result, media_type = await asyncio.to_thread(_sync)
 
+    # The file name is a uuid; the frontend uses ?fp=<updated_at> as the version key (same as ?v=); a version key
+    # means immutable
     # 文件名是 uuid，前端以 ?fp=<updated_at> 作版本键（?v= 同义）；带版本键即 immutable
     query = request.query_params
     immutable = bool(query.get("fp") or query.get("v"))
@@ -444,7 +517,7 @@ async def upload_file(
 
     original_filename = _require_filename(file, _t)
 
-    # 检查文件扩展名
+    # Check the file extension / 检查文件扩展名
     ext = Path(original_filename).suffix.lower()
     if ext not in spec.allowed_exts:
         raise HTTPException(
@@ -452,6 +525,8 @@ async def upload_file(
             detail=_t(spec.unsupported_ext_key, ext=ext, allowed=", ".join(spec.allowed_exts)),
         )
 
+    # name is joined into the disk path, so names with unsafe paths (separators / .. / control characters) are
+    # rejected at the boundary; when not provided, fall back to the original file name stem without validation.
     # name 会被拼进落盘路径，路径不安全的名字（分隔符 / .. / 控制字符）在边界即拒绝；
     # 未提供时按原文件名 stem 回落，不做校验。
     if name:
@@ -460,8 +535,10 @@ async def upload_file(
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=_t("asset_invalid_name", name=name)) from exc
 
-    # Source 分支早返 — 走 SourceLoader 规范化
+    # Source branch returns early — goes through SourceLoader normalization / Source 分支早返 — 走 SourceLoader 规范化
     if upload_type == "source":
+        # Source registration writes fields of the current schema; if a project whose migration has not finished gets
+        # written first, the retried migration would miss registering the old whole source
         # 源文登记写的是当前 schema 的字段；迁移没完成的项目先写进去，重试迁移时会把旧整本源文漏登
         await asyncio.to_thread(assert_project_migration_ok, project_name)
         if role == "episode":
@@ -511,17 +588,22 @@ async def upload_file(
 
             if spec.host_bucket is not None:
                 hosts = manager.load_project(project_name).get(spec.host_bucket) or {}
+                # name has already been normalized to NFC by validate_asset_name, while existing host keys may be NFD;
+                # resolve existence by coordinate system
                 # name 已经过 validate_asset_name 落到 NFC，存量宿主 key 可能是 NFD，按坐标系解析存在性
                 if not name or resolve_asset_key(hosts, name) is None:
                     raise HTTPException(status_code=404, detail=_t(spec.host_not_found_key, name=name or ""))
 
             target_dir = project_dir.joinpath(*spec.subdir)
+            # Stable file name (avoids version restore/reference issues from jpg/png mismatch); when name is not
+            # given, use the original file name stem
             # 稳定文件名（避免 jpg/png 不一致导致版本还原/引用异常）；未指定 name 时用原文件名主干
             stem = name or Path(original_filename).stem
             filename = f"{stem}.png" if spec.naming == "stable_png" else f"{stem}{ext}"
 
             target_dir.mkdir(parents=True, exist_ok=True)
 
+            # Save the file (compressed to JPEG when larger than 2MB, otherwise saved as is after validation)
             # 保存文件（大于 2MB 时压缩为 JPEG，否则校验后原样保存）
             nonlocal content
             if spec.content_check == "normalize_image":
@@ -537,6 +619,9 @@ async def upload_file(
                     raise HTTPException(status_code=400, detail=_t("invalid_image_file")) from exc
 
             if spec.naming == "sequenced":
+                # Take a unique file name by sequence number, reserving it with an atomic exclusive create: when
+                # uploads to the same host asset run concurrently, the two requests get different numbers, avoiding
+                # silently overwriting each other.
                 # 按序号取唯一文件名，用原子独占创建占位：并发上传同一宿主资产时
                 # 两个请求各拿到不同序号，避免静默互相覆盖。
                 seq = 1
@@ -574,20 +659,25 @@ async def upload_file(
                     with open(target_path, "wb") as f:
                         f.write(content)
 
-                    # 更新元数据
+                    # Update metadata / 更新元数据
                     if spec.metadata_setter is not None and name:
                         try:
                             with project_change_source("webui"):
                                 spec.metadata_setter(manager, project_name, name, relative_path)
                         except KeyError as exc:
                             if spec.host_bucket is not None:
+                                # The entry point already checked that the host exists; a race in the window caused by
+                                # a concurrent delete is handled as 404, and the file already written is cleaned up
+                                # too to avoid orphans
                                 # 入口已校验宿主存在；并发删除导致的窗口期竞态按 404 处理，
                                 # 已落盘的文件一并清理避免孤儿
-                                # hard-delete: rollback -- 宿主资产已消失时移除刚上传的文件
+                                # hard-delete: rollback -- remove the just-uploaded file when the host asset is gone / 宿主资产已消失时移除刚上传的文件
                                 target_path.unlink(missing_ok=True)
                                 raise HTTPException(
                                     status_code=404, detail=_t(spec.host_not_found_key, name=name)
                                 ) from exc
+                            # Single-image types: ignore when the asset does not exist; the file path is fixed, so an
+                            # asset created later can still reference it
                             # 单图类型：资产不存在时忽略，文件路径确定，资产后建仍可引用
 
             return {
@@ -625,7 +715,9 @@ def _bgm_http_error(exc: BgmError, _t: Translator) -> HTTPException:
 
 
 async def _handle_bgm_upload(project_name: str, filename: str, content: bytes, _t: Translator) -> dict[str, object]:
-    """登记一首项目级 BGM，返回它在 BGM 列表里的形态。"""
+    """Register one project-level BGM and return its shape in the BGM list.
+
+    登记一首项目级 BGM，返回它在 BGM 列表里的形态。"""
     await asyncio.to_thread(assert_project_migration_ok, project_name)
     try:
         track = await BgmLibraryService(get_project_manager()).upload(project_name, filename=filename, content=content)
@@ -727,7 +819,13 @@ async def _handle_source_upload(
     revision: str | None,
     _t: Translator,
 ):
-    """Source 分支：通过 SourceLoader 规范化为 UTF-8 .txt，并按需备份原始字节，登记为整本源文的文件。
+    """Source branch: normalize to UTF-8 .txt via SourceLoader, back up the original bytes when needed, and register it
+    as a file of the whole source.
+
+    Inserting the whole source and overwriting an already registered whole-source file both go through
+    :mod:`lib.episode.source_file_changes`, which remaps the episodes cut from it.
+
+    Source 分支：通过 SourceLoader 规范化为 UTF-8 .txt，并按需备份原始字节，登记为整本源文的文件。
 
     插入整本源文与覆盖已登记的整本源文文件都经 :mod:`lib.episode.source_file_changes`，重映射触及它的切出集。
     """
@@ -788,6 +886,10 @@ async def _handle_source_upload(
     loaded: dict[str, NormalizeResult] = {}
 
     def _sync() -> SourceFileChangeOutcome:
+        # Stream into tmp to avoid pulling the whole upload body into the Python heap; UploadFile.file is a
+        # SpooledTemporaryFile, and by now the request body is complete. Wrap try/finally outside the with: even if
+        # copyfileobj raises (e.g. disk full), the created tmp file must be cleaned up to avoid leaking /tmp
+        # (delete=False does not clean automatically).
         # 流式写入 tmp，避免把上传 body 整体拉进 Python 堆；
         # UploadFile.file 是 SpooledTemporaryFile，此处已是请求体完整到位状态。
         # 在 with 外包 try/finally：即使 copyfileobj 抛异常（如磁盘满），
@@ -800,6 +902,8 @@ async def _handle_source_upload(
 
             def _write(source_dir: Path, undo: ExitStack) -> str:
                 if on_conflict == "replace":
+                    # The replaced old file goes into the project trash together with the original upload, and is put
+                    # back where it was if the transaction fails.
                     # 被替换的旧文件连同原始上传件进项目回收站，事务失败时撤回原处。
                     trash_source_file(project_dir, f"source/{normalized_name}", undo)
                 result = SourceLoader.load(
@@ -808,10 +912,10 @@ async def _handle_source_upload(
                     original_filename=original_filename,
                     on_conflict=on_conflict,
                 )
-                # hard-delete: rollback -- 源文件写入失败时撤销本次写入
+                # hard-delete: rollback -- undo this write when writing the source file fails / 源文件写入失败时撤销本次写入
                 undo.callback(result.normalized_path.unlink, missing_ok=True)
                 if result.raw_path is not None:
-                    # hard-delete: rollback -- 源文件写入失败时撤销本次写入
+                    # hard-delete: rollback -- undo this write when writing the source file fails / 源文件写入失败时撤销本次写入
                     undo.callback(result.raw_path.unlink, missing_ok=True)
                 loaded["result"] = result
                 return f"source/{result.normalized_path.name}"
@@ -822,11 +926,15 @@ async def _handle_source_upload(
                 )
             return outcome
         finally:
-            tmp_path.unlink(missing_ok=True)  # hard-delete: temp -- 上传临时文件
+            tmp_path.unlink(missing_ok=True)  # hard-delete: temp -- upload temp file / 上传临时文件
 
     try:
         outcome = await run_sync_transaction(_sync)
     except FileNotFoundError as exc:
+        # Race window: the project directory is deleted concurrently after get_project_path passes, and it only blows
+        # up when SourceLoader writes. Without mapping it would fall into the app-level generic resource_not_found and
+        # lose the project semantics. Only convert when the project directory really is gone: a missing tmp file /
+        # file inside the loader is not a project problem and keeps propagating
         # 竞态窗口：get_project_path 通过后项目目录被并发删除，SourceLoader 写入时才炸。
         # 不映射会落到 app 级兜底的泛化 resource_not_found，丢失项目语义。
         # 仅在项目目录确实消失时转换：tmp 文件/加载器内部的文件缺失不是项目问题，继续上抛
@@ -873,7 +981,10 @@ async def _handle_source_upload(
 async def _handle_episode_source_upload(
     *, project_name: str, file: UploadFile, source_kind: SourceKind | None, _t: Translator
 ):
-    """逐集原文：规范化为文本，登记为播出顺序末尾的一集自带原文的集。"""
+    """Per-episode source: normalize to text and register it as an episode carrying its own source at the end of the
+    episode order.
+
+    逐集原文：规范化为文本，登记为播出顺序末尾的一集自带原文的集。"""
     original_filename = _require_filename(file, _t)
 
     try:
@@ -890,7 +1001,7 @@ async def _handle_episode_source_upload(
                 shutil.copyfileobj(file.file, out)
             extracted = SourceLoader.extract(tmp_path, original_filename=original_filename)
         finally:
-            tmp_path.unlink(missing_ok=True)  # hard-delete: temp -- 上传临时文件
+            tmp_path.unlink(missing_ok=True)  # hard-delete: temp -- upload temp file / 上传临时文件
         with project_change_source("webui"), manager.locked_source_registration(project_name) as (_dir, project, undo):
             return add_own_source_episode(project_dir, project, extracted.text, undo=undo, source_kind=source_kind)
 
@@ -953,11 +1064,13 @@ async def list_project_files(project_name: str, _t: Translator):
                 subdir_path = project_dir / subdir
                 if not subdir_path.exists():
                     continue
-                # source 子目录额外列出 raw 备份映射
+                # The source subdirectory additionally lists the raw backup mapping / source 子目录额外列出 raw 备份映射
                 raw_by_stem: dict[str, str] = {}
                 if subdir == "source":
                     raw_dir = subdir_path / "raw"
                     if raw_dir.exists():
+                        # sorted guarantees determinism when several raw files share a stem (the later overrides the
+                        # earlier; the last in lexical order wins)
                         # sorted 保证多个 raw 同 stem 时的确定性（后者覆盖前者，字典序末位胜出）
                         for raw_f in sorted(raw_dir.iterdir()):
                             if raw_f.is_file():
@@ -994,7 +1107,7 @@ async def get_source_file(project_name: str, filename: str, _t: Translator):
         def _sync():
             project_dir = get_project_manager().get_project_path(project_name)
 
-            # 安全检查：确保路径在项目目录内
+            # Security check: make sure the path is inside the project directory / 安全检查：确保路径在项目目录内
             try:
                 source_path = safe_join(project_dir, "source", filename)
             except PathTraversalError as exc:
@@ -1026,7 +1139,10 @@ async def _ensure_no_displaced_tasks_for_whole_source(
     preview: Callable[[ProjectManager], SourceFileChangeOutcome],
     _t: Translator,
 ) -> None:
-    """``source/<filename>`` 是已登记的整本源文文件时，执行前拦要移除或转为无原文的集的在途任务。"""
+    """When ``source/<filename>`` is a registered whole-source file, block in-flight tasks of episodes that would be
+    removed or turned into episodes without source before executing.
+
+    ``source/<filename>`` 是已登记的整本源文文件时，执行前拦要移除或转为无原文的集的在途任务。"""
     if revision is None:
         return
     manager = get_project_manager()
@@ -1072,6 +1188,8 @@ async def update_source_file(
                 return {"success": outcome.applied, **payload, "path": f"source/{filename}"}
 
             with manager.locked_source_registration(project_name) as (_source_dir, project, _undo):
+                # Security check: make sure the path is inside the project directory (must also pass when the file
+                # does not exist yet; creating it is allowed here)
                 # 安全检查：确保路径在项目目录内（文件尚不存在也要能通过，此处允许新建）
                 try:
                     source_path = safe_join(project_dir, "source", filename)
@@ -1085,6 +1203,8 @@ async def update_source_file(
                     register_whole_source_file(project, rel)
             return {"success": True, "path": f"source/{filename}"}
 
+        # Both branches are marked webui: creating an unregistered file rewrites the registration via
+        # locked_source_registration and is broadcast as well.
         # 两个分支都标 webui：未登记文件的新建经 locked_source_registration 改写登记，同样会广播。
         with project_change_source("webui"):
             return await run_sync_transaction(_sync)
@@ -1126,7 +1246,7 @@ async def delete_source_file(project_name: str, filename: str, _t: Translator, r
                 return {"success": outcome.applied, **source_file_change_payload(outcome, project, _t)}
 
             with manager.locked_source_registration(project_name) as (_source_dir, project, undo):
-                # 安全检查：确保路径在项目目录内
+                # Security check: make sure the path is inside the project directory / 安全检查：确保路径在项目目录内
                 try:
                     source_path = safe_join(project_dir, "source", filename)
                 except PathTraversalError as exc:
@@ -1134,10 +1254,14 @@ async def delete_source_file(project_name: str, filename: str, _t: Translator, r
                 if not source_path.exists():
                     raise HTTPException(status_code=404, detail=_t("file_not_found", path=filename))
                 unregister_source_file(project, f"source/{filename}")
+                # The source file together with the original upload (same stem) becomes one deletion record; withdrawn
+                # if writing back the registration fails.
                 # 源文件连同原始上传件（同主干）成为一条删除记录；写回登记失败时撤回。
                 trash_source_file(project_dir, f"source/{filename}", undo)
             return {"success": True}
 
+        # Both branches are marked webui: deleting the file of an episode that carries its own source rewrites the
+        # episode metadata, and the deletion record's initiator is recorded as the user by origin.
         # 两个分支都标 webui：删除自带原文的集文件会改写集元数据，删除记录的发起方也按来源记为用户。
         with project_change_source("webui"):
             return await run_sync_transaction(_sync)
@@ -1155,14 +1279,26 @@ async def delete_source_file(project_name: str, filename: str, _t: Translator, r
         raise HTTPException(status_code=500, detail=_t("internal_server_error")) from exc
 
 
-# ==================== 草稿文件管理 ====================
+# ==================== Draft file management ==================== / ==================== 草稿文件管理 ====================
 
+#: Stage path segment of the draft endpoints. Currently only the script plan stage uses draft reads/writes; prompt
+#: authoring has no directly editable intermediate state.
 #: 草稿端点的阶段路径段。目前只有脚本规划一段走草稿读写；提示词编写没有可直编的中间态。
 _SCRIPT_PLAN_STAGE = "script_plan"
 
 
 def _stage_files(content_mode: str, generation_mode: str | None = None) -> dict[str, str]:
-    """按 generation_mode / content_mode 给出「草稿阶段名 → 文件名」映射
+    """Give the "draft stage name -> file name" mapping by generation_mode / content_mode
+
+    ad does not use a structured script_plan (explicitly excluded, same convention as _resolve_script_plan_path /
+    script_review.script_plan_path) and has no script_plan even with reference_video generation_mode, so an empty
+    mapping is returned before checking generation_mode; the caller then reports "no such stage" instead of falling
+    on a drama / reference file name by mistake. reference_video goes through the generate_script_plan tool ->
+    script_plan_reference_units.json; other modes fall back to the structured script_plan file name of the
+    content_mode (unknown content_mode falls back to drama). Structured file names come from the single source of
+    truth SCRIPT_PLAN_FILENAMES, so new content_modes are covered automatically.
+
+    按 generation_mode / content_mode 给出「草稿阶段名 → 文件名」映射
 
     ad 不走结构化 script_plan（与 _resolve_script_plan_path / script_review.script_plan_path 同口径显式
     排除），即便带 reference_video generation_mode 也无 script_plan，故先于 generation_mode 判断返回空
@@ -1178,6 +1314,11 @@ def _stage_files(content_mode: str, generation_mode: str | None = None) -> dict[
     return {_SCRIPT_PLAN_STAGE: SCRIPT_PLAN_FILENAMES.get(content_mode, SCRIPT_PLAN_FILENAMES["drama"])}
 
 
+# Preferred candidates grouped by primary file name (mode-aware): fall back first within this mode's own candidates,
+# then to leftover files of other modes. Each mode's structured .json + legacy .md come from the single source of
+# truth; reference_video prefers the structured .json, then the legacy .md (the read / browse layer also accepts
+# existing work in progress, the write and generation side do not; same convention as the legacy semantics of
+# narration / drama).
 # 按 primary 文件名分组的优先候选（mode 感知）：先在本模式自家候选里回落，再兜底其他模式遗留文件。
 # 每模式的结构化 .json + 旧版 .md 取自单一真相源；reference_video 优先结构化 .json、再旧版 .md
 # （读取 / 浏览层兼认存量在制品，写盘与生成侧不认——与 narration / drama 的 legacy 语义同口径）。
@@ -1189,6 +1330,12 @@ _SCRIPT_PLAN_FAMILY[REFERENCE_VIDEO_SCRIPT_PLAN_FILENAME] = [
     REFERENCE_VIDEO_SCRIPT_PLAN_LEGACY_FILENAME,
 ]
 
+# Actual script_plan file candidates, used for fallback probing when the primary file does not exist. Both structured
+# .json and legacy .md candidates are derived from the single source of truth; each keeps the legacy .md so existing
+# work in progress can still be browsed. The probe priority for cross-mode leftover fallback is fixed as
+# reference_video -> narration -> drama (keeping the historical tie-break, so the leftover file picked across modes
+# after the consolidation does not differ from the old implementation); future content_modes not registered in this
+# sequence are appended after.
 # script_plan 实际文件候选 —— 主文件不存在时用于 fallback 探测。
 # 结构化 .json 与旧 .md 候选均由单一真相源派生；各自保留旧 .md 以便存量在制品仍可浏览。
 # 跨模式遗留回落的探测优先级固定为 reference_video → narration → drama（保持历史 tie-break，
@@ -1206,7 +1353,12 @@ _SCRIPT_PLAN_CANDIDATES = list(
 
 
 def _load_project_modes(project_name: str) -> tuple[str, str | None]:
-    """走 ProjectManager.load_project，读出 (content_mode, generation_mode) 两轴。
+    """Go through ProjectManager.load_project and read the two axes (content_mode, generation_mode).
+
+    Both axes are project-level fields; draft file names do not vary by episode number. Returns ("drama", None) when
+    the project does not exist, and the caller takes the content_mode-only branch.
+
+    走 ProjectManager.load_project，读出 (content_mode, generation_mode) 两轴。
 
     两轴都是项目级字段，草稿文件名不随集号变化。项目不存在时返回 ("drama", None)，由调用方走 content_mode-only 分支。
     """
@@ -1218,7 +1370,13 @@ def _load_project_modes(project_name: str) -> tuple[str, str | None]:
 
 
 def _resolve_script_plan_path(drafts_dir: Path, stage: str, primary: Path) -> Path:
-    """主路径不存在时按 primary 所属模式优先回落，再兜底其他模式遗留文件（mode 感知）。
+    """When the primary path does not exist, fall back first by the mode primary belongs to, then to leftover files of
+    other modes (mode-aware).
+
+    If stage is not the script plan or the primary path exists: return primary as is; the caller checks exists()
+    itself.
+
+    主路径不存在时按 primary 所属模式优先回落，再兜底其他模式遗留文件（mode 感知）。
 
     stage 不是脚本规划或主路径已存在：原样返回 primary；调用方自行 exists() 判定。
     """
@@ -1279,6 +1437,10 @@ async def update_draft_content(
             if stage not in stage_files:
                 raise HTTPException(status_code=400, detail=_t("invalid_draft_stage", stage=stage))
 
+            # Writes always go to the current mode's target file; fallback is only for reads/deletes (compatibility
+            # with old script_plans across mode switches). If writes fell back to the old file, after switching modes
+            # subsequent subagents reading stage_files[stage] would still find it empty, leading to "the frontend
+            # saved successfully but generation reports a missing script_plan".
             # 写入始终落到当前模式的目标文件；fallback 仅用于读取/删除（兼容跨模式切换的旧 script_plan）。
             # 若写入 fallback 到老文件，切模式后后续子智能体读 stage_files[stage] 仍为空，
             # 导致"前端保存成功但生成报缺少 script_plan"。
@@ -1286,10 +1448,19 @@ async def update_draft_content(
 
         project_dir, content_mode, draft_path = await asyncio.to_thread(_resolve_target)
 
+        # A save from the user in the Web UI: the draft event and the related writes (the prompt authoring draft
+        # cleared in reference mode) are all broadcast as webui, so the frontend does not treat them as external
+        # changes to notify about or navigate to.
         # 用户在 Web 端的保存：草稿事件与连带的写入（参考模式清掉的提示词编写草稿）都按 webui 广播，
         # 前端不把它当成外部改动去通知或跳转。
         with project_change_source("webui"):
             if draft_path.name == REFERENCE_VIDEO_SCRIPT_PLAN_FILENAME:
+                # The final script_plan of reference-to-video does not go through this endpoint's raw text write: its
+                # disk writes all converge on the single exit of ScriptReviewService.save_content (structure
+                # validation, re-deriving references, per-path lock and prompt_authoring draft cleanup); a raw write
+                # would be an unvalidated bypass around the write semantics. This endpoint has no baseline fingerprint
+                # to pass, so it does no concurrency baseline comparison (same as other direct calls without a
+                # baseline).
                 # 参考生视频正式 script_plan 不走本端点的裸文本直写：它的写盘统一收敛在
                 # ScriptReviewService.save_content 的单一出口（结构校验、references 重派生、
                 # per-path 锁与 prompt_authoring 草稿清理），裸写会成为一条未经校验、绕开写盘语义的旁路。
@@ -1298,6 +1469,9 @@ async def update_draft_content(
                     parsed = json.loads(content)
                 except json.JSONDecodeError as exc:
                     raise BadRequestError("script_review_invalid_content").with_diagnostic(str(exc)) from exc
+                # The existence probe is offloaded to a thread like the other synchronous file I/O: this function is
+                # awaited directly by the request coroutine, and a bare exists() would run on the event loop and block
+                # concurrent requests.
                 # 存在性探测同其余同步文件 I/O 卸到线程：本函数由请求协程直接 await，
                 # 裸 exists() 会跑在事件循环上阻塞并发请求。
                 is_new = not await asyncio.to_thread(draft_path.exists)
@@ -1310,6 +1484,8 @@ async def update_draft_content(
                     _write_plain_draft, project_name, project_dir, episode, draft_path, content, _t
                 )
 
+            # Emit a draft event to notify the frontend: the final script plan is not within the event service's
+            # polling scope, so this batch is its only change signal.
             # 发射 draft 事件通知前端：正式脚本规划不在事件服务的轮询范围内，这一批是它唯一的变更信号。
             action = "created" if is_new else "updated"
             draft_label_key = "draft_segment_splitting" if content_mode == "narration" else "draft_normalized_script"
@@ -1344,7 +1520,22 @@ def _write_plain_draft(
     content: str,
     _t: Translator,
 ) -> bool:
-    """非参考生视频 script_plan 的草稿落盘（同步主体），返回是否为新建文件。
+    """Save a draft of a non-reference-to-video script_plan (synchronous body); returns whether the file is newly
+    created.
+
+    The drama script_plan is saved as structured .json: before writing it is validated with the same convention as
+    the read contract of _load_drama_script_plan_content: valid JSON, a top-level object, scenes non-empty with
+    every item an object with a non-empty scene_id. This avoids writing arbitrary text / an empty script /
+    non-object shot items / missing or empty scene_id into the structured draft, which would only fail to parse at
+    the generation stage (the frontend saves successfully but generation is bound to fail). It is triggered by the
+    target file name rather than content_mode: _stage_files falls back to the drama structured file name for unknown
+    modes, so deciding by content_mode alone would let a dirty value bypass validation and write arbitrary text as
+    drama JSON. The narration script_plan goes to its own file name and does not match this validation.
+
+    A confirmed script plan is read-only, with the same criterion and error code as
+    ``ScriptReviewService.save_content``.
+
+    非参考生视频 script_plan 的草稿落盘（同步主体），返回是否为新建文件。
 
     drama script_plan 落结构化 .json：写入前与 _load_drama_script_plan_content 的读取契约同口径校验
     ——合法 JSON、顶层对象、scenes 为非空且每项为带非空 scene_id 的对象，避免任意文本 / 空剧本 /
@@ -1373,6 +1564,8 @@ def _write_plain_draft(
                 "expected a JSON object with a non-empty 'scenes' array of objects, each with a non-empty 'scene_id'"
             )
 
+    # Shares the same per-path lock with ScriptGenerator / ScriptReviewService: the migration read-modify-write of
+    # draft files and Web saves are serialized with each other.
     # 与 ScriptGenerator / ScriptReviewService 共享同一把 per-path 锁：
     # 草稿文件的迁移读改写与 Web 端保存相互串行化。
     pm = get_project_manager()
@@ -1415,7 +1608,7 @@ async def delete_draft(project_name: str, episode: int, stage: str, _t: Translat
         raise NotFoundError("project_not_found", name=project_name) from exc
 
 
-# ==================== 风格参考图管理 ====================
+# ==================== Style reference image management ==================== / ==================== 风格参考图管理 ====================
 
 
 @router.post("/projects/{project_name}/style-image")
@@ -1429,7 +1622,7 @@ async def upload_style_image(project_name: str, _t: Translator, file: UploadFile
     """
     original_filename = _require_filename(file, _t)
 
-    # 检查文件类型
+    # Check the file type / 检查文件类型
     ext = Path(original_filename).suffix.lower()
     if ext not in [".png", ".jpg", ".jpeg", ".webp"]:
         raise HTTPException(
@@ -1456,7 +1649,7 @@ async def upload_style_image(project_name: str, _t: Translator, file: UploadFile
 
         output_path, style_filename = await run_sync_transaction(_sync_prepare)
 
-        # 调用 TextGenerator 分析风格（自动追踪用量）
+        # Call TextGenerator to analyze the style (usage tracked automatically) / 调用 TextGenerator 分析风格（自动追踪用量）
         from lib.backends.providers import CallPurpose
         from lib.backends.text_backends.base import ImageInput, TextGenerationRequest, TextTaskType
         from lib.backends.text_generator import TextGenerator
@@ -1474,10 +1667,16 @@ async def upload_style_image(project_name: str, _t: Translator, file: UploadFile
         style_description = result.text
 
         def _sync_save():
+            # Update project.json: the whole RMW is done inside a single _project_lock to avoid overwriting other
+            # fields written concurrently
             # 更新 project.json：整段 RMW 在单一 _project_lock 内完成，避免覆盖并发写入的其它字段
             def _mutate(project_data: dict) -> None:
                 project_data["style_image"] = style_filename
                 project_data["style_description"] = style_description
+                # Strict mutual exclusion: custom reference image or template, one or the other. Besides clearing
+                # template_id, the `style` prompt previously written by template expansion must also be cleared;
+                # otherwise the generation chain would feed both the template prompt and style_description to the LLM,
+                # breaking the one-or-the-other semantics.
                 # 强互斥：自定义参考图与模版二选一。除了清 template_id，
                 # 还需清掉之前由模板展开写入的 `style` prompt，否则生成链路会把
                 # 模板 prompt 与 style_description 同时喂给 LLM，破坏二选一语义。

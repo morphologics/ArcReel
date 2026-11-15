@@ -1,4 +1,11 @@
-"""文件视图：按目录懒加载项目文件并标出角色，预览与下载任意单个文件（鉴权，含文本与 JSON）。
+"""File view: lazily load project files per directory and mark their roles; preview and download any single file
+(authenticated, including text and JSON).
+
+Separate from the anonymous media endpoint (``files.public_router``): that whitelist stays unchanged, and this one
+hangs on the protected router. Infrastructure files, symlinks and invalid paths all return 404, the same as a
+missing file.
+
+文件视图：按目录懒加载项目文件并标出角色，预览与下载任意单个文件（鉴权，含文本与 JSON）。
 
 与匿名媒体端点（``files.public_router``）分开：那边的白名单不变，这里挂在受保护的 router 上。
 基础设施文件、符号链接与非法路径一律与文件不存在同形返回 404。
@@ -23,7 +30,7 @@ from server.routers._file_responses import guess_media_type
 
 router = APIRouter(prefix="/projects/{project_name}/file-view")
 
-#: 文本类文件按 UTF-8 文本返回，便于预览；其余按扩展名推断。
+#: Text-like files are returned as UTF-8 text for easy preview; others are inferred from the extension. / 文本类文件按 UTF-8 文本返回，便于预览；其余按扩展名推断。
 _TEXT_SUFFIXES = frozenset({".txt", ".md", ".json", ".py", ".yaml", ".yml", ".srt", ".log", ".csv"})
 
 
@@ -86,18 +93,25 @@ async def read_file_view_content(project_name: str, path: str = Query(...), down
 
 
 def content_media_type(name: str) -> str:
-    """文本类文件按 UTF-8 文本返回，便于预览；其余按扩展名推断（首次调用读系统 mime 表，放进工作线程）。"""
+    """Text-like files are returned as UTF-8 text for easy preview; others are inferred from the extension (the first
+    call reads the system mime table, so it goes into a worker thread).
+
+    文本类文件按 UTF-8 文本返回，便于预览；其余按扩展名推断（首次调用读系统 mime 表，放进工作线程）。"""
     return "text/plain; charset=utf-8" if Path(name).suffix.lower() in _TEXT_SUFFIXES else guess_media_type(name)
 
 
 def stream_file(handle: BinaryIO, size: int, name: str, media_type: str, *, download: bool) -> StreamingResponse:
-    """把已打开的文件流式返回；项目回收站的下载共用。"""
+    """Stream an already opened file back; shared by project trash downloads.
+
+    把已打开的文件流式返回；项目回收站的下载共用。"""
     disposition = "attachment" if download else "inline"
     headers = {
         "Content-Length": str(size),
         "Content-Disposition": f"{disposition}; filename*=utf-8''{quote(name)}",
         "Cache-Control": "no-store",
         "X-Content-Type-Options": "nosniff",
+        # The project may contain HTML / SVG written by the Agent; when opened directly, scripts in them must not run
+        # with this site's identity.
         # 项目里可能有 Agent 写下的 HTML / SVG，直接打开时不让其中的脚本以本站身份运行。
         "Content-Security-Policy": "sandbox",
     }

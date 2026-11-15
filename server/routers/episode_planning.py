@@ -1,4 +1,17 @@
-"""AI 分集规划的 Web 入口：AI 规划分集与重新规划。
+"""Web entry point for AI episode planning: AI episode planning and replanning.
+
+"AI episode planning" calls :func:`server.tool_runtime.start_episode_planning`: admission (there is a whole source,
+and no pending replan candidate) uses the same predicate as the Agent's ``plan_episodes``; it plans window by window
+from the planning start derived from the ledger to the end of the whole source, each window being one queued text
+task. After submitting, the first window's generation batch is returned immediately, and progress is shown through
+task events and the project snapshot. Instructions are passed with the task and not written to the project.
+
+"Replan from this episode" calls :func:`server.tool_runtime.start_episode_replan`: it generates a candidate window
+by window, leaving the episode ledger untouched; after stopping midway it can continue generating
+(:func:`server.tool_runtime.continue_episode_replan`). Adopting and discarding the candidate are in
+:mod:`lib.episode.episode_replan`.
+
+AI 分集规划的 Web 入口：AI 规划分集与重新规划。
 
 「AI 规划分集」调用 :func:`server.tool_runtime.start_episode_planning`：准入（有整本源文、没有悬而未决的
 重新规划候选）与 Agent 的 ``plan_episodes`` 同一个谓词，从账本推导的规划起点逐窗规划到整本源文结尾，每一窗是
@@ -74,7 +87,7 @@ class EpisodePlanningRequest(BaseModel):
     )
 
 
-#: 重新规划被拒的原因码 → 状态码；未列出的为 409。
+#: Reason code for a rejected replan -> status code; unlisted ones are 409. / 重新规划被拒的原因码 → 状态码；未列出的为 409。
 _REPLAN_STATUS: dict[str, int] = {
     "episode_not_found": 404,
     "candidate_not_found": 404,
@@ -144,7 +157,7 @@ async def stop_planning(project_name: str, user: CurrentUser):
 class EpisodeReplanRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    #: 从哪一集开始重新规划（集 ID）。
+    #: Which episode to replan from (episode ID). / 从哪一集开始重新规划（集 ID）。
     episode: Annotated[int, Field(gt=0)]
     instructions: Annotated[str, Field(max_length=MAX_INSTRUCTIONS_LEN)] | None = Field(
         default=None, description="附加指令原文；空白视同未传"
@@ -197,8 +210,12 @@ class ReplanAdoptRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     candidate_id: str
+    #: ``revision`` of the change list the creator reviewed; when omitted or not matching the current list, only the
+    #: list is returned and nothing is adopted.
     #: 创作者看过的变更清单的 ``revision``；缺省或与当前清单不符时只返回清单，不采纳。
     revision: str | None = None
+    #: Also delete the retired episodes (episodes that have started production and are converted to having no source
+    #: text).
     #: 一并删除退下的集（已开始制作、转为无原文的集）。
     delete_retired: bool = False
 
@@ -210,7 +227,10 @@ class ReplanDiscardRequest(BaseModel):
 
 
 async def _run_replan[T](name: str, user_id: str, _t: Translator, action: Callable[[ProjectManager], T]) -> T:
-    """候选生成进行中时拒绝；其余在线程里执行，``ReplanError`` 映射为对应状态码与文案。"""
+    """Rejected while candidate generation is in progress; otherwise runs in a thread, and ``ReplanError`` is mapped to
+    the matching status code and message.
+
+    候选生成进行中时拒绝；其余在线程里执行，``ReplanError`` 映射为对应状态码与文案。"""
     scope, caller, services = _context(name, user_id)
     if not await asyncio.to_thread(services.projects.project_exists, name):
         raise NotFoundError("project_not_found", name=name)
@@ -241,6 +261,8 @@ async def adopt_replan(project_name: str, req: ReplanAdoptRequest, user: Current
     之间变了时再次返回确认，不采纳。
     """
     if req.revision is not None:
+        # Same check as manual splitting: reject when episodes to be retired or removed have in-flight tasks, so tasks
+        # do not write artifacts into replaced episodes
         # 与手工切分同一道检查：要退下或移除的集有在途任务时拒绝，免得任务把产物写进被替换的集
         preview = await _run_replan(
             project_name,

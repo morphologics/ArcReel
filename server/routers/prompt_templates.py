@@ -1,4 +1,9 @@
-"""提示词模版只读 API：系统设置页按类别列出内置模版，展示单个模版的源文与元数据，以及单个片段的正文与引用方。
+"""Read-only prompt template API: the system settings page lists built-in templates by category, shows a single
+template's source and metadata, and a single fragment's body and its referrers.
+
+Route prefix: /api/v1/prompt-templates
+
+提示词模版只读 API：系统设置页按类别列出内置模版，展示单个模版的源文与元数据，以及单个片段的正文与引用方。
 
 路由前缀: /api/v1/prompt-templates
 """
@@ -47,6 +52,8 @@ async def list_prompt_templates(templates: Templates) -> PromptTemplateListRespo
     )
 
 
+# Must be registered before the template detail route: the template detail's ``{template_id:path}`` swallows any
+# subpath.
 # 须注册在模版详情之前：模版详情的 ``{template_id:path}`` 会吞下任意子路径。
 @router.get("/partials/{name:path}")
 async def get_prompt_partial(name: str, templates: Templates) -> PartialEntry:
@@ -71,7 +78,9 @@ async def get_prompt_template(template_id: str, templates: Templates) -> PromptT
 
 
 def _output_json_schema(spec: str | None) -> dict[str, Any] | None:
-    """把 frontmatter 的 ``module:Class`` 解析为该 pydantic 模型的 JSON schema。"""
+    """Resolve the frontmatter's ``module:Class`` to that pydantic model's JSON schema.
+
+    把 frontmatter 的 ``module:Class`` 解析为该 pydantic 模型的 JSON schema。"""
     if spec is None:
         return None
     module_name, _, class_name = spec.partition(":")

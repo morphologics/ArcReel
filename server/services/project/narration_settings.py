@@ -1,4 +1,10 @@
-"""新建项目的旁白交付配置（docs/adr/0089）。
+"""Narration delivery config for new projects (docs/adr/0089).
+
+Shared by the Web creation wizard and the Agent's project creation tool: model, voice and voiceover speech rate
+omitted for a TTS voiceover project are prefilled from the global defaults and, once written to project.json, become
+the project's snapshot; later changes to the global defaults no longer affect this project.
+
+新建项目的旁白交付配置（docs/adr/0089）。
 
 Web 创建向导与 Agent 建项工具共用：TTS 配音项目省略的模型、音色与配音语速以全局默认预填，
 写入 project.json 后成为项目快照，此后全局默认的变化不再影响这个项目。
@@ -33,7 +39,10 @@ logger = logging.getLogger(__name__)
 
 @dataclass(frozen=True, slots=True)
 class NarrationSettingsInput:
-    """建项请求里的旁白配置。``provided`` 列出请求显式给出的 TTS 字段，其余字段按全局默认预填。"""
+    """Narration config in the project creation request. ``provided`` lists the TTS fields the request gave explicitly;
+    the other fields are prefilled from the global defaults.
+
+    建项请求里的旁白配置。``provided`` 列出请求显式给出的 TTS 字段，其余字段按全局默认预填。"""
 
     delivery: NarrationDelivery = POST_PRODUCTION
     audio_backend: str | None = None
@@ -43,7 +52,10 @@ class NarrationSettingsInput:
 
 
 def validate_tts_backend(value: str) -> str:
-    """TTS 模型必须是完整的 ``provider/model``，供应商已知，且注册表登记的模型是音频模型。"""
+    """The TTS model must be a full ``provider/model``, the provider must be known, and the model registered in the
+    registry must be an audio model.
+
+    TTS 模型必须是完整的 ``provider/model``，供应商已知，且注册表登记的模型是音频模型。"""
 
     pair = parse_tts_backend(value)
     if pair is None:
@@ -67,7 +79,15 @@ def validate_tts_speed(value: float) -> float:
 
 
 async def _voice_for_backend(resolver: ConfigResolver, provider_id: str, model_id: str, voice: str) -> str:
-    """让全局音色与项目实际使用的 TTS 模型相符。
+    """Make the global voice match the TTS model the project actually uses.
+
+    There is only one global voice, but the default audio model may be inferred automatically to another provider by
+    registry order (the default voice Cherry only belongs to DashScope). When the voice is not in the selected
+    built-in model's voice table, the first voice in the table is used instead. A custom provider's voice table is
+    not necessarily complete, so the voice is kept as is; when the voice table cannot be fetched it is also kept as
+    is, and synthesis reports the error as usual.
+
+    让全局音色与项目实际使用的 TTS 模型相符。
 
     全局音色只有一份，默认音频模型却可能按注册表顺序自动推断到另一家供应商（缺省音色 Cherry
     只属于 DashScope）。音色不在所选内置模型的音色表中时，改用表中第一个音色。自定义供应商的
@@ -78,6 +98,8 @@ async def _voice_for_backend(resolver: ConfigResolver, provider_id: str, model_i
     try:
         voice_ids = await audio_backend_voice_ids(provider_id, model_id, resolver)
     except Exception as exc:
+        # Prefilling is best effort only: construction failures such as a missing API Key or an unreadable Vertex
+        # credential file must not block project creation
         # 预填只是尽力而为：缺 API Key、Vertex 凭证文件不可读等构造失败都不能阻断建项
         logger.warning("读取音色表失败，旁白音色按全局设置预填 backend=%s/%s：%s", provider_id, model_id, exc)
         return voice
@@ -87,7 +109,12 @@ async def _voice_for_backend(resolver: ConfigResolver, provider_id: str, model_i
 
 
 async def default_narration_tts(resolver: ConfigResolver) -> tuple[ProviderModel, str, float | None]:
-    """新建 TTS 项目的预填值：全局默认音频模型、与之相符的旁白音色与配音语速。
+    """Prefill values for a new TTS project: the global default audio model, a narration voice matching it, and the
+    voiceover speech rate.
+
+    Raises ValueError when no audio provider is configured.
+
+    新建 TTS 项目的预填值：全局默认音频模型、与之相符的旁白音色与配音语速。
 
     未配置任何音频供应商时抛 ValueError。
     """
@@ -100,7 +127,9 @@ async def new_project_narration_fields(
     *,
     resolver: ConfigResolver,
 ) -> dict[str, object]:
-    """算出新项目要写入 project.json 的旁白配置字段。"""
+    """Compute the narration config fields a new project writes to project.json.
+
+    算出新项目要写入 project.json 的旁白配置字段。"""
 
     fields: dict[str, object] = {NARRATION_DELIVERY_FIELD: value.delivery}
     backend = value.audio_backend if TTS_BACKEND_FIELD in value.provided else None
@@ -126,6 +155,8 @@ async def new_project_narration_fields(
     if backend:
         backend = fields[TTS_BACKEND_FIELD] = validate_tts_backend(backend)
         if TTS_VOICE_FIELD not in value.provided and voice is not None:
+            # The voice is corrected by the model actually written; an explicitly given model may be from a different
+            # provider than the global default model
             # 音色按实际写入的模型校正，显式给出的模型可能与全局默认模型不是同一家
             provider_id, model_id = backend.split("/", 1)
             voice = await _voice_for_backend(resolver, provider_id, model_id, voice)

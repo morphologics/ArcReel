@@ -1,4 +1,6 @@
-"""参考生视频 executor。"""
+"""Reference-to-video executor.
+
+参考生视频 executor。"""
 
 from __future__ import annotations
 
@@ -100,7 +102,23 @@ def _render_unit_prompt(
     *,
     request_references: list[ReferenceResource] | None = None,
 ) -> RenderedUnitPrompt:
-    """把 unit 的书写文稿渲染成三段论 backend prompt（见 ``lib.script.reference_video.prompt_render``）。
+    """Render the unit's written text into the three-part backend prompt (see
+    ``lib.script.reference_video.prompt_render``).
+
+    Negative constraints are carried by the ``Avoid`` line in the third part of the ``reference_video/unit``
+    template, so this path appends no negative tail; the ``Avoid`` line of the ``storyboard/video`` template only
+    serves the image-to-video path.
+
+    The *structural check* for empty prompts has moved up to the enqueue guard point (``TaskSpec.from_request``), so
+    both enqueue paths (WebUI / SDK) reject empty prompts at enqueue time. A defensive empty check stays here
+    because the reference-to-video prompt source is a *mutable* script file re-read at execution time (queue dedup
+    ignores the payload, so an enqueue snapshot cannot serve as fallback): if the prompt was emptied after enqueue,
+    or an in-flight legacy task slipped past the guard, this check prevents an empty prompt from being padded into
+    non-empty text by the machine-generated first/third parts, bypassing the backend's empty-value protection and
+    wasting paid quota. The check runs on the *writing syntax text* rather than the rendered result -- the
+    three-part render always produces a non-empty third part, so after rendering it can no longer be told.
+
+    把 unit 的书写文稿渲染成三段论 backend prompt（见 ``lib.script.reference_video.prompt_render``）。
 
     负向约束由 ``reference_video/unit`` 模版第三段的 ``Avoid`` 行承担，本路径不追加反向尾词；
     ``storyboard/video`` 模版的 ``Avoid`` 行只服务图生视频路径。
@@ -124,7 +142,13 @@ def _render_unit_prompt(
 def _reference_limit_warning(
     *, backend_name: str, provider_id: str, model: str, count: int, max_refs: int
 ) -> dict[str, Any]:
-    """参考图片超限 warning；通用路径与商品优先裁剪共用。
+    """Warning for too many reference images; shared by the generic path and product-first trimming.
+
+    The parameters carry the registry provider ID (a family-alias provider differs from the backend name) so the UI
+    can look up the display name by ``(provider, model)``; with only the model, the same upstream model ID with
+    different names under two providers could not be told apart.
+
+    参考图片超限 warning；通用路径与商品优先裁剪共用。
 
     参数带注册表供应商 ID（族别名供应商与 backend 名不同），界面才能按 ``(供应商, 模型)`` 查到
     显示名；只带模型时，两个供应商下同一上游模型 ID 名称不同就无从区分。
@@ -138,7 +162,16 @@ def _reference_limit_warning(
 
 
 def default_unit_duration(request_facts: VideoRequestFactsResult, project: dict) -> int:
-    """新建 unit 的默认时长（秒）：项目偏好 > 收窄后的最短档位 > 兜底。
+    """Default duration (seconds) of a new unit: project preference > narrowed shortest option > fallback.
+
+    Options come from ``allowed_durations`` after narrowing by the video request facts, so a new unit gets a number
+    of seconds within the options it can actually request when generated. If the project preference is not a member
+    of the current options (config drift after a model change) it is not trusted and falls back to the shortest
+    option; when the facts cannot be resolved or the duration is fixed by the endpoint (no options to pick), fall
+    back to the shared planning baseline, the same source as the execution layer's fallback when it cannot read the
+    unit duration.
+
+    新建 unit 的默认时长（秒）：项目偏好 > 收窄后的最短档位 > 兜底。
 
     档位取视频请求事实收窄后的 ``allowed_durations``，使新建单元拿到的秒数落在它真正被生成时
     能申请到的档位内。项目偏好不是当前档位成员时（换模型后配置漂移）不采信，退到最短档；事实
@@ -160,7 +193,17 @@ def _build_reference_audio_wiring(
     *,
     reference_audio_per_image: bool,
 ) -> tuple[list[Path], list[int] | None]:
-    """把渲染产物的 ``audio_speakers``（+ 图号对齐下标）组装成请求字段，narration/drama 与 ad
+    """Assemble the render output's ``audio_speakers`` (+ image-number-aligned indices) into request fields;
+    narration/drama and ad share the same assembly convention.
+
+    When ``reference_audio_per_image`` is True (the backend requires audio attached segment by segment to specific
+    reference items), the render layer has already excluded speakers without a reference image via the
+    ``VoiceRenderSettings.requires_reference_image`` gate, so ``audio_speaker_reference_index`` should contain no
+    None here -- both lists are still filtered by index instead of zipping everything, so that if the render layer
+    and this place ever drift apart, the two lists always stay equal in length and order, and an unfiltered None in
+    one of them cannot misalign audio and reference image indices and silently bind the wrong character.
+
+    把渲染产物的 ``audio_speakers``（+ 图号对齐下标）组装成请求字段，narration/drama 与 ad
     共用同一份组装口径。
 
     ``reference_audio_per_image`` 为 True 时（backend 要求音频逐段挂在具体参考素材项上），
@@ -283,7 +326,12 @@ async def execute_reference_video_task(
     ]
     | None = None,
 ) -> dict[str, Any]:
-    """处理一个 reference_video unit 的生成。
+    """Handle generation of one reference_video unit.
+
+    resource_id is the unit_id (E{episode}U{number}); all content modes read from the self-contained
+    ``video_units``.
+
+    处理一个 reference_video unit 的生成。
 
     resource_id 即 unit_id（E{集}U{序号}）；所有创作类型都从自包含 ``video_units`` 读取。
     """
@@ -295,7 +343,7 @@ async def execute_reference_video_task(
     if not isinstance(script_file, str) or not script_file:
         raise ValueError("script_file is required for reference_video task")
 
-    # 1. 加载上下文（阻塞 IO，线程池）
+    # 1. Load context (blocking IO, thread pool) / 1. 加载上下文（阻塞 IO，线程池）
     def _load():
         pm = get_project_manager()
         project = pm.load_project(project_name)
@@ -313,6 +361,8 @@ async def execute_reference_video_task(
             raise ValueError(f"unit not found: {resource_id}")
         if video_unit_replan_problems(unit):
             raise ValueError(f"unit needs replanning: {resource_id}")
+        # Deciding reference image availability reads the artifact manifest and computes digests of design images,
+        # done in the worker thread together with context loading.
         # 参考图可用性判定要读产物清单、对设计图算摘要，与上下文加载同在工作线程里完成。
         declared_references = unit_reference_declarations(project, unit)
         resolved_assets = resolve_reference_assets(project, project_path, unit)
@@ -331,6 +381,13 @@ async def execute_reference_video_task(
         hydration,
     ) = await run_sync_transaction(_load)
 
+    # 2. Resolve the generation context once (declaring the video lane): build the generator and look up the
+    #    capability limits and resolution by the actual backend identity. Provider identity resolution is consolidated
+    #    in GenerationContext (docs/adr/0049) -- the executor no longer touches MediaGenerator private attributes or
+    #    rebuilds the registry provider_id by hand. The bucket is routed by this unit's actual resolved reference
+    #    images (docs/adr/0054): with reference images → r2v; a video unit without reference images degrades → i2v,
+    #    not sent to r2v-bucket models that reject empty references. The criterion is the resolution result rather
+    #    than the declaration, the same source as the backend's actual request.
     # 2. 单次解析生成上下文（声明 video lane）：构造 generator 并按实际 backend 身份
     #    查能力上限与 resolution。provider 身份解析收口于 GenerationContext
     #    （docs/adr/0049）——executor 不再触碰 MediaGenerator 私有属性、不再手工重建
@@ -354,6 +411,13 @@ async def execute_reference_video_task(
     provider_name = video.backend_name
     model_name = video.backend_model
 
+    # 3. Capabilities only read the video request facts the lane derives from the actual backend identity (provider_id
+    #    + backend.model): even when a custom model disables fallback, the active model's capabilities are hit
+    #    directly, never "trim per the old model, generate with the new one". Evaluation failures are turned into
+    #    structured blockers by the shared projection, never producing an unconstrained request. Reference expansion,
+    #    actual file existence, product-first trimming, duration option and audio conflicts all come from the same
+    #    projector. When the payload declares no request options, it is treated as confirmed under direct-enqueue
+    #    compatibility semantics; explicit options are kept in reference_request_options.
     # 3. 能力只读 lane 以实际 backend 身份（provider_id + backend.model）求得的视频请求事实：
     #    自定义模型禁用回退时也直接命中活跃 model 的能力，不会「按旧模型裁剪、按新模型生成」。
     #    求值失败由公共投影转成结构化 blocker，不制造无约束申请。引用展开、实际文件存在、商品
@@ -364,6 +428,9 @@ async def execute_reference_video_task(
         raise RuntimeError("reference video lane is missing its request facts")
 
     async def _lane_request_facts(generation_type: VideoGenerationType) -> VideoRequestFactsResult:
+        # The lane and the projection bucket by the same asset hydration; if assets change between two hydrations the
+        # unit lands in another bucket, while the lane only built a backend for this bucket, so it is blocked as
+        # capability unavailable.
         # lane 与投影按同一份资产水合定桶；两次水合之间资产变了会落到另一个桶，而 lane 只为
         # 本桶构造了 backend，按能力不可用阻断。
         if generation_type != execution_generation_type:
@@ -394,6 +461,8 @@ async def execute_reference_video_task(
     request_facts: VideoRequestFacts | None = projection.request_facts
     if request_facts is None:
         raise RuntimeError("allowed reference request is missing its request facts")
+    # Without a set resolution nothing is sent (``docs/adr/0086``); request, checkpoint and execution fingerprint all
+    # take this one value.
     # 未设分辨率即不下发（``docs/adr/0086``），请求、检查点与执行指纹都取这一个值。
     resolution = request_facts.resolution
 
@@ -431,6 +500,16 @@ async def execute_reference_video_task(
     if duration_warning is not None:
         warnings.append(duration_warning)
 
+    # 4. All content modes share the three-part render. Resolved entries carry both the request path and the logical
+    #    subject; one logical product reference can expand into multiple images, and after trimming they are passed to
+    #    the render per entry, so the 1-based index of `图片N` maps one-to-one to the reference_images the call channel
+    #    actually receives. The product high-fidelity footnote also only names products whose images are actually
+    #    sent. The prompt is always rebuilt from the script freshly read at execution time (the script is mutable +
+    #    queue dedup ignores the payload, so an enqueue snapshot would lose edits to the video unit body after
+    #    enqueue); the prompt is only used for the structural check at the enqueue boundary and is not written into
+    #    the task payload. Reference audio paths are resolved before rendering: the render layer binds by "actually
+    #    usable", so the numbering of `@音频N` and the number of segments sent with the request are strictly equal (a
+    #    field pointing to a deleted file leaves no number pointing to a nonexistent segment).
     # 4. 所有创作类型共用三段论渲染。解析条目同时携带请求路径与逻辑主体；商品的一条逻辑
     #    引用可展开成多张图片，裁剪后直接按条目传给渲染，保证 `图片N` 的 1-based 索引与
     #    调用通道实际收到的 reference_images 一一对应。商品高保真尾注也只点名仍实际发图的商品。
@@ -451,6 +530,8 @@ async def execute_reference_video_task(
     reference_audio_files, reference_audio_targets = _build_reference_audio_wiring(
         rendered, audio_paths, reference_audio_per_image=voice_settings.requires_reference_image
     )
+    # Degradation notes derived from resolution are visible on the same screen as the generation result: the same
+    # batch of {key, params} entries as the resolution preview panel.
     # 解析派生的降级提示与生成结果同屏可见：与解析预览面板同一批 {key, params} 条目。
     warnings = [*warnings, *rendered.warnings]
 
@@ -507,6 +588,8 @@ async def execute_reference_video_task(
             }
 
             def _bind_staged_media() -> tuple[tuple[ArtifactInputClaim, ...], list[Path], list[Path]]:
+                # The selection basis snapshot is bound to the digest of the staged bytes, and each staging path is
+                # verified to be a file: both read disk, so the whole thing runs in a thread.
                 # 选中依据快照按暂存字节的摘要绑定，暂存路径逐个核实为文件：都要读盘，整体在线程里做。
                 claims = (
                     script_input.claim,
@@ -564,6 +647,10 @@ async def execute_reference_video_task(
                 speech=artifact_speech.basis,
                 duration=artifact_duration_basis,
             )
+            # The paid option is merged into the option set, same convention as the storyboard route: when the
+            # duration is fixed by the endpoint the option set is empty, while the artifact freshness facts require a
+            # non-empty option set containing the paid option, so the only option here is the seconds value passed
+            # through as is.
             # 付费档位并入档位集，与分镜路线同口径：时长由端点固定时档位集是空的，而产物时效事实
             # 要求档位集非空且含付费档，这里的唯一档位就是那次原样透传的秒数。
             artifact_duration_tiers = tuple(sorted({effective_duration, *request_facts.allowed_durations}))
@@ -610,6 +697,8 @@ async def execute_reference_video_task(
                     project_path,
                     formal_input_claims,
                 )
+                # The checkpoint reads version records (version manager lock) and binds digests, so it is built in a
+                # worker thread.
                 # 检查点要读版本记录（版本管理锁）并绑定摘要，放进工作线程构造。
                 checkpoint = await asyncio.to_thread(_build_checkpoint)
                 await get_generation_queue().persist_execution_checkpoint(
@@ -708,7 +797,24 @@ def apply_unit_video_assets(
     thumb_rel: str | None,
     generated_at: str | None = None,
 ) -> str | None:
-    """在剧本 dict 上写回 unit.generated_assets（video_clip / video_uri / video_thumbnail / status）。
+    """Write unit.generated_assets (video_clip / video_uri / video_thumbnail / status) back on the script dict.
+
+    Shared by generation finalize and version restore, so both paths write fields with the same convention. Units of
+    all content modes live in ``video_units``. When the new result has no video_uri / thumbnail, old values are
+    cleared to avoid pointing at a stale URI / deleted file. Write-back failures must be visible to the caller --
+    finalize must not silently succeed when the script was not updated -- and the two failures must be
+    distinguishable: a missing unit raises KeyError (the restore side's cross-episode sync treats it as a normal
+    skip), a corrupt unit list structure raises ScriptEditError (the restore side degrades to a dirty script
+    warning).
+
+    ``generated_at`` defaults to the current time (generation finalize); version restore passes the stored time of
+    the restored version, so "is the clip older than the current reference audio settings" holds for the restored
+    old content instead of being washed to newest by the restore action.
+
+    The old ``source_signature`` kept by migration is inert historical data; this function does not read, compare or
+    add it.
+
+    在剧本 dict 上写回 unit.generated_assets（video_clip / video_uri / video_thumbnail / status）。
 
     生成 finalize 与版本还原共用，保证两条路径写出的字段口径一致。所有创作类型的 unit
     都位于 ``video_units``。新结果不含 video_uri / 缩略图时清空旧值，避免指向过期 URI /
@@ -757,7 +863,11 @@ async def finalize_reference_video_unit(
     versions: VersionManager,
     warnings: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
-    """Normal + resume + 上传共用：抽缩略图、写 unit.generated_assets、返回 result dict。
+    """Shared by normal + resume + upload: extract the thumbnail, write unit.generated_assets, return the result dict.
+
+    The old source signature kept by migration no longer takes part in finalize.
+
+    Normal + resume + 上传共用：抽缩略图、写 unit.generated_assets、返回 result dict。
 
     迁移保留的旧来源签名不再参与 finalize。
     """
@@ -769,12 +879,14 @@ async def finalize_reference_video_unit(
     if await extract_video_thumbnail(output_path, thumb_path):
         thumb_rel: str | None = f"reference_videos/thumbnails/{resource_id}.jpg"
     else:
-        # hard-delete: derived -- 抽取失败时清掉视频缩略图，可从视频重新生成
+        # hard-delete: derived -- clear the video thumbnail when extraction fails; it can be regenerated from the video / 抽取失败时清掉视频缩略图，可从视频重新生成
         await run_noninterruptible_sync(thumb_path.unlink, missing_ok=True)
         thumb_rel = None
 
     def _update_unit_assets() -> str | None:
         pm = get_project_manager()
+        # Asset write-back hot path: only touches unit.generated_assets, the structure cannot break because of it, so
+        # structural validation is exempt.
         # 资产回写热路径：只动 unit.generated_assets，结构不可能因此变坏，豁免结构校验。
         with pm.locked_script(project_name, script_file, validate=False) as script:
             return apply_unit_video_assets(script, resource_id, video_uri=video_uri, thumb_rel=thumb_rel)
@@ -782,6 +894,9 @@ async def finalize_reference_video_unit(
     await run_noninterruptible_sync(_update_unit_assets)
 
     def _latest_created_at() -> str | None:
+        # Reads the same versions.json as the archive backfill above, likewise after the artifact and script are
+        # written: when the file is unreadable, the result is missing a timestamp rather than reporting an already
+        # successful paid generation as failed -- this only holds by swallowing the guard alone.
         # 与上面的档案补写读同一个 versions.json，同样在产物与剧本落盘之后：文件不可读时
         # 让结果少一个时间戳，而不是把已成功的付费生成报成失败——只吞掉护栏才成立。
         try:

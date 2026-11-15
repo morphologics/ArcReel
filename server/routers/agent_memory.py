@@ -1,4 +1,15 @@
-"""Agent 记忆的两根对称 REST 路由：用户记忆与项目记忆。
+"""Two symmetric REST routes for agent memory: user memory and project memory.
+
+The interface shape of both memory levels is identical; the only difference is where the memory directory is derived
+from: user memory is derived from ``CurrentUser.id`` (the URL carries no user_id, currently always ``default``), and
+project memory from the project directory. The two sets of endpoints therefore share the same handling logic, each
+only providing its own ``AgentMemoryStore``.
+
+Split into two APIRouters rather than one: the write methods of project memory need
+``require_project_migration_ok``, and that dependency takes the project from the route's ``project_name`` path
+parameter, so mounting it on the user memory routes, which lack that parameter, would raise RuntimeError directly.
+
+Agent 记忆的两根对称 REST 路由：用户记忆与项目记忆。
 
 两级记忆的接口形状完全一致，差别只在记忆目录从哪里派生：用户记忆由
 ``CurrentUser.id`` 派生（URL 不带 user_id，当前恒为 ``default``），项目记忆由项目
@@ -26,6 +37,8 @@ from server.auth import CurrentUser, CurrentUserInfo
 user_router = APIRouter(prefix="/agent/memory")
 project_router = APIRouter(prefix="/projects/{project_name}/agent-memory")
 
+#: Media type of the memory body. The write side does not check Content-Type: the body is plain Markdown text, and
+#: whether the client labels it text/markdown or text/plain does not change what is written to disk.
 #: 记忆正文的媒体类型。写入端不校验 Content-Type：正文是 Markdown 纯文本，
 #: 客户端标 text/markdown 还是 text/plain 都不改变落盘内容。
 _TEXT_MEDIA_TYPE = "text/plain; charset=utf-8"
@@ -47,7 +60,10 @@ def _project_store(project_name: str) -> AgentMemoryStore:
 
 
 async def _run(build_store: Callable[[], AgentMemoryStore], action: Callable[[AgentMemoryStore], Any]) -> Any:
-    """在线程里完成建 store 与磁盘操作：项目目录解析与记忆读写都是阻塞 I/O。"""
+    """Build the store and do the disk operations in a thread: project directory resolution and memory reads/writes are
+    blocking I/O.
+
+    在线程里完成建 store 与磁盘操作：项目目录解析与记忆读写都是阻塞 I/O。"""
     return await run_sync_transaction(lambda: action(build_store()))
 
 

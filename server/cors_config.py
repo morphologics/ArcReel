@@ -10,6 +10,12 @@ WILDCARD = "*"
 def resolve_cors_policy(raw: str | None = None) -> tuple[list[str], bool]:
     """Parse ``CORS_ORIGINS`` into ``(allow_origins, allow_credentials)``.
 
+    Unset / empty / containing ``*`` → wildcard origins with credentials forced off (the CORS spec does not allow
+    wildcard + credentials, and Starlette raises RuntimeError at init); otherwise parse a comma-separated allowlist
+    and turn credentials on so the frontend can send cookies / Authorization cross-origin.
+
+    Parse ``CORS_ORIGINS`` into ``(allow_origins, allow_credentials)``.
+
     未设置 / 空 / 含 ``*`` → 通配 origins 且 credentials 强制关闭（CORS spec 不允许通配 +
     credentials 组合，Starlette 在初始化时会 RuntimeError）；否则按逗号分隔解析为白名单，
     credentials 打开供前端附带 cookie / Authorization 跨域。

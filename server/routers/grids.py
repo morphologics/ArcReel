@@ -1,4 +1,9 @@
 """
+Grid image generation API routes
+
+Handles generation, list queries, single-item queries and regeneration requests for grid images (grid-image). All
+generation requests are enqueued to GenerationQueue and executed asynchronously by GenerationWorker.
+
 宫格图生成 API 路由
 
 处理宫格图（grid-image）的生成、列表查询、单项查询和重新生成请求。
@@ -62,7 +67,7 @@ from server.services.project.episode_display import present_request_diagnostics
 router = APIRouter(prefix="/projects/{project_name}", tags=["grids"])
 
 
-# ==================== 请求/响应模型 ====================
+# ==================== Request/response models ==================== / ==================== 请求/响应模型 ====================
 
 
 class GenerateGridRequest(BaseModel):
@@ -74,12 +79,15 @@ class GenerateGridResponse(BaseModel):
     success: bool
     grid_ids: list[str]
     task_ids: list[str]
+    # Give each grid its own task row: the caller's optimistic busy markers must each wait for their own; handing over
+    # the whole batch list would make every grid wait until the whole batch is persisted. Groups that produced no grid
+    # are not in the map, so the caller does not mark them.
     # 逐宫格给出它自己的任务行：调用方的乐观占用标记要各等各的，拿整批清单会让每一张
     # 宫格都等到全批落库为止；未产出宫格的分组不进映射，调用方据此不给它们打标。
     task_ids_by_grid: dict[str, str]
-    # 缺失即生成时联合图已就绪、尚未切分落格而跳过的宫格
+    # Grids skipped in generate-missing because the grid composite is ready but not yet grid-split / 缺失即生成时联合图已就绪、尚未切分落格而跳过的宫格
     unsplit_grid_ids: list[str]
-    # 批量语义：全部入队都命中既有任务（一个新任务都没建）才为 True
+    # Batch semantics: True only when every enqueue hit an existing task (not a single new task created) / 批量语义：全部入队都命中既有任务（一个新任务都没建）才为 True
     deduped: bool
     message: str
 
@@ -104,7 +112,7 @@ def _load_admitted_grid_script(
     return script
 
 
-# ==================== 宫格图生成 ====================
+# ==================== Grid image generation ==================== / ==================== 宫格图生成 ====================
 
 
 @router.post("/generate/grid/{episode}", response_model=GenerateGridResponse)
@@ -126,15 +134,21 @@ async def generate_grid(
     """
 
     def _prepare() -> tuple[dict, dict, Path]:
+        # Ad/short projects and projects with the grid switch off are both rejected here: beyond the write boundary
+        # (create/PATCH reject ad enabling grid_storyboard), the action endpoint adds another line of defense so
+        # direct HTTP calls cannot bypass the switch and create billed tasks
         # 广告/短片项目与关闭宫格开关的项目在此一并拒绝：写入边界（create/PATCH 拒 ad 开启
         # grid_storyboard）之外，动作端点再设一道防线，不让 HTTP 直调绕过开关产生计费任务
         project = _load_project_for_grid_write(project_name)
+        # Path traversal, unbinding and episode number mismatch are all bad requests: 400, not falling into the 500
+        # fallback below; a corrupt script file (JSONDecodeError) must not be misjudged as an invalid script_file, and
+        # is left to the app-level catch-all to close out as a generic 500.
         # 路径穿越、解绑、集号失配均是坏请求，400 而非落入下方 500 兜底；剧本文件损坏
         # （JSONDecodeError）不能被误判为非法 script_file，交由 app 级 catch-all 收口为通用 500。
         script = _load_admitted_grid_script(project_name, project, req.script_file, episode)
         return project, script, get_project_manager().get_project_path(project_name)
 
-    # 读剧本可能顺带落盘迁移
+    # Reading the script may persist a migration along the way / 读剧本可能顺带落盘迁移
     project, script, project_path = await run_sync_transaction(_prepare)
     queue = get_generation_queue()
 
@@ -149,7 +163,7 @@ async def generate_grid(
             script=script,
             script_file=req.script_file,
             episode=episode,
-            # 空列表与省略同义：缺失即生成
+            # An empty list means the same as omitted: generate missing / 空列表与省略同义：缺失即生成
             scene_ids=req.scene_ids or None,
             section=section,
             active_grid_tasks=queue_active_grid_tasks(
@@ -197,7 +211,10 @@ def _submission_message(_t: Callable[..., str], *, submitted: int, unsplit: int)
 
 
 def _raise_for_refused_submission(project: dict, plan: GridSubmissionPlan) -> None:
-    """整批受阻时按类别报出一条错误；同一类别的缺口一次报全。"""
+    """When the whole batch is blocked, report one error per category; all gaps of the same category are reported at
+    once.
+
+    整批受阻时按类别报出一条错误；同一类别的缺口一次报全。"""
 
     if not plan.refused:
         return
@@ -216,7 +233,7 @@ def _raise_for_refused_submission(project: dict, plan: GridSubmissionPlan) -> No
     raise RuntimeError(f"grid submission refused without a reportable reason: {sorted(by_code)}")
 
 
-# ==================== 宫格档位能力 ====================
+# ==================== Grid tier capabilities ==================== / ==================== 宫格档位能力 ====================
 
 
 class GridCapabilityResponse(BaseModel):
@@ -244,7 +261,7 @@ async def get_grid_capability(project_name: str):
     )
 
 
-# ==================== 宫格图列表 ====================
+# ==================== Grid image list ==================== / ==================== 宫格图列表 ====================
 
 
 @router.get("/grids")
@@ -257,7 +274,7 @@ async def list_grids(project_name: str, request: Request, _t: Translator):
     return await present_request_diagnostics(await asyncio.to_thread(_list), request, _t)
 
 
-# ==================== 宫格图详情 ====================
+# ==================== Grid image detail ==================== / ==================== 宫格图详情 ====================
 
 
 def _grid_project_path(project_name: str) -> Path:
@@ -268,7 +285,10 @@ def _grid_project_path(project_name: str) -> Path:
 
 
 def _load_grid_or_404(project_path: Path, grid_id: str) -> GridGeneration:
-    """按 ID 取宫格记录；ID 格式非法与记录不存在同样收口为 404，不泄漏格式细节。"""
+    """Get the grid record by ID; an invalid ID format and a missing record both close out as 404, without leaking
+    format details.
+
+    按 ID 取宫格记录；ID 格式非法与记录不存在同样收口为 404，不泄漏格式细节。"""
     try:
         grid = GridManager(project_path).get(grid_id)
     except ValueError as exc:
@@ -285,18 +305,26 @@ async def get_grid(project_name: str, grid_id: str, request: Request, _t: Transl
     return await present_request_diagnostics(grid.to_dict(), request, _t)
 
 
-# ==================== 重新生成宫格图 ====================
+# ==================== Regenerate grid image ==================== / ==================== 重新生成宫格图 ====================
 
 
 def _require_grid_prompts_written(items: list[dict], id_field: str) -> None:
-    """任一分镜的 ``image_prompt`` 待生成即拒绝：联合图的提示词由各格拼成，缺一格整张图都出不了。"""
+    """Refuse if any shot's ``image_prompt`` is pending generation: the composite's prompt is assembled from the cells,
+    and with one cell missing the whole image cannot be produced.
+
+    任一分镜的 ``image_prompt`` 待生成即拒绝：联合图的提示词由各格拼成，缺一格整张图都出不了。"""
     pending_ids = pending_grid_prompt_ids(items, id_field)
     if pending_ids:
         raise ConflictError("script_prompt_pending", segment_id=", ".join(pending_ids))
 
 
 def _load_project_for_grid_write(project_name: str) -> dict:
-    """加载项目并校验宫格写操作闸门；判定与版本还原共用 ``ensure_grid_writable``。"""
+    """Load the project and check the grid write gate; the decision is shared with version restore via
+    ``ensure_grid_writable``.
+
+    加载项目并校验宫格写操作闸门；判定与版本还原共用 ``ensure_grid_writable``。"""
+    # A corrupt project.json (JSONDecodeError) must not be misjudged as an invalid project name; left to the app-level
+    # catch-all to close out as a generic 500
     # project.json 损坏（JSONDecodeError）不能被误判为非法项目名，交由 app 级 catch-all 收口为通用 500
     with domain_error_on_value_error(lambda _exc: BadRequestError("invalid_project_name", name=project_name)):
         project = get_project_manager().load_project(project_name)
@@ -305,13 +333,20 @@ def _load_project_for_grid_write(project_name: str) -> dict:
 
 
 def _grid_write_target(project_name: str) -> tuple[dict, Path]:
-    """宫格写操作的项目与项目目录。"""
+    """Project and project directory for grid write operations.
+
+    宫格写操作的项目与项目目录。"""
     project = _load_project_for_grid_write(project_name)
     return project, get_project_manager().get_project_path(project_name)
 
 
 async def _ensure_grid_idle(project_name: str, grid: GridGeneration, user_id: str) -> None:
-    """生成在途（pending/generating）的宫格拒绝切分/上传：worker 完成时会覆写联合图，
+    """A grid with generation in flight (pending/generating) refuses split/upload: the worker overwrites the composite
+    when done, clashing with a just-uploaded image or a split based on the old image. It only counts as in flight if
+    the queue still has an active task; after a task is cancelled, lost on restart or fails to enqueue, an orphan
+    record stuck in an intermediate state can be taken over by a user action.
+
+    生成在途（pending/generating）的宫格拒绝切分/上传：worker 完成时会覆写联合图，
     与刚上传的图或按旧图的切分互相踩踏。只有队列里仍有活动任务才算在途；任务被取消、
     重启丢失或入队失败后，停在中间态的孤儿记录可以由用户动作接管。"""
     if await grid_is_in_flight(
@@ -338,10 +373,13 @@ async def regenerate_grid(project_name: str, grid_id: str, user: CurrentUser):
             grid = _load_grid_or_404(project_path, grid_id)
             return grid, _load_admitted_grid_script(project_name, project, grid.script_file, grid.episode)
 
-        # 读剧本可能顺带落盘迁移
+        # Reading the script may persist a migration along the way / 读剧本可能顺带落盘迁移
         grid, script = await run_sync_transaction(_load_grid_and_script)
         ensure_grid_submittable(project, script)
         items, id_field, _, _, _ = get_storyboard_items(script)
+        # Regeneration is another paid image: admission uses the same decision as the first generation, evaluated on
+        # the shot set frozen in the record. If the script was changed between the two generations, gaps follow the
+        # current script -- the worker also rebuilds the request from the current script.
         # 重生成是又一次付费出图：准入与首次生成同一份判定，按记录冻结的分镜集合求值。
         # 剧本在两次生成之间被改过时，缺口以当前剧本为准——worker 也是按当前剧本重建请求的。
         scene_ids = set(grid.scene_ids)
@@ -349,6 +387,11 @@ async def regenerate_grid(project_name: str, grid_id: str, user: CurrentUser):
         require_admitted_storyboard_references(project, members)
         _require_grid_prompts_written(members, id_field)
 
+        # Regeneration reuses the rows/cols and aspect ratio frozen on the record. At execution time the worker
+        # rebuilds the provider prompt and provenance basis from the same current script, style and frozen layout; the
+        # prompt in the queue is only a compatibility field and must not become a second source of truth detached from
+        # the current basis. Legacy records without a frozen aspect ratio fall back to the project's current ratio and
+        # are filled in place; users who want a new ratio layout must rerun generation planning.
         # 重生成沿用记录上冻结的 rows/cols 与比例。Worker 在执行时从同一份当前剧本、
         # 风格和冻结布局重建 provider prompt 与 provenance basis，队列里的 prompt 仅作
         # 兼容字段，不能成为脱离当前 basis 的第二真相源。存量记录没有冻结比例时回落
@@ -358,9 +401,11 @@ async def regenerate_grid(project_name: str, grid_id: str, user: CurrentUser):
 
         grid.status = "pending"
         grid.error_message = None
-        # 清空旧 metadata，由 execute_grid_task 按 needs_i2i 重新回填
+        # Clear the old metadata; execute_grid_task refills it according to needs_i2i / 清空旧 metadata，由 execute_grid_task 按 needs_i2i 重新回填
         grid.provider = ""
         grid.model = ""
+        # Frozen values of legacy records are filled in here; when frozen values already exist this is an identity
+        # write
         # 存量记录的冻结值在此补齐；已有冻结值时是恒等写入
         grid.video_aspect_ratio = aspect_ratio
         await run_sync_transaction(lambda: GridManager(project_path).save(grid))
@@ -387,7 +432,7 @@ async def regenerate_grid(project_name: str, grid_id: str, user: CurrentUser):
     return {"success": True, "task_id": task["task_id"], "deduped": task.get("deduped", False)}
 
 
-# ==================== 切分落格 ====================
+# ==================== Grid split ==================== / ==================== 切分落格 ====================
 
 
 @router.post("/grids/{grid_id}/split")
@@ -410,6 +455,8 @@ async def split_grid(project_name: str, grid_id: str, user: CurrentUser):
             with project_change_source("webui"):
                 result = await apply_grid_split(project_name, grid)
         except GridImageNotReadyError as exc:
+            # Service-side fallback (there is a window between the precheck above and here where the file can be
+            # deleted concurrently)
             # 服务侧兜底（与上方预检间存在文件被并发删除的窗口）
             raise BadRequestError("grid_image_not_ready", grid_id=grid_id) from exc
 
@@ -422,7 +469,7 @@ async def split_grid(project_name: str, grid_id: str, user: CurrentUser):
     }
 
 
-# ==================== 联合图上传 ====================
+# ==================== Grid composite upload ==================== / ==================== 联合图上传 ====================
 
 
 @router.post("/grids/{grid_id}/upload")
@@ -450,6 +497,7 @@ async def upload_grid_image(
 
     try:
         max_bytes = validate_upload(file.filename, file.size, kind="image")
+        # Limit the number of bytes read into memory: no OOM when Content-Length is missing/bypassed
         # 限定读入内存的字节数：Content-Length 缺失/被绕过时不至于 OOM
         content = await file.read(max_bytes + 1)
         if len(content) > max_bytes:
@@ -463,6 +511,8 @@ async def upload_grid_image(
     except ValueError as exc:
         raise BadRequestError("invalid_image_file") from exc
 
+    # Register the staging file as soon as it hits disk: if cancelled mid-staging the return value is lost, and
+    # finally reclaims it from the registration.
     # 暂存文件一落盘就登记：暂存进行中被取消时返回值随之丢弃，finally 按登记回收。
     staged_files: list[Path] = []
 
@@ -476,6 +526,9 @@ async def upload_grid_image(
             target = await run_sync_transaction(_stage)
         staged_file = staged_files[0]
         async with grid_submission_section(project_name):
+            # Enqueue and record write happen in the same critical section. Here, after entering the critical section,
+            # re-read and probe again to prevent a regeneration slipping in after the earlier orphan decision and
+            # before commit.
             # 入队与记录写入在同一临界区内完成。这里在持有临界区后重读并再次探测，
             # 防止早先的孤儿判定之后、提交之前插入一次重新生成。
             current_grid = await asyncio.to_thread(_load_grid_or_404, project_path, grid_id)
@@ -487,11 +540,16 @@ async def upload_grid_image(
                 version_box: list[int] = []
 
                 def _replace_record(current_grid: GridGeneration) -> None:
+                    # A manual image fill is equivalent to a successful composite output: a failed record returns to
+                    # ready; the composite content changed, so clearing split_at means "awaiting explicit split".
                     # 手动补图等价于一次成功的联合图产出：failed 记录就此回到就绪态；
                     # 联合图内容已变更，split_at 清空表示「待显式切分」。
                     current_grid.status = "completed"
                     current_grid.error_message = None
                     current_grid.mark_composite_replaced()
+                    # Uploads are laid out with the project's current aspect ratio and the frozen values are rewritten
+                    # accordingly; reusing the old values would center-crop the new image to the old ratio after the
+                    # project ratio changed.
                     # 上传按项目当前比例排布，冻结值随之改写；沿用旧值会在项目比例
                     # 改过之后把新图按旧比例中心裁切。
                     current_grid.video_aspect_ratio = aspect_ratio
@@ -539,7 +597,7 @@ async def upload_grid_image(
         with project_change_source("webui"):
             from server.services.tasks.generation_tasks import emit_generation_success_batch
 
-            # 读剧本可能顺带落盘迁移
+            # Reading the script may persist a migration along the way / 读剧本可能顺带落盘迁移
             fingerprints = await run_sync_transaction(
                 emit_generation_success_batch,
                 task_type="grid",
@@ -549,7 +607,7 @@ async def upload_grid_image(
             )
     finally:
         for path in staged_files:
-            await asyncio.to_thread(path.unlink, missing_ok=True)  # hard-delete: temp -- 上传暂存文件
+            await asyncio.to_thread(path.unlink, missing_ok=True)  # hard-delete: temp -- upload staging file / 上传暂存文件
 
     return {
         "success": True,

@@ -1,4 +1,20 @@
-"""条目最终提示词的预览渲染。
+"""Preview rendering of an entry's final prompt.
+
+Answers "if this entry were generated now, what exactly is the prompt sent to the image / video model". The render
+functions are the same exit as the execution path (``lib.prompts.prompt_builders.render_storyboard_image_prompt`` /
+``lib.prompts.prompt_utils.render_storyboard_video_prompt``). The storyboard image side takes the same generation
+input as the executor (``lib.artifacts.generation_input``): when generation would be refused, that side is
+unavailable with input-gap codes; otherwise it is rendered after trimming to the same image-backend reference image
+limit as the executor, so the "image N" numbering matches what is actually sent; when trimming happens, a warning
+shaped like the execution-time task result is attached, so the user sees before generation that some reference
+images will not be sent with the request. The video side prepares the content mode and voice binding by the same
+rules as execution.
+
+Read-only: sends no requests to providers, incurs no cost, does not write the artifact manifest. On the
+reference-to-video path the unit body itself is the main prompt; its preview goes through
+``lib.script.reference_video.script_preview``, not this module.
+
+条目最终提示词的预览渲染。
 
 回答「这个条目现在生成，送进图像 / 视频模型的提示词逐字是什么」。渲染函数与执行路径同一个
 出口（``lib.prompts.prompt_builders.render_storyboard_image_prompt`` /
@@ -37,21 +53,32 @@ from server.services.tasks.generation_context import ImageLaneRequest, resolve_g
 
 logger = logging.getLogger(__name__)
 
+#: Unavailable reason when this prompt of the entry is pending generation (``None`` or field absent): not yet filled in
+#: after the mechanical conversion.
 #: 条目的该提示词为待生成（``None`` 或字段不在）时的不可用原因：机械转换后尚未补写。
 UNAVAILABLE_PENDING = "prompt_preview_pending"
-#: 提示词字段在场但为空（空串 / 空对象）时的不可用原因。
+#: Unavailable reason when the prompt field exists but is empty (empty string / empty object). / 提示词字段在场但为空（空串 / 空对象）时的不可用原因。
 UNAVAILABLE_MISSING = "prompt_preview_missing"
+#: Unavailable reason when the prompt field exists but has an invalid shape and the render function rejects it.
 #: 提示词字段在场但形状不合规、渲染函数拒绝时的不可用原因。
 UNAVAILABLE_INVALID = "prompt_preview_invalid"
 
 
 class ScriptItemNotFound(LookupError):
-    """剧本里没有该条目 id。"""
+    """The script has no entry with this id.
+
+    剧本里没有该条目 id。"""
 
 
 @dataclass(frozen=True)
 class RenderedPrompt:
-    """一侧提示词的渲染结果：``text`` 与 ``unavailable`` 恰有一个非 ``None``。
+    """Render result of one side's prompt: exactly one of ``text`` and ``unavailable`` is not ``None``.
+
+    ``warnings`` are non-blocking notes produced while rendering this text (e.g. reference images trimmed to the
+    backend limit), shaped like the ``{key, params}`` entries of the task ``result.warnings``; only present when
+    ``text`` rendered successfully.
+
+    一侧提示词的渲染结果：``text`` 与 ``unavailable`` 恰有一个非 ``None``。
 
     ``warnings`` 是渲染这份文本时产生的非阻断提示（如参考图按后端上限裁剪），与任务
     ``result.warnings`` 的 ``{key, params}`` 条目同形；只在 ``text`` 渲染成功时出现。
@@ -59,6 +86,8 @@ class RenderedPrompt:
 
     text: str | None = None
     unavailable: str | None = None
+    #: Text parameters of the unavailable reason: when the generation input is refused, carries all input gaps (same
+    #: shape as the execution-time error details).
     #: 不可用原因的文案参数：生成输入被拒时带全部缺口（与执行期错误详情同形）。
     unavailable_params: dict[str, object] = field(default_factory=dict)
     is_text_form: bool = False
@@ -74,7 +103,10 @@ class ItemPromptPreview:
 
 
 def _unavailable_before_rendering(prompt: object) -> str | None:
-    """渲染之前就能判定的不可用原因：待生成或为空；``None`` 表示该提示词值得渲染。"""
+    """Unavailable reasons decidable before rendering: pending generation or empty; ``None`` means the prompt is worth
+    rendering.
+
+    渲染之前就能判定的不可用原因：待生成或为空；``None`` 表示该提示词值得渲染。"""
     if prompt is None:
         return UNAVAILABLE_PENDING
     if (isinstance(prompt, str) and not prompt.strip()) or prompt == {}:
@@ -97,7 +129,17 @@ async def reference_image_limit(
     project: dict[str, Any],
     project_path: Path,
 ) -> tuple[int, str]:
-    """image lane 的 backend 参考图上限与模型名，与执行期同一裁剪口径；``0`` 表示不裁剪。
+    """The image lane backend's reference image limit and model name, with the same trimming rule as execution; ``0``
+    means no trimming.
+
+    Resolving the image lane constructs the backend (needs a credential). The preview is a read-only view, and a
+    missing credential / unconfigured provider should not hide even the prompt: resolution failure is treated as no
+    trimming and logs one info line; such a project cannot run generation anyway, so word-for-word consistency
+    between preview and execution still holds. The preview resolves by the project's current config and has no task
+    payload: if the enqueued payload pinned another provider with a different limit, the numbering would differ from
+    that execution; this is an existing limitation of the preview not knowing the payload.
+
+    image lane 的 backend 参考图上限与模型名，与执行期同一裁剪口径；``0`` 表示不裁剪。
 
     解析 image lane 会构造 backend（需凭证）。预览是只读视图，凭证缺失 / 供应商未配置时
     不该连提示词都看不到：解析失败按不裁剪处理并记一条 info——这种项目本来也跑不了生成，
@@ -126,7 +168,12 @@ async def preview_item_prompts(
     *,
     projects: ProjectManager | None = None,
 ) -> ItemPromptPreview:
-    """渲染一个分镜条目的分镜图与视频最终提示词文本。
+    """Render the final prompt text of a shot entry's storyboard image and video.
+
+    ``projects`` lets the tool runtime inject an already resolved ProjectManager (REST routes use the process
+    default instance).
+
+    渲染一个分镜条目的分镜图与视频最终提示词文本。
 
     ``projects`` 供工具运行时把已解析的 ProjectManager 注入进来（REST 路由用进程默认实例）。
     """
@@ -143,10 +190,16 @@ async def preview_item_prompts(
         return project, project_path, script, resolved[0], resolve_content_mode(script, project)
 
     project, project_path, script, item, content_mode = await run_sync_transaction(_load)
+    # The voice binding is resolved by the project's current video capability tier (None for non-drama or silent),
+    # same criterion as execution.
     # 声音绑定按项目当前的视频能力档解析（非 drama 或无声一律 None），与执行期同一判据。
     voice_characters = await resolve_voice_context(project, content_mode)
 
     def _assemble() -> StoryboardImageInput:
+        # Read the same generation input as execution (including the availability check of the previous storyboard
+        # image), so the "image N" numbering matches word for word; when the script is not registered or its content
+        # has changed, refuse with ValueError and treat it as the prompt being unrenderable; failures of the artifact
+        # manifest itself (ArtifactManifestError) still fail loud.
         # 与执行期读同一份生成输入（含上一分镜图的可用性判定），「图N」编号才能逐字一致；
         # 剧本未登记或内容已变更时以 ValueError 拒绝，按提示词不可渲染处理，产物清单本身的
         # 故障（ArtifactManifestError）沿用 fail loud。
@@ -168,6 +221,8 @@ async def preview_item_prompts(
     generation_input: StoryboardImageInput | None = None
     image_prompt = item.get("image_prompt")
     is_text_form = isinstance(image_prompt, str)
+    # Empty prompts cannot be rendered; prompts pending generation are handed to the generation input, reported all at
+    # once together with reference gaps.
     # 空提示词不可渲染；待生成提示词交给生成输入，与引用缺口一次报全。
     if image_prompt is not None and (reason := _unavailable_before_rendering(image_prompt)) is not None:
         image = RenderedPrompt(unavailable=reason, is_text_form=is_text_form)

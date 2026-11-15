@@ -1,4 +1,7 @@
-"""上传的源文件规范化为文本时的失败（``SourceLoader`` 的异常）→ HTTP 响应的共享映射。"""
+"""Shared mapping of failures when normalizing an uploaded source file to text (``SourceLoader`` exceptions) → HTTP
+responses.
+
+上传的源文件规范化为文本时的失败（``SourceLoader`` 的异常）→ HTTP 响应的共享映射。"""
 
 import shutil
 import tempfile
@@ -40,7 +43,12 @@ def source_loader_http_error(exc: SourceLoaderError, _t: Translator) -> HTTPExce
 
 
 def extract_uploaded_source_text(file: UploadFile, _t: Translator) -> str:
-    """把上传的文件规范化为 UTF-8 文本，不落到 ``source/``；格式或内容不合格时抛出对应的 ``HTTPException``。
+    """Normalize the uploaded file to UTF-8 text without writing it to ``source/``; raise the matching
+    ``HTTPException`` when the format or content is invalid.
+
+    Runs synchronously and reads the upload through a temp file; routes call it with ``asyncio.to_thread``.
+
+    把上传的文件规范化为 UTF-8 文本，不落到 ``source/``；格式或内容不合格时抛出对应的 ``HTTPException``。
 
     同步执行，经临时文件读取上传内容；路由里用 ``asyncio.to_thread`` 调用。
     """
@@ -54,7 +62,7 @@ def extract_uploaded_source_text(file: UploadFile, _t: Translator) -> str:
     except (UnsupportedFormatError, FileSizeExceededError, SourceDecodeError, CorruptFileError) as exc:
         raise source_loader_http_error(exc, _t) from exc
     finally:
-        tmp_path.unlink(missing_ok=True)  # hard-delete: temp -- 上传临时文件
+        tmp_path.unlink(missing_ok=True)  # hard-delete: temp -- upload temp file / 上传临时文件
 
 
 __all__ = ["extract_uploaded_source_text", "source_loader_http_error"]

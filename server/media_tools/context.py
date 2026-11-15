@@ -1,4 +1,6 @@
-"""媒体工具 handler 共用的结果构造、生成类结果钩子与请求字段类型。"""
+"""Result construction, generation result hooks and request field types shared by media tool handlers.
+
+媒体工具 handler 共用的结果构造、生成类结果钩子与请求字段类型。"""
 
 from __future__ import annotations
 
@@ -54,7 +56,13 @@ type GenerationToolValue = GenerationBatchReadModel | dict[str, Any]
 
 
 def generation_structured(value: GenerationToolValue) -> dict[str, Any]:
-    """生成类工具成功值的结构化结果。
+    """Structured result of a generation tool's success value.
+
+    The batch handle goes under ``generation_batch``; terminal results flatten ``generation_result`` and
+    accompanying fields at the top level, where ``generation_result`` has the same shape as the generation result
+    attached to the batch terminal-state query. ``summary`` is only summary text.
+
+    生成类工具成功值的结构化结果。
 
     批次句柄放在 ``generation_batch`` 下；终态结果把 ``generation_result`` 与附带字段平铺在顶层，
     其中 ``generation_result`` 与批次终态查询附带的生成结果同形。``summary`` 只作摘要文本。
@@ -71,7 +79,10 @@ def generation_summary(value: GenerationToolValue) -> str | None:
 
 
 def generation_is_error(value: GenerationToolValue) -> bool:
-    """终态结果未全部成功即为失败；等待用户确认的准入不算失败，批次句柄也不算。"""
+    """A terminal result that is not all successful is a failure; admission awaiting user confirmation is not a
+    failure, nor is a batch handle.
+
+    终态结果未全部成功即为失败；等待用户确认的准入不算失败，批次句柄也不算。"""
     if isinstance(value, GenerationBatchReadModel):
         return False
     result = value.get("generation_result")

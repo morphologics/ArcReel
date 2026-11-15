@@ -1,4 +1,20 @@
 """
+Video project management WebUI - FastAPI main application
+
+How to start:
+    cd ArcReel
+    uv run uvicorn server.app:app --reload --reload-dir server --reload-dir lib --port 1241
+
+Note: --reload-dir must be used to limit the watched directories, otherwise watchfiles scans over a hundred thousand
+      files in node_modules / .venv / .git / .worktrees etc., at 50%+ of one CPU core.
+
+On native Windows do not add --reload: when uvicorn enables reload on Windows it switches to SelectorEventLoop,
+which does not support subprocesses, so the built-in Agent cannot launch Claude Code. Use instead:
+    uv run uvicorn server.app:app --port 1241
+
+You can also use ``uv run python -m server.app``: the listen address comes from LISTEN_HOST / LISTEN_PORT; on
+Windows reload is automatically off, on other platforms reload is on and only server and lib are watched.
+
 视频项目管理 WebUI - FastAPI 主应用
 
 启动方式:
@@ -125,7 +141,12 @@ from server.services.tasks.resume_executor import execute_resume_video_task
 
 
 def assert_no_provider_secrets_in_environ() -> None:
-    """父进程禁止持有任何 provider 密钥；违反即 fail-fast。
+    """The parent process must not hold any provider secret; violating this fails fast.
+
+    Bash sandbox subprocesses inherit the parent env via fork, so the parent process must move all provider secrets
+    offline into the DB, and the SDK's options.env injects them into the subprocess explicitly.
+
+    父进程禁止持有任何 provider 密钥；违反即 fail-fast。
 
     Bash 沙箱子进程通过 fork 继承父 env，父进程必须把 provider secrets
     全部下线到 DB，由 SDK options.env 显式注入子进程。
@@ -151,7 +172,13 @@ def _read_sysctl(path: Path) -> str | None:
 
 
 def _diagnose_bwrap_failure() -> str:
-    """根据 host sysctl 状态给出 bwrap 失败的精确修复路径。
+    """Give the precise fix path for a bwrap failure based on the host sysctl state.
+
+    procfs is shared with the host, so host sysctl values are readable inside containers too, and this diagnosis
+    works both inside and outside docker. Priority: Ubuntu 24.04 AppArmor restriction > traditional
+    unprivileged_userns_clone > max_user_namespaces > fallback container config.
+
+    根据 host sysctl 状态给出 bwrap 失败的精确修复路径。
 
     procfs 是宿主机共享的，容器内同样能读到 host sysctl 值，所以这套
     诊断在 docker 内外都能跑。优先级：Ubuntu 24.04 AppArmor 限制 >
@@ -208,7 +235,16 @@ def check_sandbox_available(
     executable_which: Callable[[str], str | None] | None = None,
     subprocess_run: Callable[..., subprocess.CompletedProcess[bytes]] | None = None,
 ) -> bool:
-    """启动期检测 sandbox 工具可用性。
+    """Detect sandbox tool availability at startup.
+
+    Returning ``True`` means the sandbox is available and must be enabled; returning ``False`` means the SDK does
+    not support the current platform (Windows only; official platform constraints at
+    https://code.claude.com/docs/en/sandboxing#platform-and-tool-compatibility): the server can still start but with
+    the sandbox off, and the Bash tool falls back to the code allowlist
+    ``AgentAccessPolicy.WINDOWS_BASH_PREFIX_WHITELIST``. Missing tools on macOS / Linux still fail hard (no
+    degradation allowed on supported platforms).
+
+    启动期检测 sandbox 工具可用性。
 
     返回 ``True`` 表示沙箱可用且必须启用；返回 ``False`` 表示 SDK 不支持
     当前平台（仅 Windows，官方平台约束见
@@ -229,6 +265,8 @@ def check_sandbox_available(
             )
         return True
     if system == "Linux":
+        # Linux dependencies per https://code.claude.com/docs/en/sandboxing#set-up-linux-and-wsl2: both must be
+        # installed (bwrap for process/file isolation, socat for network proxy forwarding).
         # Linux 依赖见 https://code.claude.com/docs/en/sandboxing#set-up-linux-and-wsl2：需同时安装
         # （bwrap 做进程/文件隔离，socat 做网络代理转发）。
         missing = [name for name in ("bwrap", "socat") if which(name) is None]
@@ -241,6 +279,13 @@ def check_sandbox_available(
                 "  Fedora:        sudo dnf install bubblewrap socat\n"
                 "  Arch:          sudo pacman -S bubblewrap socat"
             )
+        # bwrap being installed does not mean it can run. Two common failures:
+        # 1) Creating a user namespace is denied: blocked by seccomp / apparmor / sysctl
+        #    → "No permissions to create new namespace"
+        # 2) Loopback config inside a new net namespace is denied: the container lacks CAP_NET_ADMIN
+        #    → "loopback: Failed RTM_NEWADDR: Operation not permitted"
+        # Do a trial run with unshare arguments close to the SDK's actual call, catching it at startup, so the Agent
+        # does not fail mysteriously on its first Bash call.
         # bwrap 装了不代表跑得起来。两类常见失败：
         # 1) 创建 user namespace 被拒：seccomp / apparmor / sysctl 屏蔽
         #    → "No permissions to create new namespace"
@@ -292,7 +337,11 @@ def detect_docker_environment(
     dockerenv_path: Path | None = None,
     cgroup_path: Path | None = None,
 ) -> bool:
-    """启动期一次性检测当前是否在 Docker / Podman 容器内。
+    """Detect once at startup whether we are inside a Docker / Podman container.
+
+    Used to decide whether to enable ``SandboxSettings.enableWeakerNestedSandbox``.
+
+    启动期一次性检测当前是否在 Docker / Podman 容器内。
 
     用于决定是否启用 ``SandboxSettings.enableWeakerNestedSandbox``。
     """
@@ -307,6 +356,10 @@ def detect_docker_environment(
     return "docker" in content or "podman" in content
 
 
+# Initialize logging: at module import only attach the stream handler. The file handler is deferred to lifespan, which
+# must first run migrate_legacy_log_dir() to move old logs from the code directory into the data root; otherwise the
+# handler would first open a log file with the same name in the new location and the old file could not be moved over.
+# This also avoids side effects on the real file system when pytest imports server.app during collection.
 # 初始化日志：模块导入期只挂 stream handler。
 # file handler 推迟到 lifespan，前面要先跑 migrate_legacy_log_dir()
 # 把代码目录下的旧 logs 迁入数据根，否则 handler 先在新位置开出同名日志文件，
@@ -317,7 +370,14 @@ logger = logging.getLogger(__name__)
 
 
 def _log_profile_sync_outcome(stats: dict, *, log: logging.Logger = logger) -> None:
-    """根据 ``sync_all_agent_profiles`` 返回的 stats 决定打 info 还是 warning。
+    """Decide between info and warning from the stats returned by ``sync_all_agent_profiles``.
+
+    ``stats["aborted"]`` is a bool, and bool is a subclass of int -- a naive ``isinstance(v, int) and v > 0`` would
+    treat ``aborted=True`` as a positive "materialization done" signal, the opposite of the real state. Handle the
+    abort signal separately first, then use ``type(v) is int`` (strict type equality) to count only real integer
+    counts.
+
+    根据 ``sync_all_agent_profiles`` 返回的 stats 决定打 info 还是 warning。
 
     ``stats["aborted"]`` 是 bool；而 bool 是 int 的子类——简单的
     ``isinstance(v, int) and v > 0`` 会把 ``aborted=True`` 当成"物化完成"的正向
@@ -336,9 +396,12 @@ async def _migrate_source_encoding_on_startup(
     *,
     migrate_source_encoding: Callable[[Path], Any] | None = None,
 ) -> dict[str, dict]:
-    """对每个项目执行幂等编码迁移。失败被捕获并写日志，不阻塞启动。"""
+    """Run the idempotent encoding migration on each project. Failures are caught and logged and do not block startup.
+
+    对每个项目执行幂等编码迁移。失败被捕获并写日志，不阻塞启动。"""
     summary: dict[str, dict] = {}
     migrate = migrate_source_encoding or migrate_project_source_encoding
+    # one-off existence check at startup, local metadata
     if not projects_dir.exists():  # noqa: ASYNC240 -- 启动期一次性存在性检查，本地元数据
         return summary
 
@@ -351,11 +414,18 @@ async def _migrate_source_encoding_on_startup(
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """应用生命周期管理"""
+    """Application lifespan management
+
+    应用生命周期管理"""
+    # Startup
+    # Security red-line checks: first sanitize the parent process env, then sandbox tool availability, then docker
+    # detection
     # Startup
     # 安全红线检测：先父进程 env 净化，再 sandbox 工具可用性，再 docker 检测
     assert_no_provider_secrets_in_environ()
     sandbox_enabled = check_sandbox_available()
+    # detect_docker_environment only makes sense on platforms where the sandbox is available (Linux path probing);
+    # skipped on the Windows fallback to avoid pointless file system calls.
     # detect_docker_environment 仅在 sandbox 可用平台有意义（Linux 路径探测）；
     # Windows 回退时跳过，避免无意义的文件系统调用。
     is_docker = detect_docker_environment() if sandbox_enabled else False
@@ -364,9 +434,13 @@ async def lifespan(app: FastAPI):
     app.state.in_docker = is_docker
     app.state.sandbox_enabled = sandbox_enabled
 
+    # Self-check the bundled ffmpeg once, caching the verdict in the process; unavailability does not block startup.
     # 随包 ffmpeg 自检一次，结论缓存在进程内；不可用不阻断启动。
     await asyncio.to_thread(log_ffmpeg_status)
 
+    # Log file persistence: first move old logs from the code directory into the data root, then attach the file
+    # handler. Order matters -- the handler creates arcreel.log in the new location, and attaching it early would
+    # leave the old same-named file behind due to the conflict.
     # 日志文件持久化：先把代码目录下的旧日志迁入数据根，再挂 file handler。
     # 顺序很重要——handler 会在新位置创建 arcreel.log，提前挂会让旧的同名文件因冲突留在原处。
     await asyncio.to_thread(migrate_legacy_log_dir)
@@ -380,6 +454,9 @@ async def lifespan(app: FastAPI):
     # Run Alembic migrations (auto-creates tables on first start)
     await init_db()
 
+    # Data root layout migration: after attaching the file log handler (the migration writes to the log) and Alembic
+    # (steps rewrite the DB), and before every step that iterates projects -- those steps find projects by the current
+    # layout and must not run on a half-migrated data root. Failure aborts startup.
     # 数据根布局迁移：排在挂文件日志 handler（迁移过程写进日志）与 Alembic（步骤会改写库）之后、
     # 所有遍历项目的步骤之前——那些步骤按当前布局找项目，不能跑在半迁移的数据根上。失败即中止启动。
     layout = DataRootLayout.current()
@@ -388,10 +465,16 @@ async def lifespan(app: FastAPI):
         session_factory=async_session_factory,
         sdk_config_dir=default_sdk_config_dir(),
     )
+    # The signing key may live under runtime/ in the data root and must be resolved after the layout migration: a
+    # project named runtime in the old layout is moved into projects/, and a key file written earlier would go into
+    # the project directory with it.
     # 签名密钥可能落在数据根的 runtime/ 下，须在布局迁移之后解析：旧布局里名为 runtime 的项目
     # 会被搬进 projects/，提前写入的密钥文件会随它进入项目目录。
     await asyncio.to_thread(ensure_token_secret)
 
+    # Source file encoding migration (idempotent; failure does not block startup). Runs before the schema migration:
+    # all sources are first converted to UTF-8, so every chain that reads sources as UTF-8 afterwards (episode
+    # planning, derived file reconciliation) gets uniform input.
     # 源文件编码迁移（幂等；失败不阻塞启动）。先于 schema 迁移跑：源文一律先归到 UTF-8，
     # 之后所有按 UTF-8 读源文的链路（分集规划、派生文件对账）才有统一的输入。
     source_migration_summary = await _migrate_source_encoding_on_startup(layout.projects_dir)
@@ -422,6 +505,13 @@ async def lifespan(app: FastAPI):
         )
     await asyncio.to_thread(cleanup_stale_backups, layout.projects_dir, 7)
 
+    # Session store key alignment (idempotent; failure does not block startup): after the data root moves to a new
+    # absolute path, the sessions' Agent context moves under keys derived from the current project directory. After
+    # the data root layout migration: the layout migration moves old-layout keys to directories under projects/, and
+    # only then are they recomputed here by the current layout. Before the local transcript import: the import lists
+    # local sessions by the current key and checks whether they were already imported by the current key; with
+    # unaligned keys it would import another copy under the new key, leaving records for the same session under two
+    # keys, and alignment would no longer change it.
     # 会话存储键对齐（幂等；失败不阻塞启动）：数据根换了绝对路径后，会话的 Agent 上下文改到当前项目目录派生的键下。
     # 排在数据根布局迁移之后：布局迁移把旧布局的键改到 projects/ 下的目录，这里才按当前布局重算。
     # 排在本地 transcript 导入之前：导入按当前键列本地会话、按当前键判断是否已导入，键没对齐时会在新键下
@@ -454,6 +544,8 @@ async def lifespan(app: FastAPI):
     except Exception as exc:
         logger.warning("JSON→DB config migration failed (non-fatal): %s", exc)
 
+    # Old task-level text backend keys → tier keys (docs/adr/0051). Placed after the JSON→DB migration: same-named
+    # keys in old JSON that landed in the DB via the catch-all can also be absorbed by this migration
     # 旧任务级文本 backend 键 → 档位键（docs/adr/0051）。放在 JSON→DB 迁移之后：
     # 旧 JSON 里的同名键经 catch-all 落库后也能被本迁移收编
     try:
@@ -464,6 +556,8 @@ async def lifespan(app: FastAPI):
     except Exception as exc:
         logger.warning("text tier settings migration failed (non-fatal): %s", exc)
 
+    # Rewrite renamed models in settings to their successor models (retired model mapping). Placed after the tier
+    # migration: old task-level keys absorbed into tier keys are rewritten too
     # 设置里已改名的模型改写为后继模型（退役模型映射）。放在档位迁移之后：旧任务级键收编进档位键后一并改写
     try:
         from lib.config.migration import migrate_retired_model_settings
@@ -473,7 +567,7 @@ async def lifespan(app: FastAPI):
     except Exception as exc:
         logger.warning("retired model settings migration failed (non-fatal): %s", exc)
 
-    # 官方市场源 seed：不存在则插入，地址常量变了就同步；不抓取
+    # Official market source seed: insert if absent, sync if the URL constant changed; no fetching / 官方市场源 seed：不存在则插入，地址常量变了就同步；不抓取
     try:
         from lib.market.sources import seed_official_source
 
@@ -482,6 +576,8 @@ async def lifespan(app: FastAPI):
     except Exception as exc:
         logger.warning("official market source seed failed (non-fatal): %s", exc)
 
+    # Load catalog data fetched by the official sync into catalog queries; if it cannot be read, use the factory
+    # snapshot for now until the next sync round
     # 官方同步取回的目录数据装入目录查询；读不到时暂用出厂快照，等下一轮同步
     try:
         from lib.catalog.official_sync import load_synced_data
@@ -491,6 +587,8 @@ async def lifespan(app: FastAPI):
     except Exception:
         logger.exception("loading synced catalog data failed (non-fatal)")
 
+    # Merge copies of model entries modified by the user into catalog queries; if they cannot be read, those entries
+    # use the official data for now, the rest as usual
     # 用户修改的模型条目副本并进目录查询；读不到时这些条目暂按官方数据，其余照常
     try:
         from lib.catalog.user_entries import reload_user_entries
@@ -500,6 +598,8 @@ async def lifespan(app: FastAPI):
     except Exception:
         logger.exception("loading user-modified catalog entries failed (non-fatal)")
 
+    # Merge user-added models under built-in providers into catalog queries; if they cannot be read, those models are
+    # unavailable for now, other models as usual
     # 内置供应商下用户添加的模型并进目录查询；读不到时这些模型暂不可用，其余模型照常
     try:
         from server.routers.provider_models import reload_user_added_models
@@ -509,6 +609,7 @@ async def lifespan(app: FastAPI):
     except Exception:
         logger.exception("loading user-added built-in provider models failed (non-fatal)")
 
+    # Materialize agent_runtime_profile into existing projects (file I/O → worker thread)
     # 把 agent_runtime_profile 物化到存量项目（文件 I/O → worker 线程）
     from lib.project.project_manager import get_project_manager
 
@@ -516,7 +617,7 @@ async def lifespan(app: FastAPI):
     _profile_sync_stats = await asyncio.to_thread(_pm.sync_all_agent_profiles)
     _log_profile_sync_outcome(_profile_sync_stats)
 
-    # 启动共享 httpx 客户端（用于版本检查等外部 API 调用）
+    # Start the shared httpx client (used for external API calls such as version checks) / 启动共享 httpx 客户端（用于版本检查等外部 API 调用）
     await startup_http_client()
 
     # Initialize async services
@@ -538,14 +639,21 @@ async def lifespan(app: FastAPI):
         project_event_service.publish_assistant_session_resumed
     )
 
+    # The stall probe goes after the startup steps: synchronous startup work such as migrations does not count as an
+    # online stall, avoiding false alarms.
     # 卡顿探针放在启动步骤之后：迁移等启动期同步工作不算线上卡顿，避免误报。
     stall_probe = start_loop_stall_probe()
+    # Official sync of the model catalog: check once at startup, then once a day; cancelled on app shutdown
     # 模型目录的官方同步：启动时检查一次，之后每天一次；随应用关停取消
     catalog_sync = start_official_sync(async_session_factory)
+    # Expiry cleanup of the project trash and deleted projects: once at startup, then periodically; cancelled on app
+    # shutdown
     # 项目回收站与已删除项目的过期清理：启动时清一次，之后定期清理；随应用关停取消
     from server.services.project.trash_expiry import start_trash_expiry, stop_trash_expiry
 
     trash_expiry = start_trash_expiry(layout)
+    # Pre-generation of stream segments for the edit view: scan every timeline once a minute and fill missing segments
+    # at idle priority; cancelled on app shutdown
     # 剪辑视图的流片段提前生成：每分钟扫一遍各时间线，按空闲优先级补齐缺的片段；随应用关停取消
     from lib.project.project_manager import get_project_manager
     from server.services.presentation.timeline_stream import start_stream_prebuild, stop_stream_prebuild
@@ -558,6 +666,8 @@ async def lifespan(app: FastAPI):
         await stop_stream_prebuild(stream_prebuild)
         await stop_trash_expiry(trash_expiry)
         await stop_official_sync(catalog_sync)
+        # Also stop the probe on runtime exceptions or when shutdown is cancelled, so the shutdown phase is not
+        # misreported as a stall.
         # 运行期异常或关停被取消时同样停掉探针，免得收尾阶段把关停工作误报成卡顿。
         await stop_loop_stall_probe(stall_probe)
 
@@ -571,9 +681,13 @@ async def lifespan(app: FastAPI):
     worker = getattr(app.state, "generation_worker", None)
     if worker:
         logger.info("正在停止 GenerationWorker...")
+        # Shutdown does not cancel running tasks: worker.stop() waits for running tasks to finish before leaving the
+        # main loop.
         # 关停不取消在跑任务：worker.stop() 等在跑任务跑完再退出主循环。
         await worker.stop()
         logger.info("GenerationWorker 已停止")
+    # Test-connection runs cannot resume: dying with the event loop would leave the ledger's pending rows forever, so
+    # settle them via the cancel path before shutdown.
     # 测试连接的 run 不可续跑：随事件循环消亡会把账本 pending 行永远留下，关停前按取消路径结算。
     from lib.custom_provider.endpoint_test import shutdown_trial_runs
 
@@ -582,7 +696,7 @@ async def lifespan(app: FastAPI):
     await close_db()
 
 
-# 创建 FastAPI 应用
+# Create the FastAPI app / 创建 FastAPI 应用
 app = FastAPI(
     title="视频项目管理 WebUI",
     description="AI 视频生成工作空间的 Web 管理界面",
@@ -591,12 +705,18 @@ app = FastAPI(
     dependencies=[Depends(require_valid_project_name)],
 )
 
+# CORS config (env-driven, parsed in server/cors_config.py; the remote MCP mount shares the same allowlist). Must be
+# computed before register_error_handlers(app): the 500 for unexpected exceptions is sent by the ServerErrorMiddleware
+# fallback, bypassing CORSMiddleware (see server/error_handlers.py::_cors_headers_for), and the handler needs this
+# config to add the CORS headers by hand.
 # CORS 配置（env 驱动，解析见 server/cors_config.py；远程 MCP 挂载共用同一份白名单）。
 # 须在 register_error_handlers(app) 之前算出：未预期异常的 500 由
 # ServerErrorMiddleware 兜底发送，绕过 CORSMiddleware（见
 # server/error_handlers.py::_cors_headers_for），handler 需要这份配置手工补 CORS 头。
 _allow_origins, _allow_credentials = resolve_cors_policy()
 
+# App-level exception handlers: the single point for the exception → status code → detail mapping (see
+# server/error_handlers.py)
 # app 级异常处理器：异常→状态码→detail 映射的单点（见 server/error_handlers.py）
 register_error_handlers(app, cors_allow_origins=_allow_origins, cors_allow_credentials=_allow_credentials)
 
@@ -610,7 +730,18 @@ app.add_middleware(
 
 
 def _resolve_listen_addr() -> tuple[str, int]:
-    """解析 ``LISTEN_HOST`` / ``LISTEN_PORT``，供 ``__main__`` 块与测试共用。
+    """Parse ``LISTEN_HOST`` / ``LISTEN_PORT``, shared by the ``__main__`` block and tests.
+
+    **Scope**: only takes effect when run directly via ``python server/app.py`` (going through ``__main__`` below).
+    When started with a standard ASGI CLI like ``uvicorn server.app:app``, the listen address is decided by the
+    uvicorn process's own ``--host`` / ``--port`` arguments and this function plays no part -- an ASGI app module
+    cannot go back and change the uvicorn process's binding at import time. Deployments such as Docker and systemd
+    must pass host/port explicitly as uvicorn CLI arguments.
+
+    The truthy default (``or``) is a fallback that covers a ``.env`` mistakenly set to an empty value (such as
+    ``LISTEN_PORT=``).
+
+    解析 ``LISTEN_HOST`` / ``LISTEN_PORT``，供 ``__main__`` 块与测试共用。
 
     **作用范围**：仅当通过 ``python server/app.py`` 直接执行（走下方 ``__main__``）
     时生效。通过 ``uvicorn server.app:app`` 这种标准 ASGI CLI 启动时，listen 地址
@@ -625,6 +756,9 @@ def _resolve_listen_addr() -> tuple[str, int]:
     return host, port
 
 
+# The frontend polls the endpoints below every 3s for task status; in steady state, successful responses would drown
+# out real errors/slow requests, so 2xx + fast responses are lowered to DEBUG, while errors/slow responses still go to
+# INFO for observability.
 # 前端每 3s 轮询下述接口获取任务状态；稳态下成功响应会把真正的错误/慢请求淹没，
 # 所以对 2xx + 快速响应降级到 DEBUG，异常/慢响应仍走 INFO 保证可观测。
 _QUIET_POLL_ENDPOINTS: frozenset[tuple[str, str]] = frozenset(
@@ -673,6 +807,11 @@ async def request_logging_middleware(
     return response
 
 
+# Register API routes
+#
+# This block is the single source of truth for auth requirements: routers with dependencies require a Bearer token;
+# CurrentUser in an endpoint signature only means "the handler needs the user object" and does not carry
+# authorization. The two groups without the dependency are explained separately, see the group comments below.
 # 注册 API 路由
 #
 # 认证要求的唯一真相源就是这个区块：带 dependencies 的 router 要求 Bearer token，
@@ -842,10 +981,14 @@ app.include_router(
     prompt_templates.router, prefix="/api/v1", dependencies=[Depends(get_current_user)], tags=["提示词模版"]
 )
 
+# Public endpoints: reachable anonymously. The login entry is the prerequisite for getting a token, and static media
+# is loaded via <img src> / <video src>.
 # 公开端点：匿名可达。登录入口是拿 token 的前提，静态媒体经 <img src> / <video src> 加载。
 app.include_router(auth_router.public_router, prefix="/api/v1", tags=["认证"])
 app.include_router(files.public_router, prefix="/api/v1", tags=["文件管理"])
 
+# Self-authenticating endpoints: native browser download navigation cannot carry an Authorization header, so the
+# endpoint checks a short-lived download token via verify_download_token (see docs/adr/0071).
 # 自带认证端点：浏览器原生下载导航带不了 Authorization header，
 # 端点内 verify_download_token 校验短时效下载 token（见 docs/adr/0071）。
 app.include_router(projects.self_auth_router, prefix="/api/v1", tags=["项目管理"])
@@ -881,6 +1024,8 @@ async def serve_agent_installation_guide(request: Request) -> Response:
     if not exists:
         return PlainTextResponse("Agent 安装指引不存在", status_code=404)
 
+    # Infer the base URL from the request; only trust x-forwarded-proto (standard reverse proxy header); host uses the
+    # connection's actual target address and does not accept x-forwarded-host, which users can forge.
     # 从请求推断 base URL；仅信任 x-forwarded-proto（反向代理标准头），
     # host 使用连接实际目标地址，不接受可被用户伪造的 x-forwarded-host。
     forwarded_proto = request.headers.get("x-forwarded-proto")
@@ -892,6 +1037,9 @@ async def serve_agent_installation_guide(request: Request) -> Response:
     return PlainTextResponse(content, media_type="text/markdown; charset=utf-8")
 
 
+#: Resource directory with content hashes in the frontend build output (Vite's default assetsDir). File names change
+#: with content, so they can be cached forever; files from public/ at the dist root (favicon, style-thumbnails, etc.)
+#: carry no hash and are not included.
 #: 前端构建产物里带内容哈希的资源目录（Vite 默认 assetsDir）。文件名随内容变化，可永久缓存；
 #: dist 根目录下来自 public/ 的文件（favicon、style-thumbnails 等）不带哈希，不在此列。
 _HASHED_FRONTEND_ASSETS_PREFIX = "/assets/"
@@ -900,7 +1048,20 @@ _HASHED_ASSET_CACHE_CONTROL = "public, max-age=31536000, immutable"
 
 
 class FrontendCacheHeadersMiddleware:
-    """前端构建产物的缓存头。
+    """Cache headers for the frontend build output.
+
+    - The SPA entry HTML shell must not be cached by the browser: this covers the response trait (text/html) shared
+      by both paths, spa_deep_link and the app.frontend native fallback; otherwise after a redeploy the browser may
+      keep the old shell and load old hashed resources that were deleted, causing a white screen -- deciding by
+      content-type rather than by route is what covers entries like "/" and "/login" that land on the native
+      fallback.
+    - Hashed resources under ``/assets/`` (including 304 revalidation responses) are set immutable; failure
+      responses such as 404 are not cached.
+
+    Pure ASGI implementation rather than BaseHTTPMiddleware: this is a global middleware acting on every request,
+    and BaseHTTPMiddleware's anyio TaskGroup + contextvars copying would add extra overhead to each request.
+
+    前端构建产物的缓存头。
 
     - SPA 入口 HTML 外壳禁止浏览器缓存：覆盖 spa_deep_link 与 app.frontend 原生 fallback
       两条路径共用的响应特征（text/html），否则重新部署后浏览器可能沿用旧壳加载已被删除的
@@ -938,7 +1099,15 @@ app.add_middleware(FrontendCacheHeadersMiddleware)
 
 
 class ResponseCompressionMiddleware:
-    """JSON / JS / CSS / HTML 等文本响应的 gzip 压缩。
+    """gzip compression for text responses such as JSON / JS / CSS / HTML.
+
+    Reuses Starlette GZip's default exclusion list (text/event-stream and already compressed media types such as
+    image/audio/video); 206 partial responses pass through as is; streaming responses use Z_SYNC_FLUSH per chunk
+    without batching. Response headers of excluded types are released immediately by Starlette (>= 1.8), so event
+    streams receive headers before the first event. compresslevel uses zlib's default level 6: the size gain on
+    JSON/JS is nearly the same as 9, at much lower CPU cost.
+
+    JSON / JS / CSS / HTML 等文本响应的 gzip 压缩。
 
     沿用 Starlette GZip 的默认排除清单（text/event-stream 与 image/audio/video 等已压缩的
     媒体类型），206 分段响应原样透传；流式响应按块 Z_SYNC_FLUSH，不攒批。排除类型的响应头
@@ -961,10 +1130,16 @@ class ResponseCompressionMiddleware:
         await responder(scope, receive, send)
 
 
+# Outermost: the frontend cache header middleware rewrites response headers, and compression does not change
+#            content-type, so their order does not matter
 # 最外层：前端缓存头中间件改写的是响应头，压缩不改变 content-type，两者顺序互不影响
 app.add_middleware(ResponseCompressionMiddleware)
 
 
+# Frontend build output: SPA static file serving. The fallback only applies to GET/HEAD, so write requests that stray
+# onto page paths no longer return the page. The mount condition must check index.html rather than the directory:
+# app.frontend validates the fallback file at startup, and an incomplete build output would raise RuntimeError and
+# take down the whole app (including all APIs)
 # 前端构建产物：SPA 静态文件服务。fallback 仅对 GET/HEAD 生效，写请求误入页面路径不再返回页面。
 # 挂载条件必须检查 index.html 而非目录：app.frontend 在启动期校验 fallback 文件，
 # 构建产物不完整时会抛 RuntimeError 拖垮整个应用（含全部 API）
@@ -973,6 +1148,13 @@ frontend_dist_dir = PROJECT_ROOT / "frontend" / "dist"
 if (frontend_dist_dir / "index.html").is_file():
 
     def _spa_deep_link_response(rest: str) -> FileResponse:
+        # The last segment of an SPA deep link may carry an extension (such as /app/projects/x/source/chapter1.txt);
+        # app.frontend's fallback would treat it as a static resource request and return 404, so explicitly fall back
+        # to the SPA shell here. This route is registered before app.frontend, so any request under /app/ reaches here
+        # first -- if the build output happens to contain a real static file under dist/app/... (URL path following
+        # the same mapping as app.frontend, i.e. the same path relative to the dist root), that file must be returned
+        # first so it is not unconditionally shadowed. rest is a user-controlled URL segment: anything escaping the
+        # root degrades to the SPA shell, never exposing files outside dist
         # SPA 深链末段可能带扩展名（如 /app/projects/x/source/chapter1.txt），
         # app.frontend 的 fallback 会将其判为静态资源请求返回 404，此处显式兜底回 SPA 外壳。
         # 本路由注册在 app.frontend 之前，/app/ 下任何请求都会先到这里——若构建产物中
@@ -986,6 +1168,8 @@ if (frontend_dist_dir / "index.html").is_file():
 
     @app.get("/app/{_rest:path}", include_in_schema=False)
     async def spa_deep_link(_rest: str) -> FileResponse:
+        # Probing the static file and constructing FileResponse (the first guess_type loads the system mime table)
+        # both touch disk, so the whole thing is offloaded to a thread.
         # 探测静态文件与 FileResponse 构造（首次 guess_type 会加载系统 mime 表）都触盘，整体卸到线程。
         return await asyncio.to_thread(_spa_deep_link_response, _rest)
 
@@ -995,7 +1179,13 @@ else:
 
 
 def _main_uvicorn_args(platform_name: str = sys.platform) -> tuple[str | FastAPI, dict[str, Any]]:
-    """``__main__`` 交给 ``uvicorn.run`` 的应用与参数。
+    """App and arguments that ``__main__`` hands to ``uvicorn.run``.
+
+    reload only accepts an import string. On Windows, once uvicorn enables reload it switches to SelectorEventLoop,
+    which does not support subprocesses, so the built-in Agent cannot launch the Claude Code CLI; hence no reload on
+    Windows.
+
+    ``__main__`` 交给 ``uvicorn.run`` 的应用与参数。
 
     reload 只接受导入字符串。Windows 上 uvicorn 一旦启用 reload 就改用不支持子进程的
     SelectorEventLoop，内置 Agent 拉不起 Claude Code CLI，因此 Windows 不开 reload。

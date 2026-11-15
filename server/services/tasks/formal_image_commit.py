@@ -69,6 +69,8 @@ def register_formal_task_artifact(
 
 def get_aspect_ratio(project: dict, resource_type: str) -> str:
     if resource_type in ("characters", "scenes", "props", "products", CHARACTER_DERIVATIVE_RESOURCE_TYPE):
+        # Asset sheet generation must explicitly specify an aspect ratio; the four asset types and character
+        # derivatives share the same canvas constants with the target-state planner.
         # 资产图生成必须显式指定宽高比；四类资产与角色衍生与目标态规划器共用同一画布常量。
         return ASSET_SHEET_CANVAS_RATIO
     return resolve_video_aspect_ratio(project, resource_type)
@@ -82,7 +84,7 @@ class FormalImageCommitOutcome:
     created_at: str
 
 
-# 正式图提交的公共签名：活化回调 / 元数据提交器。
+# Public signatures of formal image submission: activation callback / metadata committer. / 正式图提交的公共签名：活化回调 / 元数据提交器。
 type StagedImageCommit = Callable[[Path, Path, Mapping[str, Any]], int]
 type MetadataCommitter = Callable[[Callable[[], None]], None]
 
@@ -360,7 +362,13 @@ def storyboard_formal_image_callback(
 
 @asynccontextmanager
 async def frozen_generation_input(freeze: Callable[[], FrozenGenerationInput]) -> AsyncGenerator[FrozenGenerationInput]:
-    """在工作线程里冻结生成输入，退出时在工作线程里清理任务私有的参考图快照。
+    """Freeze the generation inputs in a worker thread, and on exit clean up the task-private reference image snapshot
+    in a worker thread.
+
+    The frozen result is registered as soon as it is created in the thread: if cancellation lands during freezing
+    the return value is lost, and on exit the snapshot directory is reclaimed from the registration.
+
+    在工作线程里冻结生成输入，退出时在工作线程里清理任务私有的参考图快照。
 
     冻结结果在线程里一建好就登记：取消落在冻结那一程时返回值会丢，退出时按登记回收快照目录。
     """
@@ -388,11 +396,16 @@ class FormalImagePlan:
     prompt: str
     aspect_ratio: str
     build_commit_callback: Callable[[Any, list[FormalImageCommitOutcome]], StagedImageCommit]
+    #: Runs once after the generator is resolved and before submitting to the provider, receiving the generator the
+    #: task uses.
     #: 解析出 generator 之后、提交供应商之前运行一次，收到任务所用的 generator。
     pre_submit: Callable[[Any], Awaitable[None]] | None = None
     before_submit: Callable[[], Awaitable[None]] | None = None
+    #: Extra metadata written into the version record together with the new version (e.g. ``source`` for image edits).
     #: 随新版本一起写进版本记录的额外元数据（如图片编辑的 ``source``）。
     version_metadata: Mapping[str, Any] = field(default_factory=dict)
+    #: Non-blocking notices written into the task's ``result.warnings`` (e.g. reference images cropped for exceeding
+    #: the limit); when empty the result has no such key.
     #: 写进任务 ``result.warnings`` 的非阻断提示（如参考图超限裁剪）；为空时结果不带该键。
     warnings: tuple[dict[str, Any], ...] = ()
 
@@ -410,6 +423,15 @@ async def run_formal_image_task(
     claimed_provider_id: str | None = None,
 ) -> dict[str, Any]:
     """Submit one formal image and return the outcome its staged activation recorded.
+
+    ``context`` lets callers that have already resolved the image lane reuse that same resolution: the reference
+    image numbers in the prompt have been trimmed to the backend's limit, and re-resolving might land on another
+    backend and misalign the numbers with the number of images actually sent. If not passed, it resolves itself
+    before submission, choosing the t2i / i2i slot by whether there are reference images. ``claimed_provider_id`` is
+    the slot the worker took when claiming; if the image lane's provider differs from it,
+    ``DispatchProviderChanged`` is raised before submission.
+
+    Submit one formal image and return the outcome its staged activation recorded.
 
     ``context`` 供已经解析过 image lane 的调用方复用同一次解析——提示词里的参考图编号按
     backend 的上限裁剪过，重解析可能落到别的 backend、让编号与实发张数错位。不传则在提交
@@ -432,10 +454,13 @@ async def run_formal_image_task(
         generator = ctx.generator
         if plan.pre_submit is not None:
             await plan.pre_submit(generator)
+        # before_submit only appears on tasks that declare a checkpoint; without the declaration it is not put into
+        # kwargs
         # before_submit 只在声明了 checkpoint 的任务上出现，不声明就不落进 kwargs
         optional: dict[str, Any] = {}
         if plan.before_submit is not None:
             optional["before_submit"] = plan.before_submit
+        # Building the submit callback needs to locate the project directory (stat), so it goes into a worker thread.
         # 提交回调的构造要定位项目目录（stat），放进工作线程。
         commit_formal_output = await asyncio.to_thread(plan.build_commit_callback, generator, formal_outcomes)
         await generator.generate_image_async(
@@ -457,6 +482,8 @@ async def run_formal_image_task(
     finally:
         await run_noninterruptible_sync(frozen_references.cleanup)
 
+    # With formal_output=True, generate_image_async always submits through the activation callback, and the callback
+    # records exactly one result.
     # formal_output=True 时 generate_image_async 恒经活化回调提交，回调恰好记录一条结果。
     outcome = formal_outcomes[0]
     result: dict[str, Any] = {
@@ -485,6 +512,12 @@ async def run_asset_sheet_image_task(
     project_manager: ProjectManager,
 ) -> dict[str, Any]:
     """Run the submit/activate pipeline shared by every asset-sheet image task.
+
+    ``frozen`` is the frozen generation input of the asset sheet: prompt, reference images actually sent,
+    registration basis and crop notices all come from one place; ``context`` is the image lane resolved from the
+    same reference images, and the number of images sent has been trimmed to its limit.
+
+    Run the submit/activate pipeline shared by every asset-sheet image task.
 
     ``frozen`` 是资产图冻结后的生成输入：提示词、实发参考图、登记依据与裁剪提示同出一处；
     ``context`` 是按同一份参考图解析出的 image lane，实发张数按它的上限裁剪过。
@@ -560,6 +593,8 @@ def grid_formal_image_callback(
 
     def _commit_metadata(activate: Callable[[], None]) -> None:
         def _complete(current_grid: Any) -> None:
+            # The grid composite content has been updated and the old split result no longer matches the current
+            # image; clearing split_at means "awaiting explicit split".
             # 联合图内容已更新，旧的落格结果不再对应当前图，split_at 清空表示「待显式切分」。
             current_grid.grid_image_path = artifact_path
             current_grid.status = "completed"

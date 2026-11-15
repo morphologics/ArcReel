@@ -1,4 +1,8 @@
 """
+Authentication API routes
+
+Provides OAuth2 login and token verification endpoints.
+
 认证 API 路由
 
 提供 OAuth2 登录和 token 验证接口。
@@ -23,11 +27,12 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
+# Public endpoint: must be reachable before a token is obtained, so no Bearer dependency is attached when registering.
 # 公开端点：拿到 token 之前必须可达，注册时不挂 Bearer 依赖。
 public_router = APIRouter()
 
 
-# ==================== 响应模型 ====================
+# ==================== Response models ==================== / ==================== 响应模型 ====================
 
 
 class TokenResponse(BaseModel):
@@ -44,7 +49,7 @@ class AuthStatusResponse(BaseModel):
     enabled: bool
 
 
-# ==================== 路由 ====================
+# ==================== Routes ==================== / ==================== 路由 ====================
 
 
 @public_router.get("/auth/status", response_model=AuthStatusResponse)

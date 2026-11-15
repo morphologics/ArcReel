@@ -306,13 +306,18 @@ class WorkflowPlanner:
         queue: GenerationQueue,
         config_resolver: ConfigResolver | None,
     ) -> dict[str, Any] | None:
-        """预告这一批真提交时的准入结论；正在生成的单元与 Web 批量入口一样不算目标，不作为在途冲突报出。"""
+        """Preview the admission verdict this batch would get if actually submitted; units being generated are not
+        targets, same as the Web batch entry point, and are not reported as in-flight conflicts.
+
+        预告这一批真提交时的准入结论；正在生成的单元与 Web 批量入口一样不算目标，不作为在途冲突报出。"""
 
         if status.project.generation_mode == "reference_video":
             units = facts.script.get("video_units")
             if isinstance(units, list):
                 units = [unit for unit in units if not (isinstance(unit, dict) and unit.get("unit_id") in in_flight)]
             screened, malformed = screen_script_entries(units, requested_ids=None)
+            # Reading the artifact manifest (including waiting on the manifest lock) and content digests is read-only
+            # and goes into a worker thread.
             # 读产物清单（含等清单锁）与内容摘要，只读，放进工作线程。
             targets, selection, _states = await asyncio.to_thread(
                 resolve_reference_batch_targets,
@@ -342,6 +347,13 @@ class WorkflowPlanner:
             )
             return admission.to_payload()
 
+        # What the plan previews is "what verdict this batch would get on actual submission", so it goes through the
+        # same seam as the submission side: the spec is built by build_storyboard_video_specs (utterance admission,
+        # input availability, prompt assembly and per-ID rejection tickets are all in it), and admission is given by
+        # admit_storyboard_video_request (the audio gate and projection gaps are folded into the same batch of
+        # tickets). Picking targets on our own and leaving the visual prompt empty would make the plan judge whether
+        # paid artifacts can be reused by a different visual baseline, diverging from the verdict of the real
+        # submission.
         # 计划要预告的是「这一批真提交时会得到什么结论」，所以走的是提交侧同一条缝：
         # spec 由 build_storyboard_video_specs 构造（发声准入、输入可用性、prompt 组装
         # 与逐 ID 拒绝票都在其中），准入由 admit_storyboard_video_request 给出（音频闸门

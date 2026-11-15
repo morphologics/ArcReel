@@ -385,6 +385,8 @@ async def finalize_selected_video_result(
         return await finalize()
     except BaseException as failure:
         try:
+            # Compensation rewrites the final file and the version record: put it in a worker thread, and only keep
+            # propagating the original exception after the thread has settled.
             # 补偿要改写正式文件与版本记录：放进工作线程，并在线程结算后才继续传播原异常。
             await run_noninterruptible_sync(_require_video_selection_compensation, committer)
         except BaseException as compensation_failure:
@@ -427,7 +429,7 @@ def _restore_file(path: Path, present: bool, content: bytes | None) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
         atomic_write_bytes(path, content)
     else:
-        path.unlink(missing_ok=True)  # hard-delete: rollback -- 回滚时移除事务前不存在的缩略图
+        path.unlink(missing_ok=True)  # hard-delete: rollback -- on rollback, remove thumbnails that did not exist before the transaction / 回滚时移除事务前不存在的缩略图
 
 
 def paid_video_history_result(
@@ -454,6 +456,9 @@ def paid_video_history_result(
         "video_uri": video_uri,
         "selected_current": False,
     }
+    # In the read-side contract of reference videos this key is always present (even if empty); other resource types
+    # only carry it when there really are notices, consistent with ``finalize_video_task`` and the storyboard planning
+    # path.
     # 参考视频的读侧契约里这一键恒在（即便为空）；其余资源类型只在真有提示时才带它，与
     # ``finalize_video_task`` 和分镜规划那条的口径一致。
     if resource_type == "reference_videos" or warnings:
@@ -476,6 +481,11 @@ async def complete_video_artifact_commit(
     """Finish normal and resumed video generation through one selection seam."""
 
     async def _notify_completed() -> None:
+        # The completion callback (emits the project change event) reads the script and computes the artifact
+        # fingerprint, so it goes into a worker thread. The artifact is final and the callback must not be
+        # interrupted: if cancellation interrupted the wait while the event is being emitted, compensation would race
+        # with the thread still emitting, and the client might receive a success event for a video that was rolled
+        # back.
         # 完成回调（发项目变更事件）会读剧本、算产物指纹，放进工作线程。产物已定型，回调不可打断：
         # 取消若在发事件时打断等待，补偿会与仍在发事件的线程竞争，客户端可能收到已撤销视频的成功事件。
         if on_completed is not None:
@@ -492,7 +502,7 @@ async def complete_video_artifact_commit(
         if committer.outcome is None:
             raise RuntimeError("formal video generator returned without invoking the artifact commit callback")
         if not committer.outcome.selected:
-            # 付费版本已入历史：取结果同样不可打断。
+            # The paid version is already in the history: fetching the result must not be interrupted either. / 付费版本已入历史：取结果同样不可打断。
             result = await run_noninterruptible_sync(
                 paid_video_history_result,
                 versions=versions,

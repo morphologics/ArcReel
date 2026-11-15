@@ -1,4 +1,33 @@
 """
+Project cover picker (computed at read time).
+
+When listing projects in the project lobby, pick a relative resource path usable as the cover, in order of
+preference:
+
+    1. First frame of a generated video, `video_thumbnail`
+       -- written in the script entry's `generated_assets.video_thumbnail`: storyboard mode stores it in
+          `segments` (narration) / `scenes` (drama) / `shots` (ad) by content mode, reference-to-video in
+          `video_units`; the entry array key comes from the skeleton registry `SKELETONS`. All are extracted
+          and saved by `lib/infra/thumbnail.extract_video_thumbnail` after generation completes.
+       The asset that best represents "the project's current output progress", highest priority.
+
+    2. Generated storyboard image `storyboard_image`
+       -- second-best choice when storyboard mode has no finished video yet but has storyboard images;
+          for reference-to-video this field is always None and is skipped naturally.
+
+    3. Scene reference image `scene_sheet`
+       -- the core fallback for reference-to-video: even if no video has been generated, a scene sheet
+          can show the project's art style. scene > character because a sense of environment/space looks more like a
+          "cover".
+
+    4. Character reference image `character_sheet`
+       -- the last fallback; only story-driven projects might lack a scene and keep a character.
+
+    5. None -- the frontend renders the placeholder FolderOpen icon.
+
+Follows the same "compute at read time, store no redundancy" convention as the project summary projection: no
+`cover_thumbnail` field is written into project.json; each list_projects re-resolves from the current on-disk truth.
+
 项目封面选择器（读时计算）。
 
 在项目大厅列出项目时，按偏好顺序挑一个可用作封面的相对资源路径：
@@ -49,7 +78,15 @@ def resolve_project_cover(
     *,
     preloaded_scripts: dict[str, dict] | None = None,
 ) -> str | None:
-    """按偏好顺序挑第一个可用的封面路径，返回 `/api/v1/files/...` URL（文件在场时带 ``?v=``）；全无则 None。
+    """Pick the first usable cover path in order of preference and return a `/api/v1/files/...` URL (with ``?v=`` when
+    the file exists); None if there is none.
+
+    ``preloaded_scripts`` lets the caller (e.g. list_projects) load scripts once and feed them to the project
+    summary projection as well, avoiding duplicate JSON I/O on two paths. The key is the raw
+    ``episode['script_file']`` value, the value is the script JSON dict; missing episodes (key not in the map) fall
+    back to ``manager.load_script``.
+
+    按偏好顺序挑第一个可用的封面路径，返回 `/api/v1/files/...` URL（文件在场时带 ``?v=``）；全无则 None。
 
     ``preloaded_scripts`` 允许调用方（如 list_projects）一次性加载剧本后同时喂给
     项目摘要投影，避免两路重复 JSON I/O。key 为 ``episode['script_file']``
@@ -57,6 +94,11 @@ def resolve_project_cover(
     """
 
     def _url(rel: str) -> str:
+        # Always go through the files static route rather than building disk paths directly; the relative path is
+        # passed through to FileResponse as-is.
+        # When the file exists, append ?v=<mtime_ns> as the version key (same rule as the asset fingerprint), so the
+        # URL changes when the cover is regenerated and the lobby can cache long-term; when the file is missing or the
+        # path is invalid no version key is appended, and the files route returns 404 as is.
         # 统一走 files 静态路由，不直接拼盘路径；相对路径原样透传给 FileResponse。
         # 文件在场时附 ?v=<mtime_ns> 作版本键（与资产指纹同口径），封面被重新生成后 URL 随之变化，
         # 大厅可长期缓存；文件缺失或路径非法时不附版本键，由 files 路由按原样回 404。
@@ -74,6 +116,10 @@ def resolve_project_cover(
             return url
         return f"{url}?v={mtime_ns}"
 
+    # First pass: iterate over all episodes' scripts, scanning video_thumbnail across all of them first, then
+    # storyboard_image across all of them. The two are separate passes rather than checked side by side on the same
+    # item, so that "any episode has a video first frame" always beats "only storyboard images" instead of being
+    # locked by episode order.
     # 第一趟：遍历所有 episode 的 script，先整体扫 video_thumbnail，再整体扫
     # storyboard_image。两趟分开而不是在同一 item 上并列判断，是为了保证
     # "任何一集有视频首帧" 都胜过 "仅有分镜图"，而不是被 episode 顺序锁死。
@@ -88,6 +134,11 @@ def resolve_project_cover(
         try:
             scripts.append(manager.load_script(project_name, script_file))
         except (OSError, ValueError) as e:
+            # A missing / corrupted / out-of-bounds script file does not block the project list; only log at debug and
+            # try other episodes.
+            # OSError covers I/O failures such as FileNotFoundError; ValueError covers JSONDecodeError and the invalid
+            # path check of ProjectManager._safe_subpath. Kept consistent with the outer preload except in
+            # list_projects.
             # 剧本文件缺失 / 损坏 / 路径越界不阻塞项目列表；仅记 debug，继续尝试其他集。
             # OSError 覆盖 FileNotFoundError 等 I/O 失败；ValueError 覆盖 JSONDecodeError
             # 与 ProjectManager._safe_subpath 的非法路径校验。与 list_projects 的外层
@@ -96,6 +147,11 @@ def resolve_project_cover(
             continue
 
     def _iter_items(script: dict) -> list[dict]:
+        # Merge entries from all skeletons registered in SKELETONS (segments / scenes / shots / video_units) rather
+        # than picking just one via evidence parsing: when several keys coexist or one is an empty shell, no structure
+        # may hide the real assets of another.
+        # Non-list arrays and non-dict entries are skipped as missing; asset paths only accept non-empty strings, and
+        # empty-shell items and dirty values are ignored together.
         # 按 SKELETONS 登记的全部骨架（segments / scenes / shots / video_units）合并条目，不经
         # 取证解析只挑一种：多种键共存或其中一方为空壳时，任一结构都不能遮蔽另一结构的真实资产。
         # 非 list 数组与非 dict 条目按缺失跳过；资产路径只认非空字符串，空壳 item 与脏值一并忽略。
@@ -118,7 +174,7 @@ def resolve_project_cover(
             if isinstance(sb, str) and sb:
                 return _url(sb)
 
-    # 项目级资产：scene > character（见模块 docstring 的抉择）
+    # Project-level assets: scene > character (see the choice in the module docstring) / 项目级资产：scene > character（见模块 docstring 的抉择）
     for data in (project.get("scenes") or {}).values():
         sheet = (data or {}).get("scene_sheet")
         if sheet:

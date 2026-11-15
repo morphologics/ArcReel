@@ -76,11 +76,13 @@ class PresentationBundleService:
             return bundle_path
 
         try:
+            # On cancel, first wait for the packing thread to finish, then delete the temp directory, so no
+            # half-written or unclaimed archive is left behind.
             # 取消时先等打包线程收尾，再删掉临时目录，不留下写到一半或无人认领的压缩包。
             return await run_sync_transaction(_export)
         except BaseException:
             for temp_dir in temp_dirs:
-                # hard-delete: temp -- 导出的临时目录
+                # hard-delete: temp -- temp directory of the export / 导出的临时目录
                 await run_noninterruptible_sync(shutil.rmtree, temp_dir, ignore_errors=True)
             raise
 

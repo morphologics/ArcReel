@@ -12,6 +12,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.sse import EventSourceResponse, ServerSentEvent
 from pydantic import BaseModel, Field, field_validator, model_validator
 
+# pydantic does not re-export PydanticCustomError at the top level, so we have to depend on pydantic-core directly.
 # pydantic 顶层不 re-export PydanticCustomError，只能直接依赖 pydantic-core。
 from pydantic_core import PydanticCustomError
 
@@ -43,6 +44,10 @@ router = APIRouter()
 assistant_service = AssistantService(project_root=PROJECT_ROOT)
 
 MAX_IMAGE_SOURCE_BYTES = 5 * 1024 * 1024
+# The frontend scales and re-encodes attached images to within this budget; the server-side total limit is derived
+# from it, and the per-image limit stays at 5 MB as a backstop when the frontend is bypassed. The total is counted as
+# 5 × 1.5 MB, about 10 MB in base64, safely within the Messages API's 32 MB per-request limit (Bedrock 20 MB / Vertex
+# 30 MB).
 # 前端把附图缩放重编码到这个预算之内；服务端合计上限按它折算，单张上限仍留 5 MB 作为
 # 绕过前端时的兜底。合计按 5 × 1.5 MB 计，base64 约 10 MB，稳在 Messages API 的
 # 32 MB 单请求上限（Bedrock 20 MB / Vertex 30 MB）之内。
@@ -65,7 +70,9 @@ def agent_startup_failure_detail(
     session_id: str | None,
     title: str,
 ) -> dict:
-    """把 runtime 启动异常映射为两个 Agent API 共用的结构化错误。"""
+    """Map runtime startup exceptions into the structured error shared by the two Agent APIs.
+
+    把 runtime 启动异常映射为两个 Agent API 共用的结构化错误。"""
     original = exc.__cause__ or exc
     failure = exc.failure_observation or build_startup_failure_observation(
         original,
@@ -135,12 +142,14 @@ class ImageRequest(BaseModel):
 class SendRequest(ImageRequest):
     content: str = ""
     session_id: str | None = None
+    # Request-side idempotency key: a retry with the same key returns the existing authoritative entry without
+    # creating a duplicate.
     # 请求侧幂等键：同键重试返回既有权威条目，不产生重复。
     client_key: str | None = Field(default=None, max_length=128)
 
 
 class RewriteRequest(ImageRequest):
-    # 锚点：被改写的那条用户消息在事件日志里的条目 uuid。
+    # Anchor: the entry uuid in the event log of the user message being rewritten. / 锚点：被改写的那条用户消息在事件日志里的条目 uuid。
     anchor_entry_uuid: str = Field(min_length=1, max_length=256)
     content: str = ""
     client_key: str | None = Field(default=None, max_length=128)
@@ -178,7 +187,7 @@ async def send_message(
     except TimeoutError as exc:
         raise HTTPException(status_code=504, detail=_t("sdk_session_timeout")) from exc
     except ValueError as exc:
-        # 空消息内容 / 非法项目名等坏请求，str(exc) 只进日志
+        # Bad requests such as empty message content / invalid project name; str(exc) only goes to the log / 空消息内容 / 非法项目名等坏请求，str(exc) 只进日志
         logger.warning("会话发送请求非法: %s", exc)
         raise BadRequestError("request_invalid") from exc
     except AgentStartupError as exc:
@@ -407,7 +416,12 @@ async def interrupt_session(project_name: str, session_id: str, _t: Translator):
 async def _act_on_queued_message(
     project_name: str, session_id: str, action: Callable[[AssistantService], Awaitable[dict]], _t: Translator
 ) -> dict:
-    """排队消息操作（编辑、删除、重新发送、立即发送）共用的错误映射。
+    """Error mapping shared by queued message operations (edit, delete, resend, send now).
+
+    Resending, and sending an "unsent" message now, rebuild the session connection when the CLI has exited, and may
+    hit full capacity or a startup failure.
+
+    排队消息操作（编辑、删除、重新发送、立即发送）共用的错误映射。
 
     重新发送与对「未发送」消息的立即发送会在 CLI 已退出时重建会话连接，可能遇到容量已满或启动失败。
     """
@@ -511,7 +525,7 @@ async def answer_question(
     except FileNotFoundError as exc:
         raise NotFoundError("session_not_found", session_id=session_id) from exc
     except ValueError as exc:
-        # 会话未运行或无待回答问题
+        # Session is not running or has no pending question / 会话未运行或无待回答问题
         logger.warning("会话回答请求非法: %s", exc)
         raise BadRequestError("session_question_unavailable") from exc
     except Exception as exc:

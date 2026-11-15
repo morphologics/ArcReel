@@ -1,4 +1,19 @@
-"""端点测试 API：预览请求、验证响应、测试连接。
+"""Endpoint test API: preview request, validate response, test connection.
+
+Three separate endpoints, no ``mode`` field: the three differ in inputs, cost and response body, and merging them
+into one endpoint would only turn "which fields matter this time" into a paragraph of explanation. Definitions are
+always inline (test connection may also take a ``model_ref``); the server keeps no drafts.
+
+The request body takes JSON; with media it uses ``multipart/form-data`` instead, with the same JSON in the
+``payload`` field and media in file fields named after the ``source`` of ``inputs`` (``start_image`` / ``end_image``
+/ ``reference_images`` / ``reference_audio_files``; the last two may repeat). Media is discarded after use; no
+temporary upload endpoint, no references to project assets.
+
+Invalid definitions and render-time errors are uniformly 422 + ``diagnostic.errors[{path, code, message}]``, judged
+by the same shared validator as the save API: a definition accepted here is guaranteed to be accepted by the save
+API too.
+
+端点测试 API：预览请求、验证响应、测试连接。
 
 三个独立端点，不用 ``mode`` 字段——三者的入参、代价与返回体各不相同，合成一个端点只会让「哪些
 字段这次有意义」变成一段说明文字。定义一律内联（测试连接另可给 ``model_ref``），服务端不留草稿。
@@ -30,6 +45,9 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
+# UploadFile is the starlette base class, not the fastapi subclass: this code does isinstance checks on the result of
+# Request.form(), and the parser produces starlette.datastructures.UploadFile, so a check against the subclass would
+# always miss.
 # UploadFile 取 starlette 基类而非 fastapi 子类：这里对 Request.form() 解析结果做 isinstance
 # 判定，解析器产出的是 starlette.datastructures.UploadFile，用子类判定会全部落空。
 from starlette.datastructures import FormData, UploadFile
@@ -77,12 +95,18 @@ from server.i18n import DisplayNamesCatalog, Translator
 
 logger = logging.getLogger(__name__)
 
+#: Limit for a single media file. First frames / reference images for tests are the same magnitude as real generation,
+#: so it uses the same tier as the reference audio limit.
 #: 单个素材文件的上限。测试用的首帧 / 参考图与真实生成同量级，与参考音频上限取同一档。
 MAX_ASSET_BYTES = 15 * 1024 * 1024
 
+#: Limit on the total number of media files per request: still has headroom over the heaviest legitimate combination
+#: (H3's 9 reference images + start/end frames + 3 audio clips).
 #: 单次请求的素材文件总数上限：覆盖最重的合法组合（H3 的 9 参考图 + 首尾帧 + 3 段音频）仍有余量。
 MAX_ASSET_FILES = 16
 
+#: Endpoint media types that can run a test connection. The model row entry point uses this to reject text / audio
+#: rows: dispatching those rows to a video or image endpoint would only send a paid call to a different model.
 #: 能跑测试连接的端点媒体类型。模型行这条入口据此拒掉文本 / 音频档的行——那些行被派发到
 #: 视频或图像端点上只会付费打给另一个模型。
 _TESTABLE_MEDIA_TYPES = frozenset({"video", "image"})
@@ -91,15 +115,24 @@ router = APIRouter(tags=["Custom Endpoints"])
 
 
 def get_trial_run_manager() -> TrialRunManager:
-    """测试连接登记处的注入口。进程内单例，测试按依赖覆盖换成隔离的一台。"""
+    """Injection point of the test connection registry. A per-process singleton; tests swap in an isolated one via
+    dependency override.
+
+    测试连接登记处的注入口。进程内单例，测试按依赖覆盖换成隔离的一台。"""
     return trial_run_manager()
 
 
 def get_config_resolver() -> ConfigResolver:
-    """``model_ref`` 装配 backend 用的配置解析器——它自开 session，与请求那条不共享事务。"""
+    """Config resolver used by ``model_ref`` to assemble the backend; it opens its own session and does not share a
+    transaction with the request.
+
+    ``model_ref`` 装配 backend 用的配置解析器——它自开 session，与请求那条不共享事务。"""
     return ConfigResolver(async_session_factory)
 
 
+# ---------------------------------------------------------------------------
+# Request / response models
+# ---------------------------------------------------------------------------
 # ---------------------------------------------------------------------------
 # 请求 / 响应模型
 # ---------------------------------------------------------------------------
@@ -150,6 +183,8 @@ class PreviewRequestInput(BaseModel):
 class CheckResponseInput(BaseModel):
     definition: Any
     stage: Literal["submit", "poll", "result"]
+    #: The provider response body as is. Strings are tried as JSON; if parsing fails they are validated as the raw
+    #: string.
     #: 供应商响应体原样。字符串按 JSON 试解析，解析不了就按原始字符串验证。
     response_body: Any = None
 
@@ -186,6 +221,8 @@ class TrialRunResponse(BaseModel):
     status: str
     provider: str
     model: str
+    #: Whether this run produced video or an image; the reading side uses it to show the artifact in a player or as an
+    #: image.
     #: 这一笔产的是视频还是图像；读侧据此决定产物按播放器还是按图展示。
     media_type: str = "video"
     created_at: float
@@ -201,20 +238,29 @@ class TrialRunResponse(BaseModel):
     video_url: str | None = None
     duration_seconds: int | None = None
     error: str | None = None
+    #: The stable failure code behind ``error``. The reading side branches on it: a failure code has a lookup table and
+    #: troubleshooting direction to offer, raw exception text does not.
     #: ``error`` 背后那个稳定失败码。读侧据它分流：失败码有对照表与排查方向可给，裸异常文本没有。
     error_code: str | None = None
+    #: What this failure code should make the user do (``GenerationAction``), the same decision a generation failure
+    #: gives on the project page.
     #: 这条失败码该让用户去做什么（``GenerationAction``），与生成失败在项目页给出的是同一份判定。
     error_action: str | None = None
     has_artifact: bool = False
 
 
 # ---------------------------------------------------------------------------
+# Shared: request parsing and the definition gate
+# ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
 # 共用：请求解析与定义闸门
 # ---------------------------------------------------------------------------
 
 
 async def _parse_body[T: BaseModel](request: Request, model: type[T]) -> tuple[T, EndpointTestAssets]:
-    """收 JSON 或 multipart。multipart 时 ``payload`` 字段是同一份 JSON，其余字段是素材。"""
+    """Accept JSON or multipart. For multipart, the ``payload`` field is the same JSON and the other fields are media.
+
+    收 JSON 或 multipart。multipart 时 ``payload`` 字段是同一份 JSON，其余字段是素材。"""
     content_type = request.headers.get("content-type", "")
     if not content_type.startswith("multipart/form-data"):
         return _validated(model, await _json_body(request)), EndpointTestAssets()
@@ -245,6 +291,9 @@ def _validated[T: BaseModel](model: type[T], payload: object) -> T:
 
 
 async def _read_assets(form: FormData) -> EndpointTestAssets:
+    # The count limit is judged on all files in the form, not just the registered fields: a file stuffed in under
+    # another field name has also been parsed, buffered or spilled to temp disk, and counting only known fields would
+    # give a limit that is bypassed by changing the key.
     # 件数上限按表单里的全部文件数判，不只数已登记的字段：换个字段名塞进来的文件同样已被
     # 解析、缓冲或落进临时盘，只数认得的字段等于给出一个换个 key 就绕开的上限。
     if sum(1 for _name, item in form.multi_items() if isinstance(item, UploadFile)) > MAX_ASSET_FILES:
@@ -258,6 +307,7 @@ async def _read_assets(form: FormData) -> EndpointTestAssets:
 
 
 async def _read_upload(upload: UploadFile) -> AssetData:
+    # Read only up to the limit + 1 byte: an oversized file can be detected without loading it whole into memory.
     # 只读到上限 +1 字节：超限件不整块载入内存就能判超。
     content = await upload.read(MAX_ASSET_BYTES + 1)
     if len(content) > MAX_ASSET_BYTES:
@@ -270,7 +320,13 @@ async def _read_upload(upload: UploadFile) -> AssetData:
 
 
 def _accepted_definition(definition: object, _t: Translator, *, mode: EndpointTestMode) -> dict[str, Any]:
-    """过共享校验器，再按定义的 ``kind`` 判这种模式支不支持。
+    """Run the shared validator, then check by the definition's ``kind`` whether this mode is supported.
+
+    Validation uses the same decision and the same error codes as the save API; endpoint tests add no extra
+    threshold. "This kind has no such mode" is not a definition error, so it is not mixed into the definition
+    diagnostics but rejected separately as a 400.
+
+    过共享校验器，再按定义的 ``kind`` 判这种模式支不支持。
 
     校验与保存接口同一份判定、同一套错误码，端点测试不另设门槛。「这种 kind 没有这种模式」不是
     定义有错，故不混进定义诊断，按一条 400 单独拒绝。
@@ -285,7 +341,10 @@ def _accepted_definition(definition: object, _t: Translator, *, mode: EndpointTe
 
 
 def _support(definition: Mapping[str, Any]) -> KindTestSupport:
-    """这份定义所属 kind 的端点测试实现。定义已过 :func:`_accepted_definition` 的模式闸。"""
+    """Endpoint test implementation for this definition's kind. The definition has already passed the mode gate of
+    :func:`_accepted_definition`.
+
+    这份定义所属 kind 的端点测试实现。定义已过 :func:`_accepted_definition` 的模式闸。"""
     return support_for_kind(str(definition["kind"]))
 
 
@@ -300,7 +359,15 @@ async def _resolve_credentials(
     require_base_url: bool = True,
     require_api_key: bool = True,
 ) -> EndpointTestCredentials | None:
-    """凭证两版归一。``provider_id`` 只接受自定义供应商——内置供应商的凭证不按端点定义调用。
+    """Normalize the two versions of credentials. ``provider_id`` only accepts custom providers: built-in providers'
+    credentials are not called by endpoint definition.
+
+    When ``require_base_url`` is False (all three URL sections of the definition are hard-coded absolute addresses),
+    inline credentials need not carry a base URL; when ``require_api_key`` is False (``auth`` is empty) no api_key
+    is needed: such a definition uses that credential nowhere, and forcing the caller to make up a fake value is
+    pointless.
+
+    凭证两版归一。``provider_id`` 只接受自定义供应商——内置供应商的凭证不按端点定义调用。
 
     ``require_base_url`` 为 False 时（定义三节 URL 都写死绝对地址）内联凭证不必带接口地址，
     ``require_api_key`` 为 False 时（``auth`` 为空）不必带 api_key：那种定义没有一处会用到
@@ -310,9 +377,14 @@ async def _resolve_credentials(
         return None
     if body_credentials.provider_id:
         if body_credentials.base_url or body_credentials.api_key:
+            # Silently picking one when two sources are mixed would send the paid request to a billing target the
+            # caller did not explicitly choose.
             # 混合两种来源时静默取其一，付费请求会打到调用方没明确选择的计费目标上。
             raise BadRequestError("endpoint_test_credentials_ambiguous")
         provider = await _custom_provider(body_credentials.provider_id, session)
+        # A row in the DB storing an empty value is judged the same as an inline missing field: a missing credential
+        # should surface on the request thread, not fail only when a background task renders a request with empty
+        # auth.
         # 库里的行存了空值时与内联缺字段同判：缺的凭证要在请求线程上露头，而不是等后台任务
         # 渲染出一个空鉴权请求才失败。
         if (require_base_url and not provider.base_url) or (require_api_key and not provider.api_key):
@@ -332,7 +404,12 @@ async def _required_credentials(
     require_base_url: bool = True,
     require_api_key: bool = True,
 ) -> EndpointTestCredentials:
-    """测试连接必须有定义用得上的凭证：没有它们的请求本就发不出去，让它排到后台任务里再失败
+    """A test connection must have the credentials the definition uses: without them the request cannot be sent at all,
+    and queueing it into a background task to fail later is pointless. When the definition uses neither credential
+    (``auth`` is empty and all three URL sections are hard-coded absolute addresses), empty credentials are let
+    through.
+
+    测试连接必须有定义用得上的凭证：没有它们的请求本就发不出去，让它排到后台任务里再失败
     没有意义。定义两种凭证都用不上（``auth`` 为空且三节 URL 全写死绝对地址）时按空凭证放行。"""
     credentials = await _resolve_credentials(
         body_credentials, session, require_base_url=require_base_url, require_api_key=require_api_key
@@ -358,6 +435,9 @@ async def _custom_provider(provider_id: str, session: AsyncSession) -> CustomPro
 
 
 # ---------------------------------------------------------------------------
+# Preview request / validate response
+# ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
 # 预览请求 / 验证响应
 # ---------------------------------------------------------------------------
 
@@ -382,6 +462,9 @@ async def preview_endpoint_request(
     except EndpointTestDefinitionError as exc:
         raise _invalid(exc.diagnostics, _t) from exc
     except ComfyuiError as exc:
+        # ComfyUI failures at build time (e.g. fewer reference images than grid cells, an image-edit cascade reaching
+        # the output node) are not definition errors; this definition cannot render a request with this set of
+        # parameters. Explain with the failure code's own three-language text instead of writing separate wording.
         # 构造期的 ComfyUI 失败（如参考图少于格子数、改图的级联触到产物节点）不是定义有错，而是
         # 这份定义配上这组参数渲染不出请求。用失败码本身的三语文案说明，不另写一套措辞。
         raise BadRequestError(
@@ -410,6 +493,9 @@ async def check_endpoint_response(
 
 
 # ---------------------------------------------------------------------------
+# Test connection
+# ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
 # 测试连接
 # ---------------------------------------------------------------------------
 
@@ -431,10 +517,14 @@ async def start_trial_run(
     body, assets = await _parse_body(request, TrialRunInput)
     parameters = body.parameters.to_parameters()
     if body.model_ref is not None and body.definition is not None:
+        # When both target forms are present, silently picking one would send the paid request to the target the
+        # caller did not choose.
         # 两种目标形态并存时静默取其一会让付费请求打到调用方没选中的那个目标上。
         raise BadRequestError("endpoint_test_definition_and_model_ref_exclusive")
     if body.model_ref is not None:
         target, credentials, definition, path_overrides = await _model_ref_target(body.model_ref, session, resolver, _t)
+        # The model recorded in the result body must be the same one actually executed and billed: the model_ref path
+        # follows the model row and overrides the model carried separately in parameters.
         # 结果体记录的模型与实际执行、记账的必须是同一个：model_ref 路径以模型行为准，
         # 覆盖 parameters 里独立携带的 model。
         parameters = replace(parameters, model=body.model_ref.model_id)
@@ -451,6 +541,8 @@ async def start_trial_run(
         raise BadRequestError("endpoint_test_definition_or_model_ref_required")
 
     preview_payload = _preview_payload(definition, parameters, credentials, assets, _t, path_overrides)
+    # The temp directory is registered here as soon as it is created in the thread: if cancellation lands during the
+    # media-writing step the return value is lost, and this is what lets it be reclaimed.
     # 临时目录在线程里建好就登记进来：取消落在落素材那一程时返回值会丢，靠它回收。
     staged: list[Path] = []
     try:
@@ -466,6 +558,8 @@ async def start_trial_run(
         await run_sync_transaction(_remove_staging, staged)
         raise ConflictError("trial_run_already_running") from exc
     except BaseException:
+        # If it fails before the manager takes over (writing media, creating the result directory), the temp directory
+        # has no owner yet and nobody would come back to delete it from disk.
         # manager 接手前失败（落素材、建结果目录）时临时目录还没有主人，留在盘上没人会回来删。
         await run_sync_transaction(_remove_staging, staged)
         raise
@@ -516,6 +610,9 @@ async def get_trial_run_artifact(
 
 
 # ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
 # 辅助
 # ---------------------------------------------------------------------------
 
@@ -525,7 +622,17 @@ def _previewed(section: Any) -> PreviewedRequestResponse:
 
 
 def _run_response(run: TrialRun, translate: Translator, names: DisplayNames) -> TrialRunResponse:
-    """结果体本地化：失败原因渲染成当前语言，失败码与它的后续动作另给一份原文。
+    """Localize the result body: the failure reason is rendered in the current language, and the failure code and its
+    follow-up action are given separately in original form.
+
+    Code and action are given together instead of letting the reading side infer them from the text: the text varies
+    by language, while "which kind of failure this is and what to do" branches on the code. The action comes from
+    :func:`problem_from_task_failure`: the same failure code should give the same follow-up action on the project
+    page and here, and writing it separately in two places would inevitably diverge (three of ComfyUI's eight codes
+    point to retry rather than configuring the provider). Raw exception text that cannot be mapped to a code has
+    neither.
+
+    结果体本地化：失败原因渲染成当前语言，失败码与它的后续动作另给一份原文。
 
     码与动作一并给出，而不是让读侧从文案里认：文案随语言变，而「这是哪一类失败、该去做什么」
     按码分流。动作取自 :func:`problem_from_task_failure`——同一条失败码在项目页与这里该给出
@@ -541,7 +648,11 @@ def _run_response(run: TrialRun, translate: Translator, names: DisplayNames) -> 
 
 
 def _has_usable_credentials(meta: ProviderMeta, config: Mapping[str, str]) -> bool:
-    """凭证够不够装配用。分组语义与凭证表单一致：声明了 credential_groups 按二选一，否则
+    """Whether the credentials are enough for assembly. Grouping semantics match the credential form: if
+    credential_groups are declared, one of them is required; otherwise everything in required ∩ secret is mandatory.
+    When neither yields a non-empty group (e.g. vertex, which uses a file upload), no gate is set here.
+
+    凭证够不够装配用。分组语义与凭证表单一致：声明了 credential_groups 按二选一，否则
     required ∩ secret 全部必填；两者都给不出非空分组（如走文件上传的 vertex）时不在此设闸。"""
     groups = [
         group
@@ -557,11 +668,20 @@ async def _model_ref_target(
     resolver: ConfigResolver,
     _t: Translator,
 ) -> tuple[TrialRunTarget, EndpointTestCredentials | None, dict[str, Any] | None, PathOverrides]:
-    """按模型行解析目标。解析出声明式定义时连凭证一起取出，好让结果体有请求与提取两段。
+    """Resolve the target from the model row. When it resolves to a declarative definition, the credentials are fetched
+    along with it so the result body has both the request and extraction sections.
+
+    A custom provider's model row also carries its effective path overrides (``docs/adr/0101``), so the rendered
+    request section matches what is actually sent.
+
+    按模型行解析目标。解析出声明式定义时连凭证一起取出，好让结果体有请求与提取两段。
 
     自定义供应商的模型行还带出它生效的路径覆盖（``docs/adr/0101``），渲染请求段与真发一致。
     """
     if not is_custom_provider(model_ref.provider_id):
+        # Built-in providers must also check the model row first: an unregistered model would make the assembly layer
+        # fall back to that provider's default video model, and a registered non-video model (e.g. a text tier) would
+        # be dispatched to the video endpoint; both send a paid call to a different model.
         # 内置供应商同样要先核模型行：未登记的 model 会让装配层落到该供应商的默认视频模型，
         # 已登记的非视频 model（如文本档）则会被派发到视频端点——两种都会付费打给另一个模型。
         info = catalog.get_model(model_ref.provider_id, model_ref.model_id)
@@ -569,11 +689,18 @@ async def _model_ref_target(
             raise NotFoundError("model_not_found")
         if info.media_type != "video":
             raise BadRequestError("endpoint_test_model_unavailable")
+        # Credentials are also checked on the request thread: when credentials are missing the assembly layer raises
+        # Chinese sentences written by each backend, and since it runs in a background task detached from the request,
+        # they would end up verbatim in the error field of the result body.
         # 凭证也在请求线程上核：装配层缺凭证时抛的是各 backend 自己写的中文句子，而它跑在
         # 脱离请求的后台任务里，会原样进结果体的 error 字段。
         config = await resolver.provider_config(model_ref.provider_id)
         if not _has_usable_credentials(PROVIDER_REGISTRY[model_ref.provider_id], config):
             raise BadRequestError("missing_credentials")
+        # When a built-in model row uses declarative assembly, the two diagnostic sections (rendered request,
+        # per-stage extraction) and the pre-submit render gate are provided as well: the definition and credentials
+        # fall back to the same ones as assembly; for rows implemented by a Python backend both sections are left
+        # empty.
         # 内置模型行走声明式装配时，诊断两段（渲染请求、逐阶段提取）与提交前渲染闸照给：
         # 定义与凭证回落取装配同一份，Python backend 实现的行两段留空。
         definition = None
@@ -589,6 +716,9 @@ async def _model_ref_target(
     model = await CustomProviderRepository(session).get_model_by_ids(provider.id, model_ref.model_id)
     if model is None:
         raise NotFoundError("model_not_found")
+    # Checking existence is not enough: a disabled row or one for a non-video endpoint would make the assembly layer
+    # fall back to the provider's default video model; the paid test would hit and bill a different model while the
+    # result body still shows the requested row.
     # 只查存在不够：已禁用或非视频端点的行会让装配层回退到该供应商的默认视频模型——
     # 付费测试打到并计费给另一个模型，而结果体仍标着请求的那一行。
     try:
@@ -597,6 +727,10 @@ async def _model_ref_target(
         endpoint_spec = None
     if not model.is_enabled or endpoint_spec is None or endpoint_spec.media_type not in _TESTABLE_MEDIA_TYPES:
         raise BadRequestError("endpoint_test_model_unavailable")
+    # Credential configuration errors can be judged on the request thread and are rejected with a translated 400: with
+    # base_url missing the assembly layer would only raise an untranslatable Chinese sentence, inside a background
+    # task detached from the request, ending up verbatim in the error field of the result body; with api_key missing
+    # the request would go out with an empty auth header, paying for a call that is bound to be rejected.
     # 凭证配置错误在请求线程上就能判，按翻译过的 400 拒掉：缺 base_url 时装配层只会抛一句
     # 不可翻译的中文，且落在脱离请求的后台任务里、原样进结果体的 error 字段；缺 api_key 时
     # 请求会带着空鉴权头发出去，付费打一个注定被拒的调用。
@@ -610,6 +744,9 @@ async def _model_ref_target(
             raise BadRequestError("missing_credentials")
     definition = None
     if endpoint_spec.definition is not None:
+        # Built-in declarative endpoints (newapi-video / v2 / minimax family) have definitions just like ce-*: the
+        # rendered request, per-stage extraction and pre-submit render gate of the result body are given along the
+        # same path, so no diagnostic section goes missing just because the definition ships with the release.
         # 内置声明式端点（newapi-video / v2 / minimax 系）与 ce-* 一样有定义：结果体的渲染请求、
         # 逐阶段提取与提交前渲染闸按同一条路给出，不因定义随版发布而缺一段诊断。
         definition = _accepted_definition(dict(endpoint_spec.definition), _t, mode=EndpointTestMode.TRIAL_RUN)
@@ -632,7 +769,15 @@ def _preview_payload(
     _t: Translator,
     path_overrides: PathOverrides = NO_PATH_OVERRIDES,
 ) -> dict[str, Any] | None:
-    """结果体里的「渲染请求」段。
+    """The "rendered request" section of the result body.
+
+    Also serves as the pre-submit render gate: the template is rendered once before actually sending, so errors like
+    a missing placeholder value return 422 right away instead of failing only once the background task runs, when
+    the user is already waiting on a run that is bound to fail. Left empty when there is no definition to render
+    (endpoints implemented in Python) or when this kind does not provide this section (ComfyUI, see
+    ``KindTestSupport``).
+
+    结果体里的「渲染请求」段。
 
     顺带充当提交前的渲染闸：模板在真发之前就渲一次，占位符缺值这类错误当场回 422，而不是等
     后台任务跑起来才失败——那时用户已经在等一个注定失败的 run。没有定义可渲（Python 实现的
@@ -675,11 +820,14 @@ def _stage_assets(assets: EndpointTestAssets, staged: list[Path]) -> dict[str, P
 
 def _remove_staging(staged: list[Path]) -> None:
     for staging in staged:
-        shutil.rmtree(staging, ignore_errors=True)  # hard-delete: temp -- 试跑的 mkdtemp 暂存
+        shutil.rmtree(staging, ignore_errors=True)  # hard-delete: temp -- mkdtemp staging of the test run / 试跑的 mkdtemp 暂存
 
 
 def _persist_assets(assets: EndpointTestAssets, staging: Path) -> dict[str, Path | list[Path] | None]:
-    """素材落到临时目录：backend 收的是文件路径，而上传内容此刻只在内存里。目录随 run 终态清掉。"""
+    """Write media into a temp directory: the backend takes file paths, while the uploaded content is only in memory
+    right now. The directory is cleaned up when the run reaches a final state.
+
+    素材落到临时目录：backend 收的是文件路径，而上传内容此刻只在内存里。目录随 run 终态清掉。"""
     persisted: dict[str, Path | list[Path] | None] = {}
     for source, is_list in ASSET_SOURCES.items():
         if is_list:

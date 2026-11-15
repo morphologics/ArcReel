@@ -1,4 +1,13 @@
-"""一集草稿的 Web 端点：列出、读取、手修保存（违约清零即采用）、AI 修复与丢弃。
+"""Web endpoints for an episode's drafts: list, read, manual-fix save (adopted once violations reach zero), AI repair,
+and discard.
+
+Four kinds of draft (the script plan drafts of reference-to-video, drama and narration, and the prompt authoring
+draft of reference-to-video) share this set of endpoints; ``doc_type`` values match the Agent draft tools. Routes
+only forward to ``EpisodeDraftService``; AI repair goes through ``server.tool_runtime.repair_draft`` just like the
+Agent, submitted as a queued text task that returns the generation batch immediately, with task progress shown
+through task events.
+
+一集草稿的 Web 端点：列出、读取、手修保存（违约清零即采用）、AI 修复与丢弃。
 
 四种草稿（参考生视频、剧情演绎、旁白/解说的脚本规划草稿，参考生视频的提示词编写草稿）共用这组端点，
 ``doc_type`` 取值同 Agent 草稿工具。路由只转发给 ``EpisodeDraftService``；AI 修复与 Agent 同走
@@ -44,7 +53,9 @@ _CONFLICT_KEYS: dict[str, str] = {
 
 
 def _raise_draft_error(exc: DraftWorkflowError, episode: int) -> NoReturn:
-    """把草稿命令的错误码映射为 HTTP 响应；Agent 面向的 ``detail`` 只作诊断附带。"""
+    """Map draft command error codes to HTTP responses; the Agent-facing ``detail`` is only attached for diagnostics.
+
+    把草稿命令的错误码映射为 HTTP 响应；Agent 面向的 ``detail`` 只作诊断附带。"""
     if exc.code == "draft_not_found":
         raise NotFoundError("draft_not_found", episode=episode) from exc
     if exc.code in _CONFLICT_KEYS:
@@ -52,17 +63,23 @@ def _raise_draft_error(exc: DraftWorkflowError, episode: int) -> NoReturn:
     if exc.code in {"invalid_request", "doc_type_not_applicable"}:
         raise BadRequestError("draft_doc_type_not_applicable").with_diagnostic({"code": exc.code}) from exc
     if exc.failure is not None:
+        # Video model config problem: the draft was written back, the re-judge was blocked on config; use the problem
+        # code to explain the reason and which setting to change.
         # 视频模型配置问题：草稿已写回，重判被挡在配置上，按问题码说清原因与该改的设置。
         failure = exc.failure
         raise UnprocessableError(failure.code, **failure.parameters()).with_diagnostic(
             {"code": failure.code, "params": failure.parameters()}
         ) from exc
     if exc.notice_key is not None:
+        # The draft was written back but adoption was blocked by final script units: explain the reason and way out
+        # using the UI's name for units; the error code is still draft_invalid.
         # 草稿已写回，采用被正式剧本单元挡下：按界面单元称呼说明原因与出路，错误码仍是 draft_invalid。
         raise UnprocessableError(exc.notice_key, **exc.notice_params).with_diagnostic({"code": exc.code}) from exc
     if exc.code == "draft_repair_failed":
         logger.warning("草稿 AI 修复失败 episode=%s：%s", episode, exc.detail)
         raise UnprocessableError("draft_repair_failed").with_diagnostic({"code": exc.code}) from exc
+    # detail is Agent-facing and may carry server paths: it only goes to the log; the response carries only the error
+    # code.
     # detail 面向 Agent，可能带服务端路径：只进日志，响应只带错误码。
     logger.warning("草稿命令失败 episode=%s code=%s：%s", episode, exc.code, exc.detail)
     raise UnprocessableError("draft_save_failed").with_diagnostic({"code": exc.code}) from exc
@@ -117,6 +134,8 @@ async def save_episode_draft(
 ):
     """手修保存：服务端全量重判，违约清零即采用为正式内容，否则返回刷新后的草稿视图。"""
     try:
+        # The user's own save is broadcast as webui, so the frontend does not treat it as an external change to notify
+        # about or jump to.
         # 用户自己的保存按 webui 广播，前端不当成外部改动去通知或跳转。
         with project_change_source("webui"):
             result = await EpisodeDraftService(get_project_manager()).save_draft(
@@ -135,7 +154,7 @@ def _raise_repair_problem(problem: ToolProblem, episode: int) -> NoReturn:
         raise ConflictError("draft_repair_task_active").with_diagnostic(problem.params or {})
     if problem.code in {"draft_not_found", "invalid_request", "doc_type_not_applicable", *_CONFLICT_KEYS}:
         _raise_draft_error(DraftWorkflowError(problem.code, problem.detail), episode)
-    # 其余是提交失败（任务队列不可用等），草稿未动。
+    # The rest are submission failures (task queue unavailable, etc.); the draft is untouched. / 其余是提交失败（任务队列不可用等），草稿未动。
     logger.warning("草稿 AI 修复未能提交 episode=%s code=%s：%s", episode, problem.code, problem.detail)
     raise UnprocessableError("draft_repair_failed").with_diagnostic({"code": problem.code})
 

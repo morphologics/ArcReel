@@ -1,4 +1,6 @@
-"""项目资产的只读草稿预览路由，随资产 router 继承注册处的认证。"""
+"""Read-only draft preview route for project assets; inherits the registry's auth along with the asset router.
+
+项目资产的只读草稿预览路由，随资产 router 继承注册处的认证。"""
 
 import asyncio
 from collections.abc import Callable

@@ -1,4 +1,6 @@
-"""集管理的 Web 入口：新建一集、调序与删除一集。"""
+"""Web entry point for episode management: create, reorder and delete an episode.
+
+集管理的 Web 入口：新建一集、调序与删除一集。"""
 
 from __future__ import annotations
 
@@ -33,19 +35,21 @@ _STATUS: dict[str, int] = {"episode_not_found": 404}
 class CreateEpisodeRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    #: 插在哪一集之后（集 ID）；缺省时放在播出顺序末尾。
+    #: Which episode to insert after (episode ID); when omitted it goes at the end of the episode order. / 插在哪一集之后（集 ID）；缺省时放在播出顺序末尾。
     after: int | None = None
     title: Annotated[str, Field(max_length=200)] = ""
     hook: Annotated[str, Field(max_length=2000)] = ""
-    #: 集原文；空白视同没有原文。
+    #: Episode source; blank counts as no source. / 集原文；空白视同没有原文。
     source_text: str | None = None
-    #: 集原文的源文件类型，只对剧情演绎项目生效；缺省为小说。
+    #: Source file kind of the episode source, only effective for drama projects; defaults to novel. / 集原文的源文件类型，只对剧情演绎项目生效；缺省为小说。
     source_kind: SourceKind | None = None
 
 
 class DeleteEpisodeRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
+    #: ``revision`` of the loss list the creator reviewed; when omitted or not matching the current list, only the list
+    #: is returned and nothing is deleted.
     #: 创作者看过的丢失清单的 ``revision``；缺省或与当前清单不符时只返回清单，不删除。
     revision: str | None = None
 
@@ -53,7 +57,7 @@ class DeleteEpisodeRequest(BaseModel):
 class MoveEpisodeRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    #: 移到哪一集之后（集 ID）；null 时移到最前。
+    #: Which episode to move after (episode ID); null moves it to the front. / 移到哪一集之后（集 ID）；null 时移到最前。
     after: int | None
 
 
@@ -105,7 +109,10 @@ async def move_episode_endpoint(name: str, episode: int, req: MoveEpisodeRequest
 
 
 async def episode_has_active_tasks(project_name: str, episode: int) -> bool:
-    """这一集是否有排队或执行中的任务：任务的资源、剧本文件或载荷带这一集的集 ID。"""
+    """Whether this episode has queued or running tasks: a task's resource, script file or payload carries this
+    episode's episode ID.
+
+    这一集是否有排队或执行中的任务：任务的资源、剧本文件或载荷带这一集的集 ID。"""
     return await episode_tasks_active(get_generation_queue(), project_name, episode)
 
 

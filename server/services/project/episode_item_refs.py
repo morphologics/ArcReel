@@ -1,4 +1,13 @@
-"""集页面之外的条目指称：给任务与调用记录附上条目所属集的标题与播出位置，以及条目本身的当前位置。
+"""References to entries outside the episode page: attach to tasks and call records the title and episode order
+position of the episode the entry belongs to, plus the entry's own current position.
+
+Tasks and call records only store the entry ID (``E3S01``); entry IDs are only allocated, never reused, and mean
+nothing to creators; the UI uses the structure attached here to build "title · 5", along with a thumbnail and a text
+excerpt. The position of a shot or video unit is its current index (from 1) in this episode's entry array, computed
+from the script; when the entry is no longer in the script it is None and the UI shows "deleted". Records may span
+projects; each project's ledger and each episode's script is read only once.
+
+集页面之外的条目指称：给任务与调用记录附上条目所属集的标题与播出位置，以及条目本身的当前位置。
 
 任务与调用记录只存条目 ID（``E3S01``），条目 ID 只分配不复用，对创作者没有意义；界面凭这里附上的
 结构拼出「标题 · 5」，并配上缩略图与正文摘录。分镜与视频单元的位置是它在本集条目数组里的当前
@@ -27,7 +36,10 @@ def with_episode_item_refs(
     projects: ProjectManager,
     translate: Callable[..., str] = _,
 ) -> list[dict[str, Any]]:
-    """返回附上 ``ref_field`` 的副本；项目读不到、ID 不带集前缀或集已不在账本里时为 None。"""
+    """Return a copy with ``ref_field`` attached; None when the project cannot be read, the ID has no episode prefix,
+    or the episode is no longer in the ledger.
+
+    返回附上 ``ref_field`` 的副本；项目读不到、ID 不带集前缀或集已不在账本里时为 None。"""
 
     ledgers: dict[str, Mapping[str, Any] | None] = {}
     scripts: dict[tuple[str, str], Mapping[str, Any] | None] = {}
@@ -49,6 +61,7 @@ def with_episode_item_refs(
     return enriched
 
 
+# Entry IDs of shots (segment / scene / shot) and video units; grids (E3G01) are not referenced by position.
 # 分镜（segment / scene / shot）与视频单元的条目 ID；宫格（E3G01）不按位置指称。
 _POSITIONED_ITEM_ID = re.compile(r"^E\d+[SU]\d")
 _NO_FACTS: dict[str, Any] = {"item_position": None, "item_excerpt": "", "item_thumbnail": None}
@@ -61,7 +74,10 @@ def _item_facts(
     item_id: str,
     cache: dict[tuple[str, str], Mapping[str, Any] | None],
 ) -> dict[str, Any]:
-    """条目在本集剧本里的当前位置、正文摘录与缩略图；条目已不在剧本里时位置为 None。"""
+    """The entry's current position, text excerpt and thumbnail in this episode's script; position is None when the
+    entry is no longer in the script.
+
+    条目在本集剧本里的当前位置、正文摘录与缩略图；条目已不在剧本里时位置为 None。"""
     episode_id = item_id_episode(item_id)
     entry = find_ledger_entry(project, episode_id) if episode_id is not None else None
     script_file = entry.get("script_file") if entry else None

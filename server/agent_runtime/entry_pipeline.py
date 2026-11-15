@@ -1,4 +1,14 @@
-"""Live 写入点管道：SDK 消息流 → 事件日志条目 + 流式预览态（draft）。
+"""Live write-point pipeline: SDK message stream -> event log entries + streaming preview state (draft).
+
+- Entries: normalized, then saved to the DB with an assigned seq, then broadcast as ``log_entry`` (the SSE event id
+  is the seq).
+- draft: server in-memory state, identified by the message ``message_id``; deltas are transient broadcast events
+  (referencing message_id + block index) and not logged; when the message completes it is cleared exactly by the
+  authoritative entry with the same message_id. ``rev`` increases monotonically; the first-frame snapshot on
+  reconnect carries the current rev, and the client uses it to filter deltas delivered twice within the subscription
+  gap; identity comparison, not content comparison.
+
+Live 写入点管道：SDK 消息流 → 事件日志条目 + 流式预览态（draft）。
 
 - 条目：normalize 后落库分配 seq，再以 ``log_entry`` 广播（SSE 事件 id 即 seq）。
 - draft：服务端内存态，身份为消息 ``message_id``；delta 为瞬时广播事件
@@ -31,6 +41,8 @@ from server.agent_runtime.turn_schema import normalize_block
 
 logger = logging.getLogger(__name__)
 
+# Bounded retries for transient save failures (SQLite busy / connection jitter); the entry is given up only after
+# retries are exhausted.
 # 落库瞬时失败（SQLite busy / 连接抖动）的有界重试；重试耗尽才放弃该条目。
 _APPEND_ATTEMPTS = 3
 _APPEND_RETRY_BASE_S = 0.05
@@ -60,13 +72,17 @@ def _safe_json_parse(value: str) -> Any | None:
 
 
 class DraftAccumulator:
-    """流式预览态：按 message_id 累积 content block，服务端内存态、不落盘。"""
+    """Streaming preview state: accumulates content blocks by message_id; server in-memory state, not saved to disk.
+
+    流式预览态：按 message_id 累积 content block，服务端内存态、不落盘。"""
 
     def __init__(self) -> None:
         self._message_id: str | None = None
         self._parent_tool_use_id: str | None = None
         self._blocks: dict[int, dict[str, Any]] = {}
         self._tool_input_json: dict[int, str] = {}
+        # Monotonically increasing across messages: the rev carried by the snapshot is the delta filtering threshold
+        # for reconnecting clients.
         # 跨消息单调递增：快照携带的 rev 是重连客户端的 delta 过滤门槛。
         self._rev = 0
 
@@ -79,7 +95,9 @@ class DraftAccumulator:
         return self._rev
 
     def apply_stream_event(self, message: dict[str, Any]) -> dict[str, Any] | None:
-        """处理一条 stream_event 消息，返回要广播的瞬时 delta 载荷（或 None）。"""
+        """Handle one stream_event message and return the transient delta payload to broadcast (or None).
+
+        处理一条 stream_event 消息，返回要广播的瞬时 delta 载荷（或 None）。"""
         event = message.get("event")
         if not isinstance(event, dict):
             return None
@@ -94,11 +112,17 @@ class DraftAccumulator:
             return None
 
         if self._message_id is None:
+            # Orphan events without identity (message_start missing): the draft contract uses message_id as identity,
+            # and increments that cannot be attributed do not enter the preview state.
             # 无身份的孤儿事件（message_start 缺失）：draft 契约以 message_id
             # 为身份，无法归属的增量不进入预览态。
             return None
 
         if (message.get("parent_tool_use_id") or None) != self._parent_tool_use_id:
+            # Interleaved parallel streaming (multiple subagents): the preview state is a single-slot structure and
+            # takes the message of the most recent message_start; increments of other streams are filtered out and
+            # dropped by parent attribution, to avoid mixing them into the wrong message's draft. The full content of
+            # dropped streams is saved with the authoritative entries.
             # 并行流式（多 subagent）交错：预览态是单槽结构，取最近一次
             # message_start 的消息；其它流的增量按 parent 归属过滤丢弃，
             # 避免拼进错误消息的草稿。被丢弃流的完整内容随权威条目落库。
@@ -158,7 +182,9 @@ class DraftAccumulator:
         return None
 
     def clear_for_message(self, message_id: Any) -> bool:
-        """权威条目落库后按同 message_id 精确清除对应 draft。"""
+        """After the authoritative entry is saved, clear the corresponding draft exactly by the same message_id.
+
+        权威条目落库后按同 message_id 精确清除对应 draft。"""
         if not message_id or message_id != self._message_id:
             return False
         self._reset_blocks()
@@ -167,13 +193,20 @@ class DraftAccumulator:
         return True
 
     def clear(self) -> None:
-        """轮次终结（result / 中断）：预览态随内存丢弃。"""
+        """Turn end (result / interrupt): the preview state is discarded with memory.
+
+        轮次终结（result / 中断）：预览态随内存丢弃。"""
         self._reset_blocks()
         self._message_id = None
         self._parent_tool_use_id = None
 
     def snapshot(self) -> dict[str, Any] | None:
-        """重连首帧快照：当前累积态（无活跃 draft 时为 None）。
+        """First-frame snapshot on reconnect: the current accumulated state (None when there is no active draft).
+
+        ``tool_json`` carries the raw partial JSON accumulated for each tool_use block; reconnecting clients use it
+        as the prefix to continue appending later input_json_delta, otherwise the bare suffix would never parse.
+
+        重连首帧快照：当前累积态（无活跃 draft 时为 None）。
 
         ``tool_json`` 携带各 tool_use 块已累积的原始 partial JSON——重连客户端
         以此为前缀继续拼接后续 input_json_delta，否则纯后缀永远解析失败。
@@ -227,7 +260,9 @@ class DraftAccumulator:
 
 
 class SessionEntryPipeline:
-    """每会话一个：消费 inbox 消息，产出日志条目写入与 log_entry / log_delta 广播。"""
+    """One per session: consumes inbox messages and produces log entry writes and log_entry / log_delta broadcasts.
+
+    每会话一个：消费 inbox 消息，产出日志条目写入与 log_entry / log_delta 广播。"""
 
     def __init__(
         self,
@@ -241,16 +276,24 @@ class SessionEntryPipeline:
         self._session_id_provider = session_id_provider
         self._project_name_provider = project_name_provider or (lambda: None)
         self._broadcast = broadcast
+        # One finalizer per session: cross-message associations (Skill tool_use -> injected message; AskUserQuestion
+        # question registration -> answer finalization) live as long as the session
         # 每会话一个定型器：跨消息关联（Skill tool_use → 注入消息；
         # AskUserQuestion 提问登记 → 答复定型）随会话存续
         self._normalizer = SdkMessageNormalizer()
         self.draft = DraftAccumulator()
+        # Critical section for the interrupt tail-check dedup: the SDK echo (inbox task) and the synthesized interrupt
+        # on the terminal path (actor done callback) may write concurrently, so check+insert must be mutually
+        # exclusive.
         # interrupt 尾检去重的临界区：SDK 回显（inbox 任务）与终态路径的
         # 合成中断（actor done 回调）可能并发写入，检查+插入必须互斥。
         self._interrupt_lock = asyncio.Lock()
 
     async def handle_message(self, msg_dict: dict[str, Any]) -> None:
-        """写入点入口。失败只记日志不打断会话——时间线的修复手段是重放重建。"""
+        """Write-point entry. Failures are only logged and do not interrupt the session; the timeline is repaired by
+        replay rebuilding.
+
+        写入点入口。失败只记日志不打断会话——时间线的修复手段是重放重建。"""
         try:
             await self._handle(msg_dict)
         except Exception:
@@ -279,8 +322,13 @@ class SessionEntryPipeline:
                 session_id=session_id,
             )
             await self._append_normalized(session_id, entries)
+            # Turn end: drafts not replaced by authoritative entries (interrupt/error) are discarded with memory.
             # 轮次终结：未被权威条目替换的 draft（中断/错误）随内存丢弃。
             self.draft.clear()
+            # The interrupt result is a timeline event: when the SDK echo is absent, result finalizes it as a
+            # fallback, and the tail-check dedup ensures only one remains alongside an echo already logged. Must be
+            # broadcast before log_turn_complete, otherwise the entry stream breaks at the terminal state and live
+            # subscribers lose the interrupt entry.
             # 中断的结果是时间线事件：SDK 回显缺席时由 result 兜底定型，
             # 尾检去重保证与已入日志的回显只留一条。须先于 log_turn_complete
             # 广播，否则 entry 流在终态处断开、live 订阅者丢失中断条目。
@@ -288,12 +336,17 @@ class SessionEntryPipeline:
                 appended = await self._append_interrupt_deduped(session_id, build_interrupt_entry())
                 for entry in appended:
                     self._broadcast({"type": "log_entry", "session_id": session_id, "entry": entry})
+            # Marker that all entries of this turn have been saved and broadcast (in inbox serial order): the entry
+            # stream produces its terminal state from it, preventing the raw result broadcast from arriving before the
+            # last log_entry.
             # 本轮全部条目已（按 inbox 串行序）落库并广播完毕的标记：entry 流
             # 以此产出终态，避免原始 result 广播抢在末条 log_entry 之前送达。
             self._broadcast({"type": "log_turn_complete", "session_id": session_id})
             return
 
         if msg_dict.get(REPLAYED_USER_ECHO_KEY):
+            # Replay copies produce no entries (the finalizer returns empty directly), but they are the only place
+            # carrying the transcript entry identity: save the identity mapping here, then discard as usual.
             # 回放副本不产生条目（定型器直接返回空），但它是唯一携带 transcript
             # entry 身份的地方：在此把身份映射落库，随后照常丢弃。
             await self._record_user_message_link(session_id, msg_dict)
@@ -311,7 +364,14 @@ class SessionEntryPipeline:
         await self._append_normalized(session_id, entries)
 
     async def _record_user_message_link(self, session_id: str, msg_dict: dict[str, Any]) -> None:
-        """落库「服务端用户消息 id ↔ SDK transcript entry uuid」映射。
+        """Save the mapping "server user message id <-> SDK transcript entry uuid".
+
+        Skipped when either id is absent (the entry has not been assigned an identity yet, or the SDK did not
+        include a uuid on the replay copy): the mapping is an optional enhancement for locating message-rewrite
+        anchors; missing it only means that message cannot be used as a rewrite anchor, without affecting the
+        timeline itself. Save failures are likewise only logged.
+
+        落库「服务端用户消息 id ↔ SDK transcript entry uuid」映射。
 
         两个 id 任一缺席（条目尚未分配身份、或 SDK 未在回放副本上带 uuid）时跳过：
         映射是消息改写定位锚点的可选增强，缺失只让该条消息不可作为改写锚点，
@@ -349,7 +409,12 @@ class SessionEntryPipeline:
                 break
 
     async def append_user_entry(self, entry: dict[str, Any], *, client_key: str | None = None) -> None:
-        """排队消息被 Agent 接纳：写入用户条目并广播，条目排在此前已产生的输出之后。
+        """A queued message was accepted by the Agent: write the user entry and broadcast it; the entry is placed after
+        output produced earlier.
+
+        Failures are only logged and do not interrupt the session; the timeline is repaired by replay rebuilding.
+
+        排队消息被 Agent 接纳：写入用户条目并广播，条目排在此前已产生的输出之后。
 
         失败只记日志不打断会话——时间线的修复手段是重放重建。
         """
@@ -366,7 +431,12 @@ class SessionEntryPipeline:
         self._broadcast({"type": "log_entry", "session_id": session_id, "entry": authoritative})
 
     async def append_interrupt(self) -> list[dict[str, Any]]:
-        """中断动作的直接写入点（终态路径：SDK 回显不再经 inbox 到达时补写）。
+        """Direct write point for the interrupt action (terminal path: fills in when the SDK echo no longer arrives via
+        the inbox).
+
+        Shares the tail-check dedup with the SDK echo: adjacent interrupt races produce only one entry.
+
+        中断动作的直接写入点（终态路径：SDK 回显不再经 inbox 到达时补写）。
 
         与 SDK 回显共用尾检去重——相邻 interrupt 竞态只产出一条条目。
         """
@@ -390,7 +460,9 @@ class SessionEntryPipeline:
 
     @staticmethod
     async def _retrying(operation: Callable[[], Awaitable[_T]]) -> _T:
-        """有界重试落库：瞬时 DB 错误不至于在 append-only 日志上留下永久空洞。"""
+        """Save with bounded retries: transient DB errors do not leave a permanent hole in the append-only log.
+
+        有界重试落库：瞬时 DB 错误不至于在 append-only 日志上留下永久空洞。"""
         for attempt in range(_APPEND_ATTEMPTS):
             try:
                 return await operation()

@@ -1,4 +1,16 @@
-"""角色衍生资产图的上传替换路由（见 ``docs/adr/0072``）。
+"""Upload-replace route for character derivative sheets (see ``docs/adr/0072``).
+
+The uploaded image is a finished image: it lands at the derivative's canonical path
+``characters/derivatives/{character}/{derivative}.png``, enters version history as a selected manual-upload version,
+and the manifest registers it by image bytes (``docs/adr/0062``); neither the base-look sheet nor the change
+description takes part. The upload only replaces the sheet and is not used as the base image for re-edit generation;
+the change description stays unchanged.
+
+Separate from base-look sheet upload (``UPLOAD_SPECS`` in ``files.py``): a derivative's coordinate has two parts,
+"base/derivative", the on-disk extension is fixed to ``.png``, and the commit goes through the official activation
+callback shared by derivative sheet generation and image edit.
+
+角色衍生资产图的上传替换路由（见 ``docs/adr/0072``）。
 
 上传的图是成品：落到衍生的规范路径 ``characters/derivatives/{角色}/{衍生}.png``，作为一条选中的
 手动上传版本进入版本历史，清单按图字节登记（``docs/adr/0062``），本体资产图与变化描述都不参与。
@@ -74,17 +86,20 @@ async def upload_derivative_sheet(
 
         target, current_image, versions = await run_sync_transaction(_resolve)
 
-        # 限定读入内存的字节数：Content-Length 缺失或被绕过时不至于 OOM
+        # Limit the bytes read into memory: no OOM when Content-Length is missing or bypassed / 限定读入内存的字节数：Content-Length 缺失或被绕过时不至于 OOM
         content = await file.read(max_bytes + 1)
         if len(content) > max_bytes:
             raise UploadTooLargeError(max_bytes)
         try:
-            # 规范路径固定为 .png，任何输入格式都归一成 PNG
+            # The canonical path is fixed to .png; any input format is normalized to PNG / 规范路径固定为 .png，任何输入格式都归一成 PNG
             png_bytes = await asyncio.to_thread(normalize_storyboard_upload, content)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=_t("invalid_image_file")) from exc
 
         with project_change_source("webui"):
+            # Register the staging file as soon as it is on disk: if cancelled while staging, the return value is
+            # discarded and it is reclaimed via the registration; after staging succeeds it is reclaimed by the
+            # finally of commit_manual_derivative_upload.
             # 暂存文件一落盘就登记：暂存进行中被取消时返回值随之丢弃，按登记回收；
             # 暂存成功后由 commit_manual_derivative_upload 的 finally 回收。
             staged_images: list[Path] = []
@@ -96,7 +111,7 @@ async def upload_derivative_sheet(
                 await run_sync_transaction(_stage)
             except BaseException:
                 for path in staged_images:
-                    # hard-delete: temp -- 上传暂存文件
+                    # hard-delete: temp -- upload staging file / 上传暂存文件
                     await run_noninterruptible_sync(path.unlink, missing_ok=True)
                 raise
             try:
@@ -109,9 +124,11 @@ async def upload_derivative_sheet(
                     original_filename=file.filename,
                 )
             except KeyError as exc:
-                # 解析之后、提交之前本体或衍生被并发删除
+                # The base look or derivative was deleted concurrently after resolution and before commit / 解析之后、提交之前本体或衍生被并发删除
                 raise NotFoundError("asset_derivative_not_found", name=derivative_name) from exc
 
+            # Change event of the same shape as completing derivative sheet generation; the returned fingerprints are
+            # reused directly in the response body
             # 与衍生资产图生成完成同形状的变更事件；返回的指纹直接复用进响应体
             fingerprints = await run_sync_transaction(
                 emit_generation_success_batch,
@@ -133,6 +150,8 @@ async def upload_derivative_sheet(
     except (HTTPException, ApiError):
         raise
     except Exception as e:
+        # Do not return str(e): the message of an unexpected exception may contain internal details such as server
+        # paths; the stack trace goes to the log
         # 不回传 str(e)：未预期异常的消息可能含服务器路径等内部细节，堆栈进日志即可
         logger.exception("请求处理失败")
         raise HTTPException(status_code=500, detail=_t("internal_server_error")) from e

@@ -1,4 +1,6 @@
-"""聚合读取的请求合流：同一键同时最多 1 份在算、1 份等待。"""
+"""Request coalescing for aggregate reads: at most 1 computing and 1 waiting per key at a time.
+
+聚合读取的请求合流：同一键同时最多 1 份在算、1 份等待。"""
 
 from __future__ import annotations
 
@@ -8,7 +10,21 @@ from typing import Any
 
 
 class RequestCoalescer:
-    """把同一键上的并发请求合进至多两份计算。
+    """Merge concurrent requests on the same key into at most two computations.
+
+    When no computation is running, start immediately; when one is running, all new requests attach to the single
+    waiting slot and share the next computation.
+    The waiting slot starts only after the current computation ends and reads its input only when it starts, so no
+    request gets a result older than its arrival time. When a computation fails, the sharers receive the same
+    exception, the key is freed, and the next request recomputes.
+
+    In-process; does not cache results across requests. The key must include every request dimension that affects
+    the response content (at least the language).
+    The computation runs in a separate task and is awaited via ``asyncio.shield``: cancellation of one request
+    (client disconnect) only affects itself, and the shared computation and other waiters get their results as
+    usual.
+
+    把同一键上的并发请求合进至多两份计算。
 
     没有计算在跑时立即开算；有计算在跑时，新请求全部挂到唯一的等待位上，共享下一次计算。
     等待位要等当前计算结束才开始，并在开始时才读取输入，所以任何请求拿到的结果都不早于它
@@ -28,6 +44,8 @@ class RequestCoalescer:
         if task is None:
             previous = self._running.get(key)
             task = asyncio.create_task(self._compute(key, previous, compute))
+            # All requests may have disconnected with nobody taking the exception; retrieve it once so task cleanup
+            # does not log "never retrieved".
             # 请求可能已全部断开而无人取走异常；取走一次以免任务回收时记 "never retrieved"。
             task.add_done_callback(lambda t: t.cancelled() or t.exception())
             (self._running if previous is None else self._waiting)[key] = task
@@ -40,6 +58,8 @@ class RequestCoalescer:
         try:
             if previous is not None:
                 await asyncio.wait([previous])
+                # The waiting slot becomes the active one: requests arriving after this open a new waiting slot and
+                # read the newer input.
                 # 等待位转正：此后到达的请求另开新的等待位，读取更新的输入。
                 self._running[key] = self._waiting.pop(key)
             return await compute()

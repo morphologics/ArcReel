@@ -1,4 +1,17 @@
-"""待修复草稿的 AI 修复：按违约报告让文本模型改草稿，修完按手修保存的口径重判。
+"""AI repair of an invalid draft: the text model revises the draft from the violation report, then the result is
+re-judged the same way as a manual save.
+
+When every violation sits on entries, only those entries go to the model and come back to their original index; the
+other entries stay as they are. Only when a violation sits at episode level (or cannot be tied to an entry) is the
+whole draft revised. Instructions are passed with the call and not saved. The revised result is written through
+``DraftWorkflow.save`` and fully re-judged: if no violations remain it is adopted, otherwise it stays in the draft
+and the report is refreshed to current values.
+
+Like ``DraftWorkflow``, this is a host-agnostic service; ``server.tool_runtime.repair_draft`` pre-checks with
+``check`` before submitting,
+then runs ``repair`` as a queued text task.
+
+待修复草稿的 AI 修复：按违约报告让文本模型改草稿，修完按手修保存的口径重判。
 
 违约都落在条目上时，只把这些条目交给模型，取回后按下标放回原位，其余条目原样保留；有违约落在整集
 层面（或定位不到条目）时才整份修改。附加指令随调用传入，不保存。修改结果经
@@ -45,7 +58,7 @@ from server.text_generation import load_novel_source
 
 logger = logging.getLogger(__name__)
 
-#: 各草稿来源的条目数组键名。
+#: Entry array key per draft source. / 各草稿来源的条目数组键名。
 _ITEM_ROOTS: dict[str, str] = {
     QUARANTINE_KIND_SCRIPT_PLAN: "units",
     QUARANTINE_KIND_DRAMA_SCRIPT_PLAN: "scenes",
@@ -54,7 +67,7 @@ _ITEM_ROOTS: dict[str, str] = {
 }
 
 
-#: 交给模型的草稿说明，按草稿来源。
+#: Draft description handed to the model, per draft source. / 交给模型的草稿说明，按草稿来源。
 _DOCUMENTS: dict[str, str] = {
     QUARANTINE_KIND_DRAMA_SCRIPT_PLAN: (
         "剧情演绎的脚本规划草稿：`scenes` 是有序分镜，每个分镜含时长档位、出场资产、画面描述、逐字台词与原文锚。"
@@ -76,14 +89,19 @@ _DOCUMENTS: dict[str, str] = {
 
 @dataclass(frozen=True, slots=True)
 class RepairScope:
-    """修复范围：``indices`` 为要改的条目下标（升序）；为 None 时整份修改。"""
+    """Repair scope: ``indices`` are the entry indices to change (ascending); None means revise the whole draft.
+
+    修复范围：``indices`` 为要改的条目下标（升序）；为 None 时整份修改。"""
 
     root: str
     indices: tuple[int, ...] | None
 
 
 def repair_scope(kind: str, content: dict[str, Any], violations: Sequence[dict[str, Any]]) -> RepairScope:
-    """按违约定位决定修复范围：任何一条定位不到现有条目，就整份修改。"""
+    """Decide the repair scope from where violations sit: if any one cannot be tied to an existing entry, revise the
+    whole draft.
+
+    按违约定位决定修复范围：任何一条定位不到现有条目，就整份修改。"""
     root = _ITEM_ROOTS[kind]
     items = content.get(root)
     if not isinstance(items, list):
@@ -98,7 +116,12 @@ def repair_scope(kind: str, content: dict[str, Any], violations: Sequence[dict[s
 
 
 def merge_repair(content: dict[str, Any], scope: RepairScope, response: object) -> dict[str, Any]:
-    """把模型回复合并回草稿正文：条目模式只替换范围内的条目，整集模式以回复覆盖原有的顶层字段。
+    """Merge the model reply back into the draft body: entry mode replaces only the entries in scope; whole-episode
+    mode overwrites the existing top-level fields with the reply.
+
+    Raises ``ValueError`` when the reply is not the agreed shape.
+
+    把模型回复合并回草稿正文：条目模式只替换范围内的条目，整集模式以回复覆盖原有的顶层字段。
 
     回复不是约定的形状时抛 ``ValueError``。
     """
@@ -109,6 +132,8 @@ def merge_repair(content: dict[str, Any], scope: RepairScope, response: object) 
     if scope.indices is None:
         if not isinstance(items, list) or not items:
             raise ValueError(f"模型回复缺少非空的 {scope.root} 数组")
+        # Take only the top-level fields and entry arrays the original draft already has; fields the model invents do
+        # not enter the draft.
         # 只取原草稿已有的顶层字段与条目数组，模型自造的字段不进草稿。
         return {**content, **{key: value for key, value in reply.items() if key in content or key == scope.root}}
     if not isinstance(items, list) or len(cast(list[Any], items)) != len(scope.indices):
@@ -161,14 +186,22 @@ def build_repair_prompt(
 
 
 class DraftRepair:
-    """AI 修复一份待修复草稿；错误以 ``DraftWorkflowError`` 抛出。"""
+    """AI-repair an invalid draft; errors are raised as ``DraftWorkflowError``.
+
+    AI 修复一份待修复草稿；错误以 ``DraftWorkflowError`` 抛出。"""
 
     def __init__(self, ctx: DraftContext):
         self.ctx = ctx
         self.workflow = DraftWorkflow(ctx)
 
     async def check(self, episode: int, doc_type: str, base_revision: str) -> tuple[str, QuarantinedDraft]:
-        """确认草稿可交给 AI 修复：适用于当前工作流、在场、不归 Agent 编辑、revision 未变。
+        """Confirm the draft can go to AI repair: applies to the current workflow, is present, is not owned by Agent
+        editing, revision unchanged.
+
+        Returns the draft source and the draft; raises ``DraftWorkflowError`` otherwise. Read-only; does not call
+        the model.
+
+        确认草稿可交给 AI 修复：适用于当前工作流、在场、不归 Agent 编辑、revision 未变。
 
         返回草稿来源与草稿；不成立时抛 ``DraftWorkflowError``。只读，不调用模型。
         """
@@ -197,7 +230,15 @@ class DraftRepair:
     async def repair(
         self, episode: int, doc_type: str, base_revision: str, instructions: str | None = None
     ) -> dict[str, Any]:
-        """修复并按保存口径重判；返回值同 ``DraftWorkflow.save``。
+        """Repair and re-judge as on save; returns the same as ``DraftWorkflow.save``.
+
+        A draft with no violations left skips the model and is adopted directly. Failures before the draft is
+        written back (reading source, calling the model, reply shape
+        mismatch, etc.) all raise ``draft_repair_failed`` and leave the draft unchanged; a truncated reply re-raises
+        ``TextOutputTruncatedError`` as is, draft likewise unchanged. Failures after write-back raise the save
+        stage's error codes as usual.
+
+        修复并按保存口径重判；返回值同 ``DraftWorkflow.save``。
 
         违约已清零的草稿不调用模型，直接采用。写回草稿之前的失败（读源文、调用模型、回复形状
         不符等）都抛 ``draft_repair_failed``，草稿不变；回复被截断时原样抛出
@@ -206,6 +247,8 @@ class DraftRepair:
         try:
             content = await self._repaired_content(episode, doc_type, base_revision, instructions)
         except (DraftWorkflowError, TextOutputTruncatedError, ModelNotInCatalogError):
+            # A referenced model no longer in the provider list is a re-selectable config problem: re-raise as is so
+            # the caller shows it with "configure provider".
             # 引用的模型已不在供应商清单中是可重选的配置问题：原样抛出，由调用方带「去配置供应商」呈现
             raise
         except Exception as exc:
@@ -215,7 +258,10 @@ class DraftRepair:
     async def _repaired_content(
         self, episode: int, doc_type: str, base_revision: str, instructions: str | None
     ) -> dict[str, Any]:
-        """待写回的草稿正文：违约已清零时原样返回，否则交给模型修复并合并回原稿。"""
+        """Draft body to write back: returned as is when no violations remain, otherwise sent to the model for repair
+        and merged back into the original.
+
+        待写回的草稿正文：违约已清零时原样返回，否则交给模型修复并合并回原稿。"""
         kind, draft = await self.check(episode, doc_type, base_revision)
         violations = await self._violations(episode, kind, draft)
         if not violations:
@@ -241,7 +287,10 @@ class DraftRepair:
         return merge_repair(draft.content, scope, json.loads(strip_json_code_fences(result.text)))
 
     async def _violations(self, episode: int, kind: str, draft: QuarantinedDraft) -> list[dict[str, Any]]:
-        """修复所依据的违约：脚本规划草稿按现值重判，提示词编写草稿取快照（它没有只读重判器）。"""
+        """Violations the repair is based on: script plan drafts are re-judged on current values; prompt authoring
+        drafts use the snapshot (they have no read-only re-judge).
+
+        修复所依据的违约：脚本规划草稿按现值重判，提示词编写草稿取快照（它没有只读重判器）。"""
         if kind == QUARANTINE_KIND_PROMPT_AUTHORING:
             return draft.violations
         project = await asyncio.to_thread(self.ctx.pm.load_project, self.ctx.project_name)
@@ -258,7 +307,9 @@ class DraftRepair:
         return violation_entries(revalidation.violations)
 
     async def _source_text(self, episode: int, kind: str, draft: QuarantinedDraft) -> str | None:
-        """脚本规划草稿的源文，供模型对照原文锚；读不出时不提供。"""
+        """Source text for a script plan draft, so the model can check source anchors; omitted when it cannot be read.
+
+        脚本规划草稿的源文，供模型对照原文锚；读不出时不提供。"""
         if kind == QUARANTINE_KIND_PROMPT_AUTHORING:
             return None
         try:

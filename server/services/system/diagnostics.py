@@ -1,4 +1,6 @@
-"""收集脱敏后的系统诊断信息，供 /system/logs/download 打包。"""
+"""Collect redacted system diagnostics for packaging by /system/logs/download.
+
+收集脱敏后的系统诊断信息，供 /system/logs/download 打包。"""
 
 from __future__ import annotations
 
@@ -94,6 +96,8 @@ def _db_url() -> str:
 
         return urlunparse(parsed._replace(netloc=netloc, query=query))
     except Exception:
+        # When redaction fails, fall back to the raw string so the diagnostic bundle does not fail completely; the
+        # caller's _safe adds another layer of fallback.
         # 脱敏失败时回退到原始字符串，避免诊断包完全失败；调用方 _safe 会再兜一层。
         return raw
 
@@ -135,7 +139,10 @@ def _catalog_sync_error() -> str:
 
 
 def collect_diagnostics(*, app_version: Callable[[], object] | None = None) -> str:
-    """返回脱敏的 plain-text 诊断报告。任一字段失败用 <unavailable> 占位，整体不抛。"""
+    """Return a redacted plain-text diagnostic report. Any field that fails is replaced by an <unavailable>
+    placeholder; the whole never raises.
+
+    返回脱敏的 plain-text 诊断报告。任一字段失败用 <unavailable> 占位，整体不抛。"""
     fields: list[tuple[str, Callable[[], object]]] = [
         ("App version", app_version or _app_version),
         ("Python", _python_version),

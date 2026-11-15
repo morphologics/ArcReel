@@ -1,4 +1,8 @@
-"""模型目录 API：按名称与媒体类型搜索模型条目；用户手动填写新条目；把用户改过的条目恢复为官方数据（用户新建的条目
+"""Model catalog API: search model entries by name and media type; let users fill in new entries manually; restore
+entries the user changed to the official data (an entry the user created switches to the official data once the
+official data includes it -- same endpoint).
+
+模型目录 API：按名称与媒体类型搜索模型条目；用户手动填写新条目；把用户改过的条目恢复为官方数据（用户新建的条目
 在官方数据收录后改用官方数据，是同一个接口）。"""
 
 from __future__ import annotations
@@ -96,7 +100,10 @@ class NewEntryBody(CatalogEntryKey):
 
 
 def build_new_entry(body: NewEntryBody, _t: Translator) -> CatalogEntry:
-    """校验并构造用户手动填写的新条目；不合法或目录里已有同名模型时 422。"""
+    """Validate and build a new entry the user filled in manually; 422 when it is invalid or the catalog already has a
+    model with the same name.
+
+    校验并构造用户手动填写的新条目；不合法或目录里已有同名模型时 422。"""
     try:
         return new_entry(
             maker=body.maker,

@@ -90,7 +90,10 @@ def _read_app_version() -> str:
 
 
 def get_app_version_reader() -> Callable[[], str]:
-    """版本读取器的路由依赖；读失败的处置归路由，故注入可调用对象而非版本值。"""
+    """Route dependency for the version reader; handling of read failures belongs to the route, so a callable is
+    injected rather than the version value.
+
+    版本读取器的路由依赖；读失败的处置归路由，故注入可调用对象而非版本值。"""
     return _read_app_version
 
 
@@ -157,18 +160,32 @@ async def _get_latest_release(
 
 @dataclass(frozen=True)
 class _ModelCandidate:
-    """一个可选模型及其任务类型桶归属，供不过滤的默认层与按桶过滤的细分层共用。"""
+    """A selectable model and its task type bucket membership, shared by the unfiltered default layer and the
+    per-bucket filtered detail layer.
+
+    一个可选模型及其任务类型桶归属，供不过滤的默认层与按桶过滤的细分层共用。"""
 
     option: str  # "provider_id/model_id"
     media_type: str
     buckets: frozenset[GenerationTypeBucket]
-    display_name: str  # 按请求语言成文的模型名
+    display_name: str  # Model name rendered in the request language / 按请求语言成文的模型名
 
 
 async def _enumerate_candidates(
     svc: ConfigService, session: AsyncSession, locale: str = DEFAULT_LOCALE
 ) -> tuple[list[_ModelCandidate], dict[str, str]]:
-    """列出所有可选模型（内置 ready 供应商与自定义供应商下已启用的供应商模型），并附任务类型桶归属。
+    """List all selectable models (provider models enabled under built-in ready providers and custom providers), with
+    their task type bucket membership.
+
+    Candidates only come from enabled provider models, and both the default layer and the task type bucket layer are
+    bound by this (capability filtering is only added at the bucket layer). A built-in provider's enabled state
+    comes from ``disabled_models`` in the provider status (see :mod:`lib.catalog.builtin_models`).
+
+    Provider and model names go through ``translate_or``, the same path as the ``/providers`` catalog: names with a
+    translation table are rendered in the request language, others (pure brand names, names custom providers typed
+    in by users) return the original name from the registry / DB as is.
+
+    列出所有可选模型（内置 ready 供应商与自定义供应商下已启用的供应商模型），并附任务类型桶归属。
 
     候选只来自已启用的供应商模型，默认层与任务类型桶层同受此约束（能力过滤只加在桶层）。内置供应商的启用状态
     取自供应商状态的 ``disabled_models``（见 :mod:`lib.catalog.builtin_models`）。
@@ -235,7 +252,13 @@ async def _enumerate_candidates(
 
 
 def _model_names(candidates: list[_ModelCandidate]) -> dict[str, str]:
-    """``"provider_id/model_id"`` → 已成文的模型名，两个端点共用的那张表。
+    """``"provider_id/model_id"`` -> rendered model name; the one table shared by both endpoints.
+
+    Not narrowed by media type: the text tier and narration voiceover dropdowns on the same screen take their
+    candidates from ``/system/config`` and share this one translation table; a missing key would make them fall back
+    to the model id.
+
+    ``"provider_id/model_id"`` → 已成文的模型名，两个端点共用的那张表。
 
     不按媒体类型收窄：同屏的文本档位与旁白配音下拉取自 ``/system/config`` 的候选，共用这一份
     译名表，缺键会让它们退回 model id。
@@ -283,8 +306,11 @@ class MediaCandidates(BaseModel):
 class ModelCandidatesResponse(BaseModel):
     image: MediaCandidates
     video: MediaCandidates
+    # Provider id -> name rendered in the request language; same rule as options (the same translate_or path).
     # 供应商 id → 按请求语言成文的名字；与 options 同口径（同一条 translate_or 路径）。
     provider_names: dict[str, str]
+    # "provider_id/model_id" -> model name rendered in the request language; the keys cover candidates of all media
+    # types (including text / audio, used only by options), and frontend dropdowns show the translated names from it.
     # "provider_id/model_id" → 按请求语言成文的模型名；键覆盖全部媒体类型的候选（含 options
     # 才用到的 text / audio），前端下拉据此显示译名。
     model_names: dict[str, str]
@@ -292,6 +318,8 @@ class ModelCandidatesResponse(BaseModel):
 
 class SystemConfigPatchRequest(BaseModel):
     default_video_backend: str | None = None
+    # Video task type buckets (docs/adr/0054): i2v = image-to-video / grid, r2v = reference-to-video; empty = fall
+    # back to the default layer
     # 视频任务类型桶（docs/adr/0054）：i2v = 图生视频 / 宫格，r2v = 参考生视频；空值 = 回退默认层
     default_video_backend_i2v: str | None = None
     default_video_backend_r2v: str | None = None
@@ -302,7 +330,7 @@ class SystemConfigPatchRequest(BaseModel):
     default_audio_backend: str | None = None
     narration_voice: str | None = None
     narration_speed: float | None = None
-    # 市场源 GitHub raw 代理前缀：空串 = 直连
+    # GitHub raw proxy prefix for the market source: empty string = direct connection / 市场源 GitHub raw 代理前缀：空串 = 直连
     market_github_proxy_prefix: str | None = None
     video_generate_audio: bool | None = None
     video_poll_timeout_seconds: int | None = None
@@ -315,12 +343,19 @@ class SystemConfigPatchRequest(BaseModel):
     claude_code_subagent_model: str | None = None
     agent_session_cleanup_delay_seconds: int | None = None
     agent_max_concurrent_sessions: int | None = None
+    # Text task tiers (docs/adr/0051): call sites are assigned to tiers in code, here only each tier's backend is
+    # configured; an unset tier falls back to default_text_backend.
     # 文本任务档位（docs/adr/0051）：调用点在代码里固定归档，这里只配置每档的 backend；
     # 各档未设置回退 default_text_backend。
     text_backend_simple: str | None = None
     text_backend_complex: str | None = None
 
 
+# DEPRECATED: anthropic_api_key / anthropic_base_url have moved to the agent_anthropic_credentials table (spec
+#             2026-05-11-agent-url-config-optimization). Reading/writing anthropic_base_url is kept here only for
+#             old-client compatibility; the new UI uses the /api/v1/agent/credentials/* endpoints. The
+#             anthropic_api_key / anthropic_base_url fields are planned for removal in 0.14.0; the anthropic_*_model
+#             series stays (still managed by Section 2 Model Routing).
 # Setting keys that map directly to string DB settings
 #
 # DEPRECATED: anthropic_api_key / anthropic_base_url 已迁移至 agent_anthropic_credentials 表
@@ -357,6 +392,9 @@ async def get_system_config(
         else ConfigResolver._DEFAULT_VIDEO_GENERATE_AUDIO
     )
     anthropic_key = all_s.get("anthropic_api_key", "")
+    # Compatibility with the new credential catalog: when the old system_settings is not filled but
+    # agent_anthropic_credentials has an active one, it also counts as is_set, to avoid a false "not configured" red
+    # dot on the dashboard
     # 兼容新凭证目录：旧 system_settings 没填但 agent_anthropic_credentials 有 active 时
     # 也算 is_set，避免 dashboard "未配置" 红点误报
     if not anthropic_key:
@@ -366,6 +404,7 @@ async def get_system_config(
         if active_cred is not None:
             anthropic_key = active_cred.api_key
 
+    # The speech rate setting is stored as a string; corrupt values (manual DB edits etc.) are treated as unset
     # 语速 setting 为字符串存储，损坏值（手工改库等）按未设置处理
     narration_speed = ConfigService.parse_narration_speed(all_s.get("narration_speed", ""))
 
@@ -488,6 +527,8 @@ async def get_tts_model_capabilities(backend: str) -> TtsModelCapabilitiesRespon
     try:
         capabilities = await audio_backend_capabilities(*pair)
     except ModelNotInCatalogError:
+        # The referenced model is not in the provider's list: let the app-level handler return a 400 asking to
+        # reselect the model (a ValueError subclass, must be caught before it)
         # 引用的模型不在供应商清单中：交 app 级 handler 返回要求重新选择模型的 400（ValueError 子类，须先于其捕获）
         raise
     except ValueError as exc:
@@ -539,6 +580,7 @@ def _is_valid_proxy_prefix(prefix: str) -> bool:
         return False
     try:
         parts = urlsplit(prefix)
+        # Accessing it validates the port; an invalid port raises ValueError
         parts.port  # noqa: B018 -- 访问即校验端口，非法端口抛 ValueError
     except ValueError:
         return False
@@ -583,10 +625,16 @@ async def patch_system_config(
                 validate_backend_value(value, backend_key)
             await svc.set_setting(backend_key, value)
 
+    # Narration voice: a configurable string id (fill in per the provider's docs); empty string = clear and fall back
+    # to the service default
     # 旁白音色：可配置字符串 id（照供应商文档填），空串 = 清除回落服务默认
     if "narration_voice" in patch:
         await svc.set_setting("narration_voice", str(patch["narration_voice"] or "").strip())
 
+    # GitHub raw proxy prefix for the market source: only prepended to raw.githubusercontent.com addresses; must be an
+    # https address with a host name, without whitespace or control characters, and without user name and password
+    # (the value is echoed back as is by GET and is not stored as a credential), and without query string or fragment
+    # (raw addresses are appended to the prefix by path); empty string = clear
     # 市场源 GitHub raw 代理前缀：只拼在 raw.githubusercontent.com 地址前，须是带主机名、不含空白与控制字符、不含用户名与密码的
     # https 地址（该值经 GET 原样回显，不当作凭证存放），且不带查询串与 fragment（raw 地址按路径拼在前缀之后）；空串 = 清除
     if "market_github_proxy_prefix" in patch:
@@ -595,6 +643,8 @@ async def patch_system_config(
             raise UnprocessableError("market_github_proxy_prefix_invalid")
         await svc.set_setting(PROXY_PREFIX_SETTING, prefix)
 
+    # Narration speech rate: only a sanity check for a positive finite number (rejecting 0/negative/inf/nan); the
+    # actual value range is constrained by each provider; null = clear
     # 旁白语速：仅做正有限数卫生校验（拒绝 0/负数/inf/nan），具体取值范围由各供应商自行约束；null = 清除
     if "narration_speed" in patch:
         speed = patch["narration_speed"]

@@ -1,4 +1,8 @@
 """
+API Key management routes
+
+Provides endpoints to create, list and delete API keys.
+
 API Key 管理路由
 
 提供 API Key 的创建、列表查询和删除接口。
@@ -27,7 +31,10 @@ router = APIRouter()
 
 
 def _require_jwt_auth(user: CurrentUserInfo, _t: Callable[..., str]) -> None:
-    """确保请求通过 JWT 认证（非 API Key）。API Key 管理操作不允许由 API Key 本身执行。"""
+    """Ensure the request is authenticated via JWT (not an API key). API key management operations may not be performed
+    by an API key itself.
+
+    确保请求通过 JWT 认证（非 API Key）。API Key 管理操作不允许由 API Key 本身执行。"""
     if user.sub.startswith("apikey:"):
         raise HTTPException(status_code=403, detail=_t("jwt_auth_required"))
 
@@ -36,7 +43,9 @@ API_KEY_DEFAULT_EXPIRY_DAYS = 30
 
 
 def _generate_api_key() -> str:
-    """生成格式为 arc-<32位随机字符> 的 API Key。"""
+    """Generate an API key of the form arc-<32 random characters>.
+
+    生成格式为 arc-<32位随机字符> 的 API Key。"""
     random_part = secrets.token_hex(16)  # 32 hex chars
     return f"{API_KEY_PREFIX}{random_part}"
 
@@ -47,13 +56,13 @@ def _default_expires_at() -> datetime:
 
 class CreateApiKeyRequest(BaseModel):
     name: str
-    expires_days: int | None = Field(None, ge=0)  # None 使用默认 30 天，0 表示不过期
+    expires_days: int | None = Field(None, ge=0)  # None uses the default 30 days, 0 means never expires / None 使用默认 30 天，0 表示不过期
 
 
 class CreateApiKeyResponse(BaseModel):
     id: int
     name: str
-    key: str  # 完整 key，仅在创建时返回
+    key: str  # Full key, returned only at creation / 完整 key，仅在创建时返回
     key_prefix: str
     created_at: str
     expires_at: str | None
@@ -137,6 +146,9 @@ async def delete_api_key(
         if row is None:
             raise HTTPException(status_code=404, detail=_t("api_key_not_found", key_id=key_id))
         key_hash = row["key_hash"]
+        # Invalidate the cache first, then delete from the DB: even if it crashes after the transaction commits, the
+        # cache has already been cleared, so there is no grace window where the DB row is deleted but the cache is
+        # still valid.
         # 先失效缓存再删库：即使事务提交后崩溃，缓存也已清除，
         # 不会出现 DB 已删但缓存仍有效的宽限窗口。
         invalidate_api_key_cache(key_hash)

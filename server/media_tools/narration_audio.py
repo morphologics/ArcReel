@@ -1,5 +1,14 @@
 """Host-neutral tool for narration audio (TTS) generation.
 
+The tool's return text is agent-facing (no i18n); the display name is registered in ``ARCREEL_MCP_TOOL_IDS`` with
+all three languages.
+
+The missing-only selection only serves this entry point, where the user explicitly asks for narration audio: video
+requests with post-production voiceover do not go through here, and on that path missing TTS is neither filled in
+automatically nor counted as a workflow gap.
+
+Host-neutral tool for narration audio (TTS) generation.
+
 工具返回文本是 agent-facing（免 i18n）；显示名在 ``ARCREEL_MCP_TOOL_IDS`` 注册、补三语。
 
 missing-only 选择只服务于用户显式要求生成旁白配音的这个入口：后期配音的视频请求
@@ -173,6 +182,8 @@ async def generate_narration_audio(
         )
 
         def select_targets() -> tuple[ArtifactCurrencyResolver, GenerationSelection, dict[str, GenerationProblem]]:
+            # Building the artifact freshness checker and judging freshness by file content are both synchronous file
+            # reads/writes and hashing
             # 建产物时效判定器、按文件内容判定时效都是同步文件读写与哈希
             resolver = active_artifact_currency_resolver(
                 services.projects.get_project_path(scope.project_name), project

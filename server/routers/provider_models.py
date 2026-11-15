@@ -1,4 +1,19 @@
-"""供应商模型 API：按供应商列出、读取单个、保存供应商设置、启用与停用、移除；内置供应商另可按 ID 添加（docs/adr/0099）。
+"""Provider model API: list by provider, read one, save provider settings, enable and disable, remove; built-in
+providers can additionally add by ID (docs/adr/0099).
+
+Shared by built-in and custom providers. Reading one and saving correspond to the "provider settings" of the
+provider model Sheet: officially listed models only have enable; models the user is responsible for (custom
+providers' models, models the user added under built-in providers) additionally have the model ID, provider model
+multiplier and capability overrides; custom providers' models additionally have default, calling endpoint, request
+URL and default resolution.
+
+The lower section of the Sheet, "model info", is the model entry it maps to, shared by all providers that use it:
+reading includes who maintains the entry, the official values and the other providers sharing it; saving writes
+atomically in the same request as the provider settings, and edits are stored as a user copy of the whole entry
+(docs/adr/0099). Models the user is responsible for can additionally "link to another model" (stored as an entry
+binding, docs/adr/0105), or manually fill in info for a model not in the catalog (creating an entry and binding it).
+
+供应商模型 API：按供应商列出、读取单个、保存供应商设置、启用与停用、移除；内置供应商另可按 ID 添加（docs/adr/0099）。
 
 内置与自定义供应商共用。读取单个与保存对应供应商模型 Sheet 的「供应商设置」：官方收录的模型只有启用；用户负责的
 模型（自定义供应商的模型、内置供应商下用户添加的模型）另有模型 ID、供应商模型倍率与能力覆盖；自定义供应商的模型
@@ -314,7 +329,14 @@ _USER_ADDED_RELOADS = LatestReadWins()
 
 
 async def reload_user_added_models(session: AsyncSession) -> None:
-    """从内置供应商模型表装入用户添加的模型，交给目录查询。应用启动时与每次写入提交之后调用。
+    """Load models the user added from the built-in provider model table and hand them to catalog lookups. Called at
+    application startup and after every write commit.
+
+    The code that reads the catalog (APIs, generation workers, Agent session tools) all runs in the application
+    process, so an in-process replacement takes effect for every reader; two concurrent loads take effect in the
+    order they started reading.
+
+    从内置供应商模型表装入用户添加的模型，交给目录查询。应用启动时与每次写入提交之后调用。
 
     读目录的代码（接口、生成 worker、Agent 会话的工具）都跑在应用进程里，进程内替换即对全部读点生效；并发的两次
     装入按开始读的先后生效。
@@ -387,6 +409,8 @@ async def _custom_items(session: AsyncSession, provider_id: str, db_id: int) -> 
         try:
             media_type = (await resolve_endpoint_spec(row.endpoint, endpoint_repo.get)).media_type
         except ValueError:
+            # The calling endpoint has been deleted: this row cannot be called and cannot be grouped, so it does not
+            # appear in the list; fix it through the custom provider form.
             # 调用端点已被删除：这一行调用不了，也无从归组，不在列表里出现；修复经自定义供应商表单。
             logger.warning("自定义供应商 %s 的模型 %s 的调用端点 %s 不存在", provider_id, row.model_id, row.endpoint)
             continue
@@ -560,7 +584,7 @@ async def add_provider_model(
     )
 
 
-#: 内置供应商获取模型时等待模型列表接口的上限。
+#: Upper limit for waiting on the model list API when a built-in provider fetches models. / 内置供应商获取模型时等待模型列表接口的上限。
 _DISCOVERY_TIMEOUT_SECONDS = 30
 
 
@@ -608,12 +632,14 @@ async def discover_provider_models(
 
 
 async def _builtin_discovery_config(session: AsyncSession, provider_id: str) -> dict[str, str] | None:
-    """叠加了激活凭证的供应商配置；没有凭证时为 ``None``。"""
+    """Provider config with the active credential overlaid; ``None`` when there is no credential.
+
+    叠加了激活凭证的供应商配置；没有凭证时为 ``None``。"""
     cred = await CredentialRepository(session).get_active(provider_id)
     if cred is None:
         return None
     config = await ConfigService(session).get_provider_config(provider_id)
-    # 叠加凭证时会探测 Vertex 凭证文件是否存在，放进线程
+    # Overlaying the credential probes whether the Vertex credential file exists, so it goes into a thread / 叠加凭证时会探测 Vertex 凭证文件是否存在，放进线程
     await asyncio.to_thread(cred.overlay_config, config)
     if not config.get("base_url") and (meta := PROVIDER_REGISTRY.get(provider_id)) and meta.default_base_url:
         config["base_url"] = meta.default_base_url
@@ -717,7 +743,10 @@ async def _custom_model_entry(row: CustomProviderModel, endpoint_repo: CustomEnd
 async def _providers_sharing(
     session: AsyncSession, entry: CatalogEntry, provider_id: str
 ) -> list[SharedProviderResponse]:
-    """同样使用这个条目的其他供应商：已配置密钥的内置供应商与自定义供应商，只算启用的模型。"""
+    """Other providers that use this same entry: built-in providers with a configured key and custom providers,
+    counting only enabled models.
+
+    同样使用这个条目的其他供应商：已配置密钥的内置供应商与自定义供应商，只算启用的模型。"""
     shared: list[SharedProviderResponse] = []
     configured = await CredentialRepository(session).get_active_credentials_bulk()
     for builtin_id, meta in PROVIDER_REGISTRY.items():
@@ -766,7 +795,9 @@ async def _entry_info(session: AsyncSession, entry: CatalogEntry | None, provide
 
 
 async def _builtin_binding(session: AsyncSession, provider_id: str, model_id: str, *, official: bool) -> str | None:
-    """内置供应商下用户添加的模型的条目绑定；官方收录的模型没有。"""
+    """Entry binding of a model the user added under a built-in provider; officially listed models have none.
+
+    内置供应商下用户添加的模型的条目绑定；官方收录的模型没有。"""
     if official:
         return None
     row = await BuiltinProviderModelRepository(session).get(provider_id, model_id)
@@ -842,7 +873,9 @@ _BUILTIN_SETTING_FIELDS = frozenset(
 
 
 async def _current_entry(session: AsyncSession, provider_id: str, model_id: str, _t: Translator) -> CatalogEntry | None:
-    """供应商模型当前对应到的条目（合成后）；供应商模型不存在时 404。"""
+    """The entry the provider model currently maps to (after merging); 404 when the provider model does not exist.
+
+    供应商模型当前对应到的条目（合成后）；供应商模型不存在时 404。"""
     if is_custom_provider(provider_id):
         db_id = await _custom_db_id(session, provider_id, _t)
         row = await CustomProviderRepository(session).get_model_by_ids(db_id, model_id)
@@ -859,7 +892,10 @@ async def _current_entry(session: AsyncSession, provider_id: str, model_id: str,
 async def _save_entry(
     session: AsyncSession, provider_id: str, model_id: str, update: EntryUpdate, _t: Translator
 ) -> bool:
-    """把「模型信息」的修改存为条目的用户副本；返回是否写入（与当前条目相同时不写，条目照旧跟随官方）。"""
+    """Store edits to "model info" as the entry's user copy; returns whether it was written (not written when equal to
+    the current entry, which then keeps following the official values).
+
+    把「模型信息」的修改存为条目的用户副本；返回是否写入（与当前条目相同时不写，条目照旧跟随官方）。"""
     current = await _current_entry(session, provider_id, model_id, _t)
     if current is None or (current.maker, current.name, current.media_type) != (
         update.maker,
@@ -884,14 +920,20 @@ async def _save_entry(
 
 @dataclass(frozen=True)
 class _BindingChange:
-    """这次保存对条目绑定的修改：``ref`` 是新的绑定（``None`` 为解除），``created`` 是随之新建的条目。"""
+    """This save's change to the entry binding: ``ref`` is the new binding (``None`` means unbind), ``created`` is the
+    entry newly created with it.
+
+    这次保存对条目绑定的修改：``ref`` 是新的绑定（``None`` 为解除），``created`` 是随之新建的条目。"""
 
     ref: str | None
     created: CatalogEntry | None
 
 
 def _plan_binding(body: ProviderModelSettingsUpdate, _t: Translator) -> _BindingChange | None:
-    """请求里的「关联其他模型」或「手动填写」；没有传时为 ``None``。新条目在这里校验，写入见 :func:`_apply_binding`。"""
+    """The "link to another model" or "fill in manually" in the request; ``None`` when not passed. A new entry is
+    validated here; writing is in :func:`_apply_binding`.
+
+    请求里的「关联其他模型」或「手动填写」；没有传时为 ``None``。新条目在这里校验，写入见 :func:`_apply_binding`。"""
     if body.new_entry is not None:
         created = build_new_entry(body.new_entry, _t)
         return _BindingChange(created.key.ref, created)
@@ -901,7 +943,10 @@ def _plan_binding(body: ProviderModelSettingsUpdate, _t: Translator) -> _Binding
 
 
 async def _apply_binding(session: AsyncSession, change: _BindingChange, media_type: str, _t: Translator) -> None:
-    """按保存后的媒体类型核对绑定：绑定到现有条目要求条目存在且同媒体类型，新条目要求媒体类型一致；通过后写入新条目。"""
+    """Check the binding against the media type after saving: binding to an existing entry requires the entry to exist
+    with the same media type, a new entry requires the media type to match; once passed, write the new entry.
+
+    按保存后的媒体类型核对绑定：绑定到现有条目要求条目存在且同媒体类型，新条目要求媒体类型一致；通过后写入新条目。"""
     if change.created is not None:
         if change.created.media_type != media_type:
             raise HTTPException(
@@ -974,6 +1019,8 @@ async def update_provider_model(
     """保存供应商模型 Sheet 的供应商设置与模型信息，一次请求原子保存；返回保存后的 Sheet 内容。"""
     if not is_custom_provider(provider_id):
         _require_builtin(provider_id, _t)
+    # Write the entry copy by the mapping from before the save first: this entry is what the Sheet read, so changing
+    # the model ID in the same request does not change which entry is edited
     # 先按保存前的对应关系写条目副本：Sheet 读到的就是这个条目，同一请求里改模型 ID 不影响改哪个条目
     entry_saved = body.entry is not None and await _save_entry(session, provider_id, model_id, body.entry, _t)
     binding = _plan_binding(body, _t)
@@ -989,6 +1036,8 @@ async def update_provider_model(
             changes["entry_binding"] = binding.ref
         row = await update_custom_model(session, db_id, model_id, changes, _t)
         saved_model_id = row.model_id
+        # Switching the calling endpoint may switch the media type: even without a binding change, check the original
+        # binding against the new media type
         # 换调用端点可能换了媒体类型：没改绑定时也按新的媒体类型核对原绑定
         if binding is None and "endpoint" in changes and row.entry_binding:
             binding = _BindingChange(ref=row.entry_binding, created=None)
@@ -1011,7 +1060,10 @@ async def update_provider_model(
 
 
 def _project_references(reference: str) -> list[ProjectReference]:
-    """读每个项目的 project.json，挑出模型设置项引用了 ``reference`` 的项目；读不了的项目跳过。"""
+    """Read each project's project.json and pick the projects whose model settings reference ``reference``; projects
+    that cannot be read are skipped.
+
+    读每个项目的 project.json，挑出模型设置项引用了 ``reference`` 的项目；读不了的项目跳过。"""
     from lib.config.resolver import get_project_manager
 
     pm = get_project_manager()

@@ -1,4 +1,15 @@
-"""Onboarding 引导状态 APIs.
+"""Onboarding state APIs.
+
+The "seen" markers of the first-use onboarding. Deliberately separate from `/system/config`: that route is the
+read/write allowlist of the config panel, and onboarding markers are neither user-configurable items nor something
+the config page's batch reads/writes should carry along.
+
+Scope: the endpoints are designed with "the current user's onboarding state" semantics, with identity resolved via
+       `get_current_user`; today the markers themselves live in the instance-level `SystemSetting` (open-source
+       single-user form). When multi-user support arrives, replace the read/write backend below; the endpoint
+       contract stays the same.
+
+Onboarding 引导状态 APIs.
 
 首次使用引导的「已看过」标记。刻意与 `/system/config` 分开：那条路由是配置面板的
 读写白名单，引导标记既不是用户可配置项，也不该被配置页的批量读写带上。

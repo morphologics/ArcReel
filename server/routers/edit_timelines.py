@@ -1,4 +1,10 @@
-"""剪辑时间线的 HTTP 入口：列表、读取、预览素材层、新建、复制、改名、修订历史、回滚、删除、一集的剪辑概况，
+"""HTTP entry for edit timelines: list, read, preview the media layer, create, copy, rename, revision history, roll
+back, delete, an episode's editing overview, and submitting, status and download of final cuts and JianYing drafts.
+
+All behavior lives in the lib-layer edit timeline commands, the final cut service and the JianYing draft service;
+rendering is enqueued as a ``render`` lane task.
+
+剪辑时间线的 HTTP 入口：列表、读取、预览素材层、新建、复制、改名、修订历史、回滚、删除、一集的剪辑概况，
 以及成片与剪映草稿的提交、现状与下载。
 
 行为全部在 lib 层剪辑时间线命令、成片服务与剪映草稿服务里；渲染作为 ``render`` 车道任务入队。
@@ -63,6 +69,8 @@ if TYPE_CHECKING:
 
 router = APIRouter(dependencies=[Depends(require_project_migration_ok)])
 
+# Native browser downloads cannot carry an Authorization header, so the endpoint validates a short-lived download
+# token (see docs/adr/0071).
 # 浏览器原生下载带不了 Authorization header，端点内校验短时效下载 token（见 docs/adr/0071）。
 self_auth_router = APIRouter()
 
@@ -124,6 +132,8 @@ def get_jianying_draft_service() -> TimelineJianyingDraftService:
     return TimelineJianyingDraftService(get_project_manager())
 
 
+# Concrete types are only visible under TYPE_CHECKING: pyJianYingDraft is a heavy dependency, imported lazily at
+# runtime when needed.
 # 具体类型只在 TYPE_CHECKING 下可见：pyJianYingDraft 是重依赖，运行期按需惰性导入。
 JianyingDraftServiceDep = Annotated[Any, Depends(get_jianying_draft_service)]
 
@@ -164,7 +174,10 @@ _FINAL_CUT_STATUS: dict[str, int] = {
 
 
 def final_cut_api_error(exc: FinalCutError) -> ApiError:
-    """成片错误的摘要只列出阻断的视频单元；结构化的问题清单与片段 ID 挂在诊断上。"""
+    """The summary of a final cut error only lists the blocking video units; the structured problem list and clip IDs
+    are attached to the diagnostics.
+
+    成片错误的摘要只列出阻断的视频单元；结构化的问题清单与片段 ID 挂在诊断上。"""
     params = exc.params
     issues = params.get("issues") or []
     units = "、".join(dict.fromkeys(str(issue.get("unit_id")) for issue in issues if issue.get("unit_id")))
@@ -215,6 +228,8 @@ class RenderFinalCutBody(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     revision: int | None = Field(default=None, ge=1)
+    # When omitted, filled in per project: TTS-voiced projects include narration, others do not; subtitles are burned
+    # in by default.
     # 省略时按项目补齐：TTS 配音项目带旁白、其余不带旁白；字幕默认烧入。
     narration: DraftNarration | None = None
     subtitles: SubtitleMode | None = None
@@ -572,6 +587,8 @@ class ExportJianyingDraftBody(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     revision: int | None = Field(default=None, ge=1)
+    # When omitted, the default narration version is taken per project: TTS-voiced projects include narration, others
+    # do not.
     # 省略时按项目取默认旁白版本：TTS 配音项目带旁白，其余不带旁白。
     narration: DraftNarration | None = None
 
@@ -592,7 +609,10 @@ _JIANYING_DRAFT_STATUS: dict[str, int] = {
 
 
 def jianying_draft_api_error(exc: JianyingDraftError) -> ApiError:
-    """剪映草稿错误的摘要只列出阻断的视频单元；结构化的问题清单挂在诊断上。"""
+    """The summary of a JianYing draft error only lists the blocking video units; the structured problem list is
+    attached to the diagnostics.
+
+    剪映草稿错误的摘要只列出阻断的视频单元；结构化的问题清单挂在诊断上。"""
     params = dict(exc.params)
     issues = params.pop("issues", None)
     if issues is not None:
@@ -699,7 +719,7 @@ async def download_jianying_draft(
         raise edit_timeline_api_error(exc) from exc
     except JianyingDraftError as exc:
         raise jianying_draft_api_error(exc) from exc
-    # hard-delete: temp -- 剪映草稿下载包的临时目录
+    # hard-delete: temp -- temp directory of the JianYing draft download package / 剪映草稿下载包的临时目录
     return FileResponse(
         path=str(package),
         media_type="application/zip",

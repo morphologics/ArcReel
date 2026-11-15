@@ -47,6 +47,8 @@ from server.media_tools.context import (
 from server.services.tasks.image_edit_tasks import EDITABLE_RESOURCE_TYPES, resolve_usable_image_edit_source
 from server.tool_runtime import CallerContext, ProjectScope, Services, ToolOutcome, ToolRequest, submit_media_generation
 
+# Editing is always an explicit choice: each edit must carry its own instruction, and there is no "missing edit"
+# derivable from the Manifest, so this tool offers no missing-only selection.
 # 编辑始终是显式选择：一次编辑必须携带自己的指令，没有可由 Manifest 推导的
 # "缺失的编辑"，因此本工具不提供 missing-only 选择。
 _OPERATION = "edit_images"
@@ -70,7 +72,14 @@ if get_args(EditableResourceType) != EDITABLE_RESOURCE_TYPES:
 async def _i2i_unavailable_problem(
     project: dict[str, Any], *, config_resolver: ConfigResolver
 ) -> GenerationProblem | None:
-    """项目 i2i 槽解析不出可用供应商时返回阻塞问题，可用时返回 None——与 HTTP 端点入队前 fail-fast
+    """Return a blocking problem when the project's i2i slot cannot resolve a usable provider, and None when it can --
+    the same decision point as the HTTP endpoint's fail-fast before enqueue (see
+    ``server/routers/generate.py::_require_i2i_image_provider_configured``); batch editing needs only one
+    project-level decision and, unlike the endpoint, does not need a provider_id to pass to enqueue. When the
+    referenced model is no longer in the provider's list, the problem points to "choose the model again" rather than
+    "switch to a provider that supports i2i".
+
+    项目 i2i 槽解析不出可用供应商时返回阻塞问题，可用时返回 None——与 HTTP 端点入队前 fail-fast
     同一判断点（见 ``server/routers/generate.py::_require_i2i_image_provider_configured``），
     批量编辑只需要一次项目级判断，不像端点那样需要拿到 provider_id 传给入队。
     引用的模型已不在供应商清单中时，问题带「重新选择模型」指引，而非「换支持 i2i 的供应商」。
@@ -82,6 +91,8 @@ async def _i2i_unavailable_problem(
             code=exc.code, detail=str(exc), action=GenerationAction.CONFIGURE_PROVIDER, params=dict(exc.params)
         )
     except ValueError:
+        # Reuse the i2i missing-capability code already registered in lib.generation.task_failure (the same failure
+        # produces this code on the HTTP endpoint's execution path); do not invent an unregistered code.
         # 复用 lib.generation.task_failure 已登记的 i2i 缺能力码（同一失败在
         # HTTP 端点的执行期路径下就是这个码），不新造未登记码。
         return GenerationProblem(
@@ -161,6 +172,8 @@ def _build_specs(
             )
             continue
         except ArtifactManifestError as exc:
+            # Fail loud when the Manifest judges this edit's artifact state: it is this single edit's own problem and
+            # should not swallow the other IDs' already-computed results into a handler-level text error.
             # Manifest 判定本条编辑的产物状态时 fail-loud：这是单条编辑自己的问题，
             # 不该把整批已经算出的其它 ID 结果一起吞进 handler 级文本错误。
             builder.block(
@@ -257,6 +270,8 @@ async def edit_images(
             resolver = active_artifact_currency_resolver(project_path, project)
             return script, project, project_path, artifact_episode, resolver
 
+        # Reading the script and project and building the artifact freshness checker are all synchronous file
+        # reads/writes
         # 读剧本与项目、建产物时效判定器都是同步文件读写
         script, project, project_path, artifact_episode, resolver = await run_sync_transaction(load_inputs)
 
@@ -266,6 +281,9 @@ async def edit_images(
 
         i2i_problem = await _i2i_unavailable_problem(project, config_resolver=services.capabilities)
         if i2i_problem is not None:
+            # Intercepted before enqueue: this is not an artifact problem of one ID but an unmet precondition shared
+            # by the whole batch; the caller still reads results under the per-ID contract, so each requested ID gets
+            # its own blocked record rather than a single block of text that cannot be consumed programmatically.
             # 拦截在入队前：不是某个 ID 的产物问题，是整批共享的前置条件不满足，
             # 但调用方仍按逐 ID 契约读结果，因此每个请求到的 ID 各记一条 blocked，
             # 而不是只回一段无法编程消费的文本。
@@ -309,6 +327,10 @@ async def edit_images(
         if submitted.successes is None or submitted.failures is None:
             return generation_batch_submission_outcome(submitted.batch)
         if specs:
+            # Edit artifacts are not written back to the Manifest (edit intent cannot be derived, see the module
+            # header), so no resolver is passed here: the artifact freshness axis is honestly left empty instead of
+            # pretending to be known. states is only used to bring untouched edit source image paths back into the
+            # result on failure and plays no part in freshness.
             # 编辑产物不写回 Manifest（编辑意图不可推导，见模块顶部说明），
             # 因此这里不带 resolver：产物时效轴如实留空而不是假装已知。states 只
             # 用来在失败时把未被触碰的编辑源图路径带回结果，不参与时效判断。

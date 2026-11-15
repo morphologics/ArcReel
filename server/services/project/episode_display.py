@@ -1,4 +1,6 @@
-"""Web 诊断里的集与条目指称；内部 ID 和 Agent 回执保持原样。"""
+"""Episode and entry references in Web diagnostics; internal IDs and Agent receipts stay as they are.
+
+Web 诊断里的集与条目指称；内部 ID 和 Agent 回执保持原样。"""
 
 from __future__ import annotations
 
@@ -23,7 +25,10 @@ _DATA_FIELDS = frozenset({"params", "error_params", "content", "inputs", "last_p
 
 
 def render_episode_text(message: str, project: Mapping[str, Any], translate: Callable[..., str]) -> str:
-    """把已成文的诊断改成标题或播出位置；已移出账本的集显示为未命名集。"""
+    """Rewrite an already-rendered diagnostic to use the title or episode order position; episodes moved out of the
+    ledger are shown as an untitled episode.
+
+    把已成文的诊断改成标题或播出位置；已移出账本的集显示为未命名集。"""
 
     def name(episode_id: int) -> str:
         return episode_display_name(project, episode_id, translate)
@@ -35,7 +40,9 @@ def render_episode_text(message: str, project: Mapping[str, Any], translate: Cal
 
 
 def present_episode_diagnostics(value: Any, project: Mapping[str, Any], translate: Callable[..., str]) -> Any:
-    """只改诊断文本字段，不改定位 ID、并发令牌、草稿正文与机器参数。"""
+    """Only change diagnostic text fields, not locator IDs, concurrency tokens, draft bodies or machine parameters.
+
+    只改诊断文本字段，不改定位 ID、并发令牌、草稿正文与机器参数。"""
     if isinstance(value, str):
         return render_episode_text(value, project, translate)
     if isinstance(value, list):
@@ -60,7 +67,10 @@ def present_episode_diagnostics(value: Any, project: Mapping[str, Any], translat
 
 
 async def present_request_diagnostics(value: Any, request: Request, translate: Callable[..., str]) -> Any:
-    """项目 REST 的呈现边界；读不到项目时仍隐藏内部集 ID。"""
+    """Presentation boundary of the project REST API; internal episode IDs stay hidden even when the project cannot be
+    read.
+
+    项目 REST 的呈现边界；读不到项目时仍隐藏内部集 ID。"""
     project_name = request.path_params.get("project_name")
     if project_name is None and "/projects/" in request.url.path:
         project_name = request.path_params.get("name")

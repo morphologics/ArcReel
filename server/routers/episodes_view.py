@@ -1,4 +1,8 @@
-"""「分集」视图：整本源文按集分段的只读投影、``source/`` 里没有登记的文件的处置，整本源文文件的类型、
+"""The "episodes" view: a read-only projection of the whole source segmented by episode, handling of files in
+``source/`` that are not registered, the type, replacement, editing, deletion and reordering of whole-source files,
+and updating the episode ledger from changes made to files outside the service.
+
+「分集」视图：整本源文按集分段的只读投影、``source/`` 里没有登记的文件的处置，整本源文文件的类型、
 替换、编辑、删除与调序，以及按文件在服务之外的改动更新分集账本。"""
 
 from __future__ import annotations
@@ -117,8 +121,11 @@ async def get_episodes_view(name: str, _t: Translator) -> dict[str, Any]:
 
 
 class AdoptSourceFileRequest(BaseModel):
+    #: whole_source appends to the end of the whole source; episode uses it as one episode's source.
     #: whole_source 加入整本源文末尾；episode 用作一集的原文。
     target: Literal["whole_source", "episode"]
+    #: When target=episode, fill it into this episode (must be an episode without source); by default a new episode is
+    #: created at the end of the episode order.
     #: target=episode 时填给这一集（须是无原文的集）；缺省时在播出顺序末尾新建一集。
     episode: int | None = None
 
@@ -153,9 +160,11 @@ async def adopt_source_file(name: str, filename: str, req: AdoptSourceFileReques
 
 
 class _ManualSplitBase(BaseModel):
+    #: Episodes with artifacts that the creator saw in the confirmation list; if the in-lock recheck finds episodes
+    #: with artifacts outside the list, send it back for confirmation.
     #: 创作者在确认清单里看过的有产物的集；锁内复核出清单之外的有产物集时退回确认。
     confirm_episodes: list[int] = Field(default_factory=list)
-    #: 只返回波及清单，不写入。
+    #: Only return the impact list, do not write. / 只返回波及清单，不写入。
     dry_run: bool = False
 
 
@@ -170,6 +179,7 @@ class SplitRequest(_ManualSplitBase):
     action: Literal["split"]
     episode: int
     at: int
+    #: The whole-source file containing ``at``; by default computed from the file containing this episode's start.
     #: ``at`` 所在的整本源文文件；缺省时按这一集起点所在的文件算。
     source_file: str | None = None
 
@@ -178,6 +188,7 @@ class MoveBoundaryRequest(_ManualSplitBase):
     action: Literal["move_boundary"]
     episode: int
     at: int
+    #: The whole-source file containing ``at``; by default computed from the file containing this episode's end.
     #: ``at`` 所在的整本源文文件；缺省时按这一集终点所在的文件算。
     source_file: str | None = None
 
@@ -185,6 +196,8 @@ class MoveBoundaryRequest(_ManualSplitBase):
 class MergeNextRequest(_ManualSplitBase):
     action: Literal["merge_next"]
     episode: int
+    #: The merged volume the creator saw in the confirmation list; if it differs from the volume rechecked inside the
+    #: lock, send it back for confirmation.
     #: 创作者在确认清单里看过的并入体量；与锁内复核出的体量不一致时退回确认。
     confirm_merged_units: int = 0
 
@@ -271,7 +284,7 @@ async def manual_split(name: str, req: ManualSplitRequest, _t: Translator) -> di
 
 class SetSourceFileKindRequest(BaseModel):
     source_kind: SourceKind
-    #: 已确认会让已开始制作的集的脚本规划判 stale。
+    #: Confirmed that it will make the script plans of episodes already in production stale. / 已确认会让已开始制作的集的脚本规划判 stale。
     confirm: bool = False
 
 
@@ -313,11 +326,16 @@ async def set_source_file_kind(
 
 
 # ---------------------------------------------------------------------------
+# Replacement, editing, deletion and reordering of whole-source files
+# ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
 # 整本源文文件的替换、编辑、删除与调序
 # ---------------------------------------------------------------------------
 
 
 class _SourceFileChangeBase(BaseModel):
+    #: Version of the affected-episode list the creator confirmed; when missing or not matching the one recomputed
+    #: inside the lock, only the list is returned and nothing is written.
     #: 创作者确认过的受影响集清单的版本；缺省或与锁内重算的不一致时只返回清单，不写入。
     revision: str | None = None
 
@@ -340,7 +358,9 @@ async def _run_source_file_change(
     revision: str | None,
     command: Callable[[ProjectManager, bool], SourceFileChangeOutcome],
 ) -> dict[str, Any]:
-    """``command(manager, dry_run)`` 跑一个整本源文文件改动命令，``revision`` 已经传给了它。"""
+    """``command(manager, dry_run)`` runs one whole-source file change command, with ``revision`` already passed to it.
+
+    ``command(manager, dry_run)`` 跑一个整本源文文件改动命令，``revision`` 已经传给了它。"""
 
     def _manager() -> ProjectManager:
         manager = get_project_manager()

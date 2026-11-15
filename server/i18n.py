@@ -1,4 +1,10 @@
-"""请求级语言解析：从 ``Accept-Language`` 取语言，注入路由的 translator 与显示名目录。
+"""Request-level language resolution: take the language from ``Accept-Language`` and inject the route's translator and
+display name catalog.
+
+The message tables and per-language rendering (``_`` / ``translate_or``) live in ``lib.i18n``, independent of the
+HTTP framework; this only does the layer that maps a request to a language.
+
+请求级语言解析：从 ``Accept-Language`` 取语言，注入路由的 translator 与显示名目录。
 
 文案表与按语言成文（``_`` / ``translate_or``）在 ``lib.i18n``，与 HTTP 框架无关；
 这里只做把请求映射到语言的那一层。
@@ -49,13 +55,21 @@ def get_translator(request: Request) -> Callable[..., str]:
 
 Translator = Annotated[Callable[..., str], Depends(get_translator)]
 
+#: The request language itself. Used where looking up a translated name needs "fall back to the original name in the
+#: data source when the key is missing" (see translate_or); regular rendering still uses Translator.
 #: 请求语言本身。取译名需要「键缺失时回退到数据源里的原名」的地方（见 translate_or）用它，
 #: 常规成文仍用 Translator。
 Locale = Annotated[str, Depends(get_locale)]
 
 
 def _builtin_display_names(locale: str) -> DisplayNames:
-    """目录加载失败时的退路：只认内置供应商与模型，自定义供应商显示泛称。
+    """Fallback when catalog loading fails: only recognizes built-in providers and models, and shows a generic name for
+    custom providers.
+
+    The catalog only decides how providers and models are named in messages; a load failure should not change the
+    response itself.
+
+    目录加载失败时的退路：只认内置供应商与模型，自定义供应商显示泛称。
 
     目录只决定文案里怎么称呼供应商与模型，加载失败不应改变响应本身。
     """
@@ -64,25 +78,39 @@ def _builtin_display_names(locale: str) -> DisplayNames:
 
 
 async def load_display_names_or_builtin(session: AsyncSession, locale: str) -> DisplayNames:
-    """在路由的会话里按语言加载显示名目录；查询失败时退回内置名称。
+    """Load the display name catalog by language in the route's session; fall back to built-in names when the query
+    fails.
+
+    Routes that need to load the catalog on demand inside the function body also call this, not
+    ``load_display_names`` directly.
+
+    在路由的会话里按语言加载显示名目录；查询失败时退回内置名称。
 
     路由需要在函数体内按需加载目录时也调用这里，不直接调用 ``load_display_names``。
     """
     try:
         return await load_display_names(session, locale)
     except Exception:
+        # The session is shared by the whole request: roll back the failed query so the route's own queries are not
+        # affected.
         # 会话由整个请求共用：回滚失败的查询，路由自己的查询不受牵连。
         await session.rollback()
         return _builtin_display_names(locale)
 
 
 async def get_display_names(request: Request, session: AsyncSession = Depends(get_async_session)) -> DisplayNames:
-    """路由依赖：按请求语言加载供应商与模型的显示名目录；查询失败时退回内置名称。"""
+    """Route dependency: load the display name catalog of providers and models in the request language; fall back to
+    built-in names when the query fails.
+
+    路由依赖：按请求语言加载供应商与模型的显示名目录；查询失败时退回内置名称。"""
     return await load_display_names_or_builtin(session, get_locale(request))
 
 
 async def request_display_names(request: Request) -> DisplayNames:
-    """app 级异常处理器按请求语言加载目录；查询或会话失败时保留原错误，退回内置名称。"""
+    """App-level exception handlers load the catalog in the request language; when the query or session fails, keep the
+    original error and fall back to built-in names.
+
+    app 级异常处理器按请求语言加载目录；查询或会话失败时保留原错误，退回内置名称。"""
     locale = get_locale(request)
     try:
         async with async_session_factory() as session:
@@ -91,5 +119,7 @@ async def request_display_names(request: Request) -> DisplayNames:
         return _builtin_display_names(locale)
 
 
+#: Display name catalog needed to render failure messages: provider and model IDs are replaced with names in the
+#: request language.
 #: 失败文案渲染所需的显示名目录：供应商与模型 ID 按请求语言换成名称。
 DisplayNamesCatalog = Annotated[DisplayNames, Depends(get_display_names)]

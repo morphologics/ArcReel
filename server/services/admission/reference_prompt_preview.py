@@ -1,4 +1,7 @@
-"""参考生视频草稿的最终提示词，使用当前请求投影的实发参考图与能力。"""
+"""Final prompt of a reference-to-video draft, using the actually-sent reference images and capabilities projected for
+the current request.
+
+参考生视频草稿的最终提示词，使用当前请求投影的实发参考图与能力。"""
 
 from collections.abc import Callable
 from pathlib import Path
@@ -21,7 +24,13 @@ def render_reference_prompt_preview(
     translate: Callable[..., str],
     names: DisplayNames,
 ) -> dict[str, Any]:
-    """只读渲染；时长待确认不妨碍查看文本，其他投影阻断项显式显示为不可用。
+    """Read-only rendering; a duration pending confirmation does not prevent viewing the text, and other projection
+    blockers are shown explicitly as unavailable.
+
+    Same rule as the shot preview: exactly one of ``text`` and ``unavailable`` is non-``None``, and ``warnings``
+    only appear with text.
+
+    只读渲染；时长待确认不妨碍查看文本，其他投影阻断项显式显示为不可用。
 
     与分镜预览同一口径：``text`` 与 ``unavailable`` 恰有一个非 ``None``，``warnings`` 只随文本出现。
     """

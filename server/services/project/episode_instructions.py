@@ -1,4 +1,9 @@
-"""按集保存的附加指令：脚本规划与提示词编写各存一份在集条目上，重新生成时预填。
+"""Instructions saved per episode: script planning and prompt authoring each keep one on the episode entry, prefilled
+when regenerating.
+
+Both submitting generation and "hand to Agent" save through here; blank counts as clearing.
+
+按集保存的附加指令：脚本规划与提示词编写各存一份在集条目上，重新生成时预填。
 
 提交生成与「交给 Agent」都经这里保存；空白视同清除。
 """
@@ -12,7 +17,9 @@ from lib.project.project_manager import ProjectManager, find_episode
 
 
 class EpisodeInstructionKind(StrEnum):
-    """附加指令所属的 AI 动作；值即集条目上的字段名。"""
+    """The AI action the instructions belong to; the value is the field name on the episode entry.
+
+    附加指令所属的 AI 动作；值即集条目上的字段名。"""
 
     SCRIPT_PLAN = "script_plan_instructions"
     PROMPT_AUTHORING = "prompt_authoring_instructions"

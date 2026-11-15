@@ -1,4 +1,8 @@
-"""Agent Anthropic 凭证 + 预设供应商目录 API。
+"""Agent Anthropic credential + preset provider catalog API.
+
+Route prefix: /api/v1/agent
+
+Agent Anthropic 凭证 + 预设供应商目录 API。
 
 路由前缀: /api/v1/agent
 """
@@ -93,6 +97,8 @@ class TierStatusResponse(BaseModel):
     model_name: str | None
     entry_display_name: str | None
     manually_bound: bool
+    # The tier stores a binding but the bound entry is no longer in the catalog: the mapping has fallen back to the
+    # model name, and the UI must still be able to remove this binding.
     # 档位存着绑定、但所绑条目已不在目录里：对应关系已回到按模型名，界面仍须能解除这条绑定。
     binding_stale: bool
     priced: bool
@@ -111,6 +117,8 @@ class CredentialResponse(BaseModel):
     opus_model: str | None
     subagent_model: str | None
     multiplier: float
+    # Model names and pricing status actually used by the five tiers main model, haiku, sonnet, opus and subagent, in
+    # fixed order.
     # 主模型、haiku、sonnet、opus、子智能体五个档位实际调用的模型名与定价状态，顺序固定。
     tiers: list[TierStatusResponse]
     is_active: bool
@@ -125,6 +133,8 @@ class CreateCredentialRequest(BaseModel):
     preset_id: str
     display_name: str | None = None
     base_url: str | None = None
+    # Mutually exclusive with from_custom_provider_id: when a provider id is given, the server copies the key from
+    # that provider
     # 与 from_custom_provider_id 二选一：给出供应商 id 时密钥由服务端从该供应商复制
     api_key: str | None = None
     from_custom_provider_id: int | None = None
@@ -133,11 +143,13 @@ class CreateCredentialRequest(BaseModel):
     sonnet_model: str | None = None
     opus_model: str | None = None
     subagent_model: str | None = None
+    # Agent credential multiplier (docs/adr/0100): subscription gateways can set 0, and costs are recorded as 0.
     # Agent 凭证倍率（docs/adr/0100）：订阅制网关可填 0，费用记 0。
     multiplier: float = Field(default=1.0, ge=0, allow_inf_nan=False)
+    # Tier -> entry binding ("model maker/official model name", docs/adr/0105); tiers with a null value are ignored.
     # 档位 → 条目绑定（「模型厂商/官方模型名」，docs/adr/0105）；值为 null 的档位忽略。
     tier_bindings: dict[Tier, str | None] | None = None
-    activate: bool | None = None  # None = 自动 (无 active 时自动 set active)
+    activate: bool | None = None  # None = automatic (set active automatically when there is none) / None = 自动 (无 active 时自动 set active)
 
 
 class UpdateCredentialRequest(BaseModel):
@@ -150,6 +162,8 @@ class UpdateCredentialRequest(BaseModel):
     opus_model: str | None = None
     subagent_model: str | None = None
     multiplier: float | None = Field(default=None, ge=0, allow_inf_nan=False)
+    # Merge per tier: given tiers are set to that entry, tiers with a null value are unbound, tiers not given stay
+    # unchanged.
     # 按档位合并：给出的档位设为该条目，值为 null 的档位解除绑定，没给出的档位保持不变。
     tier_bindings: dict[Tier, str | None] | None = None
 
@@ -161,7 +175,10 @@ class TierBindingRequest(BaseModel):
 
 
 def _cred_to_response(cred: AgentAnthropicCredential, settings: dict[str, str]) -> CredentialResponse:
-    """``settings`` 是系统设置，凭证上留空的档位以其中的旧值兜底（与注入会话的环境变量一致）。"""
+    """``settings`` are the system settings; tiers left empty on the credential fall back to the old values there
+    (consistent with the environment variables injected into the session).
+
+    ``settings`` 是系统设置，凭证上留空的档位以其中的旧值兜底（与注入会话的环境变量一致）。"""
     preset = get_preset(cred.preset_id) if cred.preset_id != CUSTOM_SENTINEL_ID else None
     return CredentialResponse(
         id=cred.id,
@@ -193,7 +210,12 @@ def _cred_to_response(cred: AgentAnthropicCredential, settings: dict[str, str]) 
 
 
 def _validated_tier_bindings(bindings: dict[Tier, str | None] | None, _t: Translator) -> dict[Tier, str | None]:
-    """写入侧校验：新给出的绑定必须指向目录里现有的文本条目。
+    """Write-side validation: newly given bindings must point to an existing text entry in the catalog.
+
+    Only values submitted this time are validated; stored bindings are not sent back on save (merged per tier), so
+    an entry being delisted does not block unrelated edits.
+
+    写入侧校验：新给出的绑定必须指向目录里现有的文本条目。
 
     只校验这次提交的值；已存的绑定不会随保存回传（按档位合并），所绑条目下架后不会堵住与它无关的编辑。
     """
@@ -207,7 +229,12 @@ def _validated_tier_bindings(bindings: dict[Tier, str | None] | None, _t: Transl
 
 
 def _normalized_base_url(raw: str, _t: Translator) -> str:
-    """入库前归一 + 校验：存储值即 Claude CLI 的调用值。
+    """Normalize + validate before storing: the stored value is the value the Claude CLI calls with.
+
+    The error message is fixed and does not echo the input: the address may contain an api_key the user filled in by
+    mistake.
+
+    入库前归一 + 校验：存储值即 Claude CLI 的调用值。
 
     错误文案固定，不回显输入——地址里可能带着用户误填的 api_key。
     """
@@ -220,7 +247,13 @@ def _normalized_base_url(raw: str, _t: Translator) -> str:
 async def _resolve_key_source(
     body: CreateCredentialRequest, _t: Translator, session: AsyncSession
 ) -> tuple[str, str | None]:
-    """确定新凭证的 (api_key, 待归一的 base_url)。
+    """Determine the new credential's (api_key, base_url to be normalized).
+
+    When from_custom_provider_id is given, the key is taken from that provider, and if the request has no base_url
+    the provider's address is used; otherwise the key is taken from the request body. The two sources cannot both be
+    given.
+
+    确定新凭证的 (api_key, 待归一的 base_url)。
 
     给出 from_custom_provider_id 时密钥取自该供应商，请求未带 base_url 则沿用供应商的地址；
     否则密钥取自请求体。两种来源不可同时给出。
@@ -289,6 +322,7 @@ async def create_credential(
         multiplier=body.multiplier,
         tier_bindings={tier: ref for tier, ref in bindings.items() if ref is not None},
     )
+    # Auto-active policy: activate=True, or (activate=None and there is currently no active one)
     # 自动 active 策略：activate=True，或 (activate=None 且当前无 active)
     should_activate = body.activate is True
     if body.activate is None:
@@ -310,6 +344,10 @@ async def update_credential(
     session: AsyncSession = Depends(get_async_session),
 ) -> CredentialResponse:
     repo = AgentCredentialRepository(session)
+    # exclude_unset keeps None values the client passed explicitly (used to clear optional overrides such as
+    # model/haiku_model).
+    # Required fields (display_name/base_url/api_key/multiplier) still filter out None: passing null to them is
+    # meaningless
     # exclude_unset 保留客户端显式传入的 None（用于清空 model/haiku_model 等可选覆盖项）
     # 必需字段 (display_name/base_url/api_key/multiplier) 仍过滤 None：传 null 给它们没有意义
     fields = body.model_dump(exclude_unset=True)

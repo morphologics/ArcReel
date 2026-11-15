@@ -95,7 +95,10 @@ _SPLIT_CONSENT_HINT = "请用户在宫格面板审阅联合图；用户明确同
 
 
 def _gate_problem(exc: ApiError) -> ToolOutcome[Any]:
-    """宫格闸门的领域异常按默认语言转述给 Agent，问题码沿用异常的 i18n key。"""
+    """Domain exceptions of the grid gate are relayed to the Agent in the default language; the issue code reuses the
+    exception's i18n key.
+
+    宫格闸门的领域异常按默认语言转述给 Agent，问题码沿用异常的 i18n key。"""
     return tool_problem(translate(exc.key, DEFAULT_LOCALE, **exc.params), code=exc.key)
 
 
@@ -116,7 +119,13 @@ def _fail_scenes(
     artifact_paths: Mapping[str, str] | None = None,
     warnings: Sequence[GenerationWarning] = (),
 ) -> None:
-    """一张宫格的失败落到它报告的每个分镜：调用方点的是分镜，不是宫格。
+    """A grid's failure lands on every shot it reports: the caller asked for shots, not grids.
+
+    ``artifact_paths`` are the old storyboard image paths already registered in the script. A failure does not touch
+    old artifacts, but the report must carry their paths and status, otherwise downstream cannot tell "replacement
+    failed, old image still there" from "there was never a reusable artifact".
+
+    一张宫格的失败落到它报告的每个分镜：调用方点的是分镜，不是宫格。
 
     ``artifact_paths`` 是剧本里已登记的旧分镜图路径。失败不动旧产物，但报告要带上它的
     路径与状态，否则下游分不清「替换失败、旧图还在」和「原本就没有可复用产物」。
@@ -142,7 +151,10 @@ def _fail_scenes(
 
 
 def _describe_layouts(layouts: Sequence[GridLayout]) -> str:
-    """把一组的宫格规划渲染为预览文案；单张沿用原格式，多张标注张数。"""
+    """Render a group's grid plan as preview text; a single grid keeps the original format, multiple grids are labeled
+    with the count.
+
+    把一组的宫格规划渲染为预览文案；单张沿用原格式，多张标注张数。"""
     parts = [f"{layout.grid_size} ({layout.rows}×{layout.cols})" for layout in layouts]
     if len(parts) == 1:
         return parts[0]
@@ -173,7 +185,9 @@ def _chunk_line(chunk: GridChunkPlan) -> str:
 
 
 def _render_plan(plan: GridSubmissionPlan) -> str:
-    """``list_only`` 预览：渲染的就是提交会执行的那份规划。"""
+    """``list_only`` preview: what is rendered is exactly the plan a submit would execute.
+
+    ``list_only`` 预览：渲染的就是提交会执行的那份规划。"""
     by_group: dict[int, list[GridChunkPlan]] = {}
     for chunk in plan.chunks:
         by_group.setdefault(chunk.group_index, []).append(chunk)
@@ -210,7 +224,10 @@ class GenerateGridRequest(BaseModel):
 
 @dataclass(frozen=True, slots=True)
 class GridPlanPreview:
-    """``list_only`` 的规划预览：与提交会执行的规划同源，但不是生成结果。"""
+    """Plan preview for ``list_only``: from the same source as the plan a submit would execute, but not a generation
+    result.
+
+    ``list_only`` 的规划预览：与提交会执行的规划同源，但不是生成结果。"""
 
     plan: str
 
@@ -219,7 +236,9 @@ type GridToolValue = GenerationToolValue | GridPlanPreview
 
 
 def grid_structured(value: GridToolValue) -> dict[str, Any]:
-    """预览放在工具名下；其余与生成类工具同形。"""
+    """The preview goes under the tool name; otherwise the same shape as generation tools.
+
+    预览放在工具名下；其余与生成类工具同形。"""
     if isinstance(value, GridPlanPreview):
         return {_OPERATION: value.plan}
     return generation_structured(value)
@@ -234,7 +253,10 @@ def grid_is_error(value: GridToolValue) -> bool:
 
 
 async def _large_grid_allowed(capabilities: ConfigResolver, project: dict[str, Any]) -> bool:
-    """宫格档位门控：按会话能力解析器取项目 T2I 槽的图像分辨率档，与路由、费用估算同一份解析。"""
+    """Grid tier gating: take the image resolution tier of the project's T2I slot via the session capability resolver,
+    the same resolution as the route and cost estimate.
+
+    宫格档位门控：按会话能力解析器取项目 T2I 槽的图像分辨率档，与路由、费用估算同一份解析。"""
     return large_grid_allowed(await resolve_image_resolution(capabilities, project))
 
 
@@ -256,6 +278,9 @@ async def generate_grid(
             )
 
         project, script = await run_sync_transaction(load_inputs)
+        # ``list_only`` passes the gate just like generation: otherwise a project without grids enabled would get a
+        # success response from the preview, and the caller would wrongly think the tool applies to the current
+        # project.
         # ``list_only`` 与生成同样先过闸门：未开宫格的项目靠预览拿到成功响应，调用方会误以为
         # 该工具适用于当前项目。
         try:
@@ -293,7 +318,9 @@ async def generate_grid(
 
 @dataclass(slots=True)
 class _CommittedSubmission:
-    """宫格记录已落地、待入队的一批提交。"""
+    """A batch of submissions whose grid records are persisted and waiting to be enqueued.
+
+    宫格记录已落地、待入队的一批提交。"""
 
     project_path: Path
     builder: GenerationResultBuilder
@@ -309,7 +336,13 @@ class _CommittedSubmission:
 def _commit_submission(
     plan: GridSubmissionPlan, project_name: str, services: Services, caller_source: str
 ) -> _CommittedSubmission | ToolOutcome[GridToolValue]:
-    """同步部分：观测产物时效、整批受阻时直接给结论，否则落地宫格记录并备好入队任务。
+    """Synchronous part: observe artifact freshness and give the conclusion directly when the whole batch is blocked;
+    otherwise persist the grid records and prepare the tasks to enqueue.
+
+    Reading the project directory, hashing and writing grid records are all synchronous file I/O, so the whole thing
+    runs in a worker thread.
+
+    同步部分：观测产物时效、整批受阻时直接给结论，否则落地宫格记录并备好入队任务。
 
     读项目目录、哈希、写宫格记录都是同步文件读写，整体在工作线程里跑。
     """
@@ -416,7 +449,10 @@ def _collect_results(
     failures: Sequence[BatchTaskResult],
     batch_id: str,
 ) -> ToolOutcome[GridToolValue]:
-    """同步部分：按出图后的宫格记录重新判定产物时效，汇总逐分镜结果。"""
+    """Synchronous part: re-judge artifact freshness from the grid records after image generation, and aggregate
+    per-shot results.
+
+    同步部分：按出图后的宫格记录重新判定产物时效，汇总逐分镜结果。"""
 
     episode = plan.episode
     builder = committed.builder
@@ -425,6 +461,9 @@ def _collect_results(
     report_ids_by_grid = committed.report_ids_by_grid
     grid_id_by_result = committed.grid_id_by_result
     reused_grid_ids = committed.reused_grid_ids
+    # The resolver plans the target state from the grid records at its first comparison and never re-reads them
+    # afterwards; it was already used above when observing unsplit grids, so this batch's generation results must be
+    # judged by a new resolver planned from the post-generation records
     # resolver 首次比较时按当时的宫格记录规划目标态、此后不再重读；上面观测未切分宫格时已用过它，
     # 本批出图结果须换一个按出图后记录规划的 resolver 判定
     resolver = active_artifact_currency_resolver(committed.project_path, plan.project)
@@ -432,6 +471,8 @@ def _collect_results(
     for result in [*successes, *failures]:
         grid_id = grid_id_by_result[result.resource_id]
         report_ids = report_ids_by_grid[grid_id]
+        # The composite is generated once, so warnings such as reference image cropping belong to the whole grid:
+        # record them for every cell
         # 联合图一次生成，参考图裁剪之类的 warning 属于整张宫格：逐格照录
         grid_warnings = generation_warnings_from_result(result.result)
         if result.status != "succeeded":
@@ -490,6 +531,8 @@ async def _submit(
     caller: CallerContext,
     services: Services,
 ) -> ToolOutcome[GridToolValue]:
+    # Persisting grid records writes official files: a thread transaction already started settles first, then the
+    # cancellation is honored
     # 落地宫格记录要写正式文件：已开始的线程事务先结算再响应取消
     committed = await run_sync_transaction(_commit_submission, plan, scope.project_name, services, caller.source)
     if isinstance(committed, ToolOutcome):
@@ -497,6 +540,8 @@ async def _submit(
 
     submitted = await submit_media_generation(
         scope=scope,
+        # Leave the submit critical section as soon as enqueueing completes: while the composite is generating, other
+        # submissions for the same project proceed as usual
         # 入队完成即离开提交临界区：等联合图生成期间，同一项目的其他提交照常进行
         caller=caller.waiting_with(on_enqueued=plan.section.end),
         services=services,
@@ -520,7 +565,10 @@ def _report_in_flight_in_refused_batch(
     episode: int,
     resolver: ArtifactCurrencyResolver,
 ) -> None:
-    """整批受阻时，已在生成中的宫格照常跑完：逐分镜给「等在途任务」的结论，不让它们从结果里消失。"""
+    """When the whole batch is blocked, grids already generating still run to completion: give each shot the conclusion
+    "wait for the in-flight task", so they do not vanish from the result.
+
+    整批受阻时，已在生成中的宫格照常跑完：逐分镜给「等在途任务」的结论，不让它们从结果里消失。"""
 
     key = grid_artifact_key(episode, grid.id)
     path = grid_artifact_path(grid.id)
@@ -559,6 +607,8 @@ async def split_grids(
             return GridManager(services.projects.get_project_path(scope.project_name))
 
         gm = await asyncio.to_thread(open_grids)
+        # Split one by one in order: each is committed inside the project metadata lock, so concurrency would not be
+        # faster
         # 逐张顺序切分：每张都在项目元数据锁内提交，并发不会更快
         results = [
             await _split_one(
@@ -596,6 +646,8 @@ async def _split_one(
         try:
             grid = await asyncio.to_thread(gm.get, grid_id)
         except Exception as exc:
+            # An invalid ID is treated as nonexistent; when a record cannot be read (corrupt JSON, missing fields,
+            # etc.) only this grid is recorded as failed, and the other grids in the batch are split as usual
             # 非法 ID 视同不存在；JSON 损坏、缺字段等记录读不出来时只记这一张失败，同批其余宫格照常切分
             if isinstance(exc, ValueError) and not isinstance(exc, json.JSONDecodeError):
                 grid = None
@@ -616,6 +668,8 @@ async def _split_one(
         except GridImageNotReadyError:
             return {"grid_id": grid_id, "status": "not_ready", "detail": "尚无可用的联合图，先生成或在面板上传"}
         except Exception:
+            # A single failure does not swallow results already split in the same batch: each grid's split rolls back
+            # atomically as a whole, reported per grid
             # 单张失败不吞掉同批已切分的结果：切分整张原子回滚，逐张报告
             logger.exception("宫格切分落格失败: grid_id=%s", grid_id)
             return {

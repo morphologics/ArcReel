@@ -118,7 +118,14 @@ def video_target_states(
 
 
 def artifact_state_tickets(states: Sequence[GenerationTargetState]) -> list[UnitAdmissionTicket]:
-    """把产物状态不可读的目标折成准入票，让它们参加同一场全有或全无的判定。
+    """Fold targets whose artifact state is unreadable into admission tickets so they take part in the same
+    all-or-nothing decision.
+
+    This state can neither be judged reusable nor treated as missing to be regenerated. If it were only recorded in
+    the result contract and not brought into admission, the healthy targets of the same batch would still enqueue
+    and bill -- exactly the partial batch this gate is meant to prevent.
+
+    把产物状态不可读的目标折成准入票，让它们参加同一场全有或全无的判定。
 
     这一态既不能判为可复用、也不能当作缺失去重生。只记进结果契约而不带进准入的话，
     同批健康的目标仍会入队并计费——那正是这道门要防的部分成批。
@@ -128,7 +135,14 @@ def artifact_state_tickets(states: Sequence[GenerationTargetState]) -> list[Unit
 
 
 def storyboard_item_id(item: dict[str, Any], id_field: str) -> object:
-    """条目自报的 id，按各入口共用的回退顺序取。
+    """The id an entry reports for itself, taken in the fallback order shared by all entry points.
+
+    Only fall back to the alias when the canonical field is missing or an empty string: falling back also when the
+    canonical field holds a non-string like ``0`` / ``[]`` would let the alias sneak it past screening; the entry
+    would be enqueued and billed under the alias, while execution locates only by the canonical field, and nobody
+    could produce it.
+
+    条目自报的 id，按各入口共用的回退顺序取。
 
     只在规范字段缺失或写成空串时才退到别名：规范字段写成 ``0`` / ``[]`` 这类非字符串时也退，
     等于让别名替它蒙混过筛查，条目按别名入队计费，而执行期只按规范字段定位，谁也做不出来。
@@ -141,7 +155,14 @@ def storyboard_item_id(item: dict[str, Any], id_field: str) -> object:
 
 
 def diagnostic_unit_id(base: str, taken: Collection[str]) -> str:
-    """成不了目标的条目按位置记名，并保证这个名字不与剧本里的合法 id 相同。
+    """Entries that cannot become targets are named by position, and the name is guaranteed not to equal any valid id
+    in the script.
+
+    The result contract records each unit_id once: if a diagnostic name collided with a real id, two different
+    entries would be treated as one and the second write would fail loud, giving the user a generic error instead of
+    per-target verdicts.
+
+    成不了目标的条目按位置记名，并保证这个名字不与剧本里的合法 id 相同。
 
     结果契约按 unit_id 记名一次：诊断名与某个真实 id 撞上时，两条不同的条目会被当作
     同一个，写第二遍时 fail loud，用户拿到的是一句通用报错而不是逐目标的结论。
@@ -158,7 +179,24 @@ def screen_script_entries(
     *,
     requested_ids: Collection[str] | None,
 ) -> tuple[list[dict[str, Any]], list[UnitAdmissionTicket]]:
-    """把 video_units 分成「能当目标的」与「成不了目标的」两份，后者按位置记名。
+    """Split video_units into "usable as targets" and "cannot become targets", naming the latter by position.
+
+    Non-object entries, unit_id that is not a string, empty unit_id, and the same unit_id appearing more than once
+    all make every later id-indexed step fail: when an entry is silently filtered out, the healthy units of the same
+    batch enqueue and bill alone; when it hits a set lookup, the per-target refusal contract collapses into a
+    generic error. Numeric, boolean and object ids can also slip through ``str()`` into the queue and only fail at
+    execution when comparing by the original value cannot find the unit, by which time sibling entries may already
+    be running and billed.
+
+    Generate-missing treats the whole script as the target set, so every dirty entry anywhere in the script takes
+    part in the decision; for named generation the target set is given by the caller, and only dirt on the named ids
+    (copies of the same id) takes part, otherwise dirty data elsewhere would veto a precisely named redo.
+
+    When the container itself is not an array it is also named here: iterating it would turn the request into a 500,
+    and a falsy value (such as ``false``) would be reported as an empty batch that passed. Names use the bracketed
+    position notation, which does not share a namespace with valid ids.
+
+    把 video_units 分成「能当目标的」与「成不了目标的」两份，后者按位置记名。
 
     非对象条目、unit_id 不是字符串、unit_id 为空、以及同一个 unit_id 出现多次，都会让后面
     按 id 索引的每一步失手：条目被静默滤掉时同批健康的 unit 独自入队计费，撞上集合查询时又
@@ -193,6 +231,8 @@ def screen_script_entries(
     }
     named = set(requested_ids) if requested_ids is not None else None
     if named is not None:
+        # Named IDs also occupy the naming space: when the caller names something not in the script, upstream also
+        # records a "does not exist" entry for it, and a diagnostic name equal to it would merge the two into one.
         # 点名的 ID 也占着记名空间：调用方点了一个剧本里没有的名字时，上游还会为它记一条
         # 「不存在」，诊断名与它同名同样会把两条并成一条。
         taken |= named
@@ -240,12 +280,20 @@ def screen_script_entries(
 
 
 def storyboard_item_aliases(item: dict[str, Any], id_field: str) -> set[str]:
-    """点名时能寻址到这个条目的全部写法。
+    """All spellings that can address this entry when naming.
+
+    Each entry point accepts both the canonical ``id_field`` and the ``scene_id`` alias, which can differ in the
+    script; naming by either must point to the same entry, otherwise the same name would point to different entries
+    at different entry points.
+
+    点名时能寻址到这个条目的全部写法。
 
     各入口既认规范 ``id_field`` 也认 ``scene_id`` 别名，两者在剧本里可以不同；按哪一个
     点名都要指到同一个条目，否则同一个名字在不同入口指向不同条目。
     """
 
+    # Filter by type before building the set: list / dict aliases in a dirty script are unhashable, building the set
+    # directly would raise TypeError, and the per-target refusal contract would collapse into a generic error.
     # 先按类型过滤再进集合：脏剧本里的 list / dict 别名不可哈希，直接建集合会抛 TypeError，
     # 逐目标的拒绝契约就塌成一句通用报错。
     aliases = (item.get(id_field), item.get("scene_id"))
@@ -258,7 +306,24 @@ def screen_storyboard_items(
     *,
     requested_ids: Collection[str] | None,
 ) -> tuple[list[dict[str, Any]], list[UnitAdmissionTicket]]:
-    """把剧本条目分成「能当目标的」与「成不了目标的」两份，后者按位置记名。
+    """Split script entries into "usable as targets" and "cannot become targets", naming the latter by position.
+
+    Non-object entries, id that is not a string, empty id, and the same id appearing more than once all make every
+    later id-indexed step fail: when an entry is silently filtered out, the healthy targets of the same batch
+    enqueue and bill alone; when it hits a set lookup, the per-target refusal contract collapses into a generic
+    error. Numeric and boolean ids that slip through ``str()`` into the queue likewise cannot find the target at
+    execution when comparing by the original value. Every entry point passes through this screen before reading ids,
+    so all these failures become a named admission ticket.
+
+    Generate-missing treats the whole script as the target set, so every dirty entry anywhere in the script takes
+    part in the decision; for named generation the target set is given by the caller, and only dirt on the named ids
+    (copies of the same id) takes part, otherwise dirty data elsewhere would veto a precisely named redo.
+
+    Names use the bracketed position notation, which does not share a namespace with valid ids: a name collision
+    would make the result contract treat two different entries as one, the second write would fail loud, and the
+    user would again get a generic error.
+
+    把剧本条目分成「能当目标的」与「成不了目标的」两份，后者按位置记名。
 
     非对象条目、id 不是字符串、id 为空、以及同一个 id 出现多次，都会让后面按 id 索引的每一步
     失手：条目被静默滤掉时同批健康的目标独自入队计费，撞上集合查询时又把逐目标的拒绝契约打成
@@ -284,6 +349,8 @@ def screen_storyboard_items(
     }
     named = set(requested_ids) if requested_ids is not None else None
     if named is not None:
+        # Named IDs also occupy the naming space: when something not in the script is named, upstream also records a
+        # "does not exist" entry, and a diagnostic name equal to it would merge the two into one.
         # 点名的 ID 也占着记名空间：点到剧本里没有的名字时上游还会记一条「不存在」，
         # 诊断名与它同名会把两条并成一条。
         taken |= named
@@ -312,6 +379,8 @@ def screen_storyboard_items(
                     )
                 )
             elif isinstance(item, dict):
+                # The name points exactly at this dirty entry: give the verdict under the named spelling, otherwise
+                # the caller only gets "does not exist" while the script clearly has an entry by that name.
                 # 点名点中的正好是这个脏条目：按点名的写法给结论，否则调用方只收到一句
                 # 「不存在」，而这个名字在剧本里明明有条目。
                 for name in sorted(storyboard_item_aliases(item, id_field) & named):
@@ -345,6 +414,11 @@ def screen_storyboard_items(
     if named is None:
         return clean, tickets
 
+    # Naming may use the canonical ID or the ``scene_id`` alias, which can differ in the script; execution locates the
+    # target by canonical ID. So when counting how many entries a name points to, count "entries it addresses
+    # directly" together with "siblings sharing their canonical ID": counting only by name misses entries with a
+    # different alias but the same canonical ID, and each entry point, picking the first or last match by its own
+    # lookup, would act on different entries for the same naming.
     # 点名可以用规范 ID，也可以用 ``scene_id`` 别名，两者在剧本里可以不同；执行期按规范 ID
     # 定位目标。因此一个名字指到几个条目，要把「直接被它寻址的条目」连同「与之共用规范 ID
     # 的兄弟」一起数：只按名字数会漏掉别名不同、规范 ID 相同的那种，各入口按各自的查法分别
@@ -402,11 +476,18 @@ def resolve_reference_batch_targets(
 
 
 def reference_unit_task_spec(unit: object, script_file: str) -> TaskSpec:
-    """单 unit 的 TaskSpec 构造，供整批准入判定、批量入队与时长预检共用同一份结构校验
+    """TaskSpec construction for a single unit, so whole-batch admission, batch enqueue and duration precheck share the
+    same structural validation (see ADR-0001) -- ``TaskSpec.from_request`` is the single source of truth for "can it
+    be enqueued", and the several checks must not each keep their own copy and diverge (e.g. precheck allowing an
+    empty-prompt unit that enqueue would reject).
+
+    单 unit 的 TaskSpec 构造，供整批准入判定、批量入队与时长预检共用同一份结构校验
     （见 ADR-0001）——``TaskSpec.from_request`` 是「是否可入队」的唯一真相源，几处判断
     不能各自维护一份、由此产生分歧（如预检放行了入队会拒绝的空提示词 unit）。
     """
 
+    # Normalize with .get: bad data missing unit_id (the Agent can write script JSON raw) is rejected by from_request
+    # as an empty resource_id, instead of raising KeyError here and aborting the whole batch.
     # 用 .get 归一化：缺失 unit_id 的坏数据（Agent 可裸写 script JSON）会被 from_request
     # 当作空 resource_id 拒绝，而不是在此抛 KeyError 中断整批。
     if not isinstance(unit, dict):
@@ -416,6 +497,10 @@ def reference_unit_task_spec(unit: object, script_file: str) -> TaskSpec:
         require_script_unit_admitted("video_units", unit)
     text = unit.get("text")
     if not isinstance(text, str):
+        # Container validation sits at this one enqueue validation point: dirty values (dicts, numbers from imports /
+        # raw Agent script writes) would, if not caught, raise TypeError downstream when assembling the prompt,
+        # turning the whole batch into a 500 instead of letting this unit enter the admission verdict with its own
+        # problem code.
         # 容器校验落在入队校验这一处：脏值（导入 / Agent 裸写 script 产生的 dict、数字）
         # 不拦就会在下游拼接提示词时抛出 TypeError，把整批打成 500，而不是让这个 unit
         # 带着自己的问题码进入准入结论。
@@ -466,7 +551,10 @@ def generation_action_for(raw: object) -> GenerationAction:
 
 
 def _facts_failure_problem(failure: VideoRequestFactsFailure, unit_id: str) -> GenerationProblem:
-    """视频请求事实失败折成该目标的阻断问题：问题码、参数与修复指引与投影侧同一出口。"""
+    """Fold a video request facts failure into a blocking problem for that target: problem code, parameters and fix
+    guidance go through the same exit as the projection side.
+
+    视频请求事实失败折成该目标的阻断问题：问题码、参数与修复指引与投影侧同一出口。"""
 
     return _generation_problem(ProjectionProblem.from_request_facts_failure(failure), unit_id=unit_id)
 
@@ -603,10 +691,16 @@ async def admit_reference_video_batch(
 
     tickets: list[UnitAdmissionTicket] = list(extra_tickets)
     seen_ids: set[str] = set()
+    # All units in the batch share one availability checker, judged on the same manifest snapshot; built only for the
+    # first unit that needs projection, and retried on the next unit if building fails.
     # 整批单元共用一份可用性判定，在同一份清单快照上判定；首个需要投影的单元才构造，构造失败下个单元重试。
     shared_assets = functools.cache(lambda: CurrentReferenceAssets(project_path, project))
     for index, unit in enumerate(units):
         unit_id = str(unit.get("unit_id") or "")
+        # Dirty data (missing unit_id, the same id appearing more than once) must not be quietly dropped from the
+        # target set: the remaining healthy units would enqueue and bill alone, exactly the partial batch this gate
+        # prevents. Missing ids are reported under a diagnostic id, duplicates have their copies refused, and both
+        # stop the whole batch here for the user to fix the script.
         # 脏数据（缺 unit_id、同一个 id 出现多次）不能被悄悄丢出目标集合：剩下的健康 unit
         # 会独自入队并计费，正是这道门要防的部分成批。缺 id 的按诊断 id 记名报告，重复的
         # 拒收副本，两者都让整批停在这里由用户去修剧本。
@@ -669,6 +763,9 @@ async def admit_reference_video_batch(
             )
             continue
         except ValueError as exc:
+            # The projection reads values on the script (such as duration_seconds): a dirty value thrown here would
+            # collapse the whole request into a generic error, and the verdicts for the other units would be lost.
+            # Report it honestly as a per-unit enqueueability problem.
             # 投影读的是剧本上的值（如 duration_seconds）：脏值在这里抛出去会让整个请求塌成
             # 一句通用错误，其余 unit 的结论无从得知。按逐 unit 的可入队性问题如实报告。
             tickets.append(
@@ -757,6 +854,8 @@ async def admit_storyboard_video_batch(
             continue
         reference_problems = reference_admission_problems(admit_storyboard_item(catalog, item), unit_id=resource_id)
         if isinstance(video_request_facts, VideoRequestFactsFailure):
+            # Facts failures and reference gaps are both known problems of this target, reported all at once: after
+            # fixing the model config the user should not then run into a reference gap.
             # 事实失败与引用缺口同属这一目标的已知问题，一次报全：用户改完模型配置不该再撞见引用缺口。
             tickets.append(
                 UnitAdmissionTicket(
@@ -804,13 +903,22 @@ def storyboard_video_prompt(
     if not isinstance(prompt, (dict, str)):
         item_id = item.get("segment_id") or item.get("scene_id")
         raise TypeError(f"分镜 video_prompt 类型无效（期望 str 或 dict）: {item_id}")
+    # Shares render_storyboard_video_prompt with the execution path: the enqueue snapshot and the actually sent text
+    # have the same structure, and the negative constraint tail is appended uniformly by that exit (idempotent at
+    # execution time on strings that already carry it).
     # 与执行路径共用 render_storyboard_video_prompt：入队快照与实发文本同构，反向约束尾词
     # 由该出口统一追加（执行期对已带尾词的字符串幂等）。
     return render_storyboard_video_prompt(prompt, item, content_mode=content_mode, voice_characters=voice_characters)
 
 
 async def resolve_voice_context(project: dict[str, Any], content_mode: str) -> dict[str, Any] | None:
-    """供 Voice_Profiles 注入的角色资产（``None`` 表示不注入）。
+    """Character assets for Voice_Profiles injection (``None`` means no injection).
+
+    Non-drama is not injected; drama is excluded by the silent criterion (class C models produce no audio, or audio
+    is turned off for this episode -- both paths use the same convention). Dialogue lines are unaffected and sent as
+    usual.
+
+    供 Voice_Profiles 注入的角色资产（``None`` 表示不注入）。
 
     非 drama 不注入；drama 按无声判据排除（C 类模型不产音、或本集关闭了音频，两条路径同口径）。
     台词不受影响、照常下发。
@@ -825,7 +933,23 @@ async def resolve_voice_context(project: dict[str, Any], content_mode: str) -> d
 async def audio_switch_conflict(
     project: dict[str, Any], *, request_facts: VideoRequestFacts | VideoRequestFactsFailure | None = None
 ) -> GenerationProblem | None:
-    """分镜图生视频的音频闸门（``assert_audio_switch_supported``，与 WebUI 提交入口同一判据）。
+    """Audio gate for storyboard-to-video (``assert_audio_switch_supported``, the same criterion as the WebUI submit
+    entry).
+
+    Models whose final output always has sound cannot take a request with audio off; letting it through would only
+    make the silent criterion strip the voice constraints from the whole batch. The gate is independent of content
+    mode; narration/ad are checked too.
+
+    The call point is fixed after "there really are targets to request": when the whole episode is done, or all
+    entries are filtered out by :func:`build_storyboard_video_specs`, no request would be made anyway, and refusing
+    then would turn a normal no-op into an error. Reference-to-video gets the same audio capability decision from
+    the shared request projection.
+
+    Returns the conflict problem, with the conflicting provider and model in its parameters so the UI can render
+    display names; returns ``None`` when there is no conflict. The caller folds it into per-target admission
+    verdicts and reports it with the other gaps all at once before creating tasks.
+
+    分镜图生视频的音频闸门（``assert_audio_switch_supported``，与 WebUI 提交入口同一判据）。
 
     成片恒有声的模型收不到关闭音频的请求，放行只会让无声判据把音色约束整批裁掉。闸门与创作类型
     无关，narration/ad 同样受检。
@@ -869,6 +993,22 @@ def build_storyboard_video_specs(
 ) -> tuple[list[TaskSpec], list[UnitAdmissionTicket]]:
     """Build the Storyboard-mode specs, refusing each unit that cannot be requested.
 
+    A unit whose speech, inputs or prompt are unusable is refused with its own code and next action instead of being
+    dropped into a log line, so one bad unit never silently shrinks the batch — and, because the refusal is a ticket
+    rather than a recorded block, it can hold the whole batch back before any task exists.
+
+    ``skeleton_kind`` takes the script's actual skeleton kind given by the generation mode gate rather than
+    inferring it from the content mode: historical forms within the family (narration data under the ``scenes`` key)
+    would be adapted to the inferred value, and valid old scripts would be judged as parse failures wholesale.
+
+    Speech admission runs here, matching the position that ``reference_unit_task_spec`` takes for
+    reference-to-video: the step that builds the TaskSpec is the single convention for "can this unit be requested";
+    the four storyboard entry points (whole episode / all / named / single) and the read-only workflow plan all go
+    through it, so mixed speech and needs_replan hold back the whole batch before any task is created at every entry
+    point, and the admission verdict previewed by the plan matches the real submission.
+
+    Build the Storyboard-mode specs, refusing each unit that cannot be requested.
+
     A unit whose speech, inputs or prompt are unusable is refused with its own code
     and next action instead of being dropped into a log line, so one bad unit never
     silently shrinks the batch — and, because the refusal is a ticket rather than a
@@ -899,6 +1039,8 @@ def build_storyboard_video_specs(
         try:
             require_script_unit_admitted(skeleton_kind, item)
         except SpeechAdmissionError as exc:
+            # The per-ID contract coexists with the existing speech_admission payload: the former says "this ID was
+            # not done, what to do next", the latter carries admission's own full location info.
             # 逐 ID 契约与既有 speech_admission 载荷并存：前者说「这个 ID 没做成、
             # 下一步做什么」，后者带着准入自己的完整定位信息。
             refused.append(speech_admission_ticket(str(item_id), exc))
@@ -914,6 +1056,8 @@ def build_storyboard_video_specs(
                 resolver=resolver,
             )
         except (OSError, ValueError) as exc:
+            # An unusable storyboard image itself is the most common case; say what to run next instead of just
+            # reporting the path.
             # 分镜图本身不可用是最常见的一种，给出下一步该跑什么，而不是只报路径。
             advice = "，请先运行 generate_storyboards" if isinstance(exc, StoryboardImageUnavailable) else ""
             refused.append(
@@ -939,6 +1083,10 @@ def build_storyboard_video_specs(
             )
             continue
 
+        # duration is a capability dimension, left for the execution layer to validate after provider resolution (see
+        # ADR-0001); pass the caller's explicitly specified value through as is, without int() truncating
+        # normalization on the enqueue side (otherwise an invalid value the execution layer should reject would be
+        # silently corrected). The default is closed out by the execution layer per caps.
         # duration 是能力维度，留待执行层在 provider 解析后校验（见 ADR-0001）；
         # 原样透传调用方显式指定的值，不在入队侧做 int() 截断式归一化（否则会把
         # 本应被执行层拒绝的非法值静默修正）。缺省由执行层按 caps 收口默认。
@@ -947,6 +1095,9 @@ def build_storyboard_video_specs(
         if duration is not None:
             extra_payload["duration_seconds"] = duration
 
+        # Building the TaskSpec is itself an enqueueability check (empty prompt, etc.; ``TaskSpecValidationError`` is
+        # a ValueError subclass): if not caught, one bad entry would turn the whole batch into a generic error, and
+        # the verdicts for the other entries would be lost.
         # 构造 TaskSpec 本身也是可入队性判定（空提示词等，``TaskSpecValidationError``
         # 是 ValueError 子类）：不接住就会让一个坏条目把整批打成一句通用报错，
         # 其余条目的结论无从得知。
@@ -976,7 +1127,10 @@ def build_storyboard_video_specs(
 async def storyboard_video_request_facts(
     project: dict[str, Any], config_resolver: ConfigResolver | None = None
 ) -> VideoRequestFacts | VideoRequestFactsFailure:
-    """分镜图生视频按项目当前配置的视频请求事实：准入与报价读同一份。"""
+    """Video request facts of storyboard-to-video per the project's current config: admission and quoting read the same
+    copy.
+
+    分镜图生视频按项目当前配置的视频请求事实：准入与报价读同一份。"""
 
     return await evaluate_video_request_facts(
         project,
@@ -1004,6 +1158,16 @@ async def admit_storyboard_video_request(
     video_request_facts: VideoRequestFacts | VideoRequestFactsFailure | None = None,
 ) -> BatchAdmission:
     """Admit one Storyboard-mode request from the specs it would actually enqueue.
+
+    The target set is taken from the specs about to be enqueued; refused units are not in it.
+    ``video_request_facts`` is passed in by callers that already evaluated it (batch preview also quotes with the
+    same facts), and evaluated here by default.
+
+    Audio switch conflicts are a known config gap of the request itself and are folded here into the same batch of
+    per-target verdicts as the other gaps: returning early would report only this one, and the user would only hit
+    the next known gap after fixing the config and retrying.
+
+    Admit one Storyboard-mode request from the specs it would actually enqueue.
 
     目标集取自即将入队的 spec，被拒的单元不在其中。``video_request_facts`` 由已求值过的调用方
     传入（批量预览还要用同一份事实报价），缺省时在此求值。
@@ -1038,6 +1202,9 @@ async def admit_storyboard_video_request(
     )
     if conflict is None:
         return admission
+    # Audio switch conflicts and the projection side's gaps go into the same batch of tickets: returning early would
+    # report only this one, and the user would only hit the next known gap after fixing the config and retrying --
+    # exactly the one-at-a-time probing this gate is meant to spare.
     # 音频开关冲突与投影侧的缺口写进同一批票：短路返回只会报出这一条，用户改完配置
     # 重试才撞见下一个已知缺口，正是这道门要免掉的逐条试探。
     target_ids = {spec.resource_id for spec in specs}

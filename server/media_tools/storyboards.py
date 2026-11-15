@@ -106,12 +106,19 @@ async def generate_storyboards(
             try:
                 project_data = services.projects.load_project(scope.project_name)
             except FileNotFoundError:
+                # When project.json is missing, degrading to an empty dict is allowed (style uses defaults); other
+                # exceptions such as corrupted JSON / permission errors should surface through the outer tool_error,
+                # otherwise we would silently continue enqueueing with an empty style and lose the config.
                 # project.json 缺失时允许降级到空 dict（style 走默认值）；
                 # JSON 损坏 / 权限错误等其他异常应该让外层 tool_error 暴露出来，
                 # 否则会用空 style 静默继续入队，丢掉了配置。
                 project_data = {}
 
             if project_data:
+                # Mismatched scripts are rejected here: the array storyboard mode should read is not in the script,
+                # and continuing would end in a fake success with an empty result, burying the cause. When
+                # project.json is missing there is no generation mode to go by, so the degraded pass-through above
+                # applies.
                 # 失配剧本在此被拒：按分镜图生视频该读的数组不在剧本里，继续走下去
                 # 会落进空结果的假成功，把成因埋掉。project.json 缺失时无生成模式可依，
                 # 沿用上面的降级放行。
@@ -138,6 +145,8 @@ async def generate_storyboards(
             )
             return project_dir, resolver, plan
 
+        # Reading the project and script, building the artifact freshness checker and judging freshness by file
+        # content are all synchronous file I/O and hashing
         # 读项目与剧本、建产物时效判定器、按文件内容判定时效都是同步文件读写与哈希
         project_dir, resolver, plan = await run_sync_transaction(plan_batch)
         by_id = plan.states
@@ -157,6 +166,8 @@ async def generate_storyboards(
             return generation_batch_submission_outcome(submitted.batch)
         if specs:
             recorder = _FailureRecorder(project_dir / "storyboards")
+            # narration -> segment_id / drama -> scene_id: ``id_field`` is the canonical field name in the script, and
+            # ``"segment"`` / ``"scene"`` are the corresponding resource types.
             # narration → segment_id / drama → scene_id：``id_field`` 是脚本里
             # 的规范字段名，``"segment"`` / ``"scene"`` 是对应的资源类型。
             resource_type = "segment" if plan.id_field == "segment_id" else "scene"

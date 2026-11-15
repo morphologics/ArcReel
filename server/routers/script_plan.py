@@ -1,4 +1,12 @@
-"""AI 规划脚本的 Web 入口。
+"""Web entry point for AI script planning.
+
+"AI script planning" calls the same service command as the Agent's ``generate_script_plan``: admission (the episode
+has an episode source), choosing the planning variant by project mode, and writing the draft to disk all happen in
+the service; the route only maps the result to HTTP. It returns the generation batch right after submission, task
+progress is shown through task events, and the resulting script plan goes into content review. Instructions are
+saved per episode and prefilled on regeneration.
+
+AI 规划脚本的 Web 入口。
 
 「AI 规划脚本」与 Agent 的 ``generate_script_plan`` 调用同一个服务命令：准入（本集有集原文）、按项目
 模式选择规划变体与草稿落盘都在服务内，路由只负责把结果映射成 HTTP。提交后立即返回生成批次，

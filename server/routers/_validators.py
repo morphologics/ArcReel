@@ -1,4 +1,6 @@
-"""共享校验函数，供多个 router 复用。"""
+"""Shared validation functions, reused by several routers.
+
+共享校验函数，供多个 router 复用。"""
 
 from __future__ import annotations
 
@@ -13,7 +15,13 @@ from lib.infra.api_errors import BadRequestError
 
 
 def split_video_backend_query(video_backend: str) -> tuple[str, str]:
-    """把能力查询的 ``video_backend`` 查询参数拆成 ``(provider_id, model_id)``。
+    """Split the ``video_backend`` query parameter of a capability lookup into ``(provider_id, model_id)``.
+
+    A bare provider (no "/") is completed with its default video model in the model catalog, the same rule as
+    completing a stored bare provider in project.json (see ``_parse_project_provider``); raises ``BadRequestError``
+    (``video_backend_malformed``) when it cannot be split into two parts.
+
+    把能力查询的 ``video_backend`` 查询参数拆成 ``(provider_id, model_id)``。
 
     裸 provider（无 "/"）按其在模型目录中的默认视频 model 补全，与 project.json 存量裸 provider
     覆盖同口径（见 ``_parse_project_provider``）；拆不出两段时抛 ``BadRequestError``
@@ -28,7 +36,10 @@ def split_video_backend_query(video_backend: str) -> tuple[str, str]:
 
 
 def reject_retired_query_params(request: Request, *names: str) -> None:
-    """已删除的查询参数按未知字段拒收（422），与请求体 ``extra="forbid"`` 的拒收同形。"""
+    """Removed query parameters are rejected as unknown fields (422), the same shape as rejection by ``extra="forbid"``
+    on the request body.
+
+    已删除的查询参数按未知字段拒收（422），与请求体 ``extra="forbid"`` 的拒收同形。"""
 
     errors = [
         {
@@ -47,7 +58,19 @@ def reject_retired_query_params(request: Request, *names: str) -> None:
 async def require_video_bucket_capability(
     project: dict, generation_type: VideoGenerationType, payload: dict | None = None
 ) -> None:
-    """视频生成入口预检：按任务类型桶解析全局 + 项目配置并过解析闸（``docs/adr/0054``）。
+    """Pre-check for video generation entry points: resolve the global + project config by task type bucket and pass
+    the resolution gate (``docs/adr/0054``).
+
+    When the resolved model lacks the capability the bucket needs, or the config references something no longer
+    available (model deleted / capability changed / provider deleted), raises ``BadRequestError`` (localized to 400
+    by the app-level handler), so the user sees the repair guidance at the submit entry point instead of an async
+    failure in the task panel. A referenced model not in the provider's list (``ModelNotInCatalogError``) is in the
+    same category and is raised as is, with its app-level handler returning a 400 asking to reselect the model. At
+    execution time the worker still checks independently through the same resolution gate, so a stale pre-check does
+    not let execution through. Other resolution failures (such as no provider configured) keep the existing behavior
+    and are left for the worker to surface in the task panel.
+
+    视频生成入口预检：按任务类型桶解析全局 + 项目配置并过解析闸（``docs/adr/0054``）。
 
     解析出的模型缺该桶所需能力、或配置引用已不可用（模型被删 / 能力被改 / 供应商被删）时抛
     ``BadRequestError``（app 级 handler 本地化为 400），让用户在提交入口即看到修复指引，而不是
@@ -67,13 +90,31 @@ async def require_video_bucket_capability(
     except ModelNotInCatalogError:
         raise
     except ValueError:
+        # Other resolution failures such as no provider configured: let it be enqueued and the worker surfaces it in
+        # the task panel (consistent with the existing behavior of the image / video generation entry points;
+        # non-capability failures are not upgraded to submit-time rejections)
         # 未配置任何供应商等其余解析失败：放行入队，由 worker 在任务面板暴露（与图片 / 视频
         # 生成入口的既有行为一致，不把非能力类失败升级为提交期拒绝）
         return
 
 
 async def require_audio_switch_supported(project: dict, generation_type: VideoGenerationType) -> None:
-    """视频生成入口预检：成片恒有声的模型不接受「关闭音频」的配置。
+    """Pre-check for video generation entry points: a model whose final cut always has sound does not accept a "turn
+    off audio" config.
+
+    Such a model has no audio track switch to send on this execution path (audio track shape ``always_on``), so the
+    turn-off intent cannot reach the provider, yet it would make the orchestration layer drop all voice constraints
+    along the silent path -- the user would get a final cut with sound that lost its voice constraints. Rejecting
+    explicitly at the submit entry point and explaining the repair path is more useful than letting the request run
+    with an intent that cannot be fulfilled.
+
+    The settings UI already disables the switch by the same criterion; this covers projects whose existing config
+    already stores "off". The criterion comes from
+    :func:`server.services.tasks.video_caps.resolve_audio_switch_conflict`, the same source as the Agent enqueue
+    path; resolution failures are always let through (same rule as :func:`require_video_bucket_capability`), not
+    upgrading config resolution problems to submit-time rejections.
+
+    视频生成入口预检：成片恒有声的模型不接受「关闭音频」的配置。
 
     这类模型在该执行路径上没有音轨开关可下发（音轨形态 ``always_on``），关闭意图无法抵达供应商，
     却会让编排层按无声路径裁掉全部音色约束——用户拿到的是失去音色约束的有声成片。提交入口
@@ -93,6 +134,9 @@ async def require_audio_switch_supported(project: dict, generation_type: VideoGe
     raise BadRequestError("video_audio_switch_not_supported", provider=provider_id, model=model_id)
 
 
+# backend field name -> expected media_type, driving the tier/model capability match check in validate_backend_value.
+# Field names not registered skip this check (a new field forgotten in the registration is let through silently,
+# rather than misreported).
 # backend 字段名 → 期望 media_type，驱动 validate_backend_value 的档位/模型能力匹配校验。
 # 未登记的字段名视为不做该项校验（新增字段忘记登记时静默放行，而非误报）。
 _FIELD_MEDIA_TYPES: dict[str, str] = {
@@ -116,7 +160,23 @@ _FIELD_MEDIA_TYPES: dict[str, str] = {
 
 
 def validate_backend_value(value: str, field_name: str) -> None:
-    """校验 ``provider/model`` 格式的 backend 字段值。
+    """Validate a backend field value in ``provider/model`` format.
+
+    Only canonical provider ids are accepted (keys of ``PROVIDER_REGISTRY`` or the ``custom-`` prefix). Legacy
+    provider names (``gemini``/``aistudio``/``vertex``/``seedance``) are always rejected -- they are historical data
+    to be cleared, and once a one-time project migration turns them into canonical ids they are no longer accepted
+    (see ``docs/adr/0001``).
+
+    Also checks that the ``media_type`` of a model registered in the model catalog matches what ``field_name``
+    expects (via ``_FIELD_MEDIA_TYPES``) (e.g. a text tier field does not accept a video model); only built-in
+    models registered in the catalog are judged; outside the catalog (custom providers etc.) there are no per-model
+    capability facts, so it is let through for the provider API to gate, without guessing.
+
+    Raises:
+        BadRequestError: invalid format, provider not in the registry, a legacy name, or media_type mismatch. The
+                         field name only goes into diagnostics, not into the user-facing summary.
+
+    校验 ``provider/model`` 格式的 backend 字段值。
 
     只接受规范 provider id（``PROVIDER_REGISTRY`` 的 key 或 ``custom-`` 前缀）。legacy provider 名
     （``gemini``/``aistudio``/``vertex``/``seedance``）一律拒绝——它们是待清除的历史数据，由一次性项目迁移
@@ -132,7 +192,7 @@ def validate_backend_value(value: str, field_name: str) -> None:
     """
     if "/" not in value:
         if value in PROVIDER_REGISTRY:
-            return  # 裸 registry id（无 model），下游按全局默认补全
+            return  # Bare registry id (no model); downstream completes it with the global default / 裸 registry id（无 model），下游按全局默认补全
         raise BadRequestError("invalid_backend_format").with_diagnostic(f"field: {field_name}")
     provider_id, model_id = value.split("/", 1)
     if provider_id not in PROVIDER_REGISTRY and not provider_id.startswith("custom-"):

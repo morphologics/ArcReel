@@ -1,4 +1,12 @@
-"""广告/短片「AI 生成脚本」的 Web 入口。
+"""Web entry point for "AI generate script" in ad/short projects.
+
+Calls the same service command as the Agent's ``generate_episode_script``: admission (at least one of brief and
+product), overwrite confirmation for a full redo, and registration of new assets all happen in the service; the
+route only maps the result to HTTP. After submitting, the generation batch is returned immediately and task progress
+is shown through task events; the result is written directly as the final script without content review.
+Instructions only go with this submission and are not saved.
+
+广告/短片「AI 生成脚本」的 Web 入口。
 
 与 Agent 的 ``generate_episode_script`` 调用同一个服务命令：准入（创作灵感与商品至少一项）、整份重做的
 覆盖确认、新增资产的登记都在服务内，路由只负责把结果映射成 HTTP。提交后立即返回生成批次，任务进度

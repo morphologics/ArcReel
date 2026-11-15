@@ -1,4 +1,17 @@
-"""项目资产图的读取视图与批量生成入口。
+"""Read view and batch generation entry point for project asset sheets.
+
+- Status: the current state of each asset sheet (including derivatives) as judged by the artifact manifest, and
+  whether its description is missing, for card status, gallery filters and batch button counts; when the manifest
+  cannot be read, every sheet reports blocked.
+- Batch generation: the gallery's per-type pages (type scope) and the episode-level next step (episode scope) share
+  one service command (:mod:`server.services.admission.asset_sheet_batch`), the same plan as the Agent's
+  ``generate_assets``. Preview only plans and creates no tasks, so the confirm dialog can list names, skipped items
+  and estimated cost; submit does not wait for results and returns the member tasks so the UI can track the whole
+  batch's final state.
+- Regeneration impact: before regenerating a single stale asset sheet, list how many storyboard images, videos and
+  derivative asset sheets will go stale with it.
+
+项目资产图的读取视图与批量生成入口。
 
 - 状态：每张资产图（含衍生）按产物清单判定的现状与是否缺描述，供卡片状态、画廊筛选与批量按钮计数；
   清单读不出时各图报告 blocked。
@@ -46,6 +59,7 @@ router = APIRouter()
 
 AssetType = Literal["character", "scene", "prop", "product"]
 
+#: Text key when the asset does not exist; scenes keep the historical prefix ``project_scene_*``.
 #: 资产不存在时的文案 key；场景沿用历史前缀 ``project_scene_*``。
 _NOT_FOUND_KEYS: dict[str, str] = {
     "character": "character_not_found",

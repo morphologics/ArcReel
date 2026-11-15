@@ -1,4 +1,6 @@
 """
+Task queue and SSE routes.
+
 任务队列与 SSE 路由。
 """
 
@@ -30,7 +32,13 @@ def get_task_queue():
 
 
 def _render_warnings(warnings: Any, translate: Callable[..., str], names: DisplayNames) -> list[str]:
-    """把 ``result.warnings`` 的 ``{key, params}`` 条目渲染成当前语言文本。
+    """Render the ``{key, params}`` entries of ``result.warnings`` as text in the current language.
+
+    Malformed entries are skipped rather than raising: warnings are purely informational, and a malformed entry
+    should not make the whole task list 500. Unknown keys fall back to the key itself via ``lib.i18n``, also without
+    raising.
+
+    把 ``result.warnings`` 的 ``{key, params}`` 条目渲染成当前语言文本。
 
     形态不符的条目跳过而非报错：warnings 是纯提示信息，畸形条目不该让整个任务列表 500。
     未知 key 由 ``lib.i18n`` 兜底回落成 key 本身，同样不抛出。
@@ -53,6 +61,9 @@ def _render_warnings(warnings: Any, translate: Callable[..., str], names: Displa
                 else translate(key)
             )
         except TypeError:
+            # params containing reserved words (such as "locale") is malformed but valid JSON, and the translation
+            # call itself fails; skip that entry rather than making the whole task list 500, consistent with the
+            # tolerance of this function's other branches.
             # params 里混入了保留字（如 "locale"）等畸形但合法的 JSON，翻译调用本身失败；
             # 跳过该条而非让整个任务列表 500，与本函数其余分支的容错口径一致。
             continue
@@ -124,7 +135,10 @@ def _localize_task(task: dict[str, Any], translate: Callable[..., str], names: D
 
 
 async def _with_resource_refs(tasks: list[dict[str, Any]], translate: Callable[..., str]) -> list[dict[str, Any]]:
-    """附上 ``resource_ref``：条目所属集的标题与播出位置，界面据此显示「标题 · S01」。"""
+    """Attach ``resource_ref``: the title and air position of the episode the entry belongs to, so the UI shows "Title
+    · S01".
+
+    附上 ``resource_ref``：条目所属集的标题与播出位置，界面据此显示「标题 · S01」。"""
     return await asyncio.to_thread(
         with_episode_item_refs,
         tasks,
@@ -218,6 +232,8 @@ async def cancel_task(task_id: str, _t: Translator, names: DisplayNamesCatalog):
         raise ConflictError("task_running_not_cancellable", id=task_id) from e
     except ValueError as e:
         raise BadRequestError("task_not_found", id=task_id) from e
+    # Final-state tasks (including failed ones) are returned to the caller as is; their error_message has the same
+    # source as list/detail/SSE, and without localization this one exit would leak raw [code] {params}.
     # 终态任务（含已失败的）原样回给调用方，其 error_message 与列表/详情/SSE 同源，
     # 不本地化就会在这一个出口泄露裸 [code] {params}。
     for key in ("cancelled", "skipped_terminal"):
@@ -232,6 +248,9 @@ async def retry_artifact_download(task_id: str, request: Request, _t: Translator
     if worker is None:
         raise BadRequestError("task_retry_download_unavailable", id=task_id)
     try:
+        # Read the polling timeout before flipping the status: it reads the config store, and a failure after the
+        # commit has no rollback point -- the task would stay at running forever, neither claimed by the queue nor
+        # eligible for retry-download anymore.
         # 轮询超时读在翻状态之前：它要读配置库，失败发生在提交之后就没有回滚点，
         # 任务会永久停在 running 上，既不被队列认领也不再满足 retry-download 的资格条件。
         poll_timeout_seconds = await worker.read_video_poll_timeout_seconds()

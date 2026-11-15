@@ -1,4 +1,21 @@
-"""参数化订阅广播组件：订阅/退订、广播、空闲心跳、溢出处理。
+"""Parameterized subscribe-and-broadcast component: subscribe/unsubscribe, broadcast, idle heartbeat, overflow
+handling.
+
+The session stream (SessionManager) and the project event stream (ProjectEventService) share this component for SSE
+fanout; all semantic differences between the two are expressed through parameters:
+
+- Overflow policy: the session stream uses :class:`EvictNonCriticalAndSignal` (a critical message evicts one
+  non-critical message; if still full, clear the queue and end that subscriber's stream; ending the stream is the
+  reconnect signal), the project event stream uses :class:`DropSubscriber` (when the queue is full, remove the
+  subscriber and end its stream; after reconnecting the client realigns from the initial snapshot).
+- Optional first/last-subscriber lifecycle hooks (the project event stream uses them to start/stop the background
+  scan).
+
+The opening (the session stream's buffer replay, the project event stream's initial snapshot) is not part of the
+component: atomicity of subscribing and the opening is guaranteed by the consumer holding a lock / synchronous
+critical section (see docs/adr/0046).
+
+参数化订阅广播组件：订阅/退订、广播、空闲心跳、溢出处理。
 
 会话流（SessionManager）与项目事件流（ProjectEventService）共用本组件做
 SSE fanout，两处的语义差异全部经参数表达：
@@ -22,7 +39,12 @@ from typing import Any
 
 
 class _IdleMarker:
-    """空闲心跳标记：idle_timeout 内无消息时由 :meth:`SseChannel.iterate` 产出。
+    """Idle heartbeat marker: produced by :meth:`SseChannel.iterate` when no message arrives within idle_timeout.
+
+    Consumers map it to their own heartbeat event (session stream ``Heartbeat``, project event stream ``{"type":
+    "_idle"}``) and run their disconnect self-check on it. Compare by identity with the singleton ``IDLE``.
+
+    空闲心跳标记：idle_timeout 内无消息时由 :meth:`SseChannel.iterate` 产出。
 
     消费方将其映射为各自的心跳事件（会话流 ``Heartbeat``、项目事件流
     ``{"type": "_idle"}``），并在其上执行断线自检。用单例 ``IDLE`` 做身份比较。
@@ -36,25 +58,39 @@ class _IdleMarker:
 
 IDLE = _IdleMarker()
 
+# Overflow signal sentinel: injected by the overflow policy after clearing a removed subscriber's queue; iterate ends
+# the stream on seeing it (ending the stream is the reconnect signal). Invisible outside the component; consumers only
+# see the stream end.
 # 溢出信号哨兵：溢出策略清空被移除订阅者的队列后注入，iterate 遇之即结束流
 # （流结束即重连信号）。对组件外不可见——消费方看到的只是流结束。
 _END_OF_STREAM = object()
 
 
 def _end_stream(queue: asyncio.Queue) -> None:
-    """清空 *queue* 并注入溢出信号，让消费循环终止而非永久阻塞。"""
+    """Clear *queue* and inject the overflow signal, so the consuming loop terminates instead of blocking forever.
+
+    清空 *queue* 并注入溢出信号，让消费循环终止而非永久阻塞。"""
     while not queue.empty():
         try:
             queue.get_nowait()
         except asyncio.QueueEmpty:
             break
-    # 清空后不应再满
+    # Should not be full again after clearing / 清空后不应再满
     with contextlib.suppress(asyncio.QueueFull):
         queue.put_nowait(_END_OF_STREAM)
 
 
 class EvictNonCriticalAndSignal:
-    """溢出策略：关键消息挤掉一条非关键消息；仍满则结束该订阅者的流。
+    """Overflow policy: a critical message evicts one non-critical message; if still full, end that subscriber's
+    stream.
+
+    ``is_critical`` decides message criticality. When the queue is full, non-critical messages are silently dropped
+    (the subscriber stays); a critical message first evicts one non-critical message from the queue to make room and
+    retries; if the retry is still full (the queue is all critical messages), the subscriber is hopelessly behind:
+    clear its queue and inject the overflow signal; :meth:`SseChannel.iterate` ends the stream on the signal, and
+    the consumer recovers by reconnecting.
+
+    溢出策略：关键消息挤掉一条非关键消息；仍满则结束该订阅者的流。
 
     ``is_critical`` 判定消息关键性。队列满时非关键消息静默丢弃（订阅者
     保留）；关键消息先逐出队内一条非关键消息腾位重试；重试仍满（队内全是
@@ -71,8 +107,8 @@ class EvictNonCriticalAndSignal:
             return True
         except asyncio.QueueFull:
             if not self._is_critical(item):
-                return True  # 非关键消息可接受丢弃
-        # 关键消息遇满队列——逐出一条非关键消息腾位。
+                return True  # Dropping non-critical messages is acceptable / 非关键消息可接受丢弃
+        # A critical message hit a full queue: evict one non-critical message to make room. / 关键消息遇满队列——逐出一条非关键消息腾位。
         self._evict_one_non_critical(queue)
         try:
             queue.put_nowait(item)
@@ -87,7 +123,9 @@ class EvictNonCriticalAndSignal:
         pass
 
     def _evict_one_non_critical(self, queue: asyncio.Queue) -> None:
-        """从 *queue* 中移除一条非关键消息，其余按原序放回。"""
+        """Remove one non-critical message from *queue* and put the rest back in original order.
+
+        从 *queue* 中移除一条非关键消息，其余按原序放回。"""
         temp: list[Any] = []
         evicted = False
         while not queue.empty():
@@ -96,7 +134,7 @@ class EvictNonCriticalAndSignal:
             except asyncio.QueueEmpty:
                 break
             if not evicted and not self._is_critical(msg):
-                evicted = True  # 丢弃这一条
+                evicted = True  # Drop this one / 丢弃这一条
                 continue
             temp.append(msg)
         for msg in temp:
@@ -107,7 +145,14 @@ class EvictNonCriticalAndSignal:
 
 
 class DropSubscriber:
-    """溢出策略：队列满即移除订阅者，并结束它的流。
+    """Overflow policy: when the queue is full, remove the subscriber and end its stream.
+
+    If the stream did not end, the client would only receive idle heartbeats and never reconnect, and all later
+    events would be silently lost; after it ends the client reconnects and realigns from the initial snapshot,
+    discarding the backlog. ``on_removed`` receives the number removed after a single broadcast removes subscribers
+    (for logging).
+
+    溢出策略：队列满即移除订阅者，并结束它的流。
 
     流若不结束，客户端只会收到空闲心跳、不会重连，此后的事件全部静默丢失；
     结束后客户端重连，由初始快照重新对齐，积压随之丢弃。``on_removed`` 在
@@ -136,7 +181,13 @@ SseOverflowPolicy = EvictNonCriticalAndSignal | DropSubscriber
 
 
 class SseChannel:
-    """一组订阅队列的注册表 + 广播扇出。
+    """Registry of a group of subscription queues + broadcast fanout.
+
+    ``subscribe`` runs synchronously, so the consumer can take the opening snapshot and register the subscription
+    within the same synchronous critical section, ensuring a seamless handoff from replay to live (the opening
+    itself is not part of the component).
+
+    一组订阅队列的注册表 + 广播扇出。
 
     ``subscribe`` 同步执行，消费方可在同一同步临界区内完成开场白快照与
     订阅注册，保证回放/直播无缝衔接（开场白本身不进组件）。
@@ -165,7 +216,15 @@ class SseChannel:
         return len(self._subscribers)
 
     def subscribe(self) -> asyncio.Queue:
-        """注册并返回一个新订阅队列。
+        """Register and return a new subscription queue.
+
+        If the set was empty before registration, ``on_first_subscriber`` is triggered (called only after
+        registration completes, so the hook can see the new subscriber; the project event stream's background scan
+        uses has_subscribers to decide liveness).
+        If the hook raises, the new queue is rolled back before re-raising: the caller gets no queue and cannot
+        unsubscribe, so the queue must not linger in the set.
+
+        注册并返回一个新订阅队列。
 
         注册前集合为空时触发 ``on_first_subscriber``（注册完成后才调用，
         钩子内可见新订阅者——项目事件流的后台扫描以 has_subscribers 判存活）。
@@ -184,7 +243,13 @@ class SseChannel:
         return queue
 
     async def unsubscribe(self, queue: asyncio.Queue) -> None:
-        """移除订阅队列；移除后集合为空则触发并等待 ``on_last_subscriber``。
+        """Remove a subscription queue; if the set is empty after removal, trigger and await ``on_last_subscriber``.
+
+        Triggered on "set empty after removal" rather than a strict 1->0 transition: a subscriber removed by
+        overflow can still trigger the teardown when it later unsubscribes (overflow removal itself does not trigger
+        the hook), so hook implementations must be idempotent.
+
+        移除订阅队列；移除后集合为空则触发并等待 ``on_last_subscriber``。
 
         按「移除后集合为空」而非严格 1→0 转变触发：被溢出移除的订阅者事后
         退订时仍能触发收尾（溢出移除本身不触发钩子），钩子实现需幂等。
@@ -194,7 +259,14 @@ class SseChannel:
             await self._on_last_subscriber()
 
     def unsubscribe_nowait(self, queue: asyncio.Queue) -> bool:
-        """同步移除订阅队列，不触发生命周期钩子；返回移除后是否已无订阅者。
+        """Remove a subscription queue synchronously without triggering lifecycle hooks; returns whether no subscribers
+        remain after removal.
+
+        For cleanup paths that cannot ``await`` (e.g. during cancellation handling, where an await could be
+        interrupted by a second cancel and leave the teardown half done); background task teardown is handled by the
+        caller.
+
+        同步移除订阅队列，不触发生命周期钩子；返回移除后是否已无订阅者。
 
         供不可 ``await`` 的清理路径使用（如取消处理中，await 可能被二次取消
         打断致收尾半途而废），后台任务收尾由调用方自理。
@@ -203,7 +275,10 @@ class SseChannel:
         return not self._subscribers
 
     def broadcast(self, item: Any) -> None:
-        """把 *item* 投递给全部订阅队列；投递失败的订阅者按溢出策略移除。"""
+        """Deliver *item* to all subscription queues; subscribers that fail delivery are removed per the overflow
+        policy.
+
+        把 *item* 投递给全部订阅队列；投递失败的订阅者按溢出策略移除。"""
         stale: list[asyncio.Queue] = [queue for queue in self._subscribers if not self._overflow.deliver(queue, item)]
         for queue in stale:
             self._overflow.finalize_removal(queue)
@@ -212,7 +287,14 @@ class SseChannel:
             self._overflow.on_removed(len(stale))
 
     async def iterate(self, queue: asyncio.Queue, *, idle_timeout: float) -> AsyncIterator[Any]:
-        """把订阅队列变为异步迭代器：逐条产出广播项，空闲时产出 :data:`IDLE`。
+        """Turn a subscription queue into an async iterator: yields broadcast items one by one, and :data:`IDLE` when
+        idle.
+
+        This generator deliberately has no ``finally`` cleanup: unsubscribing is done deterministically by the
+        consumer's async CM ``__aexit__`` (see docs/adr/0005); a bare generator's finally only runs at GC, which is
+        exactly the leak path this design avoids.
+
+        把订阅队列变为异步迭代器：逐条产出广播项，空闲时产出 :data:`IDLE`。
 
         本生成器刻意不带 ``finally`` 清理——退订由消费方的 async CM ``__aexit__``
         确定性执行（见 docs/adr/0005），裸生成器的 finally 只在 GC 时跑，正是

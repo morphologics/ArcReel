@@ -1,4 +1,17 @@
-"""一集分镜图与分镜视频的批量生成入口（时间线与宫格工具栏）。
+"""Batch generation entry point for an episode's storyboard images and shot videos (timeline and grid toolbar).
+
+- Storyboard images: the same plan as the Agent's ``generate_storyboards``
+  (:mod:`server.services.admission.storyboard_batch`); only fills shots in this episode without a usable storyboard
+  image; shots missing prompts or with unusable references are listed as skipped, the rest are submitted as usual.
+- Shot videos: only fills shots in this episode without a usable video; shots missing prompts, missing storyboard
+  images or already generating are listed as skipped; the remaining shots are admitted as a whole batch -- if any
+  target fails, the whole batch is rejected, no task is created, and the reason is given item by item.
+
+Both have preview and submit: preview only plans and creates no tasks, so the confirm dialog can list names, skipped
+items, the estimated cost of the priced part and the number of unpriced items; submit re-plans, creates one
+persistent batch and returns immediately. Stale artifacts do not enter the batch.
+
+一集分镜图与分镜视频的批量生成入口（时间线与宫格工具栏）。
 
 - 分镜图：与 Agent 的 ``generate_storyboards`` 同一份规划（:mod:`server.services.admission.storyboard_batch`），
   只补本集没有可用分镜图的分镜；缺提示词、引用不可用的分镜列为跳过项，其余照常提交。
@@ -51,7 +64,10 @@ def _skipped(skips: tuple[BatchSkip, ...]) -> list[dict[str, str]]:
 
 @contextmanager
 def _planning_errors(project_name: str, episode: int) -> Generator[None]:
-    """把规划阶段读项目、读剧本与把守生成模式的失败映射成 HTTP 错误。"""
+    """Map failures in the planning phase -- reading the project, reading the script, and guarding the generation mode
+    -- to HTTP errors.
+
+    把规划阶段读项目、读剧本与把守生成模式的失败映射成 HTTP 错误。"""
 
     try:
         yield

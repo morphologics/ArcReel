@@ -1,4 +1,11 @@
-"""项目迁移读任务与调用记录的通道。
+"""Channel for project migration to read task and call records.
+
+The migration chain is synchronous code running in a worker thread, while the database session belongs to the event
+loop. This posts per-project-name queries back to the event loop, giving the migrator the synchronous query
+functions it needs. Callers must use it from a worker thread; waiting on it synchronously on the event loop thread
+deadlocks.
+
+项目迁移读任务与调用记录的通道。
 
 迁移链是同步代码、跑在工作线程里；数据库会话属于事件循环。这里把按项目名的查询投回
 事件循环执行，得到迁移器需要的同步查询函数。调用方必须在工作线程里使用它，

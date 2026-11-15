@@ -1,4 +1,28 @@
 """
+Most recent activity time of a project (computed at read time).
+
+The project lobby uses it to put recently worked-on projects first. The most recent modification moment is computed
+from the project ledger and recognizable content, taking the latest of these sources:
+
+1. Business timestamps in the ledger: `metadata.updated_at` of `project.json` and of each episode script. Business
+   writes refresh them, and project structure migrations keep the original values when rewriting these JSON files,
+   so the modification times of these JSON files are not used.
+2. The project activity ledger (`lib.project.project_activity`): business writes of other JSON such as drafts,
+   script plans and edit timelines, as well as deletions such as deleting memory or deleting an edit timeline, with
+   the moment recorded by the write exit. When missing, only the other two kinds of sources are used.
+3. Modification times of the other content files: source, generated images and videos, project memory, etc.
+
+Excluded files do not represent the creator's activity but are rewritten wholesale during startup or background
+flows; counting them would make every project "just updated" at the same time:
+
+- Files and directories whose names start with `.`: locks, artifact manifests, migration reports, Agent config
+  copies, etc. Project memory is counted separately, and the activity ledger is taken as source 2.
+- All `.json` files: project and scripts take the business time of source 1, and business writes of other JSON take
+  source 2; their modification times cannot distinguish business writes from migration rewrites, so they are not
+  counted.
+- Migration backups (file name contains `.bak`) and lock files (ending in `.lock`).
+- `CLAUDE.md` in the project root: the embedded Agent's config is rewritten by the config sync at startup.
+
 项目的最近活动时间（读时计算）。
 
 项目大厅按它把最近在做的项目排在前面。根据项目账本与可识别内容计算最近修改的时刻，取以下来源中最晚的一个：
@@ -39,7 +63,9 @@ def project_last_activity_at(
     project: Mapping[str, Any],
     scripts: Iterable[Mapping[str, Any]],
 ) -> datetime | None:
-    """项目内容最近一次修改的时刻（UTC）；没有任何可用的时间时为 None。"""
+    """The moment (UTC) the project content was last modified; None when there is no usable time.
+
+    项目内容最近一次修改的时刻（UTC）；没有任何可用的时间时为 None。"""
     candidates = [stamp for stamp in (_metadata_updated_at(doc) for doc in (project, *scripts)) if stamp is not None]
     recorded = recorded_project_activity(project_dir)
     if recorded is not None:
@@ -59,7 +85,7 @@ def _metadata_updated_at(doc: Mapping[str, Any]) -> datetime | None:
         parsed = datetime.fromisoformat(raw)
     except ValueError:
         return None
-    # 无时区的旧数据按本机时间解释。
+    # Old data without a time zone is interpreted as local time. / 无时区的旧数据按本机时间解释。
     return parsed.astimezone(UTC)
 
 

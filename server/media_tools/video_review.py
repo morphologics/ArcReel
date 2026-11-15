@@ -72,7 +72,7 @@ class InspectedUnit:
     signals: VideoSignals | None = None
     signals_cached: bool = False
     detail: str | None = None
-    #: 该单元现有的全部视频版本号，用来发现还没看过的候选版本。
+    #: All existing video version numbers of this unit, used to find candidate versions not yet viewed. / 该单元现有的全部视频版本号，用来发现还没看过的候选版本。
     available_versions: tuple[int, ...] = ()
 
     @property

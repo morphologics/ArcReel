@@ -1,4 +1,6 @@
-"""系统级端点：诊断日志打包下载。"""
+"""System-level endpoints: diagnostic log bundle download.
+
+系统级端点：诊断日志打包下载。"""
 
 from __future__ import annotations
 
@@ -25,11 +27,16 @@ _LOG_GLOB = "arcreel.log*"
 
 
 def _write_diagnostics_zip(spooled: IO[bytes], log_dir: Path) -> None:
-    """把 logs/ 下的日志与诊断信息打成 zip 写入 ``spooled``，写完回到开头。"""
+    """Pack the logs and diagnostic info under logs/ into a zip written to ``spooled``, and seek back to the start when
+    done.
+
+    把 logs/ 下的日志与诊断信息打成 zip 写入 ``spooled``，写完回到开头。"""
     diagnostics_lines: list[str] = []
     with zipfile.ZipFile(spooled, "w", compression=zipfile.ZIP_DEFLATED) as zf:
         if log_dir.exists():
             for path in sorted(log_dir.glob(_LOG_GLOB)):
+                # Skip symlinks: prevents someone placing a symlink under logs/ that points to a sensitive file
+                # outside the directory and leaking it through the diagnostic bundle.
                 # 跳过 symlink：防止有人在 logs/ 下放符号链接指向目录外的敏感文件，
                 # 通过诊断包外泄。
                 if path.is_symlink() or not path.is_file():
@@ -53,8 +60,12 @@ async def download_logs(_t: Translator) -> StreamingResponse:
     """打包返回 logs/ 目录所有文件 + diagnostics.txt。"""
     log_dir = DataRootLayout.current().log_dir
 
+    # The handle must outlive this function and is closed only after StreamingResponse finishes streaming it, so it
+    # cannot go into a with block
     spooled = tempfile.SpooledTemporaryFile(max_size=_SPOOL_MAX)  # noqa: SIM115 -- 句柄要活过本函数、随 StreamingResponse 流式读完才关，不能收进 with
     try:
+        # Packing and diagnostic collection (subprocesses, reading logs) run in a thread; on cancellation, wait for
+        # the thread to finish writing before closing the handle
         # 打包与诊断采集（子进程、读日志）在线程里完成；取消时等线程写完再关句柄
         await run_sync_transaction(_write_diagnostics_zip, spooled, log_dir)
     except BaseException:

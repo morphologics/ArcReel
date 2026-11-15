@@ -1,4 +1,10 @@
-"""集原文登记被拒（``EpisodeSourceError``）→ HTTP 响应的共享映射。
+"""Shared mapping from rejected episode source registration (``EpisodeSourceError``) to HTTP responses.
+
+The registration commands surface from three routers: ``files`` (upload, delete source files), ``projects`` (filling
+in the episode source on the episode page) and ``episodes_view`` (handling unregistered files); the same reason code
+gives the same status code and message on every endpoint.
+
+集原文登记被拒（``EpisodeSourceError``）→ HTTP 响应的共享映射。
 
 登记命令从 ``files``（上传、删除源文件）、``projects``（集页填写集原文）与 ``episodes_view``（处置未登记文件）
 三个 router 冒出来；同一个原因码在不同端点上给出同一个状态码与文案。
@@ -24,7 +30,10 @@ _STATUS: dict[str, int] = {
 def episode_source_http_error(
     exc: EpisodeSourceError, _t: Translator, *, episode: int | None = None, filename: str | None = None
 ) -> HTTPException:
-    """``EpisodeSourceError`` 对应的 ``HTTPException``；未登记的原因码按内容不合格落 422。"""
+    """The ``HTTPException`` for an ``EpisodeSourceError``; unregistered reason codes fall to 422 as unacceptable
+    content.
+
+    ``EpisodeSourceError`` 对应的 ``HTTPException``；未登记的原因码按内容不合格落 422。"""
     key = "episode_source_episode_not_found" if exc.code == "episode_not_found" else exc.code
     params = {name: value for name, value in (("episode", episode), ("filename", filename)) if value is not None}
     return HTTPException(status_code=_STATUS.get(exc.code, 422), detail=_t(key, **params))

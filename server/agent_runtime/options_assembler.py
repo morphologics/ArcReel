@@ -1,4 +1,17 @@
-"""SDK options 装配器：持依赖、允许 I/O，异步 build 产出 ClaudeAgentOptions。
+"""SDK options assembler: holds dependencies, allows I/O, and asynchronously builds ClaudeAgentOptions.
+
+Extracted from SessionManager: all the assembly duties "collected on the spot" at session cold start/reconnect -- DB
+credential injection (real Anthropic values + empty-value overrides for other providers), prompt variant and project
+context assembly, the various PreToolUse/PostToolUse hook factories (including the JSON validation hook), and
+compiling AgentAccessPolicy's settings and wiring its ruling adapter. The I/O split with AgentAccessPolicy follows
+one criterion: static rules with zero I/O belong to the policy; assembly whose job is reading the DB / scanning disk
+on the spot when opening a session is allowed I/O and belongs to this class.
+
+The access rules themselves are not in this class -- the policy is fetched fresh on every build via
+``access_policy_provider``, and after ``configure_sandbox_runtime`` swaps in a whole new policy it takes effect
+immediately for all later sessions.
+
+SDK options 装配器：持依赖、允许 I/O，异步 build 产出 ClaudeAgentOptions。
 
 从 SessionManager 析出会话冷启动/重连时"现场收集"的全部装配职责：DB 凭证注入
 （Anthropic 真值 + 其他供应商空值覆盖）、prompt 变体与项目上下文装配、各 PreToolUse/
@@ -44,6 +57,12 @@ from claude_agent_sdk.types import HookEvent, HookMatcher, SettingSource, System
 
 SDK_AVAILABLE = True
 _EMBEDDED_AGENT_TOKEN_EXPIRY_SECONDS = 15 * 60
+# Max bytes of a single NDJSON line on CLI stdout (does not constrain the direction of the SDK writing to stdin). The
+# SDK default is 1 MiB; crossing it raises CLIJSONDecodeError, killing the message reader and hanging the session.
+# Requests with attached images hit this line twice: replay-user-messages makes the CLI echo back the user message
+# with base64 images as is, and the tool_result of Read reading an image goes through the same stdout. Sized by our
+# own load -- 5 images × 1.5 MB source × 4/3 base64 ≈ 10 MB, take 32 MiB for headroom. There is no official
+# recommended value.
 # CLI stdout 上单条 NDJSON 行的最大字节数（不约束 SDK 往 stdin 写入的方向）。
 # SDK 默认 1 MiB，超线即 CLIJSONDecodeError 打死 message reader、会话挂死。
 # 附图请求会两次撞上这条线：replay-user-messages 让 CLI 把带 base64 图的用户消息
@@ -53,7 +72,14 @@ CLI_STDOUT_MAX_BUFFER_BYTES = 32 * 1024 * 1024
 
 
 class AgentEnv(dict[str, str]):
-    """注入 ``ClaudeAgentOptions.env`` 的环境变量，并带着注入凭证的计价依据快照。
+    """Environment variables injected into ``ClaudeAgentOptions.env``, together with a snapshot of the pricing basis of
+    the injected credential.
+
+    Billing prices by the credential injected when the session connects, bound to its multiplier and tier at that
+    time (docs/adr/0017, docs/adr/0102); the snapshot is handed to the session layer along with env. Defaults apply
+    when there is no effective credential and env falls back to system settings.
+
+    注入 ``ClaudeAgentOptions.env`` 的环境变量，并带着注入凭证的计价依据快照。
 
     记账按会话连接时注入的凭证及其当时的倍率与档位绑定计价（docs/adr/0017、docs/adr/0102），快照随 env 一起交给
     会话层；没有生效凭证、env 回退到系统设置时为默认值。
@@ -65,13 +91,25 @@ class AgentEnv(dict[str, str]):
 
 
 def agent_pricing_of(options: object) -> AgentPricing:
-    """会话 options 注入的 Agent 凭证计价依据；env 不是 :class:`AgentEnv` 时取默认值。"""
+    """Pricing basis of the Agent credential injected into session options; defaults when env is not an
+    :class:`AgentEnv`.
+
+    会话 options 注入的 Agent 凭证计价依据；env 不是 :class:`AgentEnv` 时取默认值。"""
     env = getattr(options, "env", None)
     return env.agent_pricing if isinstance(env, AgentEnv) else AgentPricing()
 
 
 async def load_provider_env_overrides() -> dict[str, str]:
-    """构造 options.env 注入字典，返回 :class:`AgentEnv`。
+    """Build the options.env injection dict and return :class:`AgentEnv`.
+
+    - ANTHROPIC_* take real values from the DB active credential
+    - All other provider env vars are overridden with empty values (defensive fallback)
+
+    ``env_keys`` is the single source of truth for the list of env var names; the SDK subprocess only accepts env
+    auth, and the parent process environment is external input, so real-value injection and empty-value containment
+    are a permanent mechanism, not tech debt (see ADR).
+
+    构造 options.env 注入字典，返回 :class:`AgentEnv`。
 
     - ANTHROPIC_* 从 DB active credential 取真值
     - 其他 provider env 全部空值覆盖（防御性兜底）
@@ -93,14 +131,29 @@ async def load_provider_env_overrides() -> dict[str, str]:
 
 
 def _resolve_and_read_text(project_cwd: Path, file_path: str) -> tuple[Path, str]:
-    """解析 hook 收到的文件路径（相对路径按项目 cwd）并读出 UTF-8 文本。"""
+    """Resolve the file path received by a hook (relative paths against the project cwd) and read its UTF-8 text.
+
+    解析 hook 收到的文件路径（相对路径按项目 cwd）并读出 UTF-8 文本。"""
     p = Path(file_path)
     resolved = (project_cwd / p).resolve() if not p.is_absolute() else p.resolve()
     return resolved, resolved.read_text(encoding="utf-8")
 
 
 class OptionsAssembler:
-    """把开会话时现场收集的依赖装配成 ClaudeAgentOptions。
+    """Assemble the dependencies collected on the spot when opening a session into ClaudeAgentOptions.
+
+    Constructor parameters come in two kinds: static dependencies (``data_root`` / ``allowed_tools`` /
+    ``setting_sources``) are fixed at instantiation; dependencies that change at runtime are fetched fresh on every
+    build through provider callbacks -- ``access_policy_provider`` (``configure_sandbox_runtime`` swaps it
+    wholesale) and ``max_turns_provider`` (``refresh_config`` rewrites it). ``resolve_project_cwd`` is injected by
+    SessionManager (project name validation/scoping is the session management side's job).
+
+    ``session_factory_provider`` / ``user_id_provider`` likewise use callbacks rather than construction-time
+    snapshots: the store is built from the values at the first ``build_session_store`` and cached, matching the
+    timing at which ``_build_session_store`` lazily read SessionManager attributes before extraction -- so usage
+    records (reading ``_user_id`` live) and the transcript store do not land in different per-user namespaces.
+
+    把开会话时现场收集的依赖装配成 ClaudeAgentOptions。
 
     构造参数分两类：静态依赖（``data_root`` / ``allowed_tools`` /
     ``setting_sources``）在实例化时锁定；随运行时变化的依赖用 provider 回调每次 build
@@ -137,12 +190,17 @@ class OptionsAssembler:
         self._provider_env_loader = provider_env_loader
         self._session_factory_provider = session_factory_provider or (lambda: None)
         self._user_id_provider = user_id_provider or (lambda: DEFAULT_USER_ID)
+        # Session store singleton cache: one per assembler, so a store is not created on every build.
         # session store 单例缓存：每个 assembler 一份，避免每次 build 都新建 store。
         self._cached_session_store: DbSessionStore | None = None
         self._session_store_resolved = False
 
     async def build_provider_env_overrides(self) -> dict[str, str]:
-        """DB 凭证注入入口。默认走模块级 ``load_provider_env_overrides``（现取 module
+        """DB credential injection entry. Defaults to the module-level ``load_provider_env_overrides`` (fetched from
+        the module global so tests can patch it); if ``provider_env_loader`` is injected at construction, the
+        injected source is used instead.
+
+        DB 凭证注入入口。默认走模块级 ``load_provider_env_overrides``（现取 module
         global 以便测试 patch）；构造时注入 ``provider_env_loader`` 则改用注入源。"""
         loader = self._provider_env_loader or load_provider_env_overrides
         return await loader()
@@ -171,7 +229,21 @@ class OptionsAssembler:
         return "\n\n".join(parts)
 
     async def _build_user_memory_section(self) -> str:
-        """用户记忆段：目录位置、两级分流规则、读写方式，外加截断后的索引。
+        """User memory section: directory location, two-level routing rules, how to read and write, plus the truncated
+        index.
+
+        Native auto memory only knows the single project memory directory; the existence of user memory and the
+        two-level routing rules are the two things it cannot know, so only these two are added; categories, format
+        and write criteria are all carried by the native system prompt. When the index is missing or empty the index
+        bullet is omitted -- injecting an empty index would make the Agent think "nothing was recorded before",
+        which is not the same as "the directory has not been created yet".
+
+        The assembly phase does not create the directory: the first write is done by the Agent or the memory REST
+        API, and if nothing can be read it is treated as absent. When ``user_id`` is invalid the whole section is
+        omitted, in line with ``AgentAccessPolicy``'s fail-closed -- for a directory the fence does not allow, no
+        write guidance should be given either.
+
+        用户记忆段：目录位置、两级分流规则、读写方式，外加截断后的索引。
 
         原生 auto memory 只知道项目记忆一个目录，用户记忆的存在与两级分流规则是
         它无从得知的两件事，故只补这两件；类别、格式、写入判据全由原生系统提示承载。
@@ -207,7 +279,19 @@ class OptionsAssembler:
 
     @staticmethod
     async def _read_user_memory_index(memory_dir: Path) -> str:
-        """读用户记忆索引；目录/文件不存在、读不动或不是 UTF-8 都当空索引。
+        """Read the user memory index; a missing directory/file, unreadable file or non-UTF-8 content all count as an
+        empty index.
+
+        The read is offloaded to a thread: assembly runs on the event loop, and although the index is small it lives
+        under the data root, which may be a network drive.
+
+        Encoding errors are swallowed like I/O errors: users can edit the index file directly, and saving it back as
+        non-UTF-8 would make ``read_text`` raise ``UnicodeDecodeError`` -- letting it bubble up would mean one note
+        saved in the wrong encoding from a text editor blocks every session. Not switching to ``errors="replace"``:
+        content wholly misencoded like GBK cannot be turned back into readable text, and injecting a block of
+        garbage is worse than omitting the index.
+
+        读用户记忆索引；目录/文件不存在、读不动或不是 UTF-8 都当空索引。
 
         读卸到线程：装配跑在事件循环上，索引虽小但落在数据根，可能是网络盘。
 
@@ -282,6 +366,16 @@ class OptionsAssembler:
     ) -> Any:
         """Build ClaudeAgentOptions for a session.
 
+        ``stderr`` is the only way to get the real error when the SDK subprocess exits non-zero
+        (``ProcessError.stderr`` is hard-coded to a placeholder inside the SDK); the upper layer should wrap the
+        lines accumulated by the callback into ``AgentStartupError`` and pass them through when session startup
+        fails.
+
+        ``session_id`` opens a brand-new session with a preset id (no history to resume) and is mutually exclusive
+        with ``resume_id`` -- the SDK only allows both under ``fork_session``.
+
+        Build ClaudeAgentOptions for a session.
+
         ``stderr`` 在 SDK 子进程退出非 0 时是唯一拿到真实错误的途径
         （``ProcessError.stderr`` 在 SDK 内部被写死为占位符）；上层应在
         会话启动失败时把回调累积的行包装到 ``AgentStartupError`` 透传。
@@ -321,6 +415,8 @@ class OptionsAssembler:
                 HookMatcher(matcher=None, hooks=hook_callbacks),
                 HookMatcher(
                     matcher="Bash",
+                    # Only attached to the Bash matcher of PreToolUse, reading tool_input from the dict that event
+                    # actually passes; the SDK's HookCallback declares its parameter as the union of all event inputs
                     hooks=[self._bash_env_scrub_hook],  # type: ignore[list-item]  # 只挂在 PreToolUse 的 Bash 匹配器上，按该事件实际传入的 dict 读 tool_input；SDK 的 HookCallback 以全部事件输入的联合声明参数
                 ),
                 HookMatcher(
@@ -344,6 +440,9 @@ class OptionsAssembler:
         provider_env.update(
             {
                 "ARCREEL_EMBEDDED_AGENT": "1",
+                # Subscribe to session_state_changed frames: after a background subagent finishes, the CLI keeps
+                # reporting running while it still owes a turn, the same basis the SDK uses to decide whether a run
+                # has ended; the session layer uses it to decide whether it can disconnect the CLI.
                 # 订阅 session_state_changed 帧：后台子智能体结束后 CLI 还欠一轮时持续报 running，
                 # 与 SDK 判定 run 是否结束的依据相同；会话层据此决定能否断开 CLI。
                 "CLAUDE_CODE_EMIT_SESSION_STATE_EVENTS": "1",
@@ -358,23 +457,35 @@ class OptionsAssembler:
         user_id = self._user_id_provider()
 
         def _build_sandbox_and_mcp_server() -> tuple[dict[str, Any], McpSdkServerConfig]:
+            # Both scan disk/create directories (sandbox sensitive path resolution, the MCP service's ProjectManager),
+            # so they are offloaded to a thread together.
             # 两者都会扫盘/建目录（sandbox 敏感路径解析、MCP 服务的 ProjectManager），合并一次卸到线程。
             sandbox = policy.build_sandbox_settings(project_cwd)
+            # Built-in ArcReel in-process MCP server -- the handler runs in the main process, bypassing the sandbox.
             # 内置 ArcReel in-process MCP server — handler 跑在主进程，绕过 sandbox。
             server = build_arcreel_mcp_server(project_name=project_name, data_root=self.data_root, user_id=user_id)
             return sandbox, server
 
         sandbox_typed, arcreel_server = await asyncio.to_thread(_build_sandbox_and_mcp_server)
 
+        # Windows fallback: with the sandbox off, the Bash family is stripped out of allowed_tools, letting
+        # _can_use_tool take over prefix allowlist matching.
         # Windows 回退：sandbox 关闭时 Bash 系列被剥离出 allowed_tools，
         # 让 _can_use_tool 接管 prefix 白名单匹配。
         allowed_tools = policy.filter_allowed_tools(self._allowed_tools)
-        # 通配符让后续新增 tool 不必同步改 allowed_tools。
+        # The wildcard means tools added later do not require syncing allowed_tools. / 通配符让后续新增 tool 不必同步改 allowed_tools。
         allowed_tools.append("mcp__arcreel__*")
 
         return ClaudeAgentOptions(
             cwd=str(project_cwd),
             setting_sources=self._setting_sources,
+            # Project memory: redirect native auto memory's directory from "derived from the git repo root" to inside
+            # the project directory, otherwise all ArcReel projects on the same machine and the developer's
+            # interactive sessions would share one MEMORY.md. Passed as a JSON string rather than a materialized
+            # settings file: the path changes per session, and writing it to disk would clash with the profile
+            # manifest's "built-in files unchanged" check (ADR 0074). The settings land in the flag settings layer,
+            # which takes priority over the project's .claude/settings.json; the SDK then merges ``sandbox`` into the
+            # same JSON. autoMemoryEnabled is not set explicitly: native default is on.
             # 项目记忆：把原生 auto memory 的目录从「按 git 仓库根派生」重定向到项目目录内，
             # 否则同一台机器上所有 ArcReel 项目与开发者的交互会话共用一份 MEMORY.md。
             # 走 JSON 串而非物化 settings 文件：路径按会话变化，落盘会与 profile manifest 的
@@ -388,12 +499,17 @@ class OptionsAssembler:
                 type="preset",
                 preset="claude_code",
                 append=await self._build_append_prompt(project_name, locale=locale),
+                # Record the system prompt on the session's first turn and reuse it as is on every later turn
+                # (including resume): changes in dynamic sections like memory no longer break the prompt cache. The
+                # cost is that append is fixed within the session, and resume does not rebuild it for a new locale.
                 # 会话首轮记录系统提示，之后每轮（含 resume）原样沿用：记忆等动态段的变化
                 # 不再打断 prompt cache。代价是 append 在会话内固定，resume 不会按新 locale 重建。
                 snapshot=True,
             ),
             include_partial_messages=True,
             max_buffer_size=CLI_STDOUT_MAX_BUFFER_BYTES,
+            # Only with this switch does the CLI replay user messages received on stdin to stdout with a uuid. Without
+            # it the replay copies never appear: neither echo dedup nor user message identity mapping would trigger.
             # CLI 只在该开关下把 stdin 收到的用户消息带 uuid 回放到 stdout。
             # 不开则回放副本根本不出现：echo 去重与用户消息身份映射都不会触发。
             extra_args={"replay-user-messages": None},
@@ -404,6 +520,8 @@ class OptionsAssembler:
             mcp_servers={"arcreel": arcreel_server},
             session_store=self.build_session_store(),
             session_store_flush=session_store_flush_mode(),
+            # The SDK's SandboxSettings TypedDict does not declare the filesystem substructure; the CLI accepts it
+            # passed through as JSON
             sandbox=sandbox_typed,  # type: ignore[arg-type]  # SDK 的 SandboxSettings TypedDict 未声明 filesystem 子结构，CLI 按 JSON 透传接受
             env=provider_env,
             stderr=stderr,
@@ -422,7 +540,12 @@ class OptionsAssembler:
         _tool_use_id: str | None,
         _context: Any,
     ) -> dict[str, Any]:
-        """只读子智能体的工具名单（``AgentAccessPolicy.check_subagent_tool``）的 SDK 封皮。
+        """SDK wrapper for the read-only subagent tool list (``AgentAccessPolicy.check_subagent_tool``).
+
+        Tool calls inside a subagent carry ``agent_type`` in the hook input; the main conversation does not and is
+        not bound by this list.
+
+        只读子智能体的工具名单（``AgentAccessPolicy.check_subagent_tool``）的 SDK 封皮。
 
         子智能体内的工具调用在 hook 输入里带 ``agent_type``；主对话不带，不受这道名单约束。
         """
@@ -445,7 +568,16 @@ class OptionsAssembler:
         _tool_use_id: str | None,
         _context: Any,
     ) -> dict[str, Any]:
-        """Bash 密钥剥离 hook（SDK 封皮）：变换语义与 Windows 回退跳包装的约束见
+        """Bash secret-stripping hook (SDK wrapper): for the transform semantics and the constraint that the Windows
+        fallback skips wrapping, see ``AgentAccessPolicy.wrap_bash_command_for_env_scrub``.
+
+        Only returns ``updatedInput``, not ``permissionDecision``: the PreToolUse hook is step 1 of the permission
+        chain, and ``allow`` would short-circuit all later steps (including ``_can_use_tool``). With the sandbox
+        enabled, Bash is in allowed_tools and the wrapped command is allowed by the allow rule; the permission
+        decision is always left to later steps in the chain. When not wrapping (Windows fallback / empty command) it
+        simply continues, and the original command falls to ``_can_use_tool`` for allowlist matching.
+
+        Bash 密钥剥离 hook（SDK 封皮）：变换语义与 Windows 回退跳包装的约束见
         ``AgentAccessPolicy.wrap_bash_command_for_env_scrub``。
 
         只返回 ``updatedInput``、不返回 ``permissionDecision``：PreToolUse hook
@@ -498,6 +630,8 @@ class OptionsAssembler:
                     file_path,
                     tool_name,
                     project_cwd,
+                    # Fetched fresh like the policy: user_id decides the user memory directory and changes with the
+                    # session's owner.
                     # 与 policy 同为现取：user_id 决定用户记忆目录，随会话所属用户变化。
                     user_id=self._user_id_provider(),
                 )

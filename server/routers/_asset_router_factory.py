@@ -1,4 +1,18 @@
-"""项目级资产 CRUD 路由的统一工厂（character / scene / prop / product）。
+"""Unified factory for project-level asset CRUD routes (character / scene / prop / product).
+
+Driven by lib.project.asset_types.ASSET_SPECS; all asset types share the same route template. Each asset type is
+enabled with just 5 lines:
+
+    router = build_asset_router(asset_type="character", pm_getter=lambda: get_project_manager())
+
+Inside, the factory resolves from the spec the URL path segment, bucket key, sheet field and PATCH field allowlist
+(description + sheet_field + extra_string_fields + extra_list_fields). i18n key naming differences (scene uses the
+historical prefix "project_scene_*") are maintained in the _I18N_KEYS table.
+
+Types with ``spec.supports_derivatives`` enabled (currently only character) additionally get derivative sub-resource
+routes, see server/routers/_asset_derivatives.py.
+
+项目级资产 CRUD 路由的统一工厂（character / scene / prop / product）。
 
 按 lib.project.asset_types.ASSET_SPECS 驱动，各类资产共用同一份路由模板。每类资产仅用 5 行
 启用：
@@ -92,7 +106,10 @@ def _not_a_string(field: str) -> UnprocessableError:
 
 
 def _require_string_list_fields(values: Mapping[str, Any], fields: Iterable[str]) -> None:
-    """列表字段须是字符串列表；缺省与 None 视同未提供，交由调用方各自的默认值处理。"""
+    """List fields must be lists of strings; absent and None are treated as not provided, left to each caller's own
+    default handling.
+
+    列表字段须是字符串列表；缺省与 None 视同未提供，交由调用方各自的默认值处理。"""
     for field in fields:
         value = values.get(field)
         if value is not None and not _is_string_list(value):
@@ -102,7 +119,10 @@ def _require_string_list_fields(values: Mapping[str, Any], fields: Iterable[str]
 
 
 def _require_owned_files(spec: AssetSpec, name: str, entry: Mapping[str, Any], values: Mapping[str, Any]) -> None:
-    """资产图、参考图与参考音频只能指向本资产名下的文件：共用别的资产的文件，改名、删除与恢复之后会悬空。"""
+    """Sheets, reference images and reference audio may only point to files under this asset: sharing another asset's
+    file would leave it dangling after renames, deletions and restores.
+
+    资产图、参考图与参考音频只能指向本资产名下的文件：共用别的资产的文件，改名、删除与恢复之后会悬空。"""
     field = foreign_named_file_field(spec, name, entry, values)
     if field is not None:
         key = "asset_sheet_file_not_owned" if field == spec.sheet_field else "asset_reference_file_not_owned"
@@ -112,7 +132,10 @@ def _require_owned_files(spec: AssetSpec, name: str, entry: Mapping[str, Any], v
 
 
 class _InvalidFieldValue(Exception):
-    """PATCH 请求体中某字段的值未通过业务校验（区别于类型校验，类型错误已在边界 422）。"""
+    """The value of a field in a PATCH request body failed business validation (distinct from type validation; type
+    errors already got 422 at the boundary).
+
+    PATCH 请求体中某字段的值未通过业务校验（区别于类型校验，类型错误已在边界 422）。"""
 
     def __init__(self, field: str):
         self.field = field
@@ -136,6 +159,7 @@ class _MergeRequest(BaseModel):
     dry_run: bool = False
 
 
+#: Merge rejection reason -> i18n key. Types that cannot be merged do not register the merge route and never get here.
 #: 合并被拒绝的原因 → i18n key。类型不可合并的类型不注册合并路由，走不到这里。
 _MERGE_REJECTION_KEYS: dict[str, str] = {
     "same_asset": "asset_merge_same_asset",
@@ -144,7 +168,9 @@ _MERGE_REJECTION_KEYS: dict[str, str] = {
 
 
 def merge_report_payload(report: AssetMergeReport) -> dict[str, Any]:
-    """合并资产路由的响应体：预览与执行共用同一份字段。"""
+    """Response body of the asset merge route: preview and execution share the same fields.
+
+    合并资产路由的响应体：预览与执行共用同一份字段。"""
     return {
         "dry_run": report.dry_run,
         "source": report.source,
@@ -195,7 +221,12 @@ def build_asset_router(
     asset_type: str,
     pm_getter: Callable[[], ProjectManager],
 ) -> APIRouter:
-    """构造单一类型的项目级资产 CRUD 路由。
+    """Build the project-level asset CRUD routes for one type.
+
+    pm_getter should be a lambda that reads get_project_manager dynamically on each call, so monkeypatch in tests
+    takes effect.
+
+    构造单一类型的项目级资产 CRUD 路由。
 
     pm_getter 应为 lambda，每次调用动态读取 get_project_manager，确保 monkeypatch
     测试生效。
@@ -217,6 +248,8 @@ def build_asset_router(
         req: _CreateRequest,
         _t: Translator,
     ):
+        # The name is put into file paths and single-segment route parameters; path-unsafe names are rejected at the
+        # boundary, otherwise later generation and access by name (PATCH/DELETE/{name}) would all break.
         # 名称会被拼进文件路径与单段路由参数，路径不安全的名字在边界即拒绝，
         # 否则后续生成与按名访问（PATCH/DELETE/{name}）全部失效。
         try:
@@ -224,6 +257,10 @@ def build_asset_router(
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=_t("asset_invalid_name", name=req.name)) from exc
         extras = req.model_extra or {}
+        # String fields (voice_style / reference_image / reference_audio etc.) and list fields (reference_images /
+        # selling_points etc.) are type-checked at creation; invalid types get 422 at the boundary, avoiding pollution
+        # of project.json. The PATCH path already does the same validation (see the update_fields validation); the
+        # create path previously missed it, and with extra="allow" callers could pass any JSON type.
         # 字符串字段（voice_style / reference_image / reference_audio 等）与列表字段
         # （reference_images / selling_points 等）在创建时即校验类型，非法类型 422 在
         # 边界拦截，避免污染 project.json——PATCH 路径已做同等校验（见 update_fields
@@ -231,6 +268,11 @@ def build_asset_router(
         for field in spec.extra_string_fields:
             value = extras.get(field)
             if value is None:
+                # None is treated as not provided: not rejected, but it must be removed from extras, otherwise the
+                # default in entry[field] = extras.get(field, "") below does not take effect (dict.get does not fall
+                # back to the default when the field exists with value None), and None instead of an empty string
+                # would be written to project.json, breaking the persistence contract that the field "is always a
+                # string".
                 # None 视同未提供：不拒绝，但要从 extras 摘除，否则下面
                 # entry[field] = extras.get(field, "") 的默认值不生效
                 # （字段存在但值为 None 时 dict.get 不会回退到默认值），
@@ -240,6 +282,12 @@ def build_asset_router(
             elif not isinstance(value, str):
                 raise _not_a_string(field)
             elif field == "voice_notice_dismissed_at":
+                # A newly created character has no voice_updated_at yet, so the PATCH-side check "must equal the
+                # current voice_updated_at" can never hold here (the value does not exist); reject creation carrying
+                # this field outright, to prevent bypassing the PATCH equality check and writing a far-future
+                # timestamp that permanently suppresses the legacy transition banner. Real users may trigger this
+                # (e.g. copying an existing character's serialized form wholesale into a create request body), so like
+                # the same-named PATCH check it must be translated.
                 # 新建角色尚无 voice_updated_at，PATCH 侧「必须等于当前 voice_updated_at」的
                 # 校验在此处恒不成立（值不存在）；直接拒绝创建时携带该字段，防止绕过
                 # PATCH 的等值校验写入远未来时间戳，永久压制存量过渡横幅。真实用户可能
@@ -255,6 +303,9 @@ def build_asset_router(
                 entry: dict[str, Any] = {"description": req.description, spec.sheet_field: ""}
                 for field in spec.extra_string_fields:
                     entry[field] = extras.get(field, "")
+                # When creation already carries reference_audio, voice_updated_at must likewise be stamped
+                # mechanically: same reason as the PATCH-side stamping of the same field, otherwise this character's
+                # legacy clip banner would never notice that "a voice was set".
                 # 创建即携带 reference_audio 时同样须机械戳 voice_updated_at：与 PATCH 侧
                 # 同一字段的同一补戳理由一致，否则该角色的存量片段横幅永远感知不到这次
                 # 「设置了声音」。
@@ -262,6 +313,8 @@ def build_asset_router(
                     entry["voice_updated_at"] = datetime.now(UTC).isoformat()
                 for field in spec.extra_list_fields:
                     entry[field] = list(extras.get(field) or [])
+                # Derivatives are registered only via the derivative sub-resource: same-named fields in the create
+                # request body are never saved, and new entries always get an empty list.
                 # 衍生只经衍生子资源登记：创建请求体里的同名字段一律不落盘，新条目一律空表。
                 if spec.supports_derivatives:
                     entry[DERIVATIVES_FIELD] = {}
@@ -270,6 +323,8 @@ def build_asset_router(
                 if not ok:
                     raise HTTPException(status_code=409, detail=_t(keys["exists"], name=name))
                 data = manager.load_project(project_name)
+                # When the trash contains a deletion record with the same name, tell the frontend so it can prompt the
+                # creator that the previous sheet can be recovered.
                 # 回收站里有同名的删除记录时告诉前端，提示创作者可以把之前的资产图找回来。
                 trash_record = asset_trash.deleted_asset_record(
                     manager.get_project_path(project_name), asset_type, name
@@ -294,6 +349,9 @@ def build_asset_router(
         req: dict[str, Any],
         _t: Translator,
     ):
+        # Type-check all writable fields before writing. req is dict[str, Any]; if the client passes a wrong type it
+        # would pollute project.json and cause a TypeError downstream (e.g. execute_character_task joining the
+        # reference_image path). 422 at the boundary. String fields must be str, list fields must be lists of strings.
         # 写入前对所有可写字段做类型校验。req 是 dict[str, Any]，若客户端传入错误类型
         # 会污染 project.json 并在下游 (例如 execute_character_task 拼接 reference_image
         # 路径) 引发 TypeError。422 在边界拦截。字符串字段须为 str，列表字段须为字符串列表。
@@ -312,16 +370,25 @@ def build_asset_router(
                     _require_owned_files(spec, entry_name, entry, req)
                     for field in (*update_fields, *update_list_fields):
                         if req.get(field) is not None:
+                            # voice_notice_dismissed_at means "the voice version acknowledged" and must echo back
+                            # exactly the character's own voice_updated_at; allowing any string would let the client
+                            # write a far-future timestamp that permanently suppresses the legacy transition banner.
                             # voice_notice_dismissed_at 语义是「已确认到的声音版本」，必须原样
                             # 回填角色自己的 voice_updated_at；放行任意字符串会让客户端写入
                             # 远未来时间戳，永久压制存量过渡横幅。
                             if field == "voice_notice_dismissed_at" and req[field] != entry.get("voice_updated_at"):
                                 raise _InvalidFieldValue(field)
+                            # When reference_audio is changed via the generic PATCH, voice_updated_at must be
+                            # refreshed in sync: the field is still in the writable set here, and without stamping,
+                            # changing the voice via this path would leave the legacy transition banner unaware of the
+                            # change, or not reappear after being dismissed.
                             # reference_audio 经通用 PATCH 修改时必须同步刷新 voice_updated_at：
                             # 该字段仍在此处的可写集合内，若不补戳，经这条路径改声音会让
                             # 存量过渡横幅感知不到变化，或已关闭后不再重现。
                             if field == "reference_audio" and req[field] != entry.get("reference_audio"):
                                 entry["voice_updated_at"] = datetime.now(UTC).isoformat()
+                            # Aliases are normalized by name equality: trim whitespace, dedupe, and drop the one equal
+                            # to the asset name.
                             # 别名按名称判等规范化：去空白、去重、去掉与资产同名的一项。
                             if field == ALIASES_FIELD:
                                 entry[field] = []
@@ -339,6 +406,10 @@ def build_asset_router(
         except KeyError as exc:
             raise HTTPException(status_code=404, detail=_t(keys["not_found"], name=entry_name)) from exc
         except _InvalidFieldValue as exc:
+            # Unlike the neighboring type-check 422 ("field ... must be a string"): this path can be triggered without
+            # the client deliberately crafting an invalid request: if the voice is updated again after the banner
+            # renders and the user then clicks dismiss, it triggers; it is an error real users may see and must be
+            # translated.
             # 与相邻的类型校验 422（"field ... must be a string"）不同：这条路径不需要
             # 客户端主动构造非法请求即可触发——横幅渲染后声音被再次更新、用户随后才点击
             # 关闭即会触发，是真实用户可能看到的错误，须走翻译。
@@ -405,6 +476,8 @@ def build_asset_router(
         except FileNotFoundError as exc:
             raise NotFoundError("project_not_found", name=project_name) from exc
         except ValueError as exc:
+            # Rare cases such as rejection by the structural "no worse" check: nothing was saved; prompt the user to
+            # retry or check the project data.
             # 结构「不更坏」校验拒绝等罕见情形：整体未落盘，提示用户重试或检查项目数据。
             logger.exception("资产重命名被校验拒绝")
             raise HTTPException(status_code=422, detail=_t("asset_rename_rejected", name=entry_name)) from exc
@@ -463,6 +536,8 @@ def build_asset_router(
             except FileNotFoundError as exc:
                 raise NotFoundError("project_not_found", name=project_name) from exc
             except ValueError as exc:
+                # Rare cases such as rejection by the structural "no worse" check: nothing was saved; prompt the user
+                # to retry or check the project data.
                 # 结构「不更坏」校验拒绝等罕见情形：整体未落盘，提示用户重试或检查项目数据。
                 logger.exception("资产合并被校验拒绝")
                 raise HTTPException(status_code=422, detail=_t("asset_merge_rejected", name=entry_name)) from exc

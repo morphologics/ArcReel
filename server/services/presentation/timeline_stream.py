@@ -267,7 +267,7 @@ async def _build(build: tuple[str, str]) -> None:
                     )
                     await asyncio.to_thread(os.replace, partial, stream_dir / f"{key}.mp4")
                 finally:
-                    await asyncio.to_thread(shutil.rmtree, workspace, True)
+                    await asyncio.to_thread(shutil.rmtree, workspace, True)  # hard-delete: temp -- this build's scratch folder
         job = _JOBS[build]
         wanted = {f"{key}.mp4" for key in job.keys}
         final_dir = job.stream_dir
@@ -275,7 +275,7 @@ async def _build(build: tuple[str, str]) -> None:
         def prune() -> None:
             for entry in final_dir.iterdir():
                 if entry.is_file() and entry.suffix == ".mp4" and entry.name not in wanted:
-                    entry.unlink(missing_ok=True)  # hard-delete: cache -- an old revision's stream piece
+                    entry.unlink(missing_ok=True)  # hard-delete: derived -- an old revision's stream piece, rebuilt from the timeline on demand
 
         await asyncio.to_thread(prune)
     except Exception:

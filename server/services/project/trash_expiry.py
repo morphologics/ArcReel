@@ -1,4 +1,6 @@
-"""项目回收站与已删除项目的过期清理：应用启动时清一次，之后定期清理。"""
+"""Expiry cleanup of the project trash and deleted projects: once at application startup, then periodically.
+
+项目回收站与已删除项目的过期清理：应用启动时清一次，之后定期清理。"""
 
 from __future__ import annotations
 
@@ -12,7 +14,7 @@ from lib.project import deleted_projects, project_trash
 
 logger = logging.getLogger(__name__)
 
-#: 保留期按天计，每 6 小时清一次足够及时。
+#: Retention is counted in days, so cleaning every 6 hours is timely enough. / 保留期按天计，每 6 小时清一次足够及时。
 SWEEP_INTERVAL_SECONDS = 6 * 3600
 
 
@@ -24,6 +26,8 @@ async def _sweep_loop(layout: DataRootLayout) -> None:
         except Exception:
             logger.warning("项目回收站过期清理列项目失败，等下一轮", exc_info=True)
             project_dirs = []
+        # One transaction per project: on shutdown only wait for the project currently being cleaned; a failure in one
+        # project does not affect the others.
         # 按项目各成一个事务：关停时只等正在清理的那个项目；单个项目失败不影响其余项目。
         for project_dir in project_dirs:
             try:
@@ -43,7 +47,9 @@ async def _sweep_loop(layout: DataRootLayout) -> None:
 
 
 def start_trash_expiry(layout: DataRootLayout) -> asyncio.Task[None]:
-    """启动后台清理循环：立即清一次，之后每隔 :data:`SWEEP_INTERVAL_SECONDS` 一次。"""
+    """Start the background cleanup loop: clean once immediately, then every :data:`SWEEP_INTERVAL_SECONDS`.
+
+    启动后台清理循环：立即清一次，之后每隔 :data:`SWEEP_INTERVAL_SECONDS` 一次。"""
     return asyncio.get_running_loop().create_task(_sweep_loop(layout), name="project-trash-expiry")
 
 

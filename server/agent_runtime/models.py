@@ -11,7 +11,14 @@ SessionStatus = Literal["idle", "running", "completed", "error", "interrupted", 
 
 @dataclass(frozen=True, slots=True)
 class SubscriptionReady:
-    """会话消息流的首个事件：订阅已原子建立的屏障标记。
+    """First event of the session message stream: a barrier marker that the subscription has been established
+    atomically.
+
+    After consuming this event the consumer can be sure the live broadcasts after it have no gap: the entry stream
+    uses it as the boundary, first back-filling existing entries from the DB and then consuming live messages, with
+    duplicates filtered by the seq threshold (identity comparison).
+
+    会话消息流的首个事件：订阅已原子建立的屏障标记。
 
     消费方消费到该事件后，可确信其后的直播广播无缝隙——entry 流以此为界
     先补库读存量条目，再消费直播消息，重复由 seq 门槛过滤（身份比对）。
@@ -20,14 +27,21 @@ class SubscriptionReady:
 
 @dataclass(frozen=True, slots=True)
 class LiveMessage:
-    """会话消息流的直播事件：订阅屏障之后逐条广播的消息。"""
+    """Live event of the session message stream: messages broadcast one by one after the subscription barrier.
+
+    会话消息流的直播事件：订阅屏障之后逐条广播的消息。"""
 
     message: dict[str, Any]
 
 
 @dataclass(frozen=True, slots=True)
 class Heartbeat:
-    """会话消息流的心跳事件：idle_timeout 内无消息时产出。
+    """Heartbeat event of the session message stream: produced when there is no message within idle_timeout.
+
+    The consumer runs liveness self-checks on it (SSE checks for disconnect, sync collectors check deadline/session
+    state), guaranteeing a deterministic wake-up even during idle periods (see ADR-0005).
+
+    会话消息流的心跳事件：idle_timeout 内无消息时产出。
 
     消费方在其上执行存活自检（SSE 查断线、同步收集方查 deadline/会话状态），
     保证空闲期也有确定性的醒来时机（见 ADR-0005）。
@@ -44,7 +58,14 @@ WithdrawalIntent = Literal["edit", "delete"]
 
 @dataclass(slots=True)
 class QueuedMessage:
-    """排队消息：已交给 CLI、尚未被 Agent 接纳进对话的用户消息（服务端内存态，随会话清理）。
+    """Queued message: a user message handed to the CLI but not yet accepted into the conversation by the Agent (server
+    in-memory state, cleaned up with the session).
+
+    ``id`` is the uuid of the user entry after acceptance and does not change over the message's lifetime;
+    ``cli_uuid`` is the message uuid carried when sent to the CLI, by which the CLI's ``command_lifecycle`` frames
+    and user message replay identify this message.
+
+    排队消息：已交给 CLI、尚未被 Agent 接纳进对话的用户消息（服务端内存态，随会话清理）。
 
     ``id`` 即被接纳后用户条目的 uuid，在消息的整个生命周期内不变；``cli_uuid`` 是送入 CLI 时
     携带的消息 uuid，CLI 的 ``command_lifecycle`` 帧与用户消息回放都以它指认这条消息。
@@ -70,7 +91,9 @@ class QueuedMessage:
         self.id = str(self.entry["uuid"])
 
     def to_payload(self) -> dict[str, Any]:
-        """对外形状：发送响应与 entry 流的排队消息事件共用。"""
+        """External shape: shared by the send response and the queued message event of the entry stream.
+
+        对外形状：发送响应与 entry 流的排队消息事件共用。"""
         return {
             "id": self.id,
             "content": self.entry.get("content", []),
@@ -90,7 +113,7 @@ SessionStreamEvent = SubscriptionReady | LiveMessage | Heartbeat
 class SessionMeta(BaseModel):
     """Session metadata stored in database."""
 
-    id: str  # 对外暴露，填充 sdk_session_id 值
+    id: str  # Exposed externally, filled with the sdk_session_id value / 对外暴露，填充 sdk_session_id 值
     project_name: str
     title: str = ""
     status: SessionStatus = "idle"

@@ -1,4 +1,11 @@
-"""提示词编写的 Web 入口。
+"""Web entry point for prompt authoring.
+
+"AI write / AI rewrite" calls the same service command as the Agent's ``generate_episode_script``: target selection
+for filling gaps and explicit rewrites, overwrite confirmation and saving drafts are all inside the service; the
+route only maps the result to HTTP. It returns the generation batch right after submission, and task progress is
+shown through task events. Instructions are saved per episode and prefilled the next time the dialog opens.
+
+提示词编写的 Web 入口。
 
 「AI 编写 / AI 重写」与 Agent 的 ``generate_episode_script`` 调用同一个服务命令：补缺与显式重写的
 对象选择、覆盖确认与草稿落盘都在服务内，路由只负责把结果映射成 HTTP。提交后立即返回生成批次，

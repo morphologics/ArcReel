@@ -66,6 +66,12 @@ def build_remote_mcp_server(
         "arcreel",
         tools=remote_tools(AGENT_TOOLSET, projects=projects, services=services),
         token_verifier=token_verifier or ArcApiKeyVerifier(),
+        # ArcReel only accepts static arc- API Keys and has no OAuth authorization server (ADR 0065), so it does not
+        # declare RFC 9728 protected resource metadata: the MCP spec requires the metadata to list at least one
+        # authorization server, and declaring it would only lead discovery clients into an OAuth flow doomed to fail.
+        # Without resource_server_url, a 401 returns only a plain Bearer challenge; issuer_url is a required SDK field
+        # and only appears externally when auth routes are registered or metadata is declared, neither of which
+        # happens here.
         # ArcReel 只认静态 arc- API Key，没有 OAuth 授权服务器（ADR 0065），不声明 RFC 9728
         # 受保护资源元数据：MCP 规范要求元数据至少列出一个授权服务器，声明了只会把发现型客户端
         # 引进注定失败的 OAuth 流程。不设 resource_server_url 时 401 只回普通 Bearer challenge；
@@ -79,6 +85,12 @@ def build_remote_mcp_server(
         streamable_http_path="/",
         json_response=False,
         max_request_body_size=_MAX_REQUEST_BODY_BYTES,
+        # The endpoint enforces an arc- API Key on every request, and that key never lives in the browser as a cookie
+        # / session, so requests rebound to this endpoint get no credentials and can only receive 401 -- a Host
+        # allowlist is no security boundary here and would only block legitimate deployments; Host ownership is
+        # handled by the reverse proxy and the deployment setup. Cross-origin protection for browser clients is
+        # handled at a single point by the app-level CORSMiddleware (CORS_ORIGINS, see server/cors_config.py). Turning
+        # this switch off does not affect the SDK's Content-Type check on POST.
         # 端点每请求强制 arc- API Key，且该 Key 从不以 cookie / session 形式存在于浏览器，
         # 重绑定到本端点的请求拿不到凭证、只能收 401——Host 白名单在此不构成安全边界，
         # 只会拦下合法部署；Host 归属由反向代理与部署形态承担。浏览器型客户端的跨源防护由
@@ -119,7 +131,14 @@ REMOTE_MCP_PATH = "/mcp"
 
 
 class _MountPrefixEndpoint:
-    """把挂载前缀本身（无末尾斜杠）按 Mount 的子作用域交给同一子应用，代替 307 重定向。
+    """Hand the mount prefix itself (no trailing slash) to the same sub-app with Mount's child scope, instead of a 307
+    redirect.
+
+    Consistent with Starlette ``Mount``: ``path`` keeps the full path and only the prefix is merged into
+    ``root_path``; the sub-app strips the prefix itself via ``get_route_path``. If ``path`` were changed to ``"/"``,
+    it would not match ``Mount``'s child scope.
+
+    把挂载前缀本身（无末尾斜杠）按 Mount 的子作用域交给同一子应用，代替 307 重定向。
 
     与 Starlette ``Mount`` 一致：``path`` 保留完整路径，只把前缀并入 ``root_path``，子应用经
     ``get_route_path`` 自行去掉前缀；``path`` 若改成 ``"/"``，会和 ``Mount`` 的子作用域不一致。
@@ -143,7 +162,13 @@ class _MountPrefixEndpoint:
 
 
 def mount_remote_mcp(app: Starlette, mcp_app: ASGIApp) -> None:
-    """把远程 MCP 端点挂到 ``/mcp``。
+    """Mount the remote MCP endpoint at ``/mcp``.
+
+    The MCP spec treats ``/mcp`` without a trailing slash as the canonical endpoint form, so it is handled directly
+    here instead of returning 307: some clients do not follow POST redirects, and under reverse-proxy subpath
+    deployments a relative ``Location`` also escapes the prefix. ``/mcp/`` stays as a compatibility entry point.
+
+    把远程 MCP 端点挂到 ``/mcp``。
 
     MCP 规范以无末尾斜杠的 ``/mcp`` 为端点的规范形式，这里直接处理而不回 307：部分客户端不跟随
     POST 重定向，反向代理子路径部署下相对 ``Location`` 也会跳出前缀。``/mcp/`` 保留为兼容入口。

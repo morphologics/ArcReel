@@ -1,4 +1,22 @@
-"""重生一张资产图的连带影响：会有多少张分镜图、多少段视频、多少张衍生资产图转为过期。
+"""Knock-on impact of regenerating an asset sheet: how many storyboard images, video segments and derivative asset
+sheets turn stale.
+
+After an asset sheet is regenerated its bytes change, so the recorded basis of current artifacts that use it as a
+reference image no longer matches, and they go from current to stale. This only counts artifacts that are **current
+right now** and whose generation inputs include this asset sheet -- ones already stale are not counted again:
+
+- Storyboard images: the shot's reference fields (``characters_in_*`` / ``scenes`` / ``props`` /
+  ``products_in_shot``) name it. A derivative reference ``base look/derivative`` uses the derivative's own asset
+  sheet and does not count as referencing the base look.
+- Videos: only reference-to-video uses asset sheets directly as references; storyboard-to-video takes the storyboard
+  image as input, so regenerating an asset sheet does not make it stale directly. A reference-to-video unit's
+  references come from the body's ``@[name]`` and the reference fields.
+- Derivative asset sheets: the base look's asset sheet is the only input of a generated derivative asset sheet, so
+  after the base look is regenerated all its current generated derivative images go stale. Derivative asset sheets
+  that were uploaded or brought in from the asset library are finished products; their basis is decided only by the
+  image bytes, they do not go stale when the base look is regenerated, and are not counted.
+
+重生一张资产图的连带影响：会有多少张分镜图、多少段视频、多少张衍生资产图转为过期。
 
 资产图重生后字节变了，以它为参考图的现行产物的登记依据随之对不上，由现行转为过期。这里只数
 **现在是现行**、且生成输入里带着这张资产图的产物——已经过期的不重复计入：
@@ -55,7 +73,10 @@ def _is_current(resolver: ArtifactCurrencyResolver, key: ArtifactKey, artifact_p
 
 
 def _follows_owner_sheet(resolver: ArtifactCurrencyResolver, key: ArtifactKey, artifact_path: object) -> bool:
-    """这张衍生资产图现行、且依据含本体资产图：作为成品带入的衍生图按图字节判定，本体重生不影响它。"""
+    """This derivative asset sheet is current and its basis includes the base look's asset sheet: derivative images
+    brought in as finished products are judged by image bytes, unaffected by base look regeneration.
+
+    这张衍生资产图现行、且依据含本体资产图：作为成品带入的衍生图按图字节判定，本体重生不影响它。"""
     if not _is_current(resolver, key, artifact_path):
         return False
     basis = resolver.resolve_basis(key)
@@ -86,7 +107,10 @@ def asset_regeneration_impact(
     *,
     derivative_name: str | None = None,
 ) -> AssetRegenerationImpact:
-    """这张本体或衍生资产图此刻是否过期，以及重生它会让多少件现行产物过期；资产不存在抛 ``KeyError``。"""
+    """Whether this base look or derivative asset sheet is stale right now, and how many current artifacts regenerating
+    it would make stale; raises ``KeyError`` if the asset does not exist.
+
+    这张本体或衍生资产图此刻是否过期，以及重生它会让多少件现行产物过期；资产不存在抛 ``KeyError``。"""
 
     spec = ASSET_SPECS[asset_type]
     project = projects.load_project(project_name)

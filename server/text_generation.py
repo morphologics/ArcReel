@@ -122,10 +122,14 @@ from server.services.tasks.video_caps import reference_request_facts_lookup, sto
 
 logger = logging.getLogger(__name__)
 
+# Length limit for Agent-supplied instructions: overly long input makes token usage run away and dilutes the model's
+# handling of the source text, so exceeding it is rejected early as a parameter error. The limit is generous enough
+# for instruction text and only blocks pathological input; shared by text generation and episode planning.
 # Agent 附加 instructions 的长度上限：超长会失控 token 用量并稀释模型对原文的处理，超限按参数错误提前拒绝。
 # 上限对附加指令文本足够宽松，仅挡病态输入；文本生成与分集规划共用。
 MAX_INSTRUCTIONS_LEN = 4000
 
+#: Refusal message given by the prompt authoring tool's request model when it receives the removed ``scope`` parameter.
 #: 提示词编写工具收到已取消的 ``scope`` 参数时的拒绝说明，由其请求模型给出。
 SCOPE_REMOVED_MESSAGE = (
     "scope 参数已取消：generate_episode_script 默认只编写正式脚本中全部待编写的条目；"
@@ -139,18 +143,25 @@ class TextGenerationRequest:
     source: str | None = None
     instructions: str | None = None
     dry_run: bool = False
-    #: 提示词编写的范围；为空时是全部待编写条目。
+    #: Scope of prompt authoring; when empty, all entries pending authoring. / 提示词编写的范围；为空时是全部待编写条目。
     entry_ids: tuple[str, ...] = ()
+    #: Prompt authoring explicitly rewrites all visual layers of the entries in scope; when False, only fills missing
+    #: visual layer fields.
     #: 提示词编写显式重写范围内条目的全部视觉层；为 False 时只补缺失的视觉层字段。
     rewrite: bool = False
+    #: Fingerprint of the final script the user approved overwriting, taken from ``prompt_overwrite.revision``; for a
+    #: whole redo, taken from ``script_overwrite.revision``.
     #: 用户认可覆盖的正式脚本指纹，取自 ``prompt_overwrite.revision``；整份重做时取自 ``script_overwrite.revision``。
     overwrite_revision: str | None = None
-    #: 仅广告/短片：整份重做，替换已有的正式脚本。
+    #: Ad/short only: whole redo, replacing the existing final script. / 仅广告/短片：整份重做，替换已有的正式脚本。
     regenerate: bool = False
 
     def __post_init__(self) -> None:
         if not is_int(self.episode, minimum=1):
             raise ValueError("episode must be a positive integer")
+        # After a JSON round trip of the queue payload, entry_ids is a list: normalize it to a tuple here so the two
+        # paths "constructed from the tool entry" and "restored from the payload" get the same value, and the task
+        # fact comparison does not diverge on container type.
         # 队列 payload 经 JSON 往返后 entry_ids 是 list：在此归一为 tuple，让「从工具入口构造」
         # 与「从 payload 还原」两条路径得到同一个值，任务事实比对才不会因容器类型分叉。
         entry_ids = tuple(self.entry_ids)
@@ -159,7 +170,14 @@ class TextGenerationRequest:
         object.__setattr__(self, "entry_ids", entry_ids)
 
     def to_payload(self) -> dict[str, object]:
-        """队列任务 payload：只用 JSON 原生类型。
+        """Queue task payload: only JSON-native types.
+
+        ``asdict`` leaves ``entry_ids`` as a tuple, while the same payload read back from the database is a list;
+        the comparison "is this request the same thing as the running task" is by value equality, and the two
+        container types would make the same request look different, turning an idempotent submit into a task
+        conflict.
+
+        队列任务 payload：只用 JSON 原生类型。
 
         ``asdict`` 会把 ``entry_ids`` 留成 tuple，而从数据库读回来的同一份 payload 是 list；
         「本次请求与在跑任务是否同一件事」的比对按值相等判定，两种容器类型会让同一个请求
@@ -171,11 +189,18 @@ class TextGenerationRequest:
 @dataclass(frozen=True, slots=True)
 class TextGenerationResult:
     message: str
+    #: Locale-neutral ``{"key", "params"}`` warning entries (such as ``@[name]`` in a visual description without a
+    #: bound reference image), the same shape as the task's ``result.warnings``; the read side renders them per
+    #: language.
     #: locale-neutral 的 ``{"key", "params"}`` 提示条目（如画面描述里没绑定参考图的 ``@[名称]``），
     #: 与任务 ``result.warnings`` 同一形态，读侧按语言渲染。
     warnings: list[dict[str, Any]] = dataclass_field(default_factory=list)
+    #: New assets and derivatives registered by this ad/short whole generation (``{"type", "name"}``), handed to the
+    #: Web with the task result for listing.
     #: 广告/短片整份生成本次登记的新资产与衍生（``{"type", "name"}``），随任务结果交给 Web 列出。
     new_assets: list[dict[str, str]] = dataclass_field(default_factory=list)
+    #: Prompt authoring had no entries pending authoring and did not call the text model; the Web uses this to prompt
+    #: the user to tick overwrite and rewrite.
     #: 提示词编写没有待编写的条目、未调用文本模型；Web 据此提示用户勾选覆盖后重写。
     no_pending_authoring: bool = False
 
@@ -185,11 +210,17 @@ class TextGenerationError(Exception):
 
 
 class UnexpectedTextGenerationError(TextGenerationError):
-    """生成过程中的意外失败，原异常在 ``__cause__``：调用方据此区分供应商拒绝与可重试的任务失败。"""
+    """Unexpected failure during generation, with the original exception in ``__cause__``: callers use it to tell a
+    provider refusal from a retryable task failure.
+
+    生成过程中的意外失败，原异常在 ``__cause__``：调用方据此区分供应商拒绝与可重试的任务失败。"""
 
 
 class PromptAuthoringInputError(TextGenerationError):
-    """提示词编写的输入没有通过调用文本模型前的预判，修改输入后才能编写；携带任务失败的问题码与参数。"""
+    """The prompt authoring input did not pass the pre-check before calling the text model and can only be authored
+    after the input is changed; carries the task failure's problem code and parameters.
+
+    提示词编写的输入没有通过调用文本模型前的预判，修改输入后才能编写；携带任务失败的问题码与参数。"""
 
     def __init__(self, message: str, *, code: str, params: dict[str, Any]) -> None:
         super().__init__(message)
@@ -198,7 +229,10 @@ class PromptAuthoringInputError(TextGenerationError):
 
 
 class PromptOverwriteRequiredError(TextGenerationError):
-    """提示词显式重写会替换已有视觉层内容，而调用方未认可覆盖；携带丢失清单（含 ``text``）。"""
+    """An explicit prompt rewrite would replace existing visual layer content, and the caller has not approved
+    overwriting; carries the loss list (including ``text``).
+
+    提示词显式重写会替换已有视觉层内容，而调用方未认可覆盖；携带丢失清单（含 ``text``）。"""
 
     def __init__(self, message: str, overwrite: dict[str, Any]) -> None:
         super().__init__(message)
@@ -217,7 +251,10 @@ def _prompt_overwrite_error(episode_label: str, exc: PromptOverwriteRequired) ->
 
 
 class AdScriptRejectedError(TextGenerationError):
-    """广告/短片整份生成的产出违约：任务失败，正式脚本、资产与草稿都不变；携带逐条违约。"""
+    """Output violations of an ad/short whole generation: the task fails, and the final script, assets and draft all
+    stay unchanged; carries per-item violations.
+
+    广告/短片整份生成的产出违约：任务失败，正式脚本、资产与草稿都不变；携带逐条违约。"""
 
     def __init__(self, message: str, problems: Sequence[str]) -> None:
         super().__init__(message)
@@ -225,7 +262,13 @@ class AdScriptRejectedError(TextGenerationError):
 
 
 class VideoRequestFactsUnavailableError(TextGenerationError):
-    """视频请求事实解析不出（模型能力不满足、时长档位缺失等），文本任务无法继续；携带失败对象。
+    """The video request facts cannot be resolved (model capability not met, duration options missing, etc.), so the
+    text task cannot continue; carries the failure object.
+
+    The problem code, parameters and fix guidance of ``failure`` go into the tool problem and task failure as is;
+    the read side renders the reason by problem code.
+
+    视频请求事实解析不出（模型能力不满足、时长档位缺失等），文本任务无法继续；携带失败对象。
 
     ``failure`` 的问题码、参数与修复指引原样进入工具问题与任务失败，读侧按问题码渲染原因。
     """
@@ -236,7 +279,10 @@ class VideoRequestFactsUnavailableError(TextGenerationError):
 
 
 class ScriptOverwriteRequiredError(TextGenerationError):
-    """内容确认会覆盖该集已有的正式脚本，而调用方未认可覆盖；携带将被移除的条目与产物摘要。"""
+    """Content review would overwrite the episode's existing final script, and the caller has not approved overwriting;
+    carries the summary of entries and artifacts to be removed.
+
+    内容确认会覆盖该集已有的正式脚本，而调用方未认可覆盖；携带将被移除的条目与产物摘要。"""
 
     def __init__(self, message: str, overwrite: dict[str, Any] | None) -> None:
         super().__init__(message)
@@ -273,7 +319,10 @@ def _after_draft_revision_check[**P, T](
     *args: P.args,
     **kwargs: P.kwargs,
 ) -> T:
-    """草稿修订校验与随后的写入放进同一次线程调用，二者之间不让出事件循环。"""
+    """Draft revision validation and the following write go into the same thread call, without yielding the event loop
+    between them.
+
+    草稿修订校验与随后的写入放进同一次线程调用，二者之间不让出事件循环。"""
     _assert_draft_revision(draft_path, expected)
     return func(*args, **kwargs)
 
@@ -333,7 +382,10 @@ def _commit_generated_reference_script_plan(
 
 
 def plan_item_ids(path: Path) -> list[str]:
-    """盘上那份脚本规划的条目编号（按顺序）；文件不在或读不出时为空。参考生视频规划的单元数组键是 ``units``。"""
+    """Entry numbers (in order) of the script plan on disk; empty when the file is missing or unreadable. The unit
+    array key of a reference-to-video plan is ``units``.
+
+    盘上那份脚本规划的条目编号（按顺序）；文件不在或读不出时为空。参考生视频规划的单元数组键是 ``units``。"""
     try:
         content = json.loads(path.read_text(encoding="utf-8"))
         if isinstance(content, dict) and "units" in content:
@@ -355,7 +407,15 @@ async def reissue_plan_item_ids(
     *,
     keep: Collection[str] = (),
 ) -> None:
-    """脚本规划落盘前由服务端给条目发号，就地改写：编号只由服务端发，只分配、不复用。
+    """The server issues entry numbers before the script plan is written to disk, rewriting in place: numbers are only
+    issued by the server, only allocated, never reused.
+
+    ``keep`` holds numbers previously issued by the server for this script plan (on promotion, the numbers of the
+    final plan on disk): an entry carrying one of them, without duplicates, keeps it, so a plan promoted unchanged
+    stays identical word for word; numbers written by the model or in the draft itself are always replaced with
+    newly issued ones.
+
+    脚本规划落盘前由服务端给条目发号，就地改写：编号只由服务端发，只分配、不复用。
 
     ``keep`` 是此前已由服务端发给这份脚本规划的编号（晋升时盘上正式规划的编号）：条目带着其中之一且不重复时
     沿用，原样晋升的规划因此逐字不变；模型或草稿里自己写的编号一律换成新发的号。
@@ -438,7 +498,9 @@ def _instructions(value: Any) -> str | None:
 
 
 def _project_default_duration(project: dict[str, Any]) -> int | None:
-    """用户在项目里配置的默认秒数原样值；非法值按未配置。"""
+    """The raw default seconds value the user configured in the project; invalid values count as unconfigured.
+
+    用户在项目里配置的默认秒数原样值；非法值按未配置。"""
     raw = project.get("default_duration")
     if isinstance(raw, bool):
         return None
@@ -450,7 +512,12 @@ def _project_default_duration(project: dict[str, Any]) -> int | None:
 
 
 def video_facts_failure_text(failure: VideoRequestFactsFailure) -> str:
-    """视频请求事实解析不出时回给 Agent 的说明：按问题码陈述原因与出路，附问题码与参数摘要。
+    """Explanation returned to the Agent when the video request facts cannot be resolved: states the reason and way out
+    per problem code, with a summary of the problem code and parameters.
+
+    The problem code and parameters are the failure contract, same codes as preflight and execution.
+
+    视频请求事实解析不出时回给 Agent 的说明：按问题码陈述原因与出路，附问题码与参数摘要。
 
     问题码与参数就是失败契约，与预检、执行同码。
     """
@@ -463,7 +530,22 @@ async def fetch_storyboard_durations(
     *,
     config_resolver: ConfigResolver | None = None,
 ) -> tuple[int | None, list[int]]:
-    """分镜路线剧本规划的 ``(default_duration, supported_durations)``，档位取分镜桶的视频请求事实。
+    """``(default_duration, supported_durations)`` for storyboard-route script planning, with options from the
+    storyboard bucket's video request facts.
+
+    ``supported_durations`` has already been narrowed by the duration linkage constraint for the project resolution
+    (borrowing the planning options when the duration is fixed by the endpoint), the same result as storyboard
+    preflight and execution: the full set declared by the model does not include the "resolution↔duration"
+    constraint, and handing an un-narrowed set to the LLM would produce durations certain to be rejected at
+    execution. If the facts cannot be resolved (model not configured, options missing / invalid, narrowed to an
+    empty set), :class:`VideoRequestFactsError` is raised with no fallback to any option.
+
+    A ``default_duration`` that is not an option member is treated as None (i.e. back to the "auto" option, letting
+    the model pick by content pacing): the project stores the user's raw configured value, which may fall outside
+    the set after narrowing, and ``build_normalize_prompt`` is fail-loud for a non-member default -- not mapping it
+    to None would turn "a saved out-of-range default duration" into a hard failure of the whole tool.
+
+    分镜路线剧本规划的 ``(default_duration, supported_durations)``，档位取分镜桶的视频请求事实。
 
     ``supported_durations`` 已按项目分辨率经时长联动约束收窄（时长由端点固定时借规划档位），与
     分镜预检、执行同一份结果：型号声明的全集不含「分辨率↔时长」约束，未收窄的集合交给 LLM 会产出
@@ -481,7 +563,19 @@ async def fetch_storyboard_durations(
 
 
 def _parse_script_plan_json(response_text: str, model: type[BaseModel], *, label: str, top_shape: str) -> dict:
-    """解析并校验 script_plan 结构化响应为 dict；校验失败 fail-loud 抛 ValueError，不返回未校验内容。
+    """Parse and validate the script_plan structured response into a dict; on validation failure fail loud with
+    ValueError, never returning unvalidated content.
+
+    ``model`` is the same dynamic schema (i.e. response_schema) the call site builds from ``supported_durations``,
+    so local validation matches response_schema: even if the backend does not strictly enforce the schema, durations
+    outside supported_durations and missing fields are caught here. Validation failure raises instead of degrading
+    to keep the raw JSON -- otherwise unvalidated content would be written to disk as the final script_plan file
+    (downstream reads only guard the outermost shape and let it through), dragging invalid durations / missing
+    fields until prompt_authoring or the final save_script before they surface. Same convention as narration's
+    strict read in _load_narration_script_plan: only schema-validated content becomes the persisted script_plan
+    source of truth.
+
+    解析并校验 script_plan 结构化响应为 dict；校验失败 fail-loud 抛 ValueError，不返回未校验内容。
 
     ``model`` 取自调用处用 ``supported_durations`` 构造的同一份动态 schema（即 response_schema），
     令本地校验与 response_schema 同口径：即使 backend 未严格执行 schema，超出 supported_durations
@@ -504,12 +598,34 @@ def _parse_script_plan_json(response_text: str, model: type[BaseModel], *, label
 
 
 def _parse_normalized_content(response_text: str, model: type[BaseModel]) -> dict:
-    """drama script_plan（normalize）响应解析：见 ``_parse_script_plan_json``。"""
+    """Parse the drama script_plan (normalize) response: see ``_parse_script_plan_json``.
+
+    drama script_plan（normalize）响应解析：见 ``_parse_script_plan_json``。"""
     return _parse_script_plan_json(response_text, model, label="script_plan 规范化内容", top_shape="{title, scenes}")
 
 
 def load_novel_source(project_path: Path, source: str | None, *, episode: int) -> str:
-    """读取 script_plan 工具的源文：指定 source 文件，或缺省时本集派生源文；异常情况抛 ValueError。
+    """Read the source text for the script_plan tool: the given source file, or by default this episode's derived
+    source; raise ValueError in abnormal cases.
+
+    Shared by both kinds of script_plan tool, normalize / split: path escaping the root, missing file and empty
+    content all fail fast, and callers wrap the message in the tool error envelope.
+
+    The default (``source`` is None) resolves to ``source/episode_N.txt``, the same convention as
+    ``WorkflowTarget.source`` and the fingerprint source of ``ArtifactBasis``: the ``source/`` directory holds both
+    the original text and each episode's derived files, and concatenating the whole directory would send other
+    episodes' content into the prompt, giving every episode the same source. When the derived file is missing it
+    does not fall back to the original text -- that is equally "content outside this episode" -- and the error
+    points to running the episode planning tool to rebuild it first.
+
+    Besides the tool's own output, ``source`` is also passed in by ``revalidate_reference_script_plan_draft`` from
+    the draft's ``meta.source`` -- an Agent-editable JSON field whose runtime value the type annotation cannot
+    constrain. For non-str/None it raises ValueError directly instead of letting it reach ``safe_join``: there a
+    non-path type gives ``TypeError``, while this function's callers only catch ValueError, and letting TypeError
+    through would become an unhandled 500 in content review's read-time recomputation, instead of the intended
+    degraded state "cannot recompute".
+
+    读取 script_plan 工具的源文：指定 source 文件，或缺省时本集派生源文；异常情况抛 ValueError。
 
     normalize / split 两类 script_plan 工具共用：路径越界、文件缺失、内容为空均 fail-fast，
     调用方把消息包装为工具错误信封。
@@ -531,12 +647,18 @@ def load_novel_source(project_path: Path, source: str | None, *, episode: int) -
         raise ValueError("源文件路径不能为空")
     resolved = episode_source_relpath(episode) if source is None else source
     try:
+        # The default path is built from the episode number and is not untrusted input, but still goes through
+        # safe_join: the derived file may be a symlink pointing outside the project, and both branches sharing the
+        # same escape check leaves no gap that only the default path could hit.
         # 缺省路径由集号拼出、并非不可信输入，但仍走 safe_join：派生文件可能是指向项目外的
         # 符号链接，两条分支共用同一道越界校验才不留下只有缺省路径才踩得到的缝。
         source_path = safe_join(project_path, resolved)
     except PathTraversalError as exc:
         raise ValueError(f"路径超出项目目录: {resolved}") from exc
     if not source_path.is_file():
+        # Existing but not a file (e.g. pointing to a directory) is likewise treated as "source file not found":
+        # read_text() on a directory raises IsADirectoryError, which falls outside the ValueError this function's
+        # callers only catch, and would become an unhandled 500 in content review's read-time recomputation.
         # 存在但不是文件（如指向目录）同样按「未找到源文件」处理：直接 read_text() 对目录
         # 会抛 IsADirectoryError，落进本函数调用方一律只接的 ValueError 之外，在内容确认的
         # 读时重算里会变成未处理的 500。
@@ -571,12 +693,17 @@ def load_script_plan_source_with_basis(
 
 
 def uses_reference_video_units(project_data: dict[str, Any]) -> bool:
-    """脚本规划草稿仅适用于非广告的参考生视频项目。"""
+    """Script plan drafts only apply to non-ad reference-to-video projects.
+
+    脚本规划草稿仅适用于非广告的参考生视频项目。"""
     return project_data.get("content_mode", "narration") != "ad" and is_reference_video_project(project_data)
 
 
 class OperationNotAdmittedError(TextGenerationError):
-    """AI 操作的结构准入不成立；``reason`` 与制作状态 ``operations`` 里同一操作的理由码一致。"""
+    """Structural admission of the AI operation does not hold; ``reason`` matches the reason code of the same operation
+    in the workflow status ``operations``.
+
+    AI 操作的结构准入不成立；``reason`` 与制作状态 ``operations`` 里同一操作的理由码一致。"""
 
     def __init__(self, operation: str, admission: OperationAdmission, message: str) -> None:
         super().__init__(message)
@@ -594,13 +721,19 @@ def _refusal_text(reason: AdmissionReason | None, episode: int | None, detail: s
 def require_admitted(
     operation: str, admission: OperationAdmission, *, episode: int | None = None, detail: str = ""
 ) -> None:
-    """准入不成立时拒绝：理由码与制作状态同源，文案只作转述；``detail`` 补充入口自己知道的处置方式。"""
+    """Refuse when admission does not hold: the reason code shares its source with the workflow status and the text
+    only relays it; ``detail`` adds the remedy the entry point itself knows.
+
+    准入不成立时拒绝：理由码与制作状态同源，文案只作转述；``detail`` 补充入口自己知道的处置方式。"""
     if not admission.admitted:
         raise OperationNotAdmittedError(operation, admission, _refusal_text(admission.reason, episode, detail))
 
 
 def _prompt_authoring_draft_action(project_path: Path, episode: int) -> str:
-    """提示词编写草稿在场时的处置方式：按草稿是否可读、是否带违约定位分别给出。"""
+    """How to handle a prompt authoring draft that is present: given separately depending on whether the draft is
+    readable and whether it carries violation locations.
+
+    提示词编写草稿在场时的处置方式：按草稿是否可读、是否带违约定位分别给出。"""
     path = quarantine_path(project_path, episode, QUARANTINE_KIND_PROMPT_AUTHORING)
     draft = read_quarantine(project_path, episode, QUARANTINE_KIND_PROMPT_AUTHORING)
     if draft is None:
@@ -629,7 +762,10 @@ def _ad_overwrite_error(
 def _regenerate_preflight(
     project_path: Path, episode: int, *, content_mode: str | None, formal_present: bool, overwrite_revision: str | None
 ) -> None:
-    """整份重做的准入与覆盖确认：只适用于广告/短片，已有正式脚本时须认可它的丢失清单。"""
+    """Admission and overwrite confirmation of a whole redo: only applies to ad/short, and when a final script exists
+    its loss list must be approved.
+
+    整份重做的准入与覆盖确认：只适用于广告/短片，已有正式脚本时须认可它的丢失清单。"""
     if content_mode != "ad":
         raise TextGenerationError(
             "❌ regenerate 只适用于广告/短片；其他创作类型要整集重做，请重跑脚本规划并重新完成内容确认"
@@ -654,7 +790,10 @@ def prompt_authoring_preflight(
     overwrite_revision: str | None = None,
     regenerate: bool = False,
 ) -> None:
-    """复用制作状态的正式脚本、待编写条目与草稿事实，再调用同一份准入谓词。"""
+    """Reuse the workflow status facts for the final script, entries pending authoring and drafts, then call the same
+    admission predicate.
+
+    复用制作状态的正式脚本、待编写条目与草稿事实，再调用同一份准入谓词。"""
     projects = ProjectManager.for_project_dir(project_path)
     status = WorkflowStateService(projects).get_status(project_path.name, episode)
     if status.blockers:
@@ -710,7 +849,10 @@ def prompt_authoring_preflight(
 
 
 def script_plan_preflight(project_path: Path, project: Mapping[str, Any], episode: int, source: str | None) -> None:
-    """AI 规划脚本的准入：本集有集原文（按账本记录的来源判定）。显式指定源文件时以该文件为输入，由生成时校验。"""
+    """Admission for AI script planning: the episode has an episode source (judged by the source recorded in the
+    ledger). When a source file is given explicitly it is used as input and validated at generation time.
+
+    AI 规划脚本的准入：本集有集原文（按账本记录的来源判定）。显式指定源文件时以该文件为输入，由生成时校验。"""
     has_source = source is not None or episode_source_present(project_path, episode, episode_entry(project, episode))
     require_admitted(
         "prepare_script_plan",
@@ -764,6 +906,8 @@ async def generate_episode_script(
             project_path,
             config_resolver=config_resolver,
         )
+        # When a final script exists, only author entries; an ad project generates the whole thing only when it has no
+        # final script yet.
         # 正式剧本已存在时只编写条目；ad 项目尚无正式剧本才整份生成。
         formal_existed = await asyncio.to_thread(_formal_script_exists, project_path, generator.project_json, episode)
         rewritten: list[str] = []
@@ -794,6 +938,8 @@ async def generate_episode_script(
     except PromptAuthoringUnitRejected as exc:
         raise PromptAuthoringInputError(str(exc), code=exc.code, params=exc.params) from exc
     except PromptAuthoringTargetError as exc:
+        # A named entry not in the final script is the caller's error: report "generation refused" rather than letting
+        # it surface as internal_error, which would lead the Agent to retry the same certain-to-fail parameters as is.
         # 点名的条目不在正式剧本内是调用方的错：报「拒绝生成」而不是让它冒成 internal_error，
         # 后者会引导 Agent 原样重试同一份必然失败的参数。
         raise TextGenerationError(f"❌ 编写范围无效: {exc}") from exc
@@ -835,13 +981,18 @@ def _rewritten_mention_warnings(
     result_path: Path,
     rewritten: Sequence[str],
 ) -> list[dict[str, Any]]:
-    """本次重写条目的画面描述里没绑定参考图的 ``@[名称]``；剧本读不回来时不阻断回执。"""
+    """``@[name]`` without a bound reference image in the visual descriptions of the entries rewritten this time; if
+    the script cannot be read back, the receipt is not blocked.
+
+    本次重写条目的画面描述里没绑定参考图的 ``@[名称]``；剧本读不回来时不阻断回执。"""
     if not rewritten:
         return []
     try:
         project = projects.load_project(project_name)
         script = projects.load_script_readonly(project_name, result_path.name)
     except (OSError, ValueError):
+        # The script is already on disk; the receipt must not fail because reading it back failed (file missing, I/O
+        # fault, invalid JSON).
         # 剧本已落盘，回执不能因为读回失败（文件缺失、I/O 故障、JSON 不合法）而失败。
         return []
     return storyboard_mention_warnings(project, script, unit_ids=rewritten)
@@ -909,7 +1060,10 @@ def _unregistered_reference_violations(
     item_index: int,
     item_id: str | None,
 ) -> list[DraftViolation]:
-    """一个条目的引用数组里既未登记、也不在本次新增项中的资产名。报告回显模型写的原名而非归一形式。"""
+    """Asset names in one entry's reference array that are neither registered nor among this run's new items. The
+    report echoes the original name the model wrote, not the normalized form.
+
+    一个条目的引用数组里既未登记、也不在本次新增项中的资产名。报告回显模型写的原名而非归一形式。"""
     violations: list[DraftViolation] = []
     for field, asset_type in _REFERENCE_LIST_FIELDS[route]:
         names = item.get(field) or []
@@ -932,7 +1086,10 @@ def _unregistered_reference_violations(
 def collect_drama_violations(
     scenes: list[Any], *, project: Mapping[str, Any], new_assets: object
 ) -> list[DraftViolation]:
-    """drama script_plan 的资产违约：引用须已登记或在本次新增项中，新增项的处理决定须解析得出。"""
+    """Asset violations of a drama script_plan: references must be registered or among this run's new items, and the
+    handling decision for new items must be resolvable.
+
+    drama script_plan 的资产违约：引用须已登记或在本次新增项中，新增项的处理决定须解析得出。"""
     catalog = build_reference_catalog(planning_project(project, new_assets))
     violations: list[DraftViolation] = []
     for index, scene in enumerate(scenes):
@@ -1007,7 +1164,7 @@ async def generate_drama_script_plan(
 
         draft_path = quarantine_path(project_path, episode, QUARANTINE_KIND_DRAMA_SCRIPT_PLAN)
         script_plan_path = episode_drafts_dir(project_path, episode) / SCRIPT_PLAN_FILENAMES["drama"]
-        # 构造 ProjectManager 会建目录，放到线程里。
+        # Constructing ProjectManager creates directories, so do it in a thread. / 构造 ProjectManager 会建目录，放到线程里。
         draft_locks = await asyncio.to_thread(ProjectManager.for_project_dir, project_path)
         async with draft_locks.async_file_lock(draft_path):
             draft_baseline, formal_baseline = await asyncio.to_thread(
@@ -1104,7 +1261,23 @@ async def generate_drama_script_plan(
 
 
 class ReferenceSplitCaps(NamedTuple):
-    """rv 拆分用的视频能力：两套逐 unit 档位 + 派生上限 + 用户偏好 + 声音输入档。
+    """Video capabilities for rv splitting: two per-unit option sets + derived limit + user preference + voice input
+    tier.
+
+    ``reference_durations`` / ``text_durations`` are the effective duration options for units with / without usable
+    reference images, and ``durations`` is their union -- the schema enum and prompt candidate set take the union,
+    since a duration in either set may be valid; which set applies is only known after the `@[name]` mentions in the
+    body are hydrated against the reference images usable at that moment. When all three are equal, the model
+    declares no effective "reference image↔duration" linkage constraint at the current resolution, which is the case
+    for most models.
+
+    ``voice`` is the voice input tier derived from the r2v bucket's video request facts, consumed by voice-related
+    tolerance warnings -- it comes from the same evaluation as the duration options; querying twice would make the
+    options and voice hints of the same artifact describe config at different moments. It carries a value object
+    rather than the facts object itself: downstream only needs the voice bits, and passing the whole facts through
+    the interface would spread field name coupling to the consuming side.
+
+    rv 拆分用的视频能力：两套逐 unit 档位 + 派生上限 + 用户偏好 + 声音输入档。
 
     ``reference_durations`` / ``text_durations`` 是有 / 没有可用参考图的 unit 各自的生效档位，
     ``durations`` 是二者的并集——schema 枚举与 prompt 候选集合取并集，因为落在任一套内的时长都
@@ -1126,7 +1299,9 @@ class ReferenceSplitCaps(NamedTuple):
     voice: VoiceRenderSettings
 
     def tiers_for(self, *, has_references: bool) -> list[int]:
-        """该引用状态下的生效档位。"""
+        """Effective duration options for this reference state.
+
+        该引用状态下的生效档位。"""
         return self.reference_durations if has_references else self.text_durations
 
 
@@ -1135,7 +1310,28 @@ async def fetch_reference_split_caps(
     *,
     config_resolver: ConfigResolver | None = None,
 ) -> ReferenceSplitCaps:
-    """解析 rv 拆分所需的视频能力（见 ``ReferenceSplitCaps``），读 r2v 与 i2v 两桶的视频请求事实。
+    """Resolve the video capabilities needed for rv splitting (see ``ReferenceSplitCaps``), reading the video request
+    facts of both the r2v and i2v buckets.
+
+    A unit is the unit of one generation call, and the duration set at split time is the value actually sent to the
+    provider, so the options are the set **after narrowing by the duration linkage constraint** (buckets whose
+    duration is fixed by the endpoint borrow the planning options): without narrowing (Hailuo 1080p only accepts 6
+    seconds), script_plan would split out units exceeding the limit by the full set, and prompt_authoring's enum
+    schema would then judge them invalid.
+
+    Narrowing is done as two per-unit sets: the "reference image↔duration" constraint only applies to requests that
+    really carry reference images, and narrowing the whole episode as if all had images would also remove short
+    options units without references could request. The schema enum and prompt candidates take the union of the two
+    -- a duration in either set may be valid, and which applies is decided by the reference images mentioned in the
+    unit body and usable at that moment, judged per unit after the body is parsed (see
+    ``collect_reference_flat_violations``). ``max_duration`` is accordingly the maximum of the union.
+
+    If the r2v bucket (this route's main bucket) cannot be resolved, :class:`VideoRequestFactsError` is raised with
+    no fallback to any option; if the i2v bucket cannot be resolved, the no-image options are empty and the failure
+    is carried as is in ``text_problem``, and units landing on i2v each report a violation. A ``default_duration``
+    not in the union (user config drift) is treated as None, so the prompt does not contradict itself.
+
+    解析 rv 拆分所需的视频能力（见 ``ReferenceSplitCaps``），读 r2v 与 i2v 两桶的视频请求事实。
 
     unit 是一次生成调用的单元，拆分阶段定的时长就是真正发给供应商的那个值，故档位取**经时长
     联动约束收窄后**的集合（时长由端点固定的桶借规划档位）：不收窄的话（海螺 1080p 只接受 6 秒）
@@ -1170,7 +1366,18 @@ async def fetch_reference_split_caps(
 
 
 def _validate_unit_duration_tier(label: str, duration: int, *, has_references: bool, caps: ReferenceSplitCaps) -> None:
-    """按该 unit 此刻是否有可用参考图判时长是否落在生效档位内，出档抛 ``DraftViolation``。
+    """Judge whether the duration is within the effective options according to whether this unit has a usable reference
+    image right now; out of options raises ``DraftViolation``.
+
+    The schema enum limits to the union of the two option sets, so a unit with usable reference images could still
+    take a seconds value only valid for image-less units -- such a unit cannot be requested at execution, and
+    failing only at enqueue leaves no unified place to correct it. The error message gives two ways out (change the
+    option / remove references), consistent with the guidance in the prompt.
+
+    A content violation is raised rather than ``ValueError``: this kind is also fixable by the Agent tweaking the
+    draft, so it goes through the draft repair loop rather than falling back to discard and re-roll.
+
+    按该 unit 此刻是否有可用参考图判时长是否落在生效档位内，出档抛 ``DraftViolation``。
 
     schema 的枚举卡的是两套档位的并集，一个带可用参考图的 unit 因此仍可能取到只有无图 unit 才
     合法的秒数——那样的 unit 执行期申请不到，等到入队才失败已无统一纠正入口。错误消息给出
@@ -1180,6 +1387,8 @@ def _validate_unit_duration_tier(label: str, duration: int, *, has_references: b
     的修复闭环，不该退回丢弃重抽。
     """
     if not has_references and caps.text_problem is not None:
+        # Video model config problem of the image-less bucket: state the reason and way out per problem code; the Web
+        # view localizes by problem code and parameters.
         # 无图桶的视频模型配置问题：按问题码陈述原因与出路，Web 视图按问题码与参数本地化。
         failure = caps.text_problem
         params: dict[str, Any] = failure.parameters()
@@ -1206,7 +1415,15 @@ def _validate_unit_duration_tier(label: str, duration: int, *, has_references: b
 
 
 def _reference_unit_id(episode: int, index: int, unit_ids: Sequence[str] | None = None) -> str:
-    """扁平产出第 ``index`` 个 unit（1 起）的 ``unit_id``。
+    """``unit_id`` of the ``index``-th unit (1-based) of the flat output.
+
+    The written content, violation report and degradation notes must all refer to the same unit: if each built the
+    format string itself, changing the numbering convention in one place would point the report at another unit. The
+    server issues numbers before writing to disk (``ProjectManager.reserve_item_ids``; numbers are only allocated,
+    never reused), and issued numbers are passed in via ``unit_ids``; a flat draft not yet numbered gets location
+    numbers by position.
+
+    扁平产出第 ``index`` 个 unit（1 起）的 ``unit_id``。
 
     落盘内容、违约报告与降级提示三者指的必须是同一个 unit：各自拼一遍格式串时，改一处编号
     口径就会让报告指偏到另一个 unit。落盘前由服务端发号（``ProjectManager.reserve_item_ids``，
@@ -1218,7 +1435,9 @@ def _reference_unit_id(episode: int, index: int, unit_ids: Sequence[str] | None 
 
 
 def _reference_unit_label(episode: int, index: int) -> str:
-    """违约 / 提示条目的定位前缀（``unit E{集}U{两位序号}``）。"""
+    """Location prefix of violation / note entries (``unit E{episode}U{two-digit number}``).
+
+    违约 / 提示条目的定位前缀（``unit E{集}U{两位序号}``）。"""
     return f"unit {_reference_unit_id(episode, index)}"
 
 
@@ -1233,7 +1452,25 @@ def collect_reference_flat_violations(
     source_language: str | None,
     new_assets: object,
 ) -> list[DraftViolation]:
-    """逐 unit 收齐 script_plan 扁平产出的全部违约（不在首个违约处中断）。
+    """Collect, per unit, all violations of the script_plan flat output (without stopping at the first violation).
+
+    The schema already locks the duration enum and the outer shape; this adds constraints that depend on runtime
+    capability values / the project registry / the source text -- the duration is within the effective options for
+    this unit's reference state, the source anchor is a verbatim substring of the source, the body syntax and asset
+    references are valid, and the amount of dialogue can be spoken in time. Collect all rather than raise at the
+    first: the report must list every bad unit at once, otherwise the Agent has to rerun a round after each fix to
+    learn the next one.
+
+    Duration options and body share one entry point: which option set applies depends on whether the references
+    mentioned in the unit body have usable reference images right now (file exists and claimed by the artifact
+    manifest, same criterion as the content review panel and execution) -- when the body cannot be parsed the option
+    set cannot be decided, and what would be reported is just another way of saying the same problem.
+
+    ``@[name]`` in the body must be registered or among this run's new items: validation is judged against a project
+    view overlaid with the new items, and the handling decisions of the new items themselves are collected
+    separately into episode-level violations.
+
+    逐 unit 收齐 script_plan 扁平产出的全部违约（不在首个违约处中断）。
 
     schema 已卡死时长枚举与外层形状；此处补依赖运行时能力值 / 项目登记表 / 源文的约束——
     时长落在该 unit 引用状态对应的生效档位内、原文锚是源文逐字子串、正文语法与资产引用合法、
@@ -1247,6 +1484,8 @@ def collect_reference_flat_violations(
     正文里的 ``@[名称]`` 须已登记或在本次新增项中：校验对着叠加了新增项的项目视图判，新增项
     自身的处理决定另行收进整集违约。
     """
+    # The speech rate for dialogue amount shares its source with the prompt side: project-level override first,
+    # otherwise the language default.
     # 台词口播量的语速与 prompt 侧同源：项目级覆盖优先，否则按语言默认。
     speech_rate_override = project_speech_rate_override(project)
     planning = planning_project(project, new_assets)
@@ -1290,7 +1529,15 @@ def build_reference_units_from_flat(
     max_refs: int | None,
     unit_ids: Sequence[str],
 ) -> list[dict]:
-    """把已校验通过的扁平产出派生为落盘的结构化 unit 表。
+    """Derive the validated flat output into the structured unit table written to disk.
+
+    The LLM writes only content, the machine writes structure: ``unit_id`` takes the number the server issued for
+    this write (``unit_ids``, one-to-one with the flat output), and the body is written as is. Reference images are
+    not written to disk -- they are resolved at execution time in first-appearance order of ``@[name]`` in the body.
+    Callers must first confirm there are no violations via ``collect_reference_flat_violations``; the body is still
+    re-checked here once, so "the text validation saw" and "the body written to disk" come from the same parse.
+
+    把已校验通过的扁平产出派生为落盘的结构化 unit 表。
 
     LLM 只写内容，机器写结构：``unit_id`` 取服务端为本次落盘发出的编号（``unit_ids``，与扁平产出一一对应），
     正文原样落盘。参考图不落盘——
@@ -1313,6 +1560,9 @@ def build_reference_units_from_flat(
     return units
 
 
+#: Tolerance warnings (voice degradation) that are written to disk as usual and only shown with the artifact. Other
+#: warning keys (unregistered mention / speaker, syntax misuse) are blocking violations on this machine-artifact path
+#: and do not take the tolerance branch.
 #: 落盘照常、只随产物呈现的容忍 warning（声音降级）。其余 warning 键（未登记 mention /
 #: 说话人、语法误用）在机器产物这条路上是阻断违约，不走容忍分支。
 _TOLERATED_VOICE_WARNINGS = (
@@ -1325,7 +1575,10 @@ _TOLERATED_VOICE_WARNINGS = (
 
 @dataclass(frozen=True, slots=True)
 class SoftViolation:
-    """一条软违约（降级提示）：``code`` 即文案 key，``params`` 为插值参数，定位到草稿条目的下标与 ID。"""
+    """One soft violation (degradation note): ``code`` is the text key, ``params`` the interpolation parameters,
+    located by the draft entry's index and ID.
+
+    一条软违约（降级提示）：``code`` 即文案 key，``params`` 为插值参数，定位到草稿条目的下标与 ID。"""
 
     code: str
     params: dict[str, Any]
@@ -1341,7 +1594,20 @@ def _reference_voice_warnings(
     episode: int,
     unit_ids: Sequence[str] | None,
 ) -> list[SoftViolation]:
-    """逐 unit 派生声音绑定，取容忍类 warning。
+    """Derive voice bindings per unit and take the tolerance-class warnings.
+
+    Per unit rather than judging the concatenated text of the whole set: a unit is one generation call, and the
+    reference audio segment limit counts per call -- judging concatenated text would misreport "two speakers in each
+    unit" as over the limit. Shares ``derive_voice_bindings`` with the editor preview and execution-time rendering,
+    so the three places never diverge in their voice verdicts on the same text.
+
+    ``requires_reference_image`` is always turned off here: that bit only makes sense together with
+    ``speakers_with_reference_image``, and at the split stage a unit has not yet settled which reference images go
+    out with the request. Leaving it on without an image set would judge every speaker "no frame to attach to", and
+    that warning is not in the tolerance list so it would be discarded -- with the result that hints the Agent
+    should see, like "reference audio not set" and "over the segment limit", get swallowed instead.
+
+    逐 unit 派生声音绑定，取容忍类 warning。
 
     逐 unit 而非把全集正文拼起来判：unit 就是一次生成调用，参考音频段数上限按调用计——拼起来
     判会把「每个 unit 各两个说话人」误报成超限。与编辑器预览、执行期渲染共用
@@ -1370,7 +1636,16 @@ def _reference_voice_warnings(
 def _reference_scene_warnings(
     unit_texts: list[str], project: dict[str, Any], *, episode: int, unit_ids: Sequence[str] | None
 ) -> list[SoftViolation]:
-    """逐 unit 取「未引用任何场景资产」的提示。
+    """Take the "no scene asset referenced" hint per unit.
+
+    Same tolerance class as voice degradation: the location being left to the model is not a format error, and the
+    body is written to disk as usual; but adjacent units alternating indoors and outdoors would each improvise, and
+    if not said at output time, the Agent and the user would only find out on seeing the final cut.
+
+    The criterion comes from ``unit_lacks_scene_reference``, sharing one exit with the same-named warning in the
+    editor preview -- the same body must give the same verdict on the receipt and in the panel.
+
+    逐 unit 取「未引用任何场景资产」的提示。
 
     与声音降级同属容忍类：地点由模型自由决定不是格式错误，正文照常落盘；但室内外交替的相邻
     unit 会各自发挥，不在产出当时说，Agent 与用户都要等看到成片才发现。
@@ -1393,7 +1668,19 @@ def reference_soft_violations(
     voice: VoiceRenderSettings,
     unit_ids: Sequence[str] | None = None,
 ) -> list[SoftViolation]:
-    """一份扁平产出的全部软违约（声音降级 + 未引用场景），拆分与草稿流共用的单一出口。
+    """All soft violations of a flat output (voice degradation + no scene referenced), the single exit shared by the
+    split and draft flows.
+
+    Soft violations do not block writing to disk or enter the violation report, but every presentation path must
+    give the same set of verdicts: the split receipt, the promotion receipt, the report returned to the Agent when
+    split / promotion is blocked by violations, and the places on the Web that show entries. Derivation must stay
+    inside this function so that a new kind of soft violation reaches every path at once, rather than being wired
+    into only one of them while the rest stay silent.
+
+    The order is fixed as "voice first, scene after": when reports and receipts are compared side by side, the line
+    order for the same artifact should not jitter across paths.
+
+    一份扁平产出的全部软违约（声音降级 + 未引用场景），拆分与草稿流共用的单一出口。
 
     软违约不阻断落盘、不进违约报告，但每条呈现路径都要给出同一组结论：拆分回执、晋升回执、
     拆分 / 晋升被违约挡下时回给 Agent 的报告，以及 Web 上展示条目的地方。派生须留在本函数内，
@@ -1408,7 +1695,14 @@ def reference_soft_violations(
 
 
 def render_soft_violation_lines(soft_violations: list[SoftViolation]) -> list[str]:
-    """把软违约渲染成回给 Agent 的文本行。
+    """Render soft violations into text lines returned to the Agent.
+
+    Voice degradation is deduplicated across units, keeping first-appearance order: the same character without
+    reference audio reported once per unit is just noise. No-scene-referenced is not deduplicated and carries the
+    unit location: each unit without a scene reference must be named individually; merged into one line the Agent
+    could not locate which ones to change.
+
+    把软违约渲染成回给 Agent 的文本行。
 
     声音降级跨 unit 去重、保持首现顺序：同一个角色没配参考音频，在每个 unit 各报一遍只是噪音。
     未引用场景不去重、带 unit 定位：每个未引用场景的 unit 都要各自被指名，合并成一条 Agent 无从
@@ -1429,7 +1723,10 @@ def render_soft_violation_lines(soft_violations: list[SoftViolation]) -> list[st
 
 
 def soft_violation_entries(soft_violations: list[SoftViolation]) -> list[dict[str, Any]]:
-    """软违约 → 下发给 Web 的结构化条目；``message`` 由呈现边界按请求语言以 ``code`` + ``params`` 成文。"""
+    """Soft violation → structured entry sent to the Web; ``message`` is written by the presentation boundary from
+    ``code`` + ``params`` in the request language.
+
+    软违约 → 下发给 Web 的结构化条目；``message`` 由呈现边界按请求语言以 ``code`` + ``params`` 成文。"""
     return [
         {"code": soft.code, "params": soft.params, "item_index": soft.item_index, "item_id": soft.item_id}
         for soft in soft_violations
@@ -1444,20 +1741,32 @@ def _reference_soft_violation_lines(
     voice: VoiceRenderSettings,
     unit_ids: Sequence[str] | None = None,
 ) -> list[str]:
-    """一份扁平产出的软违约文本行（拆分回执用）。"""
+    """Soft violation text lines of a flat output (for the split receipt).
+
+    一份扁平产出的软违约文本行（拆分回执用）。"""
     return render_soft_violation_lines(
         reference_soft_violations(unit_texts, project, episode=episode, voice=voice, unit_ids=unit_ids)
     )
 
 
+#: Handling note for the soft violation section when promotion is blocked by violations: the draft is still present,
+#: and these hints are not violations to fix.
 #: 晋升被违约挡下时，软违约段的处置说明：草稿仍在场、这些提示不是要修的违约。
 SOFT_VIOLATION_NOTE_QUARANTINED = "非违约、无需为此重改，草稿仍在场"
-#: 拆分 / 晋升成功回执里软违约段的处置说明。
+#: Handling note for the soft violation section in split / promotion success receipts. / 拆分 / 晋升成功回执里软违约段的处置说明。
 SOFT_VIOLATION_NOTE_COMMITTED = "产物已落盘"
 
 
 def render_soft_violation_section(soft_violations: list[str], *, note: str) -> str:
-    """把软违约文本行渲染成可拼接的「降级提示」段（无软违约时为空串）。
+    """Render soft violation text lines into a concatenable "degradation notes" section (empty string when there are no
+    soft violations).
+
+    ``note`` explains how the section is handled in the current context: in a success receipt the artifact is
+    already on disk, in a violation report the draft is still present. The section's title and entry shape are owned
+    solely by this function, so reports and receipts never diverge in wording and the Agent can recognize them by
+    the same shape.
+
+    把软违约文本行渲染成可拼接的「降级提示」段（无软违约时为空串）。
 
     ``note`` 交代该段在当前语境下的处置：成功回执里产物已落盘，违约报告里草稿仍在场。段本身
     的标题与条目形状由本函数独占，报告与回执因此不会在措辞上分叉，Agent 也能按同一形状识别。
@@ -1468,14 +1777,21 @@ def render_soft_violation_section(soft_violations: list[str], *, note: str) -> s
 
 
 def drama_script_plan_result_text(script_plan_path: Path, scenes: list[dict], *, action: str) -> str:
-    """drama script_plan 的落盘回执。``action`` 是「生成」/「晋升」——两条路的统计段同一出口，
+    """Write receipt of a drama script_plan. ``action`` is the Chinese action word for "generate" / "promote" -- both
+    paths' statistics section share one exit and differ only in the action word, so the Agent reads the output and
+    promotion results in the same format.
+
+    drama script_plan 的落盘回执。``action`` 是「生成」/「晋升」——两条路的统计段同一出口，
     只在动作词上分叉，Agent 因此按同一种格式读产出与晋升两次结果。
     """
     return f"✅ 规范化剧本{action}（结构化内容）已保存: {script_plan_path}\n📊 生成统计: {len(scenes)} 个分镜"
 
 
 def narration_script_plan_result_text(script_plan_path: Path, segments: list[dict], *, action: str) -> str:
-    """narration script_plan 的落盘回执；``action`` 取「拆分」/「晋升」，理由同 drama 侧。"""
+    """Write receipt of a narration script_plan; ``action`` is the Chinese action word for "split" / "promote", for the
+    same reason as the drama side.
+
+    narration script_plan 的落盘回执；``action`` 取「拆分」/「晋升」，理由同 drama 侧。"""
     total_chars = sum(len(str(segment.get("novel_text") or "")) for segment in segments)
     total_seconds = sum(int(segment.get("duration_seconds") or 0) for segment in segments)
     break_count = sum(1 for segment in segments if segment.get("segment_break"))
@@ -1487,7 +1803,19 @@ def narration_script_plan_result_text(script_plan_path: Path, segments: list[dic
 
 
 def reference_result_text(script_plan_path: Path, units: list[dict], soft_violations: list[str], *, action: str) -> str:
-    """晋升 / 拆分成功后回给 Agent 的摘要：落盘统计 + 软违约段。
+    """Summary returned to the Agent after a successful promotion / split: write statistics + soft violation section.
+
+    ``action`` states whether this final script_plan came from a fresh split or from promoting a draft: both paths
+    write the same file, and if the summary did not distinguish them, the Agent would receive "split saved" after
+    fixing a draft, reading as if its changes had been overwritten by a re-roll.
+
+    Soft violations do not block writing to disk but must be presented with the artifact -- degradations like
+    "character has no reference audio" or "this unit references no scene" can only be heard or seen after
+    generation; if not said at output time, neither the Agent nor the user would know that voice consistency or the
+    visual location has been compromised. The section is rendered by ``render_soft_violation_section``, the same
+    exit as the report when promotion is blocked by violations.
+
+    晋升 / 拆分成功后回给 Agent 的摘要：落盘统计 + 软违约段。
 
     ``action`` 点明这份正式 script_plan 是重新拆分还是草稿晋升来的：两条路都写同一个文件，摘要不分
     的话，Agent 修完草稿会收到一句「拆分已保存」，读起来像它的修改被一次重抽覆盖了。
@@ -1507,18 +1835,28 @@ def reference_result_text(script_plan_path: Path, units: list[dict], soft_violat
 
 
 def narration_script_plan_path(project_path: Path, episode: int) -> Path:
-    """该集正式 narration script_plan 的路径（``drafts/episode_N/script_plan_segments.json``）。"""
+    """Path of the episode's final narration script_plan (``drafts/episode_N/script_plan_segments.json``).
+
+    该集正式 narration script_plan 的路径（``drafts/episode_N/script_plan_segments.json``）。"""
     return episode_drafts_dir(project_path, episode) / SCRIPT_PLAN_FILENAMES["narration"]
 
 
 def _narration_segment_id(segment: dict[str, Any]) -> str | None:
-    """违约条目定位用的 ``segment_id``；缺失或空白时为 None，定位只剩下标。"""
+    """``segment_id`` used to locate a violation entry; None when missing or blank, leaving only the index for
+    location.
+
+    违约条目定位用的 ``segment_id``；缺失或空白时为 None，定位只剩下标。"""
     sid = segment.get("segment_id")
     return sid if isinstance(sid, str) and sid.strip() else None
 
 
 def _narration_segment_label(segment: dict[str, Any], index: int) -> str:
-    """违约条目的定位前缀。
+    """Location prefix of a violation entry.
+
+    When ``segment_id`` is missing or blank, fall back to the array index: that is itself a violation, but the
+    report must still point to the specific item, otherwise the Agent gets a message with nowhere to start.
+
+    违约条目的定位前缀。
 
     ``segment_id`` 缺失或空白时退回数组下标：那本身就是一条违约，但报告仍要能指到具体哪一项，
     否则 Agent 拿到的是一条无处下手的消息。
@@ -1528,7 +1866,16 @@ def _narration_segment_label(segment: dict[str, Any], index: int) -> str:
 
 
 def _normalize_for_coverage(text: str) -> str:
-    """Unicode NFC 归一后把连续空白折叠为单个空格，只消除编码与空白差异，不删除空白本身。
+    """After Unicode NFC normalization, collapse runs of whitespace into a single space; only encoding and whitespace
+    differences are removed, whitespace itself is not deleted.
+
+    NFC matches the source coordinate system defined by ``lib.episode.episode_ledger.normalize_source_text``, and
+    the same convention as reference-to-video's ``_normalize_for_anchor``: for languages with combining diacritics
+    (such as vi) the source may be stored as NFD while the model writes back NFC; without normalization pure
+    encoding-form differences would be judged as deleted or altered characters, and coverage violations would land
+    as a draft, blocking content review confirmation and prompt_authoring generation.
+
+    Unicode NFC 归一后把连续空白折叠为单个空格，只消除编码与空白差异，不删除空白本身。
 
     NFC 与 ``lib.episode.episode_ledger.normalize_source_text`` 定义的源文坐标系一致，也与参考生视频
     ``_normalize_for_anchor`` 同口径：带组合附加符的语种（如 vi）源文可能以 NFD 落盘、模型
@@ -1539,7 +1886,15 @@ def _normalize_for_coverage(text: str) -> str:
 
 
 def coverage_source_scope(source: str | None, *, episode: int) -> str:
-    """覆盖判定所依据的源文范围的人话描述，供违约消息指名。
+    """Human-readable description of the source range the coverage check is based on, named in violation messages.
+
+    The coverage check is the identity "concatenated shots == the whole source", so the result depends on both the
+    shot bodies and the source range itself: with the wrong range (e.g. judging this episode's shot table against
+    another episode's source file), it fails even if the shots were not changed by a single character. Without
+    putting the range in the message, the Agent would just keep changing shot bodies, while the problem is not
+    there.
+
+    覆盖判定所依据的源文范围的人话描述，供违约消息指名。
 
     覆盖判定是「分镜拼接 == 整份源文」的全等式，判定结果因此既取决于分镜正文、也取决于源文
     范围本身：范围取错了（如拿别集的源文件判这一集的分镜表），分镜一个字没改也判不过。不把
@@ -1549,7 +1904,19 @@ def coverage_source_scope(source: str | None, *, episode: int) -> str:
 
 
 def _covers_source_verbatim(parts: list[str], source: str) -> bool:
-    """各分镜是否按序、逐字、完整覆盖 *source*；分镜交界处允许至多一个空格。
+    """Whether the shots cover *source* in order, verbatim and completely; at most one space is allowed at shot
+    boundaries.
+
+    Whitespace at both ends of each shot has already been stripped by :func:`_normalize_for_coverage`, so one space
+    at a boundary can only be a separator and can be skipped greedily without backtracking: a shot itself cannot
+    start with a space to compete for that character.
+
+    Not using "``re.escape`` each segment and join with ``" ?"`` into one regex": that pattern's length is on the
+    order of the whole source (up to hundreds of KB), and this check runs once each in split, promotion and content
+    review's read-time recomputation, the last inside the request coroutine -- compiling a regex at source scale
+    every time would weigh on the event loop. The cursor scan is a linear way to write the same check.
+
+    各分镜是否按序、逐字、完整覆盖 *source*；分镜交界处允许至多一个空格。
 
     分镜两端的空白已由 :func:`_normalize_for_coverage` 剥掉，故交界处的一个空格只可能是分隔符，
     贪心跳过即可、无须回溯：分镜自身不可能以空格开头去争这个字符。
@@ -1578,7 +1945,26 @@ def collect_narration_violations(
     novel_text: str,
     source_scope: str,
 ) -> list[DraftViolation]:
-    """逐分镜收齐 narration script_plan 产出的全部违约（不在首个违约处中断）。
+    """Collect, per shot, all violations of the narration script_plan output (without stopping at the first violation).
+
+    Asset references must be registered or among this plan's new items ``new_assets``; when the handling decision
+    for new items cannot be resolved, an episode-level violation is reported separately.
+
+    The schema (``NarrationScriptPlanDraft``) already locks fields and the outer shape; this adds constraints that
+    depend on runtime capability values / the project registry / the source -- segment_id unique across the set,
+    novel_text not blank, duration within the current options, asset names registered, and the shot bodies covering
+    the source in order, verbatim and completely. Collect all rather than raise at the first: the report must list
+    every bad shot at once, otherwise the agent has to rerun a round after each fix to learn the next one.
+
+    A content violation is raised rather than ``ValueError``: these are all fixable by the Agent tweaking the draft,
+    so they go through the draft repair loop rather than falling back to discard and re-roll.
+
+    ``source_scope`` is the description of where the ``novel_text`` text comes from (see
+    :func:`coverage_source_scope`), and only goes into coverage violation messages: the coverage check also depends
+    on the source range, and unless the range itself is written out, the report cannot tell whether to change the
+    shots or the range.
+
+    逐分镜收齐 narration script_plan 产出的全部违约（不在首个违约处中断）。
 
     资产引用须已登记，或在本次规划的新增项 ``new_assets`` 中；新增项的处理决定解析不出时另报整集违约。
 
@@ -1612,7 +1998,7 @@ def collect_narration_violations(
 
     dupes = sorted(str(sid) for sid, count in Counter(s.get("segment_id") for s in segments).items() if count > 1)
     if dupes:
-        # 集级违约，无单分镜归属：呈现层落聚合区。
+        # Episode-level violation with no single shot owner: the presentation layer puts it in the aggregate area. / 集级违约，无单分镜归属：呈现层落聚合区。
         violations.append(
             DraftViolation(
                 f"segment_id 重复: {dupes}；每个分镜的 id 须全集唯一（prompt_authoring 视觉层按 id 与分镜对齐）",
@@ -1621,6 +2007,11 @@ def collect_narration_violations(
         )
 
     allowed = {int(d) for d in supported_durations}
+    # Registered names come from the reference directory (the same entry as rv side's ``validate_unit_text``): names
+    # in ``project.json`` and names the model writes back may be different Unicode forms of the same name, and the
+    # directory has already brought both sides into the same comparison coordinate system, so a different form will
+    # not judge a registered asset as unregistered. The directory is fetched once outside the loop; each shot only
+    # does a lookup.
     # 已登记名字取自引用目录（与 rv 侧 ``validate_unit_text`` 同一入口）：``project.json`` 里的
     # 名字与模型写回的名字可能是同一名称的不同 Unicode 形式，目录已把两侧收敛到同一比对坐标系，
     # 不同形不会把一个已登记的资产判成未登记。目录在循环外取一次，逐分镜只查表。
@@ -1628,6 +2019,11 @@ def collect_narration_violations(
     for index, segment in enumerate(segments):
         label = _narration_segment_label(segment, index)
 
+        # The ``min_length=1`` of the static ``NarrationScriptPlanSegment.novel_text`` only checks the raw string
+        # length; pure whitespace (such as a single space) satisfies it while carrying no narration content. Such a
+        # shot is collapsed to an empty string by ``_normalize_for_coverage`` in the coverage check and consumes no
+        # characters, so the coverage check cannot catch it either, and it would end up as a mute shot "with duration
+        # but no narration".
         # 静态 ``NarrationScriptPlanSegment.novel_text`` 的 ``min_length=1`` 只校验原始字符串长度，纯
         # 空白（如单个空格）能满足该约束却不携带任何旁白内容；此类分镜在覆盖校验中经
         # ``_normalize_for_coverage`` 折叠为空字符串后不消耗任何字符，覆盖校验同样拦不住，会
@@ -1643,6 +2039,12 @@ def collect_narration_violations(
                 )
             )
 
+        # The static ``NarrationScriptPlanSegment.duration_seconds`` is the open range ``ge=1, le=60`` (reusing the
+        # existing shot schema, with no hard enum constraint at the schema layer), so a duration outside the current
+        # options passes schema validation; here membership is checked against the current options, the same
+        # convention as ``ScriptGenerator._load_narration_script_plan`` -- only content that passes this check is
+        # written to disk as the script_plan source of truth, so invalid durations are never dragged until
+        # prompt_authoring / the final save_script before surfacing.
         # 静态 ``NarrationScriptPlanSegment.duration_seconds`` 是 ``ge=1, le=60`` 的开区间（复用既有分镜
         # schema，不在 schema 层枚举硬约束），故超出当前档位的时长能过 schema 校验；此处按现值
         # 档位补成员校验，与 ``ScriptGenerator._load_narration_script_plan`` 同口径——只有经此校验的
@@ -1659,6 +2061,9 @@ def collect_narration_violations(
                 )
             )
 
+        # Same convention as the rv side's ``validate_unit_text`` registration check on ``@[name]``: only trust asset
+        # names that are registered or newly added this time, and do not let names the model invented or misspelled be
+        # written to disk as truth and consumed read-only by the prompt_authoring visual layer.
         # 与 rv 侧 ``validate_unit_text`` 对 ``@[名称]`` 的登记校验同口径：只信已登记或本次新增的资产名，
         # 不允许模型发明或拼错的名称被当真值写盘、被 prompt_authoring 视觉层只读消费。
         violations.extend(
@@ -1672,6 +2077,13 @@ def collect_narration_violations(
             )
         )
 
+    # Whether whitespace exists at a shot boundary is inherently ambiguous -- the split point the model chose may fall
+    # on a space in the source (that space is "consumed" by the split itself and is not in any shot's own text), or on
+    # a space-less CJK / punctuation adjacency, and the two cannot be reliably told apart from the concatenated string
+    # itself. So an optional single space is allowed only at shot boundaries; inside a shot's own text and in the rest
+    # of the source, everything must be equal verbatim after collapsing, so boundary tolerance cannot mask real
+    # deletions, rewrites or lost inter-word spaces inside a shot. The check is set-level (concatenation vs the whole
+    # source) with no single shot owner, so it carries no label.
     # 分镜边界处的空白存在与否天然歧义——模型选择的切分点可能落在源文空格上（该空格被切分本身
     # 「消耗」，不落在任一分镜自身文本里），也可能落在无空格的 CJK / 标点邻接处，两者从拼接后的
     # 字符串本身无法可靠区分。因此仅在分镜交界处允许可选的单个空格；分镜自身文本内部与源文其余
@@ -1750,7 +2162,7 @@ async def generate_reference_script_plan(
 
         draft_path = quarantine_path(project_path, episode, QUARANTINE_KIND_SCRIPT_PLAN)
         formal_script_plan_path = script_review.official_reference_script_plan_path(project_path, episode)
-        # 构造 ProjectManager 会建目录，放到线程里。
+        # Constructing ProjectManager creates directories, so do it in a thread. / 构造 ProjectManager 会建目录，放到线程里。
         draft_locks = await asyncio.to_thread(ProjectManager.for_project_dir, project_path)
         async with draft_locks.async_file_lock(draft_path):
             draft_baseline, formal_baseline = await asyncio.to_thread(
@@ -1805,12 +2217,18 @@ async def generate_reference_script_plan(
                     request.source,
                     formal_baseline,
                 )
+            # The "output is a violation" path also carries the soft violation section: the draft is present and the
+            # Agent is changing it this very turn; if the degradation notes first appeared only at promotion time, it
+            # would already have done one round of changes on incomplete information. The handling note uses the same
+            # convention as when promotion is blocked.
             # 产出即违约这条路同样带上软违约段：草稿在场、Agent 这一轮就在改它，降级提示留到晋升
             # 那一刻才第一次出现的话，它已经按不完整的信息改过一遍了。处置说明与晋升被挡下时同口径。
             raise TextGenerationError(
                 report + render_soft_violation_section(soft_violations, note=SOFT_VIOLATION_NOTE_QUARANTINED)
             )
 
+        # Numbers are only allocated, never reused: before writing to disk the server issues numbers never used in
+        # this episode, and the degradation notes in the receipt are located by the issued numbers.
         # 编号只分配、不复用：落盘前由服务端发本集从没用过的编号，回执里的降级提示按发出的编号定位。
         unit_ids = await run_sync_transaction(
             projects.reserve_item_ids, project_name, episode, "video_units", len(flat_units)
@@ -1919,7 +2337,7 @@ async def generate_narration_script_plan(
 
         draft_path = quarantine_path(project_path, episode, QUARANTINE_KIND_NARRATION_SCRIPT_PLAN)
         script_plan_path = narration_script_plan_path(project_path, episode)
-        # 构造 ProjectManager 会建目录，放到线程里。
+        # Constructing ProjectManager creates directories, so do it in a thread. / 构造 ProjectManager 会建目录，放到线程里。
         draft_locks = await asyncio.to_thread(ProjectManager.for_project_dir, project_path)
         async with draft_locks.async_file_lock(draft_path):
             draft_baseline, formal_baseline = await asyncio.to_thread(

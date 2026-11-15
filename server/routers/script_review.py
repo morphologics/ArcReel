@@ -1,4 +1,12 @@
-"""script_plan→prompt_authoring web 内容确认路由。
+"""script_plan -> prompt_authoring web content review routes.
+
+Exposes review / editing / confirmation of the script plan: after script_plan is produced it is visible and editable
+on the web; when the user explicitly confirms, the whole thing is converted to the final script (entries carry the
+pending authoring marker), after which the Agent's generate_episode_script fills in the visual layer from the final
+script.
+drama (utterances + source_text) and narration (structured novel_text) share this mechanism.
+
+script_plan→prompt_authoring web 内容确认路由。
 
 暴露脚本规划的审阅 / 编辑 / 确认：script_plan 产出后在 web 可见可改，用户显式确认时整份转为
 正式脚本（条目带待编写标记），之后由 Agent 的 generate_episode_script 按正式脚本补写视觉层。
@@ -29,7 +37,17 @@ router = APIRouter()
 async def _attach_duration_tiers(
     service: ScriptReviewService, project_name: str, episode: int, state: dict, _t: Translator, names: DisplayNames
 ) -> dict:
-    """把逐 unit 时长档位与本地化降级提示挂到 state 上；三个端点（GET/PUT/POST）
+    """Attach per-unit duration options and localized degradation notes to state; all three endpoints (GET/PUT/POST)
+    must go through this step; otherwise after save / confirm, ``adopt()`` would overwrite the narrowed result read
+    by GET with a response lacking ``duration_tiers``, and the panel could not tell effective duration options from
+    an i2v failure.
+
+    Whether to call is left to ``get_reference_duration_tiers`` itself to decide by script_plan_kind, not
+    short-circuited on ``state["supported_durations"] is not None``: that is the return value of another method and
+    is also None when the model cannot be resolved; short-circuiting on it would leave such projects without even
+    the un-narrowed options.
+
+    把逐 unit 时长档位与本地化降级提示挂到 state 上；三个端点（GET/PUT/POST）
     都要走这一步——否则保存 / 确认后 ``adopt()`` 用不带 ``duration_tiers`` 的响应覆盖 GET
     读到的收窄结果，面板无法区分生效档位与 i2v 失败。
 
@@ -48,13 +66,27 @@ async def _attach_duration_tiers(
 
 
 def _attach_overwrite_text(state: dict, _t: Translator) -> dict:
-    """给覆盖清单附上服务端渲染的丢失清单文本；Web 确认框只呈现这份文本，与 Agent 回执同源。"""
+    """Attach the server-rendered loss list text to the coverage list; the Web confirm dialog only presents this text,
+    same source as the Agent receipt.
+
+    给覆盖清单附上服务端渲染的丢失清单文本；Web 确认框只呈现这份文本，与 Agent 回执同源。"""
     state["script_overwrite"] = overwrite_with_text(state.get("script_overwrite"), _t)
     return state
 
 
 def localize_draft_view(view: dict | None, _t: Translator, names: DisplayNames) -> dict | None:
-    """把草稿视图里的固定文案违约与降级提示换成按 ``_t`` 渲染的本地化文本。
+    """Replace fixed-text violations and degradation notes in the draft view with localized text rendered via ``_t``.
+
+    ``quarantine_unreadable`` is produced in only two places (the draft envelope itself is corrupted / the meta
+    needed for recomputation is missing or corrupted), both fixed strings without interpolation; entries with
+    ``params`` are failures of video request facts, which may belong to the whole episode or carry ``item_id`` to
+    locate a specific entry; the issue code is the text key, presented the same as content review's 422. Neither
+    involves the templates with interpolation already rendered at production time used by the other violation types
+    in ``lib.script.reference_video.draft_validation``; localization of violations is limited to these two kinds.
+    Degradation notes are always written with ``code`` as the text key.
+    Provider and model IDs in the parameters are replaced with display names via ``names``.
+
+    把草稿视图里的固定文案违约与降级提示换成按 ``_t`` 渲染的本地化文本。
 
     ``quarantine_unreadable`` 只由两处产出（草稿信封本身损坏 / 重算所需的 meta 缺失损坏），都是不带
     插值的固定字符串；带 ``params`` 的条目是视频请求事实的失败，既可属于整集，也可带 ``item_id``
@@ -170,6 +202,8 @@ async def confirm_script_review(
     """
     try:
         service = ScriptReviewService(get_project_manager())
+        # Confirmation writes the final script and registers new assets; without a source tag the change is broadcast
+        # as filesystem, and the frontend treats it as an external change and jumps to the assets pane.
         # 确认会写正式脚本并登记新资产；不标来源时变更按 filesystem 广播，前端当作外部改动跳到资产窗格。
         with project_change_source("webui"):
             state = await service.confirm(

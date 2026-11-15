@@ -1,4 +1,18 @@
-"""分享到官方市场：本地预检、经官方服务创建提交，以及本地保存的提交状态。
+"""Share to the official market: local pre-check, creating submissions via the official service, and locally stored
+submission status.
+
+What is submitted is the endpoint's saved definition plus an optional icon; if the local pre-check fails it is 422
+and nothing goes out. Each endpoint keeps only the token of its latest submission; the status list queries the
+official service once per endpoint on entering the page, and when it cannot be fetched keeps the last status and
+marks it ``stale``. When the official service is disabled, creating submissions and the status list both return 409
+``official_service_disabled``; the local pre-check is unaffected.
+
+Local records are written with a single statement only after the official service returns: creating a submission
+upserts by endpoint, and a status refresh only takes effect when the token has not changed, so concurrent
+submissions and refreshes for the same endpoint do not overwrite each other, and no write lock is held during the
+outbound call.
+
+分享到官方市场：本地预检、经官方服务创建提交，以及本地保存的提交状态。
 
 提交的是端点已保存的定义与可选图标；本地预检不通过即 422，不出站。每个端点只记最近一次提交的令牌，
 状态列表在进入页面时向官方服务各查一次，取不回时保留上次状态并标记 ``stale``。官方服务关闭时，
@@ -49,7 +63,7 @@ OfficialService = Annotated[OfficialServiceGateway, Depends(get_official_service
 
 class SubmissionIcon(BaseModel):
     filename: Literal["icon.png", "icon.webp", "icon.svg"]
-    #: 标准 base64。
+    #: Standard base64. / 标准 base64。
     content: str
 
 
@@ -75,7 +89,7 @@ class CheckSubmissionResponse(BaseModel):
 
 
 SubmissionState = Literal["open", "merged", "closed"]
-#: 库里的状态写入前已按官方服务的状态集合校验。
+#: Statuses in the DB were validated against the official service's status set before writing. / 库里的状态写入前已按官方服务的状态集合校验。
 _STATUSES: dict[str, SubmissionState] = {"open": "open", "merged": "merged", "closed": "closed"}
 
 
@@ -87,6 +101,7 @@ class MarketSubmissionResponse(BaseModel):
     slug: str
     status: SubmissionState
     pr_url: str
+    #: The status could not be fetched from the official service this time; the value shown is the last saved one.
     #: 本次没能从官方服务取回状态，展示的是上次保存的值。
     stale: bool
 
@@ -107,6 +122,7 @@ async def _files_of(session: AsyncSession, body: CheckSubmissionRequest) -> tupl
     if body.icon is not None:
         try:
             icon = (body.icon.filename, base64.b64decode(body.icon.content, validate=True))
+        # Non-ASCII characters raise ValueError; other invalid encodings raise its subclass binascii.Error.
         # 非 ASCII 字符抛 ValueError，其余非法编码抛其子类 binascii.Error。
         except ValueError as exc:
             raise UnprocessableError("market_submission_icon_encoding_invalid") from exc
@@ -137,7 +153,10 @@ def _fields(status: SubmissionStatus) -> dict[str, str]:
 
 
 async def _record_submission(session: AsyncSession, endpoint_id: int, status: SubmissionStatus) -> None:
-    """以本次提交覆盖该端点的记录；同一端点并发提交时后写者生效。"""
+    """Overwrite the endpoint's record with this submission; with concurrent submissions for the same endpoint, the
+    later writer wins.
+
+    以本次提交覆盖该端点的记录；同一端点并发提交时后写者生效。"""
     values = {**_fields(status), "submitted_at": utc_now()}
     insert = pg_insert if session.bind.dialect.name == "postgresql" else sqlite_insert
     stmt = insert(MarketSubmission).values(custom_endpoint_id=endpoint_id, **values)
@@ -223,6 +242,8 @@ async def list_submissions(
             reachable = False
             stale.add(endpoint_id)
     for endpoint_id, token, status in refreshed:
+        # If the endpoint got a new submission during the refresh, the token has changed and the old token's result is
+        # no longer written.
         # 刷新期间该端点已有新提交时令牌已变，旧令牌的结果不再写入。
         await session.execute(
             update(MarketSubmission)

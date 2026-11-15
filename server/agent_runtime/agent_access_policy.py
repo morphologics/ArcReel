@@ -1,4 +1,11 @@
-"""Agent 访问规则真相源：内核 sandbox settings 编译与应用层 hook 裁决共用同一份规则。
+"""Source of truth for Agent access rules: compiling the kernel sandbox settings and the application-layer hook
+decisions share the same rules.
+
+Zero I/O, built purely from process-level root paths (fake root paths work too); does not import SDK types. The SDK
+wrapping (hook signatures, permission result types, permission chain order) stays in a thin adapter on the
+session-management side (``server/agent_runtime/session_manager.py``).
+
+Agent 访问规则真相源：内核 sandbox settings 编译与应用层 hook 裁决共用同一份规则。
 
 零 I/O、以进程级根路径纯构造（假根路径亦可构造）；不 import SDK 类型。
 SDK 封皮（hook 签名、权限结果类型、权限链顺序）留在会话管理侧薄 adapter
@@ -32,6 +39,8 @@ from lib.script.draft_quarantine import OPEN_DRAFT_TOOL_NAME, PROMOTE_TOOL_NAME
 
 logger = logging.getLogger(__name__)
 
+#: Media directories the Agent may not write directly: generated artifacts, asset sheets, grids, music and final cuts
+#: all live here and are written only through the main process's tools.
 #: Agent 不可直接写入的媒体目录：生成产物、资产图、宫格、配乐与成片都在这里，只经主进程的工具写入。
 AGENT_PROTECTED_MEDIA_DIRS: tuple[str, ...] = (
     "characters",
@@ -52,13 +61,28 @@ AGENT_PROTECTED_MEDIA_FILES: tuple[str, ...] = tuple(f"style_reference.{ext}" fo
 
 
 def _default_claude_projects_dir() -> Path:
-    """SDK 存放 per-project 会话数据的基准目录。"""
+    """Base directory where the SDK stores per-project session data.
+
+    SDK 存放 per-project 会话数据的基准目录。"""
     return Path.home() / ".claude" / "projects"
 
 
 @dataclass(frozen=True)
 class ProtectedWriteRule:
-    """一类受保护写路径的完整声明：hook 谓词、拒绝文案与 sandbox denyWrite 投影同处一行。
+    """Full declaration of one class of protected write paths: the hook predicate, the deny message and the sandbox
+    denyWrite projection sit in one row.
+
+    ``AgentAccessPolicy.PROTECTED_WRITE_RULES`` is the single source of truth for these rules: the application-layer
+    hook (``_check_write_access``, covering built-in Write/Edit) and the kernel sandbox denyWrite (covering Bash
+    subprocesses, see ``_build_protected_write_abs_paths``) are both projected from this table. Adding a class of
+    protected path takes one row and both layers take effect together; with scattered declarations, missing either
+    place leaves a single-layer bypass (breaking the two-layer premise of ADR 0026).
+
+    The coverage of the two layers may be deliberately asymmetric (e.g. the hook only denies the final script_plan
+    under ``drafts/``, while the sandbox denies the whole directory), so predicate and projection are two
+    independently declared columns, not derived from each other.
+
+    一类受保护写路径的完整声明：hook 谓词、拒绝文案与 sandbox denyWrite 投影同处一行。
 
     ``AgentAccessPolicy.PROTECTED_WRITE_RULES`` 是这类规则的单一真相源：应用层 hook
     （``_check_write_access``，管内置 Write/Edit）与内核 sandbox denyWrite（管 Bash 子进程，
@@ -69,20 +93,41 @@ class ProtectedWriteRule:
     故谓词与投影是两列独立声明，不从彼此推导。
     """
 
+    #: Rule name: a readable identifier for each row in the table; no runtime consumer (neither predicate nor
+    #: projection looks up by name).
     #: 规则名：表内每行的可读标识，无运行期消费者（谓词与投影都不按名字查找）。
     name: str
+    #: Hook-layer predicate: ``(target, bases) -> matched?``. The caller calls it once with the "logical target" and
+    #: once with the "resolved target"; bases are the raw + resolved forms of project_cwd.
     #: hook 层谓词：``(target, bases) -> 是否命中``。target 由 caller 分别以「逻辑目标」与
     #: 「resolve 后目标」各调一次，bases 为 raw + resolved 两种形式的 project_cwd。
     matches: Callable[[Path, list[Path]], bool]
-    #: hook 层拒绝文案（须指明改用哪条合法通道）。
+    #: Hook-layer deny message (must say which legitimate channel to use instead). / hook 层拒绝文案（须指明改用哪条合法通道）。
     deny_message: str
+    #: Sandbox denyWrite projection: subpaths relative to the project_cwd base (a directory means the whole subtree is
+    #: denied).
     #: sandbox denyWrite 投影：相对 project_cwd base 的子路径（目录即整子树 deny）。
     sandbox_subpaths: tuple[str, ...]
 
 
 @dataclass(frozen=True, kw_only=True)
 class AgentAccessPolicy:
-    """「Agent 能碰什么」的单一规则真相源，同一份规则做两种投影：
+    """The single source of truth for "what the Agent may touch"; the same rules are projected two ways:
+
+    - Kernel sandbox layer: compiles SandboxSettings (denyRead / denyWrite / network domain list);
+    - Application-layer hook: provides per-call read/write/command decisions and pure transforms (project_cwd passed
+      per call).
+
+    The Windows fallback (kernel sandbox unavailable, ``sandbox_enabled=False``) is contained in the class: Bash
+    uses a prefix whitelist and secret stripping skips the wrapping. The two rules are mutually coupled (a wrapped
+    command starts with ``env -u``, so the whitelist could never match) and must live in one place.
+
+    Construction is zero I/O: all fields are process-level facts (root paths already resolved by the caller + a
+    platform boolean), and the sensitive-path table is derived purely from the fields. Credential injection (reading
+    the DB) does not belong in this class: injection is assembly-time I/O, and putting it here would break the basis
+    of pure, testable construction.
+
+    「Agent 能碰什么」的单一规则真相源，同一份规则做两种投影：
 
     - 内核沙箱层：编译 SandboxSettings（denyRead / denyWrite / 网络域名单）；
     - 应用层 hook：提供逐次读/写/命令裁决与纯变换（project_cwd 逐调用传参）。
@@ -96,27 +141,42 @@ class AgentAccessPolicy:
     塞进来会破坏纯构造可测的根基。
     """
 
+    # Source repo root (resolved): ``.env`` / ``.env.*`` are relative to this root (dotenv loads from the repo root);
+    # it is also the fence base for "allow reference material inside the repo".
     # 源仓库根（已 resolve）：``.env`` / ``.env.*`` 相对此根（dotenv 从仓库根
     # 加载），也是「仓库内参考资料放行」的围栏基准。
     project_root: Path
+    # Data root (resolved, app_data_dir() in production): reads denied by default, only the current project and the
+    # current user's memory are allowed; the location of each entry under it is given by the data root layout.
     # 数据根（已 resolve，生产为 app_data_dir()）：默认拒读，只放行当前项目与当前用户的记忆；
     # 其下各条目的位置由数据根布局给出。
     data_root: Path
+    # Agent profile root (resolved, controlled by the caller's env resolution): where ``.claude/settings.json`` lives.
     # Agent profile 根（已 resolve，受调用方 env 解析控制）：
     # ``.claude/settings.json`` 所在地。
     agent_profile_root: Path
+    # False means the kernel sandbox does not support the current platform (currently only Windows); Bash falls back
+    # to the code whitelist.
     # False 表示内核沙箱不支持当前平台（目前仅 Windows）——Bash 走代码白名单回退。
     sandbox_enabled: bool = True
-    # SandboxSettings.enableWeakerNestedSandbox 标志。
+    # SandboxSettings.enableWeakerNestedSandbox flag. / SandboxSettings.enableWeakerNestedSandbox 标志。
     in_docker: bool = False
+    # Base directory where the SDK stores per-project session data (base for the tool-results read exception).
     # SDK 存放 per-project 会话数据的基准目录（tool-results 读放行例外的基准）。
     claude_projects_dir: Path = field(default_factory=_default_claude_projects_dir)
 
+    # Bash family tools: with the sandbox enabled they go into allowed_tools (allowed together with
+    # autoAllowBashIfSandboxed); with the sandbox off (Windows fallback) they are stripped and commands fall through
+    # to can_use_tool and the prefix whitelist (see ``filter_allowed_tools`` / ``is_bash_command_whitelisted``).
     # Bash 系列工具：sandbox 启用时进 allowed_tools（autoAllowBashIfSandboxed
     # 协同放行）；sandbox 关闭（Windows 回退）时剥离，命令落到 can_use_tool
     # 走前缀白名单（见 ``filter_allowed_tools`` / ``is_bash_command_whitelisted``）。
     BASH_TOOLS: ClassVar[tuple[str, ...]] = ("Bash", "BashOutput", "KillBash")
 
+    # Entry prefix for python skills. Expected form ``python .claude/skills/<skill>/scripts/<script>.py <args>``: the
+    # script path must be under some skill's scripts/ (checked by _SKILL_SCRIPT_RE), which stops any existing or
+    # future file in the skills directory from being used as an executable entry. The Windows fallback has no sandbox
+    # denyExec backstop, so a prefix-only allow would expose the whole skills tree as executable surface.
     # python skills 入口前缀。约定形态 ``python .claude/skills/<skill>/scripts/
     # <script>.py <args>``：脚本路径须落在某 skill 的 scripts/ 下（_SKILL_SCRIPT_RE
     # 校验），挡住 skills 目录里任意现有/未来文件被当作可执行入口——Windows 回退
@@ -124,23 +184,37 @@ class AgentAccessPolicy:
     _PYTHON_SKILLS_PREFIX: ClassVar[str] = "python .claude/skills/"
     _SKILL_SCRIPT_RE: ClassVar["re.Pattern[str]"] = re.compile(r"^\.claude/skills/[^/]+/scripts/[^/]+\.py$")
 
+    # Bash command whitelist for the Windows fallback (sandbox_enabled=False): equivalent to the permissions.allow
+    # section of settings.json before sandboxing. Also the single source of truth for the can_use_tool deny hint text
+    # (format_bash_whitelist_deny_message derives from it).
     # Windows 回退（sandbox_enabled=False）的 Bash 命令白名单：等价于沙箱化前
     # settings.json permissions.allow 段。也是 can_use_tool deny hint 文案的
     # 单一真相源（format_bash_whitelist_deny_message 从此派生）。
     WINDOWS_BASH_PREFIX_WHITELIST: ClassVar[tuple[str, ...]] = (_PYTHON_SKILLS_PREFIX,)
 
+    # Shell metachar blacklist for the Windows fallback whitelist: ``;`` ``&`` ``|`` ``<`` ``>`` `` ` `` ``$`` and
+    # newline can all hang an arbitrary command after a whitelisted prefix (chaining/pipes/redirection/command
+    # substitution). Quoting context is not parsed; an occurrence inside quotes also rejects the whole string. Better
+    # a false reject (fail-closed); the deny message guides the Agent to rewrite the command.
     # Windows 回退白名单的 shell metachar 黑名单：``;`` ``&`` ``|`` ``<`` ``>``
     # `` ` `` ``$`` 与换行都可能在白名单前缀后挂任意命令（链式/管道/重定向/
     # 命令替换）。不解析引号语境，引号内出现也整串拒——宁可误拒（fail-closed），
     # deny 文案会引导 Agent 改写命令。
     _BASH_METACHARS_RE: ClassVar["re.Pattern[str]"] = re.compile(r"[;&|<>`$\r\n]")
 
+    # ``..`` path segments: ``python .claude/skills/../../evil.py`` has no metachar and satisfies the ``python
+    # .claude/skills/`` prefix, but ``..`` escapes the skills directory to run any script. The Windows fallback has no
+    # sandbox denyWrite/denyExec backstop, so the whole string is rejected. Only ``..`` segments bounded by
+    # separators/whitespace/string start or end match, so file names like ``my..name`` are not hit.
     # ``..`` 路径段：``python .claude/skills/../../evil.py`` 不含 metachar 且满足
     # ``python .claude/skills/`` 前缀，但 ``..`` 逃出 skills 目录执行任意脚本——
     # Windows 回退无 sandbox denyWrite/denyExec 兜底，整串拒。仅匹配被分隔符/
     # 空白/串首尾界定的 ``..`` 段，``my..name`` 这类文件名不误伤。
     _BASH_PATH_TRAVERSAL_RE: ClassVar["re.Pattern[str]"] = re.compile(r"(?:^|[\s/\\])\.\.(?:[\s/\\]|$)")
 
+    # Env var name patterns additionally matched when unsetting for Bash: a backstop for secret-like variables that
+    # may be injected into the SDK subprocess or inherited from the host (e.g. GEMINI_CLI_IDE_AUTH_TOKEN); when the
+    # list does not cover them, the pattern catches them.
     # Bash unset 时额外匹配的环境变量名模式：兜底 SDK 子进程里可能注入或宿主机
     # 继承下来的密钥类变量（如 GEMINI_CLI_IDE_AUTH_TOKEN），名单覆盖不到时靠模式拦。
     _SECRET_ENV_NAME_PATTERNS: ClassVar[tuple[str, ...]] = (
@@ -153,6 +227,8 @@ class AgentAccessPolicy:
         "CLIENT_SECRET",
     )
 
+    # File access control goes through the PreToolUse hook (step 1 of the permission chain, applies to every tool
+    # call); the value is the key in that tool's input that carries the path.
     # 文件访问控制走 PreToolUse hook（权限链第 1 步，对所有工具调用生效）；
     # 值为该工具入参中承载路径的键名。
     PATH_TOOLS: ClassVar[dict[str, str]] = {
@@ -163,8 +239,13 @@ class AgentAccessPolicy:
         "Grep": "path",
     }
     _WRITE_TOOLS: ClassVar[set[str]] = {"Write", "Edit"}
+    # Tools that read recursively with ``path`` as the search root: besides ``path`` itself, the decision must also
+    # consider its subtree.
     # 以 ``path`` 为搜索根递归读取的工具：裁决 ``path`` 本身之外还须看它的子树。
     _SEARCH_TOOLS: ClassVar[set[str]] = {"Glob", "Grep"}
+    #: Protected write path rule table: the single source of truth for hook denial and sandbox denyWrite. The
+    #: predicates reference this class's classmethods, so it is assigned after the class body (see the end of the
+    #: module); a new protected category only adds a row to that table.
     #: 受保护写路径规则表——hook 拒绝与 sandbox denyWrite 的单一真相源。谓词引用本类的
     #: classmethod，故在类体之后赋值（见模块尾部）；新增受保护类别只在该表加一行。
     PROTECTED_WRITE_RULES: ClassVar[tuple[ProtectedWriteRule, ...]]
@@ -185,7 +266,21 @@ class AgentAccessPolicy:
 
     @functools.cached_property
     def _sensitive_table(self) -> tuple[tuple[Path, ...], tuple[tuple[Path, str], ...]]:
-        """数据根外的敏感路径表 ``(files, globs)``：``files`` 为精确路径、``globs`` 为 ``(parent, pattern)`` 对。
+        """Sensitive path table outside the data root ``(files, globs)``: ``files`` are exact paths, ``globs`` are
+        ``(parent, pattern)`` pairs.
+
+        Derived purely from the constructor fields by "logical category", correctly reflecting the real location of
+        the profile directory after environment overrides (env resolution is done by the caller; this class only
+        consumes the resolved roots):
+
+        - ``.env`` / ``.env.*`` are always relative to the source repo root
+        - ``agent_runtime_profile/.claude/settings.json`` is under ``agent_profile_root``
+
+        Entries inside the data root (database, credentials, logs, etc.) are not registered one by one: the read
+        decision denies the data root by default, and the sandbox denies reads on the data root's top-level entries
+        as a whole (see ``_build_data_root_deny_read_abs_paths``).
+
+        数据根外的敏感路径表 ``(files, globs)``：``files`` 为精确路径、``globs`` 为 ``(parent, pattern)`` 对。
 
         按"逻辑类别"从构造字段纯推导，正确反映 profile 目录被环境覆盖后的真实位置
         （env 解析由调用方完成，本类只消费 resolve 后的根）：
@@ -205,7 +300,11 @@ class AgentAccessPolicy:
         return files, globs
 
     def is_sensitive_path(self, resolved: Path) -> bool:
-        """判断已 resolve 的路径是否命中数据根外的敏感文件清单。
+        """Check whether a resolved path hits the list of sensitive files outside the data root.
+
+        Covers ``.env`` / ``.env.*`` / ``agent_runtime_profile/.claude/settings.json``.
+
+        判断已 resolve 的路径是否命中数据根外的敏感文件清单。
 
         覆盖 ``.env`` / ``.env.*`` / ``agent_runtime_profile/.claude/settings.json``。
         """
@@ -219,6 +318,8 @@ class AgentAccessPolicy:
             except ValueError:
                 continue
             rel_posix = rel.as_posix()
+            # Only match direct children of ``parent``, so the ``.env.local`` pattern does not swallow
+            # ``project_root/sub/.env.local`` (not the same file).
             # 仅匹配 ``parent`` 直系子项，避免 ``.env.local`` 模式吃掉
             # ``project_root/sub/.env.local``（不是同一文件）。
             if "/" in rel_posix:
@@ -235,7 +336,17 @@ class AgentAccessPolicy:
         *,
         user_id: str,
     ) -> tuple[bool, str | None]:
-        """检查 file_path 是否允许给定工具访问，返回 ``(allowed, deny_reason)``。
+        """Check whether the given tool may access file_path; returns ``(allowed, deny_reason)``.
+
+        Three-step dispatch:
+        - Rule 0: sensitive files outside the data root (.env / settings.json, etc.) are always denied
+        - Write tools (Write/Edit) -> ``_check_write_access``
+        - Read tools (Read/Glob/Grep) -> ``_check_read_access``
+
+        ``user_id`` is passed per call alongside ``project_cwd`` (the user memory directory is derived from it); the
+        policy itself remains a process-level zero-I/O singleton and does not hold the current user.
+
+        检查 file_path 是否允许给定工具访问，返回 ``(allowed, deny_reason)``。
 
         三步 dispatch：
         - 规则 0：数据根外的敏感文件（.env / settings.json 等）一律拒
@@ -248,6 +359,9 @@ class AgentAccessPolicy:
         try:
             p = Path(file_path)
             logical = p if p.is_absolute() else project_cwd / p
+            # normpath collapses `.`/`..` but does not expand symlinks: keep both views, the "logical target" and the
+            # "resolved real target", to detect two kinds of bypass: symlink start (logically in the protected area,
+            # resolves outside) and symlink end (logically outside, resolves into the protected area).
             # normpath 收敛 `.`/`..` 但不展开 symlink——保留「逻辑目标」与「resolve 后的真实
             # 目标」两个视角，用来识别 symlink 起点（逻辑在 protected 区、resolve 跳到外面）
             # 与 symlink 终点（逻辑在外、resolve 落入 protected 区）两类绕过。
@@ -256,7 +370,7 @@ class AgentAccessPolicy:
         except (ValueError, OSError):
             return False, "访问被拒绝：无效的文件路径"
 
-        # 规则 0: 敏感文件强制拒绝
+        # Rule 0: sensitive files are always denied / 规则 0: 敏感文件强制拒绝
         if self.is_sensitive_path(resolved):
             return False, f"访问被拒绝：敏感文件不可访问 ({resolved})"
 
@@ -267,7 +381,41 @@ class AgentAccessPolicy:
         )
 
     def build_sandbox_settings(self, project_cwd: Path) -> dict[str, Any]:
-        """构造 SandboxSettings dict（SDK Python TypedDict 未声明 filesystem
+        """Build the SandboxSettings dict (the SDK Python TypedDict does not declare the filesystem substructure, but
+        the CLI runtime passes the JSON through and accepts it): the kernel sandbox layer's compiled projection of
+        the same rules.
+
+        - ``sandbox_enabled=False`` (Windows fallback): returns only ``{"enabled": False}``; the Bash tool uses the
+          ``is_bash_command_whitelisted`` code whitelist instead.
+        - ``filesystem.denyRead``: kernel-level file read denial (macOS Seatbelt / Linux bwrap profile), applies to
+          all subprocesses inside the sandbox.
+        - ``filesystem.denyWrite``: kernel-level file write denial, covering the ``sandbox_subpaths`` of every rule
+          in ``PROTECTED_WRITE_RULES`` (``scripts/``, ``project.json``, ``edit_timelines/``, ``source/``,
+          ``drafts/``, ``.arcreel/trash/``, the media directories and ``versions/``). Writes to these kinds of files
+          can only go through in-process MCP tools (``patch_episode_script`` / ``patch_project`` / ``upload_source``
+          / fetch and promotion of the reference split, etc., which run in the main process outside the sandbox),
+          sealing off the Bash bypass (``echo>`` / ``sed`` / ``python -c``). At OS level it applies to all
+          subprocesses inside the sandbox. There is no legitimate Bash write to these paths inside the sandbox
+          anymore, so nothing is hit by mistake.
+        - No ``filesystem.allowWrite``: the user memory directory (``<data root>/users/<user_id>/memory/``) is
+          closed to Bash for both reads and writes. Built-in Read/Write/Edit/Glob/Grep run in the main process,
+          outside the kernel sandbox; the hook layer allows the memory directory, so the kernel layer does not need
+          to. Adding ``allowWrite`` for it would leak on each platform in a different way: bwrap bind-mounts the
+          writable directory back, overriding the ``denyRead`` on ``users/``, so Bash can read and write; Seatbelt
+          denies reads but allows writes, so Bash can write blind. Project memory is inside cwd, and Bash reads and
+          writes it as usual.
+        - ``filesystem.denyRead`` also contains every top-level entry under the data root other than ``projects/``
+          (see ``_build_data_root_deny_read_abs_paths``): the hook layer's data-root default deny only covers
+          built-in Read/Glob/Grep, and Bash does not go through that hook (ADR 0026).
+        - ``allowUnsandboxedCommands=False``: forbids the Agent from asking to "retry unsandboxed" when the sandbox
+          fails; unacceptable for red-line scenarios.
+        - ``network``: ``allowedDomains`` is a "pre-approval list", not a "restriction list"; omitting the key means
+          zero pre-approval, so in unattended sessions approval requests for new domains are denied outright and all
+          outbound traffic is cut. ``allowLocalBinding`` separately controls loopback: ``allowedDomains`` cannot
+          open loopback whether it contains ``*`` or ``127.0.0.1``. The current values allow all domains plus
+          loopback (ADR 0069), so every loopback service on the host is reachable from Bash inside the sandbox.
+
+        构造 SandboxSettings dict（SDK Python TypedDict 未声明 filesystem
         子结构，但 CLI 运行时透传 JSON 接受）——内核沙箱层对同一份规则的编译投影。
 
         - ``sandbox_enabled=False``（Windows 回退）：仅返回 ``{"enabled": False}``，
@@ -312,7 +460,32 @@ class AgentAccessPolicy:
         }
 
     def _build_data_root_deny_read_abs_paths(self) -> list[str]:
-        """内核沙箱层的数据根读禁清单：数据根下 ``projects/`` 以外的全部顶层条目。
+        """The kernel sandbox layer's data-root read-deny list: every top-level entry under the data root other than
+        ``projects/``.
+
+        The data-root default deny in ``_check_read_access`` only covers built-in Read/Glob/Grep; Bash and its
+        subprocesses do not go through that hook and are only constrained by the kernel sandbox (ADR 0026), so
+        having only one layer leaves a ``cat`` bypass.
+
+        The projection is one notch stricter than the hook (the hook allows the current user's own memory; here the
+        whole ``users/`` tree is denied): the same approach as "the hook only denies the final script_plan under
+        drafts/, the sandbox denies the whole directory" in ``PROTECTED_WRITE_RULES``. The Agent reads and writes
+        memory through Read/Write/Edit (outside the sandbox); Bash has no need to read memory. ``projects/`` is not
+        in the list; Bash reads across projects are not constrained here.
+
+        The list is the union of two parts: the system directories registered in the layout, plus the top-level
+        entries actually present in the data root. The latter covers the default DB file, leftovers from the old
+        layout (``.arcreel.db*``, ``.arcreel/``, ``.system_config.json``, etc.) and entries the layout does not
+        register, without registering them one by one.
+
+        Before compiling, the system directories registered in the layout are created first: the CLI logs "Skipping
+        non-existent read deny path" for missing deny paths and installs no deny mount, while the fence is compiled
+        only once at session start. On a fresh install, a system directory that does not yet exist at session start
+        would, once created later (another user's memory, the first uploaded credential), be readable by that
+        session's Bash. If creating the directory fails (read-only mount, permissions), fall back to only
+        registering the path: the CLI skips it, and the hook layer still blocks the built-in read tools.
+
+        内核沙箱层的数据根读禁清单：数据根下 ``projects/`` 以外的全部顶层条目。
 
         ``_check_read_access`` 的数据根默认拒只覆盖内置 Read/Glob/Grep；Bash 及其子进程
         不经该 hook，只受内核沙箱约束（ADR 0026），单层存在即留 ``cat`` 旁路。
@@ -347,7 +520,13 @@ class AgentAccessPolicy:
         return sorted(str(entry) for entry in entries)
 
     def _user_memory_dir_or_none(self, user_id: str) -> Path | None:
-        """当前用户的记忆目录；``user_id`` 不是单个路径段时返回 None。
+        """The current user's memory directory; returns None when ``user_id`` is not a single path segment.
+
+        The fence must fail closed: a directory derived from an invalid ``user_id`` would escape the data root and
+        widen the allowed scope to arbitrary paths, so rather not allow the memory directory at all. Log a warning
+        to keep the diagnostic signal.
+
+        当前用户的记忆目录；``user_id`` 不是单个路径段时返回 None。
 
         围栏必须 fail-closed：非法 ``user_id`` 派生出的目录会逃出数据根，把放行
         范围扩到任意路径，宁可不放行记忆目录。记 warning 保留诊断信号。
@@ -358,7 +537,13 @@ class AgentAccessPolicy:
         return self._layout.user_memory_dir(user_id)
 
     def _is_user_memory_path(self, resolved: Path, *, user_id: str) -> bool:
-        """已 resolve 的路径是否落在当前用户的记忆目录（含目录本身）之内。
+        """Whether a resolved path lies inside the current user's memory directory (including the directory itself).
+
+        Only checks the user memory level: project memory is ``<cwd>/.arcreel/memory/``, inside cwd, and the cwd
+        fence on both the read and write paths already allows it; checking again would cost one more ``project_cwd``
+        resolve (``_check_read_access`` is a per-tool-use hook and deliberately avoids that lstat).
+
+        已 resolve 的路径是否落在当前用户的记忆目录（含目录本身）之内。
 
         只判用户记忆这一级：项目记忆是 ``<cwd>/.arcreel/memory/``，落在 cwd 内，
         读写两条路径的 cwd 围栏本就放行，再判一次要多做一次 ``project_cwd``
@@ -369,7 +554,22 @@ class AgentAccessPolicy:
 
     @classmethod
     def _build_protected_write_abs_paths(cls, project_cwd: Path) -> list[str]:
-        """Bash 子进程写禁清单（绝对路径）：``PROTECTED_WRITE_RULES`` 各规则 ``sandbox_subpaths``
+        """Write-deny list for Bash subprocesses (absolute paths): the projection of the ``sandbox_subpaths`` of each
+        rule in ``PROTECTED_WRITE_RULES`` (a directory means the whole subtree is denied).
+
+        Together with the built-in Write/Edit denial in ``_check_write_access`` it forms two layers (ADR 0026):
+        sandbox denyWrite covers Bash subprocesses (kernel level), the ``_check_write_access`` hook covers built-in
+        Write/Edit (permission system, all platforms). The built-in file tools run in the main process, not through
+        Bash, so the kernel sandbox cannot cover them, and vice versa. Both layers are projected from the same rule
+        table, so adding a protected path category changes the table in one place and both layers take effect
+        together.
+
+        The base is enumerated by ``_enumerate_cwd_bases`` in both raw + resolved forms (same convention as
+        ``_check_write_access``): if the sandbox implementation compares string paths rather than inodes,
+        registering only the raw form would mismatch when a Bash subprocess writes the resolved path after symlink
+        resolution (macOS ``/var↔/private/var``, Linux symlinked project root).
+
+        Bash 子进程写禁清单（绝对路径）：``PROTECTED_WRITE_RULES`` 各规则 ``sandbox_subpaths``
         的投影（目录即整子树 deny）。
 
         与 ``_check_write_access`` 的内置 Write/Edit 拒绝构成双层（ADR 0026）：sandbox denyWrite
@@ -392,7 +592,17 @@ class AgentAccessPolicy:
         return paths
 
     def _build_sensitive_abs_paths(self) -> list[str]:
-        """构造数据根外敏感文件的绝对路径列表，传给 sandbox profile 的 denyRead 字段。
+        """Build the list of absolute paths of sensitive files outside the data root, passed to the denyRead field of
+        the sandbox profile.
+
+        The SDK CLI skips deny paths that do not exist ("Skipping non-existent deny path"), so this enumerates the
+        fixed list plus glob matches that really exist right now.
+
+        Re-enumerated at every session start, so sensitive files created later (.env / .env.local) cannot bypass the
+        sandbox profile: the sandbox profile takes effect once when the SDK client starts, and a file added at run
+        time that already follows the naming convention must go into denyRead immediately.
+
+        构造数据根外敏感文件的绝对路径列表，传给 sandbox profile 的 denyRead 字段。
 
         SDK CLI 会跳过不存在的 deny 路径（"Skipping non-existent deny path"），
         所以这里枚举当前真实存在的固定清单 + glob 命中项。
@@ -411,7 +621,15 @@ class AgentAccessPolicy:
     @classmethod
     @functools.cache
     def _collect_env_keys_to_scrub(cls) -> tuple[str, ...]:
-        """汇总要从 Bash 子进程剥离的 env 变量名。
+        """Collect the env var names to strip from Bash subprocesses.
+
+        Three sources: a fixed list (ANTHROPIC + OTHER provider) + pattern matching (scanning ``os.environ`` for
+        variables whose names contain patterns like KEY/TOKEN/CREDENTIAL) + deduplication. The parent process
+        environ does not gain or lose secret-like variables after startup, so the result is stable; the cache avoids
+        rescanning for every Bash command. Tests that need to switch environment call
+        ``cls._collect_env_keys_to_scrub.cache_clear()``.
+
+        汇总要从 Bash 子进程剥离的 env 变量名。
 
         来源三路：固定清单（ANTHROPIC + OTHER provider）+ 模式匹配（扫
         ``os.environ`` 找名字含 KEY/TOKEN/CREDENTIAL 等模式的变量）+ 去重。
@@ -432,14 +650,30 @@ class AgentAccessPolicy:
     @classmethod
     @functools.cache
     def _env_scrub_wrap_prefix(cls) -> str:
-        """``env -u VAR1 -u VAR2 ... sh -c `` 前缀。命中清单由
+        """The ``env -u VAR1 -u VAR2 ... sh -c `` prefix. The matched list is decided by ``_collect_env_keys_to_scrub``
+        and does not change at runtime, so the cache reuses the whole string.
+
+        ``env -u VAR1 -u VAR2 ... sh -c `` 前缀。命中清单由
         ``_collect_env_keys_to_scrub`` 决定，运行期不变 — cache 复用整段字符串。
         """
         unset_flags = " ".join(f"-u {key}" for key in cls._collect_env_keys_to_scrub())
         return f"env {unset_flags} sh -c "
 
     def wrap_bash_command_for_env_scrub(self, command: object) -> str | None:
-        """Bash 密钥剥离的纯变换：返回包装后的命令，None 表示不包装。
+        """Pure transform for Bash secret stripping: returns the wrapped command; None means do not wrap.
+
+        The SDK subprocess holds ANTHROPIC_* with real values (needed for auth) and OTHER_PROVIDER_* as empty
+        placeholders (overridden with empty strings via options.env). The Bash sandbox inherits all env from the
+        parent process by default, so an Agent running ``env | grep`` can see the variable names. Via ``env -u VAR
+        ... sh -c '<cmd>'`` all matched variable names are unset in the Bash subshell; the original command, passed
+        through ``shlex.quote``, becomes the -c argument of the sh subshell as a whole.
+
+        No wrapping when the sandbox is unavailable (Windows fallback): ``env -u``/``sh -c`` are POSIX mechanisms
+        that native Windows cannot run; and a wrapped command starts with ``env -u``, so the prefix whitelist of
+        ``is_bash_command_whitelisted`` would never match. The mutual exclusion "wrapping breaks whitelist matching"
+        is locked between these two methods. Empty or non-string commands are not wrapped either.
+
+        Bash 密钥剥离的纯变换：返回包装后的命令，None 表示不包装。
 
         SDK 子进程持有真值的 ANTHROPIC_*（认证需要），及空值 placeholder 的
         OTHER_PROVIDER_*（options.env 空字符串覆盖），Bash sandbox 默认从父进程
@@ -461,7 +695,32 @@ class AgentAccessPolicy:
 
     @classmethod
     def is_bash_command_whitelisted(cls, command: str) -> bool:
-        """Windows 回退（sandbox 不可用）的 Bash 命令白名单判定。
+        """Bash command whitelist check for the Windows fallback (sandbox unavailable).
+
+        Plain startswith prefix matching has three kinds of bypass: metachar chains (``python .claude/skills/...;
+        evil`` satisfies the prefix as a whole, the trailing command runs as usual, and on Windows there is no
+        sandbox denyWrite backstop), command name prefix collisions (a prefix without a space is hit by
+        ``<prefix>X``), and path traversal (``..`` escapes the skills directory). The check has four steps:
+
+        1. Reject shell metachars in the whole string (``_BASH_METACHARS_RE``), blocking
+           chaining/pipes/redirection/command substitution;
+        2. Reject ``..`` path segments (``_BASH_PATH_TRAVERSAL_RE``): besides the original string, strip quotes and
+           check again under both readings, Windows separators (backslash->``/``) and POSIX escapes (drop the
+           backslash). The shell turns ``".."`` / dot-backslash-dot back into ``..``, so checking only the original
+           string could be bypassed by such obfuscation to escape the skills directory;
+        3. Match ``WINDOWS_BASH_PREFIX_WHITELIST`` on token boundaries: a prefix without a space requires the
+           command name to be exactly equal or followed by a space;
+        4. The python skills entry additionally requires the first argument to be ``<skill>/scripts/<script>.py``
+           (``_is_allowed_python_skill_command``), not any file under the skills directory.
+
+        Whitelist matching runs on a normalized string with quotes stripped and backslashes turned into forward
+        slashes: this tolerates backslash-separated paths and quoted script paths from a Windows Agent, avoiding
+        false rejects of legitimate commands (matching does not rewrite the command actually run; when allowed, the
+        original input is passed through). Metachars and ``..`` have already been rejected on the original string
+        and every normalized variant, so normalization is only used for "does it hit the whitelist" and does not
+        loosen the security boundary.
+
+        Windows 回退（sandbox 不可用）的 Bash 命令白名单判定。
 
         纯 startswith 前缀匹配有三类绕过：metachar 链（``python .claude/skills/...; evil``
         整串满足前缀，尾部命令照常执行，且 Windows 上无 sandbox denyWrite 兜底）、
@@ -505,7 +764,16 @@ class AgentAccessPolicy:
 
     @classmethod
     def _is_allowed_python_skill_command(cls, normalized_cmd: str) -> bool:
-        """``python .claude/skills/...`` 的脚本入口校验：取首个参数（脚本路径），
+        """Script entry check for ``python .claude/skills/...``: take the first argument (the script path) and require
+        it to match ``.claude/skills/<skill>/scripts/<script>.py``. Restricting to explicit scripts entries keeps
+        arbitrary files under the skills directory from being executable in the Windows fallback (no sandbox
+        backstop).
+
+        The input must be the string normalized by ``is_bash_command_whitelisted`` (quotes stripped, backslashes
+        turned into forward slashes), so splitting on whitespace and taking the first argument is enough; no
+        shell-level tokenizing is needed.
+
+        ``python .claude/skills/...`` 的脚本入口校验：取首个参数（脚本路径），
         要求匹配 ``.claude/skills/<skill>/scripts/<script>.py``。约束到显式 scripts
         入口，避免 skills 目录下任意文件在 Windows 回退（无 sandbox 兜底）下可执行。
 
@@ -519,7 +787,10 @@ class AgentAccessPolicy:
 
     @classmethod
     def format_bash_whitelist_deny_message(cls, command: str) -> str:
-        """Windows 回退 Bash 白名单拒绝文案。从 WINDOWS_BASH_PREFIX_WHITELIST
+        """Deny message for the Windows fallback Bash whitelist. The allowed list is derived from
+        WINDOWS_BASH_PREFIX_WHITELIST so the constant and the message cannot drift apart.
+
+        Windows 回退 Bash 白名单拒绝文案。从 WINDOWS_BASH_PREFIX_WHITELIST
         派生 allowed 列表，避免常量与文案双份漂移。"""
         allowed_lines = "\n".join(f"  - {prefix}" for prefix in cls.WINDOWS_BASH_PREFIX_WHITELIST)
         return (
@@ -532,6 +803,10 @@ class AgentAccessPolicy:
             "其他 Bash 命令在 Windows 回退模式下不可用。"
         )
 
+    # Read-only subagent (the ``name`` of the agent definition) -> all tools it may call. The ``tools`` in the agent
+    # definition frontmatter make the CLI narrow the tools the subagent can see; this table rejects off-list calls
+    # once more in the PreToolUse hook, so if the definition is widened or the CLI does not narrow per the
+    # frontmatter, the subagent still cannot reach write tools. The two lists must match.
     # 只读子智能体（agent 定义的 ``name``）→ 它能调用的全部工具。agent 定义 frontmatter 的
     # ``tools`` 由 CLI 收窄子智能体看得到的工具；这张表在 PreToolUse hook 上再拒一次名单外的调用，
     # 定义被改宽或 CLI 未按 frontmatter 收窄时，子智能体照样碰不到写入工具。两处名单须一致。
@@ -541,7 +816,10 @@ class AgentAccessPolicy:
     }
 
     def check_subagent_tool(self, agent_type: object, tool_name: str) -> str | None:
-        """只读子智能体调用名单外的工具时返回拒绝说明；其余调用（含主对话）返回 None。"""
+        """Return a deny explanation when a read-only subagent calls a tool not on its list; other calls (including the
+        main conversation) return None.
+
+        只读子智能体调用名单外的工具时返回拒绝说明；其余调用（含主对话）返回 None。"""
         if not isinstance(agent_type, str):
             return None
         allowed = self.READ_ONLY_SUBAGENT_TOOLS.get(agent_type)
@@ -553,7 +831,11 @@ class AgentAccessPolicy:
         )
 
     def filter_allowed_tools(self, tools: list[str]) -> list[str]:
-        """按沙箱可用性过滤 allowed_tools：sandbox 关闭（Windows 回退）时剥离
+        """Filter allowed_tools by sandbox availability: with the sandbox off (Windows fallback), strip the Bash family
+        so commands fall through to can_use_tool and the ``is_bash_command_whitelisted`` prefix whitelist; the
+        other, mutually exclusive half of the kernel route (allowed by autoAllowBashIfSandboxed).
+
+        按沙箱可用性过滤 allowed_tools：sandbox 关闭（Windows 回退）时剥离
         Bash 系列，让命令落到 can_use_tool 走 ``is_bash_command_whitelisted``
         前缀白名单——与内核路线（autoAllowBashIfSandboxed 放行）互斥的另一半。
         """
@@ -564,7 +846,18 @@ class AgentAccessPolicy:
 
     @functools.cached_property
     def _sdk_tmp_prefixes(self) -> tuple[str, ...]:
-        """SDK 后台任务输出（``<tmp>/claude-*/tasks``）的 tmp 根前缀。
+        """Tmp root prefixes of SDK background task output (``<tmp>/claude-*/tasks``).
+
+        The results of ``tempfile.gettempdir()`` and ``.resolve()`` are stable over the process lifetime, but
+        ``_check_read_access`` is a per-tool-use hook, and recomputing each time would make useless ``.resolve()``
+        system calls (lstat/readlink); cached_property computes it once. Covers cross-platform tmp roots (Linux
+        ``/tmp``, macOS default ``/var/folders/.../T``, Windows ``%TEMP%``).
+
+        Both the raw result of ``gettempdir()`` and the result after ``resolve()`` are listed, plus ``/tmp`` and
+        ``/private/tmp``: on macOS ``/tmp`` is a symlink to ``/private/tmp`` (``/var`` likewise points to
+        ``/private/var``), so listing only one form makes startswith mismatch.
+
+        SDK 后台任务输出（``<tmp>/claude-*/tasks``）的 tmp 根前缀。
 
         ``tempfile.gettempdir()`` 与 ``.resolve()`` 的结果在进程生命周期内稳定，
         但 ``_check_read_access`` 是 per-tool-use 钩子，每次重算会做无谓的
@@ -580,13 +873,28 @@ class AgentAccessPolicy:
         return (
             str(_tempdir / "claude-"),
             str(_tempdir.resolve() / "claude-"),
+            # Fixed temp path prefix written by the SDK, matched literally.
             "/tmp/claude-",  # noqa: S108 -- SDK 写入的固定临时路径前缀，按字面匹配
             "/private/tmp/claude-",
         )
 
     @functools.cached_property
     def _claude_projects_dir_resolved(self) -> Path | None:
-        """已 resolve 的 ``claude_projects_dir`` 基准目录（实例内算一次缓存）。
+        """The resolved ``claude_projects_dir`` base directory (computed once per instance and cached).
+
+        ``~/.claude`` may be symlinked by the user to a dotfiles / cloud-sync directory, while the compared
+        ``resolved`` has already been through ``.resolve()``; if the two sides differ, is_relative_to mismatches and
+        legitimate SDK tool-results reads are wrongly denied, so the base is resolved too (same convention as the
+        tmp / project_root comparisons). Only this stable prefix needs resolving; the per-session ``encoded``
+        subdirectory is a real directory created by the SDK, and plain string joining is enough, with no per-call
+        resolve (``_check_read_access`` is a per-tool-use hook; avoid repeated lstat/readlink).
+
+        resolve raises on symlink loops (RuntimeError) / parent directories without permission (OSError). The
+        permission hook must fail closed: on resolution failure return None; the caller then skips the tool-results
+        exception and falls through to the stricter deny branch, without letting the exception bubble up and abort
+        the tool call.
+
+        已 resolve 的 ``claude_projects_dir`` 基准目录（实例内算一次缓存）。
 
         ``~/.claude`` 可能被用户软链到 dotfiles / 云同步目录，而被比较的
         ``resolved`` 已 ``.resolve()`` 过，两侧不一致会让 is_relative_to 失配、
@@ -614,7 +922,24 @@ class AgentAccessPolicy:
     def _check_read_access(
         self, resolved: Path, project_cwd: Path, *, user_id: str, is_search: bool
     ) -> tuple[bool, str | None]:
-        """Read/Glob/Grep 的跨项目隔离 + host 文件系统封锁。
+        """Cross-project isolation + host filesystem lockdown for Read/Glob/Grep.
+
+        The user memory directory is allowed; inside cwd is allowed (project memory is there); SDK tool-results /
+        /tmp/claude-*/tasks are allowed as exceptions; everything else in the data root is denied (other projects,
+        system entries, other users' memory, files directly under the root); reference material inside the repo root
+        (lib/docs, etc.) is allowed; everything else (host filesystem: ~/.ssh, /etc, etc.) is denied by default.
+
+        The data-root default deny must come before the repo-root allow: the data root often sits inside the repo
+        root (dev default ``<repo root>/projects``, Docker ``/app/projects``); otherwise entries in the data root
+        would be allowed as reference material. Likewise, if the search root of Glob/Grep (``is_search``) contains
+        the data root, the recursion would scan into the data root, so it is denied as well.
+
+        Membership in the data root is decided by the ``_normalize_path_for_protected_compare`` convention:
+        ``resolve`` does not normalize case, and on case-insensitive volumes (macOS APFS, Windows NTFS default)
+        ``<repo root>/PROJECTS/...`` and the data root are the same directory; comparing as-is would fall into the
+        repo-root allow.
+
+        Read/Glob/Grep 的跨项目隔离 + host 文件系统封锁。
 
         用户记忆目录放行；cwd 内放行（项目记忆在其中）；SDK tool-results / /tmp/claude-*/tasks 例外放行；
         数据根内其余一律拒（其他项目、系统条目、他人记忆、根下直放文件）；仓库根内参考资料
@@ -632,15 +957,20 @@ class AgentAccessPolicy:
             return True, None
         if resolved.is_relative_to(project_cwd):
             return True, None
+        # SDK tool-results exception (for the resolved base see _claude_projects_dir_resolved).
         # SDK tool-results 例外（已 resolve 的基准见 _claude_projects_dir_resolved）。
         claude_projects_dir = self._claude_projects_dir_resolved
         if claude_projects_dir is not None:
             sdk_project_dir = claude_projects_dir / self.encode_sdk_project_path(project_cwd)
             if resolved.is_relative_to(sdk_project_dir) and "tool-results" in resolved.parts:
                 return True, None
+        # SDK background task output exception (for the prefix computation see _sdk_tmp_prefixes, cached once per
+        # instance).
         # SDK 后台任务输出例外（前缀计算见 _sdk_tmp_prefixes，实例内缓存一次）。
         if str(resolved).startswith(self._sdk_tmp_prefixes) and "tasks" in resolved.parts:
             return True, None
+        # Inside the data root: the current project and the current user's memory were allowed above; everything else
+        # is denied
         # 数据根内：当前项目与当前用户的记忆已在上面放行，其余一律拒
         if self._is_within_for_compare(resolved, self._layout.projects_dir):
             return False, (f"访问被拒绝：不允许跨项目读取 ({resolved} 不在当前项目 {project_cwd} 内)")
@@ -648,16 +978,28 @@ class AgentAccessPolicy:
             return False, (f"访问被拒绝：数据根内只能读取当前项目与你的记忆 ({resolved})")
         if is_search and self._is_within_for_compare(self.data_root, resolved):
             return False, (f"访问被拒绝：搜索范围包含数据根，请缩小到当前项目或具体的参考资料目录 ({resolved})")
+        # Reference material inside the repo root (lib/docs/agent_runtime_profile, etc.) is allowed
         # 仓库根内的参考资料（lib/docs/agent_runtime_profile 等）放行
         if resolved.is_relative_to(self.project_root):
             return True, None
-        # 其余路径（host 文件系统：~/.ssh、/etc 等）默认拒
+        # All other paths (host filesystem: ~/.ssh, /etc, etc.) are denied by default / 其余路径（host 文件系统：~/.ssh、/etc 等）默认拒
         return False, (f"访问被拒绝：路径在项目根外 ({resolved})")
 
     def _check_write_access(
         self, resolved: Path, project_cwd: Path, *, logical_norm: Path, user_id: str
     ) -> tuple[bool, str | None]:
-        """Write/Edit 的写入约束：cwd 外（用户记忆目录除外）一律拒，cwd 内先过 ``PROTECTED_WRITE_RULES`` 规则表
+        """Write constraints for Write/Edit: outside cwd (except the user memory directory) everything is denied;
+        inside cwd, first apply the ``PROTECTED_WRITE_RULES`` rule table (``scripts/*.json`` / ``project.json`` /
+        the final script_plan can only go through the consolidated MCP tools), then deny code extensions (the Agent
+        does not write code).
+
+        All cwd-relative checks (inside/outside cwd, protected-area hits) compare the target against the **base
+        enumerated in both raw + resolved** forms: the ``resolved`` passed by the caller already has symlinks
+        expanded, but ``project_cwd`` may be a symlink entry (macOS ``/var↔/private/var``, Linux symlinked project
+        root). Building protected paths from the raw base only and comparing them as strings against the resolved
+        target would mismatch -> bypass; enumerating both bases keeps the same convention.
+
+        Write/Edit 的写入约束：cwd 外（用户记忆目录除外）一律拒，cwd 内先过 ``PROTECTED_WRITE_RULES`` 规则表
         （``scripts/*.json`` / ``project.json`` / 正式 script_plan——只能走收归后的 MCP
         工具），再拒代码扩展名（Agent 不写代码）。
 
@@ -666,11 +1008,18 @@ class AgentAccessPolicy:
         是 symlink 入口（macOS ``/var↔/private/var``、Linux symlinked 项目根）。仅用 raw base 拼
         protected 路径与 resolved target 字符串比对会失配 → bypass；同时枚举两种 base 保证同口径。
         """
+        # Both raw + resolved base forms are enumerated once by _enumerate_cwd_bases, so under a symlinked
+        # project_cwd, is_relative_to / the protected predicates do not miss because of a base<->target form mismatch.
+        # bases are reused by each predicate in the rule table, which consume the list directly without a second
+        # resolve (removing a redundant lstat).
         # raw + resolved 两种形式的 base 由 _enumerate_cwd_bases 一次性枚举，避免 symlinked
         # project_cwd 下 is_relative_to / 受保护谓词因 base↔target 形式不一致漏判。bases 复用
         # 给规则表各谓词,后者直接消费列表不再做第二次 resolve（消除冗余 lstat）。
         bases = self._enumerate_cwd_bases(project_cwd)
 
+        # The user memory directory is outside cwd but is an Agent-writable area (project memory is inside cwd and
+        # takes the regular path below); the code extension deny still applies: memory holds notes, and loosening
+        # extensions would hand Bash executable scripts.
         # 用户记忆目录在 cwd 外但属 Agent 可写区（项目记忆在 cwd 内，走下面的常规路径）；
         # 代码扩展名拒仍然适用——记忆装的是笔记，放宽扩展名等于给 Bash 递可执行脚本。
         in_user_memory = self._is_user_memory_path(resolved, user_id=user_id)
@@ -693,7 +1042,17 @@ class AgentAccessPolicy:
 
     @staticmethod
     def _enumerate_cwd_bases(project_cwd: Path) -> list[Path]:
-        """raw + resolved 两种形式的 project_cwd base 列表。
+        """List of project_cwd bases in raw + resolved forms.
+
+        ``project_cwd`` may be a symlink entry (macOS ``/var↔/private/var``, Linux symlinked project root); building
+        paths from the raw form only and comparing them against the resolved target would mismatch.
+        ``_check_write_access`` (hook layer) and ``_build_protected_write_abs_paths`` (sandbox denyWrite) share this
+        enumeration so both layers use the same path base.
+
+        Fail closed when resolve fails: bases contain only raw (the hook layer still safely denies the write when
+        the target is not under raw); add a warning to keep the diagnostic signal instead of swallowing it silently.
+
+        raw + resolved 两种形式的 project_cwd base 列表。
 
         ``project_cwd`` 可能是 symlink 入口（macOS ``/var↔/private/var``、Linux
         symlinked 项目根），仅用 raw 形式拼路径与已 resolve 的 target 比对会失配。
@@ -714,7 +1073,23 @@ class AgentAccessPolicy:
 
     @classmethod
     def _normalize_path_for_protected_compare(cls, path: Path | str) -> str:
-        """把路径字符串归一化为受保护区比对用的统一键。
+        """Normalize a path string into a uniform key for protected-area comparison.
+
+        Three steps, covering three kinds of form drift:
+
+        - Windows extended-length prefix (backslash-backslash-?-backslash, see the original below): ``Path.resolve``
+          returns the extended-length ``C:`` / ``UNC`` share form when the path approaches MAX_PATH or is a UNC
+          share; mixed with the regular form in bases, startswith mismatches, so strip it to the regular form before
+          comparing;
+        - ``unicodedata.normalize("NFC", ...)``: macOS HFS+ stores file names in NFD; the NFD form returned by
+          resolve and an NFC input are different strings even after casefold;
+        - ``os.path.normcase`` + ``casefold``: normcase unifies Windows separators (``/``-> backslash, identity on
+          POSIX); casefold handles case-insensitive comparison. Windows NTFS / macOS APFS default volumes are
+          case-insensitive, and ``PROJECT.JSON`` and ``project.json`` point to the same physical file. On Linux
+          case-sensitive volumes the Agent does not actually use case variants, and an occasional over-match does
+          not break the fail-loud semantics.
+
+        把路径字符串归一化为受保护区比对用的统一键。
 
         三步处理，覆盖三类形态漂移：
 
@@ -739,14 +1114,37 @@ class AgentAccessPolicy:
 
     @classmethod
     def _is_within_for_compare(cls, target: Path, base: Path) -> bool:
-        """``target`` 是否为 ``base`` 本身或其子路径，两侧按 ``_normalize_path_for_protected_compare`` 归一化后比对。"""
+        """Whether ``target`` is ``base`` itself or a subpath of it, comparing both sides after normalizing with
+        ``_normalize_path_for_protected_compare``.
+
+        ``target`` 是否为 ``base`` 本身或其子路径，两侧按 ``_normalize_path_for_protected_compare`` 归一化后比对。"""
         target_s = cls._normalize_path_for_protected_compare(target)
         base_s = cls._normalize_path_for_protected_compare(base)
         return target_s == base_s or target_s.startswith(base_s.rstrip(os.sep) + os.sep)
 
     @classmethod
     def _is_protected_project_json(cls, target: Path, bases: list[Path]) -> bool:
-        """命中受保护的项目 JSON（``scripts/`` 下任意 .json，或根 ``project.json``）。
+        """Hits a protected project JSON (any .json under ``scripts/``, or the root ``project.json``).
+
+        The caller should call it once with the "logical target" (normpath collapses `.`/`..` but does not expand
+        symlinks) and once with the "resolved real target": either one falling into the protected area counts as a
+        hit. This covers two kinds of bypass inside the project: a symlink start pointing at a protected path
+        (resolved jumps outside) and a symlink end pointing at a protected path (logically outside, resolved jumps
+        in).
+
+        ``bases`` is passed once by the caller (`_check_write_access`) as the list of project_cwd in raw + resolved
+        forms (comparing raw/resolved against the target by the same convention, avoiding misses under macOS
+        ``/var↔/private/var`` and Linux symlinked project roots); this predicate consumes the ready list and does
+        not resolve on its own (removing a redundant lstat).
+
+        Both sides of the comparison are normalized by ``_normalize_path_for_protected_compare`` (NFC + normcase +
+        casefold + stripping the extended-length prefix), handling three kinds of form drift: case, Unicode
+        normalization form, and the Windows extended-length prefix.
+
+        Same source as the sandbox ``denyWrite``; this predicate covers built-in Write/Edit (permission system, all
+        platforms) and forms two layers with denyWrite (Bash subprocesses, kernel level).
+
+        命中受保护的项目 JSON（``scripts/`` 下任意 .json，或根 ``project.json``）。
 
         caller 应分别对「逻辑目标」（normpath 收敛 `.`/`..` 但不展开 symlink）和「resolve
         后的真实目标」各调一次：任一落入 protected 区都判定命中——覆盖项目内 symlink 起点
@@ -770,6 +1168,12 @@ class AgentAccessPolicy:
             if target_s == cls._normalize_path_for_protected_compare(base / "project.json"):
                 return True
             scripts_dir = cls._normalize_path_for_protected_compare(base / "scripts")
+            # Deny the scripts/ subtree (including the directory itself): sandbox denyWrite puts all of scripts/ under
+            # kernel-level deny, and the hook layer must match. Otherwise the Agent could use Write to put
+            # scripts/foo.bak / .tmp / .md into the script directory and break the project structure convention
+            # (scripts/ is only for script .json; drafts go in drafts/). Also explicitly cover the directory path
+            # itself (target == scripts_dir): if the Agent Writes using the directory name as a file path the
+            # filesystem would refuse, but the hook layer fails fast first rather than relying on the OS backstop.
             # 拒绝 scripts/ 子树（含目录本身）：sandbox denyWrite 把整个 scripts/ 列入内核级 deny，
             # hook 层须保持一致——否则 Agent 用 Write 写 scripts/foo.bak / .tmp / .md 会污染剧本
             # 目录，破坏项目结构约定（scripts/ 是剧本 .json 专属，drafts/ 才放草稿）。
@@ -779,6 +1183,9 @@ class AgentAccessPolicy:
                 return True
         return False
 
+    #: Normalized form of the write-denied script_plan file names (measured with the same ruler as the path
+    #: comparison). The class body cannot call a classmethod, so it is declared here as a placeholder and the real
+    #: value is assigned after ``PROTECTED_WRITE_RULES``.
     #: 写禁 script_plan 文件名的归一化形态（与路径比对同一把尺）。类体内不能调 classmethod，
     #: 故占位声明在此、实际值在 ``PROTECTED_WRITE_RULES`` 之后一并赋。
     _PROTECTED_SCRIPT_PLAN_FILENAMES_NORM: ClassVar[frozenset[str]] = frozenset()
@@ -786,7 +1193,13 @@ class AgentAccessPolicy:
 
     @classmethod
     def _is_protected_edit_timeline(cls, target: Path, bases: list[Path]) -> bool:
-        """命中剪辑时间线目录（``edit_timelines/`` 整子树，含目录本身）。
+        """Hits the edit timeline directory (the whole ``edit_timelines/`` subtree, including the directory itself).
+
+        The revision chain and optimistic concurrency of edit timelines are maintained only by the edit timeline
+        commands; editing directly would bypass revisions and the per-episode lock. ``bases`` and the target follow
+        the same raw/resolved dual-form convention as ``_is_protected_project_json``.
+
+        命中剪辑时间线目录（``edit_timelines/`` 整子树，含目录本身）。
 
         剪辑时间线的修订链与乐观并发只由剪辑时间线命令维护，直改会绕过修订与集内锁。
         ``bases`` 与 target 的 raw/resolved 双形式口径同 ``_is_protected_project_json``。
@@ -800,7 +1213,14 @@ class AgentAccessPolicy:
 
     @classmethod
     def _is_protected_source(cls, target: Path, bases: list[Path]) -> bool:
-        """命中源文目录（``source/`` 整子树，含目录本身）。
+        """Hits the source directory (the whole ``source/`` subtree, including the directory itself).
+
+        The whole source, episode sources and snapshots are written only through service commands: a change must
+        remap the episode ledger according to the alignment before and after; editing directly would leave the
+        ledger out of sync with the source. ``bases`` and the target follow the same raw/resolved dual-form
+        convention as ``_is_protected_project_json``.
+
+        命中源文目录（``source/`` 整子树，含目录本身）。
 
         整本源文、集原文与快照只经服务命令写入：改动要按改动前后的对齐重映射分集账本，直改会让账本与源文对不上。
         ``bases`` 与 target 的 raw/resolved 双形式口径同 ``_is_protected_project_json``。
@@ -814,7 +1234,13 @@ class AgentAccessPolicy:
 
     @classmethod
     def _is_protected_trash(cls, target: Path, bases: list[Path]) -> bool:
-        """命中项目回收站（``.arcreel/trash/`` 整子树，含目录本身）。
+        """Hits the project trash (the whole ``.arcreel/trash/`` subtree, including the directory itself).
+
+        Deletion records are added and removed only by the trash module; writing directly could bypass "emptying and
+        permanent deletion belong only to the creator". ``bases`` and the target follow the same raw/resolved
+        dual-form convention as ``_is_protected_project_json``.
+
+        命中项目回收站（``.arcreel/trash/`` 整子树，含目录本身）。
 
         删除记录只经回收站模块增删；直写能绕过「清空与彻底删除只属于创作者」。
         ``bases`` 与 target 的 raw/resolved 双形式口径同 ``_is_protected_project_json``。
@@ -828,7 +1254,13 @@ class AgentAccessPolicy:
 
     @classmethod
     def _is_protected_media(cls, target: Path, bases: list[Path]) -> bool:
-        """命中媒体目录（``AGENT_PROTECTED_MEDIA_DIRS`` 各整子树，含目录本身）。
+        """Hits a media directory (each whole subtree in ``AGENT_PROTECTED_MEDIA_DIRS``, including the directory
+        itself).
+
+        Media is written only through the generation and editing tools; writing or deleting directly would bypass
+        the project trash, and accidental deletions could not be recovered (``docs/adr/0107``).
+
+        命中媒体目录（``AGENT_PROTECTED_MEDIA_DIRS`` 各整子树，含目录本身）。
 
         媒体只经生成与编辑工具写入；直写或删除会绕过项目回收站，误删无法找回（``docs/adr/0107``）。
         """
@@ -842,12 +1274,38 @@ class AgentAccessPolicy:
 
     @classmethod
     def _is_protected_versions(cls, target: Path, bases: list[Path]) -> bool:
-        """命中版本历史目录（``versions/`` 整子树，含目录本身）：版本记录与快照只经版本管理维护。"""
+        """Hits the version history directory (the whole ``versions/`` subtree, including the directory itself):
+        version records and snapshots are maintained only by version management.
+
+        命中版本历史目录（``versions/`` 整子树，含目录本身）：版本记录与快照只经版本管理维护。"""
         return any(cls._is_within_for_compare(target, base / "versions") for base in bases)
 
     @classmethod
     def _is_protected_formal_script_plan(cls, target: Path, bases: list[Path]) -> bool:
-        """命中受写禁的正式 script_plan（``drafts/episode_N/`` 下 ``AGENT_PROTECTED_SCRIPT_PLAN_FILENAMES``）。
+        """Hits a write-denied final script_plan (``AGENT_PROTECTED_SCRIPT_PLAN_FILENAMES`` under
+        ``drafts/episode_N/``).
+
+        Write-denied for the same reason as ``scripts/*.json`` / ``project.json``: these files have several write
+        paths (migration read-modify-write, Web saves, regeneration / promotion writes, Agent edits), and all except
+        the Agent hold the same per-path lock, ``ProjectManager.file_lock``. The Agent's Write/Edit runs inside the
+        sandbox and cannot take that lock, so between a direct edit and a concurrent Web save there is a lost-update
+        window. Use ``open_draft`` -> ``patch_draft`` -> promotion instead; disk writes only happen on the
+        lock-holding promotion side.
+
+        Match by file name, not by resolving the project variant: the write deny must hold before the session is
+        assembled, while the project's content_mode / generation_mode can change at runtime. Recognizing one or two
+        script_plan file names this project does not use is harmless; those files have no legitimate writer in that
+        project anyway.
+
+        Both final files and ``.invalid.json`` drafts are blocked: draft edits must go through the revisioned MCP
+        tools so they share the per-path lock and OCC with Web/remote patch, promotion and generation, keeping
+        direct writes from bypassing concurrency control.
+
+        ``bases`` and the target follow the same raw/resolved dual-form convention as
+        ``_is_protected_project_json``. Episode numbers are not enumerated; match on ``episode_*`` directory names,
+        again because episodes are added and removed at runtime.
+
+        命中受写禁的正式 script_plan（``drafts/episode_N/`` 下 ``AGENT_PROTECTED_SCRIPT_PLAN_FILENAMES``）。
 
         与 ``scripts/*.json`` / ``project.json`` 同一条理由收进写禁：这些文件各有多条写入路径
         （迁移读改写、Web 端保存、重生成 / 晋升写盘、Agent 修改），除 Agent 外都持
@@ -880,6 +1338,27 @@ class AgentAccessPolicy:
         return False
 
 
+#: Single source of truth for protected write paths: each row declares the hook predicate, the deny message and the
+#: sandbox denyWrite projection; ``_check_write_access`` (built-in Write/Edit) and ``_build_protected_write_abs_paths``
+#: (Bash subprocesses, kernel level) project from the same table. The predicates reference class classmethods, so it is
+#: assigned after the class body.
+#:
+#: - ``project_json``: "consolidated write entry": ``scripts/*.json`` and ``project.json`` can only go through MCP
+#:   tools; both layers project the same coverage (the whole ``scripts/`` subtree + ``project.json``).
+#: - ``edit_timeline``: "consolidated write entry": edit timelines can only get appended revisions through the edit
+#:   timeline tools; both layers have the same coverage.
+#: - ``source``: "consolidated write entry": the source can only be written through the tools that upload and edit
+#:   sources, and changes remap the episode ledger by alignment; both layers have the same coverage.
+#: - ``trash``: the project trash is added to and removed from only by the trash module; emptying and permanent
+#:   deletion are open only to the creator; both layers have the same coverage.
+#: - ``media`` / ``versions``: media and version history are written only by the generation tools and version
+#:   management, and deleted only through the project trash; both layers have the same coverage.
+#: - ``formal_script_plan``: "write entry holds the lock": the final script_plan has several other write paths that
+#:   hold the same per-path lock; Write/Edit cannot take the lock, so a direct edit opens a lost-update window. The two
+#:   layers are deliberately asymmetric: the sandbox denies the whole ``drafts/`` directory (the list is built once at
+#:   session assembly and episodes are added and removed at runtime, so per-file enumeration would always miss; Bash
+#:   has no legitimate writer anyway), while the hook denies the final script_plan and the four kinds of revisioned
+#:   quarantine drafts.
 #: 受保护写路径的单一真相源：每行声明 hook 谓词、拒绝文案与 sandbox denyWrite 投影，
 #: ``_check_write_access``（内置 Write/Edit）与 ``_build_protected_write_abs_paths``
 #: （Bash 子进程内核级）同表投影。谓词引用类的 classmethod，故在类体之后赋值。
@@ -973,6 +1452,8 @@ AgentAccessPolicy.PROTECTED_WRITE_RULES = (
     ),
 )
 
+#: Normalized form of the write-denied file names (measured with the same ruler as the path comparison). The class body
+#: cannot reference a classmethod, so it is assigned after the table.
 #: 写禁文件名的归一化形态（与路径比对同一把尺）。类体内不能引用 classmethod，故在表之后赋值。
 AgentAccessPolicy._PROTECTED_SCRIPT_PLAN_FILENAMES_NORM = frozenset(
     AgentAccessPolicy._normalize_path_for_protected_compare(Path(name))

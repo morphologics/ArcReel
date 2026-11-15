@@ -1,4 +1,15 @@
-"""分镜尾帧设置/清除路由。
+"""Routes to set/clear a shot's end frame.
+
+Setting has two channels with the same destination: ``/end-frame/upload`` takes a multipart upload,
+``/end-frame/select`` picks an existing image by project-relative path; both are normalized into a PNG snapshot
+written to ``end_frames/scene_{id}.png``. ``DELETE /end-frame`` clears it (deletes the snapshot + empties the
+field).
+
+The ``end_frame_image`` field is only written here: the generic script PATCH allowlist deliberately excludes it, to
+avoid writing values as is that bypass the snapshot copy and reintroduce dangling references and out-of-bounds
+paths.
+
+分镜尾帧设置/清除路由。
 
 设置有两条通道、同一落点：``/end-frame/upload`` 收 multipart 上传，``/end-frame/select``
 按项目内相对路径选已有图片；两者都归一为 PNG 快照写到 ``end_frames/scene_{id}.png``。
@@ -45,19 +56,23 @@ class SelectEndFrameRequest(BaseModel):
 
 @contextmanager
 def _translated_errors(script_file: str, _t: Translator) -> Generator[None]:
-    """三个端点共用的领域错误 → HTTP 映射。"""
+    """Domain error -> HTTP mapping shared by the three endpoints.
+
+    三个端点共用的领域错误 → HTTP 映射。"""
     try:
         yield
     except (EndFrameError, UploadValidationError) as e:
         raise HTTPException(status_code=e.status_code, detail=_t(e.key, **e.params)) from e
     except FileNotFoundError as exc:
-        # 不回传 str(exc)：load_script 的异常信息含服务器绝对路径
+        # Do not return str(exc): load_script's exception message contains absolute server paths / 不回传 str(exc)：load_script 的异常信息含服务器绝对路径
         raise NotFoundError("script_not_found", name=script_file) from exc
     except ScriptEditError as e:
         raise HTTPException(status_code=400, detail=script_edit_detail(e, _t)) from e
     except (HTTPException, ApiError):
         raise
     except Exception as e:
+        # Do not return str(e): the message of an unexpected exception may contain internal details such as server
+        # paths; the stack trace goes to the log
         # 不回传 str(e)：未预期异常的消息可能含服务器路径等内部细节，堆栈进日志即可
         logger.exception("请求处理失败")
         raise HTTPException(status_code=500, detail=_t("internal_server_error")) from e
@@ -74,7 +89,7 @@ async def upload_end_frame(
     """上传任意图片作为该分镜的尾帧。"""
     with _translated_errors(script_file, _t):
         max_bytes = validate_upload(file.filename, file.size, kind="image")
-        # 限定读入内存的字节数：Content-Length 缺失/被绕过时不至于 OOM
+        # Limit the bytes read into memory: no OOM when Content-Length is missing/bypassed / 限定读入内存的字节数：Content-Length 缺失/被绕过时不至于 OOM
         content = await file.read(max_bytes + 1)
         if len(content) > max_bytes:
             raise UploadTooLargeError(max_bytes)

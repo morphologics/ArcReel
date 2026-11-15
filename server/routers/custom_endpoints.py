@@ -1,4 +1,18 @@
-"""自定义调用端点管理 API。
+"""Custom endpoint management API.
+
+CRUD of the definition itself plus confirmation before save. Zero envelope: the request body and exported content
+are both the raw definition JSON; import is ``POST``, export is ``GET`` with the client saving to disk -- there is
+no separate import / export API and no outer envelope.
+
+``POST /validate`` is a single-step, server-stateless confirmation: it shares the validator with save and
+additionally returns the existing endpoint with the same author and name, echoed hints and the version tier, so the
+client can decide before creating whether to create a copy, overwrite the existing one, or cancel.
+
+The two import entry points, ``validate`` and create, branch on payload shape: one with ``kind`` is an endpoint
+definition, anything else is taken as a ComfyUI workflow -- the file users most commonly have is a workflow exported
+by ComfyUI itself, not an endpoint definition.
+
+自定义调用端点管理 API。
 
 定义本体的 CRUD 与保存前确认。零封套：请求体与导出内容都是定义 JSON 原样，导入即
 ``POST``，导出即 ``GET`` 后由客户端存盘——没有独立的 import / export 接口，也没有外层信封。
@@ -53,20 +67,31 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/custom-endpoints", tags=["Custom Endpoints"])
 
+# Routes for endpoint testing and node binding inference must be registered before this module's ``/{endpoint_id}``:
+# FastAPI matches in registration order, and a failed path parameter parse does not fall back to later routes --
+# ``/custom-endpoints/trial-runs`` hitting ``endpoint_id: int`` just gets a 422.
 # 端点测试与节点绑定推断的路由必须先于本模块的 ``/{endpoint_id}`` 注册：FastAPI 按注册序匹配，
 # 路径参数解析失败不会往后回退——``/custom-endpoints/trial-runs`` 撞上 ``endpoint_id: int`` 只会
 # 直接 422。
 router.include_router(endpoint_tests.router)
 router.include_router(comfyui_inference.router)
 
+#: The request body is the raw definition JSON. Deliberately not declared as ``dict``: non-object input (arrays, bare
+#: strings) must also go through the shared validator to produce field-located diagnostics, instead of hitting
+#: FastAPI's own 422 shape.
 #: 请求体即定义 JSON 原样。刻意不声明成 ``dict``：非对象的输入（数组、裸串）也要经共享校验器
 #: 产出定位到字段的诊断，而不是撞上 FastAPI 自己的一套 422 形状。
 DefinitionBody = Annotated[Any, Body()]
 
+#: When a raw workflow is pasted in, the importer specifies whether it produces images or video -- the workflow itself
+#: does not declare this.
 #: 粘进来的是原始 workflow 时，由导入方指定它产图还是产视频——workflow 本身不声明这件事。
 ImportMediaType = Literal["image", "video"]
 
 
+# ---------------------------------------------------------------------------
+# Pydantic models
+# ---------------------------------------------------------------------------
 # ---------------------------------------------------------------------------
 # Pydantic 模型
 # ---------------------------------------------------------------------------
@@ -76,7 +101,7 @@ class CustomEndpointResponse(BaseModel):
     """一条自定义调用端点。``definition`` 即导出内容，客户端直接存成文件。"""
 
     id: int
-    key: str  # ce-<id>，系统分配、不透明
+    key: str  # ce-<id>, system-assigned, opaque / ce-<id>，系统分配、不透明
     display_name: str
     kind: str
     schema_version: str
@@ -98,7 +123,7 @@ class DuplicateDescriptor(BaseModel):
     key: str
     display_name: str
     version: str
-    # 既有定义相对待导入文件的新旧
+    # How old/new the existing definition is relative to the file being imported / 既有定义相对待导入文件的新旧
     relation: VersionRelation
 
 
@@ -122,13 +147,20 @@ class ValidateResponse(BaseModel):
     errors: list[dict[str, str]]
     warnings: list[dict[str, str]]
     duplicates: list[DuplicateDescriptor]
+    # meta.hints echoed as is (base_url and suggested model); display only, no compound provider creation.
     # meta.hints 原样回显（base_url 与建议模型）；只展示，不复合创建供应商。
     hints: dict[str, Any] | None = None
     schema_version: SchemaVersionInfo
+    # null when the definition does not declare it (or the declared value is not semver), or the app version cannot be
+    # read.
     # 定义未声明（或声明值不是 semver）、或应用版本读不出时为 null。
     min_app_version: MinAppVersionInfo | None = None
+    # What this payload was taken as: an endpoint definition, a ComfyUI API workflow, or a UI format that cannot be
+    # submitted.
     # 这份载荷被当成什么收的：端点定义、ComfyUI 的 API workflow，还是提交不了的 UI 格式。
     import_shape: ImportShape
+    # The wrapped result of a raw API workflow; null for the other two shapes, where the client keeps using its own
+    # copy.
     # 原始 API workflow 的包装结果；另两种形状为 null，客户端继续用自己手上那份。
     wrapped_definition: dict[str, Any] | None = None
 
@@ -142,6 +174,9 @@ class EndpointReferenceDescriptor(BaseModel):
     model_display_name: str
 
 
+# ---------------------------------------------------------------------------
+# Helper functions
+# ---------------------------------------------------------------------------
 # ---------------------------------------------------------------------------
 # 辅助函数
 # ---------------------------------------------------------------------------
@@ -165,7 +200,13 @@ def endpoint_response(
 
 
 def _routed_import(body: object, media_type: str) -> tuple[ImportShape, Any, DefinitionDiagnostics]:
-    """按载荷形状分流，产出「待校验的定义 + 它的诊断」。
+    """Branch on payload shape and produce "the definition to validate + its diagnostics".
+
+    UI-format workflows do not go into the validator: they have no ``class_type``, and judging them against the
+    definition schema would only report a screenful of field errors unrelated to "picked the wrong menu item"; a
+    single structured refusal says clearly what to do.
+
+    按载荷形状分流，产出「待校验的定义 + 它的诊断」。
 
     UI 格式的 workflow 不进校验器：它没有 ``class_type``，拿定义 schema 去判只会报出一整屏与
     「导错了菜单项」无关的字段错误，一条结构化的拒绝才说得清该怎么办。
@@ -177,7 +218,13 @@ def _routed_import(body: object, media_type: str) -> tuple[ImportShape, Any, Def
 
 
 def _accepted(definition: object, diagnostics: DefinitionDiagnostics, _t: Translator) -> dict[str, Any]:
-    """错误即 422 + 结构化诊断；通过后才是可落库的定义。
+    """An error means 422 + structured diagnostics; only after passing is it a definition that can be stored.
+
+    Save and ``validate`` go through the same :func:`validate_definition`, so the two can never give different
+    verdicts -- "validate says yes, save says no" is exactly the split the shared validator is meant to eliminate.
+    Warnings do not block saving.
+
+    错误即 422 + 结构化诊断；通过后才是可落库的定义。
 
     保存与 ``validate`` 走同一个 :func:`validate_definition`，两处不可能给出不同判定——
     「validate 说行、保存说不行」正是共用校验器要消灭的分裂。警告不拦保存。
@@ -188,7 +235,12 @@ def _accepted(definition: object, diagnostics: DefinitionDiagnostics, _t: Transl
 
 
 def _accepted_definition(body: object, _t: Translator) -> dict[str, Any]:
-    """整份替换走的入口：只认端点定义，不做导入分流。
+    """Entry point for whole replacement: only accepts endpoint definitions, no import branching.
+
+    Overwriting an existing endpoint with a raw workflow would wipe out the confirmed node bindings along with it,
+    which should not happen silently.
+
+    整份替换走的入口：只认端点定义，不做导入分流。
 
     用一份原始 workflow 覆盖既有端点会把已确认的节点绑定一并抹掉，这不该是静默发生的事。
     """
@@ -196,7 +248,13 @@ def _accepted_definition(body: object, _t: Translator) -> dict[str, Any]:
 
 
 def _lineage(definition: object) -> tuple[str | None, str | None, str | None]:
-    """从任意形状的输入里取 ``(author, name, version)``。
+    """Get ``(author, name, version)`` from input of any shape.
+
+    Rows in the store have passed validation, but the request body may not have when this function is called --
+    duplicate detection must still work on a definition with errors, otherwise "one typo in the name and you cannot
+    see that you already imported it".
+
+    从任意形状的输入里取 ``(author, name, version)``。
 
     库里的行已过校验，但请求体在本函数被调用时可能尚未过——重复检测要在有错的定义上照样能跑，
     否则「名字打错一处就看不到自己已经导过一份」。
@@ -217,7 +275,13 @@ def _lineage(definition: object) -> tuple[str | None, str | None, str | None]:
 async def _duplicates_of(
     repo: CustomEndpointRepository, definition: object, exclude_id: int | None
 ) -> list[DuplicateDescriptor]:
-    """按 ``meta.author + meta.name`` 找同作者同名的既有端点。
+    """Find an existing endpoint with the same author and name by ``meta.author + meta.name``.
+
+    Matching only uses these two: keys are system-assigned and shared files carry no key, display names have no
+    uniqueness constraint, and author plus name is the only information in the file that can identify "the same
+    definition" across instances. The version only describes old vs. new and plays no part in pairing.
+
+    按 ``meta.author + meta.name`` 找同作者同名的既有端点。
 
     匹配只认这两项：键由系统分配、分享文件不带键，显示名也没有唯一约束，作者加名字是文件里
     仅有的、能跨实例指认「同一份定义」的信息。版本只用来说明新旧，不参与配对。
@@ -281,7 +345,13 @@ def _reference_descriptors(references: list[EndpointReference]) -> list[dict[str
 
 
 async def _invalidate_backend_cache() -> None:
-    """定义原地更新立即对新任务生效：清掉按 provider / model 缓存的 backend 实例。
+    """An in-place definition update takes effect immediately for new tasks: clear the backend instances cached by
+    provider / model.
+
+    Tasks already polling hold the spec from construction time, so the change only affects new tasks -- this is
+    accepted behavior; there is no in-flight version lock.
+
+    定义原地更新立即对新任务生效：清掉按 provider / model 缓存的 backend 实例。
 
     已在轮询的任务持有构造时的 spec，改动只影响新任务——这是接受的行为，不做在途版本锁。
     """
@@ -418,7 +488,16 @@ async def _check_kind_change_keeps_attachments(
     new_kind: str,
     _t: Callable[..., str],
 ) -> None:
-    """换了容器类型的定义不得把在用的挂接弄坏。
+    """A definition that changes container type must not break attachments in use.
+
+    The two-way "endpoint × provider protocol" pairing used to be checked only on provider-side writes
+    (``docs/adr/0081``), while a whole replacement changes ``kind`` in place with the key and model row references
+    unchanged: a ComfyUI definition could thus overwrite a declarative endpoint attached to an OpenAI-protocol
+    provider, and vice versa, with no sign on either side at save time. The criterion is the same predicate as on
+    the provider side, so a wrong attachment is refused on both write paths. Changing the model row's attachment
+    first and then replacing the definition remain possible as separate steps.
+
+    换了容器类型的定义不得把在用的挂接弄坏。
 
     「端点 × 供应商协议」的双向配对原先只在供应商侧写入时判（``docs/adr/0081``），而整份替换会
     原地改掉 ``kind``、键与模型行引用不变：一份 ComfyUI 定义因此能盖掉挂在 OpenAI 协议供应商上的
@@ -440,7 +519,18 @@ async def _check_media_type_change_has_no_attachments(
     endpoint_id: int,
     new_media_type: str,
 ) -> None:
-    """换了媒体类型的定义不得原地改掉在用模型行的所属媒体。
+    """A definition that changes media type must not change in place the media of the model rows in use.
+
+    Model rows carry no media type of their own; the endpoint they route to decides it. When an image-producing
+    ComfyUI definition is overwritten by a video-producing one, all model rows attached to it are rejudged in place
+    as video rows: a provider that had one default model each for image and video would end up with two video
+    defaults, querying the default model would return two rows, and it would only blow up at generation time.
+    Duration tier normalization also goes by media type and would be misaligned too.
+
+    Unlike the ``kind`` change, there is no "still valid" case here: what changes is not the pairing but the model
+    rows' ownership. Detaching first and then replacing the definition remain possible as separate steps.
+
+    换了媒体类型的定义不得原地改掉在用模型行的所属媒体。
 
     模型行不自带媒体类型，它归哪一路由端点说了算。一份产图的 ComfyUI 定义被一份产视频的盖掉后，
     挂着它的模型行全部原地改判为视频行：本来图像与视频各一个默认模型的供应商，替换后成了两个视频

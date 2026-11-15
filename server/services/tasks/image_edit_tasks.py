@@ -1,4 +1,17 @@
-"""图片指令式编辑（image edit）任务执行层。
+"""Execution layer for instruction-based image edit tasks.
+
+Edit semantics (see ``docs/adr/0050`` and the "image edit" term in GLOSSARY.md): call i2i with the resource's
+current image as the only reference image and the user's edit instruction as the only prompt; the new image
+overwrites current and goes into version history automatically; the original image_prompt is not written back -- an
+edit forks the **image**, not the prompt.
+
+Supported resources: the four kinds of asset sheets character / scene / prop / product + character derivative sheets
++ storyboard images. "Resolving the current image path" and "writing back by resource type" reuse the existing rules
+of the generation pipeline (asset sheet field / script generated_assets), provided uniformly by
+:func:`resolve_current_image_rel` to the route (validation before enqueue) and the executor (reading at execution
+time), so the two sides never diverge.
+
+图片指令式编辑（image edit）任务执行层。
 
 编辑语义（见 ``docs/adr/0050`` 与 GLOSSARY.md「图片编辑」术语）：以资源的当前图为唯一
 参考图、用户编辑指令为唯一 prompt 调用 i2i，产出新图覆盖 current 并自动进版本历史；
@@ -59,19 +72,28 @@ from server.services.tasks.formal_image_commit import (
     storyboard_formal_image_callback,
 )
 
+# source value marking "instruction-based edit" in version records; the frontend shows an edit marker based on it
+# (same mechanism as manual_upload)
 # 版本记录里标记「指令式编辑」的 source 值；前端据此展示编辑标记（与 manual_upload 同机制）
 IMAGE_EDIT_VERSION_SOURCE = "image_edit"
 
 
 def _derivative_target(artifact_id: str) -> DerivativeSheetTarget:
-    """把已解析成落盘真名的 ``本体/衍生`` id 还原为写回坐标。"""
+    """Restore a ``base/derivative`` id already resolved to its real on-disk names into write-back coordinates.
+
+    把已解析成落盘真名的 ``本体/衍生`` id 还原为写回坐标。"""
     owner_key, derivative_key = split_derivative_artifact_id(artifact_id)
     return DerivativeSheetTarget(owner_key=owner_key, derivative_key=derivative_key)
 
 
+#: Resource type name of character derivative sheets in the edit API contract (singular form, alongside the keys of
+#: ASSET_SPECS). Its resource_id is ``base name/derivative name``, addressing that image in the base-look entry's
+#: derivative table.
 #: 角色衍生资产图在编辑 API 契约里的资源类型名（单数形态，与 ASSET_SPECS 的键并列）。
 #: 它的 resource_id 是 ``本体名/衍生名``，寻址的是本体条目衍生表内的那张图。
 
+# Allowlist of editable resource types (the singular form used by the API contract; apart from storyboard and
+# derivatives it comes from the same source as ASSET_SPECS)
 # 可编辑的资源类型白名单（API 契约用的单数形态；storyboard 与衍生之外与 ASSET_SPECS 同源）
 EDITABLE_RESOURCE_TYPES: tuple[str, ...] = (*ASSET_SPECS.keys(), "storyboard", DERIVATIVE_TASK_TYPE)
 
@@ -105,6 +127,8 @@ def _build_image_edit_basis(
             references=(source,),
         )
     return build_asset_sheet_visual_basis(
+        # Derivatives share the asset-sheet basis kind with the base look; only the asset id is written as
+        # "base/derivative".
         # 衍生与本体共用 asset-sheet 依据种类，只是 asset id 写作「本体/衍生」。
         asset_type=DERIVATIVE_ASSET_TYPE if resource_type == DERIVATIVE_TASK_TYPE else resource_type,
         asset_id=resource_id,
@@ -118,7 +142,9 @@ def _build_image_edit_basis(
 
 
 def edit_version_resource_type(resource_type: str) -> str:
-    """API 契约的单数 resource_type → VersionManager / 事件层的复数资源类型。"""
+    """Singular resource_type of the API contract -> plural resource type of VersionManager / the event layer.
+
+    API 契约的单数 resource_type → VersionManager / 事件层的复数资源类型。"""
     if resource_type == "storyboard":
         return "storyboards"
     if resource_type == DERIVATIVE_TASK_TYPE:
@@ -132,7 +158,19 @@ def resolve_current_image_rel(
     resource_id: str,
     script: dict[str, Any] | None = None,
 ) -> str | None:
-    """解析资源当前图的项目相对路径（只解析登记指针，可用性由 Artifact Manifest 判定）。
+    """Resolve the project-relative path of the resource's current image (only resolves the registered pointer;
+    availability is decided by the Artifact Manifest).
+
+    - Assets (character / scene / prop / product): read the sheet field of the matching bucket in project.json;
+      raises ``KeyError`` if the asset does not exist, returns ``None`` if the sheet is not set.
+    - Character derivative: ``resource_id`` is ``base name/derivative name``; read the sheet field of that row in
+      the base-look entry's derivative table; raises ``KeyError`` if the base look or derivative does not exist,
+      returns ``None`` if not generated yet.
+    - storyboard: read ``generated_assets.storyboard_image`` of the script entry (in grid projects it may point to
+      ``scene_{id}_first.png``); no registered pointer means no artifact, current is not inferred from a same-named
+      file; raises ``KeyError`` if the entry does not exist.
+
+    解析资源当前图的项目相对路径（只解析登记指针，可用性由 Artifact Manifest 判定）。
 
     - 资产（character / scene / prop / product）：读 project.json 对应 bucket 的 sheet
       字段；资产不存在抛 ``KeyError``，sheet 未设置返回 ``None``。
@@ -168,6 +206,7 @@ def resolve_current_image_pointer(
         pointer = get_generated_assets(item).get("storyboard_image")
         if isinstance(pointer, str) and pointer:
             return resolved_id, pointer
+        # No registered pointer means no artifact: a same-named file is no evidence that it belongs to this shot.
         # 没有登记指针就是没有产物：同名文件不构成这个分镜的归属证据。
         return resolved_id, None
 
@@ -175,6 +214,7 @@ def resolve_current_image_pointer(
         try:
             owner_name, derivative_name = split_derivative_artifact_id(resource_id)
         except ValueError as exc:
+            # An ID that is not "base name/derivative name" points to no derivative; handled the same as not existing
             # 不是「本体名/衍生名」的 ID 不指向任何衍生，与不存在同样处理
             raise KeyError(f"derivative not found: {resource_id}") from exc
         try:
@@ -189,6 +229,8 @@ def resolve_current_image_pointer(
 
     spec = ASSET_SPECS[resource_type]
     bucket = project.get(spec.bucket_key)
+    # The asset name in the request and the bucket key may be either NFC or NFD; resolve the real on-disk key via the
+    # coordinate system
     # 请求里的资产名与桶 key 可能是 NFC/NFD 中的任一形态，按坐标系解析真实落盘 key
     key = resolve_asset_key(bucket, resource_id)
     entry = bucket.get(key) if isinstance(bucket, dict) and key is not None else None
@@ -302,7 +344,18 @@ async def execute_image_edit_task(
     task_id: str | None = None,
     claimed_provider_id: str | None = None,
 ) -> dict[str, Any]:
-    """执行图片编辑任务：读 current 图 → i2i → 新版本覆盖 current → 按资源类型写回。
+    """Run an image edit task: read the current image -> i2i -> new version overwrites current -> write back by
+    resource type.
+
+    An edit is always i2i (the only image task whose task type is known at enqueue, see ``docs/adr/0001``): the
+    reference image is always the single current image, so the shared pipeline always takes the i2i slot; when the
+    backend call fails, the current image pointer and the resource write-back are not touched (MediaGenerator only
+    overwrites output and registers a new version after success, and the write-back does not happen either).
+    Baseline registration of the old image (see the ``ensure_current_tracked`` call in ``_pre_submit``) happens
+    before the backend call, independent of backend success, and is not rolled back on failure -- it guarantees the
+    pre-edit image can always be rolled back to, and is not part of the version changes produced by the edit.
+
+    执行图片编辑任务：读 current 图 → i2i → 新版本覆盖 current → 按资源类型写回。
 
     编辑必然 i2i（唯一入队即知任务类型的图片任务，见 ``docs/adr/0001``）：参考图恒为当前图一张，
     共享流水线据此恒走 i2i 槽；backend 调用失败时 current 图指针与资源写回
@@ -325,6 +378,8 @@ async def execute_image_edit_task(
         raise ValueError("script_file is required for storyboard image_edit task")
 
     version_resource_type = edit_version_resource_type(resource_type)
+    # Register the snapshot as soon as it is built in the thread: if cancellation lands during preparation the return
+    # value is lost, so the snapshot directory is reclaimed via the registration.
     # 快照在线程里一建好就登记：取消落在准备那一程时返回值会丢，按登记回收快照目录。
     frozen_snapshots: list[FrozenImageReferences] = []
 
@@ -351,6 +406,9 @@ async def execute_image_edit_task(
         )
         if _source is None:
             raise ValueError(f"no current image to edit: {resource_type}/{resource_id}")
+        # The asset name may come in as either NFC or NFD: the selection seam returns the real on-disk key, and later
+        # version registration and the canonical image path are all written with it, to avoid the same asset producing
+        # files and version records in two encodings.
         # 资产名可能以 NFC/NFD 任一形态传入：选择缝返回真实落盘 key，之后的版本登记与
         # canonical 图路径统一按它写，避免同一资产落出两种编码形式的文件与版本记录。
         _key = _source.resource_id
@@ -384,7 +442,7 @@ async def execute_image_edit_task(
         return _project, _project_path, _current_image, _key, _aspect_ratio, _frozen, _basis, _source
 
     try:
-        # 读剧本可能顺带落盘迁移
+        # Reading the script may also persist a migration on the way / 读剧本可能顺带落盘迁移
         (
             project,
             project_path,
@@ -405,6 +463,10 @@ async def execute_image_edit_task(
 
     async def _pre_submit(generator: Any) -> None:
         await asyncio.to_thread(assert_artifact_input_claims_usable, project_path, project, formal_claims)
+        # If the old image has no version record yet (e.g. in an old grid project current points to a non-canonical
+        # path), register it first with neutral metadata, guaranteeing the pre-edit image can be rolled back to; this
+        # also keeps ensure_current_tracked inside generate_image_async from writing the edit instruction / edit
+        # marker onto the old version. When a version record already exists this call is a no-op.
         # 旧图若尚无版本记录（如旧宫格项目 current 指向非 canonical 路径），先以中性元数据补登，
         # 保证编辑前的旧图可回滚；也避免 generate_image_async 内部的 ensure_current_tracked
         # 把编辑指令 / 编辑标记误写到旧版本上。已有版本记录时此调用是 no-op。
@@ -466,6 +528,9 @@ async def execute_image_edit_task(
             project_manager=get_project_manager(),
         )
 
+    # The only reference image is the current image (i2i), and the prompt is only the edit instruction (the original
+    # image_prompt is not concatenated / the generation path's automatic reference image collection is not appended);
+    # the provider and the frozen basis share the task-owned source image bytes.
     # 参考图仅当前图一张（i2i）、prompt 仅编辑指令（不拼原 image_prompt / 不追加生成路径的
     # 自动参考图收集）；provider 与 frozen basis 共享 task-owned 源图字节。
     return await run_formal_image_task(

@@ -1,4 +1,14 @@
-"""项目删除与覆盖导入共用的收尾，以及已删除项目恢复时的记录改回。
+"""Wrap-up shared by project deletion and overwrite import, and reverting records when a deleted project is restored.
+
+Both deleting a project and overwrite import turn the existing project under the name into a deleted project: queued
+tasks are cancelled; tasks, batches, call records and assistant sessions are moved to the tombstone name; running
+tasks have their claim on the project voided and give up writing to disk. Any later project using this name, whether
+brought in by the overwrite import or created or imported after deletion, does not inherit these records. When a
+deleted project is restored, the records are moved from the tombstone name back to the restored project name; when
+it is restored under a new name because the original name is taken, the Agent context records of the assistant
+sessions move with the project directory to the storage key derived from the new directory.
+
+项目删除与覆盖导入共用的收尾，以及已删除项目恢复时的记录改回。
 
 删除项目与覆盖导入都让项目名下的现有项目成为已删除项目：排队中的任务取消，任务、批次、调用记录与助手
 会话改挂墓碑名，执行中的任务作废对项目的认领、放弃落盘。之后用这个名字的项目，无论是覆盖导入装进
@@ -28,7 +38,15 @@ from lib.project.task_project_claim import restore_task_project_claims, revoke_t
 
 @asynccontextmanager
 async def retiring_project(session_factory: async_sessionmaker[AsyncSession], project_name: str) -> AsyncGenerator[str]:
-    """收尾项目名下的现有项目，``async with`` 块拿到墓碑名，在块里把项目目录移成同名的已删除项目。
+    """Wrap up the existing project under the name; the ``async with`` block gets the tombstone name, and inside the
+    block the project directory is moved to a deleted project of the same name.
+
+    On entry, in one transaction, queued tasks are cancelled, records are moved to the tombstone name, and claims of
+    running tasks are voided; it commits only when the block ends normally, and once the commit starts it is not
+    interrupted by cancellation. If the block or the commit raises, the transaction rolls back, claims are restored,
+    the existing project's records stay as they were, and the directory is restored by the block's caller.
+
+    收尾项目名下的现有项目，``async with`` 块拿到墓碑名，在块里把项目目录移成同名的已删除项目。
 
     进入时在一个事务里取消排队中的任务、把记录改挂墓碑名，并作废执行中任务的认领；块正常结束才
     提交，提交开始后不被取消打断。块或提交抛错时事务回滚、认领恢复，现有项目的记录保持原样，目录
@@ -53,7 +71,16 @@ async def restore_retired_project(
     *,
     sdk_config_dir: Path,
 ) -> None:
-    """已删除项目恢复到 ``project_dir`` 后，把墓碑名 ``tombstone`` 下的记录改回恢复后的项目名并提交；提交开始后不被取消打断。
+    """After a deleted project is restored to ``project_dir``, move the records under the tombstone name ``tombstone``
+    back to the restored project name and commit; once the commit starts it is not interrupted by cancellation.
+
+    When the restored name differs from the one before deletion, the Agent session storage key (derived from the
+    absolute path of the project directory) must change too: in the same transaction, the database transcript
+    mirrors of this project's sessions are moved to the new directory's key, and after commit the SDK local records
+    under ``sdk_config_dir`` are moved. The original key now belongs to the project occupying the original name, so
+    only these sessions are moved.
+
+    已删除项目恢复到 ``project_dir`` 后，把墓碑名 ``tombstone`` 下的记录改回恢复后的项目名并提交；提交开始后不被取消打断。
 
     恢复后的名字与删除前不同时，Agent 会话存储键（由项目目录的绝对路径派生）也须跟着换：同一事务里把这个项目
     的会话在数据库中的 transcript 镜像改到新目录的键下，提交后再移动 ``sdk_config_dir`` 下的 SDK 本地记录。原键
@@ -85,7 +112,12 @@ type RetireProject = Callable[[str], AbstractContextManager[str]]
 
 
 def retire_project_on(bridge: EventLoopBridge, session_factory: async_sessionmaker[AsyncSession]) -> RetireProject:
-    """给同步的导入流程用的收尾：进出 ``with`` 块时投回 ``bridge`` 的事件循环执行，块本身留在调用线程。
+    """Wrap-up for the synchronous import flow: entering and leaving the ``with`` block are posted back to ``bridge``'s
+    event loop to run, while the block itself stays on the calling thread.
+
+    Only usable in a worker thread.
+
+    给同步的导入流程用的收尾：进出 ``with`` 块时投回 ``bridge`` 的事件循环执行，块本身留在调用线程。
 
     只能在工作线程里使用。
     """

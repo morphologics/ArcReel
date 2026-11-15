@@ -1,4 +1,6 @@
-"""费用估算 API 路由。"""
+"""Cost estimation API routes.
+
+费用估算 API 路由。"""
 
 from __future__ import annotations
 
@@ -52,7 +54,7 @@ async def _estimate(project_name: str, _t: Translator):
         except FileNotFoundError as exc:
             raise NotFoundError("project_not_found", name=project_name) from exc
 
-        # 加载所有剧本
+        # Load all scripts / 加载所有剧本
         scripts: dict[str, dict] = {}
         for ep in project_data.get("episodes", []):
             script_file = ep.get("script_file", "")

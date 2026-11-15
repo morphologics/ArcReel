@@ -1,4 +1,6 @@
-"""assets 全局资产库路由。"""
+"""Routes of the global asset library (assets).
+
+assets 全局资产库路由。"""
 
 from __future__ import annotations
 
@@ -58,7 +60,9 @@ ALLOWED_EXTS = {".png", ".jpg", ".jpeg", ".webp"}
 
 
 def _validate_asset_name(name: str, _t: Translator) -> str:
-    """HTTP 边界包装：路径不安全的名字（分隔符 / 空字节 / ..）返回 400。"""
+    """HTTP boundary wrapper: names with unsafe paths (separators / null bytes / ..) return 400.
+
+    HTTP 边界包装：路径不安全的名字（分隔符 / 空字节 / ..）返回 400。"""
     try:
         return validate_asset_name(name)
     except ValueError as exc:
@@ -66,7 +70,13 @@ def _validate_asset_name(name: str, _t: Translator) -> str:
 
 
 def _serialize(asset, derivatives: Sequence[AssetDerivative] = ()) -> dict:
-    """把一条资产（连同它的衍生子表）序列化成 API 形状。
+    """Serialize one asset (together with its derivative sub-table) into the API shape.
+
+    Derivatives go in and out together with the base look as a set; consumers only need the three things that land
+    in the project's character entry: name, change description, and image path. Types without the derivative
+    capability, and assets just created that have no derivatives yet, use the default empty sequence.
+
+    把一条资产（连同它的衍生子表）序列化成 API 形状。
 
     衍生随本体整套进出，消费方只需要落到项目角色条目里的三样：名、变化描述、图片路径。
     未开启衍生能力的类型、以及刚建出来还没有衍生的资产，走缺省的空序列。
@@ -88,12 +98,17 @@ def _serialize(asset, derivatives: Sequence[AssetDerivative] = ()) -> dict:
 
 
 async def _serialize_one(repo: AssetRepository, asset) -> dict:
-    """读出一条资产的衍生并连同本体序列化。"""
+    """Read an asset's derivatives and serialize them together with the base look.
+
+    读出一条资产的衍生并连同本体序列化。"""
     return _serialize(asset, await repo.list_derivatives(asset.id))
 
 
 async def _copy_into_global_pool(source: Path, asset_type: str, default_ext: str) -> str:
-    """把一个文件拷进全局资产库的 ``{type}/`` 下，返回相对数据根的登记路径。"""
+    """Copy a file into ``{type}/`` of the global asset library and return the registered path relative to the data
+    root.
+
+    把一个文件拷进全局资产库的 ``{type}/`` 下，返回相对数据根的登记路径。"""
     ext = source.suffix.lower() or default_ext
     pm = get_project_manager()
 
@@ -107,7 +122,10 @@ async def _copy_into_global_pool(source: Path, asset_type: str, default_ext: str
 
 
 def _project_file_if_present(project_dir: Path, rel_path: str) -> Path | None:
-    """把项目内相对路径解析成存在的文件；越界、缺失或不是文件一律按「没有」处理。"""
+    """Resolve a project-relative path to an existing file; out-of-bounds, missing or not-a-file are all treated as
+    "none".
+
+    把项目内相对路径解析成存在的文件；越界、缺失或不是文件一律按「没有」处理。"""
     if not rel_path:
         return None
     try:
@@ -135,15 +153,16 @@ async def _save_upload(file: UploadFile, asset_type: str, _t: Translator) -> str
         return target
 
     target = await run_sync_transaction(_write)
-    # 存相对数据根的路径
+    # Store the path relative to the data root / 存相对数据根的路径
     return target.relative_to(pm.data_root).as_posix()
 
 
 def _delete_global_asset_file(rel_path: str) -> None:
     path = get_project_manager().data_root / rel_path
     try:
-        path.unlink()  # hard-delete: out-of-scope -- 全局资产库文件，不属于项目
+        path.unlink()  # hard-delete: out-of-scope -- global asset library file, not part of a project / 全局资产库文件，不属于项目
     except FileNotFoundError:
+        # A file that no longer exists (concurrent delete or create rollback) counts as success; just ignore it
         # 文件已不存在（并发删除或 create 回滚）视为成功，忽略即可
         return
     except OSError:
@@ -151,7 +170,10 @@ def _delete_global_asset_file(rel_path: str) -> None:
 
 
 async def _delete_global_asset_files(rel_paths: Iterable[str]) -> None:
-    """在线程里依次删除库存储文件；单个失败只记日志，与 ``_delete_global_asset_file`` 同口径。"""
+    """Delete library storage files one by one in a thread; a single failure is only logged, same rule as
+    ``_delete_global_asset_file``.
+
+    在线程里依次删除库存储文件；单个失败只记日志，与 ``_delete_global_asset_file`` 同口径。"""
     paths = list(rel_paths)
     if not paths:
         return
@@ -212,11 +234,13 @@ async def create_asset(
         raise HTTPException(status_code=400, detail=_t("asset_invalid_type"))
     name = _validate_asset_name(name, _t)
 
+    # 1) Write to disk first, then create; the IntegrityError path is responsible for cleaning up the orphan
     # 1) 先落盘再 create；IntegrityError 路径负责清理 orphan
     image_path: str | None = None
     if image is not None and image.filename:
         image_path = await _save_upload(image, type, _t)
 
+    # 2) The actual create; every failure path must clean up the file already on disk, keeping DB/disk consistent
     # 2) 真正 create；任何失败路径都必须清理已落盘文件，保证 DB/磁盘一致
     try:
         async with async_session_factory() as s:
@@ -241,7 +265,7 @@ async def create_asset(
     except HTTPException:
         raise
     except Exception:
-        # 其它错误路径也不留 orphan
+        # Other error paths leave no orphan either / 其它错误路径也不留 orphan
         if image_path:
             await _delete_global_asset_files([image_path])
         raise
@@ -288,12 +312,17 @@ async def delete_asset(asset_id: str, _t: Translator):
         repo = AssetRepository(s)
         a = await repo.get_by_id(asset_id)
         if a:
+            # Derivative rows are deleted along with repo.delete, but only this place knows the paths of their image
+            # files; take them out before deleting the base look, otherwise those files would have no entry point left
+            # and stay in library storage forever.
             # 衍生行由 repo.delete 一并删掉，但它们各自的图片文件只有这里知道路径；
             # 删本体前先取出来，否则那些文件再无入口、永久留在库存储里。
             stored_files = [d.image_path for d in await repo.list_derivatives(asset_id) if d.image_path]
             stored_files.extend(path for path in (a.image_path, a.audio_path) if path)
             await repo.delete(asset_id)
             await s.commit()
+            # File deletion comes after the commit: it cannot be rolled back, and deleting early would leave rows
+            # pointing to missing files if the transaction fails.
             # 文件删除放在提交之后：它不可回滚，提前删会在事务失败时留下指向缺失文件的行。
             await _delete_global_asset_files(stored_files)
     return
@@ -305,7 +334,7 @@ async def replace_image(
     _t: Translator,
     image: UploadFile = File(...),
 ):
-    # 1) 先取资产并校验存在
+    # 1) Fetch the asset first and verify it exists / 1) 先取资产并校验存在
     async with async_session_factory() as s:
         repo = AssetRepository(s)
         a = await repo.get_by_id(asset_id)
@@ -314,10 +343,10 @@ async def replace_image(
         old_path = a.image_path
         asset_type = a.type
 
-    # 2) 先保存新图（会触发 415/413 校验）—— 旧文件仍完好
+    # 2) Save the new image first (triggers the 415/413 checks) -- the old file is still intact / 2) 先保存新图（会触发 415/413 校验）—— 旧文件仍完好
     new_path = await _save_upload(image, asset_type, _t)
 
-    # 3) 更新 DB；若写入失败则清理已落盘的新文件（旧文件保留）
+    # 3) Update the DB; if the write fails, clean up the new file already on disk (the old file is kept) / 3) 更新 DB；若写入失败则清理已落盘的新文件（旧文件保留）
     try:
         async with async_session_factory() as s:
             repo = AssetRepository(s)
@@ -329,7 +358,7 @@ async def replace_image(
         await _delete_global_asset_files([new_path])
         raise
 
-    # 4) DB 更新成功后才删除旧文件
+    # 4) Delete the old file only after the DB update succeeds / 4) DB 更新成功后才删除旧文件
     if old_path and old_path != new_path:
         await _delete_global_asset_files([old_path])
 
@@ -349,11 +378,11 @@ async def from_project(
     req: FromProjectRequest,
     _t: Translator,
 ):
-    # 1) 类型合法性
+    # 1) Type validity / 1) 类型合法性
     if req.resource_type not in GLOBAL_LIBRARY_ASSET_TYPES:
         raise HTTPException(status_code=400, detail=_t("asset_invalid_type"))
 
-    # 2) 加载项目
+    # 2) Load the project / 2) 加载项目
     try:
         project = await asyncio.to_thread(get_project_manager().load_project, req.project_name)
     except FileNotFoundError as exc:
@@ -362,9 +391,10 @@ async def from_project(
         logger.exception("Failed to load project '%s' for from-project", req.project_name)
         raise HTTPException(status_code=500, detail=_t("asset_load_project_failed")) from exc
 
-    # 3) 从对应 bucket 中读取资源
+    # 3) Read the resource from the matching bucket / 3) 从对应 bucket 中读取资源
     bucket_key = BUCKET_KEY[req.resource_type]
     bucket = project.get(bucket_key) or {}
+    # The stored key and the requested name may be either NFC or NFD; resolve via the coordinate system
     # 存量 key 与请求名可能是 NFC/NFD 中的任一形态，按坐标系解析
     resource_key = resolve_asset_key(bucket, req.resource_id)
     resource = bucket.get(resource_key) if resource_key is not None else None
@@ -383,6 +413,8 @@ async def from_project(
     description = resource.get("description") or ""
     voice_style = resource.get("voice_style", "") if req.resource_type == "character" else ""
 
+    # Locating the sheet, derivative images and reference audio in the source project needs a stat for each, so the
+    # whole thing goes into a thread.
     # 定位源项目里的资产图、衍生图与参考音频要逐个 stat，整体放进线程。
     def _locate_sources() -> tuple[Path | None, list[tuple[str, str, Path | None]], Path | None]:
         try:
@@ -391,13 +423,17 @@ async def from_project(
             source_project_dir = None
 
         sheet_key = SHEET_KEY[req.resource_type]
-        # 非法路径、项目丢失或文件缺失：视作无源图继续流程
+        # Invalid path, missing project or missing file: treat as no source image and continue / 非法路径、项目丢失或文件缺失：视作无源图继续流程
         source_sheet_path = (
             _project_file_if_present(source_project_dir, resource.get(sheet_key) or "")
             if source_project_dir is not None
             else None
         )
 
+        # Derivatives go into the library together with the base look as a set: each carries its change description
+        # and its own sheet; a derivative whose image is missing is still stored (the name and description are its
+        # identity, and the image can be regenerated in the target project), the same degradation rule as when the
+        # base look's sheet is missing.
         # 衍生随本体整套入库：每条带上变化描述与自己那张资产图；图缺失的衍生仍然入库（名与
         # 描述才是它的身份，图可在目标项目里重新生成），与本体资产图缺失时的降级同口径。
         derivative_sources: list[tuple[str, str, Path | None]] = []
@@ -422,6 +458,8 @@ async def from_project(
                     )
                 )
 
+        # Audio only matters for the character type (reference_audio, not a sheet concept); missing/invalid path
+        # degrades silently to "no source audio" just like images, without interrupting the import.
         # 音频只有 character 类型有意义（reference_audio，不是 sheet 概念）；缺失/路径非法同图片一样
         # 静默降级为「无源音频」，不中断入库流程。
         audio_rel = resource.get("reference_audio") or "" if req.resource_type == "character" else ""
@@ -431,6 +469,11 @@ async def from_project(
                 project_dir = get_project_manager().get_project_path(req.project_name)
                 ProjectManager._safe_subpath(project_dir, audio_rel)
                 candidate = project_dir / audio_rel
+                # reference_audio can be written to any in-project string via the generic character PATCH
+                # (extra_string_fields only checks the type), and _safe_subpath alone, which only prevents escaping
+                # the project, is not enough to stop project.json or other project files from being copied into the
+                # global library as audio; additionally check that the parent directory is characters/refs_audio, the
+                # same rule as server/routers/files.py::_resolve_audio_ref_path.
                 # reference_audio 可经通用角色 PATCH 被写成项目内任意字符串（extra_string_fields
                 # 只做类型校验），仅 _safe_subpath 防越界不足以防止把 project.json 等其它项目
                 # 文件当作音频复制进全局库；额外校验父目录命中 characters/refs_audio，与
@@ -448,10 +491,12 @@ async def from_project(
 
     source_sheet_path, derivative_sources, source_audio_path = await asyncio.to_thread(_locate_sources)
 
-    # 4) DB 预检查（orphan-safe：先查再拷贝文件）
+    # 4) DB pre-check (orphan-safe: check first, then copy files) / 4) DB 预检查（orphan-safe：先查再拷贝文件）
     async with async_session_factory() as s:
         repo = AssetRepository(s)
         existing = await repo.get_by_type_name(req.resource_type, asset_name)
+        # overwrite replaces the whole set of derivative rows; image files of the old rows are only deleted after the
+        # commit succeeds, so take their paths first.
         # overwrite 会整表换掉衍生行；旧行的图片文件在 commit 成功后才删，故先取出路径。
         stale_derivative_images = (
             [d.image_path for d in await repo.list_derivatives(existing.id) if d.image_path]
@@ -469,12 +514,18 @@ async def from_project(
             },
         )
 
+    # 5) Copy the source sheet / reference audio to global_assets/{type}/{uuid}.{ext}. Both copies share one failure
+    #    boundary: if either fails, the other file already on disk is cleaned up, leaving no orphan.
     # 5) 拷贝源 sheet / 参考音频到 global_assets/{type}/{uuid}.{ext}
     # 两次拷贝共用一个失败边界：任一失败都清理已落盘的另一个文件，不留孤儿。
     new_image_path: str | None = None
     new_audio_path: str | None = None
+    # Copies already on disk are registered in the order they happen; failure paths delete back from this list,
+    # instead of checking each variable for empty.
     # 已落盘的拷贝按发生顺序登记，失败路径统一按这张清单回删，不重复逐个变量判空。
     copied_paths: list[str] = []
+    # Derivative images share the same library storage pool as base-look images, so the on-disk shape and cleanup
+    # entry point are exactly the same.
     # 衍生的图与本体图共用同一个库存储池，落盘形状与清理入口因此完全一致。
     derivative_rows: list[tuple[str, str, str | None]] = []
     try:
@@ -496,11 +547,13 @@ async def from_project(
         await _delete_global_asset_files(copied_paths)
         raise
 
-    # 6) 写 DB：失败路径清理拷贝文件
+    # 6) Write the DB: failure paths clean up the copied files / 6) 写 DB：失败路径清理拷贝文件
     try:
         async with async_session_factory() as s:
             repo = AssetRepository(s)
             if existing is not None:
+                # overwrite: record the old file paths first and delete them after the commit succeeds; on rollback
+                #            the old files are kept
                 # overwrite：先记下旧文件路径，commit 成功后再删；回滚时旧文件保留
                 old_image = (
                     existing.image_path if existing.image_path and existing.image_path != new_image_path else None
@@ -555,7 +608,10 @@ async def from_project(
 
 
 def _applied_sheet_version(resource_type: str, resource_id: str, sheet_file: Path) -> InstalledVersionCommit:
-    """从资产库带入项目的一张图：作为选中的手动上传版本记入历史。"""
+    """An image brought into the project from the asset library: recorded in history as the selected manual-upload
+    version.
+
+    从资产库带入项目的一张图：作为选中的手动上传版本记入历史。"""
     return InstalledVersionCommit(
         resource_type=resource_type,
         resource_id=resource_id,
@@ -576,12 +632,12 @@ async def apply_to_project(
     req: ApplyToProjectRequest,
     _t: Translator,
 ):
-    # 1) 校验冲突策略（400 先于其它检查）
+    # 1) Validate the conflict policy (400 before other checks) / 1) 校验冲突策略（400 先于其它检查）
     if req.conflict_policy not in {"skip", "overwrite", "rename"}:
         raise HTTPException(status_code=400, detail=_t("asset_invalid_conflict_policy"))
     asset_ids = list(dict.fromkeys(req.asset_ids))
 
-    # 2) 校验目标项目存在
+    # 2) Verify the target project exists / 2) 校验目标项目存在
     project_manager = get_project_manager()
     try:
         project = await asyncio.to_thread(project_manager.load_project, req.target_project)
@@ -594,7 +650,7 @@ async def apply_to_project(
     skipped: list[dict] = []
     failed: list[dict] = []
 
-    # 3) 批量读取所有请求的 asset，缺失的直接归入 failed
+    # 3) Read all requested assets in bulk; missing ones go straight into failed / 3) 批量读取所有请求的 asset，缺失的直接归入 failed
     async with async_session_factory() as s:
         repo = AssetRepository(s)
         assets = await repo.get_by_ids(asset_ids)
@@ -602,9 +658,13 @@ async def apply_to_project(
     assets_by_id = {a.id: a for a in assets}
     failed.extend({"id": asset_id, "reason": "not_found"} for asset_id in asset_ids if asset_id not in assets_by_id)
 
+    # 4) First compute in memory each asset's target name + whether files need copying, then do the file copies and
+    #    the project.json write-back in one go
     # 4) 先在内存里算好每条 asset 的目标名 + 是否需要拷贝文件，
     #    再一次性执行文件拷贝和 project.json 写回
     def _probe_planning_inputs() -> tuple[Path, set[str]]:
+        # Planning only needs to know which files still exist in library storage; directory resolution and the
+        # per-file stat go into a thread in one go.
         # 规划只需知道库存储里哪些文件还在；目录解析与逐个 stat 一次性放进线程。
         target_dir = project_manager.get_project_path(req.target_project)
         stored = {
@@ -620,6 +680,10 @@ async def apply_to_project(
         return target_dir, {path for path in stored if (project_manager.data_root / path).is_file()}
 
     project_dir, present_files = await asyncio.to_thread(_probe_planning_inputs)
+    # Name occupancy tables for the four asset kinds, shaped like the project's asset tables; duplicate checking and
+    # in-lock application both use find_project_asset_name: differing only in case counts as occupied; is_entry tells
+    # whether the hit is the same entry that can be overwritten, or a conflict that cannot be overwritten (across
+    # types, or another asset of the same type differing only in case).
     # 四类资产的名称占用表，形同 project 的资产表，判重与锁内应用同用 find_project_asset_name：
     # 只差大小写即占用；命中可 overwrite 的同一条目，还是不可覆盖的冲突（跨类型，或同类型里只差
     # 大小写的另一个资产），由 is_entry 区分。
@@ -632,7 +696,7 @@ async def apply_to_project(
     for asset_id in asset_ids:
         a = assets_by_id.get(asset_id)
         if a is None:
-            continue  # 已在 failed
+            continue  # Already in failed / 已在 failed
 
         bucket_key = BUCKET_KEY[a.type]
         sheet_key = SHEET_KEY[a.type]
@@ -657,9 +721,9 @@ async def apply_to_project(
             elif not same_entry:
                 failed.append({"id": a.id, "reason": "project_name_conflict"})
                 continue
-            # overwrite 只能覆盖同类型的同名条目。
+            # overwrite can only overwrite a same-named entry of the same type. / overwrite 只能覆盖同类型的同名条目。
 
-        # 规划图片拷贝
+        # Plan the image copy / 规划图片拷贝
         target_sheet: str | None = None
         copy_src: Path | None = None
         copy_dst: Path | None = None
@@ -685,6 +749,8 @@ async def apply_to_project(
                 failed.append({"id": a.id, "reason": "image_missing"})
                 continue
 
+        # Plan the reference audio copy: same rule as images (missing means the whole entry fails, without
+        # interrupting the batch); only meaningful for character
         # 规划参考音频拷贝：与图片同口径（缺失即整条 failed，不中断整批）；只有 character 有意义
         target_audio: str | None = None
         copy_audio_src: Path | None = None
@@ -711,6 +777,10 @@ async def apply_to_project(
                 failed.append({"id": a.id, "reason": "audio_missing"})
                 continue
 
+        # Derivatives land together with the base look as a set: name and description are always written into the
+        # entry, and the image is copied only if that file still exists in the library. Derivative names are not in
+        # the project namespace (only unique within the base-look entry), so they do not take part in the occupied
+        # reconciliation.
         # 衍生随本体整套落地：名与描述一定写进条目，图只在库里那张文件还在时才拷。
         # 衍生名不进项目命名空间（只在本体条目内唯一），故不参与 occupied 对账。
         derivative_plans: list[dict] = []
@@ -751,6 +821,9 @@ async def apply_to_project(
             }
         )
 
+    # 5) A single transaction writes back all file replacements and bucket changes at once. Planning outside the lock
+    #    is only for failing fast; inside the lock the policy must be reapplied from requested_name, covering
+    #    same-type occupancy that appeared after the snapshot.
     # 5) 单次事务把所有文件替换与 bucket 变更一次性写回。锁外规划只用于快速失败；
     #    锁内必须从 requested_name 重施策略，覆盖快照之后出现的同类型占用。
     file_copies: list[tuple[Path, Path]] = []
@@ -798,16 +871,25 @@ async def apply_to_project(
                 payload["voice_style"] = a_.voice_style or ""
                 if ta:
                     payload["reference_audio"] = ta
+                    # The asset is the switch: importing is equivalent to "set this voice", and the legacy transition
+                    # banner count must be able to see it
                     # 资产即开关：导入即等效「设置了这个声音」，存量过渡横幅计数须能感知
                     payload["voice_updated_at"] = datetime.now(UTC).isoformat()
             if ts:
                 payload[sk] = ts
             if bk not in data or not isinstance(data.get(bk), dict):
                 data[bk] = {}
+            # The overwrite policy must land on the real stored key (possibly NFD), otherwise two visually same-named
+            # entries would coexist
             # overwrite 策略要落在存量真实 key 上（可能是 NFD），否则会并存两条视觉同名条目
             key = existing.name if existing is not None and existing.asset_type == a_.type else name_
             if ts:
                 plan["installed_sheets"].append(_applied_sheet_version(bk, key, project_dir / ts))
+            # Before replacing the whole entry, take over the stored entry's derivative table, then let derivatives
+            # brought from the library overwrite by name: stored derivatives not in the library are thus kept (an
+            # overwrite import does not wipe derivatives the user registered), and same-named derivatives from the
+            # library take the library version. A new entry starts from an empty table, same rule as the create path
+            # and migration.
             # 整条替换前先把存量条目的衍生表接过来，再让库里带来的衍生按名覆盖上去：
             # 库里没有的存量衍生因此得以保留（覆盖导入不抹用户已登记的衍生），库里带来的
             # 同名衍生以库版本为准。新条目从空表起步，与创建路径和迁移同口径。
@@ -815,6 +897,10 @@ async def apply_to_project(
                 previous = data[bk].get(key)
                 inherited = previous.get(DERIVATIVES_FIELD) if isinstance(previous, dict) else None
                 table = dict(inherited) if isinstance(inherited, dict) else {}
+                # First resolve library derivatives into on-disk names: a stored key may be an NFD-equivalent form or
+                # differ only in case (derivative images are saved by name, so both would land on the same file); on a
+                # hit, merge into the existing entry and keep its name, to avoid two coexisting. When the library
+                # itself brings two that differ only in case, they also go under one name, with the later one winning.
                 # 库里的衍生先解析成落盘名：存量键可能是 NFD 等价形态或只差大小写（衍生图按名落盘，
                 # 两者会落到同一个文件），命中就并入已有条目、沿用它的名字，避免并存两条。库里自带
                 # 只差大小写的两条时同样归到一个名下，后一条为准。
@@ -834,6 +920,9 @@ async def apply_to_project(
                         try:
                             ProjectManager._safe_subpath(project_dir, relative)
                         except ValueError:
+                            # Both name parts have passed validate_asset_name; reaching here means the combined path
+                            # still escapes: give up this image instead of failing the whole batch, and the
+                            # derivative's name and description land as usual.
                             # 两段名都已过 validate_asset_name，走到这里说明拼出的路径仍
                             # 越界：放弃这张图而不是整批失败，衍生的名与描述照常落地。
                             logger.warning(
@@ -880,6 +969,9 @@ async def apply_to_project(
             register_artifact_entries_atomically(project_dir, owner_entries | derivative_entries)
 
         def _select_imported_sheets(_project_file: Path) -> None:
+            # Sheets and derivative sheets brought from the library are finished images: in the same commit each
+            # selects one manual-upload version, and the planner projects the basis from the image itself before
+            # registering, without relying on description or art style.
             # 从库里带入的资产图与衍生资产图都是成品：同一次提交里各选中一条手动上传版本，
             # 规划器据此按图本身投影依据后登记，不依赖描述与画风。
             commits = [commit for plan in plans for commit in plan["installed_sheets"]]

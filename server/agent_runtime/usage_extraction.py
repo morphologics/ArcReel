@@ -1,4 +1,23 @@
-"""Agent 会话的用量计量：按请求取用量，按轮差分 ``model_usage`` 补齐流中看不到的调用（docs/adr/0102）。
+"""Usage metering for Agent sessions: take usage per request, and fill in calls not visible in the stream by diffing
+``model_usage`` per turn (docs/adr/0102).
+
+- In-stream requests: usage comes from ``AssistantMessage.usage``, deduplicated by ``message_id`` (with partial
+  message streaming the same request appears in several frames; each item takes the maximum across frames); requests
+  of subagents (with ``parent_tool_use_id``) are counted too. usage is always interpreted the Anthropic way:
+  ``input_tokens`` excludes cache; cache writes use the 5-minute and 1-hour split of ``cache_creation``, and only
+  when there is just a total is all of it counted at the 5-minute tier.
+- Out-of-stream calls: at the end of each turn, take this turn's ``model_usage`` increment over the diff baseline
+  and subtract, per model, the total of the in-stream requests; the items with a positive difference are combined
+  into one request.
+- The diff baseline is kept per session: a new session starts from zero; when resuming a session, the first result
+  after the resume is the starting point and that turn records no difference; it is zeroed when the session is
+  reset; when a model's cumulative value drops, this turn's value is taken as that model's single-turn value.
+
+Keys of ``model_usage`` and ``AssistantMessage.model`` are treated as the same model when they map to the same model
+entry (docs/adr/0105) or the same normalized name; records take the model name of the in-stream request, and only
+the difference takes the ``model_usage`` key.
+
+Agent 会话的用量计量：按请求取用量，按轮差分 ``model_usage`` 补齐流中看不到的调用（docs/adr/0102）。
 
 - 流内请求：用量取自 ``AssistantMessage.usage``，按 ``message_id`` 去重（部分消息流下同一请求会出现多帧，
   同一项取各帧的最大值），子智能体的请求（带 ``parent_tool_use_id``）一并计入。usage 一律按 Anthropic 口径解读：
@@ -28,7 +47,10 @@ logger = logging.getLogger(__name__)
 
 @dataclass(frozen=True)
 class RequestTokens:
-    """一次 API 请求的 token 用量，各项互不重叠：总输入 = 未缓存输入 + 缓存读 + 两档缓存写。"""
+    """Token usage of one API request; the items do not overlap: total input = uncached input + cache reads + both
+    cache write tiers.
+
+    一次 API 请求的 token 用量，各项互不重叠：总输入 = 未缓存输入 + 缓存读 + 两档缓存写。"""
 
     uncached_input: int = 0
     cache_read: int = 0
@@ -48,15 +70,22 @@ class RequestTokens:
         return RequestTokens(**{f.name: getattr(self, f.name) + getattr(other, f.name) for f in fields(self)})
 
     def merge_max(self, other: RequestTokens) -> RequestTokens:
-        """同一请求的两帧：各项取较大值（占位值会被之后的帧更新）。"""
+        """Two frames of the same request: each item takes the larger value (placeholder values are updated by later
+        frames).
+
+        同一请求的两帧：各项取较大值（占位值会被之后的帧更新）。"""
         return RequestTokens(**{f.name: max(getattr(self, f.name), getattr(other, f.name)) for f in fields(self)})
 
     def surplus_over(self, other: RequestTokens) -> RequestTokens:
-        """各项超出 ``other`` 的部分，不足的项记 0。"""
+        """The part of each item exceeding ``other``; items that fall short count as 0.
+
+        各项超出 ``other`` 的部分，不足的项记 0。"""
         return RequestTokens(**{f.name: max(getattr(self, f.name) - getattr(other, f.name), 0) for f in fields(self)})
 
     def covers(self, other: RequestTokens) -> bool:
-        """各项都不小于 ``other``：累计值没有回落。"""
+        """Every item is no less than ``other``: the cumulative value has not dropped.
+
+        各项都不小于 ``other``：累计值没有回落。"""
         return all(getattr(self, f.name) >= getattr(other, f.name) for f in fields(self))
 
 
@@ -65,7 +94,10 @@ _ZERO = RequestTokens()
 
 @dataclass(frozen=True)
 class ModelTurnUsage:
-    """一轮里一个模型的用量：``requests`` 是各次请求，流外调用的差额合成其中一次。"""
+    """Usage of one model in one turn: ``requests`` are the individual requests, and the difference from out-of-stream
+    calls is combined into one of them.
+
+    一轮里一个模型的用量：``requests`` 是各次请求，流外调用的差额合成其中一次。"""
 
     model: str
     requests: tuple[RequestTokens, ...]
@@ -79,7 +111,9 @@ class ModelTurnUsage:
 
 
 def _count(source: Mapping[str, Any], key: str) -> int:
-    """usage 里的一项 token 数；缺失或不是数时为 0，为负时按 0 计并打日志。"""
+    """One token count in usage; 0 when missing or not a number; negative counts as 0 and is logged.
+
+    usage 里的一项 token 数；缺失或不是数时为 0，为负时按 0 计并打日志。"""
     value = source.get(key)
     if isinstance(value, bool) or not isinstance(value, int | float) or not math.isfinite(value):
         return 0
@@ -90,12 +124,16 @@ def _count(source: Mapping[str, Any], key: str) -> int:
 
 
 def request_tokens(usage: Mapping[str, Any]) -> RequestTokens:
-    """按 Anthropic 口径解读一条 ``AssistantMessage.usage``。"""
+    """Interpret one ``AssistantMessage.usage`` the Anthropic way.
+
+    按 Anthropic 口径解读一条 ``AssistantMessage.usage``。"""
     cache_write = _count(usage, "cache_creation_input_tokens")
     split = usage.get("cache_creation")
     write_5m, write_1h = cache_write, 0
     if isinstance(split, Mapping):
         write_1h = _count(split, "ephemeral_1h_input_tokens")
+        # The part where the split falls short of the total (the gateway only gives the total) is counted at the
+        # 5-minute tier.
         # 拆分不足合计的部分（网关只给出合计）按 5 分钟档计。
         write_5m = max(_count(split, "ephemeral_5m_input_tokens"), cache_write - write_1h)
     return RequestTokens(
@@ -108,7 +146,10 @@ def request_tokens(usage: Mapping[str, Any]) -> RequestTokens:
 
 
 def _model_usage_tokens(entry: Mapping[str, Any]) -> RequestTokens:
-    """``model_usage`` 的一项累计值；它没有缓存写的两档拆分，合计按 5 分钟档计。"""
+    """One cumulative value from ``model_usage``; it has no two-tier split of cache writes, so the total is counted at
+    the 5-minute tier.
+
+    ``model_usage`` 的一项累计值；它没有缓存写的两档拆分，合计按 5 分钟档计。"""
     return RequestTokens(
         uncached_input=_count(entry, "inputTokens"),
         cache_read=_count(entry, "cacheReadInputTokens"),
@@ -124,18 +165,27 @@ def _parse_model_usage(raw: object) -> dict[str, RequestTokens] | None:
 
 
 class TurnUsageMeter:
-    """一个会话连接的用量计量。``resumed`` 为真表示恢复会话的冷启动：CLI 的累计值带着此前的花费。"""
+    """Usage metering for one session connection. ``resumed`` true means a cold start of a resumed session: the CLI's
+    cumulative values carry earlier spending.
+
+    一个会话连接的用量计量。``resumed`` 为真表示恢复会话的冷启动：CLI 的累计值带着此前的花费。"""
 
     def __init__(self, *, resumed: bool) -> None:
         self._baseline: dict[str, RequestTokens] | None = None if resumed else {}
+        # In-stream requests of this turn: message_id -> (model name, usage), in order of first appearance.
         # 本轮流内请求：message_id → (模型名, 用量)，按首次出现的顺序。
         self._pending: dict[str, tuple[str, RequestTokens]] = {}
+        # Requests already booked: frames appearing later are not counted again; usage growth is filled in by the
+        # difference.
         # 已经记账的请求：之后再出现的帧不重复计入，用量的增长由差额补齐。
         self._settled: set[str] = set()
         self._model_keys: dict[str, object] = {}
 
     def observe(self, msg: Mapping[str, Any]) -> None:
-        """读入一条消息：assistant 消息记下它所属请求的用量，会话重置时差分基线清零。"""
+        """Take in one message: an assistant message records the usage of the request it belongs to; on session reset
+        the diff baseline is zeroed.
+
+        读入一条消息：assistant 消息记下它所属请求的用量，会话重置时差分基线清零。"""
         msg_type = msg.get("type")
         if msg_type == "conversation_reset":
             self._baseline = {}
@@ -154,7 +204,13 @@ class TurnUsageMeter:
         self._pending[message_id] = (model, tokens if previous is None else previous[1].merge_max(tokens))
 
     def close_turn(self, model_usage: object) -> list[ModelTurnUsage]:
-        """一轮结束：返回本轮每个有用量的模型各次请求的用量，并把差分基线推进到本轮的累计值。
+        """End of a turn: return the usage of each request for every model with usage this turn, and advance the diff
+        baseline to this turn's cumulative values.
+
+        ``model_usage`` is the field of the same name in this turn's result; without that field no difference is
+        computed and the baseline stays unchanged.
+
+        一轮结束：返回本轮每个有用量的模型各次请求的用量，并把差分基线推进到本轮的累计值。
 
         ``model_usage`` 取本轮 result 的同名字段；没有这个字段时不计差额，基线保持不变。
         """
@@ -183,6 +239,8 @@ class TurnUsageMeter:
         streamed = _ZERO
         for request in requests:
             streamed += request
+        # Cache writes in model_usage are a two-tier total (booked at the 5-minute tier), compared against the sum of
+        # the two tiers in the stream.
         # model_usage 的缓存写是两档合计（按 5 分钟档记），与流内两档之和比较。
         streamed = replace(streamed, cache_write_5m=streamed.cache_write_5m + streamed.cache_write_1h, cache_write_1h=0)
         gap = delta.surplus_over(streamed)
@@ -198,7 +256,9 @@ class TurnUsageMeter:
         return total
 
     def _model_key(self, model: str) -> object:
-        """同一模型的标识：对应得到条目时取条目，否则取归一化后的名字。"""
+        """Identity of one model: the entry when one can be matched, otherwise the normalized name.
+
+        同一模型的标识：对应得到条目时取条目，否则取归一化后的名字。"""
         key = self._model_keys.get(model)
         if key is None:
             entry = catalog.find_entry(model, media_type="text")

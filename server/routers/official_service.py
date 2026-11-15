@@ -1,4 +1,10 @@
-"""官方服务设置 API：总开关、市场页首次告知标记与实例标识重置。
+"""Official service settings API: master switch, market page first-notice flag, and instance ID reset.
+
+Separate from ``/system/config``: the switch takes effect immediately from the settings page and the market page
+notice bar, without going through the config panel's draft save. When the official service URL is empty,
+``available`` is false and the switch stores its value but has no effect.
+
+官方服务设置 API：总开关、市场页首次告知标记与实例标识重置。
 
 与 ``/system/config`` 分开：开关由设置页与市场页的告知条即时生效，不走配置面板的草稿保存。
 官方服务地址为空时 ``available`` 为 false，开关存值但不生效。
@@ -19,12 +25,13 @@ Gateway = Annotated[OfficialServiceGateway, Depends(get_official_service_gateway
 
 
 class OfficialServiceStateResponse(BaseModel):
-    #: 官方服务地址非空。
+    #: The official service URL is non-empty. / 官方服务地址非空。
     available: bool
+    #: URL is non-empty and the master switch is on; when false, the frontend shows no official service elements.
     #: 地址非空且总开关为开；为 false 时前端不展示任何官方服务元素。
     enabled: bool
     notice_seen: bool
-    #: 随请求发往官方服务的实例标识；尚未生成时为 null。
+    #: Instance ID sent to the official service with each request; null when not generated yet. / 随请求发往官方服务的实例标识；尚未生成时为 null。
     instance_id: str | None
 
 

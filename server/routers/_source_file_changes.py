@@ -1,4 +1,10 @@
-"""整本源文文件改动（``SourceFileChangeOutcome`` / ``SourceFileChangeError``）→ HTTP 响应的共享映射。
+"""Shared mapping of whole-source file changes (``SourceFileChangeOutcome`` / ``SourceFileChangeError``) -> HTTP
+responses.
+
+Commands come out of two routers, ``episodes_view`` (the file bar of the "episodes" view) and ``files`` (upload,
+write by file name and delete source files); the same result gets the same response shape.
+
+整本源文文件改动（``SourceFileChangeOutcome`` / ``SourceFileChangeError``）→ HTTP 响应的共享映射。
 
 命令从 ``episodes_view``（「分集」视图的文件条）与 ``files``（上传、按文件名写入与删除源文件）两个 router 冒出来，
 同一结果给出同一种响应形态。
@@ -28,7 +34,13 @@ _STATUS: dict[str, int] = {
 def source_file_change_payload(
     outcome: SourceFileChangeOutcome, project: Mapping[str, Any], _t: Translator
 ) -> dict[str, Any]:
-    """已执行时返回 ``status=applied``；需要确认时返回服务端成文的受影响集清单与它的 ``revision``。
+    """Returns ``status=applied`` when executed; when confirmation is needed, returns the server-written list of
+    affected episodes and its ``revision``.
+
+    ``project`` must be the project before the change; episodes in the confirmation list are referred to by their
+    pre-change title or episode order.
+
+    已执行时返回 ``status=applied``；需要确认时返回服务端成文的受影响集清单与它的 ``revision``。
 
     ``project`` 须是改动前的项目，确认清单里的集按改动前的标题或播出位置指称。
     """
@@ -49,7 +61,14 @@ async def ensure_no_displaced_tasks(
     preview: Callable[[], SourceFileChangeOutcome],
     _t: Translator,
 ) -> None:
-    """带着 ``revision`` 执行前，用 ``preview``（命令的 ``dry_run``）重算受影响集清单。
+    """Before executing with a ``revision``, recompute the list of affected episodes with ``preview`` (the command's
+    ``dry_run``).
+
+    Returns 409 without writing when the list matches the confirmed one but episodes to be retired or removed still
+    have queued or running tasks. Without a ``revision``, or when the list has changed, do not block; let the
+    command itself return the confirmation.
+
+    带着 ``revision`` 执行前，用 ``preview``（命令的 ``dry_run``）重算受影响集清单。
 
     清单与确认过的一致、而要退下或移除的集还有排队或执行中的任务时返回 409，不写入。不带 ``revision``
     或清单已经变了时不拦，交给命令本身返回确认。

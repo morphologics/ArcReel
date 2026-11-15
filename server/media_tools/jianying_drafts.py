@@ -59,6 +59,8 @@ async def export_jianying_draft(
     caller: CallerContext,
     services: Services,
 ) -> ToolOutcome[JianyingDraftToolValue]:
+    # The JianYing draft service depends on pyJianYingDraft and the presentation model read side, so it is imported
+    # only when called.
     # 剪映草稿服务依赖 pyJianYingDraft 与呈现模型读侧，调用时才导入。
     from server.services.presentation.timeline_jianying_draft import TimelineJianyingDraftService
 

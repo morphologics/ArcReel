@@ -267,7 +267,13 @@ type BatchWaiter = Callable[..., Awaitable[tuple[list[BatchTaskResult], list[Bat
 
 @dataclass(frozen=True, slots=True)
 class CallerContext:
-    """调用方身份与宿主。
+    """Caller identity and host.
+
+    ``source`` decides whether long tasks block or return immediately: ``embedded`` is enqueued by ``batch_waiter``
+    and waits until the batch reaches a terminal state, while ``mcp`` and the Web's ``webui`` return a batch handle
+    right after submitting and need no waiter.
+
+    调用方身份与宿主。
 
     ``source`` 决定长任务阻塞还是即返：``embedded`` 由 ``batch_waiter`` 入队并等到批次终态，
     ``mcp`` 与 Web 的 ``webui`` 提交后立即返回批次句柄、不需要等待器。
@@ -278,7 +284,10 @@ class CallerContext:
     batch_waiter: BatchWaiter | None = None
 
     def waiting_with(self, **options: Any) -> CallerContext:
-        """给等待器绑定额外选项（如 ``on_enqueued`` / ``stop_on_failure``）；没有等待器时原样返回。"""
+        """Bind extra options to the waiter (such as ``on_enqueued`` / ``stop_on_failure``); returned unchanged when
+        there is no waiter.
+
+        给等待器绑定额外选项（如 ``on_enqueued`` / ``stop_on_failure``）；没有等待器时原样返回。"""
         if self.batch_waiter is None:
             return self
         return replace(self, batch_waiter=functools.partial(self.batch_waiter, **options))
@@ -293,7 +302,10 @@ class Services:
 
     @classmethod
     def defaults(cls, projects: ProjectManager) -> Services:
-        """生产缺省协作者：该项目管理器的工作流规划器、读数据库的配置解析器与全局生成队列。"""
+        """Default production collaborators: this project manager's workflow planner, a config resolver that reads the
+        database, and the global generation queue.
+
+        生产缺省协作者：该项目管理器的工作流规划器、读数据库的配置解析器与全局生成队列。"""
         return cls(
             projects=projects,
             workflow_planner=WorkflowPlanner(projects),
@@ -350,7 +362,14 @@ async def submit_media_generation(
     admission: dict[str, dict[str, Any]] | None = None,
     dependencies: Mapping[str, str] | None = None,
 ) -> MediaGenerationSubmission:
-    """提交一批媒体生成：远程调用方即返批次句柄，内嵌调用方经 ``caller.batch_waiter`` 等到批次终态。
+    """Submit a batch of media generation: remote callers get a batch handle immediately, embedded callers wait for the
+    batch's terminal state via ``caller.batch_waiter``.
+
+    ``dependencies`` records order within the batch: a unit waits until the task of another unit in the same batch
+    succeeds before running (its ``TaskSpec`` points to that unit via ``dependency_resource_id``), and when the
+    prerequisite fails it is not submitted to the provider.
+
+    提交一批媒体生成：远程调用方即返批次句柄，内嵌调用方经 ``caller.batch_waiter`` 等到批次终态。
 
     ``dependencies`` 记下批内先后：某单元要等同批另一单元的任务成功后才执行（其 ``TaskSpec``
     经 ``dependency_resource_id`` 指向那个单元），前置失败时它不提交给供应商。
@@ -626,7 +645,10 @@ def _prompt_overwrite_problem(exc: PromptOverwriteRequiredError) -> ToolProblem:
 
 
 def truncation_problem(exc: TextOutputTruncatedError) -> ToolProblem:
-    """文本模型输出被截断：各文本任务同一个问题码，出路是登记最大输出长度（自定义模型）或换一个文本模型。"""
+    """Text model output was truncated: the same issue code for every text task; the way out is to register a max
+    output length (custom model) or switch to another text model.
+
+    文本模型输出被截断：各文本任务同一个问题码，出路是登记最大输出长度（自定义模型）或换一个文本模型。"""
     return ToolProblem(
         "text_output_truncated",
         str(exc),
@@ -636,7 +658,10 @@ def truncation_problem(exc: TextOutputTruncatedError) -> ToolProblem:
 
 
 def model_not_in_catalog_problem(exc: ModelNotInCatalogError) -> ToolProblem:
-    """引用的内置模型已不在供应商清单中：沿用任务失败的稳定码与参数，出路是重新选择模型（去配置供应商）。"""
+    """The referenced built-in model is no longer in the provider's list: reuses the stable code and params of task
+    failure; the way out is to reselect the model (go configure providers).
+
+    引用的内置模型已不在供应商清单中：沿用任务失败的稳定码与参数，出路是重新选择模型（去配置供应商）。"""
     return ToolProblem(
         exc.code,
         str(exc),
@@ -646,7 +671,10 @@ def model_not_in_catalog_problem(exc: ModelNotInCatalogError) -> ToolProblem:
 
 
 def video_facts_problem(failure: VideoRequestFactsFailure, detail: str) -> ToolProblem:
-    """视频请求事实解析不出：问题码与参数原样透出，修复指引与批量准入同一映射（多为配置供应商）。"""
+    """Video request facts cannot be resolved: the issue code and params are passed through as is, and the repair
+    guidance uses the same mapping as batch admission (mostly configuring providers).
+
+    视频请求事实解析不出：问题码与参数原样透出，修复指引与批量准入同一映射（多为配置供应商）。"""
     return ToolProblem(
         failure.code,
         detail,
@@ -656,7 +684,10 @@ def video_facts_problem(failure: VideoRequestFactsFailure, detail: str) -> ToolP
 
 
 def _not_admitted_problem(exc: OperationNotAdmittedError) -> ToolProblem:
-    """准入不成立的拒绝：``params.reason`` 与制作状态 ``operations`` 里同一操作的理由码一致。"""
+    """Rejection when admission does not hold: ``params.reason`` matches the reason code of the same operation in the
+    workflow status ``operations``.
+
+    准入不成立的拒绝：``params.reason`` 与制作状态 ``operations`` 里同一操作的理由码一致。"""
     return ToolProblem(
         "operation_not_admitted",
         str(exc),
@@ -709,7 +740,10 @@ async def _run_text_generation(
 
 
 def _unexpected_text_failure_problem(detail: str, cause: BaseException) -> ToolProblem:
-    """生成中的意外异常：供应商真正拒绝了内容或输入时归为拒绝（修改输入），其余按任务失败重试，与图片任务一致。"""
+    """Unexpected exception during generation: when the provider really rejected the content or input it is classed as
+    a rejection (modify the input), otherwise it is retried as a task failure, consistent with image tasks.
+
+    生成中的意外异常：供应商真正拒绝了内容或输入时归为拒绝（修改输入），其余按任务失败重试，与图片任务一致。"""
     if is_provider_refusal(cause):
         return ToolProblem("generation_refused", detail)
     return ToolProblem(GenerationProblemCode.TASK_FAILED.value, detail, action=GenerationAction.RETRY)
@@ -720,6 +754,9 @@ _TEXT_DRAMA_SCRIPT_PLAN = "text_drama_script_plan"
 _TEXT_NARRATION_SCRIPT_PLAN = "text_narration_script_plan"
 _TEXT_REFERENCE_SCRIPT_PLAN = "text_reference_script_plan"
 _TEXT_EPISODE_PLAN = "text_episode_plan"
+#: Text tasks the embedded host submits and waits for in this process: the worker reuses the submitter's data root and
+#: services. Only in memory, not in the task payload; tasks not registered (MCP submissions, existing tasks after a
+#: restart) are resolved with the current config.
 #: 嵌入式宿主在本进程内提交、并在本进程内等待的文本任务：worker 沿用提交方的数据根与服务。
 #: 只在内存里，不进任务载荷；没有登记的任务（MCP 提交、重启后的存量任务）按当前配置解析。
 _TEXT_TASK_SERVICES: dict[str, tuple[ProjectScope, Services]] = {}
@@ -746,7 +783,11 @@ async def _submit_text_task(
     services: Services,
     conflict_resource_ids: Sequence[str] = (),
 ) -> ToolOutcome[Any]:
-    """提交一个文本任务。``conflict_resource_ids`` 是与 ``unit_id`` 互斥的其他占用槽：其中有在途任务时一律冲突；
+    """Submit a text task. ``conflict_resource_ids`` are other occupancy slots mutually exclusive with ``unit_id``: any
+    in-flight task on them always conflicts; an in-flight task on ``unit_id`` only conflicts when the request facts
+    differ, and is merged into when they are the same.
+
+    提交一个文本任务。``conflict_resource_ids`` 是与 ``unit_id`` 互斥的其他占用槽：其中有在途任务时一律冲突；
     ``unit_id`` 上的在途任务只在请求事实不同时冲突，相同时并入它。"""
     active = await services.queue.get_active_tasks_for_resources(
         project_name=scope.project_name,
@@ -1211,6 +1252,7 @@ def _read_business_file(project_dir: Path, relative: str) -> tuple[bytes, Path]:
                 raise ValueError("path 在安全校验后发生变化")
             raw = handle.read(BUSINESS_FILE_MAX_BYTES + 1)
     else:
+        # Only runs in the POSIX branch that supports dir_fd, so the constant always exists
         directory_flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW  # noqa: TID251 -- 仅在支持 dir_fd 的 POSIX 分支执行，常量必然存在
         directory_fd = os.open(project_dir, directory_flags)
         try:
@@ -1218,6 +1260,7 @@ def _read_business_file(project_dir: Path, relative: str) -> tuple[bytes, Path]:
                 child_fd = os.open(part, directory_flags, dir_fd=directory_fd)
                 os.close(directory_fd)
                 directory_fd = child_fd
+            # Only runs in the POSIX branch that supports dir_fd, so the constant always exists
             file_fd = os.open(parts[-1], os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW, dir_fd=directory_fd)  # noqa: TID251 -- 仅在支持 dir_fd 的 POSIX 分支执行，常量必然存在
             try:
                 if not stat.S_ISREG(os.fstat(file_fd).st_mode):
@@ -1317,7 +1360,10 @@ async def get_episode_script(
     _caller: CallerContext,
     services: Services,
 ) -> ToolOutcome[EpisodeScriptContent]:
-    """读一集剧本并签发 revision；迁移失败的项目不签发 revision，返回完整的迁移 problem。"""
+    """Read an episode's script and issue a revision; projects whose migration failed get no revision and the full
+    migration problem is returned.
+
+    读一集剧本并签发 revision；迁移失败的项目不签发 revision，返回完整的迁移 problem。"""
     filename = request.value.script
     if not filename or "/" in filename or "\\" in filename or filename in {".", ".."}:
         return ToolOutcome(problem=ToolProblem("invalid_request", "script 必须是纯文件名"))
@@ -1350,7 +1396,14 @@ async def get_prompt_preview(
     _caller: CallerContext,
     services: Services,
 ) -> ToolOutcome[ItemPromptPreview]:
-    """渲染一个条目当前会送进图像 / 视频模型的最终提示词文本。
+    """Render the final prompt text an entry would currently send to the image / video model.
+
+    Shares the same rendering exit as the execution path, so the result is word for word the prompt this generation
+    actually sends. Read-only: no requests to the provider, no cost, no writes to the artifact manifest.
+    ``unavailable`` is a stable machine-readable reason code that both hosts pass through as is; the finished UI
+    text is rendered by the REST route in the request language.
+
+    渲染一个条目当前会送进图像 / 视频模型的最终提示词文本。
 
     与执行路径共用同一渲染出口，结果逐字等于本次生成实际发出的提示词。只读：不向供应商
     发请求、不产生费用、不写产物清单。``unavailable`` 是稳定的机器可读原因码，两个 host
@@ -1496,7 +1549,10 @@ def _draft_workflow(scope: ProjectScope, services: Services) -> DraftWorkflow:
 async def _run_draft(
     call: Awaitable[dict[str, Any]], *, notice_as_problem: bool = False
 ) -> ToolOutcome[dict[str, Any]]:
-    """``notice_as_problem`` 为真时，带文案 key 的草稿错误以该 key 为问题码、按修改输入呈现（任务失败原因用）。"""
+    """When ``notice_as_problem`` is true, a draft error carrying a message key uses that key as the issue code and is
+    presented as modify-input (used for task failure reasons).
+
+    ``notice_as_problem`` 为真时，带文案 key 的草稿错误以该 key 为问题码、按修改输入呈现（任务失败原因用）。"""
     try:
         return ToolOutcome(value=await call)
     except DraftWorkflowError as exc:
@@ -1603,7 +1659,10 @@ async def repair_draft(
     caller: CallerContext,
     services: Services,
 ) -> ToolOutcome[Any]:
-    """AI 修复待修复草稿：预检通过后以排队文本任务提交，修完照常重判，违约清零即采用。"""
+    """AI repair of an invalid draft: after the pre-check passes it is submitted as a queued text task; once repaired
+    it is re-judged as usual and adopted when no violations remain.
+
+    AI 修复待修复草稿：预检通过后以排队文本任务提交，修完照常重判，违约清零即采用。"""
     value = request.value
     try:
         await _draft_repair(scope, services).check(value.episode_id, value.doc_type, value.base_revision)
@@ -1622,6 +1681,9 @@ async def repair_draft(
     )
 
 
+#: Draft command error code -> task failure message key, consistent with the draft REST error mapping. Failures before
+#: writing back to the draft are already classed as ``draft_repair_failed``; errors not listed come from re-judging and
+#: promotion after the body is written back to the draft, and are classed as save not completed.
 #: 草稿命令错误码 → 任务失败的文案 key，与草稿 REST 的错误映射一致。写回草稿之前的失败已归为
 #: ``draft_repair_failed``；未列出的错误来自正文写回草稿之后的重判与晋升，归为保存未完成。
 _DRAFT_REPAIR_FAILURE_KEYS: dict[str, str] = {
@@ -1650,9 +1712,14 @@ async def _execute_draft_repair(
         notice_as_problem=True,
     )
     if outcome.problem is not None and outcome.problem.action is not None:
+        # Issues with repair guidance (output truncated, video model config, final script units failing the promotion
+        # pre-check) are passed through as is: the issue code is the message key, and the failure reason is shown as
+        # the real reason.
         # 带修复指引的问题（输出截断、视频模型配置、正式剧本单元没过晋升预判）原样透出：问题码即文案 key，失败原因按真实原因呈现。
         return ToolOutcome(problem=outcome.problem)
     if outcome.problem is not None:
+        # Task failure reasons are shown localized by issue code: replace it with the error message key of the
+        # matching draft command; the Agent-facing detail is only for diagnosis.
         # 任务失败原因按问题码本地化呈现：换成草稿命令对应的错误文案 key，Agent 面向的 detail 只作诊断。
         key = _DRAFT_REPAIR_FAILURE_KEYS.get(outcome.problem.code, "draft_save_failed")
         params = {"episode": request.episode_id} if key == "draft_not_found" else None
@@ -1889,8 +1956,12 @@ class EditSourceTextRequest(BaseModel):
 
 class SourceChangeResult(BaseModel):
     message: str
+    #: When True nothing was written; call again with ``revision`` after the user confirms the list of affected
+    #: episodes.
     #: 为 True 时没有写入，等待用户确认受影响集清单后带 ``revision`` 重新调用。
     confirmation_required: bool
+    #: List of affected episodes (episode IDs, grouped by kind); None when changing an episode that carries its own
+    #: source text.
     #: 受影响集清单（集 ID，按类分组）；改自带原文的集时为 None。
     impact: dict[str, list[int]] | None = None
     revision: str | None = None
@@ -1910,7 +1981,10 @@ async def _run_source_file_change(
     revision: str | None,
     command: Callable[[bool], SourceFileChangeOutcome],
 ) -> SourceFileChangeOutcome | ToolProblem:
-    """跑一个整本源文文件改动命令（``command(dry_run)``）。带着确认过的 ``revision`` 执行前，要移除或退下的集
+    """Run a whole-source file change command (``command(dry_run)``). When executing with a confirmed ``revision``,
+    nothing is written if episodes to be removed or retired still have queued or running tasks.
+
+    跑一个整本源文文件改动命令（``command(dry_run)``）。带着确认过的 ``revision`` 执行前，要移除或退下的集
     还有排队或执行中的任务时不写入。"""
     if revision is not None:
         preview = await run_sync_transaction(command, True)
@@ -1973,7 +2047,7 @@ async def upload_source(
             yield source_path
         finally:
             if source_path is not None:
-                source_path.unlink(missing_ok=True)  # hard-delete: temp -- Agent 上传源文件的临时文件
+                source_path.unlink(missing_ok=True)  # hard-delete: temp -- temp file of an Agent-uploaded source file / Agent 上传源文件的临时文件
 
     def _upload_episode() -> dict[str, Any]:
         _validate()
@@ -2001,15 +2075,17 @@ async def upload_source(
 
             def _write(source_dir: Path, undo: contextlib.ExitStack) -> str:
                 if value.on_conflict == "replace":
+                    # The replaced old file, together with the original upload, goes into the project trash; it is
+                    # moved back if the transaction fails.
                     # 被替换的旧文件连同原始上传件进项目回收站，事务失败时撤回原处。
                     trash_source_file(source_dir.parent, f"source/{Path(value.filename).stem}.txt", undo)
                 result = SourceLoader.load(
                     source_path, source_dir, original_filename=value.filename, on_conflict=value.on_conflict
                 )
-                # hard-delete: rollback -- 源文件写入失败时撤销本次写入
+                # hard-delete: rollback -- undo this write when writing the source file fails / 源文件写入失败时撤销本次写入
                 undo.callback(result.normalized_path.unlink, missing_ok=True)
                 if result.raw_path is not None:
-                    # hard-delete: rollback -- 源文件写入失败时撤销本次写入
+                    # hard-delete: rollback -- undo this write when writing the source file fails / 源文件写入失败时撤销本次写入
                     undo.callback(result.raw_path.unlink, missing_ok=True)
                 loaded["result"] = result
                 return f"source/{result.normalized_path.name}"
@@ -2551,6 +2627,8 @@ class ResetEpisodePlanningResult(ToolMessage):
     deleted_files: list[str] = Field(default_factory=list)
     archived_files: list[str] | list[tuple[str, str]] = Field(default_factory=list)
     consumed_episodes: list[int] = Field(default_factory=list)
+    #: Episodes converted to having no source text and marked stale (in the confirmation list, the episodes about to be
+    #: converted).
     #: 转为无原文的集并标 stale 的集（确认清单里是将要转换的集）。
     retired_episodes: list[int] = Field(default_factory=list)
 
@@ -2777,6 +2855,9 @@ def _render_ledger_stats(stats: LedgerStats, project: Mapping[str, Any]) -> list
     if stats.median_units is not None:
         lines.append(f"全账本体量中位数：约 {stats.median_units}")
     if (volume := stats.target_volume) is not None:
+        # A converted source must be distinguishable from an explicit setting: when the main Agent checks volume
+        # deviation, the converted value has a speech-rate estimate layered on it and must not be treated as a hard
+        # target given by the user.
         # 折算来源须与显式设置区分：主 Agent 核对体量偏差时，折算值叠了一层语速估算，
         # 不能当成用户给定的硬指标。
         derived = f"（按单集目标时长 {volume.seconds} 秒折算）" if volume.source == "duration" else ""
@@ -2786,6 +2867,8 @@ def _render_ledger_stats(stats: LedgerStats, project: Mapping[str, Any]) -> list
 
 
 def _format_plan(result: PlanResult, project: Mapping[str, Any], *, gap: bool = False) -> str:
+    # When planning an unsplit gap, ``source_exhausted`` only means this stretch of source text is fully planned;
+    # there may still be unplanned source text later in the whole source
     # 规划未切分的空段时，``source_exhausted`` 只表示这段原文规划完了，整本源文后面可能还有未规划的原文
     done = "这段未切分的原文已全部规划完毕" if gap else "源文已全部规划完毕"
     if not result.episodes and result.source_exhausted:
@@ -2817,6 +2900,10 @@ def _format_plan(result: PlanResult, project: Mapping[str, Any], *, gap: bool = 
     return "\n".join(lines)
 
 
+#: Running windows that have had a stop requested (task IDs). A stop request may land before the next window is
+#: enqueued: this window was just claimed, or this window contains the end and must wait for the model to return this
+#: batch to know whether to enqueue another window. These windows no longer enqueue a next window. The worker and the
+#: stop request are both in the service process.
 #: 请求过停止的执行中窗口（任务 ID）。停止请求可能落在下一窗排入之前：本窗刚被领取，或本窗含结尾、
 #: 要等模型返回本批才知道还要不要排下一窗。这些窗口不再排下一窗。worker 与停止请求同在服务进程内。
 _STOPPED_PLANNING_WINDOWS: set[str] = set()
@@ -2824,7 +2911,12 @@ _STOPPED_PLANNING_WINDOWS: set[str] = set()
 
 @dataclass(frozen=True, slots=True)
 class _PlanningChain:
-    """Web 逐窗串联中正在执行的那一窗：本批之后还有原文待规划时，把下一窗排进另一个占用槽，
+    """The window currently running in the Web window-by-window chain: when there is still source text to plan after
+    this batch, enqueue the next window into another occupancy slot, running only after this window succeeds. When
+    the window does not contain the end it is enqueued before calling the model, so stopping planning can cancel it;
+    if it has not been enqueued when stopped, this window no longer enqueues it.
+
+    Web 逐窗串联中正在执行的那一窗：本批之后还有原文待规划时，把下一窗排进另一个占用槽，
     依赖本窗成功后才执行。窗口不含结尾时在请求模型之前排入，停止规划即可取消它；停止时还没排入的，
     本窗不再排。"""
 
@@ -2839,7 +2931,7 @@ class _PlanningChain:
             if self.task.get("resource_id") == EPISODE_PLANNING_SLOT
             else EPISODE_PLANNING_SLOT
         )
-        # 下一窗由正在执行的 worker 排入，worker 必然在线
+        # The next window is enqueued by the running worker, so the worker is necessarily online / 下一窗由正在执行的 worker 排入，worker 必然在线
         await self.services.queue.enqueue_task(
             project_name=str(self.task["project_name"]),
             task_type=_TEXT_EPISODE_PLAN,
@@ -2887,6 +2979,8 @@ async def _execute_plan_episodes(
             )
         )
     except Exception as exc:
+        # Unexpected exceptions such as provider call failures get the same code as planning's own failures; the UI
+        # shows a generic failure in the user's language, and the reason stays in detail for the Agent
         # 供应商调用失败等未预期异常与规划自身的失败同码，界面按用户语言显示通用失败，原因留在 detail 给 Agent
         return ToolOutcome(problem=ToolProblem("episode_planning_failed", str(exc) or type(exc).__name__))
     finally:
@@ -2917,7 +3011,10 @@ async def _execute_plan_episodes(
 
 
 def _plan_episodes_preflight(projects: ProjectManager, project_name: str) -> None:
-    """AI 分集规划的准入：有整本源文；与制作状态读同一份源文并调用同一谓词。"""
+    """Admission for AI episode planning: there is a whole source; reads the same source as workflow status and calls
+    the same predicate.
+
+    AI 分集规划的准入：有整本源文；与制作状态读同一份源文并调用同一谓词。"""
     project = projects.load_project(project_name)
     source = compute_source_revision(projects.get_project_path(project_name), project, SourceScope(kind="all"))
     require_admitted(
@@ -2948,7 +3045,10 @@ async def plan_episodes(
     *,
     planner_cls: type[EpisodePlanner] = EpisodePlanner,
 ) -> ToolOutcome[Any]:
-    """规划一批：从规划起点读一个窗口，提交其中剧情弧完整的集。"""
+    """Plan one batch: read one window from the planning start and submit the episodes in it whose story arc is
+    complete.
+
+    规划一批：从规划起点读一个窗口，提交其中剧情弧完整的集。"""
     if problem := await _plan_episodes_gate(scope, services):
         return ToolOutcome(problem=problem)
     if planner_cls is not EpisodePlanner:
@@ -2973,7 +3073,18 @@ async def start_episode_planning(
     *,
     gap: tuple[str, int] | None = None,
 ) -> ToolOutcome[Any]:
-    """「AI 规划分集」：从规划起点逐窗规划到整本源文结尾，每一窗是一个排队的文本任务。
+    """"AI episode planning": plan window by window from the planning start to the end of the whole source, each window
+    being one queued text task.
+
+    Completed windows are each submitted; after a stop (:func:`stop_episode_planning`) or a window failing, the
+    episodes already split off are kept; calling again continues from the planning start derived from the ledger.
+    Instructions are passed in each window's task payload and are not written to the project.
+
+    ``gap`` is the end point ``(source file, offset)`` of a stretch of unsplit source text: "plan this unsplit
+    source text" only plans window by window up to the end of this stretch, and the new episodes are inserted by
+    source position, without replacing any episode.
+
+    「AI 规划分集」：从规划起点逐窗规划到整本源文结尾，每一窗是一个排队的文本任务。
 
     已完成的窗口各自提交，停止（:func:`stop_episode_planning`）或某一窗失败后，已切出的集保留；再次调用
     从账本推导的规划起点继续。附加指令随每一窗的任务载荷传递，不写进项目。
@@ -2999,6 +3110,8 @@ async def start_episode_planning(
 
 
 class ReplanWindowResult(ToolMessage):
+    #: Number of candidate episodes appended in this batch, number of candidate episodes, and whether the candidates
+    #: already cover the end of the whole source.
     #: 本批追加的候选集数、候选的集数，以及候选是否已覆盖到整本源文结尾。
     planned: int
     total: int
@@ -3021,7 +3134,9 @@ async def _active_planning_windows(
 
 
 async def episode_planning_active(scope: ProjectScope, caller: CallerContext, services: Services) -> bool:
-    """本项目有分集规划（含重新规划的候选生成）在排队或执行。"""
+    """This project has episode planning (including candidate generation for replanning) queued or running.
+
+    本项目有分集规划（含重新规划的候选生成）在排队或执行。"""
     return bool(await _active_planning_windows(scope, caller, services))
 
 
@@ -3034,7 +3149,15 @@ async def start_episode_replan(
     episode: int,
     dry_run: bool = False,
 ) -> ToolOutcome[Any]:
-    """「从这一集开始重新规划」：登记一份候选，逐窗生成到整本源文结尾，每一窗是一个排队的文本任务。
+    """"Replan from this episode": register a candidate and generate window by window to the end of the whole source,
+    each window being one queued text task.
+
+    The candidate is written to the project and the episode ledger is untouched; instructions are passed in each
+    window's task payload. With ``dry_run`` only the replan scope is returned
+    (:class:`lib.episode.episode_replan.ReplanScope`) and no candidate is registered. Rejected when a candidate
+    already exists or episode planning is in progress.
+
+    「从这一集开始重新规划」：登记一份候选，逐窗生成到整本源文结尾，每一窗是一个排队的文本任务。
 
     候选写进项目，分集账本不动；附加指令随每一窗的任务载荷传递。``dry_run`` 时只返回重新规划的范围
     （:class:`lib.episode.episode_replan.ReplanScope`），不登记候选。已有候选或分集规划在进行时拒绝。
@@ -3067,6 +3190,8 @@ async def start_episode_replan(
         return ToolOutcome(problem=_replan_refused(exc))
     outcome = await _submit_replan_window(candidate_id, request.value.instructions, scope, caller, services)
     if outcome.problem is not None:
+        # The first window could not be enqueued: the candidate is still empty, so remove it rather than leave an
+        # empty candidate blocking planning
         # 首窗没能排进队列：候选还是空的，撤掉它，不留下挡住规划的空候选
         with contextlib.suppress(ReplanError):
             await _run_sync_transaction(discard_replan_candidate, project_path, candidate_id)
@@ -3076,7 +3201,14 @@ async def start_episode_replan(
 async def continue_episode_replan(
     candidate_id: str, scope: ProjectScope, caller: CallerContext, services: Services
 ) -> ToolOutcome[Any]:
-    """接着生成中途停止的候选：从候选的结尾逐窗生成到整本源文结尾，沿用发起时的附加指令。
+    """Continue generating a candidate that stopped midway: generate window by window from the candidate's end to the
+    end of the whole source, reusing the instructions from when it was started.
+
+    Rejected when the candidate no longer exists, already covers the end, or is stale; rejected when episode
+    planning is in progress. The candidate itself blocks admission to episode planning, so that check is not used
+    here.
+
+    接着生成中途停止的候选：从候选的结尾逐窗生成到整本源文结尾，沿用发起时的附加指令。
 
     候选已不在、已覆盖到结尾或已过时时拒绝；分集规划在进行时拒绝。候选本身挡住分集规划的准入，这里不走它。
     """
@@ -3128,7 +3260,13 @@ async def _execute_replan_window(
     planner_cls: type[EpisodePlanner],
     chain: _PlanningChain,
 ) -> ToolOutcome[Any]:
-    """重新规划的一窗：从候选的结尾取窗口，产出的集追加到候选；还有原文待规划时排下一窗。
+    """One window of replanning: take a window from the candidate's end and append the produced episodes to the
+    candidate; enqueue the next window when there is still source text to plan.
+
+    When no split point can be found or an error occurs, the interruption reason is recorded on the candidate and
+    the part already generated is kept.
+
+    重新规划的一窗：从候选的结尾取窗口，产出的集追加到候选；还有原文待规划时排下一窗。
 
     找不到切分点或出错时在候选上记下中断原因，已生成的部分保留。
     """
@@ -3178,6 +3316,8 @@ async def _draft_replan_window(
             )
         )
     except Exception as exc:
+        # Unexpected exceptions such as provider call failures get the same code as planning's own failures; the UI
+        # shows a generic failure in the user's language, and the reason stays in detail for the Agent
         # 供应商调用失败等未预期异常与规划自身的失败同码，界面按用户语言显示通用失败，原因留在 detail 给 Agent
         return ToolOutcome(problem=ToolProblem("episode_planning_failed", str(exc) or type(exc).__name__))
     finally:
@@ -3194,7 +3334,10 @@ async def _draft_replan_window(
 
 
 def _planning_gap(raw: object) -> tuple[str, int] | None:
-    """任务载荷里的空段终点；缺省或形状不对时按整本规划处理。"""
+    """End point of the gap in the task payload; when missing or of the wrong shape, treated as planning the whole
+    source.
+
+    任务载荷里的空段终点；缺省或形状不对时按整本规划处理。"""
     if not isinstance(raw, Mapping):
         return None
     source_file, end = raw.get("source_file"), raw.get("end")
@@ -3205,16 +3348,19 @@ def _planning_gap(raw: object) -> tuple[str, int] | None:
 
 @dataclass(frozen=True, slots=True)
 class StopEpisodePlanningResult:
-    #: 被取消的排队中窗口。
+    #: Queued windows that were cancelled. / 被取消的排队中窗口。
     cancelled: list[str]
-    #: 仍在执行的窗口：执行中的窗口不可取消，会照常完成并提交。
+    #: Windows still running: a running window cannot be cancelled and will complete and submit as usual. / 仍在执行的窗口：执行中的窗口不可取消，会照常完成并提交。
     running: list[str]
 
 
 async def stop_episode_planning(
     scope: ProjectScope, caller: CallerContext, services: Services
 ) -> StopEpisodePlanningResult:
-    """停止分集规划：取消排队中的窗口；执行中的那一窗照常完成，它切出的集保留，但不再排下一窗。"""
+    """Stop episode planning: cancel queued windows; the running window completes as usual and the episodes it splits
+    off are kept, but no next window is enqueued.
+
+    停止分集规划：取消排队中的窗口；执行中的那一窗照常完成，它切出的集保留，但不再排下一窗。"""
     active = await services.queue.get_active_tasks_for_resources(
         project_name=scope.project_name,
         task_type=_TEXT_EPISODE_PLAN,
@@ -3239,7 +3385,10 @@ async def stop_episode_planning(
 
 
 def _text_result_payload(value: TextGenerationResult) -> dict[str, Any]:
-    """任务结果里的文本回执：``warnings``、``new_assets`` 与 ``no_pending_authoring`` 只在非空时写入，读侧按 ``result.warnings`` 渲染。"""
+    """Text receipt in the task result: ``warnings``, ``new_assets`` and ``no_pending_authoring`` are only written when
+    non-empty, and the read side renders from ``result.warnings``.
+
+    任务结果里的文本回执：``warnings``、``new_assets`` 与 ``no_pending_authoring`` 只在非空时写入，读侧按 ``result.warnings`` 渲染。"""
     payload: dict[str, Any] = {"message": value.message}
     if value.warnings:
         payload["warnings"] = list(value.warnings)
@@ -3257,6 +3406,11 @@ async def execute_queued_text_task(
     services: Services | None = None,
 ) -> dict[str, Any]:
     """Execute one durable text task through the same host-independent handlers.
+
+    When ``services`` is omitted it is resolved from the current config (global generation queue); tasks registered
+    by the embedded host reuse the submitter's collaborators.
+
+    Execute one durable text task through the same host-independent handlers.
 
     ``services`` 缺省时按当前配置解析（全局生成队列）；嵌入式宿主登记过的任务沿用提交方的协作者。
     """

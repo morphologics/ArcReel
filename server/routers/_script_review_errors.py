@@ -1,4 +1,11 @@
-"""内容确认领域错误 → HTTP 响应的共享映射。
+"""Shared mapping of content review domain errors → HTTP responses.
+
+Content review domain errors surface from two routers: ``script_review`` (content review's own read/write endpoints)
+and ``files`` (the generic draft endpoint reroutes reference-to-video script_plan to ``ScriptReviewService``). The
+mapping lives in a shared module outside both, and each router takes it from here, so the same error code never gets
+a different status code or text on different endpoints.
+
+内容确认领域错误 → HTTP 响应的共享映射。
 
 内容确认的领域错误从两个 router 冒出来：``script_review``（内容确认自身的读写端点）与
 ``files``（通用草稿端点对参考生视频 script_plan 改道 ``ScriptReviewService``）。映射放在两者之外的
@@ -14,6 +21,8 @@ from lib.script.script_review import overwrite_with_text
 from server.i18n import Translator
 from server.services.project.script_review import ScriptReviewError
 
+# gate domain error code → HTTP status. invalid_content / episode_not_found carry parameters and are injected
+# separately.
 # gate 领域错误码 → HTTP 状态。invalid_content / episode_not_found 带参数另行注入。
 _ERROR_STATUS: dict[str, int] = {
     "not_applicable": 409,
@@ -24,6 +33,11 @@ _ERROR_STATUS: dict[str, int] = {
     "conflict": 409,
     "speech_admission": 409,
 }
+# Only parameterless error codes go through this mapping; invalid_content / episode_not_found need parameters and are
+# handled separately in raise_review_error. Read-only refusal (script_plan_confirmed) and the confirm-conversion error
+# codes (overwrite_required / invalid_new_assets / unregistered_references / duration_off_tier / conversion_refused /
+# conversion_conflict / video_request_facts / foreign_formal_script) carry diagnostics or a dedicated status and are
+# likewise handled separately in raise_review_error.
 # 仅无参错误码走本映射；invalid_content / episode_not_found 需注参，在 raise_review_error 单独处理。
 # 只读拒绝（script_plan_confirmed）与确认转换的错误码（overwrite_required / invalid_new_assets /
 # unregistered_references / duration_off_tier / conversion_refused / conversion_conflict / video_request_facts / foreign_formal_script）
@@ -37,7 +51,9 @@ _ERROR_I18N: dict[str, str] = {
 
 
 def raise_review_error(exc: ScriptReviewError, episode: int, _t: Translator) -> NoReturn:
-    """把 ``ScriptReviewError`` 抛成对应的 ``HTTPException``；未登记的错误码落 400。"""
+    """Raise ``ScriptReviewError`` as the matching ``HTTPException``; unregistered error codes fall to 400.
+
+    把 ``ScriptReviewError`` 抛成对应的 ``HTTPException``；未登记的错误码落 400。"""
     if exc.code == "overwrite_required":
         raise ConflictError("script_review_overwrite_required").with_diagnostic(
             {"script_overwrite": overwrite_with_text(exc.overwrite, _t)}
@@ -51,6 +67,8 @@ def raise_review_error(exc: ScriptReviewError, episode: int, _t: Translator) -> 
     if exc.code == "conversion_refused":
         raise UnprocessableError("script_review_conversion_refused").with_diagnostic(exc.message)
     if exc.code == "video_request_facts" and exc.problem is not None:
+        # The problem codes and parameters of video request facts are the persisted failure contract, shown with the
+        # same codes as preflight and execution.
         # 视频请求事实的问题码与参数就是持久化的失败契约，与预检、执行同码呈现。
         raise UnprocessableError(exc.problem.code, **exc.problem.parameters())
     if exc.code == "foreign_formal_script":

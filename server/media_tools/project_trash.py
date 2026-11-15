@@ -40,9 +40,14 @@ class RestoreTrashRecordRequest(BaseModel):
 
 
 async def _run(operation: str, write: bool, func: Callable[[], Any]) -> ToolOutcome[Any]:
-    """在线程里执行回收站操作；领域异常按默认语言转述，问题码沿用异常的 i18n key。"""
+    """Run a project trash operation in a thread; domain exceptions are rephrased in the default language, and the
+    problem code reuses the exception's i18n key.
+
+    在线程里执行回收站操作；领域异常按默认语言转述，问题码沿用异常的 i18n key。"""
 
     def guarded() -> Any:
+        # Same source tag as the generation tools: changes initiated by the Agent do not show up as external file
+        # changes, and the deletion record lists the Agent as initiator.
         # 与生成工具同一来源标签：Agent 发起的变更不显示成外部文件改动，删除记录的发起方记为 Agent。
         with project_change_source("worker"):
             return func()
@@ -101,6 +106,8 @@ async def restore_trash_record(
 
     def restore() -> dict[str, Any]:
         project_dir = services.projects.get_project_path(scope.project_name)
+        # The summary must compare the object description at deletion time with the one after restore to tell whether
+        # the name or number changed.
         # 摘要要对比删除时与恢复后的对象描述，才能说明换了名或换了编号。
         original = dict(project_trash.require_record(project_dir, record_id).object)
         return {**project_trash.restore(project_dir, record_id).to_dict(), "original_object": original}
@@ -114,7 +121,10 @@ def delete_project_file_summary(value: dict[str, Any]) -> str:
 
 
 def _identity_notes(value: dict[str, Any]) -> list[str]:
-    """对象恢复后换了名或编号时的说明；降级时对象没有按原结构恢复，不说。"""
+    """Note shown when a restored object got a new name or number; on degradation the object was not restored in its
+    original structure, so nothing is said.
+
+    对象恢复后换了名或编号时的说明；降级时对象没有按原结构恢复，不说。"""
     original, landed = value.get("original_object", {}), value["object"]
     notes = [
         f"{label}已换：{original[key]} → {landed[key]}"

@@ -1,4 +1,16 @@
-"""分镜级分镜图/视频自主上传路由。
+"""Routes for user uploads of storyboard images/videos per shot.
+
+Separate from generic asset upload (files.py), not an entry of UPLOAD_SPECS: this route locates the script entry by
+script_file + shot_id, brings it under version management (VersionManager), writes back script metadata via
+finalize_shot_*, and returns asset_fingerprints so the uploader can cache-bust immediately (SSE covers other
+clients) -- the subdir + naming path model of UploadSpec and the MetadataSetter signature do not cover this
+pipeline. Extension and size validation share upload_finalize.validate_upload.
+
+After a grid split, the canonical path of a cell image is the same as in storyboard mode
+(storyboards/scene_{id}.png), so uploading per shot overwrites that cell and the grid record is untouched; uploading
+the whole grid composite goes through the separate endpoint in grids.py.
+
+分镜级分镜图/视频自主上传路由。
 
 与通用资产上传（files.py）分离，不是 UPLOAD_SPECS 的表项：本路由按 script_file + shot_id
 定位剧本条目、纳入版本管理（VersionManager）、经 finalize_shot_* 回写剧本元数据，并返回
@@ -68,16 +80,22 @@ async def upload_shot_media(
         relative_path = resource_relative_path(resource_type, shot_id)
 
         def _validate_shot() -> tuple[Path, VersionManager]:
+            # A missing project is mapped separately: falling into the outer except FileNotFoundError would misreport
+            # "script does not exist"
             # 项目缺失单独映射：落到外层 except FileNotFoundError 会误报「剧本不存在」
             try:
                 project_path = get_project_manager().get_project_path(project_name)
             except FileNotFoundError as exc:
                 raise NotFoundError("project_not_found", name=project_name) from exc
             script = get_project_manager().load_script(project_name, script_file)
+            # A reference_video script returns an empty list -> 404; video upload in that mode goes through the
+            # reference-videos route
             # reference_video 剧本返回空列表 → 404，该模式的视频上传走 reference-videos 路由
             items, id_field, _, _, _ = get_storyboard_items(script)
             if find_storyboard_item(items, id_field, shot_id) is None:
                 raise HTTPException(status_code=404, detail=_t("segment_not_found", id=shot_id))
+            # Path traversal guard: the absolute path built from shot_id must not escape the project directory
+            # (aligned with versions.py)
             # 路径遍历防护：shot_id 拼出的绝对路径不得逃出项目目录（与 versions.py 对齐）
             try:
                 safe_join(project_path, relative_path)
@@ -90,6 +108,7 @@ async def upload_shot_media(
 
         with project_change_source("webui"):
             if kind == "storyboard":
+                # Limit the bytes read into memory: no OOM when Content-Length is missing/bypassed
                 # 限定读入内存的字节数：Content-Length 缺失/被绕过时不至于 OOM
                 content = await file.read(max_bytes + 1)
                 if len(content) > max_bytes:
@@ -98,6 +117,9 @@ async def upload_shot_media(
                     png_bytes = await asyncio.to_thread(normalize_storyboard_upload, content)
                 except ValueError as exc:
                     raise HTTPException(status_code=400, detail=_t("invalid_image_file")) from exc
+                # Register the staging file as soon as it is on disk: if cancelled while staging, the return value is
+                # discarded and it is reclaimed via the registration; after staging succeeds it is reclaimed by the
+                # finally of commit_manual_storyboard_upload.
                 # 暂存文件一落盘就登记：暂存进行中被取消时返回值随之丢弃，按登记回收；
                 # 暂存成功后由 commit_manual_storyboard_upload 的 finally 回收。
                 staged_images: list[Path] = []
@@ -109,7 +131,7 @@ async def upload_shot_media(
                     await run_sync_transaction(_stage)
                 except BaseException:
                     for path in staged_images:
-                        # hard-delete: temp -- 上传暂存文件
+                        # hard-delete: temp -- upload staging file / 上传暂存文件
                         await run_noninterruptible_sync(path.unlink, missing_ok=True)
                     raise
                 version = await commit_manual_storyboard_upload(
@@ -135,6 +157,9 @@ async def upload_shot_media(
                     original_filename=file.filename,
                 )
 
+            # emit reads the script internally to resolve the episode and compute fingerprints, so run it in the
+            # thread pool to avoid blocking the event loop; the returned fingerprints are reused directly in the
+            # response body, avoiding a second computation
             # emit 内部会读剧本解析 episode 并计算指纹，放线程池避免阻塞事件循环；
             # 返回的指纹直接复用进响应体，免二次计算
             fingerprints = await run_sync_transaction(
@@ -155,7 +180,7 @@ async def upload_shot_media(
     except UploadValidationError as e:
         raise HTTPException(status_code=e.status_code, detail=_t(e.key, **e.params)) from e
     except FileNotFoundError as exc:
-        # 不回传 str(exc)：load_script 的异常信息含服务器绝对路径
+        # Do not return str(exc): load_script's exception message contains absolute server paths / 不回传 str(exc)：load_script 的异常信息含服务器绝对路径
         raise NotFoundError("script_not_found", name=script_file) from exc
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=_t("segment_not_found", id=shot_id)) from exc
@@ -164,6 +189,8 @@ async def upload_shot_media(
     except (HTTPException, ApiError):
         raise
     except Exception as e:
+        # Do not return str(e): the message of an unexpected exception may contain internal details such as server
+        # paths; the stack trace goes to the log
         # 不回传 str(e)：未预期异常的消息可能含服务器路径等内部细节，堆栈进日志即可
         logger.exception("请求处理失败")
         raise HTTPException(status_code=500, detail=_t("internal_server_error")) from e
