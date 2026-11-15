@@ -172,12 +172,29 @@ class TimelineOreelPackService:
         media = await self._preview.media(project_name, timeline_id)
         project_dir = await asyncio.to_thread(self._projects.get_project_path, project_name)
         project = await asyncio.to_thread(self._projects.load_project, project_name)
+        shots = await asyncio.to_thread(self._episode_shots, project_name, project, readout.timeline.episode)
         workdir = await asyncio.to_thread(tempfile.TemporaryDirectory, prefix="oreelpack-")
         try:
-            return await self._build(project_name, project_dir, project, readout, media, workdir)
+            return await self._build(project_name, project_dir, project, readout, media, workdir, shots)
         except BaseException:
             await asyncio.to_thread(workdir.cleanup)
             raise
+
+    def _episode_shots(self, project_name: str, project: dict, episode: int | None) -> dict[str, dict]:
+        """The episode script's shots by shot id (every field: description, prompts with composition, lighting,
+        ambience, camera motion, lines), carried on the pack's clips so the editor (and its agent) and links back to the
+        studio keep each clip tied to its shot. Text only: about 2.7 KB a shot. Empty when the script cannot be read."""
+        entry = next((e for e in project.get("episodes") or [] if e.get("episode") == episode), None)
+        script_file = (entry or {}).get("script_file")
+        load = getattr(self._projects, "load_script_readonly", None)
+        if not script_file or load is None:
+            return {}
+        try:
+            script = load(project_name, script_file)
+        except (OSError, ValueError):
+            return {}
+        units = script.get("scenes") or script.get("segments") or []
+        return {str(u.get("scene_id") or u.get("segment_id")): u for u in units if u.get("scene_id") or u.get("segment_id")}
 
     async def _build(
         self,
@@ -187,6 +204,7 @@ class TimelineOreelPackService:
         readout: EditTimelineReadout,
         media: TimelinePreviewMedia,
         workdir: tempfile.TemporaryDirectory[str],
+        shots: dict[str, dict] | None = None,
     ) -> OreelPack:
         portrait = str(project.get("aspect_ratio") or "9:16").startswith("9")
         width, height = (1080, 1920) if portrait else (1920, 1080)
@@ -245,7 +263,8 @@ class TimelineOreelPackService:
                 metadata={"arcreel": {
                     "project": project_name, "timeline_id": readout.timeline.id, "revision": readout.revision,
                     "clip_id": clip.id, "unit_id": clip.unit_id, "video_version": clip.video_version,
-                    "reason": clip.reason,
+                    "reason": clip.reason, "episode": readout.timeline.episode,
+                    **({"shot": (shots or {})[clip.unit_id]} if clip.unit_id in (shots or {}) else {}),
                 }},
             )))
             # the clip's subtitles, on the timeline (as the Edit view places them)

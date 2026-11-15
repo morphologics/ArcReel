@@ -69,7 +69,14 @@ def service(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> TimelineOreelPac
             return tmp_path / name
 
         def load_project(self, name: str) -> dict:
-            return {"title": "Demo", "aspect_ratio": "16:9"}
+            return {"title": "Demo", "aspect_ratio": "16:9", "episodes": [{"episode": 3, "script_file": "scripts/episode_3.json"}]}
+
+        def load_script_readonly(self, name: str, filename: str) -> dict:
+            assert filename == "scripts/episode_3.json"
+            return {"scenes": [
+                {"scene_id": "E3S01", "scene_description": "A hallway", "image_prompt": {"composition": {"lighting": "dim"}}},
+                {"scene_id": "E3S02", "scene_description": "A door"},
+            ]}
 
     async def read(self, project_name, timeline_id, *, revision=None):
         return READOUT
@@ -141,3 +148,14 @@ async def test_clips_holds_transitions_subtitles_and_bgm_map_to_openreel(service
     bgm = music["clips"][0]
     assert (bgm["inPoint"], bgm["duration"], bgm["volume"]) == (2.0, 9.5, 0.8)
     assert bgm["fade"] == {"fadeIn": 1.0, "fadeOut": 1.0}
+
+
+async def test_clips_carry_their_shot_from_the_episode_script(service: TimelineOreelPackService) -> None:
+    _, project_file, _, _ = await _unpack(service)
+    video = project_file["project"]["timeline"]["tracks"][0]
+    first, second = video["clips"][0]["metadata"]["arcreel"], video["clips"][1]["metadata"]["arcreel"]
+    assert first["episode"] == 3
+    assert first["shot"]["image_prompt"]["composition"]["lighting"] == "dim"
+    assert second["shot"]["scene_description"] == "A door"
+    # E3S03 has no script entry: the clip keeps its link without a shot
+    assert "shot" not in video["clips"][3]["metadata"]["arcreel"]

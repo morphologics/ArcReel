@@ -4,7 +4,7 @@ import { useSearchParams } from "wouter";
 
 import { useConfirmLeave } from "@/components/shared/edit-unit/LeaveGuard";
 import { RetainedEditUnit } from "@/components/shared/edit-unit/RetainedEditUnit";
-import { EPISODE_VIEW_PARAM } from "@/app-routes";
+import { EPISODE_SHOT_PARAM, EPISODE_VIEW_PARAM } from "@/app-routes";
 import { EditTimelineEmptyState } from "@/components/canvas/edit-render/EditTimelineEmptyState";
 import { EpisodeRenderShortcut } from "@/components/canvas/edit-render/EpisodeRenderShortcut";
 import { RenderButton } from "@/components/canvas/edit-render/RenderButton";
@@ -130,6 +130,18 @@ function EpisodePageContent({
     if (view !== "edit") exitFocus();
   }, [view, exitFocus]);
   useEffect(() => () => exitFocus(), [exitFocus]);
+
+  // A link to a shot (`?shot=E9S19`, e.g. from the editor): show it in the shot view, then drop the parameter
+  const linkedShot = searchParams.get(EPISODE_SHOT_PARAM);
+  useEffect(() => {
+    if (!linkedShot || !hasScript) return;
+    onViewUnit(linkedShot);
+    setSearchParams((params) => {
+      const next = new URLSearchParams(params);
+      next.delete(EPISODE_SHOT_PARAM);
+      return next;
+    }, { replace: true });
+  }, [linkedShot, hasScript, onViewUnit, setSearchParams]);
 
   // Switching to an unselectable view has no effect; switching to the current view writes no history. / 切到不可选的视图不生效；切到当前视图不写历史。
   const changeView = useCallback(

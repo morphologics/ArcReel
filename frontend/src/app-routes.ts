@@ -173,6 +173,8 @@ export const WORKSPACE_ROUTE_FILES = "files";
 export const EPISODE_VIEW_PARAM = "view";
 export const EPISODE_VIEW_EDIT = "edit";
 export const EPISODE_VIEW_TIMELINE_PARAM = "tl";
+/** Shot to show on arrival (the shot view scrolls to it), e.g. from a link in the editor; removed from the URL once used. */
+export const EPISODE_SHOT_PARAM = "shot";
 
 /** Relative path within the project workspace to open an episode's (episode ID) edit view; with `timelineId`, switch to that edit timeline. / 项目工作区内打开某集（集 ID）剪辑视图的相对路径；给出 `timelineId` 时切到那条剪辑时间线。 */
 export function episodeEditViewPath(episode: number, timelineId?: string): string {
