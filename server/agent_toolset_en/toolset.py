@@ -1,0 +1,64 @@
+"""The declared Agent tools, plus the tool-name set and the migration-blocked set derived from the declarations."""
+
+from __future__ import annotations
+
+from server.agent_toolset.content_read import CONTENT_READ_TOOLS
+from server.agent_toolset.declaration import AgentToolDeclaration, Blocked, ToolDeclaration
+from server.agent_toolset.edit_timelines import EDIT_TIMELINE_TOOLS
+from server.agent_toolset.episode_planning import EPISODE_PLANNING_TOOLS
+from server.agent_toolset.final_cuts import FINAL_CUT_TOOLS
+from server.agent_toolset.generation_batches import GENERATION_BATCH_TOOLS
+from server.agent_toolset.grid_storyboards import GRID_STORYBOARD_TOOLS
+from server.agent_toolset.image_review import IMAGE_REVIEW_TOOLS
+from server.agent_toolset.jianying_drafts import JIANYING_DRAFT_TOOLS
+from server.agent_toolset.media_generation import MEDIA_GENERATION_TOOLS
+from server.agent_toolset.orientation import ORIENTATION_TOOLS
+from server.agent_toolset.project_entry import PROJECT_ENTRY_TOOLS
+from server.agent_toolset.project_trash import PROJECT_TRASH_TOOLS
+from server.agent_toolset.repair_channel import REPAIR_CHANNEL_TOOLS
+from server.agent_toolset.script_authoring import SCRIPT_AUTHORING_TOOLS
+from server.agent_toolset.script_editing import SCRIPT_EDITING_TOOLS
+from server.agent_toolset.video_review import VIDEO_REVIEW_TOOLS
+from server.agent_toolset.video_versions import VIDEO_VERSION_TOOLS
+from server.agent_toolset.workflow_completion import WORKFLOW_COMPLETION_TOOLS
+
+AGENT_TOOLSET: tuple[AgentToolDeclaration, ...] = (
+    *PROJECT_ENTRY_TOOLS,
+    *ORIENTATION_TOOLS,
+    *GENERATION_BATCH_TOOLS,
+    *CONTENT_READ_TOOLS,
+    *MEDIA_GENERATION_TOOLS,
+    *GRID_STORYBOARD_TOOLS,
+    *IMAGE_REVIEW_TOOLS,
+    *VIDEO_VERSION_TOOLS,
+    *VIDEO_REVIEW_TOOLS,
+    *EDIT_TIMELINE_TOOLS,
+    *FINAL_CUT_TOOLS,
+    *JIANYING_DRAFT_TOOLS,
+    *SCRIPT_AUTHORING_TOOLS,
+    *REPAIR_CHANNEL_TOOLS,
+    *SCRIPT_EDITING_TOOLS,
+    *EPISODE_PLANNING_TOOLS,
+    *WORKFLOW_COMPLETION_TOOLS,
+    *PROJECT_TRASH_TOOLS,
+)
+
+# Tool ids are short names (the SDK adds the ``mcp__arcreel__`` prefix at registration). Frontend display names are
+# under the ``tool_name_<id>`` keys in ``frontend/src/i18n/{zh,en,vi}/dashboard.ts``, and the summary format of step
+# rows is registered in ``frontend/src/components/copilot/chat/arcreel-tool-summaries.ts``;
+# ``tests/unit/test_frontend_mcp_tool_i18n.py`` checks that every id has a translation in all languages and has a
+# registered summary format.
+ARCREEL_MCP_TOOL_IDS: tuple[str, ...] = tuple(declaration.name for declaration in AGENT_TOOLSET)
+
+# Tools refused at the shared declaration entry when the project migration verdict is failure, derived from each
+# declaration's migration-blocking policy.
+MIGRATION_BLOCKED_TOOL_IDS: frozenset[str] = frozenset(
+    declaration.name
+    for declaration in AGENT_TOOLSET
+    if isinstance(declaration, ToolDeclaration) and isinstance(declaration.migration, Blocked)
+)
+
+if len(set(ARCREEL_MCP_TOOL_IDS)) != len(ARCREEL_MCP_TOOL_IDS):
+    raise RuntimeError("Duplicate declaration names in the Agent toolset")
+
+__all__ = ["AGENT_TOOLSET", "ARCREEL_MCP_TOOL_IDS", "MIGRATION_BLOCKED_TOOL_IDS"]
