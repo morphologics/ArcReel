@@ -61,7 +61,9 @@ def project_with_script(tmp_path):
 
 @pytest.fixture
 def grid_with_image(project_with_script):
-    """联合图已就绪（completed、grid_image_path 指向落盘 PNG）的宫格记录。"""
+    """A grid record whose composite is ready (completed, grid_image_path pointing to a persisted PNG).
+
+    联合图已就绪（completed、grid_image_path 指向落盘 PNG）的宫格记录。"""
     grid = GridGeneration.create(
         episode=1,
         script_file="episode_1.json",
@@ -121,12 +123,16 @@ def _register_grid(project_path, grid):
 
 class TestApplyGridSplit:
     async def test_split_writes_cells_and_versions(self, project_with_script, grid_with_image):
-        """切分覆写各分镜格：文件名 scene_{id}.png（无 first/last 后缀）、逐格入版本史、
+        """Splitting overwrites each shot cell: file name scene_{id}.png (no first/last suffix), each cell enters version history,
+        the script writes back storyboard_image / grid_id / grid_cell_index, and split_at is stamped.
+
+        切分覆写各分镜格：文件名 scene_{id}.png（无 first/last 后缀）、逐格入版本史、
         剧本回写 storyboard_image / grid_id / grid_cell_index、split_at 落章。"""
         from lib.artifacts.version_manager import VersionManager
 
         grid = grid_with_image
         storyboards_dir = project_with_script / "storyboards"
+        # Pre-seed old shot cells: versions must be backfill-registered before overwriting, otherwise the old bytes are lost
         # 预置旧分镜格：覆写前必须补登版本，否则旧字节丢失
         (storyboards_dir / "scene_E1S01.png").write_bytes(b"old-bytes")
         _register_grid(project_with_script, grid)
@@ -147,6 +153,7 @@ class TestApplyGridSplit:
         assert result.updated_scene_ids == ["E1S01", "E1S02", "E1S03"]
         assert result.missing_scene_ids == []
 
+        # Per-cell versions: old file backfill-registered + new version after overwriting (source=grid_split)
         # 逐格版本：旧文件补登 + 覆写后新版本（source=grid_split）
         versions = VersionManager(project_with_script)
         e1s01 = versions.get_versions("storyboards", "E1S01")
@@ -169,7 +176,11 @@ class TestApplyGridSplit:
         assert saved["split_at"] is not None
 
     async def test_split_skips_missing_scene_ids(self, project_with_script, grid_with_image, caplog):
-        """grid plan 生成后剧本被改动（删/拆分镜）→ frame_chain 中已不存在的 next_scene_id
+        """The script was changed after the grid plan was generated (shots deleted/split) -> next_scene_id no longer present in frame_chain
+        skips saving the cell PNG + warning, without letting batch_update raise KeyError and roll back the whole batch
+        (avoiding orphan PNGs that are persisted but unreferenced by the script).
+
+        grid plan 生成后剧本被改动（删/拆分镜）→ frame_chain 中已不存在的 next_scene_id
         跳过 cell PNG 保存 + warning + 不让 batch_update 抛 KeyError 整批回滚
         （避免 cell PNG 已落盘但 script 无引用的 orphan PNG）。"""
         grid = grid_with_image
@@ -350,7 +361,9 @@ class TestApplyGridSplit:
         grid_with_image,
         monkeypatch,
     ):
-        """开切时登记还在、临commit前被撤销 → 最终事务复核仍拒绝，且不留任何副作用。"""
+        """The registration still exists when splitting starts but is withdrawn right before commit -> the final transaction recheck still refuses, leaving no side effects.
+
+        开切时登记还在、临commit前被撤销 → 最终事务复核仍拒绝，且不留任何副作用。"""
         from lib.artifacts.artifact_manifest import ArtifactKey, ProjectArtifactManifestAdapter
 
         _register_grid(project_with_script, grid_with_image)
@@ -636,7 +649,9 @@ class TestApplyGridSplit:
 
 
 class TestSplitAspectRatio:
-    """切分按联合图产出时冻结的比例裁切，而非项目当下的 aspect_ratio。"""
+    """Splitting crops by the ratio frozen when the composite was produced, not the project's current aspect_ratio.
+
+    切分按联合图产出时冻结的比例裁切，而非项目当下的 aspect_ratio。"""
 
     async def _split_and_measure(self, project_with_script, grid) -> tuple[int, int]:
         GridManager(project_with_script).save(grid)
@@ -651,7 +666,11 @@ class TestSplitAspectRatio:
             return cell.size
 
     async def test_uses_frozen_ratio_after_project_ratio_changed(self, project_with_script, grid_with_image):
-        """项目从 16:9 改到 9:16 后再切历史联合图，各格仍按 16:9 裁切。
+        """After the project changes from 16:9 to 9:16, splitting a historical composite still crops each cell at 16:9.
+
+        Reading the project's current setting would center-crop landscape cells into portrait, losing most of each cell's width.
+
+        项目从 16:9 改到 9:16 后再切历史联合图，各格仍按 16:9 裁切。
 
         读项目当下设置会把横版格中心裁成竖版，每格丢掉大半宽度。
         """
@@ -664,7 +683,9 @@ class TestSplitAspectRatio:
         assert abs(width / height - 16 / 9) < 0.05
 
     async def test_legacy_record_without_ratio_falls_back_to_project(self, project_with_script, grid_with_image):
-        """存量记录没有该字段，退回项目当前设置（9:16），保持既有行为。"""
+        """Existing records lack the field and fall back to the project's current setting (9:16), keeping existing behavior.
+
+        存量记录没有该字段，退回项目当前设置（9:16），保持既有行为。"""
         grid = grid_with_image
         grid.video_aspect_ratio = None
 

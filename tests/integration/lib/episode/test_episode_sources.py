@@ -1,4 +1,7 @@
-"""集原文来源与整本源文清单：来源判定、文件顺序、规划起点推导与快照。"""
+"""Episode source origins and the whole-source list: origin detection, file order, planning-start derivation and
+snapshots.
+
+集原文来源与整本源文清单：来源判定、文件顺序、规划起点推导与快照。"""
 
 import unicodedata
 from pathlib import Path

@@ -1,4 +1,7 @@
-"""迁移失败判定记录的路径口径：只用项目内相对路径，且仍能定位问题文件。"""
+"""Path rule for migration failure records: only project-relative paths are used, and the problem file can
+still be located.
+
+迁移失败判定记录的路径口径：只用项目内相对路径，且仍能定位问题文件。"""
 
 from __future__ import annotations
 

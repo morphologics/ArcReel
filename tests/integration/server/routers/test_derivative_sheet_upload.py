@@ -1,4 +1,10 @@
-"""衍生资产图上传即成品：上传替换当前版本，依据只由图字节决定，切回生成版本后回到按生成输入判定。
+"""An uploaded derivative sheet is a finished product: upload replaces the current version, the basis is determined
+only by the image bytes, and switching back to a generated version returns to judging by generation input.
+
+Uses a real ``ProjectManager``, real version records and real artifact manifest: criteria lie in the on-disk
+image, version snapshots and manifest entries.
+
+衍生资产图上传即成品：上传替换当前版本，依据只由图字节决定，切回生成版本后回到按生成输入判定。
 
 用真 ``ProjectManager``、真版本记录与真产物清单：判据落在盘上的图、版本快照与清单条目上。
 """
@@ -58,7 +64,10 @@ def _status(project_path: Path) -> ArtifactStatus:
 
 
 def _regenerate_owner_sheet(project_path: Path) -> None:
-    """本体资产图换了字节：生成的衍生图以它为唯一输入，按生成输入判定的会随之过期。"""
+    """The base look sheet changed bytes: generated derivative images take it as their only input, so those judged by
+    generation input go stale accordingly.
+
+    本体资产图换了字节：生成的衍生图以它为唯一输入，按生成输入判定的会随之过期。"""
     write_two_tone_png(project_path / "characters/阿岚.png", left=(10, 10, 10), right=(240, 240, 240))
 
 

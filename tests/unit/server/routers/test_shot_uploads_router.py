@@ -1,4 +1,6 @@
-"""分镜级分镜图/视频上传路由 + 参考单元视频上传端点测试。"""
+"""Tests for per-shot storyboard image/video upload routes + the reference unit video upload endpoint.
+
+分镜级分镜图/视频上传路由 + 参考单元视频上传端点测试。"""
 
 import asyncio
 import threading
@@ -25,7 +27,9 @@ from tests.fakes import use_project_manager
 
 
 def _write_thumbnail(thumbnail_path: Path, content: bytes) -> None:
-    """抽帧替身的落盘：生产的抽帧由 ffmpeg 子进程写文件，不占事件循环，替身经 to_thread 调用。"""
+    """Persistence for the frame-extraction stand-in: production frame extraction writes the file in an ffmpeg subprocess off the event loop, so the stand-in is called via to_thread.
+
+    抽帧替身的落盘：生产的抽帧由 ffmpeg 子进程写文件，不占事件循环，替身经 to_thread 调用。"""
     thumbnail_path.parent.mkdir(parents=True, exist_ok=True)
     thumbnail_path.write_bytes(content)
 
@@ -135,18 +139,18 @@ class TestShotStoryboardUpload:
             assert body["version"] == 1
             assert "storyboards/scene_E1S01.png" in body["asset_fingerprints"]
 
-        # 元数据回写 + status 自动推导
+        # Metadata write-back + automatic status derivation / 元数据回写 + status 自动推导
         script = pm.load_script("demo", "episode_1.json")
         ga = script["segments"][0]["generated_assets"]
         assert ga["storyboard_image"] == "storyboards/scene_E1S01.png"
         assert ga["status"] == "storyboard_ready"
 
-        # JPEG 入参也统一落盘为 PNG（canonical 扩展名）
+        # JPEG input is also persisted as PNG (canonical extension) / JPEG 入参也统一落盘为 PNG（canonical 扩展名）
         target = pm.get_project_path("demo") / "storyboards" / "scene_E1S01.png"
         with Image.open(target) as img:
             assert img.format == "PNG"
 
-        # 版本记录带 manual_upload 来源标记
+        # The version record carries a manual_upload source marker / 版本记录带 manual_upload 来源标记
         vm = VersionManager(pm.get_project_path("demo"))
         info = vm.get_versions("storyboards", "E1S01")
         assert info["current_version"] == 1
@@ -175,7 +179,9 @@ class TestShotStoryboardUpload:
         assert comparison.status is ArtifactStatus.CURRENT
 
     def test_upload_backfills_untracked_existing_file(self, tmp_path, monkeypatch):
-        """磁盘已有旧分镜但无版本记录：上传前补登旧文件，旧字节不丢失。"""
+        """An old storyboard image exists on disk but has no version record: backfill-register the old file before uploading, so the old bytes are not lost.
+
+        磁盘已有旧分镜但无版本记录：上传前补登旧文件，旧字节不丢失。"""
         client, pm = _client(monkeypatch, tmp_path)
         project_path = pm.get_project_path("demo")
         old = project_path / "storyboards" / "scene_E1S01.png"
@@ -191,7 +197,7 @@ class TestShotStoryboardUpload:
         info = vm.get_versions("storyboards", "E1S01")
         assert info["current_version"] == 2
         assert len(info["versions"]) == 2
-        assert info["versions"][0].get("source") is None  # 补登的旧文件
+        assert info["versions"][0].get("source") is None  # The backfill-registered old file / 补登的旧文件
         assert info["versions"][1]["source"] == "manual_upload"
 
     def test_upload_resizes_long_edge(self, tmp_path, monkeypatch):
@@ -205,7 +211,9 @@ class TestShotStoryboardUpload:
             assert max(img.size) <= 2048
 
     def test_grid_fields_untouched(self, tmp_path, monkeypatch):
-        """宫格模式按镜头上传单元格图：grid_id / grid_cell_index 保持不变。"""
+        """Grid mode uploads a cell image per shot: grid_id / grid_cell_index stay unchanged.
+
+        宫格模式按镜头上传单元格图：grid_id / grid_cell_index 保持不变。"""
         client, pm = _client(monkeypatch, tmp_path)
         pm.update_scene_asset("demo", "episode_1.json", "E1S01", "grid_id", "grid_abc")
         pm.update_scene_asset("demo", "episode_1.json", "E1S01", "grid_cell_index", 2)
@@ -238,7 +246,9 @@ class TestShotStoryboardUpload:
             assert resp.status_code == 404
 
     def test_reference_script_guarded_404(self, tmp_path, monkeypatch):
-        """reference_video 剧本无分镜概念，分镜图/视频自主上传路由一律 404。"""
+        """reference_video scripts have no concept of shots, so the storyboard image/video upload routes always return 404.
+
+        reference_video 剧本无分镜概念，分镜图/视频自主上传路由一律 404。"""
         client, pm = _client(monkeypatch, tmp_path)
         pm.save_script(
             "demo",
@@ -259,7 +269,9 @@ class TestShotStoryboardUpload:
             assert resp.status_code == 404
 
     def test_emit_uses_webui_source(self, tmp_path, monkeypatch):
-        """emit 在 project_change_source("webui") 上下文内被调用（SSE source 由 contextvar 决定）。"""
+        """emit is called within the project_change_source("webui") context (the SSE source is decided by the contextvar).
+
+        emit 在 project_change_source("webui") 上下文内被调用（SSE source 由 contextvar 决定）。"""
         client, _ = _client(monkeypatch, tmp_path)
         calls: list[dict] = []
 
@@ -295,7 +307,9 @@ class TestShotStoryboardUpload:
             assert resp.json()["detail"] == zh_errors.MESSAGES["project_not_found"].format(name="nope")
 
     async def test_cancelled_while_staging_leaves_no_staged_file(self, tmp_path, monkeypatch):
-        """暂存写盘进行中被取消：等线程写完再传播取消，调用方按登记回收暂存文件。"""
+        """Cancelled while the staging write is in progress: wait for the thread to finish writing before propagating the cancel; the caller reclaims the staged file per registration.
+
+        暂存写盘进行中被取消：等线程写完再传播取消，调用方按登记回收暂存文件。"""
         pm = _seed_shot_project(tmp_path)
         monkeypatch.setattr(shot_uploads, "get_project_manager", lambda: pm)
         storyboards_dir = pm.get_project_path("demo") / "storyboards"
@@ -443,7 +457,9 @@ class TestShotVideoUpload:
             assert resp.status_code == 400
 
     def test_webm_rejected(self, tmp_path, monkeypatch):
-        """webm 明确不收：字节按 canonical .mp4 存储，VP8/VP9 在 Safari/剪映侧不可解码"""
+        """webm is explicitly not accepted: bytes are stored as canonical .mp4, and VP8/VP9 cannot be decoded on the Safari/JianYing side
+
+        webm 明确不收：字节按 canonical .mp4 存储，VP8/VP9 在 Safari/剪映侧不可解码"""
         client, _ = _client(monkeypatch, tmp_path)
         with client:
             resp = _upload(client, "video", "clip.webm", b"\x00" * 16)
@@ -463,7 +479,7 @@ class TestSaveUploadedVideoStream:
         with pytest.raises(upload_finalize.UploadTooLargeError):
             asyncio.run(upload_finalize.save_uploaded_video_stream(BytesIO(b"\x00" * 64), target, max_bytes=16))
         assert not target.exists()
-        assert list(target.parent.iterdir()) == []  # dot-tmp 已清理
+        assert list(target.parent.iterdir()) == []  # The dot-tmp file has been cleaned up / dot-tmp 已清理
 
     def test_writes_via_tmp_then_replace(self, tmp_path):
         target = tmp_path / "videos" / "scene_X.mp4"
@@ -472,12 +488,14 @@ class TestSaveUploadedVideoStream:
         assert list(target.parent.iterdir()) == [target]
 
     def test_tmp_paths_unique_per_call(self, tmp_path):
-        """tmp 文件名每次调用唯一：并发上传同一目标不会交错写同一个 tmp 文件。"""
+        """tmp file names are unique per call: concurrent uploads to the same target do not interleave writes to the same tmp file.
+
+        tmp 文件名每次调用唯一：并发上传同一目标不会交错写同一个 tmp 文件。"""
         target = tmp_path / "videos" / "scene_X.mp4"
         assert upload_finalize._upload_tmp_path(target) != upload_finalize._upload_tmp_path(target)
 
 
-# ==================== 参考单元视频上传 ====================
+# ==================== Reference unit video upload ==================== / ==================== 参考单元视频上传 ====================
 
 
 def _seed_reference_project(tmp_path) -> ProjectManager:
@@ -598,6 +616,7 @@ class TestReferenceUnitVideoUpload:
 
         ga = pm.load_script("demo", "episode_1.json")["video_units"][0]["generated_assets"]
         assert ga["video_clip"] == "reference_videos/E1U1.mp4"
+        # After an upload replaces it, the old provider URI no longer corresponds to the local file, so finalize should clear it
         # 上传替换后旧 provider URI 不再对应本地文件，finalize 应清空
         assert "video_uri" not in ga
         assert ga["video_thumbnail"] == "reference_videos/thumbnails/E1U1.jpg"
@@ -630,7 +649,12 @@ class TestReferenceUnitVideoUpload:
             assert resp.status_code == 400
 
     def test_missing_project_404(self, tmp_path, monkeypatch):
-        """项目不存在 → 404，不退化成 500。
+        """Project does not exist -> 404, not degraded to 500.
+
+        The NotFoundError raised by _load_episode_script is not an HTTPException subclass,
+        so the endpoint's except ladder must also let ApiError through, otherwise the fallback branch swallows it into a 500.
+
+        项目不存在 → 404，不退化成 500。
 
         _load_episode_script 抛出的 NotFoundError 不是 HTTPException 子类，
         端点的 except 阶梯必须同时放行 ApiError，否则被兜底分支吞成 500。
@@ -645,7 +669,9 @@ class TestReferenceUnitVideoUpload:
             assert resp.json()["detail"] == zh_errors.MESSAGES["project_not_found"].format(name="nope")
 
     def test_stale_script_binding_404(self, tmp_path, monkeypatch):
-        """project.json 指向的剧本文件已丢失（stale 绑定）→ 404 而非 500。"""
+        """The script file that project.json points to is lost (stale binding) -> 404 rather than 500.
+
+        project.json 指向的剧本文件已丢失（stale 绑定）→ 404 而非 500。"""
         client, pm = _ref_client(monkeypatch, tmp_path)
         project = pm.load_project("demo")
         project["episodes"][0]["script_file"] = "scripts/gone.json"
@@ -656,7 +682,9 @@ class TestReferenceUnitVideoUpload:
             assert resp.json()["detail"] == zh_errors.MESSAGES["script_not_found"].format(name="scripts/gone.json")
 
     def test_emit_uses_webui_source(self, tmp_path, monkeypatch):
-        """emit 在 project_change_source("webui") 上下文内被调用（SSE source 由 contextvar 决定）。"""
+        """emit is called within the project_change_source("webui") context (the SSE source is decided by the contextvar).
+
+        emit 在 project_change_source("webui") 上下文内被调用（SSE source 由 contextvar 决定）。"""
         client, _ = _ref_client(monkeypatch, tmp_path)
         calls: list[dict] = []
 

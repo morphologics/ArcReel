@@ -68,7 +68,9 @@ def _status() -> WorkflowStatus:
 
 
 async def _agent_plan(pm: ProjectManager, tmp_path: Path, arguments: dict[str, Any]) -> ToolOutcome[Any]:
-    """经 Agent 工具声明的共享入口读取制作计划（两宿主同一入口）。"""
+    """Read the workflow plan via the shared entry declared by the Agent tool (same entry for both hosts).
+
+    经 Agent 工具声明的共享入口读取制作计划（两宿主同一入口）。"""
     ctx = ToolHarness(project_name="demo", data_root=tmp_path / "projects", pm=pm)
     return await run_declared_tool(GET_WORKFLOW_PLAN, ctx, arguments)
 

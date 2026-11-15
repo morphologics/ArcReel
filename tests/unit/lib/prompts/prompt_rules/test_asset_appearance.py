@@ -1,4 +1,6 @@
-"""资产候选块的引用名与外观展开：角色的本体与衍生。"""
+"""Reference names and appearance expansion in the asset candidate block: a character's base look and derivatives.
+
+资产候选块的引用名与外观展开：角色的本体与衍生。"""
 
 from __future__ import annotations
 

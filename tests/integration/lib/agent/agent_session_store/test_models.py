@@ -44,6 +44,7 @@ async def test_summary_pk_dedup(session_factory):
         session.add(s1)
         await session.commit()
 
+    # Second insert with the same PK (a separate transaction simulates the real write path): must raise IntegrityError
     # 同 PK 二次插入（独立事务模拟真实写路径）：必须报 IntegrityError
     s2 = AgentSessionSummary(
         project_key="proj-A",

@@ -1,4 +1,7 @@
-"""供应商模型接口：列出、启用与停用、按 ID 添加与移除、Sheet 的供应商设置与模型信息，绑内存库。"""
+"""Provider model API: list, enable and disable, add and remove by ID, the Sheet's provider settings and model info;
+bound to an in-memory DB.
+
+供应商模型接口：列出、启用与停用、按 ID 添加与移除、Sheet 的供应商设置与模型信息，绑内存库。"""
 
 from __future__ import annotations
 
@@ -42,6 +45,8 @@ def models_client(db_factory: async_sessionmaker[AsyncSession]) -> Generator[Tes
     app.include_router(catalog_router.router, prefix="/api/v1", dependencies=AUTH_DEPENDENCIES)
     with TestClient(app) as test_client:
         yield test_client
+    # Adding/removing and changing model info swap out the process-level copies of user-added models and user entries
+    # in the catalog lookup
     # 添加与移除、修改模型信息会换掉目录查询里进程级的用户添加模型与用户条目副本
     catalog.install_user_added_models(())
     catalog.install_user_entries(())
@@ -76,6 +81,7 @@ def test_builtin_list_has_state_flags_and_price_summary(models_client: TestClien
             {"meter": "output_tokens", "min_price": 0.15, "max_price": 0.15, "per": 1_000_000},
         ],
     }
+    # An officially listed model whose entry was delisted: disabled when there is no status row
     # 条目已下架的官方收录模型：没有状态行时为停用
     legacy = models["agnes-2.0-flash"]
     assert (legacy["enabled"], legacy["is_default"]) == (False, False)
@@ -103,6 +109,7 @@ async def test_disabling_default_model_takes_effect_immediately(
 
 
 def test_add_by_id_matches_listing_exactly_and_by_media_type(models_client: TestClient) -> None:
+    # Dual-media model: the same API model name has an image and a video provider model, so a media type must be given
     # 两栖模型：同一 API 模型名有图片与视频两个供应商模型，要给媒体类型
     assert models_client.post("/api/v1/providers/kling/models", json={"model_id": "kling-v3-omni"}).status_code == 422
 
@@ -122,7 +129,10 @@ def test_add_by_id_matches_listing_exactly_and_by_media_type(models_client: Test
 def test_add_from_catalog_enables_the_official_model_whose_api_name_differs_from_the_entry(
     models_client: TestClient,
 ) -> None:
-    """「模型目录」里选的条目对应这个供应商官方收录的模型（API 模型名与官方模型名不同）：启用它，不另建用户添加的模型。"""
+    """The entry picked in the "model catalog" maps to this provider's officially listed model (API model name differs
+    from the official model name): enable it rather than create a user-added model.
+
+    「模型目录」里选的条目对应这个供应商官方收录的模型（API 模型名与官方模型名不同）：启用它，不另建用户添加的模型。"""
     models_client.put(
         "/api/v1/providers/ark/models/enabled", json={"model_id": "doubao-seedance-2-0-260128", "enabled": False}
     )
@@ -150,6 +160,7 @@ def test_add_unlisted_model_as_user_added_then_remove(models_client: TestClient)
     added = resp.json()
     assert added["official"] is False
     assert (added["model"]["display_name"], added["model"]["flags"]) == (None, ["unpriced"])
+    # User-added models are merged into the catalog lookup: references to them in settings can resolve
     # 用户添加的模型并进目录查询：设置里引用它可以解析
     assert catalog.get_model("ark", "my-private-ep", media_type="text") is not None
     assert models_client.post("/api/v1/providers/ark/models", json={"model_id": "my-private-ep"}).status_code == 422
@@ -178,6 +189,7 @@ def test_add_by_id_infers_media_type_by_name_when_no_entry_matches(models_client
 def test_official_model_cannot_be_removed_and_unsupported_media_type_is_rejected(models_client: TestClient) -> None:
     assert models_client.delete("/api/v1/providers/agnes/models/agnes-3.0-flash").status_code == 422
     assert models_client.delete("/api/v1/providers/agnes/models/nope").status_code == 404
+    # The provider does not offer this kind of model
     # 供应商不提供这类模型
     resp = models_client.post(
         "/api/v1/providers/openai/models", json={"model_id": "mystery-clip", "media_type": "video"}
@@ -219,6 +231,7 @@ async def test_custom_provider_list_and_disable_clears_default(
     house = models["house-model"]
     assert (house["display_name"], house["flags"], house["price"]) == ("自家模型", ["unpriced"], None)
 
+    # Enabling/disabling changes the media types this provider offers, so the worker's capacity table must refresh
     # 启停改变这个供应商开放的媒体类型，worker 的容量表要随之刷新
     worker = SimpleNamespace(reload_limits=AsyncMock())
     cast("FastAPI", models_client.app).state.generation_worker = worker
@@ -234,6 +247,9 @@ async def test_custom_provider_list_and_disable_clears_default(
     assert (row.is_enabled, row.is_default) == (False, False)
 
 
+# ---------------------------------------------------------------------------
+# Provider model Sheet: read one, save provider settings, check references before removal
+# ---------------------------------------------------------------------------
 # ---------------------------------------------------------------------------
 # 供应商模型 Sheet：读取单个、保存供应商设置、移除前查引用
 # ---------------------------------------------------------------------------
@@ -251,6 +267,8 @@ def test_user_added_video_model_overrides_take_effect_at_runtime(models_client: 
 
     detail = models_client.get("/api/v1/providers/ark/models/my-video-ep").json()
     caps = detail["capabilities"]
+    # No matching entry: selectable durations take the preset inferred by name, resolution is unconstrained; channel
+    # facts take the calling channel's declaration
     # 对应不上条目：可选时长取按名字推断的预设，分辨率不加约束；通道事实取调用通道的声明
     assert (caps["base"]["durations"], caps["base"]["resolutions"], caps["base"]["audio_track"]) == (
         [4, 8],
@@ -278,6 +296,8 @@ def test_user_added_video_model_overrides_take_effect_at_runtime(models_client: 
     assert saved["multiplier"] == 0.5
     assert saved["capabilities"]["effective"]["durations"] == [5, 10]
     assert saved["capabilities"]["base"]["durations"] == [4, 8]
+    # Runtime: model facts via the catalog lookup, channel facts via the calling channel's capability declaration,
+    # multiplier via the pricing basis, all take effect per the overrides
     # 运行时：模型事实经目录查询、通道事实经调用通道一侧的能力声明、倍率经计价依据，都按覆盖生效
     model = catalog.get_model("ark", "my-video-ep", media_type="video")
     assert model is not None
@@ -291,6 +311,7 @@ def test_user_added_video_model_overrides_take_effect_at_runtime(models_client: 
     assert price is not None
     assert price.multiplier == 0.5
 
+    # Clearing the override returns to the original value
     # 清除覆盖即回到原值
     models_client.patch("/api/v1/providers/ark/models/my-video-ep", json={"capability_overrides": None})
     cleared = catalog.get_model("ark", "my-video-ep", media_type="video")
@@ -305,6 +326,7 @@ def test_official_model_settings_only_enable(models_client: TestClient) -> None:
 
     for body in ({"multiplier": 2}, {"capability_overrides": {"image_input": False}}, {"model_id": "renamed"}):
         assert models_client.patch("/api/v1/providers/agnes/models/agnes-3.0-flash", json=body).status_code == 422
+    # Built-in providers have no settings like default and calling endpoint
     # 内置供应商没有默认与调用端点这类设置
     resp = models_client.patch("/api/v1/providers/agnes/models/agnes-3.0-flash", json={"is_default": True})
     assert resp.status_code == 422
@@ -335,6 +357,7 @@ def test_user_added_model_rename(models_client: TestClient) -> None:
     assert (resp.status_code, resp.json()["model"]["model_id"]) == (200, "my-text-ep-v2")
     assert models_client.get("/api/v1/providers/ark/models/my-text-ep").status_code == 404
     assert catalog.get_model("ark", "my-text-ep-v2", media_type="text") is not None
+    # Changing to an officially listed model name is refused
     # 改成官方收录的模型名被拒绝
     official = next(m for m in _models(models_client, "ark").values() if m["official"])
     resp = models_client.patch(
@@ -375,6 +398,7 @@ async def test_custom_unmatched_video_model_detail_and_settings(
     url = f"/api/v1/providers/custom-{db_id}/models/house-video"
 
     detail = models_client.get(url).json()
+    # The media type comes from the calling endpoint; the original value is the runtime fallback result
     # 媒体类型取调用端点，原值为运行时回落的结果
     caps = detail["capabilities"]
     assert (caps["media_type"], caps["base"]["durations"], detail["endpoint"]) == ("video", [4, 8], "newapi-video")
@@ -390,6 +414,7 @@ async def test_custom_unmatched_video_model_detail_and_settings(
     body = resp.json()
     assert (body["model"]["is_default"], body["multiplier"]) == (True, 2.0)
     assert body["capabilities"]["effective"]["durations"] == [6, 12]
+    # When set as default, the previous default in the same default group is unset
     # 设为默认时，同一默认分组里原来的默认被取消
     models = _models(models_client, f"custom-{db_id}")
     assert models["other-video"]["is_default"] is False
@@ -423,6 +448,7 @@ async def test_custom_model_rename_rewrites_and_remove_clears_references(
     assert refs.json() == {"settings": ["default_text_backend"], "projects": [{"name": "demo", "title": "演示"}]}
 
     resp = models_client.patch(f"/api/v1/providers/{provider_id}/models/house-model", json={"model_id": "house-v2"})
+    # Rows whose display name follows the model ID still show the new model ID after renaming
     # 显示名跟着模型 ID 走的行，改名后仍显示新的模型 ID
     assert (resp.status_code, resp.json()["model"]["model_id"], resp.json()["model"]["display_name"]) == (
         200,
@@ -447,6 +473,9 @@ async def test_custom_model_rename_rewrites_and_remove_clears_references(
 
 
 # ---------------------------------------------------------------------------
+# Provider model Sheet: model info (user modification layer)
+# ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
 # 供应商模型 Sheet：模型信息（用户修改层）
 # ---------------------------------------------------------------------------
 
@@ -455,7 +484,10 @@ _FLASH_URL = "/api/v1/providers/gemini-aistudio/models/gemini-3-flash-preview"
 
 
 def _flash():
-    """官方数据里的 Gemini 3 Flash 条目。期望值从它读，出厂快照随目录数据更新时测试不必改。"""
+    """The Gemini 3 Flash entry in the official data. Expected values are read from it, so tests need no change when the
+    factory snapshot updates with catalog data.
+
+    官方数据里的 Gemini 3 Flash 条目。期望值从它读，出厂快照随目录数据更新时测试不必改。"""
     entry = catalog.get_entry(EntryKey("google", "gemini-3-flash-preview", "text"))
     assert entry is not None
     return entry
@@ -466,7 +498,10 @@ def _flash_name() -> str:
 
 
 async def _share_flash(db_factory: async_sessionmaker[AsyncSession]) -> str:
-    """让 Vertex AI（配好密钥）与一个中转站也使用 Gemini 3 Flash 的条目，返回中转站的供应商 ID。"""
+    """Make Vertex AI (with a key configured) and a relay also use the Gemini 3 Flash entry; return the relay's provider
+    ID.
+
+    让 Vertex AI（配好密钥）与一个中转站也使用 Gemini 3 Flash 的条目，返回中转站的供应商 ID。"""
     async with db_factory() as session:
         await CredentialRepository(session).create("gemini-vertex", "k", api_key="k")
         await session.commit()
@@ -488,6 +523,7 @@ async def test_modify_official_entry_then_restore_official_data(
     models_client: TestClient, db_factory: async_sessionmaker[AsyncSession]
 ) -> None:
     relay = await _share_flash(db_factory)
+    # After modification the catalog lookup reads the modification layer, so take the official values first
     official = _flash()  # 修改之后目录查询读到的是修改层，先取官方值
 
     entry = models_client.get(_FLASH_URL).json()["entry"]
@@ -497,6 +533,7 @@ async def test_modify_official_entry_then_restore_official_data(
         {"provider_id": relay, "display_name": "中转站"},
     ]
 
+    # Provider settings and model info are saved in the same request
     # 供应商设置与模型信息在同一个请求里保存
     resp = models_client.patch(
         _FLASH_URL,
@@ -521,6 +558,7 @@ async def test_modify_official_entry_then_restore_official_data(
         },
         "price": entry["price"],
     }
+    # Stop following official: providers sharing this entry change together, and runtime also reads the modified info
     # 停止跟随官方：共用这个条目的供应商一起变化，运行时读到的也是修改后的信息
     vertex = _models(models_client, "gemini-vertex")["gemini-3-flash-preview"]
     assert (vertex["display_name"], "modified" in vertex["flags"]) == ("My Flash", True)
@@ -547,6 +585,7 @@ async def test_modify_official_entry_then_restore_official_data(
 
 
 def test_entry_change_is_saved_atomically_with_provider_settings(models_client: TestClient) -> None:
+    # Officially listed models accept no multiplier: the whole request is refused and model info is not written either
     # 官方收录的模型不接受倍率：整个请求被拒，模型信息也不写入
     resp = models_client.patch(_FLASH_URL, json={"multiplier": 2, "entry": {**_FLASH, "display_name": "My Flash"}})
 
@@ -563,6 +602,7 @@ def test_entry_edit_is_validated_and_must_target_the_mapped_entry(models_client:
     resp = models_client.patch(_FLASH_URL, json={"entry": {**other, "display_name": "x"}})
     assert resp.status_code == 409
 
+    # A modification identical to the current entry writes no copy; the entry keeps following official
     # 与当前条目相同的修改不写副本，条目照旧跟随官方
     resp = models_client.patch(_FLASH_URL, json={"entry": {**_FLASH, "display_name": _flash_name()}})
     assert resp.status_code == 200
@@ -594,16 +634,19 @@ def test_entry_price_table_is_shown_edited_cleared_and_compared_with_official(mo
     assert body["entry"]["price"] == new_price
     assert body["entry"]["official"]["price"] == official_price
     assert body["model"]["price"]["currency"] == "CNY"
+    # The price list is replaced whole, and runtime pricing also reads the new price list
     # 价目表是整份替换，运行时计价读到的也是新价目表
     runtime_entry = catalog.get_entry(EntryKey("google", "gemini-3-flash-preview", "text"))
     assert runtime_entry is not None
     assert runtime_entry.price is not None
     assert runtime_entry.price.currency == "CNY"
 
+    # When the price section is not passed the price list is unchanged
     # 价格栏目没有传时不改价目表
     resp = models_client.patch(_FLASH_URL, json={"entry": {**_FLASH, "display_name": "My Flash"}})
     assert resp.json()["entry"]["price"] == new_price
 
+    # null clears the price list: call costs are recorded as unpriced
     # null 清除价目表：调用费用记为未定价
     resp = models_client.patch(_FLASH_URL, json={"entry": {**_FLASH, "price": None}})
     assert resp.status_code == 200
@@ -635,10 +678,14 @@ def test_restore_rejects_entries_without_official_data(models_client: TestClient
     )
 
     assert resp.status_code == 404
+    # Restore does nothing when there is no copy
     # 没有副本时恢复什么都不做
     assert models_client.post("/api/v1/catalog/entries/restore-official", json=_FLASH).status_code == 204
 
 
+# ---------------------------------------------------------------------------
+# Fetch models and add by ID
+# ---------------------------------------------------------------------------
 # ---------------------------------------------------------------------------
 # 获取模型与按 ID 添加
 # ---------------------------------------------------------------------------
@@ -666,6 +713,8 @@ async def _create_relay(db_factory: async_sessionmaker[AsyncSession]) -> str:
 async def test_custom_discovery_matches_entries_and_infers_default_endpoints(
     models_client: TestClient, db_factory: async_sessionmaker[AsyncSession], monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    # An image entry carries a model alias without image semantics: by name it would be inferred as text; once matched
+    # to the entry the endpoint should be picked by the entry's media type
     # 图片条目带一个不含图片语义的模型别名：按名字会推成文本，对应上条目后应按条目的媒体类型选端点
     data = catalog.factory_snapshot()
     entries = tuple(
@@ -692,6 +741,7 @@ async def test_custom_discovery_matches_entries_and_infers_default_endpoints(
         "acme-video-pro": (False, "video", "openai-video", None),
         "house-chat": (False, "text", "openai-chat", None),
     }
+    # The endpoint switched to when a "matching model" of another media type is picked
     # 选了其他媒体类型的「对应模型」时换用的端点
     assert rows["house-chat"]["endpoint_by_media_type"]["video"] == "openai-video"
 
@@ -725,6 +775,7 @@ async def test_builtin_discovery_matches_listing_exactly(
     assert route.call_count == 1
     assert route.calls.last.request.headers["authorization"] == "Bearer sk-test"
     rows = {m["model_id"]: m for m in resp.json()["models"]}
+    # Exact match only on API model names in the list: different case means unrecognized
     # 只按清单中的 API 模型名精确匹配：大小写不同即未识别
     assert {mid: (m["recognized"], m["model_key"], m["media_type"]) for mid, m in rows.items()} == {
         "qwen3-max": (True, "qwen3-max", "text"),
@@ -736,6 +787,8 @@ async def test_builtin_discovery_matches_listing_exactly(
 async def test_builtin_discovery_unlisted_model_returns_the_entry_its_name_maps_to(
     models_client: TestClient, db_factory: async_sessionmaker[AsyncSession], monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    # Models outside the list whose name matches an entry carry the matching entry and whether it is priced; entries
+    # without a price are marked unpriced; unmatched ones have no entry
     # 清单外、名字能对应条目的模型带上对应条目与是否已定价；没有价格的条目标为未定价，对应不上的没有条目
     data = catalog.factory_snapshot()
     entries = tuple(replace(e, price=None) if e.name == "qwen3-max" else e for e in data.entries)
@@ -786,19 +839,26 @@ async def test_custom_add_by_id_infers_endpoint_and_takes_default(
 
     assert first.status_code == second.status_code == bound.status_code == 201
     assert (first.json()["model"]["endpoint"], first.json()["model"]["is_default"]) == ("openai-chat", True)
+    # The same media type already has a default model
     # 同一媒体类型已有默认模型
     assert (second.json()["model"]["endpoint"], second.json()["model"]["is_default"]) == ("openai-chat", False)
+    # With an entry bound, the endpoint is picked within the entry's media type, and the display name comes from the
+    # entry
     # 有条目绑定时在条目的媒体类型内选端点，显示名取条目
     assert (bound.json()["model"]["endpoint"], bound.json()["model"]["media_type"]) == ("openai-images", "image")
     assert bound.json()["model"]["flags"] == []
     duplicate = models_client.post(f"/api/v1/providers/{provider_id}/models", json={"model_id": "house-chat"})
     assert duplicate.status_code == 422
+    # When a dual-media model without a media type limit matches no entry, take the entry by the media type the caller
+    # gave, not inferred as video by name
     # 两栖模型不限媒体类型对应不上条目时，按调用方给的媒体类型取条目，不按名字推断成视频
     omni = models_client.post(
         f"/api/v1/providers/{provider_id}/models", json={"model_id": "kling-v3-omni", "media_type": "image"}
     )
     assert omni.status_code == 201
     assert omni.json()["model"]["media_type"] == "image"
+    # The explicitly given calling endpoint does not match the linked entry's media type: refuse, leaving no mismatched
+    # link
     # 显式给的调用端点与关联条目的媒体类型不一致：拒绝，不留下对不上的关联
     mismatched = models_client.post(
         f"/api/v1/providers/{provider_id}/models",
@@ -814,6 +874,8 @@ async def test_custom_add_by_id_infers_endpoint_and_takes_default(
     )
 
 
+# Provider model Sheet: link another model, fill in model info manually
+# ---------------------------------------------------------------------------
 # 供应商模型 Sheet：关联其他模型、手动填写模型信息
 # ---------------------------------------------------------------------------
 
@@ -848,8 +910,10 @@ async def test_manual_entry_is_created_with_the_sheet_save_and_bound(
     entry = body["entry"]
     assert (entry["source"], entry["official"], entry["display_name"]) == ("user_created", None, "House Flux")
     assert entry["facts"]["resolutions"] == ["1K", "2K"]
+    # No price filled in: call costs are recorded as unpriced
     # 不填价格：调用费用记为未定价
     assert body["model"]["flags"] == ["unpriced"]
+    # Takes effect on write, and catalog search can find it too
     # 写入即生效，目录搜索也能找到它
     assert [
         h["name"] for h in models_client.get("/api/v1/catalog/entries", params={"q": "house-flux"}).json()["entries"]
@@ -871,6 +935,7 @@ async def test_manual_entry_can_carry_a_price_table(
     assert resp.status_code == 200
     body = resp.json()
     assert body["entry"]["price"] == price
+    # With a price filled in, call costs are no longer unpriced
     # 填了价格，调用费用不再是未定价
     assert body["model"]["flags"] == []
     assert (
@@ -886,8 +951,10 @@ async def test_manual_entry_is_not_left_behind_when_the_save_is_rejected(
 ) -> None:
     _, url = await _house_model(db_factory)
 
+    # Another setting in the same request is refused: the entry is not written either
     # 同一请求里别的设置被拒：条目也不写入
     assert models_client.patch(url, json={"multiplier": -1, "new_entry": _NEW_IMAGE}).status_code == 422
+    # The media type does not match the model's calling endpoint
     # 媒体类型与模型的调用端点不一致
     wrong = {**_NEW_IMAGE, "media_type": "video", "facts": {"durations": [5]}}
     resp = models_client.patch(url, json={"new_entry": wrong})
@@ -930,6 +997,7 @@ async def test_link_to_another_entry_then_unlink(
     assert (body["model"]["display_name"], body["model"]["flags"]) == (target.display_name, [])
     assert body["model"]["price"] is not None
 
+    # Unbind: back to matching by name; if the name does not match there is no entry
     # 解除绑定：改回按名字对应，名字对应不上就没有条目
     body = models_client.patch(url, json={"entry_binding": None}).json()
     assert (body["entry_binding"], body["entry"]) == (None, None)
@@ -943,14 +1011,18 @@ async def test_link_is_validated_against_the_catalog_and_the_media_type(
     assert text_entry is not None
 
     assert models_client.patch(url, json={"entry_binding": "acme/nope"}).status_code == 422
+    # The entry exists, but its media type does not match the model's calling endpoint
     # 条目存在，但媒体类型与模型的调用端点不一致
     assert models_client.patch(url, json={"entry_binding": text_entry.key.ref}).status_code == 422
+    # Wrong shape: the error is about this binding, not the calling endpoint
     # 形状不对：说的是这个绑定，而不是调用端点
     malformed = models_client.patch(url, json={"entry_binding": "no-slash"})
     assert malformed.status_code == 422
     assert "no-slash" in malformed.json()["detail"]
     assert models_client.get(url).json()["entry_binding"] is None
 
+    # A linked model switched to a calling endpoint of another media type: the original binding no longer holds, and
+    # relinking or unbinding is required in the same save
     # 已关联的模型换到另一种媒体类型的调用端点：原绑定不再成立，要求同一次保存里重新关联或解除
     image_entry = catalog.find_entry("gemini-3.1-flash-image-preview", media_type="image")
     assert image_entry is not None
@@ -974,6 +1046,7 @@ def test_builtin_user_added_model_can_link_or_fill_in_but_official_cannot(models
         "google/gemini-3-flash-preview",
         "gemini-3-flash-preview",
     )
+    # The built-in provider's runtime index reads the same binding
     # 内置供应商的运行时索引读到同一个绑定
     runtime = catalog.get_model("ark", "my-private-ep", media_type="text")
     assert runtime is not None
@@ -983,6 +1056,7 @@ def test_builtin_user_added_model_can_link_or_fill_in_but_official_cannot(models
     body = models_client.patch(url, json={"new_entry": manual}).json()
     assert (body["entry_binding"], body["entry"]["source"]) == ("acme/private-chat", "user_created")
 
+    # Officially listed models are maintained officially; their binding cannot be changed
     # 官方收录的模型由官方维护，不能改绑定
     official = "/api/v1/providers/gemini-aistudio/models/gemini-3-flash-preview"
     assert models_client.patch(official, json={"entry_binding": "acme/private-chat"}).status_code == 422
@@ -995,11 +1069,13 @@ async def test_user_created_entry_switches_to_official_data_once_it_appears(
     _, url = await _house_model(db_factory)
     models_client.patch(url, json={"new_entry": _NEW_IMAGE})
     key = {"maker": "acme", "name": "house-flux", "media_type": "image"}
+    # The official data does not have it yet: cannot switch to official data
     # 官方数据还没有它：不能改用官方数据
     resp = models_client.post("/api/v1/catalog/entries/restore-official", json=key)
     assert resp.status_code == 422
     assert models_client.get(url).json()["entry"]["source"] == "user_created"
 
+    # Later the official data lists an entry of the same identity
     # 日后官方数据收录了同一身份的条目
     snapshot = catalog.factory_snapshot()
     official = replace(
@@ -1012,6 +1088,7 @@ async def test_user_created_entry_switches_to_official_data_once_it_appears(
     install_catalog(monkeypatch, replace(snapshot, entries=(*snapshot.entries, official)))
 
     entry = models_client.get(url).json()["entry"]
+    # Still user-created and not following official, while the official values are also given
     # 仍是用户新建、不跟随官方，同时给出官方的值
     assert (entry["source"], entry["display_name"], entry["official"]["display_name"]) == (
         "user_created",
@@ -1105,7 +1182,12 @@ async def test_discovery_drops_model_ids_with_dot_segment(
 
 
 def test_model_reference_setting_keys_have_i18n_labels() -> None:
-    """删除确认列出的全局引用按 `global_bucket_label_<key>` 动态取词，每个键都须有三语文案：缺文案会把
+    """Global references listed in the delete confirmation take their wording dynamically via
+    `global_bucket_label_<key>`, so every key must have text in all three languages: missing text would render the raw
+    key to the user, and the zh/en/vi consistency check only compares them with each other and cannot see keys newly
+    added by the backend.
+
+    删除确认列出的全局引用按 `global_bucket_label_<key>` 动态取词，每个键都须有三语文案：缺文案会把
     原始 key 渲染给用户，而 zh/en/vi 三语一致性检查只比对彼此、看不见后端新增的键。"""
     i18n_dir = Path(__file__).resolve().parents[4] / "frontend" / "src" / "i18n"
     for locale in ("zh", "en", "vi"):

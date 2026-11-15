@@ -1,4 +1,7 @@
-"""分镜图参考图按图像后端上限裁剪后再编号：实发张数与声明行一致，依据仍按完整装配集登记。"""
+"""Storyboard image reference images are clipped to the image backend's limit before numbering: the number
+actually sent matches the declaration line, and the basis is still registered from the full assembled set.
+
+分镜图参考图按图像后端上限裁剪后再编号：实发张数与声明行一致，依据仍按完整装配集登记。"""
 
 import base64
 import io
@@ -39,6 +42,8 @@ from tests.integration.server.services.tasks.generation_tasks_support import (
 
 ITEM_ID = "E1S02"
 STORYBOARD_PAYLOAD = {"script_file": "episode_1.json", "prompt": "queued prompt"}
+#: backend_model of fake_resolve_ctx's default image lane; the clipping warning reports it, not the provider
+#: name in the registry.
 #: fake_resolve_ctx 默认 image lane 的 backend_model；裁剪 warning 报的是它，不是 registry 里的 provider 名。
 FAKE_BACKEND_MODEL = "gpt-image-2"
 CLAMPED_PROMPT = (
@@ -52,7 +57,10 @@ CLAMPED_PROMPT = (
 
 
 def _expected_basis(project_path: Path, pm: _FakePM):
-    """完整装配集对应的 basis：6 张角色 sheet + 场景 sheet + 道具 sheet，与目标态规划器按脚本条目重建的一致。"""
+    """Basis for the full assembled set: 6 character sheets + scene sheet + prop sheet, matching what the
+    target-state planner rebuilds from the script entries.
+
+    完整装配集对应的 basis：6 张角色 sheet + 场景 sheet + 道具 sheet，与目标态规划器按脚本条目重建的一致。"""
     references = [
         VisualReference(
             path=project_path / "characters" / f"{name}.png",
@@ -97,14 +105,19 @@ def _patch_execution(monkeypatch, pm: _FakePM, generator: FakeGenerator, *, limi
 
 
 async def _run_storyboard(generator: FakeGenerator) -> tuple[dict, dict]:
-    """返回 ``(任务结果, 供应商收到的调用)``。"""
+    """Return ``(task result, calls received by the provider)``.
+
+    返回 ``(任务结果, 供应商收到的调用)``。"""
     result = await generation_tasks.execute_storyboard_task("demo", ITEM_ID, STORYBOARD_PAYLOAD)
     return result, generator.image_calls[0]
 
 
 class TestStoryboardReferenceClamping:
     async def test_over_limit_references_are_dropped_before_numbering(self, tmp_path, monkeypatch):
-        """Vidu 口径（上限 7）：只发 7 张，声明行止于图7，第 8 张的引用退回裸名。"""
+        """Vidu rule (limit 7): send only 7, the declaration line stops at image 7, and the 8th reference falls back to
+        the bare name.
+
+        Vidu 口径（上限 7）：只发 7 张，声明行止于图7，第 8 张的引用退回裸名。"""
         project_path = prepare_files(tmp_path)
         pm = pm_with_eight_references(project_path)
         generator = FakeGenerator(project_path)
@@ -113,18 +126,25 @@ class TestStoryboardReferenceClamping:
         result, call = await _run_storyboard(generator)
 
         assert len(call["reference_images"]) == 7
+        # The basis registered in the manifest still records all 8: the limit is a provider attribute, not part of
+        # the basis; the trimmed prop is still a basis of this artifact
         # 登记进清单的 basis 仍记完整的 8 张：上限是供应商属性，不进 basis，被去尾的道具仍是该产物的依据
         entry = ProjectArtifactManifestAdapter(project_path).get_entry(ArtifactKey.episode_storyboard(1, ITEM_ID))
         assert entry is not None
         assert entry.basis_digest == _expected_basis(project_path, pm).digest
         assert call["prompt"] == CLAMPED_PROMPT
+        # Reference images whose input was dropped must be noticeable to the user and the Agent: the task result
+        # carries a warning shaped like the reference-to-video route's
         # 丢弃了输入的参考图必须让用户与 Agent 感知：任务结果带与参考生视频路线同形的 warning
         assert result["warnings"] == [
             {"key": "ref_too_many_images", "params": {"count": 8, "model": FAKE_BACKEND_MODEL, "max_count": 7}}
         ]
 
     async def test_clamped_storyboard_is_current_against_the_target_state(self, tmp_path, monkeypatch):
-        """裁剪只影响实发与编号：登记后的分镜图按规划器重建的目标态比对仍是 current，不因裁剪被判 stale。"""
+        """Clipping only affects what is sent and the numbering: after registration the storyboard image compared
+        against the target state rebuilt by the planner is still current, not judged stale because of clipping.
+
+        裁剪只影响实发与编号：登记后的分镜图按规划器重建的目标态比对仍是 current，不因裁剪被判 stale。"""
         project_path = prepare_files(tmp_path)
         pm = pm_with_eight_references(project_path)
         generator = FakeGenerator(project_path)
@@ -132,6 +152,8 @@ class TestStoryboardReferenceClamping:
 
         await _run_storyboard(generator)
 
+        # The double PM does not write the storyboard pointer back to the script on disk: persist in the post-commit
+        # shape so the planner has entries to rebuild
         # 替身 PM 不把分镜图指针写回磁盘剧本：按正式提交后的形态持久化，规划器才有条目可重建
         pm.script["segments"][1]["generated_assets"] = {"storyboard_image": f"storyboards/scene_{ITEM_ID}.png"}
         persist_active_fake_project(pm, register_script=False)
@@ -142,7 +164,9 @@ class TestStoryboardReferenceClamping:
         assert comparison.status is ArtifactStatus.CURRENT
 
     async def test_limit_above_the_assembled_count_changes_nothing(self, tmp_path, monkeypatch):
-        """OpenAI 口径（上限 16）：8 张全发，编号覆盖到图8。"""
+        """OpenAI rule (limit 16): all 8 sent, numbering covers up to image 8.
+
+        OpenAI 口径（上限 16）：8 张全发，编号覆盖到图8。"""
         project_path = prepare_files(tmp_path)
         pm = pm_with_eight_references(project_path)
         generator = FakeGenerator(project_path)
@@ -153,11 +177,15 @@ class TestStoryboardReferenceClamping:
         assert len(call["reference_images"]) == 8
         assert "图7为场景参考图；图8为道具参考图。" in call["prompt"]
         assert "图1握着图8立在图7门口" in call["prompt"]
+        # No image dropped means no warning: the result lacks that key, so the task list does not show users an empty
+        # hint
         # 没丢图就没有 warning：结果不带该键，任务列表不会给用户空提示
         assert "warnings" not in result
 
     async def test_backend_without_a_declared_limit_never_clamps(self, tmp_path, monkeypatch):
-        """未声明上限的后端（0）：不裁剪，与上限充裕时同一文本。"""
+        """Backend without a declared limit (0): no clipping, same text as when the limit is ample.
+
+        未声明上限的后端（0）：不裁剪，与上限充裕时同一文本。"""
         project_path = prepare_files(tmp_path)
         pm = pm_with_eight_references(project_path)
         generator = FakeGenerator(project_path)
@@ -169,7 +197,10 @@ class TestStoryboardReferenceClamping:
         assert "图8为道具参考图。" in call["prompt"]
 
     async def test_a_dropped_reference_changing_before_submit_still_aborts(self, tmp_path, monkeypatch):
-        """被去尾的道具图仍是产物依据的输入：它的登记在提交前被删，复核照旧拦下，供应商未收到提交。"""
+        """The trimmed prop image is still an input of the artifact basis: its registration is deleted before submit,
+        the recheck still stops it, and the provider receives no submission.
+
+        被去尾的道具图仍是产物依据的输入：它的登记在提交前被删，复核照旧拦下，供应商未收到提交。"""
         project_path = prepare_files(tmp_path)
         pm = pm_with_eight_references(project_path)
         generator = FakeGenerator(project_path)
@@ -187,7 +218,10 @@ class TestStoryboardReferenceClamping:
         assert generator.image_calls == []
 
     async def test_a_kept_reference_changing_before_submit_still_aborts(self, tmp_path, monkeypatch):
-        """仍随请求发出的场景图（图7）在提交前被删登记：复核照旧拦下，供应商未收到提交。"""
+        """The scene image still sent with the request (image 7) has its registration deleted before submit: the
+        recheck still stops it, and the provider receives no submission.
+
+        仍随请求发出的场景图（图7）在提交前被删登记：复核照旧拦下，供应商未收到提交。"""
         project_path = prepare_files(tmp_path)
         pm = pm_with_eight_references(project_path)
         generator = FakeGenerator(project_path)
@@ -206,7 +240,10 @@ class TestStoryboardReferenceClamping:
 
 
 class TestLimitComesFromTheResolvedBackend:
-    """不替换 image lane：真实 resolve_generation_context 构造真实 Vidu backend，上限由它声明。"""
+    """The image lane is not replaced: the real resolve_generation_context constructs a real Vidu backend, which
+    declares the limit.
+
+    不替换 image lane：真实 resolve_generation_context 构造真实 Vidu backend，上限由它声明。"""
 
     @pytest.fixture
     async def vidu_lane(self, db_factory, monkeypatch):
@@ -224,7 +261,10 @@ class TestLimitComesFromTheResolvedBackend:
     async def test_vidu_receives_seven_images_and_a_prompt_numbered_to_match(
         self, tmp_path, monkeypatch, vidu_lane, caplog
     ):
-        """建任务请求以 400 短路（后端折成 ProviderRejectedError），只看真实发出的请求体。"""
+        """The create-task request is short-circuited with 400 (the backend folds it into ProviderRejectedError); only
+        the actually sent request body is examined.
+
+        建任务请求以 400 短路（后端折成 ProviderRejectedError），只看真实发出的请求体。"""
         project_path = prepare_files(tmp_path)
         pm = pm_with_eight_references(project_path)
         pm.project["image_provider_i2i"] = "vidu/viduq2"
@@ -241,13 +281,18 @@ class TestLimitComesFromTheResolvedBackend:
         body = json.loads(route.calls.last.request.content)
         assert len(body["images"]) == 7
         assert body["prompt"] == CLAMPED_PROMPT
+        # Clipping happens in the orchestration layer; Vidu's own fallback truncation no longer triggers on the normal
+        # path
         # 裁剪发生在编排层，Vidu 自己的兜底截断在正常路径下不再触发
         assert "超过 model=viduq2 上限 7" in caplog.text
         assert "Vidu 参考图数量" not in caplog.text
 
 
 class TestGrokLaneClampsToFive:
-    """真实 Grok backend 声明上限 5：分镜图只发前 5 张，任务结果带裁剪提示。"""
+    """The real Grok backend declares a limit of 5: the storyboard image sends only the first 5, and the task
+    result carries a clipping hint.
+
+    真实 Grok backend 声明上限 5：分镜图只发前 5 张，任务结果带裁剪提示。"""
 
     @pytest.fixture
     async def grok_lane(self, db_factory, monkeypatch):
@@ -290,7 +335,10 @@ class TestGrokLaneClampsToFive:
 
 
 class TestOpenRouterLaneClampsToTheCatalogLimit:
-    """真实 OpenRouter backend：上限按模型目录声明的 input_references 给出，编排层据此裁剪并编号。"""
+    """Real OpenRouter backend: the limit comes from input_references declared in the model catalog, and the
+    orchestration layer clips and numbers by it.
+
+    真实 OpenRouter backend：上限按模型目录声明的 input_references 给出，编排层据此裁剪并编号。"""
 
     MODEL = "vendor/three-refs"
     BASE_URL = "https://openrouter.ai/api/v1"
@@ -342,5 +390,7 @@ class TestOpenRouterLaneClampsToTheCatalogLimit:
         assert result["warnings"] == [
             {"key": "ref_too_many_images", "params": {"count": 8, "model": self.MODEL, "max_count": 3}}
         ]
+        # Channel resolution and generation use the same instance and the catalog is queried only once: both steps
+        # read the same limit, so the backend will not refuse the submission as over the limit
         # 通道解析与生成用同一个实例，目录只查一次：两步读到的上限一致，backend 不会因超限拒绝提交
         assert models.call_count == 1

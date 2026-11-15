@@ -1,4 +1,7 @@
-"""剪辑时间线管理路由：复制、改名、修订历史、回滚、删除与从项目回收站恢复，在真实项目目录与任务队列上验证。"""
+"""Edit timeline management routes: copy, rename, revision history, rollback, delete and restore from the project
+trash, verified on a real project directory and task queue.
+
+剪辑时间线管理路由：复制、改名、修订历史、回滚、删除与从项目回收站恢复，在真实项目目录与任务队列上验证。"""
 
 from __future__ import annotations
 
@@ -278,6 +281,7 @@ async def test_a_deleted_timeline_comes_back_from_the_trash_with_its_final_cut(
     assert (await timeline_client.get(_url(timeline_id))).status_code == 200
     assert (project_dir / rendered.artifact_path).is_file()
     assert adapter.get_entry(key) == claim
+    # Project-level state derived from migrating the temporary project is not brought back
     # 临时项目迁移得出的项目级状态不带回
     assert (project_dir / "project.json").read_bytes() == project_json
     assert (await timeline_client.get("/api/v1/projects/demo/trash")).json()["records"] == []
@@ -334,7 +338,10 @@ async def test_a_timeline_whose_episode_was_deleted_restores_only_its_files(
 async def test_an_episode_deleted_before_landing_fails_the_timeline_landing(
     tmp_path: Path, timeline_client: AsyncClient, timeline_project: ProjectManager
 ) -> None:
-    """取出之后、落地之前集被删除：落地在锁内再核对一次，抛错让本次恢复撤回、记录保留。"""
+    """The episode is deleted after take-out but before landing: landing re-checks under the lock and raises, so this
+    restore is withdrawn and the record kept.
+
+    取出之后、落地之前集被删除：落地在锁内再核对一次，抛错让本次恢复撤回、记录保留。"""
     timeline_id = await _create(timeline_client)
     project_dir = timeline_project.get_project_path("demo")
     staged = tmp_path / "staged" / "demo"
@@ -358,6 +365,7 @@ async def test_a_failed_timeline_restore_leaves_the_project_and_the_record_as_th
     project_dir = timeline_project.get_project_path("demo")
     assert (await timeline_client.delete(_url(timeline_id))).status_code == 204
     record = await _only_trash_record(timeline_client)
+    # The document can land back, but a directory on the render file's path was replaced with a symlink
     # 文档能落回，渲染文件的途经目录却被换成了符号链接
     (tmp_path / "outside").mkdir()
     (project_dir / "renders" / "episode_1").rmdir()
@@ -378,7 +386,10 @@ async def test_a_failed_timeline_restore_leaves_the_project_and_the_record_as_th
 async def test_a_retry_after_a_failed_landing_keeps_the_timeline_id_and_its_final_cut(
     tmp_path: Path, timeline_client: AsyncClient, timeline_project: ProjectManager, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """落地中途失败时，本次新建的目录也一并撤掉；重试不会把空渲染目录当成身份冲突而换掉 ID、丢掉成片登记。"""
+    """When landing fails midway, directories newly created this time are withdrawn too; a retry does not mistake the
+    empty render directory for an identity conflict, switch the ID and lose the final cut registration.
+
+    落地中途失败时，本次新建的目录也一并撤掉；重试不会把空渲染目录当成身份冲突而换掉 ID、丢掉成片登记。"""
     for unit_id in ("E1U1", "E1U2"):
         _install(timeline_project, tmp_path, unit_id)
     timeline_id = await _create(timeline_client)

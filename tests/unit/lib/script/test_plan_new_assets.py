@@ -1,4 +1,7 @@
-"""脚本规划带出的新增资产：登记名与项目里已有资产或本次另一项新增只差大小写时视为重名。"""
+"""New assets brought out by the script plan: a registered name that differs from an existing project asset
+or another new item in this plan only by case counts as a duplicate.
+
+脚本规划带出的新增资产：登记名与项目里已有资产或本次另一项新增只差大小写时视为重名。"""
 
 from __future__ import annotations
 

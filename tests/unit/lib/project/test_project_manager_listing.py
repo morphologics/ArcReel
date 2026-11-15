@@ -1,4 +1,7 @@
-"""ProjectManager 列项目：只有项目目录下名字合法且带 project.json 的目录是项目。"""
+"""ProjectManager project listing: only directories under the projects directory with a valid name and a
+project.json are projects.
+
+ProjectManager 列项目：只有项目目录下名字合法且带 project.json 的目录是项目。"""
 
 from __future__ import annotations
 

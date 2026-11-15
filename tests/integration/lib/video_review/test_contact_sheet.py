@@ -1,4 +1,7 @@
-"""联系表：对随包 ffmpeg 现场合成的分色素材断言帧数、尺寸上限与时间码。"""
+"""Contact sheet: asserts frame count, size limit and timecodes on color-coded material synthesized on the spot with
+the bundled ffmpeg.
+
+联系表：对随包 ffmpeg 现场合成的分色素材断言帧数、尺寸上限与时间码。"""
 
 from __future__ import annotations
 
@@ -19,7 +22,9 @@ _SEGMENT_COLORS = (("red", (255, 0, 0)), ("lime", (0, 255, 0)), ("blue", (0, 0, 
 
 
 def _color_segments(path: Path, *, size: str = "320x180", fps: int = 25) -> Path:
-    """每秒一种纯色：0–1 s 红、1–2 s 绿、2–3 s 蓝。"""
+    """One solid color per second: 0-1 s red, 1-2 s green, 2-3 s blue.
+
+    每秒一种纯色：0–1 s 红、1–2 s 绿、2–3 s 蓝。"""
     sources = ";".join(
         f"color={name}:size={size}:rate={fps}:duration=1[s{index}]"
         for index, (name, _rgb) in enumerate(_SEGMENT_COLORS)
@@ -67,6 +72,7 @@ async def test_each_tile_shows_the_frame_at_its_labelled_time(tmp_path: Path):
     assert times[0] < 1
     assert times[-1] >= 2
     for frame in sheet.frames:
+        # Timecodes fall on the 25 fps frame grid: the label is the start of that frame itself.
         # 时间码落在 25 fps 的帧格上：标注的是该帧自身的起点。
         assert frame.time_seconds * 25 == pytest.approx(round(frame.time_seconds * 25), abs=1e-6)
         left, top, right, bottom = frame.box

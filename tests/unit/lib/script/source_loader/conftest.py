@@ -1,4 +1,9 @@
-"""共享 fixtures：尽量在运行期构造测试样本，避免二进制入库。
+"""Shared fixtures: build test samples at runtime where possible, to avoid committing binaries.
+
+Exception: for PDF, since pdf_oxide has no stable Python creation API yet, pre-generated real PDFs under
+data/ are used instead (sources in data/SOURCES.md).
+
+共享 fixtures：尽量在运行期构造测试样本，避免二进制入库。
 
 例外：PDF 因 pdf_oxide 暂无稳定的 Python 创建 API，改用 data/ 下预生成的
 真实 PDF（来源详见 data/SOURCES.md）。
@@ -15,7 +20,9 @@ _PDF_DATA_DIR = Path(__file__).parent / "data"
 
 @pytest.fixture
 def docx_factory(tmp_path: Path):
-    """构造一个含两段文本的 .docx；无 python-docx 时跳过。"""
+    """Build a .docx with two paragraphs of text; skip when python-docx is missing.
+
+    构造一个含两段文本的 .docx；无 python-docx 时跳过。"""
     docx_mod = pytest.importorskip("docx", reason="需要 python-docx 构造 fixture")
 
     def _make(paragraphs: list[str], filename: str = "sample.docx") -> Path:
@@ -31,7 +38,9 @@ def docx_factory(tmp_path: Path):
 
 @pytest.fixture
 def epub_factory(tmp_path: Path):
-    """构造一个含 N 章 + toc 的 .epub。"""
+    """Build an .epub with N chapters + toc.
+
+    构造一个含 N 章 + toc 的 .epub。"""
     pytest.importorskip("ebooklib", reason="需要 ebooklib")
     from ebooklib import epub
 
@@ -62,7 +71,7 @@ def epub_factory(tmp_path: Path):
             book.add_item(epub.EpubNav())
             book.spine = ["nav", *chapters]
         else:
-            # 不设置 book.toc / 不加 nav；但仍需 NCX 才能被 ebooklib 读回
+            # Do not set book.toc / no nav; NCX is still needed for ebooklib to read it back / 不设置 book.toc / 不加 nav；但仍需 NCX 才能被 ebooklib 读回
             book.add_item(epub.EpubNcx())
             book.spine = list(chapters)
 
@@ -74,7 +83,9 @@ def epub_factory(tmp_path: Path):
 
 
 class _PdfFactory:
-    """调用得到文本 PDF，``scanned()`` 得到扫描件 PDF。"""
+    """Calling it gives a text PDF, ``scanned()`` gives a scanned PDF.
+
+    调用得到文本 PDF，``scanned()`` 得到扫描件 PDF。"""
 
     def __call__(self) -> Path:
         return _PDF_DATA_DIR / "sample_text.pdf"
@@ -85,5 +96,7 @@ class _PdfFactory:
 
 @pytest.fixture
 def pdf_factory() -> _PdfFactory:
-    """返回预生成的 PDF fixture 路径（来自真实 PDF，见 data/SOURCES.md）。"""
+    """Return the path of a pre-generated PDF fixture (from real PDFs, see data/SOURCES.md).
+
+    返回预生成的 PDF fixture 路径（来自真实 PDF，见 data/SOURCES.md）。"""
     return _PdfFactory()

@@ -12,7 +12,9 @@ from tests.integration.server.services.tasks.generation_tasks_support import (
 
 class TestGenerationTasks:
     def test_emit_success_batch_includes_fingerprints(self, monkeypatch, tmp_path):
-        """生成成功事件应携带 asset_fingerprints"""
+        """The generation success event should carry asset_fingerprints
+
+        生成成功事件应携带 asset_fingerprints"""
         captured = []
         monkeypatch.setattr(
             generation_tasks,
@@ -43,7 +45,10 @@ class TestGenerationTasks:
         assert isinstance(change["asset_fingerprints"]["storyboards/scene_E1S01.png"], int)
 
     def test_emit_success_batch_includes_derivative_sheet_fingerprint(self, monkeypatch, tmp_path):
-        """衍生资产图的完成事件带上那张图的指纹：前端据此 cache-bust，浮层不停在旧图上。"""
+        """The completion event of a derivative sheet carries that image's fingerprint: the frontend cache-busts with it,
+        so the overlay does not stay on the old image.
+
+        衍生资产图的完成事件带上那张图的指纹：前端据此 cache-bust，浮层不停在旧图上。"""
         captured = []
         monkeypatch.setattr(
             generation_tasks,
@@ -89,7 +94,10 @@ class TestGenerationTasks:
     def test_emit_success_batch_carries_label_key_and_params(
         self, monkeypatch, tmp_path, task_type, expected_label_key, expected_label
     ):
-        """完成事件携带稳定 label_key 与参数，界面据此按用户语言成文；label 只是默认语言兜底。"""
+        """The completion event carries a stable label_key and params so the UI can phrase it in the user's language;
+        label is only the default-language fallback.
+
+        完成事件携带稳定 label_key 与参数，界面据此按用户语言成文；label 只是默认语言兜底。"""
         captured = []
         monkeypatch.setattr(
             generation_tasks,
@@ -140,7 +148,11 @@ class TestGenerationTasks:
     def test_emit_success_batch_storyboard_entity_type_follows_skeleton(
         self, monkeypatch, tmp_path, script, expected_entity_type, expected_label
     ):
-        """storyboard/video 任务完成通知与分镜级事件同口径：实体类型按项目剧本骨架解析，
+        """storyboard/video task completion notices follow the same rule as shot-level events: the entity type is
+        resolved from the project's script skeleton, and the Chinese noun for all three shot skeletons is unified as
+        "shot".
+
+        storyboard/video 任务完成通知与分镜级事件同口径：实体类型按项目剧本骨架解析，
         三种分镜骨架的中文名词统一为「分镜」。"""
         captured = []
         monkeypatch.setattr(
@@ -170,7 +182,12 @@ class TestGenerationTasks:
             assert change["label"] == expected_label
 
     def test_emit_success_batch_reference_video_entity_type_aligns_with_frontend(self, monkeypatch, tmp_path):
-        """参考生视频任务完成通知的 entity_type 需为前端联合类型认识的 "reference_unit"
+        """The entity_type of a reference-to-video task completion notice must be "reference_unit", known to the
+        frontend union type (not "reference_video_unit", known only on this side), so the group title lands on
+        "video unit" rather than the "content" fallback; entry text consistently uses "video unit", not changing
+        with the skeleton noun.
+
+        参考生视频任务完成通知的 entity_type 需为前端联合类型认识的 "reference_unit"
         （而非仅本侧认识的 "reference_video_unit"），分组标题才能落「视频单元」而非「内容」
         兜底；条目文案统一使用「视频单元」，不随骨架名词改动。"""
         captured = []
@@ -201,7 +218,13 @@ class TestGenerationTasks:
         assert change["label"] == "视频单元「U01」"
 
     def test_emit_success_batch_reference_video_ad_entity_type_not_shot(self, monkeypatch, tmp_path):
-        """ad 剧本骨架恒为 shots[]，reference_video 路径派生的 video_unit 索引与 shots
+        """The ad script skeleton is always shots[]; the video_unit index derived by the reference_video path lives in
+        the same script JSON as shots - resolve_script_kind's data-shape check would fall back to
+        content_mode==ad->shots because the shots key is still there, which does not match the video_unit resource
+        the task actually corresponds to, so it must be resolved fixedly and not drift to "shot" with the skeleton
+        check.
+
+        ad 剧本骨架恒为 shots[]，reference_video 路径派生的 video_unit 索引与 shots
         同存于一份剧本 JSON——resolve_script_kind 的数据形状判别会因 shots 键仍在而落回
         content_mode==ad→shots，与该任务实际对应 video_unit 资源不符，故需固定解析，
         不随骨架判别漂到 "shot"。"""
@@ -237,7 +260,10 @@ class TestGenerationTasks:
         assert change["label"] == "视频单元「U01」"
 
     def test_emit_success_batch_reference_video_tts_entity_type_not_shot(self, monkeypatch, tmp_path):
-        """TTS 任务与视频任务共用项目生成模式，ad 参考生视频的混合骨架不能把 unit 事件分到 shot。"""
+        """TTS tasks share the project generation mode with video tasks; the mixed skeleton of ad reference-to-video
+        must not file unit events under shot.
+
+        TTS 任务与视频任务共用项目生成模式，ad 参考生视频的混合骨架不能把 unit 事件分到 shot。"""
         captured = []
         monkeypatch.setattr(
             generation_tasks,
@@ -271,7 +297,10 @@ class TestGenerationTasks:
         assert change["label"] == "旁白配音「E1U01」"
 
     def test_emit_success_batch_falls_back_to_segments_when_script_load_fails(self, monkeypatch, tmp_path):
-        """骨架判定拿不到剧本（脚本缺失/损坏）时兜底 segments/「分镜」，不让通知发送中断。"""
+        """When the skeleton check cannot get the script (script missing/corrupt), fall back to segments/"shot" so
+        sending the notice is not interrupted.
+
+        骨架判定拿不到剧本（脚本缺失/损坏）时兜底 segments/「分镜」，不让通知发送中断。"""
         captured = []
         monkeypatch.setattr(
             generation_tasks,
@@ -302,7 +331,11 @@ class TestGenerationTasks:
         assert change["label"] == "分镜「E1S01」"
 
     def test_emit_success_batch_falls_back_to_segments_when_script_not_a_dict(self, monkeypatch, tmp_path):
-        """剧本文件内容损坏成非 dict（如顶层数组）时兜底 segments/「分镜」，不让
+        """When the script file content is corrupted into a non-dict (e.g. a top-level array), fall back to
+        segments/"shot" so the .get() call inside resolve_script_kind does not raise AttributeError and interrupt
+        sending the notice.
+
+        剧本文件内容损坏成非 dict（如顶层数组）时兜底 segments/「分镜」，不让
         resolve_script_kind 内部的 .get() 调用抛 AttributeError 中断通知发送。"""
         captured = []
         monkeypatch.setattr(
@@ -330,7 +363,10 @@ class TestGenerationTasks:
         assert change["label"] == "分镜「E1S01」"
 
     def test_emit_success_batch_attaches_script_file_and_episode(self, monkeypatch, tmp_path):
-        """骨架驱动的完成事件须挂 script_file 与 episode（供 episode 作用域消费方使用）——
+        """Skeleton-driven completion events must attach script_file and episode (for episode-scoped consumers) -
+        locking this attachment down so future emit changes do not silently drop the fields.
+
+        骨架驱动的完成事件须挂 script_file 与 episode（供 episode 作用域消费方使用）——
         锁死这条挂载，防将来改动 emit 时静默丢字段。"""
         captured = []
         monkeypatch.setattr(

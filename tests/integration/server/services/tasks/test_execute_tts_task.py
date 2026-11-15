@@ -1,4 +1,6 @@
-"""旁白配音执行使用项目快照，不能付费调用回退模型。"""
+"""Narration audio execution uses the project snapshot and must not make paid calls to a fallback model.
+
+旁白配音执行使用项目快照，不能付费调用回退模型。"""
 
 import pytest
 import respx

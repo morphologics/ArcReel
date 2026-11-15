@@ -1,4 +1,6 @@
-"""v16→v17 迁移：只改写精确的退役文本模型引用；版本守卫与幂等。"""
+"""v16->v17 migration: only rewrite exact references to retired text models; version guard and idempotency.
+
+v16→v17 迁移：只改写精确的退役文本模型引用；版本守卫与幂等。"""
 
 from __future__ import annotations
 

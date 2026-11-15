@@ -1,4 +1,6 @@
-"""Alembic b3f9c07ae214（tasks 协议标识与请求域名分列）双向迁移测试。"""
+"""Up/down migration tests for Alembic b3f9c07ae214 (tasks protocol identifier and request host in separate columns).
+
+Alembic b3f9c07ae214（tasks 协议标识与请求域名分列）双向迁移测试。"""
 
 from __future__ import annotations
 
@@ -43,7 +45,10 @@ def _tasks_indexes(db_path: Path) -> set[str]:
 
 
 def test_upgrade_moves_domains_into_submitted_base_url(alembic_cfg):
-    """升级后无任何行在协议标识列存放域名；自定义供应商的两列各归其位、不被改写。"""
+    """After upgrade no row stores a host in the protocol identifier column; custom providers' two columns each stay in
+    place, not rewritten.
+
+    升级后无任何行在协议标识列存放域名；自定义供应商的两列各归其位、不被改写。"""
     cfg, db_path = alembic_cfg
     command.upgrade(cfg, DOWN_REVISION)
 
@@ -67,7 +72,10 @@ def test_upgrade_moves_domains_into_submitted_base_url(alembic_cfg):
 
 
 def test_upgrade_keeps_existing_domain_when_both_columns_hold_one(alembic_cfg):
-    """两列都有域名的畸形行以专列为准：只清协议标识位，不覆盖已有域名。"""
+    """Malformed rows with a host in both columns follow the dedicated column: only the protocol identifier is cleared, the
+    existing host is not overwritten.
+
+    两列都有域名的畸形行以专列为准：只清协议标识位，不覆盖已有域名。"""
     cfg, db_path = alembic_cfg
     command.upgrade(cfg, DOWN_REVISION)
 
@@ -82,7 +90,10 @@ def test_upgrade_keeps_existing_domain_when_both_columns_hold_one(alembic_cfg):
 
 
 def test_downgrade_restores_builtin_domains(alembic_cfg):
-    """降级把只有域名的行搬回协议标识列；自定义供应商的行两列俱在，原样不动。"""
+    """Downgrade moves rows that only have a host back into the protocol identifier column; custom provider rows have both
+    columns and stay untouched.
+
+    降级把只有域名的行搬回协议标识列；自定义供应商的行两列俱在，原样不动。"""
     cfg, db_path = alembic_cfg
     command.upgrade(cfg, DOWN_REVISION)
 
@@ -101,7 +112,10 @@ def test_downgrade_restores_builtin_domains(alembic_cfg):
 
 
 def test_upgrade_fails_loud_when_a_scheme_survives_the_backfill(alembic_cfg):
-    """校验判据独立于回填判据：回填够不着的 scheme 形态会让升级显式失败，而不是静默留下。"""
+    """The validation criterion is independent of the backfill criterion: scheme shapes the backfill cannot reach make the
+    upgrade fail explicitly instead of being silently left behind.
+
+    校验判据独立于回填判据：回填够不着的 scheme 形态会让升级显式失败，而不是静默留下。"""
     cfg, db_path = alembic_cfg
     command.upgrade(cfg, DOWN_REVISION)
 
@@ -115,7 +129,9 @@ def test_upgrade_fails_loud_when_a_scheme_survives_the_backfill(alembic_cfg):
 
 
 def test_migration_keeps_dedupe_index(alembic_cfg):
-    """纯数据迁移不重建表，表达式型 partial 唯一索引双向都在。"""
+    """A pure data migration does not rebuild the table, so the expression-based partial unique index exists both ways.
+
+    纯数据迁移不重建表，表达式型 partial 唯一索引双向都在。"""
     cfg, db_path = alembic_cfg
     command.upgrade(cfg, REVISION)
     assert "idx_tasks_dedupe_active" in _tasks_indexes(db_path)

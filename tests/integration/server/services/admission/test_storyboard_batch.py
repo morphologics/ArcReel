@@ -1,4 +1,7 @@
-"""分镜图与分镜视频的集范围批量：选目标、跳过项、整批准入与提交，落在真实项目目录与真实队列上。"""
+"""Episode-scope batches for storyboard images and storyboard videos: target selection, skipped items,
+whole-batch admission and submit, on a real project directory and a real queue.
+
+分镜图与分镜视频的集范围批量：选目标、跳过项、整批准入与提交，落在真实项目目录与真实队列上。"""
 
 from __future__ import annotations
 
@@ -89,7 +92,10 @@ def _claim_stale(board_projects: ProjectManager, key: ArtifactKey, relative_path
 
 
 def _with_storyboard(board_projects: ProjectManager, segment_id: str) -> dict:
-    """带一张现行分镜图的分镜：图先落盘并登记，剧本随后写入。"""
+    """A shot with a current storyboard image: the image is written to disk and registered first, then the script
+    is written.
+
+    带一张现行分镜图的分镜：图先落盘并登记，剧本随后写入。"""
 
     relative_path = f"storyboards/scene_{segment_id}.png"
     _write_media(board_projects, relative_path)
@@ -156,6 +162,8 @@ async def test_image_batch_targets_segments_without_a_usable_storyboard(
         BatchSkip("E1S04", BatchSkipReason.MISSING_PROMPT),
         BatchSkip("E1S05", BatchSkipReason.REFERENCE_UNAVAILABLE),
     )
+    # # E1S03 follows the previous storyboard image and uses image-to-image; a segment break starts a new chain and
+    # # uses text-to-image when there is no reference image.
     # E1S03 接在上一张分镜图之后，走图生图；章节切分点另起一链，没有参考图时走文生图。
     assert dict(plan.lanes) == {"E1S03": "i2i", "E1S06": "t2i"}
 
@@ -294,6 +302,8 @@ async def test_video_batch_is_refused_whole_when_one_target_fails_admission(
     gap = _with_storyboard(board_projects, "E1S02")
     _write_episode(board_projects, [healthy, gap])
     _claim_storyboards(board_projects, "E1S01", "E1S02")
+    # # Reference added after the storyboard image was generated: Alice has no asset sheet yet, so this video cannot
+    # # be submitted.
     # 分镜图生成之后才补的引用：Alice 还没有资产图，这一条的视频不能提交。
     with board_projects.locked_script(PROJECT, "episode_1.json") as script:
         script["segments"][1]["characters_in_segment"] = ["Alice"]
@@ -418,7 +428,10 @@ async def test_video_batch_cost_counts_every_target_when_no_target_has_planned_d
 async def test_video_batch_cost_counts_targets_whose_converted_meter_has_no_estimate(
     board_projects: ProjectManager, board_queue: GenerationQueue, session_factory
 ) -> None:
-    """视频 token 需要按像素数换算；宽高比交给上游自适应时没有估算值，整批预估把这些目标列入未定价。"""
+    """Video tokens must be converted from the pixel count; with aspect ratio left to upstream adaptation there is no
+    estimate, so the whole-batch estimate lists these targets as unpriced.
+
+    视频 token 需要按像素数换算；宽高比交给上游自适应时没有估算值，整批预估把这些目标列入未定价。"""
 
     first = _with_storyboard(board_projects, "E1S01")
     second = _with_storyboard(board_projects, "E1S02")

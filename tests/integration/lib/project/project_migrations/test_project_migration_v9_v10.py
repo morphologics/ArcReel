@@ -1,4 +1,6 @@
-"""v9→v10 脚本规划 / 提示词编写落盘改名迁移。"""
+"""v9->v10 migration renaming stored script plan / prompt authoring files.
+
+v9→v10 脚本规划 / 提示词编写落盘改名迁移。"""
 
 from __future__ import annotations
 
@@ -22,6 +24,7 @@ from lib.project.project_migrations.v9_to_v10_script_plan_naming import migrate_
 from lib.project.project_schema import CURRENT_PROJECT_SCHEMA_VERSION
 from lib.script import script_review
 
+#: Three script plan variants: content_mode / generation_mode / v9 draft file name / file name after migration.
 #: 三种脚本规划变体：content_mode / generation_mode / v9 草稿文件名 / 迁移后文件名。
 _VARIANTS = [
     ("drama", "storyboard", "step1_normalized_script.json", "script_plan_normalized_script.json"),
@@ -40,7 +43,13 @@ def _read_json(path: Path) -> dict[str, Any]:
 
 
 def _legacy_artifact_key(kind: str, episode: int) -> str:
-    """按 ``lib.artifacts.artifact_manifest`` 的真实编码造一个 v9 时期的 key。
+    """Build a v9-era key using the real encoding of ``lib.artifacts.artifact_manifest``.
+
+    The old kind has been removed from ``ArtifactKind`` and cannot build an ``ArtifactKey``, so only the module's
+    public encoding exit can be used -- which is exactly what this test guards: neither migration nor tests may build
+    a second encoding of their own.
+
+    按 ``lib.artifacts.artifact_manifest`` 的真实编码造一个 v9 时期的 key。
 
     旧 kind 已从 ``ArtifactKind`` 删除，构不出 ``ArtifactKey``，只能走该模块的公开编码出口——
     这正是本测试要守的东西：迁移与测试都不许自建第二套编码。
@@ -97,7 +106,10 @@ def test_every_script_plan_variant_keeps_its_confirmation_across_the_rename(
     old_name: str,
     new_name: str,
 ) -> None:
-    """三种脚本规划变体：文件与字段改名后确认记录随之平移，该集仍是已确认。"""
+    """Three script plan variants: after the file and field renames, the confirmation record moves along and the
+    episode is still confirmed.
+
+    三种脚本规划变体：文件与字段改名后确认记录随之平移，该集仍是已确认。"""
 
     draft = {"title": "第 1 集", "scenes": [{"scene_id": "S1"}]}
     project_dir = _project(tmp_path, content_mode=content_mode, generation_mode=generation_mode)
@@ -118,14 +130,19 @@ def test_every_script_plan_variant_keeps_its_confirmation_across_the_rename(
     episode = migrated["episodes"][0]
     assert "step1_review" not in episode
     assert episode["script_plan_review"] == {"fingerprint": fingerprint, "confirmed_at": "2026-01-01T00:00:00Z"}
+    # The script metadata at the chain end (v15) carries no whole-episode fingerprint.
     # 链尾（v15）的剧本 metadata 不带整集指纹。
     assert _read_json(project_dir / "scripts" / "episode_1.json")["metadata"] == {}
+    # The confirmation fingerprint is a content fingerprint and renaming does not change content: after migration the
+    # episode is still confirmed and does not block prompt authoring again.
     # 确认指纹是内容指纹，改名不动内容：迁移后这一集仍是已确认、不重新阻塞提示词编写。
     assert script_review.review_status(project_dir, migrated, 1) == "confirmed"
 
 
 def test_invalid_drafts_and_legacy_markdown_aliases_are_renamed_too(tmp_path: Path) -> None:
-    """待修复草稿与旧版 ``.md`` 别名同批改名，正文一字不动。"""
+    """Invalid drafts and old ``.md`` aliases are renamed in the same batch, their text untouched.
+
+    待修复草稿与旧版 ``.md`` 别名同批改名，正文一字不动。"""
 
     project_dir = _project(tmp_path, content_mode="narration", generation_mode="reference_video")
     drafts_dir = project_dir / "drafts" / "episode_1"
@@ -144,7 +161,10 @@ def test_invalid_drafts_and_legacy_markdown_aliases_are_renamed_too(tmp_path: Pa
 
 
 def test_artifact_manifest_key_and_path_follow_the_rename(tmp_path: Path) -> None:
-    """产物清单里脚本规划产物的 kind 与草稿路径同批改写，指纹原样保留。"""
+    """The kind and draft path of script plan artifacts in the artifact manifest are rewritten in the same batch;
+    fingerprints are kept as is.
+
+    产物清单里脚本规划产物的 kind 与草稿路径同批改写，指纹原样保留。"""
 
     project_dir = _project(tmp_path, content_mode="narration", generation_mode="storyboard")
     _write_json(project_dir / "drafts" / "episode_1" / "step1_segments.json", {"segments": []})
@@ -175,6 +195,9 @@ def test_artifact_manifest_key_and_path_follow_the_rename(tmp_path: Path) -> Non
     assert by_kind["episode-script-plan"]["artifact_path"] == "drafts/episode_1/script_plan_segments.json"
     assert by_kind["episode-script-plan"]["basis_digest"] == digest
     assert by_kind["episode-script"]["artifact_path"] == "scripts/episode_1.json"
+    # Read-side rule: the rewritten key must be exactly the one the current code uses to register script plan
+    # artifacts, and the manifest as a whole must still be readable -- a leftover old kind would make parsing judge the
+    # whole manifest unreadable.
     # 读侧口径：改写后的 key 必须正好是当前代码登记脚本规划产物时用的那一个，
     # 清单整体也必须仍然可读——残留旧 kind 会让解析直接判整份清单不可读。
     snapshot = ProjectArtifactManifestAdapter(project_dir).snapshot_entries()
@@ -183,7 +206,10 @@ def test_artifact_manifest_key_and_path_follow_the_rename(tmp_path: Path) -> Non
 
 
 def test_a_project_holding_both_names_keeps_the_new_one_and_sets_the_old_one_aside(tmp_path: Path) -> None:
-    """新旧两个名字同时在场：以新名为准，旧名文件挪成保留副本，迁移报告列出这一取舍。"""
+    """Old and new names both present: the new name wins, the old-name file is moved into a preserved copy, and the
+    migration report lists this choice.
+
+    新旧两个名字同时在场：以新名为准，旧名文件挪成保留副本，迁移报告列出这一取舍。"""
 
     project_dir = _project(tmp_path, content_mode="narration", generation_mode="storyboard")
     drafts_dir = project_dir / "drafts" / "episode_1"
@@ -210,7 +236,9 @@ def test_a_project_holding_both_names_keeps_the_new_one_and_sets_the_old_one_asi
 
 
 def test_migrating_twice_is_a_no_op(tmp_path: Path) -> None:
-    """已在新名下的项目重跑迁移不产生任何改动。"""
+    """Rerunning the migration on a project already under the new names produces no changes.
+
+    已在新名下的项目重跑迁移不产生任何改动。"""
 
     project_dir = _project(tmp_path, content_mode="narration", generation_mode="storyboard")
     _write_json(project_dir / "drafts" / "episode_1" / "step1_segments.json", {"segments": []})

@@ -1,4 +1,7 @@
-"""script_plan→prompt_authoring 内容确认路由测试：审阅读取、内容编辑、确认动作的可测状态流转。"""
+"""script_plan->prompt_authoring content review router tests: testable state transitions for review read,
+content edit and confirm actions.
+
+script_plan→prompt_authoring 内容确认路由测试：审阅读取、内容编辑、确认动作的可测状态流转。"""
 
 from __future__ import annotations
 
@@ -75,6 +78,9 @@ def _client(
         pm.update_project("demo", lambda p: p.__setitem__("generation_mode", generation_mode))
 
     monkeypatch.setattr(router_mod, "get_project_manager", lambda: pm)
+    # # Slot assertions for the panel and the confirm conversion both read video request facts, supplied by the test via
+    # # ``set_video_request_facts`` / ``video_request_facts``; the resolver here is only a placeholder needed to build
+    # # the service and does not touch the config DB.
     # 面板档位与确认转换的档位断言都读视频请求事实，事实由用例经 ``set_video_request_facts`` /
     # ``video_request_facts`` 供给；这里的解析器只是服务构造所需的占位，不触碰配置库。
     resolver = cast(ConfigResolver, FakeConfigResolver())
@@ -92,7 +98,9 @@ def _client(
 
 
 def _register_script_plan(pm: ProjectManager) -> None:
-    """确认转换读的是已登记的正式脚本规划：补上源文并激活产物清单。"""
+    """Confirm conversion reads the registered final script plan: add the source and activate the artifact manifest.
+
+    确认转换读的是已登记的正式脚本规划：补上源文并激活产物清单。"""
     from lib.artifacts.artifact_activation import activate_artifact_target_state
 
     project_path = pm.get_project_path("demo")
@@ -118,7 +126,10 @@ def _write_rv_script_plan(pm: ProjectManager, content: dict) -> None:
 
 
 def _admitted_drama_script_plan() -> dict:
-    """确认即转换，转换过发声准入：分镜只留台词，不与画外音混排。"""
+    """Confirm means convert, and conversion passes utterance admission: shots keep only dialogue lines, not mixed
+    with voiceover.
+
+    确认即转换，转换过发声准入：分镜只留台词，不与画外音混排。"""
     plan = _drama_script_plan()
     plan["scenes"][0]["utterances"] = [{"kind": "dialogue", "speaker": "阿离", "text": "你终于回来了。"}]
     return plan
@@ -130,11 +141,13 @@ class TestScriptReviewRouter:
         with client:
             base = "/api/v1/projects/demo/episodes/1/script-review"
 
+            # # script_plan not produced
             # script_plan 未产出
             got = client.get(base)
             assert got.status_code == 200
             assert got.json()["status"] == "no_script_plan"
 
+            # # script_plan produced -> pending_review, structured content visible
             # script_plan 产出 → pending_review，结构化内容可见
             _write_script_plan(pm, _admitted_drama_script_plan())
             got = client.get(base)
@@ -142,6 +155,7 @@ class TestScriptReviewRouter:
             assert body["status"] == "pending_review"
             assert body["content"]["scenes"][0]["utterances"][0]["speaker"] == "阿离"
 
+            # # Content review pending before confirmation
             # 确认前内容确认待审
             from lib.script import script_review
 
@@ -149,10 +163,13 @@ class TestScriptReviewRouter:
                 script_review.review_status(pm.get_project_path("demo"), pm.load_project("demo"), 1) == "pending_review"
             )
 
+            # # Confirm -> confirmed, prompt_authoring released
             # 确认 → confirmed，prompt_authoring 放行
             confirmed = client.post(f"{base}/confirm")
             assert confirmed.status_code == 200
             assert confirmed.json()["status"] == "confirmed"
+            # # The final script is converted directly by confirmation: state describes only content review; there is no
+            # # dry-run or conversion entry besides confirmation.
             # 正式脚本由确认直接转出：状态只描述内容确认，确认之外没有预演或转换入口。
             assert "script_entry_currency" not in client.get(base).json()
             assert client.get(f"{base}/conversion-preview").status_code == 404
@@ -225,6 +242,7 @@ class TestScriptReviewRouter:
                 "grid_count": 1,
             }
             expected_overwrite["text"] = script_review.render_overwrite_loss_text(expected_overwrite, i18n_message)
+            # # The loss list names voiceover audio, end frames and grid membership; Web diagnostics refer to entries by title.
             # 丢失清单列出配音、尾帧与宫格归属；Web 诊断按标题指称条目。
             for lost in ("分镜图 1 张", "视频 1 段", "配音 1 段", "尾帧 1 张", "宫格归属 1 处"):
                 assert lost in expected_overwrite["text"]
@@ -258,7 +276,10 @@ class TestScriptReviewRouter:
     def test_confirm_without_resolvable_video_model_names_the_missing_configuration(
         self, tmp_path, monkeypatch, set_video_request_facts
     ):
-        """确认转换要确定分镜时长档位：视频请求事实解析不出时按事实的问题码回 422，与预检、执行同码。"""
+        """Confirm conversion must determine shot duration slots: when video request facts cannot be resolved, return 422
+        with the facts' problem code, same code as precheck and execution.
+
+        确认转换要确定分镜时长档位：视频请求事实解析不出时按事实的问题码回 422，与预检、执行同码。"""
         set_video_request_facts(VideoRequestFactsFailure("video_capability_unavailable", (("capability", "i2v"),)))
         client, pm = _client(monkeypatch, tmp_path)
         with client:
@@ -337,7 +358,9 @@ class TestScriptReviewRouter:
             assert confirmed.status_code == 409
 
     def test_get_unregistered_episode_404(self, tmp_path, monkeypatch):
-        """未在 project.json 登记的分集 → GET 返回 404，而非误报 no_script_plan 的 200。"""
+        """Episode not registered in project.json -> GET returns 404, not a misleading 200 of no_script_plan.
+
+        未在 project.json 登记的分集 → GET 返回 404，而非误报 no_script_plan 的 200。"""
         client, _ = _client(monkeypatch, tmp_path)
         with client:
             got = client.get("/api/v1/projects/demo/episodes/99/script-review")
@@ -346,7 +369,10 @@ class TestScriptReviewRouter:
 
 class TestReferenceVideoRouter:
     def test_full_gate_flow(self, tmp_path, monkeypatch, video_request_facts):
-        """rv 走同一 HTTP gate：结构化 units 可读、可编辑、web 确认放行 prompt_authoring（与 web 确认等价）。"""
+        """rv goes through the same HTTP gate: structured units readable, editable, and web confirm releases
+        prompt_authoring (equivalent to web confirmation).
+
+        rv 走同一 HTTP gate：结构化 units 可读、可编辑、web 确认放行 prompt_authoring（与 web 确认等价）。"""
         from lib.script import script_review
 
         client, pm = _client(monkeypatch, tmp_path, generation_mode="reference_video")
@@ -366,6 +392,7 @@ class TestReferenceVideoRouter:
                 script_review.review_status(pm.get_project_path("demo"), pm.load_project("demo"), 1) == "pending_review"
             )
 
+            # # Edit a unit body -> wait for confirmation again
             # 编辑单元正文 → 重新等待确认
             edited = _rv_script_plan()
             edited["units"][0]["text"] = "@[阿离] 转身离去。"
@@ -382,7 +409,10 @@ class TestReferenceVideoRouter:
     def test_confirm_with_off_tier_unit_names_its_position_and_tiers(
         self, tmp_path, monkeypatch, set_video_request_facts, supported_durations
     ):
-        """已确认时长被收窄出局：422 专用文案按单元位置给出现时长与可选档位，不回落通用的转换拒绝。"""
+        """A confirmed duration narrowed out of range: the dedicated 422 message gives the current duration and available
+        slots by unit position, not falling back to the generic conversion refusal.
+
+        已确认时长被收窄出局：422 专用文案按单元位置给出现时长与可选档位，不回落通用的转换拒绝。"""
         set_video_request_facts(
             make_video_request_facts(
                 route="reference_video",
@@ -408,7 +438,13 @@ class TestReferenceVideoRouter:
             assert not (pm.get_project_path("demo") / "scripts" / "episode_1.json").exists()
 
     def test_web_save_and_confirm_tag_project_changes_as_webui(self, tmp_path, monkeypatch, video_request_facts):
-        """内容确认页的保存与确认是用户在 Web 上的操作：写入产生的项目变更须标为 webui。
+        """Saving and confirming on the content review page are user actions on the Web: the project changes they write
+        must be tagged webui.
+
+        Untagged changes are broadcast with the default filesystem source; the frontend treats them as outside changes
+        and jumps to the asset pane registered at confirmation.
+
+        内容确认页的保存与确认是用户在 Web 上的操作：写入产生的项目变更须标为 webui。
 
         未标注时变更按默认的 filesystem 来源广播，前端把它当作外部改动，自动跳到确认时登记的资产窗格。
         """
@@ -443,7 +479,11 @@ class TestReferenceVideoRouter:
     def test_quarantine_surfaced_with_recomputed_line_anchored_violations(
         self, tmp_path, monkeypatch, video_request_facts
     ):
-        """草稿在场时 GET 附带 ``quarantine`` 字段：违约按产出时那套校验器读时重算，
+        """With a draft present, GET carries the ``quarantine`` field: violations are recomputed at read time with the
+        validator set used at production, not trusting the previous round's snapshot in the draft (the snapshot
+        message is deliberately written as "stale" here to verify).
+
+        草稿在场时 GET 附带 ``quarantine`` 字段：违约按产出时那套校验器读时重算，
         不信任草稿里上一轮的快照（这里把快照消息故意写成 "stale" 来验证）。"""
         from lib.script.draft_quarantine import QUARANTINE_KIND_SCRIPT_PLAN, write_quarantine
         from lib.script.reference_video.draft_validation import DraftViolation
@@ -475,12 +515,16 @@ class TestReferenceVideoRouter:
             assert violations[0]["line"] == 1
             assert violations[0]["message"] != "stale"
 
+            # # With a draft present confirmation is refused: the final script_plan does not yet have content that can be released.
             # 草稿在场时确认被拒：正式 script_plan 还没有一份可放行的内容。
             confirmed = client.post(f"{base}/confirm")
             assert confirmed.status_code == 409
 
     def test_quarantine_schema_invalid_keeps_raw_content(self, tmp_path, monkeypatch, video_request_facts):
-        """草稿 units 被改成非数组：违约报 schema_invalid，``content`` 原样回传（不做收编），
+        """Draft units changed to a non-array: violation reports schema_invalid, ``content`` is returned as is (no
+        adoption), so the presentation layer falls back to a raw text view rather than iterating it as a units list.
+
+        草稿 units 被改成非数组：违约报 schema_invalid，``content`` 原样回传（不做收编），
         呈现层据此退回原始文本视图而非当作 units 列表遍历。"""
         from lib.script.draft_quarantine import QUARANTINE_KIND_SCRIPT_PLAN, write_quarantine
         from lib.script.reference_video.draft_validation import DraftViolation
@@ -508,7 +552,10 @@ class TestReferenceVideoRouter:
     def test_quarantine_meta_broken_reports_recompute_failure_not_snapshot(
         self, tmp_path, monkeypatch, video_request_facts
     ):
-        """``meta.source`` 缺失 → 无从重算：报「无法重算」本身，而不是退回草稿里那份上一轮
+        """``meta.source`` missing -> nothing to recompute from: report 'cannot recompute' itself rather than falling back
+        to the previous round's snapshot in the draft; reports are always accountable to current values.
+
+        ``meta.source`` 缺失 → 无从重算：报「无法重算」本身，而不是退回草稿里那份上一轮
         快照——报告一律对现值负责。"""
         from lib.script.draft_quarantine import QUARANTINE_KIND_SCRIPT_PLAN, write_quarantine
         from lib.script.reference_video.draft_validation import DraftViolation
@@ -531,7 +578,14 @@ class TestReferenceVideoRouter:
             assert violations[0]["label"] == ""
 
     def test_quarantine_surfaced_for_narration_variant(self, tmp_path, monkeypatch, video_request_facts):
-        """narration 的待修复草稿同样进 GET 响应：违约按 narration 那套校验器读时重算。
+        """A narration invalid draft also goes into the GET response: violations are recomputed at read time with the
+        narration validator set.
+
+        Presentation dispatches by kind and does not hard-code reference-to-video; otherwise with drafts of the other
+        two routes present the panel would look 'clean' while confirmation is actually blocked, and the user sees no
+        reason.
+
+        narration 的待修复草稿同样进 GET 响应：违约按 narration 那套校验器读时重算。
 
         呈现按 kind 分派，不写死参考生视频——否则另两条路线的草稿在场时面板看起来「干净」，
         实际确认已被阻塞，用户看不到任何原因。
@@ -575,7 +629,11 @@ class TestReferenceVideoRouter:
             assert client.post(f"{base}/confirm").status_code == 409
 
     def test_quarantine_surfaced_for_drama_variant(self, tmp_path, monkeypatch, video_request_facts):
-        """drama 的待修复草稿（取回编辑工位）同样进 GET 响应：内容重判通过则违约为空、
+        """A drama invalid draft (taken back to the editing station) also goes into the GET response: if content re-check
+        passes, violations are empty and the body is adopted at current values, so the panel says 'awaiting promotion'
+        instead of showing blank.
+
+        drama 的待修复草稿（取回编辑工位）同样进 GET 响应：内容重判通过则违约为空、
         正文按现值收编回传，面板据此说明「等待晋升」而不是显示一片空白。"""
         from lib.script.draft_quarantine import QUARANTINE_KIND_DRAMA_SCRIPT_PLAN, write_quarantine
 
@@ -615,13 +673,18 @@ class TestReferenceVideoRouter:
             assert client.post(f"{base}/confirm").status_code == 409
 
     def test_supported_durations_exposed_for_reference_video_only(self, tmp_path, monkeypatch, video_request_facts):
-        """rv 变体的 GET 带出档位表供 web 渲染时长选择；drama 变体下为 None。"""
+        """The rv variant's GET carries the slot table for the web to render the duration picker; under the drama variant
+        it is None.
+
+        rv 变体的 GET 带出档位表供 web 渲染时长选择；drama 变体下为 None。"""
         rv_client, pm = _client(monkeypatch, tmp_path, generation_mode="reference_video")
         with rv_client:
             _write_rv_script_plan(pm, _rv_script_plan())
             body = rv_client.get("/api/v1/projects/demo/episodes/1/script-review").json()
             durations = body["supported_durations"]
             assert durations is None or (isinstance(durations, list) and all(isinstance(d, int) for d in durations))
+            # # The duration_tiers field is always present (None when not narrowed or the model cannot be resolved), so the
+            # # frontend can tell 'un-narrowed full set' from 'narrowed per-unit effective slots'; KeyError cannot be the fallback.
             # duration_tiers 字段始终存在（未收窄或无法解析型号时为 None），供前端区分「未收窄
             # 全集」与「收窄后的逐 unit 生效档位」——不能靠 KeyError 兜底。
             assert "duration_tiers" in body
@@ -636,7 +699,12 @@ class TestReferenceVideoRouter:
     def test_quarantine_corrupted_envelope_reported_not_treated_as_clean(
         self, tmp_path, monkeypatch, video_request_facts
     ):
-        """草稿文件存在但信封本身损坏（非法 JSON）：``read_quarantine`` 按其自身读取口径
+        """The draft file exists but the envelope itself is corrupt (invalid JSON): ``read_quarantine`` returns None per
+        its own reading rule, but the GET response must not treat this as 'no draft'; that would make the panel show a
+        clean state and allow confirm, while confirm() would still 409 on file existence (the user clicks confirm and
+        it always fails with no explanation).
+
+        草稿文件存在但信封本身损坏（非法 JSON）：``read_quarantine`` 按其自身读取口径
         返回 None，但 GET 响应不能把这等同于「无草稿」——那会让面板显示干净态、放行确认，
         而 confirm() 仍会按文件存在性 409（用户点确认却总是失败，且看不到任何解释）。
         """
@@ -664,7 +732,12 @@ class TestReferenceVideoRouter:
     def test_quarantine_cleared_between_existence_check_and_read_is_not_reported_as_corrupted(
         self, tmp_path, monkeypatch, video_request_facts
     ):
-        """存在性检查通过之后、``read_quarantine`` 真正读取之前，晋升工具把待处置草稿清掉了
+        """After the existence check passed and before ``read_quarantine`` actually reads, the promotion tool cleared the
+        pending draft (final content already written): this is not envelope corruption; this read spanned the moment of
+        'clear' and should be treated as 'no draft', not misreported as corrupt, which would make a just-promoted
+        episode look like it still has a pending draft.
+
+        存在性检查通过之后、``read_quarantine`` 真正读取之前，晋升工具把待处置草稿清掉了
         （正式内容已写入）：这不是信封损坏，这次读跨越了「清除」那一刻，应按「无草稿」处理，
         不能误报成损坏——那会让刚晋升完成的集看起来仍有待处置草稿。"""
         from lib.script.draft_quarantine import QUARANTINE_KIND_SCRIPT_PLAN, write_quarantine
@@ -684,6 +757,8 @@ class TestReferenceVideoRouter:
         real_read_quarantine = mod.read_quarantine
 
         def _read_after_concurrent_clear(*args, **kwargs):
+            # # Simulate: this request's existence check has passed, but before the actual read another request (the promotion tool)
+            # # cleared the file.
             # 模拟：本请求的存在性检查已经通过，但真正读取发生前，另一个请求（晋升工具）
             # 把文件清掉了。
             quarantine_path.unlink()
@@ -698,7 +773,13 @@ class TestReferenceVideoRouter:
     def test_quarantine_unreadable_message_localized_by_accept_language(
         self, tmp_path, monkeypatch, video_request_facts
     ):
-        """``quarantine_unreadable`` 违约的 message 走 ``_t`` 按 ``Accept-Language`` 本地化。
+        """The message of the ``quarantine_unreadable`` violation is localized via ``_t`` by ``Accept-Language``.
+
+        Messages of other violation codes are Chinese templates rendered with interpolation at production time and are
+        not localized; ``quarantine_unreadable`` is the only pair of fixed strings without interpolation (draft envelope
+        corrupt / meta needed for recompute missing or corrupt), so the localization change is limited to these two.
+
+        ``quarantine_unreadable`` 违约的 message 走 ``_t`` 按 ``Accept-Language`` 本地化。
 
         其它违约 code 的 message 是产出时渲染好插值的中文模板，不做本地化；``quarantine_unreadable``
         是仅有的两处不带插值的固定字符串（草稿信封损坏 / 重算所需的 meta 缺失损坏），本地化
@@ -722,7 +803,10 @@ class TestReferenceVideoRouter:
     def test_quarantine_recheck_reports_video_request_facts_failure_by_problem_code(
         self, tmp_path, monkeypatch, set_video_request_facts
     ):
-        """草稿读时重算遇到视频请求事实解析不出：报成事实问题码的违约并按其文案 key 本地化，
+        """When the draft's read-time recheck cannot resolve video request facts: report a violation with the facts'
+        problem code, localized by its message key, not misreported as draft corruption.
+
+        草稿读时重算遇到视频请求事实解析不出：报成事实问题码的违约并按其文案 key 本地化，
         不误报成草稿损坏。"""
         from lib.script.draft_quarantine import QUARANTINE_KIND_SCRIPT_PLAN, write_quarantine
 
@@ -752,7 +836,11 @@ class TestReferenceVideoRouter:
             )
 
     def test_duration_tiers_survive_save_and_confirm_responses(self, tmp_path, monkeypatch, video_request_facts):
-        """PUT / confirm 的响应同样带 ``duration_tiers``——它们各自独立调用 ``get_state``，
+        """PUT / confirm responses also carry ``duration_tiers``: they each call ``get_state`` independently, not through
+        GET's merge; without it the frontend ``adopt()`` would overwrite the narrowed result from GET with the saved
+        response and fall back to un-narrowed ``supported_durations``, inconsistent with the initial load.
+
+        PUT / confirm 的响应同样带 ``duration_tiers``——它们各自独立调用 ``get_state``，
         不经过 GET 那次合并；不带的话前端 ``adopt()`` 用保存后的响应覆盖 GET 读到的收窄结果，
         退回未收窄的 ``supported_durations``，与刚加载时的呈现不一致。"""
         client, pm = _client(monkeypatch, tmp_path, generation_mode="reference_video")
@@ -771,7 +859,14 @@ class TestReferenceVideoRouter:
     def test_duration_tiers_and_supported_durations_resolved_for_custom_provider(
         self, tmp_path, monkeypatch, set_video_request_facts
     ):
-        """自定义供应商（``custom-`` 前缀）不在 ``PROVIDER_REGISTRY``：视频请求事实是它唯一的档位来源。
+        """Custom providers (``custom-`` prefix) are not in ``PROVIDER_REGISTRY``: video request facts are their only
+        slot source.
+
+        ``supported_durations`` (declared full set, for read-time adoption clamp of existing drafts) and
+        ``duration_tiers`` (narrowed per-unit options) both give real slots from the facts, so read-time migration
+        adoption and panel options share one source.
+
+        自定义供应商（``custom-`` 前缀）不在 ``PROVIDER_REGISTRY``：视频请求事实是它唯一的档位来源。
 
         ``supported_durations``（声明全集，供存量草稿的读时收编 clamp）与 ``duration_tiers``
         （收窄后的逐 unit 可选项）都按事实给出真实档位，读时迁移的收编与面板可选项同源。
@@ -801,7 +896,12 @@ class TestReferenceVideoRouter:
     def test_quarantine_with_non_string_meta_source_degrades_gracefully(
         self, tmp_path, monkeypatch, video_request_facts
     ):
-        """草稿信封本身合法，但 ``meta.source`` 被改成非字符串（如数字）：重算链路要把它当作
+        """The draft envelope itself is valid, but ``meta.source`` was changed to a non-string (e.g. a number): the
+        recompute path must degrade to 'cannot recompute' rather than letting a ``TypeError`` inside ``safe_join``
+        bubble up as an unhandled 500; otherwise, at the very moment the user most needs the panel's repair guidance,
+        they see a blank error page.
+
+        草稿信封本身合法，但 ``meta.source`` 被改成非字符串（如数字）：重算链路要把它当作
         「无法重算」降级，而不是让 ``safe_join`` 内部的 ``TypeError`` 冒穿成未处理的 500——那样
         用户在最需要看到面板给出修复指引的时刻，看到的反而是一个空白错误页。"""
         from lib.script.draft_quarantine import QUARANTINE_KIND_SCRIPT_PLAN, write_quarantine
@@ -826,7 +926,11 @@ class TestReferenceVideoRouter:
     def test_quarantine_with_directory_valued_meta_source_degrades_gracefully(
         self, tmp_path, monkeypatch, video_request_facts
     ):
-        """``meta.source`` 类型正确（字符串）但指向一个目录：``Path.exists()`` 对目录同样为
+        """``meta.source`` has the right type (string) but points to a directory: ``Path.exists()`` is also True for
+        directories, and calling ``read_text()`` directly raises ``IsADirectoryError``; it must likewise degrade to
+        quarantine_unreadable, not let this OSError subclass (neither ValueError nor a type error) bubble up as a 500.
+
+        ``meta.source`` 类型正确（字符串）但指向一个目录：``Path.exists()`` 对目录同样为
         True，直接 ``read_text()`` 会抛 ``IsADirectoryError``——同样要降级成 quarantine_unreadable，
         不能让这个既不是 ValueError 也不是类型错误的 OSError 子类冒穿成 500。"""
         from lib.script.draft_quarantine import QUARANTINE_KIND_SCRIPT_PLAN, write_quarantine
@@ -852,7 +956,12 @@ class TestReferenceVideoRouter:
     def test_put_response_includes_quarantine_created_during_the_request(
         self, tmp_path, monkeypatch, video_request_facts
     ):
-        """保存作用于正式草稿，草稿是另一份文件——PUT 响应缺 ``quarantine`` 字段的话，
+        """Saving acts on the final draft; the invalid draft is another file. If the PUT response lacked the
+        ``quarantine`` field, the panel's ``adopt()`` would treat it as 'no draft' and allow confirm, even though the
+        draft existed throughout (simulated here by 'draft already exists at save', equivalent to the timing of 'produced
+        while the save is in flight').
+
+        保存作用于正式草稿，草稿是另一份文件——PUT 响应缺 ``quarantine`` 字段的话，
         面板 ``adopt()`` 会把它当成「无草稿」而放行确认，即使这份草稿在保存前后一直
         都在（这里用「保存时草稿已存在」模拟，等价于「保存在途时才产出」的时序）。"""
         from lib.script.draft_quarantine import QUARANTINE_KIND_SCRIPT_PLAN, write_quarantine
@@ -876,6 +985,8 @@ class TestReferenceVideoRouter:
             base = "/api/v1/projects/demo/episodes/1/script-review"
             put_body = client.put(f"{base}/content", json=_rv_script_plan()).json()
             assert put_body["quarantine"] is not None
+            # # meta.source is complete and recompute runs normally: the assertion hits the real violation computed by
+            # # recompute, not the quarantine_unreadable fallback entry produced when meta is missing.
             # meta.source 完整、重算能正常跑：断言到的是重算算出的真实违约，不是
             # meta 缺失时降级出的 quarantine_unreadable 兜底条目。
             codes = [v["code"] for v in put_body["quarantine"]["violations"]]
@@ -883,7 +994,11 @@ class TestReferenceVideoRouter:
             assert "quarantine_unreadable" not in codes
 
     def test_put_with_stale_base_fingerprint_conflicts_409(self, tmp_path, monkeypatch, video_request_facts):
-        """PUT 携带的 ``base_fingerprint`` 与盘上现值不一致（编辑期间另一方已保存）→ 409、
+        """PUT's ``base_fingerprint`` differs from the current value on disk (another party saved during editing) -> 409,
+        nothing written; retrying with the latest fingerprint passes. Calls without a fingerprint keep the old
+        semantics (no comparison).
+
+        PUT 携带的 ``base_fingerprint`` 与盘上现值不一致（编辑期间另一方已保存）→ 409、
         不落盘；拿最新指纹重试放行。缺省不带指纹的调用维持原语义（不比对）。"""
         client, pm = _client(monkeypatch, tmp_path, generation_mode="reference_video")
         _write_rv_script_plan(pm, _rv_script_plan())
@@ -899,6 +1014,7 @@ class TestReferenceVideoRouter:
             mine = _rv_script_plan()
             resp = client.put(f"{base}/content", params={"base_fingerprint": stale}, json=mine)
             assert resp.status_code == 409
+            # # Conflict did not overwrite: disk still holds the other party's saved content
             # 冲突未覆盖：盘上仍是另一方保存的内容
             assert client.get(base).json()["content"]["units"][0]["text"] == "@[阿离] 转身离开。"
 

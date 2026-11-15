@@ -1,4 +1,7 @@
-"""目录查询的测试数据：在出厂快照上改写条目或换一份目录数据，再交给目录查询读取；按目录价目表给内置供应商的一次调用计价。"""
+"""Test data for catalog queries: rewrite entries on the factory snapshot or swap in other catalog data, then hand it to
+the catalog query; price one call of a built-in provider by the catalog price list.
+
+目录查询的测试数据：在出厂快照上改写条目或换一份目录数据，再交给目录查询读取；按目录价目表给内置供应商的一次调用计价。"""
 
 from __future__ import annotations
 
@@ -15,12 +18,17 @@ from lib.catalog import query
 
 
 def install_catalog(monkeypatch: pytest.MonkeyPatch, data: CatalogData) -> None:
-    """让目录查询在本用例内读 ``data``，代替出厂快照。"""
+    """Make catalog queries read ``data`` within this test instead of the factory snapshot.
+
+    让目录查询在本用例内读 ``data``，代替出厂快照。"""
     monkeypatch.setattr(query, "factory_snapshot", lambda: data)
 
 
 def with_entry_changes(data: CatalogData, provider_id: str, api_model_name: str, **changes: Any) -> CatalogData:
-    """把供应商模型引用的条目按 ``dataclasses.replace`` 改写；改的是条目，引用它的其他供应商模型一并受影响。"""
+    """Rewrite the entry referenced by a provider model via ``dataclasses.replace``; it is the entry that changes, so other
+    provider models referencing it are affected too.
+
+    把供应商模型引用的条目按 ``dataclasses.replace`` 改写；改的是条目，引用它的其他供应商模型一并受影响。"""
     listing = data.builtin_providers[provider_id]
     model = next(m for m in listing.models if m.api_model_name == api_model_name)
     target = data.entry_of(model)
@@ -30,7 +38,9 @@ def with_entry_changes(data: CatalogData, provider_id: str, api_model_name: str,
 
 
 def with_entry_facts(data: CatalogData, provider_id: str, api_model_name: str, **changes: Any) -> CatalogData:
-    """改写供应商模型所引用条目的模型事实（``facts`` 上的字段）。"""
+    """Rewrite the model facts (fields on ``facts``) of the entry referenced by a provider model.
+
+    改写供应商模型所引用条目的模型事实（``facts`` 上的字段）。"""
     listing = data.builtin_providers[provider_id]
     model = next(m for m in listing.models if m.api_model_name == api_model_name)
     target = data.entry_of(model)
@@ -43,7 +53,10 @@ def catalog_of(
     providers: Mapping[str, tuple[str, ...]],
     defaults: Mapping[str, dict[str, str]] | None = None,
 ) -> CatalogData:
-    """由条目与「供应商 → 条目引用」构造一份目录数据；供应商模型的 API 模型名取条目的官方模型名。"""
+    """Build catalog data from entries and "provider -> entry references"; a provider model's API model name is the entry's
+    official model name.
+
+    由条目与「供应商 → 条目引用」构造一份目录数据；供应商模型的 API 模型名取条目的官方模型名。"""
     listings = {
         provider_id: BuiltinProviderListing(
             models=tuple(BuiltinProviderModel(api_model_name=ref.partition("/")[2], entry=ref) for ref in refs),
@@ -61,7 +74,10 @@ def builtin_price(
     quantities: Mapping[str, float],
     dimensions: Mapping[str, object] | None = None,
 ) -> tuple[float, str]:
-    """内置供应商一次单请求调用在倍率 1 下的参考费用 ``(金额, 币种)``；算不出时断言失败。"""
+    """Reference cost ``(amount, currency)`` of one single-request call of a built-in provider at multiplier 1; fails an
+    assertion when it cannot be computed.
+
+    内置供应商一次单请求调用在倍率 1 下的参考费用 ``(金额, 币种)``；算不出时断言失败。"""
     cost = price_builtin_call(
         provider=provider_id,
         model=model,

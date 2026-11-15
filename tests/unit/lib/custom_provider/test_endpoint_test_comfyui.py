@@ -1,4 +1,6 @@
-"""ComfyUI 端点的预览请求与测试连接目标。"""
+"""Preview requests and test-connection targets for ComfyUI endpoints.
+
+ComfyUI 端点的预览请求与测试连接目标。"""
 
 from __future__ import annotations
 
@@ -30,7 +32,10 @@ def _definition(**overrides: Any) -> dict[str, Any]:
 
 
 def _with_image_bindings() -> dict[str, Any]:
-    """在最小定义上补首帧与两个参考图格子，把素材那一段带进来。"""
+    """Add a first frame and two reference image slots to the minimal definition, bringing the asset part
+    in.
+
+    在最小定义上补首帧与两个参考图格子，把素材那一段带进来。"""
     definition = comfyui_endpoint_definition()
     definition["workflow"]["10"] = {"class_type": "LoadImage", "inputs": {"image": "draft.png"}}
     definition["workflow"]["11"] = {"class_type": "LoadImage", "inputs": {"image": "ref-a.png"}}
@@ -45,7 +50,10 @@ def _with_image_bindings() -> dict[str, Any]:
 
 
 def _with_reference_slots() -> dict[str, Any]:
-    """两个参考图格子经 ``ImageBatch`` 汇进视频节点的可选入口——张数变少时改得动图。"""
+    """Two reference image slots are merged by ``ImageBatch`` into an optional input of the video node, so
+    the graph can be changed when fewer images are given.
+
+    两个参考图格子经 ``ImageBatch`` 汇进视频节点的可选入口——张数变少时改得动图。"""
     definition = comfyui_endpoint_definition()
     definition["workflow"]["20"] = {"class_type": "LoadImage", "inputs": {"image": "ref_a.png"}}
     definition["workflow"]["21"] = {"class_type": "LoadImage", "inputs": {"image": "ref_b.png"}}
@@ -90,13 +98,18 @@ class TestPreviewRequest:
         assert preview.submit.url == "https://comfy.test/prompt"
         body = preview.submit.body
         assert isinstance(body, dict)
+        # The prompt is filled into the positive node per binding, and the Avoid line is split off to the
+        # negative node; same builder as the real send.
         # 提示词按绑定填进正向节点，Avoid 行拆去负向节点——与真发同一个构造。
         assert body["prompt"]["6"]["inputs"]["text"] == "一只猫走过屋顶"
         assert "文字字幕" in body["prompt"]["7"]["inputs"]["text"]
         assert body["client_id"] == "arcreel-{{ prompt_id }}"
 
     def test_the_poll_section_carries_the_same_credentials(self):
-        """ComfyUI 多半套在反向代理后面：要核的正是这组头会不会发到每一条路由上。"""
+        """ComfyUI usually sits behind a reverse proxy: what needs checking is exactly whether this set of
+        headers reaches every route.
+
+        ComfyUI 多半套在反向代理后面：要核的正是这组头会不会发到每一条路由上。"""
         definition = _definition(auth={"headers": {"Authorization": "Bearer {{api_key}}"}})
 
         preview = _preview(definition, credentials=CREDENTIALS)
@@ -114,7 +127,10 @@ class TestPreviewRequest:
         assert preview.submit.headers == {"Authorization": "Bearer ****1234"}
 
     def test_a_masked_query_credential_reads_as_asterisks_in_the_url(self):
-        """查询参数会被百分号编码，打码记号在预览 URL 上还原成惯用形。"""
+        """Query parameters get percent-encoded; the mask marker is restored to its usual form in the
+        preview URL.
+
+        查询参数会被百分号编码，打码记号在预览 URL 上还原成惯用形。"""
         definition = _definition(auth={"query": {"token": "{{api_key}}"}})
 
         preview = _preview(definition, credentials=CREDENTIALS)
@@ -122,7 +138,10 @@ class TestPreviewRequest:
         assert preview.submit.url == "https://comfy.test/prompt?token=****1234"
 
     def test_an_empty_api_key_renders_no_credential_at_all(self):
-        """ComfyUI 原生无鉴权：空凭证发出去只会让代理以 401 拒掉一个本该放行的请求。"""
+        """ComfyUI has no auth natively: sending an empty credential only makes the proxy reject with 401 a
+        request that should pass.
+
+        ComfyUI 原生无鉴权：空凭证发出去只会让代理以 401 拒掉一个本该放行的请求。"""
         definition = _definition(auth={"headers": {"Authorization": "Bearer {{api_key}}"}})
 
         preview = _preview(definition, credentials=EndpointTestCredentials(base_url="https://comfy.test", api_key=""))
@@ -140,6 +159,8 @@ class TestPreviewRequest:
 
         conversions = preview.conversions
         assert conversions is not None
+        # The actual pixels for 9:16 + 720p and the random seed actually used are only visible in the
+        # conversion notes.
         # 9:16 + 720p 的落地像素、以及实际生效的随机种子，都只在换算说明里看得到。
         assert (conversions["width"], conversions["height"]) == (720, 1280)
         assert conversions["aspect_ratio"] == "9:16"
@@ -149,7 +170,10 @@ class TestPreviewRequest:
         assert conversions["dropped_nodes"] == []
 
     def test_an_unbound_dimension_reads_as_null(self):
-        """未绑定即「以 workflow 字面值为准」：用户在项目页选的时长对这个端点根本不起作用。"""
+        """Unbound means "the workflow literal wins": the duration the user picks on the project page has no
+        effect on this endpoint at all.
+
+        未绑定即「以 workflow 字面值为准」：用户在项目页选的时长对这个端点根本不起作用。"""
         preview = _preview(credentials=CREDENTIALS)
 
         assert preview.conversions is not None
@@ -162,7 +186,10 @@ class TestPreviewRequest:
         assert len(str(preview.conversions["workflow_sha256"])) == 64
 
     def test_missing_assets_are_summarised_so_the_shape_does_not_collapse(self):
-        """真发时用户是会带上素材的：留空会让改图把读图节点连同下游删掉。"""
+        """On a real send the user does bring assets: leaving them empty would make the graph change delete
+        the image-reading nodes together with their downstream.
+
+        真发时用户是会带上素材的：留空会让改图把读图节点连同下游删掉。"""
         preview = _preview(_with_image_bindings(), credentials=CREDENTIALS)
 
         body = preview.submit.body
@@ -182,7 +209,10 @@ class TestPreviewRequest:
         assert body["prompt"]["10"]["inputs"]["image"] == "<start_image, 9 bytes>"
 
     def test_fewer_reference_images_than_slots_reports_the_dropped_nodes(self):
-        """张数少于格子数正是会触发改图的输入，删了哪些节点是预览最该说清的事。"""
+        """Fewer images than slots is exactly the input that triggers a graph change, and which nodes get
+        deleted is what the preview most needs to make clear.
+
+        张数少于格子数正是会触发改图的输入，删了哪些节点是预览最该说清的事。"""
         assets = EndpointTestAssets(by_source={"reference_images": [AssetData("image/png", b"one")]})
 
         preview = _preview(_with_reference_slots(), credentials=CREDENTIALS, assets=assets)
@@ -191,11 +221,16 @@ class TestPreviewRequest:
         assert isinstance(body, dict)
         assert "21" not in body["prompt"]
         assert preview.conversions is not None
+        # Emptied slots go into the notes together with the merge nodes they bypass: the user sees exactly
+        # which nodes are missing from the graph this time.
         # 空出来的格子连同被它旁路掉的合并节点一起进说明：用户看到的就是这次图上少了哪几个节点。
         assert preview.conversions["dropped_nodes"] == ["21", "22"]
 
     def test_not_placeholding_missing_assets_gives_the_shape_a_real_submit_would_have(self):
-        """关掉占位摘要后走的是真发那条路：绑定了却没给值的读图节点连同下游一并删掉。"""
+        """With placeholder summaries off, the real-send path is taken: image-reading nodes that are bound
+        but given no value are deleted together with their downstream.
+
+        关掉占位摘要后走的是真发那条路：绑定了却没给值的读图节点连同下游一并删掉。"""
         preview = _preview(_with_image_bindings(), credentials=CREDENTIALS, placeholder_missing_assets=False)
 
         body = preview.submit.body
@@ -212,7 +247,10 @@ class TestPreviewRequest:
         assert definition["workflow"]["6"]["inputs"]["text"] == "一只猫"
 
     def test_the_conversions_payload_keys_match_the_dataclass(self):
-        """换算说明原样进响应体：字段名就是接口，加字段要同时改两处。"""
+        """The conversion notes go into the response body as-is: field names are the interface, and adding a
+        field means changing both places.
+
+        换算说明原样进响应体：字段名就是接口，加字段要同时改两处。"""
         preview = _preview(credentials=CREDENTIALS)
 
         assert preview.conversions is not None
@@ -232,17 +270,25 @@ class TestTrialRunTarget:
         assert isinstance(await target.build_backend(), ComfyuiVideoBackend)
 
     def test_it_skips_the_capability_gate(self):
-        """费用固定 0，而能力只从节点绑定推导——内联定义这条入口拿不到推导结果。"""
+        """The cost is fixed at 0, and capabilities are derived only from node bindings; this
+        inline-definition entry cannot get the derived result.
+
+        费用固定 0，而能力只从节点绑定推导——内联定义这条入口拿不到推导结果。"""
         assert comfyui_target(_definition(), CREDENTIALS, PARAMETERS).gate_capabilities is False
 
     def test_it_leaves_the_result_body_without_a_rendered_request(self):
-        """实发 workflow 的种子与素材引用名要到提交那一刻才定下来。"""
+        """The seed and asset reference names of the workflow actually sent are only decided at submit time.
+
+        实发 workflow 的种子与素材引用名要到提交那一刻才定下来。"""
         assert support_for_kind("comfyui").trial_run_request_preview is False
 
 
 class TestCredentialNeeds:
     def test_base_url_is_always_required(self):
-        """ComfyUI 的路由全在服务地址根下，定义里一个绝对地址都不写。"""
+        """ComfyUI's routes all live under the service root, and the definition contains no absolute URL at
+        all.
+
+        ComfyUI 的路由全在服务地址根下，定义里一个绝对地址都不写。"""
         assert comfyui_credential_needs(_definition())[0] is True
 
     def test_an_auth_section_that_sends_something_asks_for_an_api_key(self):
@@ -252,7 +298,11 @@ class TestCredentialNeeds:
         assert comfyui_credential_needs(definition)[1] is True
 
     def test_two_empty_tables_ask_for_nothing(self):
-        """``{"headers": {}}`` 是合法定义、渲染出来一个头都没有：为它索要 api_key 会把一台
+        """``{"headers": {}}`` is a valid definition that renders no header at all: demanding an api_key for
+        it would shut an unprotected ComfyUI out of preview and test connection. The validator and
+        rendering both follow this rule.
+
+        ``{"headers": {}}`` 是合法定义、渲染出来一个头都没有：为它索要 api_key 会把一台
         不设防的 ComfyUI 挡在预览与测试连接之外。校验器与渲染都按这个口径。"""
         definition = _definition()
         definition["auth"] = {"headers": {}}

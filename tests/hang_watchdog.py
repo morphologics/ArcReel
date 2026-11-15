@@ -1,4 +1,29 @@
-"""挂起诊断：进程长时间没有用例进展时，把全部线程的调用栈写进转储目录。
+"""Hang diagnostics: when the process makes no test progress for a long time, write all threads' stacks to the dump
+directory.
+
+Loaded by the root conftest's ``pytest_plugins``, enabled only when the env var ``ARCREEL_TEST_HANG_DUMP_DIR`` names a
+directory (the CI backend test job); local runs are unaffected. The xdist controller and each worker write their own
+set of files, with the worker id and pid in the name, so a worker restarted after a crash is told apart from the
+original:
+
+- ``<id>-<pid>.progress``: the process running tests records each test as it starts. When a worker is killed
+  outright, the last line is the test it was running.
+- ``<id>-<pid>.stacks``: when the process makes no progress within ``IDLE_DUMP_SECONDS``, record the current phase and
+  dump all threads' stacks; if there is still no progress, dump again at the same interval. When the process calls
+  ``os._exit``, it likewise first records the exit code and all threads' stacks, then exits.
+- ``<id>-<pid>.<signal name>``: all threads' stacks when the process receives a signal in ``CRASH_SIGNALS``; then it
+  is handed to the original handling as usual (SIGTERM still ends the process, SIGINT still raises
+  KeyboardInterrupt).
+- The controller's ``.progress`` also records each worker that went down, with its exit code or the signal that
+  killed it.
+
+pytest-timeout only covers a single test's setup/call/teardown, and its signal method only takes effect once the
+main thread is back in bytecode; it cannot see sticking points like session teardown or a worker waiting for
+non-daemon threads on exit. The watchdog here is an independent daemon thread covering those phases. It does not
+borrow faulthandler's ``dump_traceback_later``: that has only one timer per process, and the dump is lost once any
+other caller resets or cancels it.
+
+挂起诊断：进程长时间没有用例进展时，把全部线程的调用栈写进转储目录。
 
 由根 conftest 的 ``pytest_plugins`` 加载，只在环境变量 ``ARCREEL_TEST_HANG_DUMP_DIR``
 指定目录时启用（CI 的后端测试 job），本地运行不受影响。xdist 的 controller 与每个 worker
@@ -34,25 +59,37 @@ from typing import Any, NoReturn, TextIO
 import pytest
 
 DUMP_DIR_ENV = "ARCREEL_TEST_HANG_DUMP_DIR"
+# Override the no-progress threshold (seconds), so this plugin's own contract tests can shorten the wait.
 # 覆盖无进展阈值（秒），供本插件自身的契约测试缩短等待。
 IDLE_SECONDS_ENV = "ARCREEL_TEST_HANG_IDLE_SECONDS"
+# A single test's timeout is 120s (pyproject's timeout); leave headroom here and dump only when even the test timeout
+# failed to wrap things up.
 # 单个用例的超时是 120s（pyproject 的 timeout），这里留出余量，只在用例超时也没能收场时转储。
 IDLE_DUMP_SECONDS = 180.0
+# Signals on which to dump stacks: SIGTERM and SIGHUP, which end the process silently, and SIGINT, sent when execnet
+# loses contact and when CI cancels.
+# Fatal signals like SIGSEGV belong to pytest's faulthandler plugin, which writes stacks to stderr; it only prepared an
+# alternate signal stack for the thread that enabled it, so when another thread overflows its stack the handler cannot
+# run and the process dies silently.
 # 收到时转储调用栈的信号：会无声结束进程的 SIGTERM、SIGHUP，以及 execnet 失联与 CI 取消时发来的 SIGINT。
 # SIGSEGV 这类致命信号归 pytest 的 faulthandler 插件，它把调用栈写到 stderr；它只给启用它的线程
 # 准备了备用信号栈，别的线程栈溢出时处理函数跑不起来，进程无声死掉。
 CRASH_SIGNALS = ("SIGTERM", "SIGHUP", "SIGINT")
+# Upper limit (seconds) on waiting for a dead worker's process to end and fetching its exit status.
 # worker 宕掉后等它的进程结束、取退出状态的上限（秒）。
 EXIT_STATUS_WAIT_SECONDS = 5.0
 
 _real_os_exit = os._exit
 
+# One watchdog per process; the controller's report hook has no access to config, so it lives at module level.
 # 每个进程只有一个看门狗；controller 的报告钩子拿不到 config，故放在模块级。
 _watchdog: HangWatchdog | None = None
 
 
 class HangWatchdog:
-    """记录进展；``idle_seconds`` 内无进展时把全部线程的调用栈写进 ``stacks``。"""
+    """Record progress; when there is no progress within ``idle_seconds``, write all threads' stacks to ``stacks``.
+
+    记录进展；``idle_seconds`` 内无进展时把全部线程的调用栈写进 ``stacks``。"""
 
     def __init__(self, progress: TextIO, stacks: TextIO, idle_seconds: float) -> None:
         self._progress = progress
@@ -67,18 +104,24 @@ class HangWatchdog:
         self._thread.start()
 
     def mark(self, phase: str, *, record: bool = False) -> None:
-        """记下当前阶段并重新计时；``record`` 为真时同时追加到进展文件。"""
+        """Record the current phase and restart the timer; when ``record`` is true, also append it to the progress file.
+
+        记下当前阶段并重新计时；``record`` 为真时同时追加到进展文件。"""
         self._phase = phase
         self._last_progress = time.monotonic()
         if record:
             self.note(phase)
 
     def note(self, line: str) -> None:
-        """追加一行到进展文件，不改变当前阶段。"""
+        """Append one line to the progress file without changing the current phase.
+
+        追加一行到进展文件，不改变当前阶段。"""
         self._progress.write(f"{_timestamp()} {line}\n")
 
     def dump(self, reason: str) -> None:
-        """把原因、当前阶段与全部线程的调用栈写进 ``stacks``。"""
+        """Write the reason, the current phase and all threads' stacks to ``stacks``.
+
+        把原因、当前阶段与全部线程的调用栈写进 ``stacks``。"""
         self._stacks.write(f"===== {_timestamp()} {reason}，当前阶段：{self._phase}\n")
         self._stacks.flush()
         faulthandler.dump_traceback(file=self._stacks, all_threads=True)
@@ -98,6 +141,10 @@ def _timestamp() -> str:
 
 
 def _traced_os_exit(status: int) -> NoReturn:
+    # os._exit runs no finally or atexit, and the process just vanishes; first leave a record of who called it and on which
+    # path.
+    # Child processes forked by tests finish with os._exit as usual and are not dumped.
+    # The exit must still happen even if dumping fails (e.g. disk full).
     # os._exit 不跑 finally 与 atexit，进程直接消失；先留下是谁、在哪条路径上调用的。
     # 用例 fork 出的子进程照常用 os._exit 收尾，不转储。
     # 转储失败（如磁盘写满）也必须照常退出。
@@ -109,12 +156,15 @@ def _traced_os_exit(status: int) -> NoReturn:
 
 
 def _dump_stacks_on_signals(directory: Path, stem: str) -> None:
-    if not hasattr(faulthandler, "register"):  # Windows 没有
+    if not hasattr(faulthandler, "register"):  # Not available on Windows / Windows 没有
         return
     for name in CRASH_SIGNALS:
         signum = getattr(signal, name, None)
         if signum is None:
             continue
+        # faulthandler writes directly to the fd inside the signal handler, so it can dump even when the main thread is stuck in
+        # C code; faulthandler holds a reference to the file object, so it is not collected. chain=True keeps the original
+        # handling in effect.
         # faulthandler 在信号处理函数里直接写 fd，主线程卡在 C 代码里也能转储；文件对象由
         # faulthandler 持有引用，不会被回收。chain=True 让原来的处理方式照常生效。
         file = (directory / f"{stem}.{name}").open("a", encoding="utf-8")
@@ -122,7 +172,11 @@ def _dump_stacks_on_signals(directory: Path, stem: str) -> None:
 
 
 def _describe_exit(node: Any) -> str:
-    """取宕掉的 worker 的进程退出状态；拿不到时说明原因。"""
+    """Get the exit status of a dead worker process; when unavailable, say why.
+
+    取宕掉的 worker 的进程退出状态；拿不到时说明原因。"""
+    # execnet does not expose the subprocess behind the popen gateway; get it via its internal structure, and fall back to
+    # an explanation if that structure changes.
     # execnet 没有公开 popen 网关背后的子进程，按其内部结构取，结构变了就退化为说明。
     popen = getattr(getattr(getattr(node, "gateway", None), "_io", None), "popen", None)
     if not isinstance(popen, subprocess.Popen):
@@ -144,6 +198,7 @@ def pytest_configure(config: pytest.Config) -> None:
     directory = Path(dump_dir)
     directory.mkdir(parents=True, exist_ok=True)
     stem = f"{os.environ.get('PYTEST_XDIST_WORKER', 'controller')}-{os.getpid()}"
+    # Line-buffered: when the process is killed outright, every line already written has reached the kernel.
     # 行缓冲：进程被直接杀掉时，已写下的每一行都已落到内核。
     progress = (directory / f"{stem}.progress").open("a", buffering=1, encoding="utf-8")
     stacks = (directory / f"{stem}.stacks").open("a", buffering=1, encoding="utf-8")
@@ -167,6 +222,7 @@ def pytest_runtest_protocol(item: pytest.Item) -> Generator[None, object, object
 
 
 def pytest_runtest_logreport(report: pytest.TestReport) -> None:
+    # The xdist controller runs no tests; it counts progress from reports sent back by workers.
     # xdist 的 controller 不执行用例，靠 worker 回传的报告计进展。
     if _watchdog is not None:
         _watchdog.mark(f"report {report.nodeid} {report.when}")
@@ -174,6 +230,7 @@ def pytest_runtest_logreport(report: pytest.TestReport) -> None:
 
 @pytest.hookimpl(optionalhook=True)
 def pytest_testnodedown(node: Any, error: object | None) -> None:
+    # Only the xdist controller has this hook; an empty error means a normal finish.
     # xdist 的 controller 才有这个钩子；error 为空是正常收尾。
     if _watchdog is not None and error is not None:
         worker_id = getattr(getattr(node, "gateway", None), "id", "?")
@@ -186,6 +243,8 @@ def pytest_sessionfinish() -> None:
 
 
 def pytest_unconfigure() -> None:
+    # Do not stop the watchdog: after unconfigure the process still waits for non-daemon threads and runs atexit, and
+    # getting stuck there must be dumped too.
     # 不停看门狗：unconfigure 之后进程还要等非 daemon 线程、跑 atexit，卡在这里同样要转储。
     if _watchdog is not None:
         _watchdog.mark("unconfigure，等待进程退出", record=True)

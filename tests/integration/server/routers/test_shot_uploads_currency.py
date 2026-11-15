@@ -1,4 +1,7 @@
-"""上传的分镜图与视频即成品：清单按上传字节登记，时效不随提示词与引用资产变化。"""
+"""Uploaded storyboard images and videos are finished products: the manifest registers them by uploaded bytes,
+and currency does not change with prompts or referenced assets.
+
+上传的分镜图与视频即成品：清单按上传字节登记，时效不随提示词与引用资产变化。"""
 
 import asyncio
 from io import BytesIO
@@ -68,6 +71,8 @@ def _write_thumbnail(thumbnail_path: Path, content: bytes) -> None:
 
 
 async def _fake_thumbnail(_video_path: Path, thumbnail_path: Path):
+    # # Production frame extraction is written to disk by an ffmpeg subprocess, off the event loop; the stand-in also
+    # # writes in a worker thread.
     # 生产的抽帧由 ffmpeg 子进程落盘，不占事件循环；替身同样在工作线程里写。
     await asyncio.to_thread(_write_thumbnail, thumbnail_path, b"jpg")
     return thumbnail_path

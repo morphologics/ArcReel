@@ -70,7 +70,7 @@ def setup(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     # every test computes its own plan: the cache must not answer from a previous test's project state
     monkeypatch.setattr(PROJECT_STATE_CACHE, "get_or_compute", lambda _dir, _key, compute: compute())
     final_cuts = _FinalCuts()
-    service = TimelineStreamService(_Projects(tmp_path), final_cuts)  # type: ignore[arg-type]
+    service = TimelineStreamService(_Projects(tmp_path), final_cuts)  # type: ignore[arg-type]  # test doubles for the project and final-cut services
     return service, final_cuts, rendered, tmp_path / "demo" / "renders" / "episode_1" / "tl-1" / "stream"
 
 
@@ -172,7 +172,7 @@ async def test_the_background_sweep_builds_every_timeline_ahead(monkeypatch: pyt
     projects = type("P", (), {"list_projects": lambda self: ["one", "two"]})()
 
     with pytest.raises(asyncio.CancelledError):
-        await timeline_stream._prebuild_loop(projects)  # type: ignore[arg-type]
+        await timeline_stream._prebuild_loop(projects)  # type: ignore[arg-type]  # test double: only the methods the sweep calls
 
     assert built == [("tl-one", False), ("tl-two", False)]
 

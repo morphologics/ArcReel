@@ -1,4 +1,6 @@
-"""DashScopeVideoBackend 单元测试（mock httpx，异步两步式）。"""
+"""DashScopeVideoBackend unit tests (mock httpx, async two-step).
+
+DashScopeVideoBackend 单元测试（mock httpx，异步两步式）。"""
 
 from __future__ import annotations
 
@@ -28,6 +30,8 @@ def _resp(json_body: dict, status_code: int = 200) -> MagicMock:
     resp = MagicMock()
     resp.status_code = status_code
     resp.json.return_value = json_body
+    # Same as httpx: text is the raw response body. Both the >=400 log and the rejection-reason summary read it; leaving it a MagicMock
+    # would make the stand-in diverge from a real response on the real code path.
     # 与 httpx 一致：text 是响应体原文。>=400 的日志与拒因摘要都读它，留成 MagicMock 会
     # 让替身在真实代码路径上的行为与真响应分叉。
     resp.text = json.dumps(json_body, ensure_ascii=False)
@@ -42,7 +46,12 @@ def _http_error(status_code: int, message: str) -> httpx.HTTPStatusError:
 
 
 def _http_error_503_in_message(status_code: int) -> httpx.HTTPStatusError:
-    """生成 str() 含 "503" 子串、但状态码为 status_code 的真实 HTTPStatusError。
+    """Produce a real HTTPStatusError whose str() contains "503" but whose status code is status_code.
+
+    The raise_for_status message contains the request URL (here task_id carries "503"); the old string fallback would misjudge it as
+    retryable; the status-code predicate reads only response.status_code and is unaffected by transient substrings in the URL/message.
+
+    生成 str() 含 "503" 子串、但状态码为 status_code 的真实 HTTPStatusError。
 
     raise_for_status 的消息包含请求 URL（这里 task_id 带 "503"），旧字符串兜底会据此误判重试；
     状态码谓词只读 response.status_code，不受 URL/消息中瞬态子串影响。
@@ -68,7 +77,12 @@ def _succeeded(url: str = "https://x/o.mp4", duration: int = 5) -> dict:
 
 
 class _RecordingClient:
-    """httpx.AsyncClient 替身：记录每次 post/get 的 url 与参数，响应由传入的替身产出。
+    """httpx.AsyncClient stand-in: records the url and params of each post/get; responses come from the stand-ins passed in.
+
+    Contracts such as the submit body, endpoint and auth headers are about "what the outgoing request looks like", so assertions
+    target the request contents captured in ``posts`` / ``gets``, not the stand-in's call objects.
+
+    httpx.AsyncClient 替身：记录每次 post/get 的 url 与参数，响应由传入的替身产出。
 
     提交体、端点、鉴权头这些契约都是「发出去的请求长什么样」，断言落在 ``posts`` / ``gets``
     里的请求内容上，而不是替身的调用对象。
@@ -131,7 +145,11 @@ class TestCapabilities:
         assert vc.first_frame is False
 
     def test_happyhorse_11_caps(self):
-        """1.1 三模态各自登记能力档：t2v 无首帧（未登记会回落默认档的 first_frame=True，
+        """Each of the three 1.1 modalities registers its own capability tier: t2v has no first frame (unregistered, it would fall back to the
+        default tier's first_frame=True and be misfiled into the i2v bucket), i2v has a first frame and no reference images, r2v has 9
+        reference images and no first frame.
+
+        1.1 三模态各自登记能力档：t2v 无首帧（未登记会回落默认档的 first_frame=True，
         被误判进 i2v 桶），i2v 有首帧无参考图，r2v 参考图 9 张且无首帧。"""
         from lib.backends.video_backends.dashscope import DashScopeVideoBackend
 
@@ -175,25 +193,34 @@ class TestCapabilities:
         assert b.video_capabilities.first_frame is True
 
     def test_decorated_model_name_resolves_r2v_caps(self):
-        """代理中转的前缀/后缀装饰名（infer_endpoint 会按子串路由到 dashscope-async-video）
+        """Prefix/suffix-decorated names from relay proxies (infer_endpoint routes by substring to dashscope-async-video) must resolve
+        to the real r2v caps, not the unified fallback that drops reference_images.
+
+        代理中转的前缀/后缀装饰名（infer_endpoint 会按子串路由到 dashscope-async-video）
         必须解析出真实 r2v caps，而非退回统一回落 丢掉 reference_images。"""
         from lib.backends.video_backends.dashscope import DashScopeVideoBackend
 
         for model, expected_max in (
             ("proxy/happyhorse-1.0-r2v", 9),
             ("provider:wan2.7-r2v", 5),
-            ("wan2.7-r2v-0715", 5),  # 后缀版本号
-            ("Pro/HappyHorse-1.0-R2V", 9),  # 大小写不敏感
+            ("wan2.7-r2v-0715", 5),  # Suffix version number. / 后缀版本号
+            ("Pro/HappyHorse-1.0-R2V", 9),  # Case-insensitive. / 大小写不敏感
         ):
-            # 实例侧（_build_media 据此构造 media）
+            # Instance side (_build_media builds media from this). / 实例侧（_build_media 据此构造 media）
             b = DashScopeVideoBackend(api_key="sk", model=model)
             assert b.video_capabilities.max_reference_images > 0
             assert b.video_capabilities.max_reference_images == expected_max
-            # resolver 侧（纯函数，不构造 backend）
+            # Resolver side (pure function, no backend constructed). / resolver 侧（纯函数，不构造 backend）
             assert DashScopeVideoBackend.video_capabilities_for_model(model).max_reference_images == expected_max
 
     def test_alnum_glued_prefix_does_not_resolve_r2v_caps(self):
-        """字母数字直接粘连的前缀（无分隔符）不算装饰名，须落回统一回落。
+        """A prefix glued directly to letters/digits (no separator) is not a decorated name and must fall back to the unified fallback.
+
+        The opposite boundary of the previous case: "myhappyhorse-1.0-r2v" minus "my" is character-for-character
+        "happyhorse-1.0-r2v", so substring matching without an identifier-boundary check would wrongly hit -- proxy-decorated names
+        are told apart from real model names by non-alphanumeric separators like "/" ":", and a directly glued "my" does not qualify.
+
+        字母数字直接粘连的前缀（无分隔符）不算装饰名，须落回统一回落。
 
         与上一条用例的边界相反："myhappyhorse-1.0-r2v" 去掉 "my" 后与
         "happyhorse-1.0-r2v" 逐字符相同，若子串匹配不做标识符边界校验就会误判命中——
@@ -205,7 +232,14 @@ class TestCapabilities:
 
     @pytest.mark.parametrize("model", ["wan2.7-i2vfoo", "happyhorse-1.0-r2vfoo"])
     def test_alnum_glued_suffix_does_not_resolve_known_profile(self, model):
-        """字母数字直接粘连的后缀同样不算装饰名，须落回统一回落。
+        """A suffix glued directly to letters/digits is likewise not a decorated name and must fall back to the unified fallback.
+
+        The third boundary direction complementing the previous two cases: "wan2.7-i2vfoo" with "foo" cut off is
+        character-for-character the key "wan2.7-i2v"; if substring matching checks only the left boundary and not the right, an unknown
+        variant suffix would be truncated and misjudged as a known modality; a numeric suffix ("-0715") satisfies the right boundary
+        via "-" and is not constrained by this case.
+
+        字母数字直接粘连的后缀同样不算装饰名，须落回统一回落。
 
         与前两条用例互补的第三个边界方向："wan2.7-i2vfoo" 截断掉 "foo" 后与 key "wan2.7-i2v"
         逐字符相同，若子串匹配只做左侧边界校验、不做右侧校验，未知变体后缀会被截断误判成已知
@@ -218,21 +252,27 @@ class TestCapabilities:
         assert caps.max_prompt_chars is None
 
     def test_unknown_bare_series_falls_back_to_default(self):
-        """仅系列名无变体后缀（裸 "happyhorse"）无法判别 t2v/i2v/r2v → 通用默认（无 r2v）。"""
+        """A bare series name without a variant suffix ("happyhorse") cannot tell t2v/i2v/r2v apart -> generic default (no r2v).
+
+        仅系列名无变体后缀（裸 "happyhorse"）无法判别 t2v/i2v/r2v → 通用默认（无 r2v）。"""
         from lib.backends.video_backends.dashscope import DashScopeVideoBackend
 
         b = DashScopeVideoBackend(api_key="sk", model="happyhorse")
         assert b.video_capabilities.max_reference_images == 0
 
     def test_wan27_declares_prompt_char_limit(self):
-        """wan2.7 全家族 prompt ≤ 5000 字符；超限官方静默截断并照常计费，故须付费前拦。"""
+        """The whole wan2.7 family has prompt <= 5000 characters; over the limit the official API silently truncates and still bills, so it must be blocked before paying.
+
+        wan2.7 全家族 prompt ≤ 5000 字符；超限官方静默截断并照常计费，故须付费前拦。"""
         from lib.backends.video_backends.dashscope import DashScopeVideoBackend
 
         for model in ("wan2.7-t2v", "wan2.7-i2v", "wan2.7-r2v"):
             assert DashScopeVideoBackend.video_capabilities_for_model(model).max_prompt_chars == 5000
 
     def test_models_without_verified_limit_declare_none(self):
-        """未取证到上限的 model 不声明——未声明 ≠ 上限 0，凭空声明会误拒合法请求。"""
+        """Models whose limit has not been verified declare none -- undeclared != a limit of 0; declaring one out of thin air would wrongly reject valid requests.
+
+        未取证到上限的 model 不声明——未声明 ≠ 上限 0，凭空声明会误拒合法请求。"""
         from lib.backends.video_backends.dashscope import DashScopeVideoBackend
 
         for model in ("happyhorse-1.0-t2v", "happyhorse-1.0-i2v", "happyhorse-1.0-r2v", "happyhorse"):
@@ -268,14 +308,14 @@ class TestReferenceToVideo:
         assert len(media) == 2
         assert all(m["type"] == "reference_image" for m in media)
         assert media[0]["url"].startswith("data:image/png;base64,")
-        # resolution 大写、watermark 关、ratio 透传
+        # resolution uppercase, watermark off, ratio passed through. / resolution 大写、watermark 关、ratio 透传
         assert body["parameters"]["resolution"] == "720P"
         assert body["parameters"]["watermark"] is False
         assert body["parameters"]["ratio"] == "16:9"
-        # submit 端点 + async 头
+        # submit endpoint + async header. / submit 端点 + async 头
         assert client.posts[-1]["url"].endswith("/api/v1/services/aigc/video-generation/video-synthesis")
         assert client.posts[-1]["headers"]["X-DashScope-Async"] == "enable"
-        # 计费时长取 usage.duration（非请求值 5）
+        # Billed duration taken from usage.duration (not the requested value 5). / 计费时长取 usage.duration（非请求值 5）
         assert result.duration_seconds == 8
         assert result.provider == PROVIDER_DASHSCOPE
         assert result.task_id == "t-r2v"
@@ -299,7 +339,9 @@ class TestReferenceToVideo:
         assert len(client.posts[-1]["json"]["input"]["media"]) == 9
 
     async def test_r2v_refs_over_limit_rejected_before_submit(self, tmp_path: Path):
-        """超出型号上限的参考图不截断，提交前拒绝。"""
+        """Reference images beyond the model limit are not truncated; rejected before submit.
+
+        超出型号上限的参考图不截断，提交前拒绝。"""
         post = AsyncMock(return_value=_resp(_submit()))
         client = _client(post=post, get=AsyncMock())
         refs = [_ref(tmp_path, f"r{i}.png") for i in range(6)]
@@ -330,6 +372,7 @@ class TestReferenceToVideo:
         assert ei.value.code == "video_reference_images_unsupported"
 
     async def test_start_image_rejected_when_model_has_no_first_frame(self, tmp_path: Path):
+        # When the model profile declares first_frame=False, a given first frame is not silently dropped: otherwise it bills as usual and the final video does not use it.
         # 型号档案声明 first_frame=False 时带首帧不静默丢弃：否则照常计费，成片没用上首帧
         post = AsyncMock(return_value=_resp(_submit()))
         client = _client(post=post, get=AsyncMock())
@@ -346,6 +389,7 @@ class TestReferenceToVideo:
         post.assert_not_awaited()
 
     async def test_r2v_all_refs_missing_fail_loud(self, tmp_path: Path):
+        # Missing/unreadable r2v reference images (including declared items still left after filtering empty strings) must fail loudly listing names, no silent degradation.
         # r2v 参考图缺失/不可读（含空串过滤后仍有声明项）须 fail-loud 报错列名，不静默退化
         post = AsyncMock(return_value=_resp(_submit()))
         client = _client(post=post, get=AsyncMock())
@@ -365,10 +409,11 @@ class TestReferenceToVideo:
                 )
         assert ei.value.code == "video_reference_images_unreadable"
         assert "nope.png" in ei.value.params["names"]
-        # 提交请求根本不应发出
+        # The submit request should never be sent. / 提交请求根本不应发出
         post.assert_not_called()
 
     async def test_r2v_no_refs_provided_raises(self, tmp_path: Path):
+        # r2v model but the caller gave no reference images at all (None/empty) -> required error; no r2v request without media is submitted.
         # r2v 模型但调用方完全未提供参考图（None/空）→ required 错误，不提交无 media 的 r2v 请求
         post = AsyncMock(return_value=_resp(_submit()))
         client = _client(post=post, get=AsyncMock())
@@ -383,6 +428,8 @@ class TestReferenceToVideo:
         post.assert_not_called()
 
     async def test_r2v_partial_unreadable_refs_fail_loud(self, tmp_path: Path):
+        # Some reference images raise OSError on read (is_file passes but reading fails) -> fail loudly, abort and list unreadable file names,
+        # rather than silently generating with the readable subset (wrong result, still billed).
         # 部分参考图 read 抛 OSError（is_file 通过但读失败）→ fail-loud 中止并列出不可读文件名，
         # 不静默用可读子集生成（会产出错误结果且照常计费）
         post = AsyncMock(return_value=_resp(_submit("t-r2v")))
@@ -414,6 +461,7 @@ class TestReferenceToVideo:
         post.assert_not_called()
 
     async def test_r2v_all_refs_unreadable_oserror_fail_loud(self, tmp_path: Path):
+        # All reference images raise OSError on read -> fail loudly; no r2v request without media is submitted.
         # 全部参考图 read 抛 OSError → fail-loud，不提交无 media 的 r2v 请求
         post = AsyncMock(return_value=_resp(_submit()))
         client = _client(post=post, get=AsyncMock())
@@ -440,6 +488,7 @@ class TestReferenceToVideo:
 
 class TestFirstFrameAndTextOnly:
     async def test_i2v_start_image_oserror_fail_loud(self, tmp_path: Path):
+        # A first frame is declared but read raises OSError (permission/IO) -> fail loudly and abort, rather than silently ignoring the first frame and producing a video.
         # 声明了首帧图却 read 抛 OSError（权限/IO）→ fail-loud 中止，不静默忽略首帧照常出片
         post = AsyncMock(return_value=_resp(_submit()))
         get = AsyncMock(return_value=_resp(_succeeded()))
@@ -476,6 +525,7 @@ class TestFirstFrameAndTextOnly:
         media = client.posts[-1]["json"]["input"]["media"]
         assert media == [{"type": "first_frame", "url": media[0]["url"]}]
         assert media[0]["url"].startswith("data:image/png;base64,")
+        # With a first frame (image-to-video) the aspect ratio follows the first frame: even with a non-empty default aspect_ratio, ratio must not be sent or upstream rejects.
         # 带首帧（图生视频）按首帧定宽高比：默认 aspect_ratio 非空也不得下传 ratio，否则上游拒绝
         assert "ratio" not in client.posts[-1]["json"]["parameters"]
 
@@ -493,7 +543,9 @@ class TestFirstFrameAndTextOnly:
         assert client.posts[-1]["json"]["parameters"]["resolution"] == "1080P"
 
     async def test_happyhorse_11_i2v_payload(self, tmp_path: Path):
-        """1.1 与 1.0 同口径：水印显式关（官方默认开），480P 档位透传为大写。"""
+        """1.1 matches 1.0: watermark explicitly off (official default is on), the 480P tier passed through in uppercase.
+
+        1.1 与 1.0 同口径：水印显式关（官方默认开），480P 档位透传为大写。"""
         post = AsyncMock(return_value=_resp(_submit()))
         get = AsyncMock(return_value=_resp(_succeeded()))
         client = _client(post=post, get=get)
@@ -514,7 +566,9 @@ class TestFirstFrameAndTextOnly:
 
 
 class TestUserRelaxedCapabilities:
-    """请求带上执行闸门那份已叠加用户覆盖的能力时，放宽的维度照常发出，不按型号档案拒绝。"""
+    """When the request carries the capabilities from the execution gate with user overrides applied, relaxed dimensions are sent as usual, not rejected by the model profile.
+
+    请求带上执行闸门那份已叠加用户覆盖的能力时，放宽的维度照常发出，不按型号档案拒绝。"""
 
     @staticmethod
     def _build(tmp_path: Path, model: str, **request_fields) -> dict:
@@ -565,6 +619,7 @@ class TestUserRelaxedCapabilities:
             tmp_path, "wan2.7-i2v", reference_images=[_ref(tmp_path, "r.png")], video_capabilities=caps
         )
         assert [m["type"] for m in with_refs["input"]["media"]] == ["reference_image"]
+        # Relaxing the reference-image limit does not turn an i2v model into "reference images required": a request with only a first frame is still sent.
         # 放宽参考图上限不把 i2v 型号变成「必须带参考图」：只带首帧的请求照旧发出
         frame_only = self._build(tmp_path, "wan2.7-i2v", start_image=_ref(tmp_path, "s.png"), video_capabilities=caps)
         assert [m["type"] for m in frame_only["input"]["media"]] == ["first_frame"]
@@ -776,6 +831,7 @@ class TestSubmit413:
                         duration_seconds=5,
                     )
                 )
+        # Keep status_code so the choke-point layer recognizes 413; 413 is not retryable -> fail fast, single submit.
         # 保留 status_code 让咽喉层识别 413；413 非 retryable → fail-fast 单次提交
         assert ei.value.response.status_code == 413
         assert len(client.posts) == 1
@@ -783,9 +839,12 @@ class TestSubmit413:
 
 
 class TestRetryStatusGating:
-    """提交/轮询按 HTTP status_code 决定重试，消除字符串子串误判。"""
+    """Submit/poll decide retries by HTTP status_code, eliminating substring misjudgments.
+
+    提交/轮询按 HTTP status_code 决定重试，消除字符串子串误判。"""
 
     async def test_submit_4xx_with_503_substring_no_retry(self, tmp_path: Path):
+        # A 4xx error message containing "503" (URL/task_id): the old string fallback would retry by mistake; the new predicate fails fast on 400.
         # 4xx 错误消息里带 "503" 子串（URL/task_id）：旧字符串兜底会误判重试，新谓词按 400 fail-fast。
         err = _http_error_503_in_message(400)
         assert "503" in str(err)
@@ -804,7 +863,7 @@ class TestRetryStatusGating:
         assert len(client.posts) == 1
 
     async def test_submit_real_503_retries_then_succeeds(self, tmp_path: Path):
-        # 真 5xx：按 status_code 重试，第三次成功。
+        # A real 5xx: retried by status_code, succeeds on the third attempt. / 真 5xx：按 status_code 重试，第三次成功。
         err503 = _resp({"code": "ServiceUnavailable"}, status_code=503)
         err503.raise_for_status = MagicMock(side_effect=_http_error_503_in_message(503))
         post = AsyncMock(side_effect=[err503, err503, _resp(_submit("t-ok"))])
@@ -822,7 +881,7 @@ class TestRetryStatusGating:
         assert result.task_id == "t-ok"
 
     async def test_submit_connect_error_retries(self, tmp_path: Path):
-        # 网络层错误（连接确定未送达）维持重试。
+        # Network-level errors (connection definitely not delivered) are still retried. / 网络层错误（连接确定未送达）维持重试。
         post = AsyncMock(side_effect=[httpx.ConnectError("refused"), _resp(_submit("t-ok"))])
         get = AsyncMock(return_value=_resp(_succeeded()))
         client = _client(post=post, get=get)
@@ -838,7 +897,7 @@ class TestRetryStatusGating:
         assert result.task_id == "t-ok"
 
     async def test_poll_timeout_retries(self, tmp_path: Path):
-        # 轮询（幂等 GET）网络层 Timeout 维持重试。
+        # Network-level Timeout on polling (idempotent GET) is still retried. / 轮询（幂等 GET）网络层 Timeout 维持重试。
         post = AsyncMock(return_value=_resp(_submit("t-poll")))
         get = AsyncMock(side_effect=[httpx.TimeoutException("read timed out"), _resp(_succeeded())])
         client = _client(post=post, get=get)
@@ -855,7 +914,9 @@ class TestRetryStatusGating:
 
 
 class TestWan27ReferenceVoice:
-    """wan2.7-r2v 的音色不是独立 media 条目，而是挂在参考素材项上的 reference_voice 字段。"""
+    """wan2.7-r2v voices are not separate media entries but a reference_voice field on the reference material items.
+
+    wan2.7-r2v 的音色不是独立 media 条目，而是挂在参考素材项上的 reference_voice 字段。"""
 
     @staticmethod
     def _backend():
@@ -883,6 +944,7 @@ class TestWan27ReferenceVoice:
 
         caps = DashScopeVideoBackend.video_capabilities_for_model("wan2.7-r2v")
         assert caps.reference_audio_mode is ReferenceAudioMode.DIRECT
+        # Audio is attached per reference material item, so the max number of audio segments equals the max number of reference materials.
         # 音频逐段挂参考素材项，段数上限即参考素材总数上限
         assert caps.max_reference_audio_count == 5
 
@@ -908,7 +970,13 @@ class TestWan27ReferenceVoice:
         assert refs[1]["reference_voice"].startswith("data:audio/wav;base64,")
 
     def test_reference_audio_targets_align_by_explicit_index_not_position(self, tmp_path):
-        """参考音频顺序（台词 speaker 首现）与参考图顺序（mention 首现）独立派生，不天然同序。
+        """Reference audio order (first appearance of the dialogue line speaker) and reference image order (first mention) are derived independently and not naturally aligned.
+
+        Scenario: references = [scene, Zhang San] (image 0 = scene, image 1 = Zhang San), audio_speakers = [Zhang San] (the only
+        character who speaks). Aligning by position would attach Zhang San's voice to the scene image; targets=[1] explicitly declares
+        that Zhang San's voice goes with image 1 and must be aligned to the correct reference_items[1].
+
+        参考音频顺序（台词 speaker 首现）与参考图顺序（mention 首现）独立派生，不天然同序。
 
         场景：references = [场景, 张三]（图0=场景，图1=张三），audio_speakers = [张三]（唯一
         开口的角色）。若按位置对齐会把张三的声音错挂到场景图上；targets=[1] 显式声明张三的
@@ -943,7 +1011,9 @@ class TestWan27ReferenceVoice:
         assert exc.value.code == "video_reference_audio_slots_insufficient"
 
     def test_reference_audio_targets_duplicate_index_raises_instead_of_silently_overwriting(self, tmp_path):
-        """两段音频指向同一个参考素材项时，逐条赋值会静默覆盖前一条绑定——必须硬失败。"""
+        """When two audio segments point at the same reference material item, per-item assignment would silently overwrite the earlier binding -- must fail hard.
+
+        两段音频指向同一个参考素材项时，逐条赋值会静默覆盖前一条绑定——必须硬失败。"""
         with pytest.raises(VideoCapabilityError) as exc:
             self._backend()._build_payload(
                 VideoGenerationRequest(
@@ -984,7 +1054,13 @@ class TestWan27ReferenceVoice:
         assert all("reference_voice" not in r for r in refs)
 
     def test_more_audios_than_references_raises(self, tmp_path):
-        """挂不上的音频不丢弃：静默丢弃会让某个角色的音色声明无声失效，且照常扣费。
+        """Audio that cannot be attached is not dropped: silently dropping it would make a character's voice declaration silently ineffective while still billing.
+
+        The blocker is "not enough attachable reference materials", which differs from the gate's "exceeds the model's capability
+        limit", so each has its own code: the suggested fixes are opposite (add reference images vs. remove characters), and sharing
+        one would give a hint that does not match the real blocker.
+
+        挂不上的音频不丢弃：静默丢弃会让某个角色的音色声明无声失效，且照常扣费。
 
         卡点是"可挂载的参考素材不够"，与 gate 的"超出模型能力上限"是两回事，故各用一个
         code：两者的处置建议相反（补参考图 vs 减角色），共用会给出与实际卡点不符的提示。
@@ -1004,7 +1080,13 @@ class TestWan27ReferenceVoice:
         assert exc.value.params["count"] == 2
 
     def test_model_without_reference_images_rejects_audio_instead_of_dropping(self, tmp_path):
-        """无参考图能力的 model 收到音频要报错，不静默丢弃。
+        """A model without reference image capability receiving audio must error, not silently drop it.
+
+        Reachable path: a custom provider overrides the endpoint-level reference_audio_mode to direct (that endpoint's delegate does
+        send audio), but the specific model uses a tier without reference materials like wan2.7-i2v -- the audio has nowhere to attach.
+        Dropping it would generate a video with a random voice and still bill.
+
+        无参考图能力的 model 收到音频要报错，不静默丢弃。
 
         可达路径：自定义供应商把 endpoint 级的 reference_audio_mode 覆盖成 direct（该 endpoint
         的 delegate 确实会下传音频），但具体 model 走 wan2.7-i2v 这类无参考素材的档位——
@@ -1052,13 +1134,23 @@ class TestWan27ReferenceVoice:
 
 
 class TestWan2Aliases:
-    """wan2.7 的 model_id 能力档解析：连字符/下划线别名与点号形态须归同一档；WAN2_PATTERN 只认
+    """Capability tier resolution for wan2.7 model_ids: hyphen/underscore aliases and the dotted form must map to the same tier;
+    WAN2_PATTERN only recognizes 2.7, other 2.x minor versions (2.1/2.2 etc.) are outside this regex's authority (see the note at WAN2_PATTERN).
+
+    wan2.7 的 model_id 能力档解析：连字符/下划线别名与点号形态须归同一档；WAN2_PATTERN 只认
     2.7，其余 2.x 小版本（2.1/2.2 等）不在本正则确权范围内（见 WAN2_PATTERN 处的说明）。
     """
 
     @pytest.mark.parametrize("model", ["wan-2.7-r2v", "wan_2.7-r2v", "wan_2.7_r2v"])
     def test_alias_forms_get_wan27_r2v_capabilities(self, model):
-        """discovery 返回的连字符/下划线 wan2.7 别名（endpoints.py 已路由到本后端）须认作
+        """Hyphen/underscore wan2.7 aliases returned by discovery (already routed to this backend by endpoints.py) must be recognized as
+        wan2.7-r2v, not fall back to the default profile.
+
+        Shares WAN2_PATTERN with endpoints.infer_endpoint: if the two differ in breadth we get the contradiction "routed to this backend
+        but treated as a generic model, losing reference image/first frame params". Aliases like "wan_2.7_r2v" that also use an
+        underscore between the version and the modality suffix need that separator normalized to a hyphen to match the _MODEL_PROFILES keys.
+
+        discovery 返回的连字符/下划线 wan2.7 别名（endpoints.py 已路由到本后端）须认作
         wan2.7-r2v，不落回默认档案。
 
         与 endpoints.infer_endpoint 共用 WAN2_PATTERN：两处不同宽即会出现"路由到本后端却被当
@@ -1074,7 +1166,12 @@ class TestWan2Aliases:
 
     @pytest.mark.parametrize("model", ["wan-2.7-image-to-video", "wan_2.7-image2video", "wan_2.7_image_to_video"])
     def test_image_to_video_alias_gets_wan27_i2v_capabilities(self, model):
-        """连字符/下划线形态的 image-to-video 续接别名归一化后仍带该后缀（如
+        """Hyphen/underscore image-to-video continuation aliases still carry that suffix after normalization (e.g.
+        "wan2.7-image-to-video"), which is not a substring match for "wan2.7-i2v" in _MODEL_PROFILES; the suffix must first be folded
+        to "i2v" before lookup, otherwise it silently falls to the default tier, loses first_frame, and _build_media then does not send
+        start_image.
+
+        连字符/下划线形态的 image-to-video 续接别名归一化后仍带该后缀（如
         "wan2.7-image-to-video"），不与 _MODEL_PROFILES 的 "wan2.7-i2v" 构成子串关系；须先把
         该后缀折成 "i2v" 再查表，否则静默落默认档、丢失 first_frame，_build_media 据此不下发
         start_image。
@@ -1083,13 +1180,18 @@ class TestWan2Aliases:
 
         caps = DashScopeVideoBackend.video_capabilities_for_model(model)
         assert caps.first_frame is True
+        # r2v also has first_frame=True; max_reference_images tells the two apart: i2v has no reference image capability,
+        # and without this assertion a normalization that wrongly lands on the r2v profile would still pass.
         # r2v 同样 first_frame=True，靠 max_reference_images 区分二者：i2v 无参考图能力，
         # 缺这条断言时归一化误落 r2v 档案也会通过。
         assert caps.max_reference_images == 0
         assert caps.max_prompt_chars == 5000
 
     def test_fully_underscored_t2v_alias_does_not_get_default_first_frame(self):
-        """ "wan_2.7_t2v" 的版本号与模态后缀均用下划线分隔；t2v 无首帧能力，与统一回落
+        """"wan_2.7_t2v" separates both the version and the modality suffix with underscores; t2v has no first-frame capability, exactly
+        the opposite of the unified fallback's default first_frame=True, which verifies it really resolved to wan2.7-t2v rather than silently falling back.
+
+         "wan_2.7_t2v" 的版本号与模态后缀均用下划线分隔；t2v 无首帧能力，与统一回落
         的默认 first_frame=True 恰好相反，能验证确实解析到了 wan2.7-t2v 而非静默落回默认档。
         """
         from lib.backends.video_backends.dashscope import DashScopeVideoBackend
@@ -1100,7 +1202,14 @@ class TestWan2Aliases:
 
     @pytest.mark.parametrize("model", ["swan2", "vendorwan2", "wan20", "swan2.7-r2v", "vendorwan2.7-t2v"])
     def test_substring_without_boundary_does_not_get_wan2_capabilities(self, model):
-        """含 "wan2" 子串但两侧非字母数字边界不成立的型号名，不得被误判为万相 2.x 家族。
+        """Model names containing "wan2" but without non-alphanumeric boundaries on both sides must not be misjudged as the Wan 2.x family.
+
+        Full aliases like "swan2.7-r2v" / "vendorwan2.7-t2v" (letters glued on the left, a valid modality suffix on the right) cannot be
+        stopped by WAN2_PATTERN's boundary anchors alone -- what hits is the fallback substring match at the end of _profile_for_model:
+        "swan2.7-r2v" minus its first character is character-for-character the _MODEL_PROFILES key "wan2.7-r2v", so that loop must also
+        check the left boundary for each key to avoid a false hit.
+
+        含 "wan2" 子串但两侧非字母数字边界不成立的型号名，不得被误判为万相 2.x 家族。
 
         "swan2.7-r2v" / "vendorwan2.7-t2v" 这类完整别名（左侧紧贴字母、右侧带合法模态后缀）单靠
         WAN2_PATTERN 的边界锚点无法拦下——命中的是 _profile_for_model 末尾的兜底子串匹配：
@@ -1115,7 +1224,11 @@ class TestWan2Aliases:
 
     @pytest.mark.parametrize("model", ["wan-2.1-r2v", "wan_2.2-i2v"])
     def test_non_27_alias_forms_fall_back_to_default_profile(self, model):
-        """WAN2_PATTERN 只认 2.7：连字符/下划线形态的其余 2.x 小版本不落 wan2.7 能力档——
+        """WAN2_PATTERN only recognizes 2.7: hyphen/underscore forms of other 2.x minor versions do not land on the wan2.7 capability tier --
+        the endpoint this backend always requests does not match those versions' actual protocol (see the note at WAN2_PATTERN), and
+        endpoints.py does not route them to this backend either; this confirms capability tier resolution does not overreach either.
+
+        WAN2_PATTERN 只认 2.7：连字符/下划线形态的其余 2.x 小版本不落 wan2.7 能力档——
         本后端固定请求的端点与这些小版本的实际协议不符（见 WAN2_PATTERN 处的说明），
         endpoints.py 也不会把它们路由到本后端；此处确认能力档解析同样不越界。
         """
@@ -1127,7 +1240,9 @@ class TestWan2Aliases:
 
 
 class TestWan3:
-    """wan3.0-video：单模型通吃三条路径，首尾帧 + 独立参考音频条目 + 可控音轨。"""
+    """wan3.0-video: one model covers all three paths, first/last frames + separate reference audio entries + a controllable audio track.
+
+    wan3.0-video：单模型通吃三条路径，首尾帧 + 独立参考音频条目 + 可控音轨。"""
 
     @staticmethod
     def _backend(**kwargs):
@@ -1152,12 +1267,18 @@ class TestWan3:
         assert caps.max_reference_audio_count == 5
         assert caps.max_reference_audio_total_seconds == 15.0
         assert caps.max_prompt_chars == 20000
+        # Audio is a separate media entry, not attached to reference material items (the opposite of wan2.7-r2v).
         # 音频是独立 media 条目，不挂在参考素材项上（与 wan2.7-r2v 相反）
         assert caps.reference_audio_per_image is False
 
     @pytest.mark.parametrize("model", ["wan-3-turbo", "wan3-turbo", "wan_3-turbo", "wan_3_turbo"])
     def test_alias_forms_get_wan3_capabilities(self, model):
-        """discovery 返回的连字符/下划线别名（endpoints.py 已路由到本后端）须认作 wan3.0，不落回默认档案。
+        """Hyphen/underscore aliases returned by discovery (already routed to this backend by endpoints.py) must be recognized as wan3.0, not fall back to the default profile.
+
+        Shares WAN3_PATTERN with endpoints.infer_endpoint / duration_presets: if the three differ in breadth we get the contradiction
+        "routed to this backend but treated as a generic model, losing reference image/end frame/audio track params".
+
+        discovery 返回的连字符/下划线别名（endpoints.py 已路由到本后端）须认作 wan3.0，不落回默认档案。
 
         与 endpoints.infer_endpoint / duration_presets 共用 WAN3_PATTERN：三处不同宽即会出现
         "路由到本后端却被当通用型号丢失参考图/尾帧/音轨参数" 的矛盾。
@@ -1172,7 +1293,9 @@ class TestWan3:
 
     @pytest.mark.parametrize("model", ["swan3", "vendorwan3", "wan30"])
     def test_wan3_substring_without_boundary_does_not_get_wan3_capabilities(self, model):
-        """含 "wan3" 子串但两侧非字母数字边界不成立的型号名，不得被误判为万相 3.0 家族。"""
+        """Model names containing "wan3" but without non-alphanumeric boundaries on both sides must not be misjudged as the Wan 3.0 family.
+
+        含 "wan3" 子串但两侧非字母数字边界不成立的型号名，不得被误判为万相 3.0 家族。"""
         from lib.backends.video_backends.dashscope import DashScopeVideoBackend
 
         caps = DashScopeVideoBackend.video_capabilities_for_model(model)
@@ -1190,7 +1313,7 @@ class TestWan3:
         )
         types = [m["type"] for m in payload["input"]["media"]]
         assert types == ["first_frame", "last_frame"]
-        # 首帧在场即不下发 ratio（上游按首帧定比例）
+        # With a first frame present, ratio is not sent (upstream takes the ratio from the first frame). / 首帧在场即不下发 ratio（上游按首帧定比例）
         assert "ratio" not in payload["parameters"]
 
     def test_reference_audio_is_standalone_media_item(self, tmp_path):
@@ -1207,14 +1330,16 @@ class TestWan3:
         )
         media = payload["input"]["media"]
         assert [m["type"] for m in media] == ["reference_image", "reference_audio", "reference_audio"]
-        # 顺序即 prompt 中「音频N」的指认契约，不得重排
+        # The order is the contract for "audio N" references in the prompt; must not be reordered. / 顺序即 prompt 中「音频N」的指认契约，不得重排
         assert media[1]["url"].startswith("data:audio/mpeg;base64,")
         assert media[2]["url"].startswith("data:audio/wav;base64,")
-        # 音频不挂在参考图项上
+        # Audio is not attached to reference image items. / 音频不挂在参考图项上
         assert "reference_voice" not in media[0]
 
     def test_reference_images_optional(self, tmp_path):
-        """通吃型号的图生/文生请求没有参考图，不能按 r2v 专用型号那样判 required。"""
+        """Image/text-to-video requests to the all-in-one model have no reference images and must not be judged required like the r2v-only models.
+
+        通吃型号的图生/文生请求没有参考图，不能按 r2v 专用型号那样判 required。"""
         payload = self._backend()._build_payload(
             VideoGenerationRequest(
                 prompt="p", output_path=tmp_path / "o.mp4", start_image=self._file(tmp_path, "s.png")
@@ -1231,7 +1356,9 @@ class TestWan3:
 
     @pytest.mark.parametrize("model", ["wan2.7-i2v", "happyhorse-1.1-i2v"])
     def test_audio_switch_not_sent_for_always_on_models(self, tmp_path, model):
-        """恒有声型号收到该参数会被上游当非法参数拒。"""
+        """Always-audio models reject this param upstream as invalid.
+
+        恒有声型号收到该参数会被上游当非法参数拒。"""
         from lib.backends.video_backends.dashscope import DashScopeVideoBackend
 
         payload = DashScopeVideoBackend(api_key="sk", model=model)._build_payload(
@@ -1241,7 +1368,9 @@ class TestWan3:
 
     @pytest.mark.parametrize("model", ["wan2.7-i2v", "happyhorse-1.1-i2v"])
     def test_silent_request_on_always_on_model_rejected(self, tmp_path, model):
-        """恒有声型号发不出静音请求，拒绝而不是照常出有声成片。"""
+        """Always-audio models cannot send a silent request; reject rather than produce a final video with audio as usual.
+
+        恒有声型号发不出静音请求，拒绝而不是照常出有声成片。"""
         from lib.backends.video_backends.dashscope import DashScopeVideoBackend
 
         with pytest.raises(VideoCapabilityError) as ei:
@@ -1251,7 +1380,9 @@ class TestWan3:
         assert ei.value.code == "video_audio_switch_not_supported"
 
     def test_silent_request_on_unrecognized_model_not_rejected(self, tmp_path):
-        """认不得的型号声明可控，静音请求照常组装、不下发开关。"""
+        """Unknown models declare it controllable; a silent request is assembled as usual without sending the switch.
+
+        认不得的型号声明可控，静音请求照常组装、不下发开关。"""
         from lib.backends.video_backends.dashscope import DashScopeVideoBackend
 
         payload = DashScopeVideoBackend(api_key="sk", model="proxy-custom-video")._build_payload(
@@ -1275,7 +1406,9 @@ class TestWan3:
 
     @pytest.mark.parametrize("model", ["wan-3-turbo", "wan3-turbo", "wan_3-turbo", "wan_3_turbo"])
     def test_audio_switch_is_sent_for_alias_forms(self, tmp_path, model):
-        """别名同样按可控音轨型号分派，不落回恒有声默认档案。"""
+        """Aliases are likewise dispatched as controllable-audio models, not falling back to the always-audio default profile.
+
+        别名同样按可控音轨型号分派，不落回恒有声默认档案。"""
         from lib.backends.video_backends.dashscope import DashScopeVideoBackend
 
         payload = DashScopeVideoBackend(api_key="sk", model=model)._build_payload(
@@ -1284,7 +1417,9 @@ class TestWan3:
         assert payload["parameters"]["audio"] is False
 
     def test_prompt_over_limit_rejected_before_submit(self, tmp_path):
-        """超限对端静默截断且照常计费，故由 gate 在付费前拒。"""
+        """Over the limit the remote end silently truncates and still bills, so the gate rejects before paying.
+
+        超限对端静默截断且照常计费，故由 gate 在付费前拒。"""
         from lib.backends.video_backends.dashscope import DashScopeVideoBackend
         from lib.backends.video_frame_slots import gate_video_request
 
@@ -1300,8 +1435,10 @@ class TestWan3:
 
     async def test_dedicated_base_url_used_for_submit_and_poll(self):
         b = self._backend(wan3_base_url="https://maas-cn-hangzhou.example.com/ws-123/api/v1/")
+        # Trailing slash normalized; submit and poll use the same domain (a task id can only be queried on the endpoint that created it).
         # 尾部斜杠归一，提交与轮询同域名（任务 id 只在创建它的 endpoint 上可查）
         assert b._request_base_url == "https://maas-cn-hangzhou.example.com/ws-123/api/v1"
+        # Assert the POST/GET URLs actually sent, not just read-only properties -- if both places reverted to a fixed base_url, property assertions would stay green.
         # 断言实际发出的 POST/GET URL，而非只读属性——两处若改回固定 base_url，属性断言仍会绿
         post = AsyncMock(return_value=_resp(_submit("t-wan3")))
         get = AsyncMock(return_value=_resp(_succeeded()))
@@ -1325,7 +1462,9 @@ class TestWan3:
         assert b._request_base_url == b._base_url
 
     async def test_submit_persists_actual_base_url(self, tmp_path: Path):
-        """提交时把实际使用的域名与 job_id 一并落库——续跑要靠它回放。"""
+        """On submit, the domain actually used is stored with job_id -- resume relies on it for replay.
+
+        提交时把实际使用的域名与 job_id 一并落库——续跑要靠它回放。"""
         post = AsyncMock(return_value=_resp(_submit("t-wan3")))
         get = AsyncMock(return_value=_resp(_succeeded()))
         client = _client(post=post, get=get)
@@ -1341,12 +1480,14 @@ class TestWan3:
         assert [(r["base_url"], r["endpoint"]) for r in persisted] == [("https://maas-a.example.com/ws-1/api/v1", None)]
 
     async def test_resume_polls_submitted_base_url_after_config_change(self, tmp_path: Path):
-        """在途改 wan3_base_url 后续跑：轮询仍打提交时的域名，而非当下配置解析出的域名。"""
+        """Resume after changing wan3_base_url mid-flight: polling still hits the domain used at submit, not the one resolved from the current config.
+
+        在途改 wan3_base_url 后续跑：轮询仍打提交时的域名，而非当下配置解析出的域名。"""
         get = AsyncMock(return_value=_resp(_succeeded()))
         client = _client(post=AsyncMock(), get=get)
         p1, p2, p3 = _patches(client, AsyncMock())
         with p1, p2, p3:
-            # 配置已被改成 B，提交时用的是 A
+            # The config has been changed to B; submit used A. / 配置已被改成 B，提交时用的是 A
             b = self._backend(wan3_base_url="https://maas-b.example.com/ws-2/api/v1")
             await b.resume_video(
                 "t-wan3",
@@ -1362,7 +1503,9 @@ class TestWan3:
 
 
 class TestCustomProviderBaseUrlReplay:
-    """自定义供应商委托 dashscope 协议：协议标识与提交域名分列落地，续跑按提交域名回放。"""
+    """A custom provider delegating to the dashscope protocol: the protocol flag and the submit domain are stored separately; resume replays with the submit domain.
+
+    自定义供应商委托 dashscope 协议：协议标识与提交域名分列落地，续跑按提交域名回放。"""
 
     @staticmethod
     def _wrapped(base_url: str):
@@ -1378,7 +1521,9 @@ class TestCustomProviderBaseUrlReplay:
         )
 
     async def test_submit_persists_protocol_id_and_domain(self, tmp_path: Path):
-        """穿过包装层的提交：endpoint 位落协议标识供比对，域名落 base_url 位供回放。"""
+        """A submit through the wrapper layer: the endpoint slot stores the protocol flag for comparison, the base_url slot stores the domain for replay.
+
+        穿过包装层的提交：endpoint 位落协议标识供比对，域名落 base_url 位供回放。"""
         post = AsyncMock(return_value=_resp(_submit("job-c1")))
         get = AsyncMock(return_value=_resp(_succeeded()))
         client = _client(post=post, get=get)
@@ -1396,12 +1541,14 @@ class TestCustomProviderBaseUrlReplay:
         ]
 
     async def test_resume_polls_submitted_domain_after_base_url_change(self, tmp_path: Path):
-        """在途改自定义供应商的 base_url 后续跑：轮询打提交时的域名，job 仍在该域名上。"""
+        """Resume after changing a custom provider's base_url mid-flight: polling hits the domain used at submit, where the job still lives.
+
+        在途改自定义供应商的 base_url 后续跑：轮询打提交时的域名，job 仍在该域名上。"""
         get = AsyncMock(return_value=_resp(_succeeded()))
         client = _client(post=AsyncMock(), get=get)
         p1, p2, p3 = _patches(client, AsyncMock())
         with p1, p2, p3:
-            # 配置已被改成 B，提交时用的是 A
+            # The config has been changed to B; submit used A. / 配置已被改成 B，提交时用的是 A
             backend = self._wrapped("https://custom-b.example.com")
             await backend.resume_video(
                 "job-c1",
@@ -1420,6 +1567,8 @@ class TestPollErrorRedaction:
     async def test_poll_4xx_message_drops_query_credentials(self):
         from lib.backends.video_backends.dashscope import DashScopeVideoBackend
 
+        # The exception message of a polling 4xx lands in task.error_message and logs via str(exc); credentials passed in the query
+        # are rendered in the URL that raise_for_status writes into the message, so they must be redacted before raising.
         # 轮询 4xx 的异常消息会经 str(exc) 落进 task.error_message 与日志；按 query 传的
         # 凭证渲染在 raise_for_status 写进消息的那条 URL 里，须先脱敏再抛。
         backend = DashScopeVideoBackend(api_key="k")

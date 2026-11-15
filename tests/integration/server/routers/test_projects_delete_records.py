@@ -1,4 +1,7 @@
-"""删除项目后，数据库里的旧记录与同名新项目断开关联，费用统计仍按已删除项目保留。"""
+"""After a project is deleted, its old records in the database are disconnected from a new same-named project, and
+cost statistics are kept under the deleted project.
+
+删除项目后，数据库里的旧记录与同名新项目断开关联，费用统计仍按已删除项目保留。"""
 
 from lib.db.repositories.session_repo import SessionRepository
 from lib.db.repositories.task_repo import TaskRepository
@@ -21,9 +24,11 @@ async def test_same_name_project_after_delete_inherits_no_records(tmp_path, monk
         tasks = TaskRepository(session)
         assert (await tasks.list_tasks(project_name="demo"))["total"] == 0
         assert (await tasks.get(old["queued"]) or {})["status"] == "cancelled"
+        # Tasks queued at deletion are no longer picked up by the worker
         # 删除时排队的任务不再被 worker 领走
         assert await tasks.claim_next("image") is None
 
+        # A new request for the same resource starts a new task instead of merging into the old one still running
         # 同一资源的新请求另起任务，不并到仍在执行的旧任务上
         fresh = await tasks.enqueue(project_name="demo", task_type="video", media_type="video", resource_id="E1S02")
         assert fresh["deduped"] is False

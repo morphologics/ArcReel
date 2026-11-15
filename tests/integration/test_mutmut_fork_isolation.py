@@ -1,4 +1,14 @@
-"""测试设施在 mutmut 的 fork 模型下保持进程隔离。
+"""Test infrastructure keeps process isolation under mutmut's fork model.
+
+After running stats in a parent process, mutmut forks several pytest sessions per mutant to run in parallel,
+and the children inherit the parent's atexit registry and conftest module state. Three contracts: children
+taking the normal exit path must not delete the temp DB shared by all children (root conftest); mutmut
+sessions each use a private basetemp, staying out of the shared ``pytest-of-<user>`` root, so multiple
+sessions no longer race on the same symlink at teardown; mutmut sessions on macOS do not read the system
+proxy via ``_scproxy``, so constructing httpx / openai clients does not segfault in forked children
+(the last two are in `tests/mutmut_plugin.py`, loaded via ``[tool.mutmut] pytest_add_cli_args``).
+
+测试设施在 mutmut 的 fork 模型下保持进程隔离。
 
 mutmut 在一个父进程里跑过 stats 之后，按 mutant fork 出多个 pytest 会话并行跑，子进程
 继承父进程的 atexit 登记表与 conftest 模块状态。三条契约：走正常退出路径的子进程不得
@@ -34,7 +44,10 @@ def _owned_test_db_dir() -> Path:
 
 
 def _mutmut_pytest_args() -> list[str]:
-    """mutmut 实际附加给每个 pytest 会话的参数，插件由此接入而非由测试自行加载。"""
+    """The args mutmut actually appends to each pytest session; the plugin hooks in through them rather than being
+    loaded by the test itself.
+
+    mutmut 实际附加给每个 pytest 会话的参数，插件由此接入而非由测试自行加载。"""
     with (_REPO_ROOT / "pyproject.toml").open("rb") as fh:
         args: list[str] = tomllib.load(fh)["tool"]["mutmut"]["pytest_add_cli_args"]
     assert args[args.index("-p") + 1] == _MUTMUT_PLUGIN
@@ -47,7 +60,9 @@ def test_forked_child_running_atexit_handlers_keeps_shared_test_db_dir():
     assert db_dir.is_dir()
 
     pid = os.fork()
-    if pid == 0:  # pragma: no cover - 子进程
+    if pid == 0:  # pragma: no cover - child process / 子进程
+        # The normal exit path runs the atexit registry; run it explicitly here and then ``os._exit``,
+        # so the child does not rerun the whole session along pytest's call stack.
         # 正常退出路径会跑 atexit 登记表；这里显式跑一遍再 ``os._exit``，
         # 免得子进程沿 pytest 的调用栈把整个会话再跑一遍。
         try:
@@ -63,6 +78,7 @@ def test_forked_child_running_atexit_handlers_keeps_shared_test_db_dir():
 
 def test_mutmut_session_uses_private_basetemp_outside_shared_root(tmp_path: Path):
     if os.environ.get(_PROBE_ENV):
+        # Probe in the child: this session's tmp_path is not under the temproot where pytest builds the shared root.
         # 子进程里的探针：本会话的 tmp_path 不在 pytest 会建共享根的 temproot 之下。
         assert not tmp_path.is_relative_to(Path(os.environ["PYTEST_DEBUG_TEMPROOT"]).resolve())
         return
@@ -91,6 +107,7 @@ def test_mutmut_session_uses_private_basetemp_outside_shared_root(tmp_path: Path
         timeout=90,
     )
     assert result.returncode == 0, result.stdout + result.stderr
+    # The shared root was never created; the private basetemp and temp DB were reclaimed by the session itself.
     # 共享根从未被建立；私有 basetemp 与临时库都已由该会话自己回收。
     assert list(temproot.iterdir()) == []
     assert list(tmpdir.iterdir()) == []
@@ -99,6 +116,9 @@ def test_mutmut_session_uses_private_basetemp_outside_shared_root(tmp_path: Path
 @pytest.mark.skipif(sys.platform != "darwin", reason="_scproxy 只在 macOS 存在")
 def test_mutmut_session_resolves_proxies_without_touching_macos_sysconf():
     if os.environ.get(_SCPROXY_PROBE_ENV):
+        # Probe in the child: urllib binds the two _scproxy entries at module top level; replace them with stubs that
+        # raise, so any path reaching system proxy discovery fails. There are no *_proxy variables in the environment,
+        # so the system proxy is the only path left for urllib.
         # 子进程里的探针：urllib 在模块顶层就绑定了 _scproxy 的两个入口，把它们换成会抛错的桩，
         # 凡走到系统代理发现的路径都会失败。环境里没有 *_proxy 变量，urllib 只剩系统代理这条路。
         import urllib.request

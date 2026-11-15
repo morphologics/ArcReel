@@ -1,4 +1,6 @@
-"""随包字幕字体的缺字预检：按字体 cmap 找出画不出的字符。"""
+"""Missing-glyph precheck for the bundled subtitle font: find characters that cannot be drawn according to the font's cmap.
+
+随包字幕字体的缺字预检：按字体 cmap 找出画不出的字符。"""
 
 from __future__ import annotations
 

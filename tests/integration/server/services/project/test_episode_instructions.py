@@ -1,4 +1,7 @@
-"""按集保存的附加指令：脚本规划与提示词编写各存一份，重新生成时预填；空白即清除。"""
+"""Per-episode instructions: one copy each for script planning and prompt authoring, prefilled on regeneration;
+blank clears it.
+
+按集保存的附加指令：脚本规划与提示词编写各存一份，重新生成时预填；空白即清除。"""
 
 from __future__ import annotations
 

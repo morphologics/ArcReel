@@ -1,4 +1,6 @@
-"""CustomTextBackend / CustomImageBackend / CustomVideoBackend / CustomAudioBackend 单元测试。"""
+"""Unit tests for CustomTextBackend / CustomImageBackend / CustomVideoBackend / CustomAudioBackend.
+
+CustomTextBackend / CustomImageBackend / CustomVideoBackend / CustomAudioBackend 单元测试。"""
 
 from __future__ import annotations
 
@@ -40,7 +42,9 @@ class TestCustomTextBackend:
         assert backend.capabilities == {TextCapability.TEXT_GENERATION}
 
     def test_capabilities_delegated(self):
-        """capabilities 属性直接来自 delegate。"""
+        """The capabilities property comes straight from the delegate.
+
+        capabilities 属性直接来自 delegate。"""
         delegate = AsyncMock()
         delegate.capabilities = {
             TextCapability.TEXT_GENERATION,
@@ -71,7 +75,9 @@ class TestCustomTextBackend:
         delegate.generate.assert_awaited_once_with(request)
 
     async def test_generate_passes_request_unchanged(self):
-        """generate() 不修改请求对象，原样传给 delegate。"""
+        """generate() does not modify the request object and passes it to the delegate as-is.
+
+        generate() 不修改请求对象，原样传给 delegate。"""
         delegate = AsyncMock()
         delegate.generate = AsyncMock(return_value=TextGenerationResult(text="ok", provider="x", model="y"))
         delegate.capabilities = set()
@@ -107,6 +113,9 @@ class TestCustomImageBackend:
         assert backend.capabilities is delegate.capabilities
 
     def test_reference_image_limit_delegated(self):
+        # Truncation happens inside the wrapped backend, and the limit is the one it declares; otherwise the
+        # orchestration layer would treat 0 as no trimming, and the numbering would still point at images the
+        # delegate dropped.
         # 截断发生在被包装的 backend 内，上限即它声明的那一个；否则编排层会按 0 不裁剪，
         # 编号仍会指认被 delegate 丢掉的图。
         delegate = AsyncMock()
@@ -117,6 +126,8 @@ class TestCustomImageBackend:
         assert asyncio.run(backend.reference_image_limit()) == 16
 
     def test_gemini_image_endpoint_declares_the_gemini_limit(self):
+        # The gemini-image endpoint wraps the built-in Gemini backend, so the reference image limit is 14
+        # accordingly.
         # gemini-image 端点包装内置 Gemini 后端，参考图上限随之为 14。
         from lib.custom_provider.endpoints import ENDPOINT_REGISTRY
 
@@ -151,6 +162,8 @@ class TestCustomImageBackend:
         request = ImageGenerationRequest(prompt="A mountain landscape", output_path=output_path)
         result = await backend.generate(request)
 
+        # Metering the call channel brings along is kept as-is, with the image count added for per-image
+        # priced entries to look up
         # 调用通道自己带的计量原样保留，补上张数供按张计价的条目查价
         assert result.image_path == expected_result.image_path
         assert result.usage == Usage(quantities={"output_images": 1, "input_images": 0, "output_tokens": 1290})
@@ -274,7 +287,13 @@ class TestCustomVideoBackend:
         assert call_args[0] is request
 
     async def test_generate_injects_execution_endpoint(self, tmp_path: Path):
-        """记住 endpoint 的实例在转发前注入 request，让下游 backend 与 job_id 一并持久化。
+        """An instance that remembers its endpoint injects it into the request before forwarding, so the
+        downstream backend persists it together with job_id.
+
+        Injection uses replace rather than in-place mutation: the request is owned by the caller, and the
+        wrapper leaves no side effects.
+
+        记住 endpoint 的实例在转发前注入 request，让下游 backend 与 job_id 一并持久化。
 
         注入走 replace 而非就地改写：request 由调用方持有，包装层不留副作用。
         """
@@ -293,7 +312,12 @@ class TestCustomVideoBackend:
         assert request.execution_endpoint is None
 
     def test_video_capabilities_for_tier_delegates_when_delegate_supports_it(self):
-        """delegate 实现 tier-aware 查询（如 Kling）时，按请求档位透传其结果，而不是回落
+        """When the delegate implements a tier-aware lookup (such as Kling), pass its result through for the
+        requested tier instead of falling back to the context-free video_capabilities; otherwise
+        media_generator's getattr probe would hit an empty shell method that always conservatively
+        refuses, and no narrowing would happen.
+
+        delegate 实现 tier-aware 查询（如 Kling）时，按请求档位透传其结果，而不是回落
         context-free 的 video_capabilities——否则 media_generator 的 getattr 探测会命中一个
         总是保守拒绝的空壳方法,起不到收窄效果。"""
         pro_caps = VideoCapabilities(first_frame=True, last_frame=True)
@@ -307,7 +331,10 @@ class TestCustomVideoBackend:
         delegate.video_capabilities_for_tier.assert_called_once_with("pro", resolution="1080p")
 
     def test_video_capabilities_for_tier_falls_back_without_tier_support(self):
-        """delegate 未实现 tier-aware 查询时,回落到 context-free 的 video_capabilities。"""
+        """When the delegate does not implement a tier-aware lookup, fall back to the context-free
+        video_capabilities.
+
+        delegate 未实现 tier-aware 查询时,回落到 context-free 的 video_capabilities。"""
         static_caps = VideoCapabilities(first_frame=True, last_frame=False)
         delegate = AsyncMock(spec=["video_capabilities", "capabilities"])
         delegate.video_capabilities = static_caps
@@ -318,7 +345,13 @@ class TestCustomVideoBackend:
         assert result is static_caps
 
     def test_video_capabilities_for_tier_ignores_full_injected_capabilities(self):
-        """工厂注入的完整合成能力（`with_video_capabilities` 不带 overrides,如 factory.py 未
+        """The full synthesized capabilities injected by the factory (`with_video_capabilities` without
+        overrides, the call shape when factory.py has no user overrides configured) must not
+        short-circuit the tier lookup: that is a context-free system decision and a conservative
+        declaration for tier-sensitive backends such as Kling; short-circuiting would make this method
+        equivalent to having no tier awareness in production.
+
+        工厂注入的完整合成能力（`with_video_capabilities` 不带 overrides,如 factory.py 未
         配置用户覆盖时的调用形状）不得短路档位查询——那是 context-free 的系统判定,对 Kling 等
         档位敏感 backend 是保守声明;短路会让本方法在生产环境等价于未实现档位感知。"""
         static_merged = VideoCapabilities(first_frame=True, last_frame=False)
@@ -336,7 +369,12 @@ class TestCustomVideoBackend:
         delegate.video_capabilities_for_tier.assert_called_once_with("pro", resolution="1080p")
 
     def test_video_capabilities_for_tier_merges_sparse_override_onto_delegate_base(self):
-        """稀疏用户覆盖（`with_video_capabilities` 的 `overrides` 参数）叠加到 delegate 的档位
+        """Sparse user overrides (the `overrides` parameter of `with_video_capabilities`) are layered onto
+        the delegate's tier-aware base, and fields not overridden follow the base; overrides must be able
+        to flip the capabilities the execution layer sees, but must not replace the base as a whole,
+        otherwise fields not overridden would freeze at their values from when the override was injected.
+
+        稀疏用户覆盖（`with_video_capabilities` 的 `overrides` 参数）叠加到 delegate 的档位
         感知基底上,未覆盖字段跟随基底——覆盖必须能翻转执行层看到的能力,但不能整体替换基底,
         否则档位切换时未覆盖字段会冻结在覆盖注入时刻的值。"""
         base_caps = VideoCapabilities(first_frame=True, last_frame=False)

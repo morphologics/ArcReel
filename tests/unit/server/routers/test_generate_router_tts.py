@@ -1,4 +1,6 @@
-"""旁白配音（TTS）生成端点测试：单段入队、批量补缺、未配置供应商提示。"""
+"""Narration (TTS) generation endpoint tests: single-segment enqueue, batch fill-in of missing ones, unconfigured provider hint.
+
+旁白配音（TTS）生成端点测试：单段入队、批量补缺、未配置供应商提示。"""
 
 from pathlib import Path
 from typing import Any
@@ -17,7 +19,9 @@ from tests.fakes import use_generation_queue, use_project_manager
 
 
 class _FakeQueue:
-    """记录 enqueue 调用的假队列。"""
+    """Fake queue that records enqueue calls.
+
+    记录 enqueue 调用的假队列。"""
 
     def __init__(self):
         self.calls = []
@@ -30,6 +34,7 @@ class _FakeQueue:
 class _FakePM:
     def __init__(self, project_path: Path):
         self.project_path = project_path
+        # Production projects are always on the current schema, and scripts are always bound in the episodes ledger.
         # 生产项目一律处于当前 schema，剧本一律在 episodes 账本里绑定。
         self.project: dict[str, Any] = {
             "schema_version": CURRENT_PROJECT_SCHEMA_VERSION,
@@ -78,7 +83,11 @@ class _FakePM:
 
 
 class _ScriptBackedResolver:
-    """产物清单替身：剧本里 narration_audio 指向的路径视为已登记，其余一律缺失。
+    """Artifact manifest stand-in: paths that narration_audio points to in the script count as registered; everything else is missing.
+
+    The artifact manifest is the single source for reading generated narration audio; the router only asks the manifest.
+
+    产物清单替身：剧本里 narration_audio 指向的路径视为已登记，其余一律缺失。
 
     产物清单是读取已生成旁白配音的唯一口径，路由只问清单。
     """
@@ -159,11 +168,13 @@ class TestGenerateTtsSingle:
             assert call["script_file"] == "episode_1.json"
             assert call["payload"]["script_file"] == "episode_1.json"
             assert call["source"] == "webui"
-            # 入队的供应商取自项目的 TTS 快照
+            # The enqueued provider comes from the project's TTS snapshot / 入队的供应商取自项目的 TTS 快照
             assert call["provider_id"] == "dashscope"
 
     def test_regenerate_allowed_when_audio_exists(self, tmp_path, monkeypatch):
-        """已有旁白的段也允许重新生成（换音色/语速迭代）。"""
+        """Segments that already have narration may also be regenerated (iterating voice/speech rate).
+
+        已有旁白的段也允许重新生成（换音色/语速迭代）。"""
         fake_pm = _FakePM(tmp_path / "projects" / "demo")
         fake_queue = _FakeQueue()
         client = _client(monkeypatch, fake_pm, fake_queue)
@@ -177,7 +188,9 @@ class TestGenerateTtsSingle:
             assert len(fake_queue.calls) == 1
 
     def test_regenerate_is_not_blocked_by_an_active_video_task(self, tmp_path, monkeypatch):
-        """视频生成不读旁白配音：同一段的视频任务在跑时，重新生成旁白照常入队。"""
+        """Video generation does not read narration audio: while a video task for the same segment is running, regenerating narration is enqueued as usual.
+
+        视频生成不读旁白配音：同一段的视频任务在跑时，重新生成旁白照常入队。"""
 
         class _QueueWithActiveVideo(_FakeQueue):
             async def get_active_tasks_for_resources(self, **kwargs):
@@ -332,7 +345,9 @@ class TestGenerateTtsBatch:
         assert all(key.components[0] == 2 for key in currency.observed_keys)
 
     def test_enqueues_only_missing_segments(self, tmp_path, monkeypatch):
-        """批量只补缺：已有旁白（E1S02）与无原文（E1S03）的段都跳过。"""
+        """Batch only fills in missing ones: segments with existing narration (E1S02) and without source text (E1S03) are both skipped.
+
+        批量只补缺：已有旁白（E1S02）与无原文（E1S03）的段都跳过。"""
         fake_pm = _FakePM(tmp_path / "projects" / "demo")
         fake_queue = _FakeQueue()
         client = _client(monkeypatch, fake_pm, fake_queue)
@@ -355,8 +370,11 @@ class TestGenerateTtsBatch:
             assert call["media_type"] == "audio"
 
     def test_batch_maps_each_missing_segment_to_the_task_it_enqueued(self, tmp_path, monkeypatch):
-        """逐段映射：每个 segment_id 指向它自己那次入队拿到的 task_id。"""
+        """Per-segment mapping: each segment_id points to the task_id obtained from its own enqueue.
+
+        逐段映射：每个 segment_id 指向它自己那次入队拿到的 task_id。"""
         fake_pm = _FakePM(tmp_path / "projects" / "demo")
+        # Make E1S02 miss narration too, so two segments are enqueued and the mapping has a distinguishable correspondence
         # 让 E1S02 也缺旁白，凑出两段入队，映射才有可分辨的对应关系
         fake_pm.script["segments"][1]["generated_assets"] = {}
         fake_queue = _FakeQueue()
@@ -376,7 +394,9 @@ class TestGenerateTtsBatch:
         assert body["task_ids"] == ["task-1", "task-2"]
 
     def test_batch_skipped_segments_are_absent_from_the_mapping(self, tmp_path, monkeypatch):
-        """跳过的段（已有旁白 / 无原文）不进映射，调用方据此不给它们打标。"""
+        """Skipped segments (existing narration / no source text) are not in the mapping, so the caller does not mark them.
+
+        跳过的段（已有旁白 / 无原文）不进映射，调用方据此不给它们打标。"""
         fake_pm = _FakePM(tmp_path / "projects" / "demo")
         fake_queue = _FakeQueue()
         client = _client(monkeypatch, fake_pm, fake_queue)
@@ -391,7 +411,9 @@ class TestGenerateTtsBatch:
         assert res.json()["task_ids_by_segment"] == {"E1S01": "task-1"}
 
     def test_metadata_path_without_a_manifest_entry_is_reselected(self, tmp_path, monkeypatch):
-        """metadata 里留着旁白路径但清单没有认领 → 算缺失，重新入队。"""
+        """metadata still holds a narration path but the manifest does not claim it: counts as missing and is re-enqueued.
+
+        metadata 里留着旁白路径但清单没有认领 → 算缺失，重新入队。"""
 
         fake_pm = _FakePM(tmp_path / "projects" / "demo")
         fake_queue = _FakeQueue()
@@ -522,7 +544,9 @@ class TestGenerateTtsBatch:
 
 
 class _FakeDedupeHitQueue(_FakeQueue):
-    """模拟 dedupe 索引全部命中。"""
+    """Simulates the dedupe index hitting on everything.
+
+    模拟 dedupe 索引全部命中。"""
 
     async def enqueue_task(self, **kwargs):
         self.calls.append(kwargs)
@@ -530,7 +554,9 @@ class _FakeDedupeHitQueue(_FakeQueue):
 
 
 class _FakeFirstHitQueue(_FakeQueue):
-    """模拟部分命中：第一次入队命中既有任务，其余新建。"""
+    """Simulates partial hits: the first enqueue hits an existing task, the rest are created.
+
+    模拟部分命中：第一次入队命中既有任务，其余新建。"""
 
     async def enqueue_task(self, **kwargs):
         self.calls.append(kwargs)
@@ -566,6 +592,7 @@ class TestTtsDedupedPassthrough:
 
     def test_batch_partial_hit_reports_deduped_false(self, tmp_path, monkeypatch):
         fake_pm = _FakePM(tmp_path / "projects" / "demo")
+        # Make E1S02 miss narration too: two segments enqueued, one hits an existing task, so a task was still created and it is not deduped
         # 让 E1S02 也缺旁白：两段入队，其中一段命中既有任务 → 仍新建了任务，不算 deduped
         fake_pm.script["segments"][1]["generated_assets"] = {}
         client = _client(monkeypatch, fake_pm, _FakeFirstHitQueue())

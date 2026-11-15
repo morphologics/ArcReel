@@ -76,7 +76,9 @@ def test_templates_module_keys_match():
 
 
 def test_templates_cover_all_style_template_ids():
-    """每个风格模版 id 都必须在 zh/en/vi/ru templates 里有 name 与 tagline key。"""
+    """Every style template id must have name and tagline keys in the zh/en/vi/ru templates.
+
+    每个风格模版 id 都必须在 zh/en/vi/ru templates 里有 name 与 tagline key。"""
     required_name_keys = {f"template_name_{tid}" for tid in list_template_ids()}
     required_tagline_keys = {f"template_tagline_{tid}" for tid in list_template_ids()}
     for module_name, msgs in (
@@ -166,6 +168,9 @@ def test_format_placeholders_consistent():
     import string
 
     def placeholders(msg: str) -> set[tuple[str, str]]:
+        # Use `str.format`'s own parser: escaped braces `{{…}}` (such as the syntax example `@[角色]：{台词}`)
+        # are recognized as literal text rather than placeholders, and `{delta:.0%}` with a format spec also yields the field name correctly.
+        # format_spec is compared too: a language missing `.0%` / `.1f` would render the raw number in that language.
         # 用 `str.format` 自己的解析器：转义花括号 `{{…}}`（如语法示例 `@[角色]：{台词}`）
         # 被识别为字面文本而非占位符，带格式说明的 `{delta:.0%}` 也能正确取到字段名。
         # 连同 format_spec 一起比较：某语言漏写 `.0%` / `.1f` 会让该语言渲染出原始数值。
@@ -248,7 +253,9 @@ def test_events_module_keys_match():
 
 
 def test_every_event_label_key_is_translated():
-    """事件载荷可能携带的 label_key 全部有翻译，且没有无人使用的残留 key。"""
+    """Every label_key an event payload may carry is translated, and no unused leftover keys remain.
+
+    事件载荷可能携带的 label_key 全部有翻译，且没有无人使用的残留 key。"""
     from lib.project.asset_types import ASSET_SPECS
     from lib.script.script_skeleton import SKELETON_ITEM_LABEL_KEYS
     from server.services.tasks.generation_tasks import _SKELETON_TASK_LABEL_KEYS, _TASK_CHANGE_SPECS
@@ -256,9 +263,10 @@ def test_every_event_label_key_is_translated():
     emitted = {spec[2] for spec in _TASK_CHANGE_SPECS.values()}
     emitted |= set(_SKELETON_TASK_LABEL_KEYS.values())
     emitted |= set(SKELETON_ITEM_LABEL_KEYS.values())
-    # 快照差分按资产类型表派生的资产与衍生 key。
+    # Asset and derivative keys derived from the asset type table by the snapshot diff. / 快照差分按资产类型表派生的资产与衍生 key。
     emitted |= {f"named_entity_{asset_type}" for asset_type in ASSET_SPECS}
     emitted |= {f"named_entity_{t}_derivative" for t, spec in ASSET_SPECS.items() if spec.supports_derivatives}
+    # Fixed keys published directly by the snapshot diff and routes (no table to enumerate, registered here).
     # 快照差分与路由直接发布的固定 key（无表可枚举，在此登记）。
     emitted |= {
         "character_reference_audio",
@@ -274,7 +282,9 @@ def test_every_event_label_key_is_translated():
 
 
 def test_frontend_event_label_keys_match_backend():
-    """界面按同一组 label_key 渲染文案，两侧 key 集合不得漂移。"""
+    """The UI renders text by the same set of label_keys; the key sets of the two sides must not drift.
+
+    界面按同一组 label_key 渲染文案，两侧 key 集合不得漂移。"""
     source = (Path(__file__).resolve().parents[4] / "frontend" / "src" / "i18n" / "en" / "events.ts").read_text(
         encoding="utf-8"
     )
@@ -283,7 +293,9 @@ def test_frontend_event_label_keys_match_backend():
 
 
 def test_frontend_dashboard_covers_prompt_template_axes_and_categories():
-    """设置页按模版轴名与类别 id 取显示文案，缺 key 时会直接显示英文键名，三种语言都必须齐全。"""
+    """The settings page takes display text by template axis name and category id; a missing key shows the raw English key name, so all three languages must be complete.
+
+    设置页按模版轴名与类别 id 取显示文案，缺 key 时会直接显示英文键名，三种语言都必须齐全。"""
     axes = set(get_args(TemplateAxis))
     categories = {meta.category for meta in builtin_templates.list_templates()}
     required = {f"prompt_templates_axis_{axis}" for axis in axes} | {
@@ -297,19 +309,24 @@ def test_frontend_dashboard_covers_prompt_template_axes_and_categories():
         assert not missing, f"{locale} dashboard missing prompt template keys: {sorted(missing)}"
 
 
+#: Script ranges whose presence in a catalog name requires a translated name: writing systems other than Latin cannot be read directly in the en/vi UI.
 #: 目录名里出现即需要译名的书写系统区段：拉丁字母以外的写法在 en/vi 界面上无法直接阅读。
 _NON_LATIN_RANGES = (
-    ("\u0400", "\u04ff"),  # 西里尔字母
-    ("\u3040", "\u30ff"),  # 平假名 / 片假名
-    ("\u3400", "\u4dbf"),  # CJK 扩展 A
-    ("\u4e00", "\u9fff"),  # CJK 统一表意文字
-    ("\uac00", "\ud7af"),  # 谚文音节
-    ("\uf900", "\ufaff"),  # CJK 兼容表意文字
+    ("\u0400", "\u04ff"),  # Cyrillic / 西里尔字母
+    ("\u3040", "\u30ff"),  # Hiragana / Katakana / 平假名 / 片假名
+    ("\u3400", "\u4dbf"),  # CJK Extension A / CJK 扩展 A
+    ("\u4e00", "\u9fff"),  # CJK Unified Ideographs / CJK 统一表意文字
+    ("\uac00", "\ud7af"),  # Hangul Syllables / 谚文音节
+    ("\uf900", "\ufaff"),  # CJK Compatibility Ideographs / CJK 兼容表意文字
 )
 
 
 def test_non_latin_provider_display_names_are_translated():
-    """registry 里用非拉丁文字写的供应商名必须三语都有译名，否则 en/vi 目录会漏出原文。
+    """Provider names written in non-Latin script in the registry must have translated names in all three languages, otherwise the en/vi catalogs leak the original text.
+
+    Pure brand names ("OpenAI") are not added to the translation table: ``translate_or`` falls back to the registry's display_name, and three identical entries would just be duplication.
+
+    registry 里用非拉丁文字写的供应商名必须三语都有译名，否则 en/vi 目录会漏出原文。
 
     纯品牌名（"OpenAI"）不入译名表：``translate_or`` 回退到 registry 的 display_name，三份相同的条目只是重复。
     """
@@ -328,7 +345,9 @@ def test_non_latin_provider_display_names_are_translated():
 
 
 def test_model_display_names_have_no_translation_keys():
-    """模型显示名只来自模型目录的条目，不分语言，译名表里不收模型名。"""
+    """Model display names come only from model catalog entries, are language-independent, and the translation table holds no model names.
+
+    模型显示名只来自模型目录的条目，不分语言，译名表里不收模型名。"""
     for locale in SUPPORTED_LOCALES:
         model_keys = sorted(key for key in MESSAGES[locale] if key.startswith("model_name_"))
         assert not model_keys, f"{locale} 仍有模型译名: {model_keys}"

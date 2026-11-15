@@ -1,4 +1,6 @@
-"""lib.infra.env_init 读取 .env 的覆盖规则与不一致告警。"""
+"""How lib.infra.env_init reads .env: override rules and the inconsistency warning.
+
+lib.infra.env_init 读取 .env 的覆盖规则与不一致告警。"""
 
 from __future__ import annotations
 
@@ -13,19 +15,23 @@ from lib.infra import env_init
 
 @pytest.fixture(autouse=True)
 def _dotenv_enabled(monkeypatch: pytest.MonkeyPatch):
+    # The root conftest turns off .env reading for the whole test process; reading rules are exactly what is checked here.
     # 根 conftest 为整个测试进程关掉 .env 读取，这里验证的正是读取规则。
     monkeypatch.delenv("PYTHON_DOTENV_DISABLED", raising=False)
 
 
 @pytest.fixture
 def env_file(tmp_path: Path):
+    # load_env_file records the result of this read for the startup warning; clear it after the case so later lifespan cases do not warn.
     # load_env_file 会记下本次读取的结果供启动告警使用，用例结束后清掉，不让后续的 lifespan 用例告警。
     yield tmp_path / ".env"
     env_init.reset_env_file_load_for_tests()
 
 
 def test_empty_process_env_is_filled_from_env_file(env_file: Path, monkeypatch: pytest.MonkeyPatch):
-    """compose env_file 把模板里的 `AUTH_PASSWORD=` 注入为空串；.env 后来写入的值应生效。"""
+    """compose env_file injects the template's `AUTH_PASSWORD=` as an empty string; the value later written in .env should take effect.
+
+    compose env_file 把模板里的 `AUTH_PASSWORD=` 注入为空串；.env 后来写入的值应生效。"""
     env_file.write_text("AUTH_PASSWORD=my-new-pass\n", encoding="utf-8")
     monkeypatch.setenv("AUTH_PASSWORD", "")
 
@@ -97,7 +103,9 @@ def test_unset_keys_are_loaded_including_empty_values(env_file: Path, monkeypatc
 
 
 def test_returns_keys_whose_values_diverge(env_file: Path, monkeypatch: pytest.MonkeyPatch):
-    """保留的进程值与文件不同才算不一致；空串由 .env 补齐，不算。"""
+    """Only a kept process value that differs from the file counts as inconsistent; an empty string filled in from .env does not.
+
+    保留的进程值与文件不同才算不一致；空串由 .env 补齐，不算。"""
     env_file.write_text("AUTH_PASSWORD=new\nAUTH_USERNAME=admin\nAUTH_TOKEN_SECRET=s\n", encoding="utf-8")
     monkeypatch.setenv("AUTH_PASSWORD", "old")
     monkeypatch.setenv("AUTH_USERNAME", "admin")
@@ -140,7 +148,9 @@ def test_no_warning_when_env_matches_file(
 
 
 def test_unreadable_env_file_is_ignored(env_file: Path, monkeypatch: pytest.MonkeyPatch):
-    """沙箱拒读 .env 时 import lib 不能失败。"""
+    """import lib must not fail when the sandbox denies reading .env.
+
+    沙箱拒读 .env 时 import lib 不能失败。"""
     env_file.write_text("ARCREEL_TEST_DENIED=v\n", encoding="utf-8")
     monkeypatch.delenv("ARCREEL_TEST_DENIED", raising=False)
 

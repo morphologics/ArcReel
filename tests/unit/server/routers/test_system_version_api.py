@@ -35,7 +35,9 @@ def _make_app(version_reader: Callable[[], str] = lambda: "0.9.0") -> FastAPI:
 
 
 def _release_body(version: str) -> dict[str, str]:
-    """GitHub releases/latest 的响应体形状。"""
+    """Response body shape of GitHub releases/latest.
+
+    GitHub releases/latest 的响应体形状。"""
     return {
         "tag_name": f"v{version}",
         "name": version,
@@ -47,7 +49,9 @@ def _release_body(version: str) -> dict[str, str]:
 
 @pytest.fixture(autouse=True)
 def shared_http_client():
-    """生产由 app lifespan 建共享客户端；这里自己建一个，respx 在 transport 层拦它。"""
+    """In production the app lifespan builds a shared client; here we build our own, and respx intercepts it at the transport layer.
+
+    生产由 app lifespan 建共享客户端；这里自己建一个，respx 在 transport 层拦它。"""
     asyncio.run(startup_http_client())
     yield
     asyncio.run(shutdown_http_client())
@@ -55,7 +59,9 @@ def shared_http_client():
 
 @pytest.fixture(autouse=True)
 def clear_release_cache():
-    """`_latest_release_cache` 与 `_read_app_version` 的 lru_cache 都是模块级进程内状态。"""
+    """The lru_cache of `_latest_release_cache` and `_read_app_version` are both module-level in-process state.
+
+    `_latest_release_cache` 与 `_read_app_version` 的 lru_cache 都是模块级进程内状态。"""
     system_config._latest_release_cache.update({"expires_at": None, "payload": None, "fetched_at": None})
     system_config._read_app_version.cache_clear()
     yield
@@ -78,11 +84,13 @@ class TestSystemVersionApi:
         assert body["latest"]["tag_name"] == "v0.9.1"
         assert body["has_update"] is True
         assert body["update_check_error"] is None
-        # checked_at 是实际 fetch 时间，带时区
+        # checked_at is the actual fetch time, with time zone / checked_at 是实际 fetch 时间，带时区
         assert datetime.fromisoformat(body["checked_at"]).tzinfo is not None
 
     def test_sends_github_api_headers(self):
-        """出站请求形状：GitHub 要求 Accept 与 User-Agent，缺 UA 会被 403。"""
+        """Outbound request shape: GitHub requires Accept and User-Agent; without a UA you get 403.
+
+        出站请求形状：GitHub 要求 Accept 与 User-Agent，缺 UA 会被 403。"""
         app = _make_app()
         with capture_http(assert_all_called=True) as http:
             route = http.get(_GITHUB_LATEST).respond(json=_release_body("0.9.1"))
@@ -105,7 +113,7 @@ class TestSystemVersionApi:
         assert body["current"]["version"] == "0.9.0"
         assert body["latest"] is None
         assert body["has_update"] is False
-        # 信息不再泄漏：返回固定 i18n 文案，详细错误只在日志
+        # No more information leak: return a fixed i18n message; detailed errors only go to the log / 信息不再泄漏：返回固定 i18n 文案，详细错误只在日志
         assert body["update_check_error"] == "检查更新失败，请稍后重试"
         assert "502" not in body["update_check_error"]
 
@@ -123,7 +131,9 @@ class TestSystemVersionApi:
         assert body["update_check_error"] is None
 
     def test_handles_prerelease_tag_without_error(self):
-        """GitHub 真实场景：v0.10.0-rc1 这类 tag 不应触发 update_check_error。"""
+        """Real GitHub scenario: tags like v0.10.0-rc1 should not trigger update_check_error.
+
+        GitHub 真实场景：v0.10.0-rc1 这类 tag 不应触发 update_check_error。"""
         app = _make_app(lambda: "0.10.0")
         with capture_http() as http:
             http.get(_GITHUB_LATEST).respond(json=_release_body("0.10.0-rc1"))
@@ -132,12 +142,14 @@ class TestSystemVersionApi:
 
         assert resp.status_code == 200
         body = resp.json()
-        # rc1 < 0.10.0 final，不视为新版本
+        # rc1 < 0.10.0 final, not considered a new version / rc1 < 0.10.0 final，不视为新版本
         assert body["has_update"] is False
         assert body["update_check_error"] is None
 
     def test_invalid_remote_version_does_not_break_endpoint(self):
-        """远端 tag 解析失败时退化为 has_update=False，不报错。"""
+        """When parsing the remote tag fails, degrade to has_update=False without an error.
+
+        远端 tag 解析失败时退化为 has_update=False，不报错。"""
         app = _make_app()
         with capture_http() as http:
             http.get(_GITHUB_LATEST).respond(json={"tag_name": "weird", "name": "weird"})
@@ -162,7 +174,7 @@ class TestSystemVersionApi:
 
         assert resp.status_code == 500
         body = resp.json()
-        # 同样不泄漏底层异常文本
+        # Likewise the underlying exception text is not leaked / 同样不泄漏底层异常文本
         assert "missing version" not in str(body)
 
 
@@ -185,18 +197,23 @@ class TestLoadAppVersion:
 
 class TestGetLatestReleaseCache:
     async def test_cache_hit_within_ttl_skips_http_call(self):
-        """5 分钟 TTL 内重复调用应只命中 HTTP 一次。"""
+        """Repeated calls within the 5-minute TTL should hit HTTP only once.
+
+        5 分钟 TTL 内重复调用应只命中 HTTP 一次。"""
         with capture_http(assert_all_called=True) as http:
             route = http.get(_GITHUB_LATEST).respond(json=_release_body("0.9.1"))
             first = await system_config._get_latest_release()
             second = await system_config._get_latest_release()
 
+        # payload and fetched_at both come from the same fetch (a cache hit does not reset the timestamp)
         # payload 与 fetched_at 都来自同一次 fetch（缓存命中不重置时间戳）
         assert first == second
         assert route.call_count == 1
 
     def test_cached_endpoint_response_preserves_fetched_at(self):
-        """端到端：连续两次调用 /system/version 时 checked_at 不变（缓存命中）。"""
+        """End to end: checked_at stays the same across two consecutive /system/version calls (cache hit).
+
+        端到端：连续两次调用 /system/version 时 checked_at 不变（缓存命中）。"""
         app = _make_app()
         with capture_http(assert_all_called=True) as http:
             route = http.get(_GITHUB_LATEST).respond(json=_release_body("0.9.1"))
@@ -208,7 +225,9 @@ class TestGetLatestReleaseCache:
         assert first["checked_at"] == second["checked_at"]
 
     async def test_expired_cache_refetches(self):
-        """TTL 过期后重新出站，fetched_at 随之前进。"""
+        """After the TTL expires, fetch outbound again, and fetched_at advances with it.
+
+        TTL 过期后重新出站，fetched_at 随之前进。"""
         with capture_http(assert_all_called=True) as http:
             route = http.get(_GITHUB_LATEST).respond(json=_release_body("0.9.1"))
             _first, first_at = await system_config._get_latest_release(now=datetime(2026, 4, 21, 8, 0, tzinfo=UTC))
@@ -218,7 +237,12 @@ class TestGetLatestReleaseCache:
         assert second_at > first_at
 
     async def test_status_error_message_drops_query_credentials(self):
-        """4xx 抛的是脱敏后的 HTTPStatusError：请求 URL 上的查询串不进异常消息。
+        """4xx raises a redacted HTTPStatusError: the query string on the request URL does not enter the exception message.
+
+        A redirect-following client steers the failed request to a downstream address with a signed query string, constructing "the failed request
+        URL carries credentials": a bare raise_for_status would put the whole URL into the message, which the endpoint then writes to the warning log.
+
+        4xx 抛的是脱敏后的 HTTPStatusError：请求 URL 上的查询串不进异常消息。
 
         用跟随重定向的客户端把失败请求引到带签名查询串的下游地址，构造出「失败的那一条请求
         URL 带着凭证」：裸 raise_for_status 会把整条 URL 写进消息，端点再把它记进 warning 日志。
@@ -236,7 +260,9 @@ class TestGetLatestReleaseCache:
         assert exc_info.value.response.status_code == 401
 
     async def test_http_error_is_not_cached(self):
-        """失败响应不写缓存，下一次调用仍然出站重试。"""
+        """Failed responses are not cached; the next call still goes outbound to retry.
+
+        失败响应不写缓存，下一次调用仍然出站重试。"""
         with capture_http(assert_all_called=True) as http:
             route = http.get(_GITHUB_LATEST).respond(status_code=500)
             for _ in range(2):

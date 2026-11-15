@@ -1,4 +1,11 @@
-"""新增条目与覆盖剧本不复用编号，旧剪辑片段保持已删除。
+"""New entries and overwritten scripts do not reuse ids, and old edit clips stay deleted.
+
+Each test: E1U1..E1U3 each have video v1 -> build a timeline from the script and trim c3 (E1U3) -> delete/replace
+E1U3 -> register v1 for the new unit -> read the timeline. Assertions state the expected behavior (no id reuse, old
+clip judged unit_deleted). Ids are issued by the server before writing to disk: ids in a batch insert request are
+only placeholders, and the new unit's id is read from the commit result or the script on disk.
+
+新增条目与覆盖剧本不复用编号，旧剪辑片段保持已删除。
 
 每个用例：E1U1..E1U3 各有视频 v1 → 按脚本建时间线并裁切 c3（E1U3）→ 删掉/替换 E1U3 → 新单元登记 v1 → 读时间线。
 断言写的是期望行为（不复用编号、旧片段判 unit_deleted）。编号由服务端在落盘前发出：批量插入请求里的编号
@@ -86,7 +93,10 @@ def _assert_not_reconnected(report: dict[str, Any]) -> None:
 async def test_web_path_delete_last_unit_then_add(
     pm: ProjectManager, service: EditTimelineService, install_video: Callable[[str, float], None]
 ) -> None:
-    """Web：删除走批量编辑 remove；新增照 reference_videos.add_unit，以 new_item_id(current) 为占位 insert_after，
+    """Web: delete goes through batch edit remove; add follows reference_videos.add_unit, using new_item_id(current) as the
+    insert_after placeholder; the new id comes from the commit result.
+
+    Web：删除走批量编辑 remove；新增照 reference_videos.add_unit，以 new_item_id(current) 为占位 insert_after，
     新编号取自提交结果。"""
     timeline_id = await _timeline_with_trim_on_e1u3(service)
 
@@ -116,7 +126,9 @@ async def test_web_path_delete_last_unit_then_add(
 async def test_agent_path_delete_last_unit_then_add(
     pm: ProjectManager, service: EditTimelineService, install_video: Callable[[str, float], None]
 ) -> None:
-    """Agent：patch_episode_script 的 remove 与 insert（insert 经 insert_segment → new_item_id 取号）。"""
+    """Agent: remove and insert of patch_episode_script (insert takes an id via insert_segment -> new_item_id).
+
+    Agent：patch_episode_script 的 remove 与 insert（insert 经 insert_segment → new_item_id 取号）。"""
     timeline_id = await _timeline_with_trim_on_e1u3(service)
     ctx = ToolHarness(project_name="demo", data_root=pm.projects_dir, pm=pm)
 
@@ -149,7 +161,10 @@ async def test_agent_path_delete_last_unit_then_add(
 async def test_overwrite_formal_script_keeps_old_ids(
     pm: ProjectManager, service: EditTimelineService, install_video: Callable[[str, float], None]
 ) -> None:
-    """覆盖正式剧本：照 script_generator（内容确认 / 广告整稿）在落盘前发号，再整份保存。"""
+    """Overwrite the formal script: issue ids before writing to disk like script_generator (content confirmation / whole ad
+    draft), then save the whole thing.
+
+    覆盖正式剧本：照 script_generator（内容确认 / 广告整稿）在落盘前发号，再整份保存。"""
     timeline_id = await _timeline_with_trim_on_e1u3(service)
 
     script = pm.load_script("demo", "episode_1.json")

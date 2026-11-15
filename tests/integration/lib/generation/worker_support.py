@@ -1,4 +1,7 @@
-"""生成 worker 及其重启自愈、续跑协作者的集成测试共用的替身与种数据工具。"""
+"""Shared doubles and data-seeding tools for integration tests of the generation worker and its restart self-heal
+and resume collaborators.
+
+生成 worker 及其重启自愈、续跑协作者的集成测试共用的替身与种数据工具。"""
 
 import asyncio
 from datetime import UTC, datetime
@@ -11,7 +14,13 @@ from lib.generation.generation_worker import CapacityTable
 
 
 class _ExecutorStubs:
-    """经构造器注入 worker 的执行器替身。
+    """Executor doubles injected into the worker via the constructor.
+
+    The worker gets two forwarding entry points, ``execute`` / ``execute_resume``; a test case uses
+    ``monkeypatch.setattr(stub_executors, "generation" | "resume", fake)`` to set the behavior it needs; by
+    default it fails.
+
+    经构造器注入 worker 的执行器替身。
 
     worker 拿到的是 ``execute`` / ``execute_resume`` 两个转发入口；用例用
     ``monkeypatch.setattr(stub_executors, "generation" | "resume", fake)`` 指定用例所需行为，缺省即判失败。
@@ -34,7 +43,9 @@ stub_executors = _ExecutorStubs()
 
 
 def capacity_table(limits: dict[str, dict[str, int]] | None = None, *, image: int = 5, video: int = 3) -> CapacityTable:
-    """构造一张容量表：显式 per-provider 上限 + 懒默认（默认 image=5 / video=3）。"""
+    """Build a capacity table: explicit per-provider limits + lazy defaults (default image=5 / video=3).
+
+    构造一张容量表：显式 per-provider 上限 + 懒默认（默认 image=5 / video=3）。"""
     return CapacityTable(_limits=limits or {}, _defaults={"image": image, "video": video})
 
 
@@ -191,7 +202,10 @@ class FakeWorkerQueue:
 
     @property
     def session_factory(self):
-        """替身不自带库：worker 经队列取到的落库接线就是当前的全局 factory（``worker_db`` 换成内存库）。"""
+        """The double has no DB of its own: the storage wiring the worker gets via the queue is the current global factory
+        (``worker_db`` swapped to an in-memory DB).
+
+        替身不自带库：worker 经队列取到的落库接线就是当前的全局 factory（``worker_db`` 换成内存库）。"""
         import lib.db
 
         return lib.db.safe_session_factory
@@ -231,7 +245,9 @@ class FakeWorkerQueue:
 
 
 async def seed_running_task(factory, task_id: str, **overrides: Any) -> None:
-    """种一行 running 状态的 task，供回队路径的真实 guarded UPDATE 命中。"""
+    """Seed a task row in running state, for the real guarded UPDATE of the requeue path to hit.
+
+    种一行 running 状态的 task，供回队路径的真实 guarded UPDATE 命中。"""
     from lib.db.models.task import Task
 
     now = datetime.now(UTC)
@@ -260,14 +276,18 @@ async def task_status(factory, task_id: str) -> str | None:
 
 
 def db_queue(factory):
-    """真实的 GenerationQueue，落库到测试库。"""
+    """A real GenerationQueue, storing to the test DB.
+
+    真实的 GenerationQueue，落库到测试库。"""
     from lib.generation.generation_queue import GenerationQueue
 
     return GenerationQueue(session_factory=factory)
 
 
 def stage_task_dir(project_path: Path, task_id: str) -> Path:
-    """建出一个任务的 provider media staging 目录，返回该任务的 staging 根。"""
+    """Create a task's provider media staging directory and return that task's staging root.
+
+    建出一个任务的 provider media staging 目录，返回该任务的 staging 根。"""
     staged = project_path / ".arcreel" / "tasks" / task_id / "provider_media"
     staged.mkdir(parents=True)
     (staged / "000-start_image.png").write_bytes(b"x")

@@ -1,4 +1,10 @@
-"""分集规划服务的行为测试（mock 文本后端，不触真实 LLM）。
+"""Behavior tests of the episode planning service (mocked text backend, no real LLM).
+
+Only external behavior is asserted: ledger contents, derived files, the planning start derived from the ledger,
+errors and the returned summary; the prompt is pinned only under an explicit verbatim compatibility contract, and the
+number of internal calls is asserted only for retry semantics.
+
+分集规划服务的行为测试（mock 文本后端，不触真实 LLM）。
 
 只断言外部行为：账本内容、派生文件、由账本推导的规划起点、报错与返回摘要；prompt 仅在明确的
 逐字兼容契约下锁定，内部调用次数仅在重试语义下断言。
@@ -35,6 +41,7 @@ from lib.episode.episode_sources import discover_sources as _real_discover_sourc
 from lib.episode.episode_sources import planning_start, source_snapshot_path
 from lib.infra.text_metrics import count_reading_units
 
+# Source text: three plot sections, sentences never repeat, so anchors can be located uniquely
 # 源文：三段剧情，句子互不重复，锚点可唯一定位
 SOURCE = (
     "第一章 山村少年。李恒在山村长大，自幼习得吐纳之法。"
@@ -48,6 +55,7 @@ ANCHOR_EP1 = "玉中藏着剑诀。"
 ANCHOR_EP2 = "被追杀的少女。"
 ANCHOR_EP3 = "卷入漩涡之中。"
 
+#: A three-episode draft that consumes the whole source in one go, shared by tests of several "source exhausted" paths.
 #: 一次吃完整篇源文的三集草稿，多条「源文耗尽」路径的用例共用。
 _THREE_EPISODE_DRAFT = [
     {"title": "甲", "hook": "甲", "end_anchor": ANCHOR_EP1},
@@ -55,6 +63,8 @@ _THREE_EPISODE_DRAFT = [
     {"title": "丙", "hook": "丙", "end_anchor": ANCHOR_EP3},
 ]
 
+#: The prompt line when neither source of the target volume is set, pinning the current "use your own judgment"
+#: wording verbatim.
 #: 目标体量两个来源都未设置时的 prompt 行，逐字锁住「自行把握」这条现状措辞。
 _TARGET_VOLUME_UNSET_LINE = "- 每集目标体量：未设置，请按短视频节奏自行把握（以剧情弧完整优先）"
 
@@ -62,7 +72,9 @@ _TARGET_VOLUME_UNSET_LINE = "- 每集目标体量：未设置，请按短视频�
 def _expected_planning_prompt(
     target_volume_line: str, *, content_mode: str = "narration", source_kind: str = "novel"
 ) -> str:
-    """完整锁住目标体量三种来源之外的既有 planning prompt。"""
+    """Fully pin the existing planning prompt apart from the three target-volume sources.
+
+    完整锁住目标体量三种来源之外的既有 planning prompt。"""
     screenplay = source_kind == "screenplay"
     if screenplay:
         lines = ["你是短视频分集规划师。下面是作者已写好的成品剧本片段，请尊重作者自带的分集，提取而非重切。"]
@@ -76,6 +88,7 @@ def _expected_planning_prompt(
         "# 项目信息",
         f"- 创作类型：{'剧情演绎（drama）' if content_mode == 'drama' else '旁白/解说（narration）'}",
         target_volume_line,
+        # 64000-token cap: drama gets 64 episodes per batch, narration 160 per batch
         # 64000 token 上限：剧情演绎每批 64 集，旁白/解说每批 160 集
         f"- 本批最多规划 {64 if content_mode == 'drama' else 160} 集",
         "",
@@ -116,7 +129,9 @@ def _end_of(anchor: str, text: str = SOURCE) -> int:
 
 
 class _FakeTextGenerator:
-    """按顺序回放预置响应的 TextGenerator 替身，并记录每次请求。"""
+    """TextGenerator double that replays preset responses in order and records each request.
+
+    按顺序回放预置响应的 TextGenerator 替身，并记录每次请求。"""
 
     def __init__(self, responses: list[str], *, max_output_tokens: int = 64000):
         self._responses = list(responses)
@@ -142,7 +157,10 @@ def _write_project(
     whole_source: tuple[str, ...] = ("novel.txt",),
     source_kinds: tuple[str, ...] | None = None,
 ) -> Path:
-    """``source_kinds`` 与 ``whole_source`` 逐个对应，记在整本源文清单项上；缺省不记。"""
+    """``source_kinds`` correspond one-to-one with ``whole_source`` and are recorded on the whole-book source list items;
+    not recorded by default.
+
+    ``source_kinds`` 与 ``whole_source`` 逐个对应，记在整本源文清单项上；缺省不记。"""
     project_dir = tmp_path / "projects" / "demo-proj"
     (project_dir / "source").mkdir(parents=True)
     project = {
@@ -171,7 +189,11 @@ def _load_project(project_dir: Path) -> dict:
 
 
 async def _rewrite_project_elsewhere(project_dir: Path, mutate: Callable[[dict], None]) -> str:
-    """模拟模型调用期间另一个写方改写 project.json，返回改写后的全文。
+    """Simulate another writer rewriting project.json during the model call; returns the full rewritten text.
+
+    The other writer is not on the event loop of the call under test, so the rewrite goes on a worker thread.
+
+    模拟模型调用期间另一个写方改写 project.json，返回改写后的全文。
 
     另一个写方不在被测调用的事件循环上，改写放进工作线程。
     """
@@ -195,16 +217,23 @@ class TestFindAllOverlapping:
         assert _find_all_overlapping("aaaa", "aaa") == [0, 1]
 
     def test_empty_needle_returns_empty_without_hanging(self):
+        # Defensive boundary for an empty needle: return [] directly without sliding position by position (the caller's anchor
+        # is constrained by min_length=2)
         # 空 needle 防御边界：直接返回 []，不进入逐位滑动（调用方 anchor 受 min_length=2 约束）
         assert _find_all_overlapping("abcabc", "") == []
         assert _find_all_overlapping("", "") == []
 
 
 class TestParseDraft:
-    """解析层的拒绝行为：两类失败都要变成可回传给模型的 _DraftRejected，且日志留下原始输出。"""
+    """Rejection behavior of the parsing layer: both kinds of failure must become a _DraftRejected that can be returned to
+    the model, and the log keeps the raw output.
+
+    解析层的拒绝行为：两类失败都要变成可回传给模型的 _DraftRejected，且日志留下原始输出。"""
 
     def test_rejects_malformed_json_with_unescaped_quote(self, caplog):
-        """字符串里带未转义引号 → 非法 JSON，拒绝并记录原始输出。"""
+        """Unescaped quote inside a string -> invalid JSON; reject and record the raw output.
+
+        字符串里带未转义引号 → 非法 JSON，拒绝并记录原始输出。"""
         raw = '{"episodes": [{"title": "他说"你好"", "hook": "h", "end_anchor": "锚点"}]}'
 
         with (
@@ -217,7 +246,10 @@ class TestParseDraft:
         assert any(raw[:20] in record.getMessage() for record in caplog.records)
 
     def test_rejects_bare_episode_dict_at_top_level(self, caplog):
-        """顶层是裸 episode 对象（缺 episodes wrapper）→ 结构错误，拒绝而不机械补 wrapper。"""
+        """A bare episode object at the top level (missing the episodes wrapper) -> structural error; reject rather than
+        mechanically adding the wrapper.
+
+        顶层是裸 episode 对象（缺 episodes wrapper）→ 结构错误，拒绝而不机械补 wrapper。"""
         raw = json.dumps({"title": "山村少年", "hook": "h", "end_anchor": ANCHOR_EP1}, ensure_ascii=False)
 
         with (
@@ -302,7 +334,10 @@ class TestPlan:
         assert result.source_exhausted is False
 
     async def test_plan_summary_carries_first_and_last_sentence_of_each_episode(self, tmp_path: Path):
-        """多集批次：每集摘要附本集原文的首句与尾句，取自账本原文范围的切片。"""
+        """Multi-episode batch: each episode summary includes the first and last sentence of its source text, sliced from the
+        ledger's source range.
+
+        多集批次：每集摘要附本集原文的首句与尾句，取自账本原文范围的切片。"""
         project_dir = _write_project(tmp_path)
         fake = _FakeTextGenerator([_plan_response(_THREE_EPISODE_DRAFT)])
 
@@ -315,7 +350,10 @@ class TestPlan:
         ]
 
     async def test_plan_summary_splits_screenplay_lines_and_truncates_long_sentences(self, tmp_path: Path):
-        """按行与句末标点断句；超长首句保留开头、超长尾句保留结尾，截断处以省略号标出。"""
+        """Split sentences by line and sentence-ending punctuation; an overlong first sentence keeps its start, an overlong last
+        sentence keeps its end, with the cut marked by an ellipsis.
+
+        按行与句末标点断句；超长首句保留开头、超长尾句保留结尾，截断处以省略号标出。"""
         long_head = "序幕" + "风" * 100 + "。"
         long_tail = "终" + "雨" * 100 + "落幕了。"
         source = f"\n  {long_head}\n角色甲：「你来了？」\n角色乙：好。\n{long_tail}\n\n第二集\n角色甲：再见！\n"
@@ -351,7 +389,10 @@ class TestPlan:
         assert result.episodes[0].last_sentence == "The end."
 
     async def test_plan_summary_keeps_english_scene_heading_as_one_sentence(self, tmp_path: Path):
-        """全大写缩写（INT. / EXT.）后的句点不断句：场景标题整行作为首句。"""
+        """A period after an all-caps abbreviation (INT. / EXT.) does not end a sentence: the whole scene heading line is the
+        first sentence.
+
+        全大写缩写（INT. / EXT.）后的句点不断句：场景标题整行作为首句。"""
         source = "INT. KITCHEN - NIGHT\nJohn enters. He sits down.\nEXT. PARK - DAY\n"
         project_dir = _write_project(tmp_path, source_text=source, extra={"source_language": "en"})
         fake = _FakeTextGenerator([_plan_response([{"title": "One", "hook": "Park", "end_anchor": "EXT. PARK - DAY"}])])
@@ -362,7 +403,10 @@ class TestPlan:
         assert result.episodes[0].last_sentence == "EXT. PARK - DAY"
 
     async def test_plan_rejects_legacy_cut_episodes_without_source_range(self, tmp_path: Path):
-        """旧拆分流程留下的切出集（无原文范围记录）拦住规划：指名集 ID 并指路全量重置，不调模型。"""
+        """Cut episodes left by the old split flow (without a source range record) block planning: name the episode ID and point
+        to a full reset, without calling the model.
+
+        旧拆分流程留下的切出集（无原文范围记录）拦住规划：指名集 ID 并指路全量重置，不调模型。"""
         legacy = {
             "episode": 1,
             "title": "旧集",
@@ -382,7 +426,10 @@ class TestPlan:
         assert _load_project(project_dir)["episodes"] == [legacy]
 
     async def test_plan_rejects_legacy_status_entry_without_source_range(self, tmp_path: Path):
-        """存量项目遗留的已废弃状态值不影响判定：看的是切出集有没有 source_range。"""
+        """Deprecated status values left in existing projects do not affect the verdict: what matters is whether cut episodes
+        have a source_range.
+
+        存量项目遗留的已废弃状态值不影响判定：看的是切出集有没有 source_range。"""
         project_dir = _write_project(
             tmp_path,
             episodes=[
@@ -403,11 +450,15 @@ class TestPlan:
             await EpisodePlanner(project_dir, generator=fake).plan()
 
         assert fake.requests == []
+        # Episode files untouched: for an episode without a position record, its physical file is the final record
         # 集文件不动：没有位置记录的集，其物理文件就是最终记录
         assert (project_dir / "source" / "episode_1.txt").read_text(encoding="utf-8") == "人工改过的内容。"
 
     async def test_own_and_no_source_episodes_do_not_block_planning_and_keep_their_place(self, tmp_path: Path):
-        """自带原文与无原文的集没有原文范围也不拦规划；新切出的集接在最后一个切出集之后，其余集位置不变。"""
+        """Episodes with their own source text or without source text do not block planning even without a source range; newly
+        cut episodes follow the last cut episode, and other episodes keep their positions.
+
+        自带原文与无原文的集没有原文范围也不拦规划；新切出的集接在最后一个切出集之后，其余集位置不变。"""
         own = {"episode": 2, "title": "番外", "script_file": "scripts/episode_2.json", "source_origin": "own"}
         blank = {"episode": 3, "title": "空白", "script_file": "scripts/episode_3.json", "source_origin": "none"}
         cut = {
@@ -445,7 +496,10 @@ class TestPlan:
         assert not (project_dir / "source" / "episode_3.txt").exists()
 
     async def test_unregistered_files_in_source_do_not_affect_planning(self, tmp_path: Path):
-        """source/ 里未登记的文件（含形似集文件的 episode_N.txt）不是整本源文：不进规划窗口。"""
+        """Unregistered files in source/ (including episode_N.txt that look like episode files) are not whole-book source: they
+        do not enter the planning window.
+
+        source/ 里未登记的文件（含形似集文件的 episode_N.txt）不是整本源文：不进规划窗口。"""
         project_dir = _write_project(tmp_path, episodes=[])
         (project_dir / "source" / "0_stray.txt").write_text("没有登记的文件。", encoding="utf-8")
         (project_dir / "source" / "episode_9.txt").write_text("人工放进来的集内容。", encoding="utf-8")
@@ -462,7 +516,10 @@ class TestPlan:
         assert (project_dir / "source" / "episode_9.txt").read_text(encoding="utf-8") == "人工放进来的集内容。"
 
     async def test_unregistered_episode_file_taking_a_new_id_is_archived_not_overwritten(self, tmp_path: Path):
-        """新分配的集 ID 撞上 source/ 里未登记的同名集文件时，先改名留底再写派生文件，内容不丢。"""
+        """When a newly allocated episode ID collides with an unregistered same-named episode file in source/, rename and keep
+        it first, then write the derived file, so no content is lost.
+
+        新分配的集 ID 撞上 source/ 里未登记的同名集文件时，先改名留底再写派生文件，内容不丢。"""
         project_dir = _write_project(tmp_path, episodes=[])
         (project_dir / "source" / "episode_2.txt").write_text("人工放进来的集内容。", encoding="utf-8")
         fake = _FakeTextGenerator([_plan_response(_THREE_EPISODE_DRAFT)])
@@ -474,7 +531,10 @@ class TestPlan:
         assert (project_dir / "source" / "episode_2.txt").read_text(encoding="utf-8") != "人工放进来的集内容。"
 
     async def test_full_reset_unblocks_planning_for_legacy_ledger(self, tmp_path: Path):
-        """老项目出路：无原文范围记录的切出集先被 plan 拒绝，全量重置后可正常从头规划。"""
+        """Way out for old projects: cut episodes without a source range record are first refused by plan; after a full reset,
+        planning from the start works.
+
+        老项目出路：无原文范围记录的切出集先被 plan 拒绝，全量重置后可正常从头规划。"""
         project_dir = _write_project(
             tmp_path,
             episodes=[
@@ -506,7 +566,10 @@ class TestPlan:
         assert eps[0]["source_range"] == {"source_file": "source/novel.txt", "start": 0, "end": _end_of(ANCHOR_EP1)}
 
     async def test_plan_retries_with_failure_reason_when_anchor_invalid(self, tmp_path: Path):
-        """机械校验失败自动重试：锚点不存在 → 重试 prompt 附失败原因，第二轮通过。"""
+        """Automatic retry on mechanical validation failure: anchor does not exist -> the retry prompt carries the failure
+        reason, and the second round passes.
+
+        机械校验失败自动重试：锚点不存在 → 重试 prompt 附失败原因，第二轮通过。"""
         project_dir = _write_project(tmp_path)
         bad_anchor = "这句话不在原文里。"
         fake = _FakeTextGenerator(
@@ -520,24 +583,26 @@ class TestPlan:
 
         assert len(fake.requests) == 2
         retry_prompt = fake.requests[1].prompt
-        assert bad_anchor in retry_prompt  # 失败原因指明具体锚点
+        assert bad_anchor in retry_prompt  # The failure reason names the specific anchor / 失败原因指明具体锚点
         assert "不存在" in retry_prompt
         assert [s.title for s in result.episodes] == ["古玉藏诀"]
         project = _load_project(project_dir)
         assert len(project["episodes"]) == 1
 
     async def test_plan_retries_on_ambiguous_and_non_monotonic_anchors(self, tmp_path: Path):
-        """锚点不唯一 / 范围不连续同样触发重试，失败原因可区分。"""
+        """Non-unique anchors / non-contiguous ranges also trigger retries, with distinguishable failure reasons.
+
+        锚点不唯一 / 范围不连续同样触发重试，失败原因可区分。"""
         repeated = "李恒抬头看了看天。"
         source = "山中清晨。" + repeated + "他继续赶路。" + repeated + "夜幕降临，他找到了破庙。"
         project_dir = _write_project(tmp_path, source_text=source)
         fake = _FakeTextGenerator(
             [
-                _plan_response([{"title": "甲", "hook": "甲", "end_anchor": repeated}]),  # 出现两次
+                _plan_response([{"title": "甲", "hook": "甲", "end_anchor": repeated}]),  # Appears twice / 出现两次
                 _plan_response(
                     [
                         {"title": "甲", "hook": "甲", "end_anchor": "他继续赶路。"},
-                        {"title": "乙", "hook": "乙", "end_anchor": "山中清晨。"},  # 早于上一集结尾
+                        {"title": "乙", "hook": "乙", "end_anchor": "山中清晨。"},  # Earlier than the end of the previous episode / 早于上一集结尾
                     ]
                 ),
                 _plan_response([{"title": "丙", "hook": "丙", "end_anchor": "他继续赶路。"}]),
@@ -547,17 +612,20 @@ class TestPlan:
         result = await EpisodePlanner(project_dir, generator=fake).plan()
 
         assert len(fake.requests) == 3
-        assert "2 次" in fake.requests[1].prompt  # 不唯一：报出现次数
-        assert "连续" in fake.requests[2].prompt  # 不连续：报范围推进问题
+        assert "2 次" in fake.requests[1].prompt  # Not unique: report the number of occurrences / 不唯一：报出现次数
+        assert "连续" in fake.requests[2].prompt  # Not contiguous: report the range progression problem / 不连续：报范围推进问题
         assert [s.title for s in result.episodes] == ["丙"]
 
     async def test_plan_rejects_overlapping_anchor_occurrences_as_ambiguous(self, tmp_path: Path):
-        """锚点重叠出现同样判不唯一：非重叠计数会把 "哪哪哪" 中的 "哪哪" 误判为唯一定位。"""
+        """Overlapping anchor occurrences are also judged non-unique: a non-overlapping count would wrongly judge a two-char
+        repeat inside a three-char repeat as uniquely located.
+
+        锚点重叠出现同样判不唯一：非重叠计数会把 "哪哪哪" 中的 "哪哪" 误判为唯一定位。"""
         source = "天哪哪哪，山里炸开了锅。李恒收剑而立。"
         project_dir = _write_project(tmp_path, source_text=source)
         fake = _FakeTextGenerator(
             [
-                _plan_response([{"title": "甲", "hook": "甲", "end_anchor": "哪哪"}]),  # 重叠出现两次
+                _plan_response([{"title": "甲", "hook": "甲", "end_anchor": "哪哪"}]),  # Appears twice, overlapping / 重叠出现两次
                 _plan_response([{"title": "乙", "hook": "乙", "end_anchor": "李恒收剑而立。"}]),
             ]
         )
@@ -565,12 +633,16 @@ class TestPlan:
         result = await EpisodePlanner(project_dir, generator=fake).plan()
 
         assert len(fake.requests) == 2
-        assert "2 次" in fake.requests[1].prompt  # 按允许重叠的口径计数
+        assert "2 次" in fake.requests[1].prompt  # Count with overlaps allowed / 按允许重叠的口径计数
         assert [s.title for s in result.episodes] == ["乙"]
 
     async def test_plan_resolves_anchor_with_halfwidth_punctuation(self, tmp_path: Path):
-        """锚点与源文仅差全/半角标点宽度（，→ , 与 。→ .）：折叠容错还原精确 NFC 偏移，一次通过不重试。"""
+        """Anchor and source differ only in full/half-width punctuation (full-width comma -> , and full-width period -> .): the
+        folding tolerance restores the exact NFC offset, passing once without retry.
+
+        锚点与源文仅差全/半角标点宽度（，→ , 与 。→ .）：折叠容错还原精确 NFC 偏移，一次通过不重试。"""
         project_dir = _write_project(tmp_path)
+        # The source has full-width comma and period; the model echoed them as half-width , and .
         half_width_anchor = "古玉,玉中藏着剑诀."  # 源文是全角 ，与 。，模型回显成半角 , 与 .
         fake = _FakeTextGenerator(
             [_plan_response([{"title": "古玉藏诀", "hook": "玉中剑诀来历成谜", "end_anchor": half_width_anchor}])]
@@ -578,19 +650,23 @@ class TestPlan:
 
         result = await EpisodePlanner(project_dir, generator=fake).plan()
 
-        assert len(fake.requests) == 1  # 容错命中，未触发重试
+        assert len(fake.requests) == 1  # Tolerance hit, no retry triggered / 容错命中，未触发重试
         eps = _load_project(project_dir)["episodes"]
+        # The restored offset matches the exact-match basis byte for byte
         # 还原出的偏移与精确匹配口径逐字节一致
         assert eps[0]["source_range"] == {"source_file": "source/novel.txt", "start": 0, "end": _end_of(ANCHOR_EP1)}
         ep1 = (project_dir / "source" / "episode_1.txt").read_text(encoding="utf-8")
         assert ep1 == SOURCE[: _end_of(ANCHOR_EP1)]
-        assert ep1.endswith("玉中藏着剑诀。")  # 源文标点未被改写（仍是全角 。）
+        assert ep1.endswith("玉中藏着剑诀。")  # Source punctuation not rewritten (still the full-width period) / 源文标点未被改写（仍是全角 。）
         assert [s.title for s in result.episodes] == ["古玉藏诀"]
 
     async def test_plan_drama_resolves_anchor_with_punctuation_width_mismatch(self, tmp_path: Path):
-        """drama 草稿同样走折叠容错：标点宽度不匹配（。→ .）时解析到正确精确偏移。"""
+        """drama drafts also go through the folding tolerance: when punctuation width does not match (full-width period -> .),
+        it resolves to the correct exact offset.
+
+        drama 草稿同样走折叠容错：标点宽度不匹配（。→ .）时解析到正确精确偏移。"""
         project_dir = _write_project(tmp_path, content_mode="drama")
-        half_width_anchor = "被追杀的少女."  # 源文全角 。
+        half_width_anchor = "被追杀的少女."  # Source has a full-width period / 源文全角 。
         fake = _FakeTextGenerator(
             [
                 _plan_response(
@@ -609,7 +685,7 @@ class TestPlan:
 
         result = await EpisodePlanner(project_dir, generator=fake).plan()
 
-        assert len(fake.requests) == 1  # 容错命中，未触发重试
+        assert len(fake.requests) == 1  # Tolerance hit, no retry triggered / 容错命中，未触发重试
         eps = _load_project(project_dir)["episodes"]
         assert eps[0]["source_range"] == {"source_file": "source/novel.txt", "start": 0, "end": _end_of(ANCHOR_EP2)}
         assert eps[0]["outline"]["story_beats"] == ["辞别师父", "城门遇袭"]
@@ -618,10 +694,13 @@ class TestPlan:
         assert [s.title for s in result.episodes] == ["城门遇袭"]
 
     async def test_plan_resolves_anchor_with_whitespace_width_mismatch(self, tmp_path: Path):
-        """锚点空白宽度不匹配（全角空格 ↔ 半角空格）：折叠容错还原精确偏移。"""
-        source = "The hero　rose at dawn. Then darkness fell over the land."  # 含全角空格 U+3000
+        """Anchor whitespace width mismatch (full-width space <-> half-width space): the folding tolerance restores the exact
+        offset.
+
+        锚点空白宽度不匹配（全角空格 ↔ 半角空格）：折叠容错还原精确偏移。"""
+        source = "The hero　rose at dawn. Then darkness fell over the land."  # Contains a full-width space U+3000 / 含全角空格 U+3000
         project_dir = _write_project(tmp_path, source_text=source)
-        half_width_anchor = "The hero rose at dawn."  # 模型回显成半角空格
+        half_width_anchor = "The hero rose at dawn."  # The model echoed a half-width space / 模型回显成半角空格
         fake = _FakeTextGenerator(
             [_plan_response([{"title": "Dawn", "hook": "hook", "end_anchor": half_width_anchor}])]
         )
@@ -636,34 +715,46 @@ class TestPlan:
         assert [s.title for s in result.episodes] == ["Dawn"]
 
     async def test_plan_resolves_anchor_with_unicode_nfc_mismatch(self, tmp_path: Path):
-        """锚点与源文 Unicode 规范形不一致（锚为 NFD 分解形 ↔ 源文 NFC）：折叠兜底对锚副本
+        """Anchor and source differ in Unicode normal form (anchor in NFD decomposed form <-> source in NFC): the folding
+        fallback applies the same normalize_source_text normalization as the window to a copy of the anchor and then
+        matches, restoring the exact offset; Tier1 and source coordinates are unchanged.
+
+        锚点与源文 Unicode 规范形不一致（锚为 NFD 分解形 ↔ 源文 NFC）：折叠兜底对锚副本
         施加与 window 相同的 normalize_source_text 归一再匹配，还原精确偏移；Tier1 与源文坐标不变。"""
         source = unicodedata.normalize("NFC", "Tôi yêu tiếng Việt. Hôm nay trời đẹp lắm.")
         project_dir = _write_project(tmp_path, source_text=source)
         nfc_anchor = "Tôi yêu tiếng Việt."
-        nfd_anchor = unicodedata.normalize("NFD", nfc_anchor)  # 模型回显成分解形
+        nfd_anchor = unicodedata.normalize("NFD", nfc_anchor)  # The model echoed the decomposed form / 模型回显成分解形
         assert nfd_anchor != nfc_anchor
         assert len(nfd_anchor) != len(nfc_anchor)
         fake = _FakeTextGenerator([_plan_response([{"title": "Mở đầu", "hook": "hook", "end_anchor": nfd_anchor}])])
 
         result = await EpisodePlanner(project_dir, generator=fake).plan()
 
-        assert len(fake.requests) == 1  # 容错命中，未触发重试
+        assert len(fake.requests) == 1  # Tolerance hit, no retry triggered / 容错命中，未触发重试
         eps = _load_project(project_dir)["episodes"]
-        end = source.index(nfc_anchor) + len(nfc_anchor)  # 精确 NFC 偏移
+        end = source.index(nfc_anchor) + len(nfc_anchor)  # Exact NFC offset / 精确 NFC 偏移
         assert eps[0]["source_range"] == {"source_file": "source/novel.txt", "start": 0, "end": end}
         ep1 = (project_dir / "source" / "episode_1.txt").read_text(encoding="utf-8")
-        assert ep1 == source[:end]  # 切片取 NFC 原文，未改写源文
+        assert ep1 == source[:end]  # The slice takes the NFC source, the source is not rewritten / 切片取 NFC 原文，未改写源文
         assert [s.title for s in result.episodes] == ["Mở đầu"]
 
     async def test_plan_resolves_anchor_with_crlf_and_combining_length_change(self, tmp_path: Path):
-        """长度护栏：锚同时含 \\r\\n 与会改变长度的组合字符（NFD），两者都让锚比源文对应子串更长。
+        """Length guard: the anchor contains both \\r\\n and length-changing combining characters (NFD), each making the
+        anchor longer than the matching source substring. The normalized copy goes through normalize_source_text (NFC +
+        unified newlines), the end span is restored by the normalized anchor length, and the assertion checks that the source
+        offset/slice lands byte for byte on the normalized coordinate system, not drifting longer from \\r or combining
+        characters; Tier1 is still byte-for-byte unchanged.
+
+        长度护栏：锚同时含 \\r\\n 与会改变长度的组合字符（NFD），两者都让锚比源文对应子串更长。
         归一副本走 normalize_source_text（NFC + 换行统一），end 跨度按归一锚长还原，断言源文偏移/
         切片逐字节落在归一坐标系上、不被 \\r 或组合字符撑长漂移；Tier1 仍逐字节不变。"""
+        # The source is already in storage coordinate form (NFC + \n); window and slice are both in this coordinate system
         # 源文已是存储坐标系形态（NFC + \n）；窗口与切片均在此坐标系上
         source = "Tôi yêu tiếng Việt.\nHôm nay trời đẹp lắm. Mọi thứ thật tuyệt vời."
         project_dir = _write_project(tmp_path, source_text=source)
-        nfc_sub = "Tôi yêu tiếng Việt.\nHôm nay"  # 源文中的精确子串（NFC + \n）
+        nfc_sub = "Tôi yêu tiếng Việt.\nHôm nay"  # Exact substring in the source (NFC + \n) / 源文中的精确子串（NFC + \n）
+        # Model echo: combining characters decomposed (NFD, longer) + newline written as \r\n (+1 more)
         # 模型回显：组合字符分解（NFD，变长）+ 换行写成 \r\n（再 +1）
         crlf_nfd_anchor = unicodedata.normalize("NFD", nfc_sub).replace("\n", "\r\n")
         assert "\r\n" in crlf_nfd_anchor
@@ -675,19 +766,24 @@ class TestPlan:
 
         result = await EpisodePlanner(project_dir, generator=fake).plan()
 
-        assert len(fake.requests) == 1  # 容错命中，未触发重试
+        assert len(fake.requests) == 1  # Tolerance hit, no retry triggered / 容错命中，未触发重试
         eps = _load_project(project_dir)["episodes"]
+        # Exact end offset in the normalized coordinate system (not the anchor's original length)
         end = source.index(nfc_sub) + len(nfc_sub)  # 归一坐标系下的精确末偏移（非锚原长）
         assert eps[0]["source_range"] == {"source_file": "source/novel.txt", "start": 0, "end": end}
         ep1 = (project_dir / "source" / "episode_1.txt").read_text(encoding="utf-8")
+        # The slice lands byte for byte on source coordinates, not drifting longer from \r/combining characters
         assert ep1 == source[:end]  # 切片逐字节落在源文坐标上，未被 \r/组合字符撑长漂移
         assert [s.title for s in result.episodes] == ["Mở đầu"]
 
     async def test_plan_resolves_anchor_with_curly_double_quote_mismatch(self, tmp_path: Path):
-        """源文用弯双引号（U+201C/U+201D），模型回显成直双引号：折叠表新增映射令其对齐。"""
+        """The source uses curly double quotes (U+201C/U+201D) and the model echoes straight double quotes: a new mapping in
+        the folding table aligns them.
+
+        源文用弯双引号（U+201C/U+201D），模型回显成直双引号：折叠表新增映射令其对齐。"""
         source = "他说：“古玉里藏着剑诀。”少女沉默不语。"
         curly_anchor = "“古玉里藏着剑诀。”"
-        straight_anchor = '"古玉里藏着剑诀。"'  # 模型回显成直引号
+        straight_anchor = '"古玉里藏着剑诀。"'  # The model echoed straight quotes / 模型回显成直引号
         project_dir = _write_project(tmp_path, source_text=source)
         fake = _FakeTextGenerator(
             [_plan_response([{"title": "古玉藏诀", "hook": "hook", "end_anchor": straight_anchor}])]
@@ -695,26 +791,29 @@ class TestPlan:
 
         result = await EpisodePlanner(project_dir, generator=fake).plan()
 
-        assert len(fake.requests) == 1  # 容错命中，未触发重试
+        assert len(fake.requests) == 1  # Tolerance hit, no retry triggered / 容错命中，未触发重试
         end = source.index(curly_anchor) + len(curly_anchor)
         eps = _load_project(project_dir)["episodes"]
         assert eps[0]["source_range"] == {"source_file": "source/novel.txt", "start": 0, "end": end}
         ep1 = (project_dir / "source" / "episode_1.txt").read_text(encoding="utf-8")
         assert ep1 == source[:end]
-        assert ep1.endswith("”")  # 源文标点未被改写（仍是弯引号）
+        assert ep1.endswith("”")  # Source punctuation not rewritten (still curly quotes) / 源文标点未被改写（仍是弯引号）
         assert [s.title for s in result.episodes] == ["古玉藏诀"]
 
     async def test_plan_resolves_anchor_with_curly_double_quote_mismatch_reverse(self, tmp_path: Path):
-        """反向：源文用直双引号，模型回显成弯双引号，同一折叠表对齐两个方向。"""
+        """Reverse: the source uses straight double quotes and the model echoes curly ones; the same folding table aligns both
+        directions.
+
+        反向：源文用直双引号，模型回显成弯双引号，同一折叠表对齐两个方向。"""
         source = '他说："古玉里藏着剑诀。"少女沉默不语。'
         straight_anchor = '"古玉里藏着剑诀。"'
-        curly_anchor = "“古玉里藏着剑诀。”"  # 模型回显成弯引号
+        curly_anchor = "“古玉里藏着剑诀。”"  # The model echoed curly quotes / 模型回显成弯引号
         project_dir = _write_project(tmp_path, source_text=source)
         fake = _FakeTextGenerator([_plan_response([{"title": "古玉藏诀", "hook": "hook", "end_anchor": curly_anchor}])])
 
         result = await EpisodePlanner(project_dir, generator=fake).plan()
 
-        assert len(fake.requests) == 1  # 容错命中，未触发重试
+        assert len(fake.requests) == 1  # Tolerance hit, no retry triggered / 容错命中，未触发重试
         end = source.index(straight_anchor) + len(straight_anchor)
         eps = _load_project(project_dir)["episodes"]
         assert eps[0]["source_range"] == {"source_file": "source/novel.txt", "start": 0, "end": end}
@@ -723,10 +822,13 @@ class TestPlan:
         assert [s.title for s in result.episodes] == ["古玉藏诀"]
 
     async def test_plan_resolves_anchor_with_curly_single_quote_mismatch(self, tmp_path: Path):
-        """源文用弯单引号（U+2018/U+2019），模型回显成直单引号：折叠表新增映射令其对齐。"""
+        """The source uses curly single quotes (U+2018/U+2019) and the model echoes straight single quotes: a new mapping in the
+        folding table aligns them.
+
+        源文用弯单引号（U+2018/U+2019），模型回显成直单引号：折叠表新增映射令其对齐。"""
         source = "少女低声说：‘我不是坏人。’李恒不再追问。"
         curly_anchor = "‘我不是坏人。’"
-        straight_anchor = "'我不是坏人。'"  # 模型回显成直引号
+        straight_anchor = "'我不是坏人。'"  # The model echoed straight quotes / 模型回显成直引号
         project_dir = _write_project(tmp_path, source_text=source)
         fake = _FakeTextGenerator(
             [_plan_response([{"title": "少女辩白", "hook": "hook", "end_anchor": straight_anchor}])]
@@ -734,20 +836,23 @@ class TestPlan:
 
         result = await EpisodePlanner(project_dir, generator=fake).plan()
 
-        assert len(fake.requests) == 1  # 容错命中，未触发重试
+        assert len(fake.requests) == 1  # Tolerance hit, no retry triggered / 容错命中，未触发重试
         end = source.index(curly_anchor) + len(curly_anchor)
         eps = _load_project(project_dir)["episodes"]
         assert eps[0]["source_range"] == {"source_file": "source/novel.txt", "start": 0, "end": end}
         ep1 = (project_dir / "source" / "episode_1.txt").read_text(encoding="utf-8")
         assert ep1 == source[:end]
-        assert ep1.endswith("’")  # 源文标点未被改写（仍是弯引号）
+        assert ep1.endswith("’")  # Source punctuation not rewritten (still curly quotes) / 源文标点未被改写（仍是弯引号）
         assert [s.title for s in result.episodes] == ["少女辩白"]
 
     async def test_plan_resolves_anchor_with_cjk_wave_dash_fullwidth_anchor(self, tmp_path: Path):
-        """源文用 CJK 波浪号（U+301C），模型回显成全角波浪号（U+FF5E）：两者折叠后同归半角 ~。"""
+        """The source uses the CJK wave dash (U+301C) and the model echoes the full-width tilde (U+FF5E): both fold to the
+        half-width ~.
+
+        源文用 CJK 波浪号（U+301C），模型回显成全角波浪号（U+FF5E）：两者折叠后同归半角 ~。"""
         source = "古玉估价约〜百金，来历不明。少女转身离去。"
         cjk_anchor = "约〜百金，来历不明。"
-        fullwidth_anchor = "约～百金，来历不明。"  # 模型回显成 U+FF5E
+        fullwidth_anchor = "约～百金，来历不明。"  # The model echoed U+FF5E / 模型回显成 U+FF5E
         project_dir = _write_project(tmp_path, source_text=source)
         fake = _FakeTextGenerator(
             [_plan_response([{"title": "估价成谜", "hook": "hook", "end_anchor": fullwidth_anchor}])]
@@ -755,20 +860,23 @@ class TestPlan:
 
         result = await EpisodePlanner(project_dir, generator=fake).plan()
 
-        assert len(fake.requests) == 1  # 容错命中，未触发重试
+        assert len(fake.requests) == 1  # Tolerance hit, no retry triggered / 容错命中，未触发重试
         end = source.index(cjk_anchor) + len(cjk_anchor)
         eps = _load_project(project_dir)["episodes"]
         assert eps[0]["source_range"] == {"source_file": "source/novel.txt", "start": 0, "end": end}
         ep1 = (project_dir / "source" / "episode_1.txt").read_text(encoding="utf-8")
         assert ep1 == source[:end]
-        assert ep1.endswith("〜百金，来历不明。")  # 源文标点未被改写（仍是 CJK 波浪号）
+        assert ep1.endswith("〜百金，来历不明。")  # Source punctuation not rewritten (still the CJK wave dash) / 源文标点未被改写（仍是 CJK 波浪号）
         assert [s.title for s in result.episodes] == ["估价成谜"]
 
     async def test_plan_resolves_anchor_with_cjk_wave_dash_halfwidth_anchor(self, tmp_path: Path):
-        """源文用 CJK 波浪号（U+301C），模型回显成半角 ~：折叠表新增映射令其对齐。"""
+        """The source uses the CJK wave dash (U+301C) and the model echoes the half-width ~: a new mapping in the folding table
+        aligns them.
+
+        源文用 CJK 波浪号（U+301C），模型回显成半角 ~：折叠表新增映射令其对齐。"""
         source = "古玉估价约〜百金，来历不明。少女转身离去。"
         cjk_anchor = "约〜百金，来历不明。"
-        halfwidth_anchor = "约~百金，来历不明。"  # 模型回显成半角 ~
+        halfwidth_anchor = "约~百金，来历不明。"  # The model echoed the half-width ~ / 模型回显成半角 ~
         project_dir = _write_project(tmp_path, source_text=source)
         fake = _FakeTextGenerator(
             [_plan_response([{"title": "估价成谜", "hook": "hook", "end_anchor": halfwidth_anchor}])]
@@ -776,7 +884,7 @@ class TestPlan:
 
         result = await EpisodePlanner(project_dir, generator=fake).plan()
 
-        assert len(fake.requests) == 1  # 容错命中，未触发重试
+        assert len(fake.requests) == 1  # Tolerance hit, no retry triggered / 容错命中，未触发重试
         end = source.index(cjk_anchor) + len(cjk_anchor)
         eps = _load_project(project_dir)["episodes"]
         assert eps[0]["source_range"] == {"source_file": "source/novel.txt", "start": 0, "end": end}
@@ -785,10 +893,13 @@ class TestPlan:
         assert [s.title for s in result.episodes] == ["估价成谜"]
 
     async def test_plan_resolves_anchor_with_fullwidth_straight_quote_mismatch(self, tmp_path: Path):
-        """源文用全角直引号（U+FF02/U+FF07），模型回显成半角直引号：折叠表新增映射令其对齐。"""
+        """The source uses full-width straight quotes (U+FF02/U+FF07) and the model echoes half-width straight quotes: a new
+        mapping in the folding table aligns them.
+
+        源文用全角直引号（U+FF02/U+FF07），模型回显成半角直引号：折叠表新增映射令其对齐。"""
         source = "少女喊道：＂别跑，＇等等我＇！＂李恒停下脚步。"
         fullwidth_anchor = "＂别跑，＇等等我＇！＂"
-        halfwidth_anchor = "\"别跑，'等等我'！\""  # 模型回显成半角直引号
+        halfwidth_anchor = "\"别跑，'等等我'！\""  # The model echoed half-width straight quotes / 模型回显成半角直引号
         project_dir = _write_project(tmp_path, source_text=source)
         fake = _FakeTextGenerator(
             [_plan_response([{"title": "城门呼喊", "hook": "hook", "end_anchor": halfwidth_anchor}])]
@@ -796,21 +907,25 @@ class TestPlan:
 
         result = await EpisodePlanner(project_dir, generator=fake).plan()
 
-        assert len(fake.requests) == 1  # 容错命中，未触发重试
+        assert len(fake.requests) == 1  # Tolerance hit, no retry triggered / 容错命中，未触发重试
         end = source.index(fullwidth_anchor) + len(fullwidth_anchor)
         eps = _load_project(project_dir)["episodes"]
         assert eps[0]["source_range"] == {"source_file": "source/novel.txt", "start": 0, "end": end}
         ep1 = (project_dir / "source" / "episode_1.txt").read_text(encoding="utf-8")
         assert ep1 == source[:end]
-        assert ep1.endswith("＂")  # 源文标点未被改写（仍是全角直引号）
+        assert ep1.endswith("＂")  # Source punctuation not rewritten (still full-width straight quotes) / 源文标点未被改写（仍是全角直引号）
         assert [s.title for s in result.episodes] == ["城门呼喊"]
 
     async def test_plan_rejects_anchor_ambiguous_after_punctuation_folding(self, tmp_path: Path):
-        """折叠后仍命中多处：维持「无法唯一定位」拒绝并重试，不静默挑第一处。"""
-        source = "他说好的。她说好的。后来他离开了。"  # 两处「说好的。」全角句号
+        """Still matches in several places after folding: keep the "cannot locate uniquely" refusal and retry, without silently
+        picking the first.
+
+        折叠后仍命中多处：维持「无法唯一定位」拒绝并重试，不静默挑第一处。"""
+        source = "他说好的。她说好的。后来他离开了。"  # Two occurrences of the same phrase ending in a full-width period / 两处「说好的。」全角句号
         project_dir = _write_project(tmp_path, source_text=source)
         fake = _FakeTextGenerator(
             [
+                # Half-width ., which matches two places after folding
                 _plan_response([{"title": "甲", "hook": "甲", "end_anchor": "说好的."}]),  # 半角 .，折叠后命中两处
                 _plan_response([{"title": "乙", "hook": "乙", "end_anchor": "后来他离开了。"}]),
             ]
@@ -824,7 +939,10 @@ class TestPlan:
         assert [s.title for s in result.episodes] == ["乙"]
 
     async def test_plan_continues_after_last_cut_episode_in_next_source_file(self, tmp_path: Path):
-        """最后一个切出集已推进到后一个源文件：续规划从它的结尾起，不重复规划该文件前缀。"""
+        """The last cut episode has already advanced into the next source file: continued planning starts from its end,
+        without re-planning that file's prefix.
+
+        最后一个切出集已推进到后一个源文件：续规划从它的结尾起，不重复规划该文件前缀。"""
         c = _end_of(ANCHOR2_MID, SOURCE2)
         project_dir = _write_project(
             tmp_path,
@@ -845,7 +963,9 @@ class TestPlan:
         assert eps[3]["source_range"] == {"source_file": "source/novel2.txt", "start": c, "end": len(SOURCE2)}
 
     async def test_plan_raises_and_leaves_project_untouched_after_retry_exhaustion(self, tmp_path: Path):
-        """重试耗尽：抛 EpisodePlanningError，账本与文件零变更（原子性）。"""
+        """Retries exhausted: raise EpisodePlanningError, with zero changes to the ledger and files (atomicity).
+
+        重试耗尽：抛 EpisodePlanningError，账本与文件零变更（原子性）。"""
         project_dir = _write_project(tmp_path)
         before = (project_dir / "project.json").read_text(encoding="utf-8")
         bad = _plan_response([{"title": "坏", "hook": "坏", "end_anchor": "不在原文里"}])
@@ -858,7 +978,10 @@ class TestPlan:
         assert not list((project_dir / "source").glob("episode_*.txt"))
 
     async def test_plan_converts_structured_output_exhausted_to_planning_error(self, tmp_path: Path):
-        """后端结构化输出降级链耗尽：转为 EpisodePlanningError，话术指向供应商能力不足，且不在本层重试。"""
+        """The backend's structured-output fallback chain is exhausted: convert to EpisodePlanningError, with wording pointing
+        at insufficient provider capability, and no retry at this layer.
+
+        后端结构化输出降级链耗尽：转为 EpisodePlanningError，话术指向供应商能力不足，且不在本层重试。"""
         project_dir = _write_project(tmp_path)
 
         class _ExhaustedGenerator(_FakeTextGenerator):
@@ -883,12 +1006,17 @@ class TestPlan:
         assert "InstructorRetryException" not in str(exc_info.value)
 
     async def test_plan_raises_planning_conflict_when_ledger_advances_during_call(self, tmp_path: Path):
-        """请求在途时账本被另一次调用抢先提交、有效起点前移：锁内复核发现不一致，整批作废，账本与磁盘均无写入。"""
+        """While the request is in flight, another call commits to the ledger first and the effective start moves forward: the
+        recheck under the lock finds the mismatch, the whole batch is voided, and nothing is written to the ledger or disk.
+
+        请求在途时账本被另一次调用抢先提交、有效起点前移：锁内复核发现不一致，整批作废，账本与磁盘均无写入。"""
         project_dir = _write_project(tmp_path)
         after_concurrent_commit: list[str] = []
 
         class _ConcurrentCommitGenerator(_FakeTextGenerator):
             async def generate(self, request, project_name=None):
+                # Simulate another plan() call committing episode 1 after this call's snapshot outside the lock and before the
+                # recheck under the lock
                 # 模拟另一次 plan() 调用在本次锁外快照之后、锁内复核之前抢先提交了第 1 集
                 def _commit_concurrently(project: dict) -> None:
                     project["episodes"] = [_entry(1, 0, _end_of(ANCHOR_EP1))]
@@ -903,12 +1031,17 @@ class TestPlan:
         with pytest.raises(PlanningConflictError, match="并发"):
             await EpisodePlanner(project_dir, generator=fake).plan()
 
+        # The ledger stays verbatim at the state after the concurrent commit: not one byte of this call's episode entries or
+        # source fingerprints was written
         # 账本逐字停留在并发提交后的状态：本次调用的集条目与源文指纹一个字节都没落盘
         assert (project_dir / "project.json").read_text(encoding="utf-8") == after_concurrent_commit[0]
         assert not list((project_dir / "source").glob("episode_*.txt"))
 
     async def test_plan_raises_planning_conflict_when_episode_ids_are_allocated_during_call(self, tmp_path: Path):
-        """请求在途时另一写方分配过集 ID（账本与进度不变、历史最高号前移）：整批作废，不写出未受保护的派生文件。"""
+        """While the request is in flight, another writer allocated episode IDs (ledger and progress unchanged, historical
+        highest number moved forward): the whole batch is voided, and no unprotected derived files are written.
+
+        请求在途时另一写方分配过集 ID（账本与进度不变、历史最高号前移）：整批作废，不写出未受保护的派生文件。"""
         project_dir = _write_project(tmp_path)
         after_concurrent_write: list[str] = []
 
@@ -931,7 +1064,10 @@ class TestPlan:
         assert not list((project_dir / "source").glob("episode_*.txt"))
 
     async def test_plan_truncation_short_circuits_retry_and_reports_the_model(self, tmp_path: Path):
-        """结构化输出被截断时不重试，带出供应商、模型与是否自定义模型（见 docs/adr/0044）。"""
+        """When structured output is truncated, do not retry; report the provider, model and whether it is a custom model (see
+        docs/adr/0044).
+
+        结构化输出被截断时不重试，带出供应商、模型与是否自定义模型（见 docs/adr/0044）。"""
         from lib.backends.text_backends.base import TextOutputTruncatedError
 
         class _TruncatingGenerator:
@@ -954,6 +1090,8 @@ class TestPlan:
         with pytest.raises(PlanningOutputTruncatedError) as exc_info:
             await EpisodePlanner(project_dir, generator=fake).plan()
 
+        # Truncation is not retried: only one call happens, unlike schema/mechanical validation failures that exhaust
+        # max_attempts
         # 截断不重试：只发生一次调用，不像 schema/机械校验失败那样耗尽 max_attempts
         assert fake.call_count == 1
         assert (exc_info.value.provider_id, exc_info.value.model, exc_info.value.custom_model) == (
@@ -964,7 +1102,10 @@ class TestPlan:
         assert (project_dir / "project.json").read_text(encoding="utf-8") == before
 
     async def test_plan_without_a_complete_arc_reports_the_window_start(self, tmp_path: Path):
-        """窗口里找不到剧情弧完整的切分点：这一批报错并给出未切分原文的起点，不重试、账本不动。"""
+        """No split point with a complete plot arc can be found in the window: this batch errors and gives the start of the
+        unsplit source text, no retry, ledger untouched.
+
+        窗口里找不到剧情弧完整的切分点：这一批报错并给出未切分原文的起点，不重试、账本不动。"""
         project_dir = _write_project(tmp_path, episodes=[_entry(1, 0, _end_of(ANCHOR_EP1))])
         before = (project_dir / "project.json").read_text(encoding="utf-8")
         fake = _FakeTextGenerator([json.dumps({"episodes": []})])
@@ -977,7 +1118,9 @@ class TestPlan:
         assert (project_dir / "project.json").read_text(encoding="utf-8") == before
 
     async def test_plan_accepts_uppercase_json_fence(self, tmp_path: Path):
-        """模型输出大写 ```JSON 围栏也能解析（围栏标记不区分大小写）。"""
+        """Model output with an uppercase ```JSON fence can be parsed too (fence markers are case-insensitive).
+
+        模型输出大写 ```JSON 围栏也能解析（围栏标记不区分大小写）。"""
         project_dir = _write_project(tmp_path)
         fenced = (
             "```JSON\n" + _plan_response([{"title": "古玉藏诀", "hook": "钩子", "end_anchor": ANCHOR_EP1}]) + "\n```"
@@ -987,10 +1130,12 @@ class TestPlan:
         result = await EpisodePlanner(project_dir, generator=fake).plan()
 
         assert [s.title for s in result.episodes] == ["古玉藏诀"]
-        assert len(fake.requests) == 1  # 一次通过，未触发重试
+        assert len(fake.requests) == 1  # Passed once, no retry triggered / 一次通过，未触发重试
 
     async def test_plan_drama_writes_outline_to_ledger(self, tmp_path: Path):
-        """drama 条目加厚为分集大纲：story_beats + next_episode_teaser 落账本 outline。"""
+        """drama entries are thickened into an episode outline: story_beats + next_episode_teaser go into the ledger's outline.
+
+        drama 条目加厚为分集大纲：story_beats + next_episode_teaser 落账本 outline。"""
         project_dir = _write_project(tmp_path, content_mode="drama")
         fake = _FakeTextGenerator(
             [
@@ -1017,7 +1162,9 @@ class TestPlan:
         }
 
     async def test_plan_drama_rejects_response_missing_story_beats(self, tmp_path: Path):
-        """剧情演绎缺 story_beats 的输出被 schema 校验打回重试。"""
+        """Drama output missing story_beats is sent back for retry by schema validation.
+
+        剧情演绎缺 story_beats 的输出被 schema 校验打回重试。"""
         project_dir = _write_project(tmp_path, content_mode="drama")
         fake = _FakeTextGenerator(
             [
@@ -1042,14 +1189,17 @@ class TestPlan:
         assert "schema" in fake.requests[1].prompt
 
     async def test_plan_screenplay_respects_author_divisions(self, tmp_path: Path):
-        """screenplay：mock 返回尊重作者分集的规划 → 账本落作者的边界 / 标题 / 钩子 / 大纲。"""
+        """screenplay: the mock returns a plan respecting the author's episode divisions -> the ledger gets the author's
+        boundaries / titles / hooks / outlines.
+
+        screenplay：mock 返回尊重作者分集的规划 → 账本落作者的边界 / 标题 / 钩子 / 大纲。"""
         project_dir = _write_project(tmp_path, content_mode="drama", source_kinds=("screenplay",))
         fake = _FakeTextGenerator(
             [
                 _plan_response(
                     [
                         {
-                            "title": "山村少年",  # 作者写明的集标题，照搬
+                            "title": "山村少年",  # Episode title written by the author, copied as-is / 作者写明的集标题，照搬
                             "hook": "古玉剑诀来历成谜",
                             "end_anchor": ANCHOR_EP1,
                             "story_beats": ["山村习武", "后山得玉"],
@@ -1081,7 +1231,10 @@ class TestPlan:
         assert eps[0]["outline"] == {"story_beats": ["山村习武", "后山得玉"], "next_episode_teaser": "下集李恒下山"}
 
     async def test_plan_prompt_branches_on_source_kind(self, tmp_path: Path):
-        """screenplay 规划 prompt 以「下一集开头」定义作者分集的一集且只定义一次、不含标记识别的否定句；novel 不翻面。"""
+        """The screenplay planning prompt defines an author-divided episode by "the start of the next episode", only once, with
+        no negative sentence about marker recognition; novel is unchanged.
+
+        screenplay 规划 prompt 以「下一集开头」定义作者分集的一集且只定义一次、不含标记识别的否定句；novel 不翻面。"""
 
         def _one_episode_generator() -> _FakeTextGenerator:
             return _FakeTextGenerator(
@@ -1110,6 +1263,8 @@ class TestPlan:
         await EpisodePlanner(novel_dir, generator=nov_fake).plan()
         nov_prompt = nov_fake.requests[0].prompt
 
+        # screenplay: respect the author's divisions, an episode ends before the start of the next one (defined only once in
+        # the whole prompt), and if there are none split by plot arc
         # screenplay：尊重作者分集、一集止于下一集开头之前（整段 prompt 只定义一次）、无则按剧情弧切
         assert "尊重作者" in scr_prompt
         assert scr_prompt.count("下一集开头") == 1
@@ -1117,25 +1272,31 @@ class TestPlan:
         assert "正则" not in scr_prompt
         assert "剧情弧" in scr_prompt
         assert "剧本原文片段" in scr_prompt
+        # novel: still the creative basis of "split into several episodes", without screenplay-specific instructions
+        # (regression)
         # novel：仍是「切分为若干集」的创作口径，不含 screenplay 专属指令（回归）
         assert "尊重作者" not in nov_prompt
         assert "下一集开头" not in nov_prompt
         assert "小说原文片段" in nov_prompt
 
     async def test_plan_window_limits_prompt_window(self, tmp_path: Path):
-        """窗口外内容不进 prompt。"""
+        """Content outside the window does not go into the prompt.
+
+        窗口外内容不进 prompt。"""
         window_chars = _end_of(ANCHOR_EP1) + 4
         project_dir = _write_project(tmp_path)
         fake = _FakeTextGenerator([_plan_response([{"title": "古玉藏诀", "hook": "钩子", "end_anchor": ANCHOR_EP1}])])
 
         result = await EpisodePlanner(project_dir, generator=fake, window_chars=window_chars).plan()
 
-        assert ANCHOR_EP2 not in fake.requests[0].prompt  # 窗口被截断
+        assert ANCHOR_EP2 not in fake.requests[0].prompt  # The window was cut off / 窗口被截断
         assert result.source_exhausted is False
         assert result.cursor == {"source_file": "source/novel.txt", "offset": _end_of(ANCHOR_EP1)}
 
     async def test_plan_window_is_fifty_thousand_chars_regardless_of_project_settings(self, tmp_path: Path):
-        """窗口取 5 万字，project.json 里的 planning_window_chars 不参与规划。"""
+        """The window is 50,000 characters; planning_window_chars in project.json plays no part in planning.
+
+        窗口取 5 万字，project.json 里的 planning_window_chars 不参与规划。"""
         source = "甲" * 49_990 + "窗口内最后一句。" + "乙" * 20_000 + "窗口外的一句。"
         project_dir = _write_project(
             tmp_path, source_text=source, extra={"planning_window_chars": 100, "planning_max_episodes": 1}
@@ -1150,7 +1311,11 @@ class TestPlan:
         assert result.cursor == {"source_file": "source/novel.txt", "offset": 49_998}
 
     async def test_plan_window_elasticity_extends_to_full_text_when_remainder_small(self, tmp_path: Path):
-        """剩余全文不足窗口 1.2 倍时窗口直接延伸到全文末尾，避免残余被迫单独成集。"""
+        """When the remaining text is less than 1.2x the window, the window extends straight to the end of the text, so the
+        remainder is not forced into an episode of its own.
+
+        剩余全文不足窗口 1.2 倍时窗口直接延伸到全文末尾，避免残余被迫单独成集。"""
+        # Less than the full length, but the remainder is still within 1.2x the window
         window_chars = len(SOURCE) - 8  # 小于全文长度，但剩余量仍在 1.2 倍窗口以内
         project_dir = _write_project(tmp_path)
         last_anchor = "卷入漩涡之中。"
@@ -1168,12 +1333,16 @@ class TestPlan:
 
         result = await EpisodePlanner(project_dir, generator=fake, window_chars=window_chars).plan()
 
+        # The window already extends to the end of the text, not cut by window_chars
         assert last_anchor in fake.requests[0].prompt  # 窗口已延伸到全文末尾，未被 window_chars 截断
         assert result.source_exhausted is True
         assert result.cursor == {"source_file": "source/novel.txt", "offset": len(SOURCE)}
 
     async def test_plan_batch_size_follows_the_model_output_limit(self, tmp_path: Path):
-        """每批集数由模型的输出上限推导：上限只够一集时，超出的集截断留给下一批。"""
+        """The number of episodes per batch derives from the model's output limit: when the limit only fits one episode, the
+        extra episodes are truncated and left for the next batch.
+
+        每批集数由模型的输出上限推导：上限只够一集时，超出的集截断留给下一批。"""
         project_dir = _write_project(tmp_path)
         fake = _FakeTextGenerator(
             [
@@ -1195,7 +1364,10 @@ class TestPlan:
         assert result.cursor == {"source_file": "source/novel.txt", "offset": _end_of(ANCHOR_EP1)}
 
     async def test_plan_final_window_with_whitespace_tail_marks_source_exhausted(self, tmp_path: Path):
-        """规划到全文结尾（仅剩空白）：末集贴齐文末，cursor 到文末，报告源文耗尽。"""
+        """Planning to the end of the text (only whitespace left): the last episode reaches the end, the cursor goes to the end,
+        and source exhaustion is reported.
+
+        规划到全文结尾（仅剩空白）：末集贴齐文末，cursor 到文末，报告源文耗尽。"""
         source = SOURCE + "\n\n"
         project_dir = _write_project(tmp_path, source_text=source)
         last_anchor = "卷入漩涡之中。"
@@ -1220,7 +1392,10 @@ class TestPlan:
         assert ep2_file.endswith("漩涡之中。\n\n")
 
     async def test_plan_on_exhausted_source_returns_without_llm_call(self, tmp_path: Path):
-        """最后一个切出集已到文末：直接返回 source_exhausted，不调模型、不动账本。"""
+        """The last cut episode is already at the end of the text: return source_exhausted directly, without calling the model
+        or touching the ledger.
+
+        最后一个切出集已到文末：直接返回 source_exhausted，不调模型、不动账本。"""
         project_dir = _write_project(tmp_path, episodes=[_entry(1, 0, len(SOURCE))])
         fake = _FakeTextGenerator([])
 
@@ -1232,7 +1407,10 @@ class TestPlan:
         assert _load_project(project_dir)["episodes"] == [_entry(1, 0, len(SOURCE))]
 
     async def test_plan_advances_to_next_source_when_current_exhausted(self, tmp_path: Path):
-        """多源文件：当前源文件已规划完时，自动从下一个源文件起点续规划。"""
+        """Multiple source files: when the current source file is fully planned, continue planning automatically from the start
+        of the next one.
+
+        多源文件：当前源文件已规划完时，自动从下一个源文件起点续规划。"""
         source2 = "第二部 新的征程。李恒踏入上界，结识了新的同伴。"
         anchor2 = "结识了新的同伴。"
         project_dir = _write_project(
@@ -1248,16 +1426,20 @@ class TestPlan:
 
         result = await EpisodePlanner(project_dir, generator=fake).plan()
 
-        assert "第二部" in fake.requests[0].prompt  # 窗口取自下一个源文件
+        assert "第二部" in fake.requests[0].prompt  # The window comes from the next source file / 窗口取自下一个源文件
         project = _load_project(project_dir)
         eps = {e["episode"]: e for e in project["episodes"]}
         assert eps[2]["source_range"] == {"source_file": "source/novel2.txt", "start": 0, "end": len(source2)}
         assert result.cursor == {"source_file": "source/novel2.txt", "offset": len(source2)}
         assert (project_dir / "source" / "episode_2.txt").read_text(encoding="utf-8") == source2
+        # The second file also reached its end, and there are no more source files
         assert result.source_exhausted is True  # 第二个文件也到结尾，且没有更多源文件
 
     async def test_each_whole_source_file_is_planned_by_its_own_source_kind(self, tmp_path: Path):
-        """剧情演绎里小说文件与剧本文件各按自己的类型规划，一个窗口只取一个文件的原文。"""
+        """In drama, novel files and screenplay files are each planned by their own kind; a window takes text from one file
+        only.
+
+        剧情演绎里小说文件与剧本文件各按自己的类型规划，一个窗口只取一个文件的原文。"""
         source2 = "第一场 夜 山门\n李恒：师父，我走了。\n"
         project_dir = _write_project(
             tmp_path,
@@ -1288,7 +1470,10 @@ class TestPlan:
         assert [e["source_range"]["source_file"] for e in eps] == ["source/novel.txt", "source/novel2.txt"]
 
     async def test_plan_not_exhausted_when_more_source_files_remain(self, tmp_path: Path):
-        """规划到当前源文件结尾但还有后续源文件：不报源文耗尽。"""
+        """Planning reaches the end of the current source file but more source files follow: source exhaustion is not
+        reported.
+
+        规划到当前源文件结尾但还有后续源文件：不报源文耗尽。"""
         project_dir = _write_project(tmp_path, whole_source=("novel.txt", "novel2.txt"))
         (project_dir / "source" / "novel2.txt").write_text("第二部 新的征程。", encoding="utf-8")
         fake = _FakeTextGenerator(
@@ -1308,7 +1493,10 @@ class TestPlan:
         assert result.cursor == {"source_file": "source/novel.txt", "offset": len(SOURCE)}
 
     async def test_plan_rejects_when_entry_loses_source_range_during_model_call(self, tmp_path: Path):
-        """锁内复核：模型调用期间账本被补进无位置记录的条目，提交仍被拦下、账本不写入。"""
+        """Recheck under the lock: during the model call the ledger gained an entry without a position record; the commit is
+        still stopped and the ledger not written.
+
+        锁内复核：模型调用期间账本被补进无位置记录的条目，提交仍被拦下、账本不写入。"""
         project_dir = _write_project(tmp_path)
         fake = _FakeTextGenerator([_plan_response([{"title": "甲", "hook": "甲", "end_anchor": ANCHOR_EP1}])])
         planner = EpisodePlanner(project_dir, generator=fake)
@@ -1341,7 +1529,10 @@ class TestPlan:
         assert not (project_dir / "source" / "episode_1.txt").exists()
 
     async def test_plan_forwards_instructions_into_prompt(self, tmp_path: Path):
-        """首批规划带 instructions 时，原文进中性的「附加指令」分节，不自带强度措辞。"""
+        """When the first batch of planning carries instructions, the text goes into a neutral "additional instructions"
+        section, without built-in strength wording.
+
+        首批规划带 instructions 时，原文进中性的「附加指令」分节，不自带强度措辞。"""
         project_dir = _write_project(tmp_path)
         fake = _FakeTextGenerator(
             [_plan_response([{"title": "古玉藏诀", "hook": "剑诀来历成谜", "end_anchor": ANCHOR_EP1}])]
@@ -1352,11 +1543,15 @@ class TestPlan:
         prompt = fake.requests[0].prompt
         assert "# 附加指令" in prompt
         assert "严格按章节切分，一章一集" in prompt
+        # How strictly to follow is expressed by the additional instruction text itself; the injection template adds no
+        # strength qualifiers
         # 遵循强度由附加指令正文自行表达，注入模板不添加任何强度限定词
         assert "必须全部落实" not in prompt
 
     async def test_plan_without_instructions_omits_section(self, tmp_path: Path):
-        """不传 instructions 时 prompt 无指令分节，与今日纯剧情弧行为逐字一致。"""
+        """Without instructions, the prompt has no instruction section, verbatim identical to today's pure plot-arc behavior.
+
+        不传 instructions 时 prompt 无指令分节，与今日纯剧情弧行为逐字一致。"""
         project_dir = _write_project(tmp_path)
         fake = _FakeTextGenerator(
             [_plan_response([{"title": "古玉藏诀", "hook": "剑诀来历成谜", "end_anchor": ANCHOR_EP1}])]
@@ -1369,7 +1564,10 @@ class TestPlan:
         assert "必须全部落实" not in prompt
 
     async def test_plan_blank_instructions_treated_as_absent(self, tmp_path: Path):
-        """纯空白 instructions strip 后视同未传：prompt 与不传时逐字一致（无指令分节）。"""
+        """Whitespace-only instructions count as not passed after strip: the prompt is verbatim identical to not passing them
+        (no instruction section).
+
+        纯空白 instructions strip 后视同未传：prompt 与不传时逐字一致（无指令分节）。"""
         blank = _FakeTextGenerator(
             [_plan_response([{"title": "古玉藏诀", "hook": "剑诀来历成谜", "end_anchor": ANCHOR_EP1}])]
         )
@@ -1383,7 +1581,10 @@ class TestPlan:
         assert blank.requests[0].prompt == none.requests[0].prompt
 
     async def test_plan_with_instructions_injects_global_progress_section(self, tmp_path: Path):
-        """有 instructions 时才注入「全局进度」分节：已规划集数/余量/本窗口体量按阅读单位现算。"""
+        """The "global progress" section is injected only when there are instructions: planned episode count / remainder / this
+        window's volume, computed in reading units.
+
+        有 instructions 时才注入「全局进度」分节：已规划集数/余量/本窗口体量按阅读单位现算。"""
         ep1_end = _end_of(ANCHOR_EP1)
         window_chars = ep1_end + 4
         project_dir = _write_project(
@@ -1405,7 +1606,10 @@ class TestPlan:
         assert f"本窗口为其中前 {window_units} 字" in prompt
 
     async def test_plan_prompt_target_volume_line_reads_explicit_units(self, tmp_path: Path):
-        """两者都设时显式体量优先：prompt 与只设 episode_target_units 时逐字一致，折算不介入。"""
+        """When both are set the explicit volume wins: the prompt is verbatim identical to setting only episode_target_units,
+        and no conversion is involved.
+
+        两者都设时显式体量优先：prompt 与只设 episode_target_units 时逐字一致，折算不介入。"""
         both = _FakeTextGenerator(
             [_plan_response([{"title": "古玉藏诀", "hook": "剑诀来历成谜", "end_anchor": ANCHOR_EP1}])]
         )
@@ -1423,7 +1627,10 @@ class TestPlan:
         assert units_only.requests[0].prompt == expected
 
     async def test_plan_prompt_target_volume_line_derived_from_target_duration(self, tmp_path: Path):
-        """只设单集目标时长时，prompt 给出折算体量并写明目标时长与语速，模型才知道这是估算值。"""
+        """When only the per-episode target duration is set, the prompt gives the converted volume and states the target
+        duration and speaking rate, so the model knows it is an estimate.
+
+        只设单集目标时长时，prompt 给出折算体量并写明目标时长与语速，模型才知道这是估算值。"""
         project_dir = _write_project(tmp_path, content_mode="drama", extra={"episode_target_duration": 90})
         fake = _FakeTextGenerator(
             [
@@ -1449,7 +1656,10 @@ class TestPlan:
         )
 
     async def test_plan_prompt_target_volume_line_absent_when_neither_setting_is_present(self, tmp_path: Path):
-        """两者都未设时维持现状措辞，无设置路径仍由模型按内容自行把握。"""
+        """When neither is set the current wording stays, and the no-settings path is still left to the model's judgment of the
+        content.
+
+        两者都未设时维持现状措辞，无设置路径仍由模型按内容自行把握。"""
         project_dir = _write_project(tmp_path)
         fake = _FakeTextGenerator(
             [_plan_response([{"title": "古玉藏诀", "hook": "剑诀来历成谜", "end_anchor": ANCHOR_EP1}])]
@@ -1465,7 +1675,10 @@ class TestPlan:
     async def test_plan_prompt_locks_each_content_mode_and_source_kind(
         self, tmp_path: Path, content_mode: str, source_kind: str
     ):
-        """创作类型与源文类型的组合各自逐字锁住开篇句、切分规则与原文片段标题；只有剧情演绎有源文类型。"""
+        """Each combination of content mode and source kind pins the opening sentence, split rules and source section title
+        verbatim; only drama has source kinds.
+
+        创作类型与源文类型的组合各自逐字锁住开篇句、切分规则与原文片段标题；只有剧情演绎有源文类型。"""
         project_dir = _write_project(tmp_path, content_mode=content_mode, source_kinds=(source_kind,))
         draft = {"title": "古玉藏诀", "hook": "剑诀来历成谜", "end_anchor": ANCHOR_EP1}
         if content_mode == "drama":
@@ -1479,7 +1692,9 @@ class TestPlan:
         )
 
     async def test_plan_normal_batch_omits_ledger_stats(self, tmp_path: Path):
-        """常规（非耗尽）批次不附全局核对材料，只报累计已规划集数。"""
+        """Regular (non-exhausted) batches carry no global check material, only the cumulative planned episode count.
+
+        常规（非耗尽）批次不附全局核对材料，只报累计已规划集数。"""
         window_chars = _end_of(ANCHOR_EP1) + 4
         project_dir = _write_project(tmp_path)
         fake = _FakeTextGenerator([_plan_response([{"title": "古玉藏诀", "hook": "钩子", "end_anchor": ANCHOR_EP1}])])
@@ -1491,7 +1706,10 @@ class TestPlan:
         assert result.total_planned == 1
 
     async def test_plan_exhausted_batch_includes_ledger_stats(self, tmp_path: Path):
-        """末批即耗尽：附全局核对材料——累计集数、最小体量集（升序）、中位数。"""
+        """The last batch is exhausted: attach global check material: cumulative episode count, smallest-volume episodes
+        (ascending), median.
+
+        末批即耗尽：附全局核对材料——累计集数、最小体量集（升序）、中位数。"""
         last_anchor = "卷入漩涡之中。"
         fake = _FakeTextGenerator(
             [
@@ -1511,12 +1729,14 @@ class TestPlan:
         stats = result.ledger_stats
         assert stats is not None
         assert stats.total_episodes == 3
-        assert [num for num, _units in stats.smallest] == [3, 2, 1]  # 体量升序：丙 < 乙 < 甲
+        assert [num for num, _units in stats.smallest] == [3, 2, 1]  # Volume ascending: third < second < first / 体量升序：丙 < 乙 < 甲
         assert stats.median_units == 37
-        assert stats.target_volume is None  # 目标体量两个来源都未配置时不报
+        assert stats.target_volume is None  # Not reported when neither source of target volume is configured / 目标体量两个来源都未配置时不报
 
     async def test_plan_exhausted_batch_reports_target_units_when_configured(self, tmp_path: Path):
-        """episode_target_units 项目设置存在时，核对材料里带出该目标体量。"""
+        """When the episode_target_units project setting exists, the check material carries that target volume.
+
+        episode_target_units 项目设置存在时，核对材料里带出该目标体量。"""
         project_dir = _write_project(tmp_path, extra={"episode_target_units": 800})
         fake = _FakeTextGenerator([_plan_response(_THREE_EPISODE_DRAFT)])
 
@@ -1528,7 +1748,10 @@ class TestPlan:
         assert (volume.units, volume.source) == (800, "units")
 
     async def test_plan_exhausted_batch_reports_target_volume_derived_from_duration(self, tmp_path: Path):
-        """只设了单集目标时长时，核对材料回显折算体量并标明来源，主 Agent 才知道这不是用户给的数。"""
+        """When only the per-episode target duration is set, the check material echoes the converted volume and marks its
+        source, so the main Agent knows it is not a number the user gave.
+
+        只设了单集目标时长时，核对材料回显折算体量并标明来源，主 Agent 才知道这不是用户给的数。"""
         project_dir = _write_project(tmp_path, extra={"episode_target_duration": 90})
         fake = _FakeTextGenerator([_plan_response(_THREE_EPISODE_DRAFT)])
 
@@ -1540,7 +1763,10 @@ class TestPlan:
         assert (volume.units, volume.source, volume.seconds) == (450, "duration", 90)
 
     async def test_plan_no_new_content_early_exit_includes_ledger_stats(self, tmp_path: Path):
-        """再次调用无新内容（早退路径）：不调模型，仍附全局核对材料供复核。"""
+        """Calling again with no new content (early-exit path): no model call, still attaching global check material for
+        review.
+
+        再次调用无新内容（早退路径）：不调模型，仍附全局核对材料供复核。"""
         project_dir = _planned_three(tmp_path)
         fake = _FakeTextGenerator([])
 
@@ -1555,7 +1781,10 @@ class TestPlan:
         assert stats.median_units == 37
 
     async def test_plan_marks_stale_when_new_episode_num_has_downstream_products(self, tmp_path: Path):
-        """新提交的集号若在磁盘上已有剧本产物（如重置到更早集号后重新规划、与原消费范围重叠），标 stale，不删产物。"""
+        """If a newly committed episode number already has script artifacts on disk (e.g. replanning after resetting to an
+        earlier episode, overlapping the original consumed range), mark it stale without deleting artifacts.
+
+        新提交的集号若在磁盘上已有剧本产物（如重置到更早集号后重新规划、与原消费范围重叠），标 stale，不删产物。"""
         project_dir = _write_project(tmp_path)
         (project_dir / "scripts").mkdir()
         (project_dir / "scripts" / "episode_1.json").write_text("{}", encoding="utf-8")
@@ -1575,10 +1804,12 @@ class TestPlan:
         assert eps[1][script_review.STALE_SCRIPT_PLAN_REVISION_FIELD] == script_review.content_fingerprint(
             script_plan_path
         )
-        assert (project_dir / "scripts" / "episode_1.json").exists()  # 产物不删除
+        assert (project_dir / "scripts" / "episode_1.json").exists()  # Artifacts are not deleted / 产物不删除
 
     async def test_plan_keeps_planned_when_no_downstream_products(self, tmp_path: Path):
-        """新提交的集号磁盘上没有任何产物：照常标 planned，stale_episodes 为空。"""
+        """The newly committed episode number has no artifacts on disk: mark planned as usual, stale_episodes is empty.
+
+        新提交的集号磁盘上没有任何产物：照常标 planned，stale_episodes 为空。"""
         project_dir = _write_project(tmp_path)
         fake = _FakeTextGenerator(
             [_plan_response([{"title": "古玉藏诀", "hook": "剑诀来历成谜", "end_anchor": ANCHOR_EP1}])]
@@ -1611,7 +1842,10 @@ def _entry(
 
 
 def _planned_three(tmp_path: Path, *, statuses: tuple[str, str, str] = ("planned", "planned", "planned")) -> Path:
-    """已规划 3 集（覆盖全文）的项目：[0,a) [a,b) [b,文末)，规划起点推导在文末。"""
+    """A project with 3 planned episodes (covering the full text): [0,a) [a,b) [b,end); the derived planning start is at the
+    end.
+
+    已规划 3 集（覆盖全文）的项目：[0,a) [a,b) [b,文末)，规划起点推导在文末。"""
     a, b = _end_of(ANCHOR_EP1), _end_of(ANCHOR_EP2)
     project_dir = _write_project(
         tmp_path,
@@ -1626,6 +1860,7 @@ def _planned_three(tmp_path: Path, *, statuses: tuple[str, str, str] = ("planned
     return project_dir
 
 
+# Second source file: sequel content, anchors can be located uniquely
 # 第二个源文件：续作内容，锚点可唯一定位
 SOURCE2 = "第二部 上界风云。李恒踏入上界，灵气扑面而来。他在坊市结识了云岚宗弟子苏沐。两人结伴前往宗门，途中遭遇兽潮。"
 
@@ -1633,10 +1868,14 @@ ANCHOR2_MID = "云岚宗弟子苏沐。"
 
 
 class TestSourceFingerprintGate:
-    """plan 提交路径记录源文指纹、入口比对拒绝已改动的源文。"""
+    """The plan commit path records source fingerprints, and the entry comparison refuses changed sources.
+
+    plan 提交路径记录源文指纹、入口比对拒绝已改动的源文。"""
 
     async def test_plan_records_fingerprints_for_legacy_project_without_error(self, tmp_path: Path):
-        """存量项目无指纹字段：首次 plan 正常执行并补记。"""
+        """Existing project without fingerprint fields: the first plan runs normally and backfills them.
+
+        存量项目无指纹字段：首次 plan 正常执行并补记。"""
         project_dir = _write_project(tmp_path)
         fake = _FakeTextGenerator([_plan_response([{"title": "t1", "hook": "h1", "end_anchor": ANCHOR_EP2}])])
         planner = EpisodePlanner(project_dir, generator=fake)
@@ -1664,7 +1903,10 @@ class TestSourceFingerprintGate:
             await planner.plan()
 
     async def test_full_reset_clears_gate_and_plan_recovers(self, tmp_path: Path):
-        """长篇已规划后源文被替换：plan 被拒 → 全量重置 → 重新规划成功（复刻报告场景）。"""
+        """The source is replaced after a long work was planned: plan refused -> full reset -> replanning succeeds (reproducing
+        the reported scenario).
+
+        长篇已规划后源文被替换：plan 被拒 → 全量重置 → 重新规划成功（复刻报告场景）。"""
         project_dir = _write_project(tmp_path)
         fake = _FakeTextGenerator([_plan_response([{"title": "t1", "hook": "h1", "end_anchor": ANCHOR_EP1}])])
         await EpisodePlanner(project_dir, generator=fake).plan()
@@ -1683,7 +1925,10 @@ class TestSourceFingerprintGate:
         assert result2.episodes[0].title == "t2"
 
     async def test_partial_reset_retains_prefix_and_plan_allocates_fresh_ids(self, tmp_path: Path):
-        """规划 2 集后从第 2 集部分重置：账本保留第 1 集、规划起点退到其末尾，再次 plan 的新集不复用集 ID 2。"""
+        """After planning 2 episodes, partial reset from episode 2: the ledger keeps episode 1 and the planning start goes back
+        to its end; new episodes from the next plan do not reuse episode ID 2.
+
+        规划 2 集后从第 2 集部分重置：账本保留第 1 集、规划起点退到其末尾，再次 plan 的新集不复用集 ID 2。"""
         project_dir = _write_project(tmp_path)
         fake = _FakeTextGenerator(
             [
@@ -1703,12 +1948,15 @@ class TestSourceFingerprintGate:
 
         project = _load_project(project_dir)
         assert [e["episode"] for e in project["episodes"]] == [1]
+        # The planning start goes back to the end of episode 1's source range; the fingerprint fields are kept (the partial
+        # reset verified they match the current source)
         # 规划起点退到第 1 集原文范围末尾，指纹字段保留（部分重置已验证其与当前源文一致）
         assert planning_start(project, _real_discover_sources(project_dir, project)) == (
             "source/novel.txt",
             _end_of(ANCHOR_EP1),
         )
         assert SOURCE_FINGERPRINTS_KEY in project
+        # Derived files of the kept segment are untouched; derived files within the reset range are deleted
         # 保留段派生文件不动，重置范围内的派生文件已删除
         assert (project_dir / "source" / "episode_1.txt").is_file()
         assert not (project_dir / "source" / "episode_2.txt").exists()
@@ -1720,7 +1968,10 @@ class TestSourceFingerprintGate:
         assert [e["episode"] for e in _load_project(project_dir)["episodes"]] == [1, 3]
 
     async def test_plan_rejects_when_source_changes_during_model_call_without_record(self, tmp_path: Path):
-        """存量项目补记路径：模型调用期间源文被改动，提交时按文本复核拒绝，不落任何写入。"""
+        """Backfill path for existing projects: the source is changed during the model call; the commit's text recheck refuses
+        it and nothing is written.
+
+        存量项目补记路径：模型调用期间源文被改动，提交时按文本复核拒绝，不落任何写入。"""
         project_dir = _write_project(tmp_path)
         source_path = project_dir / "source" / "novel.txt"
 
@@ -1740,7 +1991,11 @@ class TestSourceFingerprintGate:
         assert SOURCE_FINGERPRINTS_KEY not in project
 
     async def test_plan_rejects_when_already_anchored_source_changes_during_model_call(self, tmp_path: Path):
-        """存量多源文件项目：本批规划 novel2.txt 时，已锚定第 1 集的 novel.txt 在模型调用期间被
+        """Existing multi-source project: while this batch plans novel2.txt, novel.txt, which episode 1 is already anchored to,
+        is changed during the model call and is refused too; rechecking only this batch's source_rel would miss this kind of
+        cross-file in-range drift.
+
+        存量多源文件项目：本批规划 novel2.txt 时，已锚定第 1 集的 novel.txt 在模型调用期间被
         改动同样拒绝——只复核本批 source_rel 会漏掉这类跨文件的界内漂移。"""
         project_dir = _write_project(
             tmp_path,
@@ -1762,11 +2017,15 @@ class TestSourceFingerprintGate:
             await planner.plan()
 
         project = _load_project(project_dir)
-        assert len(project.get("episodes") or []) == 1  # 第 1 集不受影响，也没有新集落账
+        assert len(project.get("episodes") or []) == 1  # Episode 1 is unaffected, and no new episode was recorded / 第 1 集不受影响，也没有新集落账
         assert SOURCE_FINGERPRINTS_KEY not in project
 
     async def test_plan_backfills_fingerprints_on_source_exhausted_early_return(self, tmp_path: Path):
-        """存量项目已规划到全部源文末尾：source_exhausted 早退路径不经过提交闭包，
+        """Existing project already planned to the end of all sources: the source_exhausted early-return path does not go
+        through the commit closure but must still backfill fingerprints, otherwise later same-length edits to the old text
+        would be let through for lack of a baseline.
+
+        存量项目已规划到全部源文末尾：source_exhausted 早退路径不经过提交闭包，
         仍须补记指纹，否则后续等长编辑旧正文因无基线可比而被放行。"""
         project_dir = _write_project(tmp_path, episodes=[_entry(1, 0, len(SOURCE))])
         planner = EpisodePlanner(project_dir, generator=_FakeTextGenerator([]))
@@ -1781,7 +2040,11 @@ class TestSourceFingerprintGate:
     async def test_plan_rejects_when_source_changes_between_snapshot_and_exhausted_backfill(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """存量项目已规划到全部源文末尾：入口快照之后、耗尽补记闭包读取之前源文被改动，
+        """Existing project already planned to the end of all sources: the source is changed after the entry snapshot and
+        before the exhaustion backfill closure reads it; the backfill must compare against the entry snapshot and refuse,
+        not register the changed content as a trusted baseline.
+
+        存量项目已规划到全部源文末尾：入口快照之后、耗尽补记闭包读取之前源文被改动，
         补记必须与入口快照比对拒绝，不能把变更后的内容直接登记为可信基线。"""
         project_dir = _write_project(tmp_path, episodes=[_entry(1, 0, len(SOURCE))])
         source_path = project_dir / "source" / "novel.txt"
@@ -1790,6 +2053,7 @@ class TestSourceFingerprintGate:
         def _mutating_discover_sources(project_path: Path, project: dict):
             nonlocal call_count
             call_count += 1
+            # Change the source after the entry snapshot (1st read) and before the exhaustion backfill closure (2nd read)
             if call_count == 2:  # 入口快照(第1次)之后、耗尽补记闭包(第2次)读取之前改动源文
                 source_path.write_text("耗尽补记窗口期间被换掉的原文。", encoding="utf-8")
             return _real_discover_sources(project_path, project)
@@ -1804,7 +2068,10 @@ class TestSourceFingerprintGate:
         assert SOURCE_FINGERPRINTS_KEY not in project
 
     async def test_plan_rejects_when_later_source_file_changes_during_model_call(self, tmp_path: Path):
-        """前一个文件已规划完、本批取自清单中后一个文件：该文件在模型调用期间被改动，提交复核拒绝。"""
+        """The previous file is fully planned and this batch comes from the next file in the list: that file is changed during
+        the model call, and the commit recheck refuses it.
+
+        前一个文件已规划完、本批取自清单中后一个文件：该文件在模型调用期间被改动，提交复核拒绝。"""
         project_dir = _write_project(
             tmp_path,
             episodes=[_entry(1, 0, len(SOURCE))],
@@ -1825,12 +2092,14 @@ class TestSourceFingerprintGate:
             await planner.plan()
 
         project = _load_project(project_dir)
-        assert len(project.get("episodes") or []) == 1  # 第 1 集不受影响，也没有新集落账
+        assert len(project.get("episodes") or []) == 1  # Episode 1 is unaffected, and no new episode was recorded / 第 1 集不受影响，也没有新集落账
         assert SOURCE_FINGERPRINTS_KEY not in project
 
 
 class TestEpisodeFileWrites:
-    """提交只写本批新集的集文件，其他集的集文件不动。"""
+    """The commit writes only the episode files of this batch's new episodes; other episodes' files are untouched.
+
+    提交只写本批新集的集文件，其他集的集文件不动。"""
 
     async def test_continuing_writes_only_the_new_episode_file(self, tmp_path: Path):
         a = _end_of(ANCHOR_EP1)
@@ -1858,11 +2127,17 @@ class TestEpisodeFileWrites:
 
 
 class TestPlanGap:
-    """规划这段未切分的原文：删掉中间一个切出集留下的空段，以空段结尾为终点，不替换任何集。"""
+    """Plan this unsplit stretch of source text: the gap left by deleting a cut episode in the middle, ending at the gap's
+    end, without replacing any episode.
+
+    规划这段未切分的原文：删掉中间一个切出集留下的空段，以空段结尾为终点，不替换任何集。"""
 
     @staticmethod
     def _gap_project(tmp_path: Path) -> Path:
-        """第 1、3 集在，中间第 2 集被删，[a, b) 是空段；第 9 集是自带原文的集，排在两集之间。"""
+        """Episodes 1 and 3 exist, episode 2 in the middle was deleted, [a, b) is the gap; episode 9 has its own source text
+        and sits between the two.
+
+        第 1、3 集在，中间第 2 集被删，[a, b) 是空段；第 9 集是自带原文的集，排在两集之间。"""
         a, b = _end_of(ANCHOR_EP1), _end_of(ANCHOR_EP2)
         own = {"episode": 9, "title": "番外", "script_file": "scripts/episode_9.json", "source_origin": "own"}
         project_dir = _write_project(
@@ -1878,6 +2153,8 @@ class TestPlanGap:
     async def test_gap_is_planned_up_to_its_end_and_inserted_by_source_position(self, tmp_path: Path):
         project_dir = self._gap_project(tmp_path)
         a, b = _end_of(ANCHOR_EP1), _end_of(ANCHOR_EP2)
+        # The anchor is taken in the middle of the gap; apart from the remaining whitespace, the text reaches the end of the
+        # gap
         # 锚点取在空段中间，剩下的空白之外原文贴齐空段结尾
         fake = _FakeTextGenerator(
             [
@@ -1904,6 +2181,7 @@ class TestPlanGap:
         assert eps[1]["source_range"] == {"source_file": "source/novel.txt", "start": a, "end": mid}
         assert eps[2]["source_range"] == {"source_file": "source/novel.txt", "start": mid, "end": b}
         assert (project_dir / "source" / "episode_11.txt").read_text(encoding="utf-8") == SOURCE[mid:b]
+        # Episode 3 is kept as-is
         # 第 3 集原样保留
         assert eps[4] == _entry(3, b, len(SOURCE))
         assert result.source_exhausted is True

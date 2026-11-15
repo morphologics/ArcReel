@@ -1,4 +1,6 @@
-"""安装记录摘要是持久化契约；市场轴状态与本地修改轴各自独立判定。"""
+"""The installation record digest is a persisted contract; the market axis state and the local modification axis are judged independently.
+
+安装记录摘要是持久化契约；市场轴状态与本地修改轴各自独立判定。"""
 
 import hashlib
 from typing import Any

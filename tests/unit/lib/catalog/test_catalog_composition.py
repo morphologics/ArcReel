@@ -1,4 +1,6 @@
-"""目录合成：官方数据取较新的一份，用户副本整条替换官方条目（docs/adr/0099）。"""
+"""Catalog composition: take the newer of the official data, and a user copy replaces the official entry as a whole (docs/adr/0099).
+
+目录合成：官方数据取较新的一份，用户副本整条替换官方条目（docs/adr/0099）。"""
 
 from dataclasses import replace
 
@@ -31,7 +33,7 @@ class TestNewestOfficial:
         assert newest_official([synced, factory]) is synced
 
     def test_older_sync_does_not_shadow_a_newer_factory_snapshot(self):
-        # 升级应用后出厂快照可能比库里存的官方同步更新
+        # After an app upgrade the factory snapshot may be newer than the official sync stored in the DB / 升级应用后出厂快照可能比库里存的官方同步更新
         factory = _official("2026-11-01T00:00:00Z", _text("chat", "Chat v3"))
         synced = _official("2026-10-20T00:00:00Z", _text("chat", "Chat v2"))
 
@@ -46,6 +48,7 @@ class TestNewestOfficial:
 
 class TestMergeOfficial:
     def test_newer_sync_keeps_entries_only_the_snapshot_has(self):
+        # Sync does not delete model entries: entries deleted upstream keep their last version locally (docs/adr/0103)
         # 同步不删除模型条目：上游删掉的条目在本地保留最后一个版本（docs/adr/0103）
         factory = _official("2026-10-01T00:00:00Z", _text("chat", "Chat v1"), _text("legacy"))
         synced = _official("2026-10-20T00:00:00Z", _text("chat", "Chat v2"))
@@ -116,6 +119,7 @@ class TestComposeCatalog:
         assert composed.official_entry(mine.key) == _text("chat", "Chat v2")
 
     def test_user_created_entry_stays_user_created_once_official_data_adds_it(self):
+        # A user-created entry later included in official data: still user-created and not following the official one, while the official values are visible (can switch to official data)
         # 用户新建的条目日后被官方数据收录：仍是用户新建、不跟随官方，同时能看到官方的值（可改用官方数据）
         official = _official("2026-10-20T00:00:00Z", _text("homebrew", "Official Homebrew"))
         mine = _text("homebrew", "My Homebrew")
@@ -126,5 +130,5 @@ class TestComposeCatalog:
         assert created.data.entries == (mine,)
         assert created.source_of(mine.key) == "user_created"
         assert created.official_entry(mine.key) == _text("homebrew", "Official Homebrew")
-        # 同一份副本没有新建的标记时，是用户改过官方条目
+        # When the same copy has no user-created marker, it is the user having edited an official entry / 同一份副本没有新建的标记时，是用户改过官方条目
         assert modified.source_of(mine.key) == "modified"

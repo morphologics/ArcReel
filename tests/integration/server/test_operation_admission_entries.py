@@ -1,4 +1,7 @@
-"""AI 操作入口与制作状态共用一份准入：同一条件下，入口的拒绝理由码等于状态里该操作的理由码。"""
+"""AI operation entries and the workflow status share one admission: under the same conditions, the entry's
+refusal reason code equals that operation's reason code in the status.
+
+AI 操作入口与制作状态共用一份准入：同一条件下，入口的拒绝理由码等于状态里该操作的理由码。"""
 
 from __future__ import annotations
 

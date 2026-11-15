@@ -1,4 +1,11 @@
-"""出站 HTTP 断言的统一去向：respx 在 transport 层拦截真实 httpx 客户端。
+"""The single place for outbound HTTP assertions: respx intercepts real httpx clients at the transport layer.
+
+The difference from `patch("httpx.AsyncClient")` is what is asserted: a double records call arguments, while respx
+captures the real serialized request, so URL joining, header merging and body encoding, the steps that go wrong in
+production, are all within the assertions; traffic of SDKs with their own httpx client such as `AsyncOpenAI` is
+captured too.
+
+出站 HTTP 断言的统一去向：respx 在 transport 层拦截真实 httpx 客户端。
 
 与 `patch("httpx.AsyncClient")` 的区别是断言对象：替身记录的是调用参数，respx 捕获的是
 真实序列化后的请求，因此 URL 拼接、header 合并、body 编码这些出错在线上的环节都在断言
@@ -18,7 +25,14 @@ import respx
 
 @contextmanager
 def capture_http(*, assert_all_called: bool = False) -> Generator[respx.MockRouter]:
-    """拦截全部出站 httpx 流量；未声明路由的请求直接抛错，不会静默放行到真实网络。
+    """Intercept all outbound httpx traffic; requests to undeclared routes raise right away instead of silently reaching the
+    real network.
+
+    `assert_all_called` is off by default: most tests care only whether one of the routes received the expected request,
+    and declaring error-branch routes that never trigger is normal; forcing all of them to be hit on exit would turn such
+    tests red.
+
+    拦截全部出站 httpx 流量；未声明路由的请求直接抛错，不会静默放行到真实网络。
 
     `assert_all_called` 缺省关闭：多数用例只关心其中一条路由是否收到预期请求，声明了
     错误分支路由却不触发是常态，退出时强制全部命中会把这类用例判红。
@@ -28,18 +42,25 @@ def capture_http(*, assert_all_called: bool = False) -> Generator[respx.MockRout
 
 
 def request_json(request: httpx.Request) -> Any:
-    """请求体按 JSON 解码。"""
+    """Decode the request body as JSON.
+
+    请求体按 JSON 解码。"""
     return json.loads(request.content)
 
 
 def only_request(route: respx.Route) -> httpx.Request:
-    """断言该路由恰好收到一次请求并返回它。"""
+    """Assert the route received exactly one request and return it.
+
+    断言该路由恰好收到一次请求并返回它。"""
     assert route.call_count == 1, f"期望 1 次请求，实际 {route.call_count} 次"
     return route.calls.last.request
 
 
 class PathPrefixRewrite:
-    """注入调用通道的 transport 层替身：把请求路径开头的 ``old`` 换成 ``new`` 再交给下层，并记下所见的 URL 与关闭次数。"""
+    """Transport-layer double injected into the call channel: replaces ``old`` at the start of the request path with ``new``
+    before passing it down, and records the URLs seen and the number of closes.
+
+    注入调用通道的 transport 层替身：把请求路径开头的 ``old`` 换成 ``new`` 再交给下层，并记下所见的 URL 与关闭次数。"""
 
     def __init__(self, old: str, new: str) -> None:
         self.old = old

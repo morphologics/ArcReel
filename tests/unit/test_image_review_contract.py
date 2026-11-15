@@ -1,4 +1,9 @@
-"""资产图与分镜图的审核检查点：skill 与审图子智能体里写死的机器契约须与代码真相源一致。
+"""Review checkpoint for asset sheets and storyboard images: the machine contracts hard-coded in the skill and the image review subagent must match the code's source of truth.
+
+The subagent name is constrained by name by the access policy and the skill dispatches by that name; if either changes and the .md does not follow, the main Agent cannot dispatch the image review subagent,
+or the subagent loses its read-only constraint.
+
+资产图与分镜图的审核检查点：skill 与审图子智能体里写死的机器契约须与代码真相源一致。
 
 子智能体名由访问策略按名约束，skill 按这个名字派发；任一处改了而 .md 没跟上，主 Agent 派不出审图子智能体，
 或子智能体失去只读约束。
@@ -21,7 +26,9 @@ CHECKPOINT = "审核检查点：审图"
 
 
 def _section(text: str, heading: str) -> str:
-    """取一个 ``##`` 节的正文，到下一个 ``##`` 为止。"""
+    """Take the body of a ``##`` section, up to the next ``##``.
+
+    取一个 ``##`` 节的正文，到下一个 ``##`` 为止。"""
 
     start = text.index(f"## {heading}\n")
     end = text.find("\n## ", start + 1)
@@ -38,7 +45,9 @@ def _reviewer_name() -> str:
 
 
 def test_review_images_definition_grants_exactly_the_tools_the_access_policy_allows() -> None:
-    """frontmatter 的 tools 由 CLI 收窄，访问策略在 hook 上再拒一次；两份名单不一致时总有一层失效。"""
+    """The frontmatter tools are narrowed by the CLI and the access policy rejects again in the hook; if the two lists differ, one layer always stops working.
+
+    frontmatter 的 tools 由 CLI 收窄，访问策略在 hook 上再拒一次；两份名单不一致时总有一层失效。"""
 
     meta = _frontmatter(REVIEWER)
     tools = {tool.strip() for tool in str(meta["tools"]).split(",")}
@@ -78,7 +87,9 @@ def test_generation_checkpoint_dispatches_the_reviewer_and_leaves_regeneration_t
     ],
 )
 def test_workflow_image_stages_route_to_the_generation_checkpoint(variant: str, stages: list[str]) -> None:
-    """编排流程里资产图与分镜图生成完，也走同一个审核检查点，而不是只把生成摘要交给用户。"""
+    """In the orchestrated flow, after asset sheets and storyboard images are generated they also go through the same review checkpoint, instead of only handing the generation summary to the user.
+
+    编排流程里资产图与分镜图生成完，也走同一个审核检查点，而不是只把生成摘要交给用户。"""
 
     text = (PROFILE / ".claude/skills/video-workflow" / variant).read_text(encoding="utf-8")
     for stage in stages:

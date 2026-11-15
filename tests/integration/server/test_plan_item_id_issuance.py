@@ -1,4 +1,7 @@
-"""脚本规划落盘前由服务端发号：模型或草稿写的编号不算数，晋升时已发过的编号沿用。"""
+"""The server issues IDs before a script plan is written: IDs written by the model or draft do not count, and
+IDs already issued are kept on promotion.
+
+脚本规划落盘前由服务端发号：模型或草稿写的编号不算数，晋升时已发过的编号沿用。"""
 
 from __future__ import annotations
 
@@ -54,11 +57,12 @@ async def test_generated_plan_takes_numbers_after_every_used_one(tmp_path: Path)
 
 async def test_promotion_keeps_ids_already_issued_to_the_plan(tmp_path: Path) -> None:
     pm = _project(tmp_path)
-    formal = pm.reserve_item_ids("demo", 1, "scenes", 2)  # 盘上正式规划此前发到的编号
+    formal = pm.reserve_item_ids("demo", 1, "scenes", 2)  # IDs issued so far for the final plan on disk / 盘上正式规划此前发到的编号
     plan: dict[str, Any] = {"scenes": [{"scene_id": "E1S05"}, {"scene_id": "E1S05"}, {"scene_id": "E1S02"}]}
 
     await reissue_plan_item_ids(pm, "demo", 1, plan, keep=formal)
 
+    # Repeated issued IDs are kept only for the first occurrence; anything not among the issued IDs gets a new ID
     # 重复出现的已发编号只沿用第一次；不在已发编号里的一律换新号
     assert formal == ["E1S04", "E1S05"]
     assert [scene["scene_id"] for scene in plan["scenes"]] == ["E1S05", "E1S06", "E1S07"]

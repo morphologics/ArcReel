@@ -143,7 +143,9 @@ class TestCustomProviderModelRoundTrip:
         assert loaded.updated_at is not None
 
     async def test_multiplier_defaults_to_one_without_a_binding(self, db_session):
-        """未设倍率的模型按条目原价计（倍率 1），默认没有条目绑定。"""
+        """A model with no multiplier set is billed at the entry's original price (multiplier 1); by default there is no entry binding.
+
+        未设倍率的模型按条目原价计（倍率 1），默认没有条目绑定。"""
         provider = CustomProvider(
             display_name="Local Ollama",
             discovery_format="openai",

@@ -1,4 +1,6 @@
-"""ArkImageBackend 单元测试。"""
+"""ArkImageBackend unit tests.
+
+ArkImageBackend 单元测试。"""
 
 from __future__ import annotations
 
@@ -53,7 +55,12 @@ class _RecordingImages:
 
 
 class _RecordingArkClient:
-    """Ark SDK 客户端替身：记录 images.generate 的请求参数，回固定响应。
+    """Ark SDK client stand-in: records the request params of images.generate and returns a fixed response.
+
+    Contracts such as size mapping and reference image encoding are about "what the outgoing request looks like", so assertions
+    target the request contents captured in ``requests``, not the stand-in's call objects.
+
+    Ark SDK 客户端替身：记录 images.generate 的请求参数，回固定响应。
 
     尺寸映射、参考图编码这些契约都是「发出去的请求长什么样」，断言落在 ``requests``
     里的请求内容上，而不是替身的调用对象。
@@ -71,7 +78,9 @@ class _RecordingArkClient:
 def _recorded_ark_client(
     response: _FakeImagesResponse | None = None,
 ) -> Generator[tuple[list[dict[str, Any]], _RecordingArkClient]]:
-    """create_ark_client 的记录器：收下建客户端的参数，回一个记录型客户端。"""
+    """Recorder for create_ark_client: takes the client-construction args and returns a recording client.
+
+    create_ark_client 的记录器：收下建客户端的参数，回一个记录型客户端。"""
     created: list[dict[str, Any]] = []
     client = _RecordingArkClient(response)
 
@@ -89,7 +98,9 @@ def _recorded_ark_client(
 
 
 class TestArkImageBackendInit:
-    """构造函数测试。"""
+    """Constructor tests.
+
+    构造函数测试。"""
 
     def test_missing_api_key_raises(self, monkeypatch: pytest.MonkeyPatch):
         monkeypatch.delenv("ARK_API_KEY", raising=False)
@@ -99,7 +110,9 @@ class TestArkImageBackendInit:
             ArkImageBackend(api_key=None)
 
     def test_api_key_from_env_no_longer_supported(self, monkeypatch: pytest.MonkeyPatch):
-        """spec §5.4：env fallback 已删除——即使 ARK_API_KEY 在环境中，缺失 api_key 仍 raise。"""
+        """spec section 5.4: env fallback removed -- even with ARK_API_KEY in the environment, a missing api_key still raises.
+
+        spec §5.4：env fallback 已删除——即使 ARK_API_KEY 在环境中，缺失 api_key 仍 raise。"""
         monkeypatch.setenv("ARK_API_KEY", "env-key")
         from lib.backends.image_backends.ark import ArkImageBackend
 
@@ -126,7 +139,9 @@ class TestArkImageBackendInit:
 
 
 class TestArkImageBackendProperties:
-    """属性测试。"""
+    """Property tests.
+
+    属性测试。"""
 
     @pytest.fixture
     def backend(self, monkeypatch: pytest.MonkeyPatch):
@@ -166,6 +181,7 @@ class TestArkImageBackendProperties:
         ],
     )
     def test_declares_seedream_reference_image_limit(self, monkeypatch: pytest.MonkeyPatch, model: str):
+        # Seedream 5.0 lite / 4.5 / 4.0 official limit is 14 images (input + output <= 15); 5-0-260128 is the same model as 5.0 lite.
         # Seedream 5.0 lite / 4.5 / 4.0 官方上限 14 张（输入 + 输出 ≤ 15）；5-0-260128 与 5.0 lite 同一模型。
         monkeypatch.delenv("ARK_API_KEY", raising=False)
         with patch("lib.backends.image_backends.ark.create_ark_client"):
@@ -174,6 +190,8 @@ class TestArkImageBackendProperties:
             assert asyncio.run(ArkImageBackend(api_key="k", model=model).reference_image_limit()) == 14
 
 
+# Seedream 5.0 pro / flash official limit is 10 images: https://www.volcengine.com/docs/82379/1541523.
+# The built-in catalog does not list these two models, but users can add them by ID or reuse this backend via the custom endpoint ark-seedream.
 # Seedream 5.0 pro / flash 官方上限 10 张：https://www.volcengine.com/docs/82379/1541523。
 # 内置目录不收录这两个型号，但用户可按 ID 手动添加，或经自定义端点 ark-seedream 复用本后端。
 _TEN_REFERENCE_MODELS = [
@@ -185,7 +203,9 @@ _TEN_REFERENCE_MODELS = [
 
 
 class TestArkImageBackendSeedream5ProFlashLimit:
-    """5.0 pro / flash 上限 10 张：声明、截断、计量三处同口径。"""
+    """5.0 pro / flash limit of 10: declaration, truncation and metering agree.
+
+    5.0 pro / flash 上限 10 张：声明、截断、计量三处同口径。"""
 
     @pytest.mark.parametrize("model", _TEN_REFERENCE_MODELS)
     async def test_declares_ten_and_sends_only_ten(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, model: str):
@@ -230,7 +250,9 @@ class TestArkImageBackendSeedream5ProFlashLimit:
 
 
 class TestArkImageBackendGenerate:
-    """generate() 方法测试。"""
+    """generate() method tests.
+
+    generate() 方法测试。"""
 
     @pytest.fixture
     def backend_and_client(self, monkeypatch: pytest.MonkeyPatch):
@@ -252,6 +274,7 @@ class TestArkImageBackendGenerate:
         call_kwargs = client.requests[-1]
         assert call_kwargs["model"] == "doubao-seedream-5-0-lite-260128"
         assert call_kwargs["prompt"] == "a cat"
+        # Some compatible gateways still return url even when they accept response_format, so the request no longer passes it.
         # 部分兼容网关即便吃 response_format 仍返回 url，所以请求端不再传该参数
         assert "response_format" not in call_kwargs
         assert "image" not in call_kwargs
@@ -262,7 +285,7 @@ class TestArkImageBackendGenerate:
         assert result.image_path == output
         assert output.exists()
         assert output.read_bytes() == base64.b64decode(FAKE_B64)
-        # 按生成张数上报，分辨率取请求里实际发的 size
+        # Report by generated image count; the resolution is the size actually sent in the request. / 按生成张数上报，分辨率取请求里实际发的 size
         assert result.usage is not None
         assert result.usage.quantities == {"output_images": 1, "input_images": 0}
         assert result.usage.dimensions == {"resolution": call_kwargs["size"]}
@@ -278,7 +301,10 @@ class TestArkImageBackendGenerate:
         assert call_kwargs["seed"] == 42
 
     async def test_size_from_aspect_ratio(self, backend_and_client, tmp_path: Path):
-        """aspect_ratio 必须映射成显式 size 传给 SDK，否则 Seedream 默认 2048x2048（1:1），
+        """aspect_ratio must be mapped to an explicit size for the SDK, otherwise Seedream defaults to 2048x2048 (1:1) and the
+        project setting is ignored. Size values follow Ark's official recommended width/height pixel table (2K tier, 4.x/5.x series).
+
+        aspect_ratio 必须映射成显式 size 传给 SDK，否则 Seedream 默认 2048x2048（1:1），
         导致项目设置失效。尺寸值按 Ark 官方推荐宽高像素表（2K 档，4.x/5.x 系列）。"""
         backend, client = backend_and_client
 
@@ -295,7 +321,10 @@ class TestArkImageBackendGenerate:
             assert client.requests[-1]["size"] == expected, f"aspect_ratio={ar} 应映射到 {expected}"
 
     async def test_size_fallback_unknown_aspect_ratio(self, backend_and_client, tmp_path: Path):
-        """未识别比例回退到 '2K' keyword（方式 1），由模型按 prompt 自适应，
+        """An unrecognized ratio falls back to the '2K' keyword (method 1) and the model adapts to the prompt, avoiding wrong
+        width/height being rejected by the API (4.x/5.x method 2 total pixels must be >= 3_686_400).
+
+        未识别比例回退到 '2K' keyword（方式 1），由模型按 prompt 自适应，
         避免传错宽高被 API 拒（4.x/5.x 方式 2 总像素须 ≥ 3_686_400）。"""
         backend, client = backend_and_client
         request = ImageGenerationRequest(prompt="x", output_path=tmp_path / "u.png", aspect_ratio="weird")
@@ -303,7 +332,9 @@ class TestArkImageBackendGenerate:
         assert client.requests[-1]["size"] == "2K"
 
     async def test_size_for_seedream_3_uses_1k_table(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
-        """3.0-t2i 模型族单边像素 ∈ [512, 2048]，必须用 1K 表而非 2K 表。"""
+        """The 3.0-t2i model family has per-side pixels in [512, 2048]; it must use the 1K table, not the 2K table.
+
+        3.0-t2i 模型族单边像素 ∈ [512, 2048]，必须用 1K 表而非 2K 表。"""
         monkeypatch.delenv("ARK_API_KEY", raising=False)
         with _recorded_ark_client() as (_created, client):
             from lib.backends.image_backends.ark import ArkImageBackend
@@ -315,7 +346,9 @@ class TestArkImageBackendGenerate:
         assert client.requests[-1]["size"] == "720x1280"
 
     async def test_size_fallback_unknown_aspect_ratio_seedream_3(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
-        """3.0-t2i 未识别比例必须回退到 '1K' 而非 '2K'（单边像素上限 2048）。"""
+        """3.0-t2i with an unrecognized ratio must fall back to '1K', not '2K' (per-side pixel cap 2048).
+
+        3.0-t2i 未识别比例必须回退到 '1K' 而非 '2K'（单边像素上限 2048）。"""
         monkeypatch.delenv("ARK_API_KEY", raising=False)
         with _recorded_ark_client() as (_created, client):
             from lib.backends.image_backends.ark import ArkImageBackend
@@ -327,7 +360,9 @@ class TestArkImageBackendGenerate:
         assert client.requests[-1]["size"] == "1K"
 
     async def test_explicit_image_size_overrides_aspect_ratio(self, backend_and_client, tmp_path: Path):
-        """caller 显式传入 image_size（如 grid 路径的 '2K'）必须保留，不被 aspect_ratio 推导覆盖。"""
+        """An image_size explicitly passed by the caller (e.g. '2K' on the grid path) must be kept, not overridden by aspect_ratio derivation.
+
+        caller 显式传入 image_size（如 grid 路径的 '2K'）必须保留，不被 aspect_ratio 推导覆盖。"""
         backend, client = backend_and_client
         request = ImageGenerationRequest(
             prompt="x", output_path=tmp_path / "g.png", aspect_ratio="9:16", image_size="2K"
@@ -356,7 +391,9 @@ class TestArkImageBackendGenerate:
         assert call_kwargs["image"] == expected_data_uri
 
     async def test_i2i_truncates_references_over_the_declared_limit(self, backend_and_client, tmp_path: Path):
-        """编排层未裁剪时的兜底：只发前 reference_image_limit() 张。"""
+        """Fallback when the orchestration layer did not trim: only the first reference_image_limit() images are sent.
+
+        编排层未裁剪时的兜底：只发前 reference_image_limit() 张。"""
         backend, client = backend_and_client
         refs = []
         for index in range(16):
@@ -408,7 +445,9 @@ class TestArkImageBackendGenerate:
         assert output.exists()
 
     async def test_empty_data_raises(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
-        """Ark 返回空 data 数组时，应抛出清晰的 RuntimeError 而非 IndexError。"""
+        """When Ark returns an empty data array, a clear RuntimeError should be raised rather than IndexError.
+
+        Ark 返回空 data 数组时，应抛出清晰的 RuntimeError 而非 IndexError。"""
         monkeypatch.delenv("ARK_API_KEY", raising=False)
         with _recorded_ark_client(_FakeImagesResponse(data=[])) as (_created, _client):
             from lib.backends.image_backends.ark import ArkImageBackend
@@ -421,7 +460,9 @@ class TestArkImageBackendGenerate:
                 await backend.generate(request)
 
     async def test_t2i_url_fallback(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
-        """网关只返回 url 时，应走 httpx 下载分支。"""
+        """When the gateway returns only url, the httpx download branch should be used.
+
+        网关只返回 url 时，应走 httpx 下载分支。"""
         monkeypatch.delenv("ARK_API_KEY", raising=False)
         response = _FakeImagesResponse(data=[_FakeImageData(b64_json=None, url="https://gateway/img.png")])
         downloaded = b"downloaded-from-gateway"

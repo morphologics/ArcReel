@@ -1,4 +1,9 @@
-"""资源路径解析器（模块 A）单元测试。
+"""Unit tests for the resource path resolver (module A).
+
+Only external behavior is asserted: feed resource_type + resource_id and assert the project-relative
+path, extension, and handling of unknown types. Pure functions, no fixtures, no disk reads.
+
+资源路径解析器（模块 A）单元测试。
 
 只断言外部行为：喂 resource_type + resource_id，断言项目内相对路径、扩展名、
 未知类型的处理。纯函数，无 fixture、不读盘。
@@ -20,13 +25,13 @@ class TestResourceRelativePath:
     @pytest.mark.parametrize(
         ("resource_type", "resource_id", "expected"),
         [
-            # storyboards / videos 带 scene_ 前缀特例
+            # storyboards / videos have the scene_ prefix special case / storyboards / videos 带 scene_ 前缀特例
             ("storyboards", "E1S01", "storyboards/scene_E1S01.png"),
             ("end_frames", "E1S01", "end_frames/scene_E1S01.png"),
             ("videos", "E1S01", "videos/scene_E1S01.mp4"),
-            # audio 带 segment_ 前缀特例
+            # audio has the segment_ prefix special case / audio 带 segment_ 前缀特例
             ("audio", "E1S01", "audio/segment_E1S01.wav"),
-            # 其余无前缀
+            # The rest have no prefix / 其余无前缀
             ("characters", "姜月茴", "characters/姜月茴.png"),
             ("scenes", "庙宇", "scenes/庙宇.png"),
             ("props", "玉佩", "props/玉佩.png"),
@@ -38,13 +43,15 @@ class TestResourceRelativePath:
         assert resource_relative_path(resource_type, resource_id) == expected
 
     def test_only_shot_keyed_types_get_scene_prefix(self) -> None:
+        # Reverse assertion: types not named by shot id must not carry the scene_ prefix (audio uses the
+        # segment_ prefix, verified separately)
         # 反向断言：非按镜头 id 命名的类型不得带 scene_ 前缀（audio 用 segment_ 前缀，单独验证）
         for rt in ("characters", "scenes", "props", "grids", "reference_videos"):
             assert "scene_" not in resource_relative_path(rt, "X")
         assert resource_relative_path("audio", "X").startswith("audio/segment_")
 
     def test_returns_posix_forward_slashes(self) -> None:
-        # 跨平台：始终用 / 分隔，不受运行平台影响
+        # Cross-platform: always separated by /, regardless of the running platform / 跨平台：始终用 / 分隔，不受运行平台影响
         assert "\\" not in resource_relative_path("storyboards", "E1S01")
 
     def test_unknown_resource_type_raises_value_error(self) -> None:
@@ -99,9 +106,9 @@ class TestResourceOfPath:
             ("storyboards/scene_E1S01.png", ("storyboards", "E1S01")),
             ("audio/segment_E1S01.wav", ("audio", "E1S01")),
             ("characters/姜月茴.png", ("characters", "姜月茴")),
-            # 衍生的子目录更深，先于角色匹配
+            # Derivative subdirectories are deeper and are matched before characters / 衍生的子目录更深，先于角色匹配
             ("characters/derivatives/姜月茴/少年.png", ("character_derivatives", "姜月茴/少年")),
-            # 形状对不上的路径不是任何资源的当前文件
+            # A path whose shape does not match is not the current file of any resource / 形状对不上的路径不是任何资源的当前文件
             ("characters/derivatives/少年.png", None),
             ("videos/E1S01.mp4", None),
             ("storyboards/scene_E1S01.jpg", None),

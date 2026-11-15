@@ -1,4 +1,10 @@
 """
+Task cancellation API endpoint tests:
+  - GET  /tasks/{task_id}/cancel-preview
+  - POST /tasks/{task_id}/cancel
+  - GET  /projects/{project_name}/tasks/cancel-all-preview
+  - POST /projects/{project_name}/tasks/cancel-all
+
 任务取消 API 端点测试：
   - GET  /tasks/{task_id}/cancel-preview
   - POST /tasks/{task_id}/cancel
@@ -24,7 +30,9 @@ from tests.auth_deps import AUTH_DEPENDENCIES
 
 
 class _FakeQueue:
-    """仅实现取消相关方法的最小 Fake。"""
+    """Minimal fake implementing only the cancellation-related methods.
+
+    仅实现取消相关方法的最小 Fake。"""
 
     def __init__(
         self,
@@ -68,7 +76,9 @@ class _FakeQueue:
 
 
 def _make_app() -> FastAPI:
-    """构建用于测试的最小 FastAPI 应用，注入假用户。"""
+    """Build a minimal FastAPI app for testing, injecting a fake user.
+
+    构建用于测试的最小 FastAPI 应用，注入假用户。"""
     app = FastAPI()
     app.dependency_overrides[get_current_user] = lambda: CurrentUserInfo(id="default", sub="testuser", role="admin")
     app.include_router(tasks_router.router, prefix="/api/v1", dependencies=AUTH_DEPENDENCIES)
@@ -163,7 +173,9 @@ class TestCancelTask:
         assert body["skipped_terminal"][0]["task_id"] == "done-task"
 
     def test_skipped_terminal_failure_reason_renders_per_locale(self, monkeypatch):
-        """取消命中已失败任务时，响应里的失败原因与列表/详情/SSE 同口径按请求语言渲染。"""
+        """When a cancel hits an already-failed task, the failure reason in the response renders per request language, consistent with list/detail/SSE.
+
+        取消命中已失败任务时，响应里的失败原因与列表/详情/SSE 同口径按请求语言渲染。"""
         stored = '[video_duration_not_supported] {"duration": 7, "supported": "5, 10"}'
         result = {
             "cancelled": [],

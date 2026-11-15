@@ -1,4 +1,7 @@
-"""用户条目表的装入：读不了或身份对不上的副本跳过，这些条目回到跟随官方。"""
+"""Loading the user entry table: copies that cannot be read or whose identity does not match are skipped, and those
+entries go back to following official.
+
+用户条目表的装入：读不了或身份对不上的副本跳过，这些条目回到跟随官方。"""
 
 from __future__ import annotations
 
@@ -30,6 +33,7 @@ async def test_created_flag_is_kept_on_replace_and_loaded(db_factory: async_sess
     async with db_factory() as session:
         repo = CatalogUserEntryRepository(session)
         await repo.put(key, _GOOD, user_created=True)
+        # Later changes to the copy replace it whole, without changing the fact that the entry was created by the user
         # 后续对副本的修改整条替换，不改变条目由用户新建这件事
         await repo.put(key, {**_GOOD, "display_name": "Renamed"})
         await session.commit()

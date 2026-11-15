@@ -1,4 +1,6 @@
-"""成片字幕的换行规则：中文按「可用宽度 ÷ 字号」显式换行，英文与越南语交给 libass。"""
+"""Final cut subtitle line-break rules: Chinese breaks explicitly by "available width ÷ font size"; English and Vietnamese are left to libass.
+
+成片字幕的换行规则：中文按「可用宽度 ÷ 字号」显式换行，英文与越南语交给 libass。"""
 
 from __future__ import annotations
 
@@ -11,6 +13,7 @@ def test_chinese_lines_hold_usable_width_divided_by_the_font_size() -> None:
     landscape = subtitle_layout(output_profile_for_aspect_ratio("16:9"))
     text = "天" * 30
 
+    # Portrait line width 1080 × 82%, glyph size 60 px, 14 characters per line; landscape line width 1920 × 60%, glyph size 40 px, 28 characters per line.
     # 竖屏行宽 1080 × 82%、字身 60 像素，一行 14 字；横屏行宽 1920 × 60%、字身 40 像素，一行 28 字。
     assert [len(line) for line in subtitle_lines(text, portrait)] == [14, 14, 2]
     assert [len(line) for line in subtitle_lines(text, landscape)] == [28, 2]
@@ -35,6 +38,7 @@ def test_opening_brackets_move_to_the_next_line_with_what_they_open() -> None:
 
 
 def test_latin_words_and_numbers_stay_whole_unless_wider_than_a_line() -> None:
+    # Half-width characters count as half a glyph: "ArcReel" takes 3.5 character widths and the whole word moves to the next line; the space at the break is dropped.
     # 半角字符按半个字身计：「ArcReel」占 3.5 个字宽，整词换到下一行；换行处的空格丢弃。
     assert wrap_chinese("我们用了ArcReel做视频", 6) == ("我们用了", "ArcReel做视", "频")
     assert wrap_chinese("一二 2026 年", 3) == ("一二", "2026", "年")

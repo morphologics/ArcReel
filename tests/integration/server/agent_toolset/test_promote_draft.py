@@ -70,10 +70,20 @@ from tests.integration.server.agent_tool_support import (
 pytestmark = pytest.mark.usefixtures("video_request_facts")
 
 # ---------------------------------------------------------------------------
+# Draft and repair-promotion loop (script_plan)
+# ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
 # 草稿与修复晋升闭环（script_plan）
 # ---------------------------------------------------------------------------
 
 
+#: Minimal trigger samples for the six blocking violation classes (violation class -> flat unit), 7 in total: the
+#: '``@[X]`` unregistered' class is split by position into the description slot (unregistered_asset) and the speaker slot
+#: of dialogue markup (unregistered_speaker), since the two go through different entries and testing them together would
+#: miss one. Assert 'draft written + official file clean + report locates by class' for every class, not just one or two
+#: -- all classes share one traversal, so any untested class could regress to 'discard and re-draw'.
+#: ``duration_off_tier`` (duration not in the effective tiers for the unit's reference state) needs other caps to trigger;
+#: it is tested separately in ``test_split_reference_video_units_rejects_duration_off_reference_tier``.
 #: 六类阻断违约的最小触发样例（违约类 → 扁平 unit），共 7 条：「``@[X]`` 未登记」一类按出现位置
 #: 拆成描述位（unregistered_asset）与台词记号 speaker 位（unregistered_speaker）两条，两处走不同入口，
 #: 合测会漏掉其中一处。逐类断言「落草稿 + 正式文件干净 + 报告按类定位」，而不是只验其中
@@ -95,7 +105,10 @@ _RV_VIOLATION_CASES = [
 async def test_split_reference_video_units_quarantines_each_violation_class(
     fake_ctx: ToolHarness, monkeypatch, code: str, unit: dict
 ) -> None:
-    """六类阻断违约逐类：产物落草稿、正式文件不被写出、报告按违约类逐条定位。"""
+    """Six blocking violation classes one by one: output goes to a draft, the official file is not written, the report
+    locates each item by violation class.
+
+    六类阻断违约逐类：产物落草稿、正式文件不被写出、报告按违约类逐条定位。"""
     rv_source(fake_ctx)
     out = await run_rv_split(fake_ctx, monkeypatch, [unit])
 
@@ -106,6 +119,7 @@ async def test_split_reference_video_units_quarantines_each_violation_class(
     assert envelope["kind"] == QUARANTINE_KIND_SCRIPT_PLAN
     assert [v["code"] for v in envelope["violations"]] == [code]
     assert envelope["violations"][0]["label"] == "unit E1U01"
+    # The draft holds the flat draft structure (the Agent edits text / source anchor / duration), not the derived on-disk shape
     # 草稿装的是扁平草稿结构（Agent 要改的是正文 / 原文锚 / 时长），不是派生后的落盘形状
     assert envelope["content"]["units"][0]["text"] == unit["text"]
     assert "shots" not in envelope["content"]["units"][0]
@@ -121,7 +135,10 @@ async def test_split_reference_video_units_quarantines_each_violation_class(
 async def test_split_reference_video_units_reports_all_bad_units_in_one_round(
     fake_ctx: ToolHarness, monkeypatch
 ) -> None:
-    """报告逐条覆盖所有坏 unit，不停在第一个——否则 Agent 每修一处就要再跑一轮付费拆分。"""
+    """The report covers every bad unit, not stopping at the first -- otherwise the Agent would need another paid split
+    round for each fix.
+
+    报告逐条覆盖所有坏 unit，不停在第一个——否则 Agent 每修一处就要再跑一轮付费拆分。"""
     rv_source(fake_ctx)
     units = [
         rv_unit("@[张三] 起身"),
@@ -134,6 +151,7 @@ async def test_split_reference_video_units_reports_all_bad_units_in_one_round(
     envelope = read_rv_quarantine(fake_ctx)
     assert [v["label"] for v in envelope["violations"]] == ["unit E1U02", "unit E1U03"]
     assert [v["code"] for v in envelope["violations"]] == ["unregistered_asset", "braces_in_description"]
+    # Valid units also stay in the draft as they are: the Agent only needs to fix the bad ones
     # 合法的 unit 也原样留在草稿里：Agent 只需改坏的那些
     assert len(envelope["content"]["units"]) == 3
 
@@ -180,7 +198,10 @@ async def test_reference_script_plan_write_transaction_does_not_block_event_loop
 
 
 async def test_promote_draft_promotes_after_repair(fake_ctx: ToolHarness, monkeypatch) -> None:
-    """Agent 修好草稿后晋升：正式 script_plan 落盘、草稿清除、结构由正文机械派生。"""
+    """Promote after the Agent repairs the draft: official script_plan persisted, draft cleared, structure mechanically
+    derived from the text.
+
+    Agent 修好草稿后晋升：正式 script_plan 落盘、草稿清除、结构由正文机械派生。"""
     rv_source(fake_ctx)
     await run_rv_split(fake_ctx, monkeypatch, [rv_unit("@[不存在的人] 出场")])
 
@@ -193,13 +214,17 @@ async def test_promote_draft_promotes_after_repair(fake_ctx: ToolHarness, monkey
     assert out.problem is None, out
     assert not rv_quarantine_path(fake_ctx).exists()
     saved = json.loads(rv_script_plan_path(fake_ctx).read_text(encoding="utf-8"))
+    # Numbers are issued by the server on persist: the fixture script already used number 1
     # 落盘时由服务端发号：夹具剧本已用过 1 号
     assert saved["units"][0]["unit_id"] == "E1U2"
     assert saved["units"][0]["text"] == "@[张三] 在 @[村口] 出场"
 
 
 async def test_promote_draft_reports_again_without_round_limit(fake_ctx: ToolHarness, monkeypatch) -> None:
-    """再违约则再返回刷新后的报告、草稿留在原地，可反复晋升——无收敛轮次上限。"""
+    """A new violation returns a refreshed report again and the draft stays in place; promotion can be repeated -- no limit
+    on convergence rounds.
+
+    再违约则再返回刷新后的报告、草稿留在原地，可反复晋升——无收敛轮次上限。"""
     rv_source(fake_ctx)
     await run_rv_split(fake_ctx, monkeypatch, [rv_unit("@[不存在的人] 出场")])
 
@@ -210,6 +235,7 @@ async def test_promote_draft_reports_again_without_round_limit(fake_ctx: ToolHar
         assert rv_quarantine_path(fake_ctx).exists()
         assert not rv_script_plan_path(fake_ctx).exists()
 
+    # After switching to another violation class the report refreshes; it is not a stale snapshot of the previous round
     # 改成另一类违约后报告随之刷新，不是上一轮的陈旧快照
     envelope = read_rv_quarantine(fake_ctx)
     envelope["content"]["units"][0]["text"] = "@[张三] 推门，音量 {}"
@@ -241,18 +267,27 @@ async def test_promote_draft_rejects_stale_draft_revision(fake_ctx: ToolHarness,
 
 
 # ---------------------------------------------------------------------------
+# script_plan optimistic concurrency control (baseline fingerprint recorded on fetch, compared under lock before promotion)
+# ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
 # script_plan 乐观并发控制（取回时记基线指纹，晋升前锁内比对）
 # ---------------------------------------------------------------------------
 
 
 async def test_promote_conflicts_when_official_changed_after_open(fake_ctx: ToolHarness) -> None:
-    """「用户在内容确认界面编辑 + Agent 改草稿并晋升」的双端并发：取回后正式文件被另一写入方
+    """Two-sided concurrency of 'user edits in the content review UI + Agent edits the draft and promotes': if the official
+    file was changed by another writer after fetch, promotion aborts and returns a conflict report (with the latest content
+    and merge guidance) instead of silently overwriting the other side's edits; the draft stays in place. Promotion is
+    allowed again only after explicitly accepting formal_revision via open_draft / patch_draft as the report says.
+
+    「用户在内容确认界面编辑 + Agent 改草稿并晋升」的双端并发：取回后正式文件被另一写入方
     改过时，晋升中止并返回冲突报告（含最新内容与合并指引），不静默覆盖对方的修改；草稿
     留在原地。按报告经 open_draft / patch_draft 显式接受 formal_revision 后方可重新晋升。"""
     rv_source(fake_ctx)
     write_rv_script_plan(fake_ctx, [rv_saved_unit("@[张三] 起身")])
     await open_for_edit(fake_ctx, source="source/episode_1.txt")
 
+    # Simulate a Web-side save rewriting the official file after fetch
     # 模拟取回之后 Web 端保存改写了正式文件
     write_rv_script_plan(fake_ctx, [rv_saved_unit("@[张三] 在 @[村口] 等候")])
     web_version = rv_script_plan_path(fake_ctx).read_text(encoding="utf-8")
@@ -266,12 +301,15 @@ async def test_promote_conflicts_when_official_changed_after_open(fake_ctx: Tool
     assert "patch_draft" in report
     assert "base_revision" in report
     assert '"doc_type": "reference_script_plan"' in report
+    # The conflict report attaches the flat draft units of the current on-disk values for the Agent to compare and merge
     # 冲突报告附上盘上现值的扁平草稿单元，供 Agent 对照合并
     assert "在 @[村口] 等候" in report
+    # The official file is not overwritten, the draft is still present
     # 正式文件未被覆盖，草稿仍在场
     assert rv_script_plan_path(fake_ctx).read_text(encoding="utf-8") == web_version
     assert rv_quarantine_path(fake_ctx).exists()
 
+    # After merging through the tool as the report guides and explicitly accepting the official version, re-promotion passes.
     # 按报告指引通过工具合并并显式接受正式版本后，重新晋升即放行。
     refreshed = draft_of(await open_for_edit(fake_ctx))
     refreshed["content"]["units"][0]["text"] = "@[张三] 在 @[村口] 等候"
@@ -293,7 +331,11 @@ async def test_promote_conflicts_when_official_changed_after_open(fake_ctx: Tool
 
 
 async def test_promote_conflict_report_renders_missing_fingerprint_as_json_null(fake_ctx: ToolHarness) -> None:
-    """取回后正式文件被删除：现值指纹是 null，报告须按 JSON 字面量给出而非字符串 "None"。
+    """The official file was deleted after fetch: the current fingerprint is null and the report must give it as a JSON literal,
+    not the string 'None'. Re-promoting after explicitly accepting null via patch_draft as reported passes -- written as a
+    string it would never match.
+
+    取回后正式文件被删除：现值指纹是 null，报告须按 JSON 字面量给出而非字符串 "None"。
     照报告用 patch_draft 显式接受 null 后重晋升即放行——写成字符串则永远比对不上。"""
     rv_source(fake_ctx)
     write_rv_script_plan(fake_ctx, [rv_saved_unit("@[张三] 起身")])
@@ -328,13 +370,18 @@ async def test_promote_conflict_report_renders_missing_fingerprint_as_json_null(
 
 
 async def test_promote_without_base_fingerprint_meta_promotes_unchecked(fake_ctx: ToolHarness) -> None:
-    """基线机制引入前产出的存量草稿缺 meta.base_fingerprint 键：按无基线晋升，不被新校验卡死。"""
+    """Legacy drafts produced before the baseline mechanism lack the meta.base_fingerprint key: promote without a baseline,
+    not blocked by the new check.
+
+    基线机制引入前产出的存量草稿缺 meta.base_fingerprint 键：按无基线晋升，不被新校验卡死。"""
     rv_source(fake_ctx)
     write_rv_script_plan(fake_ctx, [rv_saved_unit("@[张三] 起身")])
     await open_for_edit(fake_ctx, source="source/episode_1.txt")
     envelope = read_rv_quarantine(fake_ctx)
     del envelope["meta"]["base_fingerprint"]
     rv_quarantine_path(fake_ctx).write_text(json.dumps(envelope, ensure_ascii=False), encoding="utf-8")
+    # The official file was changed again after fetch -- a legacy draft has no baseline to compare, so overwrite as before
+    # (keeping pre-introduction semantics)
     # 取回后正式文件又被改过——存量草稿无基线可比，照旧覆盖（维持引入前语义）
     write_rv_script_plan(fake_ctx, [rv_saved_unit("@[张三] 在 @[村口] 等候")])
 
@@ -345,7 +392,11 @@ async def test_promote_without_base_fingerprint_meta_promotes_unchecked(fake_ctx
 
 
 async def test_split_violation_quarantine_records_base_fingerprint(fake_ctx: ToolHarness, monkeypatch) -> None:
-    """拆分违约落草稿时同样记基线：修好晋升前正式文件被并发改写的话按基线中止。
+    """A split violation written to a draft also records the baseline: if the official file is concurrently rewritten before
+    the repaired draft is promoted, abort per baseline. On the first split the official file does not exist and the
+    baseline is null -- if another split has written the official file by promotion time, that is a conflict too.
+
+    拆分违约落草稿时同样记基线：修好晋升前正式文件被并发改写的话按基线中止。
     首拆时正式文件不存在，基线为 null——晋升时若正式文件已被另一次拆分写出，同样判冲突。"""
     rv_source(fake_ctx)
     await run_rv_split(fake_ctx, monkeypatch, [rv_unit("@[不存在的人] 出场")])
@@ -354,6 +405,8 @@ async def test_split_violation_quarantine_records_base_fingerprint(fake_ctx: Too
     assert "base_fingerprint" in meta
     assert meta["base_fingerprint"] is None
 
+    # The official file is written (via another path) while the draft exists; promoting the repaired draft should report a
+    # conflict rather than overwrite
     # 草稿在场期间正式文件被写出（另一路径），修好草稿后晋升应报冲突而非覆盖
     write_rv_script_plan(fake_ctx, [rv_saved_unit("@[张三] 起身")])
     envelope = read_rv_quarantine(fake_ctx)
@@ -427,7 +480,14 @@ async def test_split_violation_keeps_pre_generation_formal_baseline(fake_ctx: To
     ids=["off_slot_duration", "duration_removed", "blank_source_text"],
 )
 async def test_promote_draft_rejects_schema_breach(fake_ctx: ToolHarness, monkeypatch, mutate, hint: str) -> None:
-    """草稿改坏 schema 层字段同样只回报告：晋升与产出走同一份 schema，正式文件不被污染。
+    """Breaking schema-level fields in the draft also only returns a report: promotion and production use the same schema,
+    so the official file is not polluted.
+
+    The duration enum is enforced by response_schema on the production side; if the promotion side only checked content
+    constraints, the Agent could change duration_seconds to an off-tier value or delete it (becoming 0 seconds) and get it
+    all the way into the official script_plan.
+
+    草稿改坏 schema 层字段同样只回报告：晋升与产出走同一份 schema，正式文件不被污染。
 
     时长枚举在产出侧由 response_schema 卡死；晋升侧若只判内容约束，Agent 把 duration_seconds
     改成非档位值或整个删掉（收成 0 秒）就能一路进正式 script_plan。
@@ -458,7 +518,13 @@ async def test_promote_draft_rejects_schema_breach(fake_ctx: ToolHarness, monkey
     ids=["units_removed", "units_not_a_list", "units_emptied"],
 )
 async def test_promote_draft_reports_broken_outer_shape(fake_ctx: ToolHarness, monkeypatch, mutate_content) -> None:
-    """外层形状被改坏同样刷新报告，而不是抛一句裸错误。
+    """A broken outer shape also refreshes the report instead of raising a bare error.
+
+    Deleting units entirely / making it a non-array / emptying it are all mistakes the Agent makes when editing drafts.
+    If only per-unit field violations refreshed the report, these cases would fall out of the 'fix per report, then
+    promote' loop.
+
+    外层形状被改坏同样刷新报告，而不是抛一句裸错误。
 
     units 整个删掉 / 改成非数组 / 清空都是 Agent 编辑草稿时会犯的错。只有逐 unit 的字段违约
     刷新报告的话，这几种就被甩出了「按报告改完再晋升」的循环。
@@ -478,6 +544,8 @@ async def test_promote_draft_reports_broken_outer_shape(fake_ctx: ToolHarness, m
     assert not rv_script_plan_path(fake_ctx).exists()
     refreshed = read_rv_quarantine(fake_ctx)
     assert [v["code"] for v in refreshed["violations"]] == ["schema_invalid"]
+    # The draft stays in place and keeps the Agent's content verbatim: normalizing it would reshape its original, so when it
+    # looks back per the report it would not match what it wrote, and the fix-then-promote path would break
     # 草稿留在原地且原样保留 Agent 写的那份内容：做收编会把它的原稿改形，它照着报告回看时
     # 反而对不上自己写的东西，改完再晋升这条路就断了
     assert rv_quarantine_path(fake_ctx).exists()
@@ -485,7 +553,10 @@ async def test_promote_draft_reports_broken_outer_shape(fake_ctx: ToolHarness, m
 
 
 async def test_promote_draft_requires_source_provenance(fake_ctx: ToolHarness, monkeypatch) -> None:
-    """meta.source 被改掉后不晋升：按整个 source/ 重解析比产出时更松，别集的原文锚会恰好命中。"""
+    """No promotion after meta.source was changed: re-resolving over the whole source/ is looser than at production time,
+    and another episode's source anchors might happen to match.
+
+    meta.source 被改掉后不晋升：按整个 source/ 重解析比产出时更松，别集的原文锚会恰好命中。"""
     rv_source(fake_ctx)
     await run_rv_split(fake_ctx, monkeypatch, [rv_unit("@[不存在的人] 出场")])
 
@@ -503,7 +574,10 @@ async def test_promote_draft_requires_source_provenance(fake_ctx: ToolHarness, m
 
 
 async def test_promote_draft_reports_promotion_not_split(fake_ctx: ToolHarness, monkeypatch) -> None:
-    """晋升成功的摘要要说「晋升」：说成「拆分」会让 Agent 以为自己的修改被一次重抽覆盖了。"""
+    """A successful promotion summary must say 'promoted': saying 'split' would make the Agent think its edits were
+    overwritten by a re-draw.
+
+    晋升成功的摘要要说「晋升」：说成「拆分」会让 Agent 以为自己的修改被一次重抽覆盖了。"""
     rv_source(fake_ctx)
     await run_rv_split(fake_ctx, monkeypatch, [rv_unit("@[不存在的人] 出场")])
     envelope = read_rv_quarantine(fake_ctx)
@@ -517,7 +591,9 @@ async def test_promote_draft_reports_promotion_not_split(fake_ctx: ToolHarness, 
 
 
 def _rv_scenes(fake_ctx: ToolHarness, scenes: dict[str, Any]) -> None:
-    """改写项目登记的场景资产（内存视图与盘上 project.json 同步）。"""
+    """Rewrite the scene assets registered in the project (in-memory view and on-disk project.json kept in sync).
+
+    改写项目登记的场景资产（内存视图与盘上 project.json 同步）。"""
     fake_ctx.pm.project_payload["scenes"] = scenes
     (fake_ctx.project_path / "project.json").write_text(
         json.dumps(fake_ctx.pm.project_payload, ensure_ascii=False),
@@ -526,7 +602,10 @@ def _rv_scenes(fake_ctx: ToolHarness, scenes: dict[str, Any]) -> None:
 
 
 async def _rv_draft_with(fake_ctx: ToolHarness, monkeypatch, texts: list[str]) -> None:
-    """铺一份待修复草稿，正文按 ``texts`` 覆盖（产出时用一条必违约的正文把草稿逼出来）。"""
+    """Lay down an invalid draft with text overridden by ``texts`` (at production a text that is sure to violate forces the
+    draft out).
+
+    铺一份待修复草稿，正文按 ``texts`` 覆盖（产出时用一条必违约的正文把草稿逼出来）。"""
     await run_rv_split(fake_ctx, monkeypatch, [rv_unit("@[不存在的人] 出场") for _ in texts])
     envelope = read_rv_quarantine(fake_ctx)
     for unit, text in zip(envelope["content"]["units"], texts, strict=True):
@@ -535,7 +614,10 @@ async def _rv_draft_with(fake_ctx: ToolHarness, monkeypatch, texts: list[str]) -
 
 
 async def test_promote_draft_report_names_units_without_scene_reference(fake_ctx: ToolHarness, monkeypatch) -> None:
-    """晋升被硬违约挡下时，报告也带软违约段：Agent 修草稿的每一轮都要看得见降级提示。"""
+    """When promotion is blocked by a hard violation, the report also carries the soft violation section: the Agent must see
+    degradation notes in every round of draft repair.
+
+    晋升被硬违约挡下时，报告也带软违约段：Agent 修草稿的每一轮都要看得见降级提示。"""
     rv_source(fake_ctx)
     _rv_scenes(fake_ctx, {"村口": {"description": "黄昏的村口"}})
     await _rv_draft_with(fake_ctx, monkeypatch, ["@[张三] 起身", "@[不存在的人] 出场"])
@@ -547,6 +629,8 @@ async def test_promote_draft_report_names_units_without_scene_reference(fake_ctx
     assert "unregistered_asset" in text
     assert "未引用场景" in text
     assert "unit E1U01：" in text
+    # Soft violations do not go into the violation entries of the invalid draft: merging them, the 'non-empty means
+    # blocked' rule would turn degradation notes into hard violations.
     # 软违约不进待修复草稿的违约条目：合流的话「非空即挡下」的判定会把降级提示变成硬违约。
     assert [v["code"] for v in read_rv_quarantine(fake_ctx)["violations"]] == ["unregistered_asset"]
 
@@ -554,7 +638,9 @@ async def test_promote_draft_report_names_units_without_scene_reference(fake_ctx
 async def test_promote_draft_report_silent_when_every_unit_references_a_scene(
     fake_ctx: ToolHarness, monkeypatch
 ) -> None:
-    """每个 unit 都引用了场景时报告不带软违约段——没有降级可提示。"""
+    """When every unit references a scene the report has no soft violation section -- there is no degradation to note.
+
+    每个 unit 都引用了场景时报告不带软违约段——没有降级可提示。"""
     rv_source(fake_ctx)
     _rv_scenes(fake_ctx, {"村口": {"description": "黄昏的村口"}})
     await _rv_draft_with(fake_ctx, monkeypatch, ["@[村口] 黄昏，@[不存在的人] 出场"])
@@ -566,7 +652,10 @@ async def test_promote_draft_report_silent_when_every_unit_references_a_scene(
 
 
 async def test_promote_receipt_names_units_without_scene_reference(fake_ctx: ToolHarness, monkeypatch) -> None:
-    """晋升回执带软违约段，与拆分回执同口径——软违约不阻断晋升，正式文件照常落盘。"""
+    """The promotion receipt carries a soft violation section, same as the split receipt -- soft violations do not block
+    promotion, the official file is persisted as usual.
+
+    晋升回执带软违约段，与拆分回执同口径——软违约不阻断晋升，正式文件照常落盘。"""
     rv_source(fake_ctx)
     _rv_scenes(fake_ctx, {"村口": {"description": "黄昏的村口"}})
     await _rv_draft_with(fake_ctx, monkeypatch, ["@[村口] 黄昏，@[张三] 推门", "@[张三] 起身"])
@@ -578,13 +667,16 @@ async def test_promote_receipt_names_units_without_scene_reference(fake_ctx: Too
     text = draft_of(out)["message"]
     assert "降级提示" in text
     assert "未引用场景" in text
+    # The receipt locates by the numbers issued on persist (the fixture script already used number 1)
     # 回执按落盘时发出的编号定位（夹具剧本已用过 1 号）
     assert "unit E1U3：" in text
     assert "unit E1U2：" not in text
 
 
 async def test_promote_receipt_silent_when_every_unit_references_a_scene(fake_ctx: ToolHarness, monkeypatch) -> None:
-    """每个 unit 都引用了场景时回执不带软违约段。"""
+    """When every unit references a scene the receipt has no soft violation section.
+
+    每个 unit 都引用了场景时回执不带软违约段。"""
     rv_source(fake_ctx)
     _rv_scenes(fake_ctx, {"村口": {"description": "黄昏的村口"}})
     await _rv_draft_with(fake_ctx, monkeypatch, ["@[村口] 黄昏，@[张三] 推门"])
@@ -646,7 +738,10 @@ async def test_cancelled_reference_script_plan_promotion_finishes_commit_and_cle
 async def test_writing_reference_script_plan_clears_stale_prompt_authoring_quarantine(
     fake_ctx: ToolHarness, monkeypatch
 ) -> None:
-    """script_plan 一变即清掉在场的 prompt_authoring 草稿：它以旧 script_plan 为 diff 基底，留着就永远晋升不了。"""
+    """Any change to script_plan clears a present prompt_authoring draft: it uses the old script_plan as its diff base and
+    could never be promoted if kept.
+
+    script_plan 一变即清掉在场的 prompt_authoring 草稿：它以旧 script_plan 为 diff 基底，留着就永远晋升不了。"""
     rv_source(fake_ctx)
     write_quarantine(
         fake_ctx.project_path,
@@ -667,7 +762,12 @@ async def test_writing_reference_script_plan_clears_stale_prompt_authoring_quara
 async def test_promote_reference_script_plan_preserves_prompt_authoring_draft_when_content_unchanged(
     fake_ctx: ToolHarness,
 ) -> None:
-    """情况 B 中途放弃、原样晋升：取回草稿未改动即晋升，写回的 script_plan 与盘上原值逐字相同，
+    """Case B abandoned midway and promoted unchanged: promoting a fetched draft without edits writes back a script_plan
+    identical to the on-disk value; the present prompt_authoring draft should not be cleared then -- its
+    structure-preserving diff still matches this unchanged base, and the Agent abandoning script_plan edits should not also
+    destroy a still-valid prompt_authoring repair draft.
+
+    情况 B 中途放弃、原样晋升：取回草稿未改动即晋升，写回的 script_plan 与盘上原值逐字相同，
     此时不该清在场的 prompt_authoring 草稿——它的保结构 diff 仍然对得上这份没变的基底，Agent
     放弃 script_plan 修改不该连带销毁一份仍然有效的 prompt_authoring 修复草稿。"""
     rv_source(fake_ctx)
@@ -690,7 +790,10 @@ async def test_promote_reference_script_plan_preserves_prompt_authoring_draft_wh
 
 
 def _write_rv_formal_script(fake_ctx: ToolHarness, text: str) -> str | None:
-    """正式剧本里一个待编写单元 E1U01；返回写入后的内容指纹，供草稿 meta 记作生成时基线。"""
+    """One pending-authoring unit E1U01 in the final script; returns the content fingerprint after writing, for the draft
+    meta to record as the generation-time baseline.
+
+    正式剧本里一个待编写单元 E1U01；返回写入后的内容指纹，供草稿 meta 记作生成时基线。"""
     path = fake_ctx.project_path / "scripts" / "episode_1.json"
     path.parent.mkdir(parents=True, exist_ok=True)
     script = {
@@ -706,7 +809,11 @@ def _write_rv_formal_script(fake_ctx: ToolHarness, text: str) -> str | None:
 
 
 async def test_promote_draft_prompt_authoring_uses_async_factory(fake_ctx: ToolHarness, monkeypatch) -> None:
-    """prompt_authoring 晋升走 ``ScriptGenerator.create``：晋升同样经 _add_metadata 落盘，裸构造会把
+    """prompt_authoring promotion goes through ``ScriptGenerator.create``: promotion also persists via _add_metadata, and a
+    bare constructor would record metadata.generator as 'unknown', not matching the same artifact on the direct
+    generation path.
+
+    prompt_authoring 晋升走 ``ScriptGenerator.create``：晋升同样经 _add_metadata 落盘，裸构造会把
     metadata.generator 记成 "unknown"，与直接生成路径的同一份产物对不上。"""
 
     rv_project(fake_ctx)
@@ -741,7 +848,10 @@ async def test_promote_draft_prompt_authoring_uses_async_factory(fake_ctx: ToolH
 async def test_promote_draft_surfaces_model_not_in_catalog_with_reselect_guidance(
     fake_ctx: ToolHarness, monkeypatch
 ) -> None:
-    """晋升时文本模型已下架：不被包成 draft_promote_failed，给出重新选择模型的指引。"""
+    """The text model was delisted by promotion time: not wrapped as draft_promote_failed; guidance to re-select a model is
+    given.
+
+    晋升时文本模型已下架：不被包成 draft_promote_failed，给出重新选择模型的指引。"""
     from lib.catalog.errors import ModelNotInCatalogError
 
     rv_project(fake_ctx)
@@ -861,7 +971,10 @@ async def test_open_script_plan_draft_waits_for_quarantine_lock(fake_ctx: ToolHa
 
 
 async def test_promote_draft_refuses_after_mode_switch(fake_ctx: ToolHarness) -> None:
-    """切走参考路径后不再晋升残留草稿：晋升会按参考路径的形状覆盖该集正式剧本。"""
+    """After switching off the reference path a leftover draft is no longer promoted: promotion would overwrite the episode's
+    final script in the reference path's shape.
+
+    切走参考路径后不再晋升残留草稿：晋升会按参考路径的形状覆盖该集正式剧本。"""
     rv_project(fake_ctx, generation_mode="storyboard")
     write_quarantine(
         fake_ctx.project_path,
@@ -882,7 +995,10 @@ async def test_promote_draft_refuses_after_mode_switch(fake_ctx: ToolHarness) ->
 async def test_promote_draft_prompt_authoring_ignores_unconfirmed_script_plan(
     fake_ctx: ToolHarness, monkeypatch
 ) -> None:
-    """prompt_authoring 草稿按正式剧本晋升：脚本规划重跑后尚未确认不阻塞晋升，与编写入口同口径。"""
+    """prompt_authoring drafts promote against the final script: an unconfirmed rerun of the script plan does not block
+    promotion, same as the authoring entry.
+
+    prompt_authoring 草稿按正式剧本晋升：脚本规划重跑后尚未确认不阻塞晋升，与编写入口同口径。"""
 
     rv_project(fake_ctx)
     baseline = _write_rv_formal_script(fake_ctx, "@[张三] 起身")
@@ -930,7 +1046,10 @@ async def test_promote_draft_without_draft(fake_ctx: ToolHarness) -> None:
 async def test_split_reference_video_units_clears_stale_quarantine_on_success(
     fake_ctx: ToolHarness, monkeypatch
 ) -> None:
-    """重拆分成功即清掉上一轮的草稿——留着会让内容确认与生成侧继续阻塞在已被取代的产物上。"""
+    """A successful re-split clears the previous round's draft -- keeping it would leave content review and generation
+    blocked on a superseded artifact.
+
+    重拆分成功即清掉上一轮的草稿——留着会让内容确认与生成侧继续阻塞在已被取代的产物上。"""
     rv_source(fake_ctx)
     await run_rv_split(fake_ctx, monkeypatch, [rv_unit("@[不存在的人] 出场")])
     assert rv_quarantine_path(fake_ctx).exists()
@@ -952,7 +1071,10 @@ def _write_prompt_authoring_draft(fake_ctx: ToolHarness, violations: list[DraftV
 
 
 async def _dry_run_authoring(fake_ctx: ToolHarness, content_mode: str, items_key: str, entry: dict) -> str:
-    """正式剧本里放一条待编写条目后预演编写：预检放行时真实生成器按正式剧本渲染出编写 prompt。"""
+    """Put one pending-authoring entry in the final script, then dry-run authoring: when the pre-check passes, the real
+    generator renders the authoring prompt from the final script.
+
+    正式剧本里放一条待编写条目后预演编写：预检放行时真实生成器按正式剧本渲染出编写 prompt。"""
     scripts = fake_ctx.project_path / "scripts"
     scripts.mkdir(parents=True, exist_ok=True)
     script = {
@@ -983,7 +1105,10 @@ def _write_rv_quarantine(fake_ctx: ToolHarness) -> None:
 
 
 async def test_generate_episode_script_blocked_by_prompt_authoring_draft(fake_ctx: ToolHarness) -> None:
-    """编写自身的待修复草稿在场时入口阻塞，且给出「改草稿再晋升」的出路。"""
+    """When authoring's own invalid draft is present the entry is blocked, and it offers the way out 'edit the draft, then
+    promote'.
+
+    编写自身的待修复草稿在场时入口阻塞，且给出「改草稿再晋升」的出路。"""
     rv_project(fake_ctx)
     _write_rv_formal_script(fake_ctx, "@[张三] 起身")
     _write_prompt_authoring_draft(fake_ctx, [DraftViolation("坏", code="empty_text", label="unit E1U01")])
@@ -995,7 +1120,10 @@ async def test_generate_episode_script_blocked_by_prompt_authoring_draft(fake_ct
 
 
 async def test_generate_episode_script_not_blocked_by_reference_script_plan_draft(fake_ctx: ToolHarness) -> None:
-    """编写只读正式剧本：参考生视频脚本规划的待修复草稿在场不阻塞编写，草稿原样保留。"""
+    """Authoring only reads the final script: an invalid draft of the reference-to-video script plan does not block
+    authoring, and the draft is kept as is.
+
+    编写只读正式剧本：参考生视频脚本规划的待修复草稿在场不阻塞编写，草稿原样保留。"""
     rv_project(fake_ctx)
     _write_rv_quarantine(fake_ctx)
 
@@ -1009,7 +1137,10 @@ async def test_generate_episode_script_not_blocked_by_reference_script_plan_draf
 
 
 async def test_generate_episode_script_preserves_editable_draft_without_violations(fake_ctx: ToolHarness) -> None:
-    """可编辑草稿没有违约报告，编写入口应引导校验晋升而不是要求凭空修改。"""
+    """An editable draft has no violation report; the authoring entry should guide to validate and promote instead of
+    asking for edits out of nowhere.
+
+    可编辑草稿没有违约报告，编写入口应引导校验晋升而不是要求凭空修改。"""
     rv_project(fake_ctx)
     _write_rv_formal_script(fake_ctx, "@[张三] 起身")
     _write_prompt_authoring_draft(fake_ctx, [])
@@ -1023,7 +1154,10 @@ async def test_generate_episode_script_preserves_editable_draft_without_violatio
 
 
 async def test_generate_episode_script_quarantine_precedes_missing_formal_script(fake_ctx: ToolHarness) -> None:
-    """编写草稿在场而正式剧本缺失：先报草稿待处理，不把 Agent 引回重跑脚本规划。"""
+    """Authoring draft present while the final script is missing: report the pending draft first, do not send the Agent back
+    to rerun the script plan.
+
+    编写草稿在场而正式剧本缺失：先报草稿待处理，不把 Agent 引回重跑脚本规划。"""
     rv_project(fake_ctx)
     _write_prompt_authoring_draft(fake_ctx, [DraftViolation("坏", code="empty_text", label="unit E1U01")])
     assert not (fake_ctx.project_path / "scripts" / "episode_1.json").exists()
@@ -1036,23 +1170,33 @@ async def test_generate_episode_script_quarantine_precedes_missing_formal_script
 
 
 async def test_generate_episode_script_ignores_quarantine_after_mode_switch(fake_ctx: ToolHarness) -> None:
-    """切走参考路径后残留的草稿与新路径无关：非参考路径不清它们，仍判会把该集永久卡死。"""
+    """Drafts left after switching off the reference path are unrelated to the new path: non-reference paths do not clear
+    them, and still blocking on them would leave the episode stuck forever.
+
+    切走参考路径后残留的草稿与新路径无关：非参考路径不清它们，仍判会把该集永久卡死。"""
     rv_project(fake_ctx, generation_mode="storyboard")
     _write_rv_quarantine(fake_ctx)
 
     out = await run_declared_tool("generate_episode_script", fake_ctx, {"episode_id": 1})
     assert out.problem is not None
+    # Stopped at the regular 'no final script yet' check, not at the reference path's draft
     # 卡在「尚无正式脚本」这道常规校验上，而不是参考路径的草稿
     assert "待处理的提示词编写草稿" not in said(out)
 
 
+# ---------------------------------------------------------------------------
+# Fetch-edit and promotion loop for drama script_plan
+# ---------------------------------------------------------------------------
 # ---------------------------------------------------------------------------
 # drama script_plan 的取回编辑与晋升闭环
 # ---------------------------------------------------------------------------
 
 
 async def test_promote_drama_script_plan_rederives_needs_replan(fake_ctx: ToolHarness) -> None:
-    """needs_replan 由晋升侧按台词准入重新派生，不取草稿里的值——它是机器判据，
+    """needs_replan is re-derived on the promotion side from dialogue admission, not taken from the draft -- it is a machine
+    criterion; once a hand-written value is trusted, later replanning would miss scenes that really need replanning.
+
+    needs_replan 由晋升侧按台词准入重新派生，不取草稿里的值——它是机器判据，
     手写值一旦被采信，后续重规划会漏掉真正需要重排的场景。"""
     drama_project(fake_ctx)
     write_drama_script_plan(fake_ctx, [drama_scene()])
@@ -1075,7 +1219,10 @@ async def test_promote_drama_script_plan_rederives_needs_replan(fake_ctx: ToolHa
 
 
 async def test_promote_drama_script_plan_returns_a_receipt_with_statistics(fake_ctx: ToolHarness) -> None:
-    """drama 晋升回执与产出回执同格式：Agent 两次都按同一份统计段读结果。"""
+    """The drama promotion receipt has the same format as the production receipt: the Agent reads results from the same
+    statistics section both times.
+
+    drama 晋升回执与产出回执同格式：Agent 两次都按同一份统计段读结果。"""
     drama_project(fake_ctx)
     write_drama_script_plan(fake_ctx, [drama_scene()])
 
@@ -1089,14 +1236,17 @@ async def test_promote_drama_script_plan_returns_a_receipt_with_statistics(fake_
 
 
 async def test_promote_drama_script_plan_reports_schema_breach_without_writing(fake_ctx: ToolHarness) -> None:
-    """草稿被改坏时正式文件不写：草稿留在场、按 violations 继续改再晋升，不丢内容也不污染正式文件。"""
+    """When the draft is broken the official file is not written: the draft stays, keep editing per violations and promote;
+    no content is lost and the official file is not polluted.
+
+    草稿被改坏时正式文件不写：草稿留在场、按 violations 继续改再晋升，不丢内容也不污染正式文件。"""
     drama_project(fake_ctx)
     write_drama_script_plan(fake_ctx, [drama_scene()])
     before = drama_script_plan_path(fake_ctx).read_text(encoding="utf-8")
 
     await open_drama_for_edit(fake_ctx, source="source/episode_1.txt")
     envelope = read_drama_quarantine(fake_ctx)
-    envelope["content"]["scenes"][0]["duration_seconds"] = 7  # 不在档位内
+    envelope["content"]["scenes"][0]["duration_seconds"] = 7  # Not in the tiers / 不在档位内
     drama_quarantine_path(fake_ctx).write_text(json.dumps(envelope, ensure_ascii=False), encoding="utf-8")
 
     out = await promote_drama(fake_ctx)
@@ -1110,7 +1260,10 @@ async def test_promote_drama_script_plan_reports_schema_breach_without_writing(f
 async def test_promote_drama_script_plan_reports_video_request_facts_problem(
     fake_ctx: ToolHarness, set_video_request_facts
 ) -> None:
-    """晋升重判时视频请求事实解析不出：拒绝晋升并带问题码与参数，草稿留在场。"""
+    """Video request facts cannot be resolved at promotion re-check: promotion is refused with the problem code and
+    parameters, the draft stays.
+
+    晋升重判时视频请求事实解析不出：拒绝晋升并带问题码与参数，草稿留在场。"""
     drama_project(fake_ctx)
     write_drama_script_plan(fake_ctx, [drama_scene()])
     await open_drama_for_edit(fake_ctx, source="source/episode_1.txt")
@@ -1126,7 +1279,10 @@ async def test_promote_drama_script_plan_reports_video_request_facts_problem(
 
 
 async def test_promote_drama_script_plan_aborts_on_concurrent_write(fake_ctx: ToolHarness) -> None:
-    """取回与晋升之间正式文件被别的写入方改过 → 中止并报冲突，不静默覆盖对方的保存。"""
+    """Official file changed by another writer between fetch and promotion -> abort and report a conflict, do not silently
+    overwrite the other side's save.
+
+    取回与晋升之间正式文件被别的写入方改过 → 中止并报冲突，不静默覆盖对方的保存。"""
     drama_project(fake_ctx)
     write_drama_script_plan(fake_ctx, [drama_scene()])
 
@@ -1142,7 +1298,10 @@ async def test_promote_drama_script_plan_aborts_on_concurrent_write(fake_ctx: To
 
 
 async def test_generate_episode_script_not_blocked_by_drama_script_plan_draft(fake_ctx: ToolHarness) -> None:
-    """drama 脚本规划的待修复草稿在场不阻塞编写：编写的输入是正式剧本，草稿原样保留。"""
+    """An invalid draft of the drama script plan does not block authoring: authoring's input is the final script; the draft
+    is kept as is.
+
+    drama 脚本规划的待修复草稿在场不阻塞编写：编写的输入是正式剧本，草稿原样保留。"""
     drama_project(fake_ctx)
     write_drama_script_plan(fake_ctx, [drama_scene()])
     await open_drama_for_edit(fake_ctx, source="source/episode_1.txt")
@@ -1158,7 +1317,12 @@ async def test_generate_episode_script_not_blocked_by_drama_script_plan_draft(fa
 
 
 async def test_normalize_drama_script_clears_quarantine_on_regeneration(fake_ctx: ToolHarness, monkeypatch) -> None:
-    """重新规范化是刻意的整份重建，与参考生视频的重拆分同口径：正式文件换成新产物的同一临界区内
+    """Re-normalizing is a deliberate full rebuild, same as the reference-to-video re-split: clear the previous round's draft
+    in the same critical section where the official file is replaced by the new artifact. Keeping it would leave content
+    review and prompt_authoring blocked on superseded content, and the draft's baseline fingerprint no longer matches, so
+    promotion would only keep reporting conflicts -- the Agent would have no other way out.
+
+    重新规范化是刻意的整份重建，与参考生视频的重拆分同口径：正式文件换成新产物的同一临界区内
     清掉上一轮草稿。留着它会让内容确认与 prompt_authoring 一直阻塞在一份已被取代的内容上，而草稿记下的基线
     指纹此刻也对不上，晋升只会反复报冲突——Agent 没有第二条出路。"""
 
@@ -1181,7 +1345,9 @@ async def test_normalize_drama_script_clears_quarantine_on_regeneration(fake_ctx
 
 
 async def test_normalize_drama_script_serializes_commit_with_draft_edits(fake_ctx: ToolHarness, monkeypatch) -> None:
-    """重生成的正式文件提交与草稿 patch/promote 共用草稿锁，避免交叉覆盖。"""
+    """Committing the regenerated official file shares the draft lock with draft patch/promote, avoiding cross overwrites.
+
+    重生成的正式文件提交与草稿 patch/promote 共用草稿锁，避免交叉覆盖。"""
 
     drama_project(fake_ctx)
     write_drama_script_plan(fake_ctx, [drama_scene()])
@@ -1312,6 +1478,9 @@ async def test_normalize_drama_script_preserves_output_when_formal_changes_durin
 
 
 # ---------------------------------------------------------------------------
+# Fetch-edit and promotion loop for narration script_plan
+# ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
 # narration script_plan 的取回编辑与晋升闭环
 # ---------------------------------------------------------------------------
 
@@ -1319,7 +1488,13 @@ async def test_normalize_drama_script_preserves_output_when_formal_changes_durin
 async def test_split_narration_segments_quarantines_violation_instead_of_discarding(
     fake_ctx: ToolHarness, monkeypatch
 ) -> None:
-    """违约产出落草稿而非丢弃：正式文件不写，报告带违约类与分镜定位，草稿里是这次的产出。
+    """Violating output goes to a draft instead of being discarded: the official file is not written, the report carries the
+    violation class and shot location, and the draft holds this output.
+
+    Discard-and-redraw both burns money and does not converge (the same model on the same source likely repeats the same
+    class of error); the whole point of this mechanism is to let the Agent fix this already-paid output in place.
+
+    违约产出落草稿而非丢弃：正式文件不写，报告带违约类与分镜定位，草稿里是这次的产出。
 
     丢弃重抽既烧钱又不收敛（同一模型对同一份原文大概率再犯同一类错），本机制的全部要点就是
     让 Agent 就地改这份已付费的产出。
@@ -1344,12 +1519,17 @@ async def test_split_narration_segments_quarantines_violation_instead_of_discard
     assert envelope["kind"] == QUARANTINE_KIND_NARRATION_SCRIPT_PLAN
     assert envelope["content"]["segments"][0]["segment_id"] == "E1S01"
     assert envelope["meta"]["source"] == "source/episode_1.txt"
+    # The official file does not exist now, so the baseline is null -- if another writer has created it by the time this
+    # draft is repaired and promoted, the baseline comparison reports a conflict.
     # 正式文件此刻不存在，基线即 null——这份草稿修好晋升时若已被别的写入方建出来，按基线比对报冲突。
     assert envelope["meta"]["base_fingerprint"] is None
 
 
 async def test_split_narration_segments_clears_quarantine_on_regeneration(fake_ctx: ToolHarness, monkeypatch) -> None:
-    """重跑拆分成功后清掉上一轮的草稿：正式文件已是新产物，旧草稿留着只会让内容确认与 prompt_authoring 继续
+    """After a successful split rerun clear the previous round's draft: the official file is already the new artifact, and
+    keeping the old draft would only leave content review and prompt_authoring blocked on superseded content.
+
+    重跑拆分成功后清掉上一轮的草稿：正式文件已是新产物，旧草稿留着只会让内容确认与 prompt_authoring 继续
     阻塞在一份已被取代的内容上。"""
 
     nr_source(fake_ctx)
@@ -1401,7 +1581,10 @@ async def test_promote_narration_script_plan_rejects_segment_id_from_another_epi
 
 
 async def test_promote_narration_script_plan_reports_schema_breach_without_writing(fake_ctx: ToolHarness) -> None:
-    """草稿被改到过不了产出时那份 schema：报告刷新、正式文件不写，草稿保留 Agent 手里那份原样内容。"""
+    """Draft edited so it no longer passes the production-time schema: report refreshed, official file not written, the
+    draft keeps the Agent's content verbatim.
+
+    草稿被改到过不了产出时那份 schema：报告刷新、正式文件不写，草稿保留 Agent 手里那份原样内容。"""
     nr_source(fake_ctx)
     write_nr_script_plan(fake_ctx, [nr_segment("E1S01", 4, _RV_NOVEL)])
     await open_nr_for_edit(fake_ctx, source="source/episode_1.txt")
@@ -1420,7 +1603,10 @@ async def test_promote_narration_script_plan_reports_schema_breach_without_writi
 
 
 async def test_promote_narration_script_plan_aborts_on_concurrent_write(fake_ctx: ToolHarness) -> None:
-    """取回后正式文件被别的写入方改过：晋升中止、报冲突让 Agent 合并，不静默覆盖。"""
+    """Official file changed by another writer after fetch: promotion aborts and reports a conflict for the Agent to merge,
+    no silent overwrite.
+
+    取回后正式文件被别的写入方改过：晋升中止、报冲突让 Agent 合并，不静默覆盖。"""
     nr_source(fake_ctx)
     write_nr_script_plan(fake_ctx, [nr_segment("E1S01", 4, _RV_NOVEL)])
     await open_nr_for_edit(fake_ctx, source="source/episode_1.txt")
@@ -1436,7 +1622,10 @@ async def test_promote_narration_script_plan_aborts_on_concurrent_write(fake_ctx
 
 
 async def test_promote_narration_script_plan_revalidates_against_current_source(fake_ctx: ToolHarness) -> None:
-    """晋升按现值重判原文覆盖：草稿里改写过的正文即便结构合法也拒，正式文件不被污染。"""
+    """Promotion re-checks source coverage against current values: text rewritten in the draft is refused even if
+    structurally valid, and the official file is not polluted.
+
+    晋升按现值重判原文覆盖：草稿里改写过的正文即便结构合法也拒，正式文件不被污染。"""
     nr_source(fake_ctx)
     write_nr_script_plan(fake_ctx, [nr_segment("E1S01", 4, _RV_NOVEL)])
     await open_nr_for_edit(fake_ctx, source="source/episode_1.txt")
@@ -1454,7 +1643,13 @@ async def test_promote_narration_script_plan_revalidates_against_current_source(
 
 
 async def test_promote_narration_script_plan_names_source_scope_on_coverage_violation(fake_ctx: ToolHarness) -> None:
-    """取回时指定了别集的 source：一字未改的草稿也判不过，报告须指名范围与出路。
+    """Another episode's source was given at fetch: even an untouched draft fails, and the report must name the scope and
+    the way out.
+
+    While the draft exists it cannot be fetched again; the report must guide the Agent to update the source scope via
+    patch_draft.
+
+    取回时指定了别集的 source：一字未改的草稿也判不过，报告须指名范围与出路。
 
     草稿在场时不能重新取回，报告须指引 Agent 通过 patch_draft 更新源文范围。
     """
@@ -1492,7 +1687,10 @@ async def test_promote_narration_script_plan_names_source_scope_on_coverage_viol
 async def test_promote_narration_script_plan_revalidates_a_default_source_draft_against_the_episode_file(
     fake_ctx: ToolHarness,
 ) -> None:
-    """取回时未指定 source（meta.source 为 null）时按本集派生源文重判，不受 source/ 下其他文件影响。"""
+    """When no source was given at fetch (meta.source is null), re-check against this episode's derived source, unaffected
+    by other files under source/.
+
+    取回时未指定 source（meta.source 为 null）时按本集派生源文重判，不受 source/ 下其他文件影响。"""
     nr_source(fake_ctx)
     (fake_ctx.project_path / "source" / "novel.txt").write_text("整本小说原文", encoding="utf-8")
     (fake_ctx.project_path / "source" / "episode_2.txt").write_text("李四走进院子", encoding="utf-8")
@@ -1506,7 +1704,10 @@ async def test_promote_narration_script_plan_revalidates_a_default_source_draft_
 
 
 async def test_promote_narration_script_plan_returns_a_receipt_with_statistics(fake_ctx: ToolHarness) -> None:
-    """narration 晋升回执与拆分回执同格式：Agent 两次都按同一份统计段读结果。"""
+    """The narration promotion receipt has the same format as the split receipt: the Agent reads results from the same
+    statistics section both times.
+
+    narration 晋升回执与拆分回执同格式：Agent 两次都按同一份统计段读结果。"""
     nr_source(fake_ctx)
     write_nr_script_plan(fake_ctx, [nr_segment("E1S01", 4, _RV_NOVEL)])
     await open_nr_for_edit(fake_ctx, source="source/episode_1.txt")
@@ -1521,7 +1722,10 @@ async def test_promote_narration_script_plan_returns_a_receipt_with_statistics(f
 
 
 async def test_promote_narration_script_plan_keeps_segment_ids_past_99(fake_ctx: ToolHarness) -> None:
-    """编号只升不降，过百后服务端发出 E1S100；取回再晋升时重判不把它当作格式违约，编号原样保留。"""
+    """Numbers only go up; past 100 the server issues E1S100; re-checking on fetch-and-promote does not treat it as a format
+    violation, the number is kept.
+
+    编号只升不降，过百后服务端发出 E1S100；取回再晋升时重判不把它当作格式违约，编号原样保留。"""
     segment_id = format_item_id(1, "segments", 100)
     nr_source(fake_ctx)
     write_nr_script_plan(fake_ctx, [nr_segment(segment_id, 4, _RV_NOVEL)])
@@ -1535,7 +1739,10 @@ async def test_promote_narration_script_plan_keeps_segment_ids_past_99(fake_ctx:
 
 
 async def test_generate_episode_script_not_blocked_by_narration_script_plan_draft(fake_ctx: ToolHarness) -> None:
-    """narration 脚本规划的待修复草稿在场不阻塞编写：编写的输入是正式剧本，草稿原样保留。"""
+    """An invalid draft of the narration script plan does not block authoring: authoring's input is the final script; the
+    draft is kept as is.
+
+    narration 脚本规划的待修复草稿在场不阻塞编写：编写的输入是正式剧本，草稿原样保留。"""
     nr_source(fake_ctx)
     write_nr_script_plan(fake_ctx, [nr_segment("E1S01", 4, _RV_NOVEL)])
     write_quarantine(

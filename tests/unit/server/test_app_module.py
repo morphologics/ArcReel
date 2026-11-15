@@ -71,7 +71,9 @@ class TestAppModule:
 
     @pytest.fixture
     def startup_state_reset(self):
-        """用例改动的进程级启动状态（.env 读取记录、签名密钥缓存）在结束后清掉。"""
+        """Process-level startup state changed by the cases (.env read record, signing key cache) is cleared afterwards.
+
+        用例改动的进程级启动状态（.env 读取记录、签名密钥缓存）在结束后清掉。"""
         import server.auth as auth_module
         from lib.infra import env_init
 
@@ -83,7 +85,9 @@ class TestAppModule:
     @pytest.mark.asyncio
     @pytest.mark.usefixtures("startup_state_reset")
     async def test_lifespan_persists_token_secret_and_reports_env_divergence(self, monkeypatch, caplog, tmp_path):
-        """启动时签名密钥落到数据目录；挂载的 .env 与进程环境不一致时只告警键名。"""
+        """At startup the signing key lands in the data directory; when the mounted .env differs from the process environment, only the key names are warned about.
+
+        启动时签名密钥落到数据目录；挂载的 .env 与进程环境不一致时只告警键名。"""
         import server.auth as auth_module
         from lib.infra import env_init
         from lib.infra.data_root_layout import DataRootLayout
@@ -92,7 +96,7 @@ class TestAppModule:
         env_file = tmp_path / ".env"
         env_file.write_text("ARCREEL_TEST_EDITED=value-from-file\n", encoding="utf-8")
         monkeypatch.setenv("ARCREEL_TEST_EDITED", "value-from-container")
-        monkeypatch.delenv("PYTHON_DOTENV_DISABLED", raising=False)  # 根 conftest 关掉了 .env 读取
+        monkeypatch.delenv("PYTHON_DOTENV_DISABLED", raising=False)  # The root conftest turned off .env reading / 根 conftest 关掉了 .env 读取
         env_init.load_env_file(env_file)
         stub_lifespan_dependencies(monkeypatch)
 
@@ -111,7 +115,11 @@ class TestAppModule:
 
 
 class TestListenEnvVars:
-    """``LISTEN_HOST`` / ``LISTEN_PORT`` 的解析仅在 ``__main__`` 块被 uvicorn 消费，
+    """Parsing of ``LISTEN_HOST`` / ``LISTEN_PORT`` is only consumed by uvicorn in the ``__main__`` block,
+    and importing ``server.app`` does not trigger it; the shared module-level ``_resolve_listen_addr()`` function
+    tests the same production parsing logic, avoiding drift between test and production code.
+
+    ``LISTEN_HOST`` / ``LISTEN_PORT`` 的解析仅在 ``__main__`` 块被 uvicorn 消费，
     导入 ``server.app`` 不会触发；通过共用的模块级 ``_resolve_listen_addr()`` 函数
     测试同一份生产解析逻辑，避免测试 / 生产代码漂移。"""
 
@@ -126,14 +134,18 @@ class TestListenEnvVars:
         assert app_module._resolve_listen_addr() == ("127.0.0.1", 18080)
 
     def test_empty_listen_port_falls_back_to_default(self, monkeypatch):
-        """`.env` 误写 `LISTEN_PORT=`（空值）不应让 `int("")` 抛 ValueError。"""
+        """A mistaken `LISTEN_PORT=` (empty value) in `.env` should not make `int("")` raise ValueError.
+
+        `.env` 误写 `LISTEN_PORT=`（空值）不应让 `int("")` 抛 ValueError。"""
         monkeypatch.setenv("LISTEN_HOST", "")
         monkeypatch.setenv("LISTEN_PORT", "")
         assert app_module._resolve_listen_addr() == ("0.0.0.0", 1241)
 
 
 class TestMainEntry:
-    """``python -m server.app`` 的 uvicorn 参数：reload 要求导入字符串，Windows 上不开 reload。"""
+    """uvicorn arguments of ``python -m server.app``: reload requires an import string, and reload is not enabled on Windows.
+
+    ``python -m server.app`` 的 uvicorn 参数：reload 要求导入字符串，Windows 上不开 reload。"""
 
     def test_reload_uses_import_string_and_limits_watched_dirs(self, monkeypatch):
         monkeypatch.setenv("LISTEN_HOST", "127.0.0.1")
@@ -163,7 +175,9 @@ class TestMainEntry:
 @pytest.mark.asyncio
 @pytest.mark.parametrize("path", ["/mcp", "/mcp/"])
 async def test_remote_mcp_paths_reach_host_without_redirect(path: str) -> None:
-    """规范端点与兼容入口都直接落到远程 MCP 宿主；未进入 lifespan 时宿主固定回 503。"""
+    """Both the canonical endpoint and the compatibility entry land directly on the remote MCP host; before lifespan is entered the host always returns 503.
+
+    规范端点与兼容入口都直接落到远程 MCP 宿主；未进入 lifespan 时宿主固定回 503。"""
     transport = httpx.ASGITransport(app=app_module.app)
     async with httpx.AsyncClient(transport=transport, base_url="http://internal") as client:
         response = await client.post(path, follow_redirects=False)
@@ -173,7 +187,9 @@ async def test_remote_mcp_paths_reach_host_without_redirect(path: str) -> None:
 
 
 def _recording_app(content_type: str, body: bytes, events: list[str]):
-    """先发响应头再发 body 的最小 ASGI 应用；发 body 前记录响应头是否已到达客户端。"""
+    """Minimal ASGI app that sends response headers before the body; before sending the body it records whether the headers have reached the client.
+
+    先发响应头再发 body 的最小 ASGI 应用；发 body 前记录响应头是否已到达客户端。"""
 
     async def app(scope, receive, send):
         await send(
@@ -228,7 +244,9 @@ async def test_compression_skips_media():
 @pytest.mark.parametrize("accept", ["text/event-stream", "*/*"])
 @pytest.mark.parametrize("accept_encoding", ["gzip", ""])
 async def test_event_stream_headers_reach_the_client_before_the_first_event(accept: str, accept_encoding: str):
-    """事件流按响应类型识别，与请求是否声明 Accept 无关：响应头在首个事件前送达，body 原样透传。"""
+    """The event stream is recognized by response type, regardless of whether the request declared Accept: headers arrive before the first event, and the body is passed through as is.
+
+    事件流按响应类型识别，与请求是否声明 Accept 无关：响应头在首个事件前送达，body 原样透传。"""
     events: list[str] = []
     body = b"data: hello\n\n" * 100
     messages = await _call(
@@ -241,7 +259,9 @@ async def test_event_stream_headers_reach_the_client_before_the_first_event(acce
 
 
 async def test_excluded_media_sent_by_pathsend_gets_a_single_response_start():
-    """媒体响应头已即时放行时，pathsend 不再重复发送响应头。"""
+    """When media response headers have already been released immediately, pathsend does not send the headers again.
+
+    媒体响应头已即时放行时，pathsend 不再重复发送响应头。"""
     events: list[str] = []
 
     async def app(scope, receive, send):

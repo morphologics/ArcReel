@@ -31,6 +31,7 @@ class TestProjectsRouter:
             listed = client.get("/api/v1/projects")
             assert listed.status_code == 200
             names = [p["name"] for p in listed.json()["projects"]]
+            # "empty" without a project.json is not a project and is not listed
             # 没有 project.json 的 "empty" 不是项目，不列出
             assert names == ["ready", "broken"]
             broken = next(p for p in listed.json()["projects"] if p["name"] == "broken")
@@ -118,7 +119,9 @@ class TestProjectsRouter:
         ]
 
     def test_create_does_not_record_a_project_level_source_kind(self, tmp_path, monkeypatch):
-        """源文件类型随源文件记录：创建项目不接受、也不写入项目级类型。"""
+        """The source kind is recorded with the source file: project creation neither accepts nor writes a project-level kind.
+
+        源文件类型随源文件记录：创建项目不接受、也不写入项目级类型。"""
         fake_pm = _FakePM(tmp_path)
         client = build_projects_client(monkeypatch, fake_pm)
         with client:
@@ -141,11 +144,15 @@ class TestProjectsRouter:
         with client:
             resp = client.patch("/api/v1/projects/ready", json={"source_kind": "screenplay"})
             assert resp.status_code == 200
+            # The substantive guarantee of "does not accept the field": the value in the request body must not land in the
+            # project data
             # 「不接受该字段」的实质保证：请求体里的值不得落进项目数据
             assert "source_kind" not in fake_pm.project_data["ready"]
 
     def test_project_details_report_whether_each_derivative_is_referenced(self, tmp_path, monkeypatch):
-        """读取项目时衍生附 ``referenced``：读时计算、不落盘（docs/adr/0072）。"""
+        """When reading a project, derivatives carry ``referenced``: computed on read, not persisted (docs/adr/0072).
+
+        读取项目时衍生附 ``referenced``：读时计算、不落盘（docs/adr/0072）。"""
         fake_pm = _FakePM(tmp_path)
         fake_pm.project_data["ready"]["characters"] = {
             "阿岚": {"description": "少女", "derivatives": {"战斗装": {"description": "重甲"}, "便装": {}}}
@@ -190,6 +197,7 @@ class TestProjectsRouter:
             assert ignored_mode.status_code == 200
             assert "content_mode" not in fake_pm.project_data["ready"]
 
+            # aspect_ratio can now be changed (string); a dict type will be rejected by Pydantic (422)
             # aspect_ratio 现在允许修改（字符串），dict 类型将被 Pydantic 拒绝（422）
             rejected_ratio_dict = client.patch(
                 "/api/v1/projects/ready",
@@ -197,6 +205,7 @@ class TestProjectsRouter:
             )
             assert rejected_ratio_dict.status_code == 422
 
+            # A string aspect_ratio update should succeed
             # aspect_ratio 字符串更新应成功
             updated_ratio = client.patch(
                 "/api/v1/projects/ready",

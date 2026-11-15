@@ -1,4 +1,9 @@
-"""单张重生一张资产图的连带影响：只数现在是现行、且生成输入里带着这张资产图的产物。
+"""Knock-on effects of regenerating a single asset sheet: count only artifacts that are current now and whose
+generation inputs include this asset sheet.
+
+The casting project fixture is in ``conftest.py`` in the same directory.
+
+单张重生一张资产图的连带影响：只数现在是现行、且生成输入里带着这张资产图的产物。
 
 选角项目 fixture 见同目录 ``conftest.py``。
 """
@@ -10,6 +15,7 @@ import pytest
 from lib.project.project_manager import ProjectManager
 from server.services.currency.asset_regeneration_impact import AssetRegenerationImpact, asset_regeneration_impact
 
+#: Matches the project name of the casting project in ``conftest.py``.
 #: 与 ``conftest.py`` 选角项目的项目名一致。
 PROJECT = "demo"
 
@@ -32,7 +38,10 @@ def test_derivative_impact_counts_only_its_compound_references(current_cast_arti
 
 
 def test_reports_whether_the_sheet_itself_is_stale_now(current_cast_artifacts: ProjectManager) -> None:
-    """界面据此决定是否先确认连带影响，不依赖可能滞后的本地状态行。"""
+    """The UI uses this to decide whether to confirm knock-on effects first, without relying on a possibly lagging
+    local status row.
+
+    界面据此决定是否先确认连带影响，不依赖可能滞后的本地状态行。"""
     impact = asset_regeneration_impact(current_cast_artifacts, PROJECT, "character", "Alice", derivative_name="雨夜")
 
     assert impact.stale is True

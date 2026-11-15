@@ -1,4 +1,6 @@
-"""宫格 4K 门控的分辨率取档。"""
+"""Resolution tier selection for the grid 4K gate.
+
+宫格 4K 门控的分辨率取档。"""
 
 from typing import Any, cast
 
@@ -10,7 +12,10 @@ from lib.script.grid.layout import GRID_FALLBACK_RESOLUTION, large_grid_allowed
 
 
 class _FakeResolver:
-    """只实现门控用到的两个方法；记录被问到的能力槽与身份。"""
+    """Implements only the two methods the gate uses; records the capability slot and identity it was asked
+    about.
+
+    只实现门控用到的两个方法；记录被问到的能力槽与身份。"""
 
     def __init__(self, resolution: str | None = None, raises: bool = False):
         self._resolution = resolution
@@ -30,7 +35,10 @@ class _FakeResolver:
 
 
 def _as_resolver(fake: _FakeResolver) -> ConfigResolver:
-    """测试边界的一次显式转换：替身只实现门控用到的两个方法，其余接口不参与本模块。"""
+    """One explicit conversion at the test boundary: the stand-in only implements the two methods the gate
+    uses, and the other interfaces play no part in this module.
+
+    测试边界的一次显式转换：替身只实现门控用到的两个方法，其余接口不参与本模块。"""
     return cast(ConfigResolver, fake)
 
 
@@ -49,6 +57,8 @@ async def test_resolution_drives_the_gate(resolution: str | None):
 
 
 async def test_resolution_failure_blocks_large_grid():
+    # When no image provider can be resolved, treat it as unconfigured: the gate tightens, so large grids are
+    # not allowed
     # 解析不出图像供应商时按未配置处理：门控是收紧方向，不放行大宫格
     resolver = _FakeResolver(raises=True)
     resolved = await resolve_image_resolution(_as_resolver(resolver), {})
@@ -59,10 +69,11 @@ async def test_resolution_failure_blocks_large_grid():
 @pytest.mark.parametrize(
     ("provider_id", "model_id", "expected"),
     [
+        # The catalog only declares 1080p: do not send the fallback tier, leave it to the upstream default
         ("vidu", "viduq1", None),  # 目录只声明 1080p：不发保底档，交上游默认
-        ("vidu", "viduq2", GRID_FALLBACK_RESOLUTION),  # 目录含保底档
-        ("ark", "doubao-seedream-4-5", GRID_FALLBACK_RESOLUTION),  # 目录未声明档位
-        ("custom-1", "any-model", GRID_FALLBACK_RESOLUTION),  # 不在目录中
+        ("vidu", "viduq2", GRID_FALLBACK_RESOLUTION),  # The catalog includes the fallback tier / 目录含保底档
+        ("ark", "doubao-seedream-4-5", GRID_FALLBACK_RESOLUTION),  # The catalog declares no tiers / 目录未声明档位
+        ("custom-1", "any-model", GRID_FALLBACK_RESOLUTION),  # Not in the catalog / 不在目录中
     ],
 )
 def test_unset_grid_size_follows_catalog(provider_id: str, model_id: str, expected: str | None):

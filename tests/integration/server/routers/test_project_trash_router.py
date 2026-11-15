@@ -1,4 +1,7 @@
-"""项目回收站：文件视图只能删除未引用文件，删除成为一条记录；恢复从不覆盖现有文件；过期记录被清除。"""
+"""Project trash: the file view can only delete unreferenced files, and deletion becomes a record; restore never
+overwrites existing files; expired records are purged.
+
+项目回收站：文件视图只能删除未引用文件，删除成为一条记录；恢复从不覆盖现有文件；过期记录被清除。"""
 
 from __future__ import annotations
 
@@ -77,6 +80,7 @@ def _records(trash_client) -> list[dict]:
 
 
 def test_deleting_a_referenced_file_is_rejected(trash_client, trash_project_dir):
+    # Source files not included in the whole source are refused too: they are handled by the episodes view
     # 未纳入整本源文的源文件同样拒绝：它交给分集视图处理
     for path in ("storyboards/scene_E1S01.png", "project.json", "scripts/episode_1.json", "source/extra.txt"):
         response = trash_client.delete(FILES, params={"path": path})
@@ -234,6 +238,7 @@ def test_a_multi_file_record_is_restored_whole_or_not_at_all(trash_client, trash
     (trash_project_dir / "extras/b.txt").write_text("b", encoding="utf-8")
     with project_metadata_lock(trash_project_dir):
         record = project_trash.record_deletion(trash_project_dir, {"kind": "bundle"}, ["notes.txt", "extras/b.txt"])
+    # After deletion a directory on the path was replaced by a symlink: the second file has nowhere to land
     # 删除之后途经目录被换成符号链接：第二个文件无处可落
     (tmp_path / "outside").mkdir()
     (trash_project_dir / "extras").rmdir()
@@ -301,7 +306,10 @@ def test_purge_and_empty_remove_records(trash_client):
 
 
 def test_embedded_agent_token_cannot_purge_or_empty(trash_client):
-    """内嵌 Agent 持有本地服务的令牌：彻底删除与清空在服务端拒绝它，不只靠不提供 MCP 工具。"""
+    """The embedded Agent holds the local service token: the server refuses it permanent deletion and emptying, not only
+    by not offering the MCP tools.
+
+    内嵌 Agent 持有本地服务的令牌：彻底删除与清空在服务端拒绝它，不只靠不提供 MCP 工具。"""
     trash_client.delete(FILES, params={"path": "notes.txt"})
     [record] = _records(trash_client)
     trash_client.app.dependency_overrides[get_current_user] = lambda: CurrentUserInfo(
@@ -361,6 +369,8 @@ def test_history_version_moves_to_trash_and_restores_into_version_history(trash_
     assert history["current_version"] == latest["version"]
     back = next(v for v in history["versions"] if v["file"] == restored["path"])
     assert back["prompt"] == "old prompt"
+    # The original version's metadata (generation basis etc.) is added back with the version, otherwise video and audio
+    # versions cannot be selected again after being added back.
     # 原版本的元数据（生成依据等）随版本加回，否则视频、音频版本加回后无法选回。
     assert back["aspect_ratio"] == "9:16"
     assert back["created_at"] == old["created_at"]

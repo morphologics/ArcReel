@@ -1,4 +1,6 @@
-"""_discover_anthropic 的请求路径：base_url 原样保留，只在 path 上追加 /v1/models。"""
+"""Request path of _discover_anthropic: base_url is kept as-is and only /v1/models is appended to the path.
+
+_discover_anthropic 的请求路径：base_url 原样保留，只在 path 上追加 /v1/models。"""
 
 from __future__ import annotations
 
@@ -33,7 +35,10 @@ async def test_discover_keeps_subpath(base_url: str, expected: str) -> None:
 
 @pytest.mark.asyncio
 async def test_discover_retries_with_bearer_after_401() -> None:
-    """只认 Authorization 的网关（火山方舟）：x-api-key 拿 401 后换 Bearer 重试。"""
+    """Gateways that only accept Authorization (Volcengine Ark): after x-api-key gets a 401, retry with
+    Bearer.
+
+    只认 Authorization 的网关（火山方舟）：x-api-key 拿 401 后换 Bearer 重试。"""
     from lib.custom_provider.discovery import _discover_anthropic
 
     with capture_http() as router:
@@ -63,7 +68,9 @@ async def test_discover_retries_with_bearer_after_401() -> None:
     ],
 )
 async def test_discover_refuses_metadata_destinations(base_url: str) -> None:
-    """模型发现与产物下载共用同一道出站目的地校验。"""
+    """Model discovery and artifact download share the same outbound destination check.
+
+    模型发现与产物下载共用同一道出站目的地校验。"""
     from lib.custom_provider.discovery import _discover_anthropic
 
     with capture_http() as router:
@@ -77,7 +84,10 @@ async def test_discover_refuses_metadata_destinations(base_url: str) -> None:
 @pytest.mark.asyncio
 @pytest.mark.parametrize("base_url", ["http://127.0.0.1:11434", "http://192.168.24.7:8000"])
 async def test_discover_keeps_loopback_and_private_destinations(base_url: str) -> None:
-    """自建网关合法地跑在环回与私网上，这道校验不许把它们一并拦掉。"""
+    """Self-hosted gateways legitimately run on loopback and private networks, and this check must not block
+    them as well.
+
+    自建网关合法地跑在环回与私网上，这道校验不许把它们一并拦掉。"""
     from lib.custom_provider.discovery import _discover_anthropic
 
     with capture_http() as router:

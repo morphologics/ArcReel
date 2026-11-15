@@ -1,4 +1,6 @@
-"""v5→v6 目录交换中间目录的命名、磁盘预检与清理。"""
+"""Naming, disk precheck and cleanup of the intermediate directories in the v5->v6 directory swap.
+
+v5→v6 目录交换中间目录的命名、磁盘预检与清理。"""
 
 from __future__ import annotations
 
@@ -55,13 +57,18 @@ def _v5_project(root: Path, name: str) -> Path:
 
 
 def _swap_dir(root: Path, project_name: str, *, rollback: bool) -> Path:
-    """按生产代码的命名端造一个尚未创建的中间目录路径。
+    """Build a not-yet-created intermediate directory path via the production code's naming side.
+
+    The name must come from the naming side: once it drifts from the parsing side, cleanup silently stops
+    working while the tests stay green.
+
+    按生产代码的命名端造一个尚未创建的中间目录路径。
 
     名字必须出自命名端：一旦它与解析端脱钩，清理会静默失效而测试照样绿。"""
     if rollback:
         return new_rollback_dir(root / project_name)
     staging = new_staging_dir(root / project_name)
-    staging.rmdir()  # 命名端连带建目录，交回给各用例自己按需创建
+    staging.rmdir()  # The naming side also creates the directory; hand it back so each test creates it as needed / 命名端连带建目录，交回给各用例自己按需创建
     return staging
 
 
@@ -71,7 +78,10 @@ def _age(path: Path, seconds: float) -> None:
 
 
 def test_cleanup_ignores_dirs_outside_the_naming_convention(tmp_projects: Path) -> None:
-    """`.demo.v6-rollback-deadbeef` 等后缀不是 uuid4().hex 定长产物，不属于本约定，清理端不得删除。"""
+    """Suffixes like `.demo.v6-rollback-deadbeef` are not fixed-length uuid4().hex output and do not belong
+    to this convention, so the cleanup side must not delete them.
+
+    `.demo.v6-rollback-deadbeef` 等后缀不是 uuid4().hex 定长产物，不属于本约定，清理端不得删除。"""
     _write_project(tmp_projects, "demo", {"schema_version": CURRENT_SCHEMA_VERSION, "name": "demo"})
     lookalikes = [
         tmp_projects / name
@@ -102,13 +112,18 @@ def test_swap_dir_names_round_trip_project_names_containing_dots() -> None:
 
 
 def test_runtime_staging_dir_name_is_parsable_by_cleanup(tmp_projects: Path) -> None:
-    """命名端建出的 staging 目录必须能被清理端反解，否则崩溃遗留的整树副本永远回收不掉。"""
+    """The staging directory created by the naming side must be parsable by the cleanup side, otherwise
+    full-tree copies left by a crash can never be reclaimed.
+
+    命名端建出的 staging 目录必须能被清理端反解，否则崩溃遗留的整树副本永远回收不掉。"""
     _write_project(tmp_projects, "demo", {"schema_version": CURRENT_SCHEMA_VERSION, "name": "demo"})
     staging = new_staging_dir(tmp_projects / "demo")
     rollback = new_rollback_dir(tmp_projects / "demo")
 
     staging_suffix = staging.name.rpartition(".v6-")[2]
     assert staging_project_name(staging.name) == "demo"
+    # The two kinds of intermediate directories have isomorphic suffixes, so the parsing side has a single
+    # rule to rely on.
     # 两类中间目录的后缀同构，反解端才有单一口径可依。
     assert len(staging_suffix) == len(rollback.name.rpartition("rollback-")[2])
 
@@ -119,7 +134,10 @@ def test_runtime_staging_dir_name_is_parsable_by_cleanup(tmp_projects: Path) -> 
 
 
 def test_migration_fails_readably_when_disk_headroom_is_insufficient(tmp_projects: Path, monkeypatch) -> None:
-    """预检不过时项目目录一个字节都不该被写：连迁移前的版本化备份也不落盘。"""
+    """When the precheck fails, not a single byte of the project directory should be written: not even the
+    pre-migration versioned backup is written to disk.
+
+    预检不过时项目目录一个字节都不该被写：连迁移前的版本化备份也不落盘。"""
     project_dir = _v5_project(tmp_projects, "demo")
     before = sorted(entry.name for entry in project_dir.iterdir())
     original = (project_dir / "project.json").read_bytes()
@@ -181,7 +199,10 @@ def test_cleanup_removes_stale_swap_dirs_of_completed_migrations(tmp_projects: P
 
 
 def test_startup_keeps_rollback_dir_while_project_dir_is_missing(tmp_projects: Path) -> None:
-    """项目目录缺失时 rollback 目录是唯一的项目数据：启动期迁移与清理既不改回也不删，留给人工改回。"""
+    """When the project directory is missing, the rollback directory is the only project data: startup
+    migration and cleanup neither move it back nor delete it, leaving that to a human.
+
+    项目目录缺失时 rollback 目录是唯一的项目数据：启动期迁移与清理既不改回也不删，留给人工改回。"""
     rollback = _swap_dir(tmp_projects, "demo", rollback=True)
     rollback.mkdir()
     (rollback / "project.json").write_text(json.dumps({"schema_version": 5}), encoding="utf-8")

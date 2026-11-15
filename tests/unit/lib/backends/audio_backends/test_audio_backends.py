@@ -1,4 +1,7 @@
-"""AudioBackend 家族测试：registry 注册/创建 + DashScopeAudioBackend（mock httpx，同步端点）
+"""AudioBackend family tests: registry register/create + DashScopeAudioBackend (mock httpx, sync endpoint)
++ OpenAIAudioBackend (mock SDK client, /v1/audio/speech) + extract_audio_url.
+
+AudioBackend 家族测试：registry 注册/创建 + DashScopeAudioBackend（mock httpx，同步端点）
 + OpenAIAudioBackend（mock SDK client，/v1/audio/speech）+ extract_audio_url。"""
 
 from __future__ import annotations
@@ -57,7 +60,7 @@ class TestRegistry:
             register_backend("fake-audio-test", lambda **_: marker)
             assert create_backend("fake-audio-test") is marker
         finally:
-            # 清理全局注册表，避免污染读取注册表的其它测试
+            # Clear the global registry so other tests that read it are not polluted. / 清理全局注册表，避免污染读取注册表的其它测试
             audio_registry._BACKEND_FACTORIES.pop("fake-audio-test", None)
 
 
@@ -91,7 +94,12 @@ def _dashscope_audio_routes(
     audio_url: str = _AUDIO_URL,
     synth_url: str = _SYNTH_URL,
 ) -> Generator[_DashScopeRoutes]:
-    """DashScope TTS 的两条出站流：合成 POST 与音频 GET。
+    """The two outbound flows of DashScope TTS: the synthesis POST and the audio GET.
+
+    Intercepted by respx at the transport layer; the assertions target the real serialized request (URL joining,
+    auth headers and body encoding are all covered), not the call arguments recorded by a client stand-in.
+
+    DashScope TTS 的两条出站流：合成 POST 与音频 GET。
 
     走 respx 在 transport 层拦截，断言对象是真实序列化后的请求（URL 拼接、鉴权头、body 编码
     都在断言范围内），而不是客户端替身记录的调用参数。
@@ -131,6 +139,7 @@ class TestDashScopeAudioBackend:
         ids = [v.id for v in voices]
         assert len(ids) == len(set(ids))
         assert all(v.label for v in voices)
+        # The caller (voices endpoint) relies on getting an independent list each time, not one shared mutable object.
         # 调用方（voices 端点）依赖每次返回独立列表，不能是同一份可变共享对象
         assert voices is not b.list_voices()
 
@@ -148,14 +157,14 @@ class TestDashScopeAudioBackend:
         body = request_json(submitted)
         assert body["model"] == "qwen3-tts-flash"
         assert body["input"] == {"text": "你好世界", "voice": "Cherry", "language_type": "Chinese"}
-        # 同步 TTS 不带 async 头
+        # Sync TTS sends no async header. / 同步 TTS 不带 async 头
         assert submitted.headers["Authorization"] == "Bearer sk"
         assert "X-DashScope-Async" not in submitted.headers
-        # 端点：host 派生 /api/v1 + 多模态生成路径
+        # Endpoint: /api/v1 derived from host + the multimodal generation path. / 端点：host 派生 /api/v1 + 多模态生成路径
         assert submitted.url.path == "/api/v1/services/aigc/multimodal-generation/generation"
-        # 下载 URL 命中响应里的 audio.url
+        # The download URL hits audio.url from the response. / 下载 URL 命中响应里的 audio.url
         assert str(only_request(routes.download).url) == _AUDIO_URL
-        # 字节落盘 + 结果字段
+        # Bytes written to disk + result fields. / 字节落盘 + 结果字段
         assert out.read_bytes() == b"RIFFwavbytes"
         assert result.provider == PROVIDER_DASHSCOPE
         assert result.model == "qwen3-tts-flash"
@@ -163,6 +172,7 @@ class TestDashScopeAudioBackend:
         assert result.output_path == out
 
     async def test_speed_param_ignored(self, tmp_path: Path):
+        # speed is only supported by realtime; sync models ignore it (no error, no speed in the request body).
         # speed 仅 realtime 支持，同步模型忽略（不报错、请求体不带 speed）
         from lib.backends.audio_backends.dashscope import DashScopeAudioBackend
 
@@ -177,6 +187,8 @@ class TestDashScopeAudioBackend:
         assert "speech_rate" not in body["input"]
 
     async def test_http_error_raises(self, tmp_path: Path):
+        # 4xx surfaces httpx.HTTPStatusError (same as the other backends) without embedding the response body in the
+        # exception message; the submit is not retryable per status code.
         # 4xx 透出 httpx.HTTPStatusError（与其余 backend 一致），不嵌响应体进异常消息；提交按状态码不可重试
         from lib.backends.audio_backends.dashscope import DashScopeAudioBackend
 
@@ -185,6 +197,7 @@ class TestDashScopeAudioBackend:
             with pytest.raises(httpx.HTTPStatusError) as excinfo:
                 await b.synthesize(AudioSynthesisRequest(text="x", output_path=tmp_path / "e.wav", voice="Cherry"))
 
+        # 4xx fails fast by status_code: the billed synthesis POST is sent only once and does not trigger a download.
         # 4xx 按 status_code fail-fast：计费的合成 POST 只发一次、不连带触发下载
         assert type(excinfo.value) is httpx.HTTPStatusError
         assert "bad request" not in str(excinfo.value)
@@ -192,10 +205,15 @@ class TestDashScopeAudioBackend:
         assert routes.download.call_count == 0
 
     async def test_submit_4xx_with_transient_substring_no_retry(self, tmp_path: Path, poll_clock):
+        # The 4xx error message contains the substring "503" (request URL/task_id): the old string fallback would
+        # misjudge it as retryable until timeout; the new status-code predicate reads only response.status_code and
+        # fails fast on 400 -- the billed synthesis POST is sent once and no download follows.
         # 4xx 错误消息带 "503" 子串（请求 URL/task_id）：旧字符串兜底会据此误判重试到超时，
         # 新状态码谓词只读 response.status_code，按 400 fail-fast——计费的合成 POST 只发一次、不连带下载。
         from lib.backends.audio_backends.dashscope import DashScopeAudioBackend
 
+        # Put 503 in the host so the exception text hits the transient substring -- in reality it is a number
+        # appearing in the request URL / task_id.
         # host 里带 503 让异常文本命中瞬态子串——真实形态是请求 URL / task_id 里出现的数字
         host = "https://dashscope-503.example.com"
         with _dashscope_audio_routes(
@@ -206,6 +224,8 @@ class TestDashScopeAudioBackend:
             with pytest.raises(httpx.HTTPStatusError) as ei:
                 await b.synthesize(AudioSynthesisRequest(text="x", output_path=tmp_path / "e.wav", voice="Cherry"))
 
+        # The exception string really contains the transient substring (the premise for the old fallback's wrong
+        # retry); the new predicate fails fast once based on the status code.
         # 异常字符串确实带瞬态子串（旧兜底据此误判重试的前提）；新谓词按状态码单次 fail-fast
         assert "503" in str(ei.value)
         assert ei.value.response.status_code == 400
@@ -213,6 +233,7 @@ class TestDashScopeAudioBackend:
         assert routes.download.call_count == 0
 
     async def test_download_failure_does_not_rebill_synthesis(self, tmp_path: Path, poll_clock):
+        # A transient download failure retries only the GET, never re-runs the synthesis POST that would bill again.
         # 下载瞬时失败只重试 GET，绝不回头重跑会再次计费的合成 POST。
         from lib.backends.audio_backends.dashscope import DashScopeAudioBackend
 
@@ -223,12 +244,16 @@ class TestDashScopeAudioBackend:
             out = tmp_path / "d.wav"
             await b.synthesize(AudioSynthesisRequest(text="hi", output_path=out, voice="Cherry"))
 
+        # The synthesis POST is sent only once (not re-run by the download retry -> no double billing); the download
+        # GET succeeds on the 2nd attempt.
         # 合成 POST 只发一次（未被下载重试连带重跑 → 不重复计费），下载 GET 重试到第 2 次成功
         assert routes.synthesize.call_count == 1
         assert routes.download.call_count == 2
         assert out.read_bytes() == b"ok"
 
     async def test_empty_download_retried_then_rejected_no_file(self, tmp_path: Path, poll_clock):
+        # 200 with an empty body counts as transient: retry until the shared download failure budget is exhausted,
+        # then fail; no 0-byte wav is written and the synthesis POST is not re-run.
         # 200 但空体视为瞬态：重试到共用的下载失败预算耗尽后失败，不写 0 字节 wav，
         # 合成 POST 不被重跑。
         from lib.backends.audio_backends.dashscope import DashScopeAudioBackend
@@ -245,6 +270,7 @@ class TestDashScopeAudioBackend:
         assert not out.exists()
 
     async def test_empty_download_transient_recovers(self, tmp_path: Path, poll_clock):
+        # Empty body once, then recovery: the retry gets the bytes and writes them; the synthesis POST is not re-run.
         # 空体一次后恢复：重试拿到字节落盘，合成 POST 不被重跑
         from lib.backends.audio_backends.dashscope import DashScopeAudioBackend
 
@@ -260,6 +286,9 @@ class TestDashScopeAudioBackend:
         assert out.read_bytes() == b"ok"
 
     async def test_download_http_error_raises(self, tmp_path: Path, poll_clock):
+        # Download 4xx: surfaces httpx.HTTPStatusError, writes no file, is not misjudged as retryable, and the
+        # synthesis POST is not re-run; the exception text does not carry the presigned query (equivalent to a
+        # download credential while valid).
         # 下载 4xx：透出 httpx.HTTPStatusError 且不写文件、不被误判可重试、合成 POST 不被重跑；
         # 异常文本不携带预签名 query（有效期内等同下载凭证）
         from lib.backends.audio_backends.dashscope import DashScopeAudioBackend
@@ -279,6 +308,9 @@ class TestDashScopeAudioBackend:
         assert not out.exists()
 
     async def test_download_write_settles_through_cancellation(self, tmp_path: Path):
+        # The provider has returned and the audio bytes are in hand: when cancellation lands during the staging
+        # write, the write settles first and the cancellation disappears; the caller
+        # MediaGenerator.generate_audio_async does its artifact commit and finally-cleanup after the write completes.
         # 供应商已返回、音频字节已到手：取消落在 staging 写盘期间时，写入先结算，取消随之消失，
         # 调用方 MediaGenerator.generate_audio_async 的后续产物提交与 finally 清理都在写入完成之后进行。
         from lib.backends.audio_backends.dashscope import DashScopeAudioBackend
@@ -323,7 +355,13 @@ class TestDashScopeAudioBackend:
 
 
 class _RecordingSpeechClient:
-    """OpenAI 兼容 TTS 客户端替身：记录每次流式 speech.create 的请求参数，回固定字节。
+    """Stand-in for an OpenAI-compatible TTS client: records the request params of each streaming speech.create
+    call and returns fixed bytes.
+
+    Contracts such as the sent params and the on-disk format are about "what the outgoing request looks like",
+    so assertions target the request contents captured in ``requests``, not the stand-in's call objects.
+
+    OpenAI 兼容 TTS 客户端替身：记录每次流式 speech.create 的请求参数，回固定字节。
 
     上线参数、落盘格式这些契约都是「发出去的请求长什么样」，断言落在 ``requests`` 里的
     请求内容上，而不是替身的调用对象。
@@ -362,15 +400,17 @@ class TestOpenAIAudioBackend:
         assert kwargs["model"] == "tts-1"
         assert kwargs["input"] == "你好世界"
         assert kwargs["voice"] == "alloy"
-        # 输出格式跟随落盘扩展名（资源路径约定 .wav）
+        # The output format follows the on-disk extension (the resource path convention is .wav). / 输出格式跟随落盘扩展名（资源路径约定 .wav）
         assert kwargs["response_format"] == "wav"
-        # 字节落盘 + 结果字段
+        # Bytes written to disk + result fields. / 字节落盘 + 结果字段
         assert out.read_bytes() == b"RIFFwavbytes"
         assert result.model == "tts-1"
         assert result.text == "你好世界"
         assert result.output_path == out
 
     async def test_write_settles_through_cancellation(self, tmp_path: Path):
+        # Synthesis already billed and bytes in hand: when cancellation lands during the disk write, the write
+        # settles first, the cancellation disappears, and the later artifact commit runs as usual.
         # 合成已计费、字节已到手：取消落在写盘期间时，写入先结算，取消随之消失，后续产物提交照常执行
         gate = WriteGate()
         out = GatedWritePath(tmp_path / "o.wav").attach(gate)
@@ -394,11 +434,13 @@ class TestOpenAIAudioBackend:
             b = OpenAIAudioBackend(api_key="sk", model="gpt-4o-mini-tts")
             assert b.name == PROVIDER_OPENAI
             assert b.model == "gpt-4o-mini-tts"
+            # Speech rate is passed to /v1/audio/speech with the request; the settings page enables the voiceover speech
+            # rate input based on this.
             # 语速随请求传给 /v1/audio/speech，设置页据此放开配音语速输入
             assert b.capabilities == {AudioCapability.TEXT_TO_SPEECH, AudioCapability.SPEECH_SPEED}
 
     def test_provider_name_override(self):
-        # 包装层（自定义供应商）可用真实 provider 记账
+        # The wrapper layer (custom provider) can bill with the real provider. / 包装层（自定义供应商）可用真实 provider 记账
         with captured_openai_clients():
             from lib.backends.audio_backends.openai import OpenAIAudioBackend
 
@@ -426,7 +468,9 @@ class TestOpenAIAudioBackend:
                 assert "alloy" in ids
 
     def test_list_voices_returns_full_catalog_for_custom_openai_tts_endpoint(self):
-        """自定义 openai-tts endpoint 未落入官方 legacy 集合时不额外收窄，保持既有兼容口径。"""
+        """A custom openai-tts endpoint not in the official legacy set gets no extra narrowing; keeps the existing compatibility behavior.
+
+        自定义 openai-tts endpoint 未落入官方 legacy 集合时不额外收窄，保持既有兼容口径。"""
         with captured_openai_clients():
             from lib.backends.audio_backends.openai import OpenAIAudioBackend
 
@@ -435,7 +479,11 @@ class TestOpenAIAudioBackend:
             assert {"ballad", "verse", "marin", "cedar"} <= ids
 
     def test_list_voices_legacy_narrowing_only_applies_to_official_openai(self):
-        """自定义供应商即使模型名恰好也叫 tts-1/tts-1-hd，也无法确定其继承官方同名模型的
+        """Even if a custom provider's model happens to be named tts-1/tts-1-hd, we cannot tell whether it inherits
+        the voice limits of the official model of the same name -- legacy narrowing only applies when
+        provider_name is the official openai, to avoid wrongly narrowing an unverifiable third-party endpoint.
+
+        自定义供应商即使模型名恰好也叫 tts-1/tts-1-hd，也无法确定其继承官方同名模型的
         音色限制——legacy 收窄只对 provider_name 为官方 openai 时生效，避免对无法验证的
         第三方 endpoint 误收窄。"""
         with captured_openai_clients():
@@ -461,6 +509,7 @@ class TestOpenAIAudioBackend:
             assert mock_client.requests[-1]["speed"] == 1.5
 
     async def test_language_type_not_sent(self, tmp_path: Path):
+        # /v1/audio/speech has no language field (DashScope-specific); it must not leak into the request.
         # /v1/audio/speech 无语种字段（DashScope 特有），不应混入请求
         mock_client = _mock_speech_client()
         with captured_openai_clients(mock_client):
@@ -484,7 +533,7 @@ class TestOpenAIAudioBackend:
         assert mock_client.requests[-1]["response_format"] == "wav"
 
     async def test_empty_body_rejected_no_file_no_rebill(self, tmp_path: Path):
-        # 200 + 空体：不落 0 字节文件、不重试（重试 = 再次计费）
+        # 200 + empty body: no 0-byte file, no retry (retry = billed again). / 200 + 空体：不落 0 字节文件、不重试（重试 = 再次计费）
         mock_client = _mock_speech_client(content=b"")
         with captured_openai_clients(mock_client):
             from lib.backends.audio_backends.openai import OpenAIAudioBackend
@@ -498,6 +547,7 @@ class TestOpenAIAudioBackend:
         assert not out.exists()
 
     async def test_write_failure_does_not_rebill_synthesis(self, tmp_path: Path, poll_clock):
+        # A transient disk-write failure (message matching a retryable pattern) must not re-run the synthesis call that bills again.
         # 写盘瞬态失败（消息含可重试模式）不应回头重跑会再次计费的合成调用
         mock_client = _mock_speech_client()
         with captured_openai_clients(mock_client):
@@ -505,6 +555,7 @@ class TestOpenAIAudioBackend:
 
             b = OpenAIAudioBackend(api_key="sk", model="tts-1")
             out_dir = tmp_path / "missing-dir"
+            # Parent dir missing -> write_bytes raises OSError; fake a message containing "timed out" to take the worst path.
             # 父目录不存在 → write_bytes 抛 OSError；伪造含 "timed out" 的消息走最坏路径
             req = AudioSynthesisRequest(text="hi", output_path=out_dir / "o.wav", voice="alloy")
             with (

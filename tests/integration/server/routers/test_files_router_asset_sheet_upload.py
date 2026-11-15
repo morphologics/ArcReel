@@ -1,4 +1,7 @@
-"""资产图上传即成品：清单按上传本身认领，时效不随描述与画风变化。"""
+"""An uploaded asset sheet is a finished product: the manifest claims it by the upload itself, and freshness does not
+change with description or style.
+
+资产图上传即成品：清单按上传本身认领，时效不随描述与画风变化。"""
 
 from pathlib import Path
 

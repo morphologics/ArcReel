@@ -1,4 +1,8 @@
 """
+Login API router tests
+
+Tests the login and token verification routes in server.routers.auth.
+
 登录 API 路由测试
 
 测试 server.routers.auth 中的登录和 token 验证路由。
@@ -18,7 +22,9 @@ from tests.auth_deps import AUTH_DEPENDENCIES
 
 @pytest.fixture
 def auth_router_client():
-    """创建测试客户端，设置固定的认证环境变量"""
+    """Create a test client with fixed authentication env vars
+
+    创建测试客户端，设置固定的认证环境变量"""
     auth_module._cached_token_secret = None
     auth_module._cached_password_hash = None
     with patch.dict(
@@ -38,7 +44,9 @@ def auth_router_client():
 
 class TestLoginRoute:
     def test_login_success(self, auth_router_client):
-        """正确凭据返回 200 + access_token"""
+        """Correct credentials return 200 + access_token
+
+        正确凭据返回 200 + access_token"""
         resp = auth_router_client.post(
             "/api/v1/auth/token",
             data={"username": "testuser", "password": "testpass"},
@@ -50,7 +58,9 @@ class TestLoginRoute:
         assert len(data["access_token"]) > 0
 
     def test_login_wrong_password(self, auth_router_client):
-        """错误密码返回 401"""
+        """A wrong password returns 401
+
+        错误密码返回 401"""
         resp = auth_router_client.post(
             "/api/v1/auth/token",
             data={"username": "testuser", "password": "wrongpass"},
@@ -58,7 +68,9 @@ class TestLoginRoute:
         assert resp.status_code == 401
 
     def test_login_wrong_username(self, auth_router_client):
-        """错误用户名返回 401"""
+        """A wrong username returns 401
+
+        错误用户名返回 401"""
         resp = auth_router_client.post(
             "/api/v1/auth/token",
             data={"username": "wronguser", "password": "testpass"},
@@ -68,7 +80,9 @@ class TestLoginRoute:
 
 class TestVerifyRoute:
     def test_verify_valid_token(self, auth_router_client):
-        """有效 token 验证通过"""
+        """A valid token passes verification
+
+        有效 token 验证通过"""
         login_resp = auth_router_client.post(
             "/api/v1/auth/token",
             data={"username": "testuser", "password": "testpass"},
@@ -85,12 +99,16 @@ class TestVerifyRoute:
         assert data["username"] == "testuser"
 
     def test_verify_no_token(self, auth_router_client):
-        """缺少 token 返回 401"""
+        """A missing token returns 401
+
+        缺少 token 返回 401"""
         resp = auth_router_client.get("/api/v1/auth/verify")
         assert resp.status_code == 401
 
     def test_verify_invalid_token(self, auth_router_client):
-        """无效 token 返回 401"""
+        """An invalid token returns 401
+
+        无效 token 返回 401"""
         resp = auth_router_client.get(
             "/api/v1/auth/verify",
             headers={"Authorization": "Bearer invalid-token"},

@@ -1,4 +1,6 @@
-"""Alembic 迁移：custom_provider_model.capability_overrides 的 upgrade / downgrade。"""
+"""Alembic migration: upgrade / downgrade of custom_provider_model.capability_overrides.
+
+Alembic 迁移：custom_provider_model.capability_overrides 的 upgrade / downgrade。"""
 
 from __future__ import annotations
 
@@ -14,7 +16,9 @@ from alembic import command
 
 @pytest.fixture
 def revisions() -> tuple[str, str]:
-    """读出加列迁移的 (revision, down_revision)。"""
+    """Read (revision, down_revision) of the add-column migration.
+
+    读出加列迁移的 (revision, down_revision)。"""
     repo_root = Path(__file__).resolve().parents[5]
     versions_dir = repo_root / "alembic" / "versions"
     matches = list(versions_dir.glob("*_add_capability_overrides_to_custom_.py"))
@@ -55,7 +59,10 @@ def _columns(engine: sa.Engine) -> set[str]:
 
 
 def test_upgrade_adds_column_existing_row_null(alembic_cfg: tuple[Config, Path], revisions: tuple[str, str]):
-    """升到加列前插一行，升级后该列存在且存量行为 NULL —— 即全部跟随系统判定。"""
+    """Insert a row before the add-column revision; after upgrade the column exists and the existing row has NULL, i.e.
+    everything follows the system verdict.
+
+    升到加列前插一行，升级后该列存在且存量行为 NULL —— 即全部跟随系统判定。"""
     revision_id, parent_id = revisions
     cfg, db_path = alembic_cfg
     command.upgrade(cfg, parent_id)
@@ -78,7 +85,9 @@ def test_upgrade_adds_column_existing_row_null(alembic_cfg: tuple[Config, Path],
 
 
 def test_upgraded_column_round_trips_sparse_dict(alembic_cfg: tuple[Config, Path], revisions: tuple[str, str]):
-    """稀疏覆盖字典可写入并原样读回（JSON 列，键集不受 schema 约束）。"""
+    """A sparse override dict can be written and read back as-is (JSON column, key set not constrained by the schema).
+
+    稀疏覆盖字典可写入并原样读回（JSON 列，键集不受 schema 约束）。"""
     revision_id, _ = revisions
     cfg, db_path = alembic_cfg
     command.upgrade(cfg, revision_id)
@@ -99,7 +108,9 @@ def test_upgraded_column_round_trips_sparse_dict(alembic_cfg: tuple[Config, Path
 
 
 def test_downgrade_drops_column(alembic_cfg: tuple[Config, Path], revisions: tuple[str, str]):
-    """downgrade 回退后该列消失，同行其余数据保留。"""
+    """After downgrade the column is gone, and the row's other data is kept.
+
+    downgrade 回退后该列消失，同行其余数据保留。"""
     revision_id, parent_id = revisions
     cfg, db_path = alembic_cfg
     command.upgrade(cfg, revision_id)

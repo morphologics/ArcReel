@@ -1,4 +1,6 @@
-"""内容确认领域错误到 HTTP 错误的映射。"""
+"""Mapping from content-review domain errors to HTTP errors.
+
+内容确认领域错误到 HTTP 错误的映射。"""
 
 from __future__ import annotations
 

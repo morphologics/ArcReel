@@ -35,7 +35,9 @@ STRUCTURED_VIDEO_PROMPT = {
 
 
 def _drama_pm(project_path: Path) -> _FakePM:
-    """drama 项目：条目携带有序 utterances，角色资产带非空 voice_style。"""
+    """drama project: entries carry ordered utterances; character assets have a non-empty voice_style.
+
+    drama 项目：条目携带有序 utterances，角色资产带非空 voice_style。"""
     pm = _FakePM(project_path)
     pm.project["content_mode"] = "drama"
     pm.project["characters"]["Alice"]["voice_style"] = "低沉沙哑"
@@ -100,7 +102,9 @@ CONTENT_MODES = ["narration", "drama", "ad"]
 
 
 class TestPreviewMatchesExecution:
-    """预览文本与执行期实际发出的提示词逐字一致。"""
+    """Preview text matches the prompt actually sent at execution, character for character.
+
+    预览文本与执行期实际发出的提示词逐字一致。"""
 
     @pytest.mark.parametrize("content_mode", CONTENT_MODES)
     async def test_storyboard_image_prompt_is_verbatim(self, tmp_path, monkeypatch, content_mode):
@@ -131,7 +135,10 @@ class TestPreviewMatchesExecution:
         assert preview.video.text == generator.video_calls[0]["prompt"]
 
     async def test_drama_text_form_video_prompt_keeps_utterance_speech(self, tmp_path, monkeypatch):
-        """文本形态不承载台词：发声序列仍由 utterances 决定，渲染层照常注入。"""
+        """The text form does not carry dialogue lines: the utterance sequence is still decided by utterances, and the
+        rendering layer injects them as usual.
+
+        文本形态不承载台词：发声序列仍由 utterances 决定，渲染层照常注入。"""
         project_path = prepare_files(tmp_path)
         pm = _drama_pm(project_path)
         _item_of(pm)["video_prompt"] = "镜头缓缓推近，雨水顺着伞沿滑落"
@@ -154,7 +161,10 @@ class TestPreviewMatchesExecution:
 
     @pytest.mark.parametrize("content_mode", CONTENT_MODES)
     async def test_text_form_image_prompt_is_the_prompt_body(self, tmp_path, monkeypatch, content_mode):
-        """文本形态的分镜图提示词就是提示词主体，渲染层只注入项目风格与反向约束。"""
+        """The text-form storyboard image prompt is the prompt body; the rendering layer injects only the project style
+        and negative constraints.
+
+        文本形态的分镜图提示词就是提示词主体，渲染层只注入项目风格与反向约束。"""
         body = "一条被雨水打湿的老街，霓虹反射在积水上"
         project_path = prepare_files(tmp_path)
         pm = _pm_for(content_mode, project_path)
@@ -175,7 +185,10 @@ class TestPreviewMatchesExecution:
         assert text == generator.image_calls[0]["prompt"]
 
     async def test_reference_numbering_covers_the_previous_storyboard_and_mentions(self, tmp_path, monkeypatch):
-        """预览与执行读同一份参考图装配：上一分镜图占最后一个序位，正文里的 @[登记名] 换成对应的图N。"""
+        """Preview and execution read the same reference image assembly: the previous storyboard image takes the last
+        slot, and @[registered name] in the body is replaced with the matching imageN.
+
+        预览与执行读同一份参考图装配：上一分镜图占最后一个序位，正文里的 @[登记名] 换成对应的图N。"""
         project_path = prepare_files(tmp_path)
         pm = _pm_for("narration", project_path)
         seed_current_storyboard(pm, "E1S01")
@@ -201,7 +214,9 @@ class TestPreviewMatchesExecution:
 
     @pytest.mark.parametrize("content_mode", CONTENT_MODES)
     async def test_text_form_video_prompt_is_the_prompt_body(self, tmp_path, monkeypatch, content_mode):
-        """视频侧同理：文本形态正文领先，逐字等于执行期实发文本。"""
+        """Same on the video side: the text-form body leads and equals the text actually sent at execution verbatim.
+
+        视频侧同理：文本形态正文领先，逐字等于执行期实发文本。"""
         body = "镜头缓缓推近，雨水顺着伞沿滑落"
         project_path = prepare_files(tmp_path)
         pm = _pm_for(content_mode, project_path)
@@ -221,7 +236,10 @@ class TestPreviewMatchesExecution:
         assert text == generator.video_calls[0]["prompt"]
 
     async def test_rendering_a_preview_text_again_does_not_duplicate_injections(self, tmp_path, monkeypatch):
-        """结构化 → 文本以当前渲染结果为初值：再渲染一次不叠出第二份风格与反向约束。"""
+        """Structured -> text starts from the current render: rendering again does not stack a second copy of style and
+        negative constraints.
+
+        结构化 → 文本以当前渲染结果为初值：再渲染一次不叠出第二份风格与反向约束。"""
         project_path = prepare_files(tmp_path)
         pm = _pm_for("narration", project_path)
         generator = FakeGenerator()
@@ -239,7 +257,10 @@ class TestPreviewMatchesExecution:
     async def test_rendering_a_preview_video_text_again_does_not_duplicate_injections(
         self, tmp_path, monkeypatch, content_mode
     ):
-        """视频侧同理：drama 的 Voice_Profiles / Dialogue 声明段已在正文里时不再追加第二份。"""
+        """Same on the video side: when drama's Voice_Profiles / Dialogue declaration sections are already in the body,
+        a second copy is not appended.
+
+        视频侧同理：drama 的 Voice_Profiles / Dialogue 声明段已在正文里时不再追加第二份。"""
         project_path = prepare_files(tmp_path)
         pm = _pm_for(content_mode, project_path)
         _patch_execution(monkeypatch, pm, FakeGenerator())
@@ -254,7 +275,9 @@ class TestPreviewMatchesExecution:
 
 
 class TestPreviewMatchesClampedExecution:
-    """参考图超过图像后端上限时，预览与执行按同一裁剪编号。"""
+    """When reference images exceed the image backend limit, preview and execution clip with the same numbering.
+
+    参考图超过图像后端上限时，预览与执行按同一裁剪编号。"""
 
     async def test_preview_text_is_verbatim_under_clamping(self, tmp_path, monkeypatch):
         project_path = prepare_files(tmp_path)
@@ -272,6 +295,8 @@ class TestPreviewMatchesClampedExecution:
 
         assert len(generator.image_calls[0]["reference_images"]) == 7
         assert preview.storyboard_image.text == generator.image_calls[0]["prompt"]
+        # # Preview gives the same clipping warning as the execution task result before generation; the video side does not
+        # # clip reference images and carries none
         # 预览在生成前就给出与执行期任务结果同一条裁剪 warning；视频侧不裁剪参考图，不带
         assert list(preview.storyboard_image.warnings) == result["warnings"]
         assert preview.storyboard_image.warnings == (
@@ -295,7 +320,10 @@ class TestPreviewMatchesClampedExecution:
         assert preview.storyboard_image.warnings == ()
 
     async def test_preview_falls_back_to_no_clamping_when_the_lane_cannot_resolve(self, tmp_path, monkeypatch):
-        """凭证缺失等解析失败只让预览退回不裁剪，仍渲染出提示词。"""
+        """Resolution failures like a missing credential only make the preview fall back to no clipping; the prompt is
+        still rendered.
+
+        凭证缺失等解析失败只让预览退回不裁剪，仍渲染出提示词。"""
         project_path = prepare_files(tmp_path)
         pm = pm_with_eight_references(project_path)
         monkeypatch.setattr(prompt_preview, "get_project_manager", lambda: pm)
@@ -351,7 +379,10 @@ class TestPreviewUnavailableSides:
         ]
 
     async def test_pending_prompt_reports_that_side_only(self, tmp_path, monkeypatch):
-        """机械转换写下的 ``None`` 与根本没有该字段的存量条目都是待生成：另一侧照常渲染。"""
+        """Both ``None`` written by the mechanical conversion and legacy entries without the field at all are pending
+        generation: the other side renders as usual.
+
+        机械转换写下的 ``None`` 与根本没有该字段的存量条目都是待生成：另一侧照常渲染。"""
         project_path = prepare_files(tmp_path)
         pm = _pm_for("narration", project_path)
         _item_of(pm)["video_prompt"] = None
@@ -389,7 +420,10 @@ class TestPreviewUnavailableSides:
         assert preview.storyboard_image.unavailable == prompt_preview.UNAVAILABLE_INVALID
 
     async def test_refused_generation_input_reports_its_gaps_and_matches_execution(self, tmp_path, monkeypatch):
-        """生成会被拒时预览显示不可用与缺口码，与执行期同一份拒绝；视频侧照常渲染。"""
+        """When generation would be refused, the preview shows unavailable and the gap codes, the same refusal as at
+        execution; the video side renders as usual.
+
+        生成会被拒时预览显示不可用与缺口码，与执行期同一份拒绝；视频侧照常渲染。"""
         project_path = prepare_files(tmp_path)
         pm = _pm_for("narration", project_path)
         (project_path / "props" / "玉佩.png").unlink()
@@ -423,7 +457,9 @@ class TestPreviewUnavailableSides:
 
 
 class TestPromptPreviewTool:
-    """MCP 工具层是服务层的薄包装：同一份预览，两个 host 同一入口。"""
+    """The MCP tool layer is a thin wrapper over the service layer: the same preview, one entry point for both hosts.
+
+    MCP 工具层是服务层的薄包装：同一份预览，两个 host 同一入口。"""
 
     def _services(self, pm: _FakePM):
         from typing import Any, cast
@@ -480,7 +516,10 @@ class TestPromptPreviewTool:
         assert outcome.problem.code == "invalid_request"
 
     def test_registered_in_the_tool_catalogue(self):
-        """内嵌 host 的工具目录；远程 host 的等价由 test_remote_mcp 的工具集相等断言兜住。"""
+        """The embedded host's tool catalogue; equivalence for the remote host is covered by test_remote_mcp's tool-set
+        equality assertion.
+
+        内嵌 host 的工具目录；远程 host 的等价由 test_remote_mcp 的工具集相等断言兜住。"""
         from server.agent_toolset.toolset import ARCREEL_MCP_TOOL_IDS
 
         assert "get_prompt_preview" in ARCREEL_MCP_TOOL_IDS

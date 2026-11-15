@@ -1,4 +1,10 @@
-"""分镜图引用的资产图在升级时不能登记：该分镜图照常补录、读作 current，经整条迁移链后的制作状态。
+"""The asset sheet a storyboard image references cannot be registered at upgrade time: the storyboard image is
+still backfilled and reads as current; workflow status after the whole migration chain.
+
+Input gaps only block generation (ADR 0098): v17->v18 backfills storyboard images not registered earlier
+because of gaps; already registered entries are untouched.
+
+分镜图引用的资产图在升级时不能登记：该分镜图照常补录、读作 current，经整条迁移链后的制作状态。
 
 生成缺口只拦生成（ADR 0098）：v17→v18 补录此前因缺口没登记的分镜图，已登记条目不动。
 """
@@ -58,6 +64,10 @@ def test_storyboard_with_an_unregistrable_sheet_is_backfilled_and_reads_current(
     report = load_migration_report(project_dir)
     assert report is not None
     assert [item for item in report.skipped if item.kind == "episode-storyboard"] == []
+    # E1S3 was registered earlier with a basis without the previous storyboard image, and v17->v18 does not touch
+    # registered entries; once E1S2 is backfilled it becomes E1S3's usable previous storyboard image, so the expected
+    # basis now includes E1S2 and E1S3 reads as stale -- the same rule as when the previous storyboard image becomes
+    # available at runtime.
     # E1S3 早先按不带上一分镜图的依据登记，v17→v18 不动已登记条目；E1S2 补录后成为它可用的上一分镜图，
     # 期望依据随之带上 E1S2，E1S3 读为过期——与运行期上一分镜图变为可用时同一口径。
     assert [_status(project_dir, unit_id) for unit_id in ("E1S1", "E1S2", "E1S3")] == ["current", "current", "stale"]

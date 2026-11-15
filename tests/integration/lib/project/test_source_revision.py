@@ -10,7 +10,10 @@ from lib.project.source_revision import SourceScope, compute_source_revision
 
 
 def _project(*whole_source: str, own: tuple[int, ...] = (), cut: tuple[int, ...] = ()) -> dict[str, object]:
-    """``whole_source`` 按顺序登记为整本源文；``own`` / ``cut`` 是自带原文与切出集的集 ID。"""
+    """``whole_source`` is registered in order as the whole source; ``own`` / ``cut`` are episode IDs of episodes with
+    their own source and of cut episodes.
+
+    ``whole_source`` 按顺序登记为整本源文；``own`` / ``cut`` 是自带原文与切出集的集 ID。"""
     return {
         "content_mode": "drama",
         "source_language": "zh",
@@ -39,7 +42,9 @@ def test_all_source_revision_is_stable_and_excludes_derived_and_unregistered_fil
 
 
 def test_all_scope_includes_own_source_episode_files(tmp_path: Path) -> None:
-    """自带原文的集的集文件就是源文，与整本源文一并计入。"""
+    """The episode file of an episode with its own source is the source, counted together with the whole source.
+
+    自带原文的集的集文件就是源文，与整本源文一并计入。"""
     source = tmp_path / "source"
     source.mkdir()
     (source / "episode_2.txt").write_text("第二集", encoding="utf-8")
@@ -235,7 +240,10 @@ def test_all_scope_reports_symlinked_source_dir(tmp_path: Path) -> None:
 
 
 def test_all_scope_reports_registered_symlink_beside_own_source_episode_files(tmp_path: Path) -> None:
-    """登记为整本源文的符号链接照常以阻塞项报出，自带原文的集文件不受影响。"""
+    """A symlink registered as whole source is reported as a blocker as usual; episode files with their own source are
+    unaffected.
+
+    登记为整本源文的符号链接照常以阻塞项报出，自带原文的集文件不受影响。"""
     source = tmp_path / "source"
     source.mkdir()
     (source / "episode_1.txt").write_text("第一集", encoding="utf-8")

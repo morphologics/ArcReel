@@ -1,4 +1,6 @@
-"""分集账本：归一化坐标系与源文指纹。"""
+"""Episode ledger: normalized coordinate system and source fingerprints.
+
+分集账本：归一化坐标系与源文指纹。"""
 
 import unicodedata
 from pathlib import Path
@@ -10,6 +12,7 @@ from lib.episode.episode_ledger import (
 )
 from lib.episode.episode_sources import discover_sources
 
+#: A project whose whole-book source list registers only novel.txt and extra.txt.
 #: 整本源文清单只登记 novel.txt 与 extra.txt 的项目。
 _PROJECT = {"whole_source_files": [{"source_file": "source/novel.txt"}, {"source_file": "source/extra.txt"}]}
 
@@ -42,7 +45,9 @@ class TestSourceFingerprints:
         assert fp_crlf == fp_lf
 
     def test_mismatched_when_unrecorded_returns_empty(self, tmp_path: Path):
-        """存量项目无记录字段：不比对，视同待补记，不阻塞规划。"""
+        """Existing project without the record field: no comparison, treated as pending backfill, planning not blocked.
+
+        存量项目无记录字段：不比对，视同待补记，不阻塞规划。"""
         d = _project(tmp_path)
         sources = discover_sources(d, _PROJECT)
         assert mismatched_source_fingerprints(None, sources) == []
@@ -68,7 +73,9 @@ class TestSourceFingerprints:
         assert mismatched_source_fingerprints(recorded, discover_sources(d, _PROJECT)) == []
 
     def test_unrecorded_new_file_not_flagged(self, tmp_path: Path):
-        """记录中没有的新增源文件不参与比对（首次纳入规划时才补记）。"""
+        """New source files not in the record take no part in the comparison (recorded only when first brought into planning).
+
+        记录中没有的新增源文件不参与比对（首次纳入规划时才补记）。"""
         d = _project(tmp_path)
         recorded = compute_source_fingerprints(discover_sources(d, _PROJECT))
         (d / "source" / "extra.txt").write_text("新增源文件", encoding="utf-8")

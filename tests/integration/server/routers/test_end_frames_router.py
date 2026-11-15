@@ -1,4 +1,10 @@
-"""分镜尾帧设置/清除端点测试。
+"""Tests for the shot end frame set/clear endpoints.
+
+Covers both set channels (upload / pick an in-project image) landing on the same snapshot path, in-place
+overwrite on image change, clear semantics, out-of-bounds and missing rejection, and decoupling of the snapshot
+from the source image (rewriting/deleting the source does not affect a set end frame).
+
+分镜尾帧设置/清除端点测试。
 
 覆盖两条设置通道（上传 / 项目内选图）落到同一快照路径、换图原地覆盖、清除语义、
 越界与缺失拒绝，以及快照与源图的解耦（源图被改写/删除不影响已定尾帧）。
@@ -35,7 +41,13 @@ END_FRAME_REL = "end_frames/scene_E1S01.png"
 
 
 class _ScriptIOHooks:
-    """``ProjectManager`` 剧本读写 seam 的可变挂钩。
+    """Mutable hooks for the ``ProjectManager`` script read/write seam.
+
+    By default passes through real reads and writes; cases swap ``read`` / ``write`` for injected implementations to
+    create failures and concurrent interleaving at the two exact spots "disk read inside the critical section" and
+    "disk write inside the critical section", without replacing the manager's internal methods.
+
+    ``ProjectManager`` 剧本读写 seam 的可变挂钩。
 
     缺省透传真实读写；用例把 ``read`` / ``write`` 换成注入实现，即可在「临界区内读盘」与
     「临界区内写盘」这两个精确位置制造失败与并发交错，无需替换管理器的内部方法。
@@ -104,7 +116,9 @@ def _seed_project(tmp_path, hooks: _ScriptIOHooks) -> ProjectManager:
 
 
 def _build_client(pm: ProjectManager, monkeypatch) -> TestClient:
-    """把给定 ProjectManager 接到尾帧路由上，返回可发请求的 TestClient。"""
+    """Hook the given ProjectManager to the end frame routes and return a TestClient that can send requests.
+
+    把给定 ProjectManager 接到尾帧路由上，返回可发请求的 TestClient。"""
     monkeypatch.setattr(end_frame_service, "get_project_manager", lambda: pm)
 
     app = FastAPI()
@@ -161,6 +175,7 @@ class TestUploadChannel:
         assert resp.json()["end_frame_image"] == END_FRAME_REL
 
         assert _segment(pm)["end_frame_image"] == END_FRAME_REL
+        # JPEG input is normalized to PNG (same rule as storyboard image upload)
         # JPEG 入参统一归一为 PNG（与分镜图上传同口径）
         with Image.open(pm.get_project_path("demo") / END_FRAME_REL) as img:
             assert img.format == "PNG"
@@ -170,6 +185,7 @@ class TestUploadChannel:
         _upload(c, _img_bytes("JPEG", size=(8, 8)))
         resp = _upload(c, _img_bytes("PNG", size=(16, 16)))
         assert resp.status_code == 200, resp.text
+        # Path fixed, field value unchanged; file content replaced
         # 路径固定，字段值不变；文件内容被换掉
         assert _segment(pm)["end_frame_image"] == END_FRAME_REL
         with Image.open(pm.get_project_path("demo") / END_FRAME_REL) as img:
@@ -198,6 +214,8 @@ class TestSelectChannel:
         resp = _select(c, "storyboards/scene_E1S02.png")
         assert resp.status_code == 200, resp.text
         assert resp.json()["end_frame_image"] == END_FRAME_REL
+        # The field stores the snapshot path, not the source image path -- the reference relationship structurally does not
+        # exist
         # 字段存的是快照路径，不是源图路径 —— 引用关系从结构上就不存在
         assert _segment(pm)["end_frame_image"] == END_FRAME_REL
         with Image.open(pm.get_project_path("demo") / END_FRAME_REL) as img:
@@ -215,7 +233,13 @@ class TestSelectChannel:
         assert _select(c, "storyboards/scene_E1S99.png").status_code == 404
 
     def test_oversized_source_image_rejected(self, end_frames_client, monkeypatch):
-        """项目内选图源超过上传通道同一上限时须拒绝（见 read_project_image）。
+        """An in-project picked source image over the same limit as the upload channel must be rejected (see
+        read_project_image).
+
+        Dedicated message + 400: the pick request body is just a path string, so 413 (payload too large) does not apply;
+        this differs from the upload channel's own 413 + upload_too_large split (see test_shot_uploads_router).
+
+        项目内选图源超过上传通道同一上限时须拒绝（见 read_project_image）。
 
         专属文案 + 400：选图请求体只是路径字符串，413（请求体过大）语义不适用，
         与上传通道自身的 413 + upload_too_large 分流（见 test_shot_uploads_router）。
@@ -226,6 +250,7 @@ class TestSelectChannel:
 
         resp = _select(c, "storyboards/scene_E1S02.png")
         assert resp.status_code == 400
+        # max_mb is the byte limit integer-divided by 1 MB; here the limit is squeezed to 16 bytes, hence 0
         # max_mb 由字节上限整除 1 MB 得出，本例上限被压到 16 字节故为 0
         assert resp.json()["detail"] == i18n_message(
             "end_frame_source_too_large", max_mb=0, path="storyboards/scene_未命名集 · S02.png"
@@ -233,7 +258,10 @@ class TestSelectChannel:
         assert _segment(pm).get("end_frame_image") is None
 
     def test_source_image_read_is_bounded(self, end_frames_client, monkeypatch):
-        """超限源图不得整读入内存：单次 read 请求的字节数以上限 +1 为界，够判超限即止。"""
+        """An over-limit source image must not be read whole into memory: a single read request is bounded by limit + 1
+        bytes, stopping as soon as it can tell the limit is exceeded.
+
+        超限源图不得整读入内存：单次 read 请求的字节数以上限 +1 为界，够判超限即止。"""
         _c, pm = end_frames_client
         _write_source_image(pm, "storyboards/scene_E1S02.png", _img_bytes("PNG", size=(64, 64)))
         project_path = pm.get_project_path("demo")
@@ -287,7 +315,10 @@ class TestClear:
 
 
 class TestSnapshotDecoupling:
-    """快照与源图彻底解耦：源图后续被改写或删除都动不到已定尾帧。"""
+    """Snapshot fully decoupled from the source image: later rewriting or deleting the source cannot touch a set end
+    frame.
+
+    快照与源图彻底解耦：源图后续被改写或删除都动不到已定尾帧。"""
 
     def test_source_rewrite_and_delete_leave_end_frame_intact(self, end_frames_client):
         c, pm = end_frames_client
@@ -298,6 +329,8 @@ class TestSnapshotDecoupling:
         snapshot = pm.get_project_path("demo") / END_FRAME_REL
         before = snapshot.read_bytes()
 
+        # Regenerate the source image (content and size change), then delete it, simulating version rollback / resource
+        # cleanup
         # 源图重生成（内容与尺寸都变）后再删除，模拟版本回滚 / 资源清理
         _write_source_image(pm, source_rel, _img_bytes("PNG", size=(24, 24), color=(0, 0, 255)))
         (pm.get_project_path("demo") / source_rel).unlink()
@@ -306,7 +339,10 @@ class TestSnapshotDecoupling:
         assert _segment(pm)["end_frame_image"] == END_FRAME_REL
 
     def test_source_version_rollback_leaves_end_frame_intact(self, end_frames_client):
-        """源图回滚到旧版本后已定尾帧不变——尾帧存的是快照路径，与源图的版本轴无关。"""
+        """After the source image rolls back to an old version the set end frame is unchanged -- the end frame stores the
+        snapshot path, independent of the source image's version axis.
+
+        源图回滚到旧版本后已定尾帧不变——尾帧存的是快照路径，与源图的版本轴无关。"""
         c, pm = end_frames_client
         source_rel = "storyboards/scene_E1S02.png"
         source_abs = pm.get_project_path("demo") / source_rel
@@ -319,6 +355,7 @@ class TestSnapshotDecoupling:
         snapshot = pm.get_project_path("demo") / END_FRAME_REL
         before = snapshot.read_bytes()
 
+        # Regenerate the source image as v2, then roll back to v1
         # 源图重生成为 v2，再回滚到 v1
         _write_source_image(pm, source_rel, _img_bytes("PNG", size=(24, 24), color=(0, 0, 255)))
         vm.add_version("storyboards", "E1S02", "v2", source_file=source_abs)
@@ -335,6 +372,7 @@ class TestSnapshotDecoupling:
         assert _segment(pm, 0)["end_frame_image"] == "end_frames/scene_E1S01.png"
         assert _segment(pm, 1)["end_frame_image"] == "end_frames/scene_E1S02.png"
 
+        # Clearing one does not affect the other
         # 清一个不影响另一个
         _delete(c, shot_id="E1S01")
         assert _segment(pm, 0)["end_frame_image"] is None
@@ -343,7 +381,9 @@ class TestSnapshotDecoupling:
 
 
 class _InterleavedResponses(NamedTuple):
-    """`_interleave_across_critical_section` 的两个请求各自的响应。"""
+    """The responses of each of the two requests of `_interleave_across_critical_section`.
+
+    `_interleave_across_critical_section` 的两个请求各自的响应。"""
 
     first: httpx.Response
     second: httpx.Response
@@ -352,7 +392,26 @@ class _InterleavedResponses(NamedTuple):
 def _interleave_across_critical_section(
     script_io: _ScriptIOHooks, first: Callable[[], httpx.Response], second: Callable[[], httpx.Response]
 ) -> _InterleavedResponses:
-    """让 `first` 停在剧本锁临界区内，确认 `second` 被锁挡在外面后再放行，返回两者的响应。
+    """Make `first` stop inside the script lock's critical section, confirm `second` is blocked outside by the lock, then
+    release; return both responses.
+
+    The interleaving point is aligned by a hook rather than left to thread scheduling luck: the hook sits on the
+    script write seam (the last step before `locked_script` exits), when the first party has finished its file side
+    effects but the field write-back is not yet persisted -- exactly the critical point of the dangling-reference
+    scenario "one side has written the file, the other acts before the field write-back". The later party must still
+    be blocked by the script lock meanwhile: if it could finish, the two operations are not truly mutually exclusive.
+
+    Staggering the two requests is also necessary: TestClient starts a separate thread and event loop per request,
+    and FastAPI expands `include_router` routes lazily on first match without a lock; two first requests sent at once
+    would hit a half-built route table and randomly get a route-level 404. Here the second request is sent only after
+    the first has finished routing.
+
+    The assertion "the later party did not finish" is refuted with a fixed wait window and is one-directional: if
+    mutual exclusion were broken, on a slow machine the later party might not finish within the window and be missed;
+    but it never judges a well-behaved implementation as failing, so it adds no timing sensitivity. A whole set/clear
+    without the lock takes milliseconds; the window is far wider.
+
+    让 `first` 停在剧本锁临界区内，确认 `second` 被锁挡在外面后再放行，返回两者的响应。
 
     交错点由钩子对齐而非靠线程调度碰运气：钩子挂在剧本写盘 seam 上（`locked_script`
     退出前的最后一步），此时先到的一方已经做完自己的文件副作用、字段写回尚未落盘——正是
@@ -390,7 +449,7 @@ def _interleave_across_critical_section(
         def _target() -> None:
             try:
                 results[key] = call()
-            except Exception as exc:  # 主线程复述，不能只打印到 stderr
+            except Exception as exc:  # Re-raise in the main thread; printing to stderr is not enough / 主线程复述，不能只打印到 stderr
                 errors[key] = exc
 
         thread = threading.Thread(target=_target)
@@ -402,6 +461,7 @@ def _interleave_across_critical_section(
         assert entered_section.wait(timeout=10), "先到的请求没能进入剧本锁临界区"
 
         t_second = _run("second", second)
+        # The first party is still inside the critical section; the later party must have no chance to finish
         # 先到的一方还停在临界区内，后到的一方不该有任何完成的可能
         t_second.join(timeout=0.3)
         assert "second" not in results, f"后到的请求插进了对方的临界区：{results.get('second')}"
@@ -416,10 +476,16 @@ def _interleave_across_critical_section(
 
 
 class TestConcurrentSetClear:
-    """设置与清除并发交错时，字段与快照文件必须同进同退，不留悬空引用。"""
+    """When set and clear interleave concurrently, the field and the snapshot file must move together, leaving no
+    dangling reference.
+
+    设置与清除并发交错时，字段与快照文件必须同进同退，不留悬空引用。"""
 
     def test_clear_blocked_until_set_leaves_critical_section(self, end_frames_client, script_io):
-        """设置先进临界区：清除被挡到设置整段完成之后，最终状态是「清除赢」且无残留引用。"""
+        """Set enters the critical section first: clear is held off until set fully completes; the final state is "clear
+        wins" with no leftover reference.
+
+        设置先进临界区：清除被挡到设置整段完成之后，最终状态是「清除赢」且无残留引用。"""
         c, pm = end_frames_client
         snapshot = pm.get_project_path("demo") / END_FRAME_REL
 
@@ -431,12 +497,16 @@ class TestConcurrentSetClear:
 
         assert results.first.status_code == 200, results.first.text
         assert results.second.status_code == 200, results.second.text
+        # Clear arrives later and runs entirely after set: the field is emptied and the snapshot file deleted with it
         # 清除后到、整段落在设置之后：字段置空，快照文件随之删除
         assert _segment(pm).get("end_frame_image") is None
         assert not snapshot.exists()
 
     def test_set_blocked_until_clear_leaves_critical_section(self, end_frames_client, script_io):
-        """清除先进临界区：设置被挡到清除整段完成之后，最终字段非空且快照文件在位。"""
+        """Clear enters the critical section first: set is held off until clear fully completes; the final field is non-empty
+        and the snapshot file is in place.
+
+        清除先进临界区：设置被挡到清除整段完成之后，最终字段非空且快照文件在位。"""
         c, pm = end_frames_client
         snapshot = pm.get_project_path("demo") / END_FRAME_REL
         assert _upload(c, _img_bytes("PNG")).status_code == 200
@@ -449,13 +519,21 @@ class TestConcurrentSetClear:
 
         assert results.first.status_code == 200, results.first.text
         assert results.second.status_code == 200, results.second.text
+        # Set arrives later and runs entirely after clear: if the field is non-empty the snapshot file must exist -- no
+        # reference to a missing file is allowed
         # 设置后到、整段落在清除之后：字段非空则快照文件必须存在——不允许指向缺失文件的引用
         assert _segment(pm)["end_frame_image"] == END_FRAME_REL
         assert snapshot.exists()
 
 
 def _fail_first_persist(script_io: _ScriptIOHooks) -> None:
-    """让下一次剧本持久化失败一次，随后（补偿回滚重新过锁触发的第二次）恢复真实写盘。
+    """Make the next script persist fail once, then (the second one, triggered by the compensating rollback re-taking
+    the lock) restore real disk writes.
+
+    The compensating rollback also goes through `locked_script` (read the snapshot state, rewrite if needed, persist
+    again); intercepting every time would also break the rollback's own persist, so only the first one fails.
+
+    让下一次剧本持久化失败一次，随后（补偿回滚重新过锁触发的第二次）恢复真实写盘。
 
     补偿回滚本身也要走一次 `locked_script`（读快照现状、必要时改写、重新持久化），若一律
     拦截会连回滚自身的持久化也打断，所以只失败第一次。
@@ -474,7 +552,20 @@ def _fail_first_persist(script_io: _ScriptIOHooks) -> None:
 def _inject_concurrent_takeover_before_nth_load(
     script_io: _ScriptIOHooks, key, target: Path, content: bytes | None, n: int
 ) -> None:
-    """模拟「回滚重新过锁前，另一个并发请求已抢先完整地执行完自己的一次操作」。
+    """Simulates "before the rollback re-takes the lock, another concurrent request has already completed one operation of
+    its own".
+
+    The rollback judges the "operation generation", not file content (see the degenerate-value note in the end_frame.py
+    module docstring), so here changing file bytes is not enough; the shot's generation must also advance, otherwise
+    the scenario the generation check must intercept cannot be reproduced. `content=None` means the concurrent one was
+    a clear (file deleted); otherwise it was a set.
+
+    The compensating rollback starts another `locked_script`, whose script read is the start of the rollback's critical
+    section -- run the injected "concurrent takeover" on its n-th call, equivalent to finishing just before the rollback
+    gets the lock. The hook point is the script read seam: both `load_script` outside the lock and the read-modify-write
+    inside it read through it, so the count covers both kinds of critical section start.
+
+    模拟「回滚重新过锁前，另一个并发请求已抢先完整地执行完自己的一次操作」。
 
     回滚判定的是「操作代次」而非文件内容（见 end_frame.py 模块 docstring 的退化值说明），
     所以这里不能只改文件字节，还要推进该分镜的代次，否则复现不出代次判定要拦截的场景。
@@ -500,7 +591,10 @@ def _inject_concurrent_takeover_before_nth_load(
 
 
 class TestPersistFailureRestoresSnapshot:
-    """剧本持久化在临界区内失败时，快照文件须回滚到操作前状态，不留悬空引用或静默丢失。"""
+    """When the script persist fails inside the critical section, the snapshot file must roll back to its pre-operation
+    state, leaving no dangling reference or silent loss.
+
+    剧本持久化在临界区内失败时，快照文件须回滚到操作前状态，不留悬空引用或静默丢失。"""
 
     def test_set_failure_restores_previous_snapshot_bytes(self, end_frames_client, script_io):
         c, pm = end_frames_client
@@ -512,12 +606,17 @@ class TestPersistFailureRestoresSnapshot:
         resp = _upload(c, _img_bytes("PNG", size=(16, 16)))
         assert resp.status_code == 500
 
+        # Field unchanged (write-back skipped), and the snapshot file must also be restored to its pre-write content -- not
+        # the new content overwritten by the image change
         # 字段未变（写回被跳过），快照文件也须还原成写前内容——不能是被换图覆盖后的新内容
         assert _segment(pm)["end_frame_image"] == END_FRAME_REL
         assert snapshot.read_bytes() == before
 
     def test_set_failure_on_first_write_removes_snapshot(self, end_frames_client, script_io):
-        """此前未设置过尾帧时失败：快照文件此前不存在，须整段撤回而非留下孤儿文件。"""
+        """Failure when no end frame was set before: the snapshot file did not exist before, so it must be withdrawn entirely
+        rather than leave an orphan file.
+
+        此前未设置过尾帧时失败：快照文件此前不存在，须整段撤回而非留下孤儿文件。"""
         c, pm = end_frames_client
         snapshot = pm.get_project_path("demo") / END_FRAME_REL
 
@@ -538,13 +637,19 @@ class TestPersistFailureRestoresSnapshot:
         resp = _delete(c)
         assert resp.status_code == 500
 
+        # Field unchanged (still points to the original path), and the snapshot file must be restored -- otherwise after
+        # the field rollback it points to a deleted file
         # 字段未变（仍指向原路径），快照文件须恢复——否则字段回滚后指向的是已删除的文件
         assert _segment(pm)["end_frame_image"] == END_FRAME_REL
         assert snapshot.exists()
         assert snapshot.read_bytes() == before
 
     def test_set_failure_skips_restore_when_concurrent_write_supersedes(self, end_frames_client, script_io):
-        """回滚重新过锁时若该分镜的操作代次已前移，说明并发请求已经接管，
+        """If the shot's operation generation has moved forward when the rollback re-takes the lock, a concurrent request has
+        taken over and the rollback must be skipped -- otherwise stale bytes would overwrite what the other side just
+        persisted successfully.
+
+        回滚重新过锁时若该分镜的操作代次已前移，说明并发请求已经接管，
         必须跳过回滚——否则会用陈旧字节覆盖对方刚成功落盘的内容。"""
         c, pm = end_frames_client
         snapshot = pm.get_project_path("demo") / END_FRAME_REL
@@ -552,6 +657,7 @@ class TestPersistFailureRestoresSnapshot:
         concurrent_bytes = _img_bytes("PNG", size=(32, 32))
 
         _fail_first_persist(script_io)
+        # load sequence: _locate_shot(1) -> the failing locked_script(2) -> the rollback's locked_script(3)
         # load 序列：_locate_shot(1) → 本次失败的 locked_script(2) → 回滚的 locked_script(3)
         _inject_concurrent_takeover_before_nth_load(script_io, key, snapshot, concurrent_bytes, n=3)
 
@@ -573,12 +679,20 @@ class TestPersistFailureRestoresSnapshot:
         resp = _delete(c)
         assert resp.status_code == 500
 
+        # Rollback skipped: the file keeps the new content written by the concurrent request, not overwritten by the
+        # "deleted" state
         # 回滚跳过：文件保留并发请求写入的新内容，没有被「删除态」覆盖
         assert snapshot.exists()
         assert snapshot.read_bytes() == concurrent_bytes
 
     def test_clear_failure_skips_restore_when_concurrent_clear_wins(self, end_frames_client, script_io):
-        """退化值场景：清除失败后文件已被删（期望内容与「无人接手」的期望值同为 None），
+        """Degenerate-value scenario: after the clear fails the file is already deleted (the expected content and the "nobody
+        took over" expectation are both None), and another concurrent clear then also succeeds, with the same result of
+        no file -- comparing file content alone cannot tell them apart, would misjudge it as nobody taking over and roll
+        back old snapshot bytes into an orphan file. Under the generation check, the concurrent clear advances the
+        generation and the rollback correctly skips.
+
+        退化值场景：清除失败后文件已被删（期望内容与「无人接手」的期望值同为 None），
         并发的另一次清除随后也成功完成，结果同样是文件不存在——若
         仅比对文件内容将无法区分两者，误判为无人接手并把旧快照字节回滚出孤儿文件。
         代次判定下，并发清除会推进代次，回滚据此正确跳过。"""
@@ -593,11 +707,18 @@ class TestPersistFailureRestoresSnapshot:
         resp = _delete(c)
         assert resp.status_code == 500
 
+        # Rollback skipped: the file keeps the "deleted" result of the concurrent clear, not rewritten with old bytes into
+        # an orphan file
         # 回滚跳过：文件保持并发清除后的「已删除」结果，没有被旧字节重新写回制造孤儿文件
         assert not snapshot.exists()
 
     def test_set_failure_skips_restore_when_concurrent_takeover_uses_other_alias(self, end_frames_client, script_io):
-        """别名归一：失败的这次操作用 `scripts/episode_1.json` 这个别名，
+        """Alias normalization: the failing operation uses the alias `scripts/episode_1.json`; without normalizing the
+        generation key it and the concurrent takeover (using the normalized key from `episode_1.json`) would each create
+        their own generation and not see each other -- the rollback would misjudge "nobody took over" and overwrite the
+        other side's successfully persisted content with old bytes.
+
+        别名归一：失败的这次操作用 `scripts/episode_1.json` 这个别名，
         代次键若不归一化会与并发接管（用 `episode_1.json` 归一后的键）各自生成一把代次，
         互相看不见——回滚会误判「无人接手」，用旧字节覆盖对方已成功落盘的内容。"""
         c, pm = end_frames_client
@@ -614,11 +735,20 @@ class TestPersistFailureRestoresSnapshot:
         )
         assert resp.status_code == 500
 
+        # Without normalization the generation keys differ; the rollback would not see the takeover and would overwrite the
+        # concurrent write's new content with old bytes
         # 未归一化则代次键不同，回滚会看不到接管、用旧字节覆盖并发写入的新内容
         assert snapshot.read_bytes() == concurrent_bytes
 
     def test_set_failure_restore_uses_bytes_read_inside_critical_section(self, end_frames_client, script_io):
-        """陈旧基线问题：`old_bytes` 若在取得剧本锁之前预读，读到的是「进入临界区之前」
+        """Stale baseline problem: if `old_bytes` were pre-read before taking the script lock, it would read the file content
+        "before entering the critical section" rather than "at the moment of entering". Here the generation is not
+        advanced; the file is rewritten directly at this operation's own script read (the moment of entering the critical
+        section) -- the generation check will not intercept (no other operation claims a takeover); whether the rollback
+        restores this rewritten content is what really tells a baseline read inside the lock from one pre-read outside: a
+        pre-read outside the lock gets the old pre-rewrite content and the rollback overwrites the rewrite.
+
+        陈旧基线问题：`old_bytes` 若在取得剧本锁之前预读，读到的是「进入临界区之前」
         而非「进入临界区那一刻」的文件内容。这里不推进代次，只在本次操作自己的
         剧本读盘（进入临界区的时点）直接改写文件——代次检查不会拦截
         （因为没有别的操作声称接管），能否回滚出这份改写后的内容，才真正区分基线是在
@@ -632,6 +762,7 @@ class TestPersistFailureRestoresSnapshot:
 
         def _load_with_rewrite(path: Path) -> dict:
             calls["n"] += 1
+            # Read sequence: _locate_shot(1) -> the failing operation's own locked_script(2)
             # 读盘序列：_locate_shot(1) → 失败操作自身的 locked_script(2)
             if calls["n"] == 2:
                 snapshot.write_bytes(content_at_critical_section_entry)
@@ -643,13 +774,18 @@ class TestPersistFailureRestoresSnapshot:
         resp = _upload(c, _img_bytes("PNG", size=(16, 16)))
         assert resp.status_code == 500
 
+        # With the baseline read inside the critical section it gets this rewritten content and the rollback restores it;
+        # if the baseline were pre-read outside the lock it would get the old pre-rewrite content and the rollback would
+        # overwrite this rewrite
         # 基线在临界区内读取，读到的就是这份改写后的内容，回滚据此还原；
         # 若基线在锁外预读，读到的是改写前的旧内容，回滚会把这份改写覆盖掉
         assert snapshot.read_bytes() == content_at_critical_section_entry
 
 
 class TestErrorMapping:
-    """领域错误到 HTTP 的映射：三个端点行为一致，不泄漏服务器路径。"""
+    """Mapping of domain errors to HTTP: the three endpoints behave the same and leak no server paths.
+
+    领域错误到 HTTP 的映射：三个端点行为一致，不泄漏服务器路径。"""
 
     def test_unknown_script_file_returns_404(self, end_frames_client):
         c, _pm = end_frames_client
@@ -691,7 +827,10 @@ class TestErrorMapping:
         assert _segment(pm).get("end_frame_image") is None
 
     def test_traversal_shot_id_rejected_before_write(self, end_frames_client):
-        """剧本里存在越界形状的镜头 id 时，快照路径解析必须拒绝而非写出项目目录。"""
+        """When the script has a shot id shaped to escape bounds, snapshot path resolution must reject it rather than write
+        outside the project directory.
+
+        剧本里存在越界形状的镜头 id 时，快照路径解析必须拒绝而非写出项目目录。"""
         _c, pm = end_frames_client
         script = pm.load_script("demo", "episode_1.json")
         script["segments"][0]["segment_id"] = "../../../../evil"
@@ -709,7 +848,9 @@ class TestErrorMapping:
         assert exc.value.key == "invalid_resource_id"
 
     def test_body_exceeding_limit_rejected_after_read(self, end_frames_client, monkeypatch):
-        """Content-Length 缺失/被绕过时，按实际读入字节数兜底拒绝。"""
+        """When Content-Length is missing/bypassed, reject based on the bytes actually read as a fallback.
+
+        Content-Length 缺失/被绕过时，按实际读入字节数兜底拒绝。"""
         c, pm = end_frames_client
         monkeypatch.setattr(end_frames, "validate_upload", lambda *a, **k: 16)
         assert _upload(c, _img_bytes("PNG", size=(64, 64))).status_code == 413
@@ -736,7 +877,10 @@ class TestErrorMapping:
         assert "leaked" not in resp.text
 
     def test_illegal_project_name_returns_400(self, end_frames_client):
-        """`get_project_path` 对非法项目名（正则不匹配）抛 ValueError，须映射为 400 而非落 500 兜底。"""
+        """`get_project_path` raises ValueError for an illegal project name (regex mismatch); it must map to 400, not fall
+        through to the 500 fallback.
+
+        `get_project_path` 对非法项目名（正则不匹配）抛 ValueError，须映射为 400 而非落 500 兜底。"""
         c, _pm = end_frames_client
         resp = c.post(
             "/api/v1/projects/demo.evil/shots/E1S01/end-frame/upload?script_file=episode_1.json",
@@ -745,7 +889,9 @@ class TestErrorMapping:
         assert resp.status_code == 400
 
     def test_illegal_script_file_returns_400(self, end_frames_client):
-        """`load_script` 底层 `_safe_subpath` 对越界 script_file 抛 ValueError，须映射为 400。"""
+        """`load_script`'s underlying `_safe_subpath` raises ValueError for an out-of-bounds script_file; it must map to 400.
+
+        `load_script` 底层 `_safe_subpath` 对越界 script_file 抛 ValueError，须映射为 400。"""
         c, pm = end_frames_client
         resp = c.post(
             "/api/v1/projects/demo/shots/E1S01/end-frame/upload?script_file=../../../../etc/passwd",
@@ -755,7 +901,9 @@ class TestErrorMapping:
         assert _segment(pm).get("end_frame_image") is None
 
     def test_illegal_path_returns_400_on_select_and_clear(self, end_frames_client):
-        """三个端点共用 `_locate_shot`，选图与清除通道同样须落 400 而非 500。"""
+        """The three endpoints share `_locate_shot`; the pick and clear channels must also land on 400, not 500.
+
+        三个端点共用 `_locate_shot`，选图与清除通道同样须落 400 而非 500。"""
         c, _pm = end_frames_client
         select_resp = c.post(
             "/api/v1/projects/demo.evil/shots/E1S01/end-frame/select",
@@ -769,7 +917,10 @@ class TestErrorMapping:
         assert clear_resp.status_code == 400
 
     def test_corrupt_script_still_maps_to_500(self, end_frames_client):
-        """`JSONDecodeError` 是 `ValueError` 子类：剧本文件损坏须落 500 兜底，
+        """`JSONDecodeError` is a `ValueError` subclass: a corrupted script file must land on the 500 fallback and not be
+        swallowed by the illegal-script_file 400 branch, otherwise the error cause is completely misleading for debugging.
+
+        `JSONDecodeError` 是 `ValueError` 子类：剧本文件损坏须落 500 兜底，
         不能被非法 script_file 的 400 分支吞掉，否则错误原因对排查完全失真。"""
         c, pm = end_frames_client
         (pm.get_project_path("demo") / "scripts" / "episode_1.json").write_text("{ not json", encoding="utf-8")
@@ -777,7 +928,10 @@ class TestErrorMapping:
         assert _upload(c, _img_bytes("PNG")).status_code == 500
 
     def test_non_utf8_script_still_maps_to_500(self, end_frames_client):
-        """`UnicodeDecodeError` 同样是 `ValueError` 子类：剧本文件含非法 UTF-8 字节须落 500 兜底，
+        """`UnicodeDecodeError` is also a `ValueError` subclass: a script file with invalid UTF-8 bytes must land on the 500
+        fallback and not be swallowed by the illegal-script_file 400 branch.
+
+        `UnicodeDecodeError` 同样是 `ValueError` 子类：剧本文件含非法 UTF-8 字节须落 500 兜底，
         不能被非法 script_file 的 400 分支吞掉。"""
         c, pm = end_frames_client
         (pm.get_project_path("demo") / "scripts" / "episode_1.json").write_bytes(b"\xff\xfe not utf-8")
@@ -794,7 +948,9 @@ def _client_with_project(
     project_generation_mode=None,
     grid_storyboard=None,
 ):
-    """构造项目 generation_mode 可控的测试 client，用于覆盖生成模式准入判定。"""
+    """Build a test client with a controllable project generation_mode, to cover generation mode admission.
+
+    构造项目 generation_mode 可控的测试 client，用于覆盖生成模式准入判定。"""
     pm = ProjectManager(tmp_path / "projects")
     pm.create_project("demo", content_mode=content_mode)
     pm.create_project_metadata("demo", "Demo", "Anime", content_mode)
@@ -812,7 +968,9 @@ def _client_with_project(
 
 
 def _assert_reference_video_rejected(resp) -> None:
-    """断言响应是参考生视频专属的拒绝，而非碰巧同为 400 的其他错误。"""
+    """Assert the response is the reference-to-video-specific rejection, not some other error that happens to be 400 too.
+
+    断言响应是参考生视频专属的拒绝，而非碰巧同为 400 的其他错误。"""
     assert resp.status_code == 400, resp.text
     assert resp.json()["detail"] == i18n_message("end_frame_reference_video_unsupported")
 
@@ -838,13 +996,20 @@ def _ad_script(shot_id="E1S01") -> dict:
 
 
 class TestReferenceVideoRejection:
-    """项目生成模式为 reference_video 时，尾帧三端点一律拒绝。
+    """When the project generation mode is reference_video, all three end frame endpoints reject.
+
+    The decision looks only at project.json: the ad script skeleton carries no script-level generation_mode stamp
+    (see script_generator); all content modes share this rule.
+
+    项目生成模式为 reference_video 时，尾帧三端点一律拒绝。
 
     判定只看 project.json：ad 剧本骨架不携带剧本级 generation_mode 戳（见 script_generator），
     各创作类型共用这一口径。
     """
 
     def test_ad_project_level_reference_video_rejects_all_three_endpoints(self, tmp_path, monkeypatch):
+        # The ad script skeleton carries no generation_mode stamp; reference-to-video is declared only by project-level
+        # config.
         # ad 剧本骨架不携带 generation_mode 戳，参考生视频只由项目级配置声明。
         c, pm = _client_with_project(
             tmp_path, monkeypatch, content_mode="ad", script=_ad_script(), project_generation_mode="reference_video"
@@ -857,6 +1022,7 @@ class TestReferenceVideoRejection:
         assert pm.load_script("demo", "episode_1.json")["shots"][0].get("end_frame_image") is None
 
     def test_ad_storyboard_route_allows_end_frame(self, tmp_path, monkeypatch):
+        # Storyboard-mode ad projects are let through as usual.
         # 分镜图生视频的 ad 项目照常放行。
         c, _pm = _client_with_project(
             tmp_path,
@@ -868,6 +1034,7 @@ class TestReferenceVideoRejection:
         assert _upload(c, _img_bytes("PNG"), shot_id="E1S01").status_code == 200
 
     def test_drama_reference_video_script_rejected(self, tmp_path, monkeypatch):
+        # drama/narration reference-to-video scripts land on this rejection too.
         # drama/narration 的参考生视频剧本同样落到这条拒绝上。
         script = {
             "episode": 1,
@@ -882,6 +1049,8 @@ class TestReferenceVideoRejection:
         _assert_reference_video_rejected(_upload(c, _img_bytes("PNG"), shot_id="E1S01"))
 
     def test_grid_mode_no_regression(self, tmp_path, monkeypatch):
+        # The regular multi-grid storyboard path (storyboard + grid_storyboard) is unaffected; setting end frames is let
+        # through as usual.
         # 常规宫格分镜路径（storyboard + grid_storyboard）不受影响，尾帧设置照常放行。
         script = {
             "episode": 1,
@@ -902,6 +1071,8 @@ class TestReferenceVideoRejection:
         assert pm.load_script("demo", "episode_1.json")["segments"][0]["end_frame_image"] == END_FRAME_REL
 
     def test_script_without_episode_number_rejected_by_project_route(self, tmp_path, monkeypatch):
+        # Neither script nor file name has an episode number: the decision needs only the project generation mode; reject as
+        # usual without falling into 500.
         # 剧本与文件名都不含集号：判定只需项目生成模式，照常拒绝且不落到 500。
         script = {
             "title": "E1",
@@ -911,6 +1082,8 @@ class TestReferenceVideoRejection:
         c, pm = _client_with_project(
             tmp_path, monkeypatch, content_mode="narration", script=script, project_generation_mode="reference_video"
         )
+        # The script write entry rejects scripts whose file name has no episode number; write directly to disk to simulate a
+        # file written externally.
         # 文件名不含集号的剧本写盘入口会拒绝，直接落盘模拟外部写入的文件。
         (pm.get_project_path("demo") / "scripts" / "custom.json").write_text(json.dumps(script), encoding="utf-8")
 
@@ -925,6 +1098,7 @@ class TestValidatorAcceptsWrittenSnapshot:
     def test_written_project_passes_tree_validation(self, end_frames_client):
         c, pm = end_frames_client
         _upload(c, _img_bytes("PNG"))
+        # end_frames is registered as an allowed project root entry and is not judged an unknown directory
         # end_frames 已登记为允许的项目根目录条目，不被判为未知目录
         assert "end_frames" in DataValidator.ALLOWED_ROOT_ENTRIES
         result = DataValidator(projects_dir=str(pm.projects_dir)).validate_project_tree("demo")

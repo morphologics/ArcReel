@@ -1,4 +1,7 @@
-"""剪辑时间线渲染测试共用的项目：两个画外音分镜的视频、旁白配音与一条改过的剪辑时间线。"""
+"""Shared project for edit-timeline render tests: videos of two voiceover shots, narration audio and one edited
+edit timeline.
+
+剪辑时间线渲染测试共用的项目：两个画外音分镜的视频、旁白配音与一条改过的剪辑时间线。"""
 
 from __future__ import annotations
 
@@ -129,7 +132,12 @@ def _install_narration(project_path: Path, item: dict[str, Any], seconds: float)
 
 
 def setup_project(tmp_path: Path, *, narration_delivery: str = "use_tts") -> tuple[ProjectManager, Path]:
-    """两个画外音分镜：S01 视频 2 秒、带 1.2 秒旁白配音，S02 视频 1.5 秒、带比视频长的 2 秒旁白配音。
+    """Two voiceover shots: S01 video 2 s with 1.2 s narration audio; S02 video 1.5 s with 2 s narration audio
+    longer than the video.
+
+    The videos are black screens without an audio track; the narration audio is a 440 Hz sine tone.
+
+    两个画外音分镜：S01 视频 2 秒、带 1.2 秒旁白配音，S02 视频 1.5 秒、带比视频长的 2 秒旁白配音。
 
     视频是没有音轨的黑屏，旁白配音是 440 Hz 正弦音。
     """
@@ -181,7 +189,10 @@ def _append_revision(pm: ProjectManager, timeline_id: str, content: EditTimeline
 
 
 async def edited_timeline(pm: ProjectManager) -> str:
-    """c1 截取 0.5–1.5 秒（依据版本 1）、原声 0.5、定格 0.5 秒；c2 整段使用、原声取画外音默认值。"""
+    """c1 trims 0.5-1.5 s (based on version 1), original audio 0.5, freeze frame 0.5 s; c2 is used in full,
+    original audio takes the voiceover default.
+
+    c1 截取 0.5–1.5 秒（依据版本 1）、原声 0.5、定格 0.5 秒；c2 整段使用、原声取画外音默认值。"""
     created = await EditTimelineService(pm).create_from_script("demo", episode=1, name="完整版", author=CREATOR)
     content = EditTimelineStore(pm, "demo").find(created.timeline.id).latest.content
     first, second = content.clips

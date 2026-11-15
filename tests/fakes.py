@@ -24,9 +24,13 @@ if TYPE_CHECKING:
 
 
 _NO_SDK_MESSAGES: tuple[dict[str, Any], ...] = ()
+# Stream end marker injected by close_stream: after reading it the raw frame stream ends, and further reads end at once
 # close_stream 注入的流终止标记：读到它之后原始帧流结束，再次读取也立即结束
 _STREAM_EOF = object()
 
+#: Artifact stand-in bytes with a real file header. The fetch path decides the container by file header (see
+#: ``lib.custom_provider.comfyui.artifacts.container_matches``); bare placeholder bytes would be judged a container
+#: mismatch.
 #: 带真实文件头的产物替身字节。取件路径按文件头判容器（见
 #: ``lib.custom_provider.comfyui.artifacts.container_matches``），裸占位字节会被判容器不符。
 MP4_BYTES = b"\x00\x00\x00\x18ftypisom\x00\x00\x02\x00mp4-bytes"
@@ -35,14 +39,19 @@ PNG_BYTES = b"\x89PNG\r\n\x1a\npng-bytes"
 
 @contextmanager
 def captured_vertex_credentials() -> Generator[MagicMock]:
-    """替换服务账号私钥解析，保留凭证路径与 scopes 供装配测试断言。"""
+    """Replace service-account private key parsing, keeping the credential path and scopes for assembly tests to assert.
+
+    替换服务账号私钥解析，保留凭证路径与 scopes 供装配测试断言。"""
     with patch("google.oauth2.service_account.Credentials.from_service_account_file", autospec=True) as load:
         yield load
 
 
 @contextmanager
 def failing_manifest_replace(error: BaseException) -> Generator[None]:
-    """让清单的条件替换（迁移改写登记的提交点）抛出 *error*：模拟写入失败，或进程在提交点被杀。"""
+    """Make the manifest's conditional replace (the commit point where migration rewrites the registry) raise *error*: it
+    simulates a write failure, or the process being killed at the commit point.
+
+    让清单的条件替换（迁移改写登记的提交点）抛出 *error*：模拟写入失败，或进程在提交点被杀。"""
 
     from lib.artifacts.artifact_manifest import ProjectArtifactManifestAdapter
 
@@ -51,7 +60,10 @@ def failing_manifest_replace(error: BaseException) -> Generator[None]:
 
 
 async def write_backend_output(path: Path, data: bytes) -> None:
-    """后端替身落产物：生产后端在工作线程里写产物文件，替身照同一契约放进线程，不占事件循环。"""
+    """Backend double writes its output: production backends write artifact files on a worker thread, and the double puts
+    it on a thread under the same contract, keeping the event loop free.
+
+    后端替身落产物：生产后端在工作线程里写产物文件，替身照同一契约放进线程，不占事件循环。"""
 
     def _write() -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -61,7 +73,12 @@ async def write_backend_output(path: Path, data: bytes) -> None:
 
 
 async def empty_sdk_response_stream() -> AsyncIterator[dict[str, Any]]:
-    """不产出任何消息即结束的 SDK 响应流。
+    """An SDK response stream that ends without yielding any message.
+
+    Return this function's result when a fake client needs an "empty response stream"; writing ``if False: yield``
+    directly would leave a statically unreachable branch.
+
+    不产出任何消息即结束的 SDK 响应流。
 
     fake client 需要「空响应流」时返回本函数的结果；直接写 ``if False: yield`` 会留下
     静态不可达的分支。
@@ -82,6 +99,8 @@ class FakeProjectAssetMutationMixin:
         raise NotImplementedError
 
     def get_project_path(self, project_name: str) -> Path:
+        # By default the double has no project directory: give it a nonexistent location, so looking up the project trash when
+        # creating an asset finds nothing.
         # 替身默认没有项目目录：给一个不存在的位置，新建资产时查项目回收站得到空。
         return Path("/nonexistent-arcreel-fake-projects") / project_name
 
@@ -111,6 +130,8 @@ class FakeProjectAssetMutationMixin:
 
         self.update_project(project_name, _mutate)
         if on_commit is not None:
+            # The production contract passes the path of project.json, not the project name: the double passes the same shape,
+            # otherwise an on_commit that uses this argument would get a relative name in tests.
             # 生产契约给的是 project.json 的路径，不是项目名：替身给同一形状，
             # 否则用到该入参的 on_commit 在用例里拿到的是一段相对名字。
             on_commit(self.get_project_path(project_name) / "project.json")
@@ -124,7 +145,10 @@ class FakeProjectAssetMutationMixin:
         old_name: str,
         new_name: str,
     ) -> dict[str, Any]:
-        """衍生改名的项目侧结果；剧本引用的级联改写由 ProjectManager 的用例覆盖。"""
+        """Project-side result of a derivative rename; the cascading rewrite of script references is covered by the
+        ProjectManager tests.
+
+        衍生改名的项目侧结果；剧本引用的级联改写由 ProjectManager 的用例覆盖。"""
         from lib.project.asset_derivatives import find_derivative_name
         from lib.project.asset_rename import AssetRenameConflictError, AssetRenameNotFoundError
         from lib.project.asset_types import (
@@ -176,7 +200,12 @@ def persist_fake_script(project_path: Path, script_file: object, script: object)
 def write_generation_targets(
     project_path: Path, *, segments: tuple[str, ...] = (), video_units: tuple[str, ...] = ()
 ) -> None:
-    """写一份最小项目数据，让第 1 集剧本里有这些分镜条目与视频单元。
+    """Write minimal project data so that the episode 1 script contains these shot entries and video units.
+
+    Before a queued task commits its output, it rechecks that the target resource is still in the project; when the
+    target is gone the output goes to the project trash.
+
+    写一份最小项目数据，让第 1 集剧本里有这些分镜条目与视频单元。
 
     队列任务的产物提交前会复核目标资源仍在项目中，目标不在时产物进项目回收站。
     """
@@ -220,20 +249,28 @@ def select_formal_video(
 
 
 class FakeTextGenerator:
-    """文本模型替身：按顺序回放预置的回复文本，并记下每次收到的请求。
+    """Text model double: replays preset reply texts in order and records each request it receives.
+
+    Hook it in with ``use_text_generator(monkeypatch, fake.create)``; when a reply is an exception instance it is raised
+    in ``generate``, simulating a failed provider call.
+
+    文本模型替身：按顺序回放预置的回复文本，并记下每次收到的请求。
 
     以 ``use_text_generator(monkeypatch, fake.create)`` 接入；回复为异常实例时在
     ``generate`` 抛出，模拟供应商调用失败。
     """
 
+    #: Same name as ``TextGenerator.max_output_tokens``: the effective cap when no maximum output length is registered.
     #: 与 ``TextGenerator.max_output_tokens`` 同名：未登记最大输出长度时的生效上限。
     max_output_tokens = 64000
+    #: Same name as ``TextGenerator.model``: the model name the caller writes into metadata.
     #: 与 ``TextGenerator.model`` 同名：调用方写进元数据的模型名。
     model = "fake-text"
 
     def __init__(self, *responses: str | BaseException):
         self._responses = list(responses)
         self.requests: list[Any] = []
+        #: The ``require_complete`` passed on each call, one-to-one with ``requests``.
         #: 每次调用传入的 ``require_complete``，与 ``requests`` 一一对应。
         self.require_complete: list[bool] = []
 
@@ -260,7 +297,9 @@ def assistant_frame(
     message_id: str | None = None,
     usage: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """CLI 输出的 assistant 原始帧；``content`` 是若干 content block。"""
+    """Raw assistant frame from the CLI output; ``content`` is a list of content blocks.
+
+    CLI 输出的 assistant 原始帧；``content`` 是若干 content block。"""
     message: dict[str, Any] = {"role": "assistant", "content": list(content), "model": model}
     if message_id is not None:
         message["id"] = message_id
@@ -276,12 +315,21 @@ def assistant_frame(
 
 
 def system_frame(subtype: str, **fields: Any) -> dict[str, Any]:
-    """CLI 输出的 system 原始帧，字段平铺在顶层（SDK 解析后整帧放进 ``SystemMessage.data``）。"""
+    """Raw system frame from the CLI output, with fields flat at the top level (after SDK parsing the whole frame goes into
+    ``SystemMessage.data``).
+
+    CLI 输出的 system 原始帧，字段平铺在顶层（SDK 解析后整帧放进 ``SystemMessage.data``）。"""
     return {"type": "system", "subtype": subtype, **fields}
 
 
 def session_state_message(state: str) -> dict[str, Any]:
-    """CLI 的 ``session_state_changed`` 帧经 SDK 解析、序列化后交给会话层的形状（状态在 ``data`` 里）。
+    """The shape of the CLI's ``session_state_changed`` frame after SDK parsing and serialization, as handed to the session
+    layer (the state is in ``data``).
+
+    Feed it directly to the read callback returned by ``SessionManager._make_actor_message_callback``; to send the frame
+    through the double use ``system_frame("session_state_changed", state=...)``.
+
+    CLI 的 ``session_state_changed`` 帧经 SDK 解析、序列化后交给会话层的形状（状态在 ``data`` 里）。
 
     直接喂给 ``SessionManager._make_actor_message_callback`` 返回的读取回调；经替身发帧用
     ``system_frame("session_state_changed", state=...)``。
@@ -317,7 +365,10 @@ def result_frame(
     uuid: str | None = None,
     **fields: Any,
 ) -> dict[str, Any]:
-    """CLI 输出的 result 原始帧；``fields`` 补充 ``stop_reason``、``terminal_reason``、``usage`` 等字段。"""
+    """Raw result frame from the CLI output; ``fields`` adds fields such as ``stop_reason``, ``terminal_reason`` and
+    ``usage``.
+
+    CLI 输出的 result 原始帧；``fields`` 补充 ``stop_reason``、``terminal_reason``、``usage`` 等字段。"""
     return {
         "type": "result",
         "subtype": subtype,
@@ -332,7 +383,10 @@ def result_frame(
 
 
 def command_lifecycle_frame(command_uuid: str, state: str, *, session_id: str = "default") -> dict[str, Any]:
-    """CLI 报告一条带 uuid 送入的用户消息的去向（``queued`` / ``started`` / ``completed`` / ``cancelled`` 等）。"""
+    """The CLI reports what happened to a user message sent with a uuid (``queued`` / ``started`` / ``completed`` /
+    ``cancelled`` etc.).
+
+    CLI 报告一条带 uuid 送入的用户消息的去向（``queued`` / ``started`` / ``completed`` / ``cancelled`` 等）。"""
     return {
         "type": "command_lifecycle",
         "command_uuid": command_uuid,
@@ -347,7 +401,9 @@ ScriptedFrame = dict[str, Any] | Callable[["FakeSDKClient"], dict[str, Any]]
 
 
 def replay_frame(index: int = -1, *, session_id: str = "default") -> Callable[[FakeSDKClient], dict[str, Any]]:
-    """CLI 回放第 ``index`` 条送入的用户消息，保留送入时的 uuid。"""
+    """The CLI replays the ``index``-th user message sent, keeping the uuid it was sent with.
+
+    CLI 回放第 ``index`` 条送入的用户消息，保留送入时的 uuid。"""
 
     def _build(client: FakeSDKClient) -> dict[str, Any]:
         sent = client.sent_messages[index]
@@ -367,7 +423,9 @@ _ControlResponse = dict[str, Any] | BaseException | Callable[[dict[str, Any]], d
 
 
 class _FakeQuery:
-    """``ClaudeSDKClient._query`` 的替身：原始帧流与控制请求入口。"""
+    """Double for ``ClaudeSDKClient._query``: the raw frame stream and the control request entry.
+
+    ``ClaudeSDKClient._query`` 的替身：原始帧流与控制请求入口。"""
 
     def __init__(self, client: FakeSDKClient):
         self._client = client
@@ -399,6 +457,22 @@ class _FakeQuery:
 
 class FakeSDKClient:
     """Fake Claude Agent SDK client for SessionActor / SessionManager tests.
+
+    The double emits the raw frames the CLI writes to stdout (built with ``assistant_frame`` etc.), handed to the actor
+    through ``_query.receive_messages()`` and parsed by the real SDK parser; the double does not simulate the CLI's queue
+    logic.
+
+    - `async with`: `__aenter__` records the current_task of connect, `__aexit__` records disconnect
+    - `method_tasks`: dict[str, list[asyncio.Task]] records the task each method was called on
+    - `frames`: the first-turn raw frames emitted one by one after the first `query()`; after that use `push_frame` to
+      emit frames by script. A frame can be a function like ``replay_frame()`` that builds the frame from the double's
+      state when emitted
+    - `sent_messages`: user message frames ArcReel sent (with uuid); `sent_queries` are their message contents
+    - A turn ends at the result frame; without a result frame the turn stays in flight
+    - `interrupt_frame`: the frame emitted when `interrupt()` is called (usually that turn's result)
+    - `control_responses`: replies per control request subtype: a reply dict, an exception to raise, or a function that
+      takes the request and returns the reply (it may `push_frame`); sent requests are recorded in `control_requests`
+    - `connect_error`: exception raised in `__aenter__`, to simulate a connection failure
 
     替身发出的是 CLI 写到 stdout 的原始帧（用 ``assistant_frame`` 等构造），经
     ``_query.receive_messages()`` 交给 actor，由真实的 SDK 解析器解析；替身不模拟 CLI 的队列逻辑。
@@ -459,6 +533,7 @@ class FakeSDKClient:
             async for message in prompt:
                 self.sent_messages.append(message)
                 self.sent_queries.append(message["message"]["content"])
+        # As with the real CLI: the first-turn reply is produced only after the prompt is received
         # 与真实 CLI 一致：首轮回复在收到 prompt 之后才产出
         for frame in self._initial_frames:
             await self._frames.put(frame(self) if callable(frame) else frame)
@@ -471,17 +546,24 @@ class FakeSDKClient:
             await self._frames.put(self._interrupt_frame)
 
     def push_frame(self, frame: ScriptedFrame) -> None:
-        """测试辅助：运行中让 CLI 发出一条原始帧。"""
+        """Test helper: make the CLI emit one raw frame while running.
+
+        测试辅助：运行中让 CLI 发出一条原始帧。"""
         self._frames.put_nowait(frame(self) if callable(frame) else frame)
 
     def respond_control(self, subtype: str, response: _ControlResponse) -> None:
-        """测试辅助：指定之后该 subtype 控制请求的应答。"""
+        """Test helper: set the reply for later control requests of this subtype.
+
+        测试辅助：指定之后该 subtype 控制请求的应答。"""
         self._control_responses[subtype] = response
 
     def close_stream(self) -> None:
-        """测试辅助：模拟 CLI 退出，已发出的帧读完后原始帧流终止。"""
+        """Test helper: simulate the CLI exiting; the raw frame stream ends after the emitted frames are read.
+
+        测试辅助：模拟 CLI 退出，已发出的帧读完后原始帧流终止。"""
         self._frames.put_nowait(_STREAM_EOF)
 
+    # Backward compatibility: keep the original method signatures (old tests still use `await client.connect()` / `await client.disconnect()`)
     # 向后兼容：保留原方法签名（旧测试仍使用 `await client.connect()` / `await client.disconnect()`）
     async def connect(self) -> None:
         self._record("connect")
@@ -501,7 +583,12 @@ async def build_managed_with_actor(
     frames: list[dict] | None = None,
     on_message_hook=None,
 ):
-    """测试辅助：围绕 FakeSDKClient 创建 SessionActor + ManagedSession，并启动 actor。
+    """Test helper: create SessionActor + ManagedSession around FakeSDKClient and start the actor.
+
+    Returns (managed, actor, client). After the test, call `await managed.send_disconnect()` to clean up, or let the
+    caller manage the lifecycle.
+
+    测试辅助：围绕 FakeSDKClient 创建 SessionActor + ManagedSession，并启动 actor。
 
     返回 (managed, actor, client)。测试完成后调用 `await managed.send_disconnect()`
     清理，或由调用方自行管理生命周期。
@@ -525,6 +612,7 @@ async def build_managed_with_actor(
         m = managed_ref[0]
         if m is None:
             return
+        # As with the production callback: the actor hands over SDK messages, and the session layer handles their serialized dict
         # 与生产回调一致：actor 交来 SDK 消息，会话层处理其序列化后的 dict
         msg = message_to_dict(raw_msg)
         if on_message_hook is not None:
@@ -550,7 +638,12 @@ def fake_reference_request_facts(
     failures: Mapping[str, Any] | None = None,
     **overrides: Any,
 ):
-    """参考路线请求投影的视频请求事实查找：按桶返回构造好的结果对象。
+    """Video request facts lookup for the reference-route request projection: returns prebuilt result objects per bucket.
+
+    ``failures`` gives a ``VideoRequestFactsFailure`` per bucket, returned as-is for matching buckets; other buckets get
+    successful facts built from ``durations`` and ``overrides`` (``tests.factories.make_video_request_facts``).
+
+    参考路线请求投影的视频请求事实查找：按桶返回构造好的结果对象。
 
     ``failures`` 按桶给出 ``VideoRequestFactsFailure``，命中的桶原样返回失败对象；其余桶按
     ``durations`` 与 ``overrides`` 构造成功事实（``tests.factories.make_video_request_facts``）。
@@ -587,7 +680,13 @@ def fake_reference_request_projector(
     text_to_video: bool = True,
     request_facts=None,
 ):
-    """构造使用真实资产水合与投影规则、仅替换视频请求事实的 async 测试入口。
+    """Build an async test entry that uses the real asset hydration and projection rules and only replaces the video request
+    facts.
+
+    When ``request_facts`` is given it is used as-is as the per-bucket lookup (see
+    :func:`fake_reference_request_facts`), otherwise it is built from the other arguments.
+
+    构造使用真实资产水合与投影规则、仅替换视频请求事实的 async 测试入口。
 
     ``request_facts`` 给定时原样作为按桶查找（见 :func:`fake_reference_request_facts`），
     否则按其余参数构造。
@@ -646,7 +745,22 @@ def fake_reference_request_projector(
 
 
 class FakeConfigResolver:
-    """能力解析器 seam 的手写替身：按桶回答视频能力，不触碰配置库。
+    """Hand-written double for the capability resolver seam: answers video capabilities per bucket without touching the
+    config DB.
+
+    Agent tool tests assembling ``ToolHarness`` and any production entry that takes a ``config_resolver`` keyword
+    (``MediaGenerator``, capability-dict getters like ``project_video_caps``) can inject this class, instead of replacing
+    those getters wholesale: the replaced getters contain the soft fallbacks and audio-tier derivation, which are exactly
+    the behavior tests must protect. This class does not implement execution model resolution or per-model capability
+    synthesis; consumer tests of video request facts use ``set_video_request_facts`` from ``tests/conftest.py`` to supply
+    fact results directly.
+
+    ``by_generation_type`` is for paths that branch per bucket (reference-to-video units without references go to the
+    i2v bucket): keys are ``VideoGenerationType`` literals, values are fields overlaid on the base capabilities.
+    ``error`` / ``generate_audio_error`` trigger the soft-fallback branches without further patching.
+    ``image_resolution`` is the image resolution tier, which the grid tier gate reads.
+
+    能力解析器 seam 的手写替身：按桶回答视频能力，不触碰配置库。
 
     Agent 工具测试装配 ``ToolHarness`` 与生产侧凡接 ``config_resolver`` 关键字的入口（``MediaGenerator``、
     ``project_video_caps`` 等能力 dict 取值器）都可注入本类，替代对这些取值器本身的整体替换——被替换掉的取值器里有软回退与
@@ -712,7 +826,10 @@ class FakeConfigResolver:
         self.reference_limits_calls: list[str | None] = []
 
     def caps_for(self, generation_type: str | None = None) -> dict[str, Any]:
-        """该桶的能力 dict（与生产返回同形），供用例直接对照期望。"""
+        """That bucket's capability dict (same shape as production returns), for tests to compare against expectations
+        directly.
+
+        该桶的能力 dict（与生产返回同形），供用例直接对照期望。"""
         caps = dict(self._base)
         caps.update(self._by_generation_type.get(generation_type or "", {}))
         durations = caps.get("supported_durations") or []
@@ -739,7 +856,10 @@ class FakeConfigResolver:
         *,
         generation_type: str | None = None,
     ) -> Any:
-        """解析图像供应商；``image_backend_error`` 给「项目槽位解析不出可用供应商」那条路径。"""
+        """Resolve the image provider; ``image_backend_error`` covers the path where "the project slot resolves no usable
+        provider".
+
+        解析图像供应商；``image_backend_error`` 给「项目槽位解析不出可用供应商」那条路径。"""
         from lib.config.resolver import ProviderModel
 
         del project, payload
@@ -755,7 +875,14 @@ class FakeConfigResolver:
         return bool(self._base["requested_generate_audio"])
 
     async def video_generate_audio(self, project_name: str | None = None) -> bool:
-        """生产同名读点（按项目名）：与 ``video_generate_audio_for_project`` 共享同一份配置值。
+        """Production read point of the same name (by project name): shares one config value with
+        ``video_generate_audio_for_project``.
+
+        The two read points each record their own arguments (this one takes the project name, the per-project one takes the
+        project dict); the record lists are not merged, so a test's equality assertions are not polluted by calls from the
+        other path.
+
+        生产同名读点（按项目名）：与 ``video_generate_audio_for_project`` 共享同一份配置值。
 
         两个读点各记各的入参（本读点收项目名、按 project 的那个收 project dict），
         record 列表不合并，免得用例的等值断言被另一条路径的调用串味。
@@ -766,7 +893,10 @@ class FakeConfigResolver:
         return bool(self._base["requested_generate_audio"])
 
     async def reference_payload_limits(self, provider_id: str | None = None) -> tuple[int, int]:
-        """参考图载荷限额（总量, 单张）；未显式配置时与生产同取 service 层保守默认。"""
+        """Reference image payload limits (total, per image); when not configured explicitly, the same conservative service-layer
+        defaults as production.
+
+        参考图载荷限额（总量, 单张）；未显式配置时与生产同取 service 层保守默认。"""
         self.reference_limits_calls.append(provider_id)
         if self._reference_payload_limits is not None:
             return self._reference_payload_limits
@@ -788,7 +918,17 @@ class FakeConfigResolver:
 
 
 def instructor_api_call_exhausted(cause: Exception) -> InstructorRetryException:
-    """构造「API 调用失败」形态的 Instructor 异常，供结构化输出降级链的判据测试使用。
+    """Build an Instructor exception in the "API call failed" shape, for tests of the structured-output fallback chain's
+    criteria.
+
+    Exceptions raised by the API call itself (parameters rejected, transient 5xx, connection errors) break the in-tier
+    retry loop and get wrapped into ``InstructorRetryException``, with the original exception only on ``__cause__``. That
+    shape is exactly what the fallback chain's criteria must recognize; stubbing with a bare API exception would test a
+    path that does not exist in production. Here an empty ``failed_attempts`` means this tier never got to parsing; the
+    mixed shape that fails parsing a few times and then fails on the API is built by the test module itself. The shape
+    itself is pinned against real Instructor by ``TestInstructorExceptionShape``.
+
+    构造「API 调用失败」形态的 Instructor 异常，供结构化输出降级链的判据测试使用。
 
     API 调用本身抛的异常（参数被拒、瞬态 5xx、连接错误）会中断档内重试循环、被包成
     ``InstructorRetryException``，原异常只挂在 ``__cause__`` 上。降级链的判据要认的正是这个
@@ -808,7 +948,9 @@ def instructor_api_call_exhausted(cause: Exception) -> InstructorRetryException:
 
 
 class _SteppingClock:
-    """``AsyncClock`` 替身：每读一次 ``monotonic`` 推进 ``step`` 秒，``sleep`` 只让出事件循环。"""
+    """``AsyncClock`` double: each read of ``monotonic`` advances ``step`` seconds, and ``sleep`` only yields the event loop.
+
+    ``AsyncClock`` 替身：每读一次 ``monotonic`` 推进 ``step`` 秒，``sleep`` 只让出事件循环。"""
 
     def __init__(self, step: float) -> None:
         self._ticks = itertools.count(0.0, step)
@@ -822,7 +964,18 @@ class _SteppingClock:
 
 @contextmanager
 def bounded_poll_clock(step: float = 30.0) -> Generator[None]:
-    """轮询与重试等待的唯一替身入口：sleep 不真等，每读一次表推进 step 秒。
+    """The single double entry for polling and retry waits: sleep does not really wait, and each clock read advances step
+    seconds.
+
+    It binds the stepping fake clock to the current context via ``lib.infra.retry.bind_clock``, so the backoff of
+    ``retry_async`` and the poll interval of ``poll_with_retry`` both use it; the binding only affects this context and
+    its derived tasks, leaving waits and event-loop timing of other tests in the same process alone.
+
+    When terminal-state detection breaks (treating a ready task as "still running"), a poll that does not really wait
+    would spin forever with near-zero real time, so the test hangs instead of failing. The fake clock makes such bugs hit
+    ``max_wait`` and raise ``TimeoutError`` within a few dozen polls: red fast and readable.
+
+    轮询与重试等待的唯一替身入口：sleep 不真等，每读一次表推进 step 秒。
 
     经 ``lib.infra.retry.bind_clock`` 把步进假表绑到当前上下文，``retry_async`` 的退避与
     ``poll_with_retry`` 的轮询间隔都改走它；绑定只作用于本上下文及其派生任务，同进程里其他用例的
@@ -840,7 +993,14 @@ def bounded_poll_clock(step: float = 30.0) -> Generator[None]:
 
 @contextmanager
 def captured_provider_job_ids(fail: Exception | None = None) -> Generator[list[dict[str, Any]]]:
-    """provider_job_id 写回的手写替身：收下写回参数，不落 DB。
+    """Hand-written double for the provider_job_id write-back: takes the write-back arguments without touching the DB.
+
+    ``persist_provider_job_id`` is the backend's DB boundary, and tests of each submit-poll backend only care about "what
+    was written back". It yields a list of records filed by argument name, so assertions are on record contents rather
+    than the double's call object; when a non-worker path (``task_id=None``) skips the write-back the list stays empty.
+    With ``fail`` given, the write-back raises it instead, to simulate a DB write failure.
+
+    provider_job_id 写回的手写替身：收下写回参数，不落 DB。
 
     ``persist_provider_job_id`` 是 backend 的 DB 边界，各提交-轮询型 backend 的测试只关心
     「写回了什么」。产出按参数名归档的记录列表，断言落在记录内容上而不是替身的调用对象上；
@@ -875,7 +1035,14 @@ def captured_provider_job_ids(fail: Exception | None = None) -> Generator[list[d
 
 @contextmanager
 def captured_ark_clients(module: str, client: Any = None) -> Generator[list[dict[str, Any]]]:
-    """create_ark_client 的记录器：收下建客户端的参数，回给定（或空）客户端替身。
+    """Recorder for create_ark_client: takes the client construction arguments and returns the given (or an empty) client
+    double.
+
+    The three Ark backends (text / image / video) each reference this factory from their own module, whose path the
+    caller provides. Assertions on base_url normalization and auth pass-through are on the recorded construction
+    arguments, not on the double's call object.
+
+    create_ark_client 的记录器：收下建客户端的参数，回给定（或空）客户端替身。
 
     Ark 系三个后端（文本 / 图像 / 视频）各自从自己的模块引用这个工厂，模块路径由调用方给出。
     base_url 归一化、鉴权透传的断言落在记录的构造参数上，而不是替身的调用对象。
@@ -895,7 +1062,15 @@ def captured_ark_clients(module: str, client: Any = None) -> Generator[list[dict
 
 @contextmanager
 def captured_openai_clients(client: Any = None) -> Generator[list[dict[str, Any]]]:
-    """AsyncOpenAI 构造的记录器：收下建客户端的参数，回给定（或空）客户端替身。
+    """Recorder for AsyncOpenAI construction: takes the client construction arguments and returns the given (or an empty)
+    client double.
+
+    The OpenAI-compatible family (openai / agnes text, openai image and video, openai TTS, dashscope and minimax video)
+    all get this SDK entry via ``lib.backends.openai_shared``, and the construction arguments are the contract at that
+    boundary: auth, base_url normalization, timeout. Assertions are on the recorded construction arguments, not on the
+    double's call object.
+
+    AsyncOpenAI 构造的记录器：收下建客户端的参数，回给定（或空）客户端替身。
 
     OpenAI 兼容族（openai / agnes 文本、openai 图像与视频、openai TTS、dashscope 与 minimax
     视频）都经 ``lib.backends.openai_shared`` 取这个 SDK 入口，构造参数就是该边界上的契约：鉴权、
@@ -916,7 +1091,13 @@ def captured_openai_clients(client: Any = None) -> Generator[list[dict[str, Any]
 
 @contextmanager
 def patched_instructor_from_openai(patched: Any = None, **patch_kwargs: Any) -> Generator[Any]:
-    """在 SDK 边界替换 ``instructor.from_openai``，yield 该替身，供测试断言传给 ``from_openai`` 的参数。
+    """Replace ``instructor.from_openai`` at the SDK boundary and yield the double, for tests to assert the arguments passed
+    to ``from_openai``.
+
+    *patched* is the instructor client ``from_openai`` returns; a default double is returned when omitted. Other keyword
+    arguments (``return_value`` / ``side_effect``) are passed to ``patch`` as-is.
+
+    在 SDK 边界替换 ``instructor.from_openai``，yield 该替身，供测试断言传给 ``from_openai`` 的参数。
 
     *patched* 是 ``from_openai`` 返回的 instructor 客户端；省略时返回默认替身。
     其余关键字参数（``return_value`` / ``side_effect``）原样交给 ``patch``。
@@ -929,7 +1110,16 @@ def patched_instructor_from_openai(patched: Any = None, **patch_kwargs: Any) -> 
 
 @contextmanager
 def captured_backend_construction() -> Generator[list[dict[str, Any]]]:
-    """四个后端 registry 的构造记录器：工厂换成只记参数的哑后端，不建 SDK 客户端。
+    """Construction recorder for the four backend registries: factories become dummy backends that only record arguments,
+    without building SDK clients.
+
+    The output of the assembly layer (``ProviderSpec.build_backend``, ``lib.backends.text_backends.factory``) is exactly
+    "which media registry, which backend name, which construction arguments"; real backends need credentials and
+    network. Factories are replaced one by one by name (keeping the key set, so readers of ``get_registered_backends``
+    are unaffected), and the record list lets assertions target the construction arguments themselves; unregistered
+    names still fail loud in ``create_backend``.
+
+    四个后端 registry 的构造记录器：工厂换成只记参数的哑后端，不建 SDK 客户端。
 
     装配层（``ProviderSpec.build_backend``、``lib.backends.text_backends.factory``）的产出就是
     「往哪个 media registry、用什么后端名、什么构造参数建后端」，真实后端要凭证要网络。
@@ -969,7 +1159,16 @@ def captured_backend_construction() -> Generator[list[dict[str, Any]]]:
 
 
 class _BlockingFileReadGate:
-    """把某个路径的同步读挡在闸门后，观测 async 生产路径是否把该读卸载到线程。
+    """Hold the sync read of a given path behind a gate, to observe whether the async production path offloads that read to
+    a thread.
+
+    If the read still runs on the event-loop thread, the loop stops inside the gate, the test coroutine cannot advance to
+    ``release()``, and after waiting for release times out the gate records ``event_loop_blocked`` and finishes the read
+    as usual (no exception; see ``enter_read`` for why). Once the read is offloaded to a thread the loop advances
+    normally and the read finishes on release. The verdict comes from ``assert_read_was_offloaded()``, asserting that the
+    loop can advance, not looking at call records.
+
+    把某个路径的同步读挡在闸门后，观测 async 生产路径是否把该读卸载到线程。
 
     读若仍在事件循环线程上跑，循环就停在闸门里，测试协程推进不到 ``release()``，闸门
     等放行超时后记下 ``event_loop_blocked`` 并照常读完（不抛异常，理由见 ``enter_read``）；
@@ -987,7 +1186,13 @@ class _BlockingFileReadGate:
         self._release = threading.Event()
 
     def enter_read(self) -> None:
-        """在闸门内被调用：登记读已开始，等待测试放行。
+        """Called inside the gate: register that the read has started and wait for the test to release it.
+
+        If release never comes, only record ``event_loop_blocked`` and finish the read as usual without raising: the path
+        under test often has a retry decorator, and a raise would be swallowed by the retry, pass through the already
+        released gate the second time, and turn a red test green.
+
+        在闸门内被调用：登记读已开始，等待测试放行。
 
         放行等不到只记 ``event_loop_blocked`` 后照常读完，不抛异常——被测路径多带重试
         装饰器，抛出来会被重试吞掉、第二次穿过已放行的闸门，把红测变绿。
@@ -997,7 +1202,10 @@ class _BlockingFileReadGate:
             self.event_loop_blocked = True
 
     async def wait_until_read_started(self) -> None:
-        """等到闸门内的读开始。读没卸载时事件循环被堵住，本 await 无法返回。"""
+        """Wait until the read inside the gate starts. If the read is not offloaded the event loop is blocked and this await
+        cannot return.
+
+        等到闸门内的读开始。读没卸载时事件循环被堵住，本 await 无法返回。"""
         started = await asyncio.to_thread(self._started.wait, self.TIMEOUT_SECONDS)
         assert started, f"{self.path.name} 的 {self.method} 未在 {self.TIMEOUT_SECONDS} 秒内开始"
 
@@ -1015,7 +1223,9 @@ def blocking_file_read_gate(
     *,
     method: str = "read_bytes",
 ) -> Generator[_BlockingFileReadGate]:
-    """在文件系统边界上给 *path* 的 ``Path.<method>`` 读装一道闸门。"""
+    """Install a gate on the ``Path.<method>`` read of *path* at the file-system boundary.
+
+    在文件系统边界上给 *path* 的 ``Path.<method>`` 读装一道闸门。"""
     gate = _BlockingFileReadGate(path, method)
     original = getattr(Path, method)
     target = path.resolve()
@@ -1033,7 +1243,14 @@ def blocking_file_read_gate(
 
 
 def hook_claim_recheck(monkeypatch, *, before=None, after_first_pass=None) -> None:
-    """在正式图像任务提交前的 claim 复核处插入一次产物变更，再放行真实复核。
+    """Insert an artifact change at the claim recheck before a canonical image task is submitted, then let the real recheck
+    run.
+
+    ``before`` runs before every recheck (a change after reference images are frozen and before sending to the provider);
+    ``after_first_pass`` runs only once after the first recheck passes, to verify the second checkpoint before the
+    provider call.
+
+    在正式图像任务提交前的 claim 复核处插入一次产物变更，再放行真实复核。
 
     ``before`` 在每次复核之前执行（参考图冻结之后、发给供应商之前的变更）；
     ``after_first_pass`` 只在首次复核通过后执行一次，用于验证进供应商调用前的第二道 checkpoint。
@@ -1058,12 +1275,22 @@ def hook_claim_recheck(monkeypatch, *, before=None, after_first_pass=None) -> No
 
 
 async def refuse_resume_execution(task: dict[str, Any], *, job_id: str) -> dict[str, Any]:
-    """生成 worker 的续跑执行器替身：用例不该走到续跑，走到即判失败。"""
+    """Double for the generation worker's resume executor: tests should never reach resume; reaching it fails the test.
+
+    生成 worker 的续跑执行器替身：用例不该走到续跑，走到即判失败。"""
     raise AssertionError(f"unexpected resume execution: {task.get('task_id')}")
 
 
 def bind_safe_session_factory(monkeypatch, factory) -> None:
-    """把生成 worker 自开 session 用的 ``safe_session_factory`` 指向给定的 session 工厂。
+    """Point the ``safe_session_factory`` the generation worker uses to open its own sessions at the given session factory.
+
+    The worker's ``_requeue_single_task`` and ``CapacityTable.from_db`` open their own sessions through this name, imported
+    at module level, bypassing the injected queue; at dispatch, ``lib.config.service.read_video_poll_timeout_seconds``,
+    which reads the global poll timeout, imports the global name on ``lib.db`` late inside the function, so both are
+    replaced together. The factory is given by the caller: a real-DB ``async_sessionmaker``, or a context manager that
+    yields only a fake session.
+
+    把生成 worker 自开 session 用的 ``safe_session_factory`` 指向给定的 session 工厂。
 
     worker 的 ``_requeue_single_task`` 与 ``CapacityTable.from_db`` 经模块级导入的这个名字绕开注入的
     队列自己开 session，派发时读全局轮询超时的 ``lib.config.service.read_video_poll_timeout_seconds``
@@ -1075,7 +1302,10 @@ def bind_safe_session_factory(monkeypatch, factory) -> None:
 
 
 class HangingProcess:
-    """永不自行退出的子进程替身（asyncio Process 形状）；可配置是否响应 terminate。"""
+    """Subprocess double that never exits on its own (asyncio Process shape); whether it responds to terminate is
+    configurable.
+
+    永不自行退出的子进程替身（asyncio Process 形状）；可配置是否响应 terminate。"""
 
     def __init__(self, *, honors_terminate: bool) -> None:
         self._honors_terminate = honors_terminate
@@ -1111,12 +1341,18 @@ class HangingProcess:
 
 
 def use_project_manager(monkeypatch, pm: Any) -> None:
-    """让读 ``get_project_manager()`` 的项目入口、路由与任务执行模块都拿到 *pm*。
+    """Make the project entries, routes and task execution modules that read ``get_project_manager()`` all get *pm*.
+
+    In production these modules share one process-level singleton; tests install the double into all callers in the same
+    shape, rather than only replacing the one in the module under test. Both a real ``ProjectManager`` and a double that
+    only implements the methods used can be passed.
+
+    让读 ``get_project_manager()`` 的项目入口、路由与任务执行模块都拿到 *pm*。
 
     生产里这些模块共用同一个进程级单例；用例按同一形状把替身装到所有调用方，而不是只换被测
     模块那一处。真实 ``ProjectManager`` 与只实现用到方法的替身都可以传。
     """
-    for_pm = lambda: pm  # noqa: E731 -- 同一个工厂装到下列每个调用方
+    for_pm = lambda: pm  # noqa: E731 -- The same factory goes to each caller below. / 同一个工厂装到下列每个调用方
     monkeypatch.setattr("lib.config.resolver.get_project_manager", for_pm)
     monkeypatch.setattr("lib.project.project_migration_guard.get_project_manager", for_pm)
     monkeypatch.setattr("server.routers.characters.get_project_manager", for_pm)
@@ -1139,7 +1375,13 @@ def use_project_manager(monkeypatch, pm: Any) -> None:
 
 
 def use_generation_context(monkeypatch, resolve: Callable[..., Any]) -> None:
-    """生成任务执行链各入口的 ``resolve_generation_context`` 都换成 *resolve*（返回固定上下文的 async 函数）。
+    """Replace ``resolve_generation_context`` at every entry of the generation task execution chain with *resolve* (an async
+    function returning a fixed context).
+
+    Generation tasks, canonical image submission and reference video tasks each import this resolver at module top;
+    missing one leaves a chain that gets the real resolution.
+
+    生成任务执行链各入口的 ``resolve_generation_context`` 都换成 *resolve*（返回固定上下文的 async 函数）。
 
     生成任务、正式图提交与参考视频任务各自在模块顶部导入这个解析函数，一处换掉就有一条链拿到真实解析。
     """
@@ -1149,18 +1391,29 @@ def use_generation_context(monkeypatch, resolve: Callable[..., Any]) -> None:
 
 
 def use_video_thumbnail_extractor(monkeypatch, extract: Callable[..., Any]) -> None:
-    """视频任务与参考视频任务的缩略图抽帧都换成 *extract*，用例不调真实 ffmpeg。"""
+    """Replace thumbnail frame extraction of video tasks and reference video tasks with *extract*, so tests do not call real
+    ffmpeg.
+
+    视频任务与参考视频任务的缩略图抽帧都换成 *extract*，用例不调真实 ffmpeg。"""
     monkeypatch.setattr("server.services.tasks.generation_tasks.extract_video_thumbnail", extract)
     monkeypatch.setattr("server.services.tasks.reference_video_tasks.extract_video_thumbnail", extract)
 
 
 def use_text_generator(monkeypatch, create: Callable[..., Any]) -> None:
-    """``TextGenerator.create`` 换成 *create*：所有经它取文本模型的调用方都拿到替身生成器。"""
+    """Replace ``TextGenerator.create`` with *create*: every caller that gets a text model through it gets the double
+    generator.
+
+    ``TextGenerator.create`` 换成 *create*：所有经它取文本模型的调用方都拿到替身生成器。"""
     monkeypatch.setattr("lib.backends.text_generator.TextGenerator.create", create)
 
 
 def bind_session_factory(monkeypatch, factory) -> None:
-    """把 ``lib.db.async_session_factory`` 指向给定的 session 工厂（通常是 conftest 的 ``db_factory``）。
+    """Point ``lib.db.async_session_factory`` at the given session factory (usually conftest's ``db_factory``).
+
+    Only effective for production code that imports ``from lib.db import async_session_factory`` late inside a function;
+    modules that bind the name at module top must be replaced separately.
+
+    把 ``lib.db.async_session_factory`` 指向给定的 session 工厂（通常是 conftest 的 ``db_factory``）。
 
     只对在函数内晚导入 ``from lib.db import async_session_factory`` 的生产代码生效；模块顶部绑定了
     这个名字的模块要另外替换。
@@ -1169,12 +1422,21 @@ def bind_session_factory(monkeypatch, factory) -> None:
 
 
 def use_sdk_client(monkeypatch, factory: Callable[..., Any]) -> None:
-    """``SessionManager`` 建 SDK 客户端时改调 *factory*（收 ``options``，通常返回 :class:`FakeSDKClient`）。"""
+    """Make ``SessionManager`` call *factory* when building the SDK client (takes ``options``, usually returns
+    :class:`FakeSDKClient`).
+
+    ``SessionManager`` 建 SDK 客户端时改调 *factory*（收 ``options``，通常返回 :class:`FakeSDKClient`）。"""
     monkeypatch.setattr("server.agent_runtime.session_manager.ClaudeSDKClient", factory)
 
 
 def use_artifact_registration(monkeypatch, register: Callable[..., Any]) -> None:
-    """正式产物登记改调 *register*（收 ``project_path, key``），用来记录登记了什么或注入登记失败。
+    """Make canonical artifact registration call *register* (takes ``project_path, key``), to record what was registered or
+    inject a registration failure.
+
+    The disk-write exit imports ``register_current_artifact_if_provable`` late inside the function, so replacing the name
+    on ``artifact_activation`` takes effect.
+
+    正式产物登记改调 *register*（收 ``project_path, key``），用来记录登记了什么或注入登记失败。
 
     写盘出口在函数内晚导入 ``register_current_artifact_if_provable``，替换 ``artifact_activation`` 上的名字即生效。
     """
@@ -1182,28 +1444,45 @@ def use_artifact_registration(monkeypatch, register: Callable[..., Any]) -> None
 
 
 def use_provider_env(monkeypatch, load: Callable[..., Any]) -> None:
-    """Agent 会话组装选项时读供应商环境变量改调 *load*（async，返回要注入的环境变量），不读库。"""
+    """Make Agent session option assembly call *load* (async, returns the env vars to inject) for provider env vars instead
+    of reading the DB.
+
+    Agent 会话组装选项时读供应商环境变量改调 *load*（async，返回要注入的环境变量），不读库。"""
     monkeypatch.setattr("server.agent_runtime.options_assembler.load_provider_env_overrides", load)
 
 
 def use_reference_projection(monkeypatch, project: Callable[..., Any]) -> None:
-    """参考视频路由与视频批量准入的单元请求投影都换成 *project*（与 ``project_reference_unit_request`` 同签名）。"""
+    """Replace the unit request projection of the reference video route and video batch admission with *project* (same
+    signature as ``project_reference_unit_request``).
+
+    参考视频路由与视频批量准入的单元请求投影都换成 *project*（与 ``project_reference_unit_request`` 同签名）。"""
     monkeypatch.setattr("server.routers.reference_videos.project_reference_unit_request", project)
     monkeypatch.setattr("server.services.admission.video_batch_admission.project_reference_unit_request", project)
 
 
 def use_active_tasks_lookup(monkeypatch, lookup: Callable[..., Any]) -> None:
-    """视频批量准入查在途任务改调 *lookup*（async，返回在途任务列表），不走生成队列。"""
+    """Make video batch admission call *lookup* (async, returns the in-flight task list) for in-flight tasks instead of
+    going through the generation queue.
+
+    视频批量准入查在途任务改调 *lookup*（async，返回在途任务列表），不走生成队列。"""
     monkeypatch.setattr("server.services.admission.video_batch_admission.get_active_tasks_for_resources", lookup)
 
 
 def use_project_json_write(monkeypatch, write: Callable[..., Any]) -> None:
-    """``ProjectManager`` 的 JSON 文件系统写入边界改调 *write*。"""
+    """Make ``ProjectManager``'s JSON file-system write boundary call *write*.
+
+    ``ProjectManager`` 的 JSON 文件系统写入边界改调 *write*。"""
     monkeypatch.setattr("lib.project.project_manager.atomic_write_json", write)
 
 
 def fail_project_json_write(monkeypatch, project_file: Path) -> None:
-    """``ProjectManager`` 写 *project_file* 时抛 ``OSError("injected project write failure")``，其余文件照常写。
+    """Make ``ProjectManager`` raise ``OSError("injected project write failure")`` when writing *project_file*; other files
+    are written as usual.
+
+    Failure injection at the file-system boundary: verifies that the manifest and disk files stay consistent when the
+    project.json write fails.
+
+    ``ProjectManager`` 写 *project_file* 时抛 ``OSError("injected project write failure")``，其余文件照常写。
 
     文件系统边界上的失败注入：用来验证 project.json 写失败时清单与磁盘文件保持一致。
     """
@@ -1220,18 +1499,28 @@ def fail_project_json_write(monkeypatch, project_file: Path) -> None:
 
 
 def use_generation_queue(monkeypatch, queue: Any) -> None:
-    """生成与参考视频路由的 ``get_generation_queue()`` 都返回 *queue*（入队替身）。"""
+    """Make ``get_generation_queue()`` of the generation and reference video routes both return *queue* (an enqueue double).
+
+    生成与参考视频路由的 ``get_generation_queue()`` 都返回 *queue*（入队替身）。"""
     monkeypatch.setattr("server.routers.generate.get_generation_queue", lambda: queue)
     monkeypatch.setattr("server.routers.reference_videos.get_generation_queue", lambda: queue)
 
 
 def use_backend_assembler(monkeypatch, assemble: Callable[..., Any]) -> None:
-    """生成上下文解析时组装后端改调 *assemble*：其余解析（配置、项目、DB）走真实实现，只换掉供应商后端。"""
+    """Make backend assembly during generation context resolution call *assemble*: the rest of resolution (config, project,
+    DB) is real, only the provider backend is replaced.
+
+    生成上下文解析时组装后端改调 *assemble*：其余解析（配置、项目、DB）走真实实现，只换掉供应商后端。"""
     monkeypatch.setattr("server.services.tasks.generation_context.assemble_backend", assemble)
 
 
 async def stage_and_commit(commit_formal_output, staged: Path, current: Path, content: bytes, metadata: dict) -> int:
-    """替身生成器落盘产出并提交正式版本。
+    """The double generator writes its output and commits the canonical version.
+
+    Like MediaGenerator, it writes staging output and calls the canonical commit callback on a worker thread: the backend
+    writes on the thread, and the commit callback runs via ``run_noninterruptible_sync``.
+
+    替身生成器落盘产出并提交正式版本。
 
     与 MediaGenerator 一样在工作线程里写 staging 产物、调正式提交回调：后端在线程里落盘，
     提交回调经 ``run_noninterruptible_sync`` 执行。

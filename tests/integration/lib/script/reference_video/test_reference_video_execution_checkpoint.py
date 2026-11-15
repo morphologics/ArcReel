@@ -85,6 +85,8 @@ def _stage_inputs(project_path: Path) -> tuple[ProviderMediaInput, ...]:
     )
 
 
+#: Narration delivery facts recorded by old checkpoints; the new version no longer records them, and the old payload is
+#: kept as is only to verify request_digest.
 #: 旧版检查点记录的旁白交付事实；新版不再记录，旧载荷只为校验 request_digest 原样保留。
 _LEGACY_NARRATION = {
     "delivery": "use_tts",
@@ -96,7 +98,9 @@ _LEGACY_NARRATION = {
 
 
 def _redigest(raw: dict[str, object], *, excluded: frozenset[str] = frozenset()) -> None:
-    """按旧版写侧的口径重算 request_digest，模拟升级前落库的检查点。"""
+    """Recompute request_digest by the old write side's rule, simulating a checkpoint stored before the upgrade.
+
+    按旧版写侧的口径重算 request_digest，模拟升级前落库的检查点。"""
 
     digest_payload = {key: value for key, value in raw.items() if key != "request_digest" and key not in excluded}
     raw["request_digest"] = hashlib.sha256(
@@ -357,7 +361,10 @@ def test_checkpoint_round_trip_is_versioned_strict_and_self_authenticating(tmp_p
 
 
 def test_checkpoint_from_before_task_linkage_drops_its_stale_call_id(tmp_path: Path) -> None:
-    """升级前落库的在途检查点带 api_call_id：丢弃该键后照常接续，摘要不受影响。"""
+    """An in-flight checkpoint stored before the upgrade carries api_call_id: drop that key and continue as usual; the
+    digest is unaffected.
+
+    升级前落库的在途检查点带 api_call_id：丢弃该键后照常接续，摘要不受影响。"""
     checkpoint = _checkpoint(tmp_path / "demo")
     raw = json.loads(checkpoint.to_json())
     raw["api_call_id"] = 42
@@ -460,7 +467,10 @@ def test_visual_only_checkpoint_remains_resumable_but_cannot_claim_complete_vide
 
 
 def test_narration_recording_checkpoint_stays_resumable_with_complete_currency(tmp_path: Path) -> None:
-    """v3 检查点仍带旁白交付事实：原样保留以校验摘要，产物时效事实照常可用。"""
+    """A v3 checkpoint still carries narration delivery facts: kept as is to verify the digest, and artifact currency facts
+    remain usable.
+
+    v3 检查点仍带旁白交付事实：原样保留以校验摘要，产物时效事实照常可用。"""
 
     checkpoint = _checkpoint(tmp_path / "demo")
     raw = json.loads(checkpoint.to_json())

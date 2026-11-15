@@ -19,7 +19,9 @@ def _ci_filters() -> dict[str, list[str]]:
 
 
 def _sample_path(pattern: str) -> str:
-    """把 dorny/paths-filter 的 glob 变成一条能命中它的具体路径。"""
+    """Turn a dorny/paths-filter glob into a concrete path that matches it.
+
+    把 dorny/paths-filter 的 glob 变成一条能命中它的具体路径。"""
     return pattern.replace("**", "sub/leaf.ext").replace("*", "x")
 
 
@@ -58,6 +60,7 @@ def test_shared_request_contract_triggers_backend_in_ci_and_locally() -> None:
     [("backend", "backend"), ("frontend", "frontend"), ("website", "website"), ("workflow", "workflows")],
 )
 def test_every_ci_trigger_path_selects_the_matching_gate_domain(ci_domain: str, gate_domain: str) -> None:
+    # In CI's workflow domain, .codecov.yml only affects coverage upload and has no local gate; .gitignore belongs to backend (ruff file discovery).
     # CI 的 workflow 域里 .codecov.yml 只影响覆盖率上报，本地没有对应闸门；.gitignore 归 backend（ruff 文件发现）。
     skipped = {".codecov.yml", ".gitignore"}
     for pattern in _ci_filters()[ci_domain]:

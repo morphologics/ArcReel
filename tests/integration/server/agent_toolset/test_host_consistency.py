@@ -1,4 +1,12 @@
-"""按 Agent 工具集声明表驱动的双宿主一致性。
+"""Two-host consistency, driven by the Agent toolset declaration table.
+
+For every declaration, the name, schema, description, migration blocking and result envelope projected on both the
+ArcReel Agent (embedded SDK server) and the external Agent (remote MCP) must match; the only allowed differences are
+``project`` in the remote schema and the long-task note. Declarations without scope (list, create project) carry no
+``project`` on either side. Domain behaviour is tested at the handler's ``ToolOutcome`` layer; the fake handler here
+only observes whether the adapter passes through verbatim.
+
+按 Agent 工具集声明表驱动的双宿主一致性。
 
 每条声明在 ArcReel Agent（内嵌 SDK server）与外部 Agent（远程 MCP）两侧投影出的名字、schema、
 描述、迁移阻断与结果信封必须一致；允许的差异只有远程 schema 的 ``project`` 与长任务附注。
@@ -91,6 +99,8 @@ from tests.factories import install_current_video, make_test_clip
 
 _ABSENT_REVISION = "sha256-v1:" + "0" * 64
 
+# One valid argument set per declaration; new declarations must be registered here, otherwise the parametrized test
+# fails with KeyError.
 # 每条声明一份合法入参；新增声明须在此登记，否则参数化用例以 KeyError 失败。
 SAMPLE_ARGUMENTS: dict[str, dict[str, Any]] = {
     "list_projects": {},
@@ -228,14 +238,18 @@ def _answering[DeclarationT: AgentToolDeclaration](
 
 
 def _remote_arguments(declaration: AgentToolDeclaration, arguments: dict[str, Any]) -> dict[str, Any]:
-    """外部 Agent 的等价入参：作用于项目的工具显式带上 ``project``。"""
+    """Equivalent arguments for the external Agent: project-scoped tools carry ``project`` explicitly.
+
+    外部 Agent 的等价入参：作用于项目的工具显式带上 ``project``。"""
     if isinstance(declaration, UnscopedToolDeclaration):
         return dict(arguments)
     return {"project": "demo", **arguments}
 
 
 async def _call_server(server: Server, name: str, arguments: dict[str, Any]) -> types.CallToolResult:
-    """经 in-process server 的请求入口调用，拿到的就是模型能看到的 content 与 isError。"""
+    """Call through the in-process server's request entry; what comes back is the content and isError the model sees.
+
+    经 in-process server 的请求入口调用，拿到的就是模型能看到的 content 与 isError。"""
     request = types.CallToolRequest(params=types.CallToolRequestParams(name=name, arguments=arguments))
     result = (await server.request_handlers[types.CallToolRequest](request)).root
     assert isinstance(result, types.CallToolResult)
@@ -339,7 +353,11 @@ async def test_both_hosts_expose_an_unscoped_declaration_without_project(
 async def test_every_tool_both_hosts_expose_is_defined_by_a_declaration(
     seeded_projects: ProjectManager, services: Services
 ) -> None:
-    """两宿主注册的工具集合与声明集合相同：没有声明之外的第二份工具定义。
+    """The tool sets registered by both hosts equal the declaration set: no second tool definition outside the declarations.
+
+    ``SAMPLE_ARGUMENTS`` lists every tool one by one; its key set doubles as the tool list.
+
+    两宿主注册的工具集合与声明集合相同：没有声明之外的第二份工具定义。
 
     ``SAMPLE_ARGUMENTS`` 逐个列出了全部工具，它的键集合同时充当工具清单。
     """
@@ -379,6 +397,8 @@ async def test_invalid_arguments_are_rejected_as_the_same_invalid_request_by_bot
     declaration: AgentToolDeclaration, seeded_projects: ProjectManager, services: Services
 ) -> None:
     arguments = {**SAMPLE_ARGUMENTS[declaration.name], "unexpected": 1}
+    # Call via the in-process server really registered by the session: the MCP layer does no schema pre-validation; bad
+    # arguments are rejected by the request model.
     # 经会话真实注册的 in-process server 调用：MCP 层不做 schema 预校验，坏参数由请求模型拒绝。
     session_server = build_arcreel_mcp_server(project_name="demo", data_root=seeded_projects.data_root)["instance"]
 
@@ -458,7 +478,9 @@ async def test_unblocked_declarations_reach_the_handler_on_a_migration_failed_pr
 async def test_declared_blocked_entries_refuse_a_migration_failed_project_before_the_handler(
     declaration: ToolDeclaration[Any, Any], seeded_projects: ProjectManager, services: Services
 ) -> None:
-    """声明为 ``BLOCKED`` 的入口按声明阻断，不依赖 handler 内层的迁移兜底。"""
+    """Entries declared ``BLOCKED`` are blocked per declaration, not relying on the migration fallback inside the handler.
+
+    声明为 ``BLOCKED`` 的入口按声明阻断，不依赖 handler 内层的迁移兜底。"""
     record_migration_failure(
         seeded_projects.get_project_path("demo"),
         RuntimeError("清单预检失败"),
@@ -523,7 +545,9 @@ async def test_patch_episode_script_reports_a_missing_script_as_script_not_found
 
 
 def _twin_services(seeded_projects: ProjectManager, tmp_path: Path) -> Services:
-    """同一初始状态的另一份项目根，让写入类工具在两宿主各跑一次、互不影响。"""
+    """Another project root with the same initial state, so write tools run once on each host without interfering.
+
+    同一初始状态的另一份项目根，让写入类工具在两宿主各跑一次、互不影响。"""
     root = tmp_path / "twin"
     shutil.copytree(seeded_projects.data_root, root, symlinks=True)
     twin = ProjectManager(root)
@@ -532,9 +556,13 @@ def _twin_services(seeded_projects: ProjectManager, tmp_path: Path) -> Services:
     )
 
 
+# Real handler results vary with call time, so two calls cannot be compared verbatim; pass-through consistency is
+# covered by the fake handler in the other tests.
 # 真实 handler 的结果随调用时刻变化，两次调用无法逐字比较；透传一致性由其余用例的 fake handler 覆盖。
 _TIME_DEPENDENT_RESULTS = frozenset({CREATE_PROJECT.name, CREATE_TIMELINE.name})
 
+# Declarations that legitimately return a problem with the sample arguments: the test project lacks the object or
+# capability config they look for. All other declarations must succeed with the sample arguments.
 # 样例入参下合法地返回 problem 的声明：测试项目缺少它们要找的对象或能力配置。其余声明在样例入参下必须成功。
 _PROBLEM_ON_SAMPLE = frozenset(
     {
@@ -542,6 +570,8 @@ _PROBLEM_ON_SAMPLE = frozenset(
         GET_PROMPT_PREVIEW.name,
         GET_GENERATION_BATCH.name,
         CANCEL_GENERATION_BATCH.name,
+        # The test project already has a final script: confirming needs an override approval, fetching an edit copy is refused;
+        # there is no draft present to edit or promote.
         # 测试项目已有正式脚本：确认需要覆盖认可，取回编辑副本被拒；没有在场草稿可改、可晋升。
         CONFIRM_SCRIPT_REVIEW.name,
         OPEN_DRAFT.name,
@@ -557,10 +587,13 @@ _PROBLEM_ON_SAMPLE = frozenset(
         LIST_REVISIONS.name,
         RESTORE_REVISION.name,
         COMPLETE_SCRIPT_PLAN_REBUILD.name,
+        # The test project registers only one character, so there is no keeper to merge into.
         # 测试项目只登记了一个角色，没有可并入的保留方。
         MERGE_ASSET.name,
+        # The test project has no file registered as the whole source.
         # 测试项目没有登记整本源文的文件。
         EDIT_SOURCE_TEXT.name,
+        # The test project has no file at the sample path, and the trash has no deletion record.
         # 测试项目里没有样例路径的文件，回收站里也没有删除记录。
         DELETE_PROJECT_FILE.name,
         RESTORE_TRASH_RECORD.name,
@@ -689,7 +722,10 @@ async def test_remote_project_locating_failures_are_invalid_project(
 async def test_embedded_terminal_generation_result_has_the_shape_remote_polling_reads_at_the_terminal_state(
     seeded_projects: ProjectManager, services: Services, db_factory
 ) -> None:
-    """长任务是唯一允许的结果差异：内嵌拿终态结果，远程拿批次句柄；两边的终态生成结果同形。"""
+    """Long tasks are the only allowed result difference: embedded gets the terminal result, remote gets a batch handle;
+    the terminal generation results on both sides have the same shape.
+
+    长任务是唯一允许的结果差异：内嵌拿终态结果，远程拿批次句柄；两边的终态生成结果同形。"""
     project = seeded_projects.load_project("demo")
     project["characters"] = {"李四": {"description": ""}}
     seeded_projects.save_project("demo", project)
@@ -722,11 +758,13 @@ async def test_embedded_terminal_generation_result_has_the_shape_remote_polling_
         services,
     )
 
+    # Embedded: summary first, terminal result JSON after; all batches blocked means a result-level failure.
     # 内嵌：摘要在前、终态结果 JSON 在后；批次全部被阻断即结果级失败。
     terminal = _embedded_json(embedded)
     assert embedded.isError is True
     assert len(_texts(embedded)) == 2
     assert set(terminal) == {"generation_result", "batch_id"}
+    # Remote: get a batch handle immediately, poll the handle to the terminal state, then read the attached generation result.
     # 远程：立即拿到批次句柄，按句柄轮询到终态后读取附带的生成结果。
     assert remote.isError is False
     assert set(remote.structuredContent) == {"generation_batch"}
@@ -742,7 +780,10 @@ async def test_embedded_terminal_generation_result_has_the_shape_remote_polling_
 async def test_grid_list_only_preview_is_the_same_json_in_both_hosts(
     seeded_projects: ProjectManager, services: Services
 ) -> None:
-    """宫格预览不是生成结果：两宿主都立即拿到同一份规划文本，放在工具名下，没有批次可轮询。"""
+    """A grid preview is not a generation result: both hosts immediately get the same planning text under the tool name,
+    with no batch to poll.
+
+    宫格预览不是生成结果：两宿主都立即拿到同一份规划文本，放在工具名下，没有批次可轮询。"""
     project = seeded_projects.load_project("demo")
     project.update(
         {
@@ -772,7 +813,9 @@ async def test_grid_list_only_preview_is_the_same_json_in_both_hosts(
 async def test_a_text_generation_dry_run_returns_the_same_prompt_in_both_hosts(
     seeded_projects: ProjectManager, services: Services, tmp_path: Path
 ) -> None:
-    """长任务的 dry_run 不提交批次：两宿主都立即拿到同一份 ``text_generation``，没有批次句柄。"""
+    """dry_run of a long task submits no batch: both hosts immediately get the same ``text_generation`` and no batch handle.
+
+    长任务的 dry_run 不提交批次：两宿主都立即拿到同一份 ``text_generation``，没有批次句柄。"""
     pending_scene = {
         "scene_id": "E1S01",
         "duration_seconds": 4,

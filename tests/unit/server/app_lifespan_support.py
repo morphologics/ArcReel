@@ -1,4 +1,6 @@
-"""FastAPI lifespan 用例共用的启动依赖替身。"""
+"""Startup dependency stand-ins shared by the FastAPI lifespan tests.
+
+FastAPI lifespan 用例共用的启动依赖替身。"""
 
 from __future__ import annotations
 
@@ -24,7 +26,9 @@ class _FakeWorker:
 
 
 def stub_lifespan_dependencies(monkeypatch) -> _FakeWorker:
-    """lifespan 里与被测步骤无关的依赖（建库、鉴权口令、生成 worker、助手服务）换成空实现，返回 worker 替身。"""
+    """Replace lifespan dependencies unrelated to the step under test (DB creation, auth password, generation worker, assistant service) with empty implementations; returns the worker stand-in.
+
+    lifespan 里与被测步骤无关的依赖（建库、鉴权口令、生成 worker、助手服务）换成空实现，返回 worker 替身。"""
     worker = _FakeWorker()
     monkeypatch.setattr(app_module, "create_generation_worker", lambda: worker)
     monkeypatch.setattr(app_module, "ensure_auth_password", lambda: "test")

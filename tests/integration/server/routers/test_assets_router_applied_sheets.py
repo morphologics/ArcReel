@@ -1,4 +1,7 @@
-"""从全局资产库应用到项目的资产图即成品：清单按图本身认领，时效不随描述与画风变化。"""
+"""Sheets applied to a project from the global asset library are finished goods: the manifest claims them by the
+image itself, and freshness does not change with description or style.
+
+从全局资产库应用到项目的资产图即成品：清单按图本身认领，时效不随描述与画风变化。"""
 
 import asyncio
 import json
@@ -42,7 +45,9 @@ _KEY = ArtifactKey.asset_sheet("character", "Alice")
 
 @pytest.fixture
 def library(assets_env) -> tuple[TestClient, ProjectManager]:
-    """资产库路由客户端，与已建好的目标项目 demo。"""
+    """Asset library route client, plus the already built target project demo.
+
+    资产库路由客户端，与已建好的目标项目 demo。"""
 
     pm = assets_env["pm"]
     pm.create_project("demo")
@@ -418,7 +423,10 @@ async def test_restoring_the_applied_derivative_version_claims_it_by_the_image_a
 
 
 def test_an_uploaded_derivative_sheet_round_trips_through_the_library_as_finished_content(library, monkeypatch):
-    """项目里上传的衍生资产图存入资产库时带上上传的字节，再应用到项目仍按图本身登记。"""
+    """A derivative sheet uploaded in a project carries the uploaded bytes when stored in the asset library, and when
+    applied to a project again it is still registered by the image itself.
+
+    项目里上传的衍生资产图存入资产库时带上上传的字节，再应用到项目仍按图本身登记。"""
     client, pm = library
     pm.create_project("source")
     pm.create_project_metadata("source", "Source", "Anime", "narration")

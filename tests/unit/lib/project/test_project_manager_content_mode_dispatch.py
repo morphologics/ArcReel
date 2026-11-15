@@ -1,4 +1,15 @@
-"""PM 按 content_mode 选数据结构的守卫回归测试。
+"""Regression tests for the guard that makes PM pick its data structure by content_mode.
+
+Pins an edge behavior: for a malformed script with content_mode=narration but data under the `scenes` key
+(no `segments` key), PM must follow the key-existence guard and fall back to reading `scenes`, rather
+than reading an empty list because content_mode maps literally to `segments`.
+
+If converging the field-name dispatch (-> lib.script.script_skeleton evidence-based resolution) naively
+changed it to `items = script.get(<items_key for the content_mode>, [])` and dropped the `"segments" in
+script` guard, these assertions would go red; that is exactly the regression they guard. Only external
+behavior is asserted, no private methods are patched.
+
+PM 按 content_mode 选数据结构的守卫回归测试。
 
 锁定一个边缘行为：content_mode=narration 但数据落在 `scenes` 键下（无 `segments` 键）
 的畸形脚本，PM 必须沿键存在性守卫回退去读 `scenes`，而非因 content_mode 字面映射到
@@ -24,7 +35,10 @@ def _pm(tmp_path: Path) -> ProjectManager:
 
 
 def _narration_script_with_data_under_scenes() -> dict:
-    """content_mode=narration，但内容存在 `scenes` 键下、无 `segments` 键的畸形脚本。"""
+    """A malformed script with content_mode=narration but content under the `scenes` key and no `segments`
+    key.
+
+    content_mode=narration，但内容存在 `scenes` 键下、无 `segments` 键的畸形脚本。"""
     return {
         "episode": 1,
         "title": "标题",
@@ -47,7 +61,7 @@ class TestNarrationDataUnderScenesFallback:
         pm = _pm(tmp_path)
         pm.save_script("demo", _narration_script_with_data_under_scenes(), "episode_1.json", validate=False)
 
-        # 不应抛 KeyError；应命中 scenes 下的 E1S01 并回写
+        # Should not raise KeyError; should hit E1S01 under scenes and write it back / 不应抛 KeyError；应命中 scenes 下的 E1S01 并回写
         pm.update_scene_asset("demo", "episode_1.json", "E1S01", "storyboard_image", "storyboards/scene_E1S01.png")
 
         saved = pm.load_script("demo", "episode_1.json")

@@ -1,4 +1,6 @@
-"""请求期能力校验（gate_video_request）与帧槽位组装（plan_frame_slots）的直接单测。"""
+"""Direct unit tests for request-time capability checks (gate_video_request) and frame slot assembly (plan_frame_slots).
+
+请求期能力校验（gate_video_request）与帧槽位组装（plan_frame_slots）的直接单测。"""
 
 from pathlib import Path
 
@@ -33,7 +35,12 @@ CAPS_WITH_PROMPT_LIMIT = VideoCapabilities(first_frame=True, max_prompt_chars=10
 
 
 def _gate(caps: VideoCapabilities | None, **kwargs):
-    """跑一遍请求期校验并透出返回值。
+    """Run the request-time check once and pass through its return value.
+
+    The validator's pass contract is "does not raise and returns nothing", so passing cases assert ``is None`` -- otherwise
+    "passed" could only be expressed implicitly by "this test did not blow up", and nobody would notice if the test body were emptied.
+
+    跑一遍请求期校验并透出返回值。
 
     校验器的放行契约就是「不抛且无返回」，放行用例据此断言 ``is None``——否则「通过」只能
     靠「这个测试没炸」隐式表达，用例体一旦被清空也不会有人发现。
@@ -42,7 +49,9 @@ def _gate(caps: VideoCapabilities | None, **kwargs):
 
 
 def _plan(caps: VideoCapabilities | None, **kwargs):
-    """沿用「先校验再组装」的生产调用序：组装是纯函数，不再自行判定能力。"""
+    """Follows the production call order "validate, then assemble": assembly is a pure function and no longer judges capabilities itself.
+
+    沿用「先校验再组装」的生产调用序：组装是纯函数，不再自行判定能力。"""
     gate_kwargs = {k: v for k, v in kwargs.items() if k != "start_image"}
     _gate(caps, **gate_kwargs)
     return plan_frame_slots(**kwargs)
@@ -50,7 +59,9 @@ def _plan(caps: VideoCapabilities | None, **kwargs):
 
 class TestFirstFrameGating:
     def test_first_frame_on_caps_without_first_frame_raises(self):
-        """能力 first_frame=False × 实际下发首帧：与尾帧同口径硬失败。"""
+        """Capability first_frame=False x a first frame actually sent: hard failure, same as end frames.
+
+        能力 first_frame=False × 实际下发首帧：与尾帧同口径硬失败。"""
         with pytest.raises(VideoCapabilityError) as exc:
             _gate(VideoCapabilities(first_frame=False), has_image=True, has_first_frame=True)
 
@@ -69,7 +80,9 @@ class TestFirstFrameGating:
 
 class TestLastFrameGating:
     def test_unsupported_last_frame_with_end_image_raises(self):
-        """不支持尾帧 × 携带尾帧：硬失败，不静默降级。"""
+        """End frame unsupported x end frame given: hard failure, no silent degradation.
+
+        不支持尾帧 × 携带尾帧：硬失败，不静默降级。"""
         with pytest.raises(VideoCapabilityError) as exc:
             _plan(CAPS_NO_LAST_FRAME, start_image=Path("start.png"), end_image=Path("end.png"))
 
@@ -77,14 +90,18 @@ class TestLastFrameGating:
         assert exc.value.params == {"provider": "acme", "model": "acme-v1"}
 
     def test_unsupported_last_frame_without_end_image_passes(self):
-        """不支持尾帧 × 不携带尾帧：正常放行，无尾帧槽位。"""
+        """End frame unsupported x no end frame: passes normally, no end frame slot.
+
+        不支持尾帧 × 不携带尾帧：正常放行，无尾帧槽位。"""
         plan = _plan(CAPS_NO_LAST_FRAME, start_image=Path("start.png"))
 
         assert plan.end_index is None
         assert [s.source for s in plan.specs] == [Path("start.png")]
 
     def test_supported_last_frame_with_end_image_passes(self):
-        """支持尾帧 × 携带尾帧：尾帧进入槽位（first_last 模式）。"""
+        """End frame supported x end frame given: the end frame enters a slot (first_last mode).
+
+        支持尾帧 × 携带尾帧：尾帧进入槽位（first_last 模式）。"""
         plan = _plan(CAPS_WITH_LAST_FRAME, start_image=Path("start.png"), end_image=Path("end.png"))
 
         assert plan.start_index == 0
@@ -98,7 +115,9 @@ class TestLastFrameGating:
         assert plan.start_index == 0
 
     def test_end_image_without_start_image_still_gated(self):
-        """尾帧单独出现同样受 gating——不因缺首帧而绕过。"""
+        """An end frame on its own is gated too -- not bypassed because the first frame is missing.
+
+        尾帧单独出现同样受 gating——不因缺首帧而绕过。"""
         with pytest.raises(VideoCapabilityError):
             _plan(CAPS_NO_LAST_FRAME, end_image=Path("end.png"))
 
@@ -109,11 +128,15 @@ class TestLastFrameGating:
         assert plan.end_index == 0
 
     def test_uncharted_caps_without_end_image_passes(self):
-        """caps=None（调用方未查询能力）× 三条路径都不走：无需能力声明即可放行。"""
+        """caps=None (caller did not query capabilities) x none of the three paths taken: passes without any capability declaration.
+
+        caps=None（调用方未查询能力）× 三条路径都不走：无需能力声明即可放行。"""
         assert _gate(None) is None
 
     def test_uncharted_caps_with_end_image_raises(self):
-        """caps=None × 携带尾帧：未经能力核实的尾帧一律拒绝，不按"支持"放行。"""
+        """caps=None x end frame given: an end frame not verified against capabilities is always rejected, not allowed as "supported".
+
+        caps=None × 携带尾帧：未经能力核实的尾帧一律拒绝，不按"支持"放行。"""
         with pytest.raises(VideoCapabilityError) as exc:
             _plan(None, start_image=Path("start.png"), end_image=Path("end.png"))
 
@@ -128,7 +151,9 @@ class TestSlotAssembly:
         assert (plan.start_index, plan.end_index, plan.reference_start_index) == (None, None, None)
 
     def test_reference_images_follow_frames(self):
-        """数组参考图恒排在首/尾帧之后，调用方按起始索引切片还原。"""
+        """Array reference images always come after the first/end frames; the caller slices from the start index to recover them.
+
+        数组参考图恒排在首/尾帧之后，调用方按起始索引切片还原。"""
         plan = _plan(
             CAPS_WITH_LAST_FRAME,
             start_image=Path("start.png"),
@@ -141,7 +166,9 @@ class TestSlotAssembly:
         assert [s.source for s in plan.specs[plan.reference_start_index :]] == [Path("r1.png"), Path("r2.png")]
 
     def test_empty_reference_list_yields_no_reference_index(self):
-        """空列表与 None 同义：不设起始索引，调用方回落原字段保留 [] / None 语义。"""
+        """Empty list means the same as None: no start index set; the caller falls back to the original field, keeping the [] / None semantics.
+
+        空列表与 None 同义：不设起始索引，调用方回落原字段保留 [] / None 语义。"""
         plan = _plan(CAPS_WITH_LAST_FRAME, start_image=Path("start.png"), reference_images=[])
 
         assert plan.reference_start_index is None
@@ -153,7 +180,9 @@ class TestSlotAssembly:
         assert plan.specs[0].source == Path("start.png")
 
     def test_pil_start_image_skips_compression(self):
-        """PIL.Image 首帧不入压缩器，维持 request.start_image=None 的原行为。"""
+        """A PIL.Image first frame does not go into the compressor, keeping the original request.start_image=None behavior.
+
+        PIL.Image 首帧不入压缩器，维持 request.start_image=None 的原行为。"""
         from PIL import Image
 
         plan = _plan(CAPS_WITH_LAST_FRAME, start_image=Image.new("RGB", (2, 2)), end_image=Path("end.png"))
@@ -179,7 +208,9 @@ class TestTextToVideoGating:
 
 class TestResolveVideoCapabilities:
     def test_prefers_tier_aware_query(self):
-        """后端实现 video_capabilities_for_tier 时按实际档位收窄，而非读保守属性。"""
+        """When the backend implements video_capabilities_for_tier, narrow by the actual tier instead of reading the conservative attribute.
+
+        后端实现 video_capabilities_for_tier 时按实际档位收窄，而非读保守属性。"""
         seen: dict[str, object] = {}
 
         class TierAwareBackend:
@@ -204,7 +235,9 @@ class TestResolveVideoCapabilities:
 
 class TestReferenceImageGating:
     def test_reference_images_beyond_limit_raise(self):
-        """超出上限硬失败：静默截断会让用户以为所有参考图都生效了。"""
+        """Exceeding the limit fails hard: silent truncation would make the user think all reference images took effect.
+
+        超出上限硬失败：静默截断会让用户以为所有参考图都生效了。"""
         with pytest.raises(VideoCapabilityError) as exc:
             _gate(CAPS_WITH_LAST_FRAME, reference_images=[Path(f"r{i}.png") for i in range(5)])
 
@@ -221,7 +254,9 @@ class TestReferenceImageGating:
         assert exc.value.code == "video_reference_images_unsupported"
 
     def test_uncharted_caps_with_reference_images_raise(self):
-        """caps=None × 携带参考图：与尾帧同理，未经能力核实不放行。"""
+        """caps=None x reference images given: same as end frames, not allowed without capability verification.
+
+        caps=None × 携带参考图：与尾帧同理，未经能力核实不放行。"""
         with pytest.raises(VideoCapabilityError) as exc:
             _gate(None, reference_images=[Path("r.png")])
 
@@ -230,7 +265,9 @@ class TestReferenceImageGating:
 
 class TestReferenceAudioGating:
     def test_audio_on_model_without_capability_raises(self):
-        """无音色输入能力的模型收到音频：硬失败，不静默丢弃后照常扣费生成随机音色。"""
+        """A model without voice-input capability receives audio: hard failure, rather than silently dropping it and billing a random-voice generation.
+
+        无音色输入能力的模型收到音频：硬失败，不静默丢弃后照常扣费生成随机音色。"""
         with pytest.raises(VideoCapabilityError) as exc:
             _gate(CAPS_WITH_LAST_FRAME, reference_audio_files=[Path("a.mp3")])
 
@@ -257,7 +294,9 @@ class TestReferenceAudioGating:
         assert exc.value.code == "video_reference_audio_unsupported"
 
     def test_empty_audio_list_passes_on_incapable_model(self):
-        """空列表与 None 同义：没有音频诉求就不该被音频能力挡住。"""
+        """Empty list means the same as None: with no audio requested, the audio capability must not block.
+
+        空列表与 None 同义：没有音频诉求就不该被音频能力挡住。"""
         assert _gate(CAPS_WITH_LAST_FRAME, reference_audio_files=[]) is None
 
 
@@ -294,7 +333,9 @@ class TestReferenceAudioDurationGating:
         assert exc.value.params == {"provider": "acme", "model": "acme-v1", "limit": 15.0, "total": 15.1}
 
     def test_unknown_total_skips_check_even_when_limit_declared(self):
-        """探测失败（total=None）按仓库既有降级口径跳过校验，不当作超限拒绝。"""
+        """Probe failure (total=None) skips the check per the repo's existing degradation rule; not rejected as over the limit.
+
+        探测失败（total=None）按仓库既有降级口径跳过校验，不当作超限拒绝。"""
         assert (
             _gate(
                 CAPS_WITH_AUDIO_DURATION_LIMIT,
@@ -305,7 +346,9 @@ class TestReferenceAudioDurationGating:
         )
 
     def test_no_declared_limit_skips_check_regardless_of_total(self):
-        """caps 未声明总时长约束（None）：即便传了很大的 total 也不拦——该维度对这个后端不适用。"""
+        """caps declares no total-duration constraint (None): even a large total is not blocked -- that dimension does not apply to this backend.
+
+        caps 未声明总时长约束（None）：即便传了很大的 total 也不拦——该维度对这个后端不适用。"""
         assert (
             _gate(
                 CAPS_WITH_AUDIO,
@@ -331,19 +374,27 @@ class TestPromptLengthGating:
         assert exc.value.params == {"provider": "acme", "model": "acme-v1", "limit": 100, "count": 101}
 
     def test_limit_counts_characters_not_bytes(self):
-        """计量口径是字符数，中英文同权——按字节算会把中文 prompt 误拒。"""
+        """The metering unit is characters, Chinese and English weigh the same -- counting bytes would wrongly reject Chinese prompts.
+
+        计量口径是字符数，中英文同权——按字节算会把中文 prompt 误拒。"""
         assert _gate(CAPS_WITH_PROMPT_LIMIT, prompt="中" * 100) is None
 
     def test_no_declared_limit_skips_check(self):
-        """caps 未声明上限：任意长度都放行，未声明不等于上限为 0。"""
+        """caps declares no limit: any length passes; undeclared does not mean a limit of 0.
+
+        caps 未声明上限：任意长度都放行，未声明不等于上限为 0。"""
         assert _gate(CAPS_WITH_LAST_FRAME, prompt="x" * 100_000) is None
 
     def test_none_caps_skips_check(self):
-        """能力未查询（caps=None）时不拦 prompt——无从得知上限，拒绝反成误伤。"""
+        """With capabilities not queried (caps=None) the prompt is not blocked -- the limit is unknown, and rejecting would do harm.
+
+        能力未查询（caps=None）时不拦 prompt——无从得知上限，拒绝反成误伤。"""
         assert _gate(None, prompt="x" * 100_000) is None
 
     def test_prompt_checked_before_optional_paths(self):
-        """prompt 违约先于尾帧等可选路径报出，用户一次只看到最先命中的那条。"""
+        """A prompt violation is reported before optional paths like end frames; the user sees only the first one hit.
+
+        prompt 违约先于尾帧等可选路径报出，用户一次只看到最先命中的那条。"""
         with pytest.raises(VideoCapabilityError) as exc:
             _gate(CAPS_WITH_PROMPT_LIMIT, prompt="x" * 101, end_image=Path("end.png"))
 
@@ -352,7 +403,9 @@ class TestPromptLengthGating:
 
 class TestGateAndAssemblySeparation:
     def test_plan_frame_slots_does_not_gate(self):
-        """组装是纯函数：即便尾帧不被支持也照常铺槽位，拒绝的责任全在 gate。"""
+        """Assembly is a pure function: slots are laid out even if end frames are unsupported; rejection is entirely the gate's job.
+
+        组装是纯函数：即便尾帧不被支持也照常铺槽位，拒绝的责任全在 gate。"""
         plan = plan_frame_slots(start_image=Path("start.png"), end_image=Path("end.png"))
 
         assert (plan.start_index, plan.end_index) == (0, 1)
@@ -369,7 +422,9 @@ class TestResolveFirstFrameAspectRatio:
         assert ratio == FIRST_FRAME_ADAPTIVE_RATIO
 
     def test_declared_constraint_without_first_frame_passes_through(self):
-        """无首帧（纯文生 / 仅参考图）不受该约束影响，原样透传用户比例。"""
+        """Without a first frame (pure text-to-video / reference images only) this constraint does not apply; the user's aspect ratio passes through as is.
+
+        无首帧（纯文生 / 仅参考图）不受该约束影响，原样透传用户比例。"""
         ratio = resolve_first_frame_aspect_ratio(
             caps=self.CAPS_ADAPTIVE_ONLY, aspect_ratio="9:16", has_first_frame=False
         )
@@ -377,7 +432,9 @@ class TestResolveFirstFrameAspectRatio:
         assert ratio == "9:16"
 
     def test_default_caps_unaffected(self):
-        """默认 False：既有模型请求 payload 不变。"""
+        """Default False: existing models' request payloads are unchanged.
+
+        默认 False：既有模型请求 payload 不变。"""
         ratio = resolve_first_frame_aspect_ratio(caps=CAPS_WITH_LAST_FRAME, aspect_ratio="16:9", has_first_frame=True)
 
         assert ratio == "16:9"

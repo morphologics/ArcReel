@@ -1,4 +1,6 @@
-"""anthropic-messages 调用通道：经端点注册表构造，真实 anthropic SDK 发出的请求由 respx 捕获。"""
+"""anthropic-messages call channel: built through the endpoint registry; requests sent by the real anthropic SDK are captured by respx.
+
+anthropic-messages 调用通道：经端点注册表构造，真实 anthropic SDK 发出的请求由 respx 捕获。"""
 
 from __future__ import annotations
 
@@ -29,7 +31,9 @@ def _provider(base_url: str = "https://relay.example.com/anthropic") -> SimpleNa
 
 
 def _sse(text: str, *, usage: dict, output_tokens: int, stop_reason: str = "end_turn") -> httpx.Response:
-    """按 Messages 流式协议拼一条只含单个文本块的回包。"""
+    """Assemble a response in the Messages streaming protocol containing a single text block.
+
+    按 Messages 流式协议拼一条只含单个文本块的回包。"""
     events = [
         (
             "message_start",
@@ -138,6 +142,7 @@ async def test_structured_output_with_image_is_encoded_natively(tmp_path: Path):
 
     assert _Verdict.model_validate_json(result.text) == _Verdict(label="ok", score=7)
     assert result.model == "claude-x"
+    # Anthropic's input_tokens exclude cache: total input = uncached input + cache read + cache write; cache writes have two TTL tiers.
     # Anthropic 的 input_tokens 不含缓存：总输入 = 未缓存输入 + 缓存读 + 缓存写，缓存写按 TTL 分两档
     assert (result.input_tokens, result.output_tokens) == (150, 12)
     assert (result.cache_read_tokens, result.cache_write_5m_tokens, result.cache_write_1h_tokens) == (30, 5, 15)
@@ -160,7 +165,7 @@ async def test_relay_ignoring_output_config_falls_back_to_prompt_injection():
     assert "output_config" not in fallback_body
     assert '"enum": ["ok", "bad"]' in fallback_body["messages"][0]["content"][-1]["text"]
     assert _Verdict.model_validate_json(result.text) == _Verdict(label="bad", score=2)
-    # 两次调用都已计费
+    # Both calls were billed. / 两次调用都已计费
     assert (result.input_tokens, result.output_tokens) == (130, 23)
 
 
@@ -179,7 +184,10 @@ async def test_empty_base_url_goes_to_official_endpoint_not_env(monkeypatch):
 
 
 async def test_pasted_endpoint_suffix_matches_displayed_address_with_and_without_override():
-    """base_url 整条复制成 …/v1/messages：默认请求不重复该段；有覆盖时相对原样值（docs/adr/0101），与界面灰显一致。"""
+    """A base_url copied whole as .../v1/messages: the default request does not repeat that segment; with an override it is relative
+    to the raw value (docs/adr/0101), matching the greyed-out hint in the UI.
+
+    base_url 整条复制成 …/v1/messages：默认请求不重复该段；有覆盖时相对原样值（docs/adr/0101），与界面灰显一致。"""
     provider = _provider(base_url=f"{_MESSAGES_URL}/")
     default = create_custom_backend(provider=provider, model_id="claude-x", endpoint="anthropic-messages")
     overridden = create_custom_backend(

@@ -1,4 +1,6 @@
-"""消息改写端点的 HTTP 契约：响应形态与各拒绝理由的可辨识性。"""
+"""HTTP contract of the message rewrite endpoint: response shape and distinguishability of each rejection reason.
+
+消息改写端点的 HTTP 契约：响应形态与各拒绝理由的可辨识性。"""
 
 from unittest.mock import AsyncMock, patch
 
@@ -48,7 +50,9 @@ def _build_client() -> TestClient:
 
 
 def _post(rewrite_result, body: dict | None = None):
-    """以替身服务发一次改写请求；``rewrite_result`` 为返回值或抛出的异常。"""
+    """Send one rewrite request with the stand-in service; ``rewrite_result`` is the return value or the exception to raise.
+
+    以替身服务发一次改写请求；``rewrite_result`` 为返回值或抛出的异常。"""
     payload = {"anchor_entry_uuid": "user-abc", "content": "改写后的指令", "client_key": "ck-1"}
     payload.update(body or {})
     fake = AsyncMock()
@@ -74,6 +78,7 @@ class TestRewriteContract:
 
         assert response.status_code == 200
         payload = response.json()
+        # Same shape as the send endpoint: status + session_id + authoritative entry; session_id is the new branch.
         # 与发送端点同构：status + session_id + 权威 entry；session_id 是新分支。
         assert payload["status"] == "accepted"
         assert payload["session_id"] == "branch-session"
@@ -105,7 +110,9 @@ class TestRewriteContract:
 
 
 class TestRewriteRejections:
-    """每种拒绝理由都要能从响应里分辨出来——前端据此决定下一步提示。"""
+    """Every rejection reason must be distinguishable from the response; the frontend uses it to decide the next prompt.
+
+    每种拒绝理由都要能从响应里分辨出来——前端据此决定下一步提示。"""
 
     @pytest.mark.parametrize(
         ("exc", "status", "key"),

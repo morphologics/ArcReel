@@ -1,4 +1,6 @@
-"""generate_storyboards handler 的 ``ToolOutcome``。"""
+"""``ToolOutcome`` of the generate_storyboards handler.
+
+generate_storyboards handler 的 ``ToolOutcome``。"""
 
 from __future__ import annotations
 
@@ -65,7 +67,9 @@ async def test_generate_storyboards_rejects_unbound_active_script_before_enqueue
 
 
 async def test_generate_storyboards_selects_item_with_corrupt_generated_assets(fake_ctx: ToolHarness) -> None:
-    """generated_assets 为非 dict 脏数据（如字符串）时按缺失处理，不抛 AttributeError。"""
+    """When generated_assets is non-dict dirty data (e.g. a string) treat it as missing; do not raise AttributeError.
+
+    generated_assets 为非 dict 脏数据（如字符串）时按缺失处理，不抛 AttributeError。"""
     fake_ctx.pm.script_payload["segments"][0]["generated_assets"] = "corrupt"
 
     out = await run_declared_tool(
@@ -76,7 +80,10 @@ async def test_generate_storyboards_selects_item_with_corrupt_generated_assets(f
 
 
 async def test_generate_storyboards_blocks_an_unregistered_reference(fake_ctx: ToolHarness) -> None:
-    """agent 入口与 Web 提交同判：未登记的引用阻断这条分镜，不建任务、不计费。"""
+    """The agent entry judges the same as Web submission: an unregistered reference blocks this shot; no task is created,
+    nothing is billed.
+
+    agent 入口与 Web 提交同判：未登记的引用阻断这条分镜，不建任务、不计费。"""
 
     async def unreachable_batch(**_batch_kwargs):
         raise AssertionError("引用有缺口时不该走到入队")
@@ -97,7 +104,10 @@ async def test_generate_storyboards_blocks_an_unregistered_reference(fake_ctx: T
 
 
 async def test_generate_storyboards_rejects_mismatched_unit_script(fake_ctx: ToolHarness) -> None:
-    """失配剧本不能落进"✨ 所有分镜的分镜图都已生成"的假成功——报结构错误并指引重拆。"""
+    """A mismatched script must not fall into the fake success "all shots' storyboard images are generated" -- report a
+    structural error and guide a re-split.
+
+    失配剧本不能落进"✨ 所有分镜的分镜图都已生成"的假成功——报结构错误并指引重拆。"""
     fake_ctx.pm.script_payload = {
         "content_mode": "narration",
         "episode": 1,
@@ -124,7 +134,9 @@ async def test_generate_storyboards_error(fake_ctx: ToolHarness) -> None:
 
 
 async def test_generate_storyboards_rejects_path_in_script_arg(fake_ctx: ToolHarness) -> None:
-    """Agent 传带路径分隔符的 script 名在请求校验即被拒绝。"""
+    """A script name with a path separator passed by the Agent is rejected at request validation.
+
+    Agent 传带路径分隔符的 script 名在请求校验即被拒绝。"""
     out = await run_declared_tool("generate_storyboards", fake_ctx, {"script": "../etc/passwd"})
 
     assert out.problem is not None
@@ -132,7 +144,10 @@ async def test_generate_storyboards_rejects_path_in_script_arg(fake_ctx: ToolHar
 
 
 async def test_generate_storyboards_blocks_only_the_entry_whose_prompt_is_pending(fake_ctx: ToolHarness) -> None:
-    """机械转换出的条目 image_prompt 为 None：逐条阻断该分镜、不计费，其余分镜照常入队。"""
+    """A mechanically converted entry's image_prompt is None: block that shot alone, no billing; other shots are enqueued
+    as usual.
+
+    机械转换出的条目 image_prompt 为 None：逐条阻断该分镜、不计费，其余分镜照常入队。"""
     enqueued: list[str] = []
 
     async def fake_batch(*, specs, **_batch_kwargs):

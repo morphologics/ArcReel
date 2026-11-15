@@ -1,4 +1,6 @@
-"""v8→v9 参考生视频单元正文收敛迁移。"""
+"""v8->v9 migration converging reference-to-video unit bodies.
+
+v8→v9 参考生视频单元正文收敛迁移。"""
 
 from __future__ import annotations
 
@@ -27,7 +29,9 @@ def _read_json(path: Path) -> dict:
 
 
 def _snapshot(project_dir: Path) -> dict[str, tuple[bytes, int]]:
-    """项目目录里每个文件的内容与 mtime，用于断言「零写入」。"""
+    """Content and mtime of every file in the project directory, for asserting "zero writes".
+
+    项目目录里每个文件的内容与 mtime，用于断言「零写入」。"""
     return {
         str(path.relative_to(project_dir)): (path.read_bytes(), path.stat().st_mtime_ns)
         for path in sorted(project_dir.rglob("*"))
@@ -100,6 +104,7 @@ def _script(content_mode: str, units: object, *, episode: int = 1) -> dict:
 
 
 def _draft_path(project_dir: Path, episode: int = 1) -> Path:
+    # The v8 project's script plan draft still has the name from before the v9->v10 rename.
     # v8 项目的脚本规划草稿仍是 v9→v10 改名前的名字。
     return episode_drafts_dir(project_dir, episode) / "step1_reference_units.json"
 
@@ -255,7 +260,10 @@ def test_legacy_shot_durations_land_on_the_unit(tmp_path: Path) -> None:
 def test_a_unit_that_cannot_be_converted_is_marked_for_replanning_and_the_rest_migrates(
     tmp_path: Path, broken_unit: dict, expected: dict
 ) -> None:
-    """不符合当前单元模型的单元不拒绝整个项目：标为待重新规划，交给运行期的重新规划（ADR 0098）。"""
+    """A unit not matching the current unit model does not reject the whole project: it is marked for replan and left to
+    runtime replanning (ADR 0098).
+
+    不符合当前单元模型的单元不拒绝整个项目：标为待重新规划，交给运行期的重新规划（ADR 0098）。"""
     project_dir = _project(tmp_path, episodes=2)
     _write_json(
         project_dir / "scripts/episode_1.json",
@@ -357,6 +365,7 @@ def test_storyboard_project_only_gets_the_version_bump(tmp_path: Path) -> None:
 
     assert _read_json(project_dir / "project.json")["schema_version"] == 9
     assert (project_dir / "scripts/episode_1.json").read_bytes() == script_before
+    # Storyboard mode only changes project.json, and the backup is only of that one file.
     # 分镜图生视频只改 project.json，备份也只有它那一份。
     backups = sorted(path.name.split(".bak.v8-")[0] for path in project_dir.rglob("*.bak.v8-*"))
     assert backups == ["project.json"]
@@ -389,7 +398,10 @@ def test_startup_scan_and_archive_import_share_one_migration_entry() -> None:
 
 
 def test_a_v7_project_whose_draft_was_already_renamed_still_gets_its_units_converged(tmp_path: Path) -> None:
-    """起点低于 v8 时草稿在 v7→v8 已改名，本步须按新名找到它，否则草稿停在分镜形状。"""
+    """When starting below v8 the draft was already renamed in v7->v8; this step must find it under the new name, or the
+    draft stays in shot shape.
+
+    起点低于 v8 时草稿在 v7→v8 已改名，本步须按新名找到它，否则草稿停在分镜形状。"""
 
     project_dir = _project(tmp_path)
     project = _read_json(project_dir / "project.json")

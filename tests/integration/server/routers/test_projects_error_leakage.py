@@ -1,4 +1,6 @@
-"""projects 路由的未预期异常不泄漏内部细节。"""
+"""Unexpected exceptions in the projects routes do not leak internal details.
+
+projects 路由的未预期异常不泄漏内部细节。"""
 
 from lib.db.models.custom_provider import CustomProvider, CustomProviderModel
 from lib.i18n.zh import errors as zh_errors
@@ -11,7 +13,14 @@ from tests.integration.server.routers.projects_router_support import (
 
 
 def _raise(sentinel):
-    """返回一个「一调用即抛 RuntimeError(sentinel)」的可调用，用于替换 try 块内最早被命中的内部函数。
+    """Return a callable that "raises RuntimeError(sentinel) as soon as it is called", to replace the earliest internal
+    function hit in the try block.
+
+    RuntimeError is not caught by the route's earlier except FileNotFoundError / ValueError / HTTPException, so it
+    necessarily lands in the except Exception fallback branch, taking the "generic 500 + no echo of the internal
+    exception" path.
+
+    返回一个「一调用即抛 RuntimeError(sentinel)」的可调用，用于替换 try 块内最早被命中的内部函数。
 
     RuntimeError 不会被路由前面的 except FileNotFoundError / ValueError / HTTPException 捕获，
     必然落到 except Exception 兜底分支，从而走到「通用 500 + 不回显内部异常」路径。
@@ -24,7 +33,12 @@ def _raise(sentinel):
 
 
 def _raising_service(sentinel):
-    """服务替身：任意方法一被调用即抛 RuntimeError(sentinel)。
+    """Service stand-in: any method raises RuntimeError(sentinel) as soon as it is called.
+
+    Injected via dependency override, so the exception lands inside the handler body, at the same spot as the replaced
+    internal function.
+
+    服务替身：任意方法一被调用即抛 RuntimeError(sentinel)。
 
     经依赖覆盖注入，异常因而落在处理器体内，与被替换的内部函数同一位置。
     """
@@ -40,13 +54,21 @@ def _raising_service(sentinel):
 
 
 class TestUnexpectedErrorsDoNotLeak:
-    """未预期异常统一映射为通用 500，且响应体不得回显内部异常文本（不泄露）。
+    """Unexpected exceptions are uniformly mapped to a generic 500, and the response body must not echo internal
+    exception text (no leakage).
+
+    Each endpoint replaces the earliest internal function called in the try block with a unique sentinel string, then
+    asserts: the response is 500 and the sentinel string does not appear in the response body.
+
+    未预期异常统一映射为通用 500，且响应体不得回显内部异常文本（不泄露）。
 
     每个端点用独一无二的哨兵串替换 try 块内最早被调用的内部函数，再断言：
     响应 500 且哨兵串不出现在响应体里。
     """
 
     def _body(self, resp):
+        # detail is json["detail"] on ordinary endpoints, and the import endpoint's JSONResponse has detail too;
+        # here assert on the whole raw text, covering that none of detail / errors / warnings leaks.
         # detail 在普通端点是 json["detail"]，import 端点用 JSONResponse 同样有 detail；
         # 这里直接断言整段原始文本，覆盖 detail / errors / warnings 任意字段都不泄露。
         return resp.text
@@ -54,6 +76,7 @@ class TestUnexpectedErrorsDoNotLeak:
     def test_create_project_unexpected_error_maps_to_500(self, tmp_path, monkeypatch):
         sentinel = "LEAKED_SECRET_create_project"
         client = build_projects_client(monkeypatch, _FakePM(tmp_path))
+        # get_project_manager() is hit first in _sync; RuntimeError bypasses the ValueError/HTTPException branches
         # _sync 里最早命中 get_project_manager()，RuntimeError 绕过 ValueError/HTTPException 分支
         monkeypatch.setattr(projects, "get_project_manager", _raise(sentinel))
         with client:
@@ -151,6 +174,7 @@ class TestUnexpectedErrorsDoNotLeak:
     def test_update_episode_unexpected_error_maps_to_500(self, tmp_path, monkeypatch):
         sentinel = "LEAKED_SECRET_update_episode"
         client = build_projects_client(monkeypatch, _FakePM(tmp_path))
+        # The non-empty title check is before the try; get_project_manager() is hit first in _sync
         # title 非空校验在 try 前；_sync 里最早命中 get_project_manager()
         monkeypatch.setattr(projects, "get_project_manager", _raise(sentinel))
         with client:
@@ -163,6 +187,7 @@ class TestUnexpectedErrorsDoNotLeak:
         client = build_projects_client(monkeypatch, _FakePM(tmp_path))
         monkeypatch.setattr(projects, "get_project_manager", _raise(sentinel))
         with client:
+            # content goes as a multipart form; get_project_manager() is called first inside the try
             # content 走 multipart form；get_project_manager() 在 try 内最早被调用
             resp = client.post(
                 "/api/v1/projects/ready/source",
@@ -172,6 +197,9 @@ class TestUnexpectedErrorsDoNotLeak:
             assert sentinel not in self._body(resp)
 
     def test_set_project_source_overview_error_does_not_leak_path(self, tmp_path, monkeypatch):
+        # Overview generation is an optional follow-up of upload: on failure the upload still succeeds (200), and the error
+        # is only returned degraded as overview_error. The underlying exception text may carry an absolute server path; this
+        # branch must not pass the raw str(e) through to the client.
         # 概览生成是上传的可选后续：失败时上传仍成功（200），错误只降级回传 overview_error。
         # 底层异常文本可能携带服务器绝对路径，该分支不得把裸 str(e) 透传给客户端。
         client = build_projects_client(monkeypatch, _FakePM(tmp_path))
@@ -184,11 +212,14 @@ class TestUnexpectedErrorsDoNotLeak:
             payload = resp.json()
             assert payload["success"] is True
             assert payload["overview"] is None
+            # After a successful upload the legitimately returned filename is novel.txt, which is not a leak; the leak concern
+            # is absolute server path fragments carried by exception text.
             # 上传成功后合法回传的 filename 是 novel.txt，不在泄漏范畴；
             # 泄漏关注的是异常文本携带的服务器绝对路径片段。
             assert "/Users" not in resp.text
             assert "/var" not in resp.text
             assert "/secret/" not in resp.text
+            # What is returned is the translated generic message, not the raw exception string
             # 回传的是翻译后的通用文案，而非裸异常串
             assert payload["overview_error"] == zh_errors.MESSAGES["overview_generation_failed"]
 
@@ -214,6 +245,8 @@ class TestUnexpectedErrorsDoNotLeak:
             assert sentinel not in self._body(resp)
 
     def test_generate_overview_corrupted_project_maps_to_500_not_provider_error(self, tmp_path, monkeypatch):
+        # JSONDecodeError is a ValueError subclass: a corrupted project.json must not be misjudged by except ValueError
+        # as "text provider not configured"; it must be intercepted before that and mapped to a generic 500
         # JSONDecodeError 是 ValueError 子类：损坏的 project.json 不能被 except ValueError
         # 误判为「未配置文本供应商」，须先于其拦截并映射为通用 500
         client = build_projects_client(monkeypatch, _FakePM(tmp_path))
@@ -223,6 +256,8 @@ class TestUnexpectedErrorsDoNotLeak:
             assert "配置文本供应商" not in self._body(resp)
 
     def test_generate_overview_model_not_in_catalog_asks_to_reselect(self, tmp_path, monkeypatch):
+        # The project's text model is no longer in the provider list: the app-level handler returns a 400 asking to
+        # reselect the model, not misjudged by generic ValueError handling as "text provider not configured"
         # 项目引用的文本模型已不在供应商清单中：交 app 级 handler 返回要求重新选择模型的 400，
         # 不被通用 ValueError 处理误判为「未配置文本供应商」
         client = build_projects_client(monkeypatch, _FakePM(tmp_path))
@@ -234,6 +269,9 @@ class TestUnexpectedErrorsDoNotLeak:
             assert "re-select a model" in detail
 
     def test_generate_overview_schema_failure_maps_to_ai_response_invalid(self, tmp_path, monkeypatch):
+        # pydantic ValidationError is also a ValueError subclass: model output not matching the schema must hit the
+        # dedicated "invalid AI response" branch, not be misjudged by generic ValueError handling as "text provider not
+        # configured"
         # pydantic ValidationError 也是 ValueError 子类：模型输出不合 schema 时须命中
         # 「AI 响应无效」专属分支，不能被通用 ValueError 处理误判为「未配置文本供应商」
         client = build_projects_client(monkeypatch, _FakePM(tmp_path))
@@ -245,6 +283,9 @@ class TestUnexpectedErrorsDoNotLeak:
     async def test_generate_overview_truncated_maps_to_truncation_problem(
         self, tmp_path, monkeypatch, db_factory, set_error_handler_sessions
     ):
+        # Truncated output is an actionable terminal error (narrow the scope or switch models) and must not fall into the
+        # generic 500 fallback; diagnostic reuses the shape of the text_output_truncated problem ticket, from which the
+        # frontend offers the way out of registering an output length or switching models
         # 输出被截断是可操作的终局错误（缩小范围或换模型），不能落进兜底的通用 500；
         # diagnostic 复用 text_output_truncated 问题票的形状，前端据此给出登记输出长度或换模型的出路
         async with db_factory() as session:
@@ -276,6 +317,8 @@ class TestUnexpectedErrorsDoNotLeak:
             assert body["diagnostic"]["params"] == {"provider_id": "custom-3", "model": "my-llm", "custom_model": True}
 
     def test_generate_overview_invalid_project_name_maps_to_400_not_provider_error(self, tmp_path, monkeypatch):
+        # An illegal-project-name ValueError raised by get_project_path (path traversal etc.) must not be misjudged as "text
+        # provider not configured" by the except ValueError of the provider resolution chain inside generate_overview()
         # get_project_path 抛出的非法项目名 ValueError（路径穿越等）不能被 generate_overview()
         # 内部供应商解析链路的 except ValueError 误判为「未配置文本供应商」
         client = build_projects_client(monkeypatch, _FakePM(tmp_path))
@@ -297,6 +340,9 @@ class TestUnexpectedErrorsDoNotLeak:
     def test_create_export_token_unexpected_error_maps_to_500(self, tmp_path, monkeypatch):
         sentinel = "LEAKED_SECRET_export_token"
         client = build_projects_client(monkeypatch, _FakePM(tmp_path))
+        # scope is valid (default full); get_project_manager() is hit first in _sync.
+        # The archive service now comes from a dependency override, so the same sentinel does not raise during dependency
+        # resolution and bypass the handler fallback.
         # scope 合法（默认 full）；_sync 里最早命中 get_project_manager()。
         # 归档服务改由依赖覆盖给出，免得同一个哨兵在依赖解析期就抛、绕过处理器兜底。
         override(client, projects.get_archive_service, lambda: _raising_service(sentinel))
@@ -309,6 +355,7 @@ class TestUnexpectedErrorsDoNotLeak:
     def test_export_project_archive_unexpected_error_maps_to_500(self, tmp_path, monkeypatch):
         sentinel = "LEAKED_SECRET_export_archive"
         client = build_projects_client(monkeypatch, _FakePM(tmp_path))
+        # download_token validation lets it through first, then the archive service raises RuntimeError into the fallback
         # download_token 校验先放行，再让归档服务抛 RuntimeError 落到兜底
         monkeypatch.setattr(projects, "verify_download_token", lambda token, name: {"sub": "u"})
         override(client, projects.get_archive_service, lambda: _raising_service(sentinel))
@@ -320,6 +367,8 @@ class TestUnexpectedErrorsDoNotLeak:
     def test_import_project_archive_unexpected_error_maps_to_500(self, tmp_path, monkeypatch):
         sentinel = "LEAKED_SECRET_import_archive"
         client = build_projects_client(monkeypatch, _FakePM(tmp_path))
+        # After the uploaded copy is written to disk, _sync calls the archive service which raises RuntimeError, landing in
+        # the JSONResponse(500) fallback
         # 上传副本写盘成功后，_sync 调归档服务抛 RuntimeError，落到 JSONResponse(500) 兜底
         override(client, projects.get_archive_service, lambda: _raising_service(sentinel))
         with client:

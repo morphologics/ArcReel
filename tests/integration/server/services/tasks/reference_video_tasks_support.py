@@ -1,4 +1,6 @@
-"""server.services.tasks.reference_video_tasks 测试共享的替身与 helper。"""
+"""Shared doubles and helpers for server.services.tasks.reference_video_tasks tests.
+
+server.services.tasks.reference_video_tasks 测试共享的替身与 helper。"""
 
 from __future__ import annotations
 
@@ -77,7 +79,13 @@ def write_project(tmp_path: Path, *, register_script: bool = True) -> Path:
 
 
 def register_asset_sheet(proj_dir: Path, asset_type: str, name: str, relative_path: str) -> None:
-    """把新增资产补成生产形态：sheet 文件在盘上，且在产物清单里登记。
+    """Bring a new asset into production form: the sheet file is on disk and registered in the artifact manifest.
+
+    project.json must already be written with this asset's sheet pointer before calling - the manifest
+    registration basis comes from project.json's current pointer; changing only the in-memory project copy does
+    not make a registrable asset.
+
+    把新增资产补成生产形态：sheet 文件在盘上，且在产物清单里登记。
 
     调用前 project.json 必须已经写盘并带上该资产的 sheet 指针——清单登记的依据来自
     project.json 的当前指针，只改内存里的 project 副本不构成一个可登记的资产。
@@ -109,6 +117,8 @@ def _activate_project_manifest(proj_dir: Path, *, register_script: bool = True) 
     project["schema_version"] = 7
     project_path.write_text(json.dumps(project, ensure_ascii=False), encoding="utf-8")
     assert activate_artifact_target_state(proj_dir, bump_schema=True) is True
+    # Manifest activation only reaches v8; artifact read/write requires the current schema, so finish the rest of
+    # the migration chain.
     # 清单激活只落到 v8；产物读写要求当前 schema，故补齐剩余迁移链。
     migrate_project_dir(proj_dir)
     if register_script:
@@ -118,6 +128,8 @@ def _activate_project_manifest(proj_dir: Path, *, register_script: bool = True) 
             basis=ArtifactBasis.build("test/episode-script", kind_version=1, inputs={}),
         )
     else:
+        # A script without a script_plan is registered with a no-plan basis at activation; what we want here is "the
+        # bound script has no manifest claim", so delete the entry registered by activation.
         # 没有 script_plan 的剧本在激活时按无计划依据登记；这里要的是「绑定的剧本没有清单认领」，
         # 故把激活登记的条目删掉。
         ProjectArtifactManifestAdapter(proj_dir).delete_entry(ArtifactKey.episode_script(1))

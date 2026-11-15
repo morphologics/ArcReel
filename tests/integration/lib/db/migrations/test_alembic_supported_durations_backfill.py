@@ -1,4 +1,6 @@
-"""Alembic 回填迁移：验证 video endpoint 模型的 NULL supported_durations 被启发式填充。"""
+"""Alembic backfill migration: verify that NULL supported_durations of video endpoint models are filled heuristically.
+
+Alembic 回填迁移：验证 video endpoint 模型的 NULL supported_durations 被启发式填充。"""
 
 from __future__ import annotations
 
@@ -13,7 +15,9 @@ from alembic import command
 
 @pytest.fixture
 def backfill_revisions() -> tuple[str, str]:
-    """读出新增迁移的 (revision, down_revision)，便于按名锁定。"""
+    """Read (revision, down_revision) of the new migration, to pin it by name.
+
+    读出新增迁移的 (revision, down_revision)，便于按名锁定。"""
     repo_root = Path(__file__).resolve().parents[5]
     versions_dir = repo_root / "alembic" / "versions"
     matches = list(versions_dir.glob("*_backfill_custom_model_durations.py"))
@@ -34,8 +38,12 @@ def backfill_revisions() -> tuple[str, str]:
 def test_backfill_video_endpoints_with_null_durations(
     alembic_cfg: tuple[Config, Path], backfill_revisions: tuple[str, str]
 ):
-    """先回退到 backfill 之前一格，插入若干 NULL 行，再升级到 backfill，断言被填充。"""
+    """First step back to one revision before the backfill, insert some NULL rows, then upgrade to the backfill and assert
+    they are filled.
+
+    先回退到 backfill 之前一格，插入若干 NULL 行，再升级到 backfill，断言被填充。"""
     backfill_revision_id, parent_revision_id = backfill_revisions
+    # 1. Upgrade the schema to the backfill's down_revision
     # 1. 把 schema 升到 backfill 的 down_revision
     cfg, db_path = alembic_cfg
     command.upgrade(cfg, parent_revision_id)
@@ -50,6 +58,7 @@ def test_backfill_video_endpoints_with_null_durations(
                     "VALUES (1, 'P', 'openai', 'https://x', 'k', '2026-05-04 00:00:00', '2026-05-04 00:00:00')"
                 )
             )
+            # Four rows: video endpoint and NULL -> should be backfilled; text endpoint untouched; non-NULL untouched too
             # 四条：video endpoint 且 NULL → 应被回填；text endpoint 不动；非 NULL 也不动
             conn.execute(
                 sa.text(
@@ -63,9 +72,11 @@ def test_backfill_video_endpoints_with_null_durations(
                 )
             )
 
+        # 2. Upgrade to the backfill
         # 2. 升级到 backfill
         command.upgrade(cfg, backfill_revision_id)
 
+        # 3. Assert
         # 3. 断言
         with engine.begin() as conn:
             rows = conn.execute(
@@ -75,11 +86,15 @@ def test_backfill_video_endpoints_with_null_durations(
         engine.dispose()
     by_id = {r[0]: r[1] for r in rows}
 
+    # sora-2-pro matches the first preset: [4, 8, 12]
     # sora-2-pro 命中第一条预设：[4, 8, 12]
     assert by_id["sora-2-pro"] == "[4, 8, 12]"
+    # Unknown -> DEFAULT_FALLBACK [4, 8]
     # 未知 → DEFAULT_FALLBACK [4, 8]
     assert by_id["unknown-foo"] == "[4, 8]"
+    # text endpoint untouched
     # text endpoint 不动
     assert by_id["gpt-4o"] is None
+    # Existing non-NULL untouched
     # 已有非 NULL 不动
     assert by_id["sora-2"] == "[1,2,3]"

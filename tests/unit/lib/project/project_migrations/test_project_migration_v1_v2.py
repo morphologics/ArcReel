@@ -1,4 +1,7 @@
-"""v1→v2 迁移：legacy provider 名归一化 + image_backend 拆分；纯函数 + 幂等 + 文件级版本守卫。"""
+"""v1->v2 migration: legacy provider name normalization + image_backend split; pure function + idempotency +
+file-level version guard.
+
+v1→v2 迁移：legacy provider 名归一化 + image_backend 拆分；纯函数 + 幂等 + 文件级版本守卫。"""
 
 import json
 from pathlib import Path
@@ -37,8 +40,8 @@ class TestMigrateProjectDictPureFunction:
                 "image_provider_t2i": "openai/gen-1",
             }
         )
-        assert after["image_provider_t2i"] == "openai/gen-1"  # 已存在不覆盖
-        assert after["image_provider_i2i"] == "ark/legacy"  # 缺失槽由 legacy 拆分填补
+        assert after["image_provider_t2i"] == "openai/gen-1"  # An existing value is not overwritten / 已存在不覆盖
+        assert after["image_provider_i2i"] == "ark/legacy"  # The missing slot is filled by the legacy split / 缺失槽由 legacy 拆分填补
         assert "image_backend" not in after
 
     def test_normalizes_bare_provider_name_without_model(self):
@@ -46,7 +49,10 @@ class TestMigrateProjectDictPureFunction:
         assert after["video_backend"] == "ark"
 
     def test_strips_whitespace_before_normalizing(self):
-        """带空白的 legacy 名也须归一化（先 strip 再比对别名表），否则残留未规范值。"""
+        """Legacy names with whitespace must be normalized too (strip first, then compare with the alias
+        table), otherwise non-canonical values remain.
+
+        带空白的 legacy 名也须归一化（先 strip 再比对别名表），否则残留未规范值。"""
         after = migrate_project_dict(
             {"video_backend": " seedance / seedance-1-0-pro ", "text_backend_script": " gemini "}
         )
@@ -54,7 +60,10 @@ class TestMigrateProjectDictPureFunction:
         assert after["text_backend_script"] == "gemini-aistudio"
 
     def test_slash_without_model_yields_provider_only(self):
-        """带斜杠但缺 model（如 "gemini /"）归一化为纯 provider，不留尾斜杠非规范串。"""
+        """A slash without a model (such as "gemini /") normalizes to just the provider, leaving no
+        non-canonical string with a trailing slash.
+
+        带斜杠但缺 model（如 "gemini /"）归一化为纯 provider，不留尾斜杠非规范串。"""
         after = migrate_project_dict({"video_backend": "seedance /", "text_backend_script": "gemini/"})
         assert after["video_backend"] == "ark"
         assert after["text_backend_script"] == "gemini-aistudio"
@@ -66,7 +75,7 @@ class TestMigrateProjectDictPureFunction:
     def test_does_not_mutate_input(self):
         before = {"image_backend": "seedance/x"}
         migrate_project_dict(before)
-        assert before == {"image_backend": "seedance/x"}  # 原 dict 不变
+        assert before == {"image_backend": "seedance/x"}  # The original dict is unchanged / 原 dict 不变
 
     def test_idempotent(self):
         before = {
@@ -103,11 +112,14 @@ class TestMigrateV1ToV2File:
         d = self._write(tmp_path, {"schema_version": 2, "image_backend": "seedance/x"})
         migrate_v1_to_v2(d)
         data = json.loads((d / "project.json").read_text(encoding="utf-8"))
-        # 已是 v2 → 不重复迁移，legacy 字段原样保留（不会被再次处理）
+        # Already v2 -> not migrated again; legacy fields are kept as-is (not processed again) / 已是 v2 → 不重复迁移，legacy 字段原样保留（不会被再次处理）
         assert data["image_backend"] == "seedance/x"
 
     def test_missing_project_json_is_noop(self, tmp_path: Path):
-        """没有 project.json 的目录：迁移既不抛错，也不得凭空造出任何文件。"""
+        """A directory without project.json: the migration neither raises nor creates any file out of
+        nothing.
+
+        没有 project.json 的目录：迁移既不抛错，也不得凭空造出任何文件。"""
         empty = tmp_path / "empty"
         empty.mkdir()
 

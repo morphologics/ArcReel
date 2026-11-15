@@ -670,7 +670,9 @@ def test_draft_locator_rejects_unknown_document_types() -> None:
 
 @pytest.mark.parametrize("entry_ids", [(1,), (["E1U01"],), ({"id": "E1U01"},)])
 def test_text_generation_request_rejects_non_string_entry_ids(entry_ids: tuple[object, ...]) -> None:
-    """entry_ids 经队列 payload JSON 往返回来，元素类型必须真的校验。"""
+    """entry_ids round-trip through the queue payload JSON, so element types must really be validated.
+
+    entry_ids 经队列 payload JSON 往返回来，元素类型必须真的校验。"""
 
     with pytest.raises(ValueError, match="entry_ids must be non-empty strings"):
         shared_text_generation.TextGenerationRequest(episode=1, entry_ids=entry_ids)

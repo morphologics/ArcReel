@@ -1,4 +1,7 @@
-"""内容确认时登记本集新增资产：按处理决定登记、改写引用，同名归并，「不登记」的改写。"""
+"""Registering this episode's new assets at content review: register by handling decision, rewrite references,
+merge same names, and the rewrite for "do not register".
+
+内容确认时登记本集新增资产：按处理决定登记、改写引用，同名归并，「不登记」的改写。"""
 
 from __future__ import annotations
 

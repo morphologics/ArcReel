@@ -1,4 +1,7 @@
-"""重新规划：在真实的临时项目目录上只经公开命令验证候选的生成、采纳与放弃。"""
+"""Replan: on a real temporary project directory, verify generating, adopting and discarding a candidate through public
+commands only.
+
+重新规划：在真实的临时项目目录上只经公开命令验证候选的生成、采纳与放弃。"""
 
 from __future__ import annotations
 
@@ -32,6 +35,7 @@ from lib.script.script_review import STALE_SCRIPT_PLAN_REVISION_FIELD
 
 CH = ("第一章。少年下山。", "第二章。城里起火。", "第三章。夜雨相逢。", "第四章。重逢离别。")
 SOURCE = "".join(CH)
+#: Start of each chapter in the source; the last item is the end of the source.
 #: 各章在源文里的起点；最后一项是源文结尾。
 CUTS = [sum(len(c) for c in CH[:i]) for i in range(len(CH) + 1)]
 
@@ -106,7 +110,9 @@ def _give_products(project_dir: Path, *episodes: int) -> None:
 
 
 class _Generator:
-    """窗口里出现的每个锚点各回一集。"""
+    """Return one episode for each anchor that appears in the window.
+
+    窗口里出现的每个锚点各回一集。"""
 
     model = "fake-model"
     max_output_tokens = 64000
@@ -152,6 +158,7 @@ class TestCandidate:
         project_dir = _project_dir(tmp_path, [_cut(1, 0), _cut(2, 1), _cut(3, 2), _cut(4, 3)])
         ledger_before = _load(project_dir)["episodes"]
 
+        # Chapters 3 and 4 merged into one episode
         # 第 3、4 章合成一集
         candidate_id = await _generate(project_dir, 3, ["重逢离别。"], instructions="合并后两章")
 
@@ -233,7 +240,9 @@ class TestCandidate:
 async def _generate_partial(
     project_dir: Path, episode: int, anchors: list[str], *, instructions: str | None = None
 ) -> str:
-    """只生成一批就停下：候选没有覆盖到整本源文结尾。"""
+    """Generate only one batch and stop: the candidate does not reach the end of the whole source.
+
+    只生成一批就停下：候选没有覆盖到整本源文结尾。"""
     candidate_id = create_replan_candidate(project_dir, episode=episode, instructions=instructions)
     planner = EpisodePlanner(project_dir, generator=_Generator(anchors))
     result = await planner.plan_candidate(candidate_id, instructions)
@@ -314,6 +323,8 @@ class TestInterruptedCandidate:
         assert stale.value.code == "source_changed"
 
     async def test_a_cross_file_episode_ending_beyond_the_candidate_is_named(self, tmp_path: Path):
+        # a.txt holds chapters 1 and 2, b.txt holds chapters 3 and 4; episode 2 runs from chapter 2 to the end of chapter 3.
+        # The plan only generated chapter 2 from a.txt
         # a.txt 是第一、二章，b.txt 是第三、四章；第 2 集从第二章跨到第三章结尾。方案只生成了 a.txt 里的第二章
         project_dir = _project_dir(tmp_path, [])
         source_dir = project_dir / "source"
@@ -397,6 +408,7 @@ class TestAdoption:
         assert result.deleted == [2]
         assert _order(project_dir) == [1, 3]
         assert not (project_dir / "scripts" / "episode_2.json").exists()
+        # The retired episode goes to the project trash together with its episode source: on restore, this text is its source
         # 退下的集连同集原文进项目回收站：恢复时这段原文是它的源文
         record = episode_trash_record(project_dir, 2)
         assert record is not None
@@ -405,11 +417,16 @@ class TestAdoption:
         assert stored.read_text(encoding="utf-8") == CH[1]
 
     async def test_episodes_of_other_origins_follow_the_story_by_their_anchor(self, tmp_path: Path):
+        # Side story 7 comes after episode 1 (anchor = end of episode 1 = start); side story 8 comes after episode 2 (anchor at
+        # the end of chapter 2);
+        # side story 9 comes last (anchor at the end of chapter 4)
         # 番外 7 排在第 1 集之后（锚点 = 第 1 集结尾 = 起点）；番外 8 排在第 2 集之后（锚点在第二章结尾）；
         # 番外 9 排在末尾（锚点在第四章结尾）
         project_dir = _project_dir(
             tmp_path, [_cut(1, 0), _own(7), _cut(2, 1), _own(8), _cut(3, 2), _cut(4, 3), _own(9)]
         )
+        # The new plan merges chapter 2 and the first half of chapter 3 into one episode, and the second half of chapter 3
+        # with chapter 4 into another
         # 新方案把第二章和第三章的前半合成一集，第三章后半与第四章合成一集
         candidate_id = await _generate(project_dir, 2, ["夜雨", "重逢离别。"])
 
@@ -428,6 +445,8 @@ class TestAdoption:
         assert _order(project_dir) == [7, 8, 9]
 
     async def test_an_episode_after_a_cross_file_episode_follows_where_that_episode_ends(self, tmp_path: Path):
+        # The source is split into two files: a.txt holds chapters 1 and 2, b.txt holds chapters 3 and 4; episode 2 runs
+        # from chapter 2 to the end of chapter 3
         # 源文分成两个文件：a.txt 是第一、二章，b.txt 是第三、四章；第 2 集从第二章跨到第三章结尾
         project_dir = _project_dir(tmp_path, [])
         source_dir = project_dir / "source"
@@ -451,6 +470,8 @@ class TestAdoption:
         project["episode_id_high_water"] = 7
         (project_dir / "project.json").write_text(json.dumps(project, ensure_ascii=False), encoding="utf-8")
         (source_dir / "episode_7.txt").write_text("番外原文。", encoding="utf-8")
+        # New plan: chapters 2, 3 and 4 each become one episode; episode 2 originally ended at the end of chapter 3.
+        # The window is taken file by file, generating up to the end of the source
         # 新方案：第二章、第三章、第四章各一集；第 2 集原来的结尾在第三章结尾。窗口逐个文件取，生成到源文结尾
         candidate_id = create_replan_candidate(project_dir, episode=2, instructions=None)
         planner = EpisodePlanner(project_dir, generator=_Generator(["城里起火。", "夜雨相逢。", "重逢离别。"]))

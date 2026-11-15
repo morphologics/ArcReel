@@ -1,4 +1,6 @@
-"""Alembic api_calls.duration_ms 扩为 64 位整数迁移的双向测试。"""
+"""Up/down tests for the Alembic migration widening api_calls.duration_ms to a 64-bit integer.
+
+Alembic api_calls.duration_ms 扩为 64 位整数迁移的双向测试。"""
 
 from __future__ import annotations
 

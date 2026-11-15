@@ -1,4 +1,6 @@
-"""OpenAI 图片的 quality 选择维度：按 image_size 映射出的 quality 随请求发送，并作为用量的选择维度上报。"""
+"""The quality selection dimension of OpenAI images: the quality mapped from image_size is sent with the request and reported as a usage selection dimension.
+
+OpenAI 图片的 quality 选择维度：按 image_size 映射出的 quality 随请求发送，并作为用量的选择维度上报。"""
 
 from __future__ import annotations
 
@@ -15,7 +17,9 @@ def _quality(result) -> object:
 
 
 def _make_mock_image_response(b64_data: str = "aW1hZ2VfZGF0YQ=="):
-    """构造 mock ImagesResponse。"""
+    """Build a mock ImagesResponse.
+
+    构造 mock ImagesResponse。"""
     datum = MagicMock()
     datum.b64_json = b64_data
     response = MagicMock()
@@ -25,7 +29,9 @@ def _make_mock_image_response(b64_data: str = "aW1hZ2VfZGF0YQ=="):
 
 class TestOpenAIImageBackendQuality:
     async def test_generate_result_contains_quality(self, tmp_path: Path):
-        """generate() 上报的用量带上请求里发送的 quality 维度。"""
+        """The usage reported by generate() carries the quality dimension sent in the request.
+
+        generate() 上报的用量带上请求里发送的 quality 维度。"""
         b64_data = base64.b64encode(b"fake-png").decode()
         mock_client = AsyncMock()
         mock_client.images.generate = AsyncMock(return_value=_make_mock_image_response(b64_data))
@@ -46,7 +52,9 @@ class TestOpenAIImageBackendQuality:
         assert _quality(result) == "medium"
 
     async def test_quality_propagated_for_all_sizes(self, tmp_path: Path):
-        """所有 image_size 值都应正确映射到 quality 维度。"""
+        """Every image_size value should map correctly to the quality dimension.
+
+        所有 image_size 值都应正确映射到 quality 维度。"""
         b64_data = base64.b64encode(b"img").decode()
         mock_client = AsyncMock()
         mock_client.images.generate = AsyncMock(return_value=_make_mock_image_response(b64_data))
@@ -74,7 +82,9 @@ class TestOpenAIImageBackendQuality:
                 assert _quality(result) == expected_quality, f"image_size={img_size}"
 
     async def test_unknown_size_result_quality_is_none(self, tmp_path: Path):
-        """未知 image_size 不 fallback 到 'medium'，请求不发 quality，用量也不报这一维度。"""
+        """An unknown image_size does not fall back to 'medium'; the request sends no quality and usage does not report that dimension.
+
+        未知 image_size 不 fallback 到 'medium'，请求不发 quality，用量也不报这一维度。"""
         b64_data = base64.b64encode(b"img").decode()
         mock_client = AsyncMock()
         mock_client.images.generate = AsyncMock(return_value=_make_mock_image_response(b64_data))

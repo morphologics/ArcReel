@@ -1,4 +1,8 @@
-"""数据根换了绝对路径后启动：会话的 Agent 上下文记录对齐到当前项目目录派生的存储键，续聊照常；键已一致时不写任何东西。"""
+"""Starting after the data root moved to a new absolute path: the session's Agent context records are realigned to the
+storage key derived from the current project directory and the conversation continues as usual; when keys already
+match, nothing is written.
+
+数据根换了绝对路径后启动：会话的 Agent 上下文记录对齐到当前项目目录派生的存储键，续聊照常；键已一致时不写任何东西。"""
 
 from __future__ import annotations
 
@@ -74,7 +78,9 @@ async def _create_session(session_factory, project_name: str, sid: str) -> None:
 
 
 class _WriteCounter:
-    """数一个引擎上发出的 INSERT / UPDATE / DELETE 语句。"""
+    """Count the INSERT / UPDATE / DELETE statements issued on an engine.
+
+    数一个引擎上发出的 INSERT / UPDATE / DELETE 语句。"""
 
     def __init__(self, session_factory) -> None:
         self.statements: list[str] = []
@@ -121,6 +127,7 @@ async def test_moved_data_root_sessions_resume_under_the_new_key(tmp_path, sessi
         assert materialized is not None
         await materialized.cleanup()
 
+    # Start again: keys already match, no write statements are issued
     # 再次启动：键已一致，不发任何写语句
     counter = _WriteCounter(session_factory)
     try:
@@ -153,6 +160,8 @@ async def test_retired_sessions_follow_the_original_name_so_restore_still_finds_
         session_factory, projects_dir=new_projects, sdk_config_dir=tmp_path / "cfg", store_enabled=True
     )
 
+    # Restoring a deleted project looks up the old key by "the original directory under the current data root", so a
+    # session under a tombstone name is aligned to the key of the original-name directory
     # 已删除项目恢复时按「当前数据根下的原目录」找旧键，所以挂墓碑名的会话对齐到原名目录的键
     assert result.rewritten == {RETIRED_SID}
     restore_source_key = make_project_key(new_projects / "demo")
@@ -181,7 +190,10 @@ async def test_sessions_with_records_under_the_current_key_are_left_alone(tmp_pa
 
 
 async def test_store_off_moves_local_transcripts_of_a_moved_data_root(tmp_path, monkeypatch, session_factory):
-    """``ARCREEL_SDK_SESSION_STORE=off`` 时数据库里没有镜像，SDK 只读本地 jsonl，它们移到新键目录下。"""
+    """With ``ARCREEL_SDK_SESSION_STORE=off`` there is no mirror in the database and the SDK only reads local jsonl, which
+    are moved under the new key directory.
+
+    ``ARCREEL_SDK_SESSION_STORE=off`` 时数据库里没有镜像，SDK 只读本地 jsonl，它们移到新键目录下。"""
     sdk_config_dir = tmp_path / "cfg"
     monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(sdk_config_dir))
     old_projects = _make_project_dirs(tmp_path / "A", "demo")

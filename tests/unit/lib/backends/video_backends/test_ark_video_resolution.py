@@ -1,4 +1,6 @@
-"""测试 ArkVideoBackend 对 resolution=None 的处理。"""
+"""Tests ArkVideoBackend's handling of resolution=None.
+
+测试 ArkVideoBackend 对 resolution=None 的处理。"""
 
 from unittest.mock import MagicMock
 
@@ -38,7 +40,7 @@ async def test_resolution_none_not_in_create_params(tmp_path):
         await backend._create_task(req)
 
     assert "resolution" not in captured
-    # 其他关键字段仍然透传
+    # Other key fields are still passed through. / 其他关键字段仍然透传
     assert captured["ratio"] == "9:16"
     assert captured["duration"] == 5
 
@@ -64,6 +66,7 @@ async def test_resolution_passed_when_set(tmp_path):
     with pytest.raises(RuntimeError):
         await backend._create_task(req)
 
+    # Ratio-independence guard: when resolution and ratio are both sent they are orthogonal; resolution does not override/rewrite the ratio.
     # 比例独立性守护：resolution 与 ratio 同传时彼此正交，resolution 不覆盖/不改写比例
     assert captured["resolution"] == "720p"
     assert captured["ratio"] == "9:16"

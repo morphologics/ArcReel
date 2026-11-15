@@ -1,4 +1,6 @@
-"""SessionRekey 移动 SDK 本地会话记录：从任一来源键目录移到目标键目录，目标已有同一会话时原样不动。"""
+"""SessionRekey moves the SDK's local session records: from any source key directory to the target key directory; if the target already has the same session, it is left untouched.
+
+SessionRekey 移动 SDK 本地会话记录：从任一来源键目录移到目标键目录，目标已有同一会话时原样不动。"""
 
 from __future__ import annotations
 

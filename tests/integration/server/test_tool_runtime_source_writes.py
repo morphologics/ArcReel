@@ -1,4 +1,7 @@
-"""Agent 写源文的服务命令：覆盖整本源文的文件与编辑源文，都按对齐重映射分集账本，有受影响的集时先确认。"""
+"""Agent service commands that write the source: both the file overwriting the whole source and the edited
+source remap the episode ledger by alignment, confirming first when episodes are affected.
+
+Agent 写源文的服务命令：覆盖整本源文的文件与编辑源文，都按对齐重映射分集账本，有受影响的集时先确认。"""
 
 from __future__ import annotations
 

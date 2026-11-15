@@ -45,6 +45,7 @@ def test_secret_keys_are_subset_of_required_or_optional():
             assert sk in all_keys, f"{name}: secret key {sk} not in all keys"
 
 
+# Media lane → optional concurrency limit key: whenever a provider's models in the catalog cover a lane, the settings page should be able to configure that lane's concurrency.
 # 媒体 lane → 并发上限可选键：凡 provider 在目录里的模型覆盖某条 lane，设置页就应能配该 lane 的并发。
 _LANE_WORKER_KEY = {
     "image": "image_max_workers",
@@ -54,7 +55,9 @@ _LANE_WORKER_KEY = {
 
 
 def test_optional_keys_cover_every_supported_lane_worker():
-    """每个 provider 支持的每条媒体 lane 都须在 optional_keys 声明对应 *_max_workers。"""
+    """Every media lane each provider supports must declare the matching *_max_workers in optional_keys.
+
+    每个 provider 支持的每条媒体 lane 都须在 optional_keys 声明对应 *_max_workers。"""
     for name, meta in PROVIDER_REGISTRY.items():
         optional = set(meta.optional_keys)
         for media_type in catalog.provider_media_types(name):
@@ -65,7 +68,9 @@ def test_optional_keys_cover_every_supported_lane_worker():
 
 
 def test_optional_keys_have_no_worker_for_unsupported_lane():
-    """provider 不支持的 lane 不应声明其 *_max_workers，避免设置页渲染无效字段。"""
+    """A lane the provider does not support should not declare its *_max_workers, so the settings page does not render invalid fields.
+
+    provider 不支持的 lane 不应声明其 *_max_workers，避免设置页渲染无效字段。"""
     for name, meta in PROVIDER_REGISTRY.items():
         supported_worker_keys = {
             _LANE_WORKER_KEY[m] for m in catalog.provider_media_types(name) if m in _LANE_WORKER_KEY
@@ -76,7 +81,9 @@ def test_optional_keys_have_no_worker_for_unsupported_lane():
 
 
 class TestCredentialGroups:
-    """凭证「二选一」分组声明的 fail-fast 校验。"""
+    """Fail-fast validation of credential "pick one" group declarations.
+
+    凭证「二选一」分组声明的 fail-fast 校验。"""
 
     def test_default_empty(self):
         meta = ProviderMeta(display_name="t", description="t", required_keys=["api_key"], secret_keys=["api_key"])
@@ -124,7 +131,9 @@ class TestCredentialGroups:
 
 
 class TestFullyCoveredCredentialGroups:
-    """ProviderMeta.fully_covered_credential_groups —— 切组判定的核心真值表。"""
+    """ProviderMeta.fully_covered_credential_groups: the core truth table for group switching decisions.
+
+    ProviderMeta.fully_covered_credential_groups —— 切组判定的核心真值表。"""
 
     def _kling_meta(self) -> ProviderMeta:
         return ProviderMeta(
@@ -150,7 +159,9 @@ class TestFullyCoveredCredentialGroups:
         ]
 
     def test_dual_key_group_partially_submitted_not_matched(self):
-        """只提交组内一个 key（如仅轮换 secret_key）不算完整覆盖该组。"""
+        """Submitting only one key of a group (e.g. rotating only secret_key) does not count as fully covering the group.
+
+        只提交组内一个 key（如仅轮换 secret_key）不算完整覆盖该组。"""
         meta = self._kling_meta()
         assert meta.fully_covered_credential_groups({"secret_key": "sk"}) == []
 
@@ -162,7 +173,9 @@ class TestFullyCoveredCredentialGroups:
         ]
 
     def test_empty_string_not_counted_as_covering(self):
-        """空字符串视同未提交，不满足组覆盖。"""
+        """An empty string counts as not submitted and does not satisfy group coverage.
+
+        空字符串视同未提交，不满足组覆盖。"""
         meta = self._kling_meta()
         assert meta.fully_covered_credential_groups({"api_key": ""}) == []
 
@@ -186,6 +199,7 @@ class TestDefaultConcurrency:
         assert meta.default_concurrency == {"video": 1, "image": 5}
 
     def test_lane_the_provider_does_not_cover_is_allowed(self):
+        # Declaring a valid lane name is harmless even if the provider's models do not cover that media_type (zeroed at projection time); no error
         # 声明合法 lane 名即便该 provider 的模型不覆盖该 media_type 也无害（投影期再归零），不报错
         meta = ProviderMeta(display_name="T", description="T", required_keys=[], default_concurrency={"image": 2})
         assert meta.default_concurrency == {"image": 2}
@@ -199,6 +213,8 @@ class TestDefaultConcurrency:
                 default_concurrency={"vidoe": 1},
             )
 
+    # True is an int subclass equal to 1 and must be blocked explicitly; otherwise a config typo default_concurrency={"video": True}
+    # would silently be taken as concurrency 1.
     # True 是 int 子类、值等于 1，须显式拦截，否则配置笔误 default_concurrency={"video": True}
     # 会被静默当成并发 1。
     @pytest.mark.parametrize("bad_limit", [0, -1, "1", 3.0, True])
@@ -213,6 +229,7 @@ class TestDefaultConcurrency:
 
 
 def test_dashscope_declares_wan3_base_url_key():
+    # The wan3-specific maas domain is a separate key: merging it into the general base_url would change the domain of the other models too
     # wan3 专用 maas 域名单列一键：并进通用 base_url 会让其余型号也跟着改域名
     meta = PROVIDER_REGISTRY["dashscope"]
     assert "wan3_base_url" in meta.optional_keys

@@ -1,4 +1,7 @@
-"""使用记录的「生成调用」与「Agent 会话」两个视图：记录过滤、会话聚合、明细、汇总与供应商显示名。"""
+"""The 'generation calls' and 'Agent sessions' views of usage records: record filtering, session aggregation,
+detail, summary and provider display names.
+
+使用记录的「生成调用」与「Agent 会话」两个视图：记录过滤、会话聚合、明细、汇总与供应商显示名。"""
 
 from datetime import UTC, datetime, timedelta
 
@@ -13,6 +16,7 @@ from lib.db.models.session import AgentSession
 
 T0 = datetime(2026, 3, 1, 12, 0, tzinfo=UTC)
 
+# # The only Agent credential in the fixture is the first one in the DB; another provider id points to a deleted credential.
 # 夹具里唯一的 Agent 凭证是库里的第一条；另一个供应商 id 指向一条已删除的凭证。
 LIVE_PROVIDER = "agent-1"
 DELETED_PROVIDER = "agent-101"
@@ -35,7 +39,9 @@ def generation_call(**overrides) -> ApiCall:
 
 
 def agent_call(session_id: str, minutes: int, model: str, provider: str, **overrides) -> ApiCall:
-    """一轮里某个模型的一条 Agent 记录；同一轮的几条记录共用 session_id、提示词与写入时间。"""
+    """One Agent record for one model in a turn; records of the same turn share session_id, prompt and write time.
+
+    一轮里某个模型的一条 Agent 记录；同一轮的几条记录共用 session_id、提示词与写入时间。"""
     fields: dict = {
         "project_name": "demo",
         "call_type": "text",
@@ -60,7 +66,10 @@ def agent_call(session_id: str, minutes: int, model: str, provider: str, **overr
 
 @pytest.fixture
 async def agent_client(db_factory, usage_app):
-    """同一时段内：生成调用、两个 Agent 会话（其中一个含未定价记录）、凭证已删除的会话、历史 anthropic 会话。"""
+    """In the same time window: generation calls, two Agent sessions (one with an unpriced record), a session whose
+    credential was deleted, and a historical anthropic session.
+
+    同一时段内：生成调用、两个 Agent 会话（其中一个含未定价记录）、凭证已删除的会话、历史 anthropic 会话。"""
     async with db_factory() as session:
         credential = AgentAnthropicCredential(
             preset_id="deepseek", display_name="我的 DeepSeek", base_url="https://x.test", api_key="sk-x"
@@ -82,21 +91,26 @@ async def agent_client(db_factory, usage_app):
             [
                 generation_call(segment_id="S1"),
                 generation_call(segment_id="S2", status=CallStatus.FAILED, started_at=T0 + timedelta(minutes=1)),
+                # # Session a: turn 1 has two models (same instant), turn 5 has one
                 # 会话 a：第 1 轮两个模型（同一时刻），第 5 轮一个
                 agent_call("sess-a", 1, "deepseek-chat", live, cost_amount=0.5),
                 agent_call(
                     "sess-a", 1, "deepseek-reasoner", live, cost_amount=0.25, input_tokens=400, output_tokens=100
                 ),
                 agent_call("sess-a", 5, "deepseek-chat", live, cost_amount=1.0, prompt="x" * 400),
+                # # Session b: includes one unpriced record; the other is CNY
                 # 会话 b：含一条未定价记录；另一条 CNY
                 agent_call(
                     "sess-b", 10, "glm-5", live, project_name="demo2", cost_amount=null(), unpriced_reason="no_entry"
                 ),
                 agent_call("sess-b", 11, "deepseek-chat", live, project_name="demo2", cost_amount=2.0, currency="CNY"),
+                # # Credential deleted, session metadata also deleted
                 # 凭证已删除、会话元数据也已删除
                 agent_call("sess-gone", 20, "kimi-k2", deleted, cost_amount=0.0),
+                # # Historical record: stored as anthropic
                 # 历史记录：以 anthropic 落库
                 agent_call("sess-old", 30, "claude-sonnet-4-5", "anthropic", cost_amount=0.3),
+                # # Failed Agent turns: not in 'needs attention'
                 # 失败的 Agent 轮次：不进「需要关注」
                 agent_call("sess-a", 6, "deepseek-chat", live, status=CallStatus.FAILED),
                 agent_call("sess-a", 7, "deepseek-chat", live, status=CallStatus.FAILED),
@@ -253,6 +267,7 @@ class TestSummary:
                     generation_call(segment_id=f"S{index}", started_at=T0 + timedelta(minutes=index))
                     for index in range(10)
                 ]
+                # # Only the Agent is failing: if counted, agent-1's failure rate and consecutive failures would both trigger
                 # 只有 Agent 在失败：算进去时 agent-1 的失败率与连续失败都会触发
                 + [
                     agent_call(

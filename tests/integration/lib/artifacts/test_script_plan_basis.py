@@ -1,4 +1,6 @@
-"""规划产物的依据：集原文按账本记录的来源读取。"""
+"""Basis of planning artifacts: the episode source text is read from the source recorded in the ledger.
+
+规划产物的依据：集原文按账本记录的来源读取。"""
 
 import json
 from pathlib import Path

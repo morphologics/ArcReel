@@ -1,4 +1,6 @@
-"""各生成入口对项目风格字段的归一化口径一致：首尾空白去掉，非字符串按空处理。"""
+"""Every generation entry point normalizes the project style fields the same way: trims surrounding whitespace and treats non-strings as empty.
+
+各生成入口对项目风格字段的归一化口径一致：首尾空白去掉，非字符串按空处理。"""
 
 from collections.abc import Callable
 from typing import Any

@@ -1,4 +1,11 @@
-"""角色衍生资产图的生成任务：出站请求形态、准入拒绝、产物坐标与过期判定。
+"""Generation tasks for character derivative sheets: outgoing request shape, admission refusal, artifact
+coordinates and staleness.
+
+The criterion is the request actually sent (respx intercepts at the transport layer), asserting it is an
+image edit request **with the base-look sheet as input**, and that guards and reverse constraints go through
+the sheet template rendering.
+
+角色衍生资产图的生成任务：出站请求形态、准入拒绝、产物坐标与过期判定。
 
 判据落在真实发出去的那次请求上（respx 在 transport 层拦截），断言它是**以本体资产图为
 输入**的图像编辑请求，且守卫与反向约束经过资产图模版渲染。
@@ -45,7 +52,9 @@ _ARTIFACT_KEY = derivative_artifact_key("阿岚", "战斗装")
 
 
 def _wire(monkeypatch, pm, generator) -> None:
-    """把任务的项目管理器与生成上下文接到本用例自己的真实项目/生成器上。"""
+    """Wire the task's project manager and generation context to this case's own real project/generator.
+
+    把任务的项目管理器与生成上下文接到本用例自己的真实项目/生成器上。"""
     monkeypatch.setattr(derivative_sheet_tasks, "get_project_manager", lambda: pm)
     monkeypatch.setattr(derivative_sheet_tasks, "resolve_generation_context", fake_resolve_ctx(generator))
     use_generation_context(monkeypatch, fake_resolve_ctx(generator))
@@ -88,13 +97,18 @@ class TestDerivativeSheetGeneration:
         images = _sent_images(submit)
         assert len(images) == 1
         sent = decode_data_url_image(images[0])
+        # What is sent is the base-look sheet itself: size and the left/right two color blocks match (compared with
+        # tolerance after lossy compression).
         # 送出去的就是本体资产图本身：尺寸与左右双色块都对得上（有损压缩后按容差比对）。
         assert sent.size == OWNER_SHEET_SIZE
         assert close_to(sent.convert("RGB").getpixel((8, 8)), OWNER_LEFT_RGB)
         assert close_to(sent.convert("RGB").getpixel((88, 40)), OWNER_RIGHT_RGB)
 
     async def test_provider_changed_since_claim_is_raised_before_any_paid_call(self, tmp_path, monkeypatch):
-        """执行入口解析出的 i2i 供应商与认领槽不一致：不发请求，交给 worker 改记录并回队。"""
+        """The i2i provider resolved at the execution entry differs from the claimed slot: send no request, hand it to
+        the worker to update the record and requeue.
+
+        执行入口解析出的 i2i 供应商与认领槽不一致：不发请求，交给 worker 改记录并回队。"""
         pm, project_path = seed_derivative_project(tmp_path)
         generator = build_generator(project_path, _backend())
         _wire(monkeypatch, pm, generator)
@@ -154,7 +168,10 @@ class TestDerivativeSheetGeneration:
 
 
 class TestDerivativeSheetCurrency:
-    """衍生图的过期判定：本体图换了就过期，衍生重生成后回到当前。"""
+    """Staleness of derivative images: stale when the base-look image changes, current again after the derivative
+    is regenerated.
+
+    衍生图的过期判定：本体图换了就过期，衍生重生成后回到当前。"""
 
     def _status(self, pm, project_path) -> ArtifactStatus:
         project = pm.load_project("demo")
@@ -173,6 +190,7 @@ class TestDerivativeSheetCurrency:
         await self._generate(pm, project_path, monkeypatch)
         assert self._status(pm, project_path) is ArtifactStatus.CURRENT
 
+        # The base-look sheet's content changed: the derivative is an edit of it, so its basis no longer holds.
         # 本体资产图换了内容：衍生是对它的编辑，依据随即不再成立。
         write_two_tone_png(project_path / "characters/阿岚.png", left=(10, 10, 10), right=(240, 240, 240))
         assert self._status(pm, project_path) is ArtifactStatus.STALE
@@ -192,7 +210,10 @@ class TestDerivativeSheetCurrency:
 
 
 class TestDerivativeImageEdit:
-    """衍生图的指令式编辑：输入是衍生自己的当前图，产出仍落在衍生的坐标上。"""
+    """Instruction-based editing of derivative images: the input is the derivative's own current image, and the
+    output still lands on the derivative's coordinates.
+
+    衍生图的指令式编辑：输入是衍生自己的当前图，产出仍落在衍生的坐标上。"""
 
     async def test_edit_consumes_the_derivative_current_image_and_bumps_its_version(self, tmp_path, monkeypatch):
         pm, project_path = seed_derivative_project(tmp_path)
@@ -217,6 +238,8 @@ class TestDerivativeImageEdit:
 
         images = _sent_images(submit)
         assert len(images) == 1
+        # The edit consumes the derivative's own current image (solid color), not the base look's left/right two-color
+        # sheet.
         # 编辑吃的是衍生自己的当前图（纯色），不是本体那张左右双色的资产图。
         sent = decode_data_url_image(images[0]).convert("RGB")
         assert close_to(sent.getpixel((4, 4)), RESULT_IMAGE_RGB)

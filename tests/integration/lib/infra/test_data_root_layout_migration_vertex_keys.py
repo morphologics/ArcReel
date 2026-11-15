@@ -1,4 +1,7 @@
-"""数据根布局迁移入口：存量 Vertex 凭证迁移后收进数据根并照常可加载，旧位置被清空。"""
+"""Data root layout migration entry: existing Vertex credentials are moved into the data root and still load after
+migration; the old location is emptied.
+
+数据根布局迁移入口：存量 Vertex 凭证迁移后收进数据根并照常可加载，旧位置被清空。"""
 
 from __future__ import annotations
 
@@ -22,6 +25,7 @@ def deployed_data_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     root = tmp_path / "deploy" / "projects"
     root.mkdir(parents=True)
     monkeypatch.setenv("ARCREEL_DATA_DIR", str(root))
+    # The DB-setup fixture may already have resolved the default data root once.
     # 建库夹具可能已按默认数据根解析过一次。
     reset_for_tests()
     return root
@@ -29,7 +33,10 @@ def deployed_data_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
 
 @pytest.fixture
 def legacy_keys_dir(deployed_data_root: Path) -> Path:
-    """旧布局的凭证目录：数据根的上一级（Docker 部署里是单独挂载的卷）。"""
+    """The old layout's credentials directory: one level above the data root (a separately mounted volume in Docker
+    deployments).
+
+    旧布局的凭证目录：数据根的上一级（Docker 部署里是单独挂载的卷）。"""
     return deployed_data_root.parent / "vertex_keys"
 
 
@@ -49,7 +56,9 @@ def _is_emptied(directory: Path) -> bool:
 async def _stored_vertex_credential(
     session_factory: async_sessionmaker[AsyncSession], *, recorded_name: str, recorded_dir: Path
 ) -> int:
-    """登记一条旧布局下的凭证：记录上存着凭证文件的绝对路径。"""
+    """Register a credential in the old layout: the record stores the absolute path of the credential file.
+
+    登记一条旧布局下的凭证：记录上存着凭证文件的绝对路径。"""
     async with session_factory() as session:
         repo = CredentialRepository(session)
         cred = await repo.create(provider="gemini-vertex", name="Vertex")
@@ -75,6 +84,8 @@ async def _migrate(deployed_data_root: Path, session_factory: async_sessionmaker
     "recorded_in",
     [
         pytest.param("legacy", id="recorded-path-is-legacy-location"),
+        # In Docker deployments the record holds a container path that does not exist for the current process; the file
+        # is in the old volume under the same name.
         # Docker 部署里记录的是容器内路径，在当前进程看来不存在；文件在旧卷里、同名。
         pytest.param("container", id="recorded-path-is-stale-container-path"),
     ],
@@ -154,6 +165,7 @@ async def test_rerunning_migration_keeps_credential_loadable(
 
     await _migrate(deployed_data_root, session_factory, tmp_path)
     first = await _loaded_credential(session_factory)
+    # If a later step fails and the completion marker is not written, each step reruns from scratch on next startup.
     # 后续步骤失败、完成标记未写时，下次启动各步骤从头重跑。
     DataRootLayout(deployed_data_root).layout_migration_marker_path.unlink()
     await _migrate(deployed_data_root, session_factory, tmp_path)
@@ -230,6 +242,7 @@ async def test_read_only_legacy_dir_does_not_block_migration(
 
     try:
         await _migrate(deployed_data_root, session_factory, tmp_path)
+        # If a later step fails and the completion marker is not written, each step reruns from scratch on next startup.
         # 后续步骤失败、完成标记未写时，下次启动各步骤从头重跑。
         DataRootLayout(deployed_data_root).layout_migration_marker_path.unlink()
         await _migrate(deployed_data_root, session_factory, tmp_path)

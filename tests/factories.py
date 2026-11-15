@@ -34,12 +34,18 @@ def make_display_names(
     providers: Mapping[str, str] | None = None,
     models: Mapping[tuple[str, str], str] | None = None,
 ) -> DisplayNames:
-    """内置注册表名称加上给定的自定义供应商与模型名称组成的显示名目录，不经数据库。"""
+    """Display-name catalog made of the built-in registry names plus the given custom provider and model names, without the
+    database.
+
+    内置注册表名称加上给定的自定义供应商与模型名称组成的显示名目录，不经数据库。"""
     return build_display_names(locale, custom_providers=providers or {}, custom_models=models or {})
 
 
 def wav_bytes(duration_seconds: float, sample_rate: int = 8000, *, tone_hz: float | None = None) -> bytes:
-    """纯 stdlib 生成 wav 字节（不依赖 ffmpeg）：默认静音；给出 ``tone_hz`` 时是该频率的正弦音，供需要听得见的用例使用。"""
+    """Generate wav bytes with pure stdlib (no ffmpeg): silent by default; with ``tone_hz``, a sine tone at that frequency,
+    for tests that need something audible.
+
+    纯 stdlib 生成 wav 字节（不依赖 ffmpeg）：默认静音；给出 ``tone_hz`` 时是该频率的正弦音，供需要听得见的用例使用。"""
     frames = int(duration_seconds * sample_rate)
     if tone_hz is None:
         samples = b"\x00\x00" * frames
@@ -58,7 +64,9 @@ def wav_bytes(duration_seconds: float, sample_rate: int = 8000, *, tone_hz: floa
 
 
 def run_bundled_ffmpeg(*args: str) -> None:
-    """用随包 ffmpeg 现场合成测试素材；失败即抛 CalledProcessError。"""
+    """Synthesize test material on the spot with the bundled ffmpeg; raises CalledProcessError on failure.
+
+    用随包 ffmpeg 现场合成测试素材；失败即抛 CalledProcessError。"""
     subprocess.run(
         [ffmpeg_executable(), "-hide_banner", "-nostdin", "-loglevel", "error", "-y", *args],
         capture_output=True,
@@ -67,7 +75,9 @@ def run_bundled_ffmpeg(*args: str) -> None:
 
 
 def make_test_video(path: Path, *, duration_sec: float = 1.0, fps: int = 30) -> None:
-    """使用随包 ffmpeg 生成极短测试视频（64x64 像素）"""
+    """Generate a very short test video (64x64 pixels) with the bundled ffmpeg.
+
+    使用随包 ffmpeg 生成极短测试视频（64x64 像素）"""
     path.parent.mkdir(parents=True, exist_ok=True)
     run_bundled_ffmpeg(
         "-f",
@@ -83,7 +93,10 @@ def make_test_video(path: Path, *, duration_sec: float = 1.0, fps: int = 30) -> 
 
 
 def make_test_clip(path: Path, *, size: str, fps: int, seconds: float, tone: bool) -> None:
-    """用随包 ffmpeg 现场合成一段低分辨率测试画面（``testsrc``），``tone`` 时带一条等长正弦音轨。"""
+    """Synthesize a low-resolution test picture (``testsrc``) on the spot with the bundled ffmpeg; with ``tone``, add a sine
+    audio track of the same length.
+
+    用随包 ffmpeg 现场合成一段低分辨率测试画面（``testsrc``），``tone`` 时带一条等长正弦音轨。"""
     path.parent.mkdir(parents=True, exist_ok=True)
     audio = ("-f", "lavfi", "-i", f"sine=frequency=440:duration={seconds}", "-c:a", "aac") if tone else ()
     run_bundled_ffmpeg(
@@ -102,7 +115,11 @@ def make_test_clip(path: Path, *, size: str, fps: int, seconds: float, tone: boo
 
 
 def make_signal_clip(path: Path) -> None:
-    """用随包 ffmpeg 合成 25 fps、320x180、共 5 秒的带信号素材。
+    """Synthesize 25 fps, 320x180, 5-second material with signal using the bundled ffmpeg.
+
+    0-1 s moving picture, 1-2 s pure black, 2-3 s another moving picture, 3-5 s freeze frame; cuts at 1, 2 and 3 s.
+
+    用随包 ffmpeg 合成 25 fps、320x180、共 5 秒的带信号素材。
 
     0–1 s 运动画面，1–2 s 纯黑，2–3 s 另一段运动画面，3–5 s 定格；镜头切换点在 1、2、3 s。
     """
@@ -125,7 +142,10 @@ def make_signal_clip(path: Path) -> None:
 
 
 def install_current_video(project_path: Path, resource_type: str, unit_id: str, source: Path) -> int:
-    """把 ``source`` 登记为视频单元的新 current 版本并放到正式路径上；返回版本号。"""
+    """Register ``source`` as the new current version of a video unit and put it at the canonical path; returns the version
+    number.
+
+    把 ``source`` 登记为视频单元的新 current 版本并放到正式路径上；返回版本号。"""
     import shutil
 
     from lib.artifacts.version_manager import VersionManager
@@ -139,7 +159,10 @@ def install_current_video(project_path: Path, resource_type: str, unit_id: str, 
 
 
 def install_uploaded_video(project_path: Path, resource_type: str, unit_id: str, *, seconds: float) -> None:
-    """把一段现场合成的测试画面（带音轨）作为视频单元的手动上传版本，放到正式路径上。"""
+    """Put a freshly synthesized test picture (with audio) at the canonical path as the video unit's manually uploaded
+    version.
+
+    把一段现场合成的测试画面（带音轨）作为视频单元的手动上传版本，放到正式路径上。"""
     from lib.artifacts.version_manager import MANUAL_UPLOAD_VERSION_SOURCE, VersionManager
     from lib.project.resource_paths import resource_relative_path
 
@@ -162,7 +185,9 @@ def make_test_video_with_audio_tail(
     audio_duration_sec: float = 1.5,
     fps: int = 30,
 ) -> None:
-    """生成音轨/容器尾部比视频轨更长的极短 MP4。"""
+    """Generate a very short MP4 whose audio track / container tail is longer than the video track.
+
+    生成音轨/容器尾部比视频轨更长的极短 MP4。"""
     path.parent.mkdir(parents=True, exist_ok=True)
     run_bundled_ffmpeg(
         "-f",
@@ -203,7 +228,9 @@ def make_session_meta(**overrides) -> SessionMeta:
 def make_sdk_transcript_entry(
     uuid: str, parent: str | None, entry_type: str, session_id: str, text: str
 ) -> dict[str, Any]:
-    """一条 SDK 形态的 transcript 条目，供前缀分叉相关的测试搭建原会话历史。"""
+    """One SDK-shaped transcript entry, for tests about prefix forks to build the original session history.
+
+    一条 SDK 形态的 transcript 条目，供前缀分叉相关的测试搭建原会话历史。"""
     return {
         "uuid": uuid,
         "parentUuid": parent,
@@ -215,7 +242,13 @@ def make_sdk_transcript_entry(
 
 
 def custom_endpoint_definition(**overrides: Any) -> dict[str, Any]:
-    """最小可用的声明式调用端点定义：单张首帧、提交 + 轮询、扁平取值，校验零错误零警告。
+    """Minimal usable declarative call endpoint definition: a single first frame, submit + poll, flat value extraction;
+    validates with zero errors and zero warnings.
+
+    Tests tweak it in place into counterexamples or add optional constructs; ``overrides`` replaces top-level keys (e.g.
+    swap ``meta`` to create a duplicate lineage).
+
+    最小可用的声明式调用端点定义：单张首帧、提交 + 轮询、扁平取值，校验零错误零警告。
 
     用例就地改出反例或补上可选构造；``overrides`` 覆盖顶层键（如换 ``meta`` 造重复血统）。
     """
@@ -250,7 +283,14 @@ def custom_endpoint_definition(**overrides: Any) -> dict[str, Any]:
 
 
 def image_endpoint_definition(**overrides: Any) -> dict[str, Any]:
-    """最小可用的声明式图片定义：文生图、提交 + 轮询、取图片 URL，校验零错误零警告。
+    """Minimal usable declarative image definition: text-to-image, submit + poll, take the image URL; validates with zero
+    errors and zero warnings.
+
+    The protocol shape follows the "OpenAI-style path + async task" kind of provider: submit returns
+    ``data[0].task_id``, polling reads ``data.status``, the image is ``data.result.images[0].url[0]``. Tests tweak it in
+    place into counterexamples.
+
+    最小可用的声明式图片定义：文生图、提交 + 轮询、取图片 URL，校验零错误零警告。
 
     协议形状取「OpenAI 风格路径 + 异步任务」一类供应商：提交返回 ``data[0].task_id``，轮询读
     ``data.status``，取图 ``data.result.images[0].url[0]``。用例就地改出反例。
@@ -295,7 +335,13 @@ def image_endpoint_definition(**overrides: Any) -> dict[str, Any]:
 
 
 def comfyui_api_workflow() -> dict[str, Any]:
-    """最小可用的 ComfyUI「Export (API)」导出物：文生视频一条链路，节点 id 与真实导出同为数字串。
+    """Minimal usable ComfyUI "Export (API)" output: one text-to-video chain, with node ids as numeric strings like a real
+    export.
+
+    One example of each field kind: literal (``6.text``), link (``6.clip``), bindable numbers (``5.width``, ``3.seed``),
+    output node (``9``). Tests tweak it in place into counterexamples.
+
+    最小可用的 ComfyUI「Export (API)」导出物：文生视频一条链路，节点 id 与真实导出同为数字串。
 
     每类字段各有一例：字面值（``6.text``）、连线（``6.clip``）、可绑的数值（``5.width``、``3.seed``）、
     产物节点（``9``）。用例就地改出反例。
@@ -327,7 +373,13 @@ def comfyui_api_workflow() -> dict[str, Any]:
 
 
 def comfyui_endpoint_definition(**overrides: Any) -> dict[str, Any]:
-    """最小可用的 ComfyUI 端点定义：绑定齐备、校验零错误。
+    """Minimal usable ComfyUI endpoint definition: bindings complete, validates with zero errors.
+
+    ``overrides`` replaces top-level keys; changing ``bindings`` or ``media_type`` creates the various counterexamples.
+    With ``media_type="image"`` and no ``bindings`` of its own, there is no ``fps`` binding: image endpoints have no
+    frame-rate dimension.
+
+    最小可用的 ComfyUI 端点定义：绑定齐备、校验零错误。
 
     ``overrides`` 覆盖顶层键；改 ``bindings`` 或 ``media_type`` 即可造出各类反例。
     ``media_type="image"`` 且未自带 ``bindings`` 时不含 ``fps`` 绑定：图像端点没有帧率这一维。
@@ -355,7 +407,13 @@ def comfyui_endpoint_definition(**overrides: Any) -> dict[str, Any]:
 
 
 async def seed_endpoint_fixed_video_model(db_factory, *, reference_images: bool = False) -> str:
-    """在测试库里建一个时长由端点固定的 ComfyUI 视频模型（端点没绑定帧数，可选时长为空集），返回 ``provider/model``。
+    """Create in the test DB a ComfyUI video model whose duration is fixed by the endpoint (the endpoint binds no frame
+    count, so the selectable durations are an empty set); returns ``provider/model``.
+
+    The endpoint binds a first-frame input, and with ``reference_images=True`` also a reference image input, so the model
+    passes the capability gates of both the i2v and r2v buckets.
+
+    在测试库里建一个时长由端点固定的 ComfyUI 视频模型（端点没绑定帧数，可选时长为空集），返回 ``provider/model``。
 
     端点绑定首帧输入，``reference_images=True`` 时再绑定参考图输入，使该模型同时满足 i2v 与 r2v 桶的能力闸。
     """
@@ -392,7 +450,10 @@ async def seed_endpoint_fixed_video_model(db_factory, *, reference_images: bool 
 
 
 def make_video_request_facts(**overrides: Any):
-    """分镜路线、Veo 3.1、未设分辨率的视频请求事实；消费方测试按需覆盖字段，不手搭能力 dict。"""
+    """Video request facts for the shot route, Veo 3.1, no resolution set; consumer tests override fields as needed instead
+    of hand-building capability dicts.
+
+    分镜路线、Veo 3.1、未设分辨率的视频请求事实；消费方测试按需覆盖字段，不手搭能力 dict。"""
     from lib.generation.video_request_facts import VideoRequestFacts
 
     fields: dict[str, Any] = {
@@ -421,7 +482,15 @@ def make_video_request_facts(**overrides: Any):
 
 
 def activate_reference_project(project_dir: Path, project: dict[str, Any]) -> dict[str, Any]:
-    """把 v7 形态的参考生视频项目写盘并迁到当前 schema，返回迁移后的项目字典。
+    """Write a v7-shaped reference-to-video project to disk and migrate it to the current schema; returns the migrated
+    project dict.
+
+    During migration, asset sheets that have a registered path, a ``description`` and a file on disk are claimed into the
+    artifact manifest by backfill; asset sheets registered after that are not claimed by the manifest even if the file
+    is on disk. Keys of ``project`` override the default skeleton; when ``scripts/episode_1.json`` does not exist, an empty
+    unit script is written.
+
+    把 v7 形态的参考生视频项目写盘并迁到当前 schema，返回迁移后的项目字典。
 
     迁移时已登记路径、带 ``description`` 且文件在盘上的资产图由补录认领进产物清单；此后再登记的
     资产图即使文件在盘上，清单也不认领它。``project`` 的键覆盖缺省骨架；``scripts/episode_1.json`` 不存在时写一份空单元剧本。
@@ -462,7 +531,10 @@ def add_typed_video_version(
     *,
     content: bytes = b"typed-video",
 ) -> int:
-    """给一个视频单元追加一个带完整取证描述的版本（可还原），当前文件内容即 ``content``；返回版本号。"""
+    """Append to a video unit a version with a full provenance description (restorable), whose content is the current file
+    content ``content``; returns the version number.
+
+    给一个视频单元追加一个带完整取证描述的版本（可还原），当前文件内容即 ``content``；返回版本号。"""
     from lib.artifacts.artifact_manifest import ArtifactBasis, compose_video_artifact_basis
     from lib.artifacts.version_manager import VersionManager
     from lib.artifacts.video_artifact_facts import VideoArtifactCurrencyFacts
@@ -527,7 +599,12 @@ def register_project_sources(
     whole_source: dict[str, str] | None = None,
     own_episodes: tuple[str, ...] = (),
 ) -> list[int]:
-    """经登记命令放入源文：``whole_source`` 是文件名到全文的整本源文，``own_episodes`` 逐集登记为自带原文的集。
+    """Put sources in via the register command: ``whole_source`` is the whole-book source mapping file name to full text;
+    ``own_episodes`` are registered one by one as episodes with their own source text.
+
+    Returns the episode IDs assigned to the episodes with their own source text.
+
+    经登记命令放入源文：``whole_source`` 是文件名到全文的整本源文，``own_episodes`` 逐集登记为自带原文的集。
 
     返回自带原文的集分配到的集 ID。
     """

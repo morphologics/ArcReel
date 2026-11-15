@@ -1,4 +1,7 @@
-"""Alembic 迁移：api_calls 的使用记录列（加列 + 从任务载荷反查 task_id 的回填）。"""
+"""Alembic migration: usage record columns of api_calls (add columns + backfill task_id by looking it up from task
+payloads).
+
+Alembic 迁移：api_calls 的使用记录列（加列 + 从任务载荷反查 task_id 的回填）。"""
 
 from __future__ import annotations
 
@@ -38,7 +41,9 @@ def _indexes(engine: sa.Engine) -> set[str]:
 
 
 def _seed(engine: sa.Engine) -> None:
-    """三条调用行：video 任务反查得到、非 video 任务不反查、任务载荷无 api_call_id。"""
+    """Three call rows: found via a video task, not looked up for a non-video task, task payload without api_call_id.
+
+    三条调用行：video 任务反查得到、非 video 任务不反查、任务载荷无 api_call_id。"""
     with engine.begin() as connection:
         for call_id, call_type in ((1, "video"), (2, "image"), (3, "video")):
             connection.execute(sa.text(_INSERT_CALL), {"id": call_id, "call_type": call_type})
@@ -94,6 +99,8 @@ def test_upgrade_adds_columns_and_backfills_video_task_id(
                     "FROM api_calls ORDER BY id"
                 )
             ).fetchall()
+        # The row found via the video task gets task_id and generation_task; neither the image task nor the task without
+        # api_call_id is backfilled; all other new columns stay empty.
         # video 任务反查到的那条带 task_id 与 generation_task；image 任务与无 api_call_id 的
         # 任务都不回填；其余新列一律留空。
         assert [(row[0], row[1], row[2]) for row in rows] == [
@@ -119,6 +126,7 @@ def test_downgrade_drops_usage_record_columns(
 
         assert not _NEW_COLUMNS & _columns(engine)
         assert "idx_api_calls_task_id" not in _indexes(engine)
+        # Existing indexes on the same table are not lost by the per-column DROP
         # 同表既有索引不因逐列 DROP 丢失
         assert _indexes(engine) >= {"idx_api_calls_project_name", "idx_api_calls_status"}
     finally:

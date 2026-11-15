@@ -1,4 +1,7 @@
-"""从节点绑定推导能力位与参数约束：图绑定四位、音轨三形态、原生时长与固定维度。"""
+"""Derive capability bits and parameter constraints from node bindings: four image-binding bits, three
+audio-track shapes, native duration and fixed dimensions.
+
+从节点绑定推导能力位与参数约束：图绑定四位、音轨三形态、原生时长与固定维度。"""
 
 from __future__ import annotations
 
@@ -96,7 +99,10 @@ class TestAudioTrackIsReadOffTheOutputChain:
         assert derive_video_capabilities(definition).audio_track == "always_on"
 
     def test_an_unrecognised_node_on_that_hop_falls_back_to_always_off(self):
-        """``SaveVideo.video`` 接的不是名录里的成片节点时，这份图的音轨判不出来。"""
+        """When ``SaveVideo.video`` is fed by something other than a final-cut node from the catalog, this
+        graph's audio track cannot be determined.
+
+        ``SaveVideo.video`` 接的不是名录里的成片节点时，这份图的音轨判不出来。"""
         definition = comfyui_endpoint_definition()
         definition["workflow"]["21"] = {"class_type": "MyCustomMuxer", "inputs": {"audio": ["22", 0]}}
         definition["workflow"]["9"] = {"class_type": "SaveVideo", "inputs": {"video": ["21", 0]}}
@@ -111,7 +117,9 @@ class TestAudioTrackIsReadOffTheOutputChain:
         assert derive_video_capabilities(definition).audio_track == "always_off"
 
     def test_it_is_never_controllable(self):
-        """ComfyUI 侧没有可下发的音轨开关，两种形态都不是 ``controllable``。"""
+        """ComfyUI exposes no audio-track switch to send, so neither shape is ``controllable``.
+
+        ComfyUI 侧没有可下发的音轨开关，两种形态都不是 ``controllable``。"""
         definition = comfyui_endpoint_definition()
         definition["workflow"]["20"] = {"class_type": "VHS_VideoCombine", "inputs": {"audio": ["21", 0]}}
         definition["bindings"]["output"] = [{"node": "20", "class_type": "VHS_VideoCombine"}]
@@ -142,7 +150,10 @@ class TestSizeIsFixedUnlessBothSidesAreBound:
 
     @pytest.mark.parametrize("dropped", ["width", "height"])
     def test_binding_only_one_side_counts_as_fixed(self, dropped: str):
-        """只写得动一侧时派生出的比例既不是原生的也不是用户选的，故整维判为固定。"""
+        """When only one side is writable, the derived aspect ratio is neither native nor user-chosen, so
+        the whole dimension counts as fixed.
+
+        只写得动一侧时派生出的比例既不是原生的也不是用户选的，故整维判为固定。"""
         bindings = comfyui_endpoint_definition()["bindings"]
         bindings.pop(dropped)
 
@@ -156,7 +167,10 @@ class TestSizeIsFixedUnlessBothSidesAreBound:
         assert size_is_fixed(bindings) is True
 
     def test_two_width_inputs_that_disagree_leave_the_native_short_edge_unknown(self):
-        """两路消费者各写各的尺寸：这份图没有「原生」那一档，报较小的那个等于替用户选了一路。"""
+        """Two consumers each write their own size: this graph has no "native" tier, and reporting the
+        smaller one would pick a path on the user's behalf.
+
+        两路消费者各写各的尺寸：这份图没有「原生」那一档，报较小的那个等于替用户选了一路。"""
         definition = comfyui_endpoint_definition()
         definition["workflow"]["5"]["inputs"].update({"width": 1024, "height": 576})
         definition["workflow"]["12"] = {"class_type": "WanVideoSize", "inputs": {"width": 512, "height": 512}}
@@ -185,7 +199,9 @@ class TestSizeIsFixedUnlessBothSidesAreBound:
 
 class TestNativeDurationAndTheDefaultTier:
     def test_frames_and_a_read_only_fps_give_the_workflow_its_own_tier(self):
-        """``SaveVideo.fps`` 字面 16、``length`` 字面 81 → ``round((81 − 1) / 16)`` = 5 秒。"""
+        """``SaveVideo.fps`` literal 16 and ``length`` literal 81 -> ``round((81 − 1) / 16)`` = 5 seconds.
+
+        ``SaveVideo.fps`` 字面 16、``length`` 字面 81 → ``round((81 − 1) / 16)`` = 5 秒。"""
         definition = comfyui_endpoint_definition()
         definition["workflow"]["5"]["inputs"]["length"] = 81
         definition["bindings"]["frames"] = [_frames_target(step=4)]
@@ -208,7 +224,10 @@ class TestNativeDurationAndTheDefaultTier:
         assert default_supported_durations(definition) == []
 
     def test_frames_bound_without_any_frame_rate_source_also_yields_an_empty_tier(self):
-        """时长换算不出来时不猜一个帧率：档位空集，控件禁用。"""
+        """When the duration cannot be converted, do not guess a frame rate: the tier set is empty and the
+        control is disabled.
+
+        时长换算不出来时不猜一个帧率：档位空集，控件禁用。"""
         definition = comfyui_endpoint_definition()
         definition["workflow"]["5"]["inputs"]["length"] = 81
         definition["bindings"].pop("fps")
@@ -220,14 +239,23 @@ class TestNativeDurationAndTheDefaultTier:
         assert frame_rate_is_missing(definition) is True
 
     def test_frames_unbound_is_not_a_missing_frame_rate(self):
-        """三支互斥：连帧数入口都没有时缺的不是帧率，说「补一个 fps 绑定」无处可补。"""
+        """Three mutually exclusive branches: when there is not even a frame-count input, what is missing is
+        not the frame rate, and "add an fps binding" has nowhere to go.
+
+        三支互斥：连帧数入口都没有时缺的不是帧率，说「补一个 fps 绑定」无处可补。"""
         definition = comfyui_endpoint_definition()
 
         assert duration_is_fixed(definition["bindings"]) is True
         assert frame_rate_is_missing(definition) is False
 
     def test_a_frame_rate_that_converts_to_no_whole_second_is_not_a_missing_frame_rate(self):
-        """帧率读得到、只是换算回不到原帧数：档位同样为空，但它既不固定也补不出帧率来。
+        """The frame rate is readable, but converting back does not reproduce the original frame count: the
+        tier set is empty too, yet it is neither fixed nor fixable by adding a frame rate.
+
+        50 frames @ 16fps rounds to 3 seconds, and submitting 3 seconds would write the frame count as
+        49; reporting that tier would mean changing the graph.
+
+        帧率读得到、只是换算回不到原帧数：档位同样为空，但它既不固定也补不出帧率来。
 
         50 帧 @ 16fps 折成 3 秒，而提交 3 秒会把帧数写成 49——报这一档就是改图。
         """
@@ -241,7 +269,10 @@ class TestNativeDurationAndTheDefaultTier:
         assert default_supported_durations(definition) == []
 
     def test_one_frames_target_without_a_typed_frame_rate_is_enough_to_miss_one(self):
-        """帧率来源要对每个帧数入口都在：缺一个就换算不出这一档，提示仍指向补帧率。"""
+        """A frame-rate source must exist for every frame-count input: if one is missing the tier cannot be
+        converted, and the hint still points at adding a frame rate.
+
+        帧率来源要对每个帧数入口都在：缺一个就换算不出这一档，提示仍指向补帧率。"""
         definition = comfyui_endpoint_definition()
         definition["bindings"].pop("fps")
         definition["bindings"]["frames"] = [_frames_target(fps=24), _frames_target(node="12")]
@@ -255,7 +286,15 @@ class TestNativeDurationAndTheDefaultTier:
         assert native_duration(definition) is None
 
     def test_one_unreadable_target_among_several_voids_the_tier_too(self):
-        """接了链接的那一格照样会被填值层写，它回写成什么无从判断，这一档因此不成立。
+        """A slot that has a link attached is still written by the fill layer, and what it writes back
+        cannot be known, so this tier does not hold.
+
+        This shape falls into the third branch together with "does not convert to whole seconds" (both
+        message flags are false), but the frame count is not kept: the fill layer still rewrites it to
+        the requested seconds, so the third branch's message only says the tier cannot be offered, not
+        that the final cut length follows the workflow itself.
+
+        接了链接的那一格照样会被填值层写，它回写成什么无从判断，这一档因此不成立。
 
         这一形态与「换算不出整秒」同落第三支（两个文案位都为假），但帧数并不保留：填值层照常
         按请求的秒数改写它，故第三支的文案只说档位给不出来，不说成片长度以 workflow 自身为准。
@@ -274,7 +313,10 @@ class TestNativeDurationAndTheDefaultTier:
         assert keeps_its_own_frame_count(definition) is False
 
     def test_a_second_frames_input_that_the_tier_would_rewrite_leaves_no_native_tier(self):
-        """两个帧数入口字面值不一致：选中 5 秒会把 65 那个也写成 81，这一档不算原生。"""
+        """The two frame-count inputs have different literals: choosing 5 seconds would also rewrite the 65
+        one to 81, so this tier is not native.
+
+        两个帧数入口字面值不一致：选中 5 秒会把 65 那个也写成 81，这一档不算原生。"""
         definition = comfyui_endpoint_definition()
         definition["workflow"]["5"]["inputs"]["length"] = 81
         definition["workflow"]["12"] = {"class_type": "WanVideoLength", "inputs": {"num_frames": 65}}
@@ -298,7 +340,10 @@ class TestNativeDurationAndTheDefaultTier:
         assert native_duration(definition) == 5
 
     def test_a_literal_the_step_itself_would_realign_is_not_a_native_tier_either(self):
-        """76 帧 @ 15fps 正好折回 5 秒，但步长 4 会把它对齐到 73：选中即改图，故不是原生档。"""
+        """76 frames @ 15fps converts back to exactly 5 seconds, but a step of 4 would realign it to 73:
+        choosing it changes the graph, so it is not a native tier.
+
+        76 帧 @ 15fps 正好折回 5 秒，但步长 4 会把它对齐到 73：选中即改图，故不是原生档。"""
         definition = comfyui_endpoint_definition()
         definition["workflow"]["9"]["inputs"]["fps"] = 15
         definition["workflow"]["5"]["inputs"]["length"] = 76
@@ -307,7 +352,10 @@ class TestNativeDurationAndTheDefaultTier:
         assert native_duration(definition) is None
 
     def test_the_conversion_is_the_inverse_of_the_one_the_request_builder_uses(self):
-        """``frames = round(时长 × 帧率) + 1`` 与本处的反算必须同源。"""
+        """``frames = round(duration × frame rate) + 1`` and the inverse computation here must come from the
+        same source.
+
+        ``frames = round(时长 × 帧率) + 1`` 与本处的反算必须同源。"""
         definition = comfyui_endpoint_definition()
         definition["workflow"]["9"]["inputs"]["fps"] = 24
         definition["workflow"]["5"]["inputs"]["length"] = (7 * 24) + 1

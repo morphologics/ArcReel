@@ -1,4 +1,6 @@
-"""视频预检报价单：已定价的单元合计，未定价的单元如实列出。"""
+"""Video pre-check quote: priced units are summed, unpriced units are listed truthfully.
+
+视频预检报价单：已定价的单元合计，未定价的单元如实列出。"""
 
 from __future__ import annotations
 

@@ -1,4 +1,6 @@
-"""lib.backends.data_uri 单元测试 — 出站素材编码的 MIME 查表与回落语义。"""
+"""lib.backends.data_uri unit tests -- MIME lookup and fallback semantics of outbound media encoding.
+
+lib.backends.data_uri 单元测试 — 出站素材编码的 MIME 查表与回落语义。"""
 
 from __future__ import annotations
 
@@ -49,6 +51,7 @@ class TestReferenceAudioToDataUri:
         assert uri == f"data:audio/wav;base64,{expected}"
 
     def test_unlisted_suffix_fails_loud(self, tmp_path: Path):
+        # Audio neither falls back nor is skipped: numbering follows entry order, and silently dropping one would map a voice to the wrong character.
         # 音频不回落也不跳过：编号按条目顺序，静默丢一段会把音色错配到别的角色。
         path = tmp_path / "voice.ogg"
         path.write_bytes(b"ogg")

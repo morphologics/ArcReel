@@ -1,4 +1,6 @@
-"""剪辑时间线路由：命令结果、新建的准入，以及领域错误到 HTTP 状态码的映射。"""
+"""Edit timeline routes: command results, admission for creation, and mapping of domain errors to HTTP status codes.
+
+剪辑时间线路由：命令结果、新建的准入，以及领域错误到 HTTP 状态码的映射。"""
 
 from __future__ import annotations
 
@@ -39,7 +41,10 @@ class _FailingService:
 
 
 class _NoAdmissionFacts:
-    """制作状态读不出准入（如项目不存在）：新建交给命令自己报领域错误。"""
+    """The workflow status cannot read admission (e.g. the project does not exist): creation lets the command report its
+    own domain error.
+
+    制作状态读不出准入（如项目不存在）：新建交给命令自己报领域错误。"""
 
     def get_status(self, *_args: Any, **_kwargs: Any) -> Any:
         return SimpleNamespace(target=None, operations={})
@@ -84,7 +89,10 @@ def test_domain_errors_map_to_status_codes(error: EditTimelineError, status: int
 
 
 def _install_available_video(pm: ProjectManager, unit_id: str) -> None:
-    """给视频单元落一个可用视频：版本记录、脚本里的产物指针，再补录进产物清单。"""
+    """Land a usable video for a video unit: version record, the artifact pointer in the script, then backfill into the
+    artifact manifest.
+
+    给视频单元落一个可用视频：版本记录、脚本里的产物指针，再补录进产物清单。"""
     project_path = pm.get_project_path("demo")
     install_uploaded_video(project_path, "reference_videos", unit_id, seconds=0.5)
     script = pm.load_script("demo", "episode_1.json")

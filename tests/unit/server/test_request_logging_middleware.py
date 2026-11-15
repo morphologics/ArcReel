@@ -1,4 +1,6 @@
-"""验证 request_logging_middleware 对高频轮询接口的静默策略。"""
+"""Verify request_logging_middleware's quiet policy for high-frequency polling endpoints.
+
+验证 request_logging_middleware 对高频轮询接口的静默策略。"""
 
 from __future__ import annotations
 
@@ -41,6 +43,7 @@ def _build_app_with_ok_routes(*, quiet_slow_threshold_ms: float | None = None) -
 
 
 async def test_quiet_endpoint_fast_200_is_debug(caplog: pytest.LogCaptureFixture) -> None:
+    # Set the threshold to infinity so the "fast response" check does not depend on real elapsed time (on a slow runner the first request has to build the middleware stack).
     # 阈值放到无穷大，使“快响应”判定不依赖真实耗时（慢 runner 上首个请求要构建中间件栈）。
     caplog.set_level(logging.DEBUG, logger="server.app")
     app = _build_app_with_ok_routes(quiet_slow_threshold_ms=float("inf"))
@@ -58,7 +61,9 @@ async def test_quiet_endpoint_fast_200_is_debug(caplog: pytest.LogCaptureFixture
 
 
 async def test_quiet_endpoint_slow_200_is_info(caplog: pytest.LogCaptureFixture) -> None:
-    """阈值为 0 时任何耗时都算慢，静默路径的 2xx 也要走 INFO。"""
+    """With a threshold of 0 any duration counts as slow, so 2xx on quiet paths also goes to INFO.
+
+    阈值为 0 时任何耗时都算慢，静默路径的 2xx 也要走 INFO。"""
     caplog.set_level(logging.DEBUG, logger="server.app")
     app = _build_app_with_ok_routes(quiet_slow_threshold_ms=0.0)
 
@@ -90,7 +95,9 @@ async def test_quiet_endpoint_5xx_still_info(caplog: pytest.LogCaptureFixture) -
 
 
 async def test_non_quiet_endpoint_200_still_info(caplog: pytest.LogCaptureFixture) -> None:
-    """回归保护：非静默路径的行为不变。"""
+    """Regression guard: behavior of non-quiet paths is unchanged.
+
+    回归保护：非静默路径的行为不变。"""
     caplog.set_level(logging.DEBUG, logger="server.app")
     app = _build_app_with_ok_routes()
 

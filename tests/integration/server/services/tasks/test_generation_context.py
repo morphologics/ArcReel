@@ -1,4 +1,12 @@
-"""resolve_generation_context 公开接口测试：lane 声明与跳过 / fail-loud property /
+"""Public interface tests of resolve_generation_context: lane declaration and skipping / fail-loud property /
+resolution and video request facts looked up by actual identity / atomic failure / backend cache and
+invalidation.
+
+Per ADR 0049's testing rule: real in-memory DB + real ProjectManager under tmp_path + fake backend (only the
+assemble_backend construction seam replaced); no mocking of ConfigResolver / ProjectManager, no asserting
+private attributes.
+
+resolve_generation_context 公开接口测试：lane 声明与跳过 / fail-loud property /
 按实际身份查 resolution 与视频请求事实 / 原子失败 / backend 缓存与失效。
 
 按 ADR 0049 的测试口径：真实内存 DB + tmp_path 真 ProjectManager + fake backend
@@ -47,12 +55,17 @@ from tests.fakes import bind_session_factory, use_backend_assembler, use_project
 
 
 def _registry_video_model(provider_id: str) -> str:
-    """从目录取该 provider 的任一视频 model id，避免硬编码供应商数据。"""
+    """Take any video model id for the provider from the catalog, avoiding hard-coded provider data.
+
+    从目录取该 provider 的任一视频 model id，避免硬编码供应商数据。"""
     return next(mid for mid, mi in catalog.list_models(provider_id).items() if mi.media_type == "video")
 
 
 def _backend_video_caps(provider_id: str, model_id: str) -> VideoCapabilities:
-    """视频能力位与参考图上限的唯一声明处是 backend，目录的模型信息不带这些字段。"""
+    """The only place video capability bits and reference image limits are declared is the backend; the catalog's
+    model info does not carry these fields.
+
+    视频能力位与参考图上限的唯一声明处是 backend，目录的模型信息不带这些字段。"""
     return builtin_video_capabilities_for_model(provider_id, model_id)
 
 
@@ -64,24 +77,32 @@ class _FakeBackend:
     max_reference_images: int = 0
 
     async def reference_image_limit(self) -> int:
-        """image backend 协议的一部分：image lane 解析时读一次参考图上限。"""
+        """Part of the image backend protocol: the image lane reads the reference image limit once when resolving.
+
+        image backend 协议的一部分：image lane 解析时读一次参考图上限。"""
         return self.max_reference_images
 
     def list_voices(self):
-        """audio backend 协议的一部分：audio lane 解析时会取音色目录快照。"""
+        """Part of the audio backend protocol: the audio lane takes a snapshot of the voice catalog when resolving.
+
+        audio backend 协议的一部分：audio lane 解析时会取音色目录快照。"""
         return self.voices
 
 
 @pytest.fixture
 async def patched_session_factory(db_factory, monkeypatch):
-    """真实内存 DB：建全部 ORM 表，并把 lib.db.async_session_factory 指向它。"""
+    """Real in-memory DB: create all ORM tables and point lib.db.async_session_factory at it.
+
+    真实内存 DB：建全部 ORM 表，并把 lib.db.async_session_factory 指向它。"""
     bind_session_factory(monkeypatch, db_factory)
     return db_factory
 
 
 @pytest.fixture
 def project_env(monkeypatch, tmp_path: Path):
-    """tmp_path 下的真 ProjectManager + 已存在的项目目录。"""
+    """Real ProjectManager under tmp_path + an existing project directory.
+
+    tmp_path 下的真 ProjectManager + 已存在的项目目录。"""
     pm = ProjectManager(tmp_path)
     (tmp_path / "projects" / "demo").mkdir(parents=True)
     use_project_manager(monkeypatch, pm)
@@ -90,7 +111,10 @@ def project_env(monkeypatch, tmp_path: Path):
 
 @pytest.fixture(autouse=True)
 def clean_backend_cache():
-    """每个用例前后清空 backend 实例缓存与 per-key 锁（锁绑定事件循环的原因见 ``reset_backend_cache_for_tests``）。"""
+    """Clear the backend instance cache and per-key locks before and after each case (for why locks bind to the
+    event loop, see ``reset_backend_cache_for_tests``).
+
+    每个用例前后清空 backend 实例缓存与 per-key 锁（锁绑定事件循环的原因见 ``reset_backend_cache_for_tests``）。"""
     generation_context.reset_backend_cache_for_tests()
     yield
     generation_context.reset_backend_cache_for_tests()
@@ -98,7 +122,10 @@ def clean_backend_cache():
 
 @pytest.fixture
 def fake_assemble(monkeypatch):
-    """替换 backend 构造缝：默认按请求原样回声身份，记录每次构造。"""
+    """Replace the backend construction seam: by default echoes the identity as requested and records every
+    construction.
+
+    替换 backend 构造缝：默认按请求原样回声身份，记录每次构造。"""
     calls: list[tuple[str, str, str | None]] = []
 
     async def _assemble(*, provider_id, media_type, model_id, resolver, rate_limiter=None, generation_type=None):
@@ -110,7 +137,10 @@ def fake_assemble(monkeypatch):
 
 
 async def _seed_custom_video_provider(patched_session_factory) -> str:
-    """种一个自定义供应商：目标 model 已禁用、默认 model 存活（带 resolution 与时长表）。"""
+    """Seed a custom provider: the target model is disabled, the default model alive (with resolution and duration
+    table).
+
+    种一个自定义供应商：目标 model 已禁用、默认 model 存活（带 resolution 与时长表）。"""
     async with patched_session_factory() as session:
         provider = CustomProvider(
             display_name="Prov",
@@ -148,7 +178,10 @@ async def _seed_custom_video_provider(patched_session_factory) -> str:
 
 class TestLaneDeclaration:
     async def test_only_declared_lanes_are_constructed(self, patched_session_factory, project_env, fake_assemble):
-        """只声明 image lane：不解析、不构造 video/audio，视频供应商缺配置不影响图片任务。"""
+        """Only the image lane declared: video/audio are neither resolved nor constructed; a misconfigured video
+        provider does not affect image tasks.
+
+        只声明 image lane：不解析、不构造 video/audio，视频供应商缺配置不影响图片任务。"""
         project = {"image_provider_t2i": "ark/img-model-x"}
         ctx = await resolve_generation_context("demo", None, project=project, image=ImageLaneRequest())
 
@@ -238,6 +271,7 @@ class TestVideoLane:
         assert facts.supported_durations == tuple(expected.supported_durations or [])
         assert facts.max_reference_images == _backend_video_caps("ark", video_model).max_reference_images
         assert isinstance(facts.generate_audio, bool)
+        # No resolution set means none sent: neither the lane nor the facts add a fallback tier.
         # 未设分辨率即不下发：lane 与事实都不补兜底档位。
         assert ctx.video.resolution is None
         assert facts.resolution is None
@@ -258,7 +292,10 @@ class TestVideoLane:
     async def test_lane_without_a_route_evaluates_no_capabilities(
         self, patched_session_factory, project_env, monkeypatch
     ):
-        """续跑这类不声明路线的 lane 只交付身份：registry 之外的 model 也照常构造，不求值能力。"""
+        """Lanes that declare no route, such as resume, deliver identity only: models outside the registry are
+        constructed as usual, and no capabilities are evaluated.
+
+        续跑这类不声明路线的 lane 只交付身份：registry 之外的 model 也照常构造，不求值能力。"""
 
         async def _assemble(*, provider_id, media_type, model_id, resolver, rate_limiter=None, generation_type=None):
             return _FakeBackend(name=provider_id, model="mystery-model")
@@ -274,7 +311,10 @@ class TestVideoLane:
     async def test_requested_generate_audio_follows_project_override(
         self, patched_session_factory, project_env, fake_assemble
     ):
-        """本集无声开关随 project.json 覆盖进 lane，编排层据此决定要不要组装参考音频。"""
+        """The episode's silent switch is carried into the lane via the project.json override; the orchestration layer
+        uses it to decide whether to assemble reference audio.
+
+        本集无声开关随 project.json 覆盖进 lane，编排层据此决定要不要组装参考音频。"""
         video_model = _registry_video_model("ark")
         ctx = await resolve_generation_context(
             "demo",
@@ -287,7 +327,10 @@ class TestVideoLane:
     async def test_capability_failure_does_not_supply_audio_fallback(
         self, patched_session_factory, project_env, monkeypatch
     ):
-        """声明路线的事实失败由执行器阻断，音频开关没有独立降级值。"""
+        """Facts failures of a declared route are blocked by the executor; the audio switch has no separate fallback
+        value.
+
+        声明路线的事实失败由执行器阻断，音频开关没有独立降级值。"""
 
         async def _assemble(*, provider_id, media_type, model_id, resolver, rate_limiter=None, generation_type=None):
             return _FakeBackend(name=provider_id, model="mystery-model")
@@ -305,7 +348,10 @@ class TestVideoLane:
             _ = ctx.video.requested_generate_audio
 
     async def test_payload_overrides_project(self, patched_session_factory, project_env, fake_assemble):
-        """payload > project：显式的请求身份（如 checkpoint 回放）决定实际解析身份。"""
+        """payload > project: an explicit request identity (e.g. checkpoint replay) decides the actually resolved
+        identity.
+
+        payload > project：显式的请求身份（如 checkpoint 回放）决定实际解析身份。"""
         ark_model = _registry_video_model("ark")
         grok_model = _registry_video_model("grok")
         ctx = await resolve_generation_context(
@@ -321,10 +367,13 @@ class TestActualIdentityQueries:
     async def test_custom_model_fallback_queries_by_actual_model(
         self, patched_session_factory, project_env, monkeypatch
     ):
-        """未声明路线的不定桶 lane 按默认启用模型解析分辨率。"""
+        """A bucketless lane that declares no route resolves resolution by the default enabled model.
+
+        未声明路线的不定桶 lane 按默认启用模型解析分辨率。"""
         provider_id = await _seed_custom_video_provider(patched_session_factory)
 
         async def _assemble(*, provider_id, media_type, model_id, resolver, rate_limiter=None, generation_type=None):
+            # Simulate load_custom_backend's fallback: request m-dead, actually construct the default enabled m-live
             # 模拟 load_custom_backend 的回退：请求 m-dead，实际构造出默认启用的 m-live
             return _FakeBackend(name=provider_id, model="m-live")
 
@@ -336,16 +385,23 @@ class TestActualIdentityQueries:
             video=VideoLaneRequest(),
         )
 
+        # Bucketless identity resolution converges on the default enabled model; the construction layer uses that
+        # identity directly.
         # 不定桶身份解析按默认启用 model 收敛，构造层直接使用该身份。
         assert ctx.video.provider_model == ProviderModel(provider_id, "m-live")
         assert ctx.video.backend_model == "m-live"
+        # resolution hits the DB default of m-live (the actual identity), not coming up empty with the resolve intent
+        # m-dead
         # resolution 命中 m-live（实际身份）的 DB 默认，而非按解析意图 m-dead 落空
         assert ctx.video.resolution == "540p"
         assert ctx.video.request_facts is None
 
 
 class TestVideoRequestFacts:
-    """lane 声明路线时附带执行侧视频请求事实：身份取实际构造的 backend，session 与 lane 共用。"""
+    """When a lane declares a route it carries execution-side video request facts: identity is taken from the
+    actually constructed backend, and the session is shared with the lane.
+
+    lane 声明路线时附带执行侧视频请求事实：身份取实际构造的 backend，session 与 lane 共用。"""
 
     @pytest.mark.parametrize(("route", "bucket"), [("storyboard", "i2v"), ("reference_video", "r2v")])
     @pytest.mark.parametrize("explicit_bucket", [False, True])
@@ -451,6 +507,8 @@ class TestVideoRequestFacts:
         )
 
         assert isinstance(read, VideoRequestFacts)
+        # No resolution set: neither side sends a resolution, and reference image constraints apply only with the
+        # r2v bucket.
         # 未设分辨率：两侧都不下发分辨率，参考图约束只随 r2v 桶生效。
         assert read.resolution is None
         assert read.allowed_durations == allowed
@@ -518,7 +576,11 @@ class TestAudioLane:
         assert ctx.audio.backend_model == "tts-model-x"
 
     async def test_voice_catalog_snapshot_passed_through(self, patched_session_factory, project_env, monkeypatch):
-        """ctx.audio.voices 须是 backend.list_voices() 的真实快照，而非默认的空元组——
+        """ctx.audio.voices must be a real snapshot of backend.list_voices(), not the default empty tuple - asserting
+        the field exists is not enough; it must prove resolve_generation_context really forwards the backend's voice
+        catalog.
+
+        ctx.audio.voices 须是 backend.list_voices() 的真实快照，而非默认的空元组——
         断言字段存在不够，须证明 resolve_generation_context 确实转发了 backend 的音色目录。
         """
 
@@ -537,7 +599,9 @@ class TestAtomicFailure:
     async def test_declared_lane_construction_failure_fails_whole_call(
         self, patched_session_factory, project_env, monkeypatch
     ):
-        """image 成功后 video 构造失败：整次调用原样上抛，无部分结果。"""
+        """Video construction fails after image succeeded: the whole call propagates unchanged, with no partial result.
+
+        image 成功后 video 构造失败：整次调用原样上抛，无部分结果。"""
 
         async def _assemble(*, provider_id, media_type, model_id, resolver, rate_limiter=None, generation_type=None):
             if media_type == "video":
@@ -572,7 +636,14 @@ class TestBackendCache:
         assert len(fake_assemble) == 2, "失效后须重建 backend"
 
     async def test_image_buckets_do_not_share_a_cache_entry(self, monkeypatch):
-        """同 (media_type, provider, model) 的 t2i 与 i2i 各自构造：桶参与构造，须各占一条缓存。
+        """t2i and i2i with the same (media_type, provider, model) are constructed separately: the bucket takes part in
+        construction, so each must have its own cache entry.
+
+        When a custom provider falls back to the default model, model_id is empty, and the two buckets load backends
+        of two different models; sharing one cache entry would let whichever bucket runs first evict the other's
+        backend.
+
+        同 (media_type, provider, model) 的 t2i 与 i2i 各自构造：桶参与构造，须各占一条缓存。
 
         自定义供应商回退默认模型时 model_id 为空，两个桶装载出的是两个不同模型的 backend；共用
         一条缓存会让先跑的那个桶把另一个桶的 backend 挤掉。
@@ -597,7 +668,10 @@ class TestBackendCache:
         assert t2i_again is t2i
 
     async def test_invalidate_during_construction_discards_instance(self, monkeypatch):
-        """构造中途（assemble_backend await 挂起期间）触发 invalidate：完成的实例不写回缓存。"""
+        """Invalidate triggered mid-construction (while assemble_backend's await is suspended): the finished instance
+        is not written back to the cache.
+
+        构造中途（assemble_backend await 挂起期间）触发 invalidate：完成的实例不写回缓存。"""
         entered = asyncio.Event()
         release = asyncio.Event()
         built: list[_FakeBackend] = []
@@ -626,7 +700,9 @@ class TestBackendCache:
         assert fresh is not stale
 
     async def test_concurrent_same_key_constructs_once(self, monkeypatch):
-        """同 key 并发两次 get_or_create：只构造一次，两调用方拿到同一实例。"""
+        """Two concurrent get_or_create with the same key: constructed only once, both callers get the same instance.
+
+        同 key 并发两次 get_or_create：只构造一次，两调用方拿到同一实例。"""
         entered = asyncio.Event()
         release = asyncio.Event()
         construct_count = 0
@@ -644,6 +720,8 @@ class TestBackendCache:
         t1 = asyncio.create_task(generation_context._get_or_create_video_backend("ark", {"model": "m"}, resolver))
         t2 = asyncio.create_task(generation_context._get_or_create_video_backend("ark", {"model": "m"}, resolver))
         await entered.wait()
+        # Let t2 also enter get_or_create while t1's construction is suspended (a concurrent miss, not hits one after
+        # the other)
         # 让 t2 在 t1 构造挂起期间也进入 get_or_create（并发 miss 而非先后命中）
         for _ in range(3):
             await asyncio.sleep(0)
@@ -654,7 +732,18 @@ class TestBackendCache:
         assert b1 is b2
 
     async def test_follower_queued_before_invalidate_discards_instance(self, monkeypatch):
-        """失效边界前已排队等锁的旧代际请求（follower）：跨越失效后拿到锁，仍不得写回缓存。
+        """An old-generation request already queued for the lock before the invalidation boundary (follower): after
+        getting the lock across the invalidation it still must not write back to the cache.
+
+        A third interleaving besides the leader being interrupted mid-construction while holding the lock (already
+        covered): the follower entered get_or_create and queued for the lock during the leader's construction,
+        before invalidate(), and only gets the lock after invalidate().
+        Its call arguments (the factory closure) are still the pre-invalidation old config, so even though it sees
+        the new generation when taking the lock, it must be judged stale by "the old generation captured on entry
+        (before waiting for the lock)" and not write back to the cache - otherwise a backend built from old config
+        would be marked as a valid new-generation instance, polluting later requests with the same key.
+
+        失效边界前已排队等锁的旧代际请求（follower）：跨越失效后拿到锁，仍不得写回缓存。
 
         leader 持锁构造中途被打断（已有测试覆盖）之外的第三种交错：follower 在 leader 构造期间、
         invalidate() 之前就已进入 get_or_create 并排队等锁，只有在 invalidate() 之后才轮到它拿锁。
@@ -678,15 +767,17 @@ class TestBackendCache:
         resolver = cast(ConfigResolver, None)
 
         leader = asyncio.create_task(generation_context._get_or_create_video_backend("ark", {"model": "m"}, resolver))
-        await entered.wait()  # leader 已持锁，正在构造中途挂起
+        await entered.wait()  # The leader holds the lock and is suspended mid-construction / leader 已持锁，正在构造中途挂起
 
         follower = asyncio.create_task(generation_context._get_or_create_video_backend("ark", {"model": "m"}, resolver))
+        # Let the follower run to the "capture generation + queue for the lock" step (not its turn for the lock yet)
         # 让 follower 跑到「捕获代数 + 排队等锁」这一步（尚未轮到它拿锁）
         for _ in range(3):
             await asyncio.sleep(0)
 
+        # Invalidation boundary: the follower is already queued, and the generation has moved on
         generation_context.invalidate_backend_cache()  # 失效边界：此时 follower 已排队，代数已翻篇
-        release.set()  # 放行 leader，完成构造
+        release.set()  # Release the leader to finish construction / 放行 leader，完成构造
         stale = await leader
         stale_from_follower = await follower
 
@@ -703,7 +794,9 @@ class TestBackendCache:
 
 class TestValueObjectAssembly:
     def test_fake_context_assembles_from_frozen_dataclasses(self, tmp_path: Path):
-        """消费方测试的拼装路径：frozen dataclass 直接构造假 context，property 原样返回。"""
+        """Assembly path for consumer tests: frozen dataclasses directly build a fake context; properties return as is.
+
+        消费方测试的拼装路径：frozen dataclass 直接构造假 context，property 原样返回。"""
         lane = VideoLaneResult(
             provider_model=ProviderModel("ark", "m"),
             backend_name="ark",
@@ -732,8 +825,10 @@ class TestValueObjectAssembly:
         [
             ("soft", True, False),
             ("native", True, False),
+            # Class C models produce no sound
             # C 类模型不产音
             ("none", True, True),
+            # Episode audio disabled: no sound is heard even if the model has an audio track
             # 本集关闭音频：模型有音轨也听不到声音
             ("soft", False, True),
             ("none", False, True),
@@ -742,7 +837,10 @@ class TestValueObjectAssembly:
     def test_video_lane_is_silent_covers_both_paths(
         self, voice_consistency: VoiceConsistency, requested_generate_audio: bool, expected: bool
     ):
-        """无声判据合并模型档与本集开关两条路径，渲染层据此决定是否注入声音风格。"""
+        """The silence criterion merges both paths, model class and the episode switch; the render layer uses it to
+        decide whether to inject the voice style.
+
+        无声判据合并模型档与本集开关两条路径，渲染层据此决定是否注入声音风格。"""
         lane = VideoLaneResult(
             provider_model=ProviderModel("ark", "m"),
             backend_name="ark",

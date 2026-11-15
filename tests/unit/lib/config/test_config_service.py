@@ -21,6 +21,7 @@ async def test_get_all_providers_status_empty(config_service: ConfigService):
 
 
 async def test_provider_status_models_isolated_from_catalog(config_service: ConfigService):
+    # The models return value must be isolated from the catalog query's process-level index: mutating its mutable containers must not pollute the catalog.
     # models 返回值须与目录查询的进程级索引隔离：改写其可变容器不应污染目录。
     from lib.catalog import query as catalog
 
@@ -35,6 +36,7 @@ async def test_provider_status_models_isolated_from_catalog(config_service: Conf
 
 
 async def test_provider_becomes_ready(config_service: ConfigService, db_session: AsyncSession):
+    # status is determined by the active credential in the credential table, not by the ProviderConfig table
     # status 由凭证表中的生效凭证决定，而不是 ProviderConfig 表
     cred_repo = CredentialRepository(db_session)
     await cred_repo.create("gemini-aistudio", "default", api_key="AIza-test")
@@ -103,6 +105,7 @@ async def test_set_max_workers_rejects_invalid_values(config_service: ConfigServ
         await config_service.set_provider_config("dashscope", key, value)
     assert exc_info.value.key == key
     assert exc_info.value.value == value
+    # The router relies on code/params to render i18n messages generically; the contract is pinned here
     # router 依赖 code/params 泛化渲染 i18n 文案，契约在此 pin 住
     assert exc_info.value.code == "max_workers_must_be_positive_integer"
     assert exc_info.value.params == {"field": key, "value": value}
@@ -117,6 +120,7 @@ async def test_set_max_workers_accepts_positive_integers(config_service: ConfigS
 
 @pytest.mark.parametrize(("raw", "canonical"), [(" 5 ", "5"), ("+5", "5"), ("1_0", "10")])
 async def test_set_max_workers_canonicalizes_on_write(config_service: ConfigService, raw: str, canonical: str):
+    # Non-canonical forms accepted by int() are normalized on save, so readers and the number input both get a pure digit string
     # int() 接受的非规范形态统一规范化入库，读取方与 number 输入框拿到的都是纯数字串
     await config_service.set_provider_config("ark", "video_max_workers", raw)
     config = await config_service.get_provider_config("ark")
@@ -124,6 +128,7 @@ async def test_set_max_workers_canonicalizes_on_write(config_service: ConfigServ
 
 
 async def test_set_other_number_keys_not_restricted_to_integers(config_service: ConfigService):
+    # request_gap / *_rpm semantics allow decimals and are not bound by the positive-integer check of capacity keys
     # request_gap / *_rpm 语义允许小数，不受容量键的正整数校验约束
     await config_service.set_provider_config("gemini-aistudio", "request_gap", "0.5")
     config = await config_service.get_provider_config("gemini-aistudio")

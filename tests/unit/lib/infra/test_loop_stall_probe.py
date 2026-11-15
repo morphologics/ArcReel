@@ -17,7 +17,7 @@ from lib.infra.loop_stall_probe import (
 )
 
 _PROBE_LOGGER = "lib.infra.loop_stall_probe"
-# 用例自己驱动检查时，让守护线程在用例期间不会醒来。
+# When the case drives the check itself, keep the daemon thread from waking up during the case. / 用例自己驱动检查时，让守护线程在用例期间不会醒来。
 _IDLE_CHECK_INTERVAL = 3600.0
 _FAST_HEARTBEAT = 0.001
 
@@ -50,7 +50,9 @@ def stall_log(caplog: pytest.LogCaptureFixture) -> Iterator[_StallLog]:
 
 
 def _hold_loop_thread(work: Callable[[], object]) -> None:
-    """在事件循环线程上同步等待另一个线程跑完 ``work``：期间事件循环停滞，调用栈停在这里。"""
+    """Synchronously wait on the event loop thread for another thread to finish ``work``: the event loop stalls meanwhile and the call stack stays here.
+
+    在事件循环线程上同步等待另一个线程跑完 ``work``：期间事件循环停滞，调用栈停在这里。"""
     with ThreadPoolExecutor(max_workers=1) as pool:
         pool.submit(work).result(timeout=30)
 
@@ -101,6 +103,7 @@ async def test_a_stall_shorter_than_the_threshold_is_not_logged(stall_log: _Stal
 
 
 async def test_a_stall_is_measured_from_when_the_next_heartbeat_was_due(stall_log: _StallLog) -> None:
+    # After a heartbeat the event loop is expected to idle for one heartbeat interval anyway; that time does not count as a stall.
     # 心跳之后事件循环本就要空闲一个心跳间隔，这段时间不算停滞。
     heartbeat_interval = 1.0
     clock = _Clock()
@@ -176,6 +179,7 @@ async def test_capturing_the_stack_while_other_threads_are_busy_does_not_crash(
     stall_log: _StallLog,
 ) -> None:
     clock = _Clock()
+    # Scheduling may make the stack capture land at thread start or the result wait; record each one, without requiring every capture to stop at the same stack.
     # 调度会让取栈落在线程启动或结果等待处；逐次记录，不要求每次停在同一份栈上。
     probe: LoopStallProbe = start_loop_stall_probe(
         heartbeat_interval=_FAST_HEARTBEAT,
@@ -186,10 +190,11 @@ async def test_capturing_the_stack_while_other_threads_are_busy_does_not_crash(
     done = threading.Event()
 
     def _churn(depth: int) -> int:
-        # 不停压栈出栈，让帧在取栈的同时持续变化。
+        # Keep pushing and popping the stack so frames keep changing while the stack is captured. / 不停压栈出栈，让帧在取栈的同时持续变化。
         return 0 if depth == 0 else 1 + _churn(depth - 1)
 
     def _busy() -> None:
+        # Yield the GIL each round: frames still keep changing, but the event loop thread does not have to queue behind the busy thread for the GIL.
         # 每轮让出 GIL，帧照样持续变化，但事件循环线程拿 GIL 不用排在忙线程后面。
         while not done.is_set():
             _churn(50)
@@ -199,6 +204,7 @@ async def test_capturing_the_stack_while_other_threads_are_busy_does_not_crash(
     for worker in workers:
         worker.start()
     try:
+        # Let the heartbeat tick once between stalls, so every check is a new stall and each takes a stack capture.
         # 每次停滞之间让心跳走一拍，每次检查都是一次新的停滞，都要取一次栈。
         for _ in range(20):
             await _let_heartbeat_beat(clock)

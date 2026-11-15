@@ -82,7 +82,12 @@ async def test_append_then_list_then_load_via_sdk_helpers(session_factory, tmp_p
 
 @pytest.mark.asyncio
 async def test_partial_transcript_visible_after_simulated_crash(session_factory, tmp_path: Path):
-    """eager flush durability：partial transcript 在进程"重启"后仍可读。
+    """Eager flush durability: a partial transcript is still readable after the process "restarts".
+
+    Simulating a "service process crash" = dropping all in-memory state and keeping only the DB; a new store instance
+    (simulating a new process) reads on, verifying that the entries appended before are fully reachable.
+
+    eager flush durability：partial transcript 在进程"重启"后仍可读。
 
     模拟"服务进程崩溃"= 丢弃所有 in-memory 状态，仅保留 DB；新建 store
     实例（模拟新进程）继续读，验证之前 append 的 entries 完全可达。
@@ -93,6 +98,7 @@ async def test_partial_transcript_visible_after_simulated_crash(session_factory,
     sid = "11111111-2222-3333-4444-555555555555"
     key = {"project_key": make_project_key(project_cwd), "session_id": sid}
 
+    # Simulate eager flush "mid-turn" writing two entries (user + partial assistant)
     # 模拟"turn 进行中" eager flush 写入两条 entry（user + 部分 assistant）
     await store.append(
         key,
@@ -118,6 +124,7 @@ async def test_partial_transcript_visible_after_simulated_crash(session_factory,
         ],
     )
 
+    # Simulate a new process: drop in-memory state, rebuild store
     # 模拟新进程：drop in-memory state, rebuild store
     store_after_restart = DbSessionStore(session_factory, user_id="crash-recover")
 
@@ -136,7 +143,12 @@ async def test_partial_transcript_visible_after_simulated_crash(session_factory,
 
 @pytest.mark.asyncio
 async def test_eager_multi_append_round_trip(session_factory, tmp_path: Path):
-    """多次 eager-style append 后，DB 应能还原完整 user/assistant 序列。
+    """After several eager-style appends, the DB should restore the full user/assistant sequence.
+
+    This test only covers DbSessionStore's repeated append/load round trip, not the session recovery path of the
+    session_manager layer.
+
+    多次 eager-style append 后，DB 应能还原完整 user/assistant 序列。
 
     本测试只覆盖 DbSessionStore 的多次 append/load 回环，不覆盖
     session_manager 层的会话恢复路径。
@@ -147,6 +159,7 @@ async def test_eager_multi_append_round_trip(session_factory, tmp_path: Path):
     sid = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
     key = {"project_key": make_project_key(project_cwd), "session_id": sid}
 
+    # Simulate the SDK's eager mode appending in several calls (one per complete frame)
     # 模拟 SDK eager 模式分多次 append（每个完整 frame 一次）
     frames = []
     for i in range(20):

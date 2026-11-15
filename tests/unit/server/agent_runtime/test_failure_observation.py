@@ -102,17 +102,17 @@ def _turn_key(*, assistant_message=None, result_message=None) -> str:
 @pytest.mark.parametrize(
     ("assistant_message", "result_message", "key"),
     [
-        # SDK 的 AssistantMessageError 枚举原样作为 key
+        # The SDK's AssistantMessageError enum is used as the key as is / SDK 的 AssistantMessageError 枚举原样作为 key
         ({"error": "rate_limit"}, {"subtype": "success", "is_error": True, "api_error_status": 500}, "rate_limit"),
-        # SDK 自己也说不清的 unknown 不算证据，继续看 result
+        # An unknown that even the SDK cannot explain is not evidence; keep looking at result / SDK 自己也说不清的 unknown 不算证据，继续看 result
         ({"error": "unknown"}, {"subtype": "error_max_turns", "is_error": True}, "error_max_turns"),
         (None, {"subtype": "error_max_budget_usd", "is_error": True}, "error_max_budget_usd"),
-        # 只有 HTTP 状态时按状态归到 SDK 的同一组枚举
+        # With only an HTTP status, map it to the same group of SDK enums by status / 只有 HTTP 状态时按状态归到 SDK 的同一组枚举
         (None, {"subtype": "success", "is_error": True, "api_error_status": 401}, "authentication_failed"),
         (None, {"subtype": "success", "is_error": True, "api_error_status": 429}, "rate_limit"),
         (None, {"subtype": "success", "is_error": True, "api_error_status": 529}, "server_error"),
         (None, {"subtype": "success", "is_error": True, "api_error_status": 404}, "invalid_request"),
-        # 没有可用的结构化证据：通用 key，不解析错误文案
+        # No usable structured evidence: a generic key, without parsing the error message / 没有可用的结构化证据：通用 key，不解析错误文案
         ({"error": "api_error", "content": [{"type": "text", "text": "401 Unauthorized"}]}, None, "turn_failed"),
         (None, {"subtype": "error_during_execution", "is_error": True, "errors": ["rate limit"]}, "turn_failed"),
     ],
@@ -137,14 +137,18 @@ def test_startup_failure_key_follows_the_exception_class_and_its_cause_chain() -
 
 
 class _NoSubprocessEventLoop(asyncio.SelectorEventLoop):
-    """复刻 Windows 的 SelectorEventLoop：沿用 asyncio 基类不支持子进程的实现。"""
+    """Replicates Windows' SelectorEventLoop: keeps the asyncio base class implementation that does not support subprocesses.
+
+    复刻 Windows 的 SelectorEventLoop：沿用 asyncio 基类不支持子进程的实现。"""
 
     async def _make_subprocess_transport(self, *args, **kwargs):
         return await asyncio.BaseEventLoop._make_subprocess_transport(self, *args, **kwargs)
 
 
 def test_startup_failure_key_reports_event_loop_without_subprocess_support(monkeypatch) -> None:
-    """Windows 上 uvicorn --reload 换成 SelectorEventLoop 后，SDK 拉起 CLI 只得到空消息的连接错误。"""
+    """On Windows, after uvicorn --reload switches to SelectorEventLoop, the SDK launching the CLI only gets a connection error with an empty message.
+
+    Windows 上 uvicorn --reload 换成 SelectorEventLoop 后，SDK 拉起 CLI 只得到空消息的连接错误。"""
     monkeypatch.setenv("CLAUDE_AGENT_SDK_SKIP_VERSION_CHECK", "1")
     transport = SubprocessCLITransport(prompt="", options=ClaudeAgentOptions(cli_path=sys.executable))
 

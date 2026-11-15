@@ -39,7 +39,10 @@ def test_reference_video_unit_minimal():
 
 
 def test_reference_video_unit_rejects_legacy_shot_fields():
-    """正文是唯一持久化真相：``shots`` / ``references`` 写入即被 strict 模型拒绝。"""
+    """The body is the only persisted source of truth: writing ``shots`` / ``references`` is refused by the
+    strict model.
+
+    正文是唯一持久化真相：``shots`` / ``references`` 写入即被 strict 模型拒绝。"""
     with pytest.raises(ValidationError):
         _make_unit(shots=[{"text": "镜头一"}])
     with pytest.raises(ValidationError):
@@ -47,7 +50,10 @@ def test_reference_video_unit_rejects_legacy_shot_fields():
 
 
 def test_reference_video_unit_empty_text_only_allowed_as_replan_shell():
-    """空正文只允许配 needs_replan=True 且 0 秒（迁移遗留的问题壳）。"""
+    """An empty body is only allowed with needs_replan=True and 0 seconds (a problem shell left over from
+    migration).
+
+    空正文只允许配 needs_replan=True 且 0 秒（迁移遗留的问题壳）。"""
     shell = _make_unit(text="", duration_seconds=0, needs_replan=True)
     assert shell.needs_replan is True
     assert shell.duration_seconds == 0
@@ -72,6 +78,8 @@ def test_reference_video_script_valid():
         novel=NovelInfo(title="江湖行", chapter="第一回"),
         video_units=[_make_unit()],
     )
+    # The script only carries the "content mode" dimension; generation mode is a project-level property the
+    # script does not carry
     # 剧本只承载“创作类型”维度；生成模式是项目级属性，剧本不携带
     assert script.content_mode == "narration"
     assert not hasattr(script, "generation_mode")
@@ -89,7 +97,10 @@ def test_reference_video_script_accepts_drama_content_mode():
 
 
 def test_reference_video_script_rejects_legacy_reference_video_content_mode():
-    """content_mode 不再允许 reference_video（它属于项目级 generation_mode 维度）。"""
+    """content_mode no longer allows reference_video (it belongs to the project-level generation_mode
+    dimension).
+
+    content_mode 不再允许 reference_video（它属于项目级 generation_mode 维度）。"""
     with pytest.raises(ValidationError):
         ReferenceVideoScript(
             title="x",
@@ -100,7 +111,10 @@ def test_reference_video_script_rejects_legacy_reference_video_content_mode():
 
 
 def test_reference_video_unit_duration_is_independent_of_text_length():
-    """unit 时长是唯一真相：不与正文长度挂钩，取值只受结构区间约束。"""
+    """Unit duration is the only source of truth: it is not tied to body length, and its value is only
+    bounded by the structural range.
+
+    unit 时长是唯一真相：不与正文长度挂钩，取值只受结构区间约束。"""
     assert _make_unit(duration_seconds=12).duration_seconds == 12
     assert _make_unit(text="一行", duration_seconds=120).duration_seconds == 120
 

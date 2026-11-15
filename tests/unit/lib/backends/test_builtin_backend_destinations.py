@@ -1,4 +1,10 @@
-"""内置 HTTP 式 backend 的提交与轮询请求经产物下载同一道出站目的地校验。
+"""Submit and poll requests of built-in HTTP-style backends pass the same outbound destination check as artifact downloads.
+
+The base URL of these backends is admin-configurable (the built-in provider's ``base_url`` setting, built-in endpoints
+mounted by custom providers), so submit and poll destinations are treated as untrusted just like artifact URLs returned
+by the provider: requests to link-local or cloud-metadata addresses are blocked before sending, and the API key never leaves.
+
+内置 HTTP 式 backend 的提交与轮询请求经产物下载同一道出站目的地校验。
 
 这些 backend 的 base URL 可由管理员配置（内置供应商的 ``base_url`` 设置、自定义供应商挂载的内置
 端点），故提交与轮询的目的地与供应商回传的产物地址一样按不可信处置：落在链路本地或云元数据地址上

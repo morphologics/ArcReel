@@ -1,4 +1,6 @@
-"""角色 TTS 参考音频试听样本端点测试：音色列表 / 生成入队 / confirm 落资产。"""
+"""Character TTS reference audio preview sample endpoint tests: voice list / generation enqueue / confirm persists the asset.
+
+角色 TTS 参考音频试听样本端点测试：音色列表 / 生成入队 / confirm 落资产。"""
 
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -106,6 +108,8 @@ class TestAudioBackendVoices:
                 provider_model=ProviderModel("dashscope", "qwen3-tts-flash"),
                 backend_name="dashscope",
                 backend_model="qwen3-tts-flash",
+                # Production convention: label is a lib/i18n translation key, not literal text (see
+                # the _VOICE_CATALOG comment in lib/backends/audio_backends/dashscope.py).
                 # 生产口径：label 是 lib/i18n 翻译 key，不是直出文案（见
                 # lib/backends/audio_backends/dashscope.py 的 _VOICE_CATALOG 注释）。
                 voices=(VoiceOption(id="Cherry", label="voice_label_dashscope_cherry"),),
@@ -130,10 +134,12 @@ class TestAudioBackendVoices:
         assert body["configured"] is True
         assert body["provider_id"] == "dashscope"
         assert body["model"] == "qwen3-tts-flash"
-        # 未带 Accept-Language 时按 DEFAULT_LOCALE（zh）渲染。
+        # Without Accept-Language, render per DEFAULT_LOCALE (zh). / 未带 Accept-Language 时按 DEFAULT_LOCALE（zh）渲染。
         assert body["voices"] == [{"id": "Cherry", "label": "芊悦 · 阳光正向的自然年轻女声"}]
 
     def test_configured_localizes_label_by_accept_language(self, tmp_path, monkeypatch):
+        # DashScope's label is a translation key; not rendering it per the request locale is exactly the regression this guards against:
+        # en/vi users would see hard-coded Chinese descriptions in the dropdown instead of localized text.
         # DashScope 的 label 是翻译 key，未随请求 locale 渲染就是本条要防住的回归——
         # en/vi 用户看到的下拉会是硬编码中文描述而非本地化文案。
         fake_pm = _FakePM(tmp_path / "projects" / "demo")
@@ -197,6 +203,8 @@ class TestGenerateCharacterVoiceSample:
         client = _client(monkeypatch, fake_pm, _FakeQueue())
 
         with client:
+            # A colon is a Windows reserved character and validate_asset_name rejects it, but it is legal as a single path segment value,
+            # so the ASGI routing layer does not turn it into a 404 before it reaches the route handler.
             # 冒号是 Windows 保留字符，validate_asset_name 拒绝，但作为单段路径值本身合法，
             # 不会在到达路由处理函数之前就被 ASGI 路由层拦成 404。
             res = client.post(
@@ -219,7 +227,9 @@ class TestGenerateCharacterVoiceSample:
         assert res.status_code == 400
 
     def test_provider_without_audio_model_asks_to_reselect(self, tmp_path, monkeypatch):
-        """项目裸写的内置供应商没有语音模型：报该供应商不支持语音生成，不说成「未配置 audio 供应商」。"""
+        """A built-in provider written bare in the project has no speech model: report that this provider does not support speech generation, not "no audio provider configured".
+
+        项目裸写的内置供应商没有语音模型：报该供应商不支持语音生成，不说成「未配置 audio 供应商」。"""
         fake_pm = _FakePM(tmp_path / "projects" / "demo")
         fake_queue = _FakeQueue()
         error = ModelNotInCatalogError(provider_id="kling", model_id="", media_type="audio")
@@ -249,7 +259,9 @@ class TestGenerateCharacterVoiceSample:
         assert res.status_code == 400
 
     def test_overlong_text_rejected(self, tmp_path, monkeypatch):
-        """整段粘贴的长文案在入队前就被挡住，不产生「先计费合成、再因超时长落 failed」。"""
+        """Long text pasted in one piece is stopped before enqueueing, avoiding "billed for synthesis first, then failed for exceeding the duration".
+
+        整段粘贴的长文案在入队前就被挡住，不产生「先计费合成、再因超时长落 failed」。"""
         fake_pm = _FakePM(tmp_path / "projects" / "demo")
         fake_queue = _FakeQueue()
         client = _client(monkeypatch, fake_pm, fake_queue)
@@ -479,7 +491,9 @@ class TestConfirmCharacterVoiceSample:
         assert res.status_code == 400
 
     def test_confirm_missing_sample_file_404(self, tmp_path, monkeypatch):
-        """任务已 succeeded 且 result.file_path 非空，但样本文件在磁盘上不存在。"""
+        """The task succeeded and result.file_path is non-empty, but the sample file does not exist on disk.
+
+        任务已 succeeded 且 result.file_path 非空，但样本文件在磁盘上不存在。"""
         fake_pm = _FakePM(tmp_path / "projects" / "demo")
         fake_queue = _FakeQueue(
             {
@@ -503,7 +517,9 @@ class TestConfirmCharacterVoiceSample:
         assert res.status_code == 404
 
     def test_confirm_replaces_stale_reference_audio_with_different_extension(self, tmp_path, monkeypatch):
-        """角色已有 reference_audio 指向不同扩展名的旧文件：确认后新文件写入且旧文件被清理。"""
+        """The character already has reference_audio pointing to an old file with a different extension: after confirm the new file is written and the old one cleaned up.
+
+        角色已有 reference_audio 指向不同扩展名的旧文件：确认后新文件写入且旧文件被清理。"""
         project_path = tmp_path / "projects" / "demo"
         fake_pm = _FakePM(project_path)
         fake_pm.project["characters"]["艾莉"]["reference_audio"] = "characters/refs_audio/艾莉.mp3"

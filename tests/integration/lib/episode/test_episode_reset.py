@@ -1,4 +1,8 @@
-"""分集规划全量重置的行为测试（真实文件系统，不触 LLM）。
+"""Behaviour tests for the full reset of episode planning (real file system, no LLM).
+
+Only external behaviour is asserted: ledger state, where files end up, the two-step confirmation exit and error paths.
+
+分集规划全量重置的行为测试（真实文件系统，不触 LLM）。
 
 只断言对外行为：账本状态、文件去向、二段确认出口与错误路径。
 """
@@ -32,6 +36,9 @@ from lib.episode.episode_reset import (
 )
 from lib.episode.episode_sources import discover_sources, planning_start
 
+# All cases span EpisodeReset / ProjectManager / EpisodePlanner working together, use a real tmp_path file system,
+# and do not mock the public entry points of the modules under test, so per the tiering rules in
+# docs/standards/testing.md they belong in integration.
 # 全部用例跨 EpisodeReset / ProjectManager / EpisodePlanner 协作，用真实 tmp_path 文件系统，
 # 不 mock 被测模块的公共入口——按 docs/standards/testing.md 的分档规则归 integration。
 
@@ -71,7 +78,9 @@ def _load_project(project_dir: Path) -> dict:
 
 
 def _planning_start(project_dir: Path) -> tuple[str, int] | None:
-    """由账本推导的接续规划起点。"""
+    """Resume-planning start derived from the ledger.
+
+    由账本推导的接续规划起点。"""
     project = _load_project(project_dir)
     return planning_start(project, discover_sources(project_dir, project))
 
@@ -116,12 +125,18 @@ def _write_claimed_artifact(
 
 
 # ---------------------------------------------------------------------------
+# Full reset: must succeed whatever the ledger corruption
+# ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
 # 全量重置：账本任意损坏都必须成功
 # ---------------------------------------------------------------------------
 
 
 def test_reset_on_corrupted_ledger_clears_everything(tmp_path: Path) -> None:
-    """cursor 越界 + 条目坐标越界 + 账本与磁盘不一致：全量重置仍成功，随后可从头规划。"""
+    """Cursor out of bounds + entry coordinates out of bounds + ledger inconsistent with disk: the full reset still succeeds,
+    and planning can then start from the beginning.
+
+    cursor 越界 + 条目坐标越界 + 账本与磁盘不一致：全量重置仍成功，随后可从头规划。"""
     project_dir = _write_project(
         tmp_path,
         episodes=[
@@ -138,6 +153,7 @@ def test_reset_on_corrupted_ledger_clears_everything(tmp_path: Path) -> None:
     project = _load_project(project_dir)
     assert project["episodes"] == []
     assert _planning_start(project_dir) == ("source/novel.txt", 0)
+    # After the reset the planning start returns to the beginning of the first source file (plan can plan from scratch)
     # 重置后规划起点回到第一个源文件开头（plan 可正常从头规划）
     assert _planning_start(project_dir) == ("source/novel.txt", 0)
 
@@ -162,7 +178,9 @@ def test_full_reset_succeeds_with_an_unreadable_artifact_manifest_and_leaves_it_
 
 
 def test_reset_clears_source_fingerprints(tmp_path: Path) -> None:
-    """源文指纹随账本一并失效：字段存在时被清除，不存在时不报错。"""
+    """Source fingerprints are invalidated along with the ledger: cleared when the field exists, no error when it does not.
+
+    源文指纹随账本一并失效：字段存在时被清除，不存在时不报错。"""
     project_dir = _write_project(
         tmp_path,
         extra={SOURCE_FINGERPRINTS_KEY: {"source/novel.txt": "deadbeef"}},
@@ -174,7 +192,10 @@ def test_reset_clears_source_fingerprints(tmp_path: Path) -> None:
 
 
 def test_reset_removes_remaining_file(tmp_path: Path) -> None:
-    """余文文件被清理：由账本推导的规划起点已取代它，留着只会在 source/ 下留一份与账本无关的陈旧剩余正文。"""
+    """The remaining-text file is cleaned up: the planning start derived from the ledger has replaced it; keeping it would
+    only leave a stale leftover text under source/ unrelated to the ledger.
+
+    余文文件被清理：由账本推导的规划起点已取代它，留着只会在 source/ 下留一份与账本无关的陈旧剩余正文。"""
     project_dir = _write_project(tmp_path)
     remaining = project_dir / "source" / "_remaining.txt"
     remaining.write_text("第三章 风波。少女身份成谜。", encoding="utf-8")
@@ -185,6 +206,9 @@ def test_reset_removes_remaining_file(tmp_path: Path) -> None:
     assert _planning_start(project_dir) == ("source/novel.txt", 0)
 
 
+# ---------------------------------------------------------------------------
+# File disposal: derived files are deleted, non-derived files are archived
+# ---------------------------------------------------------------------------
 # ---------------------------------------------------------------------------
 # 文件处置：派生的删、非派生的留底
 # ---------------------------------------------------------------------------
@@ -215,7 +239,9 @@ def test_derived_files_deleted_and_legacy_files_archived(tmp_path: Path) -> None
 
 
 def test_archived_file_left_out_of_discovery(tmp_path: Path) -> None:
-    """留底文件既不进源文候选，也不被当成派生集文件重新认领。"""
+    """Archived files are neither source candidates nor reclaimed as derived episode files.
+
+    留底文件既不进源文候选，也不被当成派生集文件重新认领。"""
     project_dir = _write_project(
         tmp_path,
         episodes=[_entry(2, source_range=None)],
@@ -229,7 +255,9 @@ def test_archived_file_left_out_of_discovery(tmp_path: Path) -> None:
 
 
 def test_archive_does_not_overwrite_existing_backup(tmp_path: Path) -> None:
-    """重复重置不覆盖上一次的留底：同名时追加序号。"""
+    """A repeated reset does not overwrite the previous archive: on a name clash a sequence number is appended.
+
+    重复重置不覆盖上一次的留底：同名时追加序号。"""
     project_dir = _write_project(
         tmp_path,
         episodes=[_entry(2, source_range=None)],
@@ -244,7 +272,10 @@ def test_archive_does_not_overwrite_existing_backup(tmp_path: Path) -> None:
 
 
 def test_orphan_episode_file_archived(tmp_path: Path) -> None:
-    """账本无对应条目的孤儿集文件按无坐标处理：留底而非删除，避免孤儿条目登记重新补建条目。"""
+    """An orphan episode file with no ledger entry is treated as having no coordinates: archived, not deleted, so orphan
+    entry registration does not recreate an entry for it.
+
+    账本无对应条目的孤儿集文件按无坐标处理：留底而非删除，避免孤儿条目登记重新补建条目。"""
     project_dir = _write_project(tmp_path)
     (project_dir / "source" / "episode_7.txt").write_text("孤儿内容", encoding="utf-8")
 
@@ -256,7 +287,10 @@ def test_orphan_episode_file_archived(tmp_path: Path) -> None:
 
 
 def test_file_failure_aborts_and_leaves_ledger_intact(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """文件处置失败硬失败：账本写回随之回滚，避免留下「账本已空但残留文件会被重新认领」的中间态。"""
+    """A file-disposal failure is a hard failure: the ledger write-back is rolled back with it, so we never leave the
+    half-state where the ledger is empty but leftover files get reclaimed.
+
+    文件处置失败硬失败：账本写回随之回滚，避免留下「账本已空但残留文件会被重新认领」的中间态。"""
     project_dir = _write_project(
         tmp_path,
         episodes=[_entry(1, source_range={"source_file": "source/novel.txt", "start": 0, "end": 10})],
@@ -278,8 +312,14 @@ def test_file_failure_aborts_and_leaves_ledger_intact(tmp_path: Path, monkeypatc
 def test_conflict_when_new_consumed_episode_appears_during_commit(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """锁内复扫发现确认清单之外的新消费集时拒绝提交、账本不被改动：这是防止「确认时看到的
+    """When the re-scan inside the lock finds a new consumed episode not in the confirmation list, the commit is refused and
+    the ledger is untouched: this is the key safety net against the list seen at confirmation differing from the ledger
+    state at commit time; monkeypatch simulates that race window.
+
+    锁内复扫发现确认清单之外的新消费集时拒绝提交、账本不被改动：这是防止「确认时看到的
     清单」与「实际提交时的账本状态」不一致的关键安全网，用 monkeypatch 模拟该竞态窗口。"""
+    # Get the module object via sys.modules for monkeypatch, instead of adding yet another import style
+    # (lib.episode.episode_reset is already imported with from-import at the top of the file)
     # 通过 sys.modules 取模块对象供 monkeypatch 使用，不再新增一种 import 风格
     # （lib.episode.episode_reset 已在文件顶部用 from-import 引入）
     episode_reset_module = sys.modules["lib.episode.episode_reset"]
@@ -291,7 +331,7 @@ def test_conflict_when_new_consumed_episode_appears_during_commit(
     def _fake_scan(pd: Path, project: dict, *, retained: frozenset[int] = frozenset()):
         calls["n"] += 1
         result = original_scan(pd, project, retained=retained)
-        if calls["n"] == 2:  # 第二次调用发生在锁内（_commit 的复扫）
+        if calls["n"] == 2:  # The second call happens inside the lock (the re-scan in _commit) / 第二次调用发生在锁内（_commit 的复扫）
             result.consumed.append(1)
         return result
 
@@ -303,6 +343,9 @@ def test_conflict_when_new_consumed_episode_appears_during_commit(
     assert _load_project(project_dir) == before
 
 
+# ---------------------------------------------------------------------------
+# Two-step confirmation for consumed episodes
+# ---------------------------------------------------------------------------
 # ---------------------------------------------------------------------------
 # 已消费集的二段确认
 # ---------------------------------------------------------------------------
@@ -329,7 +372,10 @@ def test_consumed_requires_confirmation_and_writes_nothing(tmp_path: Path) -> No
 
 
 def test_consumed_detected_from_disk_when_ledger_status_missing(tmp_path: Path) -> None:
-    """账本状态不可信时以磁盘产物为准：条目无 ledger_status 但剧本已存在，仍要确认。"""
+    """When the ledger status cannot be trusted, disk artifacts win: the entry has no ledger_status but the script exists,
+    so confirmation is still required.
+
+    账本状态不可信时以磁盘产物为准：条目无 ledger_status 但剧本已存在，仍要确认。"""
     project_dir = _write_project(
         tmp_path,
         episodes=[
@@ -377,17 +423,26 @@ def test_confirmed_reset_keeps_downstream_products(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Partial reset not supported yet
+# ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
 # 部分重置尚未支持
 # ---------------------------------------------------------------------------
 
 
+# ---------------------------------------------------------------------------
+# Corruption edges: non-list episodes / symlinks / orphan artifacts on disk / alias files with the same episode number
+# ---------------------------------------------------------------------------
 # ---------------------------------------------------------------------------
 # 损坏边界：非列表 episodes / 符号链接 / 磁盘孤儿产物 / 同集号别名文件
 # ---------------------------------------------------------------------------
 
 
 def test_reset_tolerates_non_list_episodes(tmp_path: Path) -> None:
-    """episodes 被写坏成 truthy 非列表值（如手工误编辑成整数）时按空账本处理，不崩溃。"""
+    """When episodes is corrupted into a truthy non-list value (e.g. hand-edited into an integer), treat it as an empty
+    ledger and do not crash.
+
+    episodes 被写坏成 truthy 非列表值（如手工误编辑成整数）时按空账本处理，不崩溃。"""
     project_dir = _write_project(tmp_path, extra={"episodes": 1})
 
     result = reset_episode_planning(project_dir)
@@ -398,7 +453,10 @@ def test_reset_tolerates_non_list_episodes(tmp_path: Path) -> None:
 
 
 def test_reset_rejects_symlinked_source_dir(tmp_path: Path) -> None:
-    """source/ 是指向项目外目录的符号链接时拒绝处置，避免删除/改名外部目录中的文件。"""
+    """When source/ is a symlink to a directory outside the project, refuse disposal, to avoid deleting or renaming files
+    in the external directory.
+
+    source/ 是指向项目外目录的符号链接时拒绝处置，避免删除/改名外部目录中的文件。"""
     project_dir = _write_project(tmp_path)
     outside = tmp_path / "outside"
     outside.mkdir()
@@ -416,7 +474,11 @@ def test_reset_rejects_symlinked_source_dir(tmp_path: Path) -> None:
 
 
 def test_reset_deletes_symlinked_episode_file_without_touching_target(tmp_path: Path) -> None:
-    """单个派生集文件是符号链接时按计划正常处置：unlink/rename 只作用于链接条目本身、
+    """When a single derived episode file is a symlink it is disposed of as planned: unlink/rename act only on the link
+    entry itself and do not follow the final link target, so the external file is unaffected (a different risk from
+    source/ itself being a symlink).
+
+    单个派生集文件是符号链接时按计划正常处置：unlink/rename 只作用于链接条目本身、
     不跟随最终一段的链接目标，外部文件不受影响（与 source/ 本身是符号链接的风险不同）。"""
     project_dir = _write_project(
         tmp_path,
@@ -436,7 +498,11 @@ def test_reset_deletes_symlinked_episode_file_without_touching_target(tmp_path: 
 
 
 def test_reset_clears_dangling_symlinked_episode_file(tmp_path: Path) -> None:
-    """目标不存在的悬空符号链接同样被发现并清理，否则残留链接会在下次 plan_episodes
+    """A dangling symlink whose target does not exist is also found and cleaned up; otherwise the leftover link would be
+    hard-blocked by EpisodePlanner's symlink check the next time plan_episodes writes derived files, breaking the
+    reset's promise that planning can continue.
+
+    目标不存在的悬空符号链接同样被发现并清理，否则残留链接会在下次 plan_episodes
     写派生文件时被 EpisodePlanner 的符号链接校验硬拦截，重置的"可继续规划"承诺落空。"""
     project_dir = _write_project(
         tmp_path,
@@ -455,7 +521,11 @@ def test_reset_clears_dangling_symlinked_episode_file(tmp_path: Path) -> None:
 
 
 def test_reset_aggregates_consumed_status_across_duplicate_episode_entries(tmp_path: Path) -> None:
-    """损坏账本同一集号出现多条条目（首条 planned、后条 consumed）时，已消费判定按
+    """When a corrupted ledger has several entries for the same episode number (first planned, later consumed), the
+    consumed check aggregates all entries per episode number, rather than only looking at the first entry kept by
+    deduplication and missing it.
+
+    损坏账本同一集号出现多条条目（首条 planned、后条 consumed）时，已消费判定按
     集号聚合全部条目，不能只看被去重逻辑留下的首条而漏判。"""
     project_dir = _write_project(
         tmp_path,
@@ -472,7 +542,12 @@ def test_reset_aggregates_consumed_status_across_duplicate_episode_entries(tmp_p
 
 
 def test_reset_aggregates_downstream_products_across_duplicate_entries(tmp_path: Path) -> None:
-    """损坏账本同一集号出现多条条目，首条指向缺失的规范剧本路径、后条的 script_file
+    """When a corrupted ledger has several entries for the same episode number, the first pointing at a missing canonical
+    script path and a later one whose script_file points at an existing non-canonical path (e.g.
+    scripts/custom_name.json), the consumed check must still hit; it must not pass only the first entry kept by
+    setdefault to has_downstream_products.
+
+    损坏账本同一集号出现多条条目，首条指向缺失的规范剧本路径、后条的 script_file
     指向实际存在的非规范路径（如 scripts/custom_name.json）时，已消费判定仍要命中——
     不能只把 setdefault 留下的首条传给 has_downstream_products。"""
     project_dir = _write_project(
@@ -493,7 +568,10 @@ def test_reset_aggregates_downstream_products_across_duplicate_entries(tmp_path:
 
 
 def test_reset_archives_when_source_range_is_structurally_incomplete(tmp_path: Path) -> None:
-    """source_range 是空字典或缺字段的损坏映射时，虽满足 isinstance(Mapping) 但没有
+    """When source_range is an empty dict or a corrupted mapping with missing fields, it satisfies isinstance(Mapping) but
+    has no usable coordinates, so it is still treated as not reproducible from the ledger (archived, not deleted).
+
+    source_range 是空字典或缺字段的损坏映射时，虽满足 isinstance(Mapping) 但没有
     可用坐标，仍按无法从账本重造处理（留底而非删除）。"""
     project_dir = _write_project(
         tmp_path,
@@ -511,7 +589,11 @@ def test_reset_archives_when_source_range_is_structurally_incomplete(tmp_path: P
 
 
 def test_reset_archives_when_any_duplicate_entry_lacks_source_range(tmp_path: Path) -> None:
-    """损坏账本同一集号出现多条条目，首条带 source_range、后条不带时，按无法证明可
+    """When a corrupted ledger has several entries for the same episode number, the first with source_range and a later
+    one without, treat it as not provably reproducible (archived, not deleted): deletion is irreversible, so be
+    conservative when the evidence conflicts.
+
+    损坏账本同一集号出现多条条目，首条带 source_range、后条不带时，按无法证明可
     重造处理（留底而非删除）——删除不可逆，证据冲突时偏保守。"""
     project_dir = _write_project(
         tmp_path,
@@ -532,7 +614,11 @@ def test_reset_archives_when_any_duplicate_entry_lacks_source_range(tmp_path: Pa
 
 
 def test_archive_path_increments_past_dangling_symlink_collision(tmp_path: Path) -> None:
-    """留底目标名恰好被上一次遗留的悬空符号链接占用时仍按占用处理并追加序号：
+    """When the archive target name happens to be taken by a dangling symlink left by a previous run, still treat it as
+    taken and append a sequence number: exists() returns False for a dangling link, so checking only exists() would let
+    rename() silently overwrite the old archive.
+
+    留底目标名恰好被上一次遗留的悬空符号链接占用时仍按占用处理并追加序号：
     exists() 对悬空链接返回 False，只查 exists() 会让 rename() 静默覆盖旧留底。"""
     project_dir = _write_project(
         tmp_path,
@@ -546,26 +632,33 @@ def test_archive_path_increments_past_dangling_symlink_collision(tmp_path: Path)
     result = reset_episode_planning(project_dir)
 
     assert isinstance(result, EpisodeResetResult)
-    assert stale_backup.is_symlink()  # 旧留底（悬空链接）未被覆盖
+    assert stale_backup.is_symlink()  # The old archive (dangling link) was not overwritten / 旧留底（悬空链接）未被覆盖
     new_backup = project_dir / "source" / "_episode_2.txt.1.bak"
     assert new_backup.read_text(encoding="utf-8") == "这一次的内容"
     assert result.archived_files == [("source/episode_2.txt", "source/_episode_2.txt.1.bak")]
 
 
 def test_discover_episode_files_prefers_readable_over_dangling_alias(tmp_path: Path) -> None:
-    """代表路径在悬空别名恰好排序在前时仍优先选可读文件，避免按内容读派生文件的调用方
+    """The representative path still prefers the readable file when a dangling alias happens to sort first, so callers that
+    read derived files by content do not hit a dangling link and wrongly conclude the episode has no content.
+
+    代表路径在悬空别名恰好排序在前时仍优先选可读文件，避免按内容读派生文件的调用方
     读到悬空链接而误判该集无内容。"""
     project_dir = _write_project(tmp_path)
     valid = project_dir / "source" / "episode_1.txt"
     valid.write_text(SOURCE[:10], encoding="utf-8")
-    dangling = project_dir / "source" / "episode_01.txt"  # 排序早于 episode_1.txt
+    dangling = project_dir / "source" / "episode_01.txt"  # Sorts before episode_1.txt / 排序早于 episode_1.txt
     dangling.symlink_to(project_dir / "source" / "does_not_exist.txt")
 
     assert discover_episode_files(project_dir)[1] == valid
 
 
 def test_discover_episode_files_skips_episode_with_only_dangling_alias(tmp_path: Path) -> None:
-    """某集号全部别名都是悬空符号链接（无真实内容）时，代表路径映射里不出现该集号，
+    """When every alias of an episode number is a dangling symlink (no real content), that episode number does not appear in
+    the representative path mapping, instead of returning a path with no readable content; otherwise orphan entry
+    registration would invent a ghost entry for a purely dangling episode number with no real content.
+
+    某集号全部别名都是悬空符号链接（无真实内容）时，代表路径映射里不出现该集号，
     而不是返回一个读不到内容的路径——否则孤儿条目登记会为纯悬空、无真实内容的集号
     凭空补建一个幽灵条目。"""
     project_dir = _write_project(tmp_path)
@@ -577,7 +670,10 @@ def test_discover_episode_files_skips_episode_with_only_dangling_alias(tmp_path:
 
 
 def test_empty_drafts_dir_does_not_require_confirmation(tmp_path: Path) -> None:
-    """drafts/episode_N/ 目录存在但为空（如一次被拒绝的草稿保存留下的空目录）时不计入
+    """When drafts/episode_N/ exists but is empty (e.g. an empty directory left by a rejected draft save), it does not count
+    as a consumed artifact; the directory existing must not falsely trigger confirmation.
+
+    drafts/episode_N/ 目录存在但为空（如一次被拒绝的草稿保存留下的空目录）时不计入
     已消费产物，不能因为目录存在就误报需要确认。"""
     project_dir = _write_project(tmp_path)
     (project_dir / "drafts" / "episode_1").mkdir(parents=True)
@@ -588,7 +684,11 @@ def test_empty_drafts_dir_does_not_require_confirmation(tmp_path: Path) -> None:
 
 
 def test_reset_tolerates_unconvertible_digit_episode_num(tmp_path: Path) -> None:
-    """episode 字段是 str.isdigit() 认可但 int() 无法转换的字符（如上标 ²）时不崩溃，
+    """When the episode field is a character that str.isdigit() accepts but int() cannot convert (e.g. a superscript 2), do
+    not crash; the entry is treated as an unrecognized episode number (skipped as is) and does not block the reset
+    escape hatch itself.
+
+    episode 字段是 str.isdigit() 认可但 int() 无法转换的字符（如上标 ²）时不崩溃，
     该条目按无法识别集号处理（原样跳过），不阻断重置这个逃生口本身。"""
     project_dir = _write_project(
         tmp_path,
@@ -602,7 +702,11 @@ def test_reset_tolerates_unconvertible_digit_episode_num(tmp_path: Path) -> None
 
 
 def test_orphan_disk_product_with_padded_filename_requires_confirmation(tmp_path: Path) -> None:
-    """账本丢失条目、产物文件名 padding 与规范路径不一致（episode_01.json 而非
+    """When the ledger lost the entry and the artifact file name padding differs from the canonical path (episode_01.json
+    instead of episode_1.json), confirmation is still required; it must not miss the consumed state just because
+    has_downstream_products only recognizes the canonical path.
+
+    账本丢失条目、产物文件名 padding 与规范路径不一致（episode_01.json 而非
     episode_1.json）时，仍要求确认——不能因为 has_downstream_products 只认规范路径
     就漏判已消费。"""
     project_dir = _write_project(tmp_path)
@@ -617,7 +721,10 @@ def test_orphan_disk_product_with_padded_filename_requires_confirmation(tmp_path
 
 
 def test_orphan_disk_product_requires_confirmation(tmp_path: Path) -> None:
-    """账本丢失条目、无对应 source/episode_N.txt，但 scripts/ 下仍有产物时仍要求确认。"""
+    """When the ledger lost the entry and there is no matching source/episode_N.txt, but scripts/ still has artifacts,
+    confirmation is still required.
+
+    账本丢失条目、无对应 source/episode_N.txt，但 scripts/ 下仍有产物时仍要求确认。"""
     project_dir = _write_project(tmp_path)
     _write_script(project_dir, 1)
 
@@ -628,7 +735,10 @@ def test_orphan_disk_product_requires_confirmation(tmp_path: Path) -> None:
 
 
 def test_orphan_draft_dir_requires_confirmation(tmp_path: Path) -> None:
-    """账本丢失条目、无对应 source/episode_N.txt，但 drafts/ 下仍有 script_plan 产物时仍要求确认。"""
+    """When the ledger lost the entry and there is no matching source/episode_N.txt, but drafts/ still has script_plan
+    artifacts, confirmation is still required.
+
+    账本丢失条目、无对应 source/episode_N.txt，但 drafts/ 下仍有 script_plan 产物时仍要求确认。"""
     project_dir = _write_project(tmp_path)
     drafts = project_dir / "drafts" / "episode_1"
     drafts.mkdir(parents=True)
@@ -641,7 +751,10 @@ def test_orphan_draft_dir_requires_confirmation(tmp_path: Path) -> None:
 
 
 def test_reset_processes_all_padding_aliases_of_same_episode(tmp_path: Path) -> None:
-    """同一集号的多个 padding 别名（episode_1.txt / episode_01.txt）全部被处置，
+    """All padding aliases of the same episode number (episode_1.txt / episode_01.txt) are disposed of; otherwise an
+    unhandled alias would get its ledger entry recreated by orphan entry registration.
+
+    同一集号的多个 padding 别名（episode_1.txt / episode_01.txt）全部被处置，
     否则未处理的别名会被孤儿条目登记重新补建账本条目。"""
     project_dir = _write_project(
         tmp_path,
@@ -671,12 +784,18 @@ def test_reset_rejects_non_positive_episode_id(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Partial reset: success paths
+# ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
 # 部分重置：成功路径
 # ---------------------------------------------------------------------------
 
 
 def test_partial_reset_keeps_retained_episodes_and_rewinds_cursor(tmp_path: Path) -> None:
-    """规划 3 集后从集 ID 2 部分重置：账本只保留集 ID 1，游标退到它的原文范围末尾。"""
+    """After planning 3 episodes, partially reset from episode ID 2: the ledger keeps only episode ID 1 and the cursor moves
+    back to the end of its source range.
+
+    规划 3 集后从集 ID 2 部分重置：账本只保留集 ID 1，游标退到它的原文范围末尾。"""
     end1 = 10
     end2 = 20
     project_dir = _write_project(
@@ -701,7 +820,10 @@ def test_partial_reset_keeps_retained_episodes_and_rewinds_cursor(tmp_path: Path
 
 
 def test_partial_reset_deletes_derived_files_in_range_keeps_retained(tmp_path: Path) -> None:
-    """重置范围内有 source_range 的派生文件删除，保留段派生文件不受影响。"""
+    """Derived files with source_range inside the reset range are deleted; derived files of the retained segment are
+    unaffected.
+
+    重置范围内有 source_range 的派生文件删除，保留段派生文件不受影响。"""
     project_dir = _write_project(
         tmp_path,
         episodes=[
@@ -719,11 +841,13 @@ def test_partial_reset_deletes_derived_files_in_range_keeps_retained(tmp_path: P
     assert isinstance(result, EpisodeResetResult)
     assert result.deleted_files == ["source/episode_2.txt"]
     assert not reset_file.exists()
-    assert retained_file.exists()  # 保留段派生文件不动
+    assert retained_file.exists()  # Derived files of the retained segment are untouched / 保留段派生文件不动
 
 
 def test_partial_reset_archives_file_without_source_range_in_range(tmp_path: Path) -> None:
-    """范围内无 source_range 的集文件按无法重造处理，留底而非删除。"""
+    """Episode files without source_range inside the range are treated as not reproducible: archived, not deleted.
+
+    范围内无 source_range 的集文件按无法重造处理，留底而非删除。"""
     project_dir = _write_project(
         tmp_path,
         episodes=[
@@ -743,6 +867,9 @@ def test_partial_reset_archives_file_without_source_range_in_range(tmp_path: Pat
 
 
 # ---------------------------------------------------------------------------
+# Partial reset: refused by pre-checks (ledger and files both untouched)
+# ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
 # 部分重置：前置校验拒绝（账本与文件均不被改动）
 # ---------------------------------------------------------------------------
 
@@ -761,7 +888,10 @@ def test_partial_reset_rejects_when_episode_id_not_in_ledger(tmp_path: Path) -> 
 
 
 def test_partial_reset_boundary_follows_ledger_order_not_episode_ids(tmp_path: Path) -> None:
-    """账本顺序即播出顺序：集 ID 不连续、不升序时，保留段是账本里目标集之前的条目。"""
+    """Ledger order is episode order: when episode IDs are non-contiguous or not ascending, the retained segment is the
+    entries before the target episode in the ledger.
+
+    账本顺序即播出顺序：集 ID 不连续、不升序时，保留段是账本里目标集之前的条目。"""
     project_dir = _write_project(
         tmp_path,
         episodes=[
@@ -781,7 +911,9 @@ def test_partial_reset_boundary_follows_ledger_order_not_episode_ids(tmp_path: P
 
 
 def test_reset_from_first_ledger_episode_is_full_reset(tmp_path: Path) -> None:
-    """目标集是播出顺序中的第一集时没有保留段，按全量重置处理。"""
+    """When the target episode is the first in episode order there is no retained segment, so it is handled as a full reset.
+
+    目标集是播出顺序中的第一集时没有保留段，按全量重置处理。"""
     project_dir = _write_project(
         tmp_path,
         episodes=[
@@ -799,7 +931,10 @@ def test_reset_from_first_ledger_episode_is_full_reset(tmp_path: Path) -> None:
 
 
 def test_partial_reset_rejects_when_retain_boundary_has_no_source_range(tmp_path: Path) -> None:
-    """保留段没有任何带位置记录的集时无法确定重置后的规划起点。"""
+    """When the retained segment has no episode with a position record, the planning start after the reset cannot be
+    determined.
+
+    保留段没有任何带位置记录的集时无法确定重置后的规划起点。"""
     project_dir = _write_project(
         tmp_path,
         episodes=[
@@ -816,7 +951,10 @@ def test_partial_reset_rejects_when_retain_boundary_has_no_source_range(tmp_path
 
 
 def test_partial_reset_rejects_structurally_incomplete_boundary_same_as_missing(tmp_path: Path) -> None:
-    """source_range 结构不完整（非 None 但字段非法）与缺失同口径处理：都归为「无可信坐标」。"""
+    """A structurally incomplete source_range (not None but with invalid fields) is handled the same as a missing one: both
+    count as having no trusted coordinates.
+
+    source_range 结构不完整（非 None 但字段非法）与缺失同口径处理：都归为「无可信坐标」。"""
     project_dir = _write_project(
         tmp_path,
         episodes=[
@@ -833,13 +971,16 @@ def test_partial_reset_rejects_structurally_incomplete_boundary_same_as_missing(
 
 
 def test_partial_reset_rejects_on_fingerprint_mismatch(tmp_path: Path) -> None:
-    """已记录的源文指纹与当前源文不一致时拒绝，账本与文件均不被改动。"""
+    """Refuse when the recorded source fingerprint differs from the current source; ledger and files are both untouched.
+
+    已记录的源文指纹与当前源文不一致时拒绝，账本与文件均不被改动。"""
     project_dir = _write_project(
         tmp_path,
         episodes=[
             _entry(1, source_range={"source_file": "source/novel.txt", "start": 0, "end": 10}),
             _entry(2, source_range={"source_file": "source/novel.txt", "start": 10, "end": 20}),
         ],
+        # Fake fingerprint that does not match the actual content
         extra={SOURCE_FINGERPRINTS_KEY: {"source/novel.txt": "0" * 64}},  # 与实际内容不一致的假指纹
     )
     before = _load_project(project_dir)
@@ -851,7 +992,10 @@ def test_partial_reset_rejects_on_fingerprint_mismatch(tmp_path: Path) -> None:
 
 
 def test_partial_reset_rejects_when_retained_range_out_of_bounds(tmp_path: Path) -> None:
-    """保留段坐标越出当前源文长度（源文已被替换为更短内容，指纹未记录故绕过指纹门禁）时拒绝。"""
+    """Refuse when retained-segment coordinates exceed the current source length (the source was replaced by shorter text
+    and no fingerprint was recorded, so the fingerprint gate is bypassed).
+
+    保留段坐标越出当前源文长度（源文已被替换为更短内容，指纹未记录故绕过指纹门禁）时拒绝。"""
     project_dir = _write_project(
         tmp_path,
         episodes=[
@@ -868,7 +1012,10 @@ def test_partial_reset_rejects_when_retained_range_out_of_bounds(tmp_path: Path)
 
 
 def test_partial_reset_rejects_overlapping_retained_ranges(tmp_path: Path) -> None:
-    """保留段按播出顺序相邻的两个切出集原文范围重叠或倒退时拒绝：账本已损坏，退回后的
+    """Refuse when the source ranges of two cut episodes adjacent in episode order within the retained segment overlap or go
+    backwards: the ledger is corrupted, and the rewound cursor would be out of step with the actually consumed range.
+
+    保留段按播出顺序相邻的两个切出集原文范围重叠或倒退时拒绝：账本已损坏，退回后的
     游标与真实已消费范围脱节。"""
     project_dir = _write_project(
         tmp_path,
@@ -887,7 +1034,11 @@ def test_partial_reset_rejects_overlapping_retained_ranges(tmp_path: Path) -> No
 
 
 def test_partial_reset_tolerates_unsplit_source_gaps(tmp_path: Path) -> None:
-    """保留段的切出集之间、以及源文开头留有未切分的原文空段（删掉某个切出集后的形态）
+    """Unsplit gaps of source text between cut episodes of the retained segment, and at the start of the source (the shape
+    after deleting a cut episode), are legal: the cursor moves back to the end of the source range of the last cut
+    episode in the retained segment.
+
+    保留段的切出集之间、以及源文开头留有未切分的原文空段（删掉某个切出集后的形态）
     是合法的：游标退到保留段最后一个切出集的原文范围末尾。"""
     project_dir = _write_project(
         tmp_path,
@@ -907,7 +1058,9 @@ def test_partial_reset_tolerates_unsplit_source_gaps(tmp_path: Path) -> None:
 
 
 def test_partial_reset_rejects_backward_source_file_switch(tmp_path: Path) -> None:
-    """保留段按播出顺序切回排序更靠前的源文件，拒绝。"""
+    """Refuse when the retained segment, in episode order, switches back to an earlier-sorted source file.
+
+    保留段按播出顺序切回排序更靠前的源文件，拒绝。"""
     project_dir = _write_project(tmp_path)
     (project_dir / "source" / "a.txt").write_text("A" * 10, encoding="utf-8")
     (project_dir / "source" / "c.txt").write_text("C" * 10, encoding="utf-8")
@@ -932,7 +1085,11 @@ def test_partial_reset_rejects_backward_source_file_switch(tmp_path: Path) -> No
 
 
 def test_partial_reset_allows_first_episode_after_blank_leading_source(tmp_path: Path) -> None:
-    """整本源文清单中排在第 1 集源文件之前的文件若只剩空白（EpisodePlanner 会自动跳过），
+    """If the files sorted before episode 1's source file in the whole-source list are only whitespace (EpisodePlanner skips
+    them automatically), episode 1 legitimately lands in a non-first file and must not be misjudged as a corrupted
+    ledger.
+
+    整本源文清单中排在第 1 集源文件之前的文件若只剩空白（EpisodePlanner 会自动跳过），
     第 1 集合法落在非首个文件，不应被误判为账本损坏。"""
     project_dir = _write_project(tmp_path)
     (project_dir / "source" / "a.txt").write_text("   \n  ", encoding="utf-8")
@@ -956,7 +1113,10 @@ def test_partial_reset_allows_first_episode_after_blank_leading_source(tmp_path:
 
 
 def test_partial_reset_allows_skip_over_blank_middle_source(tmp_path: Path) -> None:
-    """相邻保留集跨源文件时，中间被跳过的文件若只剩空白同样合法，不要求恰为紧邻下一个
+    """When adjacent retained episodes cross source files, skipped files in between that are only whitespace are also legal;
+    the next file does not have to be the immediately following one.
+
+    相邻保留集跨源文件时，中间被跳过的文件若只剩空白同样合法，不要求恰为紧邻下一个
     文件。"""
     project_dir = _write_project(tmp_path)
     (project_dir / "source" / "a.txt").write_text("A" * 10, encoding="utf-8")
@@ -983,7 +1143,10 @@ def test_partial_reset_allows_skip_over_blank_middle_source(tmp_path: Path) -> N
 
 
 def test_full_reset_keeps_own_source_and_no_source_episodes(tmp_path: Path) -> None:
-    """全量重置只移除切出集：自带原文与无原文的集连同集文件留在原处，相对顺序不变。"""
+    """A full reset removes only cut episodes: episodes with their own source and episodes without source stay in place
+    with their episode files, in the same relative order.
+
+    全量重置只移除切出集：自带原文与无原文的集连同集文件留在原处，相对顺序不变。"""
     project_dir = _write_project(
         tmp_path,
         episodes=[
@@ -1008,7 +1171,10 @@ def test_full_reset_keeps_own_source_and_no_source_episodes(tmp_path: Path) -> N
 
 
 def test_partial_reset_skips_other_origin_episodes_in_the_retained_segment(tmp_path: Path) -> None:
-    """保留段里自带原文的集不占源文位置，不参与坐标校验，重置后原样保留。"""
+    """Episodes in the retained segment that carry their own source take no position in the source, are not part of the
+    coordinate check, and are kept as is after the reset.
+
+    保留段里自带原文的集不占源文位置，不参与坐标校验，重置后原样保留。"""
     project_dir = _write_project(
         tmp_path,
         episodes=[
@@ -1029,7 +1195,10 @@ def test_partial_reset_skips_other_origin_episodes_in_the_retained_segment(tmp_p
 
 @pytest.mark.parametrize("origin", ["own", "none"])
 def test_reset_from_an_episode_that_was_not_cut_is_refused(tmp_path: Path, origin: str) -> None:
-    """重置的边界只能是切出集：给自带原文或无原文的集时拒绝，账本不变，其后的切出集不被清除。"""
+    """The reset boundary can only be a cut episode: refuse when given an episode with its own source or without source;
+    the ledger is unchanged and the cut episodes after it are not cleared.
+
+    重置的边界只能是切出集：给自带原文或无原文的集时拒绝，账本不变，其后的切出集不被清除。"""
     project_dir = _write_project(
         tmp_path,
         episodes=[
@@ -1047,7 +1216,11 @@ def test_reset_from_an_episode_that_was_not_cut_is_refused(tmp_path: Path, origi
 
 
 def test_partial_reset_rejects_zero_length_retained_range(tmp_path: Path) -> None:
-    """保留段坐标 start == end（零长度）时拒绝：零长度区间不构成可信的保留段坐标，
+    """Refuse when retained-segment coordinates have start == end (zero length): a zero-length range is not a trusted
+    retained coordinate; otherwise an empty episode would be kept and the cursor moved back to the start, shifting the
+    numbering.
+
+    保留段坐标 start == end（零长度）时拒绝：零长度区间不构成可信的保留段坐标，
     否则会保留一个空集并让游标退到起点，造成编号错位。"""
     project_dir = _write_project(
         tmp_path,
@@ -1065,7 +1238,10 @@ def test_partial_reset_rejects_zero_length_retained_range(tmp_path: Path) -> Non
 
 
 def test_partial_reset_accepts_retain_boundary_without_ledger_status(tmp_path: Path) -> None:
-    """游标退回点没有 ledger_status 但有结构完整、界内连续的 source_range：照常接受——
+    """The cursor rewind point has no ledger_status but a structurally complete, in-bounds, contiguous source_range: accept
+    as usual; the position truth lives in source_range, the status is advisory.
+
+    游标退回点没有 ledger_status 但有结构完整、界内连续的 source_range：照常接受——
     位置真相在 source_range，状态是咨询性的。"""
     project_dir = _write_project(tmp_path)
     project = _load_project(project_dir)
@@ -1086,7 +1262,10 @@ def test_partial_reset_accepts_retain_boundary_without_ledger_status(tmp_path: P
 
 
 def test_partial_reset_trusts_source_range_under_legacy_status(tmp_path: Path) -> None:
-    """存量遗留的已废弃状态值不再让坐标失效：结构完整、界内连续的 source_range 照常采信。"""
+    """Legacy deprecated status values left in existing data no longer invalidate coordinates: a structurally complete,
+    in-bounds, contiguous source_range is trusted as usual.
+
+    存量遗留的已废弃状态值不再让坐标失效：结构完整、界内连续的 source_range 照常采信。"""
     project_dir = _write_project(
         tmp_path,
         episodes=[
@@ -1106,7 +1285,10 @@ def test_partial_reset_trusts_source_range_under_legacy_status(tmp_path: Path) -
 
 
 def test_partial_reset_rejects_non_positive_episode_numbers_in_ledger(tmp_path: Path) -> None:
-    """账本存在非正数集号（如损坏写出的 0）时拒绝：不能证明它属于保留段还是应被清除。"""
+    """Refuse when the ledger has a non-positive episode number (e.g. a 0 written by corruption): we cannot prove whether it
+    belongs to the retained segment or should be cleared.
+
+    账本存在非正数集号（如损坏写出的 0）时拒绝：不能证明它属于保留段还是应被清除。"""
     project_dir = _write_project(
         tmp_path,
         episodes=[
@@ -1151,6 +1333,9 @@ def test_partial_reset_rejects_non_list_episodes(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Partial reset: two-step confirmation for consumed episodes
+# ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
 # 部分重置：已消费集的二段确认
 # ---------------------------------------------------------------------------
 
@@ -1179,7 +1364,10 @@ def test_partial_reset_consumed_within_range_requires_confirmation(tmp_path: Pat
 
 
 def test_partial_reset_consumed_before_range_not_flagged(tmp_path: Path) -> None:
-    """保留段已消费不影响二段确认：确认只针对本次重置范围内的集。"""
+    """Consumed episodes in the retained segment do not affect the two-step confirmation: confirmation only covers episodes
+    in this reset's range.
+
+    保留段已消费不影响二段确认：确认只针对本次重置范围内的集。"""
     project_dir = _write_project(
         tmp_path,
         episodes=[

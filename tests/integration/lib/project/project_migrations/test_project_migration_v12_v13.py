@@ -1,4 +1,7 @@
-"""v12→v13：为旧视频版本记录补写类型化来源、无计划剧本按固定依据登记、迁移报告落盘。"""
+"""v12->v13: add typed sources to old video version records, register plan-less scripts with a fixed basis, and
+write the migration report to disk.
+
+v12→v13：为旧视频版本记录补写类型化来源、无计划剧本按固定依据登记、迁移报告落盘。"""
 
 from __future__ import annotations
 
@@ -121,7 +124,10 @@ def test_status_passes_the_script_plan_gate_for_a_registered_planless_script(tmp
 
 
 def test_planless_script_stays_current_after_a_formal_plan_appears(tmp_path: Path) -> None:
-    """剧本依据不含脚本规划：之后补出的正式规划不让已有正式脚本过期。"""
+    """The script basis does not include the script plan: a formal plan produced later does not make the existing final
+    script stale.
+
+    剧本依据不含脚本规划：之后补出的正式规划不让已有正式脚本过期。"""
 
     project_dir = write_legacy_storyboard_project(tmp_path / "projects")
     advance_project_schema(project_dir, to_version=12)
@@ -224,7 +230,9 @@ def test_full_chain_from_schema7_writes_a_migration_report_exposed_on_status(tmp
 
 
 def test_media_on_a_needs_replan_unit_stays_out_of_the_report(tmp_path: Path) -> None:
-    """需要重新规划的单位已有持久状态，迁移报告不列它的媒体（ADR 0098）。"""
+    """A unit that needs replan already has persistent state; the migration report does not list its media (ADR 0098).
+
+    需要重新规划的单位已有持久状态，迁移报告不列它的媒体（ADR 0098）。"""
 
     project_dir = write_legacy_reference_video_project(tmp_path / "projects")
     advance_project_schema(project_dir, to_version=12)

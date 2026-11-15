@@ -1,4 +1,31 @@
-"""事件循环阻塞护栏（`tests/blocking_guard`）的端到端契约。
+"""End-to-end contract of the event-loop blocking guard (`tests/blocking_guard`).
+
+Each case starts a separate pytest session in a temp directory with the guard plugin loaded; the samples under
+test go under that directory's ``lib/`` and ``server/`` (the guard judges business code by these two
+directories under rootdir), cases and doubles go under ``tests/``, and locks use the real lib implementation.
+Contract:
+
+- A blocking call wrapped in a broad exception catch in business code still fails the case; the same call put
+  in a worker thread, and the body of a process-level cached loader function, are not violations; loaders with
+  a capacity limit cached by argument still are.
+- App code entered from sync cases via ``TestClient`` is checked too.
+- Blocking in lib/server async functions triggered via doubles under ``tests/`` is recorded under that async
+  function's name; tests calling sync lib code directly and blocking in a test's inline ``to_thread`` are not
+  counted.
+- File probing when asyncpg parses connection params while connecting, and coverage waiting on its own data
+  lock, are not charged to the caller.
+- The stack preview in the error keeps, besides lib/server/tests frames, the innermost few non-repo frames
+  (stdlib, third-party code under ``site-packages``) between the interception point and the first repo frame,
+  in real call order, with relative paths; beyond the limit, the omitted count is noted.
+- Blockingly acquiring the project file lock or version manager lock on the event loop thread is a violation;
+  non-blocking try-locks are not.
+- Entries in the permanent exemption list are let through, with no other exemption route; exemption entries
+  not triggered in a full run fail the session, while partial runs (including ``--ignore`` skipped paths and
+  modes like ``--collect-only`` that do not run cases) do not report them.
+- With ``--blocking-guard-expect-all-exemptions``, runs filtered by path or keyword also report untriggered
+  exemptions.
+
+事件循环阻塞护栏（`tests/blocking_guard`）的端到端契约。
 
 每条用例在临时目录里另起一个 pytest 会话，加载护栏插件，被测样本放在该目录的 ``lib/`` 与
 ``server/`` 下（护栏按 rootdir 下的这两个目录判定业务代码），用例与替身放在 ``tests/`` 下，
@@ -31,6 +58,8 @@ import pytest
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _EXEMPTIONS = Path("tests/blocking_guard/exemptions.toml")
+# Cases and doubles go under the session directory's tests/: the guard uses this directory to tell blocking
+# driven by the tests themselves.
 # 用例与替身放在会话目录的 tests/ 下：护栏按这个目录区分测试自身驱动的阻塞。
 _PROBE_RELPATH = Path("tests/test_probe.py")
 
@@ -130,6 +159,8 @@ async def acquire_via_vendor(lock: threading.Lock, depth: int) -> None:
     blocking_vendor.acquire_nested(lock, depth)
 """
 
+# A third-party sample placed under a site-packages style directory: it takes the lock; business code is only
+# the caller.
 # 放在 site-packages 风格目录下的第三方样本：拿锁的是它，业务代码只是调用方。
 _VENDOR_RELPATH = Path("vendor/site-packages/blocking_vendor.py")
 _VENDOR = """
@@ -388,6 +419,8 @@ def test_offloaded_cached_and_exempted_calls_pass(probe_run):
     ],
 )
 def test_blocking_inside_a_test_double_is_charged_to_the_enclosing_business_coroutine(probe_run, test_name, key):
+    # The double reads/writes disk under tests/; swapped for the production dependency, the same spot would also
+    # block the event loop, so it is charged to the lib async function wrapping it.
     # 替身在 tests/ 下读写磁盘，换成生产依赖时同一位置同样阻塞事件循环，记到包住它的 lib async 函数名下。
     assert _outcomes(probe_run.stdout)[test_name] == "FAILED", probe_run.stdout
     section = _failure_section(probe_run.stdout, test_name)
@@ -402,12 +435,18 @@ def test_blocking_driven_by_the_test_itself_is_not_a_violation(probe_run):
 
 
 def test_postgres_driver_connection_setup_is_not_charged_to_the_caller(probe_run):
+    # When connecting, asyncpg probes ~/.pgpass and certificate files under ~/.postgresql on the event loop, once
+    # per new connection; the attribution falls on whichever caller happens to make the pool open a new connection,
+    # varying with run order.
     # asyncpg 建连时在事件循环上探测 ~/.pgpass 与 ~/.postgresql 下的证书文件，每条新连接一次，
     # 归属落在恰好让连接池新建连接的那个调用方上，随运行顺序变化。
     assert _outcomes(probe_run.stdout)["test_postgres_connect"] == "PASSED", probe_run.stdout
 
 
 def test_coverage_waiting_for_its_own_data_lock_is_not_charged_to_the_measured_code(probe_run):
+    # coverage's tracer blockingly takes its own data lock every time it enters or resumes a frame under test;
+    # when a worker thread's tracer happens to hold the lock, the main thread waits for it. This lock exists only in
+    # runs with coverage on, and violations would land on arbitrary coroutines under test as threads interleave.
     # coverage 的 tracer 每进入或恢复一个被测帧都阻塞地取自身数据锁，工作线程的 tracer 恰好持锁时
     # 主线程就等它。这把锁只在开 coverage 的运行里存在，违规会随线程交错落在任意被测协程头上。
     assert _outcomes(probe_run.stdout)["test_coverage_data_lock"] == "PASSED", probe_run.stdout
@@ -426,7 +465,9 @@ def test_app_code_behind_sync_testclient_is_checked(probe_run):
 
 
 def _preview_lines(section: str, *patterns: str) -> list[int]:
-    """各模式在栈预览里命中的行号，按模式顺序；未命中时断言失败。"""
+    """Line numbers hit by each pattern in the stack preview, in pattern order; the assertion fails when not hit.
+
+    各模式在栈预览里命中的行号，按模式顺序；未命中时断言失败。"""
     lines = section.splitlines()
     positions = []
     for pattern in patterns:
@@ -437,6 +478,8 @@ def _preview_lines(section: str, *patterns: str) -> list[int]:
 
 
 def test_preview_keeps_stdlib_frames_between_the_blocking_call_and_business_code(probe_run):
+    # Business code itself takes no lock; the lock waits inside threading: the preview must show who took it,
+    # with the path relative after the stdlib directory.
     # 业务代码本身不拿锁，锁在 threading 内部等待：预览要能看到是谁拿的，路径取标准库目录之后的相对形式。
     assert _outcomes(probe_run.stdout)["test_lock_in_stdlib_internals"] == "FAILED", probe_run.stdout
     section = _failure_section(probe_run.stdout, "test_lock_in_stdlib_internals")
@@ -468,6 +511,8 @@ def test_preview_keeps_third_party_frames_in_call_order(probe_run):
 
 
 def test_preview_caps_third_party_frames_without_dropping_business_frames(probe_run):
+    # When the third-party call chain is deep, keep only the innermost few and note the omission; lib/server/tests
+    # frames are kept as usual so the caller is visible.
     # 第三方调用链很深时只留最内层几条并注明省略，lib/server/tests 帧照常保留，看得出调用方。
     assert _outcomes(probe_run.stdout)["test_lock_deep_in_third_party_code"] == "FAILED", probe_run.stdout
     section = _failure_section(probe_run.stdout, "test_lock_deep_in_third_party_code")
@@ -479,6 +524,7 @@ def test_preview_caps_third_party_frames_without_dropping_business_frames(probe_
         r"tests/test_probe\.py:\d+ in test_lock_deep_in_third_party_code",
     )
     assert positions == sorted(positions), section
+    # 10 non-repo frames (acquire_now and 9 levels of acquire_nested) keep the innermost 4.
     # 10 条非仓库帧（acquire_now 与 9 层 acquire_nested）保留最内层 4 条。
     assert section.count("in acquire_nested") == 3, section
 
@@ -517,6 +563,8 @@ def test_full_run_fails_on_untriggered_exemptions_but_partial_run_does_not(tmp_p
 def test_expect_all_exemptions_option_reports_untriggered_exemptions_on_selected_runs(
     tmp_path: Path, selection: tuple[str, ...]
 ):
+    # CI runs by path, tests/unit and tests/integration, so both sides are partial runs; the unit job adds this
+    # option, so after deleting or changing a startup path, stale exemption entries are reported in CI.
     # CI 按 tests/unit、tests/integration 分路径跑，两边都是部分运行；unit job 带上这个选项，
     # 删掉或改了启动路径后，过期的豁免条目在 CI 里就报出来。
     stale = "lib/blocking_samples.py::never_called"

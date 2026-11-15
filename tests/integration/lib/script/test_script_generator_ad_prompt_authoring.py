@@ -1,4 +1,7 @@
-"""广告/短片的提示词编写：已有正式脚本时只填待编写的分镜 / 单元，尚无正式脚本时整份生成。"""
+"""Ad/short prompt authoring: with an existing final script, only fill shots / units pending authoring; without one,
+generate it whole.
+
+广告/短片的提示词编写：已有正式脚本时只填待编写的分镜 / 单元，尚无正式脚本时整份生成。"""
 
 from __future__ import annotations
 
@@ -24,7 +27,10 @@ pytestmark = pytest.mark.asyncio
 
 @pytest.fixture(autouse=True)
 def ad_video_request_facts(video_request_facts) -> None:
-    """分镜与参考生视频两条路线的档位都来自视频请求事实：本模块统一用共享 fixture 的 (4, 6, 8)。"""
+    """Duration options for both the storyboard and reference-to-video routes come from video request facts: this module
+    uniformly uses the shared fixture's (4, 6, 8).
+
+    分镜与参考生视频两条路线的档位都来自视频请求事实：本模块统一用共享 fixture 的 (4, 6, 8)。"""
 
 
 def _write_ad_project(tmp_path: Path, generation_mode: str) -> Path:
@@ -53,7 +59,10 @@ def _write_ad_project(tmp_path: Path, generation_mode: str) -> Path:
 
 
 def _generator(project_dir: Path, responses: list[str]) -> ScriptGenerator:
-    """按调用次序吐出预置响应；多调一次即耗尽，用例据此断言「本轮没有调用模型」。"""
+    """Return the preset responses in call order; one extra call exhausts them, which lets cases assert "no model call this
+    round".
+
+    按调用次序吐出预置响应；多调一次即耗尽，用例据此断言「本轮没有调用模型」。"""
     text_generator = MagicMock()
     text_generator.model = "mock"
     text_generator.generate = AsyncMock(side_effect=[MagicMock(text=text) for text in responses])
@@ -127,7 +136,9 @@ def _shot_visual(*shot_ids: str, mark: str) -> str:
 
 
 async def _storyboard_script(tmp_path: Path) -> Path:
-    """尚无正式脚本时整份生成两个分镜，得到一份无待编写标记的 ad 正式脚本。"""
+    """With no final script yet, generate two shots whole, yielding an ad final script with no pending-authoring marks.
+
+    尚无正式脚本时整份生成两个分镜，得到一份无待编写标记的 ad 正式脚本。"""
     project_dir = _write_ad_project(tmp_path, "storyboard")
     response = {
         "title": "速干杯短片",
@@ -180,7 +191,10 @@ class TestAdShotAuthoring:
         assert PENDING_AUTHORING_FIELD not in added
 
     async def test_timeline_insert_and_remove_survive_default_authoring(self, tmp_path: Path) -> None:
-        """时间线新增 / 移除分镜之后编写：新增的空分镜被填充，移除的分镜不会被生成回来。"""
+        """Authoring after adding / removing shots on the timeline: the newly added empty shot gets filled, and the removed
+        shot is not generated back.
+
+        时间线新增 / 移除分镜之后编写：新增的空分镜被填充，移除的分镜不会被生成回来。"""
         project_dir = await _storyboard_script(tmp_path)
         pm = ProjectManager.for_project_dir(project_dir)
         editor = ScriptBatchEditor(pm)

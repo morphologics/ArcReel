@@ -83,7 +83,7 @@ def service(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> TimelineOreelPac
     monkeypatch.setattr(timeline_oreelpack.EditTimelineService, "read", read)
     monkeypatch.setattr(timeline_oreelpack.TimelinePreviewService, "media", media)
     monkeypatch.setattr(timeline_oreelpack, "_last_frame", last_frame)
-    return TimelineOreelPackService(_Projects())  # type: ignore[arg-type]
+    return TimelineOreelPackService(_Projects())  # type: ignore[arg-type]  # test double: only the two methods the service calls
 
 
 async def _unpack(service: TimelineOreelPackService) -> tuple[dict, dict, bytes, str]:

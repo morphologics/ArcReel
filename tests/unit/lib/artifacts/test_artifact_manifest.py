@@ -31,7 +31,9 @@ def test_archive_manifest_payload_wraps_serialization_recursion(monkeypatch) -> 
 
 
 def test_formal_input_selection_retains_identity_for_the_provider_recheck() -> None:
-    """选中的产物连同 key 与登记路径一并留证，供应商提交前复核的就是同一条认领。"""
+    """The selected artifact is recorded together with its key and registered path; the provider pre-submit recheck verifies that same claim.
+
+    选中的产物连同 key 与登记路径一并留证，供应商提交前复核的就是同一条认领。"""
 
     key = ArtifactKey.episode_script(1)
     claims = []
@@ -485,7 +487,9 @@ def test_manifest_blocks_windows_aliases_of_runtime_paths(artifact_path: str) ->
     ],
 )
 def test_basis_descriptor_from_dict_rejects_non_string_fields_as_value_error(payload: dict[str, object]) -> None:
-    """磁盘 JSON 的 kind/digest 可为任意类型，调用方只接 ValueError。"""
+    """kind/digest in on-disk JSON can be of any type; callers only catch ValueError.
+
+    磁盘 JSON 的 kind/digest 可为任意类型，调用方只接 ValueError。"""
 
     with pytest.raises(ValueError, match="artifact basis descriptor"):
         ArtifactBasisDescriptor.from_dict(payload)

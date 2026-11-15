@@ -1,4 +1,12 @@
-"""ComfyUI 图像通道：能力推导、参考图上传、产物白名单、不续跑与叫停远端。
+"""ComfyUI image channel: capability derivation, reference image upload, artifact whitelist, no resume, and
+stopping the remote.
+
+The post-submit part (polling, terminal-state checks, loss detection, trace summary) is shared with the
+video channel in ``lib.custom_provider.comfyui.comfyui_execution`` and already pinned case by case by
+``test_comfyui_video_backend.py``; this file only covers what is specific to the image side, plus the few
+places where that shared implementation must still hold on the image channel (whitelist, stop).
+
+ComfyUI 图像通道：能力推导、参考图上传、产物白名单、不续跑与叫停远端。
 
 提交之后那一段（轮询、终态判定、判丢失、留痕摘要）与视频通道共用
 ``lib.custom_provider.comfyui.comfyui_execution``，已由 ``test_comfyui_video_backend.py`` 逐条钉住；本文件
@@ -29,7 +37,15 @@ BASE_URL = "https://comfy.test"
 
 
 def _definition(*, reference_slots: int = 0) -> dict[str, Any]:
-    """一份最小可用的图像端点定义：产物节点存图，可带若干参考图格子。
+    """A minimal usable image endpoint definition: the artifact node saves an image and may carry some
+    reference image slots.
+
+    The semantic keys of an image endpoint have no first/last frames, frame count or frame rate (see
+    ``comfyui.bindings.IMAGE_BINDING_KEYS``), so the binding table is rewritten whole rather than
+    deleting a few keys from the video one; the latter would leave ``output`` still pointing at a node
+    that saves video.
+
+    一份最小可用的图像端点定义：产物节点存图，可带若干参考图格子。
 
     图像端点的语义键里没有首尾帧与帧数帧率（见 ``comfyui.bindings.IMAGE_BINDING_KEYS``），故绑定
     表整张重写而不是在视频那份上删几个键——后者留下的 ``output`` 仍指着一个存视频的节点。
@@ -87,7 +103,12 @@ def _image_output(filename: str = "ArcReel_00001_.png") -> dict[str, Any]:
 
 
 def _cancel_here(_request: httpx.Request) -> httpx.Response:
-    """让这一条路由的请求撞上一次任务取消。
+    """Make requests on this route hit a task cancellation.
+
+    ``CancelledError`` inherits from ``BaseException`` and respx's exception-type ``side_effect`` only
+    accepts ``Exception``, so it is raised through the callable path.
+
+    让这一条路由的请求撞上一次任务取消。
 
     ``CancelledError`` 继承 ``BaseException``，respx 的异常型 ``side_effect`` 只收 ``Exception``，
     故经可调用的那一路抛。
@@ -103,7 +124,10 @@ def _queue(*, running: tuple[str, ...] = (), pending: tuple[str, ...] = ()) -> d
 
 
 class TestDeclaredCapabilities:
-    """参考图格子有没有，决定这份 workflow 是纯文生图还是纯图生图，两者互斥（``docs/adr/0082``）。"""
+    """Whether reference image slots exist decides if this workflow is pure text-to-image or pure
+    image-to-image; the two are mutually exclusive (``docs/adr/0082``).
+
+    参考图格子有没有，决定这份 workflow 是纯文生图还是纯图生图，两者互斥（``docs/adr/0082``）。"""
 
     def test_a_workflow_without_reference_slots_is_text_to_image_only(self):
         backend = _backend()
@@ -112,7 +136,10 @@ class TestDeclaredCapabilities:
         assert asyncio.run(backend.reference_image_limit()) == 0
 
     def test_a_workflow_with_reference_slots_is_image_to_image_only(self):
-        """有格子却不给图，构造层要么删读图节点要么提交一张空图——都不是「也支持文生图」。"""
+        """Having slots but giving no image means the builder either removes the image-reading node or
+        submits a blank image; neither is "also supports text-to-image".
+
+        有格子却不给图，构造层要么删读图节点要么提交一张空图——都不是「也支持文生图」。"""
         backend = _backend(_definition(reference_slots=2))
 
         assert backend.capabilities == {ImageCapability.IMAGE_TO_IMAGE}
@@ -123,7 +150,13 @@ class TestDeclaredCapabilities:
         [(0, ["text_to_image"]), (3, ["image_to_image"])],
     )
     def test_the_endpoint_projection_says_the_same_thing(self, reference_slots: int, expected: list[str]):
-        """模型行进哪个桶读端点投影，发请求之前的兜底闸门读 backend 自己那份声明。
+        """Which bucket the model goes into reads the endpoint projection; the fallback gate before sending
+        reads the backend's own declaration.
+
+        Writing the rule twice would make them disagree: an endpoint that gets into the i2i bucket would
+        be blocked by its own gate.
+
+        模型行进哪个桶读端点投影，发请求之前的兜底闸门读 backend 自己那份声明。
 
         两处各写一份判据就会打架：一个进得了 i2i 桶的端点会在闸门上被自己挡掉。
         """
@@ -133,7 +166,10 @@ class TestDeclaredCapabilities:
         assert sorted(cap.value for cap in spec.image_capabilities or frozenset()) == expected
 
     def test_the_factory_wraps_an_image_backend_in_pure_forwarding(self):
-        """图像那一路的包装不注入能力：ComfyUI 协议的 capability_overrides 整节关闭。"""
+        """The image wrapper injects no capabilities: the ComfyUI protocol's capability_overrides section is
+        disabled as a whole.
+
+        图像那一路的包装不注入能力：ComfyUI 协议的 capability_overrides 整节关闭。"""
         from lib.custom_provider.backends import CustomImageBackend
 
         definition = _definition(reference_slots=1)
@@ -151,7 +187,10 @@ class TestDeclaredCapabilities:
 
 class TestGenerate:
     async def test_an_image_to_image_generation_uploads_submits_polls_and_stores_the_artifact(self, tmp_path: Path):
-        """端到端一条：参考图回填 → 提交 → 轮询 → 产物落到 output_path，实发种子随结果回来。"""
+        """One end-to-end run: reference image backfill -> submit -> poll -> artifact lands at output_path,
+        and the seed actually sent comes back with the result.
+
+        端到端一条：参考图回填 → 提交 → 轮询 → 产物落到 output_path，实发种子随结果回来。"""
         definition = _definition(reference_slots=2)
         reference = tmp_path / "ref.jpg"
         reference.write_bytes(b"jpg-bytes")
@@ -175,18 +214,22 @@ class TestGenerate:
         assert result.image_path.read_bytes() == PNG_BYTES
         assert (result.provider, result.model) == ("custom-1", "flux-workflow")
         assert history.call_count == 1
+        # The reference value takes subfolder / name from the response, not the request; the server renames on
+        # name clashes.
         # 引用值取响应里的 subfolder / name，不是请求里的——服务端会为重名改名。
         sent = request_json(only_request(submit))
         assert sent["prompt"]["20"]["inputs"]["image"] == "arcreel/job-7-reference_images-1.jpg"
         assert sent["client_id"] == "arcreel-job-7"
         assert upload.call_count == 1
         assert only_request(view).url.params["filename"] == "ArcReel_00001_.png"
-        # 种子是提交那一刻现随机的，不回传这一版就再也复现不了。
+        # The seed is randomized at submit time; if this version is not returned it can never be reproduced. / 种子是提交那一刻现随机的，不回传这一版就再也复现不了。
         assert result.seed == sent["prompt"]["3"]["inputs"]["seed"]
         assert result.image_uri == f"{BASE_URL}/view?filename=ArcReel_00001_.png&subfolder=&type=output"
 
     async def test_only_as_many_references_as_there_are_slots_get_uploaded(self, tmp_path: Path):
-        """格子数就是这份 workflow 能收几张；多出来的图不会被任何节点读到。"""
+        """The slot count is how many images this workflow can take; extra images are not read by any node.
+
+        格子数就是这份 workflow 能收几张；多出来的图不会被任何节点读到。"""
         definition = _definition(reference_slots=1)
         references = []
         for index in range(3):
@@ -222,7 +265,10 @@ class TestGenerate:
         assert upload.call_count == 0
 
     async def test_the_requested_size_is_derived_on_the_image_tier_table(self, tmp_path: Path):
-        """图像与视频的分辨率档位短边表不是同一张；构造层按定义的 media_type 选表。"""
+        """The image and video resolution tiers use different short-edge tables; the builder picks the table
+        by the definition's media_type.
+
+        图像与视频的分辨率档位短边表不是同一张；构造层按定义的 media_type 选表。"""
         with capture_http() as router:
             submit = router.post(f"{BASE_URL}/prompt").mock(return_value=httpx.Response(200, json={"prompt_id": "p-1"}))
             router.get(f"{BASE_URL}/history/p-1").mock(
@@ -234,6 +280,8 @@ class TestGenerate:
 
         latent = request_json(only_request(submit))["prompt"]["5"]["inputs"]
         assert latent["width"] == latent["height"]
+        # The 1k tier's short edge is larger than the workflow's literal 832×480, so the tier choice really
+        # took effect.
         # 1k 档的短边比 workflow 字面的 832×480 大，选档确实生效了。
         assert latent["width"] > 832
 
@@ -263,7 +311,10 @@ class TestGenerate:
 
 
 class TestArtifactWhitelist:
-    """产物是不是这个端点该产的那一类：先看扩展名，落盘后再按文件头核一遍容器。"""
+    """Whether the artifact is the kind this endpoint should produce: check the extension first, then verify
+    the container by file header after writing to disk.
+
+    产物是不是这个端点该产的那一类：先看扩展名，落盘后再按文件头核一遍容器。"""
 
     @pytest.mark.parametrize("filename", ["out.png", "out.jpg", "out.jpeg", "out.webp", "OUT.PNG"])
     async def test_a_whitelisted_suffix_is_stored(self, tmp_path: Path, filename: str):
@@ -280,7 +331,10 @@ class TestArtifactWhitelist:
 
     @pytest.mark.parametrize("filename", ["out.gif", "out.apng", "out.mp4"])
     async def test_an_animated_or_video_artifact_is_a_type_mismatch(self, tmp_path: Path, filename: str):
-        """一份图像端点产出动图意味着产物绑定指在了视频合成节点上；入库会得到一张只有首帧的图。"""
+        """An image endpoint producing an animated image means the artifact binding points at a video
+        compositing node; storing it would give an image with only the first frame.
+
+        一份图像端点产出动图意味着产物绑定指在了视频合成节点上；入库会得到一张只有首帧的图。"""
         with capture_http() as router:
             router.post(f"{BASE_URL}/prompt").mock(return_value=httpx.Response(200, json={"prompt_id": "p-1"}))
             router.get(f"{BASE_URL}/history/p-1").mock(
@@ -296,7 +350,10 @@ class TestArtifactWhitelist:
         assert view.call_count == 0
 
     async def test_bytes_that_are_not_an_image_container_are_refused(self, tmp_path: Path):
-        """文件头对不上 PNG / JPEG / WEBP 时删掉落盘的文件并判容器不符，不留一份打不开的图。"""
+        """When the file header matches none of PNG / JPEG / WEBP, delete the written file and report a
+        container mismatch, so no unopenable image is left behind.
+
+        文件头对不上 PNG / JPEG / WEBP 时删掉落盘的文件并判容器不符，不留一份打不开的图。"""
         with capture_http() as router:
             router.post(f"{BASE_URL}/prompt").mock(return_value=httpx.Response(200, json={"prompt_id": "p-1"}))
             router.get(f"{BASE_URL}/history/p-1").mock(
@@ -342,7 +399,13 @@ class TestArtifactWhitelist:
 
 class TestMultipleArtifacts:
     async def test_a_batch_of_images_yields_the_first_one_and_a_warning(self, tmp_path: Path, caplog):
-        """``batch_size > 1`` 的 workflow 一次出多张；本通道取第一张。
+        """A ``batch_size > 1`` workflow outputs several images at once; this channel takes the first one.
+
+        This hint only goes to the log: ``ImageGenerationResult`` has no ``warnings`` slot like the video
+        channel, and the image call entry does not collect runtime hints either. Binding inference at
+        endpoint import has a separate ``batch_size_above_one`` UI hint.
+
+        ``batch_size > 1`` 的 workflow 一次出多张；本通道取第一张。
 
         这条提示只进日志：``ImageGenerationResult`` 没有视频通道那样的 ``warnings`` 位，图像调用
         入口也不收集执行期提示。导入端点时的绑定推断另有一条 ``batch_size_above_one`` 的界面提示。
@@ -368,7 +431,10 @@ class TestMultipleArtifacts:
         assert "共 2 个" in caplog.text
 
     async def test_a_temp_preview_beside_the_image_is_not_taken(self, tmp_path: Path):
-        """``type != "output"`` 的条目是中间预览，服务端随时会清掉它。"""
+        """Entries with ``type != "output"`` are intermediate previews; the server may clear them at any
+        time.
+
+        ``type != "output"`` 的条目是中间预览，服务端随时会清掉它。"""
         outputs = {
             "9": {
                 "images": [
@@ -390,7 +456,14 @@ class TestMultipleArtifacts:
 
 class TestNoResume:
     def test_the_image_backend_offers_no_resume_entry(self):
-        """图像任务不续跑：``prompt_id`` 无处持久化（请求不带 task_id），孤儿一律标 restart_lost。
+        """Image tasks do not resume: ``prompt_id`` has nowhere to persist (the request carries no task_id),
+        so orphans are always marked restart_lost.
+
+        The worker's orphan handling splits by media_type and does not probe backend methods, so this
+        only pins "this backend has no such cell"; having one would make people think image tasks can be
+        picked up again.
+
+        图像任务不续跑：``prompt_id`` 无处持久化（请求不带 task_id），孤儿一律标 restart_lost。
 
         worker 的孤儿处置按 media_type 分流、不探 backend 的方法，故这条只钉住「本 backend 没有
         这一格」——有了它反而会让人以为图像任务接得回来。
@@ -401,7 +474,10 @@ class TestNoResume:
         assert not hasattr(backend, "resume")
 
     async def test_a_lost_job_is_a_plain_generation_failure(self, tmp_path: Path):
-        """ComfyUI 重启把队列连同未落 history 的执行一起丢掉：判可重试的生成失败，不是续跑过期。"""
+        """A ComfyUI restart drops the queue together with executions not yet in history: report a retryable
+        generation failure, not an expired resume.
+
+        ComfyUI 重启把队列连同未落 history 的执行一起丢掉：判可重试的生成失败，不是续跑过期。"""
         with capture_http() as router:
             router.post(f"{BASE_URL}/prompt").mock(return_value=httpx.Response(200, json={"prompt_id": "p-1"}))
             router.get(f"{BASE_URL}/history/p-1").mock(return_value=httpx.Response(200, json={}))
@@ -415,7 +491,10 @@ class TestNoResume:
 
 
 class TestStoppingTheRemote:
-    """不续跑不等于不叫停：取消与超时那一刻 ``prompt_id`` 就在手里，远端还占着用户的显卡。"""
+    """Not resuming does not mean not stopping: at cancel or timeout ``prompt_id`` is already at hand, and
+    the remote is still holding the user's GPU.
+
+    不续跑不等于不叫停：取消与超时那一刻 ``prompt_id`` 就在手里，远端还占着用户的显卡。"""
 
     @staticmethod
     def _version(router: Any, version: str) -> None:

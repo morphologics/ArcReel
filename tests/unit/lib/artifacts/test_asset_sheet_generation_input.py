@@ -1,4 +1,8 @@
-"""生成输入 interface：资产图与衍生资产图的参考图、缺口定性、画布比例与冻结。
+"""Generation input interface: reference images, gap classification, canvas aspect ratio and freezing for asset sheets and derivative asset sheets.
+
+Observation goes through the executor's adapter, paired with an in-memory manifest adapter; reference images are real small images in a temp directory.
+
+生成输入 interface：资产图与衍生资产图的参考图、缺口定性、画布比例与冻结。
 
 观测走执行器的 adapter，配内存清单 adapter；参考图是临时目录里的真实小图。
 """

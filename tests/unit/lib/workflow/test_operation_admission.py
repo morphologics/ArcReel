@@ -1,4 +1,6 @@
-"""AI 操作结构准入谓词：每个操作只看自己的输入，结论带稳定理由码。"""
+"""Structural admission predicates for AI operations: each operation only looks at its own input, and the verdict carries a stable reason code.
+
+AI 操作结构准入谓词：每个操作只看自己的输入，结论带稳定理由码。"""
 
 from __future__ import annotations
 

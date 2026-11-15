@@ -1,4 +1,6 @@
-"""ViduImageBackend 单元测试 — 重点校验 prompt/aspect_ratio 白名单兜底与 resolution 原样透传。"""
+"""ViduImageBackend unit tests -- focused on the prompt/aspect_ratio allowlist fallback and passing resolution through as is.
+
+ViduImageBackend 单元测试 — 重点校验 prompt/aspect_ratio 白名单兜底与 resolution 原样透传。"""
 
 from __future__ import annotations
 
@@ -47,10 +49,12 @@ class TestViduImageBackendBasics:
 
 
 class TestWhitelistConfig:
-    """避免运行时调用，先把配置常量当 spec 钉死，防止误改。"""
+    """Pin the config constants as a spec without runtime calls, guarding against accidental changes.
+
+    避免运行时调用，先把配置常量当 spec 钉死，防止误改。"""
 
     def test_q1_aspect_ratio_no_2_3_or_3_2(self):
-        # 文档：viduq1 只允许 16:9 9:16 1:1 3:4 4:3
+        # Docs: viduq1 only allows 16:9 9:16 1:1 3:4 4:3 / 文档：viduq1 只允许 16:9 9:16 1:1 3:4 4:3
         assert "2:3" not in _ASPECT_RATIO_WHITELIST["viduq1"]
         assert "3:2" not in _ASPECT_RATIO_WHITELIST["viduq1"]
 
@@ -66,7 +70,9 @@ class TestWhitelistConfig:
 
 
 class TestEstimateUsage:
-    """预估的分辨率维度与请求同源：请求带什么档位就报什么。"""
+    """The estimated resolution dimension comes from the same source as the request: whatever tier the request carries is reported.
+
+    预估的分辨率维度与请求同源：请求带什么档位就报什么。"""
 
     def test_requested_resolution_is_reported(self):
         from lib.backends.image_backends.base import ImageRequestFacts
@@ -88,6 +94,8 @@ class TestCapabilityMismatchRaises:
     async def test_q2_with_refs_path_does_not_raise_capability(
         self, tmp_path: Path, image_output_path: Path, monkeypatch
     ):
+        # Only checks that the capability check does not block first; actual generation is mocked.
+        # create_vidu_client raises so the call short-circuits quickly, avoiding a real request.
         # 仅校验 capability 检查不会先拦下来；实际生成走 mock。
         # 让 create_vidu_client 抛错是为了快速短路，避免真正发请求。
         from lib.backends.image_backends import vidu as mod
@@ -104,14 +112,18 @@ class TestCapabilityMismatchRaises:
             output_path=image_output_path,
             reference_images=[ReferenceImage(path=str(ref_file))],
         )
-        # 不应是 ImageCapabilityError；应是我们注入的 RuntimeError
+        # Should not be ImageCapabilityError; should be the RuntimeError we injected. / 不应是 ImageCapabilityError；应是我们注入的 RuntimeError
         with pytest.raises(RuntimeError, match="short-circuit"):
             await backend.generate(request)
 
 
 class TestViduReferenceImageLimit:
     async def test_declared_limit_equals_what_it_sends(self, tmp_path: Path, image_output_path: Path):
-        """声明的上限即超量时实际下传的张数——编排层按它裁剪，编号才不会指认没发出的图。
+        """The declared limit is the number actually sent when there are too many -- the orchestration layer trims by it so numbering never points at an image that was not sent.
+
+        The task-creation request is short-circuited with a 400 (the backend folds it into ProviderRejectedError); only the sent request body is checked.
+
+        声明的上限即超量时实际下传的张数——编排层按它裁剪，编号才不会指认没发出的图。
 
         建任务请求以 400 短路（后端把它折成 ProviderRejectedError），只看已发出的请求体。
         """
@@ -138,7 +150,9 @@ class TestViduReferenceImageLimit:
 
 
 class TestViduImageCreateTaskHttpErrors:
-    """_create_task 的 >=400 收口：保留状态码（咽喉层据此降档），4xx 另带脱敏拒因摘要。"""
+    """The >=400 funnel of _create_task: keeps the status code (the choke-point layer downgrades by it); 4xx also carries a redacted rejection-reason summary.
+
+    _create_task 的 >=400 收口：保留状态码（咽喉层据此降档），4xx 另带脱敏拒因摘要。"""
 
     async def test_create_task_413_surfaces_httpstatuserror_no_retry(self):
         from unittest.mock import AsyncMock, MagicMock
@@ -160,11 +174,13 @@ class TestViduImageCreateTaskHttpErrors:
         with pytest.raises(httpx.HTTPStatusError) as ei:
             await backend._create_task(client, {"model": "viduq2", "prompt": "x"})
         assert ei.value.response.status_code == 413
-        # 413 非 retryable → fail-fast 单次
+        # 413 is not retryable -> fail fast once. / 413 非 retryable → fail-fast 单次
         assert client.post.call_count == 1
 
     async def test_rejection_body_becomes_a_redacted_provider_reason(self, image_output_path: Path):
-        """4xx 与视频侧同路：消息去掉查询串，拒因摘要单独挂在异常上。"""
+        """4xx follows the video path: the message drops the query string; the rejection-reason summary is attached separately on the exception.
+
+        4xx 与视频侧同路：消息去掉查询串，拒因摘要单独挂在异常上。"""
         with capture_http() as router:
             router.post("https://api.vidu.com/ent/v2/reference2image").mock(
                 return_value=httpx.Response(400, json={"code": 1013, "message": "reference image is not readable"})
@@ -182,7 +198,9 @@ class TestViduImageResolutionPassthrough:
     async def test_resolution_is_sent_as_requested_and_upstream_rejection_is_readable(
         self, image_output_path: Path, model: str, resolution: str
     ):
-        """档位以模型目录条目为准：越界值照发，由上游拒绝并以拒因摘要返回（docs/adr/0104）。"""
+        """Tiers follow the model catalog entry: out-of-range values are sent anyway, rejected upstream and returned as a rejection-reason summary (docs/adr/0104).
+
+        档位以模型目录条目为准：越界值照发，由上游拒绝并以拒因摘要返回（docs/adr/0104）。"""
         import json
 
         with capture_http() as router:

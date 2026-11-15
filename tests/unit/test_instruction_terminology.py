@@ -1,4 +1,11 @@
-"""漂移防御：`instructions` 参数在活动文案里只叫「附加指令」。
+"""Drift guard: in active text the `instructions` parameter is only called "附加指令" (instructions).
+
+The same parameter once had three different names across the tool schema, prompt section headings and subagent guidance; the model understands parameter
+semantics from the text, and multiple names make the main Agent and subagents interpret the same input inconsistently. The scan is limited to active text
+(backend, Agent profile, frontend source and its tests); historical archives (CHANGELOG, docs/adr,
+skill-optimization-workspace research notes) keep their original wording and are excluded.
+
+漂移防御：`instructions` 参数在活动文案里只叫「附加指令」。
 
 同一参数曾在工具 schema、prompt 分节标题与子智能体指引中有三套叫法，模型据文案理解参数
 语义，多套叫法会让主 Agent 与子智能体对同一入参给出不一致的解释。扫描范围限定活动文案
@@ -12,7 +19,7 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[2]
 
-#: 活动文案所在的顶层根，以及各自要扫的后缀。
+#: Top-level roots holding active text, and the suffixes to scan in each. / 活动文案所在的顶层根，以及各自要扫的后缀。
 SCAN_ROOTS: dict[str, frozenset[str]] = {
     "lib": frozenset({".py"}),
     "server": frozenset({".py"}),
@@ -22,7 +29,7 @@ SCAN_ROOTS: dict[str, frozenset[str]] = {
     "frontend/src": frozenset({".ts", ".tsx"}),
 }
 
-#: 历史归档：语句写于旧术语时期，改写等于篡改归档。
+#: Historical archives: written in the old terminology era; rewriting them would falsify the archive. / 历史归档：语句写于旧术语时期，改写等于篡改归档。
 EXCLUDED_DIRS = (REPO / "agent_runtime_profile" / "skill-optimization-workspace",)
 
 LEGACY_TERMS = ("用户意见", "附加说明", "常驻偏好")
@@ -35,7 +42,9 @@ def _is_excluded(path: Path) -> bool:
 
 
 def test_legacy_instruction_terms_are_absent_from_active_text() -> None:
-    """扫到旧称即报文件与行号：命中处要么改用「附加指令」，要么换个不撞术语的说法。"""
+    """Report file and line number for each old term found: either switch the hit to "附加指令" (instructions) or rephrase so it does not collide with the term.
+
+    扫到旧称即报文件与行号：命中处要么改用「附加指令」，要么换个不撞术语的说法。"""
     hits: list[str] = []
     for root, suffixes in SCAN_ROOTS.items():
         for path in (REPO / root).rglob("*"):

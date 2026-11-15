@@ -279,7 +279,9 @@ class TestBuildOptionsCustomModels:
 
 class TestBuildOptionsProviderNames:
     async def test_returns_provider_names_for_custom_providers(self, session_with_factory):
-        """provider_names 应包含自定义供应商的 ID→display_name 映射。"""
+        """provider_names should contain the ID -> display_name mapping of custom providers.
+
+        provider_names 应包含自定义供应商的 ID→display_name 映射。"""
         db_session, _factory = session_with_factory
         repo = CustomProviderRepository(db_session)
         provider = await repo.create_provider(
@@ -354,7 +356,9 @@ class TestBuildOptionsProviderNames:
         assert options["provider_names"] == {}
 
     async def test_disabled_models_provider_not_in_names(self, session_with_factory):
-        """如果供应商所有模型都被禁用，则不出现在 provider_names 中。"""
+        """If all models of a provider are disabled, it does not appear in provider_names.
+
+        如果供应商所有模型都被禁用，则不出现在 provider_names 中。"""
         db_session, _factory = session_with_factory
         repo = CustomProviderRepository(db_session)
         await repo.create_provider(
@@ -381,7 +385,7 @@ class TestBuildOptionsProviderNames:
 
 
 # ---------------------------------------------------------------------------
-# Tests: _build_options 的名字按语言成文
+# Tests: _build_options renders names per language / Tests: _build_options 的名字按语言成文
 # ---------------------------------------------------------------------------
 
 
@@ -395,6 +399,7 @@ class TestBuildOptionsLocalizedNames:
 
         assert zh["provider_names"]["ark"] == "火山方舟"
         assert en["provider_names"]["ark"] == "Volcengine Ark"
+        # Model display names come from catalog entries, regardless of language; model ids come from the catalog so they do not break when the factory snapshot updates
         # 模型显示名取目录条目，不分语言；型号从目录取，免得随出厂快照更新失效
         model_id = catalog.default_model("ark", "text")
         assert model_id is not None
@@ -404,7 +409,9 @@ class TestBuildOptionsLocalizedNames:
         assert en["model_names"][f"ark/{model_id}"] == model.display_name
 
     async def test_model_names_key_every_listed_backend(self, session_with_factory):
-        """每个候选都能查到名字——缺键会让下拉退回 model id、译名形同虚设。"""
+        """Every candidate has a name: a missing key would make the dropdown fall back to the model id, rendering the translation useless.
+
+        每个候选都能查到名字——缺键会让下拉退回 model id、译名形同虚设。"""
         db_session, _factory = session_with_factory
         mock_svc = _make_mock_svc(ready_providers=["ark", "openai"])
 

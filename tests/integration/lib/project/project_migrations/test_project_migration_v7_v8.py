@@ -577,6 +577,9 @@ def test_formal_script_plan_write_serializes_with_schema_last_activation(tmp_pat
     writer_done = Event()
     failures: list[BaseException] = []
 
+    # The migration chain ends with one manifest activation, which is the step that writes the current version; the
+    # earlier steps finish first, so a writer waiting on the lock sees the migrated state once it is released -- the same
+    # rule as the startup scan migrating fully before serving.
     # 迁移链以一次清单激活收尾，它才是落当前版本的那一步；前面几步先走完，
     # 等锁的写入方在它放行后看到的就是迁移完成的状态，与启动扫描先迁完再对外服务同口径。
     for version in range(ARTIFACT_MANIFEST_SCHEMA_VERSION - 1, CURRENT_SCHEMA_VERSION - 1):
@@ -612,6 +615,9 @@ def test_formal_script_plan_write_serializes_with_schema_last_activation(tmp_pat
     activation_thread.start()
     assert activation_ready.wait(timeout=5)
     writer_thread.start()
+    # The writer must still be stuck on the lock: if it finished before activation released it, the lock did not hold
+    # off formal writes during migration, and the content assertions at the end would also hold in the
+    # "write first, then migrate" order, so discarding this return value would not catch it.
     # 写入方必须还卡在锁上：它若在 activation 放行前就跑完，说明这把锁没拦住迁移期间的正式写入，
     # 而末尾那几条内容断言在「先写后迁」的顺序下同样成立，丢弃这个返回值就判不出来。
     assert not writer_done.wait(timeout=0.2)
@@ -638,6 +644,7 @@ def test_formal_script_plan_transaction_holds_the_project_lock_through_the_write
     from lib.script.script_review import formal_script_plan_write_transaction
 
     project_dir, _project_data, _script_plan, _script = _project(tmp_path)
+    # A formal write transaction registers the artifact manifest, which only holds for projects already migrated to v8.
     # 正式写事务要登记产物清单，只在已迁移到 v8 的项目上成立。
     assert artifact_activation.activate_artifact_target_state(project_dir, bump_schema=True) is True
     migrate_project_dir(project_dir)
@@ -835,7 +842,10 @@ def test_v7_activation_backfills_formal_script_plan_before_final_script_exists(t
 
 
 def test_v7_activation_registers_script_without_claiming_an_unclaimed_script_plan(tmp_path: Path) -> None:
-    """剧本依据不含脚本规划：规划无源文可认领时不登记规划，剧本照常登记。"""
+    """The script basis does not include the script plan: when the plan has no source to claim, the plan is not
+    registered and the script is registered as usual.
+
+    剧本依据不含脚本规划：规划无源文可认领时不登记规划，剧本照常登记。"""
 
     project_dir, _project_data, _script_plan, _script = _project(tmp_path)
     (project_dir / "source" / "episode_1.txt").unlink()
@@ -909,6 +919,9 @@ def test_v7_schema_commit_failure_leaves_complete_manifest_retryable(tmp_path: P
     def fail_schema(*_args: object, **_kwargs: object) -> None:
         raise OSError("injected schema failure")
 
+    # migrate_v7_to_v8 is just a one-line delegation to activate_artifact_target_state (another test guards that
+    # delegation); failure injection targets the delegated entry directly, no need to add a forwarding parameter to the
+    # migration function.
     # migrate_v7_to_v8 只是 activate_artifact_target_state 的一行委托（另有用例守这层委托），
     # 失败注入直接对着被委托的入口下，不必为此给迁移函数加一层转发参数。
     with pytest.raises(OSError, match="injected schema failure"):
@@ -924,7 +937,13 @@ def test_v7_schema_commit_failure_leaves_complete_manifest_retryable(tmp_path: P
 
 
 def test_v7_schema_promotion_does_not_overwrite_a_concurrent_project_writer(tmp_path: Path) -> None:
-    """并发写入方在 activation 持锁期间发起 project.json 更新：schema 提升写的是持锁前算出的
+    """A concurrent writer issues a project.json update while activation holds the lock: the schema bump writes the plan
+    snapshot computed before taking the lock, and on writing must not overwrite the writer's change along with it.
+
+    The writer is released inside the critical section, so it necessarily gets the lock after activation's whole
+    commit -- it reads project.json already bumped to v8, and both title and version must survive.
+
+    并发写入方在 activation 持锁期间发起 project.json 更新：schema 提升写的是持锁前算出的
     计划快照，落盘时不能把写入方的改动连带覆盖掉。
 
     写入方在临界区内被放行，因而必然排在 activation 的整个提交之后拿到锁——它读到的是已提升
@@ -939,6 +958,8 @@ def test_v7_schema_promotion_does_not_overwrite_a_concurrent_project_writer(tmp_
     writer_errors: list[Exception] = []
 
     def _update_project() -> None:
+        # Wait with a timeout: if the release signal is never sent the thread must exit on its own, or a non-daemon thread
+        # hangs the whole process.
         # 带超时等待：放行信号没发出时线程须自行退出，否则非守护线程会把整个进程吊死。
         assert writer_released.wait(timeout=5)
         try:
@@ -955,6 +976,8 @@ def test_v7_schema_promotion_does_not_overwrite_a_concurrent_project_writer(tmp_
         artifact_activation._ensure_activation_backup(source, stamp=stamp, from_version=7)
         if source == project_path:
             writer_released.set()
+            # The writer must still be stuck on the project lock now: if it can get the lock, activation's critical section did
+            # not cover the bump.
             # 写入方此刻必须还卡在项目锁上：拿得到锁就说明 activation 的临界区没罩住提升。
             assert not writer_finished.wait(timeout=0.2)
 
@@ -974,7 +997,15 @@ def test_v7_schema_promotion_does_not_overwrite_a_concurrent_project_writer(tmp_
 
 
 def test_v7_activation_rolls_back_when_inputs_drift_inside_the_critical_section(tmp_path: Path) -> None:
-    """临界区内输入漂移：activation 须响亮失败，并把已经落下的清单回滚干净。
+    """Inputs drift inside the critical section: activation must fail loudly and roll back the manifest it already
+    wrote cleanly.
+
+    The schema bump writes the plan snapshot computed before taking the lock; committing after drift would overwrite
+    the writer's change with the snapshot's old values. This check comes after the manifest replacement; an incomplete
+    rollback would leave the project half-committed in "manifest already new, schema still v7", and the next migration
+    would start from it.
+
+    临界区内输入漂移：activation 须响亮失败，并把已经落下的清单回滚干净。
 
     schema 提升写的是持锁前算出的计划快照，漂移后照提交就会把写入方的改动覆盖成快照里的旧值。
     这一判在清单替换之后，回滚不彻底的话项目会停在「清单已是新态、schema 仍是 v7」的半提交
@@ -999,6 +1030,8 @@ def test_v7_activation_rolls_back_when_inputs_drift_inside_the_critical_section(
             project_dir, bump_schema=True, backup_file=_drift_project_after_backup
         )
 
+    # The drifted write is kept as is and the schema is not overwritten by the snapshot's old values; the manifest
+    # returns to "absent" as before activation
     # 漂移写入原样留存，schema 未被快照里的旧值覆盖；清单回到激活前的「不存在」
     landed = _read_json(project_path)
     assert landed["title"] == "Drifted inside the lock"
@@ -1123,7 +1156,10 @@ def test_v7_activation_rejects_two_artifact_keys_that_own_one_formal_path(tmp_pa
 
 
 def _rename_draft_to_v9_name(project_dir: Path) -> Path:
-    """把 fixture 写在新名下的脚本规划草稿退回 v9 落盘事实，模拟起点低于 v8 的存量项目。"""
+    """Move the script plan draft the fixture wrote under the new name back to the v9 on-disk fact, simulating an
+    existing project starting below v8.
+
+    把 fixture 写在新名下的脚本规划草稿退回 v9 落盘事实，模拟起点低于 v8 的存量项目。"""
 
     drafts_dir = project_dir / "drafts" / "episode_1"
     legacy = drafts_dir / "step1_segments.json"
@@ -1132,7 +1168,10 @@ def _rename_draft_to_v9_name(project_dir: Path) -> Path:
 
 
 def test_v7_activation_registers_a_pre_rename_script_plan_at_its_canonical_path(tmp_path: Path) -> None:
-    """草稿仍在 v9 旧名下：激活按旧名读取，登记的却是改名后的规范路径，改名与备份随后落盘。"""
+    """The draft is still under the old v9 name: activation reads it by the old name but registers the renamed
+    canonical path; the rename and backup are written afterwards.
+
+    草稿仍在 v9 旧名下：激活按旧名读取，登记的却是改名后的规范路径，改名与备份随后落盘。"""
 
     project_dir, project, script_plan, _script = _project(tmp_path)
     legacy = _rename_draft_to_v9_name(project_dir)
@@ -1151,7 +1190,10 @@ def test_v7_activation_registers_a_pre_rename_script_plan_at_its_canonical_path(
 
 
 def test_v7_preflight_rejection_leaves_a_pending_draft_rename_untouched(tmp_path: Path) -> None:
-    """激活预检拒绝时草稿改名一并不落盘：项目目录与迁移前逐字节一致。"""
+    """When the activation precheck rejects, the draft rename is not written either: the project directory is
+    byte-identical to before migration.
+
+    激活预检拒绝时草稿改名一并不落盘：项目目录与迁移前逐字节一致。"""
 
     project_dir, _project_data, _script_plan, script = _project(tmp_path)
     legacy = _rename_draft_to_v9_name(project_dir)

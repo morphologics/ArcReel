@@ -26,7 +26,10 @@ def _marks(line: str) -> list[tuple[str, str]]:
 
 
 def test_extract_mentions_ordered_unique():
-    """顺序即执行期参考图编号：重复提及去重，保留首次出现顺序。"""
+    """Order is the reference image numbering at execution time: repeated mentions are deduplicated, keeping
+    first-appearance order.
+
+    顺序即执行期参考图编号：重复提及去重，保留首次出现顺序。"""
     text = "@张三 看向 @酒馆\n@张三 拔剑 @长剑"
     assert extract_mentions(text) == ["张三", "酒馆", "长剑"]
 
@@ -55,7 +58,10 @@ def test_extract_mentions_without_any_mention():
 
 
 def test_extract_mentions_keeps_unregistered_names():
-    """解析层不认识资产表：未登记的名字照常派生，登记判定归 ``resolve_references``。"""
+    """The parsing layer does not know the asset table: unregistered names are derived as usual, and
+    registration checks belong to ``resolve_references``.
+
+    解析层不认识资产表：未登记的名字照常派生，登记判定归 ``resolve_references``。"""
     assert extract_mentions("@张三 看向 @未登记的东西") == ["张三", "未登记的东西"]
 
 
@@ -68,17 +74,22 @@ def test_extract_mentions_rejects_curly_wrapped_form():
 
 
 def test_speaker_only_before_braces_is_excluded_from_references():
-    """只在花括号前出现的角色只绑声音；同一行记号之外的引用照常进参考图。"""
+    """A character appearing only before braces only binds a voice; references outside the mark on the same
+    line still become reference images.
+
+    只在花括号前出现的角色只绑声音；同一行记号之外的引用照常进参考图。"""
     assert extract_mentions("@[酒馆] 内景。@[张三]{我来了}") == ["酒馆"]
     assert extract_mentions("@[张三] 推门。@[张三]{我来了}") == ["张三"]
     assert extract_mentions("@[张三]{我来了}\n@[李四]{你也来了}") == []
 
 
-# ── mention 前缀边界 ────────────────────────────────────────
+# ── Mention prefix boundary / mention 前缀边界 ────────────────────────────────────────
 
 
 def test_mention_ignores_email_like_prefix():
-    """email 左侧是 \\w，不应被当成 mention。"""
+    """The left side of an email is \\w, so it should not be treated as a mention.
+
+    email 左侧是 \\w，不应被当成 mention。"""
     assert extract_mentions("contact a@张三 for help") == []
     assert extract_mentions("email: test@domain.com") == []
     assert extract_mentions("alice@example.com 和 bob@foo.io") == []
@@ -87,13 +98,17 @@ def test_mention_ignores_email_like_prefix():
 
 
 def test_mention_accepts_chinese_prefix():
-    """中文左侧字符（\\u4e00-\\u9fff）不是 \\w，合法 mention 用法。"""
+    """A Chinese character on the left (\\u4e00-\\u9fff) is not \\w, so this is a valid mention.
+
+    中文左侧字符（\\u4e00-\\u9fff）不是 \\w，合法 mention 用法。"""
     assert extract_mentions("你好@张三") == ["张三"]
     assert extract_mentions("（对面）@李四 抬眼") == ["李四"]
 
 
 def test_mention_accepts_whitespace_and_line_start():
-    """空白字符 / 行首 / 标点前缀都应识别。"""
+    """Whitespace / line start / punctuation prefixes should all be recognized.
+
+    空白字符 / 行首 / 标点前缀都应识别。"""
     assert extract_mentions("@张三") == ["张三"]
     assert extract_mentions("之后 @张三 回头") == ["张三"]
     assert extract_mentions("内景。\n@张三 开门") == ["张三"]
@@ -101,15 +116,24 @@ def test_mention_accepts_whitespace_and_line_start():
 
 
 def test_mention_underscore_prefix_is_rejected():
-    """underscore 属 \\w，`foo_@张三` 类打字错误不应触发 mention。"""
+    """Underscore belongs to \\w, so typos like `foo_@张三` should not trigger a mention.
+
+    underscore 属 \\w，`foo_@张三` 类打字错误不应触发 mention。"""
     assert extract_mentions("prefix_@张三") == []
 
 
-# ── BOM / 编码归一 ────────────────────────────────────────
+# ── BOM / encoding normalization / BOM / 编码归一 ────────────────────────────────────────
 
 
 def test_bom_prefixed_dialogue_line_is_normative():
-    """BOM 开头的台词记号两侧同判：说话人不进参考图。
+    """A BOM-prefixed dialogue mark is judged the same on both sides: the speaker does not become a
+    reference image.
+
+    JS's ``\\s`` matches U+FEFF while Python's ``str.strip()`` does not; without normalization the
+    frontend sees dialogue and the backend sees description, and whether the speaker lands in references
+    depends on which side runs first.
+
+    BOM 开头的台词记号两侧同判：说话人不进参考图。
 
     JS 的 ``\\s`` 认 U+FEFF、Python 的 ``str.strip()`` 不认；不归一时前端判台词、
     后端判描述，说话人是否落进 references 取决于哪侧先跑。
@@ -120,7 +144,10 @@ def test_bom_prefixed_dialogue_line_is_normative():
 
 
 def test_bom_on_a_later_line_is_normalized_too():
-    """BOM 不止出现在文档开头——粘贴拼接会把它带到任意行首，而分叉是按行发生的。"""
+    """A BOM does not only appear at the start of a document: paste-splicing can carry it to any line start,
+    and the divergence happens per line.
+
+    BOM 不止出现在文档开头——粘贴拼接会把它带到任意行首，而分叉是按行发生的。"""
     assert extract_mentions("@酒馆 内景。\n﻿@[张三]：{我来了}") == ["酒馆"]
 
 
@@ -152,7 +179,7 @@ def test_render_mentions_unknown_mention_kept():
     text = "@张三 和 @未知 对话"
     rendered = render_mentions_as_subjects(text, {"张三"})
     assert "<张三>" in rendered
-    assert "@未知" in rendered  # 未注册保留
+    assert "@未知" in rendered  # Unregistered is kept / 未注册保留
 
 
 def test_render_mentions_across_multiple_lines():
@@ -227,6 +254,8 @@ def test_resolve_references_uses_priority_for_corrupt_shared_namespace():
     assert missing == []
 
 
+#: Asset name with combining marks (Vietnamese): the two encodings look the same on screen but differ in bytes;
+#: a coordinate-system case for asset name comparison.
 #: 带组合附加符的资产名（越南语），两种编码屏幕显示相同、字节不同——资产名比对的坐标系用例。
 _NAME_NFC = unicodedata.normalize("NFC", "Hiếu")
 _NAME_NFD = unicodedata.normalize("NFD", "Hiếu")
@@ -235,7 +264,14 @@ _NAME_NFD = unicodedata.normalize("NFD", "Hiếu")
 @pytest.mark.parametrize("registered", [_NAME_NFC, _NAME_NFD], ids=["登记NFC", "登记NFD"])
 @pytest.mark.parametrize("written", [_NAME_NFC, _NAME_NFD], ids=["出场NFC", "出场NFD"])
 def test_resolve_references_matches_across_encoding_forms(registered: str, written: str):
-    """组合字符资产名的四种 NFC/NFD 配对都判为已登记，且派生名一律是归一形式。
+    """The four NFC/NFD pairings of a combining-character asset name are all judged registered, and derived
+    names are always in normalized form.
+
+    ``ReferenceResource.name`` is used downstream to look up the asset table and to be replaced by
+    subject marks in the body; producing both forms would mean "judged registered here, not found
+    downstream".
+
+    组合字符资产名的四种 NFC/NFD 配对都判为已登记，且派生名一律是归一形式。
 
     ``ReferenceResource.name`` 要被下游拿去回查资产表与在正文里替换成主体记号，产出两种
     形式会让「这里判已登记、下游查不到」。
@@ -248,20 +284,29 @@ def test_resolve_references_matches_across_encoding_forms(registered: str, writt
 @pytest.mark.parametrize("registered", [_NAME_NFC, _NAME_NFD], ids=["登记NFC", "登记NFD"])
 @pytest.mark.parametrize("written", [_NAME_NFC, _NAME_NFD], ids=["出场NFC", "出场NFD"])
 def test_render_mentions_as_subjects_matches_across_encoding_forms(registered: str, written: str):
-    """两侧编码形式不同也要替换成主体记号：漏替换时 ``@[名称]`` 会原样进供应商请求。"""
+    """Even with different encoding forms on the two sides it must be replaced by a subject mark: if
+    replacement is missed, ``@[name]`` goes into the provider request as-is.
+
+    两侧编码形式不同也要替换成主体记号：漏替换时 ``@[名称]`` 会原样进供应商请求。"""
     assert render_mentions_as_subjects(f"@[{written}] 推门而入", [registered]) == f"<{_NAME_NFC}> 推门而入"
 
 
-# ── 行内发声记号切分 ────────────────────────────────────────
+# ── Inline utterance mark splitting / 行内发声记号切分 ────────────────────────────────────────
 
 
 def test_inline_dialogue_after_description_is_a_speech_mark():
-    """台词跟在同一行的画面描述之后照常识别——记号不要求独立成行。"""
+    """Dialogue following a picture description on the same line is recognized as usual: the mark need not
+    be on its own line.
+
+    台词跟在同一行的画面描述之后照常识别——记号不要求独立成行。"""
     assert _marks("@[张三] 推开门。@[张三]{我来了}") == [("张三", "我来了")]
 
 
 def test_mention_and_brace_separator_forms_are_equivalent():
-    """mention 与 `{` 之间的空白 / 冒号可选，三种写法产出同一条台词。"""
+    """Whitespace / colon between the mention and `{` is optional; all three forms produce the same dialogue
+    line.
+
+    mention 与 `{` 之间的空白 / 冒号可选，三种写法产出同一条台词。"""
     assert _marks("@[张三]{我来了}") == _marks("@[张三] {我来了}") == _marks("@[张三]：{我来了}")
     assert _marks("@[张三]:{我来了}") == [("张三", "我来了")]
 
@@ -279,7 +324,10 @@ def test_multiple_marks_on_one_line_keep_source_order():
 
 
 def test_mention_not_adjacent_to_braces_stays_description():
-    """中间隔着描述文字的 mention 不是说话人——不做「行内最近 mention 猜 speaker」。"""
+    """A mention separated by description text is not the speaker: no "guess the speaker from the nearest
+    mention in the line".
+
+    中间隔着描述文字的 mention 不是说话人——不做「行内最近 mention 猜 speaker」。"""
     assert _marks("@[张三] 推开门，屋里传出声音 {谁啊？}") == [("", "谁啊？")]
     assert extract_mentions("@[张三] 推开门，屋里传出声音 {谁啊？}") == ["张三"]
 
@@ -290,17 +338,26 @@ def test_empty_speech_text_is_not_a_mark():
 
 
 def test_blank_speaker_slot_is_not_a_mark():
-    """``@[ ]{台词}`` 说话人位为空：dialogue 要求非空 speaker，不降级成画外音。"""
+    """``@[ ]{台词}`` has an empty speaker slot: dialogue requires a non-empty speaker, and it is not degraded
+    to voiceover.
+
+    ``@[ ]{台词}`` 说话人位为空：dialogue 要求非空 speaker，不降级成画外音。"""
     assert _marks("@[ ]：{我来了}") == []
 
 
 def test_malformed_speaker_slot_does_not_fall_back_to_voiceover():
-    """``@[]：{台词}`` 作者写的是「某人说」，静默改判画外音比不识别更难发现。"""
+    """In ``@[]：{台词}`` the author wrote "someone says"; silently reclassifying it as voiceover is harder to
+    notice than not recognizing it.
+
+    ``@[]：{台词}`` 作者写的是「某人说」，静默改判画外音比不识别更难发现。"""
     assert _marks("@[]：{我来了}") == []
 
 
 def test_repeated_separator_colon_does_not_fall_back_to_voiceover():
-    """``@[张三]：：{台词}`` 只吞一个分隔冒号，剩下的冒号说明这不是台词形态。"""
+    """``@[张三]：：{台词}`` only swallows one separator colon; the remaining colon shows this is not the dialogue
+    form.
+
+    ``@[张三]：：{台词}`` 只吞一个分隔冒号，剩下的冒号说明这不是台词形态。"""
     assert _marks("@[张三]：：{我来了}") == []
     assert strip_speech_marks("@[张三]：：{我来了}") == "@[张三]：：{我来了}"
     assert _marks("门开了。@[张三]:: {我来了}") == []
@@ -312,7 +369,10 @@ def test_single_separator_colon_still_binds_the_speaker():
 
 
 def test_unit_separator_counts_as_inline_whitespace():
-    """U+001F 是 Python 的空白但不是 JS 的 ``\\s``——两侧空白集合须逐字符相同。"""
+    """U+001F is whitespace in Python but not JS's ``\\s``; the whitespace sets on both sides must match
+    character for character.
+
+    U+001F 是 Python 的空白但不是 JS 的 ``\\s``——两侧空白集合须逐字符相同。"""
     assert _marks("@[张三]\x1f{我来了}") == [("张三", "我来了")]
 
 
@@ -333,7 +393,10 @@ def test_strip_speech_marks_is_the_other_half_of_a_lossless_split():
 
 
 def test_speech_marks_normalize_to_nfc():
-    """NFD 落盘的说话人与 NFC 登记的资产名须判等，台词文本同样归一。"""
+    """A speaker stored as NFD must equal an asset name registered as NFC, and the dialogue text is
+    normalized the same way.
+
+    NFD 落盘的说话人与 NFC 登记的资产名须判等，台词文本同样归一。"""
     line = unicodedata.normalize("NFD", "@[Nguyễn]{Chào}")
     assert _marks(line) == [("Nguyễn", "Chào")]
 
@@ -343,11 +406,14 @@ def test_legacy_bare_mention_can_be_a_speaker():
 
 
 def test_email_like_prefix_is_not_a_speaker():
-    """左侧是 ASCII 词字符时按邮箱 / id 片段跳过，与 mention 扫描同口径。"""
+    """When the left side is an ASCII word character it is skipped as an email / id fragment, the same rule
+    as mention scanning.
+
+    左侧是 ASCII 词字符时按邮箱 / id 片段跳过，与 mention 扫描同口径。"""
     assert _marks("a@b{我来了}") == [("", "我来了")]
 
 
-# ── @[角色/衍生]（docs/adr/0072）────────────────────────────
+# ── @[character/derivative] (docs/adr/0072) / @[角色/衍生]（docs/adr/0072）────────────────────────────
 
 
 def _proj_with_derivatives(**by_character: list[str]) -> dict:
@@ -373,7 +439,10 @@ class TestDerivativeReferenceParsing:
         assert missing == ["张三/夜行衣"]
 
     def test_base_and_derivative_are_two_references(self):
-        """同一镜头里本体与衍生同现时各注入一张图，故它们是两条不同的引用。"""
+        """When base and derivative appear together in one shot each injects one image, so they are two
+        different references.
+
+        同一镜头里本体与衍生同现时各注入一张图，故它们是两条不同的引用。"""
         refs, missing = resolve_references(["张三", "张三/劲装"], _proj_with_derivatives(张三=["劲装"]))
 
         assert [ref.name for ref in refs] == ["张三", "张三/劲装"]
@@ -385,7 +454,10 @@ class TestDerivativeReferenceParsing:
 
 class TestDerivativeSpeakerSlot:
     def test_speaker_binds_the_base_while_the_written_form_keeps_the_derivative(self):
-        """声音属于身份：衍生说话仍绑本体的参考音频，写下的那套外观另行保留。"""
+        """The voice belongs to the identity: a derivative speaking still binds the base's reference audio,
+        while the written look is kept separately.
+
+        声音属于身份：衍生说话仍绑本体的参考音频，写下的那套外观另行保留。"""
         marks = line_speech_marks("@[张三/劲装]{我来了}")
 
         assert [(mark.speaker, mark.derivative, mark.speaker_reference) for mark in marks] == [
@@ -398,7 +470,9 @@ class TestDerivativeSpeakerSlot:
         assert [(mark.speaker, mark.derivative, mark.speaker_reference) for mark in marks] == [("张三", "", "张三")]
 
     def test_speaker_slot_without_a_base_name_is_not_a_mark(self):
-        """``@[/劲装]`` 没有可绑声音的身份，不静默降级成画外音。"""
+        """``@[/劲装]`` has no identity to bind a voice to, and is not silently degraded to voiceover.
+
+        ``@[/劲装]`` 没有可绑声音的身份，不静默降级成画外音。"""
         assert _marks("@[/劲装]{我来了}") == []
 
     def test_speaker_slot_is_still_excluded_from_reference_images(self):
@@ -412,7 +486,10 @@ class TestDerivativeSpeakerSlot:
 
 class TestMentionNames:
     def test_mention_names_include_the_speaker_slot(self):
-        """级联改名与「被引用」判定问的是「写下了哪些名字」，说话人位同样算。"""
+        """Cascading renames and the "is referenced" check ask "which names were written down", and the
+        speaker slot counts too.
+
+        级联改名与「被引用」判定问的是「写下了哪些名字」，说话人位同样算。"""
         assert mention_names("@[张三/劲装]{我来了}@[酒馆]") == ["张三/劲装", "酒馆"]
 
     def test_mention_names_deduplicate_in_first_appearance_order(self):
@@ -439,7 +516,10 @@ class TestRewriteDerivativeMentions:
 
 
 def test_render_mentions_hands_each_name_to_the_renderer_in_comparison_form():
-    """每个 mention 的名字（含衍生形态）以比对坐标系交给渲染函数，替换文本落回原位。"""
+    """Each mention's name (including derivative forms) is handed to the render function in the comparison
+    coordinate system, and the replacement text lands back in place.
+
+    每个 mention 的名字（含衍生形态）以比对坐标系交给渲染函数，替换文本落回原位。"""
     mapping = {"张三": "图1", "张三/黑化": "图2"}
     text = "@[张三]坐在窗边，@[怀表]与 @[李四] 同框；@[张三/黑化]立在门口"
     assert render_mentions(text, lambda name: mapping.get(name, name)) == "图1坐在窗边，怀表与 李四 同框；图2立在门口"

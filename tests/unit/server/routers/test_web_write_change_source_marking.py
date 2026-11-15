@@ -1,4 +1,13 @@
-"""项目写路由要么把写入标成 ``webui``，要么在这里登记不标的理由。
+"""Project write routes either mark their writes as ``webui`` or register here the reason they do not.
+
+The source context defaults to ``filesystem``: an unmarked Web write is treated by the frontend as an external change, popping notifications and queueing focus, and new drafts even
+auto-navigate. Routes are enumerated from the app's route table, so new write routes are checked automatically. A
+``project_change_source("webui")`` call in the endpoint function or a function it calls within the same module counts as marked; routes whose source is marked in a cross-module service are registered in :data:`_EXEMPT` with where it happens.
+
+The mark is only a mechanical lower bound: Web write changes need a hint or an explicit batch to broadcast with their source, and the behavior is verified by
+``tests/integration/server/routers/test_web_write_change_source.py`` through the real project event service.
+
+项目写路由要么把写入标成 ``webui``，要么在这里登记不标的理由。
 
 来源上下文缺省是 ``filesystem``：漏标的 Web 写入会被前端当成外部改动，弹通知、排队聚焦，新建草稿还会自动
 跳转。路由从应用路由表枚举，新增的写路由自动纳入检查。端点函数或它在同模块内调用的函数里出现
@@ -33,7 +42,7 @@ _NOT_PROJECT_CHANGE = "Agent 会话、Agent 记忆或项目整体操作，不产
 _SERVICE = "来源在服务层标记：{}"
 
 _EXEMPT: dict[str, str] = {
-    # 任务提交与控制
+    # Task submission and control / 任务提交与控制
     "ad_script:generate_ad_script": _TASK,
     "asset_sheets:submit_asset_sheet_batch_route": _TASK,
     "edit_timelines:export_jianying_draft": _TASK,
@@ -68,7 +77,7 @@ _EXEMPT: dict[str, str] = {
     "storyboard_batches:submit_storyboard_batch": _TASK,
     "storyboard_batches:submit_storyboard_video_batch_route": _TASK,
     "tasks:cancel_all_queued": _TASK,
-    # 预览与只读
+    # Preview and read-only / 预览与只读
     "_asset_prompt_preview:preview_asset": _NO_WRITE,
     "_asset_prompt_preview:preview_derivative": _NO_WRITE,
     "asset_sheets:preview_asset_sheet_batch": _NO_WRITE,
@@ -79,7 +88,7 @@ _EXEMPT: dict[str, str] = {
     "reference_videos:preview_units_batch": _NO_WRITE,
     "storyboard_batches:preview_storyboard_batch": _NO_WRITE,
     "storyboard_batches:preview_storyboard_video_batch": _NO_WRITE,
-    # Agent 会话、记忆与项目整体操作
+    # Agent sessions, memory and whole-project operations / Agent 会话、记忆与项目整体操作
     "agent_memory:clear_project_memory": _NOT_PROJECT_CHANGE,
     "agent_memory:delete_project_memory_file": _NOT_PROJECT_CHANGE,
     "agent_memory:write_project_memory_file": _NOT_PROJECT_CHANGE,
@@ -94,7 +103,7 @@ _EXEMPT: dict[str, str] = {
     "assistant:send_queued_message_now": _NOT_PROJECT_CHANGE,
     "projects:delete_project": _NOT_PROJECT_CHANGE,
     "projects:reset_agent_profile": _NOT_PROJECT_CHANGE,
-    # 来源标在服务层
+    # Source marked in the service layer / 来源标在服务层
     "end_frames:delete_end_frame": _SERVICE.format("server.services.project.end_frame"),
     "end_frames:select_end_frame": _SERVICE.format("server.services.project.end_frame"),
     "end_frames:upload_end_frame": _SERVICE.format("server.services.project.end_frame"),
@@ -155,7 +164,9 @@ def _marks_webui_in_tree(tree: ast.Module, entry: str) -> bool:
 
 
 def _marks_webui(endpoint: Callable) -> bool:
-    """端点函数或它在同模块内（传递地）调用的函数里出现 webui 来源调用。"""
+    """A webui source call appears in the endpoint function or in a function it (transitively) calls within the same module.
+
+    端点函数或它在同模块内（传递地）调用的函数里出现 webui 来源调用。"""
     return _marks_webui_in_tree(_module_tree(endpoint.__module__), endpoint.__name__)
 
 
@@ -193,14 +204,18 @@ def test_every_project_write_route_marks_webui_or_says_why_not() -> None:
 
 
 def test_exemptions_only_list_unmarked_write_routes() -> None:
-    """路由改名、删除或补上标记后，登记随之移除，清单不留过期条目。"""
+    """After a route is renamed, deleted or gains the mark, its registration is removed too, so the list keeps no stale entries.
+
+    路由改名、删除或补上标记后，登记随之移除，清单不留过期条目。"""
     endpoints = _project_write_endpoints()
     stale = sorted(key for key in _EXEMPT if key not in endpoints or _marks_webui(endpoints[key]))
     assert not stale, f"_EXEMPT 里的这些条目已不是未标来源的写路由，请删除：{stale}"
 
 
 def test_routers_do_not_broadcast_under_another_source() -> None:
-    """路由里发 hint 或批次时不写死别的来源：写死 ``worker`` 会让用户自己的保存触发外部改动的通知与跳转。"""
+    """Routes sending a hint or batch do not hard-code another source: hard-coding ``worker`` would make the user's own save trigger external-change notifications and navigation.
+
+    路由里发 hint 或批次时不写死别的来源：写死 ``worker`` 会让用户自己的保存触发外部改动的通知与跳转。"""
     offenders = []
     for path in sorted(Path(server.routers.__file__).parent.glob("*.py")):
         tree = ast.parse(path.read_text(encoding="utf-8"))

@@ -46,8 +46,11 @@ class TestScenePromptAndPropPrompt:
 
 
 class TestFigureExclusion:
-    """展示环境或物件的图种排除人物；画面主体本身是人物的图种不排除。"""
+    """Image kinds showing an environment or object exclude people; image kinds whose subject is a person do not.
 
+    展示环境或物件的图种排除人物；画面主体本身是人物的图种不排除。"""
+
+    # Assert the full partial rather than the word "人物" (people): ordinary descriptions in the body may contain that word, so keyword assertions would misjudge.
     # 断言完整片段而非「人物」二字：正文里的普通描述也可能出现该词，按关键词断言会误判。
     _EXCLUSION = "Avoid: 出镜人物"
 
@@ -97,7 +100,9 @@ _STRUCTURED = {
 
 
 class TestRenderStoryboardImagePrompt:
-    """图N 编号由实际发出的参考图列表机械派生，对全部图像后端同一口径。"""
+    """图N (image N) numbering is derived mechanically from the list of reference images actually sent, the same for every image backend.
+
+    图N 编号由实际发出的参考图列表机械派生，对全部图像后端同一口径。"""
 
     @pytest.mark.parametrize("prompt", [_STRUCTURED, _SCENE])
     def test_both_forms_share_style_block_and_wrappers_survive_text_roundtrip(self, prompt):
@@ -194,7 +199,9 @@ class TestRenderStoryboardImagePrompt:
 
 
 class TestTextFormRerenderAfterStyleFieldsChange:
-    """纯文本形态回贴后项目风格字段才补齐，再渲染时每条风格声明仍只出现一次。"""
+    """After a plain-text paste-back the project style fields are filled in; on re-render each style declaration still appears only once.
+
+    纯文本形态回贴后项目风格字段才补齐，再渲染时每条风格声明仍只出现一次。"""
 
     @pytest.mark.parametrize(
         ("first", "then"),

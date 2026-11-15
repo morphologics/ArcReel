@@ -1,4 +1,6 @@
-"""list_bgm 工具：列出项目里已上传的 BGM 供 edit_timeline 引用。"""
+"""list_bgm tool: list the BGM uploaded to the project for edit_timeline to reference.
+
+list_bgm 工具：列出项目里已上传的 BGM 供 edit_timeline 引用。"""
 
 from __future__ import annotations
 

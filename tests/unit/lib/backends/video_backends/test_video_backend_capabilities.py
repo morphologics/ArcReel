@@ -87,7 +87,9 @@ class TestVideoGenerationRequestNewFields:
 
 class TestGrokVideoCapabilities:
     def test_no_start_frame_overlay_field(self):
-        """Grok 同时下发 image_url 与 reference_image_urls，但字段已收敛，不再单独声明该组合能力。"""
+        """Grok sends both image_url and reference_image_urls, but the fields have converged, so that combined capability is no longer declared separately.
+
+        Grok 同时下发 image_url 与 reference_image_urls，但字段已收敛，不再单独声明该组合能力。"""
         from unittest.mock import patch
 
         from lib.backends.video_backends.grok import GrokVideoBackend
@@ -100,13 +102,18 @@ class TestGrokVideoCapabilities:
 
 
 class TestVideoCapabilitiesForModel:
-    """各 backend 的 client-free 静态 caps 方法：按 model_id 纯计算，不构造实例 / 不需 api_key。
+    """Each backend's client-free static caps method: pure computation by model_id, no instance constructed / no api_key needed.
+
+    The resolver resolves the reference image limit via this pure-function path, so it must not trigger SDK client construction or api_key checks.
+
+    各 backend 的 client-free 静态 caps 方法：按 model_id 纯计算，不构造实例 / 不需 api_key。
 
     resolver 解析参考图上限走这条纯函数路径，故不应触发 SDK client 构造或 api_key 校验。"""
 
     def test_ark_seedance_2_returns_nine(self):
         from lib.backends.video_backends.ark import ArkVideoBackend
 
+        # caps can be obtained without constructing an instance (i.e. no Ark SDK client, no api_key needed).
         # 不构造实例（即不构造 Ark SDK client、不需 api_key）即可取得 caps
         caps = ArkVideoBackend.video_capabilities_for_model("doubao-seedance-2-0")
         assert caps.max_reference_images == 9
@@ -138,6 +145,7 @@ class TestVideoCapabilitiesForModel:
         ("model", "expected"),
         [
             ("MiniMax-Hailuo-2.3", True),
+            # Fast is image-to-video only: that narrowing is carried by the required first-frame input in the minimax-hailuo-v1-fast definition.
             # Fast 仅图生视频：这条收窄由 minimax-hailuo-v1-fast 定义里必需的首帧输入承担。
             ("MiniMax-Hailuo-2.3-Fast", False),
             ("S2V-01", False),
@@ -175,7 +183,12 @@ class TestVideoCapabilitiesForModel:
         assert caps("whatever").max_reference_images == 4
 
     def test_instance_property_delegates_to_static(self):
-        """instance video_capabilities 委托至静态方法，保持 backend 为单一真相源。
+        """The instance video_capabilities delegates to the static method, keeping the backend as the single source of truth.
+
+        create_ark_client is patched out: this test only verifies the property -> static method delegation and should not really
+        construct an Ark SDK client in __init__ (the caps path does not depend on the client).
+
+        instance video_capabilities 委托至静态方法，保持 backend 为单一真相源。
 
         patch 掉 create_ark_client：本测试只验证 property→静态方法的委托，不应在 __init__ 里真实
         构造 Ark SDK client（caps 路径不依赖 client）。"""
@@ -188,6 +201,15 @@ class TestVideoCapabilitiesForModel:
         assert backend.video_capabilities == ArkVideoBackend.video_capabilities_for_model("doubao-seedance-2-0")
 
 
+#: Pins the audio-track stance of every built-in video model, one per execution path: ``controllable`` = the request carries
+#: an audio-track switch; ``always_on`` = always has audio, switch not controllable; ``always_off`` = this path produces no
+#: audio track. Values are ``(i2v, r2v)``.
+#:
+#: New video models must be registered here, which forces a stance on their audio track -- a new model whose backend forgot to
+#: declare it lands on this table with the ``VideoCapabilities`` default (controllable), mismatching the author's intent and
+#: surfacing in CI. The table lives in this file rather than the registry tests: the source of truth for the audio-track shape
+#: is the backend's VideoCapabilities, and the guard should sit next to it.
+#:
 #: 全部内置视频 model 的音轨立场逐条钉死，按执行路径各给一份：``controllable`` = 请求带音轨开关；
 #: ``always_on`` = 恒有声、开关不可控；``always_off`` = 该路径不产音轨。值为 ``(i2v, r2v)``。
 #:
@@ -224,6 +246,8 @@ _VIDEO_AUDIO_STANCES: dict[tuple[str, str], tuple[str, str]] = {
     ("grok", "grok-imagine-video-1.5"): ("controllable", "controllable"),
     ("grok", "grok-imagine-video-1.5-lite"): ("controllable", "controllable"),
     ("kling", "kling-v2-5-turbo"): ("always_off", "always_off"),
+    # Kling's three audio-capable tiers: the image/text-to-video sub-paths carry a sound switch; the native schema of the multi-image
+    # subject (R2V) sub-path has no such field, so the final video is always silent.
     # 可灵有音频能力的三档：图生/文生子路径带 sound 开关，多图主体（R2V）子路径的原生 schema
     # 不含该字段，成片必然无声。
     ("kling", "kling-v2-6"): ("controllable", "always_off"),
@@ -241,10 +265,14 @@ _VIDEO_AUDIO_STANCES: dict[tuple[str, str], tuple[str, str]] = {
 
 
 class TestVideoAudioTrack:
-    """音轨形态：逐路径声明、按路径取值，以及全注册表的立场守卫。"""
+    """Audio track shape: declared per path, taken per path, plus a stance guard over the whole registry.
+
+    音轨形态：逐路径声明、按路径取值，以及全注册表的立场守卫。"""
 
     def test_default_is_controllable_and_shared_by_both_routes(self):
-        """未声明即「无信号不收紧」：两条路径都按开关可控处理。"""
+        """Undeclared means "no signal, no tightening": both paths are treated as switch-controllable.
+
+        未声明即「无信号不收紧」：两条路径都按开关可控处理。"""
         caps = VideoCapabilities()
         assert caps.audio_track is VideoAudioMode.CONTROLLABLE
         assert caps.reference_route_audio_track is None
@@ -260,7 +288,12 @@ class TestVideoAudioTrack:
         assert caps.audio_track_for_route("r2v") is VideoAudioMode.ALWAYS_OFF
 
     def test_video_route_vocabulary_matches_generation_type_buckets(self):
-        """VideoRoute 与 lib.config.resolver.VideoGenerationType 是同一份桶名词汇表。
+        """VideoRoute and lib.config.resolver.VideoGenerationType are the same bucket-name vocabulary.
+
+        The layering contract does not allow the backend layer to import the config layer, so each side declares it once; if the values
+        drift apart, ``audio_track_for_route`` would silently take the i2v value for r2v.
+
+        VideoRoute 与 lib.config.resolver.VideoGenerationType 是同一份桶名词汇表。
 
         分层契约不允许 backend 层导入 config 层，故两侧各声明一次；取值一旦漂开，
         ``audio_track_for_route`` 会对 r2v 静默按 i2v 取值。
@@ -273,7 +306,9 @@ class TestVideoAudioTrack:
         assert get_args(VideoRoute) == get_args(VideoGenerationType)
 
     def test_every_video_model_matches_declared_stance(self):
-        """backend 声明在全部内置视频 model 上的逐路径取值与上表相等（整表相等，非子集）。"""
+        """The per-path values declared by the backends across all built-in video models equal the table above (whole-table equality, not a subset).
+
+        backend 声明在全部内置视频 model 上的逐路径取值与上表相等（整表相等，非子集）。"""
         from lib.backends.backend_assembly.specs import builtin_video_capabilities_for_model
         from lib.catalog import query as catalog
         from lib.config.registry import PROVIDER_REGISTRY
@@ -291,7 +326,9 @@ class TestVideoAudioTrack:
         assert actual == _VIDEO_AUDIO_STANCES
 
     def test_registry_lookup_matches_backend_declaration(self):
-        """lib.config 侧的派生查询与 backend 声明同值——展示层与入队预检读的就是这一份。"""
+        """The derived query on the lib.config side has the same values as the backend declarations -- this is what the display layer and the enqueue pre-check read.
+
+        lib.config 侧的派生查询与 backend 声明同值——展示层与入队预检读的就是这一份。"""
         from lib.config.resolver import builtin_video_audio_track
 
         for (provider_id, model_id), (i2v, r2v) in _VIDEO_AUDIO_STANCES.items():
@@ -299,7 +336,9 @@ class TestVideoAudioTrack:
             assert builtin_video_audio_track(provider_id, model_id, generation_type="r2v") == r2v
 
     def test_lookup_returns_none_without_signal(self):
-        """非视频 model / 未知供应商没有逐模型声明，返回 None 交调用方按无信号不收紧处理。"""
+        """Non-video models / unknown providers have no per-model declaration; return None for the caller to treat as no signal, no tightening.
+
+        非视频 model / 未知供应商没有逐模型声明，返回 None 交调用方按无信号不收紧处理。"""
         from lib.config.resolver import builtin_video_audio_track
 
         assert builtin_video_audio_track("dashscope", "wan2.7-image", generation_type="i2v") is None
@@ -308,14 +347,22 @@ class TestVideoAudioTrack:
 
 
 class TestVideoCapabilitySingleSourceOfTruth:
-    """全目录扫描：内置视频模型的输入模式、参考图上限与音轨形态只有 backend 一处手写声明。
+    """Full catalog scan: the input modes, reference image limits and audio track shapes of built-in video models have only one hand-written declaration, in the backend.
+
+    The catalog's model info `CatalogModel` does not describe these dimensions -- a second declaration would have nothing to compare
+    against, drift between the two would go unnoticed, and it would point reviewers at the copy that takes no part in resolution.
+    These cases guard the shape of the single source of truth.
+
+    全目录扫描：内置视频模型的输入模式、参考图上限与音轨形态只有 backend 一处手写声明。
 
     目录的模型信息 `CatalogModel` 不描述这些维度——第二份声明没有比对方，两侧漂了也无人发现，还会
     把审查者引到不参与解析的那一份上。这几个用例守住单一真相源的形状。
     """
 
     def test_registry_declares_no_video_capability_bits(self):
-        """视频模型的 capabilities 不得含输入模式或音轨 token——真相源是 VideoCapabilities。"""
+        """Video model capabilities must not contain input-mode or audio-track tokens -- the source of truth is VideoCapabilities.
+
+        视频模型的 capabilities 不得含输入模式或音轨 token——真相源是 VideoCapabilities。"""
         from lib.catalog import query as catalog
         from lib.config.registry import PROVIDER_REGISTRY
 
@@ -329,7 +376,9 @@ class TestVideoCapabilitySingleSourceOfTruth:
         assert offenders == []
 
     def test_model_info_has_no_reference_image_cap_field(self):
-        """CatalogModel 不得长出参考图上限字段：加上就等于把第二份来源请回来。"""
+        """CatalogModel must not grow a reference-image-limit field: adding it would bring back a second source.
+
+        CatalogModel 不得长出参考图上限字段：加上就等于把第二份来源请回来。"""
         from dataclasses import fields
 
         from lib.catalog.query import CatalogModel
@@ -337,7 +386,12 @@ class TestVideoCapabilitySingleSourceOfTruth:
         assert "max_reference_images" not in {f.name for f in fields(CatalogModel)}
 
     def test_model_info_has_no_audio_cap_field(self):
-        """同上：CatalogModel 不得长出音轨字段。
+        """Same as above: CatalogModel must not grow an audio-track field.
+
+        A single per-model declaration cannot express "branching by execution sub-path within one model"; adding it would create the split
+        "the UI allows turning audio off, execution silently drops it".
+
+        同上：CatalogModel 不得长出音轨字段。
 
         逐模型的单一声明表达不了「同一 model 内按执行子路径分叉」，加上就会长出
         「界面允许关音频、执行期静默丢弃」的分裂。
@@ -350,7 +404,9 @@ class TestVideoCapabilitySingleSourceOfTruth:
         assert not {n for n in names if "audio" in n}
 
     def test_every_registry_video_model_resolves_backend_capabilities(self):
-        """每个内置视频模型都能从 backend 取到能力声明——单一真相源须覆盖全部内置供应商。"""
+        """Every built-in video model can get its capability declaration from the backend -- the single source of truth must cover all built-in providers.
+
+        每个内置视频模型都能从 backend 取到能力声明——单一真相源须覆盖全部内置供应商。"""
         from lib.backends.backend_assembly.specs import builtin_video_capabilities_for_model
         from lib.catalog import query as catalog
         from lib.config.registry import PROVIDER_REGISTRY

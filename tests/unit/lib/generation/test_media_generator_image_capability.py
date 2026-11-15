@@ -1,4 +1,6 @@
-"""MediaGenerator 在调用 image backend 前 gating；不匹配抛 ImageCapabilityError。"""
+"""MediaGenerator gates before calling the image backend; on mismatch it raises ImageCapabilityError.
+
+MediaGenerator 在调用 image backend 前 gating；不匹配抛 ImageCapabilityError。"""
 
 from unittest.mock import AsyncMock, MagicMock
 
@@ -64,7 +66,9 @@ async def test_i2i_call_with_t2i_only_backend_raises(tmp_path):
 
 @pytest.mark.asyncio
 async def test_t2i_call_rejected_when_entry_only_accepts_i2i(tmp_path):
-    """通道两者都实现，模型条目只接受图生图（vidu/viduq1）：执行与任务类型桶同一个结果，文生图被拒。"""
+    """The channel implements both, but the model entry only accepts image-to-image (vidu/viduq1): execution gets the same result as the task type bucket, and text-to-image is rejected.
+
+    通道两者都实现，模型条目只接受图生图（vidu/viduq1）：执行与任务类型桶同一个结果，文生图被拒。"""
     from lib.backends.image_backends.base import BOTH_IMAGE_CAPABILITIES
     from lib.generation.media_generator import MediaGenerator
 

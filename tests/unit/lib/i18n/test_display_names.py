@@ -1,4 +1,6 @@
-"""失败文案按显示名目录把供应商与模型 ID 换成名称。"""
+"""Failure messages replace provider and model IDs with names using the display name catalog.
+
+失败文案按显示名目录把供应商与模型 ID 换成名称。"""
 
 import string
 
@@ -13,6 +15,7 @@ MODEL_ID = "relay-video-x"
 PROVIDER_NAME = "我的中转站"
 MODEL_NAME = "中转视频模型"
 
+#: Placeholders whose names look like provider or model parameters but are shown with their raw values, and why.
 #: 名字像供应商或模型参数、但按原值显示的占位符，及其原因。
 RAW_ID_PLACEHOLDERS = {
     "model_id": "自定义供应商设置页的模型行校验，主语是用户正在填写的模型 ID",
@@ -42,7 +45,7 @@ def test_every_provider_or_model_placeholder_renders_the_display_name(locale: st
         assert not unregistered, (
             f"{locale}/{key} 的占位符 {sorted(unregistered)} 不在 DISPLAY_NAME_PARAMS 里，渲染时不会换成显示名"
         )
-        # 其余占位符填数值：兼容 {limit:g} 这类格式说明
+        # The other placeholders are filled with numbers: compatible with format specs like {limit:g} / 其余占位符填数值：兼容 {limit:g} 这类格式说明
         params: dict[str, object] = dict.fromkeys(fields, 1)
         params.update({field: MODEL_ID if field == MODEL_PARAM else PROVIDER_ID for field in id_fields})
 

@@ -88,7 +88,7 @@ class TestPromptUtils:
         assert parsed_a["Action"] == "抬头观察"
         assert parsed_a["Dialogue"][0]["Speaker"] == "姜月茴"
         assert "Dialogue" not in parsed_b
-        # 反向约束以 Avoid 键收尾：有对话时置于 Dialogue 之后
+        # The negative constraint ends with the Avoid key: with dialogue it goes after Dialogue / 反向约束以 Avoid 键收尾：有对话时置于 Dialogue 之后
         assert list(parsed_a)[-2:] == ["Dialogue", "Avoid"]
         assert list(parsed_b)[-1] == "Avoid"
         assert parsed_a["Avoid"] == "BGM、文字字幕、水印、Logo"
@@ -100,6 +100,7 @@ class TestPromptUtils:
         assert not is_structured_video_prompt([])
 
     def test_video_prompt_to_yaml_voice_profiles_leads_and_is_conditional(self):
+        # Voice_Profiles is the declaration section gathered at the top: it must come before Action; without declarations the field does not appear
         # Voice_Profiles 是顶部集中声明段：须先于 Action 出现；无声明时不出现该字段
         with_profiles = {
             "action": "抬头观察",
@@ -128,7 +129,9 @@ _NAME_NFD = unicodedata.normalize("NFD", "Hiếu")
 
 
 class TestBuildDramaVideoPrompt:
-    """两注入点共用的 drama dialogue + Voice_Profiles 出口。"""
+    """The drama dialogue + Voice_Profiles exit shared by the two injection points.
+
+    两注入点共用的 drama dialogue + Voice_Profiles 出口。"""
 
     def test_one_entry_per_speaker_deduped_in_order(self):
         utterances = [_utterance("姜月茴", "有人吗"), _utterance("王", "嗯"), _utterance("姜月茴", "走吧")]
@@ -138,7 +141,7 @@ class TestBuildDramaVideoPrompt:
             {"Speaker": "姜月茴", "Voice_Style": "清冷"},
             {"Speaker": "王", "Voice_Style": "低沉"},
         ]
-        # dialogue 逐条保序，不因 Voice_Profiles 去重而合并
+        # dialogue keeps order item by item and is not merged by Voice_Profiles dedup / dialogue 逐条保序，不因 Voice_Profiles 去重而合并
         assert [d["speaker"] for d in prompt["dialogue"]] == ["姜月茴", "王", "姜月茴"]
 
     def test_characters_none_means_no_injection(self):
@@ -149,6 +152,7 @@ class TestBuildDramaVideoPrompt:
         assert "voice_profiles" not in gated
 
     def test_script_carried_voice_profiles_never_survive(self):
+        # The only source of the declaration section is the orchestration layer: leftover values in the script are always stripped, otherwise the class C (characters=None) gate would be bypassed
         # 声明段唯一来源是编排层：剧本残留值一律剥离，否则会绕过 C 类（characters=None）门控
         carried = {**_BASE_PROMPT, "voice_profiles": [{"Speaker": "赝品", "Voice_Style": "越权"}]}
         assert "voice_profiles" not in build_drama_video_prompt(carried, [], characters=None)
@@ -156,6 +160,8 @@ class TestBuildDramaVideoPrompt:
         assert prompt["voice_profiles"] == [{"Speaker": "王", "Voice_Style": "低沉"}]
 
     def test_nfd_speaker_hits_nfc_registered_character(self):
+        # speaker and the character table key may each be in either NFC or NFD form (existing data needs no migration);
+        # after normalizing, the index must hit both ways; the displayed Speaker value keeps the dialogue's original text
         # speaker 与角色表 key 可能各是 NFC/NFD 中的任一形态（存量数据无需迁移），
         # 归一后索引须双向命中；Speaker 展示值保留 dialogue 原文
         for speaker, registered in ((_NAME_NFD, _NAME_NFC), (_NAME_NFC, _NAME_NFD)):
@@ -197,6 +203,7 @@ class TestBuildDramaVideoPrompt:
 
 class TestUtterancesToDialogue:
     def test_takes_dialogue_kind_in_order_maps_text_to_line(self):
+        # Only dialogue-kind goes into the video YAML's {speaker, line}, kept in time order; voiceover does not
         # 仅 dialogue-kind 进 video YAML 的 {speaker, line}，按时序保留，voiceover 不进
         utterances = [
             {"kind": "voiceover", "speaker": None, "text": "旁白一"},
@@ -210,12 +217,15 @@ class TestUtterancesToDialogue:
         ]
 
     def test_robust_to_dirty_data(self):
+        # Non-list / non-dict elements / missing kind / all empty are always skipped without raising
         # 非 list / 非 dict 元素 / 缺 kind / 全空一律跳过，不抛
         assert utterances_to_dialogue(None) == []
         assert utterances_to_dialogue("nope") == []
         assert utterances_to_dialogue([1, "x", {"kind": "dialogue", "speaker": " ", "text": " "}]) == []
 
     def test_drops_dialogue_missing_speaker_or_text(self):
+        # A dialogue goes into the lip-sync audio track only if speaker and line are both non-empty: dirty dialogue missing speaker (the contract requires dialogue to carry a non-empty
+        # speaker) or missing text is always dropped, so ownerless lines are not fed back to lip-sync / video YAML
         # dialogue 须 speaker 与 line 同时非空才进口型音轨：缺 speaker（契约要求 dialogue 必带非空
         # speaker）或缺 text 的脏 dialogue 一律丢弃，不把无主台词重新喂给 lip-sync / video YAML
         utterances = [
@@ -226,6 +236,8 @@ class TestUtterancesToDialogue:
         assert utterances_to_dialogue(utterances) == [{"speaker": "姜月茴", "line": "你来了。"}]
 
     def test_supports_pydantic_utterance_instances(self):
+        # Compatible with already instantiated Pydantic Utterance model objects (not just raw dicts): read attributes rather than keys,
+        # dialogue-kind derived correctly and voiceover skipped, the same measure as the dict form
         # 兼容已实例化的 Pydantic Utterance 模型对象（不止原始 dict）：取属性而非键，
         # dialogue-kind 正确派生、voiceover 跳过，与 dict 形态同口径
         from lib.script.script_models import Utterance
@@ -237,6 +249,7 @@ class TestUtterancesToDialogue:
         assert utterances_to_dialogue(utterances) == [{"speaker": "王", "line": "走吧。"}]
 
     def test_feeds_video_prompt_to_yaml_dialogue(self):
+        # Chained with video_prompt_to_yaml: drama dialogue lines derived from utterances appear correctly in the YAML Dialogue
         # 与 video_prompt_to_yaml 串联：drama 台词从 utterances 派生后正确出现在 YAML Dialogue
         dialogue = utterances_to_dialogue([{"kind": "dialogue", "speaker": "王", "text": "走吧。"}])
         parsed = yaml.safe_load(
@@ -250,13 +263,16 @@ class TestUtterancesToDialogue:
         assert validate_shot_type("Close-up")
         assert not validate_shot_type("Bad Shot")
         assert validate_camera_motion("Zoom In")
+        # The vocabulary is derived from the Literal in lib.script.script_models; extended values should be directly validatable
         # 词表从 lib.script.script_models 的 Literal 派生，扩充后的值应直接可校验
         assert validate_camera_motion("Orbit")
         assert not validate_camera_motion("Teleport")
 
 
 class TestSplitAvoidLines:
-    """正文里的排除项行按前缀识别，正文与排除项文本各自成形。"""
+    """Exclusion lines in the body are recognized by prefix; the body and the exclusion text each take their own shape.
+
+    正文里的排除项行按前缀识别，正文与排除项文本各自成形。"""
 
     def test_every_avoid_line_is_lifted_in_order(self):
         body, avoid = split_avoid_lines("一只猫\n\nAvoid: 水印\n\n镜头推近\n\nAvoid: 模糊、畸变")
@@ -282,7 +298,9 @@ class TestSplitAvoidLines:
         assert split_avoid_lines("一只猫\nAvoid:") == ("一只猫", "")
 
     def test_an_indented_avoid_line_stays_in_the_body(self):
-        """前缀顶行起才算声明行；缩进的 Avoid 是正文自己的措辞。"""
+        """Only a prefix starting at the beginning of the line counts as a declaration line; an indented Avoid is the body's own wording.
+
+        前缀顶行起才算声明行；缩进的 Avoid 是正文自己的措辞。"""
         body, avoid = split_avoid_lines("一只猫\n  Avoid: 水印")
 
         assert body == "一只猫\n  Avoid: 水印"
@@ -320,7 +338,9 @@ class TestNormalizeVideoPrompt:
 
 
 class TestRenderStoryboardVideoPrompt:
-    """文本形态的最终渲染出口：正文即提示词主体，drama 的发声声明由渲染层按 utterances 追加。"""
+    """Final render exit for the text form: the body is the main prompt, and drama voicing declarations are appended by the render layer from utterances.
+
+    文本形态的最终渲染出口：正文即提示词主体，drama 的发声声明由渲染层按 utterances 追加。"""
 
     ITEM: ClassVar[dict[str, object]] = {"utterances": [{"kind": "dialogue", "speaker": "王", "text": "你来了。"}]}
     CHARACTERS: ClassVar[dict[str, object]] = {"王": {"voice_style": "低沉沙哑"}}
@@ -352,21 +372,27 @@ class TestRenderStoryboardVideoPrompt:
         ids=["text", "structured-preview"],
     )
     def test_legacy_avoid_line_without_logo_is_upgraded_on_rerender(self, legacy):
-        """纯文本回贴中不含 Logo 的 Avoid 行由模版完整声明替换，不叠出第二行。"""
+        """An Avoid line without Logo in a plain-text paste-back is replaced by the template's full declaration, without stacking a second line.
+
+        纯文本回贴中不含 Logo 的 Avoid 行由模版完整声明替换，不叠出第二行。"""
         rendered = self._render(legacy, content_mode="narration")
         assert rendered.count("Avoid:") == 1
         assert rendered.endswith("Avoid: BGM、文字字幕、水印、Logo")
         assert self._render(rendered, content_mode="narration") == rendered
 
     def test_a_hand_edited_avoid_line_is_replaced_by_the_shared_declaration(self):
-        """排除项声明是按产出媒体共享的片段，正文里改写它不会被带到供应商——渲染出口只留那一份。"""
+        """The exclusion declaration is a partial shared per output media; rewriting it in the body is not carried to the provider, and the render exit keeps only that one copy.
+
+        排除项声明是按产出媒体共享的片段，正文里改写它不会被带到供应商——渲染出口只留那一份。"""
         rendered = self._render("镜头缓缓推近\n\nAvoid: BGM、文字字幕、水印、Logo、红色", content_mode="narration")
 
         assert rendered.count("Avoid:") == 1
         assert rendered.endswith("Avoid: BGM、文字字幕、水印、Logo")
 
     def test_speech_sections_appended_after_an_avoid_line_keep_the_declaration_last(self):
-        """发声声明段追加在正文的 Avoid 行之后时，渲染出口仍把那一行归回末尾。"""
+        """When voicing declaration sections are appended after the body's Avoid line, the render exit still moves that line back to the end.
+
+        发声声明段追加在正文的 Avoid 行之后时，渲染出口仍把那一行归回末尾。"""
         rendered = self._render("镜头缓缓推近\n\nAvoid: BGM、文字字幕、水印、Logo")
 
         assert rendered.count("Avoid:") == 1
@@ -374,7 +400,9 @@ class TestRenderStoryboardVideoPrompt:
         assert "Line: 你来了。" in rendered
 
     def test_speech_sections_already_in_body_are_not_appended_twice(self):
-        """结构化 → 文本以当前渲染结果为初值：正文已带发声声明段时不叠出第二份。"""
+        """Structured → text starts from the current render result: when the body already has voicing declaration sections, a second copy is not stacked.
+
+        结构化 → 文本以当前渲染结果为初值：正文已带发声声明段时不叠出第二份。"""
         seed = self._render({"action": "起身", "camera_motion": "Static", "ambiance_audio": "风声"})
 
         assert self._render(seed) == seed

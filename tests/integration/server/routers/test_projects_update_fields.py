@@ -10,8 +10,11 @@ from tests.integration.server.routers.projects_router_support import (
 
 class TestProjectsRouter:
     def test_update_project_with_style_template_id_expands_and_clears_image(self, tmp_path, monkeypatch):
-        """PATCH style_template_id：写入 id + 展开 prompt 到 style，并清掉 style_image/description。"""
+        """PATCH style_template_id: write the id + expand the prompt into style, and clear style_image/description.
+
+        PATCH style_template_id：写入 id + 展开 prompt 到 style，并清掉 style_image/description。"""
         fake_pm = _FakePM(tmp_path)
+        # Preset a project with a reference image
         # 预置一个带参考图的项目
         fake_pm.project_data["ready"]["style_image"] = "style_reference.png"
         fake_pm.project_data["ready"]["style_description"] = "old desc"
@@ -39,7 +42,9 @@ class TestProjectsRouter:
             assert resp.status_code == 400
 
     def test_update_project_clear_style_template(self, tmp_path, monkeypatch):
-        """PATCH style_template_id=null：同时清掉 id 与派生的 style 长文本。"""
+        """PATCH style_template_id=null: clears both the id and the derived style long text.
+
+        PATCH style_template_id=null：同时清掉 id 与派生的 style 长文本。"""
         fake_pm = _FakePM(tmp_path)
         fake_pm.project_data["ready"]["style_template_id"] = "live_premium_drama"
         fake_pm.project_data["ready"]["style"] = "画风：真人电视剧风格，精品短剧画风，大师级构图"
@@ -56,7 +61,9 @@ class TestProjectsRouter:
             assert data["style"] == ""
 
     def test_update_project_clear_style_image(self, tmp_path, monkeypatch):
-        """PATCH clear_style_image=true：清掉 style_image 与 style_description。"""
+        """PATCH clear_style_image=true: clears style_image and style_description.
+
+        PATCH clear_style_image=true：清掉 style_image 与 style_description。"""
         fake_pm = _FakePM(tmp_path)
         fake_pm.project_data["ready"]["style_image"] = "style_reference.png"
         fake_pm.project_data["ready"]["style_description"] = "some desc"
@@ -73,7 +80,9 @@ class TestProjectsRouter:
             assert "style_description" not in data
 
     def test_update_project_switches_to_tts_with_snapshot(self, tmp_path, monkeypatch):
-        """PATCH 改为 TTS 配音并写入模型 / 音色 / 语速快照。"""
+        """PATCH switches to TTS voiceover and writes the model / voice / speech rate snapshot.
+
+        PATCH 改为 TTS 配音并写入模型 / 音色 / 语速快照。"""
         fake_pm = _FakePM(tmp_path)
         client = build_projects_client(monkeypatch, fake_pm)
         with client:
@@ -94,7 +103,10 @@ class TestProjectsRouter:
             assert data["narration_speed"] == 1.2
 
     def test_switching_to_post_production_keeps_tts_snapshot(self, tmp_path, monkeypatch):
-        """改为后期配音只改交付方式，快照保留，已有旁白配音的依据照旧可复算。"""
+        """Switching to post-production voiceover only changes the delivery; the snapshot is kept, and the basis of existing
+        narration audio can still be recomputed.
+
+        改为后期配音只改交付方式，快照保留，已有旁白配音的依据照旧可复算。"""
         fake_pm = _FakePM(tmp_path)
         fake_pm.project_data["ready"].update(
             narration_delivery="use_tts",
@@ -122,7 +134,10 @@ class TestProjectsRouter:
         ],
     )
     def test_update_project_rejects_incomplete_tts_config(self, tmp_path, monkeypatch, patch):
-        """TTS 配音必须带完整快照，交付方式不可清空；拒绝时整次 PATCH 不写回。"""
+        """TTS voiceover must carry a complete snapshot, and the delivery cannot be cleared; on rejection the whole PATCH is
+        not written back.
+
+        TTS 配音必须带完整快照，交付方式不可清空；拒绝时整次 PATCH 不写回。"""
         fake_pm = _FakePM(tmp_path)
         client = build_projects_client(monkeypatch, fake_pm)
         with client:
@@ -146,7 +161,10 @@ class TestProjectsRouter:
             assert fake_pm.project_data["ready"]["narration_voice"] == "Cherry"
 
     def test_update_project_clears_tts_speed(self, tmp_path, monkeypatch):
-        """语速 null = 不向供应商传语速，从快照中移除，不回落全局默认。"""
+        """Speech rate null = do not pass a speech rate to the provider; removed from the snapshot, not falling back to the
+        global default.
+
+        语速 null = 不向供应商传语速，从快照中移除，不回落全局默认。"""
         fake_pm = _FakePM(tmp_path)
         fake_pm.project_data["ready"].update(
             narration_delivery="use_tts",
@@ -161,7 +179,10 @@ class TestProjectsRouter:
             assert "narration_speed" not in fake_pm.project_data["ready"]
 
     def test_update_project_persists_character_voice_binding(self, tmp_path, monkeypatch):
-        """PATCH 角色声音绑定方式：合法枚举写入，空值回落默认（从 project.json 移除）。"""
+        """PATCH character voice binding: valid enum values are written; an empty value falls back to the default (removed
+        from project.json).
+
+        PATCH 角色声音绑定方式：合法枚举写入，空值回落默认（从 project.json 移除）。"""
         fake_pm = _FakePM(tmp_path)
         client = build_projects_client(monkeypatch, fake_pm)
         with client:
@@ -174,7 +195,9 @@ class TestProjectsRouter:
             assert "character_voice_binding" not in fake_pm.project_data["ready"]
 
     def test_update_project_rejects_unknown_character_voice_binding(self, tmp_path, monkeypatch):
-        """非法枚举 422，且不写回 project.json。"""
+        """An illegal enum returns 422 and is not written back to project.json.
+
+        非法枚举 422，且不写回 project.json。"""
         fake_pm = _FakePM(tmp_path)
         client = build_projects_client(monkeypatch, fake_pm)
         with client:
@@ -183,7 +206,9 @@ class TestProjectsRouter:
             assert "character_voice_binding" not in fake_pm.project_data["ready"]
 
     def test_update_project_rejects_non_positive_narration_speed(self, tmp_path, monkeypatch):
-        """语速 0/负数应 422，且不写回 project.json。"""
+        """A speech rate of 0/negative should return 422 and not be written back to project.json.
+
+        语速 0/负数应 422，且不写回 project.json。"""
         fake_pm = _FakePM(tmp_path)
         client = build_projects_client(monkeypatch, fake_pm)
         with client:
@@ -192,7 +217,10 @@ class TestProjectsRouter:
             assert "narration_speed" not in fake_pm.project_data["ready"]
 
     def test_update_project_persists_and_clears_speech_rate(self, tmp_path, monkeypatch):
-        """PATCH 口播语速估算：区间内写入 project.json，null 清除回落语言默认。"""
+        """PATCH speech rate estimate: written to project.json when in range; null clears and falls back to the language
+        default.
+
+        PATCH 口播语速估算：区间内写入 project.json，null 清除回落语言默认。"""
         fake_pm = _FakePM(tmp_path)
         client = build_projects_client(monkeypatch, fake_pm)
         with client:
@@ -206,7 +234,9 @@ class TestProjectsRouter:
 
     @pytest.mark.parametrize("bad", [0, -1, 20.5, 1000])
     def test_update_project_rejects_out_of_range_speech_rate(self, tmp_path, monkeypatch, bad):
-        """口播语速估算越界（≤0 或 >20）应 422，且不写回 project.json。"""
+        """A speech rate estimate out of range (<=0 or >20) should return 422 and not be written back to project.json.
+
+        口播语速估算越界（≤0 或 >20）应 422，且不写回 project.json。"""
         fake_pm = _FakePM(tmp_path)
         client = build_projects_client(monkeypatch, fake_pm)
         with client:
@@ -216,7 +246,9 @@ class TestProjectsRouter:
 
     @pytest.mark.parametrize("value", [True, False])
     def test_update_project_rejects_boolean_speech_rate(self, tmp_path, monkeypatch, value):
-        """PATCH 同样拒布尔：否则 true 会作为 1.0 落盘、false 被当成未填静默跳过。"""
+        """PATCH rejects booleans too: otherwise true would be persisted as 1.0 and false silently skipped as unset.
+
+        PATCH 同样拒布尔：否则 true 会作为 1.0 落盘、false 被当成未填静默跳过。"""
         fake_pm = _FakePM(tmp_path)
         client = build_projects_client(monkeypatch, fake_pm)
         with client:
@@ -225,7 +257,10 @@ class TestProjectsRouter:
             assert "speech_rate_units_per_second" not in fake_pm.project_data["ready"]
 
     def test_update_project_persists_and_clears_episode_target_duration(self, tmp_path, monkeypatch):
-        """PATCH 单集目标时长：区间内写入 project.json，null 清除回落「未设目标」。"""
+        """PATCH per-episode target duration: written to project.json when in range; null clears and falls back to "no target
+        set".
+
+        PATCH 单集目标时长：区间内写入 project.json，null 清除回落「未设目标」。"""
         fake_pm = _FakePM(tmp_path)
         client = build_projects_client(monkeypatch, fake_pm)
         with client:
@@ -247,7 +282,9 @@ class TestProjectsRouter:
             assert "episode_target_duration" not in fake_pm.project_data["ready"]
 
     def test_update_project_rejects_invalid_audio_backend(self, tmp_path, monkeypatch):
-        """TTS 模型非法 provider 应 400（复用 backend 格式校验）。"""
+        """An illegal provider for the TTS model should return 400 (reusing the backend format validation).
+
+        TTS 模型非法 provider 应 400（复用 backend 格式校验）。"""
         fake_pm = _FakePM(tmp_path)
         client = build_projects_client(monkeypatch, fake_pm)
         with client:
@@ -255,7 +292,9 @@ class TestProjectsRouter:
             assert resp.status_code == 400
 
     def test_update_project_clear_style_combined(self, tmp_path, monkeypatch):
-        """一次性清空所有风格：style_template_id=null + clear_style_image=true。"""
+        """Clear all styles at once: style_template_id=null + clear_style_image=true.
+
+        一次性清空所有风格：style_template_id=null + clear_style_image=true。"""
         fake_pm = _FakePM(tmp_path)
         fake_pm.project_data["ready"]["style_template_id"] = "live_premium_drama"
         fake_pm.project_data["ready"]["style"] = "画风：..."
@@ -276,7 +315,9 @@ class TestProjectsRouter:
             assert "style_description" not in data
 
     def test_patch_image_default_layer_set_and_clear(self, tmp_path, monkeypatch):
-        """项目默认图片模型可设置 / 清除；格式非法与非图片模型均 400。"""
+        """The project default image model can be set / cleared; illegal formats and non-image models both return 400.
+
+        项目默认图片模型可设置 / 清除；格式非法与非图片模型均 400。"""
         fake_pm = _FakePM(tmp_path)
         client = build_projects_client(monkeypatch, fake_pm)
         with client:
@@ -293,6 +334,8 @@ class TestProjectsRouter:
 
             rejected = client.patch("/api/v1/projects/ready", json={"default_image_backend": "no-slash"})
             assert rejected.status_code == 400
+            # Validation raises inside the disk-write closure; if the router's fallback branch did not pass domain exceptions
+            # through it would degrade to 500
             # 校验在写盘闭包内抛出，若 router 的兜底分支不透传领域异常会退化成 500
             assert rejected.json()["diagnostic"] == "field: default_image_backend"
 
@@ -303,7 +346,10 @@ class TestProjectsRouter:
             assert wrong_media.status_code == 400
 
     def test_patch_text_tier_fields_set_and_clear(self, tmp_path, monkeypatch):
-        """项目级档位 / 默认模型三字段可设置；空值 = 清除、继承全局。"""
+        """The three project-level tier / default model fields can be set; an empty value = clear, inheriting the global
+        ones.
+
+        项目级档位 / 默认模型三字段可设置；空值 = 清除、继承全局。"""
         fake_pm = _FakePM(tmp_path)
         client = build_projects_client(monkeypatch, fake_pm)
         with client:
@@ -331,6 +377,7 @@ class TestProjectsRouter:
             assert "text_backend_complex" not in data
             assert "default_text_backend" not in data
 
+            # An illegal backend value is rejected with 400
             # 非法 backend 值被 400 拒绝
             rejected = client.patch(
                 "/api/v1/projects/ready",
@@ -354,6 +401,7 @@ class TestProjectsRouter:
         fake_pm.project_data["ready"]["generation_mode"] = "storyboard"
         client = build_projects_client(monkeypatch, fake_pm)
         with client:
+            # The grid toggle can be switched at any time after creation
             # 宫格开关创建后可随时切换
             on = client.patch("/api/v1/projects/ready", json={"grid_storyboard": True})
             assert on.status_code == 200
@@ -363,6 +411,8 @@ class TestProjectsRouter:
             assert off.status_code == 200
             assert fake_pm.project_data["ready"]["grid_storyboard"] is False
 
+            # The generation mode is fixed at creation: the project PATCH model has no generation_mode structurally; if it
+            # appears it is silently dropped and not persisted
             # 生成模式创建即定：项目 PATCH 模型结构上无 generation_mode，出现即被静默丢弃、不写盘
             route = client.patch("/api/v1/projects/ready", json={"generation_mode": "reference_video"})
             assert route.status_code == 200

@@ -1,4 +1,7 @@
-"""剪辑时间线服务命令：在真实临时项目目录上经公开命令验证机械新建、列出与读取。"""
+"""Edit timeline service commands: verify mechanical creation, listing and reading through the public commands on a
+real temp project directory.
+
+剪辑时间线服务命令：在真实临时项目目录上经公开命令验证机械新建、列出与读取。"""
 
 from __future__ import annotations
 
@@ -51,6 +54,7 @@ async def test_mechanical_timeline_orders_clips_by_script_with_voice_defaults(
     assert [(clip.id, clip.unit_id) for clip in readout.clips] == [("c1", "E1U1"), ("c2", "E1U2"), ("c3", "E1U3")]
     assert [(clip.start, clip.duration) for clip in readout.clips] == [(0.0, 1.0), (1.0, 1.5), (2.5, 0.5)]
     assert readout.duration == 3.0
+    # Dialogue and no-voice units keep their original volume; voice-over units are ducked
     # 台词与无人声单位保持原音量，画外音单位压低
     assert [clip.source_volume for clip in readout.clips] == [1.0, 0.3, 1.0]
     assert all(clip.transition_to_next is None for clip in readout.clips)
@@ -82,6 +86,8 @@ async def test_script_changes_surface_as_deleted_and_unused_units(
     )
     readout = await service.read("demo", created.timeline.id)
 
+    # The edit timeline does not change with the script: clips stay as they are, and clips of deleted units are skipped
+    # when rendering
     # 剪辑时间线不随脚本变化：片段保持原样，已删除单元的片段渲染时跳过
     assert [clip.unit_id for clip in readout.clips] == ["E1U1", "E1U2", "E1U3"]
     assert [(clip.status, clip.start, clip.duration) for clip in readout.clips] == [
@@ -156,6 +162,7 @@ async def test_reading_an_unknown_timeline_is_rejected(service: EditTimelineServ
 async def test_media_durations_accumulate_before_rounding_to_milliseconds(
     service: EditTimelineService, install_video: InstallMedia
 ) -> None:
+    # Each segment is 31 frames / 30fps, shown as 1.033 seconds per segment, so the three should total 3.100 seconds.
     # 每段 31 帧 / 30fps，单段显示为 1.033 秒，三段合计应为 3.100 秒。
     for unit_id in ("E1U1", "E1U2", "E1U3"):
         install_video(unit_id, 1.03)
@@ -184,6 +191,8 @@ async def test_subtitle_characters_the_bundled_font_cannot_draw_are_reported(
 
     readout = await service.create_from_script("demo", episode=1, name="初剪", author=CREATOR)
 
+    # Only query dialogue and voice-over (the sources of subtitles); E1U3 is a no-voice unit, and action descriptions do
+    # not go into subtitles.
     # 只查台词与画外音（字幕的来源）；E1U3 是无人声单位，动作描述不进字幕。
     assert [
         (issue.clip_ids, issue.unit_id, issue.severity.value, issue.applies_to.value, issue.params)

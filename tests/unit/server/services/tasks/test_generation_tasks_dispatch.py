@@ -13,6 +13,10 @@ def test_task_executors_registered_for_reference_video():
 
 
 def test_task_change_action_registered_for_reference_video():
+    # entity_type is no longer a static spec: it is resolved dynamically by script skeleton kind (see
+    # the skeleton coverage cases for emit_generation_success_batch in test_generation_tasks_service.py),
+    # aligned with "reference_unit" in the frontend ProjectChange["entity_type"] union type, no longer the
+    # "reference_video_unit" known only to this side.
     # entity_type 不再是静态 spec：按剧本骨架种类动态解析（见
     # test_generation_tasks_service.py 里对 emit_generation_success_batch 的骨架覆盖用例），
     # 与前端 ProjectChange["entity_type"] 联合类型的 "reference_unit" 对齐，不再是仅本侧
@@ -97,7 +101,12 @@ async def test_execute_generation_task_passes_claimed_provider_to_reference_exec
     ],
 )
 async def test_execute_generation_task_propagates_capability_errors_unrendered(monkeypatch, error):
-    """能力类异常原样上抛，dispatch 层不做本地化——渲染留到读侧 Translator。
+    """Capability exceptions are re-raised as is; the dispatch layer does no localization, leaving rendering to the read-side Translator.
+
+    Previously this baked them into Chinese per DEFAULT_LOCALE and wrapped them in RuntimeError, so en/vi users saw Chinese failure reasons
+    in the task list.
+
+    能力类异常原样上抛，dispatch 层不做本地化——渲染留到读侧 Translator。
 
     此前这里按 DEFAULT_LOCALE 烘焙成中文再包 RuntimeError，导致 en/vi 用户在任务
     列表看到中文失败原因。
@@ -125,7 +134,9 @@ async def test_execute_generation_task_propagates_capability_errors_unrendered(m
 
 @pytest.mark.asyncio
 async def test_execute_generation_task_propagates_other_exceptions(monkeypatch):
-    """非能力类异常同样原样冒泡"""
+    """Non-capability exceptions also bubble up as is
+
+    非能力类异常同样原样冒泡"""
     from server.services.tasks.generation_tasks import execute_generation_task
 
     async def fake_executor(*_args, **_kwargs):

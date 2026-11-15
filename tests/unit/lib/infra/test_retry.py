@@ -1,4 +1,6 @@
-"""lib/infra/retry.py 通用重试装饰器单元测试。"""
+"""Unit tests for the generic retry decorator in lib/infra/retry.py.
+
+lib/infra/retry.py 通用重试装饰器单元测试。"""
 
 from __future__ import annotations
 
@@ -21,7 +23,9 @@ from lib.infra.retry import (
 
 
 class _FakeClock:
-    """记录退避时长的时钟 seam 替身；sleep 不真等。"""
+    """Clock seam stand-in that records backoff durations; sleep does not really wait.
+
+    记录退避时长的时钟 seam 替身；sleep 不真等。"""
 
     def __init__(self) -> None:
         self.sleeps: list[float] = []
@@ -38,7 +42,9 @@ def _no_jitter(_low: float, _high: float) -> float:
 
 
 class TestShouldRetry:
-    """should_retry 判断逻辑测试。"""
+    """Tests of the should_retry decision logic.
+
+    should_retry 判断逻辑测试。"""
 
     def test_retryable_error_type(self):
         assert should_retry(ConnectionError("reset"), BASE_RETRYABLE_ERRORS) is True
@@ -100,7 +106,12 @@ class TestShouldRetry:
         assert should_retry(MyError("oops"), ()) is False
 
     def test_non_retryable_error_short_circuits_pattern_match(self):
-        """NonRetryableError 即使消息文本偶然命中瞬态模式子串，也始终不重试。
+        """NonRetryableError is never retried, even if its message text happens to match a transient pattern substring.
+
+        Regression scenario: a structured output truncation error message embeds an arbitrary output_tokens integer; if its decimal
+        text happens to contain a substring like "500"/"429", string pattern matching would misjudge it as transient and retry.
+
+        NonRetryableError 即使消息文本偶然命中瞬态模式子串，也始终不重试。
 
         回归场景：结构化输出截断错误的消息里嵌入任意 output_tokens 整数，若其十进制
         文本恰好包含 "500"/"429" 等子串，字符串模式匹配会误判为瞬态错误进而重试。
@@ -115,7 +126,9 @@ class TestShouldRetry:
 
 
 class TestWithRetryAsync:
-    """with_retry_async 装饰器测试。"""
+    """with_retry_async decorator tests.
+
+    with_retry_async 装饰器测试。"""
 
     async def test_success_no_retry(self):
         mock_fn = AsyncMock(return_value="ok")
@@ -144,7 +157,9 @@ class TestWithRetryAsync:
         assert mock_fn.call_count == 2
 
     async def test_retry_on_string_pattern(self):
-        """错误信息中包含 429 时应重试。"""
+        """Should retry when the error message contains 429.
+
+        错误信息中包含 429 时应重试。"""
         mock_fn = AsyncMock(side_effect=[RuntimeError("Error code: 429"), "ok"])
         clock = _FakeClock()
 
@@ -171,7 +186,9 @@ class TestWithRetryAsync:
         assert clock.sleeps == []
 
     async def test_no_retry_on_non_retryable_despite_colliding_pattern(self):
-        """NonRetryableError 消息即使包含 "500" 子串也只调用一次，不重试。"""
+        """A NonRetryableError message is called only once even if it contains the substring "500"; no retry.
+
+        NonRetryableError 消息即使包含 "500" 子串也只调用一次，不重试。"""
 
         class _Truncated(NonRetryableError):
             pass
@@ -224,7 +241,9 @@ class TestWithRetryAsync:
         assert mock_fn.call_count == 2
 
     async def test_backoff_index_clamped(self):
-        """backoff_seconds 长度不足时，使用最后一个值。"""
+        """When backoff_seconds is too short, the last value is used.
+
+        backoff_seconds 长度不足时，使用最后一个值。"""
         errors = [ConnectionError(f"e{i}") for i in range(4)]
         mock_fn = AsyncMock(side_effect=[*errors, "ok"])
         clock = _FakeClock()
@@ -239,7 +258,9 @@ class TestWithRetryAsync:
         assert clock.sleeps == [1, 2, 2, 2]
 
     async def test_retry_if_true_triggers_retry(self):
-        """retry_if 返回 True 时应触发重试。"""
+        """retry_if returning True should trigger a retry.
+
+        retry_if 返回 True 时应触发重试。"""
         mock_fn = AsyncMock(side_effect=[ValueError("transient"), "ok"])
         clock = _FakeClock()
 
@@ -259,14 +280,16 @@ class TestWithRetryAsync:
         assert mock_fn.call_count == 2
 
     async def test_retry_if_false_raises_immediately(self):
-        """retry_if 返回 False 时应立即抛出，即使 should_retry 会返回 True。"""
+        """retry_if returning False should raise immediately, even if should_retry would return True.
+
+        retry_if 返回 False 时应立即抛出，即使 should_retry 会返回 True。"""
         mock_fn = AsyncMock(side_effect=ConnectionError("reset"))
         clock = _FakeClock()
 
         @with_retry_async(
             max_attempts=3,
             backoff_seconds=(0, 0, 0),
-            retry_if=lambda e: False,  # 始终不重试
+            retry_if=lambda e: False,  # Never retry / 始终不重试
             clock=clock,
             jitter=_no_jitter,
         )
@@ -279,7 +302,9 @@ class TestWithRetryAsync:
         assert clock.sleeps == []
 
     async def test_retry_if_none_uses_default_should_retry(self):
-        """retry_if=None（默认）应保持原有 should_retry 行为。"""
+        """retry_if=None (the default) should keep the original should_retry behaviour.
+
+        retry_if=None（默认）应保持原有 should_retry 行为。"""
         mock_fn = AsyncMock(side_effect=[ConnectionError("reset"), "ok"])
         clock = _FakeClock()
 
@@ -293,7 +318,13 @@ class TestWithRetryAsync:
         assert mock_fn.call_count == 2
 
     async def test_custom_retry_if_cannot_override_non_retryable(self):
-        """自定义 retry_if 即便对 NonRetryableError 返回 True，wrapper 仍应短路不重试——
+        """Even if a custom retry_if returns True for NonRetryableError, the wrapper should still short-circuit and not retry.
+
+        This guarantee must be decided centrally inside the decorator, not rely on every custom predicate calling should_retry itself;
+        otherwise a new custom predicate that forgets to handle NonRetryableError would break the module docstring's promise that
+        "exception types inheriting NonRetryableError are never retried".
+
+        自定义 retry_if 即便对 NonRetryableError 返回 True，wrapper 仍应短路不重试——
 
         这个保证须在装饰器内统一判定，不能依赖每个自定义谓词自行调用 should_retry；
         否则新增的自定义谓词若忘记处理 NonRetryableError，会破坏模块 docstring 承诺的

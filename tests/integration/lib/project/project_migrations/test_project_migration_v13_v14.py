@@ -1,4 +1,7 @@
-"""v13→v14：遗留风格值归一、依据补记风格描述后，既有产物不因升级翻过期，本就过期的不被伪造成时新。"""
+"""v13->v14: after legacy style values are normalized and bases gain the style description, existing artifacts do
+not flip to stale because of the upgrade, and already stale ones are not faked as current.
+
+v13→v14：遗留风格值归一、依据补记风格描述后，既有产物不因升级翻过期，本就过期的不被伪造成时新。"""
 
 from __future__ import annotations
 
@@ -54,7 +57,10 @@ def _status(project_dir: Path, key: ArtifactKey) -> str:
 
 
 def _is_current_before_migration(project_dir: Path, key: ArtifactKey) -> bool:
-    """迁移前的时新性判定。读模型只服务当前 schema 的项目，此处直接比对登记与目标态。"""
+    """Currency check before migration. The read model only serves projects at the current schema, so registrations are
+    compared to the target state directly here.
+
+    迁移前的时新性判定。读模型只服务当前 schema 的项目，此处直接比对登记与目标态。"""
     return _entries(project_dir).get(key) == TargetStatePlanner(project_dir).plan().entries.get(key)
 
 
@@ -67,7 +73,15 @@ def _write_project(project_dir: Path, project: dict) -> None:
 
 
 def _legacy_project_at_v13(root: Path, *, style: str = _PREFIXED_STYLE, name: str = "legacy") -> Path:
-    """一个停在 v13、产物齐全的遗留风格项目，单张分镜图的依据按归一后的风格值登记。
+    """A legacy-style project stopped at v13 with all artifacts present; the single storyboard image's basis is
+    registered with the normalized style value.
+
+    The single storyboard image's basis strips the prefix before the style value enters the digest, so its digest in
+    the existing manifest is already normalized; a twin project with an already normalized style value computes a
+    registration identical to it, which supplies this fact. Asset sheets, grids (including the storyboard images
+    split from grids) and scripts record the raw prefixed value in their basis and keep the shape the builder writes.
+
+    一个停在 v13、产物齐全的遗留风格项目，单张分镜图的依据按归一后的风格值登记。
 
     单张分镜图的依据在风格值进入摘要前先剥前缀，存量清单里它的摘要因此已是归一形态；风格值
     已归一的孪生项目算出的登记与之逐字相同，用它补上这一事实。资产图、宫格（含宫格切分出的
@@ -133,7 +147,10 @@ def test_asset_sheets_and_grids_stay_current_after_the_cleanup(tmp_path: Path) -
 
 
 def test_asset_sheet_basis_digest_is_rebased_onto_the_normalized_style(tmp_path: Path) -> None:
-    """资产图依据记的是原始风格值，归一必然改摘要——保住时新性靠改写登记，不靠摘要不变。"""
+    """The asset sheet basis records the raw style value, so normalization necessarily changes the digest -- currency is
+    kept by rewriting the registration, not by the digest staying the same.
+
+    资产图依据记的是原始风格值，归一必然改摘要——保住时新性靠改写登记，不靠摘要不变。"""
 
     project_dir = _legacy_project_at_v13(tmp_path / "projects")
     before = _entries(project_dir)[_CHARACTER_SHEET]
@@ -202,7 +219,10 @@ def _read_versions(project_dir: Path) -> dict:
 
 
 def _add_grid_version_record(project_dir: Path, *, style_description: str = "") -> None:
-    """宫格版本记录冻结的依据；描述为空时是 v13 时期与清单登记同一口径的形态，非空时按 v14 口径记描述。"""
+    """The basis frozen by a grid version record; with an empty description it has the v13-era shape identical to the
+    manifest registration, with a non-empty one it records the description per the v14 rule.
+
+    宫格版本记录冻结的依据；描述为空时是 v13 时期与清单登记同一口径的形态，非空时按 v14 口径记描述。"""
 
     project = {
         **_read_project(project_dir),
@@ -249,8 +269,12 @@ def test_described_grids_stay_current_and_bases_that_already_tracked_the_descrip
     record = _read_versions(project_dir)["grids"]["grid_123456789abc"]["versions"][0]
     assert parse_image_version_basis("grids", "grid_123456789abc", record).digest == after[_GRID].basis_digest
     if schema_version == 12:
+        # The whole activation in v12->v13 registers every present artifact as current, so stale marks on asset sheets and
+        # single storyboard images are not kept across that step.
         # v12→v13 的整份激活把在场产物一律登记为时新，资产图与单张分镜图的过期标记不跨这一步保留。
         return
+    # Asset sheet and single storyboard image bases have always recorded the description: a description that appeared
+    # after they were registered makes them stale before migration, and migration does not rewrite them.
     # 资产图与单张分镜图的依据一向记描述：描述出现在它们登记之后，迁移前就过期，迁移不改写。
     for key in (_CHARACTER_SHEET, _STORYBOARD):
         assert after[key] == before[key]
@@ -303,6 +327,8 @@ def test_described_reference_videos_stay_current_in_workflow_and_player(
         assert _status(project_dir, key) == "current"
         record = versions["reference_videos"][resource_id]["versions"][0]
         frozen = parse_typed_media_version_target("reference_videos", record).basis
+        # The player's "latest / older than current content" labels are decided by whether the frozen basis matches the
+        # current basis.
         # 播放器的「最新 / 比当前内容旧」标签按冻结依据与当前依据是否一致判断。
         current = build_current_video_artifact_basis(
             project_path=project_dir,
@@ -389,7 +415,10 @@ def test_failed_manifest_commit_rolls_back_version_records(tmp_path: Path) -> No
 
 
 def test_killed_after_version_records_are_written_resumes_on_rerun(tmp_path: Path) -> None:
-    """版本记录已落盘、清单未改写时进程被杀：重跑不再改写记录，清单照常改写。"""
+    """Process killed after version records are written but before the manifest is rewritten: the rerun does not
+    rewrite the records again, and rewrites the manifest as usual.
+
+    版本记录已落盘、清单未改写时进程被杀：重跑不再改写记录，清单照常改写。"""
 
     project_dir = write_undescribed_style_bases_project(tmp_path / "projects", "reference", route="reference_video")
     with (
@@ -419,6 +448,8 @@ def test_grid_whose_version_record_disagrees_with_the_manifest_is_left_stale_out
     assert _status(project_dir, _GRID) == "stale"
     for key in _GRID_MEMBERS:
         assert _status(project_dir, key) == "current"
+    # A basis that cannot be computed is not the same as unreadable: the report only shows the user unreadable files
+    # (ADR 0098).
     # 依据算不出不等于读不出：报告只给用户看读不出的文件（ADR 0098）。
     report = load_migration_report(project_dir)
     assert report is None or not [item for item in report.skipped if item.kind == "episode-grid"]
@@ -433,6 +464,8 @@ def test_artifacts_the_planner_cannot_project_stay_out_of_the_report(tmp_path: P
 
     migrate_project_dir(project_dir)
 
+    # A video whose basis cannot be computed reports missing on read and is not listed under "could not be carried
+    # over" (ADR 0098).
     # 依据算不出的视频读时报 missing，不进「未能带入」（ADR 0098）。
     report = load_migration_report(project_dir)
     assert report is None or not {(item.kind, item.resource_id) for item in report.skipped} & {

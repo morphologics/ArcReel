@@ -91,7 +91,9 @@ class _ProjectManager:
 
 
 def _project_dir(tmp_path: Path) -> Path:
-    """真实的 v8 项目目录：计划按产物清单读取产物，纸面路径不成立。"""
+    """A real v8 project directory: the plan reads artifacts via the artifact manifest; paper paths do not hold.
+
+    真实的 v8 项目目录：计划按产物清单读取产物，纸面路径不成立。"""
     pm = ProjectManager(tmp_path / "projects")
     pm.create_project("demo")
     pm.create_project_metadata(
@@ -283,7 +285,10 @@ async def test_planner_uses_shared_admission_and_never_reads_the_real_task_singl
 
 
 async def test_reference_plan_selects_targets_from_the_real_artifact_manifest(tmp_path: Path, db_factory) -> None:
-    """真实计划只对缺视频且不在生成中的 unit 做准入；读清单与产物不占用事件循环。"""
+    """The real plan admits only units missing a video and not being generated; reading the manifest and artifacts
+    does not occupy the event loop.
+
+    真实计划只对缺视频且不在生成中的 unit 做准入；读清单与产物不占用事件循环。"""
     pm = ProjectManager(tmp_path / "projects")
     pm.create_project("demo")
     pm.create_project_metadata(
@@ -650,7 +655,10 @@ async def test_status_read_is_idempotent_and_does_not_touch_project_files(
 async def test_planner_refuses_a_unit_whose_video_input_is_unusable(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """计划走的是提交侧同一条 spec 构造缝：分镜图不可用的条目在计划里就被逐 ID 拒绝。"""
+    """The plan uses the same spec-building seam as the submit side: entries with an unusable storyboard image are
+    rejected by ID already in the plan.
+
+    计划走的是提交侧同一条 spec 构造缝：分镜图不可用的条目在计划里就被逐 ID 拒绝。"""
 
     pm = _ProjectManager(_project_dir(tmp_path), _script())
     monkeypatch.setattr(workflow_planner.WorkflowStateService, "get_status", lambda *_args: _status())
@@ -661,11 +669,13 @@ async def test_planner_refuses_a_unit_whose_video_input_is_unusable(
     monkeypatch.setattr(workflow_planner, "get_active_tasks_for_resources", _no_active_tasks)
     use_active_tasks_lookup(monkeypatch, _no_active_tasks)
 
-    before = sorted(path.relative_to(tmp_path).as_posix() for path in tmp_path.rglob("*"))  # noqa: ASYNC240 -- 测试内本地小文件读写/断言，不在生产事件循环上
+    before = sorted(path.relative_to(tmp_path).as_posix() for path in tmp_path.rglob("*"))  # noqa: ASYNC240 -- Small local file reads/writes/asserts in a test, not on the production event loop / 测试内本地小文件读写/断言，不在生产事件循环上
     plan = await workflow_planner.WorkflowPlanner(pm).get_plan("demo", WorkflowPlanRequest())
 
+    # Going through the submit-side seam reads the Manifest and storyboard images; nothing it reads may leave a
+    # trace in the project directory.
     # 走提交侧那条缝要读 Manifest 与分镜图，读到的一切仍不得在项目目录留下痕迹。
-    assert sorted(path.relative_to(tmp_path).as_posix() for path in tmp_path.rglob("*")) == before  # noqa: ASYNC240 -- 测试内本地小文件读写/断言，不在生产事件循环上
+    assert sorted(path.relative_to(tmp_path).as_posix() for path in tmp_path.rglob("*")) == before  # noqa: ASYNC240 -- Small local file reads/writes/asserts in a test, not on the production event loop / 测试内本地小文件读写/断言，不在生产事件循环上
 
     video = next(step for step in plan.steps if step.id == "video")
     assert video.admission is not None
@@ -677,7 +687,10 @@ async def test_planner_refuses_a_unit_whose_video_input_is_unusable(
 async def test_planner_folds_a_video_request_facts_failure_into_each_target(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, set_admission_video_request_facts
 ) -> None:
-    """制作计划与提交入口同一道准入：事实解析不出时每个目标都带问题码、参数与修复指引。"""
+    """The workflow plan and the submit entry share the same admission: when facts cannot be resolved, every target
+    carries the problem code, params and fix guidance.
+
+    制作计划与提交入口同一道准入：事实解析不出时每个目标都带问题码、参数与修复指引。"""
 
     pm = _ProjectManager(_project_dir(tmp_path), _script())
     monkeypatch.setattr(workflow_planner.WorkflowStateService, "get_status", lambda *_args: _status())
@@ -719,7 +732,10 @@ async def test_planner_folds_a_video_request_facts_failure_into_each_target(
 async def test_planner_reports_the_audio_switch_conflict_before_any_task_exists(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, set_admission_video_request_facts
 ) -> None:
-    """音频闸门与入队入口同一道：计划预告的准入结论包含它，用户不必提交后才撞见。"""
+    """The audio gate is the same as the enqueue entry: the admission conclusion previewed by the plan includes it,
+    so the user does not hit it only after submitting.
+
+    音频闸门与入队入口同一道：计划预告的准入结论包含它，用户不必提交后才撞见。"""
 
     pm = _ProjectManager(_project_dir(tmp_path), _script())
     monkeypatch.setattr(workflow_planner.WorkflowStateService, "get_status", lambda *_args: _status())
@@ -754,7 +770,10 @@ async def test_planner_reports_the_audio_switch_conflict_before_any_task_exists(
 async def test_running_task_is_progress_not_a_problem_and_exposes_no_provider_handles(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """正在生成的单元只陈述为进行中的任务：不进整批准入、不成为问题，计划里也不露供应商 ID 与作业号。"""
+    """A unit being generated is only stated as an in-progress task: not in batch admission, not a problem, and
+    the plan exposes no provider IDs or job numbers.
+
+    正在生成的单元只陈述为进行中的任务：不进整批准入、不成为问题，计划里也不露供应商 ID 与作业号。"""
 
     script = _script()
     script["segments"].append({**script["segments"][0], "segment_id": "E1S02"})

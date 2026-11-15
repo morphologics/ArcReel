@@ -1,4 +1,10 @@
-"""节点绑定推断：候选、分数、信号与提示。
+"""Node binding inference: candidates, scores, signals and hints.
+
+The sample workflows are sampled node shapes from the official ComfyUI template library and Kijai's
+community examples, written in the "Export (API)" format; the official template library stores canvas
+saves, which cannot be used directly as the API format.
+
+节点绑定推断：候选、分数、信号与提示。
 
 样本 workflow 取自 ComfyUI 官方模板库与 Kijai 的社区示例所抽样出的节点形态，按「Export (API)」
 格式写成——官方模板库存的是画布存档，不能直接当 API 格式用。
@@ -21,7 +27,7 @@ from tests.factories import comfyui_endpoint_definition
 
 DATA = Path(__file__).parent / "data"
 
-#: 样本 workflow → 它产出的媒体类型。
+#: Sample workflow -> the media type it produces. / 样本 workflow → 它产出的媒体类型。
 SAMPLES = {
     "wan21_t2v": "video",
     "wan22_moe_t2v": "video",
@@ -36,7 +42,7 @@ SAMPLES = {
     "sdxl_batch_t2i": "image",
 }
 
-#: 分级信号自高到低，每一级都要有夹具命中。
+#: Graded signals from high to low; every level must be hit by a fixture. / 分级信号自高到低，每一级都要有夹具命中。
 GRADED_SIGNALS = (
     BindingSignal.MANUAL_BINDING,
     BindingSignal.TITLE_MARKER,
@@ -88,7 +94,10 @@ def marked(workflow: dict, node: str, title: str) -> dict:
 
 
 def external_workflow() -> dict:
-    """装了 ComfyUI-Deploy 参数化节点的图：正向文本由外部节点驱动。"""
+    """A graph with ComfyUI-Deploy parameter nodes installed: the positive text is driven by an external
+    node.
+
+    装了 ComfyUI-Deploy 参数化节点的图：正向文本由外部节点驱动。"""
     return {
         "1": {"class_type": "ComfyUIDeployExternalText", "inputs": {"input_id": "prompt", "default_value": "一只猫"}},
         "2": {"class_type": "CLIPTextEncode", "inputs": {"text": ["1", 0], "clip": ["3", 1]}},
@@ -101,7 +110,7 @@ def external_workflow() -> dict:
 
 
 # ---------------------------------------------------------------------------
-# 覆盖面
+# Coverage / 覆盖面
 # ---------------------------------------------------------------------------
 
 
@@ -143,7 +152,7 @@ def test_each_graded_signal_is_hit_by_at_least_one_fixture():
 
 
 # ---------------------------------------------------------------------------
-# 三种状态
+# Three states / 三种状态
 # ---------------------------------------------------------------------------
 
 
@@ -154,7 +163,10 @@ def test_a_single_highest_score_is_selected_automatically():
 
 
 def test_a_tie_at_the_top_is_ambiguous_and_selects_nothing():
-    """两段式 workflow 的两个采样器各有一个种子，谁也不比谁更像答案。"""
+    """The two samplers of a two-stage workflow each have a seed, and neither looks more like the answer
+    than the other.
+
+    两段式 workflow 的两个采样器各有一个种子，谁也不比谁更像答案。"""
     result = infer_sample("two_stage_sdxl_svd")
     assert result.keys["seed"].state is BindingState.AMBIGUOUS
     assert landings(result, "seed") == []
@@ -163,7 +175,10 @@ def test_a_tie_at_the_top_is_ambiguous_and_selects_nothing():
 
 
 def test_zero_candidates_reads_as_not_found():
-    """产物节点只预览不落盘时一个候选也没有，而不是把预览节点当成成片。"""
+    """When the artifact node only previews and does not save, there are no candidates at all, rather than
+    treating the preview node as the final cut.
+
+    产物节点只预览不落盘时一个候选也没有，而不是把预览节点当成成片。"""
     result = infer_sample("kijai_wanvideo_flf2v")
     assert result.keys["output"].state is BindingState.NOT_FOUND
     assert result.keys["output"].candidates == ()
@@ -194,12 +209,15 @@ def test_a_missing_key_is_inferred_from_scratch():
 
 
 # ---------------------------------------------------------------------------
-# 标题约定
+# Title conventions / 标题约定
 # ---------------------------------------------------------------------------
 
 
 def test_a_title_marker_suppresses_the_other_signals_on_that_key_only():
-    """标记按语义键抑制推断：正向文本改判给被标记的节点，别的键照原样推断。"""
+    """A marker suppresses inference per semantic key: positive text goes to the marked node, other keys are
+    inferred as usual.
+
+    标记按语义键抑制推断：正向文本改判给被标记的节点，别的键照原样推断。"""
     workflow = marked(sample_workflow("wan21_t2v"), "7", "ARCREEL:prompt 我说了算")
     result = infer_sample("wan21_t2v", workflow=workflow)
     assert landings(result, "prompt") == [("7", "text")]
@@ -213,7 +231,9 @@ def test_a_title_marker_is_case_insensitive_and_stops_at_the_first_space():
 
 
 def test_a_marked_node_with_several_fields_is_narrowed_by_the_input_name():
-    """``ARCREEL:width`` 打在同时有 width 与 height 的节点上只绑 width。"""
+    """``ARCREEL:width`` placed on a node that has both width and height binds only width.
+
+    ``ARCREEL:width`` 打在同时有 width 与 height 的节点上只绑 width。"""
     workflow = marked(sample_workflow("wan21_t2v"), "40", "ARCREEL:width")
     result = infer_sample("wan21_t2v", workflow=workflow)
     assert landings(result, "width") == [("40", "width")]
@@ -229,7 +249,7 @@ def test_reference_image_markers_are_numbered_by_ascending_node_id():
 
 
 # ---------------------------------------------------------------------------
-# 外部约定节点族
+# External convention node families / 外部约定节点族
 # ---------------------------------------------------------------------------
 
 
@@ -247,7 +267,7 @@ def test_an_external_node_whose_parameter_names_another_semantic_is_left_alone()
 
 
 # ---------------------------------------------------------------------------
-# 正负提示词
+# Positive and negative prompts / 正负提示词
 # ---------------------------------------------------------------------------
 
 
@@ -258,14 +278,20 @@ def test_polarity_comes_from_the_sampler_ports_not_from_the_node_order():
 
 
 def test_a_workflow_without_a_negative_path_reports_not_found_instead_of_the_positive_node():
-    """负向条件由正向清零得来时，正确答案是「这份 workflow 没有负向文本」。"""
+    """When the negative conditioning comes from zeroing out the positive, the correct answer is "this
+    workflow has no negative text".
+
+    负向条件由正向清零得来时，正确答案是「这份 workflow 没有负向文本」。"""
     result = infer_sample("flux_kontext_edit")
     assert result.keys["negative_prompt"].state is BindingState.NOT_FOUND
     assert landings(result, "prompt") == [("6", "text")]
 
 
 def test_one_node_holding_both_polarities_is_split_by_input_name():
-    """社区形态的采样器没有正负端口，两段文本挤在同一个节点的两个字段里。"""
+    """Community-style samplers have no positive/negative ports; the two texts sit in two fields of the same
+    node.
+
+    社区形态的采样器没有正负端口，两段文本挤在同一个节点的两个字段里。"""
     result = infer_sample("kijai_wanvideo_flf2v")
     assert landings(result, "prompt") == [("18", "positive_prompt")]
     assert landings(result, "negative_prompt") == [("18", "negative_prompt")]
@@ -278,12 +304,15 @@ def test_the_qwen_editor_carries_prompts_on_a_field_not_called_text():
 
 
 # ---------------------------------------------------------------------------
-# 图像类语义
+# Image semantics / 图像类语义
 # ---------------------------------------------------------------------------
 
 
 def test_the_image_field_means_different_things_on_different_carriers():
-    """``image`` 在读图节点上是文件名、在模型条件节点上是首帧、在缩放节点上只是中间连线。"""
+    """``image`` is a file name on an image-reading node, a first frame on a model conditioning node, and
+    just an intermediate link on a resize node.
+
+    ``image`` 在读图节点上是文件名、在模型条件节点上是首帧、在缩放节点上只是中间连线。"""
     result = infer_sample("ltxv_i2v")
     assert landings(result, "start_image") == [("78", "image")]
     assert ("79", "image") not in offered(result, "start_image")
@@ -303,7 +332,14 @@ def test_reference_images_record_the_entry_they_feed_in_list_order():
 
 
 def test_autogrow_reference_slots_record_the_entry_they_feed():
-    """海螺 H3 的参考图是可增生的 ``ref_images.ref_image_N``，逐槽记下它接到哪个口。
+    """Hailuo H3 reference images are the growable ``ref_images.ref_image_N``; record per slot which port it
+    feeds.
+
+    ``consumer`` is only inferred and not saved with the binding, so this assertion guards "re-importing
+    a workflow already in use still infers it": if it cannot be inferred, fewer images than slots can
+    only be filled by repeating the last one.
+
+    海螺 H3 的参考图是可增生的 ``ref_images.ref_image_N``，逐槽记下它接到哪个口。
 
     ``consumer`` 只由推断得出、不随绑定保存下来，故这条断言守的是「重导入一份已用过的 workflow
     时仍推得出它」：推不出来，张数少于槽位时就只能重复填充最后一张。
@@ -315,7 +351,13 @@ def test_autogrow_reference_slots_record_the_entry_they_feed():
 
 
 def test_minimax_h3_first_and_last_frames_are_told_apart_by_their_named_ports():
-    """海螺 H3 图生视频的首尾帧入口叫 ``first_frame`` / ``last_frame``，读图节点不带标题标记也认得出。
+    """Hailuo H3 image-to-video first/last frame inputs are named ``first_frame`` / ``last_frame``;
+    image-reading nodes are recognized even without a title marker.
+
+    First/last frame entries do not record ``consumer``; which port they feed shows only in the
+    link-tracing signal. These two images are not treated as reference images either.
+
+    海螺 H3 图生视频的首尾帧入口叫 ``first_frame`` / ``last_frame``，读图节点不带标题标记也认得出。
 
     首尾帧条目不记 ``consumer``，接到哪个口只体现在连线追溯信号上；这两张图也不会被当成参考图。
     """
@@ -329,7 +371,10 @@ def test_minimax_h3_first_and_last_frames_are_told_apart_by_their_named_ports():
 
 
 def test_an_entry_that_cannot_be_rewired_warns_about_repeated_filling():
-    """名录外的读图入口摘不掉也 bypass 不了，张数少于格子数时只能重复最后一张。"""
+    """Image-reading inputs outside the catalog can neither be removed nor bypassed; with fewer images than
+    slots, the last one can only be repeated.
+
+    名录外的读图入口摘不掉也 bypass 不了，张数少于格子数时只能重复最后一张。"""
     workflow = sample_workflow("wan_vace_flf2v")
     workflow["90"] = {"class_type": "MyStyleReference", "inputs": {"reference_image": ["82", 0], "weight": 0.6}}
     workflow["84"]["inputs"].pop("reference_image")
@@ -345,7 +390,10 @@ def test_an_optional_entry_is_dropped_instead_of_repeated_and_needs_no_warning()
 
 
 def test_frames_encoded_as_a_control_video_are_not_reported_as_reference_images():
-    """VACE 把首尾帧拼成图像批次送进控制视频；那两张图不是参考图，也推断不出首尾帧。"""
+    """VACE stitches the first/last frames into an image batch fed to the control video; those two images
+    are not reference images, and first/last frames cannot be inferred either.
+
+    VACE 把首尾帧拼成图像批次送进控制视频；那两张图不是参考图，也推断不出首尾帧。"""
     result = infer_sample("wan_vace_flf2v")
     assert [node for node, _ in offered(result, "reference_images")] == ["82"]
     assert result.keys["start_image"].state is BindingState.NOT_FOUND
@@ -353,7 +401,7 @@ def test_frames_encoded_as_a_control_video_are_not_reported_as_reference_images(
 
 
 # ---------------------------------------------------------------------------
-# 尺寸、帧数与帧率
+# Size, frame count and frame rate / 尺寸、帧数与帧率
 # ---------------------------------------------------------------------------
 
 
@@ -394,12 +442,14 @@ def test_a_field_computed_upstream_is_left_unbound_with_a_hint():
 
 
 # ---------------------------------------------------------------------------
-# 种子与产物
+# Seed and artifact / 种子与产物
 # ---------------------------------------------------------------------------
 
 
 def test_only_the_sampler_that_actually_takes_noise_is_a_seed_candidate():
-    """MoE 的低噪那一档 ``add_noise`` 是 disable，种子恒为 0。"""
+    """In MoE's low-noise stage ``add_noise`` is disable, so the seed is always 0.
+
+    MoE 的低噪那一档 ``add_noise`` 是 disable，种子恒为 0。"""
     result = infer_sample("wan22_moe_t2v")
     assert landings(result, "seed") == [("70", "noise_seed")]
     assert ("71", "noise_seed") not in offered(result, "seed")
@@ -411,7 +461,10 @@ def test_the_seed_entry_defaults_to_a_fresh_value_every_submission():
 
 @pytest.mark.parametrize("class_type", ["SaveImage", "SaveImageAdvanced", "SaveAnimatedWEBP", "SaveWEBM"])
 def test_a_saver_that_cannot_export_a_video_container_is_never_offered(class_type: str):
-    """产物候选只列导出 ISO BMFF 的保存节点：推到一个产不出成片容器的节点上，等到取件才判不符。"""
+    """Artifact candidates only list save nodes that export ISO BMFF: inferring onto a node that cannot
+    produce a final-cut container would only be caught as a mismatch at fetch time.
+
+    产物候选只列导出 ISO BMFF 的保存节点：推到一个产不出成片容器的节点上，等到取件才判不符。"""
     workflow = sample_workflow("wan21_t2v")
     workflow["59"] = {"class_type": class_type, "inputs": {"filename_prefix": "still", "images": ["8", 0]}}
     result = infer_sample("wan21_t2v", workflow=workflow)
@@ -420,7 +473,9 @@ def test_a_saver_that_cannot_export_a_video_container_is_never_offered(class_typ
 
 
 def test_an_animated_webp_saver_is_never_offered_as_an_image_output():
-    """动图不是分镜图：当成图入库只会得到一张首帧。"""
+    """An animated image is not a storyboard image: storing it as an image only yields the first frame.
+
+    动图不是分镜图：当成图入库只会得到一张首帧。"""
     workflow = sample_workflow("sdxl_batch_t2i")
     workflow["59"] = {"class_type": "SaveAnimatedWEBP", "inputs": {"filename_prefix": "anim", "images": ["8", 0]}}
     result = infer_sample("sdxl_batch_t2i", workflow=workflow)
@@ -454,7 +509,7 @@ def test_a_saver_that_only_previews_is_excluded_but_still_carries_the_frame_rate
 
 
 # ---------------------------------------------------------------------------
-# 整图提示与可保存性
+# Whole-graph hints and savability / 整图提示与可保存性
 # ---------------------------------------------------------------------------
 
 
@@ -465,12 +520,19 @@ def test_a_batch_field_above_one_is_reported_without_touching_the_workflow():
 
 
 # ---------------------------------------------------------------------------
-# 落点互斥
+# Mutually exclusive targets / 落点互斥
 # ---------------------------------------------------------------------------
 
 
 def test_two_keys_cannot_both_write_one_field_and_the_weaker_one_yields_it():
-    """标记是按节点给的，一个文本字段可以同时满足正负两极的判据。
+    """Markers are given per node, so one text field can satisfy both the positive and the negative
+    criteria.
+
+    If both keys really landed there, the request builder would write the positive prompt first and then
+    append the Avoid text to the same field, and the negative prompt the user gets would actually be the
+    positive one. The higher-scoring key stays; the other yields this candidate.
+
+    标记是按节点给的，一个文本字段可以同时满足正负两极的判据。
 
     真让两个键都落在那里，实发构造会先写正向提示词、再把 Avoid 文本追加到同一个字段，用户拿到的
     负向提示词其实是正向那条。分数高的那个键留下，另一个让出这条候选。
@@ -484,7 +546,10 @@ def test_two_keys_cannot_both_write_one_field_and_the_weaker_one_yields_it():
 
 
 def test_a_field_two_keys_want_equally_is_left_to_neither():
-    """同一张读图既接首帧入口又接参考图入口：两个键分数并列，谁都不自动拿。"""
+    """One image reader feeds both the first-frame input and the reference image input: the two keys tie, so
+    neither takes it automatically.
+
+    同一张读图既接首帧入口又接参考图入口：两个键分数并列，谁都不自动拿。"""
     workflow = sample_workflow("wan21_t2v")
     workflow["20"] = {"class_type": "LoadImage", "inputs": {"image": "a.png"}, "_meta": {"title": "图"}}
     workflow["21"] = {"class_type": "WanImageToVideo", "inputs": {"positive": ["6", 0], "start_image": ["20", 0]}}
@@ -497,7 +562,10 @@ def test_a_field_two_keys_want_equally_is_left_to_neither():
 
 
 def test_a_saved_binding_keeps_its_field_and_inference_yields_it_instead():
-    """用户确认过的落点不由推断让出：已保存绑定的权重高于任何推断信号，标记也压不过它。"""
+    """A target the user confirmed is not yielded by inference: a saved binding outweighs any inference
+    signal, and a marker cannot override it either.
+
+    用户确认过的落点不由推断让出：已保存绑定的权重高于任何推断信号，标记也压不过它。"""
     marker = "ARCREEL:prompt"
     workflow = marked(sample_workflow("wan21_t2v"), "7", marker)
     saved = {"negative_prompt": [{"node": "7", "input": "text", "class_type": "CLIPTextEncode", "title": marker}]}
@@ -509,14 +577,25 @@ def test_a_saved_binding_keeps_its_field_and_inference_yields_it_instead():
 
 
 def test_two_saved_bindings_on_one_field_are_not_savable():
-    """两边都是用户确认过的落点时推断不动它们，但这份定义不自洽，落盘前要拦下。"""
+    """When both sides are user-confirmed targets inference leaves them alone, but the definition is
+    inconsistent and must be blocked before saving.
+
+    两边都是用户确认过的落点时推断不动它们，但这份定义不自洽，落盘前要拦下。"""
     entry = {"node": "6", "input": "text", "class_type": "CLIPTextEncode", "title": "正向"}
 
     assert infer_sample("wan21_t2v", bindings={"prompt": [entry], "negative_prompt": [entry]}).savable is False
 
 
 def test_a_key_that_yields_a_field_does_not_settle_on_another_one_already_taken():
-    """让出后改选的次选可能又撞上别人：一轮解不完，要一直解到没人再让。
+    """After yielding, the second choice may collide with someone else again: one round is not enough;
+    resolve until nobody yields any more.
+
+    The last frame takes the image reader 78 via a marker, the first frame yields it and switches to 90,
+    while the reference image also claims 90. With only one round of claims this second collision goes
+    unhandled, and the first frame and reference image both go out on 90, exactly the scene mutually
+    exclusive targets are meant to block.
+
+    让出后改选的次选可能又撞上别人：一轮解不完，要一直解到没人再让。
 
     尾帧靠标记拿下 78 的读图，首帧让出它、改选 90；而参考图也认领着 90。只收集一次认领时这第二次
     撞车没人处理，首帧与参考图一起落在 90 上出去——正是落点互斥要挡的那一幕。
@@ -529,6 +608,8 @@ def test_a_key_that_yields_a_field_does_not_settle_on_another_one_already_taken(
     result = infer_sample("ltxv_i2v", workflow=workflow)
 
     assert landings(result, "end_image") == [("78", "image")]
+    # On 90 the first frame and reference image tie; by the tie rule neither stays, and both keys should hear
+    # what they yielded.
     # 90 上首帧与参考图同分，按并列规则谁都不留；两个键都该听见自己让出了什么。
     assert landings(result, "start_image") == []
     assert landings(result, "reference_images") == []
@@ -537,7 +618,10 @@ def test_a_key_that_yields_a_field_does_not_settle_on_another_one_already_taken(
 
 
 def test_a_read_only_key_does_not_claim_the_field_it_reads():
-    """帧率只从字段取值、不写回，它与写入落点不冲突。"""
+    """Frame rate only reads its value from the field and does not write back, so it does not conflict with
+    write targets.
+
+    帧率只从字段取值、不写回，它与写入落点不冲突。"""
     result = infer_sample("wan21_t2v")
 
     assert landings(result, "fps") != []
@@ -545,7 +629,14 @@ def test_a_read_only_key_does_not_claim_the_field_it_reads():
 
 
 def test_the_inference_result_saves_as_a_definition_without_errors():
-    """推断出来的条目照原样落盘必须过得了定义校验。
+    """Inferred entries saved as-is must pass definition validation.
+
+    Inference and the definition schema are two halves of one contract: one extra field on an entry that
+    the schema does not declare (writeTarget is ``additionalProperties: false``) makes the inferred
+    result impossible to save back, and that only shows at save time. ltxv_i2v has an image-reading node
+    wired into the first-frame port, which covers the rule that only reference images carry ``consumer``.
+
+    推断出来的条目照原样落盘必须过得了定义校验。
 
     推断与定义 schema 是同一票的两半：条目上多一项 schema 没声明的字段（writeTarget 是
     ``additionalProperties: false``），推出来的就是一份存不回去的结果，而这在保存那一刻才显形。

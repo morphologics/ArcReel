@@ -1,4 +1,7 @@
-"""「分集」视图：GET /projects/{name}/episodes-view 与未登记文件的处置 POST /projects/{name}/source-files/{filename}/adopt。"""
+"""The "episodes" view: GET /projects/{name}/episodes-view and handling of unregistered files via
+POST /projects/{name}/source-files/{filename}/adopt.
+
+「分集」视图：GET /projects/{name}/episodes-view 与未登记文件的处置 POST /projects/{name}/source-files/{filename}/adopt。"""
 
 from pathlib import Path
 
@@ -414,6 +417,8 @@ def _two_episode_project(monkeypatch, tmp_path):
     )
     (source_dir / "a.txt").write_text(text, encoding="utf-8")
     (source_dir / "b.txt").write_text("第三章。夜雨。\n", encoding="utf-8")
+    # Source written after registration: the source registration channel records whether the source still has
+    # unplanned text, consistent with the state left by the ledger commands
     # 源文写在登记之后：经源文登记通道记下源文是否还有未规划的原文，与账本命令留下的状态一致
     with pm.locked_source_registration("demo"):
         pass
@@ -456,6 +461,7 @@ class TestSourceFileChanges:
             replaced_text = (source_dir / "b.txt").read_text(encoding="utf-8")
             deleted = client.post("/api/v1/projects/demo/source-files/b.txt/delete", json={})
 
+        # No episode was cut from b.txt; reordering changes no episode's order and runs directly
         # b.txt 里没有切出集，调序不改变任何集的先后，直接执行
         assert moved.json()["status"] == "applied"
         assert replaced.json()["status"] == "applied"

@@ -50,7 +50,12 @@ _INTERNAL_ERROR_DETAIL = make_translator()("internal_server_error")
 
 
 def _assert_generic_500(response, sentinel: str) -> None:
-    """兜底 500 契约：响应体 detail 必须是通用 i18n 文案、且不泄露内部哨兵串。
+    """Fallback 500 contract: the response body detail must be the generic i18n message and must not leak the internal sentinel string.
+
+    Asserting only ``sentinel not in text`` is not enough: when detail is cleared or the i18n key is mistyped it also lacks the sentinel,
+    so a regression would pass silently; therefore also positively pin detail to the translated internal_server_error message.
+
+    兜底 500 契约：响应体 detail 必须是通用 i18n 文案、且不泄露内部哨兵串。
 
     仅断言 ``sentinel not in text`` 不够——detail 被清空或 i18n key 打错时也不含哨兵串，
     回归会静默通过；故同时正向锁定 detail 等于翻译后的 internal_server_error 文案。
@@ -163,7 +168,7 @@ class TestAssistantRoutes:
         [("resend_queued_message", "/resend"), ("send_queued_message_now", "/send-now")],
     )
     def test_queued_message_reconnect_failures_explain_the_cause(self, service_method: str, path: str):
-        # 对「未发送」消息的重新发送与立即发送都会重建会话连接
+        # Resending an "unsent" message and sending it immediately both rebuild the session connection / 对「未发送」消息的重新发送与立即发送都会重建会话连接
         with (
             patch.object(
                 assistant.assistant_service, service_method, new=AsyncMock(side_effect=SessionCapacityError("full"))
@@ -214,7 +219,9 @@ class TestAssistantRoutes:
         assert response.status_code == 404
 
     def test_send_unexpected_error_no_leak(self):
-        """send 末端 catch-all：未预期异常返回通用 500，不泄露内部细节。"""
+        """send's final catch-all: unexpected exceptions return a generic 500 without leaking internal details.
+
+        send 末端 catch-all：未预期异常返回通用 500，不泄露内部细节。"""
         with (
             patch.object(
                 assistant.assistant_service,
@@ -315,7 +322,9 @@ class TestAssistantRoutes:
         _assert_generic_500(response, "LEAK_skills")
 
     def test_send_endpoint_translates_agent_startup_error_to_502(self):
-        """启动失败通过结构化故障观测返回，空异常消息也不能丢掉异常类型。"""
+        """Startup failures are returned via structured failure observation; even an empty exception message must not lose the exception type.
+
+        启动失败通过结构化故障观测返回，空异常消息也不能丢掉异常类型。"""
         from server.agent_runtime.session_manager import AgentStartupError
 
         stderr_text = (

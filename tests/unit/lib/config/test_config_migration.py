@@ -57,7 +57,7 @@ async def test_migrate_system_settings(db_session: AsyncSession, json_file: Path
 
 async def test_migrate_renames_file(db_session: AsyncSession, json_file: Path):
     await migrate_json_to_db(db_session, json_file.parent)
-    assert not json_file.exists()  # noqa: ASYNC240 -- 测试内本地小文件读写/断言，不在生产事件循环上
+    assert not json_file.exists()  # noqa: ASYNC240 -- small local file read/write/asserts inside the test, not on the production event loop / 测试内本地小文件读写/断言，不在生产事件循环上
     assert json_file.with_suffix(".json.bak").exists()
 
 
@@ -71,7 +71,9 @@ async def test_migrate_max_workers_to_all_configured_providers(db_session: Async
 
 
 async def test_migrate_aistudio_001_to_preview(db_session: AsyncSession, tmp_path: Path):
-    """AI Studio 的 001 后缀应迁移为 preview。"""
+    """AI Studio's 001 suffix should be migrated to preview.
+
+    AI Studio 的 001 后缀应迁移为 preview。"""
     data = {
         "overrides": {
             "video_backend": "aistudio",
@@ -87,7 +89,9 @@ async def test_migrate_aistudio_001_to_preview(db_session: AsyncSession, tmp_pat
 
 
 async def test_migrate_noop_if_no_file(db_session: AsyncSession, tmp_path: Path):
-    """源文件不存在：迁移直接返回，不抛错也不落任何配置行。"""
+    """Source file missing: the migration returns directly, neither raising nor writing any config rows.
+
+    源文件不存在：迁移直接返回，不抛错也不落任何配置行。"""
     nonexistent = tmp_path / ".system_config.json"
 
     assert await migrate_json_to_db(db_session, nonexistent.parent) is None
@@ -97,7 +101,7 @@ async def test_migrate_noop_if_no_file(db_session: AsyncSession, tmp_path: Path)
 
 
 # ---------------------------------------------------------------------------
-# 旧任务级文本键 → 档位键迁移
+# Old task-level text keys → tier key migration / 旧任务级文本键 → 档位键迁移
 # ---------------------------------------------------------------------------
 
 from lib.config.migration import migrate_text_tier_settings
@@ -122,13 +126,13 @@ async def test_tier_migration_script_to_complex(db_session: AsyncSession):
 @pytest.mark.parametrize(
     ("overview", "style", "expected_simple"),
     [
-        # 仅 overview
+        # Only overview / 仅 overview
         ("gemini-aistudio/a", "", "gemini-aistudio/a"),
-        # 仅 style
+        # Only style / 仅 style
         ("", "gemini-aistudio/b", "gemini-aistudio/b"),
-        # 两者相同
+        # Both the same / 两者相同
         ("gemini-aistudio/a", "gemini-aistudio/a", "gemini-aistudio/a"),
-        # 两者不同：取 style 的值（保 vision）
+        # Both different: take the style value (keeps vision) / 两者不同：取 style 的值（保 vision）
         ("gemini-aistudio/a", "gemini-aistudio/b", "gemini-aistudio/b"),
     ],
 )
@@ -162,14 +166,14 @@ async def test_tier_migration_idempotent_on_rerun(db_session: AsyncSession):
     repo = SystemSettingRepository(db_session)
     await repo.set("text_backend_script", "gemini-aistudio/x")
     await migrate_text_tier_settings(db_session)
-    # 第二次启动：旧键已删除，不再改写
+    # Second start: old keys already deleted, no more rewriting / 第二次启动：旧键已删除，不再改写
     await repo.set("text_backend_complex", "gemini-aistudio/user-changed")
     await migrate_text_tier_settings(db_session)
     assert await repo.get("text_backend_complex") == "gemini-aistudio/user-changed"
 
 
 # ---------------------------------------------------------------------------
-# 退役模型映射：设置里已改名的模型改写为后继模型
+# Retired model mapping: models renamed in settings are rewritten to the successor model / 退役模型映射：设置里已改名的模型改写为后继模型
 # ---------------------------------------------------------------------------
 
 from lib.config.migration import migrate_retired_model_settings
@@ -228,7 +232,7 @@ async def test_retired_model_migration_leaves_unrenamed_references_unchanged(db_
     await repo.set("default_text_backend", "gemini-aistudio/gemini-3-flash-preview")
     await repo.set("text_backend_simple", "gemini-vertex/gemini-3.1-pro-preview")
     await repo.set("text_backend_complex", "gemini-aistudio/gemini-3.1-flash-lite-preview-extra")
-    # 已下架而没有后继的模型原样保留，运行时报错由用户重选
+    # Delisted models with no successor are kept as is; the runtime error makes the user pick again / 已下架而没有后继的模型原样保留，运行时报错由用户重选
     await repo.set("default_video_backend", "openai/sora-2")
 
     await migrate_retired_model_settings(db_session)

@@ -15,7 +15,9 @@ from tests.factories import make_display_names
 
 
 async def stored_calls(session) -> list[ApiCall]:
-    """按 started_at 倒序读回 api_calls 行。"""
+    """Read back api_calls rows in descending started_at order.
+
+    按 started_at 倒序读回 api_calls 行。"""
     stmt = select(ApiCall).order_by(ApiCall.started_at.desc(), ApiCall.id.desc())
     return list((await session.execute(stmt)).scalars().all())
 
@@ -74,6 +76,9 @@ class TestTaskRepository:
             (call_id, "pending"),
             (older_call_id, "failed"),
         ]
+        # The reopened row no longer carries the previous download's raw failure text and machine code: after a successful
+        # retry, resume settlement only flips the status, and keeping them would leave this success row hanging with
+        # download_failed.
         # 重开的行不再带上一次下载的失败原文与机器码：重试成功后 resume 结算只翻状态，
         # 留着会让这条 success 行一直挂着 download_failed。
         reopened = (
@@ -84,6 +89,8 @@ class TestTaskRepository:
         assert tuple(reopened) == (None, None, None)
 
     async def test_retry_artifact_download_reopens_api_call_left_pending_by_resume(self, db_session):
+        # Tasks that ended in artifact_download_failed with their ApiCall stuck at pending also accept a retry;
+        # not accepting it would mean the artifact can only be rerun from scratch and charged again.
         # 落 artifact_download_failed 的任务，其 ApiCall 停在 pending 时同样受理重试；
         # 不受理就意味着产物只能整单重跑、重扣一次费。
         usage = UsageRepository(db_session)
@@ -112,6 +119,8 @@ class TestTaskRepository:
     async def test_retry_artifact_download_leaves_undispatchable_task_failed(self, db_session):
         usage = UsageRepository(db_session)
         repo = TaskRepository(db_session)
+        # A task without provider_id has no dispatch target: after flipping to running no one picks it up, so eligibility
+        # should refuse it.
         # provider_id 缺席的任务没有派发目标：翻成 running 后无人接手，故资格判定就该拒绝。
         task = await repo.enqueue(
             project_name="demo",
@@ -135,7 +144,10 @@ class TestTaskRepository:
         assert (await stored_calls(db_session))[0].status == "failed"
 
     async def test_retry_artifact_download_rejects_task_without_linked_call(self, db_session):
-        """调用行按 api_calls.task_id 反查；历史任务的调用没有这层关联时拒绝重试，不新开计费行。"""
+        """Call rows are looked up via api_calls.task_id; when a historical task's calls lack that link, refuse the retry
+        rather than opening a new billing row.
+
+        调用行按 api_calls.task_id 反查；历史任务的调用没有这层关联时拒绝重试，不新开计费行。"""
         usage = UsageRepository(db_session)
         repo = TaskRepository(db_session)
         task = await repo.enqueue(
@@ -191,7 +203,10 @@ class TestTaskRepository:
         assert done["status"] == "succeeded"
 
     async def test_enqueue_dedupe_respects_resource_type(self, db_session):
-        """同名不同资产类型（如角色和道具都叫「玉佩」）不应互相去重。"""
+        """Same name with different asset types (e.g. a character and a prop with the same name) should not deduplicate each
+        other.
+
+        同名不同资产类型（如角色和道具都叫「玉佩」）不应互相去重。"""
         repo = TaskRepository(db_session)
 
         character_edit = await repo.enqueue(
@@ -215,6 +230,7 @@ class TestTaskRepository:
         assert not prop_edit["deduped"]
         assert prop_edit["task_id"] != character_edit["task_id"]
 
+        # Enqueuing again with the same resource_type should still deduplicate normally (regression guard).
         # 同一 resource_type 再次入队仍应正常去重（回归防护）。
         character_edit_again = await repo.enqueue(
             project_name="demo",
@@ -251,6 +267,9 @@ class TestTaskRepository:
             payload={"prompt": "unit1"},
             script_file="ep1.json",
         )
+        # For each dimension of the dedupe key, place an active decoy task with the same resource_id: if any dimension were
+        # left out of the query, its decoy would leak into the result, miscounting in-flight state of other projects/task
+        # types as a conflict for this one.
         # 去重键的每个维度各放一个同名 resource_id 的活动干扰任务：任一维度从查询条件里
         # 漏掉，它对应的干扰任务就会混进结果，把别的项目/任务类型的在途状态错算成本次冲突。
         decoys = [
@@ -286,7 +305,12 @@ class TestTaskRepository:
         assert found[0]["status"] == "queued"
 
     async def test_get_active_tasks_for_resources_covers_every_active_status(self, db_session):
-        """queued / running 两个活动态都算冲突，终态不算。
+        """Both active states queued / running count as conflicts; terminal states do not.
+
+        The probed status dimension comes straight from ``ACTIVE_TASK_STATUSES``, same basis as ``idx_tasks_dedupe_active``;
+        missing a status would judge units in that status "idle" and allow duplicate enqueues.
+
+        queued / running 两个活动态都算冲突，终态不算。
 
         探测的状态维度直接取自 ``ACTIVE_TASK_STATUSES``，与 ``idx_tasks_dedupe_active``
         同口径；少一个状态就会让该状态下的 unit 被判为"空闲"而放行重复入队。
@@ -304,6 +328,8 @@ class TestTaskRepository:
 
         repo = TaskRepository(db_session)
 
+        # Enqueue one at a time and immediately advance to the target status: claim_next takes the queue head, so the next
+        # claim only lands on the newly enqueued one after the previous one leaves queued.
         # 逐个入队并立刻推进到目标状态：claim_next 取的是队首，前一个离开 queued 后
         # 下一次 claim 才会落到新入队的那个。
         done = await _enqueue("E1U0")
@@ -375,7 +401,10 @@ class TestTaskRepository:
         )
 
     async def test_cascade_with_long_structured_root_reason_stays_renderable(self, db_session):
-        """根任务的失败原因本身是带长 detail 的结构化编码时，级联包裹后仍须是合法可解析的 JSON。"""
+        """When the root task's failure reason is itself a structured code with a long detail, it must still be valid,
+        parseable JSON after cascade wrapping.
+
+        根任务的失败原因本身是带长 detail 的结构化编码时，级联包裹后仍须是合法可解析的 JSON。"""
         repo = TaskRepository(db_session)
 
         first = await repo.enqueue(
@@ -413,7 +442,10 @@ class TestTaskRepository:
             assert "resume_expired_detail" not in rendered
 
     async def test_deep_dependency_cascade_stays_renderable(self, db_session):
-        """10 层依赖链级联失败：编码不应因深度嵌套被截断成非法 JSON。"""
+        """Cascade failure along a 10-level dependency chain: the encoding must not be truncated into invalid JSON by deep
+        nesting.
+
+        10 层依赖链级联失败：编码不应因深度嵌套被截断成非法 JSON。"""
         repo = TaskRepository(db_session)
 
         chain_length = 10
@@ -633,7 +665,9 @@ class TestTaskRepository:
         assert dep_task["cancelled_by"] == "cascade"
 
     async def test_cancel_running_task_is_rejected(self, db_session):
-        """取消只对 queued 开放：执行中的任务被拒绝，状态不变。"""
+        """Cancel is only open to queued: a running task is refused and its status unchanged.
+
+        取消只对 queued 开放：执行中的任务被拒绝，状态不变。"""
         repo = TaskRepository(db_session)
 
         task = await repo.enqueue(
@@ -705,6 +739,7 @@ class TestTaskRepository:
 
         result = await repo.cancel_all_queued("demo")
         assert result["cancelled_count"] == 1  # only the queued video task
+        # The running task was claimed before querying queued, so it does not count as skipped
         assert result["skipped_running_count"] == 0  # running 任务在查询 queued 前已被 claim，不算 skipped
 
         task = await repo.get(t2["task_id"])
@@ -729,7 +764,9 @@ class TestTaskRepository:
 
 
 class TestCancelCascade:
-    """A→B→C 依赖链：取消只作用于排队中的节点，级联只涉及排队中的下游。"""
+    """A->B->C dependency chain: cancel only acts on queued nodes, and the cascade only involves queued downstream nodes.
+
+    A→B→C 依赖链：取消只作用于排队中的节点，级联只涉及排队中的下游。"""
 
     async def _chain_3(self, repo: TaskRepository) -> tuple[str, str, str]:
         a = await repo.enqueue(
@@ -763,7 +800,7 @@ class TestCancelCascade:
     async def test_cancel_running_head_is_rejected_and_chain_stays_queued(self, db_session):
         repo = TaskRepository(db_session)
         a, b, c = await self._chain_3(repo)
-        await repo.claim_next("image")  # A 拉成 running
+        await repo.claim_next("image")  # Pull A to running / A 拉成 running
 
         with pytest.raises(TaskNotCancellableError):
             await repo.cancel_task(a)
@@ -773,7 +810,9 @@ class TestCancelCascade:
         assert (await repo.get(c))["status"] == "queued"
 
     async def test_cancel_queued_head_cascades_to_grandchildren(self, db_session):
-        """取消排队中的 A → A/B/C 全 cancelled；下游与发起方在 cancelled_by 上可区分。"""
+        """Cancel queued A -> A/B/C all cancelled; downstream nodes and the initiator are distinguishable by cancelled_by.
+
+        取消排队中的 A → A/B/C 全 cancelled；下游与发起方在 cancelled_by 上可区分。"""
         repo = TaskRepository(db_session)
         a, b, c = await self._chain_3(repo)
 
@@ -786,7 +825,9 @@ class TestCancelCascade:
             assert t["cancelled_by"] == expected
 
     async def test_interrupted_running_head_cascades_to_queued_dependents(self, db_session):
-        """进程级打断把 running 的 A 落 cancelled，排队中的下游随之级联取消。"""
+        """A process-level interrupt sets running A to cancelled, and queued downstream nodes are cascade-cancelled with it.
+
+        进程级打断把 running 的 A 落 cancelled，排队中的下游随之级联取消。"""
         repo = TaskRepository(db_session)
         a, b, c = await self._chain_3(repo)
         await repo.claim_next("image")
@@ -799,7 +840,9 @@ class TestCancelCascade:
             assert t["cancelled_by"] == expected
 
     async def test_cancel_records_each_terminal_event_at_most_once(self, db_session):
-        """每个 task 的终态推送（project_events SSE 依赖的 terminal_events）不重复记账。"""
+        """Each task's terminal push (the terminal_events project_events SSE relies on) is recorded at most once.
+
+        每个 task 的终态推送（project_events SSE 依赖的 terminal_events）不重复记账。"""
         repo = TaskRepository(db_session)
         a, b, c = await self._chain_3(repo)
         await repo.cancel_task(a)
@@ -814,7 +857,10 @@ class TestCancelCascade:
 
 
 class ResourceScopedTaskRepository(TaskRepository):
-    """只看得到 resource_id 为 ``visible`` 的任务，用来验证取消与下载重试路径的目标行查询经过 ``_scope_query``。"""
+    """Sees only tasks whose resource_id is ``visible``, to verify that the target-row queries of the cancel and download
+    retry paths go through ``_scope_query``.
+
+    只看得到 resource_id 为 ``visible`` 的任务，用来验证取消与下载重试路径的目标行查询经过 ``_scope_query``。"""
 
     def _scope_query(self, stmt, model):
         return stmt.where(Task.resource_id == "visible")
@@ -822,7 +868,10 @@ class ResourceScopedTaskRepository(TaskRepository):
 
 class TestRetryDownloadRespectsScope:
     async def _seed_download_failed(self, db_session, resource_id: str) -> tuple[str, int]:
-        """落一个满足全部重试资格的下载失败任务，返回任务 id 与其 failed 调用行 id。"""
+        """Insert a download-failed task meeting every retry eligibility condition; returns the task id and the id of its
+        failed call row.
+
+        落一个满足全部重试资格的下载失败任务，返回任务 id 与其 failed 调用行 id。"""
         repo = TaskRepository(db_session)
         usage = UsageRepository(db_session)
         task = await repo.enqueue(
@@ -935,6 +984,7 @@ class TestCancelRespectsScope:
         remaining = await self._enqueue(repo, "E1S02")
         fired: list[bool] = []
 
+        # After the target rows are queried and before the UPDATE, a worker claims one of the tasks
         # 目标行查出之后、UPDATE 之前，worker 领走其中一个任务
         def claim_before_update(orm_execute_state):
             if orm_execute_state.is_update and not fired:

@@ -27,7 +27,10 @@ def _backend(definition: dict[str, Any] | None = None) -> DeclarativeImageBacken
 
 
 def _image_to_image_definition(*, encoding: str = "data_uri", max_reference_images: int | float = 2) -> dict[str, Any]:
-    """同时声明文生图与图生图、参考图可选的定义：参考图逐张铺进 ``image_urls``。"""
+    """A definition declaring both text-to-image and image-to-image with optional reference images:
+    reference images are laid one by one into ``image_urls``.
+
+    同时声明文生图与图生图、参考图可选的定义：参考图逐张铺进 ``image_urls``。"""
     definition = image_endpoint_definition(
         capabilities={"text_to_image": True, "image_to_image": True, "max_reference_images": max_reference_images},
         inputs={"refs": {"source": "reference_images", "encoding": encoding}},

@@ -1,4 +1,6 @@
-"""旧名默认 SQLite 库改名后，只在 ``-wal`` 里的已提交数据仍可读。"""
+"""After the legacy-named default SQLite DB is renamed, committed data that is only in ``-wal`` is still readable.
+
+旧名默认 SQLite 库改名后，只在 ``-wal`` 里的已提交数据仍可读。"""
 
 import shutil
 import sqlite3
@@ -21,7 +23,9 @@ def data_root(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
 
 
 def _write_legacy_db_with_uncheckpointed_row(data_root: Path) -> None:
-    """在数据根下造一份旧名默认库：最后一次提交只在 ``-wal`` 里，主文件里还没有。"""
+    """Create a legacy-named default DB under the data root: the last commit is only in ``-wal``, not yet in the main file.
+
+    在数据根下造一份旧名默认库：最后一次提交只在 ``-wal`` 里，主文件里还没有。"""
     live = data_root.parent / "live"
     live.mkdir()
     conn = sqlite3.connect(live / "db")
@@ -31,6 +35,8 @@ def _write_legacy_db_with_uncheckpointed_row(data_root: Path) -> None:
         conn.execute("CREATE TABLE notes (body TEXT)")
         conn.execute("INSERT INTO notes VALUES ('kept')")
         conn.commit()
+        # Copy while the connection is still open: ``-wal`` / ``-shm`` are still there, and the commit has not been written
+        # back to the main file.
         # 连接仍开着时复制，``-wal`` / ``-shm`` 都还在，提交尚未回写主文件。
         for suffix in ("", "-wal", "-shm"):
             shutil.copyfile(live / f"db{suffix}", data_root / f".arcreel.db{suffix}")

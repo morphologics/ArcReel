@@ -1,5 +1,14 @@
 """Tests for manifest-driven profile sync via ``ProjectManager.sync_agent_profile``.
 
+The historical name ``test_project_manager_symlink.py`` is kept (external test selectors still use it).
+Materialization is based on manifest + sha256:
+- built-in skills upgraded in the profile propagate automatically to old projects (row #4)
+- built-in skills the user deliberately deleted are not resurrected (rows #2/#11)
+- full coverage of the 15-row decision table: name collisions / state machine reflow / upstream deletion,
+  etc.
+
+Tests for manifest-driven profile sync via ``ProjectManager.sync_agent_profile``.
+
 历史命名 ``test_project_manager_symlink.py`` 保留（外部测试 selector 仍用此名）。
 物化基于 manifest + sha256：
 - profile 升级内置 skill 自动传播到老项目（行 #4）
@@ -24,12 +33,16 @@ from lib.agent.profile_manifest import (
 )
 from lib.project.project_manager import ProjectManager
 
-# ---------- 公共 fixtures ----------
+# ---------- Shared fixtures / 公共 fixtures ----------
 
 
 @pytest.fixture
 def env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-    """构造标准测试环境：profile_dir + 数据根 + 单个项目目录。
+    """Build the standard test environment: profile_dir + data root + a single project directory.
+
+    The profile has one built-in demo skill and a top-level CLAUDE.md.
+
+    构造标准测试环境：profile_dir + 数据根 + 单个项目目录。
 
     profile 内置一个 demo skill 和顶层 CLAUDE.md。
     """
@@ -63,7 +76,7 @@ def _profile_skill_path(profile_dir: Path, name: str = "demo") -> Path:
     return profile_dir / ".claude" / "skills" / name / "SKILL.md"
 
 
-# ---------- 首次迁移分支 ----------
+# ---------- First-migration branch / 首次迁移分支 ----------
 
 
 class TestFirstSyncMigration:
@@ -80,7 +93,9 @@ class TestFirstSyncMigration:
         assert "CLAUDE.md" in manifest["entries"]
 
     def test_first_sync_resets_even_with_existing_user_content(self, env):
-        """用户决策'忽略已有'：首次接入时直接覆盖 dest。"""
+        """User decision "ignore existing": on first adoption dest is overwritten directly.
+
+        用户决策'忽略已有'：首次接入时直接覆盖 dest。"""
         pm, _, project_dir = env
         _skill_path(project_dir).parent.mkdir(parents=True, exist_ok=True)
         _skill_path(project_dir).write_text("legacy junk")
@@ -92,12 +107,16 @@ class TestFirstSyncMigration:
         assert (project_dir / "CLAUDE.md").read_text() == "prompt v1"
 
     def test_first_sync_replaces_wrong_type_placeholders(self, env):
-        """``.claude`` 是普通文件 / ``CLAUDE.md`` 是目录时，reset 必须先清理掉，
+        """When ``.claude`` is a regular file / ``CLAUDE.md`` is a directory, reset must clear them first,
+        otherwise the later mkdir()/_safe_copy() fail and leave a half-finished state + an incomplete
+        manifest.
+
+        ``.claude`` 是普通文件 / ``CLAUDE.md`` 是目录时，reset 必须先清理掉，
         否则后续 mkdir()/_safe_copy() 会失败，留下半完成状态 + 不完整 manifest。"""
         pm, _, project_dir = env
-        # dest_tree 错误类型：普通文件（手抄 README 时的常见错招）
+        # dest_tree has the wrong type: a regular file (a common mistake when hand-copying a README) / dest_tree 错误类型：普通文件（手抄 README 时的常见错招）
         (project_dir / ".claude").write_text("wrong type — should be a dir")
-        # dest_top 错误类型：目录（手动 mkdir CLAUDE.md/）
+        # dest_top has the wrong type: a directory (a manual mkdir CLAUDE.md/) / dest_top 错误类型：目录（手动 mkdir CLAUDE.md/）
         (project_dir / "CLAUDE.md").mkdir()
         (project_dir / "CLAUDE.md" / "stray.txt").write_text("stray")
 
@@ -118,12 +137,14 @@ class TestFirstSyncMigration:
         assert (new_dir / "CLAUDE.md").read_text() == "prompt v1"
 
 
-# ---------- 决策表 15 行覆盖 ----------
+# ---------- Decision table, all 15 rows / 决策表 15 行覆盖 ----------
 
 
 class TestDecisionTable:
     def test_decision_2_user_delete_not_resurrected(self, env):
-        """#2：profile 存在 + dest 缺失 + manifest active → 转 tombstone，不补回。"""
+        """#2: profile exists + dest missing + manifest active -> becomes tombstone, not restored.
+
+        #2：profile 存在 + dest 缺失 + manifest active → 转 tombstone，不补回。"""
         pm, _, project_dir = env
         pm.sync_agent_profile(project_dir)
         _skill_path(project_dir).unlink()
@@ -137,7 +158,9 @@ class TestDecisionTable:
         assert entries[".claude/skills/demo/SKILL.md"]["source"] == "tombstone"
 
     def test_decision_3_no_op_when_three_hashes_match(self, env):
-        """#3：三态一致 → no-op，manifest 字节不变（写前比对生效）。"""
+        """#3: all three states agree -> no-op, manifest bytes unchanged (compare-before-write works).
+
+        #3：三态一致 → no-op，manifest 字节不变（写前比对生效）。"""
         pm, _, project_dir = env
         pm.sync_agent_profile(project_dir)
         raw1 = (project_dir / MANIFEST_FILENAME).read_bytes()
@@ -151,7 +174,10 @@ class TestDecisionTable:
         assert stats["unchanged"] >= 1
 
     def test_decision_4_profile_upgrade_propagates_when_user_clean(self, env):
-        """#4：用户未改 + profile 升级 → 覆盖，manifest 刷 hash。这是方案 C 的核心价值。"""
+        """#4: user did not edit + profile upgraded -> overwrite, manifest hash refreshed. This is the core
+        value of option C.
+
+        #4：用户未改 + profile 升级 → 覆盖，manifest 刷 hash。这是方案 C 的核心价值。"""
         pm, profile_dir, project_dir = env
         pm.sync_agent_profile(project_dir)
         _profile_skill_path(profile_dir).write_text("demo v2")
@@ -162,7 +188,10 @@ class TestDecisionTable:
         assert stats["upgraded"] == 1
 
     def test_decision_5_user_edit_converging_to_profile_version(self, env):
-        """#5：用户改完恰好 = profile 当前版 → 状态机回流刷 manifest，下轮归 #3。"""
+        """#5: the user's edit happens to equal the current profile version -> state machine reflow
+        refreshes the manifest, and the next round is #3.
+
+        #5：用户改完恰好 = profile 当前版 → 状态机回流刷 manifest，下轮归 #3。"""
         pm, profile_dir, project_dir = env
         pm.sync_agent_profile(project_dir)
         _profile_skill_path(profile_dir).write_text("demo v2")
@@ -178,7 +207,9 @@ class TestDecisionTable:
         assert stats2["upgraded"] == 0
 
     def test_decision_6_user_edit_preserved_against_profile_upgrade(self, env):
-        """#6：用户改 + profile 升级 → 保留用户版。"""
+        """#6: user edited + profile upgraded -> keep the user's version.
+
+        #6：用户改 + profile 升级 → 保留用户版。"""
         pm, profile_dir, project_dir = env
         pm.sync_agent_profile(project_dir)
         _skill_path(project_dir).write_text("user customized")
@@ -190,7 +221,10 @@ class TestDecisionTable:
         assert stats["user_modified"] == 1
 
     def test_decision_7_profile_deletion_propagates_to_unmodified_dest(self, env):
-        """#7：profile 上游删 + 用户未改 → 物化时删除 dest + tombstone。"""
+        """#7: deleted upstream in the profile + user did not edit -> delete dest + tombstone on
+        materialization.
+
+        #7：profile 上游删 + 用户未改 → 物化时删除 dest + tombstone。"""
         pm, profile_dir, project_dir = env
         pm.sync_agent_profile(project_dir)
         _profile_skill_path(profile_dir).unlink()
@@ -203,7 +237,10 @@ class TestDecisionTable:
         assert entries[".claude/skills/demo/SKILL.md"]["source"] == "tombstone"
 
     def test_decision_8_profile_deletion_orphans_user_modified(self, env):
-        """#8：profile 上游删 + 用户改过 → 保留 dest 与基线，供设置页标记定制。"""
+        """#8: deleted upstream in the profile + user edited -> keep dest and baseline, so the settings page
+        can mark it as customized.
+
+        #8：profile 上游删 + 用户改过 → 保留 dest 与基线，供设置页标记定制。"""
         pm, profile_dir, project_dir = env
         pm.sync_agent_profile(project_dir)
         _skill_path(project_dir).write_text("user owned now")
@@ -217,7 +254,9 @@ class TestDecisionTable:
         assert entries[".claude/skills/demo/SKILL.md"]["source"] == "profile"
 
     def test_decision_9_user_only_file_untouched(self, env):
-        """#9：项目独有 skill（profile 没有，manifest 无记录）→ 完全不动。"""
+        """#9: project-only skill (not in the profile, no manifest record) -> left completely alone.
+
+        #9：项目独有 skill（profile 没有，manifest 无记录）→ 完全不动。"""
         pm, _, project_dir = env
         pm.sync_agent_profile(project_dir)
         user_skill = project_dir / ".claude" / "skills" / "user_only" / "SKILL.md"
@@ -232,7 +271,10 @@ class TestDecisionTable:
         assert ".claude/skills/user_only/SKILL.md" not in entries
 
     def test_decision_10_user_manually_restores_deleted_file(self, env):
-        """#10：tombstone 状态下用户手动重写 D → 清 tombstone，下轮按 #9 user_only。"""
+        """#10: user manually rewrites D while tombstoned -> clear the tombstone, next round goes by #9
+        user_only.
+
+        #10：tombstone 状态下用户手动重写 D → 清 tombstone，下轮按 #9 user_only。"""
         pm, _, project_dir = env
         pm.sync_agent_profile(project_dir)
         _skill_path(project_dir).unlink()
@@ -246,7 +288,9 @@ class TestDecisionTable:
         assert stats["user_only"] >= 1
 
     def test_decision_11_tombstone_steady_state(self, env):
-        """#11：用户删 + profile 仍在，跑 N 次 repair 都稳态 no-op。"""
+        """#11: user deleted + profile still has it; running repair N times stays a steady no-op.
+
+        #11：用户删 + profile 仍在，跑 N 次 repair 都稳态 no-op。"""
         pm, _, project_dir = env
         pm.sync_agent_profile(project_dir)
         _skill_path(project_dir).unlink()
@@ -260,7 +304,9 @@ class TestDecisionTable:
             assert stats["tombstoned"] >= 1
 
     def test_decision_12_orphaned_dest_with_tombstone_clears_entry(self, env):
-        """#12：profile 删了 + dest 还在 + manifest tombstone → 清 entry。"""
+        """#12: profile deleted + dest still there + manifest tombstone -> clear the entry.
+
+        #12：profile 删了 + dest 还在 + manifest tombstone → 清 entry。"""
         pm, profile_dir, project_dir = env
         pm.sync_agent_profile(project_dir)
         _skill_path(project_dir).unlink()
@@ -276,7 +322,9 @@ class TestDecisionTable:
         assert stats["user_only"] >= 1
 
     def test_decision_13_tombstone_persists_when_both_missing(self, env):
-        """#13：profile + dest 都没 + manifest tombstone → no-op，tombstone 持续。"""
+        """#13: profile + dest both missing + manifest tombstone -> no-op, tombstone persists.
+
+        #13：profile + dest 都没 + manifest tombstone → no-op，tombstone 持续。"""
         pm, profile_dir, project_dir = env
         pm.sync_agent_profile(project_dir)
         _skill_path(project_dir).unlink()
@@ -290,7 +338,9 @@ class TestDecisionTable:
         assert stats["tombstoned"] >= 1
 
     def test_decision_14_double_delete_creates_tombstone(self, env):
-        """#14：双方同轮删（active entry）→ 转 tombstone。"""
+        """#14: both sides deleted in the same round (active entry) -> becomes tombstone.
+
+        #14：双方同轮删（active entry）→ 转 tombstone。"""
         pm, profile_dir, project_dir = env
         pm.sync_agent_profile(project_dir)
         _profile_skill_path(profile_dir).unlink()
@@ -303,7 +353,10 @@ class TestDecisionTable:
         assert stats["pruned"] == 1
 
     def test_decision_14_tombstone_blocks_future_readd_unless_force_resync(self, env):
-        """#14 隐含假设：tombstone 后 profile 重新加回 → 仍走 #11，不自动复活。需 force_resync。"""
+        """#14 implicit assumption: after a tombstone the profile adds it back -> still goes by #11, no
+        automatic resurrection. Needs force_resync.
+
+        #14 隐含假设：tombstone 后 profile 重新加回 → 仍走 #11，不自动复活。需 force_resync。"""
         pm, profile_dir, project_dir = env
         pm.sync_agent_profile(project_dir)
         _profile_skill_path(profile_dir).unlink()
@@ -320,10 +373,12 @@ class TestDecisionTable:
         assert _skill_path(project_dir).read_text() == "demo v2 readded"
 
     def test_decision_15_collision_preserves_user_content(self, env):
-        """#15：用户独立创建同名文件（D≠P）→ 保留 D，不写 entry。"""
+        """#15: user independently created a same-named file (D≠P) -> keep D, write no entry.
+
+        #15：用户独立创建同名文件（D≠P）→ 保留 D，不写 entry。"""
         pm, profile_dir, project_dir = env
-        pm.sync_agent_profile(project_dir)  # 建 baseline
-        # 现在手加 user_x 和 profile_x 同名但不同内容
+        pm.sync_agent_profile(project_dir)  # Build the baseline / 建 baseline
+        # Now hand-add user_x with the same name as profile_x but different content / 现在手加 user_x 和 profile_x 同名但不同内容
         user_x = project_dir / ".claude" / "skills" / "X" / "SKILL.md"
         user_x.parent.mkdir(parents=True)
         user_x.write_text("user version A")
@@ -339,7 +394,10 @@ class TestDecisionTable:
         assert stats["collision"] == 1
 
     def test_decision_15_collision_when_hashes_match_writes_active_entry(self, env):
-        """#15：D=P 时视为已下发，写 active entry，下轮归 #3 unchanged。"""
+        """#15: when D=P it is treated as already delivered, write an active entry, and the next round is #3
+        unchanged.
+
+        #15：D=P 时视为已下发，写 active entry，下轮归 #3 unchanged。"""
         pm, profile_dir, project_dir = env
         pm.sync_agent_profile(project_dir)
         user_x = project_dir / ".claude" / "skills" / "X" / "SKILL.md"
@@ -375,7 +433,9 @@ class TestForceResync:
         assert stats["created"] == 1
 
     def test_force_resync_skips_missing_profile_file(self, env, caplog):
-        """paths 含 profile 已删的文件 → skip + warn，不算 error。"""
+        """paths includes a file already deleted from the profile -> skip + warn, not an error.
+
+        paths 含 profile 已删的文件 → skip + warn，不算 error。"""
         pm, profile_dir, project_dir = env
         pm.sync_agent_profile(project_dir)
         _profile_skill_path(profile_dir).unlink()
@@ -399,7 +459,10 @@ class TestForceResync:
         ],
     )
     def test_force_resync_rejects_path_traversal(self, env, evil):
-        """``paths`` 来自外部输入 → 必须拒绝绝对路径 / `..` / manifest 自身，
+        """``paths`` comes from external input -> absolute paths / `..` / the manifest itself must be
+        refused, otherwise it could escape the profile / project root and read or write arbitrary files.
+
+        ``paths`` 来自外部输入 → 必须拒绝绝对路径 / `..` / manifest 自身，
         否则会逃逸出 profile / 项目根目录，读写任意文件。
         """
         pm, _, project_dir = env
@@ -408,29 +471,36 @@ class TestForceResync:
             pm.force_resync_profile(project_dir, paths=[evil])
 
     def test_force_resync_with_paths_does_not_full_reset_when_manifest_missing(self, env):
-        """``paths=["X"]`` + manifest 缺失 → 只回填 X，不能调 _full_reset 把
+        """``paths=["X"]`` + manifest missing -> only backfill X; it must not call _full_reset, which would
+        wipe the whole .claude and overwrite other built-in files.
+
+        Scenario: an old project has no manifest and the user clicks "restore demo skill" in the UI ->
+        expect only demo to be reset, without overwriting other edited skills or resurrecting deleted
+        skills.
+
+        ``paths=["X"]`` + manifest 缺失 → 只回填 X，不能调 _full_reset 把
         .claude 整个清空覆盖其他内置文件。
 
         场景：老项目无 manifest，用户在 UI 点 "恢复 demo skill" → 期望只重置
         demo，不要覆盖其他改过的 skill 或复活已删的 skill。
         """
         pm, _, project_dir = env
-        # 先 sync 一次让 dest 有完整 baseline + manifest
+        # Sync once first so dest has a full baseline + manifest / 先 sync 一次让 dest 有完整 baseline + manifest
         pm.sync_agent_profile(project_dir)
-        # 模拟用户改了另一个 skill 文件
+        # Simulate the user editing another skill file / 模拟用户改了另一个 skill 文件
         other_skill = project_dir / ".claude" / "skills" / "other" / "SKILL.md"
         other_skill.parent.mkdir(parents=True, exist_ok=True)
         other_skill.write_text("user-customized other skill")
-        # 删 manifest 模拟"老项目无 manifest"
+        # Delete the manifest to simulate "old project without manifest" / 删 manifest 模拟"老项目无 manifest"
         (project_dir / ".arcreel_profile_manifest.json").unlink()
 
         stats = pm.force_resync_profile(project_dir, paths=[".claude/skills/demo/SKILL.md"])
 
-        # demo 被回填
+        # demo is backfilled / demo 被回填
         assert _skill_path(project_dir).read_text() == "demo v1"
-        # other skill 不被破坏
+        # The other skill is not damaged / other skill 不被破坏
         assert other_skill.read_text() == "user-customized other skill"
-        # 新 manifest 只含 demo entry，不是全量
+        # The new manifest contains only the demo entry, not everything / 新 manifest 只含 demo entry，不是全量
         from lib.agent.profile_manifest import load_manifest
 
         loaded = load_manifest(project_dir)
@@ -440,7 +510,16 @@ class TestForceResync:
         assert stats["created"] == 1
 
     def test_sync_skips_dest_symlink_escape(self, env):
-        """``.claude`` 子树含逃逸 symlink 时该项跳过，不读写项目外文件。
+        """When the ``.claude`` subtree contains an escaping symlink, that item is skipped and no file
+        outside the project is read or written.
+
+        Attack model: the user/an imported archive places ``.claude/evil_link`` pointing at a sensitive
+        file outside the project; during sync that entry hits the dest enumeration (rglob dereferences
+        the symlink to the file), and _safe_copy / _safe_unlink_if_file on the decision path would read
+        or write outside the project. The escape guard must resolve and check that it is still under
+        project_dir before any I/O.
+
+        ``.claude`` 子树含逃逸 symlink 时该项跳过，不读写项目外文件。
 
         攻击模型：用户/导入归档放了 ``.claude/evil_link`` 指向项目外 sensitive
         文件；sync 时该 entry 命中 dest enumerate（rglob 解引用 symlink 跟踪到
@@ -451,12 +530,19 @@ class TestForceResync:
 
         pm, _, project_dir = env
         pm.sync_agent_profile(project_dir)
-        # 在 .claude 内放一个指向项目外的 symlink
+        # Put a symlink inside .claude pointing outside the project / 在 .claude 内放一个指向项目外的 symlink
         outside = project_dir.parent.parent / "outside_secret.md"
         outside.write_text("MUST NOT be touched")
         escape_link = project_dir / ".claude" / "evil_link.md"
         escape_link.symlink_to(outside)
 
+        # Would deleting the manifest once to trigger the first-migration branch also run the check?
+        # _full_reset does not go through the escape guard
+        # path (it does a full copy and will not hit an existing dest). So this takes the main
+        # materialization path:
+        # hand-insert an entry into the manifest so this rel enters all_keys -> triggers the #6 user_modified
+        # branch -> sha256_file(d) in _apply_decision would follow the symlink and read outside.
+        # The escape guard blocks I/O for this rel.
         # manifest 删一遍触发首次迁移分支也会跑校验？_full_reset 不走 escape guard
         # 路径（它走全量 copy 不会撞已存在 dest）。所以这里走主物化路径：
         # 在 manifest 里手插一条 entry 让该 rel 进 all_keys → 触发 #6 user_modified
@@ -473,15 +559,24 @@ class TestForceResync:
 
         stats = pm.sync_agent_profile(project_dir)
 
-        # outside 文件应原样不动
+        # The outside file should stay untouched / outside 文件应原样不动
         assert outside.read_text() == "MUST NOT be touched"
-        # 该 rel 至少计为 errors（escape guard 拦下来）
+        # This rel counts at least as errors (blocked by the escape guard) / 该 rel 至少计为 errors（escape guard 拦下来）
         assert stats["errors"] >= 1
+        # The symlink itself was not changed (rmtree only happens in _full_reset; this takes the main path)
         # symlink 自身没被改（rmtree 在 _full_reset 才发生，这里走主路径）
         assert os.path.islink(escape_link)
 
     def test_sync_refuses_symlink_lock_file(self, env):
-        """``.profile_sync.lock`` 被预置为指向项目外的 symlink → sync 拒绝运行，
+        """``.profile_sync.lock`` preset as a symlink pointing outside the project -> sync refuses to run
+        and does not follow the symlink to truncate an external file.
+
+        Attack model: an imported archive contains a malicious ``.profile_sync.lock`` symlink ->
+        ``/etc/x``; the old portalocker implementation's internal ``open("w")`` would follow the symlink
+        and truncate the target; the new implementation opens the fd itself with ``os.open(O_NOFOLLOW)``
+        and gets ELOOP on a symlink.
+
+        ``.profile_sync.lock`` 被预置为指向项目外的 symlink → sync 拒绝运行，
         不允许跟 symlink 截断外部文件。
 
         攻击模型：导入归档含恶意 ``.profile_sync.lock`` symlink → ``/etc/x``，
@@ -500,7 +595,12 @@ class TestForceResync:
         assert outside.read_text() == "MUST NOT be truncated"
 
     def test_sync_works_without_o_nofollow(self, env, monkeypatch: pytest.MonkeyPatch):
-        """Windows 上 ``os`` 模块没有 ``O_NOFOLLOW`` 常量。锁实现必须能降级到
+        """On Windows the ``os`` module has no ``O_NOFOLLOW`` constant. The lock implementation must degrade
+        to a Python-level ``is_symlink`` precheck, otherwise the process crashes right at the
+        ``_project_lock`` entry with ``AttributeError: module 'os' has no attribute 'O_NOFOLLOW'`` and
+        Windows users cannot create projects.
+
+        Windows 上 ``os`` 模块没有 ``O_NOFOLLOW`` 常量。锁实现必须能降级到
         Python 层 ``is_symlink`` 预检，否则进程在 ``_project_lock`` 入口就会因
         ``AttributeError: module 'os' has no attribute 'O_NOFOLLOW'`` 直接崩，
         Windows 用户无法创建项目。
@@ -514,7 +614,10 @@ class TestForceResync:
         assert (project_dir / "CLAUDE.md").exists()
 
     def test_sync_refuses_symlink_lock_without_o_nofollow(self, env, monkeypatch: pytest.MonkeyPatch):
-        """Windows 降级路径下仍须拒绝 symlink 形态的锁文件，不能因没有
+        """The Windows fallback path must still refuse symlink-shaped lock files; lacking ``O_NOFOLLOW`` is
+        no reason to drop symlink protection.
+
+        Windows 降级路径下仍须拒绝 symlink 形态的锁文件，不能因没有
         ``O_NOFOLLOW`` 就放弃 symlink 防护。
         """
         pm, _, project_dir = env
@@ -530,7 +633,12 @@ class TestForceResync:
         assert outside.read_text() == "MUST NOT be truncated"
 
     def test_save_manifest_tmp_uses_unpredictable_name(self, tmp_path: Path):
-        """``save_manifest`` 不能用 ``.arcreel_profile_manifest.json.tmp`` 这种
+        """``save_manifest`` must not use a predictable name like ``.arcreel_profile_manifest.json.tmp``,
+        otherwise when an attacker presets a same-named symlink -> ``/etc/x``, tmp.write would follow the
+        symlink and truncate the external file. Use ``tempfile.mkstemp`` instead, with O_EXCL + an
+        unpredictable name + the same dir.
+
+        ``save_manifest`` 不能用 ``.arcreel_profile_manifest.json.tmp`` 这种
         predictable 名字，否则攻击者预置同名 symlink → ``/etc/x`` 时 tmp.write
         会跟 symlink 截断外部文件。改用 ``tempfile.mkstemp`` 用 O_EXCL +
         不可预测名字 + same dir。
@@ -557,13 +665,17 @@ class TestForceResync:
         )
         save_manifest(project, manifest, original_bytes=None)
 
-        # outside 内容必须不被截断/覆盖
+        # The outside content must not be truncated/overwritten / outside 内容必须不被截断/覆盖
         assert outside.read_text() == "MUST NOT be truncated"
-        # 真实 manifest 写入 project_dir
+        # The real manifest is written into project_dir / 真实 manifest 写入 project_dir
         assert (project / MANIFEST_FILENAME).read_bytes() == manifest.normalized_bytes()
 
     def test_load_manifest_refuses_symlink_manifest(self, tmp_path: Path):
-        """``.arcreel_profile_manifest.json`` 被预置为指向项目外的 symlink → load
+        """``.arcreel_profile_manifest.json`` preset as a symlink pointing outside the project -> load
+        treats it as corrupted and resets, without following the symlink to read external content
+        (information leak + a wrong reset decision).
+
+        ``.arcreel_profile_manifest.json`` 被预置为指向项目外的 symlink → load
         视同损坏走 reset，不跟 symlink 读外部内容（信息泄露 + 错误 reset 决策）。
         """
         from lib.agent.profile_manifest import MANIFEST_FILENAME, load_manifest
@@ -575,11 +687,16 @@ class TestForceResync:
         (project / MANIFEST_FILENAME).symlink_to(outside)
 
         assert load_manifest(project) is None
+        # The symlink was not deleted automatically (the decision should be handled by the later _full_reset
+        # via mkstemp + os.replace)
         # symlink 没被自动删（决策应由后续 _full_reset 通过 mkstemp + os.replace 处理）
         assert (project / MANIFEST_FILENAME).is_symlink()
 
     def test_safe_copy_rejects_dir_dest(self, tmp_path: Path):
-        """``_safe_copy`` 拒绝 dest 是真实目录的情况，否则 shutil.copy2 会创建
+        """``_safe_copy`` refuses a dest that is a real directory, otherwise shutil.copy2 would create an
+        unexpected path like ``dest/source.name`` instead of failing.
+
+        ``_safe_copy`` 拒绝 dest 是真实目录的情况，否则 shutil.copy2 会创建
         ``dest/source.name`` 这种意外路径而不是失败。
         """
         from lib.agent.profile_manifest import _safe_copy
@@ -591,12 +708,18 @@ class TestForceResync:
 
         with pytest.raises(ValueError, match="dest is a directory"):
             _safe_copy(src, dest_dir)
-        # dest 目录及内部都没被改
+        # The dest directory and its contents were not changed / dest 目录及内部都没被改
         assert dest_dir.is_dir()
         assert list(dest_dir.iterdir()) == []
 
     def test_safe_copy_unlinks_symlink_dest_before_write(self, tmp_path: Path):
-        """``_safe_copy`` 必须先 unlink symlink 形态的 dest 再写，否则会跟 symlink
+        """``_safe_copy`` must unlink a symlink-shaped dest before writing, otherwise it would follow the
+        symlink and write the content to the target (outside the project).
+
+        Covers file-level TOCTOU: replaced with a symlink by an external process race between the guard
+        check and _safe_copy -> do not follow the symlink when writing.
+
+        ``_safe_copy`` 必须先 unlink symlink 形态的 dest 再写，否则会跟 symlink
         把内容写到 target（项目外）。
 
         覆盖 file-level TOCTOU：guard 校验后到 _safe_copy 之间被外部进程 race
@@ -613,14 +736,17 @@ class TestForceResync:
 
         _safe_copy(src, dest)
 
-        # outside 内容不应被修改
+        # The outside content should not be modified / outside 内容不应被修改
         assert outside.read_text() == "ORIGINAL outside content"
-        # dest 应该是真实文件（不再是 symlink），含新内容
+        # dest should be a real file (no longer a symlink) with the new content / dest 应该是真实文件（不再是 symlink），含新内容
         assert not dest.is_symlink()
         assert dest.read_text() == "new content"
 
     def test_force_resync_raises_on_empty_profile(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-        """profile 存在但无文件 → ProfileEmptyError，与主入口对称。
+        """Profile exists but has no files -> ProfileEmptyError, symmetric with the main entry. Otherwise
+        paths=None + no manifest would go to _full_reset and wipe the project.
+
+        profile 存在但无文件 → ProfileEmptyError，与主入口对称。
         否则 paths=None + 无 manifest 时会走 _full_reset 把项目清空。
         """
         empty_profile = tmp_path / "empty_profile"
@@ -638,12 +764,14 @@ class TestForceResync:
             pm.force_resync_profile(project_dir)
 
 
-# ---------- 入口防御 ----------
+# ---------- Entry guards / 入口防御 ----------
 
 
 class TestProfileEntryGuards:
     def test_profile_missing_raises_protective_error(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-        """profile 不存在 → ProfileMissingError，绝不静默 mass prune dest。"""
+        """Profile does not exist -> ProfileMissingError; never silently mass-prune dest.
+
+        profile 不存在 → ProfileMissingError，绝不静默 mass prune dest。"""
         monkeypatch.setenv("ARCREEL_PROFILE_DIR", str(tmp_path / "nonexistent"))
         projects_root = tmp_path / "projects"
         projects_root.mkdir()
@@ -659,7 +787,9 @@ class TestProfileEntryGuards:
         assert (project_dir / ".claude" / "skill.md").exists()
 
     def test_profile_empty_raises_protective_error(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-        """profile 目录存在但无可物化文件 → ProfileEmptyError。"""
+        """Profile directory exists but has no materializable files -> ProfileEmptyError.
+
+        profile 目录存在但无可物化文件 → ProfileEmptyError。"""
         empty_profile = tmp_path / "profile"
         empty_profile.mkdir()
         monkeypatch.setenv("ARCREEL_PROFILE_DIR", str(empty_profile))
@@ -698,7 +828,9 @@ class TestRepairAllSymlinks:
         assert stats["aborted"] is False
 
     def test_repair_all_continues_on_single_project_failure(self, env, monkeypatch: pytest.MonkeyPatch):
-        """单项目异常 → 其他项目继续；failed_projects 计数。"""
+        """One project fails -> the others continue; failed_projects is counted.
+
+        单项目异常 → 其他项目继续；failed_projects 计数。"""
         pm, _, _ = env
         _make_project(pm.projects_dir / "proj2")
 
@@ -718,7 +850,9 @@ class TestRepairAllSymlinks:
         assert stats["aborted"] is False
 
     def test_repair_all_aborts_on_profile_missing(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-        """ProfileMissingError → totals.aborted=True，所有项目跳过。"""
+        """ProfileMissingError -> totals.aborted=True, all projects skipped.
+
+        ProfileMissingError → totals.aborted=True，所有项目跳过。"""
         monkeypatch.setenv("ARCREEL_PROFILE_DIR", str(tmp_path / "nonexistent"))
         pm = ProjectManager(tmp_path / "data")
         _make_project(pm.projects_dir / "proj1")
@@ -731,7 +865,10 @@ class TestRepairAllSymlinks:
         assert not (pm.projects_dir / "proj2" / MANIFEST_FILENAME).exists()
 
     def test_skips_entries_that_are_not_projects(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-        """只物化到项目：没有 project.json、名字不合法的目录与数据根里的系统条目都不物化。"""
+        """Only materialize into projects: directories without project.json, with invalid names, and system
+        entries in the data root are not materialized.
+
+        只物化到项目：没有 project.json、名字不合法的目录与数据根里的系统条目都不物化。"""
         profile_dir = tmp_path / "profile"
         (profile_dir / ".claude").mkdir(parents=True)
         (profile_dir / ".claude" / "x.md").write_text("v1")
@@ -759,12 +896,15 @@ class TestRepairAllSymlinks:
             assert not (directory / ".claude").exists(), directory
 
 
-# ---------- 老 symlink 迁移 ----------
+# ---------- Legacy symlink migration / 老 symlink 迁移 ----------
 
 
 class TestLegacySymlinkMigration:
     def test_legacy_symlink_replaced_with_materialized_dir(self, env):
-        """老版本部署遗留的 symlink → 首次 repair 拆除升级为物化。"""
+        """Symlinks left by old deployments -> the first repair removes them and upgrades to
+        materialization.
+
+        老版本部署遗留的 symlink → 首次 repair 拆除升级为物化。"""
         pm, profile_dir, project_dir = env
         (project_dir / ".claude").symlink_to(profile_dir / ".claude")
         (project_dir / "CLAUDE.md").symlink_to(profile_dir / "CLAUDE.md")
@@ -778,12 +918,14 @@ class TestLegacySymlinkMigration:
         assert (project_dir / MANIFEST_FILENAME).exists()
 
 
-# ---------- manifest 字段不变量 ----------
+# ---------- Manifest field invariants / manifest 字段不变量 ----------
 
 
 class TestManifestInvariants:
     def test_manifest_uses_posix_path_keys(self, env):
-        """跨平台路径 key 必须用 POSIX 分隔符。"""
+        """Cross-platform path keys must use POSIX separators.
+
+        跨平台路径 key 必须用 POSIX 分隔符。"""
         pm, _, project_dir = env
         pm.sync_agent_profile(project_dir)
 
@@ -792,7 +934,9 @@ class TestManifestInvariants:
             assert "\\" not in key, f"manifest key has backslash: {key!r}"
 
     def test_manifest_skipped_when_unchanged_across_repair(self, env):
-        """repeat repair 时 manifest 字节级稳态（写前比对生效）。"""
+        """On repeated repair the manifest is byte-for-byte stable (compare-before-write works).
+
+        repeat repair 时 manifest 字节级稳态（写前比对生效）。"""
         pm, _, project_dir = env
         pm.sync_agent_profile(project_dir)
         raw1 = (project_dir / MANIFEST_FILENAME).read_bytes()
@@ -806,7 +950,9 @@ class TestManifestInvariants:
         assert mtime1 == mtime2
 
     def test_manifest_schema_version_mismatch_triggers_full_reset(self, env):
-        """旧 schema 的 manifest → 触发 _full_reset_from_profile。"""
+        """A manifest with an old schema -> triggers _full_reset_from_profile.
+
+        旧 schema 的 manifest → 触发 _full_reset_from_profile。"""
         pm, _, project_dir = env
         pm.sync_agent_profile(project_dir)
         _skill_path(project_dir).write_text("user customized")
@@ -821,7 +967,9 @@ class TestManifestInvariants:
         assert _read_manifest(project_dir)["schema_version"] == MANIFEST_SCHEMA_VERSION
 
     def test_manifest_profile_id_mismatch_triggers_full_reset(self, env):
-        """profile_id 不匹配 → 等价 reset。"""
+        """profile_id mismatch -> equivalent to a reset.
+
+        profile_id 不匹配 → 等价 reset。"""
         pm, _, project_dir = env
         pm.sync_agent_profile(project_dir)
         manifest_path = project_dir / MANIFEST_FILENAME

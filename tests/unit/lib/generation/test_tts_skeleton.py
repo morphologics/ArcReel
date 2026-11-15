@@ -1,4 +1,7 @@
-"""TTS 骨架跨层单测：路径/版本化/白名单/导出 + GeneratedAssets 字段 + generate_audio_async +
+"""Cross-layer unit tests for the TTS skeleton: paths/versioning/allowlist/export + GeneratedAssets fields + generate_audio_async +
+usage aggregation audio_count + worker audio lane routing.
+
+TTS 骨架跨层单测：路径/版本化/白名单/导出 + GeneratedAssets 字段 + generate_audio_async +
 用量聚合 audio_count + worker audio lane 路由。"""
 
 from __future__ import annotations
@@ -27,7 +30,9 @@ from tests.fakes import refuse_resume_execution, write_backend_output
 
 
 async def _refuse_generation_execution(task: dict[str, Any], *, claimed_provider_id: str) -> dict[str, Any]:
-    """常规执行器的防误调替身。"""
+    """Guard stand-in for the regular executor against accidental calls.
+
+    常规执行器的防误调替身。"""
     raise AssertionError(f"unexpected generation execution: {task.get('task_id')}")
 
 
@@ -51,7 +56,7 @@ class TestVersionManagerAudio:
 
     def test_ensure_dirs_creates_audio(self, tmp_path: Path):
         vm = VersionManager(tmp_path)
-        # 目录由写路径按需创建，构造本身只读，不落盘
+        # Directories are created on demand by the write path; construction itself is read-only and writes nothing / 目录由写路径按需创建，构造本身只读，不落盘
         assert not (tmp_path / "versions").exists()
 
         vm._ensure_dirs()
@@ -70,7 +75,7 @@ class TestGeneratedAssetsNarrationAudio:
     def test_roundtrip(self):
         ga = GeneratedAssets(narration_audio="audio/segment_E1S01.wav")
         assert ga.narration_audio == "audio/segment_E1S01.wav"
-        # extra="forbid" 下仍可序列化/反序列化往返
+        # Still round-trips through serialization/deserialization under extra="forbid" / extra="forbid" 下仍可序列化/反序列化往返
         restored = GeneratedAssets.model_validate(ga.model_dump())
         assert restored.narration_audio == "audio/segment_E1S01.wav"
 
@@ -149,7 +154,9 @@ class _FakeLedgerCall:
 
 
 class _FakeLedger:
-    """记账账本假实现：捕获记账括号入参与递交的 backend 结果对象（新主缝）。"""
+    """Fake accounting ledger: captures the accounting bracket arguments and the backend result object handed over (the new main seam).
+
+    记账账本假实现：捕获记账括号入参与递交的 backend 结果对象（新主缝）。"""
 
     def __init__(self):
         self.started = []
@@ -200,6 +207,7 @@ class TestGenerateAudioAsync:
         assert gen._audio_backend.calls[0].output_path != output_path
         assert not gen._audio_backend.calls[0].output_path.exists()
         assert version == 1
+        # The accounting bracket uses call_type=audio; the backend reports the raw text, and the real Ledger's union dispatch turns it into metered usage
         # 记账括号用 call_type=audio；backend 上报原始文本，由真 Ledger union 分发转成计量用量
         assert gen.ledger.started[0]["call_type"] == "audio"
         assert gen.ledger.started[0]["model"] == "tts-model"
@@ -280,6 +288,7 @@ class TestGenerateAudioAsync:
             await gen.generate_audio_async(text="x", resource_id="E1S03", voice="Cherry")
 
     async def test_regenerate_tracks_existing_file(self, tmp_path: Path):
+        # On regeneration the old file must first be recorded into the version history via ensure_current_tracked
         # 重新生成时旧文件须先经 ensure_current_tracked 记录进版本历史
         gen = _build_generator(tmp_path)
         tracked = []
@@ -359,6 +368,7 @@ class TestGenerateAudioAsync:
         assert (gen.project_path / history["versions"][0]["file"]).read_bytes() == b"RIFFfakewav"
 
 
+# ── audio call accounting ──────────────────────────────────────────────────────
 # ── audio 调用记账 ────────────────────────────────────────────────────────
 
 
@@ -381,7 +391,7 @@ class TestAudioCallSettlement:
                 )
                 stored = (await session.execute(select(ApiCall))).scalars().all()
                 assert [row.call_type for row in stored] == ["audio"]
-                # audio 按字符冻结费用（非 0）
+                # audio freezes cost by character (non-zero) / audio 按字符冻结费用（非 0）
                 assert stored[0].currency == "CNY"
                 assert stored[0].cost_amount is not None
                 assert stored[0].cost_amount > 0
@@ -394,7 +404,7 @@ class TestAudioCallSettlement:
 
 class TestWorkerAudioLane:
     def test_lane_limits_audio_projection(self):
-        # 支持 audio 的 provider 投影出上限，不支持的 lane → 0
+        # Providers supporting audio project a limit; unsupported lanes → 0 / 支持 audio 的 provider 投影出上限，不支持的 lane → 0
         assert CapacityTable._lane_limits({"audio"}, 5, 3, 10) == {"image": 0, "video": 0, "audio": 10}
         assert CapacityTable._lane_limits({"image", "video"}, 5, 3, 10)["audio"] == 0
 
@@ -406,7 +416,7 @@ class TestWorkerAudioLane:
         slots.register("dashscope", "audio", "a", dummy)
         slots.register("dashscope", "audio", "b", dummy)
         assert not slots.has_room("dashscope", "audio", 2)
-        # cap=0（provider 不支持 audio）始终无空位
+        # cap=0 (provider does not support audio) never has room / cap=0（provider 不支持 audio）始终无空位
         assert not slots.has_room("x", "audio", 0)
 
     async def test_pool_full_providers_audio(self):
@@ -475,6 +485,7 @@ class TestExtractProviderAudio:
     async def test_audio_payload_provider_routes_to_audio_resolver(self):
         from lib.generation.generation_worker import _extract_provider
 
+        # payload carries a historical audio_provider → the audio lane projection short-circuits to it
         # payload 携带历史 audio_provider → audio lane 投影短路取到
         task = {
             "payload": {"audio_provider": "dashscope", "audio_model": "qwen3-tts-flash"},
@@ -485,6 +496,7 @@ class TestExtractProviderAudio:
 
 class TestOrphanAudioRestartLost:
     async def test_orphan_audio_running_marked_restart_lost(self):
+        # audio is synchronous with no resume entry: running orphans degrade to [restart_lost] and are not resubmitted, to avoid double billing
         # audio 同步无 resume 入口：running 孤儿降级 [restart_lost]，不重新提交以免重复计费
         class _Q:
             def __init__(self):

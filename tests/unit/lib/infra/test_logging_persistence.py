@@ -1,4 +1,6 @@
-"""TimedRotatingFileHandler 注册与降级行为测试。"""
+"""TimedRotatingFileHandler registration and degradation behaviour tests.
+
+TimedRotatingFileHandler 注册与降级行为测试。"""
 
 from __future__ import annotations
 
@@ -16,7 +18,14 @@ from lib.infra import logging_config
 
 @pytest.fixture(autouse=True)
 def reset_root_logger():
-    """每个用例前后清空 root logger handlers，避免污染。
+    """Clear the root logger handlers before and after each case to avoid pollution.
+
+    setup_logging() / attach_file_handler() change more than root.handlers; they also touch
+    root.level and the handlers/disabled/propagate of named loggers such as uvicorn*/aiosqlite.
+    teardown must restore all of these and close() the temporarily attached file handler
+    to release the fd (file locking on Windows is especially sensitive).
+
+    每个用例前后清空 root logger handlers，避免污染。
 
     setup_logging() / attach_file_handler() 不止改 root.handlers——还动
     root.level 以及 uvicorn*/aiosqlite 等命名 logger 的 handlers/disabled/
@@ -35,7 +44,7 @@ def reset_root_logger():
     }
     root.handlers.clear()
     yield
-    # 关闭测试中临时挂的 handler 释放 fd
+    # Close handlers temporarily attached during the test to release the fd / 关闭测试中临时挂的 handler 释放 fd
     for handler in list(root.handlers):
         root.removeHandler(handler)
         handler.close()
@@ -51,7 +60,9 @@ def reset_root_logger():
 
 @pytest.fixture
 def isolated_log_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Path]:
-    """数据根钉到 tmp_path/data，文件日志应落在 ``<数据根>/logs``。"""
+    """Pin the data root to tmp_path/data; file logs should land in ``<data root>/logs``.
+
+    数据根钉到 tmp_path/data，文件日志应落在 ``<数据根>/logs``。"""
     monkeypatch.setenv("ARCREEL_DATA_DIR", str(tmp_path / "data"))
     monkeypatch.delenv("ARCREEL_LOG_DIR", raising=False)
     monkeypatch.delenv("ARCREEL_LOG_FILE_DISABLED", raising=False)
@@ -90,7 +101,7 @@ def test_mkdir_failure_graceful(isolated_log_dir: Path, monkeypatch: pytest.Monk
 
     monkeypatch.setattr(Path, "mkdir", fake_mkdir)
 
-    logging_config.setup_logging()  # 不抛
+    logging_config.setup_logging()  # Does not raise / 不抛
     root = logging.getLogger()
     assert any(isinstance(h, logging.StreamHandler) for h in root.handlers)
     assert not any(isinstance(h, TimedRotatingFileHandler) for h in root.handlers)
@@ -113,12 +124,16 @@ def test_disabled_env_accepts_aliases(isolated_log_dir: Path, monkeypatch: pytes
     assert not any(isinstance(h, TimedRotatingFileHandler) for h in root.handlers)
 
 
+# --- Log location + migrating in from the old location -----------------------------------------------------
 # --- 日志位置 + 旧位置迁入 -----------------------------------------------------
 
 
 @pytest.fixture
 def isolated_data_dir(tmp_path: Path, isolated_log_dir: Path) -> Path:
-    """数据根为 tmp_path/data，旧日志位置为 tmp_path/root/logs（代码目录下的 ``logs``，
+    """The data root is tmp_path/data and the old log location is tmp_path/root/logs (``logs`` under the code directory,
+    the same as the old Docker volume mount point), passed to the migration via ``legacy_dir``.
+
+    数据根为 tmp_path/data，旧日志位置为 tmp_path/root/logs（代码目录下的 ``logs``，
     Docker 旧卷挂载点同此），经 ``legacy_dir`` 传给迁移。"""
     (tmp_path / "data").mkdir()
     (tmp_path / "root").mkdir()
@@ -183,7 +198,9 @@ def test_migrate_moves_legacy_logs_into_data_root(isolated_data_dir: Path) -> No
 
 
 def test_migrate_then_attach_appends_to_migrated_log(isolated_data_dir: Path) -> None:
-    """启动顺序：先迁入旧日志、再挂 handler，新日志续写在迁入的文件后面。"""
+    """Startup order: migrate old logs in first, then attach the handler; new logs are appended after the migrated file.
+
+    启动顺序：先迁入旧日志、再挂 handler，新日志续写在迁入的文件后面。"""
     _write_legacy_logs(isolated_data_dir / "root" / "logs")
 
     _migrate(isolated_data_dir)
@@ -206,7 +223,9 @@ def test_migrate_is_rerunnable(isolated_data_dir: Path) -> None:
 
 
 def test_migrate_merges_into_existing_new_dir_without_overwrite(isolated_data_dir: Path) -> None:
-    """新位置已有同名文件时不覆盖：同名条目留在旧位置，其余照常迁入。"""
+    """When the new location already has a file with the same name it is not overwritten: the same-name entry stays in the old location and the rest migrate as usual.
+
+    新位置已有同名文件时不覆盖：同名条目留在旧位置，其余照常迁入。"""
     old_dir = isolated_data_dir / "root" / "logs"
     new_dir = isolated_data_dir / "data" / "logs"
     _write_legacy_logs(old_dir)
@@ -224,7 +243,10 @@ def test_migrate_merges_into_existing_new_dir_without_overwrite(isolated_data_di
 def test_migrate_empties_mountpoint_that_cannot_be_removed(
     isolated_data_dir: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Docker 旧卷 ``./logs:/app/logs``：旧位置是挂载点，rmdir 抛 EBUSY，
+    """Old Docker volume ``./logs:/app/logs``: the old location is a mount point, rmdir raises EBUSY,
+    and it is on a different device from the data root. The content must still be copied into the data root, and the old location emptied.
+
+    Docker 旧卷 ``./logs:/app/logs``：旧位置是挂载点，rmdir 抛 EBUSY，
     且与数据根跨设备。内容仍要复制进数据根，旧位置被清空。"""
     import errno
 
@@ -262,7 +284,10 @@ def test_migrate_empties_mountpoint_that_cannot_be_removed(
 def test_log_dir_occupied_by_project_is_left_untouched(
     isolated_data_dir: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
-    """旧布局里 ``<数据根>/logs`` 可能是名为 logs 的项目：本次启动不迁旧日志、不挂文件日志，
+    """In the old layout ``<data root>/logs`` may be a project named logs: this startup does not migrate old logs or attach file logging,
+    leaves the project directory untouched, and warns once.
+
+    旧布局里 ``<数据根>/logs`` 可能是名为 logs 的项目：本次启动不迁旧日志、不挂文件日志，
     项目目录原样不动，并告警一次。"""
     project = isolated_data_dir / "data" / "logs"
     project.mkdir()
@@ -282,12 +307,14 @@ def test_log_dir_occupied_by_project_is_left_untouched(
 
 
 def test_migrate_noop_when_legacy_absent(isolated_data_dir: Path) -> None:
-    _migrate(isolated_data_dir)  # 不抛
+    _migrate(isolated_data_dir)  # Does not raise / 不抛
     assert not (isolated_data_dir / "data" / "logs").exists()
 
 
 def test_migrate_noop_when_paths_equal(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """数据根就是代码目录时新旧位置相同，原样保留。"""
+    """When the data root is the code directory, the old and new locations are the same and are kept as is.
+
+    数据根就是代码目录时新旧位置相同，原样保留。"""
     monkeypatch.setenv("ARCREEL_DATA_DIR", str(tmp_path))
     app_data_dir_mod.reset_for_tests()
     try:
@@ -295,7 +322,7 @@ def test_migrate_noop_when_paths_equal(tmp_path: Path, monkeypatch: pytest.Monke
         logs.mkdir()
         (logs / "arcreel.log").write_text("hi\n", encoding="utf-8")
 
-        logging_config.migrate_legacy_log_dir(legacy_dir=logs)  # 不抛
+        logging_config.migrate_legacy_log_dir(legacy_dir=logs)  # Does not raise / 不抛
 
         assert (logs / "arcreel.log").read_text(encoding="utf-8") == "hi\n"
     finally:
@@ -304,7 +331,9 @@ def test_migrate_noop_when_paths_equal(tmp_path: Path, monkeypatch: pytest.Monke
 
 @pytest.mark.skipif(os.name != "posix" or os.geteuid() == 0, reason="directory write bits only bind non-root POSIX")
 def test_migrate_leaves_read_only_legacy_dir_intact(isolated_data_dir: Path, caplog: pytest.LogCaptureFixture) -> None:
-    """旧位置不可写（只读代码目录）：不迁、不在新位置留副本，告警后照常启动；重跑结果相同。"""
+    """Old location not writable (read-only code directory): no migration, no copy left in the new location, warn and start as usual; rerunning gives the same result.
+
+    旧位置不可写（只读代码目录）：不迁、不在新位置留副本，告警后照常启动；重跑结果相同。"""
     old_dir = isolated_data_dir / "root" / "logs"
     _write_legacy_logs(old_dir)
     old_dir.chmod(0o555)
@@ -325,7 +354,9 @@ def test_migrate_failure_logs_error(
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """迁移失败记 ERROR（日志仍留在旧位置），不中止启动。"""
+    """A failed migration logs ERROR (logs stay in the old location) and does not abort startup.
+
+    迁移失败记 ERROR（日志仍留在旧位置），不中止启动。"""
     import shutil
 
     old_dir = isolated_data_dir / "root" / "logs"
@@ -348,7 +379,9 @@ def test_migrate_failed_entry_does_not_block_the_rest(
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """单个条目迁移失败只把该条目留在旧位置并记 ERROR，其余条目照常迁入。"""
+    """A single entry failing to migrate only leaves that entry in the old location and logs ERROR; the other entries migrate as usual.
+
+    单个条目迁移失败只把该条目留在旧位置并记 ERROR，其余条目照常迁入。"""
     import shutil
 
     old_dir = isolated_data_dir / "root" / "logs"
@@ -373,8 +406,10 @@ def test_migrate_failed_entry_does_not_block_the_rest(
 
 
 def test_setup_logging_file_false_skips_file_handler(isolated_log_dir: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """模块导入期用 file=False 时不应挂 file handler、不应 mkdir 新目录。"""
-    # 注意：isolated_log_dir 指向的数据根日志目录尚未创建
+    """With file=False at module import time, no file handler should be attached and no new directory created.
+
+    模块导入期用 file=False 时不应挂 file handler、不应 mkdir 新目录。"""
+    # Note: the data root log directory isolated_log_dir points to has not been created yet / 注意：isolated_log_dir 指向的数据根日志目录尚未创建
     log_dir = isolated_log_dir
     assert not log_dir.exists()
 
@@ -386,7 +421,9 @@ def test_setup_logging_file_false_skips_file_handler(isolated_log_dir: Path, mon
 
 
 def test_attach_file_handler_is_idempotent(isolated_log_dir: Path) -> None:
-    """attach_file_handler() 多次调用只挂一个 file handler。"""
+    """Calling attach_file_handler() several times attaches only one file handler.
+
+    attach_file_handler() 多次调用只挂一个 file handler。"""
     logging_config.setup_logging(file=False)
     logging_config.attach_file_handler()
     logging_config.attach_file_handler()

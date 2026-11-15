@@ -1,4 +1,7 @@
-"""导出剪映草稿工具：经工具声明入口提交到 render 车道，内嵌调用方拿到已登记的草稿，外部调用方拿到批次句柄。"""
+"""Export JianYing draft tool: submitted to the render lane through the tool declaration entry; embedded callers get
+the registered draft, external callers get a batch handle.
+
+导出剪映草稿工具：经工具声明入口提交到 render 车道，内嵌调用方拿到已登记的草稿，外部调用方拿到批次句柄。"""
 
 from __future__ import annotations
 
@@ -168,6 +171,8 @@ async def test_a_render_time_failure_comes_back_as_a_stable_problem_without_left
     project_dir = timeline_project.get_project_path("demo")
     source = tmp_path / "media" / "E1U2.mp4"
     make_test_clip(source, size="160x90", fps=30, seconds=1.0, tone=True)
+    # A version with no typed source that was not manually uploaded cannot be projected into a presentation model; this
+    # is only discovered when the task starts materializing the media layer
     # 没有类型化来源、也不是手动上传的版本投影不出呈现模型，只有任务开始物化素材层时才发现
     install_current_video(project_dir, "reference_videos", "E1U2", source)
     timeline_id = await _timeline(timeline_project)

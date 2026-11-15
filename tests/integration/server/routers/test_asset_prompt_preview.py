@@ -1,4 +1,7 @@
-"""项目资产预览按草稿渲染，与执行取同一份生成输入，保持项目与认证边界。"""
+"""Project asset preview renders from the draft, takes the same generation input as execution, and keeps the project
+and auth boundaries.
+
+项目资产预览按草稿渲染，与执行取同一份生成输入，保持项目与认证边界。"""
 
 import json
 

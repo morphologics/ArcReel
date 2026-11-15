@@ -107,7 +107,9 @@ def _write(root: Path, rel: str, text: str) -> None:
 
 @pytest.fixture
 def repo(tmp_path: Path) -> Path:
-    """最小仓库：各项约定都满足，生成区为空待 `--fix` 填充。"""
+    """Minimal repo: every convention is satisfied and the generated region is empty, waiting for `--fix` to fill it.
+
+    最小仓库：各项约定都满足，生成区为空待 `--fix` 填充。"""
     _write(tmp_path, "docs/standards/backend.md", _STANDARD)
     _write(tmp_path, "CODING_STANDARDS.md", _INDEX)
     _write(tmp_path, ".coderabbit.yaml", _CODERABBIT)

@@ -1,4 +1,6 @@
-"""项目目录绝对路径改写为项目内相对路径的拼写覆盖。"""
+"""Spelling coverage for rewriting absolute project directory paths into project-relative paths.
+
+项目目录绝对路径改写为项目内相对路径的拼写覆盖。"""
 
 from __future__ import annotations
 
@@ -33,7 +35,10 @@ def test_relativize_leaves_sibling_projects_with_a_shared_prefix_alone(tmp_path:
 
 
 def test_relativize_rewrites_windows_paths_quoted_by_os_errors() -> None:
-    """OSError 按 repr 引用文件名，Windows 路径的反斜杠成对出现；改写后仍是可定位的项目内相对路径。"""
+    """OSError quotes file names via repr, so backslashes in Windows paths appear doubled; after rewriting
+    it is still a locatable project-relative path.
+
+    OSError 按 repr 引用文件名，Windows 路径的反斜杠成对出现；改写后仍是可定位的项目内相对路径。"""
     project_dir = PureWindowsPath(r"C:\data\projects\demo")
     script = project_dir / "scripts" / "episode_1.json"
     text = str(FileNotFoundError(2, "No such file or directory", str(script)))
@@ -62,7 +67,10 @@ def test_relativize_leaves_escaped_sibling_projects_with_a_shared_prefix_alone()
 
 
 def test_relativize_rewrites_paths_whose_repr_escapes_single_quotes() -> None:
-    """文件名同时含两种引号时，repr 改用单引号包裹并转义项目目录里的单引号。"""
+    """When a file name contains both kinds of quotes, repr wraps it in single quotes and escapes the single
+    quotes in the project directory.
+
+    文件名同时含两种引号时，repr 改用单引号包裹并转义项目目录里的单引号。"""
     project_dir = PurePosixPath("/data/o'brien/projects/demo")
     text = str(PermissionError(13, "Permission denied", f'{project_dir}/scripts/x"y.json'))
 

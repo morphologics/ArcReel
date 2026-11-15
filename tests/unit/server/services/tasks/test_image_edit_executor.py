@@ -1,4 +1,7 @@
-"""image_edit executor 的编辑独有语义：底图即当前图且是唯一参考图、prompt 即指令、
+"""Edit-specific semantics of the image_edit executor: the base image is the current image and the only reference image, the prompt is the instruction,
+write-back per resource type, versions carry an edit marker, no write-back on failure; image_size resolution has the same source before and after migration.
+
+image_edit executor 的编辑独有语义：底图即当前图且是唯一参考图、prompt 即指令、
 按资源类型写回、版本带编辑标记、失败不写回；image_size 解析迁移前后同源。"""
 
 import asyncio
@@ -53,7 +56,12 @@ from tests.fakes import (
 
 @pytest.fixture
 async def patched_session_factory(db_factory, monkeypatch):
-    """真实内存 DB：建全部 ORM 表，把 lib.db.async_session_factory 指向它。
+    """Real in-memory DB: create all ORM tables and point lib.db.async_session_factory at it.
+
+    Used by the real ConfigResolver in the image_size resolution equivalence cases (preset providers have no DB rows; only custom providers'
+    default resolution lands in the DB).
+
+    真实内存 DB：建全部 ORM 表，把 lib.db.async_session_factory 指向它。
 
     供 image_size 解析等价用例的真实 ConfigResolver 使用（预置供应商无 DB 行，自定义供应商
     默认 resolution 才落 DB）。
@@ -69,6 +77,8 @@ class _FakeGenerator:
         self.reference_bytes = []
         self.tracked = []
         self.versions = self
+        # Injected by _patch_common: the real generator writes the new image to the canonical path,
+        # and artifact manifest registration requires the image to actually be on disk.
         # 由 _patch_common 注入：真实 generator 会把新图落到 canonical 路径，
         # 产物清单登记要求这张图确实在盘上。
         self.project_path: Path | None = None
@@ -77,6 +87,8 @@ class _FakeGenerator:
         if self.fail:
             raise RuntimeError("backend boom")
         self.image_calls.append(kwargs)
+        # Reading reference images, persisting output and committing versions all happen in a worker thread: the real backend writes artifacts in a thread,
+        # and the formal commit callback runs via run_noninterruptible_sync
         # 读参考图、落盘产出与提交版本都在工作线程里：真实后端在线程里写产物，
         # 正式提交回调经 run_noninterruptible_sync 执行
         return await asyncio.to_thread(self._produce_and_commit, kwargs)
@@ -87,6 +99,7 @@ class _FakeGenerator:
             canonical = self.project_path / resource_relative_path(kwargs["resource_type"], kwargs["resource_id"])
             canonical.parent.mkdir(parents=True, exist_ok=True)
             canonical.write_bytes(b"edited")
+        # Like MediaGenerator, commit the version via formal_output's activation callback and return the version number the callback gives
         # 与 MediaGenerator 一样经 formal_output 的活化回调提交版本，返回回调给出的版本号
         current = Path(tempfile.gettempdir()) / "image.png"
         version = kwargs["commit_formal_output"](current, current, {"source": kwargs["source"]})
@@ -111,6 +124,7 @@ class _FakeGenerator:
 class _FakePM:
     def __init__(self, project_path: Path):
         self.project_path = project_path
+        # Production projects are always on the current schema, and scripts are always bound in the episodes ledger.
         # 生产项目一律处于当前 schema，剧本一律在 episodes 账本里绑定。
         self.project = {
             "schema_version": CURRENT_PROJECT_SCHEMA_VERSION,
@@ -148,14 +162,18 @@ class _FakePM:
         self.script_commits = []
 
     def sync_disk(self):
-        """把内存态项目与剧本落盘——产物清单按磁盘上的真实项目做比对。"""
+        """Persist the in-memory project and script: the artifact manifest compares against the real project on disk.
+
+        把内存态项目与剧本落盘——产物清单按磁盘上的真实项目做比对。"""
 
         (self.project_path / "scripts").mkdir(parents=True, exist_ok=True)
         (self.project_path / "project.json").write_text(json.dumps(self.project), encoding="utf-8")
         (self.project_path / "scripts" / "episode_1.json").write_text(json.dumps(self.script), encoding="utf-8")
 
     def register_artifacts(self):
-        """把已落盘的资产图与分镜图登记进产物清单——未登记的产物不被编辑准入。"""
+        """Register the persisted asset sheets and storyboard images in the artifact manifest: unregistered artifacts are not admitted for editing.
+
+        把已落盘的资产图与分镜图登记进产物清单——未登记的产物不被编辑准入。"""
 
         self.sync_disk()
         register_current_artifact_if_provable(self.project_path, ArtifactKey.asset_sheet("character", "Alice"))
@@ -203,9 +221,13 @@ def _prepare_files(tmp_path: Path) -> Path:
 
 
 def _patch_common(monkeypatch, fake_pm, fake_generator, *, resolution=None, register_artifacts=True):
-    """替换项目管理器与 generation context 解析缝：ctx.generator 即 fake_generator，
+    """Replace the project manager and the generation context resolution seam: ctx.generator is fake_generator,
+    and the image lane carries the given resolution. Asserts that editing always declares the i2i slot (generation_type == "i2i").
+
+    替换项目管理器与 generation context 解析缝：ctx.generator 即 fake_generator，
     image lane 携带指定 resolution。断言编辑恒声明 i2i 槽（generation_type == "i2i"）。"""
     if isinstance(fake_pm, _FakePM):
+        # Cases with a real ProjectManager build and register their own projects; this only serves the fake PM.
         # 真实 ProjectManager 的用例自己造项目与登记，这里只服务假 PM。
         if register_artifacts:
             fake_pm.register_artifacts()
@@ -238,7 +260,9 @@ class TestResolveCurrentImageRel:
             resolve_current_image_rel(project, "character", "不存在")
 
     def test_asset_sheet_matches_across_nfc_nfd_forms(self):
-        """请求里的资产名与桶 key 形态可以不同（登记闸口落 NFC，存量 key 可能是 NFD）。"""
+        """The asset name in the request and the bucket key may differ in form (the registration gate stores NFC; existing keys may be NFD).
+
+        请求里的资产名与桶 key 形态可以不同（登记闸口落 NFC，存量 key 可能是 NFD）。"""
         import unicodedata
 
         name_nfc = unicodedata.normalize("NFC", "Hiếu")
@@ -250,7 +274,9 @@ class TestResolveCurrentImageRel:
         assert resolve_current_image_rel(project, "character", name_nfd) == "characters/legacy.png"
 
     def test_storyboard_pointer_is_the_only_evidence_of_a_current_image(self):
-        """只认登记指针：没有指针就是没有产物，同名文件不构成这个分镜的归属证据。"""
+        """Only the registered pointer counts: no pointer means no artifact, and a file with the same name is no evidence of belonging to this shot.
+
+        只认登记指针：没有指针就是没有产物，同名文件不构成这个分镜的归属证据。"""
 
         script = {
             "content_mode": "narration",
@@ -337,7 +363,10 @@ class TestExecuteImageEditTask:
         tmp_path: Path,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """未升级到当前数据版本的项目：编辑在触达供应商之前就被阻断并给出原因，
+        """A project not upgraded to the current data version: the edit is blocked with a reason before reaching the provider,
+        and an asset sheet with the same name actually lying on disk does not change the verdict.
+
+        未升级到当前数据版本的项目：编辑在触达供应商之前就被阻断并给出原因，
         盘上确实躺着一张同名资产图也不改变判定。"""
 
         pm = ProjectManager(tmp_path / "projects")
@@ -537,6 +566,7 @@ class TestExecuteImageEditTask:
                 provider_references.append(provider_reference)
 
                 def _edit_concurrently() -> bytes:
+                    # During generation another party changed the base image, project and script: the provider still reads the bytes frozen at that time
                     # 生成期间另一方改了底图、项目与剧本：供应商读到的仍是冻结时的字节
                     current.write_bytes(b"source-changed-during-await")
 
@@ -554,6 +584,7 @@ class TestExecuteImageEditTask:
 
                 assert await asyncio.to_thread(_edit_concurrently) == b"source-before-await"
 
+                # A direct call (not a queued task) has no task_id: the staging identity is made inside the generator, so the stand-in makes its own.
                 # 直接调用（非队列任务）没有 task_id：staging 身份由生成器内部造，替身自造一个。
                 staged = task_image_staging_path(current, kwargs["task_id"] or "inline-test")
                 version = await stage_and_commit(
@@ -822,18 +853,21 @@ class TestExecuteImageEditTask:
         )
 
         call = fake_generator.image_calls[0]
+        # Only the current image as reference; the prompt is only the edit instruction (the original image_prompt is not appended)
         # 参考图仅当前图一张；prompt 仅编辑指令（不拼原 image_prompt）
         assert len(call["reference_images"]) == 1
         assert Path(call["reference_images"][0]).name.endswith("Alice.png")
         assert fake_generator.reference_bytes == [b"png"]
-        assert not Path(call["reference_images"][0]).exists()  # noqa: ASYNC240 -- 测试内本地小文件读写/断言，不在生产事件循环上
+        assert not Path(call["reference_images"][0]).exists()  # noqa: ASYNC240 -- Small local file I/O / assertions in the test, not on the production event loop. / 测试内本地小文件读写/断言，不在生产事件循环上
         assert call["prompt"] == "把头发改成红色"
         assert "原始角色 prompt" not in call["prompt"]
-        # 新版本带编辑标记 metadata
+        # The new version carries edit-marker metadata / 新版本带编辑标记 metadata
         assert call["source"] == IMAGE_EDIT_VERSION_SOURCE
         assert call["resource_type"] == "characters"
+        # The old image is first backfill-registered with neutral metadata (no edit instruction), ensuring the pre-edit version can be rolled back
         # 旧图先以中性元数据补登（不带编辑指令），保证编辑前版本可回滚
         assert fake_generator.tracked == [{"resource_type": "characters", "resource_id": "Alice", "prompt": ""}]
+        # Write back to the canonical path per resource type; the original image_prompt field is not changed
         # 按资源类型写回 canonical 路径；原 image_prompt 字段不被改动
         assert fake_pm.project_commits == 1
         assert fake_pm.project["characters"]["Alice"]["character_sheet"] == "characters/Alice.png"
@@ -845,7 +879,9 @@ class TestExecuteImageEditTask:
         assert result["file_path"] == "characters/Alice.png"
 
     async def test_reference_snapshot_is_cleaned_when_cancelled_while_preparing(self, tmp_path, monkeypatch):
-        """取消落在线程里准备底图快照的那一程：快照建好后照样回收，不调供应商。"""
+        """Cancellation lands while the base image snapshot is being prepared in a thread: the snapshot is still reclaimed once built, and the provider is not called.
+
+        取消落在线程里准备底图快照的那一程：快照建好后照样回收，不调供应商。"""
         project_path = _prepare_files(tmp_path)
         fake_pm = _FakePM(project_path)
         fake_generator = _FakeGenerator()
@@ -892,18 +928,21 @@ class TestExecuteImageEditTask:
         )
 
         call = fake_generator.image_calls[0]
+        # The base image comes from the generated_assets pointer (old grid project path); the new image is written back to canonical
         # 底图取 generated_assets 指针（旧宫格项目路径），新图写回 canonical
         assert len(call["reference_images"]) == 1
         assert Path(call["reference_images"][0]).name.endswith("scene_E1S01_first.png")
         assert fake_generator.reference_bytes == [b"png"]
-        assert not Path(call["reference_images"][0]).exists()  # noqa: ASYNC240 -- 测试内本地小文件读写/断言，不在生产事件循环上
+        assert not Path(call["reference_images"][0]).exists()  # noqa: ASYNC240 -- Small local file I/O / assertions in the test, not on the production event loop. / 测试内本地小文件读写/断言，不在生产事件循环上
         assert call["resource_type"] == "storyboards"
         assert fake_pm.script_commits == ["episode_1.json"]
         assert fake_pm.script["segments"][0]["generated_assets"]["storyboard_image"] == "storyboards/scene_E1S01.png"
         assert result["file_path"] == "storyboards/scene_E1S01.png"
 
     async def test_provider_changed_since_claim_is_raised_before_the_provider_call(self, tmp_path, monkeypatch):
-        """执行入口解析出的 i2i 供应商与认领槽不一致：不补登旧图、不调供应商，交给 worker 改记录并回队。"""
+        """The i2i provider resolved at the execution entry differs from the claimed slot: do not backfill the old image or call the provider; leave it to the worker to update the record and requeue.
+
+        执行入口解析出的 i2i 供应商与认领槽不一致：不补登旧图、不调供应商，交给 worker 改记录并回队。"""
         project_path = _prepare_files(tmp_path)
         fake_pm = _FakePM(project_path)
         fake_generator = _FakeGenerator()
@@ -934,7 +973,10 @@ class TestExecuteImageEditTask:
         assert fake_pm.project_commits == 0
 
     async def test_backend_failure_skips_writeback(self, tmp_path, monkeypatch):
-        """失败零损失：backend 抛错时不写回资源字段（current 图指针由 MediaGenerator 保证不触碰）。
+        """Zero loss on failure: when the backend raises, resource fields are not written back (MediaGenerator guarantees the current image pointer is untouched).
+        The old image's baseline registration happens before the backend call, independent of success, is not rolled back on failure, and is outside this case's assertions.
+
+        失败零损失：backend 抛错时不写回资源字段（current 图指针由 MediaGenerator 保证不触碰）。
         旧图基线登记先于 backend 调用发生，与成败无关、不因失败回滚，不在本用例断言范围。
         """
         project_path = _prepare_files(tmp_path)
@@ -963,7 +1005,9 @@ class TestExecuteImageEditTask:
 
 @dataclass
 class _EchoBackend:
-    """回声 backend：model 原样反映请求 model_id（无自定义回退，与 registry 身份一致）。"""
+    """Echo backend: model reflects the requested model_id as is (no custom fallback, consistent with the registry identity).
+
+    回声 backend：model 原样反映请求 model_id（无自定义回退，与 registry 身份一致）。"""
 
     name: str
     model: str
@@ -974,7 +1018,13 @@ class _EchoBackend:
 
 
 class TestImageSizeResolutionEquivalence:
-    """image_size 同源：``ctx.image.resolution`` 等于「先 resolve_image_backend(i2i) 得
+    """image_size has the same source: ``ctx.image.resolution`` equals the result of the independent two-step rule "first resolve_image_backend(i2i) to get
+    provider/model, then look up resolution by model_id".
+
+    Editing uses the i2i slot, and the preset provider's backend.model matches the registry model_id (no custom fallback),
+    so the new path "look up by the backend's actual model" is identical to the two-step rule "look up by registry model_id".
+
+    image_size 同源：``ctx.image.resolution`` 等于「先 resolve_image_backend(i2i) 得
     provider/model、再按 model_id 查 resolution」这一独立两步口径的结果。
 
     编辑走 i2i 槽、预置供应商 backend.model 与 registry model_id 一致（无自定义回退），
@@ -983,7 +1033,9 @@ class TestImageSizeResolutionEquivalence:
 
     @pytest.fixture
     def _ctx_env(self, monkeypatch, tmp_path):
-        """真 ProjectManager（demo 项目目录）+ 回声 assemble 缝，避免 backend 构造触网。"""
+        """Real ProjectManager (demo project directory) + echo assemble seam, to avoid backend construction hitting the network.
+
+        真 ProjectManager（demo 项目目录）+ 回声 assemble 缝，避免 backend 构造触网。"""
         pm = ProjectManager(tmp_path)
         (pm.projects_dir / "demo").mkdir(parents=True)
         use_project_manager(monkeypatch, pm)
@@ -998,7 +1050,9 @@ class TestImageSizeResolutionEquivalence:
 
     @staticmethod
     async def _old_image_size(patched_session_factory, project, payload):
-        """旧执行层口径：resolve_image_backend(i2i) 得 provider/model，再按 model_id 查 resolution。"""
+        """Old execution-layer rule: resolve_image_backend(i2i) gives provider/model, then resolution is looked up by model_id.
+
+        旧执行层口径：resolve_image_backend(i2i) 得 provider/model，再按 model_id 查 resolution。"""
         resolver = ConfigResolver(patched_session_factory)
         async with resolver.session() as r:
             resolved = await r.resolve_image_backend(project, payload, generation_type="i2i")
@@ -1030,7 +1084,9 @@ class TestImageSizeResolutionEquivalence:
 
 class TestImageEditEventMapping:
     def test_emit_maps_image_edit_to_resource_events(self, tmp_path, monkeypatch):
-        """编辑完成事件与同资源的生成完成事件同形状：按 payload.resource_type 派发。"""
+        """The edit completion event has the same shape as the generation completion event for the same resource: dispatched by payload.resource_type.
+
+        编辑完成事件与同资源的生成完成事件同形状：按 payload.resource_type 派发。"""
         from lib.project.project_change_hints import register_project_change_batch_listener
         from server.services.tasks import generation_tasks
 
@@ -1038,6 +1094,7 @@ class TestImageEditEventMapping:
         fake_pm = _FakePM(project_path)
         use_project_manager(monkeypatch, fake_pm)
 
+        # Attach the real event bus via the public subscription entry: the assertions are on the batches actually received by the subscriber (the SSE broadcast side).
         # 从公开订阅口接真实事件总线：断言落在订阅方（SSE 广播那一侧）实际收到的批次上。
         delivered: list[dict] = []
         unregister = register_project_change_batch_listener(
@@ -1052,6 +1109,7 @@ class TestImageEditEventMapping:
             )
             assert delivered[0]["entity_type"] == "character"
             assert delivered[0]["action"] == "updated"
+            # The fingerprint is computed per the character task rule (characters/Alice.png exists on disk)
             # 指纹按 character 任务口径计算（characters/Alice.png 存在于磁盘）
             assert "characters/Alice.png" in delivered[0]["asset_fingerprints"]
 

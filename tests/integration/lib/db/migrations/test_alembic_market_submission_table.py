@@ -1,4 +1,6 @@
-"""分享提交记录迁移往返、每端点一条记录及端点删除级联。"""
+"""Share submission record migration round trip, one record per endpoint, and cascade on endpoint deletion.
+
+分享提交记录迁移往返、每端点一条记录及端点删除级联。"""
 
 from collections.abc import Callable
 from datetime import UTC, datetime

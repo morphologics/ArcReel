@@ -75,7 +75,9 @@ class TestGenerationTasks:
         assert fake_generator.video_calls == []
 
     async def test_execute_video_task_generates_thumbnail(self, monkeypatch, tmp_path):
-        """视频生成后应自动提取首帧缩略图"""
+        """After video generation, the first-frame thumbnail should be extracted automatically
+
+        视频生成后应自动提取首帧缩略图"""
         project_path = prepare_files(tmp_path)
         fake_pm = _FakePM(project_path)
         seed_current_storyboard(fake_pm)
@@ -84,6 +86,8 @@ class TestGenerationTasks:
         thumbnail_path = project_path / "thumbnails" / "scene_E1S01.jpg"
 
         async def fake_extract(video_path, out_path):
+            # In production an ffmpeg subprocess writes the thumbnail; the double writes to disk in a worker thread, not
+            # occupying the event loop
             # 生产由 ffmpeg 子进程写缩略图，替身在工作线程里落盘，不占事件循环
             await write_backend_output(out_path, b"thumb")
             return out_path
@@ -99,13 +103,16 @@ class TestGenerationTasks:
         )
 
         assert result["resource_type"] == "videos"
+        # Verify update_scene_asset was called with video_thumbnail
         # 验证 update_scene_asset 被调用，其中包含 video_thumbnail
         asset_types = [call["asset_type"] for call in fake_pm.updated_assets]
         assert "video_thumbnail" in asset_types
         assert thumbnail_path.exists()
 
     async def test_execute_video_task_carries_backend_warnings_into_the_result(self, monkeypatch, tmp_path):
-        """backend 执行期的提示要落到任务 result 上，用户才看得到——日志只有运维读得到。"""
+        """Backend hints at execution must land on the task result for users to see them - only ops can read the logs.
+
+        backend 执行期的提示要落到任务 result 上，用户才看得到——日志只有运维读得到。"""
         project_path = prepare_files(tmp_path)
         fake_pm = _FakePM(project_path)
         seed_current_storyboard(fake_pm)
@@ -129,7 +136,11 @@ class TestGenerationTasks:
         assert result["warnings"] == [warning]
 
     async def test_finalize_video_completes_when_cancelled_during_script_write(self, monkeypatch, tmp_path):
-        """取消落在视频落账段的剧本回写上：写完照常走完收尾并交回结果，取消不再传给选中补偿。"""
+        """Cancellation landing on the script write-back in the video booking stage: after writing, finalization
+        completes as usual and the result is returned; the cancellation no longer passes to the selection
+        compensation.
+
+        取消落在视频落账段的剧本回写上：写完照常走完收尾并交回结果，取消不再传给选中补偿。"""
         project_path = prepare_files(tmp_path)
         fake_pm = _FakePM(project_path)
         writing = threading.Event()
@@ -242,7 +253,9 @@ class TestGenerationTasks:
         assert not (project_path / ".arcreel" / "tasks" / "task-storyboard" / "provider_media").exists()
 
     async def test_execute_video_task_lane_bucket_follows_project_route(self, monkeypatch, tmp_path):
-        """lane 归桶按项目生成模式求值，与提交入口使用同一口径。"""
+        """Lane bucketing is evaluated by the project generation mode, the same rule as the submit entry.
+
+        lane 归桶按项目生成模式求值，与提交入口使用同一口径。"""
         project_path = prepare_files(tmp_path)
         fake_pm = _FakePM(project_path)
         seed_current_storyboard(fake_pm)
@@ -265,7 +278,9 @@ class TestGenerationTasks:
         assert seen_lanes[-1]["video"].generation_type == "r2v"
 
     async def test_execute_video_task_rejects_unsupported_duration(self, monkeypatch, tmp_path):
-        """执行层在解析出 ProviderModel 后，对越界 duration 以明确错误拒绝。"""
+        """After the execution layer resolves the ProviderModel, an out-of-range duration is refused with a clear error.
+
+        执行层在解析出 ProviderModel 后，对越界 duration 以明确错误拒绝。"""
         project_path = prepare_files(tmp_path)
         fake_pm = _FakePM(project_path)
         seed_current_storyboard(fake_pm)
@@ -285,6 +300,7 @@ class TestGenerationTasks:
                 },
             )
         assert exc.value.code == "video_duration_not_supported"
+        # An out-of-range duration is refused at start; the backend must never be called to generate.
         # 越界 duration 在起跑时被拒，绝不应调用后端生成。
         assert fake_generator.video_calls == []
 
@@ -316,7 +332,9 @@ class TestGenerationTasks:
         assert fake_generator.video_calls == []
 
     async def test_execute_video_task_supported_duration_passes(self, monkeypatch, tmp_path):
-        """合法 duration 通过守卫，正常进入后端生成。"""
+        """A valid duration passes the guard and proceeds to backend generation normally.
+
+        合法 duration 通过守卫，正常进入后端生成。"""
         project_path = prepare_files(tmp_path)
         fake_pm = _FakePM(project_path)
         seed_current_storyboard(fake_pm)
@@ -339,7 +357,10 @@ class TestGenerationTasks:
         assert fake_generator.video_calls[0]["duration_seconds"] == 8
 
     async def test_execute_video_task_refuses_a_script_outside_the_episode_ledger(self, monkeypatch, tmp_path):
-        """剧本身份只认 project.json 的 episodes 账本：未绑定的剧本文件一律拒绝，不猜集号。"""
+        """Script identity recognizes only project.json's episodes ledger: unbound script files are always refused,
+        without guessing the episode number.
+
+        剧本身份只认 project.json 的 episodes 账本：未绑定的剧本文件一律拒绝，不猜集号。"""
         project_path = prepare_files(tmp_path)
         fake_pm = _FakePM(project_path)
         seed_current_storyboard(fake_pm)
@@ -370,7 +391,10 @@ class TestGenerationTasks:
     async def test_execute_video_task_requests_planned_duration_regardless_of_narration_delivery(
         self, monkeypatch, tmp_path, narration_delivery
     ):
-        """视频按剧本计划时长申请，只声明 video lane：项目的旁白交付方式与已有的更长旁白配音都不改变请求。"""
+        """Video is requested by the script's planned duration, declaring only the video lane: neither the project's
+        narration delivery mode nor existing longer narration audio changes the request.
+
+        视频按剧本计划时长申请，只声明 video lane：项目的旁白交付方式与已有的更长旁白配音都不改变请求。"""
         project_path = prepare_files(tmp_path)
         fake_pm = _FakePM(project_path)
         fake_pm.project["narration_delivery"] = narration_delivery
@@ -410,7 +434,10 @@ class TestGenerationTasks:
         assert [request["audio"] for request in seen_lane_requests] == [None]
 
     async def test_execute_video_task_blocks_on_unresolvable_request_facts(self, monkeypatch, tmp_path):
-        """排队期间配置变化让档位收成空集：提交供应商前以原问题码阻断，不回退到未收窄的全集。"""
+        """A config change while queued narrows the tiers to an empty set: blocked with the original problem code
+        before submitting to the provider, without falling back to the unnarrowed full set.
+
+        排队期间配置变化让档位收成空集：提交供应商前以原问题码阻断，不回退到未收窄的全集。"""
         project_path = prepare_files(tmp_path)
         fake_pm = _FakePM(project_path)
         seed_current_storyboard(fake_pm)
@@ -448,7 +475,11 @@ class TestGenerationTasks:
         assert fake_generator.video_calls == []
 
     async def test_execute_video_task_storyboard_image_grid_filename_resolves(self, monkeypatch, tmp_path):
-        """宫格项目 storyboard_image 指向 scene_{id}_first.png（非 canonical 文件名），只要登记在
+        """In grid projects storyboard_image points to scene_{id}_first.png (not the canonical file name); as long as it
+        is registered in the artifact manifest and lies inside storyboards/, it resolves normally - unlike
+        end_frame_image, the file name is not required to match the canonical path one to one here.
+
+        宫格项目 storyboard_image 指向 scene_{id}_first.png（非 canonical 文件名），只要登记在
         产物清单里且落在 storyboards/ 目录内就正常解析——与 end_frame_image 不同，这里不要求
         文件名与 canonical 路径逐一比对。"""
         project_path = prepare_files(tmp_path)
@@ -475,7 +506,9 @@ class TestGenerationTasks:
         assert fake_generator.video_calls[0]["start_image"] == project_path / "storyboards" / "scene_E1S01_first.png"
 
     async def test_execute_video_task_missing_storyboard_image_fails_hard(self, monkeypatch, tmp_path):
-        """storyboard_image 字段指向的文件缺失时硬失败，不调用后端生成。"""
+        """When the file the storyboard_image field points to is missing, fail hard without calling backend generation.
+
+        storyboard_image 字段指向的文件缺失时硬失败，不调用后端生成。"""
         project_path = prepare_files(tmp_path)
         fake_pm = _FakePM(project_path)
         fake_generator = FakeGenerator()
@@ -550,6 +583,8 @@ class TestGenerationTasks:
 
         async def _drop_claim_after_staging(project_dir, task_id, inputs):
             staged = await original_stage(project_dir, task_id, inputs)
+            # Simulate a concurrent claim withdrawal elsewhere: change the manifest in a worker thread, not occupying the
+            # event loop
             # 模拟另一处并发撤掉认领：在工作线程里改清单，不占事件循环
             await asyncio.to_thread(lambda: ProjectArtifactManifestAdapter(project_path).delete_entry(key))
             return staged
@@ -626,6 +661,8 @@ class TestGenerationTasks:
 
         async def _stage_then_replace_and_reactivate(project_dir, task_id, inputs):
             staged = await original_stage(project_dir, task_id, inputs)
+            # Simulate a concurrent shot replacement and reclaim elsewhere: change the disk in a worker thread, not
+            # occupying the event loop
             # 模拟另一处并发替换分镜并重新认领：在工作线程里改盘，不占事件循环
             await asyncio.to_thread(_replace_and_reactivate)
             return staged
@@ -648,7 +685,11 @@ class TestGenerationTasks:
         assert not (project_path / ".arcreel" / "tasks" / "task-legacy-storyboard-race" / "provider_media").exists()
 
     async def test_execute_video_task_generated_assets_non_dict_is_refused(self, monkeypatch, tmp_path):
-        """generated_assets 容器本身被外部编辑损坏为非 dict（如 list）时读不出分镜指针，
+        """When the generated_assets container itself was corrupted by an external edit into a non-dict (e.g. list), the
+        storyboard pointer cannot be read, so refuse as "no registered pointer" - no guessing a same-named file, no
+        uncaught AttributeError.
+
+        generated_assets 容器本身被外部编辑损坏为非 dict（如 list）时读不出分镜指针，
         按「无登记指针」拒绝——不猜同名文件，也不抛未捕获 AttributeError。"""
         from lib.script.storyboard_sequence import StoryboardImageBindingRequired
 
@@ -676,14 +717,20 @@ class TestGenerationTasks:
     @pytest.mark.parametrize(
         ("storyboard_value", "expected_message"),
         [
+            # Out-of-bounds and dirty data: collectively illegal paths
             # 越界与脏数据：统称非法路径
+            # Absolute path: a bare `/` join discards the left operand entirely
             ("/etc/passwd", "invalid storyboard image path"),  # 绝对路径：裸 `/` 拼接会整体丢弃左操作数
-            ("../../outside.png", "invalid storyboard image path"),  # `..` 穿越出项目目录
+            ("../../outside.png", "invalid storyboard image path"),  # `..` traverses out of the project directory / `..` 穿越出项目目录
+            # Dirty data (non-string) in the script JSON must fail readably, not with TypeError
             (123, "invalid storyboard image path"),  # 剧本 JSON 里的脏数据（非字符串）须可读失败而非 TypeError
+            # Falsy dirty data: a truthiness check must not treat it as "unset" and silently fall back to the default path
             (0, "invalid storyboard image path"),  # falsy 脏数据：真值判断不得当成「未设置」而静默回退默认路径
-            (False, "invalid storyboard image path"),  # 同上
-            ([], "invalid storyboard image path"),  # 同上
-            ({}, "invalid storyboard image path"),  # 同上
+            (False, "invalid storyboard image path"),  # Same as above / 同上
+            ([], "invalid storyboard image path"),  # Same as above / 同上
+            ({}, "invalid storyboard image path"),  # Same as above / 同上
+            # Directory ownership: inside the project but not in storyboards/; the wording must differ from out-of-bounds
+            # to help locate externally edited scripts
             # 目录归属：项目内但不在 storyboards/，措辞需与越界区分，便于定位外部编辑过的剧本
             ("storyboards/../end_frames/scene_E1S01.png", "must stay under storyboards/"),
             ("end_frames/scene_E1S01.png", "must stay under storyboards/"),
@@ -692,7 +739,11 @@ class TestGenerationTasks:
     async def test_execute_video_task_storyboard_image_outside_dir_fails_hard(
         self, monkeypatch, tmp_path, storyboard_value, expected_message
     ):
-        """剧本是磁盘 JSON，storyboard_image 字段不可信：越界 / 绕开 storyboards 目录 / 脏数据
+        """The script is JSON on disk and the storyboard_image field is untrusted: out-of-bounds / bypassing the
+        storyboards directory / dirty data all fail hard, never sending arbitrary server files in the video request
+        upload to the provider.
+
+        剧本是磁盘 JSON，storyboard_image 字段不可信：越界 / 绕开 storyboards 目录 / 脏数据
         一律硬失败，不把任意服务器文件送进视频请求上传给供应商。"""
         project_path = prepare_files(tmp_path)
         (tmp_path / "outside.png").write_bytes(b"png")
@@ -720,7 +771,12 @@ class TestGenerationTasks:
     async def test_execute_video_task_storyboard_image_absolute_path_inside_project_fails_hard(
         self, monkeypatch, tmp_path
     ):
-        """storyboard_image 是项目 storyboards/ 内的绝对路径时同样硬失败：`os.path.join` 遇绝对
+        """storyboard_image being an absolute path inside the project's storyboards/ also fails hard: `os.path.join`
+        discards the project root on an absolute path, and the bounds check only looks at whether the result is
+        inside the project, so directory ownership alone cannot stop such values; absolute paths themselves must be
+        refused explicitly.
+
+        storyboard_image 是项目 storyboards/ 内的绝对路径时同样硬失败：`os.path.join` 遇绝对
         路径会丢弃项目根，越界校验只看结果是否落在项目内，光靠目录归属挡不住这类值，须显式拒绝
         绝对路径本身。"""
         project_path = prepare_files(tmp_path)
@@ -745,7 +801,12 @@ class TestGenerationTasks:
         assert fake_generator.video_calls == []
 
     async def test_execute_video_task_storyboard_image_rooted_no_drive_path_fails_hard(self, monkeypatch, tmp_path):
-        """storyboard_image 是无盘符的根路径（如 `\\Users\\...`）时同样硬失败：`Path.is_absolute()`
+        """storyboard_image being a rooted path without a drive letter (e.g. `\\Users\\...`) also fails hard:
+        `Path.is_absolute()` returns False for such values when running natively on Windows, but `os.path.join`
+        still discards the project root on a rooted path (keeping only the base's drive letter), so after
+        normalizing to forward slashes a leading root separator must be checked separately.
+
+        storyboard_image 是无盘符的根路径（如 `\\Users\\...`）时同样硬失败：`Path.is_absolute()`
         在 Windows 原生运行时对这类值返回 False，但 `os.path.join` 遇到根路径仍会丢弃项目根（仅
         保留 base 的盘符），须按正斜杠归一化后单独判断根分隔符开头。"""
         project_path = prepare_files(tmp_path)
@@ -769,7 +830,11 @@ class TestGenerationTasks:
         assert fake_generator.video_calls == []
 
     async def test_execute_video_task_storyboard_image_pointing_to_directory_fails_hard(self, monkeypatch, tmp_path):
-        """storyboard_image 指向 storyboards/ 内一个存在的目录（而非文件）时硬失败：目录同样
+        """storyboard_image pointing to an existing directory (not a file) inside storyboards/ fails hard: a directory
+        also passes `exists()`; without explicitly requiring a file, the directory would be passed to the video
+        backend as start_image and fail only at encoding with an unreadable reason.
+
+        storyboard_image 指向 storyboards/ 内一个存在的目录（而非文件）时硬失败：目录同样
         通过 `exists()`，若不显式要求是文件，目录会被当作 start_image 传给视频后端，在编码阶段
         才失败且原因不可读。"""
         project_path = prepare_files(tmp_path)
@@ -793,7 +858,10 @@ class TestGenerationTasks:
         assert fake_generator.video_calls == []
 
     async def test_execute_video_task_end_frame_image_passed_to_generator(self, monkeypatch, tmp_path):
-        """镜头设置了 end_frame_image 时，生成视频请求携带 end_image；快照路径取自
+        """When a shot sets end_frame_image, the video generation request carries end_image; the snapshot path is a
+        fixed in-project relative path built from the shot's persistent field.
+
+        镜头设置了 end_frame_image 时，生成视频请求携带 end_image；快照路径取自
         镜头持久字段拼接的项目内固定相对路径。"""
         project_path = prepare_files(tmp_path)
         fake_pm = _FakePM(project_path)
@@ -820,7 +888,12 @@ class TestGenerationTasks:
     async def test_execute_video_task_end_frame_image_bare_filename_resolves_via_default_dir(
         self, monkeypatch, tmp_path
     ):
-        """尾帧字段是裸文件名（无 `end_frames/` 前缀）时按校验侧
+        """When the end frame field is a bare file name (no `end_frames/` prefix), resolve it by the validator side's
+        data_validator._resolve_existing_path default_dir fallback rule - otherwise values that pass import
+        validation (the validator retries bare file names with the directory) would fail hard at generation for no
+        reason.
+
+        尾帧字段是裸文件名（无 `end_frames/` 前缀）时按校验侧
         data_validator._resolve_existing_path 的 default_dir 回退口径解析——否则通过导入校验
         （校验器对裸文件名会补目录重试）的值会在生成期无理由硬失败。"""
         project_path = prepare_files(tmp_path)
@@ -847,7 +920,10 @@ class TestGenerationTasks:
 
     @pytest.mark.parametrize("missing", [True, False], ids=["field-absent", "empty-string"])
     async def test_execute_video_task_without_end_frame_image_passes_none(self, monkeypatch, tmp_path, missing):
-        """未设置尾帧的镜头行为不变：字段缺失或显式空字符串，end_image 均为 None。"""
+        """Behavior unchanged for shots without an end frame: with the field missing or an explicit empty string,
+        end_image is None.
+
+        未设置尾帧的镜头行为不变：字段缺失或显式空字符串，end_image 均为 None。"""
         project_path = prepare_files(tmp_path)
         fake_pm = _FakePM(project_path)
         seed_current_storyboard(fake_pm)
@@ -868,7 +944,10 @@ class TestGenerationTasks:
         assert fake_generator.video_calls[0]["end_image"] is None
 
     async def test_execute_video_task_missing_end_frame_snapshot_fails_hard(self, monkeypatch, tmp_path):
-        """尾帧字段指向的快照文件缺失时硬失败，不调用后端生成。"""
+        """When the snapshot file the end frame field points to is missing, fail hard without calling backend
+        generation.
+
+        尾帧字段指向的快照文件缺失时硬失败，不调用后端生成。"""
         project_path = prepare_files(tmp_path)
         fake_pm = _FakePM(project_path)
         seed_current_storyboard(fake_pm)
@@ -892,27 +971,37 @@ class TestGenerationTasks:
     @pytest.mark.parametrize(
         "end_frame_value",
         [
+            # Absolute path: a bare `/` join discards the left operand entirely and reads a file outside the project
             "/etc/passwd",  # 绝对路径：裸 `/` 拼接会整体丢弃左操作数，读到项目外文件
-            "../../outside.png",  # `..` 穿越出项目目录
+            "../../outside.png",  # `..` traverses out of the project directory / `..` 穿越出项目目录
+            # Inside the project but bypassing the snapshot directory, equivalent to referencing the source image directly
             "end_frames/../storyboards/scene_E1S01.png",  # 项目内但绕开快照目录，等于直接引用源图
-            "storyboards/scene_E1S01.png",  # 同上：字段只接受 end_frames/ 内的快照
+            "storyboards/scene_E1S01.png",  # Same as above: the field only accepts snapshots inside end_frames/ / 同上：字段只接受 end_frames/ 内的快照
+            # Dirty data (non-string) in the script JSON must give a readable failure, not TypeError
             123,  # 剧本 JSON 里的脏数据（非字符串）须给出可读失败，而非 TypeError
+            # Falsy dirty data: a truthiness check must not treat it as "unset" and silently skip the end frame
             0,  # falsy 脏数据：真值判断不得把它当成「未设置」而静默跳过尾帧
-            False,  # 同上
-            [],  # 同上
-            {},  # 同上
+            False,  # Same as above / 同上
+            [],  # Same as above / 同上
+            {},  # Same as above / 同上
+            # Inside the snapshot directory and the file exists, but it belongs to another shot - a cross-shot misreference
             "end_frames/scene_E1S02.png",  # 落在快照目录内、文件也存在，但属于别的镜头——跨镜头误引
         ],
     )
     async def test_execute_video_task_end_frame_path_outside_snapshot_dir_fails_hard(
         self, monkeypatch, tmp_path, end_frame_value
     ):
-        """剧本是磁盘 JSON，尾帧字段不可信：越界 / 绕开 end_frames 快照目录 / 脏数据一律硬失败，
+        """The script is JSON on disk and the end frame field is untrusted: out-of-bounds / bypassing the end_frames
+        snapshot directory / dirty data all fail hard, never sending arbitrary server files in the video request.
+        The constraints match the write side end_frame.py and the validator side data_validator.
+
+        剧本是磁盘 JSON，尾帧字段不可信：越界 / 绕开 end_frames 快照目录 / 脏数据一律硬失败，
         不把任意服务器文件送进视频请求。约束与写侧 end_frame.py、校验侧 data_validator 同口径。"""
         project_path = prepare_files(tmp_path)
         (tmp_path / "outside.png").write_bytes(b"png")
         end_frame_dir = project_path / "end_frames"
         end_frame_dir.mkdir(parents=True, exist_ok=True)
+        # Another shot's snapshot, for the cross-shot misreference case
         (end_frame_dir / "scene_E1S02.png").write_bytes(b"png")  # 别的镜头的快照，供跨镜头误引用例检查
         fake_pm = _FakePM(project_path)
         seed_current_storyboard(fake_pm)
@@ -934,7 +1023,12 @@ class TestGenerationTasks:
         assert fake_generator.video_calls == []
 
     async def test_execute_video_task_end_frame_canonical_path_symlink_fails_hard(self, monkeypatch, tmp_path):
-        """尾帧字段值恰是当前镜头的 canonical 相对路径，但磁盘上那个位置被替换成指向别处
+        """The end frame field value is exactly the current shot's canonical relative path, but that location on disk
+        was replaced by a symlink pointing elsewhere (another shot's snapshot): try_safe_join / safe_join both expand
+        symlinks and resolve both sides to the same real target, so path equality alone cannot stop "right path
+        string, swapped disk object"; it must be refused explicitly.
+
+        尾帧字段值恰是当前镜头的 canonical 相对路径，但磁盘上那个位置被替换成指向别处
         （另一镜头快照）的符号链接：try_safe_join / safe_join 都会展开符号链接把两侧解析到
         同一真实目标，仅凭路径相等挡不住「路径字符串对、磁盘对象被调包」，须显式拒绝。"""
         project_path = prepare_files(tmp_path)
@@ -962,7 +1056,12 @@ class TestGenerationTasks:
         assert fake_generator.video_calls == []
 
     async def test_execute_video_task_end_frame_parent_dir_symlink_fails_hard(self, monkeypatch, tmp_path):
-        """符号链接调包不止发生在文件名这一级：`end_frames/` 目录本身被替换成指向项目内
+        """Symlink swaps do not only happen at the file name level: when the `end_frames/` directory itself is replaced
+        by a symlink to another directory in the project, the final file name matches and both sides are equal after
+        realpath expansion, so checking only the file name segment cannot stop it - every component of the canonical
+        path (including parent directories) must be checked segment by segment.
+
+        符号链接调包不止发生在文件名这一级：`end_frames/` 目录本身被替换成指向项目内
         别的目录的符号链接时，最终文件名一致、realpath 展开后两侧路径也相等，仅检查文件名
         这一段挡不住——须逐段检查 canonical 路径的每个组件（含父目录）。"""
         project_path = prepare_files(tmp_path)
@@ -990,7 +1089,13 @@ class TestGenerationTasks:
         assert fake_generator.video_calls == []
 
     async def test_execute_video_task_end_frame_parent_dir_junction_fails_hard(self, monkeypatch, tmp_path):
-        """Windows 原生环境下目录联接（junction）是独立于符号链接的 reparse point 类型，
+        """On native Windows a directory junction is a reparse point type separate from symlinks, which
+        `Path.is_symlink()` does not detect; when `end_frames/` is junctioned to another directory in the project it
+        must be stopped separately via `is_junction()`. Non-Windows platforms cannot really create junctions, so
+        here `Path.is_junction()` is monkeypatched to simulate that state, verifying that the per-segment check
+        actually calls it rather than only checking symlinks.
+
+        Windows 原生环境下目录联接（junction）是独立于符号链接的 reparse point 类型，
         `Path.is_symlink()` 识别不到；`end_frames/` 被联接到项目内别的目录时须靠 `is_junction()`
         单独挡住。非 Windows 平台无法真实创建 junction，这里 monkeypatch `Path.is_junction()`
         模拟该状态，验证逐段检查确实调用了它而非只查符号链接。"""
@@ -1022,7 +1127,15 @@ class TestGenerationTasks:
         assert fake_generator.video_calls == []
 
     async def test_execute_video_task_end_frame_capability_unsupported_propagates(self, monkeypatch, tmp_path):
-        """后端不支持尾帧能力时硬失败，不降级为参考图、不静默丢帧。
+        """When the backend does not support the end frame capability, fail hard; no downgrade to a reference image,
+        no silently dropped frame.
+
+        The double replaces only the provider call; the capability decision is left to production code
+        gate_video_request running on real values (caps last_frame=False) - otherwise the double would raise on its
+        own conditions, testing the double rather than whether the wiring really reaches the gating. The branches of
+        capability combinations are in tests/test_video_frame_slots.py.
+
+        后端不支持尾帧能力时硬失败，不降级为参考图、不静默丢帧。
 
         替身只替换 provider 调用，能力判定交给生产代码 gate_video_request 跑真值（caps
         last_frame=False）——否则替身按自己的条件抛异常，验的是替身而非接线是否真能触达
@@ -1064,7 +1177,10 @@ class TestGenerationTasks:
         assert exc.value.code == "video_last_frame_unsupported"
 
     async def test_execute_video_task_reuses_end_frame_on_regeneration(self, monkeypatch, tmp_path):
-        """视频重生成无需额外操作即自动沿用尾帧：字段是镜头持久属性，每次执行都从剧本重新加载。"""
+        """Video regeneration reuses the end frame automatically with no extra action: the field is a persistent shot
+        attribute, reloaded from the script on every run.
+
+        视频重生成无需额外操作即自动沿用尾帧：字段是镜头持久属性，每次执行都从剧本重新加载。"""
         project_path = prepare_files(tmp_path)
         fake_pm = _FakePM(project_path)
         seed_current_storyboard(fake_pm)
@@ -1094,12 +1210,16 @@ class TestGenerationTasks:
             assert call["end_image"] == end_frame_dir / "scene_E1S01.png"
 
     async def test_execute_video_task_drama_dialogue_from_utterances(self, monkeypatch, tmp_path):
-        """drama 口型台词从分镜级 dialogue-kind utterances 取（覆盖 payload 已不带的
+        """drama lip-sync dialogue comes from shot-level dialogue-kind utterances (overriding
+        video_prompt.dialogue, which the payload no longer carries); voiceover-kind does not go into the video YAML.
+
+        drama 口型台词从分镜级 dialogue-kind utterances 取（覆盖 payload 已不带的
         video_prompt.dialogue）；voiceover-kind 不进视频 YAML。"""
         project_path = prepare_files(tmp_path)
         fake_pm = _FakePM(project_path)
         fake_generator = FakeGenerator()
 
+        # Switch to a drama script: E1S01 carries ordered utterances (voiceover first, dialogue after)
         # 改用 drama 剧本：E1S01 携带有序 utterances（voiceover 在前、dialogue 在后）
         fake_pm.script = {
             "episode": 1,
@@ -1127,6 +1247,7 @@ class TestGenerationTasks:
         use_generation_context(monkeypatch, fake_resolve_ctx(fake_generator))
         use_video_thumbnail_extractor(monkeypatch, async_return(None))
 
+        # The payload's video_prompt has no dialogue (new drama structure)
         # payload 的 video_prompt 不带 dialogue（drama 新结构）
         await generation_tasks.execute_video_task(
             "demo",
@@ -1139,6 +1260,7 @@ class TestGenerationTasks:
         )
 
         prompt_yaml = fake_generator.video_calls[0]["prompt"]
+        # dialogue-kind lines and speakers go into the YAML; voiceover-kind does not go into the video prompt
         # dialogue-kind 台词与说话人进 YAML，voiceover-kind 不进视频提示词
         assert "你来了。" in prompt_yaml
         assert "王" in prompt_yaml
@@ -1166,13 +1288,19 @@ class TestGenerationTasks:
         }
 
     def _legacy_drama_script(self):
-        """utterances 迁移前的存量 drama 剧本：scene 无 utterances，台词仍留在 video_prompt.dialogue。"""
+        """An existing drama script from before the utterances migration: scenes have no utterances, and dialogue is
+        still in video_prompt.dialogue.
+
+        utterances 迁移前的存量 drama 剧本：scene 无 utterances，台词仍留在 video_prompt.dialogue。"""
         script = self._drama_script()
         del script["scenes"][0]["utterances"]
         return script
 
     async def test_execute_video_task_injects_voice_profiles_for_audible_model(self, monkeypatch, tmp_path):
-        """有音轨模型（voice_consistency != none）：dialogue speaker 命中的角色资产
+        """Audible models (voice_consistency != none): the non-empty voice_style of character assets matched by
+        dialogue speakers is mechanically derived into the Voice_Profiles header declaration section.
+
+        有音轨模型（voice_consistency != none）：dialogue speaker 命中的角色资产
         非空 voice_style 机械派生进 Voice_Profiles 顶部声明段。"""
         project_path = prepare_files(tmp_path)
         fake_pm = _FakePM(project_path)
@@ -1198,11 +1326,14 @@ class TestGenerationTasks:
         prompt_yaml = fake_generator.video_calls[0]["prompt"]
         assert "Voice_Profiles" in prompt_yaml
         assert "低沉沙哑" in prompt_yaml
+        # The header declaration section must appear before Action
         # 顶部集中声明段须先于 Action 出现
         assert prompt_yaml.index("Voice_Profiles") < prompt_yaml.index("Action")
 
     async def test_execute_video_task_skips_voice_profiles_for_silent_model(self, monkeypatch, tmp_path):
-        """C 类（真无声，voice_consistency == none）模型不注入 Voice_Profiles。"""
+        """Class C (truly silent, voice_consistency == none) models get no Voice_Profiles injected.
+
+        C 类（真无声，voice_consistency == none）模型不注入 Voice_Profiles。"""
         project_path = prepare_files(tmp_path)
         fake_pm = _FakePM(project_path)
         fake_pm.project["characters"]["王"] = {"voice_style": "低沉沙哑"}
@@ -1227,11 +1358,16 @@ class TestGenerationTasks:
         prompt_yaml = fake_generator.video_calls[0]["prompt"]
         assert "Voice_Profiles" not in prompt_yaml
         assert "低沉沙哑" not in prompt_yaml
+        # Dialogue is not omitted along with voice style: in a silent final cut the dialogue text is sent as usual,
+        # and the provider can use it as a lip-sync reference
         # 台词不随声音风格一并省略：无声成片里台词文本照常下发，供应商可用作口型参考
         assert "你来了。" in prompt_yaml
 
     async def test_execute_video_task_skips_voice_profiles_when_episode_audio_disabled(self, monkeypatch, tmp_path):
-        """本集关闭音频（requested_generate_audio=False）：即便模型有音轨也不注入 Voice_Profiles，
+        """Episode audio disabled (requested_generate_audio=False): no Voice_Profiles injected even if the model has an
+        audio track, same as class C truly silent models.
+
+        本集关闭音频（requested_generate_audio=False）：即便模型有音轨也不注入 Voice_Profiles，
         与 C 类真无声模型同口径。"""
         project_path = prepare_files(tmp_path)
         fake_pm = _FakePM(project_path)
@@ -1259,11 +1395,16 @@ class TestGenerationTasks:
         prompt_yaml = fake_generator.video_calls[0]["prompt"]
         assert "Voice_Profiles" not in prompt_yaml
         assert "低沉沙哑" not in prompt_yaml
+        # Dialogue unchanged word for word, same as the class C truly silent path
         # 台词逐字不变，与 C 类真无声路径同口径
         assert "你来了。" in prompt_yaml
 
     async def test_execute_video_task_strips_caller_supplied_voice_profiles_for_non_drama(self, monkeypatch, tmp_path):
-        """narration/ad（item 无 utterances 字段）请求体自带 voice_profiles 时一律剥离：
+        """voice_profiles supplied in the request body for narration/ad (items without an utterances field) are always
+        stripped: the only source of that declaration section is build_drama_video_prompt's mechanical derivation;
+        callers must not inject it and bypass the class C (truly silent) gate.
+
+        narration/ad（item 无 utterances 字段）请求体自带 voice_profiles 时一律剥离：
         该声明段唯一来源是 build_drama_video_prompt 的机械派生，调用方不得越权注入、绕过
         C 类（真无声）门控。"""
         project_path = prepare_files(tmp_path)
@@ -1294,7 +1435,11 @@ class TestGenerationTasks:
         assert "越权" not in prompt_yaml
 
     async def test_execute_video_task_injects_voice_profiles_from_legacy_dialogue(self, monkeypatch, tmp_path):
-        """utterances 迁移前的存量 drama 剧本（scene 无 utterances 字段，台词仍在
+        """Existing drama scripts from before the utterances migration (scenes without an utterances field, dialogue
+        still in video_prompt.dialogue): load_script reads the raw JSON from disk without the pydantic migration,
+        so Voice_Profiles is derived via the legacy exit instead, not silently lost for missing utterances.
+
+        utterances 迁移前的存量 drama 剧本（scene 无 utterances 字段，台词仍在
         video_prompt.dialogue）：load_script 按原始 JSON 读盘不过 pydantic 迁移，改走 legacy
         出口派生 Voice_Profiles，不因缺 utterances 静默丢失。"""
         project_path = prepare_files(tmp_path)
@@ -1331,7 +1476,10 @@ class TestGenerationTasks:
     async def test_execute_video_task_skips_voice_profiles_from_legacy_dialogue_when_silent(
         self, monkeypatch, tmp_path
     ):
-        """legacy dialogue 出口同过无声门控：本集关闭音频时不注入 Voice_Profiles，台词照常下发。"""
+        """The legacy dialogue exit also goes through the silent gate: with episode audio disabled no Voice_Profiles
+        is injected, and dialogue is sent as usual.
+
+        legacy dialogue 出口同过无声门控：本集关闭音频时不注入 Voice_Profiles，台词照常下发。"""
         project_path = prepare_files(tmp_path)
         fake_pm = _FakePM(project_path)
         fake_pm.project["characters"]["王"] = {"voice_style": "低沉沙哑"}
@@ -1368,7 +1516,11 @@ class TestGenerationTasks:
     async def test_execute_video_task_content_mode_falls_back_to_project_when_episode_omits_it(
         self, monkeypatch, tmp_path
     ):
-        """存量 episode 剧本省略顶层 content_mode 时回退到 project.json 的 content_mode
+        """When an existing episode script omits the top-level content_mode, fall back to project.json's content_mode
+        (matching the established rule already validated by lib.project.data_validator), so a missing fallback does
+        not misjudge it as narration and silently skip dialogue rebuilding and Voice_Profiles injection.
+
+        存量 episode 剧本省略顶层 content_mode 时回退到 project.json 的 content_mode
         （与 lib.project.data_validator 已校验通过的既定口径一致），不因回退缺失而被误判为
         narration、静默跳过 dialogue 重建与 Voice_Profiles 注入。"""
         project_path = prepare_files(tmp_path)
@@ -1378,6 +1530,8 @@ class TestGenerationTasks:
         fake_generator = FakeGenerator()
         fake_pm.script = {
             "episode": 1,
+            # No top-level content_mode: existing episodes omit the field, and the source of truth falls back to
+            # project.json.
             # 顶层无 content_mode：存量 episode 省略该字段，真相源退到 project.json。
             "scenes": [
                 {
@@ -1417,7 +1571,10 @@ class TestGenerationTasks:
         assert "你来了。" in prompt_yaml
 
     async def test_execute_video_task_default_duration_from_caps(self, monkeypatch, tmp_path):
-        """无显式 duration 时，默认值由 caps 收口（取 supported_durations[0]），且必然合法。"""
+        """Without an explicit duration, the default is settled by caps (supported_durations[0]) and is necessarily
+        valid.
+
+        无显式 duration 时，默认值由 caps 收口（取 supported_durations[0]），且必然合法。"""
         project_path = prepare_files(tmp_path)
         fake_pm = _FakePM(project_path)
         seed_current_storyboard(fake_pm)
@@ -1426,6 +1583,7 @@ class TestGenerationTasks:
         use_project_manager(monkeypatch, fake_pm)
         use_generation_context(monkeypatch, fake_resolve_ctx(fake_generator, supported_durations=(6, 10)))
         use_video_thumbnail_extractor(monkeypatch, async_return(None))
+        # Also blank the project default duration, forcing the caps default.
         # 项目默认 duration 也置空，强制走 caps 默认。
         fake_pm.project.pop("default_duration", None)
 
@@ -1440,7 +1598,10 @@ class TestGenerationTasks:
     async def test_execute_video_task_default_duration_on_endpoint_fixed_uses_planning_basis(
         self, monkeypatch, tmp_path
     ):
-        """时长由端点固定、单元与项目都没写时长时，申请的秒数取共享的默认规划时长。"""
+        """When the duration is fixed by the endpoint and neither the unit nor the project sets one, the requested
+        seconds take the shared default planning duration.
+
+        时长由端点固定、单元与项目都没写时长时，申请的秒数取共享的默认规划时长。"""
         project_path = prepare_files(tmp_path)
         fake_pm = _FakePM(project_path)
         seed_current_storyboard(fake_pm)
@@ -1462,7 +1623,13 @@ class TestGenerationTasks:
         assert fake_generator.video_calls[0]["duration_seconds"] == DEFAULT_PLANNED_DURATION_SECONDS
 
     async def test_execute_video_task_default_duration_respects_resolution_constraint(self, monkeypatch, tmp_path):
-        """Auto（无显式 duration）在受约束分辨率下取约束内的时长，而非 supported_durations 首项。
+        """Auto (no explicit duration) at a constrained resolution takes a duration within the constraint, not the first
+        entry of supported_durations.
+
+        Veo + 4k only accepts 8 s; taking the first entry 4 s would make the default setting always hit the backend's
+        execution-time rejection.
+
+        Auto（无显式 duration）在受约束分辨率下取约束内的时长，而非 supported_durations 首项。
 
         Veo + 4k 只接受 8 秒；取首项 4 秒会让默认设置必然撞上 backend 的执行期拒绝。
         """
@@ -1498,7 +1665,10 @@ class TestGenerationTasks:
         assert fake_generator.video_calls[0]["duration_seconds"] == 8
 
     async def test_video_resolve_failure_fails_task_without_fallback(self, monkeypatch, tmp_path):
-        """视频解析失败即任务失败：异常原样上抛留痕，无硬编码 provider/model 兜底，后端不被调用。"""
+        """A video resolve failure fails the task: the exception propagates unchanged for the record, there is no
+        hard-coded provider/model fallback, and the backend is not called.
+
+        视频解析失败即任务失败：异常原样上抛留痕，无硬编码 provider/model 兜底，后端不被调用。"""
         project_path = prepare_files(tmp_path)
         fake_pm = _FakePM(project_path)
         fake_generator = FakeGenerator()

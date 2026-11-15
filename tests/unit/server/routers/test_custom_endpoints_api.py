@@ -1,4 +1,8 @@
-"""自定义调用端点 API：定义 CRUD、被引用拒删、保存前确认。
+"""Custom call endpoint API: definition CRUD, refusing deletion while referenced, pre-save confirmation.
+
+Zero envelope throughout all cases: the request body and the ``definition`` response field are the definition JSON as is.
+
+自定义调用端点 API：定义 CRUD、被引用拒删、保存前确认。
 
 零封套贯穿全部用例——请求体与 ``definition`` 响应字段都是定义 JSON 原样。
 """
@@ -29,7 +33,11 @@ from tests.factories import comfyui_api_workflow, comfyui_endpoint_definition, c
 
 @pytest.fixture
 def endpoints_app(db_engine, set_error_handler_sessions) -> FastAPI:
-    """绑定内存数据库的应用，同时挂端点路由与供应商路由（目录用例要读同一个库）。
+    """App bound to an in-memory database, mounting both the endpoint routes and the provider routes (catalog cases read the same DB).
+
+    The error handler opens its own session to load the display-name catalog, also pointing at this DB.
+
+    绑定内存数据库的应用，同时挂端点路由与供应商路由（目录用例要读同一个库）。
 
     错误处理器自开会话加载显示名目录，也指向这个库。
     """
@@ -58,7 +66,11 @@ def endpoints_client(endpoints_app: FastAPI) -> Generator[TestClient, None, None
 
 @pytest.fixture
 async def attach_model(db_engine):
-    """把一个自定义模型行挂到指定 endpoint 键上，制造删除时的引用。
+    """Attach a custom model row to the given endpoint key, creating a reference at delete time.
+
+    ``discovery_format`` decides the provider protocol of this attachment, for the "endpoint x provider protocol" pairing cases.
+
+    把一个自定义模型行挂到指定 endpoint 键上，制造删除时的引用。
 
     ``discovery_format`` 决定这条挂接的供应商协议，用于「端点 × 供应商协议」的配对用例。
     """
@@ -88,7 +100,9 @@ async def attach_model(db_engine):
 
 
 def _comfyui_image_definition() -> dict:
-    """一份产图的 ComfyUI 定义：视频专属的语义键摘干净，否则媒体类型白名单先拦下它。"""
+    """An image-producing ComfyUI definition: the video-only semantic keys are stripped, otherwise the media-type allowlist would stop it first.
+
+    一份产图的 ComfyUI 定义：视频专属的语义键摘干净，否则媒体类型白名单先拦下它。"""
     definition = comfyui_endpoint_definition(media_type="image")
     for key in ("start_image", "end_image", "frames", "fps"):
         definition["bindings"].pop(key, None)
@@ -102,7 +116,7 @@ def _create(client: TestClient, definition: dict[str, Any]) -> dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
-# 生命周期
+# Lifecycle / 生命周期
 # ---------------------------------------------------------------------------
 
 
@@ -167,7 +181,9 @@ class TestCreate:
         assert resp.json()["diagnostic"]["errors"], "非对象输入也应拿到定位到字段的诊断"
 
     def test_warning_does_not_block_saving(self, endpoints_client: TestClient):
-        """轮询没引用 task_id 只是警告：拦下它等于把「有意为之」的定义也堵死。"""
+        """Polling that does not reference task_id is only a warning: blocking it would also block "intentional" definitions.
+
+        轮询没引用 task_id 只是警告：拦下它等于把「有意为之」的定义也堵死。"""
         definition = custom_endpoint_definition()
         definition["poll"]["url"] = "{{ base_url }}/v1/video/latest"
 
@@ -275,7 +291,7 @@ class TestDelete:
 
 
 # ---------------------------------------------------------------------------
-# 保存前确认
+# Pre-save confirmation / 保存前确认
 # ---------------------------------------------------------------------------
 
 
@@ -410,12 +426,14 @@ class TestValidateDuplicates:
 
 
 # ---------------------------------------------------------------------------
-# 目录
+# Catalog / 目录
 # ---------------------------------------------------------------------------
 
 
 class TestComfyuiEndpoint:
-    """ComfyUI 定义与声明式定义同走一条 CRUD：镜像列改由定义自己声明媒体类型。"""
+    """ComfyUI definitions go through the same CRUD as declarative definitions: the mirror columns are instead taken from the media type the definition declares.
+
+    ComfyUI 定义与声明式定义同走一条 CRUD：镜像列改由定义自己声明媒体类型。"""
 
     def test_a_bound_definition_is_stored_and_mirrors_its_own_media_type(self, endpoints_client: TestClient):
         definition = comfyui_endpoint_definition(media_type="image")
@@ -463,7 +481,9 @@ class TestComfyuiEndpoint:
 
 
 class TestImportRouting:
-    """三种载荷形状各有一种反应：定义照旧、API workflow 自动包装、UI 格式结构化拒绝。"""
+    """Each of the three payload shapes has one reaction: definitions as before, API workflows wrapped automatically, UI format rejected in a structured way.
+
+    三种载荷形状各有一种反应：定义照旧、API workflow 自动包装、UI 格式结构化拒绝。"""
 
     def test_a_definition_is_taken_as_a_definition(self, endpoints_client: TestClient):
         body = endpoints_client.post("/api/v1/custom-endpoints/validate", json=comfyui_endpoint_definition()).json()
@@ -473,7 +493,9 @@ class TestImportRouting:
         assert body["errors"] == []
 
     def test_a_comfyui_definition_is_measured_against_its_own_version_line(self, endpoints_client: TestClient):
-        """两种 kind 各有一条版本线：拿声明式那条去比，一份齐整的 ComfyUI 定义会被报成版本落后。"""
+        """Each of the two kinds has its own version line: compared against the declarative one, a complete ComfyUI definition would be reported as outdated.
+
+        两种 kind 各有一条版本线：拿声明式那条去比，一份齐整的 ComfyUI 定义会被报成版本落后。"""
         body = endpoints_client.post("/api/v1/custom-endpoints/validate", json=comfyui_endpoint_definition()).json()
 
         assert body["schema_version"] == {"file": "1.0.0", "current": "1.0.0", "level": "direct"}
@@ -505,7 +527,9 @@ class TestImportRouting:
         assert [(e["path"], e["code"]) for e in body["errors"]] == [("$", "comfyui_ui_format_workflow")]
 
     def test_saving_a_raw_api_workflow_is_wrapped_and_then_refused_for_its_bindings(self, endpoints_client: TestClient):
-        """创建入口与 validate 同走一条分流：包装结果的节点绑定为空，保存到此为止。"""
+        """The create entry point and validate share the same routing: the wrapped result has empty node bindings, so saving stops there.
+
+        创建入口与 validate 同走一条分流：包装结果的节点绑定为空，保存到此为止。"""
         resp = endpoints_client.post("/api/v1/custom-endpoints", json=comfyui_api_workflow())
 
         assert resp.status_code == 422
@@ -523,7 +547,9 @@ class TestImportRouting:
         assert [e["code"] for e in resp.json()["diagnostic"]["errors"]] == ["comfyui_ui_format_workflow"]
 
     def test_replacing_a_definition_never_takes_a_raw_workflow(self, endpoints_client: TestClient):
-        """整份替换只认端点定义：用一份原始 workflow 覆盖会把已确认的节点绑定一并抹掉。"""
+        """Whole-definition replacement only accepts endpoint definitions: overwriting with a raw workflow would wipe out the confirmed node bindings too.
+
+        整份替换只认端点定义：用一份原始 workflow 覆盖会把已确认的节点绑定一并抹掉。"""
         created = _create(endpoints_client, comfyui_endpoint_definition())
 
         resp = endpoints_client.put(f"/api/v1/custom-endpoints/{created['id']}", json=comfyui_api_workflow())
@@ -534,7 +560,9 @@ class TestImportRouting:
     async def test_replacing_a_declarative_definition_with_comfyui_is_refused_while_attached(
         self, endpoints_client: TestClient, attach_model
     ):
-        """整份替换原地改掉 kind、键与引用不变，于是能把挂接弄坏——这条路上同样要拒。"""
+        """Whole replacement changes kind in place while the key and references stay the same, so it can break attachments; it must be refused on this path too.
+
+        整份替换原地改掉 kind、键与引用不变，于是能把挂接弄坏——这条路上同样要拒。"""
         created = _create(endpoints_client, custom_endpoint_definition())
         await attach_model(created["key"])
 
@@ -559,7 +587,9 @@ class TestImportRouting:
     async def test_replacing_a_definition_with_the_same_kind_stays_allowed_while_attached(
         self, endpoints_client: TestClient, attach_model
     ):
-        """配对没被改动就不该多拦一道：改名、改模板都走这条路。"""
+        """If the pairing is untouched there should be no extra block: renames and template edits go this way.
+
+        配对没被改动就不该多拦一道：改名、改模板都走这条路。"""
         created = _create(endpoints_client, custom_endpoint_definition())
         await attach_model(created["key"])
         renamed = custom_endpoint_definition(meta={"name": "改名后", "author": "ArcReel", "version": "0.2.0"})
@@ -571,7 +601,9 @@ class TestImportRouting:
     async def test_replacing_an_image_definition_with_a_video_one_is_refused_while_attached(
         self, endpoints_client: TestClient, attach_model
     ):
-        """模型行不自带媒体类型，归哪一路由端点决定：原地改判会把它们整批挪到另一路去。"""
+        """Model rows carry no media type of their own; which lane they belong to is decided by the endpoint: reclassifying in place would move them all to another lane.
+
+        模型行不自带媒体类型，归哪一路由端点决定：原地改判会把它们整批挪到另一路去。"""
         created = _create(endpoints_client, _comfyui_image_definition())
         await attach_model(created["key"], discovery_format="comfyui")
 
@@ -609,6 +641,7 @@ class TestEndpointCatalog:
         assert descriptor["source"] == "custom"
         assert descriptor["kind"] == "declarative"
         assert descriptor["display_name"] == "示例端点"
+        # Display names of declarative endpoints (bundled and user-defined follow the same convention) are written in the definition; there is no translatable key
         # 声明式端点（随版与用户自定义同此约定）的显示名写在定义里，没有可翻译的 key
         assert descriptor["display_name_key"] == ""
 

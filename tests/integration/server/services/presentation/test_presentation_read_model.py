@@ -556,6 +556,7 @@ async def test_episode_materialization_restarts_as_one_snapshot_after_script_edi
             return 4.5
         video_probes += 1
         if video_probes == 2:
+            # Another request changed the script and project in a worker thread during probing
             # 探测期间另一个请求在工作线程里改了剧本与项目
             await asyncio.to_thread(_edit_script_and_project)
         return 6.25
@@ -682,7 +683,10 @@ async def test_cancelling_a_bundle_export_settles_the_packaging_and_removes_its_
 async def test_real_media_presents_without_system_ffmpeg_or_ffprobe(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, video_shape: str, video_microseconds: int, audio_microseconds: int
 ) -> None:
-    """系统 PATH 上没有 ffmpeg / ffprobe 时，预览与素材包都用随包 ffmpeg 探出真实时长。"""
+    """With no ffmpeg / ffprobe on the system PATH, both the preview and the asset bundle probe the real duration
+    with the bundled ffmpeg.
+
+    系统 PATH 上没有 ffmpeg / ffprobe 时，预览与素材包都用随包 ffmpeg 探出真实时长。"""
     source_video = tmp_path / "source" / "clip.mp4"
     if video_shape == "silent_vfr":
         source_video.parent.mkdir(parents=True)
@@ -916,6 +920,7 @@ async def test_current_presentation_reselects_when_version_changes_during_media_
         nonlocal switched
         if path.suffix == ".mp4" and not switched:
             switched = True
+            # Another request switched the current version in a worker thread during probing
             # 探测期间另一个请求在工作线程里换了当前版本
             await asyncio.to_thread(_add_replacement_version)
         return 6.25

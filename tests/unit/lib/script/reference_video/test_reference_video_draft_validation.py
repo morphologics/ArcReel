@@ -1,4 +1,7 @@
-"""参考生视频扁平草稿结构的机械校验（script_plan / prompt_authoring 共用）。"""
+"""Mechanical validation of the reference-to-video flat draft structure (shared by script_plan /
+prompt_authoring).
+
+参考生视频扁平草稿结构的机械校验（script_plan / prompt_authoring 共用）。"""
 
 import unicodedata
 
@@ -22,6 +25,8 @@ PROJECT = {
     "props": {"长剑": {}},
 }
 
+#: Project payload with a character that has derivatives: registration checks for ``@[character/derivative]``
+#: (docs/adr/0072).
 #: 角色带衍生的项目载荷：``@[角色/衍生]`` 的登记判定用例（docs/adr/0072）。
 DERIVATIVE_PROJECT = {
     "characters": {"李明": {"derivatives": {"劲装": {}}}, "王五": {}},
@@ -29,6 +34,8 @@ DERIVATIVE_PROJECT = {
     "props": {"长剑": {}},
 }
 
+#: A character name with combining marks (Vietnamese): the two encodings look the same on screen but differ in
+#: bytes; a coordinate-system case for asset name comparison.
 #: 带组合附加符的角色名（越南语），两种编码屏幕显示相同、字节不同——资产名比对的坐标系用例。
 _NAME_NFC = unicodedata.normalize("NFC", "Hiếu")
 _NAME_NFD = unicodedata.normalize("NFD", "Hiếu")
@@ -42,13 +49,19 @@ class TestSourceTextAnchor:
         )
 
     def test_whitespace_differences_tolerated(self):
-        """空白折叠后比对：换行 / 缩进的还原不可靠，但删字改字必须被抓住。"""
+        """Compare after collapsing whitespace: restoring newlines / indentation is unreliable, but deleted
+        or changed characters must be caught.
+
+        空白折叠后比对：换行 / 缩进的还原不可靠，但删字改字必须被抓住。"""
         assert (
             validate_source_text_anchor("unit E1U01", "李明推开\n  酒馆的门", "李明推开 酒馆的门，环视四周。") is None
         )
 
     def test_unicode_form_differences_tolerated(self):
-        """源文以 NFD 落盘、模型回写 NFC（组合附加符语种常见）不算改写：两侧先归一到 NFC。"""
+        """Source stored as NFD and written back by the model as NFC (common in languages with combining
+        marks) is not a rewrite: both sides are normalized to NFC first.
+
+        源文以 NFD 落盘、模型回写 NFC（组合附加符语种常见）不算改写：两侧先归一到 NFC。"""
         novel = unicodedata.normalize("NFD", "Anh ấy mở cửa quán rượu.")
         anchor = unicodedata.normalize("NFC", "Anh ấy mở cửa")
         assert validate_source_text_anchor("unit E1U01", anchor, novel) is None
@@ -106,7 +119,10 @@ class TestUnitText:
         ]
 
     def test_dialogue_speaker_not_a_reference_image(self):
-        """台词记号的说话人位只驱动音色声明，不进参考图（画外说话的角色不该被画进来）。"""
+        """The speaker slot of a dialogue mark only drives the voice declaration and does not become a
+        reference image (a character speaking off-screen should not be drawn in).
+
+        台词记号的说话人位只驱动音色声明，不进参考图（画外说话的角色不该被画进来）。"""
         refs = validate_unit_text("unit E1U01", "镜头1：门在风里晃动\n@[李明]：{我来了。}", PROJECT, max_refs=None)
         assert refs == []
 
@@ -125,12 +141,18 @@ class TestUnitText:
         assert exc_info.value.line == 1
 
     def test_brace_in_description_rejected(self):
-        """没被识别成发声记号的花括号仍判违约：空台词会派生出没有内容的发声。"""
+        """Braces not recognized as an utterance mark are still a violation: an empty line would derive an
+        utterance with no content.
+
+        没被识别成发声记号的花括号仍判违约：空台词会派生出没有内容的发声。"""
         with pytest.raises(DraftViolation, match="画面描述里使用了花括号"):
             validate_unit_text("unit E1U01", "镜头1：@[李明] 推门，音量 {}", PROJECT, max_refs=None)
 
     def test_inline_speech_marks_are_accepted(self):
-        """台词与画外音写在同一行的画面描述之后照常放行；说话人位不进参考图。"""
+        """Dialogue and voiceover written after a picture description on the same line are accepted as
+        usual; the speaker slot does not become a reference image.
+
+        台词与画外音写在同一行的画面描述之后照常放行；说话人位不进参考图。"""
         refs = validate_unit_text(
             "unit E1U01", "镜头1：@[李明] 推开 @[酒馆] 木门。@[李明]{我来了}", PROJECT, max_refs=None
         )
@@ -145,7 +167,10 @@ class TestUnitText:
             validate_unit_text("unit E1U01", "镜头1：门开了\n@[无名氏]：{我来了。}", PROJECT, max_refs=None)
 
     def test_registered_derivative_accepted_in_a_mention_and_in_the_speaker_slot(self):
-        """``@[角色/衍生]`` 与 ``@[角色/衍生]{台词}``：登记过的衍生两处都放行。"""
+        """``@[character/derivative]`` and ``@[character/derivative]{line}``: a registered derivative is
+        accepted in both places.
+
+        ``@[角色/衍生]`` 与 ``@[角色/衍生]{台词}``：登记过的衍生两处都放行。"""
         refs = validate_unit_text(
             "unit E1U01", "镜头1：@[李明/劲装] 推门。@[李明/劲装]{我来了}", DERIVATIVE_PROJECT, max_refs=None
         )
@@ -157,20 +182,33 @@ class TestUnitText:
             validate_unit_text("unit E1U01", "镜头1：@[李明/夜行衣] 推门", DERIVATIVE_PROJECT, max_refs=None)
 
     def test_unregistered_derivative_in_the_speaker_slot_rejected(self):
-        """说话人位不进参考图派生，未登记的事实要在这里单独抓住。"""
+        """The speaker slot is not derived into reference images, so an unregistered fact must be caught
+        separately here.
+
+        说话人位不进参考图派生，未登记的事实要在这里单独抓住。"""
         with pytest.raises(DraftViolation, match="写了该角色没有的衍生") as excinfo:
             validate_unit_text("unit E1U01", "镜头1：门开了\n@[李明/夜行衣]{我来了}", DERIVATIVE_PROJECT, max_refs=None)
 
         assert excinfo.value.code == "unregistered_speaker_derivative"
 
     def test_derivative_speaker_is_the_base_character(self):
-        """衍生说话仍绑本体的声音，故 speaker 位不因写了衍生而被判未登记角色。"""
+        """A derivative speaking is still bound to the base character's voice, so the speaker slot is not
+        judged an unregistered character because a derivative was written.
+
+        衍生说话仍绑本体的声音，故 speaker 位不因写了衍生而被判未登记角色。"""
         assert dialogue_speakers("@[李明/劲装]{我来了}") == ["李明"]
 
     @pytest.mark.parametrize("registered", [_NAME_NFC, _NAME_NFD], ids=["登记NFC", "登记NFD"])
     @pytest.mark.parametrize("written", [_NAME_NFC, _NAME_NFD], ids=["出场NFC", "出场NFD"])
     def test_combining_char_name_passes_in_every_encoding_pairing(self, registered: str, written: str):
-        """组合字符角色名的四种 NFC/NFD 配对判定一致：肉眼同字，不该有任一组合被判未登记。
+        """The four NFC/NFD pairings of a combining-character name are judged the same: visually the same
+        text, so no pairing should be judged unregistered.
+
+        A description mention and a dialogue-mark speaker appear together; the two go through different
+        comparison points (reference derivation / speaker registration), and missing normalization at
+        either would surface here with a different violation code.
+
+        组合字符角色名的四种 NFC/NFD 配对判定一致：肉眼同字，不该有任一组合被判未登记。
 
         画面描述 mention 与台词记号说话人同时出现——两者走不同的比对点（引用派生 / 说话人登记），
         任一处漏归一都会在这里以不同的违约 code 冒出来。
@@ -180,11 +218,16 @@ class TestUnitText:
 
         refs = validate_unit_text("unit E1U01", text, project, max_refs=None)
 
+        # Derived references are always in normalized form: downstream uses them to look up the asset table
+        # and replace them with subject marks in the body, so they must match the form here
         # 派生出的引用一律是归一形式：下游拿它回查资产表、在正文里替换成主体记号，须与此处同形
         assert [(r.type, r.name) for r in refs] == [("character", _NAME_NFC)]
 
     def test_unregistered_mention_still_rejected_after_normalization(self):
-        """归一只消除编码形式差异，不放宽登记判定：真没登记的名字照常拒。"""
+        """Normalization only removes encoding-form differences and does not relax the registration check:
+        names that really are unregistered are still refused.
+
+        归一只消除编码形式差异，不放宽登记判定：真没登记的名字照常拒。"""
         project = {"characters": {_NAME_NFC: {}}, "scenes": {}, "props": {}}
         with pytest.raises(DraftViolation, match="未登记的资产名"):
             validate_unit_text("unit E1U01", f"镜头1：@[{_NAME_NFD}Ⅱ] 推门而入", project, max_refs=None)
@@ -194,32 +237,50 @@ class TestUnitText:
             validate_unit_text("unit E1U01", "镜头1：@[李明] 与 @[王五] 在 @[酒馆]", PROJECT, max_refs=2)
 
     def test_fullwidth_braces_rejected(self):
-        """全角花括号不被发声记号语法识别，放行会让台词静默降级成描述、说话人反被派生成参考图。"""
+        """Fullwidth braces are not recognized by the utterance-mark syntax; letting them through would
+        silently degrade the line into description while the speaker is derived into a reference image.
+
+        全角花括号不被发声记号语法识别，放行会让台词静默降级成描述、说话人反被派生成参考图。"""
         with pytest.raises(DraftViolation, match="全角花括号"):
             validate_unit_text("unit E1U01", "镜头1：门开了\n@[李明]：｛我来了。｝", PROJECT, max_refs=None)
 
     def test_dialogue_without_braces_rejected(self):
-        """漏花括号的台词会被当成画面描述：台词整句消失、说话人反被派生成参考图。"""
+        """A dialogue line missing braces is treated as picture description: the whole line disappears and
+        the speaker is derived into a reference image instead.
+
+        漏花括号的台词会被当成画面描述：台词整句消失、说话人反被派生成参考图。"""
         with pytest.raises(DraftViolation, match="台词写法不合法"):
             validate_unit_text("unit E1U01", "镜头1：门开了\n@[李明]：我来了。", PROJECT, max_refs=None)
 
     def test_dialogue_followed_by_description_is_accepted(self):
-        """行首台词后接描述不再判违约：记号可写在行内任意位置，其余是画面描述。"""
+        """A line-initial dialogue followed by description is no longer a violation: the mark can be written
+        anywhere in the line, and the rest is picture description.
+
+        行首台词后接描述不再判违约：记号可写在行内任意位置，其余是画面描述。"""
         refs = validate_unit_text("unit E1U01", "镜头1：门开了\n@[李明]：{我来了}，然后转身", PROJECT, max_refs=None)
         assert [r.name for r in refs] == []
 
     def test_non_character_mention_with_colon_is_a_description(self):
-        """场景 / 道具做小标题是合法的画面描述写法，不能按「@[名称]：」形态一概判成写坏的台词。"""
+        """Using a scene / prop as a subheading is a valid way to write a picture description, and must not
+        be judged a broken dialogue line just by the "@[name]：" shape.
+
+        场景 / 道具做小标题是合法的画面描述写法，不能按「@[名称]：」形态一概判成写坏的台词。"""
         refs = validate_unit_text("unit E1U01", "镜头1：@[酒馆]：木门被风吹开，灯笼摇晃", PROJECT, max_refs=None)
         assert [(r.type, r.name) for r in refs] == [("scene", "酒馆")]
 
     def test_fullwidth_mention_delimiters_rejected(self):
-        """全角 `＠` / `［］` 不被 mention 语法识别：参考图会从视频请求里静默消失。"""
+        """Fullwidth `＠` / `［］` are not recognized by the mention syntax: the reference image would silently
+        disappear from the video request.
+
+        全角 `＠` / `［］` 不被 mention 语法识别：参考图会从视频请求里静默消失。"""
         with pytest.raises(DraftViolation, match="写坏的资产引用"):
             validate_unit_text("unit E1U01", "镜头1：@［李明］ 推开门", PROJECT, max_refs=None)
 
     def test_malformed_mention_rejected(self):
-        """写坏的 `@[` 既不进 references，又会原样进入供应商请求（渲染只替换认得的 mention）。"""
+        """A broken `@[` does not enter references, yet goes into the provider request as-is (rendering only
+        replaces mentions it recognizes).
+
+        写坏的 `@[` 既不进 references，又会原样进入供应商请求（渲染只替换认得的 mention）。"""
         with pytest.raises(DraftViolation, match="写坏的资产引用"):
             validate_unit_text("unit E1U01", "镜头1：@[李明 推开门", PROJECT, max_refs=None)
 
@@ -228,12 +289,18 @@ class TestUnitText:
             validate_unit_text("unit E1U01", "镜头1：@[] 推开门", PROJECT, max_refs=None)
 
     def test_dialogue_only_text_rejected(self):
-        """只有台词的正文没有可生成的画面：画面是 unit 要产出的东西，不能只有声音。"""
+        """A body with only dialogue has no picture to generate: the picture is what the unit must produce,
+        it cannot be sound only.
+
+        只有台词的正文没有可生成的画面：画面是 unit 要产出的东西，不能只有声音。"""
         with pytest.raises(DraftViolation, match="没有画面描述"):
             validate_unit_text("unit E1U01", "@[李明]：{我来了。}\n{风吹过。}", PROJECT, max_refs=None)
 
     def test_dialogue_written_on_shot_header_line_is_normative(self):
-        """写在 ``镜头N：`` 同一行的台词在切分后就是规范行，判定须在剥 header 之后。"""
+        """Dialogue written on the same line as ``镜头N：`` is a normative line after splitting, so the check
+        must come after stripping the header.
+
+        写在 ``镜头N：`` 同一行的台词在切分后就是规范行，判定须在剥 header 之后。"""
         refs = validate_unit_text("unit E1U01", "镜头1：@[李明]：{我来了。}\n门在风里晃动", PROJECT, max_refs=None)
         assert refs == []
 
@@ -243,12 +310,17 @@ class TestDialogueLoad:
         assert validate_dialogue_load("unit E1U01", "镜头1：门开了\n@[李明]：{我来了。}", 4, "zh") is None
 
     def test_overload_rejected(self):
-        long_line = "这是一段非常长的台词" * 6  # 60 字 ÷ 5 字/秒 ≈ 12 秒
+        long_line = "这是一段非常长的台词" * 6  # 60 characters ÷ 5 characters/second ≈ 12 seconds / 60 字 ÷ 5 字/秒 ≈ 12 秒
         with pytest.raises(DraftViolation, match="超过该 unit"):
             validate_dialogue_load("unit E1U01", f"镜头1：门开了\n@[李明]：{{{long_line}}}", 4, "zh")
 
     def test_tolerance_admits_slight_overrun(self):
-        """宽容系数内放行：语速是统计估算，「刚好写满」的正常产出不该被判违约。"""
+        """Allowed within the tolerance factor: speech rate is a statistical estimate, and normal output
+        that "just fills it" should not be judged a violation.
+
+        宽容系数内放行：语速是统计估算，「刚好写满」的正常产出不该被判违约。"""
+        # 21 characters ÷ 5 characters/second = 4.2 seconds, within the tolerance limit of 4 seconds × 1.2 =
+        # 4.8 seconds
         # 21 字 ÷ 5 字/秒 = 4.2 秒，落在 4 秒 × 1.2 = 4.8 秒的宽容上限内
         line = "一二三四五六七八九十一二三四五六七八九十。"
         assert validate_dialogue_load("unit E1U01", f"@[李明]：{{{line}}}", 4, "zh") is None
@@ -259,18 +331,27 @@ class TestDialogueLoad:
             validate_dialogue_load("unit E1U01", f"镜头1：空镜\n{{{long_line}}}", 4, "zh")
 
     def test_project_override_changes_budget(self):
-        """项目级语速覆盖生效：同一段台词在慢速覆盖下判超载、在快速覆盖下放行。"""
+        """A project-level speech rate override takes effect: the same line is judged overloaded under a
+        slow override and allowed under a fast one.
+
+        项目级语速覆盖生效：同一段台词在慢速覆盖下判超载、在快速覆盖下放行。"""
         text = "镜头1：门开了\n@[李明]：{一二三四五六七八九十一二三四五六七八九十。}"
         with pytest.raises(DraftViolation, match="超过该 unit"):
             validate_dialogue_load("unit E1U01", text, 4, "zh", 2.0)
         validate_dialogue_load("unit E1U01", text, 4, "zh", 10.0)
 
     def test_non_string_language_falls_back_to_default_rate(self):
-        """project.json 的 source_language 可能是脏数据：估算按默认语速走，不抛 AttributeError。"""
+        """source_language in project.json may be dirty data: estimation uses the default rate without
+        raising AttributeError.
+
+        project.json 的 source_language 可能是脏数据：估算按默认语速走，不抛 AttributeError。"""
         assert validate_dialogue_load("unit E1U01", "@[李明]：{我来了。}", 4, 123) is None
 
     def test_normalizes_unicode_before_estimating(self):
-        """NFD 台词先归一再估：组合附加符会被词计数拆成多个单位，不归一会把念得完的 unit 判超载。"""
+        """NFD dialogue is normalized before estimating: word counting splits combining marks into several
+        units, and without normalization a unit that can be spoken in time would be judged overloaded.
+
+        NFD 台词先归一再估：组合附加符会被词计数拆成多个单位，不归一会把念得完的 unit 判超载。"""
         line = "Anh ấy mở cửa quán rượu ngay lập tức"
         text = f"镜头1：@[李明] 推门\n@[李明]：{{{unicodedata.normalize('NFD', line)}}}"
         assert validate_dialogue_load("unit E1U01", text, 4, "vi") is None
@@ -300,7 +381,10 @@ class TestDialoguePreserved:
         )
 
     def test_unicode_form_difference_not_a_rewrite(self):
-        """script_plan 存 NFD、prompt_authoring 回写 NFC 是纯编码差异，不该把已付费的展开判成改词。"""
+        """script_plan storing NFD and prompt_authoring writing back NFC is a pure encoding difference and
+        should not turn an already-paid expansion into a rewording.
+
+        script_plan 存 NFD、prompt_authoring 回写 NFC 是纯编码差异，不该把已付费的展开判成改词。"""
         line = "Anh ấy mở cửa"
         script_plan = f"镜头1：@[李明] 推门\n@[李明]：{{{unicodedata.normalize('NFD', line)}}}"
         prompt_authoring = f"镜头1：中景。@[李明] 推开木门\n@[李明]：{{{unicodedata.normalize('NFC', line)}}}"
@@ -326,7 +410,15 @@ class TestDialoguePreserved:
 
 
 class TestNeutralLayerReexport:
-    """违约条目类型的定义处是路线中立的 ``lib.script.draft_violation``，本模块只再导出。
+    """The violation entry types are defined in the route-neutral ``lib.script.draft_violation``; this
+    module only re-exports them.
+
+    If they forked into two type definitions, ``except DraftViolation`` would silently miss half of them
+    depending on the import path; the validators and draft envelopes of all three routes rely on the same
+    except. The import-linter contract "the route-neutral layer does not depend on the reference-to-video
+    subpackage" governs direction; this case governs identity.
+
+    违约条目类型的定义处是路线中立的 ``lib.script.draft_violation``，本模块只再导出。
 
     分叉成两份类型定义时，``except DraftViolation`` 会按导入路径的不同静默漏接一半——三条
     路线的校验器与草稿信封都在同一条 except 上。import-linter 的「路线中立层不依赖参考

@@ -1,4 +1,13 @@
-"""视频生成入口预检 ``require_video_bucket_capability`` 的行为：
+"""Behaviour of the video generation entry precheck ``require_video_bucket_capability``:
+
+- resolution result lacks capabilities the bucket needs / dangling reference -> ``BadRequestError`` (carrying
+  the errors catalog key and params);
+- referenced model not in the provider list -> ``ModelNotInCatalogError`` raised as is, the app-level handler
+  returns 400;
+- other resolution failures (no provider configured) -> allowed; non-capability failures are not escalated to
+  submit-time refusals.
+
+视频生成入口预检 ``require_video_bucket_capability`` 的行为：
 
 - 解析结果缺桶所需能力 / 悬空引用 → ``BadRequestError``（携带 errors 目录 key 与参数）；
 - 引用的模型不在供应商清单中 → 原样抛 ``ModelNotInCatalogError``，由 app 级 handler 返回 400；
@@ -35,23 +44,32 @@ class TestRequireVideoBucketCapability:
         assert exc_info.value.params == {"provider": "minimax", "model": "MiniMax-Hailuo-2.3"}
 
     async def test_project_r2v_bucket_overrides_incapable_default(self, db_factory, monkeypatch):
-        """配置 r2v 桶后参考生视频改用桶内模型：默认模型缺参考图能力也不再拦截。"""
+        """With an r2v bucket configured, reference-to-video uses the bucket's model: the default model lacking
+        reference-image capability no longer blocks.
+
+        配置 r2v 桶后参考生视频改用桶内模型：默认模型缺参考图能力也不再拦截。"""
         await _set_default_video_backend(db_factory, "minimax/MiniMax-Hailuo-2.3")
         bind_session_factory(monkeypatch, db_factory)
 
+        # # Precheck pass returns None silently
         # 预检放行即静默返回 None
         assert (
             await require_video_bucket_capability({"video_provider_r2v": "dashscope/happyhorse-1.1-r2v"}, "r2v") is None
         )
 
     async def test_no_provider_configured_passes_through(self, db_factory, monkeypatch):
-        """未配置任何供应商（自动推断失败）→ 放行入队，由 worker 在任务面板暴露。"""
+        """No provider configured (auto inference fails) -> allowed to enqueue; the worker surfaces it in the task panel.
+
+        未配置任何供应商（自动推断失败）→ 放行入队，由 worker 在任务面板暴露。"""
         bind_session_factory(monkeypatch, db_factory)
 
         assert await require_video_bucket_capability({}, "i2v") is None
 
     async def test_bare_builtin_provider_without_video_model_is_rejected(self, db_factory, monkeypatch):
-        """项目层裸写的内置供应商在目录里没有视频默认模型：提交期就报重新选择模型，不放行入队。"""
+        """A bare built-in provider written at project level has no default video model in the catalog: report 're-pick
+        the model' at submit time instead of allowing enqueue.
+
+        项目层裸写的内置供应商在目录里没有视频默认模型：提交期就报重新选择模型，不放行入队。"""
         bind_session_factory(monkeypatch, db_factory)
 
         with pytest.raises(ModelNotInCatalogError) as exc_info:

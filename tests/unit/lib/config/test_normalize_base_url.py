@@ -1,4 +1,6 @@
-"""base_url 归一化工具函数测试。"""
+"""Tests for base_url normalization helper functions.
+
+base_url 归一化工具函数测试。"""
 
 from lib.config.url_utils import (
     ensure_google_base_url,
@@ -9,7 +11,11 @@ from lib.config.url_utils import (
 
 
 class TestIsOfficialOpenAIBaseURL:
-    """官方端点判定：决定 OpenAI 后端的输出上限参数名。
+    """Official endpoint detection: decides the OpenAI backend's output limit parameter name.
+
+    base_url only comes from DB config; no environment variables are read.
+
+    官方端点判定：决定 OpenAI 后端的输出上限参数名。
 
     base_url 只来自 DB 配置，不读取任何环境变量。
     """
@@ -74,7 +80,9 @@ class TestNormalizeBaseUrl:
 
 
 class TestEnsureOpenaiBaseUrl:
-    """ensure_openai_base_url 自动追加 /v1 后缀。"""
+    """ensure_openai_base_url appends the /v1 suffix automatically.
+
+    ensure_openai_base_url 自动追加 /v1 后缀。"""
 
     def test_none_returns_none(self):
         assert ensure_openai_base_url(None) is None
@@ -111,7 +119,9 @@ class TestEnsureOpenaiBaseUrl:
 
 
 class TestEnsureGoogleBaseUrl:
-    """ensure_google_base_url 剥离版本路径，防止 SDK 重复拼接。"""
+    """ensure_google_base_url strips the version path so the SDK does not append it twice.
+
+    ensure_google_base_url 剥离版本路径，防止 SDK 重复拼接。"""
 
     def test_none_returns_none(self):
         assert ensure_google_base_url(None) is None

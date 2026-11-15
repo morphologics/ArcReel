@@ -1,4 +1,8 @@
-"""``resolve_reference_audio_paths`` 的归一化解析：真实文件系统 I/O，故与
+"""Normalized resolution of ``resolve_reference_audio_paths``: real file system I/O, so it is split into its own file
+apart from ``tests/unit/lib/script/reference_video/test_reference_video_prompt_render.py`` -- the tier is decided by
+the directory, and one file cannot hold two tiers.
+
+``resolve_reference_audio_paths`` 的归一化解析：真实文件系统 I/O，故与
 ``tests/unit/lib/script/reference_video/test_reference_video_prompt_render.py`` 分开成
 独立文件——档位由所在目录决定，同一个文件放不下两个档位。
 """
@@ -14,7 +18,11 @@ _NAME_NFD = unicodedata.normalize("NFD", "Hiếu")
 
 
 def test_resolve_reference_audio_paths_keys_are_normalized_for_binding(tmp_path):
-    """``resolve_reference_audio_paths`` 的 key 直接作为 ``audio_ready`` 与说话人判等：
+    """The keys of ``resolve_reference_audio_paths`` are compared directly with ``audio_ready`` and speakers: if the asset
+    table is stored as NFD and returned unchanged, the two sides of the binding check differ in form and the audio is
+    silently judged unavailable.
+
+    ``resolve_reference_audio_paths`` 的 key 直接作为 ``audio_ready`` 与说话人判等：
     资产表以 NFD 落盘时若原样返回，绑定判定两侧不同形，音频会被静默判成不可用。"""
     refs_audio = tmp_path / "characters" / "refs_audio"
     refs_audio.mkdir(parents=True)

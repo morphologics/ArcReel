@@ -12,7 +12,9 @@ _DB_FILE_SUFFIXES = ("", "-wal", "-shm")
 
 @pytest.fixture
 def default_sqlite(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
-    """未设置 ``DATABASE_URL``、数据根指向临时目录；返回数据根。"""
+    """``DATABASE_URL`` not set, data root pointing at a temp directory; returns the data root.
+
+    未设置 ``DATABASE_URL``、数据根指向临时目录；返回数据根。"""
     monkeypatch.delenv("DATABASE_URL", raising=False)
     data_root = tmp_path / "data"
     data_root.mkdir()
@@ -54,7 +56,7 @@ class TestGetDatabaseUrl:
         }
 
     def test_interrupted_rename_is_completed(self, default_sqlite: Path):
-        # 上次改名中断在辅助文件已改、主文件未改时。
+        # When the last rename was interrupted with the auxiliary files renamed but the main file not. / 上次改名中断在辅助文件已改、主文件未改时。
         _write_db_files(default_sqlite, ".arcreel.db", ("",))
         _write_db_files(default_sqlite, "arcreel.db", ("-wal", "-shm"))
 

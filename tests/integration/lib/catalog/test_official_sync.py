@@ -1,4 +1,7 @@
-"""官方同步：从目录数据仓库的 raw 地址取回新数据集并整批应用（docs/adr/0103）。raw 抓取由 respx 替身，绑内存库。"""
+"""Official sync: fetch a new dataset from the catalog data repo's raw URL and apply it as a whole batch
+(docs/adr/0103). The raw fetch is a respx double, bound to an in-memory DB.
+
+官方同步：从目录数据仓库的 raw 地址取回新数据集并整批应用（docs/adr/0103）。raw 抓取由 respx 替身，绑内存库。"""
 
 from __future__ import annotations
 
@@ -45,7 +48,9 @@ def _dataset(version: str, entries: Iterable[CatalogEntry], listed: Iterable[str
 
 
 def _files(data: CatalogData) -> tuple[bytes, bytes]:
-    """目录数据仓库发布的一对文件：清单文件与数据文件。"""
+    """The pair of files the catalog data repo publishes: the manifest file and the data file.
+
+    目录数据仓库发布的一对文件：清单文件与数据文件。"""
     raw = {
         "dataset_version": data.dataset_version,
         "entries": [dump_entry(entry) for entry in data.entries],
@@ -53,7 +58,7 @@ def _files(data: CatalogData) -> tuple[bytes, bytes]:
             pid: {
                 "models": [{"api_model_name": m.api_model_name, "entry": m.entry} for m in listing.models],
                 "defaults": dict(listing.defaults),
-                "some_future_field": True,  # 不认识的字段忽略
+                "some_future_field": True,  # Unknown fields are ignored / 不认识的字段忽略
             }
             for pid, listing in data.builtin_providers.items()
         },
@@ -110,11 +115,14 @@ async def test_newer_dataset_is_applied_as_a_batch(db_factory, http_client) -> N
     assert catalog.official_data().dataset_version == UPSTREAM.dataset_version
     assert catalog.get_entry(_key("chat")).display_name == "Chat v2"
     assert catalog.get_entry(_key("fresh")).display_name == "Fresh"
+    # Entries deleted upstream keep their last local version
     # 上游删掉的条目保留本地最后一个版本
     assert catalog.get_entry(_key("legacy")).display_name == "Legacy"
+    # Entries that stopped following official keep using the user copy, while the official values update with the sync
     # 停止跟随官方的条目照旧用用户副本，官方值随同步更新
     assert catalog.get_entry(_key("pinned")) == pinned_copy
     assert catalog.official_entry(_key("pinned")).display_name == "Pinned v2"
+    # The provider model list of built-in providers follows the data as a whole
     # 内置供应商的供应商模型清单整份跟随数据
     assert [view.model_id for view in catalog.provider_models(PROVIDER)] == ["chat", "fresh"]
 
@@ -122,6 +130,7 @@ async def test_newer_dataset_is_applied_as_a_batch(db_factory, http_client) -> N
     assert status.last_success_at is not None
     assert status.last_error is None
 
+    # After restart the same data is loaded back from the DB, including the retained entries
     # 重启后从库里装回同一份数据，保留下来的条目也在
     official_sync.reset_for_tests()
     assert catalog.official_data() is SNAPSHOT
@@ -162,6 +171,7 @@ async def test_hash_mismatch_and_network_failure_are_recorded_silently(db_factor
     assert official_sync.sync_status().last_error == "HTTP 503"
     assert catalog.official_data() is SNAPSHOT
 
+    # The failure reason is cleared after the next successful round
     # 下一轮成功后清掉失败原因
     await _sync(db_factory, http_client, UPSTREAM)
     assert official_sync.sync_status().last_error is None
@@ -178,9 +188,11 @@ async def test_newer_factory_snapshot_replaces_older_synced_data(
     assert catalog.official_data().dataset_version == upgraded.dataset_version
     assert catalog.get_entry(_key("chat")).display_name == "Chat v3"
     assert [view.model_id for view in catalog.provider_models(PROVIDER)] == ["chat"]
+    # Entries only in the synced data are still kept
     # 已同步数据独有的条目仍保留
     assert catalog.get_entry(_key("fresh")).display_name == "Fresh"
 
+    # The manifest's dataset version is not newer than local: do not fetch the data file
     # 清单的数据集版本不比本地新：不取数据文件
     manifest, _ = _files(UPSTREAM)
     with capture_http() as http:
@@ -238,7 +250,10 @@ async def test_unexpected_failure_still_shows_in_sync_status() -> None:
 
 
 class _AnyioConnectTransport(httpx.AsyncBaseTransport):
-    """同 httpcore 经 ``anyio.connect_tcp`` 建连：连接建立后 anyio 取消自己的任务组，再返回清单响应。"""
+    """Connects via ``anyio.connect_tcp`` like httpcore: once connected, anyio cancels its own task group, then returns the
+    manifest response.
+
+    同 httpcore 经 ``anyio.connect_tcp`` 建连：连接建立后 anyio 取消自己的任务组，再返回清单响应。"""
 
     def __init__(self, status_code: int) -> None:
         self.connected = asyncio.Event()
@@ -267,10 +282,14 @@ async def test_stop_ends_the_sync_when_anyio_absorbs_the_cancellation(db_factory
 
         async def stop_once_connected() -> None:
             await transport.connected.wait()
+            # The shutdown cancellation and anyio's task-group cancellation land in the same scheduling round and are both
+            # swallowed by anyio
             # 关停的取消与 anyio 的任务组取消落在同一轮调度，被 anyio 一并吞掉
             await official_sync.stop_official_sync(task)
 
         stopping = asyncio.create_task(stop_once_connected())
+        # Anti-hang cap: do not wrap the await in asyncio.timeout, whose timeout cancellation would pass through the await to
+        # the sync task and mask the hang
         # 防挂起的上限：不用 asyncio.timeout 包住 await，它的超时取消会经 await 转给同步任务，掩盖挂起
         await asyncio.wait({stopping}, timeout=5)
 
@@ -280,6 +299,8 @@ async def test_stop_ends_the_sync_when_anyio_absorbs_the_cancellation(db_factory
 
 
 async def test_stop_returns_after_the_interrupted_database_write_is_cleaned_up(tmp_path: Path, http_client) -> None:
+    # File SQLite with the default connection pool, same as the production DB: an interrupted session rolls back and
+    # returns its connection inside asyncio.shield
     # 与生产库同样的文件 SQLite 配默认连接池：被打断的会话在 asyncio.shield 里回滚、归还连接
     engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'catalog.db'}")
     loop = asyncio.get_running_loop()
@@ -287,6 +308,7 @@ async def test_stop_returns_after_the_interrupted_database_write_is_cleaned_up(t
     release_insert = threading.Event()
 
     def hold_insert() -> int:
+        # Runs on aiosqlite's worker thread: the INSERT recording the sync failure stops here until the test releases it
         # 在 aiosqlite 的工作线程里执行：记录同步失败的 INSERT 停在这里，直到用例放行
         loop.call_soon_threadsafe(insert_running.set)
         release_insert.wait()
@@ -309,9 +331,12 @@ async def test_stop_returns_after_the_interrupted_database_write_is_cleaned_up(t
             await insert_running.wait()
 
             stopping = asyncio.create_task(official_sync.stop_official_sync(task))
+            # Let the INSERT hang for a while before releasing: this only decides whether the wrap-up being interrupted by a
+            # re-delivered cancellation is exposed; it does not affect the result of a correct implementation
             # 先让 INSERT 卡一段时间再放行：只决定能否暴露收尾被重投的取消打断，不影响正确实现的结果
             await asyncio.wait({stopping}, timeout=0.2)
             release_insert.set()
+            # Anti-hang cap, same as the previous test; on a hang, finally cleans up leftover tasks
             # 防挂起的上限，与上一条用例一致；挂住时由 finally 清退遗留任务
             await asyncio.wait({stopping}, timeout=5)
             assert stopping.done()
@@ -322,6 +347,8 @@ async def test_stop_returns_after_the_interrupted_database_write_is_cleaned_up(t
     finally:
         release_insert.set()
         pending = asyncio.all_tasks() - before
+        # After an assertion failure, stop the leftover cleanup task so a broken implementation does not keep the test event
+        # loop waiting forever.
         # 断言失败后终止遗留清理任务，免得坏实现让测试事件循环一直等下去。
         while pending:
             for task in pending:

@@ -1,4 +1,8 @@
-"""端点测试 API：预览请求、验证响应、测试连接三个端点。
+"""Endpoint test API: the three endpoints preview request, validate response and test connection.
+
+All three share the one validator of the save API, so their error code sets are the same; this file locks that in by hitting four entry points with the same invalid definition.
+
+端点测试 API：预览请求、验证响应、测试连接三个端点。
 
 三者共用保存接口那一个校验器，因此错误码集一致——本文件用同一份非法定义打四个入口来锁住这一点。
 """
@@ -42,7 +46,12 @@ COMFYUI_CREDENTIALS = {"base_url": "https://comfy.test", "api_key": ""}
 
 @pytest.fixture
 def file_db_engine(file_db_factory: async_sessionmaker[AsyncSession]) -> AsyncEngine:
-    """本文件各夹具共用的文件库 engine，每个连接独立。
+    """File-DB engine shared by this file's fixtures, with an independent connection each.
+
+    ``TestClient`` returns as soon as the response body is sent, while the request dependency's session teardown and the background trial run's ledger entry write the DB concurrently;
+    independent connections keep the two transactions from entangling.
+
+    本文件各夹具共用的文件库 engine，每个连接独立。
 
     ``TestClient`` 在响应体发完即返回，请求依赖的 session 收尾与后台 trial run 的落账并发写库；
     独立连接让两边的事务互不连带。
@@ -52,7 +61,9 @@ def file_db_engine(file_db_factory: async_sessionmaker[AsyncSession]) -> AsyncEn
 
 @pytest.fixture
 def trial_runs(tmp_path, file_db_engine) -> TrialRunManager:
-    """隔离到 tmp_path 与文件库的登记处，经依赖覆盖注入。"""
+    """Registry isolated to tmp_path and the file DB, injected via dependency override.
+
+    隔离到 tmp_path 与文件库的登记处，经依赖覆盖注入。"""
     return TrialRunManager(
         root=tmp_path / "trial_runs",
         ledger=Ledger(session_factory=async_sessionmaker(file_db_engine, expire_on_commit=False)),
@@ -99,7 +110,12 @@ def _mock_successful_run(router) -> None:
 
 
 def _mock_successful_comfyui_run(router) -> None:
-    """一台跑得通的假 ComfyUI：提交给 prompt_id，第二次查 history 出终态，产物经 /view 取回。
+    """A fake ComfyUI that works: submission returns a prompt_id, the second history query gives the terminal state, and the artifact is fetched via /view.
+
+    ``/queue`` is provided too: in the round where history is still empty, this table decides whether the job was lost; only if the job is in the queue
+    is it still waiting.
+
+    一台跑得通的假 ComfyUI：提交给 prompt_id，第二次查 history 出终态，产物经 /view 取回。
 
     ``/queue`` 一并给出：history 还空着的那一轮要据这张表判任务是不是丢了，队列里有这一笔才
     说明它还在排。
@@ -126,7 +142,9 @@ def _mock_successful_comfyui_run(router) -> None:
 
 
 def _mock_successful_comfyui_image_run(router) -> None:
-    """同上，但产物是一张图：产物挂在 ``images`` 键上，取回的字节带 PNG 文件头。"""
+    """Same as above, but the artifact is an image: it hangs on the ``images`` key, and the fetched bytes carry a PNG header.
+
+    同上，但产物是一张图：产物挂在 ``images`` 键上，取回的字节带 PNG 文件头。"""
     router.post("https://comfy.test/prompt").mock(return_value=httpx.Response(200, json={"prompt_id": "p-1"}))
     router.get("https://comfy.test/queue").mock(
         return_value=httpx.Response(200, json={"queue_running": [[0, "p-1", {}, [], {}]], "queue_pending": []})
@@ -148,7 +166,9 @@ def _mock_successful_comfyui_image_run(router) -> None:
 
 
 def _comfyui_image_definition() -> dict[str, Any]:
-    """一份图像 ComfyUI 端点定义：图像端点没有帧率与负向入口这两个语义键。"""
+    """An image ComfyUI endpoint definition: image endpoints lack the two semantic keys frame rate and negative input.
+
+    一份图像 ComfyUI 端点定义：图像端点没有帧率与负向入口这两个语义键。"""
     definition = comfyui_endpoint_definition(media_type="image")
     definition["bindings"] = {
         key: value for key, value in definition["bindings"].items() if key not in ("fps", "negative_prompt")
@@ -157,13 +177,18 @@ def _comfyui_image_definition() -> dict[str, Any]:
 
 
 def _mock_comfyui_run_stuck_in_polling(router) -> asyncio.Event:
-    """一台提交得了、却永远查不出终态的假 ComfyUI；返回的事件在第一次查 history 时置位。
+    """A fake ComfyUI that accepts the submission but never yields a terminal state; the returned event is set on the first history query.
+
+    Waiting for this handshake gets exactly the situation "the remote already has a job running and the local side has entered polling", which is what cancel must stop,
+    without guessing how many times the event loop has to yield.
+
+    一台提交得了、却永远查不出终态的假 ComfyUI；返回的事件在第一次查 history 时置位。
 
     等这次握手等到的正是「远端已经有一笔在跑、本地也已进了轮询」，即取消要叫停的那个局面，
     不必去猜事件循环要让步多少次。
     """
     polling = asyncio.Event()
-    gate = asyncio.Event()  # 永不置位：这次 run 只可能被 cancel 停下
+    gate = asyncio.Event()  # Never set: this run can only be stopped by cancel / 永不置位：这次 run 只可能被 cancel 停下
 
     async def _never_settles(_request: httpx.Request) -> httpx.Response:
         polling.set()
@@ -183,7 +208,17 @@ def _post(client: TestClient, path: str, payload: dict[str, Any]):
 
 
 def _hold_submit(router) -> asyncio.Queue[None]:
-    """让提交请求停在一道只由取消解除的闸口上，run 在测试说停之前一定还在进行。
+    """Hold the submit request at a gate that only cancellation releases, so the run is certainly still in progress until the test says stop.
+
+    If "still in progress" were maintained by polling ``status: processing``, it would be a race: one poll round under the fake table takes almost
+    no real time, so the background task could exhaust ``poll_timeout`` between two assertions, hit a terminal state and release the slot. The gate
+    hands this lifetime to the test, so the conclusion holds however loaded the machine is.
+
+    Each submit request arriving at the gate puts one item into the returned queue. Before cancelling, wait for it via ``client.portal.call(queue.get)``:
+    when ``create`` returns, the background task may still be in the ledger insert before submission; a cancel landing there would make SQLAlchemy
+    invalidate the connection, the in-memory DB would lose its tables along with its only connection, the next run's ledger insert would fail and end on its own, and cancelling it would give 404.
+
+    让提交请求停在一道只由取消解除的闸口上，run 在测试说停之前一定还在进行。
 
     「仍在进行」若靠 ``status: processing`` 的轮询维持，就成了一场竞速：假表下的一轮轮询几乎
     不耗真实时间，后台任务能在两次断言之间跑满 ``poll_timeout`` 撞进终态、把名额让出去。闸口
@@ -194,7 +229,7 @@ def _hold_submit(router) -> asyncio.Queue[None]:
     作废连接，内存库随唯一的连接一起丢掉表，下一笔 run 插账即失败、自行结束，取消它得到 404。
     """
     arrived: asyncio.Queue[None] = asyncio.Queue()
-    gate = asyncio.Event()  # 永不置位：这次 run 只可能被 cancel 停下
+    gate = asyncio.Event()  # Never set: this run can only be stopped by cancel / 永不置位：这次 run 只可能被 cancel 停下
 
     async def _never_responds(_request: httpx.Request) -> httpx.Response:
         arrived.put_nowait(None)
@@ -225,7 +260,9 @@ class TestPreviewRequest:
         assert body["result"] is None
 
     def test_a_fixed_url_definition_previews_with_only_an_api_key(self, client: TestClient):
-        """三节 URL 都写死绝对地址时，只带 api_key 的凭证不得被丢弃成占位符。"""
+        """When all three URL sections are hard-coded absolute addresses, a credential with only an api_key must not be dropped to a placeholder.
+
+        三节 URL 都写死绝对地址时，只带 api_key 的凭证不得被丢弃成占位符。"""
         definition = custom_endpoint_definition()
         definition["submit"] = {**definition["submit"], "url": "https://fixed.test/v1/video/create"}
         definition["poll"] = {**definition["poll"], "url": "https://fixed.test/v1/video/fetch/{{ task_id }}"}
@@ -294,11 +331,14 @@ class TestAssetLimits:
         )
 
         assert resp.status_code == 400
+        # The response body is the rendered product message (no error code is sent); asserting the limit number is present pins that the count limit was hit, not some other 400.
         # 响应体是渲染后的产品文案（错误码不下发）；断言上限数字在场，锁住命中的是数量上限而非别的 400。
         assert "16" in resp.json()["detail"]
 
     def test_files_under_unknown_field_names_still_count(self, client: TestClient):
-        """换个字段名的文件同样已被解析缓冲；不数进去，上限就是换个 key 即可绕开的摆设。"""
+        """Files under a different field name have also been parsed and buffered; if they were not counted, the limit would be a decoration bypassed by changing the key.
+
+        换个字段名的文件同样已被解析缓冲；不数进去，上限就是换个 key 即可绕开的摆设。"""
         files = [(f"junk_{i}", (f"r{i}.png", b"x", "image/png")) for i in range(17)]
         resp = client.post(
             "/api/v1/custom-endpoints/preview-request",
@@ -350,7 +390,9 @@ class TestCheckResponse:
 
 
 class TestSharedValidation:
-    """非法定义在三个测试端点与保存接口报出同一错误码集。"""
+    """An invalid definition reports the same error code set at the three test endpoints and the save API.
+
+    非法定义在三个测试端点与保存接口报出同一错误码集。"""
 
     @staticmethod
     def _codes(payload: dict[str, Any]) -> set[str]:
@@ -467,9 +509,10 @@ class TestTrialRuns:
             client.portal.call(submits.get)
             cancelled = client.post(f"/api/v1/custom-endpoints/trial-runs/{run_id}/cancel")
             assert cancelled.status_code == 204
-            # 取消后名额让出，同一份定义可以再发一次。
+            # After cancellation the slot is released, so the same definition can be sent again. / 取消后名额让出，同一份定义可以再发一次。
             third = _post(client, "trial-runs", payload)
             assert third.status_code == 201
+            # This one must also be stopped before leaving the http stand-in, otherwise it would hang at the gate until the event loop dies.
             # 这一笔也要在离开 http 替身之前停掉，否则它会挂在闸口上直到事件循环消亡。
             third_id = third.json()["id"]
             client.portal.call(submits.get)
@@ -489,6 +532,7 @@ class TestTrialRuns:
             )
             run_id = created.json()["id"]
             client.portal.call(submits.get)
+            # The 204 itself is the criterion: cancellation stopped a run still in progress, not one that had already finished by itself.
             # 204 本身是判据：取消停下的是一笔仍在进行的 run，不是一笔已经自己跑完的。
             assert client.post(f"/api/v1/custom-endpoints/trial-runs/{run_id}/cancel").status_code == 204
 
@@ -502,7 +546,9 @@ class TestTrialRuns:
     def test_a_definition_with_fixed_urls_runs_without_a_base_url(
         self, client: TestClient, trial_runs: TrialRunManager
     ):
-        """三节 URL 都写死绝对地址的定义没有一处会用到接口地址，不必逼调用方编一个假地址。"""
+        """A definition with all three URL sections hard-coded uses the API address nowhere, so the caller need not invent a fake one.
+
+        三节 URL 都写死绝对地址的定义没有一处会用到接口地址，不必逼调用方编一个假地址。"""
         definition = custom_endpoint_definition()
         definition["submit"] = {**definition["submit"], "url": "https://fixed.test/v1/video/create"}
         definition["poll"] = {**definition["poll"], "url": "https://fixed.test/v1/video/fetch/{{ task_id }}"}
@@ -524,6 +570,7 @@ class TestTrialRuns:
                 },
             )
             assert created.status_code == 201, created.text
+            # Inline credentials have no provider identity, so the ledger records the host of the submit address, i.e. who actually gets paid.
             # 内联凭证没有供应商身份，账本落提交地址的 host——这笔钱实际打给谁。
             assert created.json()["provider"] == "fixed.test"
             client.post(f"/api/v1/custom-endpoints/trial-runs/{created.json()['id']}/cancel")
@@ -531,7 +578,9 @@ class TestTrialRuns:
     def test_a_credential_free_definition_runs_without_credentials(
         self, client: TestClient, trial_runs: TrialRunManager
     ):
-        """auth 为空且三节 URL 全写死绝对地址的定义没有一处用得上凭证，不带凭证即可发起。"""
+        """A definition with empty auth and all three URL sections hard-coded uses credentials nowhere, so it can be launched without them.
+
+        auth 为空且三节 URL 全写死绝对地址的定义没有一处用得上凭证，不带凭证即可发起。"""
         definition = custom_endpoint_definition(auth={})
         definition["submit"] = {**definition["submit"], "url": "https://fixed.test/v1/video/create"}
         definition["poll"] = {**definition["poll"], "url": "https://fixed.test/v1/video/fetch/{{ task_id }}"}
@@ -550,7 +599,9 @@ class TestTrialRuns:
     def test_a_model_ref_to_a_builtin_declarative_endpoint_reports_diagnostics(
         self, client: TestClient, trial_runs: TrialRunManager, stored_builtin_endpoint_model_row: dict[str, Any]
     ):
-        """定义随版发布不该让结果体缺渲染请求与逐阶段提取——与 ce-* 走同一条诊断路。"""
+        """A definition being bundled should not make the result body miss the rendered request and per-stage extraction; it takes the same diagnostic path as ce-*.
+
+        定义随版发布不该让结果体缺渲染请求与逐阶段提取——与 ce-* 走同一条诊断路。"""
         with capture_http() as router, bounded_poll_clock():
             router.post("https://relay.test/v1/video/generations").mock(
                 return_value=httpx.Response(200, json={"task_id": "job-42"})
@@ -584,7 +635,9 @@ class TestTrialRuns:
     def test_a_builtin_minimax_model_ref_reports_declarative_diagnostics(
         self, client: TestClient, trial_runs: TrialRunManager, stored_minimax_config: None
     ):
-        """内置模型行走声明式装配：结果体同样给出渲染请求与逐阶段提取，不因定义随版发布而缺段。"""
+        """Built-in model rows use declarative assembly: the result body also gives the rendered request and per-stage extraction, without missing sections just because the definition is bundled.
+
+        内置模型行走声明式装配：结果体同样给出渲染请求与逐阶段提取，不因定义随版发布而缺段。"""
         with capture_http() as router, bounded_poll_clock():
             router.post("https://api.minimaxi.com/v2/video_generation").mock(
                 return_value=httpx.Response(200, json={"task_id": "t-1"})
@@ -607,6 +660,7 @@ class TestTrialRuns:
         fetched = client.get(f"/api/v1/custom-endpoints/trial-runs/{run_id}").json()
         assert fetched["status"] == "succeeded", fetched["error"]
         assert fetched["request"]["url"] == "https://api.minimaxi.com/v2/video_generation"
+        # No resolution specified: the definition's defaults.resolution is rendered into the request and is also visible in the result body's rendered request.
         # 未指定分辨率：定义的 defaults.resolution 渲进请求，结果体的渲染请求里同样可见。
         assert fetched["request"]["body"]["resolution"] == "768P"
         assert fetched["extractions"]["submit"]["task_id"] == "t-1"
@@ -640,7 +694,9 @@ class TestTrialRuns:
         assert resp.status_code == 404
 
     def test_mixed_credential_sources_are_rejected(self, client: TestClient, stored_provider):
-        """provider_id 与内联字段并存时不静默取库里那份——付费目标必须是调用方明确选的。"""
+        """When provider_id and inline fields coexist, the stored one is not silently taken: the paid target must be what the caller explicitly chose.
+
+        provider_id 与内联字段并存时不静默取库里那份——付费目标必须是调用方明确选的。"""
         resp = _post(
             client,
             "preview-request",
@@ -656,7 +712,9 @@ class TestTrialRuns:
     def test_a_model_ref_run_records_the_referenced_model(
         self, client: TestClient, trial_runs: TrialRunManager, stored_model_row: dict[str, Any]
     ):
-        """parameters.model 与 model_ref 不一致时以模型行为准：结果体记录的就是实际执行、记账的那个。"""
+        """When parameters.model and model_ref disagree, the model row wins: the result body records the one actually executed and billed.
+
+        parameters.model 与 model_ref 不一致时以模型行为准：结果体记录的就是实际执行、记账的那个。"""
         with capture_http() as router, bounded_poll_clock():
             _mock_successful_run(router)
             created = _post(
@@ -681,7 +739,9 @@ class TestTrialRuns:
     def test_supplying_both_definition_and_model_ref_is_rejected(
         self, client: TestClient, trial_runs: TrialRunManager, stored_model_row: dict[str, Any]
     ):
-        """两种目标形态并存时不静默取其一——付费请求不能打到调用方没选中的目标上。"""
+        """When both target forms coexist, neither is silently picked: a paid request must not hit a target the caller did not choose.
+
+        两种目标形态并存时不静默取其一——付费请求不能打到调用方没选中的目标上。"""
         resp = _post(
             client,
             "trial-runs",
@@ -701,7 +761,9 @@ class TestTrialRuns:
     def test_a_model_ref_to_a_disabled_model_is_rejected(
         self, client: TestClient, trial_runs: TrialRunManager, stored_disabled_model_row: dict[str, Any]
     ):
-        """只查存在不够：禁用行会让装配层回退默认模型，付费测试打到并计费给另一个模型。"""
+        """Checking existence is not enough: a disabled row makes the assembly layer fall back to the default model, so the paid test would hit and bill another model.
+
+        只查存在不够：禁用行会让装配层回退默认模型，付费测试打到并计费给另一个模型。"""
         resp = _post(
             client,
             "trial-runs",
@@ -719,7 +781,9 @@ class TestTrialRuns:
     def test_a_model_ref_without_a_provider_base_url_is_rejected(
         self, client: TestClient, trial_runs: TrialRunManager, stored_model_row_without_base_url: dict[str, Any]
     ):
-        """装配层缺 base_url 只抛一句不可翻译的中文，且落在脱离请求的后台任务里；请求线程先拒。"""
+        """When base_url is missing, the assembly layer only raises an untranslatable Chinese sentence, and in a background task detached from the request; the request thread rejects first.
+
+        装配层缺 base_url 只抛一句不可翻译的中文，且落在脱离请求的后台任务里；请求线程先拒。"""
         resp = _post(
             client,
             "trial-runs",
@@ -738,7 +802,9 @@ class TestTrialRuns:
     def test_stored_provider_credentials_missing_the_required_api_key_are_rejected(
         self, client: TestClient, trial_runs: TrialRunManager, stored_provider_without_api_key: dict[str, Any]
     ):
-        """provider_id 读出的空 api_key 与内联缺字段同判：请求线程上 400，不进后台任务。"""
+        """An empty api_key read via provider_id is judged the same as a missing inline field: 400 on the request thread, never reaching the background task.
+
+        provider_id 读出的空 api_key 与内联缺字段同判：请求线程上 400，不进后台任务。"""
         resp = _post(
             client,
             "trial-runs",
@@ -754,7 +820,9 @@ class TestTrialRuns:
     def test_a_model_ref_to_a_provider_without_an_api_key_is_rejected(
         self, client: TestClient, trial_runs: TrialRunManager, stored_model_row_without_api_key: dict[str, Any]
     ):
-        """定义的 auth 节非空而供应商没存 api_key：放行会带着空鉴权头付费打一个注定被拒的调用。"""
+        """The definition's auth section is non-empty but the provider stored no api_key: allowing it would make a paid call with an empty auth header that is bound to be refused.
+
+        定义的 auth 节非空而供应商没存 api_key：放行会带着空鉴权头付费打一个注定被拒的调用。"""
         resp = _post(
             client,
             "trial-runs",
@@ -772,7 +840,9 @@ class TestTrialRuns:
     def test_a_builtin_model_ref_to_a_non_video_model_is_rejected(
         self, client: TestClient, trial_runs: TrialRunManager
     ):
-        """内置供应商的文本档若放行，会被派发到视频端点，付费打给另一个模型。"""
+        """If a built-in provider's text tier were allowed, it would be dispatched to the video endpoint and bill another model.
+
+        内置供应商的文本档若放行，会被派发到视频端点，付费打给另一个模型。"""
         resp = _post(
             client,
             "trial-runs",
@@ -784,7 +854,9 @@ class TestTrialRuns:
     def test_a_builtin_model_ref_to_an_unregistered_model_is_not_found(
         self, client: TestClient, trial_runs: TrialRunManager
     ):
-        """未登记的 model 会让装配层落到该供应商的默认视频模型，同样是付费打给另一个模型。"""
+        """An unregistered model makes the assembly layer fall back to that provider's default video model, again billing another model.
+
+        未登记的 model 会让装配层落到该供应商的默认视频模型，同样是付费打给另一个模型。"""
         resp = _post(
             client,
             "trial-runs",
@@ -794,7 +866,9 @@ class TestTrialRuns:
         assert resp.status_code == 404
 
     def test_a_builtin_model_ref_without_credentials_is_rejected(self, client: TestClient, trial_runs: TrialRunManager):
-        """装配层缺凭证时抛的是 backend 自己写的中文句子，且落在后台任务里；请求线程先拒。"""
+        """When credentials are missing, the assembly layer raises a Chinese sentence written by the backend itself, in the background task; the request thread rejects first.
+
+        装配层缺凭证时抛的是 backend 自己写的中文句子，且落在后台任务里；请求线程先拒。"""
         resp = _post(
             client,
             "trial-runs",
@@ -810,7 +884,9 @@ class TestTrialRuns:
     def test_a_model_ref_runs_the_stored_row_to_a_terminal_state(
         self, client: TestClient, trial_runs: TrialRunManager, stored_model_row: dict[str, Any]
     ):
-        """模型行这条入口装的是生产那道构造缝装出来的 backend，不是另一个只在测试里存在的对象。"""
+        """The model-row entry point carries a backend built by the production construction seam, not some other object that exists only in tests.
+
+        模型行这条入口装的是生产那道构造缝装出来的 backend，不是另一个只在测试里存在的对象。"""
         with capture_http() as router, bounded_poll_clock():
             _mock_successful_run(router)
             created = _post(
@@ -831,11 +907,13 @@ class TestTrialRuns:
         fetched = client.get(f"/api/v1/custom-endpoints/trial-runs/{run_id}").json()
         assert fetched["status"] == "succeeded", fetched["error"]
         assert fetched["video_url"] == "https://relay.test/files/job-42.mp4"
+        # The billing identity comes from the model row, rather than falling back to the base_url host as with inline definitions.
         # 记账身份取模型行，不像内联定义那样回落到 base_url 的 host。
         assert (fetched["provider"], fetched["model"]) == (
             stored_model_row["provider_id"],
             stored_model_row["model_id"],
         )
+        # The model row carries a custom call endpoint, which is why the result body has the rendered request and per-stage extraction sections.
         # 模型行挂着自定义调用端点，结果体才有渲染请求与逐阶段提取这两段。
         assert fetched["request"]["url"] == "https://relay.test/v1/video/create"
         assert fetched["extractions"]["submit"]["task_id"] == "job-42"
@@ -869,13 +947,17 @@ class TestTrialRuns:
 
 @pytest.fixture
 async def stored_model_row(file_db_engine) -> dict[str, Any]:
-    """一条挂着自定义调用端点的视频模型行，供 ``model_ref`` 用例引用。"""
+    """A video model row attached to a custom call endpoint, referenced by the ``model_ref`` cases.
+
+    一条挂着自定义调用端点的视频模型行，供 ``model_ref`` 用例引用。"""
     return await _store_model_row(file_db_engine)
 
 
 @pytest.fixture
 async def stored_model_row_with_submit_override(file_db_engine) -> dict[str, Any]:
-    """同 ``stored_model_row``，提交请求的路径被覆盖为 ``/v2/create``。"""
+    """Same as ``stored_model_row``, with the submit request path overridden to ``/v2/create``.
+
+    同 ``stored_model_row``，提交请求的路径被覆盖为 ``/v2/create``。"""
     return await _store_model_row(file_db_engine, path_overrides={"submit": "/v2/create"})
 
 
@@ -911,7 +993,9 @@ async def _store_model_row(file_db_engine, *, path_overrides: dict[str, str] | N
 
 @pytest.fixture
 async def stored_minimax_config(file_db_engine) -> None:
-    """内置 minimax 的凭证配置，供内置直连 ``model_ref`` 用例引用。"""
+    """Credential config of the built-in minimax, referenced by the built-in direct ``model_ref`` cases.
+
+    内置 minimax 的凭证配置，供内置直连 ``model_ref`` 用例引用。"""
     session_factory = async_sessionmaker(file_db_engine, expire_on_commit=False)
     async with session_factory() as session:
         await ConfigService(session).set_provider_config("minimax", "api_key", "sk-minimax-key-0001")
@@ -920,7 +1004,9 @@ async def stored_minimax_config(file_db_engine) -> None:
 
 @pytest.fixture
 async def stored_provider_without_api_key(file_db_engine) -> dict[str, Any]:
-    """一条没存 api_key 的供应商行，供「凭证读库缺字段」用例引用。"""
+    """A provider row with no stored api_key, referenced by the "credential read from DB missing a field" case.
+
+    一条没存 api_key 的供应商行，供「凭证读库缺字段」用例引用。"""
     session_factory = async_sessionmaker(file_db_engine, expire_on_commit=False)
     async with session_factory() as session:
         provider = await CustomProviderRepository(session).create_provider(
@@ -936,7 +1022,9 @@ async def stored_provider_without_api_key(file_db_engine) -> dict[str, Any]:
 
 @pytest.fixture
 async def stored_model_row_without_api_key(file_db_engine) -> dict[str, Any]:
-    """同样的模型行，但供应商没存 api_key——定义的 auth 节非空，空凭证发不出合法请求。"""
+    """The same model row, but the provider stored no api_key: the definition's auth section is non-empty, so empty credentials cannot produce a valid request.
+
+    同样的模型行，但供应商没存 api_key——定义的 auth 节非空，空凭证发不出合法请求。"""
     session_factory = async_sessionmaker(file_db_engine, expire_on_commit=False)
     async with session_factory() as session:
         endpoint = await CustomEndpointRepository(session).create(
@@ -967,7 +1055,9 @@ async def stored_model_row_without_api_key(file_db_engine) -> dict[str, Any]:
 
 @pytest.fixture
 async def stored_builtin_endpoint_model_row(file_db_engine) -> dict[str, Any]:
-    """挂内置声明式端点（newapi-video）的模型行：定义随版发布，不落 custom_endpoint 表。"""
+    """A model row attached to a built-in declarative endpoint (newapi-video): the definition is bundled and not stored in the custom_endpoint table.
+
+    挂内置声明式端点（newapi-video）的模型行：定义随版发布，不落 custom_endpoint 表。"""
     session_factory = async_sessionmaker(file_db_engine, expire_on_commit=False)
     async with session_factory() as session:
         provider = await CustomProviderRepository(session).create_provider(
@@ -991,7 +1081,9 @@ async def stored_builtin_endpoint_model_row(file_db_engine) -> dict[str, Any]:
 
 @pytest.fixture
 async def stored_model_row_without_base_url(file_db_engine) -> dict[str, Any]:
-    """同样的模型行，但供应商没填接口地址——声明式端点的提交 URL 需要它。"""
+    """The same model row, but the provider has no API address: the declarative endpoint's submit URL needs it.
+
+    同样的模型行，但供应商没填接口地址——声明式端点的提交 URL 需要它。"""
     session_factory = async_sessionmaker(file_db_engine, expire_on_commit=False)
     async with session_factory() as session:
         endpoint = await CustomEndpointRepository(session).create(
@@ -1022,7 +1114,9 @@ async def stored_model_row_without_base_url(file_db_engine) -> dict[str, Any]:
 
 @pytest.fixture
 async def stored_disabled_model_row(file_db_engine) -> dict[str, Any]:
-    """一条已禁用的视频模型行，供拒绝用例引用。"""
+    """A disabled video model row, referenced by the rejection cases.
+
+    一条已禁用的视频模型行，供拒绝用例引用。"""
     session_factory = async_sessionmaker(file_db_engine, expire_on_commit=False)
     async with session_factory() as session:
         endpoint = await CustomEndpointRepository(session).create(
@@ -1052,7 +1146,9 @@ async def stored_disabled_model_row(file_db_engine) -> dict[str, Any]:
 
 
 class TestComfyuiEndpoints:
-    """ComfyUI 端点在三个入口上的分派：预览有、测试连接有、验证响应结构化不支持。"""
+    """Dispatch of ComfyUI endpoints at the three entry points: preview yes, test connection yes, validate response returns structured not-supported.
+
+    ComfyUI 端点在三个入口上的分派：预览有、测试连接有、验证响应结构化不支持。"""
 
     def test_checking_a_response_is_refused_as_unsupported(self, client: TestClient):
         resp = _post(
@@ -1096,7 +1192,9 @@ class TestComfyuiEndpoints:
         assert resp.json()["conversions"] is None
 
     def test_an_empty_api_key_is_enough_to_preview(self, client: TestClient):
-        """ComfyUI 原生无鉴权：``auth`` 节缺席的定义不该被拦在「请先填 API Key」上。"""
+        """ComfyUI natively has no auth: a definition without an ``auth`` section must not be stopped at "please enter an API Key first".
+
+        ComfyUI 原生无鉴权：``auth`` 节缺席的定义不该被拦在「请先填 API Key」上。"""
         resp = _post(
             client,
             "preview-request",
@@ -1111,7 +1209,10 @@ class TestComfyuiEndpoints:
         assert resp.json()["submit"]["headers"] == {}
 
     def test_a_workflow_that_cannot_be_edited_down_is_refused_with_its_failure_text(self, client: TestClient):
-        """改图的级联触到产物节点：这不是定义有错，而是这份定义配上这组素材渲染不出请求。"""
+        """The image-editing cascade reaches the output node: the definition is not wrong, but this definition with this set of inputs cannot render a request.
+
+        改图的级联触到产物节点：这不是定义有错，而是这份定义配上这组素材渲染不出请求。"""
+        # Three slots, the last two merge into one path connected directly to the output node: when only one image is uploaded that whole path is removed, and the cascade hits the output node.
         # 三个格子，后两个汇成一路直接接产物节点：只上传一张时那一路整条被删，级联撞上产物节点。
         definition = comfyui_endpoint_definition()
         workflow = definition["workflow"]
@@ -1157,7 +1258,7 @@ class TestComfyuiEndpoints:
         )
 
         assert resp.status_code == 400
-        # 用失败码本身的三语文案说明，不另写一套措辞。
+        # Explained with the failure code's own trilingual message, without writing a separate wording. / 用失败码本身的三语文案说明，不另写一套措辞。
         assert "无法改图" in resp.json()["detail"]
 
     def test_a_trial_run_reports_the_prompt_id_stages_and_artifact(
@@ -1184,16 +1285,19 @@ class TestComfyuiEndpoints:
         assert fetched["error_action"] is None
         assert fetched["provider_job_id"] == "p-1"
         assert fetched["stages"] == {"submit": "done", "poll": "done", "result": "done", "artifact": "done"}
+        # The seed and asset reference names of the actually sent workflow are only fixed at submit time, so the result body does not show a preview just to fill space.
         # 实发 workflow 的种子与素材引用名要到提交那一刻才定下来，结果体不摆一份预览充数。
         assert fetched["request"] is None
-        # 产物提取是固定代码，没有可配的取值路径可报。
+        # Artifact extraction is fixed code; there is no configurable value path to report. / 产物提取是固定代码，没有可配的取值路径可报。
         assert fetched["extractions"] == {}
         artifact = client.get(f"/api/v1/custom-endpoints/trial-runs/{run_id}/artifact")
         assert artifact.content == MP4_BYTES
         assert artifact.headers["content-type"] == "video/mp4"
 
     def test_the_queue_shows_a_readable_name_for_a_trial_run(self, client: TestClient, trial_runs: TrialRunManager):
-        """用户在自己手动跑的 ComfyUI 队列里要认得出哪一笔是刚点的「测试连接」。"""
+        """In the ComfyUI queue they run manually, users need to recognize which job is the "test connection" they just clicked.
+
+        用户在自己手动跑的 ComfyUI 队列里要认得出哪一笔是刚点的「测试连接」。"""
         with capture_http() as router, bounded_poll_clock():
             _mock_successful_comfyui_run(router)
             created = _post(
@@ -1238,8 +1342,10 @@ class TestComfyuiEndpoints:
         fetched = client.get(f"/api/v1/custom-endpoints/trial-runs/{run_id}").json()
         assert fetched["status"] == "failed"
         assert "KSampler: value too large" in fetched["error"]
+        # The message varies with Accept-Language, the code does not: the read side branches on the code for "what kind of failure is this and what to do".
         # 文案随 Accept-Language 变，码不变：读侧按码分流「这是哪一类失败、该去做什么」。
         assert fetched["error_code"] == "comfyui_node_errors"
+        # The action comes from the same lookup table as project-page generation failures, not a sentence written here: three of ComfyUI's eight codes point to retrying.
         # 动作取自项目页生成失败那一份对照表，不是这里另写的一句：ComfyUI 的八条码里有三条指向重试。
         assert fetched["error_action"] == "configure_provider"
         assert fetched["provider_job_id"] is None
@@ -1248,9 +1354,12 @@ class TestComfyuiEndpoints:
     def test_a_lost_job_points_at_retrying_rather_than_at_the_provider_settings(
         self, client: TestClient, trial_runs: TrialRunManager
     ):
-        """一时的失败与配置错误在卡上要说不同的话，动作由失败码本身决定。"""
+        """A transient failure and a configuration error must say different things on the card; the action is decided by the failure code itself.
+
+        一时的失败与配置错误在卡上要说不同的话，动作由失败码本身决定。"""
         with capture_http() as router, bounded_poll_clock():
             router.post("https://comfy.test/prompt").mock(return_value=httpx.Response(200, json={"prompt_id": "p-1"}))
+            # The job is in neither the queue nor the history: ComfyUI most likely restarted, and a retry will work.
             # 队列与历史里都没有这一笔：ComfyUI 多半重启过，重试就能好。
             router.get("https://comfy.test/queue").mock(
                 return_value=httpx.Response(200, json={"queue_running": [], "queue_pending": []})
@@ -1274,7 +1383,9 @@ class TestComfyuiEndpoints:
         assert fetched["error_action"] == "retry"
 
     def test_a_trial_run_needs_the_service_address(self, client: TestClient, trial_runs: TrialRunManager):
-        """ComfyUI 的路由全在服务地址根下，定义里一个绝对地址都不写。"""
+        """ComfyUI's routes are all under the service address root; the definition does not contain a single absolute address.
+
+        ComfyUI 的路由全在服务地址根下，定义里一个绝对地址都不写。"""
         resp = _post(
             client,
             "trial-runs",
@@ -1288,7 +1399,9 @@ class TestComfyuiEndpoints:
         assert resp.status_code == 400
 
     def test_giving_up_stops_the_remote_job(self, client: TestClient, trial_runs: TrialRunManager):
-        """远端还在跑就还占着用户的显卡，而这一笔的产物已经没人要了。"""
+        """While the remote is still running it still occupies the user's GPU, and nobody wants this job's artifact anymore.
+
+        远端还在跑就还占着用户的显卡，而这一笔的产物已经没人要了。"""
         assert client.portal is not None
         with capture_http() as router:
             polling = _mock_comfyui_run_stuck_in_polling(router)
@@ -1312,7 +1425,9 @@ class TestComfyuiEndpoints:
         assert job_cancel.called
 
     def test_an_image_endpoint_can_still_be_previewed(self, client: TestClient):
-        """预览请求与媒体类型无关：跑不了测试连接的端点，照样要看得见它会发出什么。"""
+        """Previewing a request is independent of media type: for endpoints that cannot run test connection, you still need to see what they would send.
+
+        预览请求与媒体类型无关：跑不了测试连接的端点，照样要看得见它会发出什么。"""
         resp = _post(
             client,
             "preview-request",
@@ -1329,7 +1444,9 @@ class TestComfyuiEndpoints:
     def test_an_image_endpoint_runs_a_trial_run_and_serves_the_image(
         self, client: TestClient, trial_runs: TrialRunManager, file_db_engine
     ):
-        """图像端点跑的是同一条测试连接：四段状态点齐备，产物按图的 MIME 下发。"""
+        """Image endpoints run the same test connection: all four status points are present, and the artifact is served with the image's MIME type.
+
+        图像端点跑的是同一条测试连接：四段状态点齐备，产物按图的 MIME 下发。"""
         with capture_http() as router, bounded_poll_clock():
             _mock_successful_comfyui_image_run(router)
             created = _post(
@@ -1349,11 +1466,13 @@ class TestComfyuiEndpoints:
         assert fetched["status"] == "succeeded", fetched["error"]
         assert fetched["media_type"] == "image"
         assert fetched["stages"] == {"submit": "done", "poll": "done", "result": "done", "artifact": "done"}
+        # The image dimension has no duration: recording seconds would show a nonexistent duration on the usage page.
         # 图像这一维没有时长：记一个秒数会让用量页上出现一个不存在的时长。
         assert fetched["duration_seconds"] is None
         artifact = client.get(f"/api/v1/custom-endpoints/trial-runs/{run_id}/artifact")
         assert artifact.content == PNG_BYTES
         assert artifact.headers["content-type"] == "image/png"
+        # This ledger row records the call actually sent: the image request shape has no duration or audio track dimensions.
         # 账本这一行记的是实际发出的那笔调用：图像请求形状里没有时长与音轨这两维。
         assert client.portal is not None
         row = client.portal.call(_only_api_call, async_sessionmaker(file_db_engine, expire_on_commit=False))
@@ -1362,7 +1481,9 @@ class TestComfyuiEndpoints:
     def test_an_image_model_row_with_a_reference_image_passes_the_capability_gate(
         self, client: TestClient, trial_runs: TrialRunManager, stored_comfyui_image_model_row: dict[str, Any]
     ):
-        """模型行这条入口跑的是图像那道能力闸：带参考图的图生图端点不能被视频闸判成不支持参考图。"""
+        """The model-row entry point runs the image capability gate: an image-to-image endpoint with a reference image must not be judged by the video gate as not supporting reference images.
+
+        模型行这条入口跑的是图像那道能力闸：带参考图的图生图端点不能被视频闸判成不支持参考图。"""
         with capture_http() as router, bounded_poll_clock():
             _mock_successful_comfyui_image_run(router)
             router.post("https://comfy.test/upload/image").mock(
@@ -1394,7 +1515,9 @@ class TestComfyuiEndpoints:
     def test_an_image_model_row_without_its_required_reference_image_is_rejected_in_words(
         self, client: TestClient, trial_runs: TrialRunManager, stored_comfyui_image_model_row: dict[str, Any]
     ):
-        """图生图端点收不到参考图时按图像那道闸拒绝，文案是本地化后的能力拒因、不是一串失败码。"""
+        """When an image-to-image endpoint receives no reference image it is refused by the image gate, with a localized capability reason, not a string of failure codes.
+
+        图生图端点收不到参考图时按图像那道闸拒绝，文案是本地化后的能力拒因、不是一串失败码。"""
         with capture_http() as router, bounded_poll_clock():
             _mock_successful_comfyui_image_run(router)
             created = _post(
@@ -1416,13 +1539,15 @@ class TestComfyuiEndpoints:
         assert fetched["status"] == "failed"
         assert fetched["error_code"] == "image_capability_missing_t2i"
         assert "不支持文生图" in fetched["error"]
-        # 闸在提交之前：一个字节都没发给 ComfyUI。
+        # The gate is before submission: not a single byte was sent to ComfyUI. / 闸在提交之前：一个字节都没发给 ComfyUI。
         assert router.calls.call_count == 0
 
 
 @pytest.fixture
 async def stored_comfyui_image_model_row(file_db_engine) -> dict[str, Any]:
-    """一条挂着 ComfyUI 图生图端点的图像模型行，供图像 ``model_ref`` 用例引用。"""
+    """An image model row attached to a ComfyUI image-to-image endpoint, referenced by the image ``model_ref`` cases.
+
+    一条挂着 ComfyUI 图生图端点的图像模型行，供图像 ``model_ref`` 用例引用。"""
     definition = _comfyui_image_definition()
     definition["workflow"]["20"] = {"class_type": "LoadImage", "inputs": {"image": "draft.png"}}
     definition["bindings"]["reference_images"] = [{"node": "20", "input": "image", "class_type": "LoadImage"}]
@@ -1456,7 +1581,9 @@ async def stored_comfyui_image_model_row(file_db_engine) -> dict[str, Any]:
 
 @pytest.fixture
 async def stored_provider(file_db_engine) -> dict[str, Any]:
-    """一条自定义供应商行，供「凭证读库」用例引用。"""
+    """A custom provider row, referenced by the "credential read from DB" cases.
+
+    一条自定义供应商行，供「凭证读库」用例引用。"""
     session_factory = async_sessionmaker(file_db_engine, expire_on_commit=False)
     async with session_factory() as session:
         provider = await CustomProviderRepository(session).create_provider(
@@ -1471,7 +1598,9 @@ async def stored_provider(file_db_engine) -> dict[str, Any]:
 
 
 async def _only_api_call(session_factory: async_sessionmaker) -> ApiCall:
-    """这次 run 记下的那唯一一行账本记录。"""
+    """The one and only ledger record this run wrote.
+
+    这次 run 记下的那唯一一行账本记录。"""
     async with session_factory() as session:
         rows = (await session.execute(select(ApiCall))).scalars().all()
     assert len(rows) == 1
@@ -1479,7 +1608,12 @@ async def _only_api_call(session_factory: async_sessionmaker) -> ApiCall:
 
 
 def _drain(client: TestClient, trial_runs: TrialRunManager, run_id: str) -> None:
-    """等后台 run 走到终态。
+    """Wait for the background run to reach a terminal state.
+
+    ``TestClient`` runs the app on an event loop in another thread; via its portal, ``await manager.wait()`` runs in that loop,
+    synchronizing on the event rather than polling the wall clock.
+
+    等后台 run 走到终态。
 
     ``TestClient`` 把应用跑在另一个线程的事件循环上；经它的 portal 在那个循环里
     ``await manager.wait()``，按事件同步而不是按挂钟轮询。

@@ -40,14 +40,18 @@ class TestTaskSpecFromRequest:
         assert spec.payload == {"prompt": "一个奔跑的镜头", "script_file": "episode_1.json"}
 
     def test_blank_resource_id_is_rejected(self):
-        """纯空白的 resource_id 与空的同样不可用：它会在执行期变成一段空白文件名。"""
+        """An all-whitespace resource_id is as unusable as an empty one: at execution time it would become a blank file name.
+
+        纯空白的 resource_id 与空的同样不可用：它会在执行期变成一段空白文件名。"""
 
         with pytest.raises(TaskSpecValidationError) as excinfo:
             TaskSpec.from_request(task_type="video", media_type="video", resource_id="   ", prompt="镜头平移")
         assert excinfo.value.code == "resource_id_required"
 
     def test_path_like_resource_id_is_rejected(self):
-        """带路径片段的 resource_id 在结构守卫处就拒，不留到执行期拼产物路径时才发现。"""
+        """A resource_id with path fragments is rejected at the structural guard, not discovered only when the artifact path is built at execution time.
+
+        带路径片段的 resource_id 在结构守卫处就拒，不留到执行期拼产物路径时才发现。"""
 
         with pytest.raises(TaskSpecValidationError) as excinfo:
             TaskSpec.from_request(task_type="video", media_type="video", resource_id="../bad", prompt="镜头平移")
@@ -95,6 +99,7 @@ class TestTaskSpecFromRequest:
         assert exc.value.code == "video_prompt_action_empty"
 
     def test_video_null_action_rejected(self):
+        # Explicit null: str(None) gives the truthy "None", so it must be rejected as empty rather than let through.
         # 显式 null：str(None) 会得到 truthy 的 "None"，必须当作空值拒绝而非放行。
         with pytest.raises(TaskSpecValidationError) as exc:
             TaskSpec.from_request(task_type="video", media_type="video", resource_id="S01", prompt={"action": None})
@@ -139,6 +144,8 @@ class TestTaskSpecFromRequest:
 
     @pytest.mark.parametrize("scene", [123, ["a"], {"text": "a"}, True])
     def test_storyboard_non_string_scene_rejected(self, scene):
+        # The enqueue guard and the render exit share require_storyboard_scene:
+        # a non-string scene is rejected at enqueue, not deferred to execution.
         # 入队守卫与渲染出口共用 require_storyboard_scene：
         # 非字符串 scene 在入队即被拒，不推迟到执行期。
         with pytest.raises(TaskSpecValidationError) as exc:
@@ -148,7 +155,7 @@ class TestTaskSpecFromRequest:
         assert exc.value.code == "prompt_scene_empty"
 
     def test_storyboard_string_prompt_builds_spec(self):
-        # 文本形态提示词不走 scene 判据，非空串照常入队。
+        # Text-form prompts do not go through the scene check; non-empty strings enqueue as usual. / 文本形态提示词不走 scene 判据，非空串照常入队。
         spec = TaskSpec.from_request(task_type="storyboard", media_type="image", resource_id="S01", prompt="黄昏的码头")
         assert spec.payload == {"prompt": "黄昏的码头"}
 
@@ -158,6 +165,7 @@ class TestTaskSpecFromRequest:
         assert exc.value.code == "prompt_text_empty"
 
     def test_storyboard_non_mapping_composition_accepted(self):
+        # The enqueue check only looks at scene: the composition form takes no part in admission, and prompt goes into the payload as is.
         # 入队判据只看 scene：composition 形态不参与准入，prompt 原样进入 payload。
         prompt = {"scene": "黄昏的码头", "composition": "medium"}
         spec = TaskSpec.from_request(task_type="storyboard", media_type="image", resource_id="S01", prompt=prompt)
@@ -165,6 +173,7 @@ class TestTaskSpecFromRequest:
 
     @pytest.mark.parametrize("task_type", ["character", "scene", "prop", "product"])
     def test_asset_sheet_spec_carries_no_prompt(self, task_type):
+        # The asset sheet description is read from the stored entry by the execution layer; enqueue stores no snapshot.
         # 资产图描述由执行层从存储的条目读取，入队不存快照。
         spec = TaskSpec.from_request(task_type=task_type, media_type="image", resource_id="张三")
         assert spec.payload == {}
@@ -175,6 +184,7 @@ class TestTaskSpecFromRequest:
             TaskSpec.from_request(task_type="character", media_type="image", resource_id="张三", prompt=prompt)
 
     def test_reference_video_validates_prompt_without_snapshotting_it(self):
+        # Current shots are validated only at the enqueue guard point; the worker re-reads the latest content from script_file + resource_id.
         # 当前 shots 只在入队守卫点校验；worker 从 script_file + resource_id 重读最新内容。
         spec = TaskSpec.from_request(
             task_type="reference_video",
@@ -187,6 +197,7 @@ class TestTaskSpecFromRequest:
         assert spec.payload == {"script_file": "episode_1.json"}
 
     def test_reference_video_empty_prompt_rejected(self):
+        # All shots[*].text concatenated leave only whitespace → rejected at the guard point, no longer leaking into the execution layer.
         # 所有 shots[*].text 拼接后只剩空白 → 守卫点拒绝，不再漏到执行层。
         with pytest.raises(TaskSpecValidationError) as exc:
             TaskSpec.from_request(
@@ -199,6 +210,7 @@ class TestTaskSpecFromRequest:
         assert exc.value.code == "prompt_text_empty"
 
     def test_tts_null_prompt_builds_spec(self):
+        # The narration text is read from the script's novel_text by the execution layer by default; an empty prompt is valid.
         # 旁白文本默认由执行层从剧本 novel_text 读取，prompt 留空合法。
         spec = TaskSpec.from_request(task_type="tts", media_type="audio", resource_id="E1S01", prompt=None)
         assert spec.payload == {"prompt": None}
@@ -213,12 +225,14 @@ class TestTaskSpecFromRequest:
         assert exc.value.code == "prompt_text_empty"
 
     def test_tts_object_prompt_rejected(self):
+        # tts only accepts a non-empty string or empty; object types get a dedicated error code stating the actual constraint.
         # tts 只接受非空字符串或留空，对象类型用专用错误码标明实际约束。
         with pytest.raises(TaskSpecValidationError) as exc:
             TaskSpec.from_request(task_type="tts", media_type="audio", resource_id="E1S01", prompt={"text": "x"})
         assert exc.value.code == "tts_prompt_must_be_string_or_null"
 
     def test_tts_extra_payload_text_rejected(self):
+        # text is the field the tts execution layer reads first; it must go through the guard point together with prompt and must not bypass it via extra_payload.
         # text 是 tts 执行层优先读取的字段，必须与 prompt 同走守卫点，不得经 extra_payload 绕过。
         with pytest.raises(ValueError, match=r"extra_payload contains reserved keys: text") as exc:
             TaskSpec.from_request(
@@ -236,7 +250,7 @@ class TestTaskSpecFromRequest:
         assert excinfo.value.code == "resource_id_required"
 
     def test_extra_payload_cannot_override_reserved_keys(self):
-        # extra_payload 携带保留键会绕过单一守卫点，必须拒绝。
+        # extra_payload carrying reserved keys would bypass the single guard point and must be rejected. / extra_payload 携带保留键会绕过单一守卫点，必须拒绝。
         with pytest.raises(ValueError, match=r"extra_payload contains reserved keys: prompt") as exc:
             TaskSpec.from_request(
                 task_type="video",
@@ -260,6 +274,7 @@ class TestTaskSpecFromRequest:
         assert "reserved" in str(exc.value)
 
     def test_webui_and_sdk_same_input_same_spec(self):
+        # The same invalid input goes through from_request on both paths (WebUI / SDK), with the same result.
         # 同一非法输入，两路（WebUI / SDK）都经 from_request，结果一致。
         kwargs = {"task_type": "video", "media_type": "video", "resource_id": "S01", "prompt": {"action": ""}}
         with pytest.raises(TaskSpecValidationError) as web:
@@ -353,6 +368,7 @@ class TestGenerationQueueClient:
             script_file="episode_01.json",
             source="skill",
         )
+        # After cancelling the task, wait_for_task should return normally (no exception) with status cancelled
         # 取消任务后 wait_for_task 应正常返回（不抛异常），状态为 cancelled
         await generation_queue.cancel_task(task["task_id"])
 
@@ -367,7 +383,9 @@ class TestGenerationQueueClient:
     @patch("lib.generation.generation_queue_client.wait_for_task", new_callable=AsyncMock)
     @patch("lib.generation.generation_queue_client.enqueue_task_only", new_callable=AsyncMock)
     async def test_enqueue_and_wait_raises_task_cancelled_error(self, mock_enqueue, mock_wait, generation_queue):
-        """enqueue_and_wait 应在 wait_for_task 返回 cancelled 状态时抛出 TaskCancelledError。"""
+        """enqueue_and_wait should raise TaskCancelledError when wait_for_task returns the cancelled status.
+
+        enqueue_and_wait 应在 wait_for_task 返回 cancelled 状态时抛出 TaskCancelledError。"""
         mock_enqueue.return_value = {"task_id": "task-cancelled-123"}
         mock_wait.return_value = {"status": "cancelled", "task_id": "task-cancelled-123"}
 
@@ -663,6 +681,7 @@ class TestBatchEnqueueAndWaitSync:
             on_failure=on_failure,
         )
 
+        # Return value and callback use the same measure: the terminal state decides where it goes, and both sides must be able to tell which resource it is
         # 返回值与回调同口径：终态决定去向，两边都要认得出是哪个 resource
         assert [r.resource_id for r in successes] == ["A"]
         assert [r.resource_id for r in failures] == ["B"]
@@ -705,7 +724,9 @@ class TestBatchEnqueueAndWaitSync:
 
 
 class TestBatchEnqueueOnly:
-    """入队中断不撤销已创建的任务，没轮到的目标逐 ID 报出来。"""
+    """An interrupted enqueue does not undo tasks already created; targets that never got their turn are reported by ID.
+
+    入队中断不撤销已创建的任务，没轮到的目标逐 ID 报出来。"""
 
     @patch("lib.generation.generation_queue_client.enqueue_task_only", new_callable=AsyncMock)
     async def test_projects_all_memberships_in_the_enqueue_transaction(self, mock_enqueue):
@@ -775,7 +796,9 @@ class TestBatchEnqueueOnly:
     @patch("lib.generation.generation_queue_client.get_generation_queue")
     @patch("lib.generation.generation_queue_client.enqueue_task_only", new_callable=AsyncMock)
     async def test_keeps_created_tasks_and_reports_the_rest_when_a_spec_fails(self, mock_enqueue, mock_queue):
-        """已创建的任务是准入通过的完整付费单元：不撤销，照常执行。"""
+        """Tasks already created are complete paid units that passed admission: not undone, executed as usual.
+
+        已创建的任务是准入通过的完整付费单元：不撤销，照常执行。"""
 
         mock_enqueue.side_effect = [
             {"task_id": "t1", "deduped": False},
@@ -803,7 +826,9 @@ class TestBatchEnqueueOnly:
 
     @patch("lib.generation.generation_queue_client.enqueue_task_only", new_callable=AsyncMock)
     async def test_specs_after_the_interruption_are_reported_without_another_attempt(self, mock_enqueue):
-        """中断后不再逐个重试：同一个系统性故障会被撞 N 次，结果还是一个都建不出来。"""
+        """No per-item retry after the interruption: the same systemic fault would be hit N times and still none could be created.
+
+        中断后不再逐个重试：同一个系统性故障会被撞 N 次，结果还是一个都建不出来。"""
 
         mock_enqueue.side_effect = [
             {"task_id": "t1", "deduped": False},
@@ -824,7 +849,9 @@ class TestBatchEnqueueOnly:
 
 
 async def test_batch_enqueue_only_keeps_created_tasks_when_the_caller_is_cancelled(monkeypatch):
-    """调用方在中途被取消：取消语义原样上抛，已创建的任务留在队列里照常执行。"""
+    """The caller is cancelled midway: the cancellation propagates unchanged, and tasks already created stay in the queue and run as usual.
+
+    调用方在中途被取消：取消语义原样上抛，已创建的任务留在队列里照常执行。"""
     import asyncio as _asyncio
 
     from lib.generation import generation_queue_client as mod

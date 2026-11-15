@@ -1,4 +1,6 @@
-"""GeminiImageBackend 单元测试。"""
+"""GeminiImageBackend unit tests.
+
+GeminiImageBackend 单元测试。"""
 
 from __future__ import annotations
 
@@ -96,7 +98,7 @@ class TestProperties:
 
     @pytest.mark.parametrize("model", ["gemini-3-pro-image-preview", "gemini-3.1-flash-image-preview"])
     def test_declares_gemini_3_reference_image_limit(self, fake_rate_limiter, patch_genai, model):
-        # Gemini 3 图像模型官方上限：单请求最多混合 14 张参考图。
+        # Official limit for Gemini 3 image models: at most 14 mixed reference images per request. / Gemini 3 图像模型官方上限：单请求最多混合 14 张参考图。
         from lib.backends.image_backends.gemini import GeminiImageBackend
 
         backend = GeminiImageBackend(
@@ -142,13 +144,17 @@ class TestGenerate:
         assert result.image_path == output_file
         assert result.provider == "gemini"
         assert output_file.exists()
+        # No image_size sent: report only the output image count, no resolution (priced at the price list's default tier).
         # 没发 image_size：只报输出张数，不报分辨率（按价目表默认档计）
         assert result.usage is not None
         assert result.usage.quantities == {"output_images": 1}
         assert result.usage.dimensions == {}
 
     async def test_save_settles_through_cancellation(self, backend_aistudio, tmp_path):
-        """供应商已返回图片：取消落在解码保存期间时，保存先结算，取消随之消失，后续转码与产物提交照常执行。"""
+        """The provider has returned the image: when cancellation lands during decode-and-save, the save settles first, the cancellation
+        disappears, and later transcoding and artifact commit run as usual.
+
+        供应商已返回图片：取消落在解码保存期间时，保存先结算，取消随之消失，后续转码与产物提交照常执行。"""
         gate = WriteGate()
         output_file = tmp_path / "out.png"
 
@@ -173,7 +179,9 @@ class TestGenerate:
         assert PILImage.open(output_file).size == (8, 8)
 
     async def test_generate_with_reference_images(self, backend_aistudio, tmp_path):
-        """参考图按顺序作为图片内容送入 SDK，prompt 置于末尾，中间不夹任何名称标签。"""
+        """Reference images are sent to the SDK in order as image content, with the prompt at the end and no name labels in between.
+
+        参考图按顺序作为图片内容送入 SDK，prompt 置于末尾，中间不夹任何名称标签。"""
         output_file = tmp_path / "out.png"
         ref_img_path = tmp_path / "characters" / "角色A.png"
         ref_img_path.parent.mkdir(parents=True, exist_ok=True)
@@ -203,7 +211,9 @@ class TestGenerate:
         assert contents[1] == "draw character"
 
     async def test_generate_truncates_references_over_the_declared_limit(self, backend_aistudio, tmp_path):
-        """编排层未裁剪时的兜底：只把前 reference_image_limit() 张送入 SDK，prompt 仍在末尾。"""
+        """Fallback when the orchestration layer did not trim: only the first reference_image_limit() images go to the SDK; the prompt is still last.
+
+        编排层未裁剪时的兜底：只把前 reference_image_limit() 张送入 SDK，prompt 仍在末尾。"""
         refs = []
         for index in range(16):
             ref_path = tmp_path / f"ref{index}.png"

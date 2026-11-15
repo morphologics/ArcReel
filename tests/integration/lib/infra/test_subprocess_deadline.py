@@ -1,4 +1,6 @@
-"""带 deadline 运行真实子进程：超时后子进程被收尸。"""
+"""Run a real subprocess with a deadline: after timeout the subprocess is reaped.
+
+带 deadline 运行真实子进程：超时后子进程被收尸。"""
 
 from __future__ import annotations
 

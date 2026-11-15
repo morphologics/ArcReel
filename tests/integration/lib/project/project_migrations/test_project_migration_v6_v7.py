@@ -1,4 +1,6 @@
-"""v6→v7 广告/短片的参考生视频自包含 video_units 迁移。"""
+"""v6->v7 migration of ad/short reference-to-video to self-contained video_units.
+
+v6→v7 广告/短片的参考生视频自包含 video_units 迁移。"""
 
 from __future__ import annotations
 
@@ -116,6 +118,8 @@ def test_existing_index_preserves_identity_boundaries_assets_and_content(tmp_pat
     unit = migrated["video_units"][0]
     assert unit["duration_seconds"] == 8
     assert unit["generated_assets"] == assets
+    # References are no longer stored: `@[name]` markers in the body are written in the old field order and derived on
+    # read.
     # 引用不再落盘：正文里的 `@[名称]` 记号按旧字段顺序写入，读时派生。
     text = unit["text"]
     assert extract_mentions(text)[:4] == ["咖啡", "演员", "厨房", "杯子"]
@@ -193,7 +197,10 @@ def test_existing_index_preserves_member_transitions_until_the_final_step(tmp_pa
 
 
 def test_many_member_legacy_unit_keeps_all_text_in_one_body(tmp_path: Path) -> None:
-    """成员数不再有上限：多成员旧 unit 的全部画面文本拼进同一段正文，不因数量判问题壳。"""
+    """There is no longer a member limit: all visual text of a multi-member old unit is joined into one body, not
+    judged a problem shell because of the count.
+
+    成员数不再有上限：多成员旧 unit 的全部画面文本拼进同一段正文，不因数量判问题壳。"""
     project_dir = _project(tmp_path)
     script = _script()
     for ordinal in range(3, 6):
@@ -231,6 +238,7 @@ def test_nonempty_zero_duration_unit_remains_readable_and_requires_replan(tmp_pa
     unit = migrated["video_units"][0]
     assert unit["duration_seconds"] == 1
     assert unit["needs_replan"] is True
+    # Visual text of both member shots stays in the same body.
     # 两个成员镜头的画面文本都留在同一段正文里。
     assert unit["text"].count("演员端起咖啡") == 2
 
@@ -360,7 +368,10 @@ def test_a_duplicate_shot_id_keeps_the_later_shot_in_a_unit_of_its_own(tmp_path:
 
 
 def test_a_unit_the_current_model_rejects_is_kept_and_marked_for_replanning(tmp_path: Path) -> None:
-    """旧 unit 的产物字段带当前模型不认的键：原样保留、标为待重新规划，不拒绝整个项目。"""
+    """An old unit's artifact field carries keys the current model does not accept: kept as is and marked for replan,
+    without rejecting the whole project.
+
+    旧 unit 的产物字段带当前模型不认的键：原样保留、标为待重新规划，不拒绝整个项目。"""
     project_dir = _project(tmp_path)
     script = _script(
         units=[
@@ -397,6 +408,8 @@ def test_empty_legacy_members_become_replan_shell_and_same_name_uses_product_pri
     empty, collision = _read_json(project_dir / "scripts/episode_1.json")["video_units"][:2]
     assert (empty["text"], empty["duration_seconds"], empty["needs_replan"]) == ("", 0, True)
     assert empty["generated_assets"] == {"video_uri": "provider://job"}
+    # A product and a character with the same name get only one `@[same name]` marker; type ownership is derived on
+    # read (product first).
     # 同名的商品与角色只写一个 `@[同名]` 记号，类型归属交读时派生（商品优先）。
     assert collision["text"].count("@[同名]") == 1
     assert extract_mentions(collision["text"])[0] == "同名"

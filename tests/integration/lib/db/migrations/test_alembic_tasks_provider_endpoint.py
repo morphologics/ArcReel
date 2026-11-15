@@ -1,4 +1,6 @@
-"""Alembic c4a91f7d2b18（tasks.provider_endpoint）双向迁移测试。"""
+"""Up/down migration tests for Alembic c4a91f7d2b18 (tasks.provider_endpoint).
+
+Alembic c4a91f7d2b18（tasks.provider_endpoint）双向迁移测试。"""
 
 from __future__ import annotations
 
@@ -22,7 +24,10 @@ def _tasks_columns(db_path: Path) -> set[str]:
 
 
 def test_upgrade_adds_nullable_provider_endpoint(alembic_cfg):
-    """升级加列；存量任务该列为 NULL —— 无从比对 endpoint，续跑照常接续。"""
+    """Upgrade adds the column; existing tasks have NULL there, so there is no endpoint to compare and resume continues as
+    usual.
+
+    升级加列；存量任务该列为 NULL —— 无从比对 endpoint，续跑照常接续。"""
     cfg, db_path = alembic_cfg
     command.upgrade(cfg, DOWN_REVISION)
 

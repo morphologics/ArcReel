@@ -1,4 +1,6 @@
-"""模型目录搜索接口：按名称与媒体类型过滤，需登录。"""
+"""Model catalog search API: filters by name and media type, login required.
+
+模型目录搜索接口：按名称与媒体类型过滤，需登录。"""
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient

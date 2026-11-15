@@ -1,4 +1,6 @@
-"""测试 CustomProviderModel.endpoint 字段及 resolver 的 fail-loud 行为。"""
+"""Tests for the CustomProviderModel.endpoint field and the resolver's fail-loud behavior.
+
+测试 CustomProviderModel.endpoint 字段及 resolver 的 fail-loud 行为。"""
 
 from __future__ import annotations
 
@@ -47,7 +49,9 @@ async def test_resolution_column_accepts_none_and_string(db_session: AsyncSessio
 
 @pytest.mark.asyncio
 async def test_endpoint_field_stores_openai_chat(db_session: AsyncSession):
-    """text 模型使用 openai-chat endpoint。"""
+    """Text models use the openai-chat endpoint.
+
+    text 模型使用 openai-chat endpoint。"""
     provider = CustomProvider(
         display_name="TextProv",
         discovery_format="openai",
@@ -73,7 +77,9 @@ async def test_endpoint_field_stores_openai_chat(db_session: AsyncSession):
 
 @pytest.mark.asyncio
 async def test_endpoint_field_stores_gemini_image(db_session: AsyncSession):
-    """Google 图像模型使用 gemini-image endpoint。"""
+    """Google image models use the gemini-image endpoint.
+
+    Google 图像模型使用 gemini-image endpoint。"""
     provider = CustomProvider(
         display_name="GoogleProv",
         discovery_format="google",
@@ -99,7 +105,14 @@ async def test_endpoint_field_stores_gemini_image(db_session: AsyncSession):
 
 @pytest.mark.asyncio
 async def test_video_capabilities_endpoint_mismatch_raises(db_session: AsyncSession):
-    """配 endpoint=openai-chat 但被当作 video_backend 使用 → 任务类型桶解析闸判悬空引用并报错。
+    """Configured with endpoint=openai-chat but used as video_backend -> the task-type bucket resolution
+    gate flags a dangling reference and errors.
+
+    Same rule as the execution path: a reference whose media_type does not match can no longer be
+    honored, so error and let the user pick again, rather than silently switching to another model of
+    that provider (``docs/adr/0054``).
+
+    配 endpoint=openai-chat 但被当作 video_backend 使用 → 任务类型桶解析闸判悬空引用并报错。
 
     与执行路径同一条口径：media_type 不符的引用已不可兑现，报错让用户重选，不静默换成该供应商
     的其它 model（``docs/adr/0054``）。"""
@@ -129,7 +142,7 @@ async def test_video_capabilities_endpoint_mismatch_raises(db_session: AsyncSess
     from lib.custom_provider import make_provider_id
 
     provider_id_str = make_provider_id(provider.id)
-    # project.json 中 video_backend 指向这个 text-only 模型
+    # video_backend in project.json points at this text-only model / project.json 中 video_backend 指向这个 text-only 模型
     project = {"video_backend": f"{provider_id_str}/gpt-4o"}
 
     factory = async_sessionmaker(bind=db_session.bind, class_=AsyncSession, expire_on_commit=False)
@@ -148,13 +161,19 @@ async def test_video_capabilities_endpoint_mismatch_raises(db_session: AsyncSess
 @pytest.mark.parametrize(
     ("endpoint", "model_id", "expected_max_refs", "generation_mode"),
     [
-        # 显式 int：直接用 endpoint cap（行为零变化）
+        # Explicit int: use the endpoint cap directly (zero behavior change) / 显式 int：直接用 endpoint cap（行为零变化）
         ("openai-video", "vid-model", 1, "storyboard"),
         ("newapi-video", "vid-model", 0, "storyboard"),
+        # Undeclared (None): read the limit by calling the backend's pure caps function with model_id, without
+        # building a backend
         # 未声明（None）：按 model_id 调 backend 纯 caps 函数读上限，不构造 backend
         ("ark-seedance", "doubao-seedance-2-0", 9, "storyboard"),
+        # Not seedance-2 -> 0, proving the pure function still branches by model
         ("ark-seedance", "doubao-seedance-1-0", 0, "storyboard"),  # 非 seedance-2 → 0，证明纯函数仍按 model 分支
         ("vidu-video", "viduq3-turbo", 7, "storyboard"),
+        # MiniMax declarative endpoint: S2V-01 single-face reference -> 1; the Hailuo series takes a first
+        # frame without references -> 0. S2V-01 has no first-frame capability and can only land in the r2v
+        # bucket, so it only resolves when the project is reference-to-video
         # MiniMax 声明式端点：S2V-01 单脸参考 → 1；海螺系列走首帧无参考 → 0。S2V-01 无首帧能力，
         # 只能落 r2v 桶，项目须是参考生视频才解析得到它
         ("minimax-s2v-01", "S2V-01", 1, "reference_video"),
@@ -164,7 +183,15 @@ async def test_video_capabilities_endpoint_mismatch_raises(db_session: AsyncSess
 async def test_custom_video_max_reference_images_from_endpoint(
     db_session: AsyncSession, endpoint: str, model_id: str, expected_max_refs: int, generation_mode: str
 ):
-    """custom 视频 model 的 max_reference_images 经 ENDPOINT_REGISTRY 派生：endpoint cap
+    """A custom video model's max_reference_images is derived via ENDPOINT_REGISTRY: when the endpoint cap
+    is an explicit int it is used directly; when it is None the limit is read by calling the backend's
+    pure caps function with model_id; neither silently falls back to a default.
+
+    Perf regression guard: on either path, assert that `CustomProviderRepository.get_provider` is not
+    called; the old fallthrough did an extra provider-row lookup + backend construction, which
+    pure-function resolution on the new path should not trigger.
+
+    custom 视频 model 的 max_reference_images 经 ENDPOINT_REGISTRY 派生：endpoint cap
     为显式 int 时直接用；为 None 时按 model_id 调 backend 纯 caps 函数读上限，均不静默落默认值。
 
     perf 回归护栏：无论哪条路径都断言 `CustomProviderRepository.get_provider` 未被调用——
@@ -213,7 +240,14 @@ async def test_custom_video_max_reference_images_from_endpoint(
 
 @pytest.mark.asyncio
 async def test_custom_video_caps_resolved_without_api_key(db_session: AsyncSession):
-    """endpoint cap=None 的 ark-seedance 在 api_key 为空时仍解析出上限（=9）且**不抛**。
+    """ark-seedance with endpoint cap=None still resolves the limit (=9) with an empty api_key and **does
+    not raise**.
+
+    The old path built ArkVideoBackend, which raised ValueError on an empty key (asymmetric with vidu's
+    lazy resolution); the pure caps function does not depend on a client, so it lets it through
+    symmetrically.
+
+    endpoint cap=None 的 ark-seedance 在 api_key 为空时仍解析出上限（=9）且**不抛**。
 
     旧路径构造 ArkVideoBackend 会因空 key 抛 ValueError（与延迟解析的 vidu 行为不对称）；
     纯 caps 函数不依赖 client，故对称放行。"""
@@ -255,7 +289,14 @@ async def test_custom_video_caps_resolved_without_api_key(db_session: AsyncSessi
 
 @pytest.mark.asyncio
 async def test_custom_video_max_refs_missing_caps_fn_raises(db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch):
-    """endpoint cap=None 且 video_caps_for_model 也缺失（misconfig）→ 任务类型桶解析闸报悬空引用。
+    """Endpoint cap=None and video_caps_for_model also missing (misconfig) -> the task-type bucket
+    resolution gate reports a dangling reference.
+
+    EndpointSpec is a frozen dataclass, so build the misconfig spec with dataclasses.replace and swap it
+    in temporarily with setitem (the module-load invariant only applies at import time and does not block
+    runtime monkeypatching).
+
+    endpoint cap=None 且 video_caps_for_model 也缺失（misconfig）→ 任务类型桶解析闸报悬空引用。
 
     EndpointSpec 是 frozen dataclass，用 dataclasses.replace 造 misconfig spec 再 setitem 临时替换
     （module-load 不变式仅 import 期生效，不拦运行时 monkeypatch）。"""
@@ -302,13 +343,18 @@ async def test_custom_video_max_refs_missing_caps_fn_raises(db_session: AsyncSes
     with pytest.raises(VideoBucketCapabilityError) as excinfo:
         await resolver._resolve_video_capabilities_from_project(svc, db_session, project)
     assert excinfo.value.code == "video_capability_reference_unavailable"
+    # The specific cause stays on the exception chain for log lookup and does not go into the user-facing
+    # error text
     # 具体成因留在异常链上供日志定位，不进面向用户的报错文案
     assert "declares neither video_max_reference_images" in str(excinfo.value.__cause__)
 
 
 @pytest.mark.asyncio
 async def test_custom_video_max_refs_negative_caps_raises(db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch):
-    """endpoint cap=None，caps 函数返回负数 → raise ValueError（不静默下传坏值）。"""
+    """Endpoint cap=None, caps function returns a negative number -> raise ValueError (do not silently pass
+    a bad value down).
+
+    endpoint cap=None，caps 函数返回负数 → raise ValueError（不静默下传坏值）。"""
     import dataclasses
 
     from arcreel_market_core.video_backend_contract import VideoCapabilities
@@ -384,7 +430,10 @@ async def _seed_image_provider(db_session: AsyncSession, *, endpoint: str, model
 
 @pytest.mark.asyncio
 async def test_image_bucket_gate_rejects_model_lacking_the_bucket(db_session: AsyncSession):
-    """i2i 桶配了只声明 t2i 的自定义模型 → 解析期即报错，不静默换模型也不等到执行期。"""
+    """An i2i bucket configured with a custom model that only declares t2i -> error at resolution time,
+    without silently switching models or waiting until execution.
+
+    i2i 桶配了只声明 t2i 的自定义模型 → 解析期即报错，不静默换模型也不等到执行期。"""
     from lib.config.resolver import ConfigResolver, ImageBucketCapabilityError
 
     provider_id_str = await _seed_image_provider(db_session, endpoint="openai-images-generations", model_id="t2i-m")
@@ -415,7 +464,10 @@ async def test_image_bucket_gate_passes_model_declaring_the_bucket(db_session: A
 
 @pytest.mark.asyncio
 async def test_image_bucket_gate_leaves_disabled_reference_to_the_default_fallback(db_session: AsyncSession):
-    """引用的模型已禁用 → 不在解析闸报错，留给按桶过滤的默认回退处理。"""
+    """The referenced model is disabled -> no error at the resolution gate; left to the per-bucket filtered
+    default fallback.
+
+    引用的模型已禁用 → 不在解析闸报错，留给按桶过滤的默认回退处理。"""
     from lib.config.resolver import ConfigResolver
 
     provider_id_str = await _seed_image_provider(db_session, endpoint="openai-images-generations", model_id="t2i-m")

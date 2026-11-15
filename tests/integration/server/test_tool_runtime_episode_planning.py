@@ -1,4 +1,7 @@
-"""「AI 规划分集」逐窗串联：真实队列与 worker 上经服务命令规划到结尾、停止与接续。"""
+""""AI episode planning" window by window: on a real queue and worker, planning to the end via the service
+command, stopping and continuing.
+
+「AI 规划分集」逐窗串联：真实队列与 worker 上经服务命令规划到结尾、停止与接续。"""
 
 from __future__ import annotations
 
@@ -44,17 +47,23 @@ _CHAPTERS = (
     "第三章。两人从此卷入江湖漩涡之中。",
 )
 _ANCHORS = ("玉中藏着剑诀。", "被追杀的少女。", "卷入江湖漩涡之中。")
+# A window holds just over one chapter: the first two windows are not the last, and the third window's
+# remainder is under 1.2 windows, so it extends to the end
 # 窗口只容得下一章多一点：前两窗都不是最后一窗，第三窗剩余不足 1.2 倍窗口而延伸到结尾
 _WINDOW_CHARS = len(_CHAPTERS[0]) + 3
 
 
 class _Generator:
-    """窗口里出现的每个锚点各回一集；``hold`` 置位时第一次调用停在模型请求里，直到测试放行。"""
+    """Returns one episode for each anchor appearing in the window; when ``hold`` is set the first call stays in
+    the model request until the test releases it.
+
+    窗口里出现的每个锚点各回一集；``hold`` 置位时第一次调用停在模型请求里，直到测试放行。"""
 
     model = "fake-model"
 
     def __init__(self, *, hold: bool = False, max_output_tokens: int = 64000, stuck: bool = False) -> None:
         self.max_output_tokens = max_output_tokens
+        #: When set, no split point is found in the window: no episodes are returned.
         #: 置位时窗口里找不到切分点：一集都不回。
         self.stuck = stuck
         self.prompts: list[str] = []
@@ -125,6 +134,7 @@ def _use_generator(
     monkeypatch: pytest.MonkeyPatch, generator: _Generator, *, window_chars: int = _WINDOW_CHARS
 ) -> None:
     async def create(_cls, path):
+        # Construct in a worker thread like EpisodePlanner.create: constructing ProjectManager creates directories.
         # 与 EpisodePlanner.create 一样在工作线程里构造：构造 ProjectManager 会建目录。
         return await asyncio.to_thread(EpisodePlanner, path, generator=generator, window_chars=window_chars)
 
@@ -180,6 +190,8 @@ async def test_a_final_window_capped_by_the_batch_size_keeps_planning_to_the_end
     planning, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     projects, services, session_factory = planning
+    # The whole source falls in one window, the model gives three episodes at once; the output limit only allows
+    # one episode per batch
     # 整本源文落在一个窗口里，模型一次给出三集；输出上限只够每批一集
     _use_generator(monkeypatch, _Generator(max_output_tokens=400), window_chars=len("".join(_CHAPTERS)))
 
@@ -219,6 +231,8 @@ async def test_stop_during_a_capped_final_window_does_not_queue_another(
     planning, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     projects, services, session_factory = planning
+    # The whole source falls in one window and each batch allows only one episode: whether to schedule the next
+    # window is known only after the model returns, so at stop there is no window to cancel yet
     # 整本源文落在一个窗口里、每批只够一集：下一窗要等模型返回后才知道要不要排，停止时还没有可取消的窗口
     generator = _Generator(hold=True, max_output_tokens=400)
     _use_generator(monkeypatch, generator, window_chars=len("".join(_CHAPTERS)))
@@ -276,6 +290,8 @@ async def test_the_gap_left_by_a_deleted_middle_episode_is_planned_back(
     assert isinstance(preview, EpisodeDeletionConfirmationRequired)
     delete_episode(projects, "planning", middle["episode"], revision=preview.impact.revision)
 
+    # One-click planning does not backfill empty segments: the planning start derived from the ledger is still at
+    # the end
     # 一键规划不回填空段：账本推导的规划起点仍在结尾
     again = await start_episode_planning(ToolRequest(PlanEpisodesRequest()), _scope(projects), _WEB, services)
     assert again.problem is None

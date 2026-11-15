@@ -1,4 +1,6 @@
-"""内置目录扫描通过加载接口执行语法、槽位、变体族完整性、判重开启范围与共享片段门槛约束。"""
+"""The built-in catalog scan, through the load interface, enforces syntax, slots, variant family completeness, the scope where dedup is enabled, and the shared partial threshold.
+
+内置目录扫描通过加载接口执行语法、槽位、变体族完整性、判重开启范围与共享片段门槛约束。"""
 
 from collections import defaultdict
 from collections.abc import Iterable
@@ -21,8 +23,9 @@ def test_builtin_directory_has_valid_slots_variants_and_template_syntax():
     for entry in metadata:
         body, partials = templates.read_source(entry.id)
         assert body.strip()
-        # 行距写在引用处，片段只写措辞本身。
+        # Line spacing is written at the reference site; a partial only holds the wording itself. / 行距写在引用处，片段只写措辞本身。
         assert not [partial.name for partial in partials if partial.source.startswith("\n")]
+    # Dedup is only enabled for templates that have a plain-text paste-back form; other templates must not swallow repeated references to the same data partial.
     # 判重只给存在纯文本回贴形态的模版开启，其余模版多处引用同一数据片段时不能被吞掉。
     assert {entry.id for entry in metadata if entry.idempotent} == {"storyboard/image", "storyboard/video"}
     asset = next(entry for entry in metadata if entry.id == "asset/sheet")
@@ -47,7 +50,9 @@ def test_builtin_directory_has_valid_slots_variants_and_template_syntax():
 
 
 def test_builtin_applies_to_values_are_real_project_values():
-    """设置页原样展示轴值，项目里不存在的取值会误导用户以为有这种模式。"""
+    """The settings page shows axis values as is; values that do not exist in projects would mislead users into thinking such a mode exists.
+
+    设置页原样展示轴值，项目里不存在的取值会误导用户以为有这种模式。"""
     known = {
         "content_mode": set(VALID_CONTENT_MODES),
         "generation_mode": set(VALID_GENERATION_MODES),
@@ -79,7 +84,7 @@ def test_builtin_templates_declare_stage_and_trigger_and_lock_structural_partial
         "shared/additional_instructions",
         "shared/writing_syntax",
     }
-    # 引用方含经由资产图变体间接引用的模版，按注册顺序排列。
+    # Referrers include templates referenced indirectly via asset sheet variants, ordered by registration. / 引用方含经由资产图变体间接引用的模版，按注册顺序排列。
     assert catalog["shared/media_style"].referenced_by == [
         "asset/sheet",
         "reference_video/unit",
@@ -113,7 +118,9 @@ def _single_parent_shared_partials(partials_directory: Path, template_sources: I
 
 
 def test_builtin_shared_partials_are_not_referenced_by_a_single_partial():
-    """只被一个片段引用的措辞内联回该片段；变体族成员按轴值拆分，不计入。"""
+    """Wording referenced by only one partial is inlined back into that partial; variant family members are split by axis value and do not count.
+
+    只被一个片段引用的措辞内联回该片段；变体族成员按轴值拆分，不计入。"""
     templates = PromptTemplates(BUILTIN_DIRECTORY)
     template_sources = ((entry.id, templates.read_source(entry.id)[0]) for entry in templates.list_templates())
     assert _single_parent_shared_partials(BUILTIN_DIRECTORY / "partials", template_sources) == []

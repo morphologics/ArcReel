@@ -1,4 +1,13 @@
-"""MediaGenerator.resume_video_async 单元测试。
+"""Unit tests for MediaGenerator.resume_video_async.
+
+Concerns:
+- the resume path writes no new pending row (opens no accounting bracket)
+- the pending call row is looked up via api_calls.task_id, and ledger.resume_success / resume_failed flip pending precisely
+- after a successful resume one paid version is saved; formal media decide current atomically via the staging callback,
+  non-formal requests append and select the new version directly
+- ResumeExpiredError propagates up the call chain and pending flips to failed
+
+MediaGenerator.resume_video_async 单元测试。
 
 关注点：
 - resume 路径不落新 pending 行（不开记账括号）
@@ -60,7 +69,9 @@ class _FakeVideoBackend:
 
 
 class _FakeVersions:
-    """模拟 VersionManager 的 ensure_current_tracked / add_version / get_current_version。"""
+    """Simulates VersionManager's ensure_current_tracked / add_version / get_current_version.
+
+    模拟 VersionManager 的 ensure_current_tracked / add_version / get_current_version。"""
 
     def __init__(self, *, initial_version: int = 0) -> None:
         self._version = initial_version
@@ -85,7 +96,9 @@ class _FakeVersions:
 
 
 class _ProbeVideoBackend(_FakeVideoBackend):
-    """resume_video 触发时记录当时 add_calls 的快照，用来断言 add_version 在下载之后才发生。"""
+    """Records a snapshot of add_calls when resume_video fires, used to assert that add_version happens only after the download.
+
+    resume_video 触发时记录当时 add_calls 的快照，用来断言 add_version 在下载之后才发生。"""
 
     def __init__(self, versions: _FakeVersions) -> None:
         super().__init__()
@@ -111,7 +124,12 @@ class _FakeLedgerCall:
 
 
 class _FakeLedger:
-    """记账账本假实现：resume 路径只该走 resume_success/resume_failed，不开记账括号。
+    """Fake accounting ledger: the resume path should only go through resume_success/resume_failed and open no accounting bracket.
+
+    ``started`` captures brackets opened by mistake (should always be empty); ``resumed`` captures the resume backfill arguments (including the
+    backend result object handed over), the new main seam. ``lookups`` captures the arguments of looking up call rows by task.
+
+    记账账本假实现：resume 路径只该走 resume_success/resume_failed，不开记账括号。
 
     ``started`` 捕获误开的括号（应恒空）；``resumed`` 捕获 resume 补账入参（含递交的
     backend 结果对象）——新主缝。``lookups`` 捕获按任务反查调用行的入参。
@@ -181,6 +199,7 @@ async def test_resume_does_not_open_record_bracket(tmp_path):
         task_id="T-1",
     )
 
+    # Resume writes no new pending row: only resume_success/resume_failed backfill, no accounting bracket opened
     # resume 不落新 pending 行：只走 resume_success/resume_failed 补账，不开记账括号
     assert gen.ledger.started == [], "resume 不应开记账括号"
 
@@ -200,6 +219,8 @@ async def test_resume_success_flips_pending_apicall_by_call_id(tmp_path):
     call = gen.ledger.resumed[0]
     assert call["call_id"] == 42
     assert call["status"] == "success"
+    # The success backfill does not pass cost_amount explicitly, letting the repo auto-calc the actual cost from the ApiCall row fields
+    # (equivalent to the generate path's accounting); cost_amount is not among resume_success's backfill arguments
     # 成功补账不显式传 cost_amount，让 repo 按 ApiCall 行字段 auto-calc 算实际 cost
     # （与 generate 路径记账等价）；cost_amount 不进 resume_success 的补账入参
     assert "cost_amount" not in call
@@ -208,7 +229,7 @@ async def test_resume_success_flips_pending_apicall_by_call_id(tmp_path):
 @pytest.mark.asyncio
 async def test_resume_idempotent_when_finalize_returns_zero(tmp_path, caplog):
     gen = _build_generator(tmp_path)
-    gen.ledger._resume_affected = 0  # 模拟「已 success」幂等场景
+    gen.ledger._resume_affected = 0  # Simulate the "already success" idempotent case / 模拟「已 success」幂等场景
 
     output_path, version, _, _ = await gen.resume_video_async(
         job_id="provider-job-1",
@@ -219,7 +240,7 @@ async def test_resume_idempotent_when_finalize_returns_zero(tmp_path, caplog):
 
     assert output_path.exists()
     assert version == 1
-    # 0 rows 不应抛异常，应当 logger.info 记录
+    # 0 rows should not raise; it should be logged with logger.info / 0 rows 不应抛异常，应当 logger.info 记录
     assert len(gen.ledger.resumed) == 1
 
 
@@ -241,14 +262,18 @@ async def test_resume_expired_flips_pending_to_failed(tmp_path):
     call = gen.ledger.resumed[0]
     assert call["call_id"] == 42
     assert call["status"] == "failed"
+    # The expired exception itself is handed to the backfill: encoding the raw failure text and machine code happens inside the ledger; here we only pin the "it was passed" step
     # 过期异常本身递交补账：失败原文与机器码的编码收在 ledger 内部，这里只锁「传了」这一步
     assert call["failure"] is expired
+    # The zero-cost no-double-charge semantics live inside ledger.resume_failed (cost_amount=0.0); the backfill arguments do not carry it explicitly
     # 零费用不重扣的语义收在 ledger.resume_failed 内部（cost_amount=0.0），补账入参不显式承载
 
 
 @pytest.mark.asyncio
 async def test_resume_other_exception_does_not_finalize(tmp_path):
-    """非 ResumeExpiredError（如下载超时）不翻 pending，留给 worker 重试机制处理。"""
+    """Anything other than ResumeExpiredError (e.g. download timeout) does not flip pending; it is left to the worker's retry mechanism.
+
+    非 ResumeExpiredError（如下载超时）不翻 pending，留给 worker 重试机制处理。"""
     gen = _build_generator(tmp_path)
     gen._video_backend = _FakeVideoBackend(raises=RuntimeError("network timeout"))
 
@@ -265,7 +290,10 @@ async def test_resume_other_exception_does_not_finalize(tmp_path):
 
 @pytest.mark.asyncio
 async def test_resume_calls_add_version_after_download(tmp_path):
-    """resume 成功后必须 add_version 记录新版本，且 add_version 发生在 backend.resume_video 之后
+    """After a successful resume, add_version must record the new version, and add_version must happen after backend.resume_video
+    (otherwise leftover/old files would be wrongly registered in the versions table). ensure_current_tracked must also not be pre-registered at the start.
+
+    resume 成功后必须 add_version 记录新版本，且 add_version 发生在 backend.resume_video 之后
     （否则会把残留/旧文件错登记到 versions 表）。同时不应在开头预登记 ensure_current_tracked。"""
     gen = _build_generator(tmp_path)
     probe = _ProbeVideoBackend(gen.versions)
@@ -278,16 +306,20 @@ async def test_resume_calls_add_version_after_download(tmp_path):
         task_id="T-1",
     )
 
+    # add_version must happen after the download: add_calls is still 0 when entering resume_video
     # add_version 必须发生在下载之后：进入 resume_video 时 add_calls 还是 0
     assert probe.add_calls_at_resume == 0
     assert len(gen.versions.add_calls) == 1
-    # 开头/末尾不调 ensure_current_tracked（避免错位登记残留文件）
+    # No ensure_current_tracked at the start/end (avoids misregistering leftover files) / 开头/末尾不调 ensure_current_tracked（避免错位登记残留文件）
     assert gen.versions.ensure_calls == []
 
 
 @pytest.mark.asyncio
 async def test_resume_after_pre_version_crash_creates_v1(tmp_path):
-    """submit→poll 中崩 → versions.json 空 → resume 下载新视频后 add_version 登记 v1，
+    """Crash during submit→poll → versions.json empty → after resume downloads the new video, add_version registers v1,
+    so the downstream finalize_video_task does not hit IndexError on versions[-1].
+
+    submit→poll 中崩 → versions.json 空 → resume 下载新视频后 add_version 登记 v1，
     避免下游 finalize_video_task 在 versions[-1] 上 IndexError。"""
     gen = _build_generator(tmp_path, initial_version=0)
 
@@ -304,7 +336,11 @@ async def test_resume_after_pre_version_crash_creates_v1(tmp_path):
 
 @pytest.mark.asyncio
 async def test_resume_after_version_v1_crash_bumps_to_v2(tmp_path):
-    """覆盖式重新生成：versions.json 已有 v1，generate 在 add_version 之前崩。
+    """Overwriting regeneration: versions.json already has v1 and generate crashed before add_version.
+    After resume downloads the new video over output_path it must bump to v2 so versions.json matches the disk content;
+    otherwise versions={v1} still points at the old record while output_path already holds v2 content, and rollback/history become wrong.
+
+    覆盖式重新生成：versions.json 已有 v1，generate 在 add_version 之前崩。
     resume 下载新视频覆盖 output_path 后必须 bump 到 v2，让 versions.json 与磁盘内容一致；
     否则 versions={v1} 仍指向旧记录而 output_path 已是 v2 内容，回滚/历史会失真。"""
     gen = _build_generator(tmp_path, initial_version=1)
@@ -393,7 +429,11 @@ async def test_resume_formal_prepare_failure_archives_paid_history_without_selec
 
 @pytest.mark.asyncio
 async def test_resume_handles_float_string_duration(tmp_path):
-    """duration_seconds 传浮点字符串（如 "10.0"）时应解析为 int(10)，
+    """When duration_seconds is passed as a float string (e.g. "10.0") it should be parsed as int(10),
+    not silently swallowed by try/except into the fallback value 8 (int("10.0") raises ValueError).
+    Both add_version and VideoGenerationRequest should receive the normalized int.
+
+    duration_seconds 传浮点字符串（如 "10.0"）时应解析为 int(10)，
     不能被 try/except 静默吞成兜底值 8（int("10.0") 会 ValueError）。
     add_version 与 VideoGenerationRequest 都应收到归一后的 int。"""
     gen = _build_generator(tmp_path, initial_version=1)
@@ -406,13 +446,13 @@ async def test_resume_handles_float_string_duration(tmp_path):
         task_id="T-1",
     )
 
-    # add_version 应该收到 duration_seconds=10（int），不是 "10.0" 也不是 8
+    # add_version should receive duration_seconds=10 (int), neither "10.0" nor 8 / add_version 应该收到 duration_seconds=10（int），不是 "10.0" 也不是 8
     assert len(gen.versions.add_calls) == 1
     add_call = gen.versions.add_calls[0]
     assert add_call["duration_seconds"] == 10
     assert isinstance(add_call["duration_seconds"], int)
 
-    # provider 请求里的 duration_seconds 也应是 int(10)
+    # duration_seconds in the provider request should also be int(10) / provider 请求里的 duration_seconds 也应是 int(10)
     backend = gen._video_backend
     assert len(backend.calls) == 1
     _, request = backend.calls[0]
@@ -422,14 +462,18 @@ async def test_resume_handles_float_string_duration(tmp_path):
 
 @pytest.mark.asyncio
 async def test_resume_passes_usage_tokens_to_finalize(tmp_path):
-    """Ark 视频按 usage_tokens 计费，缺省为 0 会导致 cost 永远为 0；
+    """Ark video is billed by usage_tokens, and defaulting to 0 would make the cost always 0;
+    the resume path must pass the usage_tokens returned by backend.resume_video through to finalize_pending_by_call_id,
+    equivalent to the generate path's finish_call(..., usage_tokens=...) accounting.
+
+    Ark 视频按 usage_tokens 计费，缺省为 0 会导致 cost 永远为 0；
     resume 路径必须把 backend.resume_video 返回的 usage_tokens 透传到 finalize_pending_by_call_id，
     与 generate 路径 finish_call(..., usage_tokens=...) 等价记账。"""
 
     class _ArkLikeResult:
         def __init__(self) -> None:
             self.video_uri = "video-uri-resume"
-            self.usage_tokens = 12345  # 模拟 Ark 返回的 completion_tokens
+            self.usage_tokens = 12345  # Simulate the completion_tokens returned by Ark / 模拟 Ark 返回的 completion_tokens
             self.generate_audio = True
             self.duration_seconds = 8
             self.seed = None
@@ -470,7 +514,9 @@ async def test_resume_passes_usage_tokens_to_finalize(tmp_path):
 
 @pytest.mark.asyncio
 async def test_resume_without_settleable_call_row_warns_does_not_crash(tmp_path, caplog):
-    """按 task_id 反查不到待结算调用行 → resume 仍成功，仅 warning。"""
+    """No pending call row found by task_id → resume still succeeds, with only a warning.
+
+    按 task_id 反查不到待结算调用行 → resume 仍成功，仅 warning。"""
     gen = _build_generator(tmp_path)
     gen.ledger = _FakeLedger(pending_call_id=None)
 
@@ -488,7 +534,9 @@ async def test_resume_without_settleable_call_row_warns_does_not_crash(tmp_path,
 
 @pytest.mark.asyncio
 async def test_resume_looks_up_settleable_call_by_task_id(tmp_path):
-    """调用行按任务身份反查，不再由 caller 透传 —— 任务与调用只有 api_calls.task_id 一个真相源。"""
+    """The call row is looked up by task identity rather than passed through by the caller; task and call have a single source of truth, api_calls.task_id.
+
+    调用行按任务身份反查，不再由 caller 透传 —— 任务与调用只有 api_calls.task_id 一个真相源。"""
     gen = _build_generator(tmp_path)
 
     await gen.resume_video_async(
@@ -503,7 +551,9 @@ async def test_resume_looks_up_settleable_call_by_task_id(tmp_path):
 
 
 class _FailingResumeLedger(_FakeLedger):
-    """模拟 resume 补账（finalize）自身失败的场景。"""
+    """Simulates the case where the resume backfill (finalize) itself fails.
+
+    模拟 resume 补账（finalize）自身失败的场景。"""
 
     def __init__(self, *, exc: Exception) -> None:
         super().__init__()
@@ -522,7 +572,13 @@ class _FailingResumeLedger(_FakeLedger):
 
 @pytest.mark.asyncio
 async def test_resume_success_propagates_finalize_exception(tmp_path):
-    """finalize_pending_by_call_id(success) 异常必须冒泡，不能被吞掉。
+    """An exception from finalize_pending_by_call_id(success) must bubble up and not be swallowed.
+
+    Swallowing it would leave the corresponding ApiCall stuck in pending forever (the success branch has no later retry,
+    and the expired branch is terminal), leaving a permanent gap in usage reports and backfill. Fail fast
+    and let the worker's finally mark_failed act as the fallback.
+
+    finalize_pending_by_call_id(success) 异常必须冒泡，不能被吞掉。
 
     吞掉会让对应的 ApiCall 永远卡在 pending（success 分支无后续重试，
     expired 分支又是终态），usage 报表和补账会出现永久缺口。fail-fast
@@ -538,7 +594,7 @@ async def test_resume_success_propagates_finalize_exception(tmp_path):
             task_id="T-1",
         )
 
-    # finalize 被调过一次（看到异常上抛前的入参）
+    # finalize was called once (see the arguments before the exception propagated) / finalize 被调过一次（看到异常上抛前的入参）
     assert len(gen.ledger.resumed) == 1
 
 
@@ -568,12 +624,16 @@ async def test_resume_formal_output_cleans_staging_when_finalize_fails(tmp_path)
 
 @pytest.mark.asyncio
 async def test_resume_expired_propagates_finalize_exception(tmp_path):
-    """ResumeExpiredError 分支同样不能吞 finalize 异常：让 worker finally 兜底标记
+    """The ResumeExpiredError branch likewise must not swallow the finalize exception: let the worker's finally mark it
+    failed as a fallback, so the ApiCall does not stay stuck in pending forever.
+
+    ResumeExpiredError 分支同样不能吞 finalize 异常：让 worker finally 兜底标记
     失败，避免 ApiCall 永远卡 pending。"""
     gen = _build_generator(tmp_path)
     gen._video_backend = _FakeVideoBackend(raises=ResumeExpiredError(job_id="provider-job-1", provider="openai"))
     gen.ledger = _FailingResumeLedger(exc=RuntimeError("db down"))
 
+    # The RuntimeError raised by finalize should override the ResumeExpiredError that would otherwise propagate
     # finalize 抛 RuntimeError 应该覆盖原本要抛的 ResumeExpiredError 上抛
     with pytest.raises(RuntimeError, match="db down"):
         await gen.resume_video_async(
@@ -647,7 +707,11 @@ async def test_resume_cancellation_cleans_partial_formal_staging(tmp_path):
 
 @pytest.mark.asyncio
 async def test_resume_passes_generate_audio_to_finalize(tmp_path):
-    """provider 在 submit 后可能降级/关闭音频；resume 必须把 backend 返回的
+    """A provider may degrade/turn off audio after submit; resume must pass the generate_audio returned by the backend
+    through to finalize_pending_by_call_id, so the cost does not reuse the requested value and bill wrongly
+    (equivalent to the generate path's finish_call(generate_audio=result.generate_audio)).
+
+    provider 在 submit 后可能降级/关闭音频；resume 必须把 backend 返回的
     generate_audio 透传到 finalize_pending_by_call_id，避免 cost 沿用请求值误计费
     （与 generate 路径 finish_call(generate_audio=result.generate_audio) 等价）。"""
 
@@ -655,7 +719,7 @@ async def test_resume_passes_generate_audio_to_finalize(tmp_path):
         def __init__(self) -> None:
             self.video_uri = "video-uri-resume"
             self.usage_tokens = 1234
-            self.generate_audio = False  # provider 实际降级到无音频
+            self.generate_audio = False  # The provider actually degraded to no audio / provider 实际降级到无音频
             self.duration_seconds = 8
             self.seed = None
             self.provenance = None
@@ -693,7 +757,11 @@ async def test_resume_passes_generate_audio_to_finalize(tmp_path):
 
 @pytest.mark.asyncio
 async def test_resume_passes_billed_duration_to_finalize(tmp_path):
-    """DashScope 的 resume 与 generate 走同一段 poll，result.duration_seconds 可能是
+    """DashScope's resume and generate share the same poll; result.duration_seconds may be
+    the actual billed duration including the input reference video's length; resume must pass it through to finalize_pending_by_call_id,
+    equivalent to the generate path's finish_call(billed_duration_seconds=...) accounting.
+
+    DashScope 的 resume 与 generate 走同一段 poll，result.duration_seconds 可能是
     含输入参考视频时长的实际计费时长；resume 必须把它透传到 finalize_pending_by_call_id，
     与 generate 路径 finish_call(billed_duration_seconds=...) 等价记账。"""
 
@@ -702,7 +770,7 @@ async def test_resume_passes_billed_duration_to_finalize(tmp_path):
             self.video_uri = "video-uri-resume"
             self.usage_tokens = 0
             self.generate_audio = True
-            self.duration_seconds = 15  # 请求 8 秒，provider 按 15 秒计费
+            self.duration_seconds = 15  # Requested 8 seconds, the provider bills 15 seconds / 请求 8 秒，provider 按 15 秒计费
             self.seed = None
             self.provenance = None
             self.warnings = ()
@@ -740,7 +808,11 @@ async def test_resume_passes_billed_duration_to_finalize(tmp_path):
 
 @pytest.mark.asyncio
 async def test_resume_forwards_submitted_base_url_to_request(tmp_path):
-    """提交时的域名装进递交 backend 的 request，且不落进版本元数据。
+    """The domain used at submit goes into the request handed to the backend, and not into the version metadata.
+
+    It is a replay value fed to backend polling; mixing it into versions.json would record a connection parameter as a version attribute.
+
+    提交时的域名装进递交 backend 的 request，且不落进版本元数据。
 
     它是喂给 backend 轮询的回放值，混进 versions.json 会把一个连接参数写成版本属性。
     """
@@ -762,7 +834,12 @@ async def test_resume_forwards_submitted_base_url_to_request(tmp_path):
 
 @pytest.mark.asyncio
 async def test_resume_records_the_actual_seed_and_provenance_like_a_first_run(tmp_path):
-    """同一笔任务在重启前后落下的版本元数据必须是同一份。
+    """The version metadata written for the same task before and after a restart must be the same.
+
+    The rest of the metadata is finalized before submit, while the actual seed and the fingerprint of the actual workflow only exist once the
+    backend finishes; merging them only on the first-run path would make "which seed this version used" depend on when the process restarted.
+
+    同一笔任务在重启前后落下的版本元数据必须是同一份。
 
     元数据的其余部分在提交之前就已定稿，而实发种子与实发 workflow 的指纹要到 backend 跑完才
     存在——只在首跑那条路上并一次，「这一版用的哪个种子」就会取决于进程什么时候重启过。
@@ -785,7 +862,9 @@ async def test_resume_records_the_actual_seed_and_provenance_like_a_first_run(tm
 
 @pytest.mark.asyncio
 async def test_resume_hands_backend_warnings_to_the_caller(tmp_path):
-    """续跑期产生的提示与首跑走同一条通道，否则同一件事只有首跑的用户看得到。"""
+    """Hints produced during a resume go through the same channel as the first run; otherwise only first-run users would see them.
+
+    续跑期产生的提示与首跑走同一条通道，否则同一件事只有首跑的用户看得到。"""
     warning = {"key": "comfyui_multiple_outputs", "params": {"count": 2, "filename": "final.mp4"}}
     gen = _build_generator(tmp_path)
     gen._video_backend = _FakeVideoBackend(result=_FakeVideoResult(warnings=(warning,)))

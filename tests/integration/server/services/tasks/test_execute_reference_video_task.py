@@ -31,7 +31,12 @@ from tests.integration.server.services.tasks.reference_video_tasks_support impor
 
 
 def _wire_locked_script(fake_pm: MagicMock) -> None:
-    """让 fake_pm.locked_script 产出磁盘上的真实剧本 dict。
+    """Make fake_pm.locked_script yield the real script dict on disk.
+
+    When finalize writes back unit assets it looks up the unit in the script and raises KeyError if missing; a
+    bare MagicMock's script.get("video_units") is not a list and would blow up immediately.
+
+    让 fake_pm.locked_script 产出磁盘上的真实剧本 dict。
 
     finalize 写回 unit 资产时会在剧本中查找 unit 并在缺失时抛 KeyError，
     裸 MagicMock 的 script.get("video_units") 不是 list 会直接炸。
@@ -69,7 +74,22 @@ def _wire_context(
     request_facts_failure: VideoRequestFactsFailure | None = None,
     seen_lane_requests: list[dict[str, Any]] | None = None,
 ) -> None:
-    """把 fake generator + video lane 值包成 GenerationContext，替换 resolve_generation_context 单点。
+    """Wrap the fake generator + video lane values into a GenerationContext, replacing the single point
+    resolve_generation_context.
+
+    The executor does not touch MediaGenerator private attributes or rebuild provider identity by hand - all
+    provider/backend identity comes from the video lane, and capabilities and request resolution are read only
+    from the lane's video request facts.
+    Facts are built directly from the bucket declared by the lane request (``allowed_durations`` defaults to the
+    full set); the evaluation itself is covered in tests/integration/lib/generation/test_video_request_facts.py;
+    here only the executor's downstream clamp / guard / pass-through behavior is verified. When
+    ``request_facts_failure`` is given, the lane carries that failure object.
+
+    ``registry_provider_id`` defaults to ``backend_name`` (true for most providers); for family-alias providers
+    (e.g. the ark-agent-plan family reusing the Ark backend) the two differ and must be distinguished explicitly
+    to cover the registry lookup path.
+
+    把 fake generator + video lane 值包成 GenerationContext，替换 resolve_generation_context 单点。
 
     执行器不触碰 MediaGenerator 私有属性、不手工重建 provider 身份——所有
     provider/backend 身份由 video lane 提供，能力与请求分辨率只读 lane 上的视频请求事实。
@@ -165,6 +185,7 @@ async def test_execute_reference_video_task_success(tmp_path: Path, monkeypatch:
     _wire_locked_script(fake_pm)
     use_project_manager(monkeypatch, fake_pm)
 
+    # Mock generator.generate_video_async: create a fake video file
     # Mock generator.generate_video_async: 创建伪视频文件
     async def _fake_generate_video_async(**kwargs):
         out = proj_dir / "reference_videos" / "E1U1.mp4"
@@ -198,7 +219,13 @@ async def test_execute_reference_video_task_success(tmp_path: Path, monkeypatch:
 async def test_execute_reference_video_task_passes_planned_duration_when_endpoint_fixed(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):
-    """时长由端点固定的模型在执行期同样放行：不按档位声明缺失拒绝，规划秒数原样透传。
+    """Models whose duration is fixed by the endpoint are also let through at execution: not refused for missing
+    tier declarations; the planned seconds are passed through unchanged.
+
+    With ``task_id`` it takes the formal submit path, so the tier set of the artifact currency facts is checked
+    too.
+
+    时长由端点固定的模型在执行期同样放行：不按档位声明缺失拒绝，规划秒数原样透传。
 
     带 ``task_id`` 走正式提交路径，产物时效事实的档位集因此也一并受检。
     """
@@ -257,6 +284,8 @@ async def test_execute_reference_video_task_passes_planned_duration_when_endpoin
 
     assert result["resource_id"] == "E1U1"
     assert fake_generator.generate_video_async.await_args.kwargs["duration_seconds"] == 3
+    # Artifact currency facts require a non-empty tier set that includes the paid tier; with an endpoint-fixed
+    # duration the only tier is the seconds passed through that time.
     # 产物时效事实要求档位集非空且含付费档；端点固定时长下唯一档位就是那次透传的秒数。
     checkpoint = ReferenceSubmissionCheckpoint.from_json(persisted["raw"])
     assert checkpoint.duration_seconds == 3
@@ -267,7 +296,10 @@ async def test_execute_reference_video_task_passes_planned_duration_when_endpoin
 async def test_execute_reference_video_task_rejects_changed_claim_provider_before_submission(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):
-    """执行期 provider 与已占用槽不同时，在任何生成调用前交回 worker 重认领。"""
+    """When the provider at execution differs from the occupied slot, hand it back to the worker to reclaim before
+    any generation call.
+
+    执行期 provider 与已占用槽不同时，在任何生成调用前交回 worker 重认领。"""
 
     from lib.generation.generation_queue import DispatchProviderChanged
     from server.services.tasks import reference_video_tasks as rvt
@@ -351,7 +383,14 @@ async def test_execute_reference_video_task_blocks_a_dirty_text_before_submissio
 async def test_execute_reference_video_task_bucket_follows_resolved_references(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, strip_mentions: bool, expected_generation_type: str
 ):
-    """执行侧按解析后的实际参考图分流定桶：有参考图 → r2v，无参考图的视频单元 → i2v。
+    """The execution side picks the bucket by the actual resolved reference images: with references -> r2v, video
+    units without references -> i2v.
+
+    The downgrade lets projects whose r2v bucket is configured with a model that rejects empty references
+    (DashScope R2V / MiniMax S2V) still generate video units without references - if r2v were always declared,
+    such units would always fail at execution with video_reference_images_required.
+
+    执行侧按解析后的实际参考图分流定桶：有参考图 → r2v，无参考图的视频单元 → i2v。
 
     降级让 r2v 桶配置为拒空参考模型（DashScope R2V / MiniMax S2V）的项目也能生成
     无参考图的视频单元——若恒声明 r2v，这类视频单元执行期必以 video_reference_images_required 失败。
@@ -466,7 +505,10 @@ async def test_execute_reference_video_task_rechecks_text_to_video_capability(
 async def test_execute_reference_video_task_sends_reference_audio_in_prompt_order(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):
-    """A 类 tracer bullet：请求 reference_audio_files 的顺序与第一段 @音频N 指认严格一致。"""
+    """Class A tracer bullet: the order of the requested reference_audio_files strictly matches the @audioN
+    pointers in the first segment.
+
+    A 类 tracer bullet：请求 reference_audio_files 的顺序与第一段 @音频N 指认严格一致。"""
     proj_dir = write_project(tmp_path)
 
     project = json.loads((proj_dir / "project.json").read_text(encoding="utf-8"))
@@ -528,10 +570,13 @@ async def test_execute_reference_video_task_sends_reference_audio_in_prompt_orde
     await rvt.execute_reference_video_task("demo", "E1U1", {"script_file": "scripts/episode_1.json"}, user_id="u1")
 
     prompt = captured["prompt"]
+    # Speaker first-appearance order = audio number = request field order (Li Si speaks first, although Zhang San
+    # enters the frame first)
     # speaker 首现顺序 = 音频编号 = 请求字段顺序（李四先开口，尽管张三先入画）
     assert "<李四>的台词音色参考 @音频1，只取音色、语速与情绪，台词以正文为准，声音特征：清亮少女音。" in prompt
     assert "<张三>的台词音色参考 @音频2，只取音色、语速与情绪，台词以正文为准，声音特征：低沉沙哑的男声。" in prompt
     assert [p.name for p in captured["reference_audio_files"]] == ["李四.mp3", "张三.wav"]
+    # Speaker slots produce no reference images: Li Si has no @imageN binding
     # speaker 位不产生参考图：李四没有 @图片N 绑定
     assert "<张三>@图片1。" in prompt
     assert "<李四>@图片" not in prompt
@@ -569,7 +614,11 @@ async def test_execute_reference_video_task_sends_reference_audio_in_prompt_orde
 async def test_execute_reference_video_task_omits_reference_audio_when_episode_is_silent(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):
-    """无声视频：即便角色配好了音色档案、模型也是 A 类，请求里也不带任何参考音频负载；
+    """Silent video: even if the character has a voice profile and the model is class A, the request carries no
+    reference audio payload; dialogue text is sent as usual (the provider can use it as a lip-sync reference),
+    and a silent notice is returned with the result.
+
+    无声视频：即便角色配好了音色档案、模型也是 A 类，请求里也不带任何参考音频负载；
     台词文本照常下发（供应商可用作口型参考），并随结果回一条无声知会。"""
     proj_dir = write_project(tmp_path)
 
@@ -630,6 +679,7 @@ async def test_execute_reference_video_task_omits_reference_audio_when_episode_i
     assert captured["reference_audio_targets"] is None
     prompt = captured["prompt"]
     assert "@音频" not in prompt
+    # Dialogue and reference image binding as usual; only the voice reference line disappears
     # 台词与参考图绑定照常，只有音色参考行消失
     assert "<张三>说 {今晚的酒，我请。}" in prompt
     assert "<张三>@图片1。" in prompt
@@ -640,7 +690,10 @@ async def test_execute_reference_video_task_omits_reference_audio_when_episode_i
 async def test_execute_reference_video_task_blocks_on_request_facts_failure_with_its_code(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):
-    """lane 的视频请求事实解析不出时，执行在提交供应商前以原问题码与参数键阻断。"""
+    """When the lane's video request facts cannot be resolved, execution is blocked before submitting to the
+    provider with the original problem code and param keys.
+
+    lane 的视频请求事实解析不出时，执行在提交供应商前以原问题码与参数键阻断。"""
 
     from lib.script.reference_video.request_projection import ReferenceProjectionBlockedError
 
@@ -696,7 +749,10 @@ async def test_execute_reference_video_task_blocks_on_request_facts_failure_with
 async def test_execute_reference_video_task_rechecks_audio_switch_for_latest_model(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):
-    """任务等待期间切到恒有声音轨模型后，worker 按当前模型阻止无声请求。"""
+    """After switching to an always-audible model while the task waits, the worker blocks silent requests based on
+    the current model.
+
+    任务等待期间切到恒有声音轨模型后，worker 按当前模型阻止无声请求。"""
 
     proj_dir = write_project(tmp_path)
     from server.services.tasks import reference_video_tasks as rvt
@@ -744,7 +800,11 @@ async def test_execute_reference_video_task_rechecks_audio_switch_for_latest_mod
 async def test_execute_reference_video_task_aligns_reference_audio_targets_for_per_image_backend(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):
-    """backend 要求音频逐段挂参考图（如 wan2.7-r2v）时，reference_audio_targets 须按名字
+    """When the backend requires audio attached per reference image (e.g. wan2.7-r2v), reference_audio_targets
+    must be aligned by name to the correct reference image index, and pure off-screen characters (Li Si) are
+    downgraded to unbound - the two lists cannot be assumed to share an order.
+
+    backend 要求音频逐段挂参考图（如 wan2.7-r2v）时，reference_audio_targets 须按名字
     对齐到正确的参考图下标，纯画外角色（李四）降级不绑定——不能假设两个列表天然同序。"""
     proj_dir = write_project(tmp_path)
 
@@ -766,6 +826,9 @@ async def test_execute_reference_video_task_aligns_reference_audio_targets_for_p
 
     script_path = proj_dir / "scripts" / "episode_1.json"
     script = json.loads(script_path.read_text(encoding="utf-8"))
+    # The scene is mentioned before Zhang San: image order is tavern (index 0), Zhang San (index 1) -
+    # audio order (Li Si speaks first -> Zhang San) differs from image order, so positional alignment would attach
+    # audio to the tavern image.
     # 场景先于张三被提及：图片顺序是酒馆（下标0）、张三（下标1）——
     # 音频顺序（李四先开口→张三）与图片顺序不同序，位置对齐会把音频错挂到酒馆图上。
     script["video_units"][0]["text"] = (
@@ -811,8 +874,11 @@ async def test_execute_reference_video_task_aligns_reference_audio_targets_for_p
 
     await rvt.execute_reference_video_task("demo", "E1U1", {"script_file": "scripts/episode_1.json"}, user_id="u1")
 
+    # Li Si has no reference image (purely off-screen), downgraded to unbound: only Zhang San's audio remains
     # 李四没有参考图（纯画外），降级不绑定：只剩张三一段音频
     assert [p.name for p in captured["reference_audio_files"]] == ["张三.wav"]
+    # Reference order is the order of first mention in the body: tavern at index 0, Zhang San at index 1; audio is
+    # attached by name to Zhang San's image.
     # 引用顺序即正文首次提及顺序：酒馆在下标 0、张三在下标 1，音频按名字挂到张三那张图上。
     assert captured["reference_audio_targets"] == [1]
 
@@ -821,7 +887,10 @@ async def test_execute_reference_video_task_aligns_reference_audio_targets_for_p
 async def test_execute_reference_video_task_omits_audio_field_for_soft_tier(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):
-    """B 类：无音频字段，但第一段仍带 voice_style 声音特征声明。"""
+    """Class B: no audio field, but the first segment still carries the voice_style voice characteristics
+    declaration.
+
+    B 类：无音频字段，但第一段仍带 voice_style 声音特征声明。"""
     proj_dir = write_project(tmp_path)
     project = json.loads((proj_dir / "project.json").read_text(encoding="utf-8"))
     project["characters"]["张三"]["voice_style"] = "低沉沙哑的男声"
@@ -879,7 +948,9 @@ async def test_execute_reference_video_task_omits_audio_field_for_soft_tier(
 
 @pytest.mark.asyncio
 async def test_execute_reference_video_task_surfaces_backend_warnings(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-    """backend 执行期的提示与渲染期的走同一条 result.warnings 通道。"""
+    """Backend hints at execution go through the same result.warnings channel as those at render time.
+
+    backend 执行期的提示与渲染期的走同一条 result.warnings 通道。"""
     proj_dir = write_project(tmp_path)
     project = json.loads((proj_dir / "project.json").read_text(encoding="utf-8"))
     script_path = proj_dir / "scripts" / "episode_1.json"
@@ -920,7 +991,10 @@ async def test_execute_reference_video_task_surfaces_backend_warnings(tmp_path: 
 
 @pytest.mark.asyncio
 async def test_execute_reference_video_task_surfaces_render_warnings(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-    """渲染期降级 warning 与既有 result.warnings 通道贯通（超上限截断降级）。"""
+    """Render-time downgrade warnings connect with the existing result.warnings channel (over-limit truncation
+    downgrade).
+
+    渲染期降级 warning 与既有 result.warnings 通道贯通（超上限截断降级）。"""
     proj_dir = write_project(tmp_path)
     project = json.loads((proj_dir / "project.json").read_text(encoding="utf-8"))
     project["characters"]["张三"]["reference_audio"] = "characters/refs_audio/张三.wav"
@@ -984,7 +1058,10 @@ async def test_execute_reference_video_task_reports_reference_image_limit(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ):
-    """参考图超出型号上限：截断到上限张，并按 count / provider / model / max_count 报出一条超限 warning。"""
+    """Reference images exceed the model limit: truncate to the limit and report one over-limit warning with
+    count / provider / model / max_count.
+
+    参考图超出型号上限：截断到上限张，并按 count / provider / model / max_count 报出一条超限 warning。"""
     proj_dir = write_project(tmp_path)
     project = json.loads((proj_dir / "project.json").read_text(encoding="utf-8"))
 
@@ -1032,6 +1109,8 @@ async def test_execute_reference_video_task_reports_reference_image_limit(
         "key": "ref_too_many_images",
         "params": {"count": 2, "provider": "custom-7", "model": "shared-model", "max_count": 1},
     } in result["warnings"]
+    # The warning carries the provider: when the same upstream model ID has a different name under another
+    # provider, the UI can still find this model name
     # warning 带上供应商：另一个供应商下同一上游模型 ID 名称不同时，界面仍能查到这一个模型名
     (warning,) = [warning for warning in result["warnings"] if warning["key"] == "ref_too_many_images"]
     models = {("custom-7", "shared-model"): "甲网关模型", ("custom-8", "shared-model"): "乙网关模型"}
@@ -1053,10 +1132,14 @@ async def test_execute_reference_video_task_clears_stale_video_uri_and_thumbnail
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ):
-    """重跑时新结果不含 video_uri 且缩略图提取失败 → 旧 video_uri / video_thumbnail 必须被清空，
+    """On rerun the new result has no video_uri and thumbnail extraction fails -> the old video_uri /
+    video_thumbnail must be cleared, not keep old values pointing to an expired URI / deleted file.
+
+    重跑时新结果不含 video_uri 且缩略图提取失败 → 旧 video_uri / video_thumbnail 必须被清空，
     不能保留指向过期 URI / 已删除文件的旧值。"""
     proj_dir = write_project(tmp_path)
 
+    # Preset old artifacts left by the previous successful generation
     # 预置上一次成功生成留下的旧产物
     script_path = proj_dir / "scripts" / "episode_1.json"
     script_data = json.loads(script_path.read_text(encoding="utf-8"))
@@ -1067,6 +1150,7 @@ async def test_execute_reference_video_task_clears_stale_video_uri_and_thumbnail
 
     from server.services.tasks import reference_video_tasks as rvt
 
+    # locked_script writes back to live_script with a real contextmanager, for the assertions to read
     # locked_script 用真实 contextmanager 回写到 live_script，供断言读取
     live_script = json.loads(script_path.read_text(encoding="utf-8"))
 
@@ -1081,6 +1165,7 @@ async def test_execute_reference_video_task_clears_stale_video_uri_and_thumbnail
     fake_pm.locked_script.side_effect = _locked_script
     use_project_manager(monkeypatch, fake_pm)
 
+    # The new backend returns no video_uri (4th element is None)
     # 新后端不返回 video_uri（第 4 个元素为 None）
     async def _fake_generate_video_async(**kwargs):
         out = proj_dir / "reference_videos" / "E1U1.mp4"
@@ -1092,6 +1177,7 @@ async def test_execute_reference_video_task_clears_stale_video_uri_and_thumbnail
     fake_generator.versions.get_versions.return_value = {"versions": [{"created_at": "2026-04-17T10:00:00"}]}
     _wire_context(monkeypatch, rvt, fake_generator, backend_name="ark", backend_model="doubao-seedance-2-0-260128")
 
+    # Thumbnail extraction fails -> thumb_rel=None
     # 缩略图提取失败 → thumb_rel=None
     async def _fake_extract(*_a, **_k):
         return False
@@ -1108,6 +1194,7 @@ async def test_execute_reference_video_task_clears_stale_video_uri_and_thumbnail
     ga_after = live_script["video_units"][0]["generated_assets"]
     assert "video_uri" not in ga_after
     assert "video_thumbnail" not in ga_after
+    # Normal artifacts are still written correctly
     # 正常产物仍正确写入
     assert ga_after["video_clip"] == "reference_videos/E1U1.mp4"
     assert ga_after["status"] == "completed"
@@ -1120,7 +1207,10 @@ async def test_execute_reference_video_task_sends_the_request_facts_resolution(
     monkeypatch: pytest.MonkeyPatch,
     resolution: str | None,
 ):
-    """执行器把视频请求事实的请求分辨率原样下发：未设置即不携带该参数，不补兜底档位。"""
+    """The executor sends the request resolution of the video request facts unchanged: when unset, the param is
+    not sent and no fallback tier is added.
+
+    执行器把视频请求事实的请求分辨率原样下发：未设置即不携带该参数，不补兜底档位。"""
     proj_dir = write_project(tmp_path)
 
     from server.services.tasks import reference_video_tasks as rvt
@@ -1174,7 +1264,10 @@ async def test_execute_reference_video_task_sends_the_request_facts_resolution(
 async def test_execute_reference_video_task_picks_the_tier_from_narrowed_request_facts(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):
-    """取档只看视频请求事实收窄后的档位：Veo 3.1 带参考图只剩 8 秒，3 秒剧本不会取到全集里的 4 秒。"""
+    """Tier selection only looks at tiers narrowed by video request facts: Veo 3.1 with reference images has only
+    8 s left, so a 3 s script does not get the 4 s from the full set.
+
+    取档只看视频请求事实收窄后的档位：Veo 3.1 带参考图只剩 8 秒，3 秒剧本不会取到全集里的 4 秒。"""
     proj_dir = write_project(tmp_path)
 
     from server.services.tasks import reference_video_tasks as rvt
@@ -1374,6 +1467,8 @@ async def test_execute_reference_video_task_rechecks_formal_sheet_claim_before_p
     provider_submissions: list[str] = []
 
     async def _fake_generate_video_async(**kwargs):
+        # Simulate a concurrent claim withdrawal elsewhere: change the manifest in a worker thread, not occupying the
+        # event loop
         # 模拟另一处并发撤掉认领：在工作线程里改清单，不占事件循环
         await asyncio.to_thread(
             lambda: ProjectArtifactManifestAdapter(proj_dir).delete_entry(ArtifactKey.asset_sheet("character", "张三"))
@@ -1414,7 +1509,10 @@ async def test_execute_reference_video_task_blocks_an_unmigrated_project_before_
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ):
-    """产物清单是读取已生成产物的唯一口径：项目未达到当前 schema 版本时在付费前阻断。"""
+    """The artifact manifest is the only way to read generated artifacts: a project not at the current schema
+    version is blocked before paying.
+
+    产物清单是读取已生成产物的唯一口径：项目未达到当前 schema 版本时在付费前阻断。"""
 
     from lib.project.project_migration_failure import ProjectMigrationError
     from lib.project.project_schema import CURRENT_PROJECT_SCHEMA_VERSION
@@ -1491,6 +1589,8 @@ async def test_execute_reference_video_task_rejects_a_replaced_sheet_before_prov
     provider_submissions: list[str] = []
 
     async def _fake_generate_video_async(**kwargs):
+        # Simulate a concurrent replacement of the design sheet elsewhere: write to disk in a worker thread, not
+        # occupying the event loop
         # 模拟另一处并发替换设定图：在工作线程里写盘，不占事件循环
         await asyncio.to_thread((proj_dir / "characters" / "张三.png").write_bytes, b"replacement-sheet")
         await kwargs["before_submit"]()
@@ -1529,7 +1629,9 @@ async def test_execute_reference_video_task_refuses_a_script_outside_the_episode
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ):
-    """产物身份只认 project.json 的 episodes 账本：没绑定的剧本在付费前被拒。"""
+    """Artifact identity recognizes only project.json's episodes ledger: unbound scripts are refused before paying.
+
+    产物身份只认 project.json 的 episodes 账本：没绑定的剧本在付费前被拒。"""
 
     from server.services.tasks import reference_video_tasks as rvt
 
@@ -1579,7 +1681,12 @@ async def test_execute_reference_video_task_refuses_a_script_outside_the_episode
 
 @pytest.mark.asyncio
 async def test_execute_reference_video_task_uses_real_media_generator(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-    """执行器必须走真实 MediaGenerator._get_output_path。
+    """The executor must go through the real MediaGenerator._get_output_path.
+
+    Only the outermost VideoBackend.generate is mocked - if resource_type is not registered in
+    lib.project.resource_paths, this test blows up with ValueError immediately.
+
+    执行器必须走真实 MediaGenerator._get_output_path。
 
     只 mock 最外层的 VideoBackend.generate ——resource_type 未注册到
     lib.project.resource_paths 时，这条测试会立刻爆 ValueError。
@@ -1600,6 +1707,10 @@ async def test_execute_reference_video_task_uses_real_media_generator(tmp_path: 
     _wire_locked_script(fake_pm)
     use_project_manager(monkeypatch, fake_pm)
 
+    # Mock only the outermost layer: VideoBackend (the only real external dependency) + Ledger/ConfigResolver
+    # (these two touch the DB, and tests have no DB). VersionManager uses the real implementation - so
+    # VersionManager's own allowlists (RESOURCE_TYPES / EXTENSIONS) are also guarded by this path, and a missing
+    # registration in any of the three registries blows up with ValueError here.
     # 只 mock 最外层：VideoBackend（唯一的真外部依赖）+ Ledger/ConfigResolver
     # （这俩摸 DB，测试无 DB）。VersionManager 用真实实现 —— 这样 VersionManager
     # 自己的白名单（RESOURCE_TYPES / EXTENSIONS）也被这条路径守住，
@@ -1639,6 +1750,7 @@ async def test_execute_reference_video_task_uses_real_media_generator(tmp_path: 
 
             yield _Call()
 
+    # object.__new__ bypasses MediaGenerator.__init__ (avoiding the Ledger's DB initialization in __init__)
     # object.__new__ 绕过 MediaGenerator.__init__（避开 __init__ 里的 Ledger 对 DB 的初始化）
     real_gen = object.__new__(MediaGenerator)
     real_gen.project_path = proj_dir
@@ -1667,14 +1779,18 @@ async def test_execute_reference_video_task_uses_real_media_generator(tmp_path: 
         user_id="u1",
     )
 
+    # The backend is really called once, and output_path follows the resource_relative_path("reference_videos", ...)
+    # template
     # Backend 被真实调用一次，且 output_path 走 resource_relative_path("reference_videos", ...) 模板
     assert len(captured_requests) == 1
     req = captured_requests[0]
     assert req.output_path == (proj_dir / "reference_videos" / "E1U1.mp4")
+    # Real file written to disk
     # 真实文件落盘
     assert (proj_dir / "reference_videos" / "E1U1.mp4").exists()
     assert result["file_path"] == "reference_videos/E1U1.mp4"
     assert result["video_uri"] == "uri-x"
+    # Real VersionManager loop: version files land in versions/reference_videos/
     # 真实 VersionManager 闭环：版本文件落入 versions/reference_videos/
     version_dir = proj_dir / "versions" / "reference_videos"
     assert version_dir.exists()
@@ -1683,7 +1799,11 @@ async def test_execute_reference_video_task_uses_real_media_generator(tmp_path: 
 
 @pytest.mark.asyncio
 async def test_execute_reference_video_task_passes_source_refs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-    """执行器把**源 sheet 路径**直接交给 generate_video_async（单次调用），压缩下沉
+    """The executor hands the **source sheet paths** directly to generate_video_async (single call); compression is
+    pushed down to the choke-point layer - no pre-compression to temp files, no second compression retry in the
+    R2V layer.
+
+    执行器把**源 sheet 路径**直接交给 generate_video_async（单次调用），压缩下沉
     咽喉层——不预压缩到临时文件，不在 R2V 层做二次压缩重试。
     """
     proj_dir = write_project(tmp_path)
@@ -1725,12 +1845,15 @@ async def test_execute_reference_video_task_passes_source_refs(tmp_path: Path, m
         {"script_file": "scripts/episode_1.json"},
         user_id="u1",
     )
+    # Single call: no second compression retry in the R2V layer
     # 单次调用：R2V 层不做二次压缩重试
     assert call_count["n"] == 1
     assert result["resource_id"] == "E1U1"
+    # What is passed to the choke-point layer is exactly the source sheet path (a real file inside the project
+    # directory), not a temp compressed copy - compression has been pushed down to the MediaGenerator choke point
     # 传给咽喉层的恰是源 sheet 路径（项目目录内真实文件），而非临时压缩副本——
     # 压缩已下沉到 MediaGenerator 咽喉层
-    refs = [Path(p).resolve() for p in captured["reference_images"]]  # noqa: ASYNC240 -- 测试内本地小文件读写/断言，不在生产事件循环上
+    refs = [Path(p).resolve() for p in captured["reference_images"]]  # noqa: ASYNC240 -- Small local file reads/writes/asserts in a test, not on the production event loop / 测试内本地小文件读写/断言，不在生产事件循环上
     assert refs == [
         (proj_dir / "characters" / "张三.png").resolve(),
         (proj_dir / "scenes" / "酒馆.png").resolve(),
@@ -1745,10 +1868,12 @@ async def test_execute_reference_video_task_rejects_duration_above_lane_maximum(
     """Executor never truncates a unit whose duration exceeds the current model tier."""
     proj_dir = write_project(tmp_path)
 
+    # Change the unit to have 2 refs + 15s duration, to verify the clamp
     # 改造 unit 让它有 2 张 refs + 15s duration，便于验证 clamp
     script_path = proj_dir / "scripts" / "episode_1.json"
     script = json.loads(script_path.read_text(encoding="utf-8"))
     script["video_units"][0]["duration_seconds"] = 15
+    # characters already has Zhang San's sheet; scenes already has the tavern sheet - refs are already 2
     # characters 已有 张三 sheet；scenes 已有 酒馆 sheet —— refs 已是 2 张
     script_path.write_text(json.dumps(script, ensure_ascii=False), encoding="utf-8")
 
@@ -1772,6 +1897,8 @@ async def test_execute_reference_video_task_rejects_duration_above_lane_maximum(
     fake_generator = MagicMock()
     fake_generator.generate_video_async = AsyncMock(side_effect=_fake_generate_video_async)
     fake_generator.versions.get_versions.return_value = {"versions": [{"created_at": "2026-04-17T10:00:00"}]}
+    # Feed fake caps into the lane - simulating a custom model with "supported_durations=[2,4,6]",
+    # max_reference_images=1
     # lane 喂入假 caps —— 模拟 "supported_durations=[2,4,6]", max_reference_images=1 的 custom model
     _wire_context(
         monkeypatch,
@@ -1807,12 +1934,18 @@ async def test_execute_reference_video_task_prompt_matches_clipped_refs(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ):
-    """prompt 里的 `@图片N` 索引必须与 backend 收到的 reference_images 对齐：references 裁剪后
+    """The `@imageN` indexes in the prompt must align with the reference_images the backend receives: after
+    references are clipped, re-slice by the length of `constrained_refs`; rendering with the whole
+    `unit.references` would push `@imageN` out of range (e.g. 5 clipped to 1, while `@image5` still appears in
+    the prompt).
+
+    prompt 里的 `@图片N` 索引必须与 backend 收到的 reference_images 对齐：references 裁剪后
     须按 `constrained_refs` 长度重新 slice，用整条 `unit.references` 渲染会让 `@图片N` 越界
     （例如 5 张裁到 1 张，prompt 里仍出现 `@图片5`）。
     """
     proj_dir = write_project(tmp_path)
 
+    # Add a prop sheet so the unit has 3 refs (1 character + 1 scene + 1 prop).
     # 新增一个道具 sheet，让 unit 拥有 3 张 refs（1 character + 1 scene + 1 prop）。
     (proj_dir / "props").mkdir()
     (proj_dir / "props" / "瓶子.png").write_bytes(_TINY_PNG)
@@ -1824,6 +1957,8 @@ async def test_execute_reference_video_task_prompt_matches_clipped_refs(
 
     script_path = proj_dir / "scripts" / "episode_1.json"
     script = json.loads(script_path.read_text(encoding="utf-8"))
+    # Duration takes a member of sora's supported_durations (4) to avoid tripping the execution-layer duration
+    # capability guard; this test focuses on refs clipping.
     # 时长取 sora supported_durations 成员（4），避免触发执行层 duration 能力守卫；本测试聚焦 refs 裁剪。
     script["video_units"][0]["text"] = "Shot 1 (4s): @张三 在 @酒馆 拿起 @瓶子"
     script["video_units"][0]["duration_seconds"] = 4
@@ -1849,6 +1984,7 @@ async def test_execute_reference_video_task_prompt_matches_clipped_refs(
     fake_generator = MagicMock()
     fake_generator.generate_video_async = AsyncMock(side_effect=_fake_generate_video_async)
     fake_generator.versions.get_versions.return_value = {"versions": [{"created_at": "2026-04-17T10:00:00"}]}
+    # Sora limit is 1 image (provider_id=openai, model=sora-2)
     # Sora 上限 1 张（provider_id=openai, model=sora-2）
     _wire_context(
         monkeypatch,
@@ -1872,12 +2008,15 @@ async def test_execute_reference_video_task_prompt_matches_clipped_refs(
         user_id="u1",
     )
 
+    # 3 clipped to 1; the first segment can only bind @image1; @image2/@image3 must not appear
     # 3 张裁到 1 张，第一段只能绑出 @图片1，不能出现 @图片2/@图片3
     assert len(captured["reference_images"]) == 1
     prompt = captured["prompt"]
     assert "@图片1" in prompt
     assert "@图片2" not in prompt
     assert "@图片3" not in prompt
+    # The clipped @tavern / @bottle are still subjects of the frame (<X> decoupled from image numbers), they just
+    # have no binding line and no image sent with the request
     # 被裁掉的 @酒馆 / @瓶子 仍是画面主体（<X> 与图号解耦），只是没有绑定行、没随请求发图
     assert "<酒馆>" in prompt
     assert "<瓶子>" in prompt
@@ -1918,7 +2057,12 @@ async def test_execute_reference_video_task_prompt_matches_deduped_refs(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ):
-    """unit.references 携带同一角色的 NFC/NFD 两条记录时，prompt 的 `@图片N` 索引必须与去重后的
+    """When unit.references carries NFC/NFD records of the same character, the prompt's `@imageN` indexes must
+    align with the deduplicated reference_images: the image list and the logical reference list used for
+    rendering must count by the same dedup rule, otherwise `@image2` would wrongly bind to the same asset as
+    `@image1`, and the truly different reference after it would lose its number.
+
+    unit.references 携带同一角色的 NFC/NFD 两条记录时，prompt 的 `@图片N` 索引必须与去重后的
     reference_images 对齐：图片列表与渲染用的逻辑引用列表须按同一去重规则计数，否则 `@图片2`
     会错误绑到与 `@图片1` 相同的资产、后面一条真正不同的参考丢失编号。"""
     import unicodedata
@@ -1960,6 +2104,7 @@ async def test_execute_reference_video_task_prompt_matches_deduped_refs(
     fake_generator = MagicMock()
     fake_generator.generate_video_async = AsyncMock(side_effect=_fake_generate_video_async)
     fake_generator.versions.get_versions.return_value = {"versions": [{"created_at": "2026-04-17T10:00:00"}]}
+    # max_refs=None: no provider clipping; dedup itself is the only effect this test verifies.
     # max_refs=None：不做 provider 裁剪，去重本身是本测试唯一验证的效应。
     _wire_context(
         monkeypatch,
@@ -1983,6 +2128,7 @@ async def test_execute_reference_video_task_prompt_matches_deduped_refs(
         user_id="u1",
     )
 
+    # 3 references (including an NFC/NFD duplicate pair) dedupe to 2 images; image numbers must align with them
     # 3 条 references（含一对 NFC/NFD 重复）去重后只剩 2 张图，图号必须与之对齐
     assert len(captured["reference_images"]) == 2
     prompt = captured["prompt"]
@@ -1996,7 +2142,13 @@ async def test_execute_reference_video_task_requests_planned_tier_regardless_of_
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ):
-    """use_tts 项目里已有更长的旁白配音，worker 仍按剧本计划时长取档，只声明 video lane。
+    """A use_tts project already has longer narration audio; the worker still picks the tier from the script's
+    planned duration and declares only the video lane.
+
+    Request options enqueued by older versions carry ``narration_delivery``, ignored on read; the checkpoint no
+    longer records narration delivery facts.
+
+    use_tts 项目里已有更长的旁白配音，worker 仍按剧本计划时长取档，只声明 video lane。
 
     旧版本入队的请求选项带着 ``narration_delivery``，读取时忽略；检查点不再记录旁白交付事实。
     """
@@ -2007,6 +2159,7 @@ async def test_execute_reference_video_task_requests_planned_tier_regardless_of_
     project_path.write_text(json.dumps(project, ensure_ascii=False), encoding="utf-8")
     script_path = proj_dir / "scripts" / "episode_1.json"
     script = json.loads(script_path.read_text(encoding="utf-8"))
+    # 5 is not a member of [4,8,12] -> request 8 s; 9.5 s narration audio does not raise the tier
     # 5 不是 [4,8,12] 成员 → 按 8 秒申请；9.5 秒的旁白配音不抬高档位
     script["video_units"][0]["text"] = "镜头1：海面\n{旁白正文。}"
     script["video_units"][0]["duration_seconds"] = 5
@@ -2079,7 +2232,10 @@ async def test_execute_reference_video_task_persists_effective_duration_when_rou
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ):
-    """取档偏移时 checkpoint 冻结实际申请秒数，enqueue payload 保持无内容快照。"""
+    """When tier selection shifts, the checkpoint freezes the actually requested seconds; the enqueue payload stays
+    a content-free snapshot.
+
+    取档偏移时 checkpoint 冻结实际申请秒数，enqueue payload 保持无内容快照。"""
     proj_dir = write_project(tmp_path)
     script_path = proj_dir / "scripts" / "episode_1.json"
     script = json.loads(script_path.read_text(encoding="utf-8"))
@@ -2138,7 +2294,10 @@ async def test_execute_reference_video_task_persists_duration_when_unchanged(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ):
-    """未偏移时 checkpoint 也冻结 unit 实际时长，resume 不读当前 project 默认值。"""
+    """Without a shift the checkpoint also freezes the unit's actual duration; resume does not read the current
+    project default.
+
+    未偏移时 checkpoint 也冻结 unit 实际时长，resume 不读当前 project 默认值。"""
     proj_dir = write_project(tmp_path)
 
     from lib.script.reference_video.execution_checkpoint import ReferenceSubmissionCheckpoint
@@ -2191,7 +2350,10 @@ async def test_execute_reference_video_task_persists_execution_identity(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ):
-    """当前投影解析出的 registry/provider/backend 身份在 provider submit 前原子冻结。"""
+    """The registry/provider/backend identity resolved by the current projection is frozen atomically before the
+    provider submit.
+
+    当前投影解析出的 registry/provider/backend 身份在 provider submit 前原子冻结。"""
     proj_dir = write_project(tmp_path)
 
     from lib.script.reference_video.execution_checkpoint import ReferenceSubmissionCheckpoint
@@ -2217,6 +2379,9 @@ async def test_execute_reference_video_task_persists_execution_identity(
 
     fake_generator = MagicMock()
     fake_generator.generate_video_async = AsyncMock(side_effect=_fake_generate_video_async)
+    # Family-alias scenario: registry provider_id differs from backend_name; what is written back must be the
+    # registry identity (the existing meaning of the provider_id column; claim pool filtering and resume locking
+    # both query by it).
     # 族别名场景：registry provider_id 与 backend_name 不同，写回的必须是 registry 身份
     # （provider_id 列的既有口径，claim 池过滤与 resume 锁定都按它查）。
     _wire_context(
@@ -2288,7 +2453,10 @@ async def test_execute_reference_video_task_stages_actual_request_and_checkpoint
     submitted_visual_bases: dict[str, str] = {}
 
     async def _edit_source_before_staging(project_path, task_id, inputs):
-        """经 ``stage_media_for_task`` 注入：在现摘要与暂存之间改写源文件，其余照真实暂存跑。"""
+        """Injected via ``stage_media_for_task``: rewrite the source file between the current digest and staging;
+        everything else runs as real staging.
+
+        经 ``stage_media_for_task`` 注入：在现摘要与暂存之间改写源文件，其余照真实暂存跑。"""
         if inputs:
             await asyncio.to_thread(inputs[0].path.write_bytes, b"edited-between-live-basis-and-staging")
         return await rvt.stage_provider_media_for_task(project_path, task_id, inputs, stage=rvt.stage_provider_media)
@@ -2331,6 +2499,8 @@ async def test_execute_reference_video_task_stages_actual_request_and_checkpoint
     monkeypatch.setattr(rvt, "get_generation_queue", lambda: fake_queue)
     use_video_thumbnail_extractor(monkeypatch, AsyncMock(return_value=False))
 
+    # Baseline: the visual basis digest submitted when the source file is unchanged, i.e. the bytes the
+    # pre-rewrite current digest was based on.
     # 基线：源文件未改时提交的视觉依据摘要，即改写前的现摘要所依据的字节。
     await rvt.execute_reference_video_task(
         "demo", "E1U1", {}, script_file="scripts/episode_1.json", user_id="u1", task_id="task-baseline"
@@ -2354,6 +2524,8 @@ async def test_execute_reference_video_task_stages_actual_request_and_checkpoint
 
     assert events == ["checkpoint", "provider_submit"]
     assert result["resource_id"] == "E1U1"
+    # Source file rewritten between the current digest and staging: the submitted digest binds the staged
+    # rewritten bytes, not the pre-rewrite current digest.
     # 现摘要与暂存之间被改写的源文件：提交的摘要绑定暂存下来的改写后字节，而不是改写前的现摘要。
     assert submitted_visual_bases["task-submit"] != submitted_visual_bases["task-baseline"]
     checkpoint = ReferenceSubmissionCheckpoint.from_json(persisted["raw"])

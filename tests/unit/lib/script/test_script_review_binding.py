@@ -1,4 +1,7 @@
-"""内容确认按集绑定解析剧本：绑定文件缺席时不拿规范路径上的别集文件当本集产出。"""
+"""Content review resolves the script by per-episode binding: when the bound file is absent, a file of
+another episode at the canonical path is not taken as this episode's output.
+
+内容确认按集绑定解析剧本：绑定文件缺席时不拿规范路径上的别集文件当本集产出。"""
 
 from __future__ import annotations
 
@@ -41,7 +44,10 @@ def _project_dir(tmp_path: Path, *, canonical_holds: int | None, bound_present: 
 
 
 def test_absent_binding_is_not_grandfathered_by_the_file_at_the_canonical_path(tmp_path: Path) -> None:
-    """迁移跳过的形态：绑定文件缺席、规范路径上是别集的剧本——本集没有产出，不得放行成已确认。"""
+    """A shape the migration skipped: the bound file is absent and the canonical path holds another
+    episode's script; this episode has no output and must not be let through as confirmed.
+
+    迁移跳过的形态：绑定文件缺席、规范路径上是别集的剧本——本集没有产出，不得放行成已确认。"""
 
     project_dir = _project_dir(tmp_path, canonical_holds=2, bound_present=False)
     project = _project("scripts/custom.json")
@@ -70,7 +76,13 @@ def test_unbound_episode_still_falls_back_to_the_canonical_path(tmp_path: Path) 
 
 
 def test_canonical_fallback_refuses_a_file_that_holds_another_episode(tmp_path: Path) -> None:
-    """绑定文件缺席、规范路径上是别集剧本：解析不出本集正式脚本，覆盖清单按无剧本算。
+    """Bound file absent and another episode's script at the canonical path: this episode's final script
+    cannot be resolved, and the overwrite list counts it as having no script.
+
+    Falling back to that file would make content review rebuild the other episode's live script wholesale
+    and bind this episode to it.
+
+    绑定文件缺席、规范路径上是别集剧本：解析不出本集正式脚本，覆盖清单按无剧本算。
 
     回落到那份文件会让内容确认整份重建别集的在世剧本，并把本集绑到它上面。
     """
@@ -85,7 +97,10 @@ def test_canonical_fallback_refuses_a_file_that_holds_another_episode(tmp_path: 
 
 
 def test_canonical_fallback_refuses_a_file_that_is_not_a_script_object(tmp_path: Path) -> None:
-    """判据与 v14→v15 改名前那次归属校验一致：读不成对象同样不回落。"""
+    """Same criterion as the ownership check before the v14->v15 rename: if it cannot be read as an object,
+    there is no fallback either.
+
+    判据与 v14→v15 改名前那次归属校验一致：读不成对象同样不回落。"""
 
     project_dir = _project_dir(tmp_path, canonical_holds=None, bound_present=False)
     (project_dir / "scripts").mkdir(parents=True, exist_ok=True)
@@ -97,7 +112,10 @@ def test_canonical_fallback_refuses_a_file_that_is_not_a_script_object(tmp_path:
 
 
 def test_canonical_fallback_refuses_a_boolean_episode(tmp_path: Path) -> None:
-    """剧本内 ``episode`` 为 JSON ``true``：``True == 1``，按 ``!=`` 比会冒充第 1 集放行回落。"""
+    """``episode`` inside the script is JSON ``true``: ``True == 1``, so comparing with ``!=`` would pass it
+    off as episode 1 and allow the fallback.
+
+    剧本内 ``episode`` 为 JSON ``true``：``True == 1``，按 ``!=`` 比会冒充第 1 集放行回落。"""
 
     project_dir = _project_dir(tmp_path, canonical_holds=None, bound_present=False)
     _write_json(project_dir / "scripts" / "episode_1.json", {"episode": True, "segments": []})
@@ -108,7 +126,10 @@ def test_canonical_fallback_refuses_a_boolean_episode(tmp_path: Path) -> None:
 
 
 def test_canonical_fallback_stands_when_the_path_is_free_or_holds_this_episode(tmp_path: Path) -> None:
-    """规范路径空着（首次写入的落点）或放着本集剧本时，回落照旧成立。"""
+    """When the canonical path is free (the landing spot of a first write) or holds this episode's script,
+    the fallback still applies.
+
+    规范路径空着（首次写入的落点）或放着本集剧本时，回落照旧成立。"""
 
     free = _project_dir(tmp_path / "free", canonical_holds=None, bound_present=False)
     assert formal_script_filename(free, _project("scripts/custom.json"), 1) == "episode_1.json"

@@ -1,4 +1,6 @@
-"""剪辑时间线工具：修订按调用方记录作者与所属 Agent 轮次。"""
+"""Edit timeline tools: revisions record the author and the owning Agent turn by caller.
+
+剪辑时间线工具：修订按调用方记录作者与所属 Agent 轮次。"""
 
 from __future__ import annotations
 

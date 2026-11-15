@@ -1,4 +1,10 @@
-"""图片编辑选用声明了图生图的声明式图片端点：编辑指令随 prompt 下发，当前图作为参考图，产出新版本。
+"""Image editing picks a declarative image endpoint that declares image-to-image: the edit instruction is sent
+with the prompt, the current image is the reference image, and a new version is produced.
+
+Real ``ProjectManager`` + real ``MediaGenerator`` + a declarative image backend built from the endpoint
+projection; outgoing requests are answered by respx at the transport layer.
+
+图片编辑选用声明了图生图的声明式图片端点：编辑指令随 prompt 下发，当前图作为参考图，产出新版本。
 
 真 ``ProjectManager`` + 真 ``MediaGenerator`` + 由端点投影装出的声明式图片 backend，出站请求由
 respx 在 transport 层应答。

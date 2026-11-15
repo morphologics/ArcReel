@@ -1,4 +1,6 @@
-"""v0→v1 迁移：clues → scenes/props + 剧本级联 + 文件重命名。"""
+"""v0->v1 migration: clues -> scenes/props + script cascade + file renames.
+
+v0→v1 迁移：clues → scenes/props + 剧本级联 + 文件重命名。"""
 
 import json
 from pathlib import Path
@@ -63,10 +65,10 @@ def test_migrate_v0_to_v1_project_json(tmp_path: Path):
     assert "clues" not in data
     assert set(data["scenes"].keys()) == {"庙宇"}
     assert set(data["props"].keys()) == {"玉佩"}
-    # importance / type 字段被清理
+    # The importance / type fields are cleaned up / importance / type 字段被清理
     assert "importance" not in data["props"]["玉佩"]
     assert "type" not in data["props"]["玉佩"]
-    # sheet 字段重命名
+    # The sheet field is renamed / sheet 字段重命名
     assert data["props"]["玉佩"]["prop_sheet"] == "props/玉佩.png"
     assert "clue_sheet" not in data["props"]["玉佩"]
 
@@ -95,13 +97,21 @@ def test_migrate_v0_to_v1_script_clues_split(tmp_path: Path):
 def test_migrate_idempotent(tmp_path: Path):
     p = _make_v0_project(tmp_path)
     migrate_v0_to_v1(p)
-    migrate_v0_to_v1(p)  # 再跑一次不应抛错
+    migrate_v0_to_v1(p)  # Running again should not raise / 再跑一次不应抛错
     data = json.loads((p / "project.json").read_text())
     assert data["schema_version"] == 1
 
 
 def test_migrate_order_files_before_schema_bump(tmp_path: Path):
-    """若剧本迁移中途崩溃，schema_version 必须仍为 0（防止下次启动因幂等跳过 → 永久丢图）。
+    """If the script migration crashes midway, schema_version must still be 0 (otherwise the next startup
+    would skip it as idempotent -> images lost for good).
+
+    The crash point is triggered for real by a malformed script: in a hand-broken v0 script ``scenes``
+    holds a string instead of an object, so the cascade rewrite hits AttributeError at ``pop``. File
+    moves are ordered before the script cascade, which pins exactly the state "images moved, script not
+    fully rewritten, version not bumped".
+
+    若剧本迁移中途崩溃，schema_version 必须仍为 0（防止下次启动因幂等跳过 → 永久丢图）。
 
     崩溃点由畸形剧本真实触发：手改坏的 v0 剧本里 ``scenes`` 存的是字符串而非对象，级联改写
     走到 ``pop`` 就 AttributeError。文件搬迁排在剧本级联之前，正好卡出「图已搬、剧本没改完、
@@ -116,17 +126,19 @@ def test_migrate_order_files_before_schema_bump(tmp_path: Path):
     with pytest.raises(AttributeError):
         mod.migrate_v0_to_v1(p)
 
-    # 第一步（搬图）确实先跑完了，崩溃卡在第二步
+    # The first step (moving images) really did finish first; the crash is stuck at the second step / 第一步（搬图）确实先跑完了，崩溃卡在第二步
     assert (p / "props" / "玉佩.png").exists()
     assert (p / "scenes" / "庙宇.png").exists()
 
     data = json.loads((p / "project.json").read_text(encoding="utf-8"))
     assert data.get("schema_version", 0) == 0
-    assert "clues" in data  # project.json 未升级，幂等检查会重试
+    assert "clues" in data  # project.json was not upgraded, so the idempotency check will retry / project.json 未升级，幂等检查会重试
 
 
 def test_migrate_self_heals_half_migrated(tmp_path: Path):
-    """schema_version=1 但 clues/ 仍存在 → 自愈补跑。"""
+    """schema_version=1 but clues/ still exists -> self-heal by re-running.
+
+    schema_version=1 但 clues/ 仍存在 → 自愈补跑。"""
     p = tmp_path / "demo"
     p.mkdir()
     (p / "characters").mkdir()
@@ -135,6 +147,8 @@ def test_migrate_self_heals_half_migrated(tmp_path: Path):
     (p / "clues" / "庙宇.png").write_bytes(b"scene-image")
     (p / "scripts").mkdir()
 
+    # Simulate a "half-migrated" state: project.json is already v1, but clues/ files were not moved and the
+    # script's clues[] was not split
     # 模拟"半迁移"状态：project.json 已 v1，但 clues/ 文件未搬走、剧本 clues[] 未拆
     (p / "project.json").write_text(
         json.dumps(

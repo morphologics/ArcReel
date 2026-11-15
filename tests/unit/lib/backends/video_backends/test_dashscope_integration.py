@@ -1,4 +1,6 @@
-"""DashScope 跨层集成测试：文本记账 provider、目录计价、自定义 endpoint 派发、能力 fallthrough。"""
+"""DashScope cross-layer integration tests: text accounting provider, catalog pricing, custom endpoint dispatch, capability fallthrough.
+
+DashScope 跨层集成测试：文本记账 provider、目录计价、自定义 endpoint 派发、能力 fallthrough。"""
 
 from __future__ import annotations
 
@@ -27,7 +29,9 @@ def _text_response(content: str = "ok", in_tok: int = 10, out_tok: int = 5) -> M
 
 
 class TestTextProviderBilling:
-    """隐患 3 回归：dashscope 文本复用 OpenAI 后端必须以 'dashscope' 记账，否则计费命中 USD。"""
+    """Hazard 3 regression: dashscope text reusing the OpenAI backend must account as 'dashscope', otherwise billing hits USD.
+
+    隐患 3 回归：dashscope 文本复用 OpenAI 后端必须以 'dashscope' 记账，否则计费命中 USD。"""
 
     def test_provider_name_override(self):
         with captured_openai_clients():
@@ -57,6 +61,7 @@ class TestTextProviderBilling:
 
 class TestCatalogPricing:
     def test_text_cny(self):
+        # qwen-plus is tiered by the input volume of a single request; 100k input falls in the first tier: input 0.8, output 2 CNY per million tokens.
         # qwen-plus 按单次请求的输入量分档，10 万输入落在首档：输入 0.8、输出 2 元/百万 token。
         amount, cur = builtin_price(
             PROVIDER_DASHSCOPE,
@@ -84,7 +89,9 @@ class TestCatalogPricing:
 
     @pytest.mark.parametrize("model", ["happyhorse-1.1-t2v", "happyhorse-1.1-i2v", "happyhorse-1.1-r2v"])
     def test_happyhorse_11_pricing_covers_three_resolutions(self, model: str):
-        """三档分辨率都要有价：任一档缺价会让该档的调用记为未定价。"""
+        """All three resolution tiers must have a price: a tier missing a price makes calls in that tier unpriced.
+
+        三档分辨率都要有价：任一档缺价会让该档的调用记为未定价。"""
         for resolution, expected in (("480p", 4.5), ("720p", 9.0), ("1080p", 12.0)):
             amount, cur = builtin_price(
                 PROVIDER_DASHSCOPE, model, "video", {"output_seconds": 10}, {"resolution": resolution}
@@ -116,6 +123,7 @@ class TestCustomEndpointDispatch:
 
         result = create_custom_backend(provider=self._provider(), model_id="qwen-image-2.0", endpoint="dashscope-image")
         assert isinstance(result, CustomImageBackend)
+        # The builder passes the raw base_url through; the backend derives /api/v1 internally (no double normalization).
         # builder 透传原始 base_url，由 backend 内部派生 /api/v1（不重复归一化）
         mock_cls.assert_called_once_with(
             api_key="sk-test", base_url="https://dashscope.aliyuncs.com", model="qwen-image-2.0", transport_layer=None
@@ -130,6 +138,7 @@ class TestCustomEndpointDispatch:
             provider=self._provider(), model_id="happyhorse-1.0-r2v", endpoint="dashscope-async-video"
         )
         assert isinstance(result, CustomVideoBackend)
+        # The builder passes the raw base_url through; the backend derives /api/v1 internally (no double normalization).
         # builder 透传原始 base_url，由 backend 内部派生 /api/v1（不重复归一化）
         mock_cls.assert_called_once_with(
             api_key="sk-test",
@@ -140,7 +149,9 @@ class TestCustomEndpointDispatch:
 
 
 class TestEndpointFallthrough:
-    """endpoint 不声明 video_max_reference_images → resolver fallthrough 到 backend caps（#677）。"""
+    """The endpoint does not declare video_max_reference_images -> the resolver falls through to backend caps (#677).
+
+    endpoint 不声明 video_max_reference_images → resolver fallthrough 到 backend caps（#677）。"""
 
     def test_async_video_endpoint_declares_none(self):
         from lib.custom_provider.endpoints import get_endpoint_spec

@@ -119,11 +119,12 @@ class TestSessionManager:
     def test_managed_session_broadcast_and_queue_overflow(self):
         managed = ManagedSession(session_id="s1", actor=None)
 
-        # 会话通道把消息广播给订阅者。
+        # The session channel broadcasts messages to subscribers. / 会话通道把消息广播给订阅者。
         queue = managed.channel.subscribe()
         managed.channel.broadcast({"type": "result", "uuid": "r1"})
         assert queue.get_nowait()["type"] == "result"
 
+        # The subscriber cannot keep up at all (queue full of critical messages, nothing evictable): removed per the session stream overflow policy.
         # 订阅者彻底跟不上（队列填满关键消息、无可逐出）→ 按会话流溢出策略移除。
         for i in range(120):
             managed.channel.broadcast({"type": "result", "uuid": f"m{i}"})
@@ -177,6 +178,7 @@ class TestSessionManager:
             await asyncio.sleep(0)
             assert created_clients
             assert created_clients[0].connected
+            # The stand-in CLI exits immediately: reconnecting discards the old session whose actor has exited and rebuilds the connection
             # 替身的 CLI 立即退出：再次连接丢弃 actor 已退出的旧会话，重建连接
             await managed.actor.wait()
             revived = await session_manager.get_or_connect(meta.id)
@@ -208,7 +210,9 @@ class TestSessionManager:
 
     @pytest.mark.asyncio
     async def test_stream_messages_waits_across_eviction_and_revival(self, session_manager, meta_store, monkeypatch):
-        """订阅不复活冷会话；会话之后复活、被驱逐、再复活，同一订阅都照常收到广播。"""
+        """Subscribing does not revive a cold session; when the session later revives, is evicted and revives again, the same subscription keeps receiving broadcasts.
+
+        订阅不复活冷会话；会话之后复活、被驱逐、再复活，同一订阅都照常收到广播。"""
         (session_manager.layout.projects_dir / "demo").mkdir(parents=True)
         meta = await meta_store.create("demo", "sdk-stream-survives-eviction")
 
@@ -314,7 +318,9 @@ class TestSessionManager:
         assert (await meta_store.get(meta.id)).status == "interrupted"
 
     async def test_autonomous_turn_survives_failed_running_persist(self, session_manager, meta_store, monkeypatch):
-        """自主轮次开头写 running 失败：inbox 照常处理到 CLI 报 idle，会话仍能收尾。"""
+        """Writing running at the start of an autonomous turn fails: the inbox still processes until the CLI reports idle, and the session can still settle.
+
+        自主轮次开头写 running 失败：inbox 照常处理到 CLI 报 idle，会话仍能收尾。"""
         meta = await meta_store.create("demo", "sdk-autonomous-persist")
         managed = ManagedSession(session_id=meta.id, actor=_dummy_actor(), status="idle", project_name="demo")
         managed.resolved_sdk_id = meta.id
@@ -342,7 +348,10 @@ class TestSessionManager:
     async def test_autonomous_turn_resumes_running_when_read_and_broadcasts_it(
         self, session_manager, meta_store, monkeypatch
     ):
-        """idle 会话读到主线程 assistant 帧（CLI 未先报 running 就开启的一轮）：读到即回到 running，
+        """An idle session reads a main-thread assistant frame (a turn the CLI started without first reporting running): it returns to running on read,
+        then the inbox persists it, broadcasts running on the session channel and notifies listeners.
+
+        idle 会话读到主线程 assistant 帧（CLI 未先报 running 就开启的一轮）：读到即回到 running，
         inbox 随后持久化、在会话通道广播 running 并通知监听方。"""
         meta = await meta_store.create("demo", "sdk-autonomous-1")
         managed = ManagedSession(session_id=meta.id, actor=_dummy_actor(), status="idle", project_name="demo")
@@ -367,7 +376,9 @@ class TestSessionManager:
     async def test_turn_read_after_idle_without_running_frame_makes_that_idle_stale(
         self, session_manager, meta_store, monkeypatch
     ):
-        """CLI 报 idle 后未先报 running 就开启新一轮：读出时已登记的 idle 过时，会话不落终态。"""
+        """The CLI starts a new turn after reporting idle without first reporting running: the registered idle is stale when read, and the session does not settle to a terminal state.
+
+        CLI 报 idle 后未先报 running 就开启新一轮：读出时已登记的 idle 过时，会话不落终态。"""
         meta = await meta_store.create("demo", "sdk-autonomous-stale-idle")
         managed = ManagedSession(session_id=meta.id, actor=_dummy_actor(), status="running", project_name="demo")
         managed.resolved_sdk_id = meta.id
@@ -394,7 +405,9 @@ class TestSessionManager:
     async def test_cli_work_read_while_idle_persists_does_not_broadcast_the_stale_terminal(
         self, session_manager, meta_store, monkeypatch
     ):
-        """idle 落库期间读到 CLI 开始工作：会话回到 running，不向订阅者广播过时的终态。"""
+        """CLI starting work is read while idle is being persisted: the session returns to running and does not broadcast the stale terminal state to subscribers.
+
+        idle 落库期间读到 CLI 开始工作：会话回到 running，不向订阅者广播过时的终态。"""
         meta = await meta_store.create("demo", "sdk-idle-persist-race")
         managed = ManagedSession(session_id=meta.id, actor=_dummy_actor(), status="running", project_name="demo")
         managed.resolved_sdk_id = meta.id
@@ -423,7 +436,9 @@ class TestSessionManager:
     async def test_send_accepted_while_idle_persists_leaves_running_persisted(
         self, session_manager, meta_store, monkeypatch
     ):
-        """idle 落库期间新消息送达、且它的 running 先落库：会话最终持久化为 running，而不是过时的终态。"""
+        """A new message arrives while idle is being persisted, and its running is persisted first: the session ends up persisted as running, not the stale terminal state.
+
+        idle 落库期间新消息送达、且它的 running 先落库：会话最终持久化为 running，而不是过时的终态。"""
         meta = await meta_store.create("demo", "sdk-idle-send-race")
         managed = ManagedSession(session_id=meta.id, actor=_dummy_actor(), status="running", project_name="demo")
         managed.resolved_sdk_id = meta.id
@@ -433,6 +448,7 @@ class TestSessionManager:
 
         async def _send_lands_first(session_id, status):
             if status == "completed":
+                # The send path accepts after seeing non-running: write running first, then deliver to the CLI
                 # 发送路径看到非 running 后受理：先写 running，再送达 CLI
                 await real_update(session_id, "running")
                 managed.enter_running()
@@ -483,7 +499,9 @@ class TestSessionManager:
     async def test_cli_work_read_keeps_the_session_running_until_cli_idle(
         self, session_manager, meta_store, frames_read
     ):
-        """CLI 报告开始工作的帧一读出就切入 running，不必等 inbox；result 不让它离开 running。"""
+        """A frame where the CLI reports starting work switches to running as soon as it is read, without waiting for the inbox; result does not make it leave running.
+
+        CLI 报告开始工作的帧一读出就切入 running，不必等 inbox；result 不让它离开 running。"""
         meta = await meta_store.create("demo", "sdk-autonomous-busy")
         managed = ManagedSession(session_id=meta.id, actor=_dummy_actor(), status="idle", project_name="demo")
         managed.resolved_sdk_id = meta.id
@@ -527,7 +545,9 @@ class TestSessionManager:
     async def test_cli_work_read_after_the_inbox_stopped_does_not_protect_the_session(
         self, session_manager, meta_store
     ):
-        """finalize 失败后 inbox 不再处理帧：读到 CLI 开始工作仍切 running 的话，再也没人收尾，会话一直受保护。"""
+        """After finalize fails the inbox no longer processes frames: if reading CLI work still switched to running, nobody would ever settle it and the session would stay protected forever.
+
+        finalize 失败后 inbox 不再处理帧：读到 CLI 开始工作仍切 running 的话，再也没人收尾，会话一直受保护。"""
         meta = await meta_store.create("demo", "sdk-inbox-stopped")
         managed = ManagedSession(session_id=meta.id, actor=_dummy_actor(), status="idle", project_name="demo")
         managed.resolved_sdk_id = meta.id
@@ -549,7 +569,9 @@ class TestSessionManager:
         assert managed.status == "error"
 
     async def test_question_is_answerable_before_the_cli_running_frame_is_read(self, session_manager):
-        """提问经 SDK 控制请求到达，可能先于 actor 读到 CLI 报告 running 的帧。"""
+        """A question arrives via an SDK control request, possibly before the actor reads the frame where the CLI reports running.
+
+        提问经 SDK 控制请求到达，可能先于 actor 读到 CLI 报告 running 的帧。"""
         managed = ManagedSession(session_id="s1", actor=_dummy_actor(), status="idle", project_name="demo")
         session_manager.sessions["s1"] = managed
         pending = managed.add_pending_question({"questions": []})
@@ -626,7 +648,9 @@ class TestSessionManager:
 
     @pytest.mark.asyncio
     async def test_stream_messages_event_sequence(self, session_manager, meta_store):
-        """事件序列：订阅屏障 → 逐条直播 → 心跳 → 溢出以流结束表达。"""
+        """Event sequence: subscription barrier, then live entries one by one, then heartbeat, then overflow expressed as end of stream.
+
+        事件序列：订阅屏障 → 逐条直播 → 心跳 → 溢出以流结束表达。"""
         from tests.fakes import build_managed_with_actor
 
         meta = await meta_store.create("demo", "sdk-stream-seq")
@@ -644,14 +668,15 @@ class TestSessionManager:
             live = await anext(stream)
             assert isinstance(live, LiveMessage)
             assert live.message["uuid"] == "live-1"
-            # idle_timeout 内无消息 → 心跳事件
+            # No message within idle_timeout: heartbeat event / idle_timeout 内无消息 → 心跳事件
             assert isinstance(await anext(stream), Heartbeat)
+            # Overflow the subscriber queue: filled with critical messages + nothing evictable, so the queue is cleared and the stream ends.
             # 挤爆订阅者队列：critical 消息填满 + 无可驱逐 → 队列被清空，流结束。
             for i in range(120):
                 managed.channel.broadcast({"type": "result", "uuid": f"m{i}"})
             tail = [event async for event in stream]
             assert tail == []
-        # 正常退出后订阅者被移除
+        # After a normal exit the subscriber is removed / 正常退出后订阅者被移除
         assert not managed.channel.has_subscribers
 
     @pytest.mark.asyncio
@@ -675,14 +700,14 @@ class TestSessionManager:
                         continue
                     if exit_mode == "exception":
                         raise RuntimeError("boom")
-                    break  # break 退出路径
+                    break  # break exit path / break 退出路径
 
         if exit_mode == "exception":
             with pytest.raises(RuntimeError):
                 await consume()
         else:
             await consume()
-        # break / 异常退出路径同样确定性移除订阅者
+        # break / exception exit paths also remove the subscriber deterministically / break / 异常退出路径同样确定性移除订阅者
         assert not managed.channel.has_subscribers
 
     @pytest.mark.asyncio
@@ -712,7 +737,7 @@ class TestSessionManager:
         )
         assert result.get("continue_") is True
 
-        # Read other project file — denied (跨项目隔离)
+        # Read other project file: denied (cross-project isolation) / Read other project file — denied (跨项目隔离)
         result = await hook(
             {"tool_name": "Read", "tool_input": {"file_path": str(other_project / "script.json")}},
             None,
@@ -720,6 +745,7 @@ class TestSessionManager:
         )
         assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
 
+        # Read docs dir: allowed (outside cwd and not under projects/, as reference material)
         # Read docs dir — allowed (cwd 外且不在 projects/ 下，作为参考资料)
         result = await hook(
             {"tool_name": "Read", "tool_input": {"file_path": str(docs_dir / "guide.md")}},
@@ -814,6 +840,7 @@ class TestSessionManager:
         )
         assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
 
+        # Write a plain .json: allowed (project.json / scripts/*.json are covered by a dedicated deny)
         # Write 普通 .json — allowed（project.json / scripts/*.json 另由专门 deny 覆盖）
         result = await hook(
             {"tool_name": "Write", "tool_input": {"file_path": str(own_project / "notes.json")}},
@@ -900,6 +927,7 @@ class TestSessionManager:
             project_root=app_root,
             meta_store=meta_store,
         )
+        # The SDK session data base directory is a policy constructor argument: a new policy injects the test location
         # SDK 会话数据基准目录是 policy 的构造参数：换新 policy 即注入测试位置
         mgr.access_policy = replace(mgr.access_policy, claude_projects_dir=claude_home)
 
@@ -909,6 +937,11 @@ class TestSessionManager:
     @pytest.mark.asyncio
     async def test_file_access_hook_allows_read_sdk_tool_results(self, tmp_path, meta_store):
         """Hook allows Read for SDK tool-results of the CURRENT project.
+
+        New policy: cwd-external non-projects paths (including the SDK directory) are allowed by default;
+        Write is still restricted to within cwd.
+
+        Hook allows Read for SDK tool-results of the CURRENT project.
 
         New policy: cwd-external non-projects paths (含 SDK 目录) 默认放行；
         Write 仍受 cwd 内限制约束。
@@ -941,6 +974,11 @@ class TestSessionManager:
     async def test_file_access_hook_denies_read_other_project_dir(self, tmp_path, meta_store):
         """Hook denies Read for ANOTHER project's directory under projects/.
 
+        New policy: cross-project isolation is based on the physical location project_root/projects/<other>/,
+        not the SDK-encoded path.
+
+        Hook denies Read for ANOTHER project's directory under projects/.
+
         New policy: 跨项目隔离基于 project_root/projects/<other>/ 的物理位置，
         而非 SDK 编码路径。
         """
@@ -963,6 +1001,10 @@ class TestSessionManager:
     async def test_file_access_hook_denies_write_outside_cwd(self, tmp_path, meta_store):
         """Hook denies Write to any path outside project_cwd.
 
+        New policy: write tools always deny paths outside cwd; Read has been relaxed to non-projects/ paths outside cwd.
+
+        Hook denies Write to any path outside project_cwd.
+
         New policy: 写工具一律拒绝 cwd 外路径；Read 已放宽至 cwd 外非 projects/ 路径。
         """
         hook, _, _ = await self._make_sdk_hook_env(tmp_path, meta_store)
@@ -978,6 +1020,11 @@ class TestSessionManager:
     @pytest.mark.asyncio
     async def test_file_access_hook_allows_read_sdk_task_output(self, tmp_path, meta_store):
         """Hook allows Read for SDK task output files under /tmp/claude-*.
+
+        New policy: cwd-external non-projects paths are allowed by default (including SDK background task output);
+        write tools are still restricted to within cwd.
+
+        Hook allows Read for SDK task output files under /tmp/claude-*.
 
         New policy: cwd-external non-projects 路径默认放行（含 SDK 后台任务输出），
         写工具仍受 cwd 内限制约束。
@@ -1384,23 +1431,28 @@ class TestJsonPostValidationHook:
         assert "test-tool-use-id" not in backups
 
 
+# --- ManagedSession state machine (Session Actor refactor) -----------------------------
 # --- ManagedSession 状态机（Session Actor 重构）-----------------------------
 
 
 def _make_managed_for_state_test():
-    """构造一个 ManagedSession 用于状态机测试，actor 字段用 None 占位。"""
+    """Build a ManagedSession for state machine tests, with None as a placeholder for the actor field.
+
+    构造一个 ManagedSession 用于状态机测试，actor 字段用 None 占位。"""
     from server.agent_runtime.session_manager import ManagedSession
 
     return ManagedSession(
         session_id="test",
-        actor=None,  # 状态机测试不触及 actor
+        actor=None,  # State machine tests do not touch the actor / 状态机测试不触及 actor
         status="running",
         project_name="demo",
     )
 
 
 def test_interrupt_marker_applies_only_to_the_first_result_after_it(session_manager):
-    """被中断那一轮的 result 记为中断；排队消息开启的下一轮在收尾之前结束，也按自身结果判定。"""
+    """The result of the interrupted turn counts as interrupted; the next turn opened by a queued message ends before settling and is judged by its own result.
+
+    被中断那一轮的 result 记为中断；排队消息开启的下一轮在收尾之前结束，也按自身结果判定。"""
     managed = _make_managed_for_state_test()
     managed.interrupt_requested = True
     interrupted = result_frame("error_during_execution", is_error=True)
@@ -1414,7 +1466,9 @@ def test_interrupt_marker_applies_only_to_the_first_result_after_it(session_mana
 
 
 def test_on_actor_message_result_does_not_change_status():
-    """P1 race 防护：sync 回调不再改 status；由 _finalize_turn 统一设置。"""
+    """P1 race guard: the sync callback no longer changes status; _finalize_turn sets it uniformly.
+
+    P1 race 防护：sync 回调不再改 status；由 _finalize_turn 统一设置。"""
     for subtype in ("success", "error_during_execution", "error_max_turns"):
         managed = _make_managed_for_state_test()
         managed.status = "running"
@@ -1436,6 +1490,7 @@ def test_on_actor_message_broadcasts_to_subscribers():
     assert queue.get_nowait()["type"] == "assistant"
 
 
+# --- ManagedSession proxying to the actor -----------------------------------------
 # --- ManagedSession 对 actor 的代理 -----------------------------------------
 
 
@@ -1458,10 +1513,11 @@ async def test_send_query_sets_running_and_awaits_done():
     await actor.start()
     await managed.send_query(_user_message("hi", "u-1"))
     assert [m["uuid"] for m in client.sent_messages] == ["u-1"]
+    # send_query returns once the message is written to the CLI; leaving running is governed by the CLI reporting idle (this unit test has no inbox attached)
     # send_query 在消息写给 CLI 后即返回；离开 running 以 CLI 报 idle 为准（此单元测试没挂 inbox）
     assert managed.status == "running"
 
-    # 收尾
+    # Wind down / 收尾
     await managed.send_disconnect()
 
 
@@ -1486,7 +1542,9 @@ async def test_send_query_raises_on_cmd_error():
 
 @pytest.mark.asyncio
 async def test_send_interrupt_is_idempotent_via_flag():
-    """_interrupting 标志防止重入。"""
+    """The _interrupting flag prevents reentry.
+
+    _interrupting 标志防止重入。"""
     from server.agent_runtime.session_actor import SessionActor, SessionCommand
     from server.agent_runtime.session_manager import ManagedSession
     from tests.fakes import FakeSDKClient
@@ -1496,13 +1554,15 @@ async def test_send_interrupt_is_idempotent_via_flag():
     managed = ManagedSession(session_id="t", actor=actor, status="running", project_name="p")
     await actor.start()
 
-    # 发一个 query 让这一轮开始
+    # Send a query to start this turn / 发一个 query 让这一轮开始
     q = SessionCommand(type="query", message=_user_message("x", "u-x"))
     await actor.enqueue(q)
     await q.done.wait()
 
+    # Two concurrent send_interrupt calls; the second should take the _interrupting fast-return
     # 并发两次 send_interrupt；第二次应走 _interrupting fast-return
     await asyncio.gather(managed.send_interrupt(), managed.send_interrupt())
+    # client.interrupt is called at least once (exact count depends on asyncio scheduling; 1 or 2 allowed)
     # client.interrupt 至少被调一次（具体次数视 asyncio 调度，允许 1 或 2）
     assert client.interrupted
 

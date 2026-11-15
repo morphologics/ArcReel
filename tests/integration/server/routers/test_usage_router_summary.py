@@ -1,4 +1,7 @@
-"""`GET /usage/summary` 的路由缝：KPI 口径、时区切天、构成表、需要关注与筛选候选值。"""
+"""Router seam of `GET /usage/summary`: KPI rules, time-zone day splitting, breakdown tables, needs-attention and
+filter option values.
+
+`GET /usage/summary` 的路由缝：KPI 口径、时区切天、构成表、需要关注与筛选候选值。"""
 
 from datetime import UTC, datetime
 
@@ -27,7 +30,9 @@ async def seed_call(
     segment_id: str | None = None,
     error_code: str | None = None,
 ) -> int:
-    """经仓储落一条真实调用行；``started_at`` 与 ``error_code`` 事后按行更新。"""
+    """Store one real call row via the repository; ``started_at`` and ``error_code`` are updated per row afterwards.
+
+    经仓储落一条真实调用行；``started_at`` 与 ``error_code`` 事后按行更新。"""
     repo = UsageRepository(session)
     call_id = await repo.start_call(
         project_name=project_name,
@@ -56,7 +61,9 @@ def summary_client(db_factory, usage_app) -> TestClient:
 
 class TestSummaryKpi:
     async def test_kpi_counts_terminal_calls_and_skips_pending(self, summary_client, db_factory):
-        """调用次数 = 成功 + 失败 + 已取消；pending 不进聚合，失败行的费用照样计入。"""
+        """Call count = success + failed + cancelled; pending is not aggregated; failed rows' cost is still counted.
+
+        调用次数 = 成功 + 失败 + 已取消；pending 不进聚合，失败行的费用照样计入。"""
         async with db_factory() as session:
             await seed_call(session, status=CallStatus.SUCCESS, cost=1.0)
             await seed_call(session, status=CallStatus.FAILED, cost=0.5)
@@ -75,7 +82,9 @@ class TestSummaryKpi:
         }
 
     async def test_success_rate_is_null_without_decided_calls(self, summary_client, db_factory):
-        """只有取消时成功率分母为 0，返回 null 而不是 0。"""
+        """With only cancellations the success-rate denominator is 0; return null, not 0.
+
+        只有取消时成功率分母为 0，返回 null 而不是 0。"""
         async with db_factory() as session:
             await seed_call(session, status=CallStatus.CANCELLED)
 
@@ -84,7 +93,9 @@ class TestSummaryKpi:
         assert kpi["success_rate"] is None
 
     async def test_status_query_is_ignored(self, summary_client, db_factory):
-        """记录表的状态筛选带上来时被忽略：汇总口径不按状态再切。"""
+        """The record table's status filter is ignored when passed: the summary is not sliced by status again.
+
+        记录表的状态筛选带上来时被忽略：汇总口径不按状态再切。"""
         async with db_factory() as session:
             await seed_call(session, status=CallStatus.SUCCESS)
             await seed_call(session, status=CallStatus.FAILED)
@@ -94,7 +105,9 @@ class TestSummaryKpi:
         )
 
     async def test_filters_narrow_the_aggregate(self, summary_client, db_factory):
-        """项目 / 供应商 / 模型 / 媒体类型四个筛选都作用于聚合。"""
+        """Project / provider / model / media type filters all apply to the aggregate.
+
+        项目 / 供应商 / 模型 / 媒体类型四个筛选都作用于聚合。"""
         async with db_factory() as session:
             await seed_call(session, project_name="alpha", provider="ark", model="seed", media_type="text")
             await seed_call(session, project_name="beta", provider="ark", model="seed", media_type="text")
@@ -110,7 +123,9 @@ class TestSummaryDailyBuckets:
         [("UTC", "2026-03-01"), ("Asia/Shanghai", "2026-03-02"), ("America/New_York", "2026-03-01")],
     )
     async def test_local_day_follows_timezone(self, summary_client, db_factory, tz, expected):
-        """跨 UTC 日界的调用按 tz 落在本地日。"""
+        """Calls across the UTC day boundary land on the local day by tz.
+
+        跨 UTC 日界的调用按 tz 落在本地日。"""
         async with db_factory() as session:
             await seed_call(session, started_at=datetime(2026, 3, 1, 23, 30, tzinfo=UTC))
 
@@ -119,7 +134,9 @@ class TestSummaryDailyBuckets:
         assert body["range"] == {"since": expected, "until": expected}
 
     async def test_gaps_are_filled_with_zero_buckets(self, summary_client, db_factory):
-        """首尾之间没有调用的日子补零桶，趋势不跳日。"""
+        """Days without calls between first and last get zero buckets, so the trend does not skip days.
+
+        首尾之间没有调用的日子补零桶，趋势不跳日。"""
         async with db_factory() as session:
             await seed_call(session, started_at=datetime(2026, 3, 1, 1, 0, tzinfo=UTC))
             await seed_call(session, started_at=datetime(2026, 3, 4, 1, 0, tzinfo=UTC))
@@ -135,14 +152,18 @@ class TestSummaryDailyBuckets:
         assert body["daily"][1]["cost_by_media_type"] == {"image": 0.0, "video": 0.0, "text": 0.0, "audio": 0.0}
 
     async def test_range_is_null_without_records(self, summary_client):
-        """没有可聚合的记录时 range 为 null、趋势为空。"""
+        """With no aggregatable records, range is null and the trend is empty.
+
+        没有可聚合的记录时 range 为 null、趋势为空。"""
         body = summary_client.get("/api/v1/usage/summary").json()
         assert body["range"] is None
         assert body["daily"] == []
         assert body["kpi"]["calls"] == 0
 
     async def test_explicit_range_bounds_the_buckets(self, summary_client, db_factory):
-        """传 since / until 时按半开区间取行并从 since 起补桶。"""
+        """With since / until, rows are taken as a half-open interval and buckets are filled from since.
+
+        传 since / until 时按半开区间取行并从 since 起补桶。"""
         async with db_factory() as session:
             await seed_call(session, started_at=datetime(2026, 3, 1, 1, 0, tzinfo=UTC))
             await seed_call(session, started_at=datetime(2026, 3, 5, 1, 0, tzinfo=UTC))
@@ -167,7 +188,9 @@ class TestSummaryDailyBuckets:
         assert body["range"] == {"since": "2026-03-02", "until": "2026-03-02"}
 
     async def test_daily_cost_splits_by_media_type_in_primary_currency(self, summary_client, db_factory):
-        """日桶费用按媒体类型分列，只统计主币种，不做汇率折算。"""
+        """Daily bucket cost is split by media type, counting only the primary currency, with no exchange-rate conversion.
+
+        日桶费用按媒体类型分列，只统计主币种，不做汇率折算。"""
         async with db_factory() as session:
             await seed_call(session, media_type="image", cost=2.0, currency="USD")
             await seed_call(session, media_type="video", cost=1.0, currency="USD")
@@ -193,7 +216,10 @@ class TestSummaryDailyBuckets:
         assert response.json()["detail"] == "Unknown IANA time zone name; check the tz parameter"
 
     async def test_oversized_window_is_rejected(self, summary_client, db_factory):
-        """since / until 展开的日桶超过上限时 422，而不是同步铺出几百万个零桶。"""
+        """When since / until expand to more daily buckets than the limit, return 422 rather than synchronously laying out
+        millions of zero buckets.
+
+        since / until 展开的日桶超过上限时 422，而不是同步铺出几百万个零桶。"""
         async with db_factory() as session:
             await seed_call(session)
 
@@ -202,7 +228,10 @@ class TestSummaryDailyBuckets:
         assert response.json()["detail"] == "统计时间范围过大，请缩小起止时刻后重试"
 
     def test_unrepresentable_instant_is_rejected(self, summary_client):
-        """落在可表示区间之外的时刻 422：半开右端减一微秒不能在 datetime 的下界上溢出。"""
+        """Instants outside the representable range are 422: subtracting one microsecond for the half-open right end must
+        not overflow at datetime's lower bound.
+
+        落在可表示区间之外的时刻 422：半开右端减一微秒不能在 datetime 的下界上溢出。"""
         response = summary_client.get("/api/v1/usage/summary?until=0001-01-01T00:00:00Z")
         assert response.status_code == 422
         assert response.json()["detail"] == "起止时刻超出可表示的时间范围，请检查后重试"
@@ -242,7 +271,9 @@ class TestSummaryCurrency:
 
 class TestSummaryBreakdown:
     async def test_three_dimensions_with_model_keyed_by_provider_and_model(self, summary_client, db_factory):
-        """同名模型分属两个供应商时是两行；项目与供应商各自成维。"""
+        """Same-named models under two providers are two rows; project and provider are each their own dimension.
+
+        同名模型分属两个供应商时是两行；项目与供应商各自成维。"""
         async with db_factory() as session:
             await seed_call(session, project_name="alpha", provider="ark", model="shared")
             await seed_call(session, project_name="alpha", provider="ark", model="shared")
@@ -261,7 +292,9 @@ class TestSummaryBreakdown:
         assert breakdown["project"]["other"] is None
 
     async def test_rows_beyond_fifty_are_merged_into_other(self, summary_client, db_factory):
-        """构成表每维最多 50 行，余量并入列表外的 other。"""
+        """Each breakdown dimension has at most 50 rows; the rest are merged into 'other' outside the list.
+
+        构成表每维最多 50 行，余量并入列表外的 other。"""
         async with db_factory() as session:
             for index in range(52):
                 await seed_call(session, project_name=f"p{index:03d}", cost=1.0)
@@ -282,7 +315,9 @@ class TestSummaryBreakdown:
 
 class TestSummaryFilterOptions:
     async def test_options_come_from_the_whole_table(self, summary_client, db_factory):
-        """筛选候选值取全表 distinct，不随本次筛选变化。"""
+        """Filter option values are distinct over the whole table and do not change with the current filter.
+
+        筛选候选值取全表 distinct，不随本次筛选变化。"""
         async with db_factory() as session:
             await seed_call(session, project_name="alpha", provider="ark", model="seed")
             await seed_call(session, project_name="beta", provider="gemini", model="flash")
@@ -298,7 +333,10 @@ class TestSummaryFilterOptions:
     async def test_provider_label_follows_locale_and_falls_back_to_id(
         self, summary_client, db_factory, accept_language, expected
     ):
-        """供应商显示名从目录解析并跟随请求语言；目录里没有的回退 id。"""
+        """Provider display names are resolved from the catalog and follow the request language; those missing from the
+        catalog fall back to the id.
+
+        供应商显示名从目录解析并跟随请求语言；目录里没有的回退 id。"""
         async with db_factory() as session:
             await seed_call(session, provider="ark", model="seed")
             await seed_call(session, provider="not-in-registry", model="whatever")
@@ -312,7 +350,9 @@ class TestSummaryFilterOptions:
 
 class TestSummaryAttention:
     async def test_provider_trigger_suppresses_its_models(self, summary_client, db_factory):
-        """供应商级失败率偏高时只报供应商，不再重复报它下面的模型。"""
+        """When the provider-level failure rate is high only the provider is reported, not its models again.
+
+        供应商级失败率偏高时只报供应商，不再重复报它下面的模型。"""
         async with db_factory() as session:
             for _ in range(5):
                 await seed_call(session, provider="flaky", model="only", status=CallStatus.FAILED)
@@ -325,7 +365,9 @@ class TestSummaryAttention:
         assert attention[0]["failure_rate"] == 1.0
 
     async def test_model_is_reported_when_its_provider_is_not(self, summary_client, db_factory):
-        """供应商整体不越线、其下单个模型越线时报模型。"""
+        """When the provider as a whole is under the line but one of its models is over, the model is reported.
+
+        供应商整体不越线、其下单个模型越线时报模型。"""
         async with db_factory() as session:
             for _ in range(15):
                 await seed_call(session, provider="mixed", model="good", status=CallStatus.SUCCESS)
@@ -338,7 +380,9 @@ class TestSummaryAttention:
         assert [(item["provider"], item["model"]) for item in attention] == [("mixed", "bad")]
 
     async def test_single_failure_never_triggers(self, summary_client, db_factory):
-        """只失败一次不报：Wilson 下界再高也过不了 failed ≥ 2 这道门槛。"""
+        """A single failure is never reported: however high the Wilson lower bound, it cannot pass the failed >= 2 gate.
+
+        只失败一次不报：Wilson 下界再高也过不了 failed ≥ 2 这道门槛。"""
         async with db_factory() as session:
             await seed_call(session, provider="flaky", model="only", status=CallStatus.FAILED)
             for _ in range(30):
@@ -347,7 +391,10 @@ class TestSummaryAttention:
         assert summary_client.get("/api/v1/usage/summary").json()["attention"] == []
 
     async def test_consecutive_failures_report_the_trailing_run(self, summary_client, db_factory):
-        """末尾连续失败 ≥ 2 才报，取消不打断也不计数，之后有成功就不报。"""
+        """Report only when trailing consecutive failures >= 2; cancellations neither break nor count; any later success
+        means no report.
+
+        末尾连续失败 ≥ 2 才报，取消不打断也不计数，之后有成功就不报。"""
         base = datetime(2026, 3, 1, 0, 0, tzinfo=UTC)
 
         async def failure_chain(session, segment_id, statuses):

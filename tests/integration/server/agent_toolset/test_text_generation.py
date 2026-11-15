@@ -45,7 +45,9 @@ from tests.integration.server.agent_tool_support import (
 
 
 def _as_json(value: Any) -> Any:
-    """Agent 收到的 JSON 形态（如 int 键变为字符串）。"""
+    """The JSON shape the Agent receives (e.g. int keys become strings).
+
+    Agent 收到的 JSON 形态（如 int 键变为字符串）。"""
     return json.loads(json.dumps(value, ensure_ascii=False))
 
 
@@ -58,7 +60,10 @@ async def test_get_video_capabilities_happy(fake_ctx: ToolHarness, video_request
 
 
 async def test_get_video_capabilities_resolves_by_project(fake_ctx: ToolHarness, video_request_facts) -> None:
-    """能力按项目生成模式解析：工具不收集号，集号入参作为多余参数被拒、不触发解析。"""
+    """Capabilities are resolved by the project's generation mode: the tool takes no episode number; an episode-number
+    argument is rejected as an extra parameter and does not trigger resolution.
+
+    能力按项目生成模式解析：工具不收集号，集号入参作为多余参数被拒、不触发解析。"""
     resolver = use_fake_caps(fake_ctx, provider_id="fake", supported_durations=[4, 6, 8])
     assert (await run_declared_tool(GET_VIDEO_CAPABILITIES, fake_ctx, {})).problem is None
     rejected = await run_declared_tool(GET_VIDEO_CAPABILITIES, fake_ctx, {"episode_id": 3})
@@ -70,7 +75,10 @@ async def test_get_video_capabilities_resolves_by_project(fake_ctx: ToolHarness,
 async def test_get_video_capabilities_annotates_reference_unit_tiers(
     fake_ctx: ToolHarness, set_video_request_facts
 ) -> None:
-    """带图档位取 r2v 桶事实的收窄结果；Agent 只收到一处无图档位及其失败原因。"""
+    """Tiers with images take the narrowed result of the r2v bucket facts; the Agent receives only one no-image tier set
+    and its failure reason.
+
+    带图档位取 r2v 桶事实的收窄结果；Agent 只收到一处无图档位及其失败原因。"""
     set_video_request_facts(
         {
             "r2v": make_video_request_facts(
@@ -105,6 +113,7 @@ async def test_get_video_capabilities_annotates_reference_unit_tiers(
         },
         "units": {},
     }
+    # The full set is kept as is: it is the model's declaration, not the effective duration options
     # 全集原样保留：它是型号声明，不是生效档位
     assert payload["supported_durations"] == [4, 6, 8]
 
@@ -112,7 +121,9 @@ async def test_get_video_capabilities_annotates_reference_unit_tiers(
 async def test_get_video_capabilities_reports_both_successful_buckets(
     fake_ctx: ToolHarness, set_video_request_facts
 ) -> None:
-    """两桶各自成功时 ``reference_unit_durations`` 各带一套档位。"""
+    """When both buckets succeed, ``reference_unit_durations`` carries one set of tiers each.
+
+    两桶各自成功时 ``reference_unit_durations`` 各带一套档位。"""
     set_video_request_facts(
         {
             "r2v": make_video_request_facts(
@@ -183,7 +194,10 @@ async def test_get_video_capabilities_reports_endpoint_fixed_per_bucket(
 async def test_get_video_capabilities_skips_tiers_off_episode_reference_path(
     fake_ctx: ToolHarness, video_request_facts, generation_mode: str, content_mode: str
 ) -> None:
-    """非剧集参考路径不补该字段：其它路径没有逐 unit 引用状态，ad 分镜时长也不受档位枚举管辖。"""
+    """Non-episode-reference paths do not add this field: other paths have no per-unit reference state, and ad shot
+    durations are not governed by the tier enumeration.
+
+    非剧集参考路径不补该字段：其它路径没有逐 unit 引用状态，ad 分镜时长也不受档位枚举管辖。"""
     use_fake_caps(
         fake_ctx,
         provider_id="gemini-aistudio",
@@ -198,7 +212,12 @@ async def test_get_video_capabilities_skips_tiers_off_episode_reference_path(
 
 
 async def test_get_video_capabilities_shares_rest_resolution_entry(fake_ctx: ToolHarness, video_request_facts) -> None:
-    """Agent 工具把闭包项目交给 ``ConfigResolver.video_capabilities_for_project``。
+    """The Agent tool hands the closure's project to ``ConfigResolver.video_capabilities_for_project``.
+
+    The resolver does not go back to the global projects directory by project name; sessions with a non-default
+    projects_root also read the project from the closure.
+
+    Agent 工具把闭包项目交给 ``ConfigResolver.video_capabilities_for_project``。
 
     解析器不按项目名回到全局项目目录，非默认 projects_root 的会话也读取闭包里的项目。
     """
@@ -212,7 +231,9 @@ async def test_get_video_capabilities_shares_rest_resolution_entry(fake_ctx: Too
 async def test_get_video_capabilities_duration_constraints_come_from_request_facts(
     fake_ctx: ToolHarness, set_video_request_facts
 ) -> None:
-    """Agent 载荷的 ``duration_constraints`` 取项目主桶的视频请求事实。"""
+    """``duration_constraints`` in the Agent payload come from the video request facts of the project's main bucket.
+
+    Agent 载荷的 ``duration_constraints`` 取项目主桶的视频请求事实。"""
     set_video_request_facts(
         make_video_request_facts(
             resolution="1080p", allowed_durations=(8,), excluded_durations=((4, "resolution"), (6, "resolution"))
@@ -293,7 +314,9 @@ def test_text_generation_request_rejects_non_positive_or_non_integer_episode(bad
 
 
 def _write_formal_script(project_path: Path, episode: int = 1, *, pending: bool = True) -> None:
-    """正式脚本：默认带一条待编写条目，提示词编写的准入据此成立。"""
+    """Final script: carries one entry pending authoring by default, so admission to prompt authoring holds.
+
+    正式脚本：默认带一条待编写条目，提示词编写的准入据此成立。"""
     scripts = project_path / "scripts"
     scripts.mkdir(parents=True, exist_ok=True)
     segments = (
@@ -307,7 +330,9 @@ def _write_formal_script(project_path: Path, episode: int = 1, *, pending: bool 
 
 
 def _prepare_script_admission(project_path: Path) -> None:
-    """工具用例经真实项目与产物清单提供准入输入。"""
+    """Tool cases provide admission inputs through a real project and artifact manifest.
+
+    工具用例经真实项目与产物清单提供准入输入。"""
     project = json.loads((project_path / "project.json").read_text(encoding="utf-8"))
     project.setdefault("generation_mode", "storyboard")
     project.setdefault("episodes", [{"episode": 1, "script_file": "scripts/episode_1.json"}])
@@ -349,7 +374,9 @@ async def test_generate_episode_script_dry_run(fake_ctx: ToolHarness, monkeypatc
 
 
 async def test_generate_episode_script_without_formal_script_is_refused(fake_ctx: ToolHarness) -> None:
-    """非 ad 项目尚无正式脚本时拒绝编写，并指向内容确认。"""
+    """A non-ad project without a final script refuses authoring and points to content review.
+
+    非 ad 项目尚无正式脚本时拒绝编写，并指向内容确认。"""
     (fake_ctx.project_path / "project.json").write_text(
         json.dumps({"schema_version": CURRENT_PROJECT_SCHEMA_VERSION, "content_mode": "narration"}), encoding="utf-8"
     )
@@ -361,7 +388,10 @@ async def test_generate_episode_script_without_formal_script_is_refused(fake_ctx
 
 
 async def test_generate_episode_script_writes_to_default_project_scripts(fake_ctx: ToolHarness, monkeypatch) -> None:
-    """output 参数已下线；写出路径必须由 ScriptGenerator 内部决定，handler 不应让 Agent 控制。"""
+    """The output parameter is retired; the write path must be decided inside ScriptGenerator, the handler must not let
+    the Agent control it.
+
+    output 参数已下线；写出路径必须由 ScriptGenerator 内部决定，handler 不应让 Agent 控制。"""
     from server import text_generation as mod
 
     project_path = fake_ctx.project_path
@@ -390,6 +420,7 @@ async def test_generate_episode_script_writes_to_default_project_scripts(fake_ct
     _prepare_script_admission(fake_ctx.project_path)
     out = await run_declared_tool("generate_episode_script", fake_ctx, {"episode_id": 1})
     assert out.problem is None
+    # The handler does not pass output_path -- ScriptGenerator decides where to write
     # handler 不传 output_path —— ScriptGenerator 自己决定写到哪里
     assert "output_path" not in captured["calls"]
     assert "scripts/episode_1.json" in said(out)
@@ -397,7 +428,10 @@ async def test_generate_episode_script_writes_to_default_project_scripts(fake_ct
 
 
 async def test_generate_episode_script_ad_skips_script_plan(fake_ctx: ToolHarness, monkeypatch) -> None:
-    """ad 一键生成不依赖 script_plan 中间文件与正式脚本：两者都缺也不报错。"""
+    """Ad one-click generation does not depend on the script_plan intermediate file or the final script: no error even
+    when both are missing.
+
+    ad 一键生成不依赖 script_plan 中间文件与正式脚本：两者都缺也不报错。"""
     from server import text_generation as mod
 
     project_path = fake_ctx.project_path
@@ -431,7 +465,9 @@ async def test_generate_episode_script_ad_skips_script_plan(fake_ctx: ToolHarnes
 
 
 async def test_generate_episode_script_entry_ids_reach_the_generator(fake_ctx: ToolHarness, monkeypatch) -> None:
-    """entry_ids 原样落到 ScriptGenerator.generate，回执列出本次编写的条目。"""
+    """entry_ids reach ScriptGenerator.generate unchanged; the receipt lists the entries authored this time.
+
+    entry_ids 原样落到 ScriptGenerator.generate，回执列出本次编写的条目。"""
     from server import text_generation as mod
 
     project_path = fake_ctx.project_path
@@ -473,7 +509,10 @@ async def test_generate_episode_script_entry_ids_reach_the_generator(fake_ctx: T
 async def test_generate_episode_script_rewrite_over_existing_prompts_returns_the_loss_list(
     fake_ctx: ToolHarness,
 ) -> None:
-    """Agent 显式重写已有提示词：提交前按同一服务拒绝，回执带服务端丢失清单与认可令牌，不提交任务。"""
+    """The Agent explicitly rewrites existing prompts: refused before submission by the same service; the receipt carries
+    the server's loss list and an acknowledgement token; no task is submitted.
+
+    Agent 显式重写已有提示词：提交前按同一服务拒绝，回执带服务端丢失清单与认可令牌，不提交任务。"""
     project_path = fake_ctx.project_path
     (project_path / "project.json").write_text(
         json.dumps({"schema_version": CURRENT_PROJECT_SCHEMA_VERSION, "content_mode": "narration"}), encoding="utf-8"
@@ -511,7 +550,10 @@ async def test_generate_episode_script_rewrite_over_existing_prompts_returns_the
 async def test_generate_episode_script_without_pending_entries_says_how_to_rewrite(
     fake_ctx: ToolHarness, monkeypatch, content_mode: str, redo_hint: str
 ) -> None:
-    """没有待编写条目时准入不成立：不调用模型，理由码与制作状态同源，并给出重写指定条目与整份重做的出路。"""
+    """Without entries pending authoring, admission fails: the model is not called, the reason code has the same source as
+    the workflow status, and the ways out (rewrite named entries, redo the whole script) are given.
+
+    没有待编写条目时准入不成立：不调用模型，理由码与制作状态同源，并给出重写指定条目与整份重做的出路。"""
     from server import text_generation as mod
 
     project_path = fake_ctx.project_path
@@ -546,7 +588,10 @@ async def test_generate_episode_script_without_pending_entries_says_how_to_rewri
 
 
 async def test_generate_episode_script_reports_unbound_scene_mentions(fake_ctx: ToolHarness, monkeypatch) -> None:
-    """写出的剧本里，被重写条目的画面描述若有对不上参考图的 @[名称]，回执带 warnings。"""
+    """In the written script, if a rewritten entry's scene description has an @[name] that matches no reference image,
+    the receipt carries warnings.
+
+    写出的剧本里，被重写条目的画面描述若有对不上参考图的 @[名称]，回执带 warnings。"""
     from lib.script.storyboard_mentions import WARN_STORYBOARD_MENTION_UNBOUND
     from server import text_generation as mod
 
@@ -601,7 +646,10 @@ async def test_generate_episode_script_reports_unbound_scene_mentions(fake_ctx: 
 async def test_generate_episode_script_unknown_entry_id_is_refused_not_internal(
     fake_ctx: ToolHarness, monkeypatch
 ) -> None:
-    """点名了正式脚本里没有的条目：报「拒绝生成」，不冒成 internal_error 引导 Agent 原样重试。"""
+    """Naming an entry not in the final script: reported as "refused to generate", not disguised as internal_error
+    that would lead the Agent to retry unchanged.
+
+    点名了正式脚本里没有的条目：报「拒绝生成」，不冒成 internal_error 引导 Agent 原样重试。"""
     from lib.script.script_generator import PromptAuthoringTargetError
     from server import text_generation as mod
 
@@ -649,7 +697,10 @@ def _narration_formal_script(project_path: Path) -> None:
 async def test_generate_episode_script_unit_rejected_before_the_model_is_an_input_problem(
     fake_ctx: ToolHarness, monkeypatch, set_video_request_facts
 ) -> None:
-    """正式脚本单元没过编写前的预判：问题码与参数原样透出、归为修改输入，不冒成 internal_error 引导重试。"""
+    """A final-script unit fails the pre-authoring check: the problem code and parameters pass through unchanged and it
+    is classed as an input fix, not disguised as internal_error that would lead to a retry.
+
+    正式脚本单元没过编写前的预判：问题码与参数原样透出、归为修改输入，不冒成 internal_error 引导重试。"""
     set_video_request_facts(make_video_request_facts(route="reference_video", generation_type="i2v"))
     fake_ctx.pm.project_payload.update(
         {
@@ -665,6 +716,8 @@ async def test_generate_episode_script_unit_rejected_before_the_model_is_an_inpu
     (fake_ctx.project_path / "project.json").write_text(
         json.dumps(fake_ctx.pm.project_payload, ensure_ascii=False), encoding="utf-8"
     )
+    # After shortening the duration on the timeline the dialogue no longer fits: the 2nd unit is stopped before the text
+    # model is called.
     # 在时间线上改短时长后台词念不完：第 2 个单元在调用文本模型前被拦下。
     long_line = "他站在门口足足看了半晌才缓缓开口说出这句迟到了整整十年的道歉与告别" * 2
     scripts = fake_ctx.project_path / "scripts"
@@ -700,6 +753,8 @@ async def test_generate_episode_script_unit_rejected_before_the_model_is_an_inpu
         "prompt_authoring_dialogue_overload",
         GenerationAction.FIX_INPUT.value,
     )
+    # Units are referred to by their position in the UI (video unit 2); parameters pass through unchanged for the Agent
+    # to relay.
     # 按界面上的位置称呼单元（视频单元 2），参数原样透出供 Agent 转述。
     assert {key: problem["params"][key] for key in ("unit_id", "position", "duration_seconds")} == {
         "unit_id": "E1U04",
@@ -714,7 +769,10 @@ async def test_generate_episode_script_unit_rejected_before_the_model_is_an_inpu
 async def test_generate_episode_script_without_anything_to_write_marks_the_result(
     fake_ctx: ToolHarness, monkeypatch
 ) -> None:
-    """只补缺而范围内没有待编写的条目：未调用文本模型，结果带上空操作标记，Web 据此提示勾选覆盖。"""
+    """Fill-missing only, with no entries pending authoring in scope: the text model is not called, the result carries a
+    no-op marker, and the Web uses it to suggest ticking overwrite.
+
+    只补缺而范围内没有待编写的条目：未调用文本模型，结果带上空操作标记，Web 据此提示勾选覆盖。"""
     _narration_formal_script(fake_ctx.project_path)
     script_path = fake_ctx.project_path / "scripts" / "episode_1.json"
     script = json.loads(script_path.read_text(encoding="utf-8"))
@@ -737,7 +795,10 @@ async def test_generate_episode_script_without_anything_to_write_marks_the_resul
 async def test_generate_episode_script_facts_failure_reports_the_real_problem(
     fake_ctx: ToolHarness, set_video_request_facts
 ) -> None:
-    """分镜档位的视频请求事实解析不出：报真实问题码、参数与「去配置供应商」，不冒成 internal_error 引导重试。"""
+    """The video request facts for the shot tiers cannot be resolved: report the real problem code, parameters and
+    "configure a provider", not disguised as internal_error that would lead to a retry.
+
+    分镜档位的视频请求事实解析不出：报真实问题码、参数与「去配置供应商」，不冒成 internal_error 引导重试。"""
     (fake_ctx.project_path / "project.json").write_text(
         json.dumps(
             {
@@ -773,7 +834,9 @@ async def test_generate_episode_script_facts_failure_reports_the_real_problem(
 async def test_generate_episode_script_rejects_removed_scope_with_migration_note(
     fake_ctx: ToolHarness, scope: str | None
 ) -> None:
-    """scope 已取消：传入即拒绝（不论取值），说明改用默认范围或 entry_ids。"""
+    """scope is removed: passing it is refused (whatever the value), with a note to use the default scope or entry_ids.
+
+    scope 已取消：传入即拒绝（不论取值），说明改用默认范围或 entry_ids。"""
     out = await run_declared_tool("generate_episode_script", fake_ctx, {"episode_id": 1, "scope": scope})
     assert problem_of(out).code == "invalid_request"
     text = said(out)
@@ -782,7 +845,10 @@ async def test_generate_episode_script_rejects_removed_scope_with_migration_note
 
 
 async def test_generate_episode_script_does_not_wait_for_script_plan_review(fake_ctx: ToolHarness) -> None:
-    """编写只读正式脚本：脚本规划重跑后尚未确认也不阻塞编写，真实生成器按正式脚本渲染编写 prompt。"""
+    """Authoring reads only the final script: a rerun script plan not yet confirmed does not block authoring; the real
+    generator renders the authoring prompt from the final script.
+
+    编写只读正式脚本：脚本规划重跑后尚未确认也不阻塞编写，真实生成器按正式脚本渲染编写 prompt。"""
     project_path = fake_ctx.project_path
     scripts = project_path / "scripts"
     scripts.mkdir(parents=True, exist_ok=True)
@@ -820,7 +886,12 @@ async def test_generate_episode_script_does_not_wait_for_script_plan_review(fake
 
 
 def test_parse_normalized_content_uses_dynamic_duration_schema() -> None:
-    """_parse_normalized_content 复用按 supported_durations 构造的动态 schema：合法 duration 经模型
+    """_parse_normalized_content reuses the dynamic schema built from supported_durations: a valid duration passes model
+    validation and gets default fields filled; a duration outside the enum triggers fail-loud (raises ValueError),
+    instead of being silently let through by the static model (ge=1,le=60) or degraded into writing unvalidated content
+    to disk.
+
+    _parse_normalized_content 复用按 supported_durations 构造的动态 schema：合法 duration 经模型
     校验并补全默认字段；超出枚举的 duration 触发 fail-loud（抛 ValueError），而非被静态模型(ge=1,le=60)
     静默放行、也不降级保留未校验内容写盘。"""
     from lib.script.script_models import build_drama_normalized_script_model
@@ -834,18 +905,24 @@ def test_parse_normalized_content_uses_dynamic_duration_schema() -> None:
     }
 
     valid = _parse_normalized_content(json.dumps({"title": "t", "scenes": [base_scene]}), model)
+    # Valid duration -> model validation passes, DramaSceneContent default fields are filled (source_text defaults to
+    # the empty string)
     # 合法 duration → 模型校验通过，补全 DramaSceneContent 默认字段（source_text 默认空串）
     assert valid["scenes"][0]["duration_seconds"] == 8
     assert valid["scenes"][0]["source_text"] == ""
 
-    bad = {**base_scene, "duration_seconds": 5}  # 5 不在 supported_durations
+    bad = {**base_scene, "duration_seconds": 5}  # 5 is not in supported_durations / 5 不在 supported_durations
+    # Outside the enum -> dynamic schema validation fails -> fail-loud raises ValueError; unvalidated content is not
+    # persisted as a formal script_plan
     # 超出枚举 → 动态 schema 校验失败 → fail-loud 抛 ValueError，不把未校验内容当成正式 script_plan 落盘
     with pytest.raises(ValueError, match="script_plan 规范化内容结构校验失败"):
         _parse_normalized_content(json.dumps({"title": "t", "scenes": [bad]}), model)
 
 
 async def test_fetch_storyboard_durations_raises_typed_code_when_facts_fail(set_video_request_facts) -> None:
-    """分镜桶事实解析不出时按问题码抛错，不回退到任何档位集合。"""
+    """When the shot bucket facts cannot be resolved, raise by problem code; do not fall back to any tier set.
+
+    分镜桶事实解析不出时按问题码抛错，不回退到任何档位集合。"""
     from lib.generation.video_request_facts import VideoRequestFactsError
     from server import text_generation as mod
 
@@ -859,7 +936,13 @@ async def test_fetch_storyboard_durations_raises_typed_code_when_facts_fail(set_
 
 
 async def test_fetch_storyboard_durations_drops_out_of_range_default(set_video_request_facts) -> None:
-    """收窄后落在集合外的已保存 default_duration 归 None（回到 auto 档），不拖垮整个工具。
+    """A saved default_duration that falls outside the narrowed set becomes None (back to the auto tier) instead of
+    breaking the whole tool.
+
+    ``build_normalize_prompt`` is fail-loud for a non-member default: the user saved 4 seconds at 720p, switched to
+    1080p and Veo narrowed to [8]; without becoming None, normalize_drama_script would raise ValueError outright.
+
+    收窄后落在集合外的已保存 default_duration 归 None（回到 auto 档），不拖垮整个工具。
 
     ``build_normalize_prompt`` 对非成员 default 是 fail-loud 的：用户在 720p 下存过 4 秒、
     改到 1080p 后 Veo 收窄为 [8]，不归 None 会让 normalize_drama_script 直接抛 ValueError。
@@ -875,7 +958,10 @@ async def test_fetch_storyboard_durations_drops_out_of_range_default(set_video_r
 
 
 async def test_fetch_storyboard_durations_borrows_planning_tiers_when_endpoint_fixed(set_video_request_facts) -> None:
-    """时长由端点固定的桶没有档位可选，剧本规划借共享的规划档位出篇幅。"""
+    """A bucket whose duration is fixed by the endpoint has no tiers to choose from; script planning borrows the shared
+    planning tiers to size the content.
+
+    时长由端点固定的桶没有档位可选，剧本规划借共享的规划档位出篇幅。"""
     from lib.generation.video_request_facts import ENDPOINT_FIXED_PLANNING_DURATIONS
     from server import text_generation as mod
 
@@ -889,7 +975,10 @@ async def test_fetch_storyboard_durations_borrows_planning_tiers_when_endpoint_f
 
 
 async def test_fetch_storyboard_durations_reads_the_bucket_of_the_generation_mode(set_video_request_facts) -> None:
-    """分镜桶随项目生成模式定：参考生视频项目读 r2v 桶，其余读 i2v 桶。"""
+    """The shot bucket follows the project's generation mode: reference-to-video projects read the r2v bucket, others
+    read the i2v bucket.
+
+    分镜桶随项目生成模式定：参考生视频项目读 r2v 桶，其余读 i2v 桶。"""
     from server import text_generation as mod
 
     set_video_request_facts(
@@ -943,9 +1032,14 @@ async def test_normalize_drama_script_projects_durable_inputs_once(
 
 
 async def test_normalize_drama_script_wires_target_language(fake_ctx: ToolHarness, video_request_facts) -> None:
-    """normalize 把项目 source_language 透传为 build_normalize_prompt 的 target_language——
+    """normalize passes the project's source_language through as build_normalize_prompt's target_language -- the output
+    language of a non-Chinese project's script_plan switches accordingly instead of always falling back to Chinese.
+
+    normalize 把项目 source_language 透传为 build_normalize_prompt 的 target_language——
     非中文项目的 script_plan 输出语言据此切换，而非恒退默认中文。"""
 
+    # The tool gets the project via ctx.pm.load_project; source_language is the single source of truth for the output
+    # language
     # 工具经 ctx.pm.load_project 取项目；source_language 是输出语言的唯一真相源
     fake_ctx.pm.project_payload["source_language"] = "English"
     project_path = fake_ctx.project_path
@@ -961,7 +1055,10 @@ async def test_normalize_drama_script_wires_target_language(fake_ctx: ToolHarnes
 async def test_normalize_drama_script_rejects_empty_scenes(
     fake_ctx: ToolHarness, monkeypatch, video_request_facts
 ) -> None:
-    """normalize 产出空 scenes → 工具报错，不把空 script_plan 当成功产物写盘（与 _load_drama_script_plan_content 同口径）。"""
+    """normalize produces empty scenes -> the tool reports an error and does not write an empty script_plan as a
+    successful artifact (same rule as _load_drama_script_plan_content).
+
+    normalize 产出空 scenes → 工具报错，不把空 script_plan 当成功产物写盘（与 _load_drama_script_plan_content 同口径）。"""
 
     project_path = fake_ctx.project_path
     src = project_path / "source"
@@ -982,12 +1079,15 @@ async def test_normalize_drama_script_rejects_empty_scenes(
 
     out = await run_declared_tool("generate_script_plan", fake_ctx, {"episode_id": 1})
     assert out.problem is not None
+    # Empty scenes are not written to disk, so generation does not inevitably fail later
     # 空 scenes 不写盘，避免生成阶段才必然失败
     assert not (project_path / "drafts" / "episode_1" / "script_plan_normalized_script.json").exists()
 
 
 async def test_normalize_drama_script_injects_episode_into_prompt(fake_ctx: ToolHarness, video_request_facts) -> None:
-    """工具必须把 episode 注入 build_normalize_prompt，避免 LLM 写错 E\\d+ 前缀。"""
+    """The tool must inject episode into build_normalize_prompt so the LLM does not get the E\\d+ prefix wrong.
+
+    工具必须把 episode 注入 build_normalize_prompt，避免 LLM 写错 E\\d+ 前缀。"""
 
     project_path = fake_ctx.project_path
     src = project_path / "source"
@@ -1005,7 +1105,10 @@ async def test_normalize_drama_script_injects_episode_into_prompt(fake_ctx: Tool
 
 
 async def test_normalize_drama_script_injects_episode_outline(fake_ctx: ToolHarness, video_request_facts) -> None:
-    """分集大纲（故事节点 / 钩子）随 script_plan 注入 normalize prompt（见 ADR 0041）。"""
+    """The episode outline (story beats / hooks) is injected into the normalize prompt along with script_plan (see
+    ADR 0041).
+
+    分集大纲（故事节点 / 钩子）随 script_plan 注入 normalize prompt（见 ADR 0041）。"""
 
     project_path = fake_ctx.project_path
     src = project_path / "source"
@@ -1031,7 +1134,10 @@ async def test_normalize_drama_script_injects_episode_outline(fake_ctx: ToolHarn
 async def test_normalize_drama_script_passes_project_name_to_backend(
     fake_ctx: ToolHarness, monkeypatch, video_request_facts
 ) -> None:
-    """工具必须把 ctx.project_name 传给 TextGenerator.create/generate，
+    """The tool must pass ctx.project_name to TextGenerator.create/generate, otherwise project-level text tier overrides
+    are skipped and usage tracking loses project_name.
+
+    工具必须把 ctx.project_name 传给 TextGenerator.create/generate，
     否则项目级文本档位覆盖被跳过，且 usage tracking 会丢 project_name。"""
     from server import text_generation as mod
 
@@ -1049,6 +1155,7 @@ async def test_normalize_drama_script_passes_project_name_to_backend(
             captured["generate_project_name"] = project_name
 
             class _R:
+                # script_plan produces structured JSON (DramaNormalizedScript), not a markdown table
                 # script_plan 产出结构化 JSON（DramaNormalizedScript），非 markdown 表
                 text = json.dumps(
                     {
@@ -1122,6 +1229,7 @@ async def test_normalize_drama_script_registers_the_frozen_explicit_source_basis
 
     class _Generator:
         async def generate(self, _request, project_name=None):
+            # Rewrites while waiting for the provider come from another writer, not on the event loop of the call under test.
             # 等待供应商期间的改写来自别的写方，不在被测调用的事件循环上。
             await asyncio.to_thread(source_path.write_text, "等待供应商期间改过的原文", encoding="utf-8")
             latest = {**project, "source_language": "English"}
@@ -1235,6 +1343,8 @@ async def test_normalize_drama_script_preserves_legacy_request_basis_when_manife
 
     use_text_generator(monkeypatch, fake_create)
 
+    # A legacy project before upgrade: the tool entry refuses per the migration verdict; here we call the handler
+    # directly to observe the request basis kept by generation itself.
     # 升级前的旧项目：工具入口按迁移裁决拒绝，这里直接调 handler 观察生成本身保留的请求依据。
     result = await generate_script_plan(
         ToolRequest(GenerateScriptPlanRequest(episode_id=1, source="source/selected.txt")),
@@ -1307,7 +1417,13 @@ async def test_normalize_drama_script_marks_mixed_machine_candidate_before_revie
 async def test_normalize_drama_script_defaults_to_the_episode_derived_source(
     fake_ctx: ToolHarness, video_request_facts
 ) -> None:
-    """省略 source 时只读本集派生源文：``source/`` 里的原文与别集派生文件都不进 prompt。
+    """When source is omitted, only this episode's derived source is read: the original in ``source/`` and other
+    episodes' derived files do not enter the prompt.
+
+    That directory holds both the whole original and each episode's derived files; sending them all into the prompt
+    would give every episode the same source.
+
+    省略 source 时只读本集派生源文：``source/`` 里的原文与别集派生文件都不进 prompt。
 
     该目录同时存放整本原文与各集派生文件，把它们一并送进 prompt 会让每一集拿到同一份源文。
     """
@@ -1358,7 +1474,10 @@ async def test_normalize_drama_script_refuses_when_the_episode_derived_source_is
     fake_ctx: ToolHarness,
     video_request_facts,
 ) -> None:
-    """派生文件缺失时报错并指名重建路径，不回落到目录里的原文——那同样不是本集的内容。"""
+    """When the derived file is missing, report an error naming the rebuild path; do not fall back to the original in the
+    directory -- that is not this episode's content either.
+
+    派生文件缺失时报错并指名重建路径，不回落到目录里的原文——那同样不是本集的内容。"""
     source_dir = fake_ctx.project_path / "source"
     source_dir.mkdir(parents=True)
     (source_dir / "novel.txt").write_text("整本小说原文", encoding="utf-8")
@@ -1387,7 +1506,9 @@ async def test_normalize_drama_script_injects_instructions(fake_ctx: ToolHarness
 
 
 async def test_generate_episode_script_forwards_instructions(fake_ctx: ToolHarness, monkeypatch) -> None:
-    """handler 把 instructions 原样转交 ScriptGenerator（dry_run 与生成路径同口径）。"""
+    """The handler passes instructions to ScriptGenerator unchanged (same rule for dry_run and the generation path).
+
+    handler 把 instructions 原样转交 ScriptGenerator（dry_run 与生成路径同口径）。"""
     from server import text_generation as mod
 
     project_path = fake_ctx.project_path
@@ -1436,7 +1557,10 @@ async def test_generate_episode_script_forwards_instructions(fake_ctx: ToolHarne
 async def test_get_video_capabilities_annotates_each_formal_unit(
     fake_ctx: ToolHarness, set_video_request_facts
 ) -> None:
-    """Agent 的逐单元标注取服务端按可用参考图定桶的同一份结果：登记了角色却缺图的单元落 i2v。"""
+    """The Agent's per-unit annotation takes the same server result that picks the bucket by available reference images:
+    a unit with a registered character but a missing image lands in i2v.
+
+    Agent 的逐单元标注取服务端按可用参考图定桶的同一份结果：登记了角色却缺图的单元落 i2v。"""
     set_video_request_facts(
         {
             "i2v": make_video_request_facts(
@@ -1483,6 +1607,9 @@ async def test_get_video_capabilities_annotates_each_formal_unit(
 
 
 # ---------------------------------------------------------------------------
+# Output truncation: script planning and prompt authoring land on the same problem code
+# ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
 # 输出截断：脚本规划与提示词编写落到同一个问题码
 # ---------------------------------------------------------------------------
 
@@ -1505,7 +1632,10 @@ def _drama_source(fake_ctx: ToolHarness) -> None:
 async def test_generate_script_plan_truncation_offers_the_way_out(
     fake_ctx: ToolHarness, monkeypatch, video_request_facts, prepare
 ) -> None:
-    """脚本规划的输出被截断：问题码、出路与分集规划相同，带供应商、模型与是否为自定义模型。"""
+    """The script plan output is truncated: the problem code and way out are the same as episode planning, with the
+    provider, model and whether it is a custom model.
+
+    脚本规划的输出被截断：问题码、出路与分集规划相同，带供应商、模型与是否为自定义模型。"""
 
     prepare(fake_ctx)
 

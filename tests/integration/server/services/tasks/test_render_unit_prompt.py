@@ -12,7 +12,12 @@ from server.services.tasks.reference_video_tasks import (
 
 
 def test_render_unit_prompt_rejects_empty_text():
-    """执行层保留一道防御性空检查：提示词源是可变 script、执行期重读，结构校验上移到
+    """The execution layer keeps a defensive empty check: the prompt source is a mutable script reread at
+    execution; after structural validation moved up to the enqueue guard, empty prompts slipping through
+    "emptied after enqueue / in-flight legacy tasks" must still be stopped, so that after the suffix is appended
+    they are not submitted to a paid backend as a valid prompt.
+
+    执行层保留一道防御性空检查：提示词源是可变 script、执行期重读，结构校验上移到
     入队守卫点后仍需挡住「入队后被改空 / 在途遗留任务」漏过的空提示词，避免尾词追加后
     被当成有效 prompt 提交给付费 backend。"""
     with pytest.raises(ValueError, match="empty"):

@@ -1,4 +1,6 @@
-"""预设供应商目录单元测试。"""
+"""Unit tests for the preset provider catalog.
+
+预设供应商目录单元测试。"""
 
 import pytest
 
@@ -19,13 +21,15 @@ def test_anthropic_official_present() -> None:
     assert p.messages_url == "https://api.anthropic.com"
     assert p.discovery_url == "https://api.anthropic.com"
     assert p.icon_key == "Anthropic"
-    # 用户表格明确 Anthropic 官方默认模型为空、不标推荐
+    # The user's table states that the official Anthropic default model is empty and not marked recommended / 用户表格明确 Anthropic 官方默认模型为空、不标推荐
     assert p.default_model == ""
     assert p.is_recommended is False
 
 
 def test_arcreel_is_only_recommended() -> None:
-    """ArcReel 是用户表格中唯一标推荐的预设;其他全部不推荐."""
+    """ArcReel is the only preset marked recommended in the user's table; none of the others is recommended.
+
+    ArcReel 是用户表格中唯一标推荐的预设;其他全部不推荐."""
     recommended = [p for p in list_presets() if p.is_recommended]
     assert [p.id for p in recommended] == ["arcreel"]
 
@@ -35,7 +39,9 @@ def test_get_preset_unknown_returns_none() -> None:
 
 
 def test_anthropic_official_first_arcreel_second() -> None:
-    """显示顺序:官方第一,ArcReel API 第二."""
+    """Display order: official first, ArcReel API second.
+
+    显示顺序:官方第一,ArcReel API 第二."""
     presets = list_presets()
     assert presets[0].id == "anthropic-official"
     assert presets[1].id == "arcreel"
@@ -54,7 +60,9 @@ def test_messages_url_https_only() -> None:
 
 
 def test_curated_preset_set() -> None:
-    """目录与用户提供的表格保持一致;11 条预设."""
+    """The catalog matches the table the user provided; 11 presets.
+
+    目录与用户提供的表格保持一致;11 条预设."""
     expected = {
         "anthropic-official",
         "arcreel",
@@ -73,7 +81,9 @@ def test_curated_preset_set() -> None:
 
 
 def test_default_models_match_table() -> None:
-    """用户表格指定的默认模型."""
+    """Default models specified by the user's table.
+
+    用户表格指定的默认模型."""
     expected = {
         "anthropic-official": "",
         "arcreel": "gpt-5.5",
@@ -92,7 +102,9 @@ def test_default_models_match_table() -> None:
 
 
 def test_api_key_url_required() -> None:
-    """每条预设都必须有「获取 API Key」链接(便于用户跳转)."""
+    """Every preset must have a "get API key" link (so the user can jump to it).
+
+    每条预设都必须有「获取 API Key」链接(便于用户跳转)."""
     for p in list_presets():
         assert p.api_key_url, f"{p.id} missing api_key_url"
         assert p.api_key_url.startswith("https://"), f"{p.id} api_key_url not https"
@@ -109,7 +121,9 @@ def test_preset_dataclass_is_frozen() -> None:
 
 
 def test_ark_presets_carry_suggested_models_without_discovery() -> None:
-    """火山方舟两档套餐没有模型列表接口：discovery 关闭，靠建议模型兜底。"""
+    """The two Volcengine Ark plans have no model list endpoint: discovery is off and suggested models are the fallback.
+
+    火山方舟两档套餐没有模型列表接口：discovery 关闭，靠建议模型兜底。"""
     for preset_id in ("ark-coding-plan", "ark-agent-plan"):
         p = get_preset(preset_id)
         assert p is not None

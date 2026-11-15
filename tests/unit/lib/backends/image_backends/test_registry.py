@@ -1,4 +1,6 @@
-"""图片后端注册表测试。"""
+"""Image backend registry tests.
+
+图片后端注册表测试。"""
 
 import pytest
 
@@ -17,7 +19,9 @@ class _DummyBackend:
 
 @pytest.fixture(autouse=True)
 def clean_image_registry():
-    """注册表是模块级全局：清空后跑，跑完还原，避免测试用后端泄漏给其他用例。"""
+    """The registry is a module-level global: run with it cleared and restore afterwards, so test backends do not leak into other cases.
+
+    注册表是模块级全局：清空后跑，跑完还原，避免测试用后端泄漏给其他用例。"""
     saved = dict(_BACKEND_FACTORIES)
     _BACKEND_FACTORIES.clear()
     yield

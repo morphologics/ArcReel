@@ -1,4 +1,12 @@
-"""内存库共享连接并发写检查（`tests/memory_db_guard`）的契约。
+"""Contract of the concurrent-write check on the in-memory DB shared connection (`tests/memory_db_guard`).
+
+On the in-memory DB fixture, when one task's write transaction has not ended and another task writes, the
+write statement fails on the spot and points to the corresponding file DB fixture; it also counts when the
+task that started the write transaction has ended but the transaction was neither committed nor rolled back.
+When the failure is swallowed by a broad exception catch, it is still reported when the engine closes.
+Writes completed one after another and nested sessions in the same task are not concurrency.
+
+内存库共享连接并发写检查（`tests/memory_db_guard`）的契约。
 
 内存库夹具上，一个任务的写事务未结束时另一个任务写库，写语句当场失败并指向对应的文件库夹具；
 写事务的发起任务已经结束、事务却没有提交或回滚时同样算数。失败被宽泛异常捕获吞掉时，engine
@@ -27,7 +35,9 @@ async def _insert(session: AsyncSession, value: str) -> None:
 
 
 async def _write_while_other_task_holds_open_write(factory: async_sessionmaker[AsyncSession]) -> BaseException | None:
-    """任务 A 写入后挂起不提交，任务 B 此时写入；返回 B 的写入异常。"""
+    """Task A writes then suspends without committing, task B writes meanwhile; return B's write exception.
+
+    任务 A 写入后挂起不提交，任务 B 此时写入；返回 B 的写入异常。"""
     a_wrote = asyncio.Event()
     release = asyncio.Event()
 

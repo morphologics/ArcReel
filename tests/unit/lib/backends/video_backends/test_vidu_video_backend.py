@@ -1,4 +1,6 @@
-"""ViduVideoBackend 单元测试 — 重点：endpoint 选择、duration 强制、resolution 原样透传、build_request 字段。"""
+"""ViduVideoBackend unit tests -- focus: endpoint selection, duration enforcement, resolution passed through as is, build_request fields.
+
+ViduVideoBackend 单元测试 — 重点：endpoint 选择、duration 强制、resolution 原样透传、build_request 字段。"""
 
 from __future__ import annotations
 
@@ -39,6 +41,9 @@ class TestBackendBasics:
         assert backend.video_capabilities.max_reference_images == 7
 
     def test_max_reference_images_zero_for_non_reference2video_model(self):
+        # viduq3-pro-fast supports /img2video but is not on the /start-end2video or /reference2video allowlists --
+        # last_frame/reference_images should be False and max_reference_images drops to zero with reference_images,
+        # so the display layer does not claim end frame/reference image support that would inevitably RuntimeError at generation time.
         # viduq3-pro-fast 支持 /img2video，但不在 /start-end2video、/reference2video 白名单内——
         # last_frame/reference_images 应为 False，max_reference_images 随 reference_images 归零，
         # 避免展示层声称支持尾帧/参考图但生成期必然 RuntimeError。
@@ -50,6 +55,7 @@ class TestBackendBasics:
         assert caps.max_reference_images == 0
 
     def test_last_frame_true_for_start_end2video_model(self):
+        # viduq3-turbo is on the /start-end2video allowlist; last_frame should be True.
         # viduq3-turbo 在 /start-end2video 白名单内，last_frame 应为 True。
         backend = ViduVideoBackend(api_key="test-key", model="viduq3-turbo")
         assert backend.video_capabilities.last_frame is True
@@ -106,7 +112,9 @@ class TestEndpointSelection:
         assert backend._select_endpoint(req) == "/start-end2video"
 
     def test_reference_images_take_priority(self, tmp_path: Path, video_output_path: Path):
-        """有 refs 时即使带 start_image 也应走 reference2video（依实现：refs 先判）。"""
+        """With refs, reference2video should be used even if start_image is given (per the implementation: refs are checked first).
+
+        有 refs 时即使带 start_image 也应走 reference2video（依实现：refs 先判）。"""
         backend = self._backend()
         ref = tmp_path / "ref.png"
         ref.write_bytes(b"x")
@@ -115,10 +123,12 @@ class TestEndpointSelection:
 
 
 class TestEndpointModelMatrix:
-    """端点支持模型集合是 spec，钉死，避免误改。"""
+    """The endpoint-supported model sets are spec; pin them to avoid accidental changes.
+
+    端点支持模型集合是 spec，钉死，避免误改。"""
 
     def test_reference2video_does_not_include_q3_pro(self):
-        # q3-pro 在 reference2video 上不被官方文档列出
+        # q3-pro is not listed for reference2video in the official docs. / q3-pro 在 reference2video 上不被官方文档列出
         assert "viduq3-pro" not in _ENDPOINT_MODELS["/reference2video"]
 
     def test_reference2video_includes_q3_turbo(self):
@@ -141,7 +151,7 @@ class TestCoerceDuration:
         assert _coerce_duration("viduq3-turbo", "/text2video", 8) == 8
 
     def test_q3_turbo_text2video_clamps_to_nearest(self):
-        # range 1..16；超过 16 应取 16
+        # range 1..16; above 16 takes 16. / range 1..16；超过 16 应取 16
         assert _coerce_duration("viduq3-turbo", "/text2video", 30) == 16
 
     def test_vidu2_0_img2video_only_4_or_8(self):
@@ -157,17 +167,19 @@ class TestCoerceDuration:
         assert _coerce_duration("viduq1", "/text2video", 10) == 5
 
     def test_q3_reference2video_min_3(self):
-        # range 3..16；请求 1 → 取最近 3
+        # range 3..16; request 1 -> nearest is 3. / range 3..16；请求 1 → 取最近 3
         assert _coerce_duration("viduq3", "/reference2video", 1) == 3
 
     def test_unknown_combination_passthrough(self):
-        # 表里无项时不强校（透传 / 兜底 5）
+        # No entry in the table: no strict check (pass through / fallback 5). / 表里无项时不强校（透传 / 兜底 5）
         assert _coerce_duration("unknown-model", "/img2video", 9) == 9
         assert _coerce_duration("unknown-model", "/img2video", None) == 5
 
 
 class TestBuildRequest:
-    """_build_request 是核心串联函数：endpoint 选择 + duration/resolution/aspect_ratio/audio 字段拼装。"""
+    """_build_request is the core wiring function: endpoint selection + assembling the duration/resolution/aspect_ratio/audio fields.
+
+    _build_request 是核心串联函数：endpoint 选择 + duration/resolution/aspect_ratio/audio 字段拼装。"""
 
     @patch("lib.backends.video_backends.vidu.image_to_data_uri")
     def test_text2video_body_minimal(self, mock_data_uri, video_output_path: Path):
@@ -187,9 +199,9 @@ class TestBuildRequest:
         assert body["duration"] == 8
         assert body["resolution"] == "720p"
         assert body["aspect_ratio"] == "9:16"
-        # q3 默认透传 audio
+        # q3 passes audio through by default. / q3 默认透传 audio
         assert body["audio"] is True
-        # text2video 不携带 images
+        # text2video carries no images. / text2video 不携带 images
         assert "images" not in body
 
     @pytest.mark.parametrize(
@@ -197,7 +209,9 @@ class TestBuildRequest:
         [("viduq1", "720p"), ("viduq3-turbo", "4K"), ("unknown-model", "9000p")],
     )
     def test_resolution_is_sent_as_requested(self, video_output_path: Path, model: str, resolution: str):
-        """档位以模型目录条目为准：不在任何本地表里的值也原样下发，由上游拒绝（docs/adr/0104）。"""
+        """Tiers follow the model catalog entry: values in no local table are also sent as is and rejected upstream (docs/adr/0104).
+
+        档位以模型目录条目为准：不在任何本地表里的值也原样下发，由上游拒绝（docs/adr/0104）。"""
         backend = ViduVideoBackend(api_key="test-key", model=model)
         req = VideoGenerationRequest(prompt="x", output_path=video_output_path, resolution=resolution)
 
@@ -227,14 +241,14 @@ class TestBuildRequest:
             prompt="x",
             output_path=video_output_path,
             start_image=start,
-            aspect_ratio="9:16",  # 应被丢弃
+            aspect_ratio="9:16",  # Should be dropped. / 应被丢弃
             duration_seconds=5,
         )
         endpoint, body = backend._build_request(req)
 
         assert endpoint == "/img2video"
         assert body["images"] == ["data:image/png;base64,XX"]
-        # img2video 不接受 aspect_ratio
+        # img2video does not accept aspect_ratio. / img2video 不接受 aspect_ratio
         assert "aspect_ratio" not in body
 
     @patch("lib.backends.video_backends.vidu.image_to_data_uri", new=MagicMock(return_value="data:image/png;base64,XX"))
@@ -255,9 +269,9 @@ class TestBuildRequest:
 
         assert endpoint == "/reference2video"
         assert len(body["images"]) == 2
-        # reference2video 接受 aspect_ratio
+        # reference2video accepts aspect_ratio. / reference2video 接受 aspect_ratio
         assert body["aspect_ratio"] == "9:16"
-        # range 3..16，5 透传
+        # range 3..16, 5 passed through. / range 3..16，5 透传
         assert body["duration"] == 5
 
     def test_reference2video_with_q3_pro_raises_model_mismatch(self, tmp_path: Path, video_output_path: Path):
@@ -276,6 +290,11 @@ class TestBuildRequest:
 
     def test_non_q3_model_does_not_send_audio(self, video_output_path: Path):
         backend = ViduVideoBackend(api_key="test-key", model="vidu2.0")
+        # vidu2.0 uses img2video and cannot do text2video.
+        # Using the reference2video path directly here would need a ref; demonstrate via start-image instead.
+        # Use monkeypatch to skip image_to_data_uri.
+        # Simplified: build a text2video request directly to verify audio is not written
+        # -- but vidu2.0 is not in the text2video set, so it should raise.
         # vidu2.0 走 img2video，不能 text2video
         # 这里直接用 reference2video 路径需 ref；走 start-image 演示
         # 用 monkeypatch 跳过 image_to_data_uri
@@ -287,7 +306,9 @@ class TestBuildRequest:
 
 
 class TestUnsendableInputsRejected:
-    """端点发不出的输入在组装请求时拒绝，不静默丢弃。"""
+    """Inputs the endpoint cannot send are rejected while assembling the request, not silently dropped.
+
+    端点发不出的输入在组装请求时拒绝，不静默丢弃。"""
 
     @staticmethod
     def _image(tmp_path: Path, name: str) -> Path:
@@ -333,18 +354,26 @@ class TestUnsendableInputsRejected:
 
 
 class TestPromptLength:
-    """prompt 超限一律拒绝，不再客户端静默截断。"""
+    """An over-limit prompt is always rejected; no more silent client-side truncation.
+
+    prompt 超限一律拒绝，不再客户端静默截断。"""
 
     def test_reference_only_model_declares_narrow_limit(self):
-        """viduq3 只跑 /reference2video，静态声明取该端点的窄值。"""
+        """viduq3 only runs /reference2video, so the static declaration takes that endpoint's narrow value.
+
+        viduq3 只跑 /reference2video，静态声明取该端点的窄值。"""
         assert ViduVideoBackend.video_capabilities_for_model("viduq3").max_prompt_chars == 2000
 
     def test_multi_endpoint_model_declares_wide_limit(self):
-        """viduq3-turbo 还能跑 t2v/i2v，静态声明取宽值——否则会误拒其合法的长 prompt。"""
+        """viduq3-turbo can also run t2v/i2v, so the static declaration takes the wide value -- otherwise it would wrongly reject its valid long prompts.
+
+        viduq3-turbo 还能跑 t2v/i2v，静态声明取宽值——否则会误拒其合法的长 prompt。"""
         assert ViduVideoBackend.video_capabilities_for_model("viduq3-turbo").max_prompt_chars == 5000
 
     def test_unknown_model_declares_wide_limit(self):
-        """未登记 model（中转自定义命名）取宽值：能力不明时误拒是更糟的降级。"""
+        """Unregistered models (relay custom names) take the wide value: with unknown capabilities, wrong rejection is the worse degradation.
+
+        未登记 model（中转自定义命名）取宽值：能力不明时误拒是更糟的降级。"""
         assert ViduVideoBackend.video_capabilities_for_model("proxy-x").max_prompt_chars == 5000
 
     def test_reference2video_over_limit_raises(self, video_output_path: Path):
@@ -381,7 +410,9 @@ class TestPromptLength:
         assert body["prompt"] == prompt
 
     def test_text2video_allows_longer_than_reference_limit(self, video_output_path: Path):
-        """端点上限按端点各算：t2v 的 5000 不受 /reference2video 的 2000 牵连。"""
+        """Endpoint limits are computed per endpoint: t2v's 5000 is not dragged down by /reference2video's 2000.
+
+        端点上限按端点各算：t2v 的 5000 不受 /reference2video 的 2000 牵连。"""
         backend = ViduVideoBackend(api_key="k", model="viduq3-turbo")
         req = VideoGenerationRequest(prompt="字" * 3000, output_path=video_output_path, duration_seconds=8)
         _endpoint, body = backend._build_request(req)
@@ -390,13 +421,17 @@ class TestPromptLength:
 
 
 class TestDurationRulesSpec:
-    """直接钉死 _DURATION_RULES 关键条目，避免误改。"""
+    """Pin the key entries of _DURATION_RULES directly, to avoid accidental changes.
+
+    直接钉死 _DURATION_RULES 关键条目，避免误改。"""
 
     def test_q1_text2video_only_5(self):
         assert _DURATION_RULES[("viduq1", "/text2video")] == [5]
 
     def test_q2_img2video_up_to_10(self):
-        """/img2video 官方为 1–10；1–8 是 /start-end2video 的值，两端点不同。"""
+        """/img2video is officially 1-10; 1-8 is the value for /start-end2video; the two endpoints differ.
+
+        /img2video 官方为 1–10；1–8 是 /start-end2video 的值，两端点不同。"""
         assert _DURATION_RULES[("viduq2-pro", "/img2video")] == list(range(1, 11))
         assert _DURATION_RULES[("viduq2-turbo", "/img2video")] == list(range(1, 11))
         assert _DURATION_RULES[("viduq2-pro-fast", "/img2video")] == list(range(1, 11))
@@ -413,7 +448,11 @@ class TestDurationRulesSpec:
 
 
 class TestRegistryBackendConsistency:
-    """目录里 vidu 视频条目的模型事实与 backend 执行期表须无分歧（两侧同一份官方文档核实）。
+    """The model facts of vidu video entries in the catalog must not diverge from the backend's execution-time tables (both sides verified against the same official docs).
+
+    The duration table is an endpoint-level exception allowed by docs/adr/0018; only a subset is required between the two sides.
+
+    目录里 vidu 视频条目的模型事实与 backend 执行期表须无分歧（两侧同一份官方文档核实）。
 
     时长表是 docs/adr/0018 允许的端点级例外，两侧只要求子集。
     """
@@ -435,13 +474,19 @@ class TestRegistryBackendConsistency:
         assert set(model_info.supported_durations) == expected_durations
 
     def test_duration_resolution_constraints_confines_non_720p_to_4s(self):
-        """8 秒档只出 720p——360p / 1080p 须声明仅 4 秒可选，UI 才不会给出无效的时长×分辨率组合。"""
+        """The 8-second tier only outputs 720p -- 360p / 1080p must declare only 4 seconds as selectable, so the UI does not offer invalid duration x resolution combos.
+
+        8 秒档只出 720p——360p / 1080p 须声明仅 4 秒可选，UI 才不会给出无效的时长×分辨率组合。"""
         model_info = self._vidu2_model_info()
         assert model_info.duration_resolution_constraints == {"360p": [4], "1080p": [4]}
 
     @pytest.mark.parametrize("name", sorted(_KNOWN_MODELS))
     def test_durations_within_endpoint_rules(self, name: str):
-        """目录时长须落在端点级时长表内，否则 _coerce_duration 会把用户选的时长静默改成最近值。
+        """Catalog durations must fall within the endpoint-level duration table, otherwise _coerce_duration would silently change the user's chosen duration to the nearest value.
+
+        Endpoint-level correction is an exception allowed by docs/adr/0018; only a subset is required between the two sides, not equality.
+
+        目录时长须落在端点级时长表内，否则 _coerce_duration 会把用户选的时长静默改成最近值。
 
         端点级校正是 docs/adr/0018 允许的例外，两侧只要求子集，不要求相等。
         """
@@ -452,6 +497,7 @@ class TestRegistryBackendConsistency:
             d for (m, ep), ds in _DURATION_RULES.items() if m == name and ep != "/reference2video" for d in ds
         }
         reference = set(_DURATION_RULES.get((name, "/reference2video"), []))
+        # For models that only do reference-to-video, the selectable durations are those of the reference-to-video endpoint.
         # 只走参考生视频的型号，可选时长就是参考生视频端点的时长。
         allowed = non_reference or reference
         extra = set(model_info.supported_durations) - allowed
@@ -463,7 +509,9 @@ class TestRegistryBackendConsistency:
 
 
 class TestCreateTask413:
-    """413 规整：_create_task 透出保留状态码的 httpx.HTTPStatusError（咽喉层据此降档）。"""
+    """413 normalization: _create_task surfaces an httpx.HTTPStatusError that keeps the status code (the choke-point layer downgrades by it).
+
+    413 规整：_create_task 透出保留状态码的 httpx.HTTPStatusError（咽喉层据此降档）。"""
 
     async def test_create_task_413_surfaces_httpstatuserror_no_retry(self):
         from unittest.mock import AsyncMock, MagicMock
@@ -485,12 +533,14 @@ class TestCreateTask413:
         with pytest.raises(httpx.HTTPStatusError) as ei:
             await backend._create_task(client, "/text2video", {"model": "viduq3-turbo", "prompt": "x", "duration": 8})
         assert ei.value.response.status_code == 413
-        # 413 非 retryable → fail-fast 单次
+        # 413 is not retryable -> fail fast once. / 413 非 retryable → fail-fast 单次
         assert client.post.call_count == 1
 
 
 class TestCreateTaskAmbiguity:
-    """create 阶段按「请求是否确定送达」收窄重试，避免重复建任务 + 重复计费。"""
+    """The create phase narrows retries by "whether the request definitely arrived", avoiding duplicate tasks + double billing.
+
+    create 阶段按「请求是否确定送达」收窄重试，避免重复建任务 + 重复计费。"""
 
     async def test_read_timeout_fails_fast_with_manual_retry_hint(self):
         from unittest.mock import AsyncMock
@@ -508,7 +558,7 @@ class TestCreateTaskAmbiguity:
             pytest.raises(AmbiguousSubmitError, match="手动重试"),
         ):
             await backend._create_task(client, "/text2video", {"model": "viduq3-turbo", "prompt": "x", "duration": 8})
-        # 歧义态：请求可能已送达，不重试
+        # Ambiguous state: the request may have arrived, no retry. / 歧义态：请求可能已送达，不重试
         assert client.post.call_count == 1
 
     async def test_connect_error_retries(self):
@@ -528,5 +578,5 @@ class TestCreateTaskAmbiguity:
                 client, "/text2video", {"model": "viduq3-turbo", "prompt": "x", "duration": 8}
             )
         assert data["task_id"] == "vidu-conn"
-        # ConnectError 请求确定未送达，应重试
+        # ConnectError: the request definitely did not arrive, should retry. / ConnectError 请求确定未送达，应重试
         assert client.post.call_count == 3

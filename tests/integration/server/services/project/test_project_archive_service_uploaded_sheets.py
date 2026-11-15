@@ -1,4 +1,7 @@
-"""带上传版本记录的资产图与衍生资产图：迁移补录与各种归档导入得出同一时效结论，无上传记录的存量结论不变。"""
+"""Sheets and derivative sheets with upload version records: migration backfill and every kind of archive
+import reach the same currency conclusion; existing conclusions without upload records are unchanged.
+
+带上传版本记录的资产图与衍生资产图：迁移补录与各种归档导入得出同一时效结论，无上传记录的存量结论不变。"""
 
 import asyncio
 import json
@@ -34,6 +37,10 @@ from tests.integration.server.derivative_sheet_support import (
     write_two_tone_png,
 )
 
+#: Alice uploaded while her description was empty; Bob changed his description after uploading; Carol's and
+#: Dave's sheets have no upload version record, and Dave's description is empty -
+#: input gaps only block generation (ADR 0098), so Dave is backfilled as usual; Eve has an empty description
+#: and no sheet.
 #: Alice 描述为空时上传；Bob 上传后改了描述；Carol 与 Dave 的资产图没有上传版本记录，Dave 描述为空——
 #: 生成缺口只拦生成（ADR 0098），Dave 照常补录；Eve 描述为空且没有资产图。
 _EXPECTED = {"Alice": "current", "Bob": "current", "Carol": "current", "Dave": "current", "Eve": "missing"}
@@ -57,7 +64,10 @@ def _statuses(project_dir: Path, names) -> dict[str, str]:
 
 
 def _backfilled_project(pm: ProjectManager) -> Path:
-    """建项目、上传资产图、放无记录的资产图，再退回 v7 走整条迁移链补录。"""
+    """Create the project, upload sheets, place sheets without records, then roll back to v7 and backfill through
+    the whole migration chain.
+
+    建项目、上传资产图、放无记录的资产图，再退回 v7 走整条迁移链补录。"""
 
     pm.create_project("demo")
     pm.create_project_metadata("demo", "Demo", "Anime", "narration")
@@ -143,12 +153,17 @@ def test_archive_import_reaches_the_backfill_conclusion(tmp_path, scope, envelop
         project["style_description"] = "胶片颗粒"
 
     pm.update_project("demo", _edit)
+    # Dave is backfilled from generation inputs; the basis includes the project art style, so changing the style
+    # description makes it stale.
     # Dave 按生成输入补录，依据含项目画风，画风描述一改即过期。
     assert _statuses(imported_dir, _EXPECTED) == {**_EXPECTED, "Carol": "stale", "Dave": "stale"}
 
 
 def test_envelope_without_a_claim_for_a_gapped_sheet_backfills_it_and_keeps_the_other_claims(tmp_path):
-    """较早导出的归档没有为空描述的 Dave 留 claim：导入按生成缺口补录口径登记它，其余 claim 原样恢复。"""
+    """An earlier exported archive left no claim for Dave with the empty description: import registers it by the
+    input-gap backfill rule, and the other claims are restored as they are.
+
+    较早导出的归档没有为空描述的 Dave 留 claim：导入按生成缺口补录口径登记它，其余 claim 原样恢复。"""
     pm = ProjectManager(tmp_path / "projects")
     project_dir = _backfilled_project(pm)
     archive_path, _ = ProjectArchiveService(pm).export_project("demo", scope="full")
@@ -263,6 +278,8 @@ def test_uploaded_derivative_sheet_survives_archive_round_trip_as_finished_conte
     imported_dir = pm.get_project_path("demo")
     assert (imported_dir / sheet_path).read_bytes() == uploaded
     assert ArtifactCurrencyResolver(imported_dir).compare(key, artifact_path=sheet_path).status.value == "current"
+    # Base-look sheet bytes changed and the variation description rewritten: an uploaded derivative image is a
+    # finished product, so neither makes it stale.
     # 本体资产图换了字节、变化描述改写：上传的衍生图是成品，两者都不让它过期。
     write_two_tone_png(imported_dir / "characters/阿岚.png", left=(10, 10, 10), right=(240, 240, 240))
     pm.update_asset_entry(

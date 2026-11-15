@@ -109,20 +109,21 @@ class TestAssistantRouter:
             send_empty = client.post(f"{PREFIX}/sessions/send", json={"content": "   "})
             assert send_empty.status_code == 400
 
-            # POST /sessions/send — 并发槽位占满 → 503
+            # POST /sessions/send: concurrency slots full -> 503 / POST /sessions/send — 并发槽位占满 → 503
             send_at_capacity = client.post(
                 "/api/v1/projects/at-capacity/assistant/sessions/send",
                 json={"content": "hello"},
             )
             assert send_at_capacity.status_code == 503
 
-            # POST /sessions/send — 会话已被改写取代 → 409
+            # POST /sessions/send: session already superseded by a rewrite -> 409 / POST /sessions/send — 会话已被改写取代 → 409
             send_superseded = client.post(
                 f"{PREFIX}/sessions/send",
                 json={"content": "hello", "session_id": "superseded"},
             )
             assert send_superseded.status_code == 409
 
+            # POST /sessions/send: a same-key retry hits a message that was accepted but never written to the log -> 409, not sent again
             # POST /sessions/send — 同键重试命中已接纳却没写入日志的消息 → 409，不再送入
             send_unrecorded = client.post(
                 f"{PREFIX}/sessions/send",
@@ -196,7 +197,9 @@ class TestAssistantRouter:
             assert skills_missing.status_code == 404
 
     def test_send_with_timeout_error(self, monkeypatch):
-        """TimeoutError 应返回 504。"""
+        """TimeoutError should return 504.
+
+        TimeoutError 应返回 504。"""
         fake = _FakeService()
 
         async def _timeout_send_or_create(

@@ -1,4 +1,6 @@
-"""会话事件日志：写入点定型、seq 单调、幂等键、懒生成。"""
+"""Session event log: write-point typing, monotonic seq, idempotency key, lazy generation.
+
+会话事件日志：写入点定型、seq 单调、幂等键、懒生成。"""
 
 from __future__ import annotations
 
@@ -26,12 +28,17 @@ async def log_store(db_factory):
 
 @pytest.fixture
 async def file_log_store(file_db_factory):
-    """文件 SQLite + NullPool：并发测试需要独立连接（内存库 StaticPool 会串扰）。"""
+    """File SQLite + NullPool: concurrency tests need independent connections (an in-memory StaticPool would cross-talk).
+
+    文件 SQLite + NullPool：并发测试需要独立连接（内存库 StaticPool 会串扰）。"""
     return EventLogStore(session_factory=file_db_factory)
 
 
 class _FakeDriverError(Exception):
-    """带驱动侧属性的伪 DBAPI 错误（asyncpg 的 sqlstate/constraint_name、
+    """Fake DBAPI error with driver-side attributes (asyncpg's sqlstate/constraint_name,
+    sqlite3's sqlite_errorname), used to build an IntegrityError with localized messages.
+
+    带驱动侧属性的伪 DBAPI 错误（asyncpg 的 sqlstate/constraint_name、
     sqlite3 的 sqlite_errorname），用于构造本地化文案下的 IntegrityError。"""
 
     def __init__(
@@ -52,7 +59,7 @@ class _FakeDriverError(Exception):
 
 
 # ---------------------------------------------------------------------------
-# normalize_sdk_message_to_entries — 写入点定型纯函数
+# normalize_sdk_message_to_entries: pure write-point typing function / normalize_sdk_message_to_entries — 写入点定型纯函数
 # ---------------------------------------------------------------------------
 
 
@@ -100,7 +107,7 @@ class TestNormalize:
         assert entries[1]["tool_use_id"] == "tu-2"
         assert entries[1]["content"] == "boom"
         assert entries[1]["is_error"] is True
-        # 独立条目、不同 uuid
+        # Independent entries, different uuids / 独立条目、不同 uuid
         assert entries[0]["uuid"] != entries[1]["uuid"]
 
     def test_mixed_user_content_splits_tool_results_from_text(self):
@@ -172,7 +179,7 @@ class TestNormalize:
 
 
 # ---------------------------------------------------------------------------
-# 写入点定型 — interrupt / task 通知 XML / AskUserQuestion 答复
+# Write-point typing: interrupt / task notification XML / AskUserQuestion answer / 写入点定型 — interrupt / task 通知 XML / AskUserQuestion 答复
 # ---------------------------------------------------------------------------
 
 
@@ -204,7 +211,9 @@ class TestNormalizeInterrupt:
         assert is_interrupt_entry(entries[0])
 
     def test_interrupt_prefix_midway_is_not_interrupt(self):
-        """只有整条内容即中断回显才定型；正文中途出现同字样不误判。"""
+        """Only typed when the whole content is the interrupt echo; the same phrase appearing mid-text is not misjudged.
+
+        只有整条内容即中断回显才定型；正文中途出现同字样不误判。"""
         entries = normalize_sdk_message_to_entries(
             {"type": "user", "content": "日志里出现 [Request interrupted by user] 是什么意思"}
         )
@@ -285,7 +294,9 @@ class TestNormalizeTaskNotificationXml:
         assert entries[0]["type"] == "user"
 
     def test_two_notifications_batched_in_one_message_both_typed(self):
-        """同一 tick 内两个后台任务的通知被批到一条消息时，两条都要保留成条目。"""
+        """When notifications of two background tasks in the same tick are batched into one message, both must be kept as entries.
+
+        同一 tick 内两个后台任务的通知被批到一条消息时，两条都要保留成条目。"""
         xml2 = self.XML.replace("t9", "t10").replace("tu-9", "tu-10").replace("子智能体完成", "另一子智能体完成")
         entries = normalize_sdk_message_to_entries(
             {"type": "user", "content": self.XML + "\n" + xml2, "uuid": "n-multi"}
@@ -293,12 +304,16 @@ class TestNormalizeTaskNotificationXml:
         assert len(entries) == 2
         assert [e["task_id"] for e in entries] == ["t9", "t10"]
         assert [e["subtype"] for e in entries] == ["task_notification", "task_notification"]
+        # With multiple entries the uuid gets an index suffix, to avoid colliding with the single-entry uuid
         # 多条时 uuid 加序号后缀，避免与单条场景的 uuid 撞车
         assert entries[0]["uuid"] == "n-multi-tn0"
         assert entries[1]["uuid"] == "n-multi-tn1"
 
     def test_two_notifications_without_base_uuid_get_distinct_uuids(self):
-        """消息本身没有 uuid 时，批量通知不能都退化成同一个 "None-tn{i}"——否则
+        """When the message itself has no uuid, batched notifications must not all degrade to the same "None-tn{i}"; otherwise,
+        as in the single-entry case, they would overwrite each other during frontend merging/lookup.
+
+        消息本身没有 uuid 时，批量通知不能都退化成同一个 "None-tn{i}"——否则
         与单条场景一样会在前端归并/查找时互相覆盖。"""
         xml2 = self.XML.replace("t9", "t10").replace("tu-9", "tu-10").replace("子智能体完成", "另一子智能体完成")
         entries = normalize_sdk_message_to_entries({"type": "user", "content": self.XML + "\n" + xml2})
@@ -307,7 +322,10 @@ class TestNormalizeTaskNotificationXml:
         assert all(e["uuid"] for e in entries)
 
     def test_subagent_notification_carries_parent_tool_use_id(self):
-        """subagent 内产生的后台任务通知需带 parent_tool_use_id，前端时间线才能
+        """Background task notifications produced inside a subagent must carry parent_tool_use_id so the frontend timeline can
+        route them into the corresponding subagent card instead of falling back to the top-level timeline.
+
+        subagent 内产生的后台任务通知需带 parent_tool_use_id，前端时间线才能
         把它路由进对应 subagent 卡片，而不是退化到顶层时间线。"""
         entries = normalize_sdk_message_to_entries(
             {"type": "user", "content": self.XML, "uuid": "n-sub", "parent_tool_use_id": "tu-parent"}
@@ -316,13 +334,17 @@ class TestNormalizeTaskNotificationXml:
         assert entries[0]["parent_tool_use_id"] == "tu-parent"
 
     def test_subagent_notification_parent_key_case_variants_normalized(self):
-        """归属键的大小写变体走既有归一化 helper，与其它分支同口径。"""
+        """Case variants of the ownership key go through the existing normalization helper, consistent with other branches.
+
+        归属键的大小写变体走既有归一化 helper，与其它分支同口径。"""
         for key in ("parent_tool_use_id", "parentToolUseID", "parentToolUseId"):
             entries = normalize_sdk_message_to_entries({"type": "user", "content": self.XML, key: "tu-p"})
             assert entries[0]["parent_tool_use_id"] == "tu-p", key
 
     def test_batched_notifications_all_carry_same_parent(self):
-        """同一消息批多条通知时，每条都带同一 parent。"""
+        """When one message batches several notifications, each carries the same parent.
+
+        同一消息批多条通知时，每条都带同一 parent。"""
         xml2 = self.XML.replace("t9", "t10").replace("tu-9", "tu-10").replace("子智能体完成", "另一子智能体完成")
         entries = normalize_sdk_message_to_entries(
             {"type": "user", "content": self.XML + "\n" + xml2, "uuid": "n-multi", "parent_tool_use_id": "tu-parent"}
@@ -331,7 +353,10 @@ class TestNormalizeTaskNotificationXml:
         assert all(e["parent_tool_use_id"] == "tu-parent" for e in entries)
 
     def test_top_level_notification_has_no_parent_key(self):
-        """不带 parent 的消息归一化产出的 task_notification 条目不含该字段
+        """task_notification entries normalized from messages without a parent do not contain that field
+        (existing behavior does not regress).
+
+        不带 parent 的消息归一化产出的 task_notification 条目不含该字段
         （既有行为不回归）。"""
         entries = normalize_sdk_message_to_entries({"type": "user", "content": self.XML, "uuid": "n-top"})
         assert len(entries) == 1
@@ -383,7 +408,9 @@ class TestNormalizeQuestionAnswer:
         assert entry["is_error"] is False
 
     def test_answer_without_structured_result_keeps_raw_content(self):
-        """旧 transcript 无 toolUseResult 时仍定型为答复条目，内容原样保留。"""
+        """An old transcript without toolUseResult is still typed as an answer entry, with content kept as is.
+
+        旧 transcript 无 toolUseResult 时仍定型为答复条目，内容原样保留。"""
         normalizer = SdkMessageNormalizer()
         self._ask_assistant(normalizer)
         entries = normalizer.normalize(
@@ -439,7 +466,11 @@ class TestNormalizeQuestionAnswer:
         assert entries[1]["subtype"] == "question_answer"
 
     def test_two_questions_batched_in_one_message_do_not_share_answers(self):
-        """并行两个 AskUserQuestion 的 tool_result 批进同一条消息时，消息级
+        """When the tool_results of two parallel AskUserQuestion calls are batched into one message, the message-level
+        tool_use_result cannot be split by tool_use_id: better to fall back to raw text for both than to mismatch
+        the same answers to both questions.
+
+        并行两个 AskUserQuestion 的 tool_result 批进同一条消息时，消息级
         tool_use_result 无法按 tool_use_id 拆分——宁可都回退原始文本，也不能把
         同一份 answers 错配给两个问题。"""
         normalizer = SdkMessageNormalizer()
@@ -471,7 +502,7 @@ class TestNormalizeQuestionAnswer:
 
 
 # ---------------------------------------------------------------------------
-# SdkMessageNormalizer — skill 调用定型（跨消息状态）
+# SdkMessageNormalizer: skill call typing (cross-message state) / SdkMessageNormalizer — skill 调用定型（跨消息状态）
 # ---------------------------------------------------------------------------
 
 
@@ -511,7 +542,7 @@ class TestSkillInvocationTyping:
         assert entry["skill_name"] == "generate-storyboard"
         assert entry["skill_args"] == "第一集所有场景"
         assert entry["tool_use_id"] == "tu-skill"
-        # 注入全文不进日志：条目任何字段都不携带正文
+        # The injected full text does not go into the log: no field of the entry carries the body / 注入全文不进日志：条目任何字段都不携带正文
         import json
 
         assert "完整注入正文" not in json.dumps(entries, ensure_ascii=False)
@@ -556,7 +587,9 @@ class TestSkillInvocationTyping:
         assert second[0]["tool_use_id"] is None
 
     def test_concurrent_skill_calls_in_one_message_consumed_in_order(self):
-        """同一 assistant 消息内并发发起两个 Skill 调用：按调用顺序逐一消费，不覆盖。"""
+        """Two Skill calls launched concurrently in the same assistant message: consumed one by one in call order, without overwriting.
+
+        同一 assistant 消息内并发发起两个 Skill 调用：按调用顺序逐一消费，不覆盖。"""
         normalizer = SdkMessageNormalizer()
         normalizer.normalize(
             {
@@ -575,7 +608,9 @@ class TestSkillInvocationTyping:
         assert second[0]["tool_use_id"] == "tu-b"
 
     def test_skill_state_keyed_by_parent_context(self):
-        """主线与 subagent 消息在 live 流中交错：skill 关联互不串扰。"""
+        """Main-line and subagent messages interleave in the live stream: skill associations do not cross-talk.
+
+        主线与 subagent 消息在 live 流中交错：skill 关联互不串扰。"""
         normalizer = SdkMessageNormalizer()
         normalizer.normalize(
             {
@@ -624,7 +659,9 @@ class TestSkillInvocationTyping:
         assert entries[2]["content"] == [{"type": "text", "text": "普通文本"}]
 
     def test_camel_case_parent_variants_normalized_at_write_point(self):
-        """三种大小写 key 变体在写入点归一化为 parent_tool_use_id。"""
+        """Three key case variants are normalized to parent_tool_use_id at the write point.
+
+        三种大小写 key 变体在写入点归一化为 parent_tool_use_id。"""
         for key in ("parent_tool_use_id", "parentToolUseID", "parentToolUseId"):
             entries = normalize_sdk_message_to_entries(
                 {"type": "assistant", key: "tu-p", "content": [{"type": "text", "text": "x"}]}
@@ -639,7 +676,7 @@ class TestSkillInvocationTyping:
 
 
 # ---------------------------------------------------------------------------
-# EventLogStore — seq 单调 / 幂等键 / 游标
+# EventLogStore: monotonic seq / idempotency key / cursor / EventLogStore — seq 单调 / 幂等键 / 游标
 # ---------------------------------------------------------------------------
 
 
@@ -692,7 +729,11 @@ class TestEventLogStore:
     async def test_append_retries_pk_conflict_even_without_literal_seq_in_message(
         self, log_store: EventLogStore, monkeypatch
     ):
-        """seq 竞争判定不依赖错误信息字面包含 "seq"：驱动/配置不同,主键冲突的
+        """Seq race detection does not depend on the error message literally containing "seq": depending on driver/config, the primary-key conflict
+        DETAIL message may not contain the word; as long as it is not a client_key conflict it should be retried as a seq race
+        (the table only has two constraints: the (session_id, seq) primary key and the client_key unique index).
+
+        seq 竞争判定不依赖错误信息字面包含 "seq"：驱动/配置不同,主键冲突的
         DETAIL 文案未必带这个词,只要不是 client_key 冲突就该按 seq 竞争重试
         （该表仅有 (session_id, seq) 主键与 client_key 唯一索引两个约束）。"""
         from sqlalchemy.exc import IntegrityError
@@ -714,13 +755,17 @@ class TestEventLogStore:
 
         result = await log_store.append("s1", [{"type": "user", "uuid": "u1"}])
 
-        assert calls["n"] == 2  # 首次撞主键冲突后重试一次即成功
+        assert calls["n"] == 2  # After the first primary-key conflict, a single retry succeeds / 首次撞主键冲突后重试一次即成功
         assert result[0]["uuid"] == "u1"
 
     async def test_append_retries_seq_race_with_localized_pg_error_via_sqlstate(
         self, log_store: EventLogStore, monkeypatch
     ):
-        """唯一约束冲突判定以 SQLSTATE 为准：PostgreSQL 错误文案随 lc_messages
+        """Unique-constraint conflict detection is based on SQLSTATE: PostgreSQL error messages are localized per lc_messages,
+        and in non-English environments they do not contain "duplicate key"/"UNIQUE"; substring matching would misjudge a
+        retryable seq race as a real error and raise a 500.
+
+        唯一约束冲突判定以 SQLSTATE 为准：PostgreSQL 错误文案随 lc_messages
         本地化，非英文环境下不含 "duplicate key"/"UNIQUE" 字样，子串匹配会把
         可重试的 seq 竞争误判为真实错误抛成 500。"""
         from sqlalchemy.exc import IntegrityError
@@ -748,7 +793,10 @@ class TestEventLogStore:
     async def test_append_client_key_conflict_detected_by_constraint_name_when_localized(
         self, log_store: EventLogStore, monkeypatch
     ):
-        """client_key 冲突判定优先用驱动暴露的约束名（不随 locale 翻译）：
+        """client_key conflict detection prefers the constraint name exposed by the driver (not translated per locale):
+        with localized messages it can still take the idempotent short-circuit and return the existing entry instead of raising.
+
+        client_key 冲突判定优先用驱动暴露的约束名（不随 locale 翻译）：
         本地化文案下仍能走幂等短路，返回既有条目而非抛出。"""
         from sqlalchemy.exc import IntegrityError
 
@@ -774,7 +822,11 @@ class TestEventLogStore:
     async def test_append_client_key_conflict_detected_via_context_without_explicit_cause(
         self, log_store: EventLogStore, monkeypatch
     ):
-        """约束名探测优先走 ``__cause__``，驱动异常仅隐式关联（无显式
+        """Constraint-name probing prefers ``__cause__`` and falls back to ``__context__`` when the driver exception is only implicitly
+        chained (no explicit ``raise ... from``): a broken chain must not cause a missed client_key conflict that is
+        mistaken for an ordinary seq race and retried until exhausted.
+
+        约束名探测优先走 ``__cause__``，驱动异常仅隐式关联（无显式
         ``raise ... from``）时回退 ``__context__``：不因链路断裂漏判 client_key
         冲突，误当作普通 seq 竞争重试到耗尽。"""
         from sqlalchemy.exc import IntegrityError
@@ -786,7 +838,7 @@ class TestEventLogStore:
         driver_error.__context__ = _FakeDriverError(
             "original pg error", constraint_name="uq_agent_event_log_client_key"
         )
-        assert driver_error.__cause__ is None  # 隐式关联，未显式 raise ... from
+        assert driver_error.__cause__ is None  # Implicit chaining, no explicit raise ... from / 隐式关联，未显式 raise ... from
 
         async def _conflicting_append_once(session_id, entries, client_key):
             raise IntegrityError("INSERT INTO agent_session_event_log ...", {}, driver_error)
@@ -799,7 +851,10 @@ class TestEventLogStore:
         assert result == [existing]
 
     async def test_first_driver_attr_terminates_on_cyclic_exception_chain(self):
-        """``__cause__``/``__context__`` 链人为构造成环（正常异常传播不会产生,
+        """When the ``__cause__``/``__context__`` chain is artificially made cyclic (normal exception propagation never does this,
+        but pathological construction cannot be ruled out), deduplicating by id() still terminates instead of looping forever.
+
+        ``__cause__``/``__context__`` 链人为构造成环（正常异常传播不会产生,
         但不排除病态构造）时按 id() 去重仍能终止,不陷入死循环。"""
         from sqlalchemy.exc import IntegrityError
 
@@ -808,7 +863,7 @@ class TestEventLogStore:
         err_a = _FakeDriverError("a")
         err_b = _FakeDriverError("b")
         err_a.__context__ = err_b
-        err_b.__context__ = err_a  # 环：a -> b -> a -> ...
+        err_b.__context__ = err_a  # Cycle: a -> b -> a -> ... / 环：a -> b -> a -> ...
 
         exc = IntegrityError("INSERT INTO agent_session_event_log ...", {}, err_a)
 
@@ -817,7 +872,12 @@ class TestEventLogStore:
         assert result is None
 
     async def test_is_client_key_violation_ignores_sql_statement_text_when_orig_is_none(self):
-        """``exc.orig`` 为 None 时的兜底不能对 ``str(exc)`` 全文匹配：
+        """The fallback when ``exc.orig`` is None must not match against the full ``str(exc)``:
+        SQLAlchemy splices the INSERT statement (including the client_key column name) into the exception text, so any
+        exception unrelated to client_key (e.g. a seq primary-key race) would be misjudged as a client_key
+        conflict; the part after ``[SQL: ...]`` must be stripped before matching.
+
+        ``exc.orig`` 为 None 时的兜底不能对 ``str(exc)`` 全文匹配：
         SQLAlchemy 把 INSERT 语句（含 client_key 列名）拼进异常文本，任何
         与 client_key 无关的异常（如 seq 主键竞争）都会被误判为 client_key
         冲突；需先剥离 ``[SQL: ...]`` 之后的部分再匹配。"""
@@ -836,13 +896,19 @@ class TestEventLogStore:
     async def test_append_seq_race_retries_when_client_key_absent_despite_false_positive_violation_check(
         self, log_store: EventLogStore, monkeypatch
     ):
-        """本次调用未传 client_key 时，即便冲突文案把 client_key 判成命中，
+        """When this call passed no client_key, even if the conflict message makes client_key look like a hit,
+        the client_key conflict class should be structurally excluded: a write without a client_key cannot possibly
+        hit the client_key unique constraint, so a misjudgment must not turn off retries for an ordinary seq race.
+
+        本次调用未传 client_key 时，即便冲突文案把 client_key 判成命中，
         也应结构性排除 client_key 冲突分类——未传 client_key 的写入根本不可能
         撞上 client_key 唯一约束，不能让误判把普通 seq 竞争的重试关掉。"""
         from sqlalchemy.exc import IntegrityError
 
         calls = {"n": 0}
         original_append_once = log_store._append_once
+        # The driver only gives a message containing the word client_key: the real classifier judges True from it, which is exactly
+        # the kind of misjudgment to be structurally excluded.
         # 驱动只给出含 client_key 字样的文案：真实分类器据此判为 True，正是要被
         # 结构性排除的那种误判。
         misleading = _FakeDriverError(
@@ -858,13 +924,16 @@ class TestEventLogStore:
 
         monkeypatch.setattr(log_store, "_append_once", _flaky_append_once)
 
-        result = await log_store.append("s1", [{"type": "user", "uuid": "u1"}])  # client_key 默认 None
+        result = await log_store.append("s1", [{"type": "user", "uuid": "u1"}])  # client_key defaults to None / client_key 默认 None
 
         assert calls["n"] == 2
         assert result[0]["uuid"] == "u1"
 
     async def test_append_raises_non_unique_integrity_error_without_retry(self, log_store: EventLogStore, monkeypatch):
-        """非唯一约束的 IntegrityError（如外键冲突 SQLSTATE 23503）不属于
+        """An IntegrityError from a non-unique constraint (e.g. foreign-key violation SQLSTATE 23503) is not a
+        seq race and should be raised immediately instead of retried.
+
+        非唯一约束的 IntegrityError（如外键冲突 SQLSTATE 23503）不属于
         seq 竞争，应立即抛出而非重试。"""
         from sqlalchemy.exc import IntegrityError
 
@@ -885,7 +954,10 @@ class TestEventLogStore:
         assert calls["n"] == 1
 
     async def test_append_retries_seq_race_via_sqlite_errorname(self, log_store: EventLogStore, monkeypatch):
-        """SQLite 侧用 sqlite_errorname 判定（PRIMARYKEY/UNIQUE 两个扩展码都算），
+        """On SQLite, detection uses sqlite_errorname (both PRIMARYKEY/UNIQUE extended codes count),
+        not the error message.
+
+        SQLite 侧用 sqlite_errorname 判定（PRIMARYKEY/UNIQUE 两个扩展码都算），
         不依赖错误文案。"""
         from sqlalchemy.exc import IntegrityError
 
@@ -907,11 +979,15 @@ class TestEventLogStore:
         assert result[0]["uuid"] == "u1"
 
     async def test_find_new_session_by_client_key_scans_across_sessions(self, log_store: EventLogStore):
-        """跨会话按幂等键定位新会话受理条目（seq 0）：进程内映射重启/淘汰
+        """Locate a new session's acceptance entry (seq 0) by idempotency key across sessions: after the in-process map is lost on restart/eviction,
+        a retry uses this to hit the existing session instead of creating a duplicate.
+
+        跨会话按幂等键定位新会话受理条目（seq 0）：进程内映射重启/淘汰
         丢失后，重试凭此命中既有会话而非重复建会话。"""
         first = build_user_entry([{"type": "text", "text": "hi"}])
         await log_store.append("sdk-a", [first], client_key="ck-new")
         await log_store.append("sdk-b", [build_user_entry([{"type": "text", "text": "other"}])])
+        # Idempotency keys of regular messages that are not the first entry (seq>0) are not new-session acceptances and do not take part in matching
         # 非首条（seq>0）的常规消息幂等键不属于新会话受理，不参与匹配
         mid = build_user_entry([{"type": "text", "text": "mid"}])
         await log_store.append("sdk-b", [mid], client_key="ck-mid")
@@ -941,7 +1017,9 @@ class TestEventLogStore:
 
 
 class TestUserMessageLink:
-    """用户消息身份映射：服务端条目 id ↔ SDK transcript entry uuid。"""
+    """User message identity mapping: server entry id <-> SDK transcript entry uuid.
+
+    用户消息身份映射：服务端条目 id ↔ SDK transcript entry uuid。"""
 
     async def test_records_and_finds_mapping(self, log_store: EventLogStore):
         entry = build_user_entry([{"type": "text", "text": "hi"}])
@@ -952,7 +1030,9 @@ class TestUserMessageLink:
         assert await log_store.find_user_message_link("s1", appended["uuid"]) == "sdk-entry-1"
 
     async def test_missing_mapping_returns_none(self, log_store: EventLogStore):
-        """没有映射行的会话：查不到即返回 None，不抛错。"""
+        """A session without mapping rows: a miss returns None without raising.
+
+        没有映射行的会话：查不到即返回 None，不抛错。"""
         assert await log_store.find_user_message_link("s1", "user-unknown") is None
 
     async def test_repeat_record_keeps_first_mapping(self, log_store: EventLogStore):
@@ -977,7 +1057,7 @@ class TestUserMessageLink:
 
 
 # ---------------------------------------------------------------------------
-# EventLogService — 懒生成
+# EventLogService: lazy generation / EventLogService — 懒生成
 # ---------------------------------------------------------------------------
 
 
@@ -1020,7 +1100,7 @@ class TestLazyBackfill:
         assert [e["seq"] for e in entries] == [0, 1]
         assert entries[0]["timestamp"] == "2026-01-01T00:00:00Z"
 
-        # 第二次访问不重复重放
+        # The second access does not replay again / 第二次访问不重复重放
         again = await service.list_entries("old-session", None)
         assert len(again) == 2
         assert adapter.read_count == 1
@@ -1059,7 +1139,9 @@ class TestLazyBackfill:
         assert len(await log_store.list_after("old")) == 1
 
     async def test_backfilled_session_works_without_mapping(self, log_store: EventLogStore):
-        """没有身份映射行的会话：懒生成照常重建，只是条目不可作改写锚点。"""
+        """A session without identity mapping rows: lazy generation rebuilds as usual, the entries just cannot serve as rewrite anchors.
+
+        没有身份映射行的会话：懒生成照常重建，只是条目不可作改写锚点。"""
         adapter = _FakeAdapter([{"type": "user", "content": "hi", "uuid": "t1"}])
         service = EventLogService(log_store, adapter)
 
@@ -1086,7 +1168,11 @@ class TestLazyBackfill:
         assert [e["uuid"] for e in entries] == ["b"]
 
     async def test_backfill_lock_not_leaked_when_transcript_empty(self, log_store: EventLogStore):
-        """空 transcript 不写入：无协程持有/等待时锁对象随弱引用字典自动回收，
+        """An empty transcript writes nothing: when no coroutine holds/waits, the lock object is collected via the weak-ref dict,
+        so no memory stays resident forever for each empty/invalid session; once it has content, concurrent first visits still load only once
+        (mutual exclusion is unaffected by collection: concurrent waiters on the same session_id share the same lock object).
+
+        空 transcript 不写入：无协程持有/等待时锁对象随弱引用字典自动回收，
         不会为每个空/无效会话永久驻留内存；转为有内容后并发首访仍只灌入一次
         （互斥性质不受回收影响——同一 session_id 的并发等待者共享同一锁对象）。"""
         adapter = _FakeAdapter([])
@@ -1096,15 +1182,17 @@ class TestLazyBackfill:
             await service.ensure_backfilled(f"empty-{i}", None)
         assert len(service._backfill_locks) == 0
 
-        # transcript 补齐内容后，并发访问只灌入一次
+        # After the transcript gets content, concurrent access loads only once / transcript 补齐内容后，并发访问只灌入一次
         adapter._messages = [{"type": "user", "content": "hi", "uuid": "u1"}]
         await asyncio.gather(*[service.ensure_backfilled("old", None) for _ in range(5)])
         assert len(await log_store.list_after("old")) == 1
-        # 写入成功后锁引用被清理
+        # The lock reference is cleaned up after a successful write / 写入成功后锁引用被清理
         assert "old" not in service._backfill_locks
 
     async def test_backfill_skips_message_that_fails_normalization(self, log_store: EventLogStore, monkeypatch):
-        """历史消息规范化单条抛异常时容错跳过，不让整个懒生成因一条脏数据失败。"""
+        """If normalizing a single history message raises, it is skipped tolerantly, so one bad record does not fail the whole lazy generation.
+
+        历史消息规范化单条抛异常时容错跳过，不让整个懒生成因一条脏数据失败。"""
         adapter = _FakeAdapter(
             [
                 {"type": "user", "content": "ok-1", "uuid": "u1", "timestamp": "2026-01-01T00:00:00Z"},
@@ -1127,7 +1215,9 @@ class TestLazyBackfill:
         assert [e["uuid"] for e in entries] == ["u1", "u2"]
 
     async def test_backfill_produces_typed_entries_for_interrupt_question_and_task(self, log_store: EventLogStore):
-        """懒生成重放与 live 写入点共用定型逻辑：三族事件产出同样的 typed 条目。"""
+        """Lazy-generation replay and the live write point share the typing logic: the three event families produce the same typed entries.
+
+        懒生成重放与 live 写入点共用定型逻辑：三族事件产出同样的 typed 条目。"""
         xml = (
             "<task-notification>\n<task-id>t1</task-id>\n<tool-use-id>tu-t</tool-use-id>\n"
             "<status>completed</status>\n<summary>done</summary>\n</task-notification>"
@@ -1187,7 +1277,9 @@ class TestLazyBackfill:
         assert [entry["type"] for entry in entries] == ["user"]
 
     async def test_backfill_collapses_adjacent_interrupt_echoes(self, log_store: EventLogStore):
-        """相邻 interrupt echo（SDK 回显 + 竞态副本）在写入点去重，只产出一条。"""
+        """Adjacent interrupt echoes (SDK echo + racing copy) are deduplicated at the write point, producing only one.
+
+        相邻 interrupt echo（SDK 回显 + 竞态副本）在写入点去重，只产出一条。"""
         adapter = _FakeAdapter(
             [
                 {"type": "user", "content": "开始", "uuid": "u1"},
@@ -1201,13 +1293,13 @@ class TestLazyBackfill:
 
         entries = await service.list_entries("old-session", None)
         assert [e["type"] for e in entries] == ["user", "system", "user", "system"]
-        # 相邻两条回显收敛为一条；隔轮的新中断仍独立成条
+        # Two adjacent echoes collapse into one; a new interrupt in a later turn is still its own entry / 相邻两条回显收敛为一条；隔轮的新中断仍独立成条
         assert entries[1]["subtype"] == "interrupt"
         assert entries[3]["subtype"] == "interrupt"
 
 
 # ---------------------------------------------------------------------------
-# 懒生成 — subagent subpath 合并
+# Lazy generation: subagent subpath merging / 懒生成 — subagent subpath 合并
 # ---------------------------------------------------------------------------
 
 
@@ -1258,10 +1350,11 @@ class TestSubagentBackfillMerge:
 
         entries = await service.list_entries("old-session", None)
 
+        # Child entries immediately follow the main-line entry that carries the Task tool_use, before later main-line entries
         # 子条目紧跟携带 Task tool_use 的主线条目之后，先于后续主线条目
         uuids = [e["uuid"] for e in entries]
         assert uuids == ["u1", "a1", "s-u1", "s-a1", "s-u2-tr0", "u2-tr0", "a2"]
-        # 子条目全部带 parent_tool_use_id，主线条目不带
+        # All child entries carry parent_tool_use_id; main-line entries do not / 子条目全部带 parent_tool_use_id，主线条目不带
         sub = [e for e in entries if e.get("parent_tool_use_id")]
         assert {e["parent_tool_use_id"] for e in sub} == {"tu-agent"}
         assert [e["uuid"] for e in sub] == ["s-u1", "s-a1", "s-u2-tr0"]
@@ -1285,7 +1378,9 @@ class TestSubagentBackfillMerge:
         return outcomes[0]
 
     async def test_unanchored_subagent_that_answered_is_inferred_completed(self, log_store: EventLogStore):
-        """压缩续接后锚点 tool_use 不在主线：描述取子时间线的首条指令（多行合并为一行），结论取最后的回答。"""
+        """After compaction resume the anchor tool_use is not on the main line: the description takes the child timeline's first instruction (multi-line merged into one line), the conclusion takes the last answer.
+
+        压缩续接后锚点 tool_use 不在主线：描述取子时间线的首条指令（多行合并为一行），结论取最后的回答。"""
         sub = [
             {"type": "user", "content": "审片：检查第 8 集\n逐个镜头核对时长", "uuid": "s-u1"},
             {
@@ -1318,7 +1413,9 @@ class TestSubagentBackfillMerge:
         assert outcome["timestamp"] == "2026-01-01T00:05:00Z"
 
     async def test_unanchored_subagent_prefers_the_description_from_the_raw_call(self, log_store: EventLogStore):
-        """原始载荷里还留着压缩前的调用参数时，描述用父代理写下的 description。"""
+        """When the raw payload still holds the pre-compaction call arguments, the description uses the description written by the parent agent.
+
+        原始载荷里还留着压缩前的调用参数时，描述用父代理写下的 description。"""
         sub = [
             {"type": "user", "content": "逐个镜头核对第 8 集的时长\n列出超时的镜头", "uuid": "s-u1"},
             {"type": "assistant", "content": [{"type": "text", "text": "全部通过"}], "uuid": "s-a1"},
@@ -1426,10 +1523,14 @@ class TestSubagentBackfillMerge:
 
 
 class TestResolveUserMessageAnchor:
-    """锚点解析两段化：身份映射优先，未命中按恒等性回退。"""
+    """Two-stage anchor resolution: the identity mapping first, falling back to identity on a miss.
+
+    锚点解析两段化：身份映射优先，未命中按恒等性回退。"""
 
     async def test_mapping_wins_and_needs_no_transcript(self, log_store: EventLogStore):
-        """活跃路径 mint 的条目 id 与 SDK uuid 天然不同名，只能靠映射对上。"""
+        """Entry ids minted on the active path naturally differ from the SDK uuid; only the mapping can match them.
+
+        活跃路径 mint 的条目 id 与 SDK uuid 天然不同名，只能靠映射对上。"""
         adapter = _FakeAdapter([{"type": "user", "content": "hi", "uuid": "sdk-1"}])
         service = EventLogService(log_store, adapter)
         await log_store.record_user_message_link("s1", "user-abc", "sdk-1")
@@ -1438,7 +1539,9 @@ class TestResolveUserMessageAnchor:
         assert adapter.read_count == 0
 
     async def test_falls_back_to_identity_for_a_plain_user_entry(self, log_store: EventLogStore):
-        """无映射的历史用户条目：两个域的 uuid 本就相同，取自身即可。"""
+        """Historical user entries without a mapping: the uuids of both domains are the same, so take the entry itself.
+
+        无映射的历史用户条目：两个域的 uuid 本就相同，取自身即可。"""
         adapter = _FakeAdapter(
             [
                 {"type": "user", "content": "hi", "uuid": "t1"},
@@ -1456,7 +1559,9 @@ class TestResolveUserMessageAnchor:
         assert await service.resolve_user_message_anchor("s1", "a1", None) is None
 
     async def test_typed_user_subtypes_are_refused(self, log_store: EventLogStore):
-        """问答回复带 subtype、uuid 也是派生的；作锚点没有意义。"""
+        """Q&A replies carry a subtype and their uuid is derived too; they are meaningless as anchors.
+
+        问答回复带 subtype、uuid 也是派生的；作锚点没有意义。"""
         adapter = _FakeAdapter(
             [
                 {
@@ -1484,7 +1589,10 @@ class TestResolveUserMessageAnchor:
         assert await service.resolve_user_message_anchor("s1", "u-ans", None) is None
 
     async def test_system_shaped_pseudo_user_entries_are_refused(self, log_store: EventLogStore):
-        """transcript 侧的 interrupt 回显与 skill 注入都是 type:"user"，定型后成
+        """On the transcript side, the interrupt echo and skill injection are both type:"user" and are typed as
+        system entries: the former keeps its uuid as is, the latter has a -skill suffix; neither shape serves as an anchor.
+
+        transcript 侧的 interrupt 回显与 skill 注入都是 type:"user"，定型后成
         system 条目：前者原样留用 uuid、后者带 -skill 后缀，两种形状都不作锚点。"""
         adapter = _FakeAdapter(
             [
@@ -1501,7 +1609,9 @@ class TestResolveUserMessageAnchor:
         assert await service.resolve_user_message_anchor("s1", "u1", None) == "u1"
 
     async def test_subagent_entry_is_refused(self, log_store: EventLogStore):
-        """子时间线里的用户条目带 parent_tool_use_id，不在主线上。"""
+        """User entries in a child timeline carry parent_tool_use_id and are not on the main line.
+
+        子时间线里的用户条目带 parent_tool_use_id，不在主线上。"""
         adapter = _FakeAdapter(
             [
                 {

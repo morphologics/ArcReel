@@ -1,4 +1,7 @@
-"""视频请求事实求值接口：真实 ConfigResolver + 内存测试库，按「项目 × 路线 × 桶 × 身份来源」断言事实或失败。"""
+"""Video request facts evaluation interface: real ConfigResolver + in-memory test DB; asserts facts or failures per
+"project x route x bucket x identity source".
+
+视频请求事实求值接口：真实 ConfigResolver + 内存测试库，按「项目 × 路线 × 桶 × 身份来源」断言事实或失败。"""
 
 from __future__ import annotations
 
@@ -204,7 +207,10 @@ async def test_database_query_failure_returns_unavailable_facts(resolver, db_fac
 
 
 async def test_custom_model_without_durations_falls_back_to_name_preset(resolver, db_factory):
-    """对应不上条目、行上也没有可选时长：运行时取按名字推断的预设，一个族都匹配不上时为 [4, 8]。"""
+    """No matching entry and no duration options on the row: at runtime take the preset inferred from the name, or
+    [4, 8] when no family matches.
+
+    对应不上条目、行上也没有可选时长：运行时取按名字推断的预设，一个族都匹配不上时为 [4, 8]。"""
     provider_id = await _seed_custom_video_models(db_factory, {"model_id": "m", "is_default": True})
 
     facts = await _read(resolver, {"video_provider_i2v": f"{provider_id}/m"})
@@ -214,7 +220,10 @@ async def test_custom_model_without_durations_falls_back_to_name_preset(resolver
 
 
 async def test_custom_model_matched_to_entry_takes_entry_durations_and_constraints(resolver, db_factory):
-    """名字对上条目的自定义模型：可选时长与时长联动约束取条目（Veo 在 1080p 下只剩 8 秒）。"""
+    """A custom model whose name matches an entry: duration options and duration-linked constraints come from the
+    entry (Veo only has 8 seconds left at 1080p).
+
+    名字对上条目的自定义模型：可选时长与时长联动约束取条目（Veo 在 1080p 下只剩 8 秒）。"""
     provider_id = await _seed_custom_video_models(
         db_factory, {"model_id": "vendor/Veo-3.1-Generate-001", "resolution": "1080p", "is_default": True}
     )
@@ -228,7 +237,10 @@ async def test_custom_model_matched_to_entry_takes_entry_durations_and_constrain
 
 
 async def test_custom_model_constraint_override_replaces_entry_constraints(resolver, db_factory):
-    """能力覆盖整维替换时长联动约束：分辨率键按小写比较，参考图约束随这一维一起被替换掉。"""
+    """A capability override replaces the duration-linked constraints dimension as a whole: resolution keys are
+    compared in lowercase, and reference image constraints are replaced along with that dimension.
+
+    能力覆盖整维替换时长联动约束：分辨率键按小写比较，参考图约束随这一维一起被替换掉。"""
     provider_id = await _seed_custom_video_models(
         db_factory,
         {
@@ -307,6 +319,8 @@ async def test_configured_identity_change_after_bucket_validation_fails(db_facto
     async def changing_sessions():
         async with db_factory() as session:
             yield session
+        # Commit the config change after the session that did the identity and bucket checks is closed; the next
+        # capability read sees it.
         # 在身份与桶校验完成的 session 关闭后提交配置变更，下一次能力读取会看到它。
         if not disabled:
             disabled.append(True)
@@ -333,7 +347,10 @@ async def test_configured_identity_change_after_bucket_validation_fails(db_facto
 
 
 async def test_execution_identity_follows_the_backend_when_it_diverges_from_configuration(resolver, db_factory):
-    """配置身份已禁用时读侧报悬空；调用方给定的有效执行身份独立求值。"""
+    """When the configured identity is disabled the read side reports it as dangling; a valid execution identity
+    given by the caller is evaluated independently.
+
+    配置身份已禁用时读侧报悬空；调用方给定的有效执行身份独立求值。"""
     provider_id = await _seed_custom_video_models(
         db_factory,
         {"model_id": "m-dead", "is_enabled": False, "capability_overrides": {"durations": [5]}},
@@ -374,7 +391,10 @@ async def test_execution_identity_follows_the_backend_when_it_diverges_from_conf
     ],
 )
 async def test_read_and_execution_sides_agree_when_identities_match(resolver, project, route, generation_type):
-    """读侧（预检、报价）与执行侧对同一份配置给出同一组档位与请求分辨率。"""
+    """The read side (precheck, quote) and the execution side give the same duration options and request resolution
+    for the same config.
+
+    读侧（预检、报价）与执行侧对同一份配置给出同一组档位与请求分辨率。"""
     read = await _read(resolver, project, route=route, generation_type=generation_type)
     assert isinstance(read, VideoRequestFacts)
 
@@ -423,7 +443,10 @@ async def test_reference_buckets_use_their_own_model_resolution_on_both_sides(re
 async def test_resolution_override_previews_an_unsaved_resolution(
     resolver, generation_type, override, resolution, allowed, excluded
 ):
-    """覆盖分辨率取代项目已保存的档位作为请求分辨率，其余求值不变。"""
+    """The override resolution replaces the project's saved option as the request resolution; the rest of the
+    evaluation is unchanged.
+
+    覆盖分辨率取代项目已保存的档位作为请求分辨率，其余求值不变。"""
     project = _with_resolution({f"video_provider_{generation_type}": VEO}, VEO, "1080p")
 
     preview = await evaluate_video_request_facts(
@@ -443,7 +466,10 @@ async def test_resolution_override_previews_an_unsaved_resolution(
 
 
 async def test_resolution_override_leaves_read_and_execution_evaluations_on_the_saved_resolution(resolver):
-    """预览过未保存的分辨率后，不传覆盖的读侧与执行侧仍按已保存档位求值。"""
+    """After previewing an unsaved resolution, the read and execution sides without an override still evaluate with
+    the saved option.
+
+    预览过未保存的分辨率后，不传覆盖的读侧与执行侧仍按已保存档位求值。"""
     project = _with_resolution({"video_provider_i2v": VEO}, VEO, "1080p")
     await evaluate_video_request_facts(
         project,
@@ -470,7 +496,10 @@ async def test_resolution_override_leaves_read_and_execution_evaluations_on_the_
 
 
 async def test_auto_resolution_override_falls_back_to_the_custom_model_default(resolver, db_factory):
-    """预览「自动」等于项目未存档位：自定义供应商仍取模型默认档，与保存后的求值一致。"""
+    """Previewing "auto" equals the project having no saved option: a custom provider still takes the model's default
+    option, matching the evaluation after saving.
+
+    预览「自动」等于项目未存档位：自定义供应商仍取模型默认档，与保存后的求值一致。"""
     provider_id = await _seed_custom_video_models(
         db_factory,
         {"model_id": "m", "is_default": True, "resolution": "540p", "capability_overrides": {"durations": [4, 6]}},
@@ -523,7 +552,10 @@ async def test_audio_facts_follow_the_request_bucket(
 
 
 async def test_request_shaping_capabilities_come_from_the_same_evaluation(resolver):
-    """参考图上限、无图能力位与参考音频形态随同一次求值给出，请求组装直接消费求值结果。"""
+    """Reference image limit, no-image capability bit and reference audio shape come from the same evaluation; request
+    assembly consumes the evaluation result directly.
+
+    参考图上限、无图能力位与参考音频形态随同一次求值给出，请求组装直接消费求值结果。"""
     from lib.backends.backend_assembly.specs import builtin_video_capabilities_for_model
 
     facts = await _read(resolver, {"video_provider_r2v": VEO}, route="reference_video", generation_type="r2v")

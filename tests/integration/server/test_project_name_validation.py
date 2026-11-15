@@ -1,4 +1,10 @@
-"""按项目名寻址的路由统一校验项目名：非法名一律 400，合法但不存在的项目维持 404。
+"""Routes addressed by project name validate the name uniformly: illegal names always get 400, legal but
+nonexistent projects stay 404.
+
+Routes are enumerated from the application route table, so new project routes are included in the
+assertions automatically.
+
+按项目名寻址的路由统一校验项目名：非法名一律 400，合法但不存在的项目维持 404。
 
 路由从应用路由表枚举，新增的项目路由自动纳入断言。
 """

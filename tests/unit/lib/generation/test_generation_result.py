@@ -71,7 +71,9 @@ def _candidate(unit_id: str, *, path: str | None = "videos/x.mp4") -> Generation
 
 
 def test_missing_only_selects_missing_and_reuses_stale(tmp_path: Path) -> None:
-    """stale 可用即复用：只有 missing 进 targets，stale 与 current 都进 skipped。"""
+    """Reuse stale when usable: only missing goes into targets; stale and current both go into skipped.
+
+    stale 可用即复用：只有 missing 进 targets，stale 与 current 都进 skipped。"""
 
     resolver = _Resolver(
         {
@@ -94,7 +96,9 @@ def test_missing_only_selects_missing_and_reuses_stale(tmp_path: Path) -> None:
 
 
 def test_missing_only_never_regenerates_a_blocked_artifact(tmp_path: Path) -> None:
-    """产物状态读不出来时报为独立缺口，绝不当作 missing 去重付一次费。"""
+    """When the artifact state cannot be read, it is reported as a separate gap and never treated as missing to pay again.
+
+    产物状态读不出来时报为独立缺口，绝不当作 missing 去重付一次费。"""
 
     resolver = _Resolver({"A": ArtifactStatus.MISSING}, raises={"B"})
 
@@ -116,7 +120,9 @@ def test_missing_only_never_regenerates_a_blocked_artifact(tmp_path: Path) -> No
 
 
 def test_explicit_selection_takes_named_ids_regardless_of_state(tmp_path: Path) -> None:
-    """点名即强制：current 的 ID 照样进 targets，未命中的 ID 单列为 unmatched。"""
+    """Naming means forcing: current IDs still go into targets, and unmatched IDs are listed separately as unmatched.
+
+    点名即强制：current 的 ID 照样进 targets，未命中的 ID 单列为 unmatched。"""
 
     resolver = _Resolver({"A": ArtifactStatus.CURRENT, "B": ArtifactStatus.MISSING})
 
@@ -133,7 +139,9 @@ def test_explicit_selection_takes_named_ids_regardless_of_state(tmp_path: Path) 
 
 
 def test_explicit_empty_collection_is_invalid_not_everything(tmp_path: Path) -> None:
-    """显式空集合是调用方错误：既不等于「全部」，也不静默变成空批次。"""
+    """An explicit empty collection is a caller error: it is neither "everything" nor silently an empty batch.
+
+    显式空集合是调用方错误：既不等于「全部」，也不静默变成空批次。"""
 
     with pytest.raises(ValueError, match="不能为空"):
         select_generation_targets(
@@ -153,7 +161,9 @@ def test_normalize_requested_ids_is_the_single_gate_for_selection_intent() -> No
 
 
 def test_missing_only_reselects_a_recorded_path_the_manifest_no_longer_claims() -> None:
-    """登记路径指向的文件被删/被移后，比对报 MISSING，该单元判为缺失而不是被永久复用。"""
+    """After the file the registered path points to is deleted/moved, the comparison reports MISSING and the unit is judged missing rather than reused forever.
+
+    登记路径指向的文件被删/被移后，比对报 MISSING，该单元判为缺失而不是被永久复用。"""
 
     resolver = _Resolver({"GONE": ArtifactStatus.MISSING, "KEPT": ArtifactStatus.CURRENT})
 
@@ -171,7 +181,9 @@ def test_missing_only_reselects_a_recorded_path_the_manifest_no_longer_claims() 
 
 
 def test_missing_only_does_not_recheck_the_filesystem(tmp_path: Path) -> None:
-    """只信比对结论：磁盘上没有同名文件也不改变判定。"""
+    """Only the comparison verdict is trusted: no same-name file on disk does not change the decision.
+
+    只信比对结论：磁盘上没有同名文件也不改变判定。"""
 
     resolver = _Resolver({"A": ArtifactStatus.CURRENT, "B": ArtifactStatus.MISSING})
 
@@ -189,7 +201,7 @@ def test_observe_artifact_status_separates_unobservable_from_missing() -> None:
     key = ArtifactKey.episode_video(1, "A")
     resolver = _Resolver({"A": ArtifactStatus.CURRENT})
 
-    # 没有 key 可比对的单元：该轴不可观测，与「缺失」不是一回事。
+    # A unit with no key to compare: that axis is unobservable, which is not the same as "missing". / 没有 key 可比对的单元：该轴不可观测，与「缺失」不是一回事。
     assert observe_artifact_status(
         resolver=resolver,
         key=None,
@@ -251,7 +263,7 @@ def test_requested_is_exactly_the_union_of_the_three_outcome_sets() -> None:
     assert not set(result.succeeded) & set(result.failed)
     assert not set(result.succeeded) & set(result.blocked)
     assert not set(result.failed) & set(result.blocked)
-    # 复用的单元刻意留在 requested 之外：它既没做也没失败。
+    # Reused units are deliberately kept out of requested: they were neither done nor failed. / 复用的单元刻意留在 requested 之外：它既没做也没失败。
     assert [entry.unit_id for entry in result.skipped] == ["D"]
     assert "D" not in result.requested
     assert result.ok is False
@@ -311,7 +323,9 @@ def test_the_contract_survives_a_json_round_trip() -> None:
 
 
 def test_a_succeeded_task_can_still_report_a_stale_artifact() -> None:
-    """任务成功 ≠ 产物匹配当前依据：两条轴各报各的，不合并。"""
+    """Task succeeded ≠ artifact matches the current basis: the two axes report separately and are not merged.
+
+    任务成功 ≠ 产物匹配当前依据：两条轴各报各的，不合并。"""
 
     builder = GenerationResultBuilder("probe", GenerationSelectionMode.EXPLICIT)
     builder.succeed(
@@ -331,7 +345,9 @@ def test_a_succeeded_task_can_still_report_a_stale_artifact() -> None:
 
 
 def test_a_failed_commit_keeps_the_old_artifact_and_never_claims_current() -> None:
-    """正式文件落盘 / Manifest 更新失败时该 ID 记为 failed，旧的付费产物原样保留。"""
+    """When the formal file write / manifest update fails, the ID is recorded as failed and the old paid artifact is kept as is.
+
+    正式文件落盘 / Manifest 更新失败时该 ID 记为 failed，旧的付费产物原样保留。"""
 
     builder = GenerationResultBuilder("probe", GenerationSelectionMode.EXPLICIT)
     builder.fail(
@@ -350,7 +366,7 @@ def test_a_failed_commit_keeps_the_old_artifact_and_never_claims_current() -> No
     item = builder.build().items[0]
 
     assert item.state is GenerationItemState.FAILED
-    # 任务本身跑成功了（钱已花），但产物没有被标成 current。
+    # The task itself ran successfully (money spent), but the artifact was not marked current. / 任务本身跑成功了（钱已花），但产物没有被标成 current。
     assert item.task_state is GenerationTaskState.SUCCEEDED
     assert item.artifact_status is ArtifactStatus.STALE
     assert item.artifact_path == "videos/a.mp4"
@@ -393,7 +409,11 @@ def test_a_cancelled_task_reports_cancellation_rather_than_failure() -> None:
 
 
 def test_every_registered_failure_code_resolves_to_a_declared_action() -> None:
-    """动作表与 task_failure 的编码表同源：新增 failure code 不登记就会被这里挡住。
+    """The action table shares its source with task_failure's code table: a new failure code that is not registered is caught here.
+
+    An unregistered code would only degrade to ``retry``; safe but not sharp enough, so explicit registration is required.
+
+    动作表与 task_failure 的编码表同源：新增 failure code 不登记就会被这里挡住。
 
     未登记的 code 只会退化成 ``retry``——安全但不够锐利，所以要求显式登记。
     """
@@ -413,7 +433,9 @@ def _batch(resource_id: str, *, status: str = "succeeded", **kwargs: object) -> 
 
 
 def test_recording_a_batch_reports_task_provider_and_artifact_axes_separately() -> None:
-    """一次成功的任务不等于产物 current：三条轴各自如实报告。"""
+    """One successful task does not mean the artifact is current: the three axes each report truthfully.
+
+    一次成功的任务不等于产物 current：三条轴各自如实报告。"""
 
     resolver = _Resolver({"A": ArtifactStatus.STALE})
     states = {
@@ -437,7 +459,9 @@ def test_recording_a_batch_reports_task_provider_and_artifact_axes_separately() 
 
 
 def test_a_target_left_behind_by_an_interrupted_enqueue_is_reported_as_not_queued() -> None:
-    """顺序入队中途停下：已建成的照常记结局，没轮到的记为未入队、未计费，问题码与供应商失败分开。"""
+    """A sequential enqueue stopping midway: those already created record their outcome as usual, those that never got a turn are recorded as not queued and not billed, with the problem code kept separate from provider failures.
+
+    顺序入队中途停下：已建成的照常记结局，没轮到的记为未入队、未计费，问题码与供应商失败分开。"""
 
     builder = GenerationResultBuilder("probe", GenerationSelectionMode.MISSING_ONLY)
 
@@ -462,7 +486,9 @@ def test_a_target_left_behind_by_an_interrupted_enqueue_is_reported_as_not_queue
 
 
 def test_a_succeeded_batch_item_carries_the_worker_warnings() -> None:
-    """worker 写进 result.warnings 的提示原样进结构化契约，Agent 与任务 API 读同一份条目。"""
+    """Hints the worker wrote into result.warnings go into the structured contract as is; the Agent and the task API read the same entries.
+
+    worker 写进 result.warnings 的提示原样进结构化契约，Agent 与任务 API 读同一份条目。"""
 
     clamp_warning = {"key": "ref_too_many_images", "params": {"count": 8, "model": "viduq2", "max_count": 7}}
     builder = GenerationResultBuilder("probe", GenerationSelectionMode.EXPLICIT)
@@ -481,7 +507,9 @@ def test_a_succeeded_batch_item_carries_the_worker_warnings() -> None:
 
 
 def test_malformed_worker_warnings_are_skipped_not_fatal() -> None:
-    """warnings 是纯提示：形态不符的条目跳过，不让整批报告失败。"""
+    """warnings are pure hints: malformed entries are skipped rather than failing the whole batch report.
+
+    warnings 是纯提示：形态不符的条目跳过，不让整批报告失败。"""
 
     builder = GenerationResultBuilder("probe", GenerationSelectionMode.EXPLICIT)
 
@@ -511,7 +539,9 @@ def test_malformed_worker_warnings_are_skipped_not_fatal() -> None:
 
 
 def test_the_rendered_summary_spells_out_item_warnings() -> None:
-    """摘要把 warning 按 i18n 文案渲染在条目之下，不直出 key。"""
+    """The summary renders warnings under their item via i18n text, not as raw keys.
+
+    摘要把 warning 按 i18n 文案渲染在条目之下，不直出 key。"""
 
     builder = GenerationResultBuilder("generate_storyboards", GenerationSelectionMode.EXPLICIT)
     builder.succeed(
@@ -528,7 +558,9 @@ def test_the_rendered_summary_spells_out_item_warnings() -> None:
 
 
 def test_a_warning_cannot_carry_params_that_shadow_translate_arguments() -> None:
-    """构造出来的 warning 一定可渲染：params 撞上翻译函数形参名的直接拒绝。"""
+    """A constructed warning is always renderable: params that collide with the translate function's parameter names are rejected outright.
+
+    构造出来的 warning 一定可渲染：params 撞上翻译函数形参名的直接拒绝。"""
 
     with pytest.raises(ValidationError):
         GenerationWarning(key="ref_too_many_images", params={"key": "x"})
@@ -537,7 +569,9 @@ def test_a_warning_cannot_carry_params_that_shadow_translate_arguments() -> None
 
 
 def test_worker_warnings_whose_params_shadow_translate_arguments_are_skipped() -> None:
-    """畸形但合法的 JSON 落到 params 时只丢该条，其余提示与整批报告照常。"""
+    """When malformed-but-valid JSON lands in params, only that entry is dropped; the other hints and the whole batch report proceed as usual.
+
+    畸形但合法的 JSON 落到 params 时只丢该条，其余提示与整批报告照常。"""
 
     builder = GenerationResultBuilder("probe", GenerationSelectionMode.EXPLICIT)
 
@@ -563,7 +597,9 @@ def test_worker_warnings_whose_params_shadow_translate_arguments_are_skipped() -
 
 
 def test_a_failed_batch_item_keeps_the_old_artifact_and_its_status() -> None:
-    """失败不动旧产物：报告里保留旧文件路径与旧状态，付过的钱不被抹掉。"""
+    """A failure does not touch the old artifact: the report keeps the old file path and old status, and money already paid is not erased.
+
+    失败不动旧产物：报告里保留旧文件路径与旧状态，付过的钱不被抹掉。"""
 
     states = {
         "A": GenerationTargetState(candidate=_candidate("A", path="videos/old.mp4"), status=ArtifactStatus.STALE),
@@ -585,7 +621,11 @@ def test_a_failed_batch_item_keeps_the_old_artifact_and_its_status() -> None:
 
 
 def test_a_wait_interrupted_batch_item_is_reported_distinctly_from_a_real_failure() -> None:
-    """等待被打断（超时/worker 离线）时任务在 worker 侧仍非终态——报告为
+    """When the wait is interrupted (timeout / worker offline) the task is still non-terminal on the worker side, so it is reported as
+    INTERRUPTED + WAIT_FOR_TASK, not FAILED + RETRY; otherwise the caller would blindly resubmit a task that may still be running
+    and would land normally, paying twice.
+
+    等待被打断（超时/worker 离线）时任务在 worker 侧仍非终态——报告为
     INTERRUPTED + WAIT_FOR_TASK，不是 FAILED + RETRY，否则调用方会对一个可能仍在跑、
     还会正常落地的任务盲目重提交造成重复付费。"""
 
@@ -610,7 +650,12 @@ def test_a_wait_interrupted_batch_item_is_reported_distinctly_from_a_real_failur
 
 
 def test_a_never_queued_failure_gets_the_enqueue_failed_code_not_task_failed() -> None:
-    """``task_id=""`` 标记 enqueue 调用本身炸了、从未进队——task_state 已经区分为
+    """``task_id=""`` marks that the enqueue call itself blew up and never entered the queue; task_state already distinguishes it as
+    NOT_QUEUED, and the problem code must likewise be the enqueue-specific code, not fall into
+    ``problem_from_task_failure``'s default TASK_FAILED: downstream could not tell "the request never got queued" from
+    "the task ran and the provider judged it failed", and could not give the right retry path (re-trigger enqueue vs investigate the provider).
+
+    ``task_id=""`` 标记 enqueue 调用本身炸了、从未进队——task_state 已经区分为
     NOT_QUEUED，problem code 也要跟着区分为 enqueue 专属码，不能落进
     ``problem_from_task_failure`` 的默认 TASK_FAILED：下游分不清"请求从没进队"和
     "任务跑了、供应商判失败"，给不出正确的重试路径（重触发 enqueue vs 排查供应商）。"""
@@ -630,7 +675,9 @@ def test_a_never_queued_failure_gets_the_enqueue_failed_code_not_task_failed() -
 
 
 def test_recording_maps_queue_resource_ids_onto_contract_unit_ids() -> None:
-    """队列侧 resource_id 与契约 unit ID 不同名时（如资产的 <type>/<name>）按映射记账。"""
+    """When the queue-side resource_id differs from the contract unit ID (e.g. an asset's <type>/<name>), bookkeeping follows the mapping.
+
+    队列侧 resource_id 与契约 unit ID 不同名时（如资产的 <type>/<name>）按映射记账。"""
 
     builder = GenerationResultBuilder("generate_assets", GenerationSelectionMode.MISSING_ONLY)
 
@@ -648,7 +695,11 @@ def test_recording_maps_queue_resource_ids_onto_contract_unit_ids() -> None:
 
 
 def test_recording_a_success_with_no_known_state_does_not_crash_under_an_active_manifest() -> None:
-    """``states`` 缺该 unit 时退回的默认 state 没有 artifact_key；产物轴退化为
+    """When ``states`` lacks the unit, the fallback default state has no artifact_key; the artifact axis degrades to
+    unobservable (None) instead of crashing the whole batch; whether the resolver is active does not change the fact that "without a key there is nothing to compare",
+    and a crash would only drag down the other correctly recorded entries in the batch.
+
+    ``states`` 缺该 unit 时退回的默认 state 没有 artifact_key；产物轴退化为
     不可观测（None）而不是崩掉整批——resolver 是否激活不改变"缺 key 就没法比对"这一事实，
     崩溃只会连累这批里其它已正确记账的条目。"""
 
@@ -658,6 +709,7 @@ def test_recording_a_success_with_no_known_state_does_not_crash_under_an_active_
         builder,
         successes=[_batch("张三", result={"file_path": "characters/张三.png"})],
         failures=[],
+        # Unit not in the mapping -> _state() falls back to a default state without artifact_key
         states={},  # unit 不在映射里 -> _state() 退回无 artifact_key 的默认 state
         resolver=_Resolver({}),
     )
@@ -686,7 +738,9 @@ def test_the_rendered_text_is_only_a_projection_of_the_payload() -> None:
 
 
 def test_rendered_summary_uses_product_language_not_raw_enums() -> None:
-    """默认摘要不含原始枚举值或 Python 类名/函数名——机器标识只在结构化层。"""
+    """The default summary contains no raw enum values or Python class/function names; machine identifiers stay in the structured layer.
+
+    默认摘要不含原始枚举值或 Python 类名/函数名——机器标识只在结构化层。"""
     builder = GenerationResultBuilder("generate_videos", GenerationSelectionMode.MISSING_ONLY)
     builder.fail(
         "E1S01",
@@ -723,13 +777,17 @@ def test_rendered_summary_uses_product_language_not_raw_enums() -> None:
 
 
 def test_every_machine_identifier_has_a_product_language_label() -> None:
-    """标签表对枚举全覆盖：漏一个成员，摘要就会静默丢掉那条信息。"""
+    """The label table fully covers the enums: miss one member and the summary silently drops that piece of information.
+
+    标签表对枚举全覆盖：漏一个成员，摘要就会静默丢掉那条信息。"""
     assert set(_ACTION_LABELS) == set(GenerationAction)
     assert set(_ARTIFACT_STATUS_LABELS) == set(ArtifactStatus)
 
 
 def test_every_generation_entry_point_has_a_product_language_label() -> None:
-    """每个生成入口都登记了产品语言名，摘要抬头才不会回落到中性措辞。"""
+    """Every generation entry point registers a product language name, so the summary header does not fall back to neutral wording.
+
+    每个生成入口都登记了产品语言名，摘要抬头才不会回落到中性措辞。"""
     from server.media_tools import (
         final_cuts,
         grid,
@@ -762,7 +820,9 @@ def test_every_generation_entry_point_has_a_product_language_label() -> None:
 
 
 def test_the_summary_header_names_the_operation_in_product_language() -> None:
-    """抬头用生成入口的产品语言名，不直出工具名。"""
+    """The header uses the generation entry point's product language name, not the raw tool name.
+
+    抬头用生成入口的产品语言名，不直出工具名。"""
     builder = GenerationResultBuilder("generate_videos", GenerationSelectionMode.MISSING_ONLY)
     builder.succeed("E1S01", task_id="t1", artifact_path="videos/E1S01.mp4")
     text = render_generation_result(builder.build())

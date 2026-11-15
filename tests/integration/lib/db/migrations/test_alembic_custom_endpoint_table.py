@@ -1,4 +1,6 @@
-"""Alembic 迁移：custom_endpoint 建表的 upgrade / downgrade。"""
+"""Alembic migration: upgrade / downgrade of the custom_endpoint table.
+
+Alembic 迁移：custom_endpoint 建表的 upgrade / downgrade。"""
 
 from __future__ import annotations
 
@@ -53,6 +55,7 @@ def test_upgrade_creates_table(alembic_cfg: tuple[Config, Path], migration_revis
                 )
             )
             assigned_id = conn.execute(sa.text("SELECT id FROM custom_endpoint")).scalar_one()
+        # The endpoint key ce-<id> is derived from the autoincrement primary key, so no id is given on insert
         # 端点键 ce-<id> 由自增主键派生，插入时不用给 id
         assert assigned_id == 1
     finally:

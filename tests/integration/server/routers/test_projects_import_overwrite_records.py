@@ -1,4 +1,7 @@
-"""覆盖导入等同于删除现有项目再导入：现有项目的记录按删除收尾，覆盖失败时项目与记录原样保留。"""
+"""Overwrite import equals deleting the existing project and then importing: the existing project's records are
+wrapped up as deleted; when the overwrite fails, the project and records are kept as they were.
+
+覆盖导入等同于删除现有项目再导入：现有项目的记录按删除收尾，覆盖失败时项目与记录原样保留。"""
 
 from pathlib import Path
 
@@ -14,7 +17,10 @@ from tests.integration.server.routers.projects_router_support import build_proje
 
 
 def _create_demo_with_archive(manager: ProjectManager) -> bytes:
-    """建好项目 demo，返回它的导出包，并给现有项目留下导出包里没有的项目记忆。"""
+    """Build project demo, return its export archive, and leave the existing project some project memory that the export
+    archive lacks.
+
+    建好项目 demo，返回它的导出包，并给现有项目留下导出包里没有的项目记忆。"""
     manager.create_project("demo")
     manager.create_project_metadata("demo", "Demo", "Anime", "narration")
     archive_path, _ = ProjectArchiveService(manager).export_project("demo")
@@ -70,6 +76,9 @@ async def test_failed_overwrite_leaves_the_project_and_its_records(tmp_path, mon
     refused: list[Path] = []
 
     def _failing_rename(self: Path, target):
+        # existing-out: the existing project directory is in use and cannot be moved (e.g. a file is still open on
+        # Windows).
+        # import-in: the existing project was moved away, and moving the imported content into the project name fails.
         # existing-out：现有项目目录被占用、移不走（如 Windows 上有文件仍被打开）。
         # import-in：现有项目已移走，导入内容移入项目名时失败。
         if not refused and (self == project_dir if failing_rename == "existing-out" else Path(target) == project_dir):
@@ -94,6 +103,7 @@ async def test_failed_overwrite_leaves_the_project_and_its_records(tmp_path, mon
         assert len(await SessionRepository(session).list(project_name="demo")) == 1
         [row] = await UsageRepository(session).fetch_summary_rows(filters=UsageFilters(project_name="demo"))
         assert row.cost_amount == 1.5
+    # Running tasks can still persist
     # 执行中的任务仍可落盘
     with claim_task_project(old["running"], "demo"):
         ensure_task_project_claim("demo")

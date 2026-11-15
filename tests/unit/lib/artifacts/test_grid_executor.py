@@ -23,7 +23,12 @@ def _image_ctx(
     backend_model=None,
     max_reference_images=0,
 ):
-    """把 image lane 解析产物拼成假 GenerationContext，替换 resolve_generation_context 单点。
+    """Assemble the image lane resolution output into a fake GenerationContext, replacing the single point resolve_generation_context.
+
+    backend_model can diverge from model, simulating the case where a custom provider's target model is disabled and falls back, so the backend's
+    actual identity differs from the resolved model_id.
+
+    把 image lane 解析产物拼成假 GenerationContext，替换 resolve_generation_context 单点。
 
     backend_model 可与 model 发散，模拟自定义供应商目标 model 被禁用回退时 backend
     实际身份与解析 model_id 不同的场景。
@@ -46,7 +51,9 @@ def _image_ctx(
 
 
 class _FormalVersions:
-    """VersionManager 的最小替身：提交 staged 版本，在 ``on_commit`` 成功后才选中该版本。"""
+    """Minimal stand-in for VersionManager: commits a staged version and only selects it after ``on_commit`` succeeds.
+
+    VersionManager 的最小替身：提交 staged 版本，在 ``on_commit`` 成功后才选中该版本。"""
 
     def __init__(self, version: int = 1):
         self.version = version
@@ -72,7 +79,11 @@ class _FormalVersions:
 
 
 async def _commit_formal(kwargs: dict, image_path: Path) -> tuple[Path, int]:
-    """与 MediaGenerator 一样经 formal_output 的活化回调提交，返回回调给出的版本号。
+    """Commits through formal_output's activation callback like MediaGenerator does, returning the version number given by the callback.
+
+    The commit callback writes formal files; MediaGenerator calls it in a worker thread via run_noninterruptible_sync, so the stand-in also runs it in a thread.
+
+    与 MediaGenerator 一样经 formal_output 的活化回调提交，返回回调给出的版本号。
 
     提交回调会写正式文件，MediaGenerator 经 run_noninterruptible_sync 在工作线程里调用，替身同样放进线程。
     """
@@ -81,7 +92,9 @@ async def _commit_formal(kwargs: dict, image_path: Path) -> tuple[Path, int]:
 
 
 def _committing_to(image_path: Path):
-    """``generate_image_async`` 的 AsyncMock side_effect：按生产口径提交到 ``image_path``。"""
+    """AsyncMock side_effect for ``generate_image_async``: commits to ``image_path`` the way production does.
+
+    ``generate_image_async`` 的 AsyncMock side_effect：按生产口径提交到 ``image_path``。"""
 
     async def _generate(**kwargs) -> tuple[Path, int]:
         return await _commit_formal(kwargs, image_path)
@@ -143,19 +156,23 @@ def project_with_script(tmp_path):
             }
         )
     )
+    # Production projects are always on the current schema; the script and its provenance chain (episode source → script_plan) are all registered in the artifact manifest
     # 生产项目一律处于当前 schema，剧本与其取证链（分集原文 → script_plan）均已登记进产物清单
     (p / "source" / "episode_1.txt").write_text("原文", encoding="utf-8")
     (p / "drafts" / "episode_1" / "script_plan_segments.json").write_text(
         json.dumps({"episode": 1, "segments": []}), encoding="utf-8"
     )
     activate_artifact_target_state(p, bump_schema=True)
+    # Manifest activation only lands on the manifest version; later migrations bring the project up to the current schema before the artifact read path admits it
     # 清单激活只落到清单版本，后续迁移把项目补到当前 schema，产物读路径才准入
     migrate_project_dir(p)
     return p
 
 
 def _register_sheet(project_path, resource_type, resource_id):
-    """把已落盘的资产图登记进产物清单——未登记的图不被生产准入。"""
+    """Register an asset sheet already written to disk in the artifact manifest; unregistered images are not admitted to production.
+
+    把已落盘的资产图登记进产物清单——未登记的图不被生产准入。"""
     from lib.artifacts.artifact_activation import register_current_resource_artifact
 
     assert register_current_resource_artifact(
@@ -166,7 +183,9 @@ def _register_sheet(project_path, resource_type, resource_id):
 
 
 def _seed_one_hero_per_scene(project_path, grid_json):
-    """每格一个已登记的角色 sheet（hero1..heroN），格内正文以 @[] 指认该角色；返回项目、剧本与落盘的宫格图路径。"""
+    """One registered character sheet per cell (hero1..heroN), with the cell body pointing at that character via @[]; returns the project, the script and the grid image path written to disk.
+
+    每格一个已登记的角色 sheet（hero1..heroN），格内正文以 @[] 指认该角色；返回项目、剧本与落盘的宫格图路径。"""
     from PIL import Image
 
     project = json.loads((project_path / "project.json").read_text(encoding="utf-8"))
@@ -289,10 +308,10 @@ class TestExecuteGridTask:
         assert result["resource_type"] == "grids"
         assert result["resource_id"] == grid.id
         assert result["version"] == 1
-        # created_at 取选中版本的创建时间
+        # created_at is the creation time of the selected version / created_at 取选中版本的创建时间
         assert result["created_at"] == "2026-01-01T00:00:00Z"
         assert "grids/" in result["file_path"]
-        # 没有参考图被裁剪就没有 warning：结果不带该键
+        # No warning if no reference image was clipped: the result has no such key / 没有参考图被裁剪就没有 warning：结果不带该键
         assert "warnings" not in result
 
         # Verify grid status was updated
@@ -303,14 +322,16 @@ class TestExecuteGridTask:
         )
         assert updated_grid_data["status"] == "completed"
         assert updated_grid_data["grid_image_path"] == f"grids/{grid.id}.png"
-        # 联合图内容更新后落格状态复位，等待显式切分
+        # After the grid composite content updates, the split state resets and waits for an explicit split / 联合图内容更新后落格状态复位，等待显式切分
         assert updated_grid_data["split_at"] is None
 
     @pytest.mark.parametrize("status_before_claim", ["pending", "failed"])
     async def test_provider_changed_since_claim_restores_the_grid_and_skips_the_provider(
         self, project_with_script, grid_json, status_before_claim
     ):
-        """执行入口解析出的供应商与认领槽不一致：不调供应商，宫格记录回到领取前的状态，等任务回队重领。"""
+        """The provider resolved at the execution entry does not match the claim slot: the provider is not called, the grid record goes back to its pre-claim state and waits for the task to be requeued and reclaimed.
+
+        执行入口解析出的供应商与认领槽不一致：不调供应商，宫格记录回到领取前的状态，等任务回队重领。"""
         from lib.generation.generation_queue import DispatchProviderChanged
         from server.services.tasks.generation_tasks import execute_grid_task
 
@@ -352,7 +373,9 @@ class TestExecuteGridTask:
         assert (restored["status"], restored["error_message"]) == (stored["status"], stored["error_message"])
 
     async def test_reference_snapshots_are_cleaned_when_cancelled_while_freezing(self, project_with_script, grid_json):
-        """取消落在线程里冻结参考图的那一程：冻结完成后照样回收快照目录，不调供应商。"""
+        """Cancellation lands during the leg that freezes reference images in a thread: after freezing completes the snapshot directory is still cleaned up and the provider is not called.
+
+        取消落在线程里冻结参考图的那一程：冻结完成后照样回收快照目录，不调供应商。"""
         import threading
 
         from server.services.tasks.generation_tasks import execute_grid_task
@@ -445,7 +468,9 @@ class TestExecuteGridTask:
     async def test_a_task_enqueued_after_the_grid_completed_does_not_generate_again(
         self, project_with_script, grid_json
     ):
-        """沿用在途宫格时恰好赶上上一任务完成而重复入队：记录已是 completed，不再出图。"""
+        """Reusing an in-flight grid that happened to coincide with the previous task completing, so it was enqueued twice: the record is already completed, so no image is generated again.
+
+        沿用在途宫格时恰好赶上上一任务完成而重复入队：记录已是 completed，不再出图。"""
         record = self._complete(project_with_script, grid_json, registered=True)
         before = record.read_bytes()
 
@@ -461,7 +486,9 @@ class TestExecuteGridTask:
     async def test_a_duplicate_task_on_an_unusable_composite_fails_instead_of_reporting_success(
         self, project_with_script, grid_json
     ):
-        """联合图没有登记在案：不报成功，也不重新出图。"""
+        """The grid composite is not registered: do not report success and do not regenerate the image either.
+
+        联合图没有登记在案：不报成功，也不重新出图。"""
         record = self._complete(project_with_script, grid_json, registered=False)
         before = record.read_bytes()
 
@@ -475,7 +502,9 @@ class TestExecuteGridTask:
         project_with_script,
         grid_json,
     ):
-        """超出后端上限的参考图在编号前去尾：声明行与格内「图N」只指认实际发出的那几张。"""
+        """Reference images beyond the backend limit are trimmed off the end before numbering: declaration lines and in-cell "图N" (image N) only refer to the images actually sent.
+
+        超出后端上限的参考图在编号前去尾：声明行与格内「图N」只指认实际发出的那几张。"""
         from server.services.tasks.generation_tasks import execute_grid_task
 
         project, script, grid_image_path = _seed_one_hero_per_scene(project_with_script, grid_json)
@@ -510,6 +539,7 @@ class TestExecuteGridTask:
             )
 
         assert len(captured[0]["reference_images"]) == 2
+        # Reference images dropped from the input must be visible to the user and the Agent: the task result carries a warning shaped like those of storyboard images / reference-to-video
         # 丢弃了输入的参考图必须让用户与 Agent 感知：任务结果带与分镜图 / 参考生视频同形的 warning
         assert result["warnings"] == [
             {"key": "ref_too_many_images", "params": {"count": 3, "model": "gpt-image-2", "max_count": 2}}
@@ -518,9 +548,11 @@ class TestExecuteGridTask:
         assert prompt.startswith("Reference_Images: 图1、图2为角色参考图。")
         assert "图1站在门口" in prompt
         assert "图2站在门口" in prompt
+        # Image 3 was not sent with the request; the body keeps only the bare name and does not refer to a nonexistent 图3 (image 3)
         # 第 3 张没随请求发出，正文只留裸名，不指认一个不存在的图3
         assert "图3" not in prompt
         assert "hero3站在门口" in prompt
+        # The grid record still registers the full assembly set: the target-state planner rebuilds the basis from it; the limit is a provider property and is not recorded
         # 宫格记录仍登记完整装配集：目标态规划器据此重建依据，上限是供应商属性、不进记录
         stored = json.loads((project_with_script / "grids" / f"{grid_json.id}.json").read_text(encoding="utf-8"))
         assert [ref["name"] for ref in stored["reference_images"]] == ["hero1", "hero2", "hero3"]
@@ -530,7 +562,9 @@ class TestExecuteGridTask:
         project_with_script,
         grid_json,
     ):
-        """宫格没有固定张数上限：成员分镜引用的资产图取并集、按路径去重后全部发出与登记。"""
+        """A grid has no fixed image count limit: the asset sheets referenced by member shots are unioned, deduplicated by path, and all sent and registered.
+
+        宫格没有固定张数上限：成员分镜引用的资产图取并集、按路径去重后全部发出与登记。"""
         from server.services.tasks.generation_tasks import execute_grid_task
 
         project = json.loads((project_with_script / "project.json").read_text(encoding="utf-8"))
@@ -588,12 +622,15 @@ class TestExecuteGridTask:
         ]
 
     async def test_reference_gaps_fail_before_the_provider_is_resolved(self, project_with_script, grid_json):
-        """成员分镜引用的资产未登记或资产图不可用：付费前失败，一次列出全部缺口。"""
+        """An asset referenced by a member shot is unregistered or its asset sheet unusable: fail before paying, listing all gaps at once.
+
+        成员分镜引用的资产未登记或资产图不可用：付费前失败，一次列出全部缺口。"""
         from lib.infra.api_errors import BadRequestError
         from server.services.tasks.generation_tasks import execute_grid_task
 
         project = json.loads((project_with_script / "project.json").read_text(encoding="utf-8"))
         script = json.loads((project_with_script / "scripts" / "episode_1.json").read_text(encoding="utf-8"))
+        # hero's asset sheet is on disk but not registered in the manifest; ghost is not a registered character.
         # hero 的资产图在盘上但未登记进清单；ghost 不是已登记的角色。
         project["characters"]["hero"] = {"description": "hero", "character_sheet": "characters/hero.png"}
         Image.new("RGB", (4, 4)).save(project_with_script / "characters" / "hero.png")
@@ -639,7 +676,9 @@ class TestExecuteGridTask:
         grid_json,
         monkeypatch,
     ):
-        """被去尾的第 3 张图仍是宫格依据的输入：它的登记在提交前被删，复核拦下，供应商未收到提交。"""
+        """The trimmed image 3 is still an input of the grid basis: its registration is deleted before submit, the recheck stops it, and the provider receives no submission.
+
+        被去尾的第 3 张图仍是宫格依据的输入：它的登记在提交前被删，复核拦下，供应商未收到提交。"""
         from lib.artifacts.artifact_manifest import ArtifactKey, ProjectArtifactManifestAdapter
         from server.services.tasks.generation_tasks import execute_grid_task
         from tests.fakes import hook_claim_recheck
@@ -690,7 +729,9 @@ class TestExecuteGridTask:
         project_with_script,
         grid_json,
     ):
-        """剧本已在 episodes 账本里绑定但清单里没有认领 → 在触达供应商之前就拒绝。"""
+        """The script is bound in the episodes ledger but the manifest has no claim → rejected before reaching the provider.
+
+        剧本已在 episodes 账本里绑定但清单里没有认领 → 在触达供应商之前就拒绝。"""
         from lib.artifacts.artifact_manifest import ArtifactKey, ProjectArtifactManifestAdapter
         from server.services.tasks.generation_tasks import execute_grid_task
 
@@ -932,7 +973,10 @@ class TestExecuteGridTask:
         assert updated_grid_data["grid_image_path"] is None
 
     async def test_execute_grid_task_does_not_touch_storyboards(self, project_with_script, grid_json):
-        """生成任务只产出联合图：不写任何分镜格文件、不回写剧本、不登记分镜版本——
+        """The generation task only produces the grid composite: it writes no storyboard cell files, does not write back to the script and registers no storyboard versions;
+        the split is performed explicitly by a separate split operation (apply_grid_split).
+
+        生成任务只产出联合图：不写任何分镜格文件、不回写剧本、不登记分镜版本——
         落格由独立的切分操作（apply_grid_split）显式执行。"""
         from PIL import Image
 
@@ -940,7 +984,7 @@ class TestExecuteGridTask:
 
         grid = grid_json
 
-        # 预置一个已存在的分镜格，锁定「生成完成后分镜字节不变」
+        # Pre-place an existing storyboard cell to pin "storyboard bytes are unchanged after generation" / 预置一个已存在的分镜格，锁定「生成完成后分镜字节不变」
         storyboards_dir = project_with_script / "storyboards"
         existing = storyboards_dir / "scene_E1S01.png"
         existing.write_bytes(b"pre-existing-bytes")
@@ -977,11 +1021,11 @@ class TestExecuteGridTask:
                 user_id="test-user",
             )
 
-        # 已有分镜格字节不变，未预置的分镜格不产生
+        # Existing storyboard cell bytes are unchanged, and cells not pre-placed are not produced / 已有分镜格字节不变，未预置的分镜格不产生
         assert existing.read_bytes() == b"pre-existing-bytes"
         for sid in ("E1S02", "E1S03"):
             assert not (storyboards_dir / f"scene_{sid}.png").exists()
-        # 不回写剧本、不登记分镜版本
+        # No write back to the script, no storyboard version registered / 不回写剧本、不登记分镜版本
         assert not mock_pm.batch_update_scene_assets.called
         assert mock_generator.versions.committed == [("grids", grid.id)]
 
@@ -1013,11 +1057,15 @@ class TestTaskExecutorsRegistry:
 
 
 class TestGridMetadataT2II2ISlotSelection:
-    """Bug 2 回归：execute_grid_task 必须按 reference_images 是否非空决定写 T2I 还是 I2I 槽。"""
+    """Bug 2 regression: execute_grid_task must decide between the T2I and I2I slot based on whether reference_images is non-empty.
+
+    Bug 2 回归：execute_grid_task 必须按 reference_images 是否非空决定写 T2I 还是 I2I 槽。"""
 
     @pytest.fixture
     def grid_with_empty_metadata(self, project_with_script):
-        """模拟 route 层修复后的状态：grid 创建时 provider/model 为空，由 task 层回填。"""
+        """Simulate the state after the route layer fix: provider/model are empty when the grid is created and backfilled by the task layer.
+
+        模拟 route 层修复后的状态：grid 创建时 provider/model 为空，由 task 层回填。"""
         from lib.script.grid.models import GridGeneration
 
         grid = GridGeneration.create(
@@ -1037,7 +1085,9 @@ class TestGridMetadataT2II2ISlotSelection:
         return grid
 
     async def _run_grid_task(self, project_with_script, grid, payload, resolve_override=None):
-        """Helper：mock 掉 generator 与 project manager，运行 execute_grid_task。"""
+        """Helper: mock out the generator and project manager, then run execute_grid_task.
+
+        Helper：mock 掉 generator 与 project manager，运行 execute_grid_task。"""
         from PIL import Image
 
         from server.services.tasks.generation_tasks import execute_grid_task
@@ -1051,6 +1101,8 @@ class TestGridMetadataT2II2ISlotSelection:
         mock_generator.generate_image_async = AsyncMock(side_effect=_committing_to(grid_image_path))
 
         async def _cap_aware_resolve(project_name, req_payload, *, image, **kwargs):
+            # generation_type-aware: a grid task picks the t2i/i2i slot by whether reference_images is non-empty;
+            # the fake resolution echoes the provider/model of the matching payload slot, pinning the "slot selection → metadata backfill" contract.
             # generation_type-aware：grid 任务按 reference_images 是否非空选 t2i/i2i 槽，
             # 假解析回显对应 payload 槽的 provider/model，锁定「槽选择 → 元数据回填」契约。
             provider, model = req_payload[f"image_provider_{image.generation_type}"].split("/")
@@ -1085,7 +1137,9 @@ class TestGridMetadataT2II2ISlotSelection:
             await execute_grid_task("test-project", grid.id, payload, user_id="test-user")
 
     async def test_uses_t2i_slot_when_no_reference_images(self, project_with_script, grid_with_empty_metadata):
-        """无 character/scene/prop sheet → reference_images 为空 → 写 T2I 槽配置"""
+        """No character/scene/prop sheet → reference_images empty → write the T2I slot config
+
+        无 character/scene/prop sheet → reference_images 为空 → 写 T2I 槽配置"""
         grid = grid_with_empty_metadata
         payload = {
             "prompt": "test grid prompt",
@@ -1101,7 +1155,10 @@ class TestGridMetadataT2II2ISlotSelection:
         assert updated["model"] == "gpt-image-t2i"
 
     async def test_uses_i2i_slot_when_reference_images_present(self, project_with_script, grid_with_empty_metadata):
-        """有 character sheet 且 segment 引用了角色 → reference_images 非空 → 写 I2I 槽配置"""
+        """A character sheet exists and the segment references the character → reference_images non-empty → write the I2I slot config
+
+        有 character sheet 且 segment 引用了角色 → reference_images 非空 → 写 I2I 槽配置"""
+        # Inject a registered character sheet into project + script so the grid's reference image set is non-empty
         # 给 project + script 注入已登记的 character sheet，让宫格参考图集非空
         project_data = json.loads((project_with_script / "project.json").read_text(encoding="utf-8"))
         project_data["characters"]["hero"] = {"description": "hero", "character_sheet": "characters/hero.png"}
@@ -1130,7 +1187,10 @@ class TestGridMetadataT2II2ISlotSelection:
     async def test_metadata_records_backend_actual_model_on_divergence(
         self, project_with_script, grid_with_empty_metadata
     ):
-        """自定义供应商目标 model 被禁用回退时，backend 实际身份与解析 model_id 发散：
+        """When a custom provider's target model is disabled and falls back, the backend's actual identity diverges from the resolved model_id:
+        the grid metadata provider records the registry identity and model records the model the backend actually called.
+
+        自定义供应商目标 model 被禁用回退时，backend 实际身份与解析 model_id 发散：
         grid 元数据 provider 记 registry 身份、model 记 backend 实际调用的 model。"""
         grid = grid_with_empty_metadata
         payload = {"prompt": "test grid prompt", "script_file": "episode_1.json"}

@@ -65,6 +65,7 @@ def _seed(engine: sa.Engine) -> None:
         ("S2V-01", "minimax-video"),
         ("MiniMax-H3", "minimax-video"),
         ("other", "openai-video"),
+        # Fast aliases with a namespace prefix go to the generic Hailuo key: the Fast tier only accepts exact model names.
         # 带命名空间前缀的 Fast 别名归通用海螺键：Fast 档只认精确型号名。
         ("proxy/MiniMax-Hailuo-2.3-Fast", "minimax-video"),
     ]
@@ -108,6 +109,8 @@ def test_upgrade_and_downgrade_rewrite_models_and_resumable_checkpoints(alembic_
     command.upgrade(cfg, DOWN_REVISION)
     engine = sa.create_engine(f"sqlite:///{Path(db_path)}")
     _seed(engine)
+    # A broken checkpoint is an identity problem of a single task and should not abort the whole migration; that row is
+    # kept as-is.
     # 坏掉的 checkpoint 是单条任务的身份问题，不该让整个迁移中止；该行原样保留。
     with engine.begin() as connection:
         connection.execute(

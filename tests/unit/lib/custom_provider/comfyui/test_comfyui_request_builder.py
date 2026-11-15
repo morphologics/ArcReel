@@ -1,4 +1,7 @@
-"""实发 workflow 的构造：填值、尺寸与帧数换算、种子、`Avoid` 拆分与按张数改图。"""
+"""Building the workflow to send: value filling, size and frame-count conversion, seed, `Avoid` split, and
+changing the graph by image count.
+
+实发 workflow 的构造：填值、尺寸与帧数换算、种子、`Avoid` 拆分与按张数改图。"""
 
 from __future__ import annotations
 
@@ -19,7 +22,9 @@ from tests.factories import comfyui_endpoint_definition, make_display_names, mak
 
 
 def _build(definition: dict[str, Any], **kwargs: Any):
-    """构造一次实发 workflow，入参给出各维度都用得上的缺省值。"""
+    """Build one workflow to send; the arguments give defaults usable for every dimension.
+
+    构造一次实发 workflow，入参给出各维度都用得上的缺省值。"""
     kwargs.setdefault("prompt", "一只猫走过屋顶")
     kwargs.setdefault("aspect_ratio", "9:16")
     kwargs.setdefault("rng", Random(0))
@@ -86,7 +91,10 @@ class TestSize:
         assert built.width > built.height
 
     def test_an_unselected_resolution_takes_the_shorter_literal_edge(self):
-        """底稿的 832×480 就是作者调好的那一档，短边取 480、比例仍按项目走（720p 则得 720）。"""
+        """The template's 832×480 is the tier the author tuned: the short edge is 480 and the aspect ratio
+        still follows the project (720p gives 720).
+
+        底稿的 832×480 就是作者调好的那一档，短边取 480、比例仍按项目走（720p 则得 720）。"""
         literal = _build(comfyui_endpoint_definition(), aspect_ratio="9:16", resolution=None)
         tiered = _build(comfyui_endpoint_definition(), aspect_ratio="9:16", resolution="720p")
 
@@ -103,7 +111,10 @@ class TestSize:
         assert (built.width, built.height) == (720, 720)
 
     def test_each_target_is_aligned_down_to_its_own_step(self):
-        """两侧步长 64：短边 1080 落在 9·64·t 的整数倍上，取 t = 2 得 1152×2048。"""
+        """Both sides have step 64: short edge 1080 lands on a multiple of 9·64·t; taking t = 2 gives
+        1152×2048.
+
+        两侧步长 64：短边 1080 落在 9·64·t 的整数倍上，取 t = 2 得 1152×2048。"""
         definition = comfyui_endpoint_definition()
         definition["bindings"]["width"][0]["step"] = 64
         definition["bindings"]["height"][0]["step"] = 64
@@ -134,7 +145,10 @@ class TestSize:
 
     @pytest.mark.parametrize("dropped", ["width", "height"])
     def test_binding_only_one_side_leaves_both_literals_alone(self, dropped: str):
-        """写得动一侧、另一侧固定时派生出的比例两头不靠，故整维当作固定、一个字节都不改。"""
+        """When one side is writable and the other fixed, the derived aspect ratio fits neither, so the
+        whole dimension is treated as fixed and not a byte is changed.
+
+        写得动一侧、另一侧固定时派生出的比例两头不靠，故整维当作固定、一个字节都不改。"""
         definition = comfyui_endpoint_definition()
         del definition["bindings"][dropped]
 
@@ -177,14 +191,18 @@ class TestFrames:
         return definition
 
     def test_four_n_plus_one_alignment(self):
-        """16 fps × 5 秒 = 81 帧，已是 4n+1。"""
+        """16 fps × 5 seconds = 81 frames, already 4n+1.
+
+        16 fps × 5 秒 = 81 帧，已是 4n+1。"""
         built = _build(self._with_frames(4, fps=16), duration_seconds=5)
 
         assert built.frames == 81
         assert _inputs(built, "9")["length"] == 81
 
     def test_eight_n_plus_one_alignment(self):
-        """24 fps × 4 秒 + 1 = 97，已是 8n+1。"""
+        """24 fps × 4 seconds + 1 = 97, already 8n+1.
+
+        24 fps × 4 秒 + 1 = 97，已是 8n+1。"""
         built = _build(self._with_frames(8, fps=24), duration_seconds=4)
 
         assert built.frames == 97
@@ -218,7 +236,10 @@ class TestFrames:
         assert built.frames == 9
 
     def test_a_workflow_that_keeps_its_own_length_is_not_rewritten(self):
-        """81 帧 @ 24fps 凑不出整档，端点因此对外说时长不由 ArcReel 驱动；填值层要给同一个答案。"""
+        """81 frames @ 24fps does not make a whole tier, so the endpoint reports that duration is not driven
+        by ArcReel; the fill layer must give the same answer.
+
+        81 帧 @ 24fps 凑不出整档，端点因此对外说时长不由 ArcReel 驱动；填值层要给同一个答案。"""
         definition = self._with_frames(1, fps=24)
         definition["workflow"]["9"]["inputs"]["length"] = 81
 
@@ -253,7 +274,10 @@ class TestSeed:
         assert _inputs(built, "3")["seed"] != 123456
 
     def test_every_random_target_gets_the_same_seed(self):
-        """一份 workflow 里的两个采样器共用一个种子，否则同一次生成不可复现。"""
+        """The two samplers in one workflow share one seed; otherwise the same generation is not
+        reproducible.
+
+        一份 workflow 里的两个采样器共用一个种子，否则同一次生成不可复现。"""
         definition = comfyui_endpoint_definition()
         definition["workflow"]["10"] = {"class_type": "KSampler", "inputs": {"seed": 1, "model": ["4", 0]}}
         definition["bindings"]["seed"].append({"node": "10", "input": "seed", "class_type": "KSampler"})
@@ -356,7 +380,10 @@ class TestMediaValues:
 
 class TestImageDrop:
     def test_an_optional_entry_loses_its_key(self):
-        """尾帧未给值：读图节点删掉，视频节点的 ``end_image`` 是可选入口，摘键即可。"""
+        """No value for the last frame: the image-reading node is deleted, and the video node's
+        ``end_image`` is an optional input, so dropping the key is enough.
+
+        尾帧未给值：读图节点删掉，视频节点的 ``end_image`` 是可选入口，摘键即可。"""
         definition = _i2v_definition()
 
         built = _build(definition, media=MediaInputs(start_image="first.png"))
@@ -367,7 +394,10 @@ class TestImageDrop:
         assert "21" in built.dropped_nodes
 
     def test_surplus_autogrow_reference_slots_lose_their_keys(self):
-        """海螺 H3 参考图少于槽位：多余的 ``ref_images.ref_image_N`` 键摘掉，节点本身留下。"""
+        """Fewer Hailuo H3 reference images than slots: the extra ``ref_images.ref_image_N`` keys are
+        dropped and the node itself stays.
+
+        海螺 H3 参考图少于槽位：多余的 ``ref_images.ref_image_N`` 键摘掉，节点本身留下。"""
         definition = _autogrow_reference_definition(slots=3)
 
         built = _build(definition, media=MediaInputs(reference_images=("a.png",)))
@@ -390,7 +420,15 @@ class TestImageDrop:
         assert _inputs(built, "30")["reference_image"] == ["20", 0]
 
     def test_a_merge_whose_two_inputs_share_one_loader_is_not_bypassed(self):
-        """合并节点两个入口接的是同一个读图节点：剩下那一路指的正是刚删掉的节点。
+        """Both inputs of the merge node come from the same image reader: the remaining path points at
+        exactly the node just deleted.
+
+        Rewiring to it would give the downstream a dangling link, while the workflow would still be
+        submitted and only the remote would error. If it cannot be removed, the merge node must be
+        deleted too and the cascade continues; on this graph the cascade runs all the way to the artifact
+        node, which is exactly "cannot change it".
+
+        合并节点两个入口接的是同一个读图节点：剩下那一路指的正是刚删掉的节点。
 
         照它改接，下游会拿到一条悬空连线，而 workflow 仍会照常提交出去，远端才报错。摘不掉就
         只能把合并节点也删掉并继续级联——这张图上级联一路走到产物节点，那正是「改不动」。
@@ -398,6 +436,10 @@ class TestImageDrop:
         definition = _reference_definition()
         definition["workflow"]["22"]["inputs"]["image2"] = ["20", 0]
         definition["bindings"]["reference_images"] = definition["bindings"]["reference_images"][:1]
+        # The merge node's downstream is ordered before it: when the delete pass reaches the downstream the
+        # merge has not been removed yet, and the dead link left by rewiring gets no second chance to be
+        # cleaned up. On a graph ordered the other way the same defect would be masked by the later hop, so
+        # this order is fixed here.
         # 合并节点的下游排在它前面：删节点那一遍扫到下游时合并还没摘，改接留下的死链没有第二次
         # 机会被顺手清掉。反过来排的图上同一个缺陷会被后面那一跳掩盖，故这里固定这个次序。
         nodes = definition["workflow"]
@@ -410,7 +452,13 @@ class TestImageDrop:
         assert "reference_image" not in _inputs(built, "30")
 
     def test_a_consumer_outside_the_two_tables_repeats_the_last_image_instead(self):
-        """格子接进的入口不在可选入口表也不在合并节点表：改不动图，退回重复最后一张。
+        """The input the slot feeds is in neither the optional-input table nor the merge-node table: the
+        graph cannot be changed, so fall back to repeating the last image.
+
+        When this binding was saved, inference already warned with the same rule that "fewer images will
+        repeat-fill the last one"; both sides agree.
+
+        格子接进的入口不在可选入口表也不在合并节点表：改不动图，退回重复最后一张。
 
         推断在保存这份绑定时就按同一条判据提示过「减少张数会重复填充最后一张」，两侧同口径。
         """
@@ -424,7 +472,10 @@ class TestImageDrop:
         assert built.dropped_nodes == ()
 
     def test_the_cascade_continues_past_a_node_type_outside_the_two_tables(self):
-        """级联第二跳往后撞上名录外的类型：按「其他节点」删掉并继续，到下一个可选入口才停。"""
+        """The second hop of the cascade onward hits a type outside the catalog: delete it as an "other
+        node" and continue, stopping only at the next optional input.
+
+        级联第二跳往后撞上名录外的类型：按「其他节点」删掉并继续，到下一个可选入口才停。"""
         definition = _reference_definition()
         definition["workflow"]["23"] = {"class_type": "SomeCustomImageMasher", "inputs": {"images": ["22", 0]}}
         definition["workflow"]["30"]["inputs"]["reference_image"] = ["23", 0]
@@ -437,7 +488,10 @@ class TestImageDrop:
         assert "reference_image" not in _inputs(built, "30")
 
     def test_reaching_the_output_node_is_refused(self):
-        """整条成片链路都不认得这张图缺席，级联一路走到产物节点——这次生成只能失败。"""
+        """The whole final-cut chain does not tolerate this image being absent, so the cascade runs all the
+        way to the artifact node; this generation can only fail.
+
+        整条成片链路都不认得这张图缺席，级联一路走到产物节点——这次生成只能失败。"""
         definition = _reference_definition()
         definition["workflow"]["30"]["class_type"] = "SomeCustomVideoNode"
 
@@ -463,7 +517,10 @@ class TestImageDrop:
         assert "18" not in built.workflow
 
     def test_a_terminal_node_outside_the_dropped_chain_survives(self):
-        """后向清理只走被删节点的上游，图里本就没有下游的预览节点不该被扫掉。"""
+        """Backward cleanup only walks upstream of deleted nodes; a preview node that never had a downstream
+        should not be swept away.
+
+        后向清理只走被删节点的上游，图里本就没有下游的预览节点不该被扫掉。"""
         definition = _i2v_definition()
         definition["workflow"]["40"] = {"class_type": "PreviewImage", "inputs": {"images": ["20", 0]}}
 
@@ -512,7 +569,10 @@ class TestImageDrop:
         assert "reference_image" not in _inputs(built, "30")
 
     def test_a_definition_without_any_image_binding_leaves_the_graph_alone(self):
-        """文生视频端点没有读图节点可删，一次改图也不该发生。"""
+        """A text-to-video endpoint has no image-reading node to delete, so no graph change should happen at
+        all.
+
+        文生视频端点没有读图节点可删，一次改图也不该发生。"""
         definition = comfyui_endpoint_definition()
 
         built = _build(definition, media=MediaInputs())
@@ -533,7 +593,10 @@ class TestFailureCodeRegistration:
 
 
 def _i2v_definition() -> dict[str, Any]:
-    """首尾帧各一个读图节点，都落在视频节点的可选入口上。"""
+    """One image-reading node each for the first and last frame, both landing on optional inputs of the
+    video node.
+
+    首尾帧各一个读图节点，都落在视频节点的可选入口上。"""
     definition = comfyui_endpoint_definition()
     definition["workflow"]["20"] = {"class_type": "LoadImage", "inputs": {"image": "first.png"}}
     definition["workflow"]["21"] = {"class_type": "LoadImage", "inputs": {"image": "last.png"}}
@@ -548,7 +611,9 @@ def _i2v_definition() -> dict[str, Any]:
 
 
 def _dangling_links(workflow: dict[str, Any]) -> list[tuple[str, str, str]]:
-    """指向图里已经不存在的节点的连线：``(消费方, 入口名, 上游)``。"""
+    """Links pointing at nodes no longer in the graph: ``(consumer, input name, upstream)``.
+
+    指向图里已经不存在的节点的连线：``(消费方, 入口名, 上游)``。"""
     return [
         (node_id, name, raw[0])
         for node_id, node in workflow.items()
@@ -558,7 +623,10 @@ def _dangling_links(workflow: dict[str, Any]) -> list[tuple[str, str, str]]:
 
 
 def _reference_definition() -> dict[str, Any]:
-    """两个参考图格子经 ``ImageBatch`` 汇成一路，再进视频节点的可选入口。"""
+    """Two reference image slots are merged into one stream by ``ImageBatch`` and fed into an optional input
+    of the video node.
+
+    两个参考图格子经 ``ImageBatch`` 汇成一路，再进视频节点的可选入口。"""
     definition = comfyui_endpoint_definition()
     definition["workflow"]["20"] = {"class_type": "LoadImage", "inputs": {"image": "ref_a.png"}}
     definition["workflow"]["21"] = {"class_type": "LoadImage", "inputs": {"image": "ref_b.png"}}
@@ -586,7 +654,10 @@ def _reference_definition() -> dict[str, Any]:
 
 
 def _autogrow_reference_definition(*, slots: int) -> dict[str, Any]:
-    """若干参考图格子直连海螺 H3 参考生视频节点的 autogrow 口 ``ref_images.ref_image_N``。"""
+    """Several reference image slots wired directly to the autogrow port ``ref_images.ref_image_N`` of the
+    Hailuo H3 reference-to-video node.
+
+    若干参考图格子直连海螺 H3 参考生视频节点的 autogrow 口 ``ref_images.ref_image_N``。"""
     definition = comfyui_endpoint_definition()
     h3_inputs: dict[str, Any] = {"prompt": "一只猫"}
     targets = []
@@ -613,7 +684,10 @@ def _autogrow_reference_definition(*, slots: int) -> dict[str, Any]:
 
 
 def _masher_definition() -> dict[str, Any]:
-    """两个参考图格子接进一个名录外的自定义节点——推断认得出是参考图，却改不动图。"""
+    """Two reference image slots wired into a custom node outside the catalog: inference recognizes them as
+    reference images but cannot change the graph.
+
+    两个参考图格子接进一个名录外的自定义节点——推断认得出是参考图，却改不动图。"""
     definition = _reference_definition()
     definition["workflow"]["22"]["class_type"] = "SomeCustomImageMasher"
     for target in definition["bindings"]["reference_images"]:

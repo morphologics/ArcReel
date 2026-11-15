@@ -1,4 +1,11 @@
-"""归档导入针对 参考生视频（video_units）的修复测试。
+"""Archive import repair tests for reference-to-video (video_units).
+
+Covers how _repair_script_payload handles video_units in scripts of generation_mode=reference_video
+projects: ensures that on an export-import round trip, path normalization and version backtracking of
+video_units[*].generated_assets are triggered properly (the function's segments/scenes branches by
+content_mode do not cover video_units, so it must be checked separately).
+
+归档导入针对 参考生视频（video_units）的修复测试。
 
 覆盖 _repair_script_payload 对 generation_mode=reference_video 项目剧本里
 video_units 的处理：确保导出-导入往返时 video_units[*].generated_assets
@@ -21,6 +28,7 @@ from server.services.project.project_archive import ProjectArchiveService
 
 REMOTE_VIDEO_URI = "https://cdn.example.com/v/E1U1.mp4"
 
+# Distinguish "generated_assets not passed (use default)" from "explicitly passed None (do not write the field)"
 # 区分"未传 generated_assets（用默认）"与"显式传 None（不写该字段）"
 _DEFAULT_ASSETS = object()
 
@@ -130,6 +138,8 @@ def _create_reference_video_project(
 
 class TestProjectArchiveReferenceVideo:
     def test_canonical_resource_path_reference_videos(self):
+        # Acceptance item: reference_videos takes the unit_id no-prefix branch (path shape is owned exclusively by
+        # lib.project.resource_paths)
         # 验收项：reference_videos 走 unit_id 无前缀分支（路径形状由 lib.project.resource_paths 独家拥有）
         assert resource_relative_path("reference_videos", "E1U1") == "reference_videos/E1U1.mp4"
 
@@ -149,13 +159,20 @@ class TestProjectArchiveReferenceVideo:
         assets = imported["video_units"][0]["generated_assets"]
         assert assets["video_clip"] == "reference_videos/E1U1.mp4"
         assert assets["video_thumbnail"] == "reference_videos/thumbnails/E1U1.jpg"
+        # video_uri is a remote URL and must never be overwritten as a local path
         # video_uri 是远端 URL，绝不能被当成本地路径覆盖
         assert assets["video_uri"] == REMOTE_VIDEO_URI
         assert (project_dir / "reference_videos" / "E1U1.mp4").exists()
         assert (project_dir / "reference_videos" / "thumbnails" / "E1U1.jpg").exists()
 
     def test_import_migrates_legacy_per_shot_duration_before_validation(self, tmp_path):
-        """存量归档的 unit 仍是收编前形状（时长挂在 shots 上、无 unit 级 duration_seconds）：
+        """Units in existing archives still have the pre-consolidation shape (duration on shots, no unit-level
+        duration_seconds): structural validation requires duration_seconds within a sane range, so if it ran before
+        the migration such archives would be rejected outright and never reach the migrator that can fix them.
+        The repair must run the migration once before validation; shot text is then joined back into the unit
+        text by the schema migration chain.
+
+        存量归档的 unit 仍是收编前形状（时长挂在 shots 上、无 unit 级 duration_seconds）：
         结构校验要求 duration_seconds 落在合理区间内，早于迁移执行的话会把这类归档直接拒绝，
         永远走不到能修复它的迁移器。修复须先于校验跑一次迁移，镜头正文随后由 schema 迁移
         链拼回单元正文。
@@ -177,6 +194,8 @@ class TestProjectArchiveReferenceVideo:
             },
         }
         project_dir = _create_reference_video_project(pm, unit=legacy_unit)
+        # An archive without schema_version is treated as the earliest version: import runs the full migration chain,
+        # and duration consolidation completes along the chain.
         # 缺 schema_version 的归档按最早版本处理：导入时补跑完整迁移链，时长收编在链上完成。
         project_file = project_dir / "project.json"
         payload = json.loads(project_file.read_text(encoding="utf-8"))
@@ -200,7 +219,14 @@ class TestProjectArchiveReferenceVideo:
 
     @pytest.mark.parametrize(("legacy_seconds", "expected"), [(4, 4), (9, 10)])
     def test_import_migration_takes_the_union_of_both_bucket_tiers(self, tmp_path, legacy_seconds, expected):
-        """参考项目的单元按可用参考图落 r2v 或 i2v：导入收编取两桶声明全集的并集，与在线内容确认同口径。
+        """Units of a reference project land in r2v or i2v depending on available reference images: import
+        consolidation takes the union of both buckets' declared sets, the same rule as online content review.
+
+        r2v is [6, 10], i2v is [4, 6, 8], union [4, 6, 8, 10]: 4 s is only valid in i2v, so taking tiers from r2v
+        alone would change it to 6; 9 s is invalid in both buckets, taking tiers from i2v alone would drop it to 8,
+        and keeping it as is would not be a member of either bucket.
+
+        参考项目的单元按可用参考图落 r2v 或 i2v：导入收编取两桶声明全集的并集，与在线内容确认同口径。
 
         r2v 为 [6, 10]、i2v 为 [4, 6, 8]，并集 [4, 6, 8, 10]：4 秒只在 i2v 合法，只按 r2v 取档会改成
         6；9 秒两桶都不合法，只按 i2v 取档会降到 8，原样保留则不是任一桶的成员。
@@ -244,7 +270,14 @@ class TestProjectArchiveReferenceVideo:
         assert imported["video_units"][0]["duration_seconds"] == expected
 
     def test_import_resolves_tiers_for_legacy_provider_alias(self, tmp_path):
-        """归档修复跑在 provider 归一化之前：video_backend 仍是 legacy 别名时也要解析出档位。
+        """Archive repair runs before provider normalization: tiers must also be resolved while video_backend is still
+        a legacy alias.
+
+        If resolution fails it falls back to the structural clamp, freezing a non-tier seconds value, and the
+        migration is idempotent - once migrate_project_dir has normalized the provider there is no second chance
+        to pick a tier.
+
+        归档修复跑在 provider 归一化之前：video_backend 仍是 legacy 别名时也要解析出档位。
 
         解析落空会退回结构 clamp 把非档位秒数固化，而迁移幂等——等 migrate_project_dir 把
         provider 归一化之后，已经没有第二次取档的机会。
@@ -266,6 +299,7 @@ class TestProjectArchiveReferenceVideo:
             },
         }
         project_dir = _create_reference_video_project(pm, unit=legacy_unit)
+        # Legacy alias: tiers can only be obtained by looking up the registry after normalization.
         # legacy 别名：档位只能靠归一化后查 registry 得到。
         project_file = project_dir / "project.json"
         payload = json.loads(project_file.read_text(encoding="utf-8"))
@@ -283,12 +317,14 @@ class TestProjectArchiveReferenceVideo:
         imported = json.loads(
             (pm.get_project_path(result.project_name) / "scripts" / "episode_1.json").read_text(encoding="utf-8")
         )
+        # The 10 s sum is not a tier member for this model; after tier selection the written seconds must be a member.
         # 求和 10s 不是该型号档位成员，取档后落盘的秒数必是成员。
         veo_tiers = _durations("gemini-aistudio", "veo-3.1-generate-preview")
         assert imported["video_units"][0]["duration_seconds"] in veo_tiers
 
     def test_import_restores_video_clip_from_version(self, tmp_path):
         pm = ProjectManager(tmp_path / "projects")
+        # video_clip points to a stale version path; the current file is materialized by backtracking via versions.json
         # video_clip 指向失效的版本路径，靠 versions.json 回溯物化当前文件
         unit = _build_unit(
             video_clip="versions/reference_videos/E1U1_v9.mp4",
@@ -377,6 +413,8 @@ class TestProjectArchiveReferenceVideo:
         assert any(item["code"] == "invalid_generated_assets" for item in result.diagnostics["auto_fixed"])
 
     def test_export_resets_invalid_generated_assets(self, tmp_path):
+        # Export and import share _repair_project_tree, but export repairs a snapshot copy: the package has a clean
+        # structure, while dirty values on the source project's disk stay as they are (export does not change user data).
         # 导出与导入共用 _repair_project_tree，但导出修的是快照副本：包内是干净结构，
         # 源项目磁盘上的脏值保持原样（导出不改用户数据）。
         pm = ProjectManager(tmp_path / "projects")
@@ -402,6 +440,9 @@ class TestProjectArchiveReferenceVideo:
         assert on_disk["video_units"][0]["generated_assets"] == "corrupted-value"
 
     def test_import_adds_placeholder_for_missing_character_speaker(self, tmp_path):
+        # A speaker slot syntactically implies a character: when the definition is missing, as with narration/drama,
+        # a placeholder definition is added automatically.
+        # The placeholder's description is left empty so repair text is not used as the prompt for generating the sheet.
         # 说话人位在语法上就断定是角色：缺定义时与 narration/drama 对齐，自动补占位定义。
         # 占位定义的描述留空，不把修复文字当作生成资产图的提示词。
         pm = ProjectManager(tmp_path / "projects")
@@ -420,6 +461,8 @@ class TestProjectArchiveReferenceVideo:
 
         imported_project = pm.load_project(result.project_name)
         assert imported_project["characters"]["幽灵"]["description"] == ""
+        # The placeholder went into the report confirmed before import; diagnostics after a successful import do not
+        # list it again.
         # 占位进了导入前确认过的报告，导入成功后的诊断不再重复列出。
         report = load_migration_report(pm.get_project_path(result.project_name))
         assert report is not None
@@ -429,6 +472,8 @@ class TestProjectArchiveReferenceVideo:
         assert not any(item["code"] == "placeholder_character_added" for item in result.diagnostics["auto_fixed"])
 
     def test_import_warns_without_blocking_on_unresolved_mention(self, tmp_path):
+        # @[name] in body text is a derived source resolved only at execution time: being unregistered only means no
+        # reference image here; import completes as usual, leaving only a non-blocking warning.
         # 正文里的 @[名称] 是执行期才解析的派生来源：未登记只意味着这一处不出参考图，
         # 导入照常完成，只留一条非阻断 warning。
         pm = ProjectManager(tmp_path / "projects")
@@ -453,11 +498,15 @@ class TestProjectArchiveReferenceVideo:
             (pm.get_project_path(result.project_name) / "scripts" / "episode_1.json").read_text(encoding="utf-8")
         )
         assert imported["video_units"][0]["text"] == unit["text"]
+        # Unresolved mentions get no placeholder definition - only speaker slots imply the asset type.
         # 未解析的提及不补占位定义——只有说话人位才断定资产类型。
         imported_project = pm.load_project(result.project_name)
         assert "缺失场景" not in imported_project["characters"]
 
     def test_import_resolves_nfc_speaker_against_nfd_registered_character(self, tmp_path):
+        # Speaker names are normalized to NFC (see lib.project.asset_types.normalize_asset_name), while the registered
+        # character key may still be the stored NFD form; the self-heal logic must treat them as equal instead of
+        # misjudging a registered character as missing and adding a duplicate placeholder definition.
         # 说话人名已归一到 NFC（见 lib.project.asset_types.normalize_asset_name），登记侧的角色
         # key 仍可能是落盘的 NFD 原形；自愈逻辑须把两者判等，而非把已登记角色误判缺失、
         # 补出一份重复的占位定义。

@@ -1,4 +1,11 @@
-"""视频生成入口预检 ``require_audio_switch_supported`` 的行为：
+"""Behaviour of the video generation entry precheck ``require_audio_switch_supported``:
+
+Always-audible models (no audio-track switch to send in the request) facing an 'audio off' config are rejected
+at the submit entry; allowing it would make orchestration take the silent path and strip all voice
+constraints, and the user would get an audible final cut without voice constraints. Models with a controllable
+switch, and cases where the model cannot be resolved, are all allowed.
+
+视频生成入口预检 ``require_audio_switch_supported`` 的行为：
 
 恒有声模型（请求里没有音轨开关可下发）遇到「关闭音频」的配置时在提交入口即拒绝——放行会让
 编排层按无声路径裁掉全部音色约束，用户拿到的是失去音色约束的有声成片。开关可控的模型、
@@ -40,7 +47,9 @@ class TestRequireAudioSwitchSupported:
         assert exc_info.value.params == {"provider": "dashscope", "model": "wan2.7-i2v"}
 
     async def test_always_audible_model_rejects_project_level_off_override(self, db_factory, monkeypatch):
-        """项目覆盖优先于全局：全局开着、项目关掉，同样在入口拒绝。"""
+        """Project override beats global: global on, project off, also rejected at the entry.
+
+        项目覆盖优先于全局：全局开着、项目关掉，同样在入口拒绝。"""
         await _seed_settings(db_factory, default_video_backend=_ALWAYS_AUDIBLE, video_generate_audio="true")
         bind_session_factory(monkeypatch, db_factory)
 
@@ -51,11 +60,14 @@ class TestRequireAudioSwitchSupported:
         await _seed_settings(db_factory, default_video_backend=_ALWAYS_AUDIBLE)
         bind_session_factory(monkeypatch, db_factory)
 
+        # # Precheck pass returns None silently
         # 预检放行即静默返回 None
         assert await require_audio_switch_supported({}, "i2v") is None
 
     async def test_controllable_model_keeps_the_off_setting(self, db_factory, monkeypatch):
-        """开关可控的供应商行为不变：关闭意图能抵达请求，无声路径照常成立。"""
+        """Providers with a controllable switch behave as before: the off intent reaches the request and the silent path holds.
+
+        开关可控的供应商行为不变：关闭意图能抵达请求，无声路径照常成立。"""
         await _seed_settings(db_factory, default_video_backend=_CONTROLLABLE, video_generate_audio="false")
         bind_session_factory(monkeypatch, db_factory)
 
@@ -63,7 +75,10 @@ class TestRequireAudioSwitchSupported:
 
     @pytest.mark.parametrize(("audio_track", "rejected"), [("always_on", True), ("controllable", False)])
     async def test_custom_model_follows_its_audio_track_override(self, db_factory, monkeypatch, audio_track, rejected):
-        """自定义供应商的模型按用户覆盖的音轨形态判开关：覆盖为恒有声时与内置恒有声模型同样在入口拒绝。"""
+        """A custom provider's model decides the switch by the user's audio-track override: overridden to always-audible,
+        it is rejected at the entry just like built-in always-audible models.
+
+        自定义供应商的模型按用户覆盖的音轨形态判开关：覆盖为恒有声时与内置恒有声模型同样在入口拒绝。"""
         from lib.db.models.custom_provider import CustomProvider, CustomProviderModel
 
         async with db_factory() as session:
@@ -101,7 +116,9 @@ class TestRequireAudioSwitchSupported:
 
 
 class TestResolutionFailurePassesThrough:
-    """事实求值的数据库故障不升级为音频开关拒绝。"""
+    """A database fault while evaluating facts is not escalated to an audio-switch refusal.
+
+    事实求值的数据库故障不升级为音频开关拒绝。"""
 
     async def test_facts_evaluation_db_failure(self, monkeypatch):
         async def _fail(*_args, **_kwargs):

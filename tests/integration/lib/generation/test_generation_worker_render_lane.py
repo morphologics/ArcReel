@@ -1,4 +1,6 @@
-"""本地渲染车道：不绑定供应商、全局串行，不阻塞其他车道。"""
+"""Local render lane: not bound to a provider, globally serial, does not block other lanes.
+
+本地渲染车道：不绑定供应商、全局串行，不阻塞其他车道。"""
 
 from __future__ import annotations
 

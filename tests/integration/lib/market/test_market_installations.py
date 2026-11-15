@@ -1,4 +1,6 @@
-"""安装记录写入在独立连接并发时由唯一约束收敛。"""
+"""Installation record writes from concurrent independent connections converge via the unique constraint.
+
+安装记录写入在独立连接并发时由唯一约束收敛。"""
 
 import asyncio
 

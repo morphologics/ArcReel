@@ -1,4 +1,6 @@
-"""script_plan prompt 的时长约束：档位文案、空集守卫与单集目标时长软约束的注入。"""
+"""Duration constraints of the script_plan prompt: tier text, the empty-set guard and injection of the per-episode target duration soft constraint.
+
+script_plan prompt 的时长约束：档位文案、空集守卫与单集目标时长软约束的注入。"""
 
 from __future__ import annotations
 
@@ -10,9 +12,11 @@ from lib.prompts.prompt_builders_script import (
     format_duration_constraint,
 )
 
+#: Fixed start of the rule sentence: with no target set the whole passage is not injected, and this start should not appear in the prompt.
 #: 规则句的固定开头：未设目标时整段不注入，该开头不应出现在提示词中。
 _RULE_HEAD = "本集成片目标时长约 "
 
+#: The target duration sentence rendered by the shared partial (the two directions after the soft target merged into one sentence).
 #: 共享片段渲染的目标时长句（软目标后的两个方向合并为一句）。
 _SHARED_TARGET_RULE = (
     "本集成片目标时长约 {seconds} 秒：据此决定本集的单元数与拆分粒度，让各单元时长合计向该目标靠拢。"
@@ -32,25 +36,33 @@ class TestFormatDurationConstraint:
         assert text != format_duration_constraint([4, 6, 8], default_duration=None)
 
     def test_default_duration_must_be_in_supported(self):
-        """default_duration 不在 supported 集合时应抛错，避免 prompt 自相矛盾。"""
+        """default_duration not in the supported set should raise, so the prompt does not contradict itself.
+
+        default_duration 不在 supported 集合时应抛错，避免 prompt 自相矛盾。"""
         with pytest.raises(ValueError, match="default_duration=6 不在"):
             format_duration_constraint([4, 8], default_duration=6)
 
     def test_continuous_range_uses_min_max_phrasing(self):
-        """长度 ≥5 且连续整数时压缩为只包含边界的区间。"""
+        """Length ≥5 and consecutive integers: compressed into a range with only the bounds.
+
+        长度 ≥5 且连续整数时压缩为只包含边界的区间。"""
         text = format_duration_constraint([3, 4, 5, 6, 7, 8, 9, 10], default_duration=None)
         assert "3" in text
         assert "10" in text
         assert "[3, 4, 5, 6, 7, 8, 9, 10]" not in text
 
     def test_short_continuous_still_uses_list(self):
-        """长度 <5 即使连续，仍保留中间值。"""
+        """Length <5: intermediate values are kept even if consecutive.
+
+        长度 <5 即使连续，仍保留中间值。"""
         text = format_duration_constraint([4, 5, 6], default_duration=None)
         assert "5" in text
 
 
 class TestBuildersRequireDurations:
-    """删除 fallback 后，传 None / 空 list 不应再被静默回填。"""
+    """After the fallback was removed, passing None / an empty list should no longer be silently backfilled.
+
+    删除 fallback 后，传 None / 空 list 不应再被静默回填。"""
 
     def test_format_constraint_rejects_empty(self):
         with pytest.raises(ValueError, match="supported_durations 不能为空"):
@@ -89,7 +101,9 @@ def _narration_prompt(**overrides) -> str:
 
 
 class TestEpisodeTargetDurationInjection:
-    """单集目标时长非 None 时注入共享软约束句；未设时提示词与不带该参数时逐字相同。"""
+    """When the per-episode target duration is not None, the shared soft constraint sentence is injected; when unset, the prompt is verbatim identical to the one without the parameter.
+
+    单集目标时长非 None 时注入共享软约束句；未设时提示词与不带该参数时逐字相同。"""
 
     def test_drama_prompt_carries_the_shared_rule(self):
         prompt = _drama_prompt(episode_target_duration=120)
@@ -106,7 +120,9 @@ class TestEpisodeTargetDurationInjection:
         assert _RULE_HEAD not in _narration_prompt()
 
     def test_the_rule_coexists_with_the_default_duration_preference(self):
-        """两条约束尺度不同（整集体量 vs 单场秒数），须同时呈现而非互相取代。"""
+        """The two constraints work at different scales (whole-episode volume vs seconds per scene) and must both be presented rather than replace each other.
+
+        两条约束尺度不同（整集体量 vs 单场秒数），须同时呈现而非互相取代。"""
         prompt = _drama_prompt(default_duration=8, episode_target_duration=120)
         assert _SHARED_TARGET_RULE.format(seconds=120) in prompt
         assert "默认 8 秒" in prompt

@@ -15,7 +15,10 @@ from tests.integration.server.services.tasks.generation_tasks_support import (
 
 class TestGenerationTasks:
     async def test_execute_product_task_injects_reference_images(self, tmp_path, monkeypatch):
-        """product sheet 生成把用户上传原图作为参考注入（标准化整理的输入），描述取自存储的条目；
+        """product sheet generation injects the user-uploaded original images as references (standardized input), with
+        the description taken from the stored entry; product_sheet is written back on completion.
+
+        product sheet 生成把用户上传原图作为参考注入（标准化整理的输入），描述取自存储的条目；
         完成后回写 product_sheet。"""
         project_path = prepare_files(tmp_path)
         fake_pm = _FakePM(project_path)
@@ -58,7 +61,10 @@ class TestGenerationTasks:
         ["products/refs/缺失.jpg", "../outside.jpg", "products/refs/../../../outside.jpg", "products/refs"],
     )
     async def test_unreadable_original_is_refused_before_any_provider_call(self, tmp_path, monkeypatch, unreadable):
-        """声明了却读不到的原图（缺失、越出项目目录、是目录）在提交供应商前拒绝，不静默少图。"""
+        """Declared but unreadable original images (missing, outside the project directory, a directory) are refused
+        before submitting to the provider, rather than silently dropping images.
+
+        声明了却读不到的原图（缺失、越出项目目录、是目录）在提交供应商前拒绝，不静默少图。"""
         project_path = prepare_files(tmp_path)
         (tmp_path / "outside.jpg").write_bytes(b"jpg")
         fake_pm = _FakePM(project_path)

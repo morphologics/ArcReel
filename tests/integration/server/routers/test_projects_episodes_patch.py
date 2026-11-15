@@ -88,7 +88,9 @@ class TestProjectsRouter:
         assert adapter.get_entry(unrelated) == unrelated_entry
 
     def test_patch_project_episodes_updates_script_file(self, tmp_path, monkeypatch):
-        """PATCH /projects/{name} with episodes[] 只更新匹配集的白名单字段。"""
+        """PATCH /projects/{name} with episodes[] only updates allowlisted fields of matching episodes.
+
+        PATCH /projects/{name} with episodes[] 只更新匹配集的白名单字段。"""
         fake_pm = _FakePM(tmp_path)
         fake_pm.project_data["ready"]["episodes"] = [
             {"episode": 1, "title": "第一集", "script_file": "scripts/ep1.json"},
@@ -106,11 +108,15 @@ class TestProjectsRouter:
             ep1 = next(e for e in episodes if e["episode"] == 1)
             ep2 = next(e for e in episodes if e["episode"] == 2)
             assert ep1["script_file"] == "scripts/ep1_v2.json"
+            # Episode 2 is unaffected
             # 第二集不受影响
             assert ep2["script_file"] == "scripts/ep2.json"
 
     def test_patch_project_episodes_has_no_route_field(self, tmp_path, monkeypatch):
-        """生成模式按项目定轴：集级 PATCH 模型结构上无 generation_mode，出现即被静默丢弃、不写盘。"""
+        """The generation mode is fixed per project: the episode-level PATCH model has no generation_mode structurally; if it
+        appears it is silently dropped and not persisted.
+
+        生成模式按项目定轴：集级 PATCH 模型结构上无 generation_mode，出现即被静默丢弃、不写盘。"""
         fake_pm = _FakePM(tmp_path)
         fake_pm.project_data["ready"]["episodes"] = [
             {"episode": 1, "title": "第一集", "script_file": "scripts/ep1.json"},
@@ -127,7 +133,10 @@ class TestProjectsRouter:
             assert "generation_mode" not in ep1
 
     def test_patch_project_episodes_strips_computed_fields(self, tmp_path, monkeypatch):
-        """PATCH 不得把项目摘要读时注入的每集统计字段写回 project.json；title 也不可经此端点写入。"""
+        """PATCH must not write back to project.json the per-episode stats fields injected on read by the project summary;
+        title cannot be written through this endpoint either.
+
+        PATCH 不得把项目摘要读时注入的每集统计字段写回 project.json；title 也不可经此端点写入。"""
         fake_pm = _FakePM(tmp_path)
         fake_pm.project_data["ready"]["episodes"] = [
             {"episode": 1, "title": "原标题", "script_file": "scripts/ep1.json"},
@@ -141,11 +150,12 @@ class TestProjectsRouter:
                     "episodes": [
                         {
                             "episode": 1,
-                            "script_file": "scripts/ep1_v2.json",  # 合法白名单字段
-                            "title": "新标题",  # title 不再可经 PATCH /projects 写入
+                            "script_file": "scripts/ep1_v2.json",  # Valid allowlisted field / 合法白名单字段
+                            "title": "新标题",  # title can no longer be written via PATCH /projects / title 不再可经 PATCH /projects 写入
+                            # The following are stats fields injected on read by the project summary and should not be written to disk
                             # 以下为项目摘要读时注入的统计字段，不应写入磁盘
                             "item_count": 999,
-                            "scenes_count": 999,  # 已退场的旧字段，同样不得落盘
+                            "scenes_count": 999,  # A retired old field, likewise must not be persisted / 已退场的旧字段，同样不得落盘
                             "status": "completed",
                             "storyboards": {"total": 5, "available": 3, "stale": 0},
                             "videos": {"total": 5, "available": 5, "stale": 1},
@@ -157,10 +167,14 @@ class TestProjectsRouter:
             )
             assert resp.status_code == 200
             ep1 = fake_pm.project_data["ready"]["episodes"][0]
+            # Valid fields should be written
             # 合法字段应被写入
             assert ep1["script_file"] == "scripts/ep1_v2.json"
+            # title cannot be rewritten through this endpoint and keeps its value (renaming goes through PATCH
+            # /episodes/{episode})
             # title 不可经此端点改写，保持原值（改名走 PATCH /episodes/{episode}）
             assert ep1["title"] == "原标题"
+            # Computed fields must not be written
             # 计算字段不得写入
             assert "item_count" not in ep1
             assert "scenes_count" not in ep1
@@ -171,7 +185,9 @@ class TestProjectsRouter:
             assert "duration_seconds" not in ep1
 
     def test_patch_project_episodes_skips_unknown_episode(self, tmp_path, monkeypatch):
-        """PATCH 传入未知 episode 编号时，静默跳过，不改变已有 episodes。"""
+        """When PATCH passes an unknown episode number, skip it silently without changing existing episodes.
+
+        PATCH 传入未知 episode 编号时，静默跳过，不改变已有 episodes。"""
         fake_pm = _FakePM(tmp_path)
         fake_pm.project_data["ready"]["episodes"] = [
             {"episode": 1, "title": "第一集", "script_file": "scripts/ep1.json"},
@@ -186,15 +202,22 @@ class TestProjectsRouter:
             )
             assert resp.status_code == 200
             episodes = fake_pm.project_data["ready"]["episodes"]
+            # Episode count unchanged
             # 集数不变
             assert len(episodes) == 2
+            # Existing fields are unaffected
             # 已有字段不受影响
             assert episodes[0]["script_file"] == "scripts/ep1.json"
             assert episodes[1]["script_file"] == "scripts/ep2.json"
 
     def test_update_episode_title_renames_script_and_mirror(self, tmp_path, monkeypatch):
-        """PATCH /episodes/{episode}：剧本顶层 title 与 project.json 镜像都反映新值，标题首尾空白被裁剪。"""
+        """PATCH /episodes/{episode}: both the script's top-level title and the project.json mirror reflect the new value;
+        leading/trailing whitespace of the title is trimmed.
+
+        PATCH /episodes/{episode}：剧本顶层 title 与 project.json 镜像都反映新值，标题首尾空白被裁剪。"""
         fake_pm = _FakePM(tmp_path)
+        # The script carries an episode field, triggering the _apply_episode_sync mirror (consistent with really generated
+        # scripts)
         # 剧本带 episode 字段，触发 _apply_episode_sync 镜像（与真实生成剧本一致）
         fake_pm.scripts[("ready", "episode_1.json")]["episode"] = 1
 
@@ -203,14 +226,19 @@ class TestProjectsRouter:
             resp = client.patch("/api/v1/projects/ready/episodes/1", json={"title": "  新集名  "})
             assert resp.status_code == 200
             assert resp.json()["episode"]["title"] == "新集名"
+            # The script's top-level title is persisted
             # 剧本顶层 title 落盘
             assert fake_pm.scripts[("ready", "episode_1.json")]["title"] == "新集名"
+            # The project.json mirror is synced
             # project.json 镜像同步
             ep = next(e for e in fake_pm.project_data["ready"]["episodes"] if e["episode"] == 1)
             assert ep["title"] == "新集名"
 
     def test_update_episode_title_cleared_to_empty(self, tmp_path, monkeypatch):
-        """空/纯空白标题清空剧本与账本标题，集名回到按播出位置派生。"""
+        """An empty/whitespace-only title clears the script and ledger titles; the episode name goes back to being derived
+        from its episode order position.
+
+        空/纯空白标题清空剧本与账本标题，集名回到按播出位置派生。"""
         fake_pm = _FakePM(tmp_path)
         fake_pm.scripts[("ready", "episode_1.json")]["episode"] = 1
         client = build_projects_client(monkeypatch, fake_pm)
@@ -224,14 +252,21 @@ class TestProjectsRouter:
                 assert ep["title"] == ""
 
     def test_update_episode_missing_episode_404(self, tmp_path, monkeypatch):
-        """不存在的 episode → 404。"""
+        """Nonexistent episode -> 404.
+
+        不存在的 episode → 404。"""
         client = build_projects_client(monkeypatch, _FakePM(tmp_path))
         with client:
             resp = client.patch("/api/v1/projects/ready/episodes/99", json={"title": "x"})
             assert resp.status_code == 404
 
     def test_update_episode_missing_project_404(self, tmp_path, monkeypatch):
-        """项目不存在 → 404，不退化成 500。
+        """Project does not exist -> 404, not degraded to 500.
+
+        The NotFoundError raised inside the lock is not an HTTPException subclass; the outer except ladder must also let
+        ApiError through, otherwise the fallback branch swallows it as internal_server_error.
+
+        项目不存在 → 404，不退化成 500。
 
         锁内抛出的 NotFoundError 不是 HTTPException 子类，外层 except 阶梯必须
         同时放行 ApiError，否则被兜底分支吞成 internal_server_error。
@@ -243,7 +278,10 @@ class TestProjectsRouter:
             assert resp.json()["detail"] == zh_errors.MESSAGES["project_not_found"].format(name="nope")
 
     def test_update_episode_title_without_script_is_kept_on_the_ledger_entry(self, tmp_path, monkeypatch):
-        """还没有剧本的集改标题记在账本条目上，之后从空白开始建出的剧本以它为标题。"""
+        """Renaming an episode that has no script yet records the title on the ledger entry; a script later built from blank
+        takes it as its title.
+
+        还没有剧本的集改标题记在账本条目上，之后从空白开始建出的剧本以它为标题。"""
         pm = ProjectManager(tmp_path / "projects")
         pm.create_project("demo")
         pm.create_project_metadata("demo", "Demo", "Anime", "narration")

@@ -1,4 +1,12 @@
-"""资产图与衍生资产图的生成输入在升级时有缺口：照常登记、读作 current，经整条迁移链后的制作状态。
+"""Generation inputs of asset sheets and derivative asset sheets have gaps at upgrade time: registered as usual,
+read as current; workflow status after the whole migration chain.
+
+Old projects may contain: characters that declare an original image that cannot be read, scenes whose
+description was cleared, and derivatives whose base look has gaps. Input gaps only block generation
+(ADR 0098): v17->v18 backfills asset sheets that were not registered earlier because of gaps; once the gaps are
+filled they are judged stale as usual.
+
+资产图与衍生资产图的生成输入在升级时有缺口：照常登记、读作 current，经整条迁移链后的制作状态。
 
 旧项目里可能有：声明了原图却读不到的角色、描述被清空的场景，以及本体有缺口的衍生。生成缺口只拦
 生成（ADR 0098）：v17→v18 把此前因缺口没登记的资产图补录，之后补齐缺口按常规判过期。
@@ -48,6 +56,7 @@ def test_asset_sheets_with_generation_input_gaps_are_backfilled_and_read_current
     characters = status.artifacts["asset_sheets"]["character"]
     assert characters["current_ids"] == ["张三", "李四"]
     assert characters["missing_ids"] == []
+    # Generation is still refused: gaps only block generation.
     # 生成仍被拒：缺口只拦生成。
     project = json.loads((project_dir / "project.json").read_text(encoding="utf-8"))
     refusal = asset_sheet_input(

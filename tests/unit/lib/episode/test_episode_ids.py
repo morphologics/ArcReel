@@ -1,4 +1,6 @@
-"""集名的派生：空标题的集按当下播出位置成文，插集或调序后跟随位置。"""
+"""Episode name derivation: an episode with an empty title is named after its current episode order position, and follows the position after episode inserts or reordering.
+
+集名的派生：空标题的集按当下播出位置成文，插集或调序后跟随位置。"""
 
 from functools import partial
 

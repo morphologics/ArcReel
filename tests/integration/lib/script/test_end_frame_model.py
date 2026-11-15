@@ -1,4 +1,11 @@
-"""``end_frame_image`` 的数据模型、PATCH 白名单与 data_validator 校验测试。
+"""Tests for the ``end_frame_image`` data model, PATCH allowlist and data_validator validation.
+
+All three skeletons (narration / drama / ad shots) hold this field the same way: empty by default, part of Python-side
+serialization and validation, hidden from the LLM. The only write channel is the dedicated end-frame endpoint -- the
+generic script PATCH deliberately does not allow this field, otherwise writing the raw value would bypass snapshot
+copying and reopen holes for dangling references and out-of-bounds paths.
+
+``end_frame_image`` 的数据模型、PATCH 白名单与 data_validator 校验测试。
 
 三骨架（narration / drama / ad 分镜）同构持有该字段：默认空、参与
 Python 端序列化与校验、对 LLM 隐藏。写入通道只有尾帧专用端点——通用剧本 PATCH
@@ -92,7 +99,9 @@ class TestEndFrameImageField:
 
     @_BUILDERS
     def test_absent_key_loads_as_none(self, build) -> None:
-        """存量剧本没有该键：extra=forbid 下仍须放行并落回默认空。"""
+        """Existing scripts lack this key: it must still pass under extra=forbid and fall back to the empty default.
+
+        存量剧本没有该键：extra=forbid 下仍须放行并落回默认空。"""
         model = type(build())
         payload = build().model_dump()
         payload.pop("end_frame_image")
@@ -128,11 +137,15 @@ def _projects_client(pm: ProjectManager, monkeypatch) -> TestClient:
 
 
 class TestGenericPatchIgnoresEndFrame:
-    """通用剧本 PATCH 白名单不含 end_frame_image：设置尾帧只能走专用端点。"""
+    """The generic script PATCH allowlist does not include end_frame_image: setting the end frame only goes through the
+    dedicated endpoint.
+
+    通用剧本 PATCH 白名单不含 end_frame_image：设置尾帧只能走专用端点。"""
 
     @pytest.mark.parametrize(
         ("content_mode", "path", "items_key", "id_key", "flat_body"),
         [
+            # narration uses an explicit Pydantic request body (field-level allowlist), drama/ad use the updates dict allowlist
             # narration 走显式 Pydantic 请求体（字段级白名单），drama/ad 走 updates 字典白名单
             ("narration", "segments", "segments", "segment_id", True),
             ("drama", "script-scenes", "scenes", "scene_id", False),
@@ -145,6 +158,8 @@ class TestGenericPatchIgnoresEndFrame:
         pm = _seed_project(tmp_path, content_mode)
         client = _projects_client(pm, monkeypatch)
 
+        # Submit the allowlisted note too: it taking effect proves the PATCH really ran, and end_frame_image was ignored on
+        # its own
         # 白名单内的 note 一并提交：它生效即证明 PATCH 确实执行了，end_frame_image 是被单独忽略
         updates = {"end_frame_image": "../../../etc/passwd", "note": "备注"}
         body = (
@@ -207,7 +222,11 @@ class TestDataValidatorEndFramePath:
         assert not [e for e in result.errors if "end_frame_image" in e]
 
     def test_path_outside_end_frames_dir_is_error(self, project):
-        """指向 end_frames/ 之外目录内确实存在的文件也须拒绝——字段只认服务层写出的快照路径，
+        """A file that really exists in a directory outside end_frames/ must also be rejected -- the field only accepts snapshot
+        paths written by the service layer, otherwise it would reference the source image directly, bypassing snapshot
+        copying and reintroducing source image coupling.
+
+        指向 end_frames/ 之外目录内确实存在的文件也须拒绝——字段只认服务层写出的快照路径，
         否则等于绕过快照复制直接引用源图，重新引入源图耦合。"""
         pm, validator = project
         _write_png(pm.get_project_path("demo") / "storyboards/scene_E1S02.png")
@@ -216,7 +235,10 @@ class TestDataValidatorEndFramePath:
         assert not result.valid
 
     def test_dot_dot_escaping_end_frames_prefix_is_error(self, project):
-        """`end_frames/../storyboards/x.png` 表面以 end_frames 前缀开头，实际逃出该目录，同样拒绝。"""
+        """`end_frames/../storyboards/x.png` looks like it starts with the end_frames prefix but actually escapes that
+        directory; also rejected.
+
+        `end_frames/../storyboards/x.png` 表面以 end_frames 前缀开头，实际逃出该目录，同样拒绝。"""
         pm, validator = project
         _write_png(pm.get_project_path("demo") / "storyboards/scene_E1S02.png")
         result = self._validate_with(pm, validator, "end_frames/../storyboards/scene_E1S02.png")
@@ -224,7 +246,10 @@ class TestDataValidatorEndFramePath:
         assert not result.valid
 
     def test_directory_reference_is_error(self, project):
-        """指向 end_frames/ 下确实存在的目录须拒绝——校验只认普通文件，不认目录。"""
+        """A directory that really exists under end_frames/ must be rejected -- validation only accepts regular files, not
+        directories.
+
+        指向 end_frames/ 下确实存在的目录须拒绝——校验只认普通文件，不认目录。"""
         pm, validator = project
         (pm.get_project_path("demo") / "end_frames" / "scene_E1S01.png").mkdir(parents=True)
         result = self._validate_with(pm, validator, END_FRAME_REL)

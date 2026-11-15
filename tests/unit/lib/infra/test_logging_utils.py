@@ -37,6 +37,7 @@ def test_diagnostic_payload_redacts_credentials_embedded_in_text():
 
 
 def test_diagnostic_payload_redacts_credentials_echoed_in_prose():
+    # Upstream 4xx responses often echo the key along with a sentence, with ordinary words between label and value, so key-value rules do not match.
     # 上游 4xx 常把密钥连同一句话回显，标签与值之间隔着普通词，键值型规则匹配不到。
     sanitized = sanitize_diagnostic_payload(
         {
@@ -261,7 +262,10 @@ def test_formatter_swallows_internal_errors():
 
 
 def test_fallback_returns_fixed_placeholder_not_raw_repr():
-    """_to_safe 抛错时必须返回固定占位符，不能回退到 repr(payload)，
+    """When _to_safe raises it must return a fixed placeholder, not fall back to repr(payload),
+    otherwise the unmasked raw object content (including sensitive field literals) would be brought back into the log.
+
+    _to_safe 抛错时必须返回固定占位符，不能回退到 repr(payload)，
     否则会把未脱敏的原始对象内容（含敏感字段字面量）重新带回日志。"""
 
     class Disaster:
@@ -273,7 +277,12 @@ def test_fallback_returns_fixed_placeholder_not_raw_repr():
 
 
 def test_fallback_does_not_leak_sensitive_via_repr():
-    """同一 payload 里既有敏感字面量、又有序列化会炸的对象：走兜底也不能把 api_key 带出来。
+    """The same payload holds both a sensitive literal and an object whose serialization blows up: even the fallback must not leak api_key.
+
+    The blow-up is triggered by a real object (``__repr__`` raises), without replacing the masking function; if the fallback ever goes back to repr(payload),
+    the whole payload together with the unmasked api_key goes into the log.
+
+    同一 payload 里既有敏感字面量、又有序列化会炸的对象：走兜底也不能把 api_key 带出来。
 
     炸点由真实对象触发（``__repr__`` 抛错），不替换脱敏函数——兜底一旦改回 repr(payload)，
     整个 payload 连同未脱敏的 api_key 会一起进日志。
@@ -311,6 +320,8 @@ def test_pydantic_class_not_called_as_instance():
 
 
 def test_diagnostic_payload_keeps_numeric_token_counters():
+    # *_tokens also falls under the sensitive key shapes, but carries usage counts: masking it would make billing and diagnostic info vanish on the read side.
+    # auth_token, directly qualified by a credential word, is not in this group and is masked even when its value is a number.
     # *_tokens 同时落在敏感键形里，但带的是用量计数：遮蔽它会让读侧的计费与诊断信息消失。
     # 被凭证词直接限定的 auth_token 不在此列，值是数字也照遮。
     assert sanitize_diagnostic_payload(

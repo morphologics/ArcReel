@@ -1,4 +1,8 @@
-"""TaskRepository SQL WHERE 守卫状态机测试。
+"""TaskRepository SQL WHERE guard state machine tests.
+
+Only externally observable behaviour is checked: valid source → rows=1 + DB change; invalid source → rows=0 + DB unchanged.
+
+TaskRepository SQL WHERE 守卫状态机测试。
 
 只验证外部可观察行为：合法源 → rows=1 + DB 变化；非法源 → rows=0 + DB 不变。
 """
@@ -22,7 +26,7 @@ class TestRepoStateMachineGuards:
             payload={},
             script_file="ep1.json",
         )
-        # queued → mark_succeeded 守卫 status='running' 拒绝
+        # queued → mark_succeeded guard status='running' rejects / queued → mark_succeeded 守卫 status='running' 拒绝
         rows = await repo.mark_succeeded(t["task_id"], {"file": "x"})
         assert rows == 0
         assert (await repo.get(t["task_id"]))["status"] == "queued"
@@ -32,7 +36,7 @@ class TestRepoStateMachineGuards:
         assert rows == 1
         assert (await repo.get(t["task_id"]))["status"] == "succeeded"
 
-        # 已 succeeded 再调 → 0 rows
+        # Calling again after succeeded → 0 rows / 已 succeeded 再调 → 0 rows
         rows = await repo.mark_succeeded(t["task_id"], {"file": "y"})
         assert rows == 0
 
@@ -67,11 +71,13 @@ class TestRepoStateMachineGuards:
         # queued → cancelled
         assert await repo.finalize_interrupted(t["task_id"]) == 1
         assert (await repo.get(t["task_id"]))["status"] == "cancelled"
-        # 重复调 → 0 rows
+        # Repeated call → 0 rows / 重复调 → 0 rows
         assert await repo.finalize_interrupted(t["task_id"]) == 0
 
     async def test_finalize_interrupted_rejects_terminal(self, db_session):
-        """从 succeeded/failed 等终态不可转入 cancelled。"""
+        """Terminal states such as succeeded/failed cannot transition to cancelled.
+
+        从 succeeded/failed 等终态不可转入 cancelled。"""
         repo = TaskRepository(db_session)
         t = await repo.enqueue(
             project_name="demo",
@@ -102,7 +108,7 @@ class TestRepoStateMachineGuards:
         assert exc_info.value.task_id == t["task_id"]
         assert (await repo.get(t["task_id"]))["status"] == "running"
 
-        # 被拒绝的取消不改变执行：任务照常收尾为 succeeded
+        # A rejected cancel does not change execution: the task finishes as succeeded as usual / 被拒绝的取消不改变执行：任务照常收尾为 succeeded
         assert await repo.mark_succeeded(t["task_id"], {"x": 1}) == 1
         assert (await repo.get(t["task_id"]))["status"] == "succeeded"
 
@@ -136,11 +142,14 @@ class TestRepoStateMachineGuards:
         await repo.persist_provider_job_id(t["task_id"], "provider-job-42")
         refreshed = await repo.get(t["task_id"])
         assert refreshed["provider_job_id"] == "provider-job-42"
-        # 内置供应商无 endpoint 维度，该列保持 NULL
+        # Built-in providers have no endpoint dimension; the column stays NULL / 内置供应商无 endpoint 维度，该列保持 NULL
         assert refreshed["provider_endpoint"] is None
 
     async def test_persist_provider_job_id_writes_endpoint_alongside(self, db_session):
-        """自定义供应商的 endpoint 与 job_id 同一次写入落地——两者必须同时可见，
+        """A custom provider's endpoint and job_id land in the same write; both must be visible together,
+        otherwise a resume gets the job_id but cannot tell whether the protocol has been swapped.
+
+        自定义供应商的 endpoint 与 job_id 同一次写入落地——两者必须同时可见，
         否则续跑拿得到 job_id 却判不出协议是否已被换掉。"""
         repo = TaskRepository(db_session)
         t = await repo.enqueue(
@@ -158,7 +167,9 @@ class TestRepoStateMachineGuards:
         assert refreshed["provider_endpoint"] == "openai-video"
 
     async def test_persist_provider_job_id_without_endpoint_keeps_existing(self, db_session):
-        """endpoint 传 None 不清空已有值——清空等于放弃比对，比保留旧值更危险。"""
+        """Passing None for endpoint does not clear the existing value; clearing means giving up the comparison, which is more dangerous than keeping the old value.
+
+        endpoint 传 None 不清空已有值——清空等于放弃比对，比保留旧值更危险。"""
         repo = TaskRepository(db_session)
         t = await repo.enqueue(
             project_name="demo",
@@ -175,7 +186,9 @@ class TestRepoStateMachineGuards:
         assert refreshed["provider_endpoint"] == "openai-video"
 
     async def test_persist_provider_job_id_writes_base_url_alongside_endpoint(self, db_session):
-        """自定义供应商两个维度分列落地：endpoint 位存协议标识，域名存 submitted_base_url。"""
+        """The two dimensions of a custom provider land in separate columns: the endpoint slot stores the protocol id, the domain goes into submitted_base_url.
+
+        自定义供应商两个维度分列落地：endpoint 位存协议标识，域名存 submitted_base_url。"""
         repo = TaskRepository(db_session)
         t = await repo.enqueue(
             project_name="demo",
@@ -198,7 +211,9 @@ class TestRepoStateMachineGuards:
         assert refreshed["submitted_base_url"] == "https://custom-a.example.com/api/v1"
 
     async def test_persist_provider_job_id_without_base_url_keeps_existing(self, db_session):
-        """base_url 传 None 不清空已有值——清空等于放弃回放，续跑会退回按当下配置的域名轮询。"""
+        """Passing None for base_url does not clear the existing value; clearing means giving up the replay, and a resume would fall back to polling the currently configured domain.
+
+        base_url 传 None 不清空已有值——清空等于放弃回放，续跑会退回按当下配置的域名轮询。"""
         repo = TaskRepository(db_session)
         t = await repo.enqueue(
             project_name="demo",
@@ -288,9 +303,11 @@ class TestRepoStateMachineGuards:
         assert (await repo.get(t2["task_id"]))["status"] == "queued"
 
     async def test_claim_next_excludes_pool_full_providers(self, db_session):
-        """claim_next 用 pool_full_providers 黑名单：排除池满 provider；NULL 和未知 provider 不受影响。"""
+        """claim_next uses the pool_full_providers blocklist: providers with a full pool are excluded; NULL and unknown providers are unaffected.
+
+        claim_next 用 pool_full_providers 黑名单：排除池满 provider；NULL 和未知 provider 不受影响。"""
         repo = TaskRepository(db_session)
-        # provider_id 显式 set 为 'gemini-aistudio'
+        # provider_id explicitly set to 'gemini-aistudio' / provider_id 显式 set 为 'gemini-aistudio'
         t1 = await repo.enqueue(
             project_name="demo",
             task_type="storyboard",
@@ -300,7 +317,7 @@ class TestRepoStateMachineGuards:
             script_file="ep1.json",
             provider_id="gemini-aistudio",
         )
-        # 不设 provider_id（老数据 IS NULL 兜底）
+        # provider_id not set (fallback for old data IS NULL) / 不设 provider_id（老数据 IS NULL 兜底）
         t2 = await repo.enqueue(
             project_name="demo",
             task_type="storyboard",
@@ -309,6 +326,7 @@ class TestRepoStateMachineGuards:
             payload={},
             script_file="ep1.json",
         )
+        # Unknown provider (e.g. the custom provider was deleted but the DB still holds the provider_id)
         # 未知 provider（例如自定义 provider 已被删除，DB 仍留有 provider_id）
         t3 = await repo.enqueue(
             project_name="demo",
@@ -319,25 +337,29 @@ class TestRepoStateMachineGuards:
             script_file="ep1.json",
             provider_id="custom-deleted",
         )
+        # gemini pool full → blocklist contains gemini-aistudio; t1 should be skipped and t2 (NULL) claimed FIFO
         # gemini 池满 → 黑名单含 gemini-aistudio，应跳过 t1，FIFO 领 t2（NULL）
         first = await repo.claim_next("image", pool_full_providers=frozenset({"gemini-aistudio"}))
         assert first is not None
         assert first["task_id"] == t2["task_id"]
 
+        # Continue: still only gemini's pool is full, t1 cannot be claimed, t3 (custom-deleted is not on the blocklist) should be claimed
         # 继续：仍然只 gemini 池满，t1 不能领，t3（custom-deleted 不在黑名单）应被领
         await repo.mark_succeeded(t2["task_id"], {})
         second = await repo.claim_next("image", pool_full_providers=frozenset({"gemini-aistudio"}))
         assert second is not None
         assert second["task_id"] == t3["task_id"], "未知 provider（已删除的自定义 provider）不应被白名单/黑名单误过滤"
 
-        # 黑名单清空 → t1 可领
+        # Blocklist cleared → t1 can be claimed / 黑名单清空 → t1 可领
         await repo.mark_succeeded(t3["task_id"], {})
         third = await repo.claim_next("image", pool_full_providers=None)
         assert third is not None
         assert third["task_id"] == t1["task_id"]
 
     async def test_claim_next_filters_reference_task_by_recorded_provider(self, db_session):
-        """参考生视频与其它任务同一口径：按排队记录的 provider 过滤，不为现状推算放行。"""
+        """Reference-to-video uses the same measure as other tasks: filtered by the provider recorded at queue time, not let through by re-deriving from the current state.
+
+        参考生视频与其它任务同一口径：按排队记录的 provider 过滤，不为现状推算放行。"""
         repo = TaskRepository(db_session)
         await repo.enqueue(
             project_name="demo",
@@ -367,7 +389,9 @@ class TestRepoStateMachineGuards:
         assert claimed["task_id"] == ready["task_id"]
 
     async def test_finalize_interrupted_from_running(self, db_session):
-        """进程级打断把 running 直接落 cancelled，任务不会停在 running 被重启自愈反复拉起。"""
+        """A process-level interruption takes running straight to cancelled, so the task does not stay running and get repeatedly revived by the restart self-heal.
+
+        进程级打断把 running 直接落 cancelled，任务不会停在 running 被重启自愈反复拉起。"""
         repo = TaskRepository(db_session)
         t = await repo.enqueue(
             project_name="demo",
@@ -377,7 +401,7 @@ class TestRepoStateMachineGuards:
             payload={},
             script_file="ep1.json",
         )
-        # 状态推到 running
+        # Push the state to running / 状态推到 running
         claimed = await repo.claim_next("image")
         assert claimed is not None
         assert claimed["task_id"] == t["task_id"]

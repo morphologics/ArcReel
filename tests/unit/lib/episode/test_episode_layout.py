@@ -1,4 +1,6 @@
-"""「分集」视图的只读投影：按集分段、空段与尚未分集的原文、每集体量与首尾句、未登记文件。"""
+"""Read-only projection of the "episodes" view: segments by episode, empty segments and source not yet split into episodes, per-episode volume and first/last sentence, unregistered files.
+
+「分集」视图的只读投影：按集分段、空段与尚未分集的原文、每集体量与首尾句、未登记文件。"""
 
 from pathlib import Path
 

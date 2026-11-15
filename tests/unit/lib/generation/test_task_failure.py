@@ -170,6 +170,7 @@ class TestCascadeBlockedDependency:
             for locale in ("zh", "en", "vi")
         }
         for locale, text in rendered.items():
+            # A nested reason must render in the same locale as the outer one rather than fall back to another language.
             # 嵌套 reason 必须跟随外层同一 locale 渲染，而不是回落到别的语言。
             assert render_failure(inner, _translator(locale), make_display_names(locale)) in text
             assert "task-1" in text
@@ -314,7 +315,9 @@ def _aio_rpc_error(code, details: str):
 
 
 def test_grpc_invalid_argument_encodes_as_provider_rejection():
-    """xAI 走 gRPC：确定性拒绝按 HTTP 等价状态码结构化落库，不落 AioRpcError 的调试表示。"""
+    """xAI uses gRPC: deterministic rejections are stored structured with the HTTP-equivalent status code, not as AioRpcError's debug representation.
+
+    xAI 走 gRPC：确定性拒绝按 HTTP 等价状态码结构化落库，不落 AioRpcError 的调试表示。"""
     import grpc
 
     exc = _aio_rpc_error(grpc.StatusCode.INVALID_ARGUMENT, "`reference_images` is not supported for this model.")
@@ -332,7 +335,9 @@ def test_grpc_invalid_argument_encodes_as_provider_rejection():
 
 
 def test_grpc_unauthenticated_drops_details():
-    """认证失败的详情可能回显凭证，与 HTTP 401 同口径只落状态码。"""
+    """Auth failure details may echo the credential; same as HTTP 401, only the status code is stored.
+
+    认证失败的详情可能回显凭证，与 HTTP 401 同口径只落状态码。"""
     import grpc
 
     stored = encode_task_failure_message(_aio_rpc_error(grpc.StatusCode.UNAUTHENTICATED, "bad key xai-SECRET"))
@@ -342,7 +347,9 @@ def test_grpc_unauthenticated_drops_details():
 
 
 def test_grpc_transient_error_is_not_classified_as_rejection():
-    """瞬态码（限流、不可用）不是确定性拒绝，不套 provider_rejected 的「修改输入」。"""
+    """Transient codes (rate limit, unavailable) are not deterministic rejections and do not get provider_rejected's "change the input".
+
+    瞬态码（限流、不可用）不是确定性拒绝，不套 provider_rejected 的「修改输入」。"""
     import grpc
 
     stored = encode_task_failure_message(_aio_rpc_error(grpc.StatusCode.UNAVAILABLE, "Socket closed"))

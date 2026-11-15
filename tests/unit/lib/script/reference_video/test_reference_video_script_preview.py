@@ -1,4 +1,6 @@
-"""视频单元正文的发声记号派生与降级可见性 warning。"""
+"""Utterance mark derivation from video unit bodies and degradation visibility warnings.
+
+视频单元正文的发声记号派生与降级可见性 warning。"""
 
 import unicodedata
 
@@ -38,14 +40,22 @@ PROJECT = {
     "props": {},
 }
 
+#: A project with no scene assets registered at all: when the body has no scene to reference, "this unit
+#: references no scene" is not sent,
+#: so grammar / voice cases unrelated to scenes keep a single concern.
 #: 一张场景资产都没登记的项目：正文没有场景可引用时不发「本单元未引用场景」，与场景无关的
 #: 语法 / 声音用例据此保持单一关注点。
 PROJECT_WITHOUT_SCENES = {**PROJECT, "scenes": {}}
 
+#: A character name with combining marks (Vietnamese): the two encodings look the same on screen but differ in
+#: bytes; a coordinate-system case for asset name comparison.
 #: 带组合附加符的角色名（越南语），两种编码屏幕显示相同、字节不同——资产名比对的坐标系用例。
 _NAME_NFC = unicodedata.normalize("NFC", "Hiếu")
 _NAME_NFD = unicodedata.normalize("NFD", "Hiếu")
 
+#: Voice settings for cases unrelated to voice: ``soft`` with sound and no reference audio. The preview
+#: entry's ``settings`` is required,
+#: so these cases still pass one, taking the field defaults.
 #: 与声音无关的用例用的声音档：``soft`` 有声、无参考音频。预览入口的 ``settings`` 必填，
 #: 这些用例照样要给一档，取字段默认即可。
 _SOFT = VoiceRenderSettings()
@@ -55,7 +65,7 @@ def keys(preview) -> list[str]:
     return [w["key"] for w in preview.warnings]
 
 
-# ---------- 行内记号匹配原语 ----------
+# ---------- Inline mark matching primitives / 行内记号匹配原语 ----------
 
 
 def marks(line: str) -> list[tuple[str, str]]:
@@ -80,11 +90,11 @@ def test_dialogue_mark_accepts_wrapped_bare_both_colons_and_inline(line: str):
 @pytest.mark.parametrize(
     "line",
     [
-        "@[张三]：我来了",  # 无花括号
-        "@[张三]：{我来了",  # 未闭合
-        "@[ ]：{我来了}",  # speaker 位全为空白
-        "@[张三]：{}",  # 空台词
-        "@[张三]：{   }",  # 台词只有空白
+        "@[张三]：我来了",  # No braces / 无花括号
+        "@[张三]：{我来了",  # Not closed / 未闭合
+        "@[ ]：{我来了}",  # The speaker slot is all whitespace / speaker 位全为空白
+        "@[张三]：{}",  # Empty dialogue / 空台词
+        "@[张三]：{   }",  # Dialogue is only whitespace / 台词只有空白
     ],
 )
 def test_line_without_valid_mark_derives_nothing(line: str):
@@ -92,14 +102,21 @@ def test_line_without_valid_mark_derives_nothing(line: str):
 
 
 def test_speaker_must_be_adjacent_to_the_braces():
-    """隔着描述文字的 mention 不是说话人——不做「行内最近 mention 猜 speaker」。"""
+    """A mention separated by description text is not the speaker: no "guess the speaker from the nearest
+    mention in the line".
+
+    隔着描述文字的 mention 不是说话人——不做「行内最近 mention 猜 speaker」。"""
     assert marks("他说 @[张三] 转身，屋里传出 {我来了}") == [("", "我来了")]
 
 
 def test_blank_speaker_degrades_to_warning_instead_of_raising():
-    """speaker 位空白不得构造非法 Utterance——只读派生要出 warning，不能抛校验错。"""
+    """A blank speaker slot must not build an invalid Utterance: the read-only derivation must emit a
+    warning, not raise a validation error.
+
+    speaker 位空白不得构造非法 Utterance——只读派生要出 warning，不能抛校验错。"""
     preview = build_script_preview("中景。\n@[ ]：{我来了}", PROJECT_WITHOUT_SCENES, _SOFT)
     assert preview.utterances == []
+    # Not a mark -> unrecognized-braces warning; the blank name is also named as an unregistered mention.
     # 未成记号 → 花括号未识别 warning；空白名同时作为未登记 mention 被点名。
     assert keys(preview) == [WARN_UNREGISTERED_MENTION, WARN_BRACES_NOT_SPEECH]
 
@@ -112,7 +129,9 @@ def test_voiceover_mark_is_bare_braces_anywhere():
 
 @pytest.mark.parametrize("line", ["{}", "{   }"])
 def test_blank_braces_are_not_utterances(line: str):
-    """空台词不派生：``Utterance`` 与 DataValidator 都要求 text 非空。"""
+    """Empty dialogue is not derived: both ``Utterance`` and DataValidator require non-empty text.
+
+    空台词不派生：``Utterance`` 与 DataValidator 都要求 text 非空。"""
     assert marks(line) == []
 
 
@@ -122,7 +141,7 @@ def test_blank_braces_degrade_to_warning():
     assert keys(preview) == [WARN_BRACES_NOT_SPEECH, WARN_BRACES_NOT_SPEECH]
 
 
-# ---------- 派生 ----------
+# ---------- Derivation / 派生 ----------
 
 
 def test_normative_lines_derive_dialogue_and_voiceover():
@@ -136,7 +155,10 @@ def test_normative_lines_derive_dialogue_and_voiceover():
 
 
 def test_inline_dialogue_is_derived_alongside_the_description():
-    """台词跟在同一行画面描述之后照常派生；说话人只绑声音，描述里的资产照常进参考图。"""
+    """Dialogue following a picture description on the same line is derived as usual; the speaker only binds
+    a voice, and assets in the description still become reference images.
+
+    台词跟在同一行画面描述之后照常派生；说话人只绑声音，描述里的资产照常进参考图。"""
     text = "@[酒馆] 内景，@[张三] 推门。@[张三]{我来了}"
     preview = build_script_preview(text, PROJECT, _SOFT)
     assert [(u.kind, u.speaker, u.text) for u in preview.utterances] == [("dialogue", "张三", "我来了")]
@@ -151,7 +173,9 @@ def test_marks_recognized_on_a_line_do_not_suppress_residual_brace_warning():
 
 
 def test_script_without_dialogue_symbols_derives_nothing():
-    """没有台词符号的正文 → utterances 自然为空、无 warning。"""
+    """A body without dialogue symbols -> utterances is naturally empty, with no warnings.
+
+    没有台词符号的正文 → utterances 自然为空、无 warning。"""
     text = "中景，@[张三] 推门进 @[酒馆]。"
     preview = build_script_preview(text, PROJECT, _SOFT)
     assert preview.utterances == []
@@ -159,14 +183,14 @@ def test_script_without_dialogue_symbols_derives_nothing():
     assert [r.name for r in derive_references_from_text(text, PROJECT)[0]] == ["张三", "酒馆"]
 
 
-# ---------- speaker 位不计入参考图 ----------
+# ---------- The speaker slot does not count toward reference images / speaker 位不计入参考图 ----------
 
 
 def test_speaker_position_is_excluded_from_references():
     text = "@[酒馆] 内景，人声嘈杂。\n@[张三]：{我来了}"
     preview = build_script_preview(text, PROJECT, _SOFT)
     assert [r.name for r in derive_references_from_text(text, PROJECT)[0]] == ["酒馆"]
-    # 纯画外角色没有参考图，但 utterance 照常
+    # A purely off-screen character has no reference image, but the utterance works as usual / 纯画外角色没有参考图，但 utterance 照常
     assert [u.speaker for u in preview.utterances] == ["张三"]
 
 
@@ -182,14 +206,19 @@ def test_padded_speaker_uses_registered_character_without_warning():
 
 
 def test_extract_mentions_skips_speaker_position():
-    """两条派生路径（script_plan 工具与审阅回写）共用的口径出口。"""
+    """The shared rule exit for both derivation paths (the script_plan tool and review write-back).
+
+    两条派生路径（script_plan 工具与审阅回写）共用的口径出口。"""
     text = "@[酒馆] 内景。\n@[张三]：{我来了}\n@[张三] 抬眼。"
     assert extract_mentions(text) == ["酒馆", "张三"]
     assert extract_mentions("@[张三]：{我来了}") == []
 
 
 def test_dialogue_only_line_derives_utterance_without_reference():
-    """整行只有台词：参考图与 utterance 两侧口径须一致，说话人不进参考图。"""
+    """A line with only dialogue: the reference image side and the utterance side must agree, and the
+    speaker does not become a reference image.
+
+    整行只有台词：参考图与 utterance 两侧口径须一致，说话人不进参考图。"""
     text = "@[张三]：{我来了}"
     preview = build_script_preview(text, PROJECT, _SOFT)
     assert derive_references_from_text(text, PROJECT)[0] == []
@@ -197,11 +226,14 @@ def test_dialogue_only_line_derives_utterance_without_reference():
     assert extract_mentions(text) == []
 
 
-# ---------- 降级可见性 warning ----------
+# ---------- Degradation visibility warnings / 降级可见性 warning ----------
 
 
 def test_warn_unit_without_scene_when_project_has_scene_assets():
-    """未引用场景的单元，画面地点由模型自由决定——项目登记了场景才发得出这条提示。"""
+    """For a unit that references no scene, the model decides the location freely; this hint can only be
+    sent when the project has registered scenes.
+
+    未引用场景的单元，画面地点由模型自由决定——项目登记了场景才发得出这条提示。"""
     preview = build_script_preview("中景，@[张三] 推门。", PROJECT, _SOFT)
     assert keys(preview) == [WARN_UNIT_WITHOUT_SCENE]
     assert preview.warnings[0]["params"] == {}
@@ -218,12 +250,15 @@ def test_no_scene_warning_when_project_registers_no_scene():
 
 
 def test_scene_warning_ignores_reference_image_clipping():
-    """场景引用被能力上限裁掉不改变判定：这条问的是作者写没写引用，不是发出去几张图。"""
+    """A scene reference clipped by the capability limit does not change the decision: this asks whether the
+    author wrote the reference, not how many images were sent.
+
+    场景引用被能力上限裁掉不改变判定：这条问的是作者写没写引用，不是发出去几张图。"""
     preview = build_script_preview(
         "@[张三] 推门进 @[酒馆]。",
         PROJECT,
         _SOFT,
-        max_reference_images=1,  # 只留 @[张三]，@[酒馆] 的图被裁掉
+        max_reference_images=1,  # Only @[张三] is kept; the image of @[酒馆] is clipped / 只留 @[张三]，@[酒馆] 的图被裁掉
     )
     assert keys(preview) == []
 
@@ -241,7 +276,10 @@ def test_warn_unclosed_brace():
 
 
 def test_warn_braces_not_speech():
-    """说话人位写坏时不静默降级成画外音，出 warning 让作者看见这段没被认成台词。"""
+    """When the speaker slot is broken, do not silently degrade to voiceover; emit a warning so the author
+    sees this passage was not recognized as dialogue.
+
+    说话人位写坏时不静默降级成画外音，出 warning 让作者看见这段没被认成台词。"""
     preview = build_script_preview("@[]：{我来了}。", PROJECT_WITHOUT_SCENES, _SOFT)
     assert keys(preview) == [WARN_BRACES_NOT_SPEECH]
 
@@ -252,6 +290,8 @@ def test_warn_unregistered_speaker():
     assert preview.warnings[0]["params"] == {"name": "王五"}
 
 
+#: Project payload where Zhang San has one registered derivative (no scenes, to avoid stacking the "no scene
+#: referenced" warning).
 #: 张三带一个已登记衍生的项目载荷（无场景，避免叠上「未引用场景」warning）。
 PROJECT_WITH_DERIVATIVE = {
     **PROJECT_WITHOUT_SCENES,
@@ -260,7 +300,9 @@ PROJECT_WITH_DERIVATIVE = {
 
 
 class TestDerivativeWarnings:
-    """``@[角色/衍生]`` 在编辑器只警告、不阻断（docs/adr/0064 / 0072）。"""
+    """``@[character/derivative]`` only warns in the editor and does not block (docs/adr/0064 / 0072).
+
+    ``@[角色/衍生]`` 在编辑器只警告、不阻断（docs/adr/0064 / 0072）。"""
 
     def test_registered_derivative_is_silent(self):
         preview = build_script_preview("@[张三/劲装] 推门。@[张三/劲装]{我来了}", PROJECT_WITH_DERIVATIVE, _SOFT)
@@ -274,14 +316,20 @@ class TestDerivativeWarnings:
         assert preview.warnings[0]["params"] == {"name": "张三/夜行衣"}
 
     def test_unregistered_derivative_in_the_speaker_slot_warns(self):
-        """说话人位不进参考图派生，未登记的事实要在这里单独报出来。"""
+        """The speaker slot is not derived into reference images, so the unregistered fact must be reported
+        separately here.
+
+        说话人位不进参考图派生，未登记的事实要在这里单独报出来。"""
         preview = build_script_preview("开场。\n@[张三/夜行衣]{我来了}", PROJECT_WITH_DERIVATIVE, _SOFT)
 
         assert keys(preview) == [WARN_UNREGISTERED_MENTION]
         assert preview.warnings[0]["params"] == {"name": "张三/夜行衣"}
 
     def test_same_unregistered_derivative_written_in_both_slots_warns_once(self):
-        """记号之外与说话人位是两处独立去重的来源，同一个名字只该报一条。"""
+        """Outside marks and the speaker slot are two independently deduplicated sources; the same name
+        should be reported only once.
+
+        记号之外与说话人位是两处独立去重的来源，同一个名字只该报一条。"""
         preview = build_script_preview("@[张三/夜行衣] 推门。@[张三/夜行衣]{我来了}", PROJECT_WITH_DERIVATIVE, _SOFT)
 
         assert keys(preview) == [WARN_UNREGISTERED_MENTION]
@@ -315,7 +363,12 @@ def test_warn_speaker_without_reference_audio_only_on_native():
 
 
 def test_warn_speaker_audio_unavailable_distinguished_from_unset():
-    """``audio_ready`` 非 None 时，字段有值但音频不可用（不在 audio_ready 内）与字段未设置
+    """When ``audio_ready`` is not None, "field has a value but the audio is unavailable (not in
+    audio_ready)" and "field not set" must emit different warnings: in the former the field is filled and
+    the audio it points at should be checked, in the latter audio should be added in the character
+    settings.
+
+    ``audio_ready`` 非 None 时，字段有值但音频不可用（不在 audio_ready 内）与字段未设置
     要发不同的 warning：前者字段已填好、该去查它指向的音频，后者该去角色设置里补音频。"""
     text = "开场。\n@[张三]：{我来了}\n@[李四]：{你迟到了}"
     preview = build_script_preview(
@@ -327,6 +380,8 @@ def test_warn_speaker_audio_unavailable_distinguished_from_unset():
         VoiceRenderSettings(
             voice_consistency="native",
             max_reference_audio=3,
+            # Zhang San's field has a value, Li Si's is not set; an empty audio_ready means the execution
+            # layer resolved not a single clip.
             # 张三字段有值、李四未设置；audio_ready 为空表示执行层一段都没解析出来。
             audio_ready=set(),
         ),
@@ -340,7 +395,14 @@ def test_warn_speaker_audio_unavailable_distinguished_from_unset():
 @pytest.mark.parametrize("registered", [_NAME_NFC, _NAME_NFD], ids=["登记NFC", "登记NFD"])
 @pytest.mark.parametrize("written", [_NAME_NFC, _NAME_NFD], ids=["出场NFC", "出场NFD"])
 def test_combining_char_speaker_binds_audio_in_every_encoding_pairing(registered: str, written: str):
-    """组合字符角色名的四种 NFC/NFD 配对绑定结果一致：不得因编码形式差异静默降级。
+    """The four NFC/NFD pairings of a combining-character name give the same binding result: no silent
+    degradation due to encoding-form differences.
+
+    Neither the "unregistered" nor the "no usable audio" warning is sent; they do not block generation,
+    and missing one means the user gets a final cut without the voice bound, rather than an error they
+    can investigate.
+
+    组合字符角色名的四种 NFC/NFD 配对绑定结果一致：不得因编码形式差异静默降级。
 
     「未登记」与「无可用音频」两条 warning 都不发——它们不阻断生成，漏发的后果是用户拿到
     一条没绑上音色的成片，而不是一个能排查的报错。
@@ -357,6 +419,8 @@ def test_combining_char_speaker_binds_audio_in_every_encoding_pairing(registered
     )
     assert keys(preview) == []
 
+    # Execution-layer rule: audio_ready is built by resolve_reference_audio_paths keyed by the asset table,
+    # which may likewise be in either form
     # 执行层口径：audio_ready 由 resolve_reference_audio_paths 按资产表的 key 建，同样可能是任一形式
     bindings = derive_voice_bindings(
         preview.utterances,
@@ -375,7 +439,11 @@ def test_combining_char_speaker_binds_audio_in_every_encoding_pairing(registered
 
 
 def test_derive_voice_bindings_degrades_on_malformed_character_entry():
-    """执行层传入 ``audio_ready`` 时，角色条目非 dict（外部写坏 project.json）不得崩溃——
+    """When the execution layer passes ``audio_ready``, a non-dict character entry (project.json corrupted
+    externally) must not crash: audio_field_set just finds no value and degrades to "not set", rather
+    than letting ``.get`` raise AttributeError.
+
+    执行层传入 ``audio_ready`` 时，角色条目非 dict（外部写坏 project.json）不得崩溃——
     只是 audio_field_set 判定不到值，按「未设置」降级，而不是让 ``.get`` 抛 AttributeError。"""
     text = "开场。\n@[张三]：{我来了}"
     preview = build_script_preview(
@@ -390,7 +458,11 @@ def test_derive_voice_bindings_degrades_on_malformed_character_entry():
 
 
 def test_warn_speaker_audio_needs_image_when_backend_requires_per_image_attachment():
-    """纯画外 speaker（台词记号的 speaker 位不产生参考图）遇到要求逐图挂载音频的 backend
+    """A purely off-screen speaker (the speaker slot of a dialogue mark produces no reference image) meeting
+    a backend that requires per-image audio attachment (such as wan2.7-r2v) must get the same decision as
+    the execution layer: the preview must not show it bound while execution degrades.
+
+    纯画外 speaker（台词记号的 speaker 位不产生参考图）遇到要求逐图挂载音频的 backend
     （如 wan2.7-r2v）时须与执行层同一份判定：预览不能显示已绑定，执行时才降级。"""
     text = "@[张三]：{我来了}"
     preview = build_script_preview(
@@ -403,15 +475,22 @@ def test_warn_speaker_audio_needs_image_when_backend_requires_per_image_attachme
 
 
 def test_warn_speaker_audio_needs_image_when_image_clipped_by_reference_limit():
-    """执行层会先把 references 裁到能力上限再渲染（图片N 编号与实际发出的参考图严格等长），
+    """The execution layer trims references to the capability limit before rendering (图片N numbering has
+    exactly as many entries as reference images actually sent), so the preview must decide on the same
+    trim line; otherwise after an over-limit character's image is trimmed the preview would still show
+    audio bound, and execution would degrade.
+
+    执行层会先把 references 裁到能力上限再渲染（图片N 编号与实际发出的参考图严格等长），
     预览须按同一条裁剪线判定，否则超限角色的图被裁掉后预览仍显示音频已绑定，执行时才降级。"""
+    # Only when Zhang San is written in the description slot is a reference image derived; with a limit of 1
+    # only @[酒馆] stays, and Zhang San's image being trimmed is the sole cause of the warning.
     # 张三写在描述位上才会派生参考图；上限 1 只留 @[酒馆]，张三的图被裁掉才是告警的唯一致因。
     text = "@[酒馆] 内景，@[张三] 推门。\n@[张三]：{我来了}"
     preview = build_script_preview(
         text,
         PROJECT,
         VoiceRenderSettings(voice_consistency="native", max_reference_audio=3, requires_reference_image=True),
-        max_reference_images=1,  # 只留 @[酒馆]，张三的图被裁掉
+        max_reference_images=1,  # Only @[酒馆] is kept; Zhang San's image is trimmed / 只留 @[酒馆]，张三的图被裁掉
     )
     assert keys(preview) == [WARN_SPEAKER_AUDIO_NEEDS_IMAGE]
     assert preview.warnings[0]["params"] == {"name": "张三"}
@@ -436,7 +515,10 @@ def test_warn_silent_model_notice():
 
 
 def test_silent_model_notice_skips_a_voiceover_only_script():
-    """无归属旁白整段不进 prompt，「台词仅用于提示词参考」对纯旁白文稿会指错排查方向。"""
+    """Unattributed narration never enters the prompt, so "dialogue is only used as prompt reference" would
+    point the investigation in the wrong direction for a pure narration script.
+
+    无归属旁白整段不进 prompt，「台词仅用于提示词参考」对纯旁白文稿会指错排查方向。"""
     preview = build_script_preview(
         "开场。\n{那年冬天格外冷}",
         PROJECT_WITHOUT_SCENES,
@@ -446,7 +528,10 @@ def test_silent_model_notice_skips_a_voiceover_only_script():
 
 
 def test_silent_model_notice_covers_an_unregistered_speaker():
-    """未登记说话人的台词按原文照常渲染，仍要知会它只当提示词参考。"""
+    """Dialogue from an unregistered speaker is rendered from the original text as usual, and it must still
+    be noted that it is only a prompt reference.
+
+    未登记说话人的台词按原文照常渲染，仍要知会它只当提示词参考。"""
     preview = build_script_preview(
         "开场。\n@[路人]：{我也在}",
         PROJECT_WITHOUT_SCENES,
@@ -462,11 +547,14 @@ def test_silent_model_notice_not_emitted_without_any_utterance():
     assert preview.warnings == []
 
 
-# ---------- 本集无声（requested_generate_audio=False） ----------
+# ---------- Silent episode (requested_generate_audio=False) / 本集无声（requested_generate_audio=False） ----------
 
 
 def test_silent_episode_drops_audio_bindings_on_native_model():
-    """无声开关关掉后，A 类模型也不再绑定参考音频——请求里不会带音频段。"""
+    """With the silence switch off, class A models no longer bind reference audio either: the request
+    carries no audio clips.
+
+    无声开关关掉后，A 类模型也不再绑定参考音频——请求里不会带音频段。"""
     text = "开场。\n@[张三]：{我来了}"
     bindings = derive_voice_bindings(
         derive_utterances(text)[0],
@@ -479,7 +567,10 @@ def test_silent_episode_drops_audio_bindings_on_native_model():
 
 
 def test_silent_episode_notice_replaces_per_speaker_audio_warnings():
-    """无声时不再逐角色报「未设参考音频」——原因是本集无声，不是角色没配音频。"""
+    """When silent, "no reference audio set" is no longer reported per character: the reason is that this
+    episode is silent, not that the character lacks audio.
+
+    无声时不再逐角色报「未设参考音频」——原因是本集无声，不是角色没配音频。"""
     text = "开场。\n@[张三]：{我来了}\n@[李四]：{我也在}"
     preview = build_script_preview(
         text, PROJECT_WITHOUT_SCENES, VoiceRenderSettings(voice_consistency="native", requested_generate_audio=False)
@@ -507,7 +598,10 @@ def test_silent_episode_notice_not_emitted_without_any_utterance():
 
 
 def test_silent_episode_keeps_utterances_for_lip_sync():
-    """台词照常派生：无声视频里台词仍下发，供应商可用作口型参考。"""
+    """Dialogue is derived as usual: in a silent video dialogue is still sent, and the provider can use it
+    as a lip-sync reference.
+
+    台词照常派生：无声视频里台词仍下发，供应商可用作口型参考。"""
     preview = build_script_preview(
         "开场。\n@[张三]：{我来了}",
         PROJECT,
@@ -549,6 +643,8 @@ def test_warning_messages_render_in_all_locales(locale: str, key: str):
     assert key in MESSAGES[locale]
     text = _(key, locale=locale, **WARNING_PARAMS[key])
     assert text != key
+    # All placeholders are replaced (the escaped example syntax `{{台词}}` renders as literal braces and does
+    # not count as a leftover placeholder)
     # 占位符全部被替换（转义的示例语法 `{{台词}}` 渲染成字面花括号，不算残留占位符）
     for param in WARNING_PARAMS[key]:
         assert f"{{{param}}}" not in text

@@ -1,4 +1,7 @@
-"""删除或覆盖项目时仍在执行的任务放弃落盘：不写进同名的新项目，也不在已删除项目下留下残余目录。"""
+"""Tasks still running when a project is deleted or overwritten give up persisting: they write nothing into the new
+same-named project and leave no residual directory under the deleted project.
+
+删除或覆盖项目时仍在执行的任务放弃落盘：不写进同名的新项目，也不在已删除项目下留下残余目录。"""
 
 import asyncio
 import contextvars
@@ -75,6 +78,8 @@ async def test_task_running_when_project_replaced_leaves_no_trace(monkeypatch, d
                 new_project.update(_tree(project_dir))
 
         async def _delete_while_generating(_request: httpx.Request) -> httpx.Response:
+            # Delete, rebuild and overwrite import come from other requests, not in the task's execution context, and do not
+            # occupy the task's event loop.
             # 删除、重建与覆盖导入来自别的请求，不在任务的执行上下文里，也不占任务所在的事件循环。
             await asyncio.to_thread(contextvars.Context().run, _replace)
             return httpx.Response(
@@ -89,6 +94,8 @@ async def test_task_running_when_project_replaced_leaves_no_trace(monkeypatch, d
                 executor=generation_tasks.execute_generation_task,
                 resume_executor=refuse_resume_execution,
             )
+            # The claimed slot matches the image lane provider of the fake generation context, so the execution entry check
+            # passes.
             # 认领槽与假生成上下文的 image lane provider 一致，执行入口核对放行。
             await worker._process_task(task, claimed_provider_id="openai")
 

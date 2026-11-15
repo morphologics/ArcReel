@@ -1,4 +1,6 @@
-"""per-shot 时长 → unit 时长的存量迁移。"""
+"""Migration of existing data from per-shot durations to unit durations.
+
+per-shot 时长 → unit 时长的存量迁移。"""
 
 from __future__ import annotations
 
@@ -36,7 +38,10 @@ class TestMigrateUnitDurations:
         assert "duration_override" not in units[0]
 
     def test_manual_duration_wins_over_shot_sum(self):
-        """收编前 override 单元的 duration_seconds 就是用户手填的申请秒数，迁移不得被镜头值改写。"""
+        """Before consolidation, an override unit's duration_seconds is the seconds the user requested by hand; migration must
+        not overwrite it with shot values.
+
+        收编前 override 单元的 duration_seconds 就是用户手填的申请秒数，迁移不得被镜头值改写。"""
         unit = _legacy_unit(shots=[1], duration_seconds=12, duration_override=True)
         changed, _warnings = migrate_unit_durations([unit])
         assert changed is True
@@ -48,14 +53,20 @@ class TestMigrateUnitDurations:
         assert unit["duration_seconds"] == 10
 
     def test_clamps_out_of_range_sum_with_warning(self):
-        """结构区间只兜脏数据量级；无档位时它是唯一的上界，超出即 clamp 并记 warning。"""
+        """The structural range only guards against dirty-data magnitudes; without duration options it is the only upper
+        bound, and exceeding it clamps and records a warning.
+
+        结构区间只兜脏数据量级；无档位时它是唯一的上界，超出即 clamp 并记 warning。"""
         unit = _legacy_unit(shots=[15, 15, 15, 15], duration_seconds=9999)
         _changed, warnings = migrate_unit_durations([unit])
         assert unit["duration_seconds"] == REFERENCE_UNIT_DURATION_RANGE[1]
         assert any("合理区间" in w.render(default_translate) for w in warnings)
 
     def test_keeps_durations_longer_than_four_shots_worth(self):
-        """unit 时长的合法性由档位判定，与镜头数无关：档位成员即便远大于各镜头之和也原样保留。"""
+        """Unit duration validity is decided by the duration options, independent of shot count: an option member is kept as
+        is even if far larger than the sum of the shots.
+
+        unit 时长的合法性由档位判定，与镜头数无关：档位成员即便远大于各镜头之和也原样保留。"""
         unit = _legacy_unit(shots=[15, 15], duration_seconds=120)
         _changed, warnings = migrate_unit_durations([unit], supported_durations=[8, 120])
         assert unit["duration_seconds"] == 120
@@ -88,7 +99,7 @@ class TestMigrateUnitDurations:
     def test_tolerates_dirty_shapes(self):
         units = ["not a dict", {"unit_id": "E1U1", "shots": "bad", "duration_override": False}]
         changed, _warnings = migrate_unit_durations(units)
-        assert changed is True  # duration_override 被剥离
+        assert changed is True  # duration_override is stripped / duration_override 被剥离
         assert migrate_unit_durations("not a list") == (False, [])
 
     def test_does_not_invent_duration_when_no_source(self):
@@ -142,6 +153,7 @@ class TestLoadScriptMigration:
         assert loaded["video_units"][0]["shots"] == [{"text": "镜头1"}, {"text": "镜头2"}]
         assert loaded["video_units"][0]["duration_seconds"] == 8
 
+        # The migration result is written to disk: a second load already reads the new format and does not trigger a rewrite
         # 迁移结果落盘：二次加载读到的已是新格式，不再触发改写
         on_disk = json.loads(script_path.read_text(encoding="utf-8"))
         assert "duration" not in on_disk["video_units"][0]["shots"][0]
@@ -151,7 +163,9 @@ class TestLoadScriptMigration:
         assert script_path.stat().st_mtime_ns == mtime
 
     def test_migration_does_not_touch_metadata_timestamps(self, tmp_path: Path):
-        """迁移只做格式收编，不应刷新 updated_at 或写入 metadata（那是保存路径的职责）。"""
+        """Migration only consolidates format; it must not refresh updated_at or write metadata (that is the save path's job).
+
+        迁移只做格式收编，不应刷新 updated_at 或写入 metadata（那是保存路径的职责）。"""
         pm, _script = _write_legacy_project(tmp_path)
         loaded = pm.load_script("demo", "episode_1.json")
         assert "metadata" not in loaded
@@ -164,7 +178,10 @@ class TestLoadScriptMigration:
             assert all("duration" not in s for s in unit["shots"])
 
     def test_already_migrated_load_takes_no_script_lock(self, tmp_path: Path):
-        """收编完成后读剧本回到无锁路径：迁移不应给每次读盘都加上一把排他锁。"""
+        """After consolidation, reading a script returns to the lock-free path: migration must not add an exclusive lock to
+        every disk read.
+
+        收编完成后读剧本回到无锁路径：迁移不应给每次读盘都加上一把排他锁。"""
         pm, _script = _write_legacy_project(tmp_path)
         scripts_dir = tmp_path / "projects" / "demo" / "scripts"
         pm.load_script("demo", "episode_1.json")
@@ -174,7 +191,9 @@ class TestLoadScriptMigration:
         assert not (scripts_dir / ".episode_1.json.lock").exists()
 
     def test_missing_script_fails_before_creating_lock_artifacts(self, tmp_path: Path):
-        """剧本不存在时照旧 fail-loud，且不为一次落空的读盘留下目录与锁文件。"""
+        """A missing script still fails loud, and leaves no directory or lock file behind for a read that found nothing.
+
+        剧本不存在时照旧 fail-loud，且不为一次落空的读盘留下目录与锁文件。"""
         pm, _script = _write_legacy_project(tmp_path)
         project_dir = tmp_path / "projects" / "demo"
         with pytest.raises(FileNotFoundError):

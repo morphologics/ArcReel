@@ -7,7 +7,7 @@ from lib.script.source_loader.txt import TxtExtractor, decode_txt
 
 
 def test_decode_utf8_bom():
-    raw = b"\xef\xbb\xbf\xe4\xbd\xa0\xe5\xa5\xbd"  # "你好"
+    raw = b"\xef\xbb\xbf\xe4\xbd\xa0\xe5\xa5\xbd"  # "Hello" / "你好"
     text, enc = decode_txt(raw)
     assert text == "你好"
     assert enc == "utf-8-sig"
@@ -40,7 +40,7 @@ def test_decode_gbk_via_charset_normalizer():
     raw = ("第一章 起点。" * 50).encode("gbk")
     text, enc = decode_txt(raw)
     assert "起点" in text
-    # charset-normalizer 通常返回 gbk / gb18030 / cp936 之一
+    # charset-normalizer usually returns one of gbk / gb18030 / cp936 / charset-normalizer 通常返回 gbk / gb18030 / cp936 之一
     assert enc
     assert enc.lower() in {"gbk", "gb18030", "cp936"}
 
@@ -54,6 +54,9 @@ def test_decode_big5_via_charset_normalizer():
 
 
 def test_decode_random_bytes_raises():
+    # Use pseudo-random bytes with a fixed seed: charset-normalizer cannot give a confident result,
+    # and the gb18030 errors='replace' fallback also produces � far above the 5% threshold, triggering
+    # SourceDecodeError.
     # 使用固定种子的伪随机字节：charset-normalizer 无法给出可信结果，
     # gb18030 errors='replace' 兜底也会产生远高于 5% 阈值的 \ufffd，触发 SourceDecodeError。
     rng = random.Random(42)
@@ -68,6 +71,8 @@ def test_decode_clean_gb18030_without_replacements():
     # Short, very few sinograms — charset-normalizer may not be confident
     # (chaos >= 0.5 → falls through to gb18030 fallback). Decoding should
     # still succeed cleanly (no \ufffd) and be labeled "gb18030" (not "-lossy").
+    # Use a GB18030 4-byte sequence (U+20000 "𠀀") to avoid GBK/Big5 misdetection;
+    # it is either correctly detected as gb18030 by charset-normalizer or goes straight to the clean gb18030 fallback.
     # 使用 GB18030 4 字节序列（U+20000 "𠀀"），绕过 GBK/Big5 的误检，
     # 要么被 charset-normalizer 正确识别为 gb18030，要么直接走 gb18030 干净兜底。
     raw = "𠀀".encode("gb18030")
@@ -81,6 +86,8 @@ def test_decode_clean_gb18030_without_replacements():
 
 def test_extractor_writes_via_decode(tmp_path):
     src = tmp_path / "novel.txt"
+    # The sample must be long enough and have a realistic Chinese distribution for charset-normalizer to
+    # reliably detect the gbk family
     # 样本需足够长且具备真实中文分布，charset-normalizer 才能稳定识别为 gbk 系列
     src.write_bytes(("第一章 内容起点。" * 50).encode("gbk"))
     result = TxtExtractor().extract(src)

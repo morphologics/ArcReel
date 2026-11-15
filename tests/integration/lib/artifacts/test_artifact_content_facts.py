@@ -1,4 +1,7 @@
-"""视频与音频产物登记时记下正式文件自身的内容事实：内容指纹、字节数与纳秒 mtime。"""
+"""When video and audio artifacts are registered, record content facts of the canonical file itself: content
+fingerprint, byte count and nanosecond mtime.
+
+视频与音频产物登记时记下正式文件自身的内容事实：内容指纹、字节数与纳秒 mtime。"""
 
 from __future__ import annotations
 

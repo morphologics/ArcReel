@@ -20,7 +20,10 @@ class TestPromptPreviewEndpoint:
         return fake_pm
 
     def test_returns_both_sides_with_unavailable_reason_rendered(self, tmp_path, monkeypatch):
-        """两侧各自作答：可渲染的给文本，不可渲染的给已翻译成品文案，不整体失败。"""
+        """Each side answers on its own: the renderable one gives text, the unrenderable one gives a translated finished
+        message; it does not fail as a whole.
+
+        两侧各自作答：可渲染的给文本，不可渲染的给已翻译成品文案，不整体失败。"""
 
         async def _preview(project_name: str, script_file: str, item_id: str) -> ItemPromptPreview:
             assert (project_name, script_file, item_id) == ("ready", "episode_1.json", "E1S01")
@@ -54,11 +57,15 @@ class TestPromptPreviewEndpoint:
             "text": "Style: Anime\n\n最终提示词",
             "unavailable": None,
             "is_text_form": True,
+            # Hints at render time follow the same rule as unavailable reasons: rendered into finished text in the request
+            # language, not pushing raw keys to the frontend
             # 渲染时的提示与不可用原因同口径：按请求语言渲染成成品文案，不把裸 key 推给前端
             "warnings": ["参考图数量 8 超出 Vidu Q2 Image 上限 7，已取前 7 张"],
         }
         assert body["video"]["text"] is None
         assert body["video"]["warnings"] == []
+        # The unavailable reason is finished text rendered by the backend in the request language, not a raw key pushed to
+        # the frontend
         # 不可用原因是后端按请求语言渲染的成品文案，不把裸 key 推给前端
         assert body["video"]["unavailable"] == "该分镜还没有填写提示词"
 

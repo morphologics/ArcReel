@@ -1,4 +1,15 @@
-"""定向测试选择含不存在的路径时，根 conftest 在收集前报用法错误。
+"""When a targeted test selection contains a nonexistent path, the root conftest reports a usage error before
+collection.
+
+Without -n, pytest has its own "file or directory not found"; under xdist the controller only aggregates
+worker results, so the missing path is dropped together with the real files in the same batch, leaving only
+"no tests ran" and exit code 5. Both modes must terminate with exit code 4 and a clear error line, and real
+files must not be silently run either. Under ``--pyargs`` positional args are judged as module names:
+existing modules are collected as usual, while missing modules, namespace packages when
+``consider_namespace_packages`` is off, and selections empty before ``::`` (such as ``::test_x``) also error
+before collection.
+
+定向测试选择含不存在的路径时，根 conftest 在收集前报用法错误。
 
 不带 -n 时 pytest 自带「file or directory not found」；xdist 下 controller 只汇总 worker
 结果，缺失路径与同批真实文件一起被丢，只剩「no tests ran」与退出码 5。两种模式都要

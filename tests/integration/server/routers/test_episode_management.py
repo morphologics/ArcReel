@@ -1,4 +1,6 @@
-"""集管理的 Web 入口：新建、调序与删除一集。"""
+"""Web entry for episode management: create, reorder and delete an episode.
+
+集管理的 Web 入口：新建、调序与删除一集。"""
 
 from pathlib import Path
 
@@ -106,6 +108,7 @@ def test_a_restored_cut_episode_comes_back_at_the_end_with_its_range_text_as_its
     assert entry["source_origin"] == "own"
     assert "source_range" not in entry
     assert (source_dir / "episode_1.txt").read_text(encoding="utf-8") == NOVEL[0:5]
+    # The original range stays as unsplit source text; the whole source is unchanged
     # 原范围留作未切分的原文，整本源文没有被改动
     assert (source_dir / "novel.txt").read_text(encoding="utf-8") == NOVEL
     layout = build_episode_layout(pm.get_project_path("demo"), pm.load_project("demo"))

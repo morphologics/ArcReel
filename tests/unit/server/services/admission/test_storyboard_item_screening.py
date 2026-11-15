@@ -1,4 +1,6 @@
-"""分镜图生视频的剧本条目筛查：成不了目标的条目按记名拒收，不被静默滤掉，也不打断整批。"""
+"""Screening script entries for storyboard-to-video: entries that cannot become targets are refused by name, not silently filtered out, and do not interrupt the whole batch.
+
+分镜图生视频的剧本条目筛查：成不了目标的条目按记名拒收，不被静默滤掉，也不打断整批。"""
 
 from __future__ import annotations
 

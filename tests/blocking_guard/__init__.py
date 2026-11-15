@@ -1,4 +1,52 @@
-"""测试期的事件循环阻塞护栏：lib/server 代码在事件循环线程上的阻塞调用让用例失败。
+"""Event-loop blocking guard for tests: blocking calls made by lib/server code on the event-loop thread fail the test.
+
+Loaded by the root conftest's ``pytest_plugins`` and active for the whole session, covering both sync and async
+tests: the app code of a sync ``TestClient`` runs on the anyio portal thread's own event loop and is checked too.
+
+Detection borrows blockbuster's interception points (files, ``os``, socket, sqlite, ``time.sleep``, contended
+``threading.Lock``) and adds four kinds of lock waits: blocking-mode portalocker file locks (project file lock,
+generation-admission sync lock, etc.), the polling wait of the artifact manifest lock, and the version-management
+thread lock. Non-blocking try-locks are not violations.
+
+**Record, don't raise.** By default blockbuster raises ``BlockingError`` at an interception point; broad exception
+handling in business code swallows it (an inference failure falls back to a default, an executor records the
+exception as a task failure), and the violation disappears. Here each interception point's allow predicate is
+replaced with "judge, record, allow": the call proceeds as usual, the violation is recorded on the current test,
+and when the test reports each phase, violations not on the exemption list turn it into a failure. There is no
+other way to exempt.
+
+**Attribution.** Walking outward from the blocking point along the call stack, the first lib/server async function
+is the violation entry (file + qualified name), even when the walk passes ``tests/`` frames: a test double that a
+lib/server async function calls reads and writes disk under ``tests/``, and with the production dependency the same
+place blocks the event loop just the same. When the double itself does I/O the production implementation would not,
+make the double an in-memory implementation. When the whole stack has no lib/server async frame, passing through a
+``tests/`` frame means the test itself drives the blocking (the test calls sync lib code directly) and it does not
+count; otherwise it is a sync function called back directly by the event loop, and the outermost lib/server frame
+is taken. A ``to_thread`` inlined in a test runs on a worker thread and is not checked anyway.
+
+**Always allowed**: writing logs to disk, traceback reading source lines, ``realpath`` resolving symlinks, deferred
+imports inside functions, asyncpg parsing connection parameters when connecting, coverage waiting for its own data
+lock while recording coverage data, and the bodies of module-level unbounded caches (``functools.cache``) or
+parameterless cached loaders. The last two run only once per process, and which test hits the first call depends
+on scheduling order; functions with a bounded, per-argument cache get evicted and re-read, so they are not allowed.
+
+**Stack preview.** The error lists lib/server/tests frames, and additionally keeps, in real call order, the
+innermost few non-repo frames (stdlib, third-party packages) between the interception point and the first repo
+frame; when the blocking is triggered by non-repo code invoked at a business-code await, they show who it was.
+
+The permanent exemption list ``exemptions.toml`` holds only one-off blocking on the app startup and shutdown paths,
+each with a stated reason. At the end of a full run (no selection or filtering), entries on the exemption list that
+were not triggered make the session fail; with ``--blocking-guard-expect-all-exemptions`` a filtered run does the
+same (in CI only the unit job passes it): when the startup and shutdown paths change, delete the matching entries
+along with them.
+
+**Known limits.** The unbounded-cache allowance cannot tell a fixed key set from keys that grow with input: the
+latter block once per new key, which review must catch by the rule "the event-loop thread only schedules". The
+guard only covers paths the tests run: routes without tests, or routes whose tests replace the whole file system
+with a double, still let blocking slip through; when adding tests for such routes, keep the real-I/O step in the
+double.
+
+测试期的事件循环阻塞护栏：lib/server 代码在事件循环线程上的阻塞调用让用例失败。
 
 由根 conftest 的 ``pytest_plugins`` 加载，会话内全程启用，同步与异步用例都覆盖：同步
 ``TestClient`` 的应用代码跑在 anyio portal 线程自己的事件循环上，同样受检。
@@ -67,6 +115,7 @@ _GUARD_DIR = str(Path(__file__).resolve().parent) + os.sep
 _GUARD_MODULE = __name__
 _LOGGING_DIR = str(Path(logging.__file__).resolve().parent) + os.sep
 _BLOCKBUSTER_DIR = str(Path(blockbuster.__file__).resolve().parent) + os.sep
+# Non-repo frames drop these prefixes in the preview, keeping only the path relative to the package or stdlib.
 # 非仓库帧在预览里去掉这些前缀，只留包内或标准库内的相对路径。
 _STDLIB_DIRS = tuple(
     sorted(
@@ -80,6 +129,22 @@ _STDLIB_DIRS = tuple(
     )
 )
 
+# Frames allowed on any stack, unrelated to business blocking: writing logs to disk, traceback reading source lines,
+# deferred imports inside functions.
+# realpath lstat()s segment by segment (not an interception point) and only calls readlink when the path goes through
+# a symlink: the macOS temp dir lives under /var -> /private/var and Linux's does not, so without allowing it the same
+# code would violate only on macOS.
+# When parsing connection parameters, asyncpg probes ~/.pgpass and the certificate files under ~/.postgresql on the
+# event loop, once per new connection. The violation would be charged to whichever caller happened to make the pool
+# open a new connection, varying with run order, and it only shows up under PostgreSQL; violations that only show up
+# under PostgreSQL are invisible in SQLite runs.
+# Each time coverage's tracer enters or resumes a traced frame, it acquires its own data lock blocking via lock_data
+# (the lock exists only when concurrency includes thread); when a tracer on a worker thread happens to hold the lock,
+# the event-loop thread waits for it. The violation lands on an arbitrary traced coroutine depending on thread
+# interleaving, commonly the generation-queue worker main loop at the moment it resumes at an await; this lock only
+# exists in coverage runs and not on production paths. Only this one path through lock_data is allowed; a
+# lock.acquire without lock_data on the stack is still recorded as a violation, and the non-repo frame taking the lock
+# is shown in the stack preview.
 # 与业务阻塞无关、在任何栈上都放行的帧：日志落盘、traceback 取源码行、函数内延迟 import。
 # realpath 逐段 lstat（不在拦截点内），只有路径经过符号链接时才 readlink：macOS 的临时目录
 # 在 /var -> /private/var 之下，Linux 不是，不放行会让同一段代码只在 macOS 上违规。
@@ -101,6 +166,9 @@ _ALWAYS_ALLOWED_FRAMES: tuple[tuple[str, frozenset[str] | None], ...] = (
     ("coverage/collector.py", frozenset({"lock_data"})),
 )
 
+# The two budgets of the stack preview do not crowd each other out: at most this many repo frames (lib/server/tests),
+# enough to see the caller; the non-repo frames between the interception point and the first repo frame get their own
+# innermost few, enough to see what actually blocked, with the number of omitted frames noted.
 # 栈预览的两份预算互不挤占：仓库帧（lib/server/tests）至多这么多条，看得出调用方；拦截点到第一个
 # 仓库帧之间的非仓库帧另取最内层的几条，看得出阻塞的到底是谁，超出的注明省略条数。
 _REPO_PREVIEW_FRAMES = 6
@@ -109,7 +177,9 @@ _NON_REPO_PREVIEW_FRAMES = 4
 
 @dataclass(frozen=True, slots=True)
 class Violation:
-    """一次被拦截的阻塞调用。"""
+    """One intercepted blocking call.
+
+    一次被拦截的阻塞调用。"""
 
     key: str
     call: str
@@ -119,7 +189,9 @@ class Violation:
 
 @dataclass(slots=True)
 class BlockingGuard:
-    """会话级状态：拦截点、待结算的违规与豁免清单的触发情况。"""
+    """Session-level state: interception points, violations pending settlement, and which exemptions were triggered.
+
+    会话级状态：拦截点、待结算的违规与豁免清单的触发情况。"""
 
     root: Path
     exemptions: dict[str, str]
@@ -136,10 +208,13 @@ class BlockingGuard:
         self.scanned_prefixes = tuple(str(self.root / name) + os.sep for name in SCANNED_DIRS)
         self.tests_prefix = str(self.root / TESTS_DIR) + os.sep
 
+    # ------------------------------------------------------------------ Start/stop
     # ------------------------------------------------------------------ 启停
 
     def activate(self) -> None:
         blockbuster = BlockBuster()
+        # abspath of an absolute path only normalizes the string and does not touch the file system; only relative paths read
+        # cwd.
         # 绝对路径的 abspath 只做字符串规范化，不碰文件系统；相对路径才会读 cwd。
         blockbuster.functions["os.path.abspath"].can_block_predicate = _absolute_path_arg
         self._blockbuster = blockbuster
@@ -156,6 +231,7 @@ class BlockingGuard:
         while self._restore:
             self._restore.pop()()
 
+    # ------------------------------------------------------------------ Recording
     # ------------------------------------------------------------------ 记录
 
     def _recording_predicate(self, function: BlockBusterFunction) -> Callable[..., bool]:
@@ -164,6 +240,8 @@ class BlockingGuard:
         call = function.full_name
 
         def predicate(*args: Any, **kwargs: Any) -> bool:
+            # blockbuster only gets here when the current thread has a running event loop, and suppresses nested interception
+            # during the predicate; returning True allows the original call, so this only judges and records, never raises.
             # blockbuster 只在当前线程有运行中的事件循环时才走到这里，并在谓词期间
             # 屏蔽了嵌套拦截；返回 True 即放行原调用，所以这里只判定和记录，从不抛错。
             if not allowed(*args, **kwargs):
@@ -189,6 +267,8 @@ class BlockingGuard:
             if _is_guard_frame(candidate):
                 continue
             if self._is_tests_frame(candidate):
+                # Frames of doubles and test helpers do not end the search: if there is a lib/server async function further out, the
+                # same place would block the event loop with production dependencies too, so it is charged to that function.
                 # 替身、测试辅助函数的帧不终止查找：外层若有 lib/server 的 async 函数，
                 # 换成生产依赖后同一位置同样阻塞事件循环，照样记到它名下。
                 driven_by_tests = True
@@ -199,6 +279,9 @@ class BlockingGuard:
                     break
                 outermost_scanned = candidate
         if key is None:
+            # No lib/server async function wraps the blocking point: passing through a tests/ frame means the test itself drives it
+            # (the test calls sync lib code directly), so it does not count; otherwise it is a sync function called back directly
+            # by the event loop, and the outermost frame is taken.
             # 没有 lib/server 的 async 函数包住阻塞点：经过 tests/ 帧说明由测试自身驱动
             # （测试直接调同步 lib 代码），不计；否则是事件循环直接回调的同步函数，取最外层。
             if outermost_scanned is None or driven_by_tests:
@@ -208,7 +291,10 @@ class BlockingGuard:
         self.pending.append(Violation(key, call, threading.current_thread().name, self._stack_preview(frames)))
 
     def _stack_preview(self, frames: list[FrameType]) -> tuple[str, ...]:
-        """由内向外的栈预览：拦截点到第一个仓库帧之间最内层的非仓库帧，接着是仓库帧。"""
+        """Stack preview from inside out: the innermost non-repo frames between the interception point and the first repo
+        frame, followed by the repo frames.
+
+        由内向外的栈预览：拦截点到第一个仓库帧之间最内层的非仓库帧，接着是仓库帧。"""
         non_repo: list[FrameType] = []
         repo: list[FrameType] = []
         for frame in frames:
@@ -238,6 +324,8 @@ class BlockingGuard:
         return self._relpath(filename)
 
     def _is_tests_frame(self, frame: FrameType) -> bool:
+        # Module-name fallback: pytest's assertion-rewrite cache does not fix co_filename, so paths do not match when the cache
+        # is reused across machines.
         # 模块名兜底：pytest 断言重写的缓存不修正 co_filename，跨机器复用缓存时路径对不上。
         return frame.f_code.co_filename.startswith(self.tests_prefix) or frame.f_globals.get("__name__", "").startswith(
             f"{TESTS_DIR}."
@@ -249,10 +337,14 @@ class BlockingGuard:
     def _key(self, frame: FrameType) -> str:
         return f"{self._relpath(frame.f_code.co_filename)}::{frame.f_code.co_qualname}"
 
+    # ------------------------------------------------------------------ Settlement
     # ------------------------------------------------------------------ 结算
 
     def settle(self) -> list[Violation]:
-        """取走待结算的违规，登记豁免的触发情况，返回豁免之外的部分。"""
+        """Take the violations pending settlement, record which exemptions were triggered, and return the part outside the
+        exemptions.
+
+        取走待结算的违规，登记豁免的触发情况，返回豁免之外的部分。"""
         drained, self.pending[:] = list(self.pending), []
         unexpected = []
         for violation in drained:
@@ -270,7 +362,14 @@ def _is_guard_frame(frame: FrameType) -> bool:
 
 
 def _runs_once_per_process(frame: FrameType) -> bool:
-    """帧是否是模块级、每个进程按参数只执行一次的缓存加载器的函数体。
+    """Whether the frame is the body of a module-level cached loader that runs once per process per argument.
+
+    Such loaders (packaged schemas, rule tables) are like deferred imports inside functions: which test hits the first
+    call depends on xdist scheduling, and without allowing them violations would appear or vanish with run order. Only
+    unbounded ``functools.cache`` (``lru_cache(maxsize=None)``) and parameterless functions are recognized: functions
+    with a bounded, per-argument cache get evicted and re-read, and every re-read is a real blocking call.
+
+    帧是否是模块级、每个进程按参数只执行一次的缓存加载器的函数体。
 
     这类加载器（随包分发的 schema、规则表）与函数内的延迟 import 同类，首次调用落在哪个用例
     取决于 xdist 的调度，不放行会让违规随运行顺序出现或消失。只认无上限的 ``functools.cache``
@@ -303,11 +402,18 @@ def _frame_allowed(filename: str, function: str, allowed_frames: Iterable[tuple[
     return any(normalized.endswith(suffix) and function in names for suffix, names in allowed_frames)
 
 
+# ---------------------------------------------------------------------- Lock rules
 # ---------------------------------------------------------------------- 锁规则
 
 
 class _WatchedRLock:
-    """包住版本管理的 ``RLock``，让 ``with`` 加锁经过可拦截的 Python 层 ``acquire``。
+    """Wrap version management's ``RLock`` so that ``with`` locking goes through an interceptable Python-level
+    ``acquire``.
+
+    The C implementation of ``RLock.__enter__`` does not go through the ``acquire`` attribute, and blockbuster's lock
+    rules do not cover RLock either.
+
+    包住版本管理的 ``RLock``，让 ``with`` 加锁经过可拦截的 Python 层 ``acquire``。
 
     C 实现的 ``RLock.__enter__`` 不走 ``acquire`` 属性，blockbuster 的锁规则也不覆盖 RLock。
     """
@@ -331,7 +437,10 @@ class _WatchedRLock:
 
 
 def _lock_rules(restore: list[Callable[[], None]]) -> list[BlockBusterFunction]:
-    """项目文件锁、生成准入锁、产物清单锁、版本管理锁的阻塞等待规则。"""
+    """Blocking-wait rules for the project file lock, generation-admission lock, artifact manifest lock and
+    version-management lock.
+
+    项目文件锁、生成准入锁、产物清单锁、版本管理锁的阻塞等待规则。"""
     import portalocker
     import portalocker.portalocker as portalocker_impl
 
@@ -344,12 +453,16 @@ def _lock_rules(restore: list[Callable[[], None]]) -> list[BlockBusterFunction]:
     def rlock_nonblocking(_lock: object, blocking: bool = True, timeout: float = -1) -> bool:
         return not blocking or timeout == 0
 
+    # The version-management lock caches an RLock per versions.json path; swap in an interceptable wrapper at the factory,
+    # and instances still share the same lock.
     # 版本管理锁按 versions.json 路径缓存 RLock；从工厂处换成可拦截的包装，实例照旧共享同一把锁。
     original_factory = version_manager._get_versions_file_lock
 
     watched: dict[int, _WatchedRLock] = {}
 
     def watched_factory(versions_file: Path) -> Any:
+        # The original factory caches per path and never releases, so the same lock has a stable id; the wrapper is likewise
+        # reused per lock, keeping "same file, same lock".
         # 原工厂按路径缓存且从不释放，同一把锁的 id 稳定；包装同样按锁复用，保持「同一文件同一把锁」。
         lock = original_factory(versions_file)
         return watched.setdefault(id(lock), _WatchedRLock(lock))
@@ -358,6 +471,8 @@ def _lock_rules(restore: list[Callable[[], None]]) -> list[BlockBusterFunction]:
     restore.append(lambda: setattr(version_manager, "_get_versions_file_lock", original_factory))
 
     rules = [
+        # The project file lock, ProjectManager.file_lock and the generation-admission sync lock all end up in flock via
+        # portalocker's blocking mode.
         # 项目文件锁、ProjectManager.file_lock、生成准入的同步锁都经 portalocker 阻塞模式落到 flock。
         (
             "文件锁（portalocker 阻塞模式）",
@@ -367,6 +482,8 @@ def _lock_rules(restore: list[Callable[[], None]]) -> list[BlockBusterFunction]:
             "文件锁（portalocker 阻塞模式）",
             BlockBusterFunction(portalocker_impl, "lock", can_block_predicate=portalocker_nonblocking),
         ),
+        # The artifact manifest lock polls with a non-blocking try plus time.sleep, waiting at most 10 seconds; entering it is
+        # one lock wait.
         # 产物清单锁以非阻塞尝试加 time.sleep 轮询，最长等 10 秒；进入它就是一次锁等待。
         ("产物清单锁（轮询等待）", BlockBusterFunction(ProjectArtifactManifestAdapter, "_locked")),
         ("版本管理锁（RLock）", BlockBusterFunction(_WatchedRLock, "acquire", can_block_predicate=rlock_nonblocking)),
@@ -376,6 +493,7 @@ def _lock_rules(restore: list[Callable[[], None]]) -> list[BlockBusterFunction]:
     return [function for _, function in rules]
 
 
+# ---------------------------------------------------------------------- Exemption list
 # ---------------------------------------------------------------------- 清单
 
 
@@ -393,6 +511,7 @@ def load_exemptions(root: Path) -> dict[str, str]:
     return exemptions
 
 
+# ---------------------------------------------------------------------- pytest hooks
 # ---------------------------------------------------------------------- pytest 钩子
 
 _GUARD_KEY = pytest.StashKey[BlockingGuard]()
@@ -417,12 +536,15 @@ def _is_xdist_controller(config: pytest.Config) -> bool:
 
 
 def _executes_tests(config: pytest.Config) -> bool:
+    # --collect-only/--setup-only/--setup-plan do not run tests and cannot record any violation.
     # --collect-only/--setup-only/--setup-plan 不执行用例，记录不到任何违规。
     return not any(getattr(config.option, name, None) for name in ("collectonly", "setuponly", "setupplan"))
 
 
 def _selects_whole_suite(config: pytest.Config) -> bool:
-    """命令行是否选中了整个 testpaths 且没有任何筛选。"""
+    """Whether the command line selects all of testpaths without any filtering.
+
+    命令行是否选中了整个 testpaths 且没有任何筛选。"""
     root = config.rootpath.resolve()
     targets = {root, *((root / p).resolve() for p in config.getini("testpaths"))}
     for arg in config.args:
@@ -432,6 +554,8 @@ def _selects_whole_suite(config: pytest.Config) -> bool:
         resolved = (path if path.is_absolute() else config.invocation_params.dir / path).resolve()
         if resolved not in targets:
             return False
+    # --ignore/--ignore-glob skip paths at collection time; they neither change config.args nor go through
+    # pytest_deselected.
     # --ignore/--ignore-glob 在收集期跳过路径，既不改 config.args，也不经过 pytest_deselected。
     filters = ("keyword", "markexpr", "lf", "stepwise", "testmon", "deselect", "ignore", "ignore_glob")
     return not any(getattr(config.option, name, None) for name in filters)
@@ -532,6 +656,8 @@ def pytest_testnodedown(node: Any, error: object) -> None:
 
 
 def _finish(config: pytest.Config, session: pytest.Session, totals: _SessionTotals) -> None:
+    # The explicit option declares "this batch of tests should trigger every exemption"; filtered-out tests do not affect
+    # the verdict.
     # 显式选项声明「这批用例应触发每一条豁免」，筛选掉的用例不影响判定。
     complete = (
         (totals.expect_all or (totals.full_run and totals.deselected == 0))

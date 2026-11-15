@@ -1,4 +1,6 @@
-"""节点绑定推断规则表的数据契约。"""
+"""Data contract of the node binding inference rule tables.
+
+节点绑定推断规则表的数据契约。"""
 
 import json
 
@@ -17,6 +19,8 @@ from lib.custom_provider.comfyui.inference_rules import (
     semantic_key_names,
 )
 
+#: Sections that are word-for-word identical in both rule tables: they are facts about node types, independent
+#: of whether the output is an image or a video.
 #: 两份规则表里逐字相同的几节：它们是节点类型的事实，与产图还是产视频无关。
 SHARED_SECTIONS = (
     "constant_nodes",
@@ -41,13 +45,23 @@ def test_shipped_rules_pass_their_schema(media_type):
 
 @pytest.mark.parametrize("section", SHARED_SECTIONS)
 def test_node_type_facts_are_identical_across_both_rule_files(section):
-    """与媒体类型无关的几节不得漂移：同一个节点不会因为端点产图还是产视频而改变形状。"""
+    """Sections independent of media type must not drift: the same node does not change shape depending on
+    whether the endpoint produces images or videos.
+
+    与媒体类型无关的几节不得漂移：同一个节点不会因为端点产图还是产视频而改变形状。"""
     assert read("image")[section] == read("video")[section]
 
 
 @pytest.mark.parametrize("media_type", sorted(RULES_PATHS))
 def test_every_adjustable_input_comes_from_one_of_the_two_tables(media_type):
-    """张数变少时改得动的入口只有两种：可选入口摘键、两两合并节点 bypass。
+    """When fewer images are given, only two kinds of inputs can be adjusted: optional inputs drop their
+    key, and pairwise merge nodes are bypassed.
+
+    The inference hint "this slot cannot change the graph" and the request builder's "change the graph or
+    repeat-fill" read this same rule, which lives in the rule table instead of each keeping its own
+    table.
+
+    张数变少时改得动的入口只有两种：可选入口摘键、两两合并节点 bypass。
 
     推断的「这个格子改不动图」提示与实发构造的「改图还是重复填充」读的是这同一条判据，它落在
     规则表上而不是各写一份表。
@@ -62,7 +76,14 @@ def test_every_adjustable_input_comes_from_one_of_the_two_tables(media_type):
 
 @pytest.mark.parametrize("media_type", sorted(RULES_PATHS))
 def test_minimax_h3_slots_are_adjustable(media_type):
-    """海螺 H3 的首尾帧与参考图槽位都是节点上的可选口。
+    """Hailuo H3's first/last frame and reference image slots are all optional ports on the node.
+
+    If not registered, the builder treats them as required inputs: with a missing first/last frame,
+    deleting the image-reading node cascades all the way to the artifact node; with fewer reference
+    images it falls back to repeat-filling the last one. Reference images are an autogrow port, so one
+    entry with the ``ref_images.ref_image_`` prefix registers all slots.
+
+    海螺 H3 的首尾帧与参考图槽位都是节点上的可选口。
 
     没登记就会被构造层当成必需输入——首尾帧少带时删读图节点会一路级联到产物节点，参考图少带时
     则退回重复填最后一张。参考图是 autogrow 口，按 ``ref_images.ref_image_`` 前缀一条登记全部槽位。
@@ -86,7 +107,10 @@ def test_a_prefixed_optional_input_only_matches_its_own_node_and_prefix(media_ty
 
 
 def test_minimax_h3_reference_slots_are_one_prefixed_entry_per_section():
-    """autogrow 口逐槽登记会随节点的槽数上限漂移，收敛成一条前缀条目。"""
+    """Registering autogrow ports slot by slot would drift with the node's slot limit; collapse them into
+    one prefixed entry.
+
+    autogrow 口逐槽登记会随节点的槽数上限漂移，收敛成一条前缀条目。"""
     video = read("video")
 
     assert [item for item in video["optional_inputs"] if item["class_type"] == "MiniMaxH3ReferenceToVideo"] == [
@@ -148,7 +172,10 @@ def test_the_schema_wants_exactly_one_of_input_and_input_prefix(section, entry):
 
 
 def test_prefix_forms_stay_out_of_the_other_node_input_sections():
-    """只有可选入口与消费口两节认前缀：读图节点等节点按精确入口名取值，前缀在那里没有意义。"""
+    """Only the optional-input and consumer-port sections accept prefixes: image readers and similar nodes
+    read values by exact input name, where a prefix has no meaning.
+
+    只有可选入口与消费口两节认前缀：读图节点等节点按精确入口名取值，前缀在那里没有意义。"""
     entry = {"class_type": "X", "input_prefix": "a_"}
 
     for section in ("image_loaders", "batch_size_inputs"):
@@ -165,7 +192,10 @@ def _with_entry(section: str, entry: dict) -> dict:
 
 @pytest.mark.parametrize("media_type", sorted(RULES_PATHS))
 def test_every_semantic_key_the_rules_mention_is_on_that_media_types_roster(media_type):
-    """规则表提到的键名都得在名录里：写错一个 schema 照样过，那一节规则却谁都读不到。"""
+    """Every key name the rule tables mention must be on the catalog: a typo would still pass the schema,
+    but nobody would ever read that rule section.
+
+    规则表提到的键名都得在名录里：写错一个 schema 照样过，那一节规则却谁都读不到。"""
     assert semantic_key_names(read(media_type)) <= set(BINDING_KEYS_BY_MEDIA_TYPE[media_type])
 
 
@@ -186,7 +216,9 @@ def test_a_mistyped_key_name_is_seen_wherever_a_section_names_one(section):
 
 
 def test_a_rule_table_naming_a_key_off_the_roster_fails_at_load(tmp_path, monkeypatch):
-    """随包数据写坏了在读入时就炸，而不是让某个语义键悄悄推断不出来。"""
+    """Broken bundled data blows up at load time, instead of some semantic key silently failing to infer.
+
+    随包数据写坏了在读入时就炸，而不是让某个语义键悄悄推断不出来。"""
     path = tmp_path / "inference_rules.video.json"
     path.write_text(json.dumps(read("video") | {"consumer_ports": {"framez": []}}), encoding="utf-8")
     monkeypatch.setattr(rules_module, "RULES_PATHS", {**RULES_PATHS, "video": path})
@@ -199,7 +231,13 @@ def test_a_rule_table_naming_a_key_off_the_roster_fails_at_load(tmp_path, monkey
 
 
 def sub_signal_ceiling() -> int:
-    """一条候选能拿到的次级信号加总上界，按实发数据文件算。
+    """Upper bound of the summed sub-signals a candidate can get, computed on the shipped data files.
+
+    The carrier-node tier and the artifact priority share one signal bit, and a candidate can only hit
+    one of them, so take the larger of the two; add the other two sub-signals whose voting weights do not
+    vary with the data.
+
+    一条候选能拿到的次级信号加总上界，按实发数据文件算。
 
     承载节点档位与产物优先级同一个信号位，一条候选只可能命中其中一个，故取两者的较大值；
     加表决权重不随数据变化的另外两个次级信号。
@@ -211,7 +249,9 @@ def sub_signal_ceiling() -> int:
 
 
 def test_sub_signals_cannot_outrank_the_weakest_graded_signal():
-    """次级信号只决同分先后：它们加总也压不过任何一级分级信号。"""
+    """Sub-signals only break ties: even summed they cannot outrank any graded signal.
+
+    次级信号只决同分先后：它们加总也压不过任何一级分级信号。"""
     assert sub_signal_ceiling() < WEAKEST_GRADED_WEIGHT
 
 
@@ -273,7 +313,10 @@ def test_external_families_are_recognised_by_class_type_prefix():
 
 
 def test_the_audio_track_rule_points_at_the_output_side_node():
-    """音轨看的是产物节点（或它上游那个成片节点）的音频入口有没有连线。"""
+    """The audio track looks at whether the audio input of the artifact node (or the final-cut node upstream
+    of it) is wired.
+
+    音轨看的是产物节点（或它上游那个成片节点）的音频入口有没有连线。"""
     sources = {source.class_type: source for source in load_inference_rules("video").audio_track_sources}
     assert sources["VHS_VideoCombine"].audio_input == "audio"
     assert sources["SaveVideo"].through_input == "video"

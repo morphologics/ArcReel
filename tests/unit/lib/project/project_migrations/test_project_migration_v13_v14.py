@@ -1,4 +1,7 @@
-"""v13→v14：剥「画风：」前缀、解析遗留短标签并展开快照；版本守卫与幂等。"""
+"""v13->v14: strip the "画风：" prefix, resolve legacy short labels and expand the snapshot; version guard and
+idempotency.
+
+v13→v14：剥「画风：」前缀、解析遗留短标签并展开快照；版本守卫与幂等。"""
 
 import json
 from pathlib import Path
@@ -29,7 +32,9 @@ class TestStylePrefix:
         assert migrate_project_dict({"style": "  画风: 国风3D  "})["style"] == "国风3D"
 
     def test_compound_word_is_not_a_prefix(self):
-        """``anim_arcane`` 的「油画三渲二画风：」是复合词，不是可删前缀。"""
+        """The "油画三渲二画风：" of ``anim_arcane`` is a compound word, not a removable prefix.
+
+        ``anim_arcane`` 的「油画三渲二画风：」是复合词，不是可删前缀。"""
         style = "油画三渲二画风：参考《双城之战》(Fortiche / Arcane Style)画风"
         assert migrate_project_dict({"style": style})["style"] == style
 
@@ -58,7 +63,10 @@ class TestLegacyShortLabel:
         assert after["style_image"] == "reference.png"
 
     def test_existing_template_id_keeps_the_label_untouched(self):
-        """已有 ``style_template_id`` 说明用户此后选过风格，那次选择是准的。"""
+        """An existing ``style_template_id`` means the user picked a style after that, and that choice is
+        accurate.
+
+        已有 ``style_template_id`` 说明用户此后选过风格，那次选择是准的。"""
         after = migrate_project_dict({"style": "Photographic", "style_template_id": "anim_kyoto"})
         assert after["style_template_id"] == "anim_kyoto"
         assert after["style"] == "Photographic"
@@ -75,7 +83,10 @@ class TestLegacyShortLabel:
 class TestMigrateProjectDict:
     @pytest.mark.parametrize("style", [None, 7, ["画风：写实"]])
     def test_non_string_style_is_preserved(self, style):
-        """手编脏值不在迁移里修复，其结构错误由 DataValidator 另行报告。"""
+        """Hand-edited dirty values are not repaired in the migration; their structural errors are reported
+        separately by DataValidator.
+
+        手编脏值不在迁移里修复，其结构错误由 DataValidator 另行报告。"""
         assert migrate_project_dict({"style": style})["style"] == style
 
     def test_missing_style_field_is_not_added(self):
@@ -127,7 +138,10 @@ class TestMigrateV13ToV14File:
             migrate_v13_to_v14(d)
 
     def test_unmigratable_style_needs_no_manifest(self, tmp_path: Path):
-        """风格值不变的项目不做目标态规划，因而没有产物清单也能走完这一步。"""
+        """Projects whose style value does not change get no target-state planning, so they can complete
+        this step even without an artifact manifest.
+
+        风格值不变的项目不做目标态规划，因而没有产物清单也能走完这一步。"""
         d = _write(tmp_path, {"schema_version": 13, "style": "写实"})
         migrate_v13_to_v14(d)
         assert _load(d) == {"schema_version": 14, "style": "写实"}

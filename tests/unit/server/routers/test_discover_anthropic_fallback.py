@@ -1,4 +1,6 @@
-"""/custom-providers/discover-anthropic 回退到 active credential 的回归测试。"""
+"""Regression test for /custom-providers/discover-anthropic falling back to the active credential.
+
+/custom-providers/discover-anthropic 回退到 active credential 的回归测试。"""
 
 from __future__ import annotations
 
@@ -57,6 +59,8 @@ async def test_discover_falls_back_to_active_credential(discover_client, monkeyp
     )
     assert create_resp.status_code == 201, create_resp.text
 
+    # /discover-anthropic with empty body should pick up the active credential;
+    # the preset credential does not override base_url, so the model list is fetched from the preset catalog's discovery_url, not the messages root
     # /discover-anthropic with empty body → should pick up the active credential；
     # 预设凭证未覆盖 base_url，模型列表按预设目录的 discovery_url 取，而不是 messages 根
     resp = await discover_client.post(

@@ -1,4 +1,9 @@
-"""迁移失败 → 项目级阻断 → 修复 → 重试成功的完整路径。
+"""The full path: migration failure -> project-level block -> repair -> retry succeeds.
+
+Asserts externally observable outputs: the verdict record on disk, the workflow status blocker, the workflow plan's
+single problem, refused enqueueing, and the retry tool's return; internal call order is not asserted.
+
+迁移失败 → 项目级阻断 → 修复 → 重试成功的完整路径。
 
 断言的是外部可观察的输出：磁盘上的裁决记录、制作状态的 blocker、制作计划的单条 problem、
 入队被拒、以及重试工具的返回，不断言内部调用顺序。
@@ -80,6 +85,8 @@ def test_failed_migration_records_the_offending_episode_and_file(tmp_path: Path)
     failure = migrate_project_with_verdict(project_dir)
 
     assert failure is not None
+    # The project is stuck at the starting version of the manifest activation step, not at the end of the migration
+    # chain.
     # 项目卡在清单激活这一步的起点版本上，不是迁移链的末端。
     assert failure.schema_version == ARTIFACT_MANIFEST_SCHEMA_VERSION - 1
     assert failure.reason
@@ -189,6 +196,7 @@ async def test_retry_tool_returns_details_then_unblocks_once_repaired(tmp_path: 
     ctx = ToolHarness(project_name="demo", data_root=tmp_path, pm=ProjectManager(str(tmp_path)))
 
     blocked = await run_declared_tool(RETRY_PROJECT_MIGRATION, ctx, {})
+    # Same receipt shape as the blocked generation tools: one problem, not a second error/reason envelope
     # 与被拦截的生成工具同一个回执形状：一份 problem，不是第二套 error/reason 信封
     assert blocked.problem is not None
     assert blocked.problem.code == MIGRATION_FAILURE_CODE
@@ -206,7 +214,10 @@ async def test_retry_tool_returns_details_then_unblocks_once_repaired(tmp_path: 
 
 
 def test_web_retry_reports_the_reason_then_unblocks_once_repaired(tmp_path: Path, monkeypatch) -> None:
-    """Web 的「重试」与 Agent 的重试工具走同一服务：失败带回原因与明细，修好后解除阻断。"""
+    """The web "Retry" and the Agent's retry tool use the same service: failure returns the reason and details, and once
+    repaired the block is lifted.
+
+    Web 的「重试」与 Agent 的重试工具走同一服务：失败带回原因与明细，修好后解除阻断。"""
     from server.auth import CurrentUserInfo, get_current_user
     from server.routers import project_migration
 
@@ -227,6 +238,8 @@ def test_web_retry_reports_the_reason_then_unblocks_once_repaired(tmp_path: Path
 
     assert refused.status_code == 422
     diagnostic = refused.json()["diagnostic"]
+    # The original failure text has its episode references rewritten at the web presentation boundary; the rest is
+    # unchanged.
     # 失败原文经 Web 呈现边界改写集指称，其余原样。
     assert "not valid UTF-8 JSON" in diagnostic["reason"]
     assert diagnostic["details"][0]["file"] == "scripts/episode_1.json"
@@ -321,7 +334,10 @@ async def test_retry_success_uses_caller_scoped_queue_and_capabilities(tmp_path:
 
 
 async def test_pending_asset_listing_reports_the_migration_problem_until_repaired(tmp_path: Path) -> None:
-    """待生成资产清单自报迁移裁决：命中则返回与生成类工具同构的 problem，裁决清空后照常列出。"""
+    """The pending asset listing reports the migration verdict itself: on a hit it returns a problem of the same shape as
+    the generation tools, and lists normally once the verdict is cleared.
+
+    待生成资产清单自报迁移裁决：命中则返回与生成类工具同构的 problem，裁决清空后照常列出。"""
 
     projects_root = tmp_path / "projects"
     projects_root.mkdir()
@@ -353,7 +369,10 @@ async def test_pending_asset_listing_reports_the_migration_problem_until_repaire
 
 
 async def test_episode_script_reader_withholds_the_revision_until_the_migration_is_repaired(tmp_path: Path) -> None:
-    """剧本读取自报迁移裁决：失败时不签发 revision，返回带 action 与明细的完整 problem。"""
+    """The episode script reader reports the migration verdict itself: on failure it issues no revision and returns the
+    full problem with action and details.
+
+    剧本读取自报迁移裁决：失败时不签发 revision，返回带 action 与明细的完整 problem。"""
 
     projects_root = tmp_path / "projects"
     projects_root.mkdir()
@@ -387,7 +406,10 @@ async def test_episode_script_reader_withholds_the_revision_until_the_migration_
 
 
 async def test_prompt_preview_reports_the_full_migration_problem(tmp_path: Path) -> None:
-    """提示词预览自报迁移裁决，返回与入口阻断同形、带 action 与明细的 problem。"""
+    """Prompt preview reports the migration verdict itself, returning a problem with action and details, shaped like the
+    entry block.
+
+    提示词预览自报迁移裁决，返回与入口阻断同形、带 action 与明细的 problem。"""
 
     projects_root = tmp_path / "projects"
     projects_root.mkdir()
@@ -418,7 +440,10 @@ _DRAFT = {"episode_id": 1, "doc_type": "drama_script_plan"}
 
 
 async def test_mcp_guard_reads_the_session_projects_root_not_the_global_one(tmp_path: Path, monkeypatch) -> None:
-    """声明入口的裁决必须取自会话的项目根：会话可能绑定另一个 projects_root，同名项目不是同一个项目。"""
+    """A declared entry's verdict must come from the session's project root: the session may be bound to another
+    projects_root, and a project with the same name is not the same project.
+
+    声明入口的裁决必须取自会话的项目根：会话可能绑定另一个 projects_root，同名项目不是同一个项目。"""
 
     from server.agent_toolset.script_authoring import DISCARD_DRAFT
     from tests.integration.server.agent_tool_support import ToolHarness, run_declared_tool
@@ -452,7 +477,10 @@ async def test_mcp_guard_reads_the_session_projects_root_not_the_global_one(tmp_
 
 
 def test_retry_keeps_the_project_blocked_when_the_chain_cannot_place_it(tmp_path: Path) -> None:
-    """迁移器一次也没跑起来（project.json 不可读）时不得报成功——裁决必须留着。"""
+    """When the migrator never ran even once (project.json unreadable) it must not report success -- the verdict must
+    remain.
+
+    迁移器一次也没跑起来（project.json 不可读）时不得报成功——裁决必须留着。"""
 
     projects_root = tmp_path / "projects"
     projects_root.mkdir()
@@ -460,6 +488,7 @@ def test_retry_keeps_the_project_blocked_when_the_chain_cannot_place_it(tmp_path
     _break_episode_script(project_dir)
     assert migrate_project_with_verdict(project_dir) is not None
 
+    # The "repair" removed project.json: the chain has nowhere to start, and the schema is still below target.
     # 「修复」把 project.json 弄没了：链条无处落脚，schema 仍未达标。
     (project_dir / "project.json").unlink()
     residual = migrate_project_with_verdict(project_dir)
@@ -470,18 +499,25 @@ def test_retry_keeps_the_project_blocked_when_the_chain_cannot_place_it(tmp_path
 
 
 def test_a_verdict_that_cannot_be_persisted_fails_loud(tmp_path: Path) -> None:
-    """裁决写不进磁盘时，任何守卫都读不到它——报成功等于放开一个该被阻断的项目。"""
+    """When the verdict cannot be written to disk no guard can read it -- reporting success would release a project that
+    should be blocked.
+
+    裁决写不进磁盘时，任何守卫都读不到它——报成功等于放开一个该被阻断的项目。"""
 
     projects_root = tmp_path / "projects"
     projects_root.mkdir()
     project_dir, *_ = _project(tmp_path)
     _break_episode_script(project_dir)
+    # The record location is occupied by a directory: the write step must fail, without relying on platform permission
+    # semantics.
     # 记录位置被一个目录占住：落盘那一步必然失败，且不依赖平台的权限语义。
     (project_dir / MIGRATION_FAILURE_FILENAME).mkdir()
 
     with pytest.raises(IsADirectoryError, match=r"Is a directory"):
         migrate_project_with_verdict(project_dir)
 
+    # One project failing to write its verdict at startup does not bring down the other projects in the same round:
+    # healthy comes after demo, and it is migrated only if the loop really continued.
     # 启动期一个项目写不下裁决，不拖垮同一轮里其它项目：healthy 排在 demo 之后，
     # 只有循环真的继续了它才会被迁移。
     seed_root = tmp_path / "seed"
@@ -495,7 +531,9 @@ def test_a_verdict_that_cannot_be_persisted_fails_loud(tmp_path: Path) -> None:
 
 
 def _guarded_app() -> FastAPI:
-    """一个只挂守卫的最小 app：断言的是依赖本身在真实 FastAPI 栈里的行为。"""
+    """A minimal app with only the guard mounted: asserts the behavior of the dependency itself in a real FastAPI stack.
+
+    一个只挂守卫的最小 app：断言的是依赖本身在真实 FastAPI 栈里的行为。"""
 
     app = FastAPI()
     register_error_handlers(app)
@@ -532,6 +570,8 @@ def test_rest_guard_refuses_writes_but_keeps_reads_open(tmp_path: Path, monkeypa
     assert refused.status_code == 409
     assert "demo" in refused.json()["detail"]
 
+    # Reads work as usual: a blocked project must still be able to view the script and the artifacts already on the
+    # canvas
     # 只读照常：被阻断的项目仍要能看脚本与画布上已有的产物
     assert client.get("/projects/demo/thing").status_code == 200
 
@@ -548,7 +588,10 @@ def test_rest_guard_fails_loud_when_the_route_has_no_project_param() -> None:
 
 
 def test_every_guarded_router_route_can_name_its_project() -> None:
-    """守卫按路径参数取项目，所以挂了守卫的路由必须都带得出项目名——否则会 fail loud。"""
+    """The guard takes the project from path parameters, so every route with the guard must be able to yield the project
+    name -- otherwise it fails loud.
+
+    守卫按路径参数取项目，所以挂了守卫的路由必须都带得出项目名——否则会 fail loud。"""
 
     from server.app import app
 

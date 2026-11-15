@@ -1,4 +1,6 @@
-"""目录搜索：按名称与媒体类型查找模型条目的读契约。"""
+"""Catalog search: the read contract for finding model entries by name and media type.
+
+目录搜索：按名称与媒体类型查找模型条目的读契约。"""
 
 import pytest
 

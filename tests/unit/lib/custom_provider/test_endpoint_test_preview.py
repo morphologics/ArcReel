@@ -1,4 +1,6 @@
-"""预览请求与验证响应：不外发一个字节的两种端点测试。"""
+"""Preview request and verify response: the two endpoint tests that send not a single byte out.
+
+预览请求与验证响应：不外发一个字节的两种端点测试。"""
 
 from __future__ import annotations
 
@@ -28,7 +30,10 @@ CREDENTIALS = EndpointTestCredentials(base_url="https://api.example.com", api_ke
 
 
 class TestCostsNothing:
-    """两种模式的卖点就是不外发：出站被 respx 全量拦截，任何一次请求都会当场抛错。"""
+    """The selling point of both modes is not sending anything: outbound traffic is fully intercepted by
+    respx, and any request raises on the spot.
+
+    两种模式的卖点就是不外发：出站被 respx 全量拦截，任何一次请求都会当场抛错。"""
 
     def test_preview_sends_no_request(self):
         with capture_http() as router:
@@ -55,7 +60,10 @@ class TestPreviewRequest:
         assert preview.result is None
 
     def test_a_versioned_base_url_previews_the_same_url_the_runtime_would_send(self):
-        """定义带显式版本段时，配置末尾的版本段被剥掉——与运行时 backend 同一份归一化。"""
+        """When the definition has an explicit version segment, the version segment at the end of the config
+        is stripped; same normalization as the runtime backend.
+
+        定义带显式版本段时，配置末尾的版本段被剥掉——与运行时 backend 同一份归一化。"""
         credentials = EndpointTestCredentials(base_url="https://api.example.com/v1", api_key="sk-secret-key-1234")
 
         preview = preview_request(custom_endpoint_definition(), PARAMETERS, credentials=credentials)
@@ -63,7 +71,10 @@ class TestPreviewRequest:
         assert preview.submit.url == "https://api.example.com/v1/video/create"
 
     def test_a_versioned_poll_url_strips_the_configured_version_segment_too(self):
-        """提交写死绝对地址、只有轮询引用带版本段的 base_url：剥版本段的判定看整份定义。"""
+        """Submit hard-codes an absolute URL and only polling references a base_url with a version segment:
+        the decision to strip the version segment looks at the whole definition.
+
+        提交写死绝对地址、只有轮询引用带版本段的 base_url：剥版本段的判定看整份定义。"""
         definition = custom_endpoint_definition()
         definition["submit"] = {**definition["submit"], "url": "https://fixed.example.com/video/create"}
         credentials = EndpointTestCredentials(base_url="https://api.example.com/v1", api_key="sk-secret-key-1234")
@@ -86,7 +97,10 @@ class TestPreviewRequest:
         assert preview.submit.url.endswith("key=****1234")
 
     def test_a_short_key_does_not_rewrite_matching_substrings_elsewhere(self):
-        """打码值渲染前就落在凭证注入点上：host / model / prompt 里恰好相同的子串不得被改写。"""
+        """The masked value lands on the credential injection point before rendering: identical substrings
+        in host / model / prompt must not be rewritten.
+
+        打码值渲染前就落在凭证注入点上：host / model / prompt 里恰好相同的子串不得被改写。"""
         credentials = EndpointTestCredentials(base_url="https://test.example.com", api_key="test")
         parameters = EndpointTestParameters(
             model="test-model", prompt="test prompt", duration_seconds=5, aspect_ratio="9:16"
@@ -123,7 +137,10 @@ class TestPreviewRequest:
         assert preview.submit.body["image"] == "<data:image/png;base64, 2048 bytes>"
 
     def test_missing_assets_can_render_like_the_runtime(self):
-        """测试连接的结果体记录真发形状：缺席的可选素材按运行时口径整字段省略，不放占位摘要。"""
+        """The test connection result body records the real-send shape: absent optional assets omit the
+        whole field as at runtime, with no placeholder summary.
+
+        测试连接的结果体记录真发形状：缺席的可选素材按运行时口径整字段省略，不放占位摘要。"""
         preview = preview_request(
             custom_endpoint_definition(), PARAMETERS, credentials=CREDENTIALS, placeholder_missing_assets=False
         )
@@ -132,7 +149,10 @@ class TestPreviewRequest:
         assert "image" not in preview.submit.body
 
     def test_missing_assets_still_show_the_field(self):
-        """占位摘要不能省：留空会让整串占位符把字段删掉，预览出的形状就与真发时不同。"""
+        """The placeholder summary cannot be omitted: leaving it empty would let the whole placeholder
+        string delete the field, and the previewed shape would differ from the real send.
+
+        占位摘要不能省：留空会让整串占位符把字段删掉，预览出的形状就与真发时不同。"""
         preview = preview_request(custom_endpoint_definition(), PARAMETERS, credentials=CREDENTIALS)
 
         assert isinstance(preview.submit.body, dict)
@@ -171,7 +191,9 @@ class TestCheckResponse:
         assert report.status == "running"
 
     def test_reads_the_submit_stage_by_its_own_rule(self):
-        """提交节没有状态可读，判据是取不取得到 task_id。"""
+        """The submit section has no status to read; the criterion is whether a task_id can be obtained.
+
+        提交节没有状态可读，判据是取不取得到 task_id。"""
         report = check_response(custom_endpoint_definition(), "submit", {"task_id": "job-1"})
 
         assert report.task_id == "job-1"
@@ -215,7 +237,10 @@ class TestCheckResponse:
 
 
 class TestImageDefinition:
-    """图片定义的预览与验证：按图片的变量渲染请求，按图片的产物字段判读响应。"""
+    """Preview and verify for image definitions: render the request with image variables and read the
+    response by the image artifact fields.
+
+    图片定义的预览与验证：按图片的变量渲染请求，按图片的产物字段判读响应。"""
 
     def test_preview_renders_the_image_request_with_image_resolution_tiers(self):
         parameters = EndpointTestParameters(model="gpt-image-2", prompt="一座灯塔", aspect_ratio="1:1", resolution="2K")

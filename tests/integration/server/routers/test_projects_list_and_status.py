@@ -17,7 +17,10 @@ from tests.integration.server.routers.projects_router_support import (
 
 
 class _ArrivalSpy(RequestCoalescer):
-    """登记每个已挂上合流的请求，测试据此确认请求已到达，再放行计算。"""
+    """Registers each request that has joined the coalescer, so the test can confirm the request arrived before releasing
+    the computation.
+
+    登记每个已挂上合流的请求，测试据此确认请求已到达，再放行计算。"""
 
     def __init__(self):
         super().__init__()
@@ -29,7 +32,10 @@ class _ArrivalSpy(RequestCoalescer):
 
 
 class _GatedSummaries(_FakeSummaries):
-    """第一次摘要计算停在闸门前；修复原因引用剧本文件，呈现时按请求语言成文。"""
+    """The first summary computation stops before the gate; the repair reason references the script file and is phrased
+    in the request language at presentation.
+
+    第一次摘要计算停在闸门前；修复原因引用剧本文件，呈现时按请求语言成文。"""
 
     def __init__(self):
         super().__init__()
@@ -45,7 +51,10 @@ class _GatedSummaries(_FakeSummaries):
 
 
 async def _until(awaitable, *requests):
-    """等到 awaitable 完成；任一请求先结束说明路由提前返回，直接失败而不是挂住。"""
+    """Wait until the awaitable completes; if any request finishes first the route returned early, so fail directly
+    instead of hanging.
+
+    等到 awaitable 完成；任一请求先结束说明路由提前返回，直接失败而不是挂住。"""
 
     step = asyncio.ensure_future(awaitable)
     done, _pending = await asyncio.wait({step, *requests}, return_when=asyncio.FIRST_COMPLETED)
@@ -56,8 +65,12 @@ async def _until(awaitable, *requests):
 
 class TestProjectsRouter:
     def test_list_projects_shares_script_preload_with_status(self, tmp_path, monkeypatch):
-        """list_projects 一次性加载 episode scripts，传给项目摘要投影，去除 cover + status 双重 I/O。"""
+        """list_projects loads episode scripts once and passes them to the project summary projection, removing the
+        cover + status double I/O.
+
+        list_projects 一次性加载 episode scripts，传给项目摘要投影，去除 cover + status 双重 I/O。"""
         fake_pm = _FakePM(tmp_path)
+        # Count load_script calls: with the shared preload, the ready project should trigger only one.
         # 统计 load_script 调用次数：共享预加载后，ready 项目应只触发一次。
         orig_load_script = fake_pm.load_script
         calls: list[tuple[str, str]] = []
@@ -74,19 +87,25 @@ class TestProjectsRouter:
             resp = client.get("/api/v1/projects")
             assert resp.status_code == 200
 
+        # ready has only 1 episode with script_file="scripts/episode_1.json": preloaded once.
+        # If cover + status loaded independently, this would be 2.
         # ready 只有 1 集 script_file="scripts/episode_1.json"：预加载一次。
         # 若 cover + status 各自独立加载，这里会是 2 次。
         ready_calls = [c for c in calls if c[0] == "ready"]
         assert len(ready_calls) == 1, f"expected 1 shared load, got {ready_calls}"
 
+        # The preload map is passed to the project summary projection
         # 预加载 map 被传给项目摘要投影
         assert fake_summaries.last_preloaded_scripts is not None
         assert "scripts/episode_1.json" in fake_summaries.last_preloaded_scripts
+        # The list only looks at manifest registration and file presence, not comparing canonical state item by item
         # 列表只看清单登记与文件在场，不逐件比对规范状态
         assert set(fake_summaries.currencies) == {"registered"}
 
     def test_get_project_status_verifies_artifact_currency(self, tmp_path, monkeypatch):
-        """单个项目的详情走完整比对口径：剧集卡要区分 current 与 stale。"""
+        """A single project's details use the full comparison rule: episode cards must tell current from stale.
+
+        单个项目的详情走完整比对口径：剧集卡要区分 current 与 stale。"""
         fake_summaries = _FakeSummaries()
         client = build_projects_client(monkeypatch, _FakePM(tmp_path), fake_summaries)
         with client:
@@ -96,7 +115,10 @@ class TestProjectsRouter:
         assert fake_summaries.currencies == ["verified"]
 
     def test_list_projects_status_comes_from_the_project_summary(self, tmp_path, monkeypatch):
-        """列表页的计数一律来自项目摘要：项目阶段已取消，phase 与 current_phase 都不在。"""
+        """Counts on the list page all come from the project summary: project phases are removed; neither phase nor
+        current_phase is present.
+
+        列表页的计数一律来自项目摘要：项目阶段已取消，phase 与 current_phase 都不在。"""
         client = build_projects_client(monkeypatch, _FakePM(tmp_path))
         with client:
             resp = client.get("/api/v1/projects")
@@ -107,11 +129,14 @@ class TestProjectsRouter:
         assert "phase" not in status
         assert "current_phase" not in status
         assert status["assets"]["character"] == {"total": 1, "available": 0, "stale": 0}
+        # Per-episode details belong to the project details endpoint, not carried on a list of N projects
         # 每集明细归项目详情端点，不驮在 N 个项目的列表里
         assert "episodes" not in status
 
     def test_get_project_status_comes_from_the_project_summary(self, tmp_path, monkeypatch):
-        """全局头读的项目级状态与列表同源。"""
+        """The project-level status read by the global header has the same source as the list.
+
+        全局头读的项目级状态与列表同源。"""
         client = build_projects_client(monkeypatch, _FakePM(tmp_path))
         with client:
             resp = client.get("/api/v1/projects/ready")
@@ -124,7 +149,10 @@ class TestProjectsRouter:
         assert "current_phase" not in status
 
     def test_get_project_episode_fields_come_from_the_project_summary(self, tmp_path, monkeypatch):
-        """剧集卡 / 剧集头读的每集字段由项目摘要提供，project.json 侧字段原样保留。"""
+        """Per-episode fields read by episode cards / episode headers are provided by the project summary; project.json-side
+        fields are kept as is.
+
+        剧集卡 / 剧集头读的每集字段由项目摘要提供，project.json 侧字段原样保留。"""
         fake_pm = _FakePM(tmp_path)
         fake_pm.project_data["ready"]["episodes"] = [
             {"episode": 1, "title": "第一集", "script_file": "scripts/ep1.json"},
@@ -135,22 +163,30 @@ class TestProjectsRouter:
 
         assert resp.status_code == 200
         episode = resp.json()["project"]["episodes"][0]
+        # project.json-side fields are not overwritten
         # project.json 侧字段不被覆盖
         assert (episode["title"], episode["script_file"]) == ("第一集", "scripts/ep1.json")
+        # Summary-side fields are injected per the artifact manifest rule: usable = current U stale, stale counted
+        # separately
         # 摘要侧字段按产物清单口径注入：可用 = current ∪ stale，stale 另计
         assert episode["script_status"] == "generated"
         assert episode["status"] == "in_production"
         assert episode["item_count"] == 1
+        # The response contains no retired total fields
         # 响应不包含退役的总量字段
         assert "scenes_count" not in episode
         assert episode["duration_seconds"] == 8
         assert episode["storyboards"] == {"total": 1, "available": 1, "stale": 0}
         assert episode["videos"] == {"total": 1, "available": 0, "stale": 0}
+        # Per-episode details go only through episodes[]; the project-level status does not carry a duplicate copy
         # 每集明细只走 episodes[]，项目级 status 不重复驮一份
         assert "episodes" not in resp.json()["project"]["status"]
 
     def test_get_project_scripts_carry_no_derived_totals(self, tmp_path, monkeypatch):
-        """剧本响应不再注入条目数 / 总时长 / 出场名单：这些派生值只有项目摘要一个来源。"""
+        """Script responses no longer inject entry count / total duration / cast list: these derived values have only the
+        project summary as source.
+
+        剧本响应不再注入条目数 / 总时长 / 出场名单：这些派生值只有项目摘要一个来源。"""
         client = build_projects_client(monkeypatch, _FakePM(tmp_path))
         with client:
             resp = client.get("/api/v1/projects/ready")
@@ -163,9 +199,12 @@ class TestProjectsRouter:
         assert "estimated_duration_seconds" not in script.get("metadata", {})
 
     def test_list_projects_returns_style_image_field(self, tmp_path, monkeypatch):
-        """列表端点需返回 style_image：否则前端无法区分"自定义风格"与"未设置"。"""
+        """The list endpoint must return style_image: otherwise the frontend cannot tell "custom style" from "not set".
+
+        列表端点需返回 style_image：否则前端无法区分"自定义风格"与"未设置"。"""
         fake_pm = _FakePM(tmp_path)
         fake_pm.project_data["ready"]["style_image"] = "style_reference.png"
+        # Mutually exclusive: with a custom image style_template_id should be empty
         # 互斥：自定义图情况下 style_template_id 应为空
         fake_pm.project_data["ready"].pop("style_template_id", None)
         fake_pm.project_data["ready"]["style"] = ""
@@ -179,7 +218,9 @@ class TestProjectsRouter:
             assert ready.get("style_template_id") is None
 
     def test_get_project_includes_asset_fingerprints(self, tmp_path, monkeypatch):
-        """项目 API 应返回 asset_fingerprints 字段"""
+        """The project API should return the asset_fingerprints field
+
+        项目 API 应返回 asset_fingerprints 字段"""
         fake_pm = _FakePM(tmp_path)
         client = build_projects_client(monkeypatch, fake_pm)
 
@@ -194,7 +235,10 @@ class TestProjectsRouter:
     # ---------------------------------------------------------------------------
 
     async def test_get_project_does_not_share_results_across_languages(self, tmp_path, monkeypatch):
-        """合流按语言分开：中文计算在跑、中文请求已占等待位时到达的英文请求，拿到英文文案。"""
+        """Coalescing is split by language: an English request arriving while a Chinese computation runs and a Chinese
+        request holds the waiting slot gets English text.
+
+        合流按语言分开：中文计算在跑、中文请求已占等待位时到达的英文请求，拿到英文文案。"""
         summaries = _GatedSummaries()
         spy = _ArrivalSpy()
         sync_client = build_projects_client(monkeypatch, _FakePM(tmp_path), summaries)
@@ -213,6 +257,7 @@ class TestProjectsRouter:
                 for _arrival in range(3):
                     await _until(spy.arrivals.get(), running, waiting, english)
             finally:
+                # Release the gate even when the assertion fails, leaving no blocked worker thread.
                 # 断言失败时也放行闸门，不留阻塞的工作线程。
                 summaries.gate.set()
             responses = await asyncio.gather(running, waiting, english)

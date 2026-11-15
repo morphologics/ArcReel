@@ -1,4 +1,6 @@
-"""server.services.tasks.generation_tasks 测试共享的替身与 helper。"""
+"""Shared doubles and helpers for server.services.tasks.generation_tasks tests.
+
+server.services.tasks.generation_tasks 测试共享的替身与 helper。"""
 
 import asyncio
 import json
@@ -50,7 +52,16 @@ def fake_resolve_ctx(
     video_request_facts=None,
     seen_lane_requests=None,
 ):
-    """lane 感知的假 resolve_generation_context：按调用方声明的 lane 拼装 frozen dataclass 产物。
+    """Lane-aware fake resolve_generation_context: assembles frozen dataclass products by the lanes the caller
+    declares.
+
+    When the video lane declares a route it attaches video request facts: ``video_request_facts`` is used as is
+    when given (may be a failure object), otherwise an unnarrowed facts object is built from this double's
+    identity, resolution and tier params.
+    When a list is passed as ``seen_lane_requests``, it records the lane requests declared by each call, so tests
+    can assert a task declares only the lanes it uses.
+
+    lane 感知的假 resolve_generation_context：按调用方声明的 lane 拼装 frozen dataclass 产物。
 
     video lane 声明了路线时附带视频请求事实：``video_request_facts`` 给定时原样使用（可为失败对象），
     否则按本替身的身份、分辨率与档位参数构造一份未收窄的事实。
@@ -271,7 +282,9 @@ class _FakePM:
 
 
 class SheetGenerator:
-    """按生产口径经正式图活化回调提交一张生成的资产图。"""
+    """Submit a generated sheet via the formal image activation callback, the production way.
+
+    按生产口径经正式图活化回调提交一张生成的资产图。"""
 
     def __init__(self, project_dir: Path, content: bytes) -> None:
         self.versions = VersionManager(project_dir)
@@ -286,6 +299,8 @@ class SheetGenerator:
 
 class FakeGenerator:
     def __init__(self, project_path: Path | None = None):
+        # When a project directory is passed, write the output to the artifact's canonical path so the task registers
+        # the manifest the production way
         # 传入项目目录时把产出落到产物的规范路径，让任务按生产口径登记清单
         self.project_path = project_path
         self.image_calls = []
@@ -296,6 +311,9 @@ class FakeGenerator:
 
     async def generate_image_async(self, **kwargs):
         self.image_calls.append(kwargs)
+        # Writing output, reading reference images and submitting the version all happen in a worker thread:
+        # MediaGenerator's backends write artifacts in a thread, and the formal submit callback also runs in a thread
+        # via run_noninterruptible_sync
         # 落盘产出、读参考图与提交版本都在工作线程里做：MediaGenerator 的后端在线程里写产物，
         # 正式提交回调也经 run_noninterruptible_sync 在线程里执行
         return await asyncio.to_thread(self._produce_and_commit, kwargs)
@@ -308,6 +326,8 @@ class FakeGenerator:
                 for reference in kwargs.get("reference_images") or []
             ]
         )
+        # Like MediaGenerator, submit the version via formal_output's activation callback and return the version
+        # number the callback gives
         # 与 MediaGenerator 一样经 formal_output 的活化回调提交版本，返回回调给出的版本号
         current = Path("/tmp/image.png")
         version = kwargs["commit_formal_output"](current, current, {})
@@ -423,7 +443,10 @@ _EIGHT_REFERENCE_CHARACTERS = ["配角1", "配角2", "配角3", "配角4", "配�
 
 
 def pm_with_eight_references(project_path: Path) -> _FakePM:
-    """E1S02 装配出 8 张参考图：6 张角色 sheet + 1 张场景 + 1 张道具（无上一分镜图），正文指认首角色、道具与场景。"""
+    """E1S02 assembles 8 reference images: 6 character sheets + 1 scene + 1 prop (no previous storyboard image);
+    the body text points out the first character, the prop and the scene.
+
+    E1S02 装配出 8 张参考图：6 张角色 sheet + 1 张场景 + 1 张道具（无上一分镜图），正文指认首角色、道具与场景。"""
     pm = _FakePM(project_path)
     for name in _EIGHT_REFERENCE_CHARACTERS:
         pm.project["characters"][name] = {"description": name, "character_sheet": f"characters/{name}.png"}
@@ -469,7 +492,9 @@ def register_stale_visual_claim(project_path: Path, key: ArtifactKey, artifact_p
 
 
 def ad_pm(project_path: Path, *, with_sheet: bool) -> _FakePM:
-    """ad 项目 fixture：商品分镜 E1S02（引用保温杯）+ 氛围分镜 E1S01/E1S03。"""
+    """ad project fixture: product shot E1S02 (references the thermos) + atmosphere shots E1S01/E1S03.
+
+    ad 项目 fixture：商品分镜 E1S02（引用保温杯）+ 氛围分镜 E1S01/E1S03。"""
     pm = _FakePM(project_path)
     pm.project["content_mode"] = "ad"
     if with_sheet:
@@ -507,7 +532,10 @@ def ad_pm(project_path: Path, *, with_sheet: bool) -> _FakePM:
 
 
 def skip_artifact_registration(monkeypatch) -> None:
-    """正式图提交跳过产物清单登记（视作登记成功），用例只看提交与项目写回。"""
+    """Formal image submission skips artifact manifest registration (treated as successful); the case only looks
+    at submission and the project write-back.
+
+    正式图提交跳过产物清单登记（视作登记成功），用例只看提交与项目写回。"""
     monkeypatch.setattr(
         "server.services.tasks.formal_image_commit.register_current_resource_artifact", lambda *_a, **_kw: True
     )

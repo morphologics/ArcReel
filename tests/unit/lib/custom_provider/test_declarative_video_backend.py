@@ -119,11 +119,16 @@ class TestDeclarativeVideoBackend:
 
         request = download.calls.last.request
         assert "Authorization" not in request.headers
+        # The query of a signed URL is part of the signature; appending the auth section's query credentials
+        # would break it.
         # 签名 URL 的 query 是签名的一部分，附带 auth 节的 query 凭证会直接破坏它。
         assert request.url.query == b"sig=abc"
 
     async def test_artifact_on_the_fixed_submit_host_gets_credentials(self, tmp_path: Path):
-        """信任集来自渲染出的请求源：提交写死绝对地址时，提交主机上的产物照样附凭证下载。"""
+        """The trust set comes from the rendered request origins: when submit hard-codes an absolute URL,
+        artifacts on the submit host are still downloaded with credentials.
+
+        信任集来自渲染出的请求源：提交写死绝对地址时，提交主机上的产物照样附凭证下载。"""
         definition = _definition()
         definition["submit"] = {**definition["submit"], "url": "https://submit.test/v1/video/create"}
         definition["poll"] = {**definition["poll"], "url": "https://poll.test/v1/video/fetch/{{ task_id }}"}
@@ -151,7 +156,10 @@ class TestDeclarativeVideoBackend:
         assert download.calls.last.request.headers["Authorization"] == "Bearer secret"
 
     async def test_an_unused_configured_base_origin_is_not_trusted_for_artifacts(self, tmp_path: Path):
-        """配置了却从未被请求的 base_url 源不进信任集：产物落在那个源上按裸请求下载。"""
+        """A configured base_url origin that is never requested does not enter the trust set: artifacts on
+        that origin are downloaded with a bare request.
+
+        配置了却从未被请求的 base_url 源不进信任集：产物落在那个源上按裸请求下载。"""
         definition = _definition()
         definition["submit"] = {**definition["submit"], "url": "https://submit.test/v1/video/create"}
         definition["poll"] = {**definition["poll"], "url": "https://submit.test/v1/video/fetch/{{ task_id }}"}
@@ -179,7 +187,12 @@ class TestDeclarativeVideoBackend:
         assert "Authorization" not in download.calls.last.request.headers
 
     async def test_redirect_to_another_origin_drops_custom_auth_headers(self, tmp_path: Path):
-        """同源产物地址跳到 CDN 时，自定义头名的凭证同样不许跟过去。
+        """When a same-origin artifact URL redirects to a CDN, credentials under custom header names must
+        not follow either.
+
+        httpx only strips Authorization across origins, while the auth section may use any header name.
+
+        同源产物地址跳到 CDN 时，自定义头名的凭证同样不许跟过去。
 
         httpx 跨源只摘 Authorization，而 auth 节可以用任意头名。
         """
@@ -216,7 +229,10 @@ class TestDeclarativeVideoBackend:
         assert "X-API-Key" not in cdn.calls.last.request.headers
 
     async def test_submit_redirect_to_another_origin_drops_custom_auth_headers(self, tmp_path: Path):
-        """提交 / 轮询 / 二次取件同样带着 auth 节，跨源跳转时凭证不许跟过去。"""
+        """Submit / poll / second fetch also carry the auth section; credentials must not follow a
+        cross-origin redirect.
+
+        提交 / 轮询 / 二次取件同样带着 auth 节，跨源跳转时凭证不许跟过去。"""
         definition = _definition()
         definition["auth"] = {"headers": {"X-API-Key": "{{ api_key }}"}}
         assert validate_definition(definition).valid
@@ -248,7 +264,10 @@ class TestDeclarativeVideoBackend:
         assert "X-API-Key" not in moved.calls.last.request.headers
 
     async def test_submit_302_does_not_replay_the_creation_payload(self, tmp_path: Path):
-        """302 后按 GET 跟随、丢掉请求体：原样重放创建请求会在跳转目标上再建一个付费任务。"""
+        """After a 302, follow with GET and drop the body: replaying the creation request as-is would create
+        another paid task at the redirect target.
+
+        302 后按 GET 跟随、丢掉请求体：原样重放创建请求会在跳转目标上再建一个付费任务。"""
         with capture_http() as router, bounded_poll_clock():
             router.post("https://relay.test/v1/video/create").mock(
                 return_value=httpx.Response(302, headers={"location": "https://relay.test/v1/video/created"})
@@ -278,7 +297,10 @@ class TestDeclarativeVideoBackend:
         assert followed.calls.last.request.read() == b""
 
     async def test_poll_on_another_host_keeps_credentials_but_scopes_them_there(self, tmp_path: Path):
-        """定义可以把轮询端点写在与 base_url 不同的主机上：凭证按该请求自己的源判作用域。"""
+        """A definition may put the poll endpoint on a host other than base_url: credentials are scoped by
+        each request's own origin.
+
+        定义可以把轮询端点写在与 base_url 不同的主机上：凭证按该请求自己的源判作用域。"""
         definition = _definition()
         definition["auth"] = {"headers": {"X-API-Key": "{{ api_key }}"}}
         definition["poll"]["url"] = "https://status.test/v1/video/fetch/{{ task_id }}"
@@ -307,12 +329,19 @@ class TestDeclarativeVideoBackend:
                 provider="custom-1",
             ).generate(_request(tmp_path))
 
+        # The host the definition names gets the credentials; a third-party host the server redirects to does
+        # not.
         # 定义指名的主机拿得到凭证；服务端把它引去的第三方主机拿不到。
         assert poll.calls.last.request.headers["X-API-Key"] == "secret"
         assert "X-API-Key" not in moved.calls.last.request.headers
 
     async def test_same_origin_redirect_keeps_query_credentials(self, tmp_path: Path):
-        """按 query 传的凭证在同源续跳上要补回：Location 会整体替换查询串。
+        """Credentials passed in the query must be added back on a same-origin follow-up redirect: Location
+        replaces the whole query string.
+
+        A single `/fetch/job-42` -> `/fetch/job-42/` normalization redirect is enough to lose api_key.
+
+        按 query 传的凭证在同源续跳上要补回：Location 会整体替换查询串。
 
         一次 `/fetch/job-42` → `/fetch/job-42/` 的规范化跳转就足以丢掉 api_key。
         """
@@ -346,7 +375,10 @@ class TestDeclarativeVideoBackend:
         assert followed.calls.last.request.url.params["key"] == "secret"
 
     async def test_same_origin_redirect_keeps_the_location_query_too(self, tmp_path: Path):
-        """凭证要合并进 Location 自带的查询串，而不是整串替换掉它。"""
+        """Credentials are merged into the query string Location already carries, not replacing it
+        wholesale.
+
+        凭证要合并进 Location 自带的查询串，而不是整串替换掉它。"""
         definition = _definition()
         definition["auth"] = {"query": {"key": "{{ api_key }}"}}
 
@@ -378,7 +410,11 @@ class TestDeclarativeVideoBackend:
         assert params["region"] == "us"
 
     async def test_artifact_on_the_poll_host_gets_credentials(self, tmp_path: Path):
-        """定义可以把端点写在别的主机上，产物地址往往就出自那台主机。
+        """A definition may put endpoints on other hosts, and artifact URLs often come from that host.
+
+        Judging same-origin by base_url alone would make such downloads bare requests that fail auth.
+
+        定义可以把端点写在别的主机上，产物地址往往就出自那台主机。
 
         只按 base_url 判同源会让这类下载裸请求、认证失败。
         """
@@ -411,7 +447,13 @@ class TestDeclarativeVideoBackend:
         assert download.calls.last.request.headers["Authorization"] == "Bearer secret"
 
     async def test_redirect_target_does_not_become_a_trusted_artifact_origin(self, tmp_path: Path):
-        """轮询被跨源重定向后，终点主机不算「访问过的可信源」。
+        """After polling is redirected cross-origin, the destination host does not count as a "visited
+        trusted origin".
+
+        Credentials were already stripped on that hop; treating the destination as trusted would let the
+        artifact download hand the key to a third-party host that was never verified.
+
+        轮询被跨源重定向后，终点主机不算「访问过的可信源」。
 
         凭证在那一跳早已被卸掉；把终点当可信源，等于让产物下载把 key 送给一个从没验证过
         的第三方主机。
@@ -597,7 +639,10 @@ class TestDeclarativeVideoBackend:
         assert recorded == [("submit", {"error": "bad prompt"})]
 
     async def test_rejected_submit_carries_the_provider_reason(self, tmp_path: Path):
-        """声明式后端复用 submit_post，上游 4xx 的拒因摘要同样挂在异常上。"""
+        """The declarative backend reuses submit_post, so the summarized rejection reason of an upstream 4xx
+        is attached to the exception as well.
+
+        声明式后端复用 submit_post，上游 4xx 的拒因摘要同样挂在异常上。"""
         with capture_http() as router:
             router.post("https://relay.test/v1/video/create").mock(
                 return_value=httpx.Response(
@@ -631,6 +676,8 @@ class TestDeclarativeVideoBackend:
             )
             download = router.get(artifact_url).mock(return_value=httpx.Response(200, content=b"video"))
 
+            # A non-compliant destination is a deterministic outcome, so it does not become the retryable
+            # download failure artifact_download_failed
             # 目的地不合规是确定性结果，不落可重试下载的 artifact_download_failed
             with pytest.raises(ArtifactDestinationRejectedError):
                 await DeclarativeVideoBackend(
@@ -728,7 +775,10 @@ class TestDeclarativeVideoBackend:
         assert result.video_path.read_bytes() == b"resumed"
 
     async def test_submitted_base_url_is_replayed_on_resume(self, tmp_path: Path):
-        """用户在途改了供应商域名：续跑仍按提交时的域名轮询，不把旧任务误判成过期。"""
+        """The user changed the provider domain mid-flight: resume still polls the domain used at submit,
+        instead of misjudging the old task as expired.
+
+        用户在途改了供应商域名：续跑仍按提交时的域名轮询，不把旧任务误判成过期。"""
         with capture_http() as router:
             old_host = router.get("https://old.relay.test/v1/video/fetch/job-old").mock(
                 return_value=httpx.Response(
@@ -752,7 +802,7 @@ class TestDeclarativeVideoBackend:
         assert old_host.call_count == 1
         assert new_host.call_count == 0
         assert result.video_path.read_bytes() == b"resumed"
-        # 同源判定跟着回放的域名走，凭证照常附上。
+        # Same-origin checks follow the replayed domain, and credentials are attached as usual. / 同源判定跟着回放的域名走，凭证照常附上。
         assert download.calls.last.request.headers["Authorization"] == "Bearer secret"
 
     async def test_submit_persists_the_base_url_it_used(self, tmp_path: Path):
@@ -781,7 +831,10 @@ class TestDeclarativeVideoBackend:
         assert persisted[-1]["base_url"] == "https://relay.test"
 
     async def test_path_overrides_replace_submit_and_poll_paths(self, tmp_path: Path):
-        """覆盖的两条请求各按覆盖路径发出，相对原样 base_url 不剥版本段；取自响应的下载地址不受影响。"""
+        """The two overridden requests are each sent on their override path, relative to the raw base_url
+        without stripping the version segment; download URLs taken from the response are not affected.
+
+        覆盖的两条请求各按覆盖路径发出，相对原样 base_url 不剥版本段；取自响应的下载地址不受影响。"""
         with capture_http() as router, bounded_poll_clock():
             submit = router.post("https://relay.test/api/v1/v2/create").mock(
                 return_value=httpx.Response(200, json={"task_id": "job-42"})
@@ -810,7 +863,10 @@ class TestDeclarativeVideoBackend:
         assert download.calls.last.request.headers["Authorization"] == "Bearer secret"
 
     async def test_resume_replays_the_submitted_base_url_for_overridden_and_default_paths(self, tmp_path: Path):
-        """续跑回放提交时的原样域名：有覆盖的轮询相对原样值，没有覆盖的取件仍按归一化后的域名。"""
+        """Resume replays the raw domain used at submit: overridden polling is relative to the raw value,
+        and fetching without an override still uses the normalized domain.
+
+        续跑回放提交时的原样域名：有覆盖的轮询相对原样值，没有覆盖的取件仍按归一化后的域名。"""
         definition = _definition()
         definition["poll"]["extract"] = {"status": ["$.status"], "result_id": ["$.result_id"]}
         definition["result"] = {
@@ -845,7 +901,10 @@ class TestDeclarativeVideoBackend:
         assert outcome.video_path.read_bytes() == b"resumed"
 
     async def test_unreadable_input_asset_fails_with_the_stable_code(self, tmp_path: Path):
-        """素材在任务准备与执行之间消失时也要落稳定错误码，而不是没有译文的裸 OSError 文本。"""
+        """When an asset disappears between task preparation and execution, a stable error code must be
+        recorded, not bare OSError text with no translation.
+
+        素材在任务准备与执行之间消失时也要落稳定错误码，而不是没有译文的裸 OSError 文本。"""
         with capture_http() as router:
             submit = router.post("https://relay.test/v1/video/create")
 
@@ -884,7 +943,10 @@ class TestDeclarativeVideoBackend:
         assert submit.call_count == 0
 
     async def test_non_json_success_response_is_recorded(self, tmp_path: Path):
-        """2xx 却不是 JSON（网关 HTML 错误页、被截断的响应）时，原文也要留痕。"""
+        """When a 2xx is not JSON (a gateway HTML error page, a truncated response), the raw text must be
+        traced too.
+
+        2xx 却不是 JSON（网关 HTML 错误页、被截断的响应）时，原文也要留痕。"""
         recorded: list[tuple[str, object]] = []
 
         async def _record(stage: ProviderResponseStage, body: object) -> None:
@@ -930,7 +992,10 @@ class TestDeclarativeVideoBackend:
         }
 
     async def test_missing_required_input_fails_before_submitting(self, tmp_path: Path):
-        """声明为必需的素材缺席时不许发请求：模板会把该键整个删掉，供应商照样建任务照常计费。"""
+        """When an asset declared required is absent, no request may be sent: the template would drop that
+        key entirely, and the provider would still create and bill the task.
+
+        声明为必需的素材缺席时不许发请求：模板会把该键整个删掉，供应商照样建任务照常计费。"""
         definition = _definition()
         definition["inputs"]["first_frame"]["required"] = True
         assert validate_definition(definition).valid
@@ -952,7 +1017,13 @@ class TestDeclarativeVideoBackend:
         assert submit.call_count == 0
 
     async def test_resume_does_not_require_submit_assets(self, tmp_path: Path):
-        """续跑的请求本就不带素材（校验器也禁止 poll/result 模板引用 inputs）。
+        """Resume requests never carry assets (the validator also forbids poll/result templates from
+        referencing inputs).
+
+        Checking required items on resume would kill every paid task of a "required image input" endpoint
+        before its first poll.
+
+        续跑的请求本就不带素材（校验器也禁止 poll/result 模板引用 inputs）。
 
         在续跑上查必需项，会把每一笔「必需图输入」端点的已付费任务判死在第一次轮询之前。
         """
@@ -983,7 +1054,10 @@ class TestDeclarativeVideoBackend:
         assert result.video_path.read_bytes() == b"resumed"
 
     async def test_numeric_provider_task_id_is_accepted(self, tmp_path: Path):
-        """accept=scalar 的定义可以命中数字，格式口径是按字符串化交给下游。"""
+        """A definition with accept=scalar may match a number; the format rule is to stringify it before
+        handing it downstream.
+
+        accept=scalar 的定义可以命中数字，格式口径是按字符串化交给下游。"""
         definition = _definition()
         definition["submit"]["extract"]["task_id"] = {"paths": ["$.task_id"], "accept": "scalar"}
         assert validate_definition(definition).valid
@@ -1012,7 +1086,10 @@ class TestDeclarativeVideoBackend:
         assert poll.call_count == 1
 
     async def test_failed_status_without_error_still_fails_immediately(self, tmp_path: Path):
-        """供应商判负却没给理由时也必须立刻终态，不是一路轮询到超时。"""
+        """When the provider reports failure without a reason, the task must still reach a terminal state
+        immediately rather than poll until timeout.
+
+        供应商判负却没给理由时也必须立刻终态，不是一路轮询到超时。"""
         with capture_http() as router, bounded_poll_clock():
             router.post("https://relay.test/v1/video/create").mock(
                 return_value=httpx.Response(200, json={"task_id": "job-42"})
@@ -1033,7 +1110,13 @@ class TestDeclarativeVideoBackend:
         assert poll.call_count == 1
 
     async def test_result_request_404_on_resume_is_retried_not_expired(self, tmp_path: Path):
-        """只有轮询端点的 404 是「远端任务没了」。
+        """Only a 404 from the poll endpoint means "the remote task is gone".
+
+        A 404 from the result endpoint means the artifact is not ready yet; treating it as expired during
+        resume would permanently lose a paid task that already succeeded, and it should be left to the
+        fetch budget to retry.
+
+        只有轮询端点的 404 是「远端任务没了」。
 
         result 端点的 404 说的是产物还没就绪；续跑期把它判成过期会永久丢掉一条已经成功的
         付费任务，它该留给取件预算重试。
@@ -1098,7 +1181,10 @@ class TestDeclarativeVideoBackend:
         assert poll.call_count == 1
 
     async def test_query_credentials_are_not_in_the_failure_text(self, tmp_path: Path):
-        """auth 节按 query 传凭证时，HTTP 错误的消息会落进 task.error_message 与日志。"""
+        """When the auth section passes credentials in the query, the message of an HTTP error ends up in
+        task.error_message and the logs.
+
+        auth 节按 query 传凭证时，HTTP 错误的消息会落进 task.error_message 与日志。"""
         definition = _definition()
         definition["auth"] = {"query": {"key": "{{ api_key }}"}}
         assert validate_definition(definition).valid
@@ -1148,6 +1234,9 @@ class TestDeclarativeVideoBackend:
                 return_value=httpx.Response(500, json={"error": "result exploded"})
             )
 
+            # The task already succeeded and the money is spent: transient failures of the second fetch share
+            # the artifact fetch budget, and once exhausted end in the recoverable artifact_download_failed,
+            # rather than discarding a paid final cut on the spot.
             # 任务已成功、钱已花：二次取件的瞬态失败共用产物取件预算，耗尽后落可恢复的
             # artifact_download_failed，而不是就地废掉一条已付费的成片。
             with pytest.raises(DeclarativeRuntimeError) as caught:
@@ -1164,7 +1253,10 @@ class TestDeclarativeVideoBackend:
         assert recorded[-1] == ("result", {"error": "result exploded"})
 
     async def test_request_log_drops_auth_query_credentials(self, tmp_path: Path, caplog):
-        """请求日志按键名遮蔽，遮不到拼进 URL 查询串里的 ``auth.query`` 凭证。"""
+        """The request log masks by key name, which cannot reach ``auth.query`` credentials appended to the
+        URL query string.
+
+        请求日志按键名遮蔽，遮不到拼进 URL 查询串里的 ``auth.query`` 凭证。"""
         definition = _definition()
         definition["auth"] = {"query": {"key": "{{ api_key }}"}}
         assert validate_definition(definition).valid
@@ -1190,6 +1282,8 @@ class TestDeclarativeVideoBackend:
                 provider="custom-1",
             ).generate(_request(tmp_path))
 
+        # Assertions are limited to logs written by this module; httpx's own `HTTP Request:` lines are outside
+        # it.
         # 断言范围限本模块写入的日志；httpx 自己的 `HTTP Request:` 行不在其内。
         logged = "\n".join(
             record.getMessage() for record in caplog.records if record.name == "lib.custom_provider.declarative_backend"
@@ -1198,7 +1292,10 @@ class TestDeclarativeVideoBackend:
         assert "sk-super-secret" not in logged
 
     async def test_request_log_summarizes_raw_base64_assets(self, tmp_path: Path, caplog):
-        """``encoding: "base64"`` 渲染出的是裸 base64 串，没有 data URI 前缀可识别；日志按形状摘要。"""
+        """``encoding: "base64"`` renders a bare base64 string with no data URI prefix to recognize; the log
+        summarizes by shape.
+
+        ``encoding: "base64"`` 渲染出的是裸 base64 串，没有 data URI 前缀可识别；日志按形状摘要。"""
         definition = _definition()
         definition["inputs"] = {"first_frame": {"source": "start_image", "encoding": "base64"}}
         assert validate_definition(definition).valid
@@ -1232,7 +1329,10 @@ class TestDeclarativeVideoBackend:
         assert encoded_prefix not in logged
 
     async def test_request_log_summarizes_assets_shorter_than_the_shape_threshold(self, tmp_path: Path, caplog):
-        """小到编不出摘要阈值长度的素材（如 1×1 PNG）照样是用户媒体：按来源摘，不按体积。"""
+        """Assets too small to reach the summary threshold length (such as a 1×1 PNG) are still user media:
+        summarize by source, not by size.
+
+        小到编不出摘要阈值长度的素材（如 1×1 PNG）照样是用户媒体：按来源摘，不按体积。"""
         definition = _definition()
         definition["inputs"] = {"first_frame": {"source": "start_image", "encoding": "base64"}}
         assert validate_definition(definition).valid
@@ -1266,7 +1366,10 @@ class TestDeclarativeVideoBackend:
         assert encoded not in logged
 
     async def test_request_log_summarizes_assets_embedded_in_mixed_text(self, tmp_path: Path, caplog):
-        """定义可以把素材拼进 ``"prefix{{ inputs.first_frame }}"``：既不等值也过不了纯 base64 兜底。"""
+        """A definition may splice an asset into ``"prefix{{ inputs.first_frame }}"``: it is neither an
+        exact match nor caught by the pure base64 fallback.
+
+        定义可以把素材拼进 ``"prefix{{ inputs.first_frame }}"``：既不等值也过不了纯 base64 兜底。"""
         definition = _definition()
         definition["inputs"] = {"first_frame": {"source": "start_image", "encoding": "base64"}}
         definition["submit"]["body"]["image"] = "prefix:{{ inputs.first_frame }}"
@@ -1301,7 +1404,10 @@ class TestDeclarativeVideoBackend:
         assert encoded not in logged
 
     async def test_request_log_masks_arbitrary_auth_header_names(self, tmp_path: Path, caplog):
-        """通用敏感词表认不出 ``Ocp-Apim-Subscription-Key`` 这类名字；按定义 ``auth.headers`` 的键名遮。"""
+        """The generic sensitive-word list does not recognize names like ``Ocp-Apim-Subscription-Key``; mask
+        by the key names of the definition's ``auth.headers``.
+
+        通用敏感词表认不出 ``Ocp-Apim-Subscription-Key`` 这类名字；按定义 ``auth.headers`` 的键名遮。"""
         definition = _definition()
         definition["auth"] = {"headers": {"Ocp-Apim-Subscription-Key": "{{ api_key }}"}}
         assert validate_definition(definition).valid
@@ -1333,7 +1439,10 @@ class TestDeclarativeVideoBackend:
 
 
 class TestExtractDuration:
-    """``extract_duration`` 直接决定计费时长：越界与不可解析一律回 ``None`` 走缺省计价。"""
+    """``extract_duration`` directly decides the billed duration: out-of-range and unparsable values all
+    return ``None`` and use default pricing.
+
+    ``extract_duration`` 直接决定计费时长：越界与不可解析一律回 ``None`` 走缺省计价。"""
 
     SPEC: ClassVar[dict[str, object]] = {"paths": ["$.usage.duration"], "accept": "scalar"}
 

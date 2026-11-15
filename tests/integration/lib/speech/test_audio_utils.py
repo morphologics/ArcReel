@@ -1,4 +1,6 @@
-"""媒体时长探测（lib/speech/audio_utils.py）的降级与探测行为。"""
+"""Degradation and probing behavior of media duration probing (lib/speech/audio_utils.py).
+
+媒体时长探测（lib/speech/audio_utils.py）的降级与探测行为。"""
 
 from __future__ import annotations
 
@@ -38,7 +40,9 @@ def _synthesized_bytes(name: str, *args: str) -> bytes:
 
 
 def _video_only_mp4_bytes(duration_seconds: float = 1.0) -> bytes:
-    """生成一段无音轨的极小 MP4（供"视频改名为 .wav 上传"用例复现）。"""
+    """Generate a tiny MP4 without an audio track (to reproduce the "video renamed to .wav and uploaded" case).
+
+    生成一段无音轨的极小 MP4（供"视频改名为 .wav 上传"用例复现）。"""
     return _synthesized_bytes(
         "video.mp4",
         "-f",
@@ -53,7 +57,10 @@ def _video_only_mp4_bytes(duration_seconds: float = 1.0) -> bytes:
 
 
 def _m4a_bytes(duration_seconds: float = 3.0) -> bytes:
-    """生成一段有音轨但容器不是 wav/mp3 的 m4a（供"容器改名不改内容"用例复现）。"""
+    """Generate an m4a with an audio track whose container is not wav/mp3 (to reproduce the "container renamed, content
+    unchanged" case).
+
+    生成一段有音轨但容器不是 wav/mp3 的 m4a（供"容器改名不改内容"用例复现）。"""
     return _synthesized_bytes(
         "audio.m4a", "-f", "lavfi", "-i", f"sine=frequency=440:duration={duration_seconds}", "-c:a", "aac"
     )
@@ -87,12 +94,18 @@ class TestProbeAudioDuration:
             await audio_utils_module.probe_audio_duration_seconds(b"not audio at all", ".wav")
 
     async def test_video_only_file_renamed_to_wav_is_rejected(self):
-        """把无音轨的视频文件改名为 .wav 上传时，容器/时长校验会通过，但应无音频流可用而拒绝。"""
+        """When a video file without an audio track is renamed to .wav and uploaded, the container/duration checks pass, but
+        it should be rejected for having no usable audio stream.
+
+        把无音轨的视频文件改名为 .wav 上传时，容器/时长校验会通过，但应无音频流可用而拒绝。"""
         with pytest.raises(ValueError, match=r"音频文件无法解析"):
             await audio_utils_module.probe_audio_duration_seconds(_video_only_mp4_bytes(), ".wav")
 
     async def test_m4a_renamed_to_wav_is_rejected(self):
-        """m4a 有音轨也能探出时长，但容器不是 wav，改名上传应被拒绝而非当作 wav 收下。"""
+        """An m4a has an audio track and its duration can be probed, but the container is not wav, so a renamed upload should
+        be rejected rather than accepted as wav.
+
+        m4a 有音轨也能探出时长，但容器不是 wav，改名上传应被拒绝而非当作 wav 收下。"""
         with pytest.raises(ValueError, match=r"音频文件无法解析"):
             await audio_utils_module.probe_audio_duration_seconds(_m4a_bytes(), ".wav")
 
@@ -104,6 +117,8 @@ class TestProbeAudioDuration:
 
         @contextmanager
         def gated_named_temporary_file(*args, **kwargs):
+            # Stop after the temp file is written and before the path is handed back, so the cancellation lands exactly in this
+            # stretch.
             # 临时文件写完、交还路径之前停住，让取消恰好落在这一程。
             with original_named_temporary_file(*args, **kwargs) as tmp:
                 yield tmp
@@ -157,7 +172,10 @@ class TestProbeReferenceAudioTotalSeconds:
         assert total == 0.0
 
     async def test_unreadable_file_returns_none_not_partial_sum(self, tmp_path):
-        """半截总时长比跳过校验更危险：任一文件探测失败就整体判 None，不能只算成功的部分。"""
+        """A partial total duration is more dangerous than skipping the check: if any file fails to probe the whole result is
+        None; the successful part alone must not be summed.
+
+        半截总时长比跳过校验更危险：任一文件探测失败就整体判 None，不能只算成功的部分。"""
         path_a = tmp_path / "a.wav"
         path_missing = tmp_path / "missing.wav"
         path_a.write_bytes(wav_bytes(3))

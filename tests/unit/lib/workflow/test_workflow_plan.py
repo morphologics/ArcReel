@@ -242,6 +242,7 @@ def test_multiple_admission_repairs_preserve_the_first_structured_action() -> No
         admission=admission.to_payload(),
     )
 
+    # Per-unit problems are stated only once, in the video step's admission verdict, and no longer copied into step problems and the top-level summary.
     # 逐单元问题只在视频一步的准入结论里陈述一次，不再复制到步骤问题与顶层汇总。
     assert [p.code for step in plan.steps for p in step.problems] == []
     assert plan.problems == []
@@ -366,7 +367,9 @@ def test_stale_video_remains_editable_without_an_implicit_regeneration_step() ->
 
 
 def test_steps_state_their_own_content_instead_of_their_position() -> None:
-    """下一步在前面的步骤上时，后面已经齐备的内容照常陈述为完成，不因前一步未完成而显示为待处理。"""
+    """When the next step is on an earlier step, later content that is already complete is still stated as done, not shown as pending because the earlier step is unfinished.
+
+    下一步在前面的步骤上时，后面已经齐备的内容照常陈述为完成，不因前一步未完成而显示为待处理。"""
     status = _status(action="author_prompts", requested_ids=["E1S02"])
     status.content.pending_authoring_ids = ["E1S02"]
     status.artifacts["videos"] = {"current_ids": ["E1S01"], "stale_ids": [], "missing_ids": []}
@@ -394,7 +397,9 @@ def test_branch_alternatives_travel_with_the_unchanged_next_action() -> None:
 
 
 def test_structure_problem_is_stated_once_on_its_step_with_its_unit() -> None:
-    """同一提示只在所属步骤下发一次，带单元标识与稳定问题码，不带原始理由码。"""
+    """The same hint is issued only once under the step it belongs to, with the unit id and a stable problem code, without the raw reason code.
+
+    同一提示只在所属步骤下发一次，带单元标识与稳定问题码，不带原始理由码。"""
     problem = GenerationProblem(
         code="mixed_speech",
         detail="character_and_narrator_mixed",

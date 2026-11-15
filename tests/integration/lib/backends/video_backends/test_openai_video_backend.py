@@ -1,4 +1,7 @@
-"""OpenAIVideoBackend 与随包 ffmpeg：自管落盘的成片经真实重封装变成 faststart（OpenAI SDK 用替身）。"""
+"""OpenAIVideoBackend with the bundled ffmpeg: the output it writes itself becomes faststart through a real remux
+(the OpenAI SDK is a double).
+
+OpenAIVideoBackend 与随包 ffmpeg：自管落盘的成片经真实重封装变成 faststart（OpenAI SDK 用替身）。"""
 
 from __future__ import annotations
 
@@ -21,9 +24,12 @@ def _video(status: str) -> MagicMock:
 
 
 async def test_generated_video_lands_as_faststart(tmp_path: Path):
-    """OpenAI 不经 download_video，写完成片后自己补 faststart：落盘的 mp4 moov 在前。"""
+    """OpenAI does not go through download_video and adds faststart itself after writing the output: the mp4 on disk has
+    moov first.
+
+    OpenAI 不经 download_video，写完成片后自己补 faststart：落盘的 mp4 moov 在前。"""
     source = tmp_path / "provider.mp4"
-    make_test_video_with_audio_tail(source)  # mp4 封装器缺省把 moov 写在末尾
+    make_test_video_with_audio_tail(source)  # The mp4 muxer writes moov at the end by default / mp4 封装器缺省把 moov 写在末尾
     assert read_mp4_layout(source) == Mp4Layout(major_brand=b"isom", moov_first=False)
     payload = source.read_bytes()
 

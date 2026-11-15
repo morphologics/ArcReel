@@ -1,4 +1,6 @@
-"""ImageCapabilityError 携带稳定 code + 上下文 params。"""
+"""ImageCapabilityError carries a stable code + context params.
+
+ImageCapabilityError 携带稳定 code + 上下文 params。"""
 
 from lib.backends.image_backends import ImageCapabilityError
 

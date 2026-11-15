@@ -1,4 +1,8 @@
-"""生成输入 interface：分镜图与宫格的装配序、缺口定性与一次报全、依据与冻结。
+"""Generation input interface: assembly order, gap classification with all gaps reported at once, basis and freezing for storyboard images and grids.
+
+Observation goes through the executor's adapter, paired with an in-memory manifest adapter; reference images are real small images in a temp directory.
+
+生成输入 interface：分镜图与宫格的装配序、缺口定性与一次报全、依据与冻结。
 
 观测走执行器的 adapter，配内存清单 adapter；参考图是临时目录里的真实小图。
 """
@@ -35,7 +39,7 @@ from lib.artifacts.generation_input import (
 TARGET = "E1S02"
 _REGISTERED_BASIS = ArtifactBasis.build("test/registered", kind_version=1, inputs={}).digest
 
-#: 缺省登记在清单里的资产图与上一分镜图：键 → 路径。
+#: Asset sheets and the previous storyboard image registered in the manifest by default: key → path. / 缺省登记在清单里的资产图与上一分镜图：键 → 路径。
 _SHEETS: dict[ArtifactKey, str] = {
     ArtifactKey.asset_sheet("character", "张三"): "characters/张三.png",
     ArtifactKey.asset_sheet("character", "张三/劲装"): "characters/derivatives/张三/劲装.png",
@@ -105,7 +109,9 @@ def _script(**target_fields: Any) -> dict[str, Any]:
 
 
 class _Fixture:
-    """项目目录里的真实小图 + 内存清单：每个用例在其上做一处改动。"""
+    """Real small images in the project directory + in-memory manifest: each case makes one change on top of it.
+
+    项目目录里的真实小图 + 内存清单：每个用例在其上做一处改动。"""
 
     def __init__(self, root: Path) -> None:
         self.root = root
@@ -487,6 +493,7 @@ class TestFreeze:
             frozen_digests = [visual.content_digest for visual in frozen.references.visual_references]
             claimed = {claim.artifact_path: claim.content_digest for claim in frozen.claims}
 
+        # The original image is not a registered artifact and has no claim; every other reference image's claim is bound to the bytes read at freeze time.
         # 原图不是登记产物，没有 claim；其余每张参考图的 claim 绑定到冻结时读到的字节。
         claimable = [ref for ref in generation_input.references if ref.claim is not None]
         assert [claim.key for claim in frozen.claims] == [ref.claim.key for ref in claimable if ref.claim]

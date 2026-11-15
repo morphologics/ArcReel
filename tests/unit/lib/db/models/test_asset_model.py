@@ -1,4 +1,6 @@
-"""Asset ORM 模型结构测试。"""
+"""Asset ORM model structure tests.
+
+Asset ORM 模型结构测试。"""
 
 import pytest
 from sqlalchemy import select

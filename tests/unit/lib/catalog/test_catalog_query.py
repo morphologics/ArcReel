@@ -1,4 +1,6 @@
-"""目录查询：按供应商取模型、列模型、取默认模型与价格的读契约。"""
+"""Catalog queries: the read contract for getting models by provider, listing models, and getting the default model and prices.
+
+目录查询：按供应商取模型、列模型、取默认模型与价格的读契约。"""
 
 import pytest
 
@@ -147,6 +149,7 @@ def test_min_app_version_hides_model_and_its_default(monkeypatch):
     )
     install_catalog(monkeypatch, parse_catalog(raw))
 
+    # Below the minimum app version: not shown and not resolvable; if designated as default, treated as having no default
     # 低于最低应用版本：不展示、不可解析；被指定为默认时按没有默认处理
     assert catalog.get_model("acme", "next") is None
     assert "next" not in catalog.list_models("acme")
@@ -172,7 +175,7 @@ def user_added_models(acme_catalog):
             catalog.UserAddedModel("acme", "chat-pro", "text", multiplier=0.5),
             catalog.UserAddedModel("acme", "vendor/chat", "text", multiplier=2.0),
             catalog.UserAddedModel("acme", "clip-x", "video", fallback_durations=(4, 8)),
-            # 官方清单里已有同一模型键：换成官方版本
+            # The official list already has the same model key: replaced with the official version / 官方清单里已有同一模型键：换成官方版本
             catalog.UserAddedModel("acme", "img-new", "image", multiplier=3.0),
         ]
     )

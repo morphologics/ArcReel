@@ -1,4 +1,10 @@
-"""assemble_backend 内置（简单族）async 装载段单测：内存 SQLite + 真 ConfigResolver。
+"""Unit tests for the async loading stage of assemble_backend built-ins (simple family): in-memory SQLite + real ConfigResolver.
+
+Mirrors the in-memory DB pattern of test_config_resolver.py: the resolver is not mocked; asserts that the
+credential overlay really lands in the LoadedConfig envelope, that a simple-family backend is built end to
+end through assemble_backend, and that an unregistered provider x media fails loudly.
+
+assemble_backend 内置（简单族）async 装载段单测：内存 SQLite + 真 ConfigResolver。
 
 镜像 test_config_resolver.py 的内存 DB 范式：不 mock resolver，断言凭证 overlay 真进 LoadedConfig
 信封、端到端经 assemble_backend 造出简单族 backend、未登记 provider × media fail-loud。
@@ -41,7 +47,7 @@ class TestLoadBuiltinConfig:
         config = await _load_builtin_config(resolver, "ark", rate_limiter=None)
         assert config.credentials.get("api_key") == "ark-secret"
         assert config.credentials.get("base_url") == "https://relay.test/api/v3"
-        # registry meta 进信封：用于 default_base_url 回退
+        # Registry meta goes into the envelope: used for the default_base_url fallback. / registry meta 进信封：用于 default_base_url 回退
         assert config.provider_meta is not None
         assert config.provider_meta.default_base_url == "https://ark.cn-beijing.volces.com/api/v3"
 
@@ -60,6 +66,7 @@ class TestAssembleBuiltinEndToEnd:
             await assemble_backend(
                 provider_id="ark", media_type="image", model_id="doubao-seedream-5-0-lite-260128", resolver=resolver
             )
+        # User has no base_url -> fall back to the registry default; the credential overlay really reaches the constructor args via loading.
         # 用户未配 base_url → 回落 registry default；凭证 overlay 经装载真进构造参数
         assert built == [
             {
@@ -74,7 +81,9 @@ class TestAssembleBuiltinEndToEnd:
         ]
 
     async def test_model_outside_provider_listing_is_rejected_without_fallback(self, db_factory):
-        """已下架的模型不在供应商清单中：报错由用户重新选择，不构造 backend、不回落到别的模型。"""
+        """A delisted model is not in the provider list: report an error so the user picks again; do not build a backend or fall back to another model.
+
+        已下架的模型不在供应商清单中：报错由用户重新选择，不构造 backend、不回落到别的模型。"""
         await _seed_provider_config(db_factory, "openai", api_key="sk")
         resolver = ConfigResolver(db_factory)
         with captured_backend_construction() as built, pytest.raises(ModelNotInCatalogError) as excinfo:
@@ -98,6 +107,7 @@ class TestAssembleBuiltinEndToEnd:
             await assemble_backend(provider_id="ark", media_type="audio", model_id="x", resolver=resolver)
 
     async def test_gemini_aistudio_image_end_to_end(self, db_factory):
+        # gemini special family: provider_id directly decides backend_type; credential overlay + shared rate_limiter reach the closure via loading.
         # gemini 特例族：provider_id 直接决定 backend_type，凭证 overlay + 共享 rate_limiter 经装载进闭包
         await _seed_provider_config(db_factory, "gemini-aistudio", api_key="g-secret", base_url="https://g.relay.test")
         sentinel = object()
@@ -125,6 +135,7 @@ class TestAssembleBuiltinEndToEnd:
         ]
 
     async def test_text_simple_end_to_end(self, db_factory):
+        # Text simple family: the credential overlay really reaches the constructor args; base_url falls back to the registry default.
         # 文本简单族：凭证 overlay 经装载真进构造参数，base_url 回落 registry default
         await _seed_provider_config(db_factory, "ark", api_key="ark-secret")
         resolver = ConfigResolver(db_factory)
@@ -145,6 +156,8 @@ class TestAssembleBuiltinEndToEnd:
         ]
 
     async def test_text_dashscope_compat_end_to_end(self, db_factory):
+        # dashscope text OpenAI-compat: base_url derived by the helper, provider_name passed through for billing
+        # attribution, end to end through the seam.
         # dashscope 文本 OpenAI-compat：base_url 经 helper 派生、透传 provider_name 计费归因，端到端经缝
         await _seed_provider_config(db_factory, "dashscope", api_key="ds-secret")
         resolver = ConfigResolver(db_factory)
@@ -200,6 +213,8 @@ class TestAssembleBuiltinEndToEnd:
         mock_patched.chat.completions.create_with_completion.assert_awaited_once()
 
     async def test_kling_image_api_model_name_decoupled_end_to_end(self, db_factory):
+        # kling special family: the dual-secret overlay really reaches the closure; api_model_name decoupling is read
+        # from the registry models (alias key).
         # kling 特例族：双 secret overlay 真进闭包；api_model_name 解耦从 registry models 读到（别名键）
         await _seed_provider_config(db_factory, "kling", access_key="ak-1", secret_key="sk-1")
         resolver = ConfigResolver(db_factory)
@@ -224,7 +239,10 @@ class TestAssembleBuiltinEndToEnd:
 
 
 def _any_listed_model(provider_id: str, media_type: str) -> str | None:
-    """该供应商该媒体类型的默认模型；目录没指定默认时取清单里第一个同媒体类型的模型，一个都没有时为 None。"""
+    """Default model of this provider for this media type; if the catalog names no default, the first model of the
+    same media type in the list; None if there is none.
+
+    该供应商该媒体类型的默认模型；目录没指定默认时取清单里第一个同媒体类型的模型，一个都没有时为 None。"""
     default = catalog.default_model(provider_id, media_type)
     if default is not None:
         return default
@@ -234,7 +252,12 @@ def _any_listed_model(provider_id: str, media_type: str) -> str | None:
 
 
 class TestAssembleBuiltinWithRealSdkClients:
-    """不替换任何 SDK 客户端，经 assemble_backend 的线程构造路径造出每个内置 backend。
+    """Build every built-in backend via assemble_backend's thread construction path, without replacing any SDK client.
+
+    Construction runs in an asyncio.to_thread worker thread, which has no event loop: an SDK client that needs an
+    event loop at construction time (e.g. the grpc.aio channel of xai_sdk.AsyncClient) fails here.
+
+    不替换任何 SDK 客户端，经 assemble_backend 的线程构造路径造出每个内置 backend。
 
     构造在 asyncio.to_thread 的工作线程里跑，那里没有事件循环：构造时就要求事件循环的 SDK 客户端
     （如 xai_sdk.AsyncClient 的 grpc.aio 通道）会在这里失败。
@@ -254,6 +277,7 @@ class TestAssembleBuiltinWithRealSdkClients:
             credentials_path=str(credentials_file),
             gcs_bucket="demo-bucket",
         )
+        # Service-account private key parsing has nothing to do with the event loop; replace it so the test need not generate a real key.
         # 服务账号私钥解析与事件循环无关，替掉它免得在测试里生成真私钥。
         with captured_vertex_credentials():
             backend = await assemble_backend(
@@ -335,6 +359,7 @@ class TestAssembleCustomEndToEnd:
 
     @patch("lib.custom_provider.endpoints.OpenAITextBackend")
     async def test_custom_text_provider_delegates_to_loader(self, mock_cls, db_factory):
+        # The text custom path shares load_custom_backend with media: the text media_type goes through the same unified seam.
         # 文本自定义路径与媒体共用 load_custom_backend：text media_type 同经统一缝
         from lib.custom_provider import make_provider_id
         from lib.custom_provider.backends import CustomTextBackend

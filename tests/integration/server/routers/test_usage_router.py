@@ -14,6 +14,7 @@ from lib.db.repositories.custom_provider_repo import CustomProviderRepository
 from lib.project.project_manager import ProjectManager
 from server.routers import usage
 
+# # These tests' projects have no script file: the entry cannot be found, position is None.
 # 这些用例的项目没有剧本文件：条目找不到，位置为 None。
 _NO_SCRIPT = {"item_position": None, "item_excerpt": "", "item_thumbnail": None}
 
@@ -21,7 +22,9 @@ BASE_TIME = datetime(2026, 3, 1, 12, 0, tzinfo=UTC)
 
 
 def make_call(**overrides) -> ApiCall:
-    """一行 api_calls；未覆写的列取一组不影响筛选的中性值。"""
+    """One api_calls row; columns not overridden take neutral values that do not affect filtering.
+
+    一行 api_calls；未覆写的列取一组不影响筛选的中性值。"""
     fields: dict = {
         "project_name": "demo",
         "call_type": "image",
@@ -38,7 +41,9 @@ def make_call(**overrides) -> ApiCall:
 
 @pytest.fixture
 async def records_client(db_factory, usage_app):
-    """五条终态记录 + 一条被任务代表的 pending + 一条无任务的 pending。"""
+    """Five terminal records + one pending represented by a task + one pending without a task.
+
+    五条终态记录 + 一条被任务代表的 pending + 一条无任务的 pending。"""
     async with db_factory() as session:
         session.add(
             Task(
@@ -157,7 +162,10 @@ class TestUnpricedCost:
         assert body["cache_write_1h_tokens"] == 50
 
     def test_summary_totals_only_priced_calls_and_counts_the_rest(self, unpriced_client):
-        """汇总只合计已定价的调用（0 元也是已定价），未定价的另给次数；主币种判定不变。"""
+        """The summary totals only priced calls (0 is also priced); unpriced ones get a separate count; primary currency
+        determination is unchanged.
+
+        汇总只合计已定价的调用（0 元也是已定价），未定价的另给次数；主币种判定不变。"""
         body = unpriced_client.get("/api/v1/usage/summary").json()
 
         assert body["kpi"]["calls"] == 4
@@ -241,7 +249,10 @@ class TestUsageRecordsList:
 
     @pytest.mark.parametrize("query", ["since=0001-01-01T00:00:00%2B08:00", "until=9999-12-31T23:59:59-08:00"])
     def test_unrepresentable_bound_is_rejected(self, records_client, query):
-        """带偏移的极端时刻换算到 UTC 会越过 datetime 边界；路由先拒绝，不让它溢出成 500。"""
+        """Extreme instants with offsets crossing the datetime bounds when converted to UTC; the router rejects them first
+        instead of letting them overflow into a 500.
+
+        带偏移的极端时刻换算到 UTC 会越过 datetime 边界；路由先拒绝，不让它溢出成 500。"""
         response = records_client.get(f"/api/v1/usage/records?{query}")
         assert response.status_code == 422
         assert response.json()["detail"] == "起止时刻超出可表示的时间范围，请检查后重试"
@@ -251,7 +262,9 @@ class TestUsageRecordsList:
         assert records_client.get(f"/api/v1/usage/records?cursor={cursor}").status_code == 422
 
     def test_cursor_instant_overflowing_utc_rejected(self, records_client):
-        """游标里的时刻带极端偏移、换算 UTC 越界时同样 422，不让它溢出成 500。"""
+        """A cursor instant with an extreme offset that overflows when converted to UTC is likewise 422, not a 500.
+
+        游标里的时刻带极端偏移、换算 UTC 越界时同样 422，不让它溢出成 500。"""
         cursor = base64.urlsafe_b64encode(
             json.dumps({"started_at": "0001-01-01T00:00:00+14:00", "id": 1}).encode()
         ).decode()
@@ -267,7 +280,10 @@ class TestUsageRecordsList:
 
 
 class TestUsageRecordEpisodeItemRefs:
-    """条目 ID 里的集 ID 不给创作者看：记录附上所属集的标题、播出位置与集内 ID。"""
+    """The episode ID inside entry IDs is not shown to creators: records carry the episode's title, order position
+    and in-episode ID.
+
+    条目 ID 里的集 ID 不给创作者看：记录附上所属集的标题、播出位置与集内 ID。"""
 
     @pytest.fixture
     async def client(self, db_factory, monkeypatch, tmp_path, usage_app):
@@ -315,7 +331,10 @@ class TestUsageRecordEpisodeItemRefs:
 
 
 class TestUsageRecordProjectTitles:
-    """项目列显示标题；项目读不到或没有标题时不给标题，由界面回退显示项目名。"""
+    """The project column shows the title; when the project cannot be read or has no title no title is given, and
+    the UI falls back to the project name.
+
+    项目列显示标题；项目读不到或没有标题时不给标题，由界面回退显示项目名。"""
 
     @pytest.fixture
     async def client(self, db_factory, monkeypatch, tmp_path, usage_app):
@@ -359,7 +378,10 @@ class TestUsageRecordProjectTitles:
 
 
 class TestProviderInSettings:
-    """详情说明供应商是否还在供应商设置里，界面据此决定模型名是否链接到供应商模型的设置。"""
+    """Detail says whether the provider is still in provider settings; the UI uses it to decide whether the model name
+    links to the provider's model settings.
+
+    详情说明供应商是否还在供应商设置里，界面据此决定模型名是否链接到供应商模型的设置。"""
 
     async def test_only_builtin_and_existing_custom_providers_are_in_settings(self, db_factory, usage_app):
         async with db_factory() as session:
@@ -401,7 +423,9 @@ class TestUsageRecordDetail:
         assert "user_id" not in detail
 
     def test_detail_carries_the_failure_columns(self, records_client):
-        """失败行的三字段要一路到详情：弹窗的「失败原因」分组靠它们渲染。"""
+        """The three fields of a failed row must reach the detail: the dialog's 'failure reason' group renders from them.
+
+        失败行的三字段要一路到详情：弹窗的「失败原因」分组靠它们渲染。"""
         record_id = records_client.get("/api/v1/usage/records?segment_id=S2").json()["items"][0]["id"]
 
         detail = records_client.get(f"/api/v1/usage/records/{record_id}").json()

@@ -1,4 +1,7 @@
-"""资产图与衍生资产图任务执行：生成后判 current；生成输入不成立时在解析供应商通道与付费前失败。"""
+"""Sheet and derivative sheet task execution: judged current after generation; when generation inputs do not
+hold, fail before resolving the provider channel and before paying.
+
+资产图与衍生资产图任务执行：生成后判 current；生成输入不成立时在解析供应商通道与付费前失败。"""
 
 import pytest
 

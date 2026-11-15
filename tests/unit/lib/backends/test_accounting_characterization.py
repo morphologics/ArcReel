@@ -1,4 +1,24 @@
-"""记账特征化测试矩阵：五通道落库行为锁。
+"""Accounting characterization test matrix: behavior lock on how the five channels write to the DB.
+
+Driven through the generators' public methods + fake backends (Protocol implementations returning controllable
+results / raising controllable exceptions) + a real in-memory SQLite DB + a frozen clock, it locks field by field
+how the accounting chain (Ledger -> UsageRepository -> settlement -> catalog price-list pricing) writes rows: nothing
+inside the chain is mocked, the whole ApiCall row is asserted, and any unexpected change in what accounting writes
+fails right here.
+
+The five channels (per-turn accounting of Agent sessions is in
+``tests/integration/server/agent_runtime/test_session_manager_usage_billing.py``):
+- image / audio / video / text generation brackets (public methods of MediaGenerator / TextGenerator)
+- resume back-billing (MediaGenerator.resume_video_async: success and expired-failure branches + pending idempotency guard)
+
+Time fields: usage_repo's utc_now is replaced by a stepping clock (advances 5 seconds per read), so
+started_at / finished_at can be asserted exactly. SQLite reads DateTime(timezone=True) back as naive
+datetime; in cross-session finish/finalize the naive side gets a UTC tzinfo before subtracting it from
+aware(finished_at), and duration_ms is written back from the real step (a single start->finish is 5000ms)
+(also the real duration under PostgreSQL, no divergence). created_at / updated_at are bound by ORM column
+defaults to the real clock and carry no accounting meaning; they are only asserted to be datetime.
+
+记账特征化测试矩阵：五通道落库行为锁。
 
 以生成器公开方法驱动 + 假 backend（Protocol 实现，返回可控结果/抛可控异常）+ 真内存
 SQLite 落库 + 冻结时钟，把记账链路（Ledger → UsageRepository → 结算 →
@@ -67,18 +87,24 @@ from tests.catalog_support import catalog_of, install_catalog
 from tests.fakes import FakeConfigResolver, write_backend_output, write_generation_targets
 
 # ---------------------------------------------------------------------------
+# Frozen clock: the write side (usage_repo.utc_now) is an aware datetime; SQLite reads it back as naive.
+# ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
 # 冻结时钟：写入侧（usage_repo.utc_now）是 aware datetime，SQLite 回读为 naive。
 # ---------------------------------------------------------------------------
 
 _T0_AWARE = datetime(2026, 1, 1, 12, 0, 0, tzinfo=UTC)
 _CLOCK_STEP = timedelta(seconds=5)
+# ApiCall row read-back form (naive): T0 = started_at, T1 = finished_at of the finish/finalize that follows right after.
 # ApiCall 行回读形态（naive）：T0 = started_at，T1 = 紧随其后一次 finish/finalize 的 finished_at
 T0 = _T0_AWARE.replace(tzinfo=None)
 T1 = T0 + _CLOCK_STEP
 
 
 class _SteppingClock:
-    """每读一次前进固定步长的确定性时钟。"""
+    """Deterministic clock that advances a fixed step on every read.
+
+    每读一次前进固定步长的确定性时钟。"""
 
     def __init__(self) -> None:
         self._now = _T0_AWARE
@@ -97,6 +123,9 @@ def frozen_clock(monkeypatch: pytest.MonkeyPatch) -> _SteppingClock:
 
 
 # ---------------------------------------------------------------------------
+# Real in-memory SQLite accounting sink
+# ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
 # 真内存 SQLite 记账落点
 # ---------------------------------------------------------------------------
 
@@ -107,7 +136,12 @@ class _AccountingDb:
     factory: async_sessionmaker
 
     async def fetch_rows(self) -> list[dict[str, Any]]:
-        """按 id 升序取全部 ApiCall 行，整行快照（表列全集）。
+        """Fetch all ApiCall rows in ascending id order as whole-row snapshots (every table column).
+
+        New columns enter the snapshot automatically and make the existing expected dicts mismatch -- the behavior
+        lock does this on purpose, forcing the matrix to be updated consciously as the schema evolves.
+
+        按 id 升序取全部 ApiCall 行，整行快照（表列全集）。
 
         新增列会自动进入快照并让既有期望字典失配——行为锁刻意如此，逼迫矩阵随
         schema 演进被有意识地更新。
@@ -131,7 +165,9 @@ async def acct(frozen_clock: _SteppingClock, db_engine: AsyncEngine, db_factory)
 
 
 def _assert_full_row(actual: dict[str, Any], expected: dict[str, Any]) -> None:
-    """整行断言：created_at / updated_at 仅要求为 datetime，其余列逐字段精确比对。"""
+    """Whole-row assertion: created_at / updated_at only need to be datetime; all other columns compared exactly field by field.
+
+    整行断言：created_at / updated_at 仅要求为 datetime，其余列逐字段精确比对。"""
     actual = dict(actual)
     for column in ("created_at", "updated_at"):
         value = actual.pop(column)
@@ -140,7 +176,9 @@ def _assert_full_row(actual: dict[str, Any], expected: dict[str, Any]) -> None:
 
 
 def _expected_row(**overrides: Any) -> dict[str, Any]:
-    """ApiCall 整行期望基线：成功、零费用、默认 user，各 token 列为空。"""
+    """Expected ApiCall whole-row baseline: success, zero cost, default user, all token columns empty.
+
+    ApiCall 整行期望基线：成功、零费用、默认 user，各 token 列为空。"""
     row: dict[str, Any] = {
         "id": 1,
         "user_id": "default",
@@ -164,6 +202,7 @@ def _expected_row(**overrides: Any) -> dict[str, Any]:
         "inputs": None,
         "started_at": T0,
         "finished_at": T1,
+        # A single start->finish advances the stepping clock by one tick (5s); see the module docstring.
         # 单次 start→finish 步进时钟前进一格（5s），见模块 docstring
         "duration_ms": 5000,
         "retry_count": 0,
@@ -188,7 +227,9 @@ def _expected_row(**overrides: Any) -> dict[str, Any]:
 
 
 def _expected_pending_row(**overrides: Any) -> dict[str, Any]:
-    """start_call 之后未终结的行：无 finished_at / duration_ms，费用列为 server 默认。"""
+    """A row not yet finalized after start_call: no finished_at / duration_ms; cost columns at server defaults.
+
+    start_call 之后未终结的行：无 finished_at / duration_ms，费用列为 server 默认。"""
     return _expected_row(
         status="pending",
         finished_at=None,
@@ -197,6 +238,9 @@ def _expected_pending_row(**overrides: Any) -> dict[str, Any]:
     )
 
 
+# ---------------------------------------------------------------------------
+# Fake backends (Protocol implementations)
+# ---------------------------------------------------------------------------
 # ---------------------------------------------------------------------------
 # 假 backend（Protocol 实现）
 # ---------------------------------------------------------------------------
@@ -301,11 +345,14 @@ class _FakeVideoBackend:
     ) -> None:
         self._provider = provider
         self._model = model
+        # duration_seconds in result_fields simulates the actual billed duration reported by the provider;
+        # by default it echoes the requested duration (most backends behave this way).
         # result_fields 里的 duration_seconds 模拟 provider 回报的实际计费时长；
         # 缺省回显请求时长（多数后端行为）。
         self._result_fields = result_fields or {}
         self._error = error
         self._resume_error = resume_error
+        # Built-in call channels report metering via the usage contract (``metered_usage``); if not given, simulates a channel that does not declare it.
         # 内置调用通道按用量契约上报计量（``metered_usage``）；不给时模拟没有声明它的通道。
         if metered is not None:
             self.metered_usage = lambda _model, request, result=None: metered(request, result)
@@ -405,6 +452,9 @@ def _media_generator(
 ) -> MediaGenerator:
     project_path = tmp_path / "projects" / "demo"
     project_path.mkdir(parents=True, exist_ok=True)
+    # Paired invariant: if backend is present, provider_id is present. On the media side the real backend.name equals the resolver id
+    # (gemini-aistudio/ark/dashscope), so backend.name is the default to keep the matrix unchanged; the reverse-lock test explicitly
+    # passes a different value to prove accounting takes provider_id, not name.
     # 成对不变量要求：backend 在则 provider_id 在。媒体侧真实 backend.name 与解析层 id 同值
     # （gemini-aistudio/ark/dashscope），故默认取 backend.name 保持矩阵零改动；反转锁测试显式传
     # 不同值证明记账取 provider_id 而非 name。
@@ -418,11 +468,15 @@ def _media_generator(
         video_provider_id=video_provider_id or (video_backend.name if video_backend else None),
         audio_provider_id=audio_provider_id or (audio_backend.name if audio_backend else None),
     )
+    # The only wiring replacement: point the accounting sink at the test in-memory DB. The chain itself (ledger->repo->settlement->pricing) is all real.
     # 唯一的接线替换：把记账落点指到测试内存库。记账链路内部（ledger→repo→结算→定价）全真实。
     gen.ledger = Ledger(session_factory=db.factory)
     return gen
 
 
+# ---------------------------------------------------------------------------
+# Channel 1: image generation bracket
+# ---------------------------------------------------------------------------
 # ---------------------------------------------------------------------------
 # 通道一：image 生成括号
 # ---------------------------------------------------------------------------
@@ -493,6 +547,7 @@ class TestImageChannel:
 
         await gen.generate_image_async(prompt="p", resource_type="storyboards", resource_id="E1S01")
 
+        # input/output_tokens carry the summed meaning of image_* + text_*; storyboards resources record segment_id.
         # input/output_tokens 承载 image_* + text_* 的总和语义；storyboards 资源落 segment_id
         _assert_full_row(
             await acct.fetch_only_row(),
@@ -519,6 +574,8 @@ class TestImageChannel:
     async def test_builtin_call_priced_by_resolution_sent_in_request(
         self, tmp_path: Path, acct: _AccountingDb, image_size: str | None, expected_cost: float
     ) -> None:
+        # The call channel reports resolution from the request's image_size (same function as GeminiImageBackend) and the unit price
+        # follows that tier; with no resolution sent, the price list's default tier (1K) applies.
         # 调用通道按请求里的 image_size 上报分辨率（与 GeminiImageBackend 同一函数），单价按它落档；
         # 没发分辨率时按价目表的默认档（1K）计
         gen = _media_generator(
@@ -602,12 +659,17 @@ class TestImageChannel:
 
         await gen.generate_image_async(prompt="p", resource_type="characters", resource_id="婉儿")
 
+        # Image-to-image reports the reference image count honestly, but the price list has no per-reference-image price: the vendor
+        # does not charge for it, so it is not billed; pricing is by output image count only.
         # 图生图如实上报了参考图张数，价目表没有参考图单价：厂商不按它收费，这一项不计，只按输出张数计价
         row = await acct.fetch_only_row()
         assert row["cost_amount"] == pytest.approx(0.04)
         assert row["unpriced_reason"] is None
 
     async def test_openai_without_usage_is_unpriced(self, tmp_path: Path, acct: _AccountingDb) -> None:
+        # When the OpenAI image channel gets no usage it reports only the output image count (fallback of
+        # OpenAIImageBackend._save_and_return); gpt-image-2 is priced per token, so none of the price list's metered items
+        # has usage, the whole call is recorded as unpriced and not billed on estimated tokens.
         # OpenAI 图片通道拿不到 usage 时只报输出张数（OpenAIImageBackend._save_and_return 的回退）；gpt-image-2
         # 按 token 计价，价目表的计量项一项用量都没有，整笔记为未定价，不按估算 token 记账
         gen = _media_generator(
@@ -669,6 +731,7 @@ class TestImageChannel:
         with pytest.raises(asyncio.CancelledError):
             await gen.generate_image_async(prompt="p", resource_type="characters", resource_id="婉儿")
 
+        # CancelledError settles as cancelled (zero cost) and is re-raised: no pending left, not counted as a failure.
         # CancelledError 结算为 cancelled（零费用）后重抛：不留 pending，也不计入失败
         _assert_full_row(
             await acct.fetch_only_row(),
@@ -683,6 +746,9 @@ class TestImageChannel:
         )
 
 
+# ---------------------------------------------------------------------------
+# Channel 2: audio generation bracket
+# ---------------------------------------------------------------------------
 # ---------------------------------------------------------------------------
 # 通道二：audio 生成括号
 # ---------------------------------------------------------------------------
@@ -700,6 +766,8 @@ class TestAudioChannel:
 
         await gen.generate_audio_async(text=text, resource_id="E1S01", voice="Cherry", task_id="T-1")
 
+        # The entry's character-count metered item has "Han character counts 2": 6000 x 2 + 3000 = 15000 characters, at 0.8 CNY per
+        # 10k characters = 1.2; usage_tokens records the raw character count.
         # 条目的字符数计量项带「汉字计 2」：6000 × 2 + 3000 = 15000 字符，按每万字符 0.8 CNY 计 1.2；
         # usage_tokens 记原文字符数
         _assert_full_row(
@@ -749,12 +817,17 @@ class TestAudioChannel:
 
 
 # ---------------------------------------------------------------------------
+# Channel 3: video generation bracket
+# ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
 # 通道三：video 生成括号
 # ---------------------------------------------------------------------------
 
 
 def _veo_backend(**result_fields: Any) -> _FakeVideoBackend:
-    """AI Studio 的 Veo 3.1：按 GeminiVideoBackend 的用量契约上报计量，价目表按输出秒数 × 分辨率 × 有声计价。"""
+    """Veo 3.1 on AI Studio: reports metering via GeminiVideoBackend's usage contract; the price list charges output seconds x resolution x audio.
+
+    AI Studio 的 Veo 3.1：按 GeminiVideoBackend 的用量契约上报计量，价目表按输出秒数 × 分辨率 × 有声计价。"""
     return _FakeVideoBackend(
         provider="gemini-aistudio",
         model="veo-3.1-generate-preview",
@@ -796,7 +869,7 @@ class TestVideoChannel:
 
         await _generate_video(gen)
 
-        # (720p, 有声) 0.40 USD/s × 8s
+        # (720p, with audio) 0.40 USD/s x 8s / (720p, 有声) 0.40 USD/s × 8s
         _assert_full_row(
             await acct.fetch_only_row(),
             _expected_video_row(provider="gemini-aistudio", cost_amount=pytest.approx(3.2), usage_tokens=0),
@@ -807,6 +880,7 @@ class TestVideoChannel:
 
         await _generate_video(gen)
 
+        # Provider reports no audio, overriding the requested audio: row records False, billed at (720p, no audio) 0.20 USD/s.
         # provider 回报无声覆盖请求有声：行落 False，按 (720p, 无声) 0.20 USD/s 计费
         _assert_full_row(
             await acct.fetch_only_row(),
@@ -820,7 +894,7 @@ class TestVideoChannel:
 
         await _generate_video(gen)
 
-        # 实际计费时长 6s 覆盖请求 8s，账本与自动费用同口径
+        # Actual billed duration 6s overrides the requested 8s; ledger and automatic cost use the same basis. / 实际计费时长 6s 覆盖请求 8s，账本与自动费用同口径
         _assert_full_row(
             await acct.fetch_only_row(),
             _expected_video_row(
@@ -833,7 +907,7 @@ class TestVideoChannel:
 
         await _generate_video(gen)
 
-        # 超出 24h 上限的计费时长视同未提供，回落请求时长
+        # A billed duration above the 24h cap is treated as not provided; fall back to the requested duration. / 超出 24h 上限的计费时长视同未提供，回落请求时长
         _assert_full_row(
             await acct.fetch_only_row(),
             _expected_video_row(
@@ -858,7 +932,7 @@ class TestVideoChannel:
 
         await _generate_video(gen)
 
-        # 46.00 CNY/百万 token × 1M token
+        # 46.00 CNY per million tokens x 1M tokens / 46.00 CNY/百万 token × 1M token
         _assert_full_row(
             await acct.fetch_only_row(),
             _expected_video_row(
@@ -914,7 +988,9 @@ class TestVideoChannel:
 
 
 def _clip_entry() -> CatalogEntry:
-    """测试用视频条目：输出秒数按分辨率 × 有声分档，输入视频按秒计，参考图每请求免费 2 张。"""
+    """Test video entry: output seconds tiered by resolution x audio, input video billed per second, 2 reference images free per request.
+
+    测试用视频条目：输出秒数按分辨率 × 有声分档，输入视频按秒计，参考图每请求免费 2 张。"""
     return CatalogEntry(
         maker="acme",
         name="clip",
@@ -940,7 +1016,10 @@ def _clip_entry() -> CatalogEntry:
 
 
 def _clip_usage(request: VideoGenerationRequest, result: VideoGenerationResult | None) -> Usage:
-    """模拟内置调用通道的上报：输出秒数与是否有声取结果，带 4 秒输入视频与 5 张参考图；调用次数价目表不计。"""
+    """Simulates the built-in call channel's report: output seconds and audio flag from the result, with 4s of input video and
+    5 reference images; the call count is not in the price list.
+
+    模拟内置调用通道的上报：输出秒数与是否有声取结果，带 4 秒输入视频与 5 张参考图；调用次数价目表不计。"""
     assert result is not None
     return Usage(
         quantities={
@@ -954,7 +1033,10 @@ def _clip_usage(request: VideoGenerationRequest, result: VideoGenerationResult |
 
 
 class TestCatalogPricedVideo:
-    """视频按模型目录的价目表结算：调用通道上报的计量项与选择维度，免费额度与计数类计量项。"""
+    """Video settles against the model catalog's price list: metered items and selection dimensions reported by the call
+    channel, free allowance and count-type metered items.
+
+    视频按模型目录的价目表结算：调用通道上报的计量项与选择维度，免费额度与计数类计量项。"""
 
     @pytest.mark.parametrize(
         ("resolution", "audio", "per_second"),
@@ -982,6 +1064,7 @@ class TestCatalogPricedVideo:
             prompt="p", resource_type="videos", resource_id="E1S01", duration_seconds="8", resolution=resolution
         )
 
+        # 8s x tier unit price + 4s input video x 0.1 + 3 reference images beyond the 2 free x 0.05; the call count is not in the price list, not billed.
         # 8 秒 × 档位单价 + 输入视频 4 秒 × 0.1 + 超出免费 2 张的 3 张参考图 × 0.05；调用次数不在价目表里，不计费
         _assert_full_row(
             await acct.fetch_only_row(),
@@ -1002,6 +1085,7 @@ class TestCatalogPricedVideo:
 
         await _generate_video(gen)
 
+        # The built-in call channel reported no metering: none of the price list's metered items are hit, recorded as unpriced, no guessing from seconds.
         # 内置调用通道没有上报计量：价目表的计量项全部落空，记为未定价，不按秒数猜
         _assert_full_row(
             await acct.fetch_only_row(),
@@ -1009,6 +1093,9 @@ class TestCatalogPricedVideo:
         )
 
 
+# ---------------------------------------------------------------------------
+# Channel 4: text generation bracket
+# ---------------------------------------------------------------------------
 # ---------------------------------------------------------------------------
 # 通道四：text 生成括号
 # ---------------------------------------------------------------------------
@@ -1030,6 +1117,7 @@ class TestTextChannel:
 
         await gen.generate(TextGenerationRequest(prompt="文" * 700), project_name="demo")
 
+        # 0.50 + 3.00 USD per million tokens; the accounting provider is the resolver id (gemini-aistudio), not backend.name (gemini).
         # 0.50 + 3.00 USD/百万 token；记账 provider 取解析层 id（gemini-aistudio），非 backend.name（gemini）
         _assert_full_row(
             await acct.fetch_only_row(),
@@ -1055,6 +1143,7 @@ class TestTextChannel:
 
         await gen.generate(TextGenerationRequest(prompt="p"))
 
+        # None of the price list's metered items got usage: the cost is unknown, recorded as unpriced rather than silently 0; project_name defaults to empty string.
         # 价目表的计量项一项用量都没拿到：费用无从得知，记为未定价，不静默记 0；project_name 缺省落空串
         _assert_full_row(
             await acct.fetch_only_row(),
@@ -1130,6 +1219,7 @@ class TestTextChannel:
 
         await self._generate(acct, provider_key, "relay/GPT-5.4")
 
+        # Name matches gpt-5.4: (0.2M x 2.5 + 0.1M x 15) / 1M = 2.0 USD, then times the model multiplier 0.5.
         # 名字对上 gpt-5.4：(0.2M × 2.5 + 0.1M × 15) / 1M = 2.0 USD，再乘模型倍率 0.5
         _assert_full_row(
             await acct.fetch_only_row(),
@@ -1156,7 +1246,10 @@ class TestTextChannel:
 
 
 class _PromptFallbackTextBackend(_FakeTextBackend):
-    """结构化输出走 prompt 注入降级：按 ``replies`` 依次回复 (文本, 输入 token, 输出 token)，每次请求都已计费。"""
+    """Structured output degrades to prompt injection: replies in order from ``replies`` with (text, input tokens, output tokens);
+    every request has been billed.
+
+    结构化输出走 prompt 注入降级：按 ``replies`` 依次回复 (文本, 输入 token, 输出 token)，每次请求都已计费。"""
 
     def __init__(self, *, provider: str, model: str, replies: list[tuple[str, int, int]]) -> None:
         super().__init__(provider=provider, model=model)
@@ -1209,7 +1302,9 @@ async def _set_provider_multiplier(acct: _AccountingDb, provider_id: str, value:
 
 
 class TestCatalogPricedText:
-    """文本按模型目录的价目表结算：计量项互不重叠、上下文档、未定价与两级倍率。"""
+    """Text settles against the model catalog's price list: non-overlapping metered items, context tiers, unpriced, and two-level multipliers.
+
+    文本按模型目录的价目表结算：计量项互不重叠、上下文档、未定价与两级倍率。"""
 
     async def test_context_tier_and_cache_meters_priced_separately(
         self, acct: _AccountingDb, monkeypatch: pytest.MonkeyPatch
@@ -1236,6 +1331,8 @@ class TestCatalogPricedText:
             cache_write_1h_tokens=10_000,
         ).generate(TextGenerationRequest(prompt="p"), project_name="demo")
 
+        # Total input 300k (incl. cache reads/writes) exceeds 200k, so the whole request falls in the second tier: uncached input 150k x 4
+        # + cache read 100k x 0.4 + 5-minute cache write 40k x 5 + 1-hour cache write 10k x 4 (untiered) + output 20k x 15, per million tokens = 1.18
         # 总输入 30 万（含缓存读写）超过 20 万，整个请求落入第二档：未缓存输入 15 万 × 4 + 缓存读 10 万 × 0.4
         # + 5 分钟缓存写 4 万 × 5 + 1 小时缓存写 1 万 × 4（不分档）+ 输出 2 万 × 15，按每百万 token 计 = 1.18
         _assert_full_row(
@@ -1275,6 +1372,8 @@ class TestCatalogPricedText:
             backend, Ledger(session_factory=acct.factory), "openai", purpose=CallPurpose.SCRIPT_GENERATION
         ).generate(TextGenerationRequest(prompt="p", response_schema={"type": "object"}), project_name="demo")
 
+        # Two requests of 150k input each, 300k combined exceeds 200k, but each one alone is in the first tier:
+        # 2 x (150k x 1 + 1000 x 10) / 1M = 0.32; tiering by the combined total would give 0.64.
         # 两次请求各 15 万输入，合计 30 万超过 20 万，但每次单独看都在首档：
         # 2 × (15 万 × 1 + 1000 × 10) / 百万 = 0.32；按合计落档会是 0.64
         _assert_full_row(
@@ -1303,6 +1402,7 @@ class TestCatalogPricedText:
             acct, "openai", "no-cache-price", input_tokens=10_000, output_tokens=1_000, cache_read_tokens=8_000
         ).generate(TextGenerationRequest(prompt="p"), project_name="demo")
 
+        # The provider reported cache hits but the price list has no cache-read price: no unit price for that part, the whole call is unpriced, not billed as 0.
         # 供应商回报了缓存命中，价目表却没有缓存读价：这部分查不到单价，整笔记为未定价，不按 0 计
         _assert_full_row(
             await acct.fetch_only_row(),
@@ -1334,6 +1434,7 @@ class TestCatalogPricedText:
             TextGenerationRequest(prompt="p"), project_name="demo"
         )
 
+        # The request sent no service tier and the metered item has no default: no fallback to the flex tier; recorded as unpriced with a reason.
         # 请求没有发送服务档、计量项也没有默认值：不回落到 flex 档，记为未定价并带原因
         _assert_full_row(
             await acct.fetch_only_row(),
@@ -1364,7 +1465,7 @@ class TestCatalogPricedText:
             TextGenerationRequest(prompt="p"), project_name="demo"
         )
 
-        # (2 + 8) USD × 供应商倍率 0.5 × 供应商模型倍率 0.8 = 4.0
+        # (2 + 8) USD x provider multiplier 0.5 x provider-model multiplier 0.8 = 4.0 / (2 + 8) USD × 供应商倍率 0.5 × 供应商模型倍率 0.8 = 4.0
         _assert_full_row(
             await acct.fetch_only_row(),
             _expected_row(
@@ -1382,6 +1483,7 @@ class TestCatalogPricedText:
     async def test_zero_multiplier_records_zero_without_pricing(
         self, acct: _AccountingDb, monkeypatch: pytest.MonkeyPatch
     ) -> None:
+        # The entry has no price list: with a non-zero multiplier it would be unpriced; ark-agent-plan's provider multiplier defaults to 0, so it records 0.
         # 条目没有价目表：倍率不为 0 时会是未定价；ark-agent-plan 的供应商倍率默认 0，直接记 0
         entry = replace(_text_entry("subscription"), price=None)
         install_catalog(monkeypatch, catalog_of((entry,), {"ark-agent-plan": ("acme/subscription",)}))
@@ -1406,6 +1508,9 @@ class TestCatalogPricedText:
 
 
 # ---------------------------------------------------------------------------
+# Identity invariants: the accounting provider is the resolver's provider_id; paired invariant at construction time
+# ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
 # 身份不变量：记账 provider 取解析层 provider_id，构造期成对不变量
 # ---------------------------------------------------------------------------
 
@@ -1414,6 +1519,7 @@ class TestIdentityInvariant:
     async def test_media_records_resolver_provider_id_not_backend_name(
         self, tmp_path: Path, acct: _AccountingDb
     ) -> None:
+        # backend.name reports a bare "gemini" while the resolver id is "gemini-aistudio": accounting must record the resolver id.
         # backend.name 报裸 "gemini"，解析层 id 为 "gemini-aistudio"：记账须落解析层 id。
         gen = _media_generator(
             tmp_path,
@@ -1453,6 +1559,9 @@ class TestIdentityInvariant:
 
 
 # ---------------------------------------------------------------------------
+# Channel 5: resume back-billing
+# ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
 # 通道五：resume 补账
 # ---------------------------------------------------------------------------
 
@@ -1461,7 +1570,12 @@ _RESUME_TASK_ID = "T-resume"
 
 
 async def _pending_video_call(acct: _AccountingDb, *, task_id: str | None = _RESUME_TASK_ID) -> int:
-    """模拟 submit 侧已记账的 pending 行（resume 的补账锚点）。
+    """Simulates a pending row already recorded on the submit side (the anchor for resume back-billing).
+
+    Writes the pending row directly via UsageRepository -- in production the submit side enters through the start of the
+    accounting bracket; here only the anchor row is needed, no bracket. ``task_id`` is the only key resume uses to find this row.
+
+    模拟 submit 侧已记账的 pending 行（resume 的补账锚点）。
 
     直接经 UsageRepository 落 pending 行 —— submit 侧生产入口是记账括号的 start，此处仅需
     锚点行，不必开括号。``task_id`` 是 resume 反查这条行的唯一凭据。
@@ -1497,6 +1611,7 @@ async def _resume_video(gen: MediaGenerator, task_id: str | None = _RESUME_TASK_
 
 
 def _expected_resume_row(**overrides: Any) -> dict[str, Any]:
+    # Resume back-billing does not write back output_path: finalize only flips status and cost-basis fields.
     # resume 补账不回写 output_path：finalize 只翻状态与费用口径字段
     defaults: dict[str, Any] = {
         "purpose": "generation_task",
@@ -1527,6 +1642,7 @@ class TestResumeChannel:
 
         await _resume_video(gen)
 
+        # Backend-reported values override the request basis: no audio + 6s -> (720p, no audio) 0.20 USD/s x 6s
         # backend 回报值覆盖请求口径：无声 + 6s → (720p, 无声) 0.20 USD/s × 6s
         _assert_full_row(
             await acct.fetch_only_row(),
@@ -1550,6 +1666,7 @@ class TestResumeChannel:
 
         await _resume_video(gen)
 
+        # Over-limit billed duration falls back to the requested 8s; backend reported no audio flag (None), keeping the row's requested value True.
         # 超限计费时长回落请求 8s；backend 未回报音频标志（None）保留行内请求值 True
         _assert_full_row(
             await acct.fetch_only_row(),
@@ -1571,6 +1688,7 @@ class TestResumeChannel:
         with pytest.raises(ResumeExpiredError):
             await _resume_video(gen)
 
+        # Expired back-billing flips to failed with zero cost; the original expiry exception text goes into the row; the classifier does not know this kind, so no code.
         # 过期补账翻 failed、零费用；过期异常的原文随补账落行，分类不认得这一类故无码
         _assert_full_row(
             await acct.fetch_only_row(),
@@ -1582,6 +1700,7 @@ class TestResumeChannel:
 
     async def test_pending_guard_never_touches_terminal_row(self, tmp_path: Path, acct: _AccountingDb) -> None:
         call_id = await _pending_video_call(acct)
+        # Pre-seed a terminal row already in success (simulating generate having finished) to verify the resume idempotency guard.
         # 预置一条已 success 的终态行（模拟 generate 已 finish），供 resume 幂等守卫验证。
         async with acct.factory() as session:
             await UsageRepository(session).finish_call(
@@ -1595,6 +1714,7 @@ class TestResumeChannel:
         gen = _media_generator(tmp_path, acct, video_backend=_veo_backend(usage_tokens=0, duration_seconds=6))
         await _resume_video(gen)
 
+        # WHERE status='pending' idempotency guard: the terminal row is untouched in full (incl. created_at/updated_at).
         # WHERE status='pending' 幂等守卫：已终态行整行原样（含 created_at/updated_at）
         assert await acct.fetch_only_row() == terminal_snapshot
 
@@ -1604,6 +1724,7 @@ class TestResumeChannel:
 
         await _resume_video(gen)
 
+        # Legacy rows have no task_id to look up: no fuzzy-match back-billing, the row stays pending.
         # 历史行没有 task_id 可反查：不做模糊匹配补账，行保持 pending
         _assert_full_row(
             await acct.fetch_only_row(),

@@ -1,4 +1,6 @@
-"""MiniMaxImageBackend 单元测试（mock httpx，单步同步端点，不打真实 HTTP）。"""
+"""MiniMaxImageBackend unit tests (mock httpx, single-step synchronous endpoint, no real HTTP).
+
+MiniMaxImageBackend 单元测试（mock httpx，单步同步端点，不打真实 HTTP）。"""
 
 from __future__ import annotations
 
@@ -60,7 +62,13 @@ def _error_response(status_code: int) -> httpx.Response:
 
 @contextmanager
 def _generation_route(resp: httpx.Response, download: AsyncMock | None = None) -> Generator[respx.Route]:
-    """成图端点的出站流：走 respx 在 transport 层拦截。
+    """Outbound flow of the image endpoint: intercepted by respx at the transport layer.
+
+    Endpoint derivation, request body fields and auth headers are contracts about "what the outgoing request looks like", so
+    assertions target the real request captured by the route; when ``download`` is given it also takes over the disk write
+    (the separate download section of the non-base64 branch).
+
+    成图端点的出站流：走 respx 在 transport 层拦截。
 
     端点派生、请求体字段、鉴权头都是「发出去的请求长什么样」的契约，断言落在路由捕获的
     真实请求上；``download`` 给出时同时接管落盘（非 base64 分支的独立下载段）。
@@ -112,16 +120,16 @@ class TestTextToImage:
         assert body["n"] == 1
         assert body["prompt_optimizer"] is False
         assert "subject_reference" not in body
-        # 默认 aspect_ratio=9:16 精确算、受单边 2048 收口
+        # Default aspect_ratio=9:16 computed exactly, capped at 2048 per side. / 默认 aspect_ratio=9:16 精确算、受单边 2048 收口
         assert (body["width"], body["height"]) == (1152, 2048)
-        # 端点：base host 派生 /v1 + /image_generation
+        # Endpoint: /v1 derived from the base host + /image_generation. / 端点：base host 派生 /v1 + /image_generation
         assert str(route.calls.last.request.url) == "https://api.minimax.io/v1/image_generation"
         assert route.calls.last.request.headers["Authorization"] == "Bearer sk"
         assert result.provider == PROVIDER_MINIMAX
         assert result.model == "image-01"
         assert result.image_uri == "https://x/out.png"
         assert result.image_path == tmp_path / "o.png"
-        # 响应里的 URL 与请求的 output_path 原样交给下载器
+        # The URL from the response and the requested output_path are handed to the downloader as is. / 响应里的 URL 与请求的 output_path 原样交给下载器
         download.assert_called_once_with("https://x/out.png", tmp_path / "o.png")
 
     async def test_default_endpoint_is_domestic(self, tmp_path: Path):
@@ -176,6 +184,7 @@ class TestDimensions:
         assert await self._dims(tmp_path, aspect_ratio="9:16", image_size="1K") == (1008, 1792)
 
     async def test_custom_pixel_strips_embedded_ratio(self, tmp_path: Path):
+        # Custom pixels 1920*1080 (16:9) only contribute min=1080 as the short edge; the ratio is still set by the project aspect_ratio=9:16.
         # 自定义像素 16:9 的 1920*1080 只贡献 min=1080 当短边，比例仍由项目 aspect_ratio=9:16 决定
         w, h = await self._dims(tmp_path, aspect_ratio="9:16", image_size="1920*1080")
         assert w * 16 == h * 9
@@ -190,18 +199,21 @@ class TestDimensions:
         assert h % 8 == 0
 
     async def test_extreme_ratio_short_edge_clamped_to_512(self, tmp_path: Path):
+        # 5:1 exceeds the expressible 4:1 limit; the computed short edge is <512 -> clamped to 512 (still divisible by 8).
         # 5:1 超出 4:1 可表达上限，短边自然算出 <512 → 夹到 512（仍 8 整除）
         w, h = await self._dims(tmp_path, aspect_ratio="5:1")
         assert h == 512
         assert w == 2040
 
     async def test_small_custom_size_preserves_ratio(self, tmp_path: Path):
+        # Custom small size (short edge <512): clamp the short edge to _MIN_EDGE first, so aspect_size does not produce a <512 edge that
+        # _clamp_edge then clamps independently, breaking the ratio (16:9 landscape degrading to a 1:1 512x512).
         # 自定义小尺寸（短边 <512）：短边先夹到 _MIN_EDGE，避免 aspect_size 出 <512 边后
         # 被 _clamp_edge 独立夹取破坏比例（16:9 横屏退化成 512x512 的 1:1）
         w, h = await self._dims(tmp_path, aspect_ratio="16:9", image_size="320*180")
         assert w >= 512
         assert h >= 512
-        assert w > h  # 横屏未退化成 1:1
+        assert w > h  # Landscape did not degrade to 1:1. / 横屏未退化成 1:1
         assert abs(w / h - 16 / 9) < 0.1
 
 
@@ -231,6 +243,7 @@ class TestSubjectReference:
             b = MiniMaxImageBackend(api_key="sk")
             await b.generate(ImageGenerationRequest(prompt="p", output_path=tmp_path / "o.png", reference_images=refs))
 
+        # image-01 single-face reference: only the first image is taken; the declared limit is the number actually sent, and the orchestration layer trims and numbers by it.
         # image-01 单脸参考：仅取首张；声明的上限即实际下传张数，编排层按它裁剪后编号。
         subject = request_json(route.calls.last.request)["subject_reference"]
         assert len(subject) == (await b.reference_image_limit()) == 1
@@ -262,7 +275,7 @@ class TestSubjectReference:
                 )
             )
         assert ei.value.code == "image_reference_images_unreadable"
-        # 空路径用 locale 中性序号 #1，不漏中文占位
+        # An empty path uses the locale-neutral index #1, no Chinese placeholder leaks. / 空路径用 locale 中性序号 #1，不漏中文占位
         assert ei.value.params["names"] == "#1"
 
     async def test_ref_read_oserror_raises_unreadable(self, tmp_path: Path):
@@ -288,6 +301,7 @@ class TestResponseHandling:
         b64 = base64.b64encode(raw).decode("ascii")
         download = AsyncMock()
         out = tmp_path / "o.png"
+        # Wire download into the route so the final assert_not_called really proves the base64 path writes on its own without downloading.
         # download 接入路由，使末尾的 assert_not_called 真能证明 base64 路径独立落盘、不触下载
         with _generation_route(_b64_response(b64), download):
             from lib.backends.image_backends.minimax import MiniMaxImageBackend
@@ -296,7 +310,7 @@ class TestResponseHandling:
             result = await b.generate(ImageGenerationRequest(prompt="x", output_path=out))
 
         assert out.read_bytes() == raw
-        # base64 路径无远端 URL
+        # The base64 path has no remote URL. / base64 路径无远端 URL
         assert result.image_uri is None
         download.assert_not_called()
 
@@ -321,7 +335,7 @@ class TestResponseHandling:
             with pytest.raises(RuntimeError) as ei:
                 await b.generate(ImageGenerationRequest(prompt="x", output_path=tmp_path / "o.png"))
         assert "1004" in str(ei.value)
-        # 业务错误不重试、不下载
+        # Business errors: no retry, no download. / 业务错误不重试、不下载
         assert route.call_count == 1
         download.assert_not_called()
 
@@ -358,6 +372,7 @@ class TestHttpErrors:
             b = MiniMaxImageBackend(api_key="sk")
             with pytest.raises(httpx.HTTPStatusError) as ei:
                 await b.generate(ImageGenerationRequest(prompt="p", output_path=tmp_path / "o.png"))
+        # Keep status_code so the choke-point layer recognizes 413 and downgrades; fail fast once.
         # 保留 status_code 让咽喉层识别 413 走降档；单次 fail-fast
         assert ei.value.response.status_code == 413
         assert route.call_count == 1
@@ -366,6 +381,8 @@ class TestHttpErrors:
 
 class TestRetryScope:
     async def test_download_failure_does_not_retrigger_generation(self, tmp_path: Path, poll_clock):
+        # Transient download failures are retried only at the download layer, never by re-running the non-idempotent generation POST (prevents duplicate images + double billing).
+        # The backoff sleep is stubbed out so download-layer retries do not actually wait seconds of backoff.
         # 下载阶段瞬态失败只在下载层重试，绝不回退到重跑非幂等的生成 POST（防重复建图 + 重复计费）。
         # 退避 sleep 打桩跳过，避免下载层重试真的等退避的秒级时间。
         from lib.backends.backend_runtime import VIDEO_POLL_MAX_CONSECUTIVE_FAILURES
@@ -375,10 +392,11 @@ class TestRetryScope:
             from lib.backends.image_backends.minimax import MiniMaxImageBackend
 
             b = MiniMaxImageBackend(api_key="sk")
+            # After the shared budget is exhausted, a RuntimeError carrying the last original error is raised.
             # 共用预算耗尽后抛的是带最后一次原错误的 RuntimeError。
             with pytest.raises(RuntimeError, match="conn reset"):
                 await b.generate(ImageGenerationRequest(prompt="x", output_path=tmp_path / "o.png"))
-        # 生成 POST 恰好一次（计费一次）；重试全部发生在下载层
+        # Exactly one generation POST (billed once); all retries happen at the download layer. / 生成 POST 恰好一次（计费一次）；重试全部发生在下载层
         assert route.call_count == 1
         assert download.call_count == VIDEO_POLL_MAX_CONSECUTIVE_FAILURES
 

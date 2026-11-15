@@ -22,12 +22,14 @@ def isolated_auth_env():
 
 
 class TestIsAuthEnabled:
-    """``is_auth_enabled()`` 解析 AUTH_ENABLED env 值。"""
+    """``is_auth_enabled()`` parses the AUTH_ENABLED env value.
+
+    ``is_auth_enabled()`` 解析 AUTH_ENABLED env 值。"""
 
     @pytest.mark.parametrize(
         ("raw", "expected"),
         [
-            (None, True),  # 未设置 → 默认开启（向后兼容）
+            (None, True),  # Not set -> enabled by default (backward compatible) / 未设置 → 默认开启（向后兼容）
             ("true", True),
             ("True", True),
             ("TRUE", True),
@@ -40,8 +42,9 @@ class TestIsAuthEnabled:
             ("0", False),
             ("no", False),
             ("off", False),
+            # Empty string is treated as unconfigured -> fall back to the default (enabled), fail-closed
             ("", True),  # 空串视为未配置 → 回退默认（开启），fail-closed
-            ("  ", True),  # 仅空白同上
+            ("  ", True),  # Whitespace only: same as above / 仅空白同上
             ("  false  ", False),
         ],
     )
@@ -115,7 +118,9 @@ class TestVerifyDownloadTokenKillSwitch:
 
 
 class TestGetCurrentUserKillSwitch:
-    """这些 dep 函数是 async；用 asyncio.run 直接调用。"""
+    """These dep functions are async; call them directly with asyncio.run.
+
+    这些 dep 函数是 async；用 asyncio.run 直接调用。"""
 
     @pytest.mark.asyncio
     async def test_disabled_returns_anonymous_admin_without_token(self):
@@ -144,7 +149,9 @@ class TestGetCurrentUserKillSwitch:
 class TestLoginRouteKillSwitch:
     @pytest.mark.asyncio
     async def test_disabled_login_succeeds_with_any_password(self):
-        """端到端：AUTH_ENABLED=false 时 /auth/token 接受任意凭据。"""
+        """End to end: with AUTH_ENABLED=false, /auth/token accepts any credentials.
+
+        端到端：AUTH_ENABLED=false 时 /auth/token 接受任意凭据。"""
         from fastapi.testclient import TestClient
 
         from server.app import app

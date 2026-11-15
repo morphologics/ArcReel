@@ -45,7 +45,14 @@ async def _seed_call(
     currency: str | None = None,
     unpriced: bool = False,
 ) -> None:
-    """直连 UsageRepository 写入一条已完成调用记录（等价于旧 UsageTracker 的种子写法）。
+    """Write one completed call record directly via UsageRepository (equivalent to the old UsageTracker seeding).
+
+    When ``cost_amount`` is non-null it bypasses automatic price-table computation and settles to that value; used
+    by tests that do not depend on specific provider pricing and care only about split/aggregation logic (e.g. unit
+    cost spread back to shots). Seed rows carry no reported usage; without ``cost_amount`` they are recorded as
+    unpriced per the settlement rules.
+
+    直连 UsageRepository 写入一条已完成调用记录（等价于旧 UsageTracker 的种子写法）。
 
     ``cost_amount`` 非空时绕过按价目表的自动计算，直接结算为该值——用于不依赖
     具体供应商定价配置、只关心分摊/聚合逻辑的用例（如 unit 费用按镜头摊回）。种子行不带上报用量，
@@ -68,6 +75,8 @@ async def _seed_call(
             output_path=output_path,
         )
         if unpriced:
+            # # Settlement only writes numbers as cost; unpriced (NULL) rows change the column directly, equivalent to settling a
+            # # built-in provider with no unit price found.
             # 结算只会把数值写成费用；未定价（NULL）的行直接改列，等价于内置供应商查不到单价的结算结果。
             await session.execute(
                 update(ApiCall).where(ApiCall.id == cid).values(cost_amount=None, unpriced_reason="missing_rate")
@@ -118,7 +127,9 @@ def _make_script(
 
 
 def _make_ad_script(shot_ids: list[str], durations: list[int]) -> dict:
-    """Helper to create an ad episode script dict (平铺 shots[])."""
+    """Helper to create an ad episode script dict (flat shots[]).
+
+    Helper to create an ad episode script dict (平铺 shots[])."""
     shots = []
     for sid, dur in zip(shot_ids, durations, strict=True):
         shots.append(
@@ -210,6 +221,7 @@ class TestCostEstimationService:
             ("minimax", "MiniMax-Hailuo-2.3", "1080p", 6),
             ("kling", "kling-v3", "4k", 8),
             ("vidu", "viduq3-turbo", "1080p", 8),
+            # # Video tokens are estimated with the official formula; when the provider reports tokens equal to the formula, amounts match.
             # 视频 token 预估按官方换算公式；供应商回报的 token 数等于公式值时金额相等。
             ("ark", "doubao-seedance-2-0-260128", "1080p", 8),
         ],
@@ -248,6 +260,9 @@ class TestCostEstimationService:
         assert estimate
         assert all(amount > 0 for amount in estimate.values())
 
+        # # Settlement side: the request sent to the call channel at execution (shot with first frame, aspect ratio from the
+        # # project video aspect ratio) and the provider's result are metered by the call channel per the usage contract, then
+        # # go through the same catalog lookup and calculator as the estimate.
         # 结算侧：执行时发给调用通道的请求（分镜带首帧，宽高比取项目视频宽高比）与供应商回报的结果，
         # 由调用通道按用量契约上报计量，再走与预估同一个目录查询与计算器。
         executed = await evaluate_video_request_facts(
@@ -371,7 +386,10 @@ class TestCostEstimationService:
     async def test_reference_estimate_buckets_an_unclaimed_sheet_like_admission_and_execution(
         self, db_factory, tmp_path: Path, set_video_request_facts
     ):
-        """报价与准入、执行同判据：图在盘上但产物清单未认领的单元落 i2v 并因分裂不报价，认领的单元按 r2v 报价。"""
+        """Quote uses the same criteria as admission and execution: a unit with the image on disk but unclaimed by the
+        artifact manifest falls to i2v and is not quoted due to the split; claimed units are quoted as r2v.
+
+        报价与准入、执行同判据：图在盘上但产物清单未认领的单元落 i2v 并因分裂不报价，认领的单元按 r2v 报价。"""
         set_video_request_facts(
             {
                 "i2v": make_video_request_facts(
@@ -452,14 +470,19 @@ class TestCostEstimationService:
     @pytest.mark.parametrize(
         ("has_audio_track", "controllable", "requested", "expected"),
         [
+            # Always audible (AI Studio catalog model): upstream produces an audible final cut as usual
             (True, False, False, True),  # 恒有声（AI Studio 目录型号）：上游照常出有声成片
+            # Switch controllable (Vertex, including user-added models with a relaxed audio track): follows the switch
             (True, True, False, False),  # 开关可控（Vertex，含放宽了音轨的用户添加型号）：跟随开关
-            (False, False, True, True),  # 恒无声：原样带出开关，由调用通道按型号计量
+            (False, False, True, True),  # Always silent: carry the switch as is; the call channel meters by model / 恒无声：原样带出开关，由调用通道按型号计量
             (True, True, True, True),
         ],
     )
     def test_provider_request_audio_is_what_execution_sends(self, has_audio_track, controllable, requested, expected):
-        """预估还原的请求带执行时实际发出的音频开关，调用通道按请求中的开关计量。"""
+        """The request reconstructed by the estimate carries the audio switch actually sent at execution; the call
+        channel meters by the switch in the request.
+
+        预估还原的请求带执行时实际发出的音频开关，调用通道按请求中的开关计量。"""
         facts = make_video_request_facts(
             provider_id="gemini-vertex",
             requested_generate_audio=requested,
@@ -472,7 +495,10 @@ class TestCostEstimationService:
         assert request.generate_audio is expected
 
     async def test_ark_video_tokens_are_estimated_by_the_official_formula(self, db_factory):
-        """Seedance 2.0 按 (输入视频秒数 + 输出秒数) × 宽 × 高 × 24 / 1024 估算视频 token，再按价目表计价。"""
+        """Seedance 2.0 estimates video tokens as (input video seconds + output seconds) x width x height x 24 / 1024,
+        then prices by the price table.
+
+        Seedance 2.0 按 (输入视频秒数 + 输出秒数) × 宽 × 高 × 24 / 1024 估算视频 token，再按价目表计价。"""
         quote = await quote_video_request(
             VideoRequestCostFacts(
                 request_facts=make_video_request_facts(
@@ -486,11 +512,15 @@ class TestCostEstimationService:
         )
 
         assert quote is not None
+        # # 5 x 1280 x 720 x 24 / 1024 = 108000 tokens, 720p without input video 46 CNY / million tokens
         # 5 × 1280 × 720 × 24 / 1024 = 108000 token，720p 无输入视频 46 CNY / 百万 token
         assert (quote.amount, quote.currency, quote.unpriced_reason) == (pytest.approx(4.968), "CNY", None)
 
     async def test_video_tokens_without_an_estimate_are_unpriced_not_guessed(self, db_factory):
-        """宽高比交给上游自适应时像素数不可知，视频 token 没有估算值：这次预估记为未定价，不按每秒固定 token 数猜。"""
+        """When aspect ratio is left to upstream adaptation the pixel count is unknown and video tokens have no estimate:
+        this estimate is recorded as unpriced, not guessed by a fixed tokens-per-second.
+
+        宽高比交给上游自适应时像素数不可知，视频 token 没有估算值：这次预估记为未定价，不按每秒固定 token 数猜。"""
         quote = await quote_video_request(
             VideoRequestCostFacts(
                 request_facts=make_video_request_facts(
@@ -649,7 +679,9 @@ class TestCostEstimationService:
         assert result["project_totals"]["actual"]["unassigned"]["USD"] == pytest.approx(2.2)
 
     async def test_missing_script_episode_still_gets_history_row(self, db_factory):
-        """剧本文件缺失的集不进入估算，但它的历史支出仍要落在该集行上。"""
+        """An episode whose script file is missing is not estimated, but its historical spend must still land on its row.
+
+        剧本文件缺失的集不进入估算，但它的历史支出仍要落在该集行上。"""
         resolver = ConfigResolver(db_factory)
         service = CostEstimationService(resolver, db_factory)
         await _seed_call(
@@ -670,6 +702,7 @@ class TestCostEstimationService:
                 {"episode": 2, "title": "Ep2", "script_file": "ep2.json"},
             ],
         }
+        # # ep2.json is not in scripts: simulate the script file lost while episode metadata remains in project.json
         # ep2.json 不在 scripts 里：模拟剧本文件已丢失、集元数据仍在 project.json 的状态
         scripts = {"ep1.json": _make_reference_video_script(1, "narration", [("E1U1", 5)])}
 
@@ -683,7 +716,9 @@ class TestCostEstimationService:
         assert result["project_totals"]["actual"]["unassigned"]["USD"] == pytest.approx(1.5)
 
     async def test_null_segment_history_counts_as_unassigned(self, db_factory):
-        """segment_id 为空的历史 video/audio 与无法归类的图，同样是真实支出。"""
+        """Historical video/audio with empty segment_id and unclassifiable images are also real spend.
+
+        segment_id 为空的历史 video/audio 与无法归类的图，同样是真实支出。"""
         resolver = ConfigResolver(db_factory)
         service = CostEstimationService(resolver, db_factory)
         await _seed_call(
@@ -735,13 +770,17 @@ class TestCostEstimationService:
         result = await service.compute(project_data, scripts, project_name="null-segment")
 
         project_actual = result["project_totals"]["actual"]
+        # # Asset sheets listed by type; the rest (other images + video + audio) go to unassigned
         # 资产图按类型单列，其余（other 图 + video + audio）归入未归属
         assert project_actual["characters"]["USD"] == pytest.approx(0.7)
         assert project_actual["unassigned"]["USD"] == pytest.approx(2.8)
         assert "unassigned" not in result["episodes"][0]["totals"]["actual"]
 
     async def test_unit_id_named_like_project_sentinel_is_not_double_counted(self, db_factory):
-        """剧本用哨兵键字面量作 unit_id 时，它的支出只算一次（哨兵键不与真实 ID 共用取值）。"""
+        """When a script uses the sentinel key literal as unit_id, its spend is counted once (the sentinel key does not
+        share values with real IDs).
+
+        剧本用哨兵键字面量作 unit_id 时，它的支出只算一次（哨兵键不与真实 ID 共用取值）。"""
         resolver = ConfigResolver(db_factory)
         service = CostEstimationService(resolver, db_factory)
         await _seed_call(
@@ -816,7 +855,11 @@ class TestCostEstimationService:
         assert result["project_totals"]["actual"]["image"]["USD"] == pytest.approx(0.101, abs=1e-4)
 
     async def test_grid_duplicate_ids_each_claim_own_share(self, db_factory):
-        """一张宫格覆盖两个共用同一 ID 的条目（ADR 0053 明确接受的受支持状态）：
+        """One grid covers two entries sharing the same ID (a supported state explicitly accepted by ADR 0053):
+
+        each entry should get its own split share, not count the grid's actual cost twice in the total.
+
+        一张宫格覆盖两个共用同一 ID 的条目（ADR 0053 明确接受的受支持状态）：
 
         两条目应各拿自己那一份均摊份额，而不是把宫格实付重复计入合计。"""
         resolver = ConfigResolver(db_factory)
@@ -859,7 +902,9 @@ class TestCostEstimationService:
         assert result["project_totals"]["actual"]["image"]["USD"] == pytest.approx(1.0)
 
     async def test_grid_duplicate_ids_across_multiple_grids(self, db_factory):
-        """同一 ID 既在一张宫格内出现 3 次、又跨到另一张宫格：每个条目只拿所属宫格的那一份。"""
+        """The same ID appears 3 times in one grid and also in another grid: each entry gets only the share of its own grid.
+
+        同一 ID 既在一张宫格内出现 3 次、又跨到另一张宫格：每个条目只拿所属宫格的那一份。"""
         resolver = ConfigResolver(db_factory)
         service = CostEstimationService(resolver, db_factory)
 
@@ -898,7 +943,10 @@ class TestCostEstimationService:
         assert result["project_totals"]["actual"]["image"]["USD"] == pytest.approx(1.9)
 
     async def test_grid_actual_split_remainder_sums_exactly(self, db_factory):
-        """除不尽的宫格实付（USD 0.101 均摊 9 份）分摊后，各份之和须与冻结实付分文不差。"""
+        """After splitting a grid's indivisible actual cost (USD 0.101 over 9 shares), the shares must sum exactly to the
+        frozen actual cost.
+
+        除不尽的宫格实付（USD 0.101 均摊 9 份）分摊后，各份之和须与冻结实付分文不差。"""
         resolver = ConfigResolver(db_factory)
         service = CostEstimationService(resolver, db_factory)
 
@@ -931,7 +979,10 @@ class TestCostEstimationService:
         assert sum(per_scene_costs) == pytest.approx(0.101, abs=1e-9)
 
     async def test_claimed_key_keeps_unconsumed_cost_types_as_unassigned(self, db_factory):
-        """认领粒度到 (记账 key, 类型)：宫格 key 上只消费 image，同 key 的 video 仍须计入未归属。"""
+        """Claims are per (accounting key, type): the grid key consumes only image; video on the same key must still be
+        counted as unassigned.
+
+        认领粒度到 (记账 key, 类型)：宫格 key 上只消费 image，同 key 的 video 仍须计入未归属。"""
         resolver = ConfigResolver(db_factory)
         service = CostEstimationService(resolver, db_factory)
 
@@ -1051,7 +1102,13 @@ class TestCostEstimationService:
         assert seg2["actual"]["image"] == {}
 
     async def test_grid_estimate_count_follows_4k_gate(self, db_factory, monkeypatch):
-        """估算的宫格张数按 4K 门控走同一条阶梯：12 场景一组，4K 下一张 4×4 装下，
+        """The estimated grid count follows the same ladder as the 4K gate: a group of 12 scenes fits one 4x4 under 4K,
+        but without 4K is capped at 3x3 and needs two, doubling the estimated total.
+
+        Use an entry priced per image (independent of resolution) to separate count changes from unit price changes by
+        tier.
+
+        估算的宫格张数按 4K 门控走同一条阶梯：12 场景一组，4K 下一张 4×4 装下，
         非 4K 下封顶 3×3 要切两张，估算总价相应翻倍。
 
         用按张定价（与分辨率无关）的条目，把张数变化与单价随档位变化的影响隔开。
@@ -1070,6 +1127,7 @@ class TestCostEstimationService:
                         "model_id": "img",
                         "display_name": "Img",
                         "endpoint": "openai-images",
+                        # # Entry priced per image, independent of resolution: Grok Imagine Pro 0.07 USD per image
                         # 按张计价、与分辨率无关的条目：Grok Imagine Pro 每张 0.07 USD
                         "entry_binding": "xai/grok-imagine-image-pro",
                     },
@@ -1099,12 +1157,21 @@ class TestCostEstimationService:
 
         total_4k = await _estimated_image_total("4K")
         assert total_4k > 0
+        # # Unconfigured resolution (None) is inside the gate, same as 2K
         # 未配置分辨率（None）与 2K 同样落在门控内
+        # each share rounded with round(..., 6) separately
         assert await _estimated_image_total("2K") == pytest.approx(total_4k * 2, rel=1e-4)  # 每条份额各自 round(…, 6)
+        # each share rounded with round(..., 6) separately
         assert await _estimated_image_total(None) == pytest.approx(total_4k * 2, rel=1e-4)  # 每条份额各自 round(…, 6)
 
     async def test_grid_estimate_prices_at_resolved_resolution(self, db_factory, monkeypatch):
-        """宫格图按执行期生效的分辨率档计价：4K 项目按 4K 单价，未配置回落保底档。
+        """Grid images are priced at the resolution tier effective at execution: 4K projects at the 4K price,
+        unconfigured falls back to the floor tier.
+
+        9 scenes always split into one grid_9 at any tier; the count is unchanged and the difference comes only from
+        unit price.
+
+        宫格图按执行期生效的分辨率档计价：4K 项目按 4K 单价，未配置回落保底档。
 
         9 场景在任何档位下都只切一张 grid_9，张数不变，差异只来自单价。
         """
@@ -1117,6 +1184,8 @@ class TestCostEstimationService:
             "content_mode": "narration",
             "generation_mode": "storyboard",
             "grid_storyboard": True,
+            # # Explicitly pin a model with resolution-tiered pricing: the test verifies 'price tier follows the resolution
+            # # result' and should not rely on the global default image model happening to be tiered
             # 显式钉住按分辨率分档定价的型号：测试要验的是「计价档随解析结果走」，
             # 不该依赖全局默认图片模型恰好是分档定价的
             "image_provider_t2i": "gemini-aistudio/gemini-3.1-flash-image",
@@ -1136,15 +1205,20 @@ class TestCostEstimationService:
         total_2k = await _estimated_image_total("2K")
         total_4k = await _estimated_image_total("4K")
         assert total_2k > 0
+        # # This model's 4K price is higher than 2K; the estimate must rise accordingly rather than always using 2K
         # 该型号 4K 单价高于 2K，估算须随之上浮而非恒按 2K
         assert total_4k > total_2k
+        # # With no resolution configured, price at the floor tier, the same source as the tier sent at execution
         # 未配置分辨率时按保底档计价，与执行期下发的档位同源
         assert await _estimated_image_total(None) == pytest.approx(
             await _estimated_image_total(GRID_FALLBACK_RESOLUTION)
         )
 
     async def test_grid_estimate_without_fallback_tier_in_catalog_is_priced(self, db_factory, monkeypatch):
-        """目录不含保底档的型号（viduq1 只声明 1080p），未配置分辨率时宫格不下发档位，按价目表默认档计价。"""
+        """For models whose catalog lacks the floor tier (viduq1 declares only 1080p), with no resolution configured the
+        grid sends no tier and is priced at the price table's default tier.
+
+        目录不含保底档的型号（viduq1 只声明 1080p），未配置分辨率时宫格不下发档位，按价目表默认档计价。"""
         from server.services.admission import cost_estimation as ce
 
         async def _unset(_r, _project):
@@ -1168,7 +1242,10 @@ class TestCostEstimationService:
         assert sum(seg["estimate"]["image"].get("CNY", 0) for seg in segments) == pytest.approx(0.625, rel=1e-4)
 
     async def test_plain_storyboard_estimate_prices_at_resolved_resolution(self, db_factory, monkeypatch):
-        """普通（非宫格）分镜图同样按执行期生效的分辨率档计价；未配置时不下发分辨率，按价目表的默认档计。"""
+        """Plain (non-grid) storyboard images are also priced at the resolution tier effective at execution; when
+        unconfigured no resolution is sent and the price table's default tier applies.
+
+        普通（非宫格）分镜图同样按执行期生效的分辨率档计价；未配置时不下发分辨率，按价目表的默认档计。"""
         from server.services.admission import cost_estimation as ce
 
         seg_ids = [f"E1S{i:03d}" for i in range(1, 4)]
@@ -1176,6 +1253,7 @@ class TestCostEstimationService:
             "title": "Test",
             "content_mode": "narration",
             "generation_mode": "storyboard",
+            # # Only a model with resolution-tiered pricing makes tier differences observable
             # 按分辨率分档定价的型号，档位差异才可观测
             "image_provider_t2i": "gemini-aistudio/gemini-3.1-flash-image",
             "episodes": [{"episode": 1, "title": "Ep1", "script_file": "ep1.json"}],
@@ -1193,16 +1271,23 @@ class TestCostEstimationService:
 
         total_1k = await _estimated_image_total("1K")
         assert total_1k > 0
+        # # This model's 4K price is higher than 1K; the estimate must rise accordingly
         # 该型号 4K 单价高于 1K，估算须随之上浮
         assert await _estimated_image_total("4K") > total_1k
+        # # Resolution not configured: not sent at execution; the price table's default tier is 1K
         # 未配置分辨率：执行时不下发，价目表默认档是 1K
         assert await _estimated_image_total(None) == pytest.approx(total_1k)
 
     async def test_grid_estimate_duplicate_ids_across_groups_each_correct(self, db_factory):
-        """同 ID 条目落在不同分组时各自展示本组的均摊估算，不被后写的分组覆盖。"""
+        """Same-ID entries in different groups each show their own group's split estimate and are not overwritten by the
+        group written later.
+
+        同 ID 条目落在不同分组时各自展示本组的均摊估算，不被后写的分组覆盖。"""
         resolver = ConfigResolver(db_factory)
         service = CostEstimationService(resolver, db_factory)
 
+        # # The first 9 form one group (grid_9, each 1/9 image); the 10th has segment_break and starts another group (grid_4,
+        # # a whole image to itself)
         # 前 9 条一组（grid_9，每条摊 1/9 张），第 10 条 segment_break 另起一组（grid_4，独占一张）
         seg_ids = [f"E1S{i:03d}" for i in range(1, 9)] + ["DUP", "DUP"]
         script = _make_script(1, seg_ids, [6] * 10)
@@ -1220,17 +1305,22 @@ class TestCostEstimationService:
         result = await service.compute(project_data, {"ep1.json": script}, project_name="proj")
         segments = result["episodes"][0]["segments"]
 
-        unit = segments[9]["estimate"]["image"]["USD"]  # 独占一张宫格 → 满张单价
+        unit = segments[9]["estimate"]["image"]["USD"]  # a whole grid to itself -> full unit price / 独占一张宫格 → 满张单价
         assert unit > 0
+        # # Including the 9th, which shares its name with the 10th: keyed by ID it would be overwritten by the later second group
+        # # with the full unit price
         # 含末位与第 10 条同名的第 9 条：按 ID 建 key 时它会被后写的第二组覆盖成满张单价
         for seg in segments[:9]:
             assert seg["estimate"]["image"]["USD"] == pytest.approx(round(unit / 9, 6))
 
     async def test_project_level_actual_split_by_asset_type(self, db_factory):
-        """project-level image 成本应按 output_path 前缀拆分为 characters/scenes/props 三项。"""
+        """Project-level image cost should be split into characters/scenes/props by output_path prefix.
+
+        project-level image 成本应按 output_path 前缀拆分为 characters/scenes/props 三项。"""
         resolver = ConfigResolver(db_factory)
         service = CostEstimationService(resolver, db_factory)
 
+        # # 3 project-level image calls, landing in characters / scenes / props respectively
         # 3 条 project-level image 调用，分别落在 characters / scenes / props
         for sub in ("characters", "scenes", "props"):
             await _seed_call(
@@ -1257,11 +1347,15 @@ class TestCostEstimationService:
         assert actual["scenes"].get("USD", 0) > 0
         assert "props" in actual
         assert actual["props"].get("USD", 0) > 0
+        # # The old key should not appear
         # 旧 key 不应出现
         assert "character_and_clue" not in actual
 
     async def test_dirty_script_skipped_with_warning(self, db_factory, caplog):
-        """单集脏脚本(segments=null)不应让整个项目费用估算 5xx;脏集降级为 0 segments
+        """One dirty episode script (segments=null) should not make the whole project's cost estimate 5xx; the dirty
+        episode degrades to 0 segments + warning, and other normal episodes still take part.
+
+        单集脏脚本(segments=null)不应让整个项目费用估算 5xx;脏集降级为 0 segments
         + warning,其他正常集仍参与估算。"""
         import logging
 
@@ -1277,6 +1371,7 @@ class TestCostEstimationService:
                 {"episode": 3, "title": "Ep3", "script_file": "ep3.json"},
             ],
         }
+        # # ep2 segments is null (dirty data) -> get_storyboard_items raises ScriptEditError
         # ep2 segments 是 null(脏数据)→ get_storyboard_items 抛 ScriptEditError
         dirty_script = {
             "episode": 2,
@@ -1284,7 +1379,7 @@ class TestCostEstimationService:
             "content_mode": "narration",
             "summary": "t",
             "novel": {"title": "t", "chapter": "c"},
-            "segments": None,  # 脏数据
+            "segments": None,  # dirty data / 脏数据
         }
         scripts = {
             "ep1.json": _make_script(1, ["E1S001"], [6]),
@@ -1295,6 +1390,7 @@ class TestCostEstimationService:
         with caplog.at_level(logging.WARNING, logger="server.services.admission.cost_estimation"):
             result = await service.compute(project_data, scripts, project_name="test")
 
+        # # Normal episodes ep1 / ep3 both take part in the estimate; dirty episode ep2 still appears but with empty segments
         # 正常集 ep1 / ep3 都参与估算,脏集 ep2 仍出现但 segments 为空
         assert len(result["episodes"]) == 3
         eps_by_episode = {ep["episode"]: ep for ep in result["episodes"]}
@@ -1302,12 +1398,16 @@ class TestCostEstimationService:
         assert len(eps_by_episode[2]["segments"]) == 0
         assert len(eps_by_episode[3]["segments"]) == 1
 
+        # # The warning explicitly names which episode was skipped
         # warning 显式标出哪一集被跳过
         warnings = [r.getMessage() for r in caplog.records if r.levelno == logging.WARNING]
         assert any("ep2.json" in m for m in warnings), warnings
 
     async def test_audio_estimate_per_segment_by_characters(self, db_factory):
-        """旁白配音预估与结算同一个计算器：novel_text 按条目的「汉字计 2」统计字符数；models 含 audio 条目。"""
+        """Narration audio estimate and settlement use the same calculator: novel_text characters are counted per the
+        entry's 'Chinese character counts as 2'; models include an audio entry.
+
+        旁白配音预估与结算同一个计算器：novel_text 按条目的「汉字计 2」统计字符数；models 含 audio 条目。"""
         resolver = ConfigResolver(db_factory)
         service = CostEstimationService(resolver, db_factory)
 
@@ -1328,16 +1428,23 @@ class TestCostEstimationService:
 
         assert result["models"]["audio"] == {"provider": "dashscope", "model": "qwen3-tts-flash"}
         segments = result["episodes"][0]["segments"]
+        # # qwen3-tts-flash at CNY 0.8 per 10k characters, Chinese characters count as 2: 100 Chinese characters count as
+        # # 200 characters -> 0.016 CNY
         # qwen3-tts-flash 按 ¥0.8/万字符、汉字计 2：100 个汉字计 200 字符 → 0.016 CNY
         assert segments[0]["estimate"]["audio"]["CNY"] == pytest.approx(0.016)
+        # # Segments without source text produce no narration estimate
         # 无原文的段不产生旁白预估
         assert segments[1]["estimate"]["audio"] == {}
+        # # Episode/project totals include audio
         # 集/项目两级合计纳入 audio
         assert result["episodes"][0]["totals"]["estimate"]["audio"]["CNY"] == pytest.approx(0.016)
         assert result["project_totals"]["estimate"]["audio"]["CNY"] == pytest.approx(0.016)
 
     async def test_post_production_project_has_no_audio_estimate(self, db_factory):
-        """后期配音项目即使保留着 TTS 快照也不产生旁白配音预估，全局默认同样不参与。"""
+        """Post-production voiceover projects produce no narration audio estimate even if they keep a TTS snapshot; the
+        global default does not apply either.
+
+        后期配音项目即使保留着 TTS 快照也不产生旁白配音预估，全局默认同样不参与。"""
         from lib.config.service import ConfigService
 
         async with db_factory() as session:
@@ -1361,7 +1468,9 @@ class TestCostEstimationService:
         assert result["episodes"][0]["segments"][0]["estimate"]["audio"] == {}
 
     async def test_audio_actual_costs_included(self, db_factory):
-        """旁白实际费用按 segment 聚合进 actual.audio。"""
+        """Actual narration cost is aggregated per segment into actual.audio.
+
+        旁白实际费用按 segment 聚合进 actual.audio。"""
         resolver = ConfigResolver(db_factory)
         service = CostEstimationService(resolver, db_factory)
 
@@ -1392,7 +1501,10 @@ class TestCostEstimationService:
         assert result["project_totals"]["actual"]["audio"]["CNY"] == pytest.approx(0.008)
 
     async def test_ad_storyboard_estimates_per_shot(self, db_factory):
-        """ad 项目（分镜图生视频路径）：逐个分镜返回分镜图 + 视频估值，聚合进集/项目两级合计。"""
+        """ad project (storyboard-to-video path): returns storyboard image + video estimates per shot, aggregated into
+        episode and project totals.
+
+        ad 项目（分镜图生视频路径）：逐个分镜返回分镜图 + 视频估值，聚合进集/项目两级合计。"""
         resolver = ConfigResolver(db_factory)
         service = CostEstimationService(resolver, db_factory)
 
@@ -1414,13 +1526,16 @@ class TestCostEstimationService:
         for seg in segments:
             assert seg["estimate"]["image"], seg
             assert seg["estimate"]["video"], seg
+        # # Video estimate varies with shot duration (per-shot estimate, not an even split of the episode)
         # 视频估值随分镜时长变化（单个分镜级估值非整集平摊）
         assert segments[0]["estimate"]["video"] != segments[1]["estimate"]["video"]
         assert result["episodes"][0]["totals"]["estimate"]["image"]
         assert result["project_totals"]["estimate"]["video"]
 
     async def test_ad_voiceover_does_not_produce_audio_estimate(self, db_factory):
-        """ad 镜头口播文案不产生旁白配音预估（本期草稿导出后在剪映配音）。"""
+        """ad shot voiceover copy produces no narration audio estimate (in this phase, voiced in JianYing after draft export).
+
+        ad 镜头口播文案不产生旁白配音预估（本期草稿导出后在剪映配音）。"""
         from lib.config.service import ConfigService
 
         async with db_factory() as session:
@@ -1442,7 +1557,9 @@ class TestCostEstimationService:
         assert result["episodes"][0]["segments"][0]["estimate"]["audio"] == {}
 
     async def test_ad_reference_video_estimates_self_contained_units(self, db_factory):
-        """广告/短片的参考生视频按 video_units 计费展示，并跳过分镜图与独立音频估值。"""
+        """Ad/short reference-to-video is billed per video_units, skipping storyboard image and standalone audio estimates.
+
+        广告/短片的参考生视频按 video_units 计费展示，并跳过分镜图与独立音频估值。"""
         resolver = ConfigResolver(db_factory)
         service = CostEstimationService(resolver, db_factory)
 
@@ -1475,7 +1592,14 @@ class TestCostEstimationService:
         assert result["project_totals"]["estimate"]["video"]
 
     async def test_narration_reference_video_produces_nonzero_video_estimate(self, db_factory):
-        """narration + reference_video 集的视频估值不应恒为 0（`get_storyboard_items` 对该
+        """Video estimate for narration + reference_video episodes should not always be 0 (`get_storyboard_items`
+        always returns an empty list for that generation_mode; the old estimate loop iterated it and so never computed
+        video cost).
+
+        The unit itself is the display granularity (``Shot`` has no own ID), so segment_id is the unit_id directly,
+        unlike the ad path which spreads back to member shots.
+
+        narration + reference_video 集的视频估值不应恒为 0（`get_storyboard_items` 对该
         generation_mode 恒返回空列表，之前的估算循环遍历它，等于永远算不出视频费用）。
 
         unit 本身就是展示颗粒度（``Shot`` 无独立 ID），故 segment_id 直接是 unit_id，
@@ -1507,7 +1631,10 @@ class TestCostEstimationService:
         assert result["project_totals"]["estimate"]["video"]
 
     async def test_drama_reference_video_actual_cost_matches_unit_id(self, db_factory):
-        """actual 侧直接按 unit_id 匹配，不需要摊分——reference_videos 的记账 resource_id
+        """The actual side matches directly by unit_id with no split: the accounting resource_id of reference_videos is
+        the unit_id, the same identity as the segment_id output by this path.
+
+        actual 侧直接按 unit_id 匹配，不需要摊分——reference_videos 的记账 resource_id
         即 unit_id，与本路径输出的 segment_id 同一 identity。
         """
         resolver = ConfigResolver(db_factory)
@@ -1542,7 +1669,12 @@ class TestCostEstimationService:
         assert result["project_totals"]["actual"]["video"]["USD"] == pytest.approx(0.8)
 
     async def test_narration_reference_video_estimate_uses_rounded_up_unit_duration(self, db_factory, monkeypatch):
-        """取档向上的 unit：预估金额按取档后的秒数（6s）计，而非剧本原始总时长（5s）。
+        """A unit rounded up to a slot: the estimate uses the slotted seconds (6s), not the script's raw total (5s).
+
+        With no resolution set, Veo 3.1 requests carry no resolution, and a unit without reference images takes slots
+        from the full set [4, 6, 8].
+
+        取档向上的 unit：预估金额按取档后的秒数（6s）计，而非剧本原始总时长（5s）。
 
         Veo 3.1 未设分辨率时请求不携带分辨率，无参考图单元按全集 [4, 6, 8] 取档。
         """
@@ -1582,7 +1714,10 @@ class TestCostEstimationService:
     async def test_reference_video_quote_is_identical_for_tts_and_post_production_projects(
         self, db_factory, monkeypatch
     ):
-        """旁白交付方式不影响视频请求：同一 unit 在 use_tts 与 post_production 项目下取档与报价相同。"""
+        """Narration delivery mode does not affect the video request: the same unit gets the same slot and quote under
+        use_tts and post_production projects.
+
+        旁白交付方式不影响视频请求：同一 unit 在 use_tts 与 post_production 项目下取档与报价相同。"""
         request_facts = fake_reference_request_facts(
             durations=(4, 8, 12),
             provider_id="grok",
@@ -1657,7 +1792,13 @@ class TestCostEstimationService:
         ]
 
     async def test_reference_route_gives_no_estimate_for_mismatched_storyboard_script(self, db_factory):
-        """参考生视频项目下的失配剧本（分镜骨架）不产生预估：该集按当前生成模式根本不能生成。
+        """A mismatched script (shot skeleton) under a reference-to-video project produces no estimate: that episode
+        cannot be generated in the current generation mode at all.
+
+        Estimation and execution share one axis: generation refuses such legacy mixed episodes outright and requires a
+        re-split, so estimation honestly gives zero rather than imagining a shot path for it.
+
+        参考生视频项目下的失配剧本（分镜骨架）不产生预估：该集按当前生成模式根本不能生成。
 
         估算与执行同轴——生成侧对这类存量混排集直接拒绝并要求重拆，估算这边照实给零，
         不去替它假想一条分镜路径。
@@ -1693,7 +1834,10 @@ class TestCostEstimationService:
         assert not result["project_totals"]["estimate"]["video"]
 
     async def test_reference_route_estimates_units_ignoring_residual_segments(self, db_factory):
-        """参考生视频项目按 units 估算，剧本里残留的 segments 不参与——生成模式定路径，形状不投票。"""
+        """Reference-to-video projects estimate by units; residual segments in the script take no part: generation mode
+        decides the path, shape does not vote.
+
+        参考生视频项目按 units 估算，剧本里残留的 segments 不参与——生成模式定路径，形状不投票。"""
         resolver = ConfigResolver(db_factory)
         service = CostEstimationService(resolver, db_factory)
 
@@ -1718,7 +1862,10 @@ class TestCostEstimationService:
         assert result["project_totals"]["estimate"]["video"]
 
     async def test_storyboard_route_gives_no_estimate_for_mismatched_unit_script(self, db_factory):
-        """分镜图生视频项目下的失配剧本（video_units 骨架）不产生预估：估算只认项目生成模式。"""
+        """A mismatched script (video_units skeleton) under a storyboard-to-video project produces no estimate:
+        estimation follows only the project's generation mode.
+
+        分镜图生视频项目下的失配剧本（video_units 骨架）不产生预估：估算只认项目生成模式。"""
         resolver = ConfigResolver(db_factory)
         service = CostEstimationService(resolver, db_factory)
 
@@ -1737,7 +1884,14 @@ class TestCostEstimationService:
         assert not result["project_totals"]["estimate"]["video"]
 
     async def test_narration_reference_video_estimate_skips_unenqueueable_units(self, db_factory):
-        """正文为空或只有空白的 unit 不可入队（``video_batch_admission.reference_unit_task_spec``
+        """Units with an empty or whitespace-only body cannot be enqueued (``video_batch_admission.reference_unit_task_spec``
+        rejects empty bodies outright, and ``TaskSpec.from_request`` likewise rejects empty prompts), so such units
+        produce no new estimate; but the whole unit must still stay in the result and in the totals: not being
+        enqueueable affects only whether a new estimate is made, not whether the unit was ever generated. A unit with
+        actual cost (generated successfully, later edited to an empty body) must not have its historical spend vanish
+        from the total.
+
+        正文为空或只有空白的 unit 不可入队（``video_batch_admission.reference_unit_task_spec``
         对空正文直接拒绝，``TaskSpec.from_request`` 对空提示词同样拒绝），这类 unit
         不产生新预估——但 unit 整条仍要保留在结果里、纳入汇总：不可入队只影响能否产生新预估，
         不影响该 unit 是否曾经成功生成过。已有实付的 unit（曾成功生成、之后被编辑成空正文）
@@ -1823,7 +1977,12 @@ class TestCostEstimationService:
         assert result["project_totals"]["actual"]["video"] == {"USD": 1.23}
 
     async def test_narration_reference_video_estimate_skips_unit_with_malformed_duration(self, db_factory):
-        """Agent/外部编辑过的剧本可能写入非数值 ``duration_seconds``（字符串、list、dict 等）。
+        """Scripts edited by the Agent or externally may contain a non-numeric ``duration_seconds`` (string, list, dict,
+        etc.). The video tool's enqueue precheck (``server/media_tools/videos.py``) catches ``ValueError`` per unit and
+        skips it; estimation must follow the same tolerance: one unit's dirty duration must not 500 the whole project
+        estimate and drag down other normal episodes, and other normal units must still produce estimates.
+
+        Agent/外部编辑过的剧本可能写入非数值 ``duration_seconds``（字符串、list、dict 等）。
         视频工具的入队预检（``server/media_tools/videos.py``）对每个 unit 单独 catch ``ValueError`` 跳过，
         估算须跟随同一容错口径——一个 unit 的脏时长不能让整个项目估算 500，拖累其余正常集，
         其余正常 unit 仍要继续产生预估。
@@ -1852,7 +2011,11 @@ class TestCostEstimationService:
         assert segments[2]["estimate"]["video"]
 
     async def test_narration_reference_video_estimate_skips_unit_with_non_string_text(self, db_factory):
-        """Agent/外部编辑过的剧本可能把 ``text`` 裸写成非字符串的 truthy 值（如 ``true``/``1``）。
+        """Scripts edited by the Agent or externally may raw-write ``text`` as a non-string truthy value (e.g.
+        ``true``/``1``). That value raises ``TypeError`` during prompt concatenation, so it must be type-checked
+        first, otherwise a single dirty entry 500s the whole project estimate.
+
+        Agent/外部编辑过的剧本可能把 ``text`` 裸写成非字符串的 truthy 值（如 ``true``/``1``）。
         该值参与提示词拼接会抛 ``TypeError``，必须先做类型检查，否则单条脏数据会让整个项目
         估算 500。
         """
@@ -1878,7 +2041,13 @@ class TestCostEstimationService:
         assert segments[1]["estimate"]["video"]
 
     async def test_narration_reference_video_estimate_rejects_non_string_unit_id(self, db_factory):
-        """Agent/外部编辑过的剧本可能把 ``unit_id`` 裸写成非字符串 truthy 值（如数字/布尔）。
+        """Scripts edited by the Agent or externally may raw-write ``unit_id`` as a non-string truthy value (e.g.
+        number/boolean). At enqueue execution (``execute_reference_video_task``) the unit is located by comparing the
+        string resource_id with the script's raw (unconverted) value, and the type mismatch causes "unit not found";
+        if the estimate str()-converted the value and billed normally, it would show a cost that can never actually
+        run, so only values that are strings originally are priced.
+
+        Agent/外部编辑过的剧本可能把 ``unit_id`` 裸写成非字符串 truthy 值（如数字/布尔）。
         入队执行时（``execute_reference_video_task``）按字符串 resource_id 与剧本原始
         （未转型）值比较定位 unit，类型不等会导致 "unit not found"；估算侧若把该值
         str() 强转后正常计费，会展示一笔实际跑不起来的费用，必须原本就是字符串才计价。
@@ -1904,7 +2073,12 @@ class TestCostEstimationService:
         assert segments[0]["estimate"]["video"]
 
     async def test_narration_reference_video_estimate_handles_token_priced_video_model(self, db_factory):
-        """按 token 计费的视频模型（Ark/Seedance）也要能算出非零视频预估。
+        """Token-billed video models (Ark/Seedance) must also produce a non-zero video estimate.
+
+        The reference-to-video estimate passes only ``duration_seconds``; unless video tokens are estimated by the
+        channel formula, a token-priced price table cannot compute without usage.
+
+        按 token 计费的视频模型（Ark/Seedance）也要能算出非零视频预估。
 
         参考生视频的视频估值只传 ``duration_seconds``，若不按通道公式估出视频 token，
         按 token 计价的价目表会因缺少用量算不出。
@@ -1941,7 +2115,9 @@ class TestCostEstimationService:
         assert result["project_totals"]["estimate"] == {}
 
     async def test_cost_estimation_uses_t2i_default_when_split_fields_present(self, db_factory):
-        """project 仅有 image_provider_t2i 时，cost estimation 用此值估算（T2I 是 cost estimation 锚点）。"""
+        """When the project has only image_provider_t2i, cost estimation uses that value (T2I is the cost estimation anchor).
+
+        project 仅有 image_provider_t2i 时，cost estimation 用此值估算（T2I 是 cost estimation 锚点）。"""
         resolver = ConfigResolver(db_factory)
         service = CostEstimationService(resolver, db_factory)
 
@@ -1960,7 +2136,11 @@ class TestCostEstimationService:
         assert result["models"]["image"]["model"] == "gpt-image-1"
 
     async def test_cost_estimation_no_image_provider_falls_back_to_resolver(self, db_factory):
-        """project 没有 image_provider_t2i 时，cost_estimation 不再自行 fallback I2I 或 legacy
+        """When the project has no image_provider_t2i, cost_estimation no longer falls back to I2I or legacy on its own
+        (legacy is handled by the lazy upgrade in ProjectManager.load_project; I2I and T2I are orthogonal capability
+        slots and substituting one for the other prices wrongly). Without a T2I field the resolver default is used.
+
+        project 没有 image_provider_t2i 时，cost_estimation 不再自行 fallback I2I 或 legacy
         （legacy 由 ProjectManager.load_project 的 lazy upgrade 处理；I2I 和 T2I 是正交能力槽，
         互替会算到错误价目）。无 T2I 字段则使用 resolver 默认值。"""
         resolver = ConfigResolver(db_factory)
@@ -1969,6 +2149,7 @@ class TestCostEstimationService:
         project_data = {
             "title": "Test",
             "content_mode": "narration",
+            # # Only i2i and legacy fields: cost_estimation should ignore them and fall to the resolver default
             # 仅有 i2i 与 legacy 字段：cost_estimation 应忽略，落到 resolver 默认值
             "image_provider_i2i": "openai/gpt-image-1-edit",
             "image_backend": "gemini/gemini-2.0-flash-preview-image-generation",
@@ -1977,6 +2158,9 @@ class TestCostEstimationService:
 
         result = await service.compute(project_data, {}, project_name="test_no_t2i")
 
+        # # Positive lock: a project with no T2I field goes through the resolver; an empty DB has no image provider, so
+        # # cost_estimation takes the except branch and returns ("unknown", "unknown").
+        # # This contract also rules out the i2i slot (gpt-image-1-edit) and legacy (gemini-2.0-...).
         # 正向锁定：项目无 T2I 字段时走 resolver；空 DB 没有任何 image provider，
         # cost_estimation 走 except 分支返回 ("unknown", "unknown")。
         # 这个契约同时排除掉 i2i 槽（gpt-image-1-edit）和 legacy（gemini-2.0-...）。
@@ -1984,7 +2168,9 @@ class TestCostEstimationService:
         assert result["models"]["image"]["model"] == "unknown"
 
     async def test_cost_estimation_does_not_hide_unexpected_resolution_error(self, db_factory, monkeypatch):
-        """意外的程序错误应暴露，而不是作为能力不可用生成伪报价。"""
+        """Unexpected programming errors should surface rather than produce a pseudo-quote as 'capability unavailable'.
+
+        意外的程序错误应暴露，而不是作为能力不可用生成伪报价。"""
         resolver = ConfigResolver(db_factory)
         service = CostEstimationService(resolver, db_factory)
 
@@ -2005,10 +2191,15 @@ class TestCostEstimationService:
     @pytest.mark.parametrize(
         ("video_backend", "configured_generate_audio", "expected_usd"),
         [
+            # # With no resolution set Veo outputs 720p. AI Studio has no audio-off tier and the provider always bills at the
+            # # with-audio price: regardless of the switch, the estimate must land on veo-3.1-lite-generate-preview 720p
+            # # with-audio price 0.05 USD/s.
             # 未设分辨率时 Veo 按 720p 出片。AI Studio 无 audio-off 档，供应商恒按含音价出账：
             # 无论开关状态，预估都须落在 veo-3.1-lite-generate-preview 720p 的含音价 0.05 USD/s。
             ("gemini-aistudio", True, 0.05),
             ("gemini-aistudio", False, 0.05),
+            # # Vertex has a separate audio-off tier, unaffected by the AI Studio correction, so the estimate follows the switch
+            # # (veo-3.1-fast-generate-001 720p: with audio 0.10 / without 0.08 USD/s).
             # Vertex 有独立的 audio-off 档，不受 AI Studio 修正影响，预估随开关走
             # （veo-3.1-fast-generate-001 720p：含音 0.10 / 无音 0.08 USD/s）。
             ("gemini-vertex", True, 0.10),
@@ -2018,7 +2209,12 @@ class TestCostEstimationService:
     async def test_video_estimate_generate_audio_by_provider(
         self, db_factory, video_backend, configured_generate_audio, expected_usd
     ):
-        """费用预估在所有 (provider, audio 开关) 组合下与供应商实际出账口径一致。
+        """Cost estimates match the provider's actual billing for every (provider, audio switch) combination.
+
+        The project switch is given directly in the loaded project dict, verifying capability resolution does not
+        depend on the on-disk project file a second time.
+
+        费用预估在所有 (provider, audio 开关) 组合下与供应商实际出账口径一致。
 
         直接在已加载 project dict 中给出项目开关，验证能力解析不二次依赖磁盘项目文件。
         """
@@ -2041,7 +2237,10 @@ class TestCostEstimationService:
         assert seg["estimate"]["video"]["USD"] == pytest.approx(expected_usd)
 
     async def test_kling_reference_model_estimate_uses_effective_silent_tier(self, db_factory):
-        """参考能力 model 不产出人声；即使项目开关为真，预估也应与 backend 结算的静音档一致。"""
+        """Reference-capable models produce no human voice; even if the project switch is true, the estimate should match
+        the silent tier the backend settles at.
+
+        参考能力 model 不产出人声；即使项目开关为真，预估也应与 backend 结算的静音档一致。"""
         service = CostEstimationService(ConfigResolver(db_factory), db_factory)
         project_data = {
             "title": "Test",
@@ -2055,11 +2254,16 @@ class TestCostEstimationService:
             project_data, {"ep1.json": _make_script(1, ["E1S001"], [5])}, project_name="test"
         )
 
+        # # kling-video-o1 defaults to std: silent CNY 0.6/s; wrongly following the project switch would use audible CNY 0.8/s.
         # kling-video-o1 默认 std：静音 ¥0.6/s；错误沿用项目开关会走有声 ¥0.8/s。
         assert result["episodes"][0]["segments"][0]["estimate"]["video"]["CNY"] == pytest.approx(3.0)
 
     async def test_disabled_custom_video_model_estimate_reports_unknown(self, db_factory):
-        """估算模型身份与执行同口径：项目模型被禁用后按任务类型桶解析闸算悬空引用，不改按该供应商
+        """Estimate model identity follows the same rule as execution: after the project model is disabled, the per-task-
+        type bucket resolution gate counts it as a dangling reference, rather than pricing with that provider's default
+        enabled model; the user never chose that model and execution will not use it either (``docs/adr/0054``).
+
+        估算模型身份与执行同口径：项目模型被禁用后按任务类型桶解析闸算悬空引用，不改按该供应商
         默认启用模型出价——那个模型用户没选过，执行期也不会用它（``docs/adr/0054``）。"""
         from lib.db.repositories.custom_provider_repo import CustomProviderRepository
 
@@ -2103,6 +2307,8 @@ class TestCostEstimationService:
         )
 
         assert result["models"]["video"] == {"provider": "unknown", "model": "unknown"}
+        # # When identity cannot be resolved, fall back to the generic catalog price, priced neither by the disabled model
+        # # (Kling 2.6 720p 0.3/s x 6 s x 30 -> 54.0) nor by the provider's default enabled model (0.3/s x 6 s -> 1.8)
         # 身份解析不出时退到通用目录价，既不按被禁用模型（可灵 2.6 720p 0.3/s × 6 秒 × 30 → 54.0）也不按该
         # 供应商默认启用模型（0.3/s × 6 秒 → 1.8）的条目价出数
         video_estimate = result["episodes"][0]["segments"][0]["estimate"]["video"]
@@ -2116,7 +2322,10 @@ class TestCostEstimationService:
     async def test_estimate_resolves_video_model_by_generation_mode_bucket(
         self, db_factory, generation_mode, expected_model
     ):
-        """估算按 generation_mode 定桶取模型，与执行扣费同源：切模式即换到另一个桶的价目。"""
+        """Estimation picks the bucket and model by generation_mode, the same source as execution charging: switching
+        mode switches to the other bucket's prices.
+
+        估算按 generation_mode 定桶取模型，与执行扣费同源：切模式即换到另一个桶的价目。"""
         service = CostEstimationService(ConfigResolver(db_factory), db_factory)
         project_data = {
             "title": "Test",
@@ -2132,7 +2341,13 @@ class TestCostEstimationService:
         assert result["models"]["video"] == {"provider": "kling", "model": expected_model}
 
     async def test_unit_duration_slots_come_from_the_r2v_bucket_model(self, db_factory, monkeypatch):
-        """有参考图 unit 的取档与算价读同一个模型：两者都落 r2v 桶。
+        """Slot selection and pricing for a unit with reference images read the same model: both land in the r2v bucket.
+
+        If slot selection wrongly used the i2v bucket, a 5-second unit would stay at 5 seconds per kling's [5, 10],
+        then be priced at the r2v bucket's Veo unit price; while execution requests 8 seconds per Veo's slots (with
+        reference images only 8 s is accepted), so the estimated and charged amounts would not match.
+
+        有参考图 unit 的取档与算价读同一个模型：两者都落 r2v 桶。
 
         若取档误用 i2v 桶，5 秒的 unit 会按 kling 的 [5, 10] 停在 5 秒，再按 r2v 桶 Veo 的单价
         算钱；而执行期按 Veo 的档位（带参考图只接受 8 秒）申请 8 秒——估算量与扣费量对不上。
@@ -2166,7 +2381,14 @@ class TestCostEstimationService:
         assert priced == [("veo-3.1-generate-preview", 8)]
 
     async def test_degenerate_unit_prices_by_i2v_bucket_model(self, db_factory, monkeypatch):
-        """无参考图退化 unit 降级到 i2v 桶：取档与算价都读 i2v 桶模型。
+        """A degenerate unit without reference images downgrades to the i2v bucket: slot selection and pricing both read
+        the i2v bucket model.
+
+        Execution resolves the model for empty-reference shots by the i2v bucket (not sending them to the r2v model that
+        rejects empty references); if the estimate still used the r2v bucket's Veo slots (only 8 s) and price, it would
+        not match the actual kling 5-second charge.
+
+        无参考图退化 unit 降级到 i2v 桶：取档与算价都读 i2v 桶模型。
 
         执行侧对空参考镜头按 i2v 桶解析模型（不送入拒空参考的 r2v 模型），估算若仍按 r2v 桶
         Veo 的档位（只接受 8 秒）与单价出数，会与实际扣费的 kling 5 秒对不上。
@@ -2198,7 +2420,13 @@ class TestCostEstimationService:
         assert priced == [("kling-v3", 5)]
 
     async def test_all_episodes_priced_by_the_project_route_bucket(self, db_factory, monkeypatch):
-        """全项目同一种生成模式、同一个桶：算价不逐集分歧，也不被某集的剧本形状带偏。
+        """The whole project uses one generation mode and one bucket: pricing does not diverge per episode, nor is it
+        skewed by one episode's script shape.
+
+        The project generation mode is storyboard and ep2 is a mismatched video_units skeleton: it produces no estimate
+        (generation would refuse it and require a re-split), let alone pulling the estimate into the r2v bucket.
+
+        全项目同一种生成模式、同一个桶：算价不逐集分歧，也不被某集的剧本形状带偏。
 
         项目生成模式是 storyboard，ep2 是失配的 video_units 骨架——它不产生预估（生成侧会拒绝
         并要求重拆），更不会把估算拽去 r2v 桶。
@@ -2233,6 +2461,8 @@ class TestCostEstimationService:
 
         result = await service.compute(project_data, scripts, project_name="per-episode-bucket")
 
+        # # Only ep1, whose skeleton matches the generation mode, produces an estimate, priced at the i2v bucket of the
+        # # project generation mode.
         # 只有骨架与生成模式相符的 ep1 产生预估，且按项目生成模式的 i2v 桶算价。
         assert priced_models == ["kling-v3"]
         assert result["episodes"][1]["segments"] == []
@@ -2245,7 +2475,13 @@ class TestCostEstimationService:
     async def test_ad_reference_route_prices_by_unit_reference_bucket(
         self, db_factory, monkeypatch, text, expected_model
     ):
-        """ad 参考生视频按 unit 当前实际可用参考图分桶算价：有图 → r2v，无图 → i2v。
+        """Ad reference-to-video prices per unit by the bucket of its currently usable reference images: with images ->
+        r2v, without -> i2v.
+
+        Reference-to-video episodes actually enqueue reference-to-video tasks; execution downgrades video units without
+        reference images to the i2v bucket when resolving the model, so pricing must bucket by the same rule.
+
+        ad 参考生视频按 unit 当前实际可用参考图分桶算价：有图 → r2v，无图 → i2v。
 
         参考生视频的集实际入队参考生视频任务；执行侧对无参考图视频单元按 i2v 桶降级解析模型，
         算价须跟着同一口径分桶。
@@ -2280,7 +2516,10 @@ class TestCostEstimationService:
         assert priced_models == [expected_model]
 
     async def test_custom_provider_estimates_use_the_matched_entry_prices(self, db_factory):
-        """自定义供应商预估：image/video/audio 按所对应条目的价目表 × 倍率计价，与实际记账同源。"""
+        """Custom provider estimate: image/video/audio priced by the matching entry's price table x multiplier, the same
+        source as actual accounting.
+
+        自定义供应商预估：image/video/audio 按所对应条目的价目表 × 倍率计价，与实际记账同源。"""
         from lib.db.repositories.custom_provider_repo import CustomProviderRepository
 
         async with db_factory() as session:
@@ -2327,24 +2566,30 @@ class TestCostEstimationService:
             "episodes": [{"episode": 1, "title": "Ep1", "script_file": "ep1.json"}],
         }
         script = _make_script(1, ["E1S001"], [6])
-        script["segments"][0]["novel_text"] = "字" * 10000  # 1 万字符
+        script["segments"][0]["novel_text"] = "字" * 10000  # 10k characters / 1 万字符
         scripts = {"ep1.json": script}
 
         result = await service.compute(project_data, scripts, project_name="test-custom")
 
         assert result["models"]["image"] == {"provider": "custom-1", "model": "img"}
         seg = result["episodes"][0]["segments"][0]
+        # # image: bound entry is priced per image, 0.07 USD (does not change with 1K/2K)
         # image：绑定的条目按张计费，0.07 USD（不随 1K/2K 变化）
         assert seg["estimate"]["image"]["USD"] == pytest.approx(0.07)
+        # # video: name matches Kling 2.6, 720p silent 0.3 CNY/s x 6 s x model multiplier 0.5 = 0.9 CNY
         # video：名字对上可灵 2.6，720p 无声 0.3 CNY/秒 × 6 秒 × 模型倍率 0.5 = 0.9 CNY
         assert seg["estimate"]["video"]["CNY"] == pytest.approx(0.9)
+        # # audio: 10k Chinese characters counted as 2 -> 20k characters / 10k x 2.0 = 4.0 CNY
         # audio：1 万个汉字按 2 计 → 2 万字符 / 1 万 × 2.0 = 4.0 CNY
         assert seg["estimate"]["audio"]["CNY"] == pytest.approx(4.0)
+        # # Episode/project totals include it too
         # 集/项目两级合计同步纳入
         assert result["project_totals"]["estimate"]["video"]["CNY"] == pytest.approx(0.9)
 
     async def test_custom_provider_grid_estimate_uses_the_entry_price(self, db_factory):
-        """grid 模式下自定义供应商图片单价同样贯通（2K grid 单价 = 条目的每张价格）。"""
+        """Custom provider image unit price also flows through in grid mode (2K grid unit price = the entry's per-image price).
+
+        grid 模式下自定义供应商图片单价同样贯通（2K grid 单价 = 条目的每张价格）。"""
         from lib.db.repositories.custom_provider_repo import CustomProviderRepository
 
         async with db_factory() as session:
@@ -2358,6 +2603,7 @@ class TestCostEstimationService:
                         "model_id": "img",
                         "display_name": "Img",
                         "endpoint": "openai-images",
+                        # # Entry priced per image, independent of resolution: Grok Imagine Pro 0.07 USD per image
                         # 按张计价、与分辨率无关的条目：Grok Imagine Pro 每张 0.07 USD
                         "entry_binding": "xai/grok-imagine-image-pro",
                     },
@@ -2368,7 +2614,7 @@ class TestCostEstimationService:
         resolver = ConfigResolver(db_factory)
         service = CostEstimationService(resolver, db_factory)
 
-        seg_ids = [f"E1S{i:03d}" for i in range(1, 10)]  # 9 scenes → 1 张 grid_9
+        seg_ids = [f"E1S{i:03d}" for i in range(1, 10)]  # 9 scenes -> 1 grid_9 image / 9 scenes → 1 张 grid_9
         project_data = {
             "title": "Test",
             "content_mode": "narration",
@@ -2381,15 +2627,20 @@ class TestCostEstimationService:
 
         result = await service.compute(project_data, scripts, project_name="test-grid-custom")
 
+        # # 9 cells form 1 grid, 0.07 USD per image spread over 9 cells
         # 9 格拼成 1 张 grid，每张 0.07 USD 摊到 9 格
         segments = result["episodes"][0]["segments"]
         for seg in segments:
             assert seg["estimate"]["image"]["USD"] == pytest.approx(round(0.07 / 9, 6))
+        # # Episode total = full unit price 0.07 USD
         # 集合计 = 满张单价 0.07 USD
         assert result["episodes"][0]["totals"]["estimate"]["image"]["USD"] == pytest.approx(0.07, abs=1e-4)
 
     async def test_grid_estimate_counts_every_chunk_of_oversized_group(self, db_factory):
-        """超过单张格数上限的分组按切块后的张数计价，与入队实际产出的宫格张数一致。"""
+        """Groups exceeding the per-image cell limit are priced by the chunked image count, matching the grid images
+        actually produced on enqueue.
+
+        超过单张格数上限的分组按切块后的张数计价，与入队实际产出的宫格张数一致。"""
         from lib.db.repositories.custom_provider_repo import CustomProviderRepository
         from lib.script.grid.layout import plan_grid_chunks
 
@@ -2404,6 +2655,7 @@ class TestCostEstimationService:
                         "model_id": "img",
                         "display_name": "Img",
                         "endpoint": "openai-images",
+                        # # Entry priced per image, independent of resolution: Grok Imagine Pro 0.07 USD per image
                         # 按张计价、与分辨率无关的条目：Grok Imagine Pro 每张 0.07 USD
                         "entry_binding": "xai/grok-imagine-image-pro",
                     },
@@ -2414,7 +2666,7 @@ class TestCostEstimationService:
         resolver = ConfigResolver(db_factory)
         service = CostEstimationService(resolver, db_factory)
 
-        seg_ids = [f"E1S{i:03d}" for i in range(1, 13)]  # 12 scenes，非 4K 上限 9 → 切 2 张
+        seg_ids = [f"E1S{i:03d}" for i in range(1, 13)]  # 12 scenes, non-4K limit 9 -> split into 2 images / 12 scenes，非 4K 上限 9 → 切 2 张
         project_data = {
             "title": "Test",
             "content_mode": "narration",
@@ -2435,34 +2687,43 @@ class TestCostEstimationService:
         )
 
     async def test_custom_provider_without_price_degrades_to_zero(self, db_factory):
-        """自定义供应商查无价格模型：预估降级为 0（记 debug 日志、不抛错），与现状降级口径一致。"""
+        """Custom provider model with no price found: the estimate degrades to 0 (debug log, no raise), consistent with
+        the current degradation rule.
+
+        自定义供应商查无价格模型：预估降级为 0（记 debug 日志、不抛错），与现状降级口径一致。"""
         resolver = ConfigResolver(db_factory)
         service = CostEstimationService(resolver, db_factory)
 
         project_data = {
             "title": "Test",
             "content_mode": "narration",
-            "image_provider_t2i": "custom-99/ghost",  # DB 无此供应商/模型
+            "image_provider_t2i": "custom-99/ghost",  # this provider/model is not in the DB / DB 无此供应商/模型
             "episodes": [{"episode": 1, "title": "Ep1", "script_file": "ep1.json"}],
         }
         scripts = {"ep1.json": _make_script(1, ["E1S001"], [6])}
 
         result = await service.compute(project_data, scripts, project_name="test-noprice")
 
+        # # Assert the resolved value is still that custom provider/model, ruling out a false positive with the same result
+        # # from the resolver falling back to unknown
         # 断言解析到的仍是该自定义供应商/模型，排除 resolver 回落 unknown 导致的同结果假阳性
         assert result["models"]["image"] == {"provider": "custom-99", "model": "ghost"}
+        # # Missing price -> calculate_cost returns 0, _add_cost filters it, image estimate is empty and nothing raised
         # 缺价 → calculate_cost 返回 0，_add_cost 过滤，image 估值为空且未抛错
         seg = result["episodes"][0]["segments"][0]
         assert seg["estimate"]["image"] == {}
 
     async def test_custom_provider_malformed_id_degrades_to_zero(self, db_factory):
-        """畸形 custom- provider id（非数字后缀）：parse_provider_id 的 ValueError 需降级为 0，不抛错。"""
+        """Malformed custom- provider id (non-numeric suffix): parse_provider_id's ValueError must degrade to 0, not raise.
+
+        畸形 custom- provider id（非数字后缀）：parse_provider_id 的 ValueError 需降级为 0，不抛错。"""
         resolver = ConfigResolver(db_factory)
         service = CostEstimationService(resolver, db_factory)
 
         project_data = {
             "title": "Test",
             "content_mode": "narration",
+            # write-side validation checks only the prefix, so a non-numeric suffix can still be stored
             "image_provider_t2i": "custom-abc/ghost",  # 写入侧校验只查前缀，后缀非数字仍可能入库
             "episodes": [{"episode": 1, "title": "Ep1", "script_file": "ep1.json"}],
         }
@@ -2470,6 +2731,8 @@ class TestCostEstimationService:
 
         result = await service.compute(project_data, scripts, project_name="test-malformed-id")
 
+        # # Assert the resolved value is still that malformed provider/model, ruling out a false positive with the same result
+        # # from the resolver falling back to unknown
         # 断言解析到的仍是该畸形 provider/model，排除 resolver 回落 unknown 导致的同结果假阳性
         assert result["models"]["image"] == {"provider": "custom-abc", "model": "ghost"}
         seg = result["episodes"][0]["segments"][0]
@@ -2477,7 +2740,9 @@ class TestCostEstimationService:
 
 
 class TestUnpricedCosts:
-    """预估与实际两侧标出没有价格的部分，让界面区分真实的 0 与未知。"""
+    """Both the estimate and actual sides mark the parts without a price, so the UI can tell a real 0 from unknown.
+
+    预估与实际两侧标出没有价格的部分，让界面区分真实的 0 与未知。"""
 
     async def test_custom_model_without_price_is_reported_on_both_sides(self, db_factory):
         from lib.db.repositories.custom_provider_repo import CustomProviderRepository
@@ -2519,6 +2784,7 @@ class TestUnpricedCosts:
         )
 
         unpriced_img = {"call_type": "image", "provider": "custom-1", "provider_name": "Relay", "model": "img"}
+        # # Image models not matching an entry are recorded as unpriced; a video model with multiplier 0 is a real 0, not unpriced
         # 对应不上条目的图片模型记未定价；倍率设为 0 的视频模型是真实的 0，不算未计价
         assert result["unpriced"]["estimate"] == [{**unpriced_img, "count": 2}]
         assert result["unpriced"]["actual"] == [{**unpriced_img, "count": 1}]
@@ -2561,7 +2827,9 @@ class TestUnpricedCosts:
         ]
 
     async def test_zero_cost_call_is_not_reported_as_unpriced(self, db_factory):
-        """未计价看费用是否为 NULL：记为 0 的调用是真实的 0，模型有没有价格都不改变这一点。"""
+        """Unpriced means cost is NULL: a call recorded as 0 is a real 0, whether or not the model has a price.
+
+        未计价看费用是否为 NULL：记为 0 的调用是真实的 0，模型有没有价格都不改变这一点。"""
         await _seed_call(
             db_factory,
             "test-zero",
@@ -2593,6 +2861,7 @@ class TestUnpricedCosts:
             ("asset", None, True),
             ("storyboard", None, True),
             ("asset", ("image", "success"), False),
+            # # Text calls and failed media calls cannot give artifact cost; unknown spend must not become a real 0
             # 文本调用与失败的媒体调用都算不出产物的费用，不能让未知的已花变成真实的 0
             ("asset", ("text", "success"), True),
             ("asset", ("image", "failed"), True),
@@ -2602,7 +2871,10 @@ class TestUnpricedCosts:
     async def test_missing_local_calls_flags_generated_media_without_call_records(
         self, db_factory, generated, call, expected
     ):
-        """没有本机媒体调用记录（如导入的项目）时实际费用无从统计；什么都还没生成的新项目则是真实的 0。"""
+        """Without local media call records (e.g. an imported project) actual cost cannot be computed; a new project
+        with nothing generated yet is a real 0.
+
+        没有本机媒体调用记录（如导入的项目）时实际费用无从统计；什么都还没生成的新项目则是真实的 0。"""
         project_name = "test-imported"
         if call is not None:
             call_type, status = call
@@ -2633,7 +2905,10 @@ class TestUnpricedCosts:
 
 
 class TestImageBatchEstimate:
-    """整批图片预估与结算同一个目录查询与计算器：用量由调用通道按请求事实推出。"""
+    """Whole-batch image estimate and settlement share the same catalog lookup and calculator: usage is derived by
+    the call channel from request facts.
+
+    整批图片预估与结算同一个目录查询与计算器：用量由调用通道按请求事实推出。"""
 
     async def test_openai_output_tokens_estimated_from_size_and_quality(self, db_factory):
         from server.services.admission.cost_estimation import estimate_image_batch_cost
@@ -2649,6 +2924,8 @@ class TestImageBatchEstimate:
             project, ["t2i", "t2i"], aspect_ratio="1:1", resolver=ConfigResolver(db_factory), session_factory=db_factory
         )
 
+        # # 1K -> quality medium, 1:1 -> 1024x1024: official calculator 1756 output tokens x $30/million; prompt text tokens
+        # # count as 0
         # 1K → quality medium、1:1 → 1024x1024：官方计算器 1756 个输出 token × $30/百万；提示词文字 token 记 0
         assert estimated.total == {"USD": pytest.approx(2 * 1756 * 30 / 1_000_000)}
         assert estimated.unpriced_count == 0
@@ -2668,6 +2945,8 @@ class TestImageBatchEstimate:
             project, ["t2i"], aspect_ratio="9:16", resolver=resolver, session_factory=db_factory
         )
         assert (t2i.total, t2i.unpriced_count) == ({"USD": pytest.approx(0.01)}, 0)
+        # # Image-to-image only knows it uses reference images, not how many; Agnes adds a per-image surcharge from the 4th
+        # # image, so it cannot be priced
         # 图生图只知道走参考图、不知道几张；Agnes 第 4 张起按张加价，算不出
         i2i = await estimate_image_batch_cost(
             project, ["i2i"], aspect_ratio="9:16", resolver=resolver, session_factory=db_factory
@@ -2676,7 +2955,10 @@ class TestImageBatchEstimate:
         assert i2i.to_payload() == {"estimated_cost": None, "unpriced_count": 1}
 
     async def test_batch_totals_the_priced_images_and_counts_the_unpriced_ones(self, db_factory):
-        """一批里文生图能定价、图生图算不出价：合计只含文生图，图生图的张数列入未定价。"""
+        """In a batch, text-to-image can be priced but image-to-image cannot: the total includes only text-to-image, and
+        the image-to-image count is listed as unpriced.
+
+        一批里文生图能定价、图生图算不出价：合计只含文生图，图生图的张数列入未定价。"""
         from server.services.admission.cost_estimation import estimate_image_batch_cost
 
         project = {

@@ -30,7 +30,9 @@ def _make_ready_provider(name: str, media_types: list[str]) -> ProviderStatus:
 
 
 class _FakeConfigService:
-    """最小化的 ConfigService fake，只实现 resolver 需要的方法。"""
+    """Minimal ConfigService fake that only implements the methods the resolver needs.
+
+    最小化的 ConfigService fake，只实现 resolver 需要的方法。"""
 
     def __init__(
         self,
@@ -63,37 +65,50 @@ class _FakeConfigService:
 
 
 async def _video_caps(db_factory, project: dict, *, generation_type: VideoGenerationType | None = None) -> dict:
-    """按项目字典解析视频能力；项目落盘不参与本组判据，故 project_manager 只做占位。"""
+    """Resolve video capabilities from the project dict; persisting the project plays no part in these criteria, so
+    project_manager is just a placeholder.
+
+    按项目字典解析视频能力；项目落盘不参与本组判据，故 project_manager 只做占位。"""
     with patch("lib.config.resolver.get_project_manager"):
         return await ConfigResolver(db_factory).video_capabilities_for_project(project, generation_type=generation_type)
 
 
 class TestVideoGenerateAudio:
-    """验证 video_generate_audio 的默认值、全局配置、项目级覆盖优先级。"""
+    """Verify video_generate_audio's default, global config, and project-level override priority.
+
+    验证 video_generate_audio 的默认值、全局配置、项目级覆盖优先级。"""
 
     async def test_default_is_true_when_db_empty(self, tmp_path):
-        """DB 无值时应返回 True（与 Seedance/Grok 默认开启一致）。"""
+        """Should return True when the DB has no value (consistent with Seedance/Grok defaulting to on).
+
+        DB 无值时应返回 True（与 Seedance/Grok 默认开启一致）。"""
         resolver = ConfigResolver.__new__(ConfigResolver)
         fake_svc = _FakeConfigService(settings={})
         result = await resolver._resolve_video_generate_audio(fake_svc, project_name=None)
         assert result is True
 
     async def test_global_true(self, tmp_path):
-        """DB 中值为 "true" 时返回 True。"""
+        """Returns True when the DB value is "true".
+
+        DB 中值为 "true" 时返回 True。"""
         resolver = ConfigResolver.__new__(ConfigResolver)
         fake_svc = _FakeConfigService(settings={"video_generate_audio": "true"})
         result = await resolver._resolve_video_generate_audio(fake_svc, project_name=None)
         assert result is True
 
     async def test_global_false(self, tmp_path):
-        """DB 中值为 "false" 时返回 False。"""
+        """Returns False when the DB value is "false".
+
+        DB 中值为 "false" 时返回 False。"""
         resolver = ConfigResolver.__new__(ConfigResolver)
         fake_svc = _FakeConfigService(settings={"video_generate_audio": "false"})
         result = await resolver._resolve_video_generate_audio(fake_svc, project_name=None)
         assert result is False
 
     async def test_bool_parsing_variants(self, tmp_path):
-        """验证各种布尔字符串的解析。"""
+        """Verify parsing of various boolean strings.
+
+        验证各种布尔字符串的解析。"""
         resolver = ConfigResolver.__new__(ConfigResolver)
         for val, expected in [("TRUE", True), ("1", True), ("yes", True), ("0", False), ("no", False), ("", True)]:
             fake_svc = _FakeConfigService(settings={"video_generate_audio": val} if val else {})
@@ -101,7 +116,9 @@ class TestVideoGenerateAudio:
             assert result is expected, f"Failed for {val!r}: got {result}"
 
     async def test_project_override_true_over_global_false(self, tmp_path):
-        """项目级覆盖 True 优先于全局 False。"""
+        """A project-level override of True takes priority over a global False.
+
+        项目级覆盖 True 优先于全局 False。"""
         resolver = ConfigResolver.__new__(ConfigResolver)
         fake_svc = _FakeConfigService(settings={"video_generate_audio": "false"})
         with patch("lib.config.resolver.get_project_manager") as mock_pm:
@@ -110,7 +127,9 @@ class TestVideoGenerateAudio:
         assert result is True
 
     async def test_project_override_false_over_global_true(self, tmp_path):
-        """项目级覆盖 False 优先于全局 True。"""
+        """A project-level override of False takes priority over a global True.
+
+        项目级覆盖 False 优先于全局 True。"""
         resolver = ConfigResolver.__new__(ConfigResolver)
         fake_svc = _FakeConfigService(settings={"video_generate_audio": "true"})
         with patch("lib.config.resolver.get_project_manager") as mock_pm:
@@ -119,7 +138,13 @@ class TestVideoGenerateAudio:
         assert result is False
 
     async def test_project_none_skips_override(self, tmp_path):
-        """project_name=None 时不读取项目配置。
+        """With project_name=None the project config is not read.
+
+        The project layer is set up with an override that would flip the result (global False, project True): if the
+        project_name short-circuit were missed and the project config read, the result would become True. Asserting False
+        proves the project layer was not read.
+
+        project_name=None 时不读取项目配置。
 
         项目层备好一个会翻转结果的覆盖值（全局 False、项目 True）：若漏了 project_name 的
         短路而去读项目配置，结果会变成 True。断言 False 即证明项目层未被读取。
@@ -132,7 +157,9 @@ class TestVideoGenerateAudio:
         assert result is False
 
     async def test_project_override_string_value(self, tmp_path):
-        """项目级覆盖值为字符串时也能正确解析。"""
+        """A project-level override given as a string is also parsed correctly.
+
+        项目级覆盖值为字符串时也能正确解析。"""
         resolver = ConfigResolver.__new__(ConfigResolver)
         fake_svc = _FakeConfigService(settings={"video_generate_audio": "true"})
         with patch("lib.config.resolver.get_project_manager") as mock_pm:
@@ -142,10 +169,14 @@ class TestVideoGenerateAudio:
 
 
 class TestDefaultBackends:
-    """验证 video/image 后端解析：显式值 vs auto-resolve。"""
+    """Verify video/image backend resolution: explicit value vs auto-resolve.
+
+    验证 video/image 后端解析：显式值 vs auto-resolve。"""
 
     async def test_video_backend_explicit(self):
-        """DB 有显式值时直接返回。"""
+        """Return it directly when the DB has an explicit value.
+
+        DB 有显式值时直接返回。"""
         resolver = ConfigResolver.__new__(ConfigResolver)
         fake_svc = _FakeConfigService(
             settings={"default_video_backend": "ark/doubao-seedance-1-5-pro"},
@@ -154,16 +185,21 @@ class TestDefaultBackends:
         assert result == ("ark", "doubao-seedance-1-5-pro")
 
     async def test_video_backend_auto_resolve(self, db_factory):
-        """DB 无值时走 auto-resolve，选第一个 ready 供应商的默认 video 模型。"""
+        """When the DB has no value, auto-resolve picks the default video model of the first ready provider.
+
+        DB 无值时走 auto-resolve，选第一个 ready 供应商的默认 video 模型。"""
         resolver = ConfigResolver.__new__(ConfigResolver)
         fake_svc = _FakeConfigService(settings={})
+        # auto-resolve finds a ready provider in PROVIDER_REGISTRY and never reaches the custom provider branch
         # auto-resolve 会在 PROVIDER_REGISTRY 中找到 ready 供应商，不会走到 custom provider 分支
         async with db_factory() as session:
             result = await resolver._resolve_default_video_backend(fake_svc, session)
         assert result[0] in ("gemini-aistudio", "gemini-vertex", "ark", "grok")
 
     async def test_video_backend_auto_resolve_no_ready_provider(self, db_factory):
-        """无 ready 供应商且无自定义供应商时抛出 ValueError。"""
+        """Raises ValueError when there is no ready provider and no custom provider.
+
+        无 ready 供应商且无自定义供应商时抛出 ValueError。"""
         resolver = ConfigResolver.__new__(ConfigResolver)
         fake_svc = _FakeConfigService(settings={}, ready_providers=[])
         async with db_factory() as session:
@@ -171,7 +207,9 @@ class TestDefaultBackends:
                 await resolver._resolve_default_video_backend(fake_svc, session)
 
     async def test_image_backend_explicit(self):
-        """DB 有显式值时直接返回。"""
+        """Return it directly when the DB has an explicit value.
+
+        DB 有显式值时直接返回。"""
         resolver = ConfigResolver.__new__(ConfigResolver)
         fake_svc = _FakeConfigService(
             settings={"default_image_backend": "grok/grok-2-image"},
@@ -180,7 +218,9 @@ class TestDefaultBackends:
         assert result == ("grok", "grok-2-image")
 
     async def test_image_backend_auto_resolve(self, db_factory):
-        """DB 无值时走 auto-resolve。"""
+        """When the DB has no value, use auto-resolve.
+
+        DB 无值时走 auto-resolve。"""
         resolver = ConfigResolver.__new__(ConfigResolver)
         fake_svc = _FakeConfigService(settings={})
         async with db_factory() as session:
@@ -188,7 +228,9 @@ class TestDefaultBackends:
         assert result[0] in ("gemini-aistudio", "gemini-vertex", "ark", "grok")
 
     async def test_image_backend_auto_resolve_no_ready_provider(self, db_factory):
-        """无 ready 供应商且无自定义供应商时抛出 ValueError。"""
+        """Raises ValueError when there is no ready provider and no custom provider.
+
+        无 ready 供应商且无自定义供应商时抛出 ValueError。"""
         resolver = ConfigResolver.__new__(ConfigResolver)
         fake_svc = _FakeConfigService(settings={}, ready_providers=[])
         async with db_factory() as session:
@@ -199,7 +241,10 @@ class TestDefaultBackends:
     async def test_image_backend_auto_resolve_picks_the_custom_default_of_the_bucket(
         self, db_factory, generation_type, expected_model
     ):
-        """无 ready 内置供应商时的自定义兜底按桶挑默认：t2i 与 i2i 各设一个默认时不能取错桶。"""
+        """The custom fallback when no built-in provider is ready picks the default per bucket: with one default set for each
+        of t2i and i2i, it must not take the wrong bucket.
+
+        无 ready 内置供应商时的自定义兜底按桶挑默认：t2i 与 i2i 各设一个默认时不能取错桶。"""
         from lib.custom_provider import make_provider_id
         from lib.db.models.custom_provider import CustomProvider, CustomProviderModel
 
@@ -213,6 +258,7 @@ class TestDefaultBackends:
             await session.flush()
             session.add_all(
                 [
+                    # openai-images-generations declares only t2i, openai-images-edits only i2i
                     # openai-images-generations 只声明 t2i，openai-images-edits 只声明 i2i
                     CustomProviderModel(
                         provider_id=provider.id,
@@ -238,7 +284,9 @@ class TestDefaultBackends:
         assert result == (make_provider_id(provider.id), expected_model)
 
     async def test_default_image_backend_t2i_bucket_overrides_default_layer(self):
-        """全局桶 default_image_backend_t2i 覆盖全局默认层 default_image_backend。"""
+        """The global bucket default_image_backend_t2i overrides the global default layer default_image_backend.
+
+        全局桶 default_image_backend_t2i 覆盖全局默认层 default_image_backend。"""
         resolver = ConfigResolver.__new__(ConfigResolver)
         fake_svc = _FakeConfigService(
             settings={
@@ -250,7 +298,9 @@ class TestDefaultBackends:
         assert result == ("ark", "stable-diffusion-3")
 
     async def test_default_image_backend_i2i_bucket_overrides_default_layer(self):
-        """对称测试 i2i：全局桶覆盖全局默认层。"""
+        """Symmetric test for i2i: the global bucket overrides the global default layer.
+
+        对称测试 i2i：全局桶覆盖全局默认层。"""
         resolver = ConfigResolver.__new__(ConfigResolver)
         fake_svc = _FakeConfigService(
             settings={
@@ -265,7 +315,13 @@ class TestDefaultBackends:
     async def test_default_image_backend_empty_bucket_falls_back_to_default_layer(
         self, db_factory, generation_type: str
     ):
-        """桶键为空字符串时回退默认层（docs/adr/0054）。
+        """An empty-string bucket key falls back to the default layer (docs/adr/0054).
+
+        Semantic lock: a bucket is an optional override, and an empty value no longer means "no default / auto-select".
+        ready_providers=[] makes the auto-inference path raise, which tells "fall back to the default layer" (expected) apart
+        from "jump to auto-inference".
+
+        桶键为空字符串时回退默认层（docs/adr/0054）。
 
         语义锁：桶是可选覆盖，空值不再表示「不设默认 / 自动选择」。ready_providers=[] 让
         自动推断路径抛错，以此区分「回退到默认层」（期望）与「跳到自动推断」。
@@ -284,7 +340,9 @@ class TestDefaultBackends:
 
     @pytest.mark.parametrize("generation_type", ["t2i", "i2i"])
     async def test_default_image_backend_only_default_layer_covers_all_buckets(self, generation_type: str):
-        """只配 default_image_backend、两个桶都不配时，全部图片路径解析到该默认模型。"""
+        """With only default_image_backend configured and neither bucket set, every image path resolves to that default model.
+
+        只配 default_image_backend、两个桶都不配时，全部图片路径解析到该默认模型。"""
         resolver = ConfigResolver.__new__(ConfigResolver)
         fake_svc = _FakeConfigService(settings={"default_image_backend": "grok/grok-2-image"})
         result = await resolver._resolve_default_image_backend(fake_svc, None, generation_type)
@@ -292,7 +350,9 @@ class TestDefaultBackends:
 
 
 class TestProviderConfig:
-    """验证供应商配置方法委托给 ConfigService。"""
+    """Verify that the provider config methods delegate to ConfigService.
+
+    验证供应商配置方法委托给 ConfigService。"""
 
     async def test_provider_config(self, db_factory):
         resolver = ConfigResolver.__new__(ConfigResolver)
@@ -310,10 +370,14 @@ class TestProviderConfig:
 
 
 class TestSessionReuse:
-    """验证 session() 上下文管理器的 session 复用行为。"""
+    """Verify session reuse of the session() context manager.
+
+    验证 session() 上下文管理器的 session 复用行为。"""
 
     async def test_session_context_manager_reuses_single_session(self, db_factory):
-        """resolver.session() 下多次调用只创建 1 个 session。"""
+        """Several calls under resolver.session() create only 1 session.
+
+        resolver.session() 下多次调用只创建 1 个 session。"""
         call_count = 0
         real_call = db_factory.__call__
 
@@ -325,6 +389,7 @@ class TestSessionReuse:
         resolver = ConfigResolver(db_factory)
         fake_backend = ("gemini-aistudio", "test-model")
 
+        # Without session(): each call creates a new session
         # 不使用 session()：每次调用创建新 session
         call_count = 0
         with (
@@ -336,6 +401,7 @@ class TestSessionReuse:
             await resolver.default_image_backend()
         assert call_count == 2, f"不使用 session() 应创建 2 个 session，实际 {call_count}"
 
+        # With session(): only 1 session is created
         # 使用 session()：只创建 1 个 session
         call_count = 0
         with patch.object(resolver, "_session_factory", side_effect=counting_factory):
@@ -348,11 +414,14 @@ class TestSessionReuse:
                     await r.default_video_backend()
                     await r.default_image_backend()
                     await r.video_generate_audio()
+        # session() itself creates 1; inner calls reuse the bound session and create no more
         # session() 自身创建 1 个，内部调用复用 bound session 不再创建
         assert call_count == 1, f"使用 session() 应只创建 1 个 session，实际 {call_count}"
 
     async def test_bound_resolver_shares_session_object(self, db_factory):
-        """bound resolver 的 _open_session 返回同一个 session 对象。"""
+        """A bound resolver's _open_session returns the same session object.
+
+        bound resolver 的 _open_session 返回同一个 session 对象。"""
         resolver = ConfigResolver(db_factory)
         sessions_seen = []
 
@@ -365,7 +434,9 @@ class TestSessionReuse:
         assert sessions_seen[0] is sessions_seen[1]
 
     async def test_unbound_resolver_creates_separate_sessions(self, db_factory):
-        """未绑定的 resolver 每次 _open_session 创建不同 session。"""
+        """An unbound resolver creates a different session on each _open_session.
+
+        未绑定的 resolver 每次 _open_session 创建不同 session。"""
         resolver = ConfigResolver(db_factory)
         sessions_seen = []
 
@@ -378,7 +449,9 @@ class TestSessionReuse:
 
 
 class TestVideoBackendThreeLevelPriority:
-    """验证 video_backend 三级优先级：项目设置 > 系统设置 > auto-resolve。"""
+    """Verify the three-level priority of video_backend: project settings > system settings > auto-resolve.
+
+    验证 video_backend 三级优先级：项目设置 > 系统设置 > auto-resolve。"""
 
     async def test_project_override_wins_over_system_setting(self):
         resolver = ConfigResolver.__new__(ConfigResolver)
@@ -412,11 +485,16 @@ class TestVideoBackendThreeLevelPriority:
 
 
 class TestVideoCapabilitiesBucketing:
-    """读侧按 generation_mode 定桶：能力查询回答的是当前配置真正会执行的那个模型。"""
+    """The read side picks the bucket by generation_mode: the capability query answers for the model the current config
+    will actually run.
+
+    读侧按 generation_mode 定桶：能力查询回答的是当前配置真正会执行的那个模型。"""
 
     def test_generation_mode_maps_to_bucket(self):
         assert video_bucket_for_generation_mode("storyboard") == "i2v"
         assert video_bucket_for_generation_mode("reference_video") == "r2v"
+        # Missing and unknown values (including the retired three-value grid) and non-string dirty data all land in the
+        # default bucket
         # 缺省、未知值（含已退役的三值 grid）与非字符串脏数据一律落默认桶
         assert video_bucket_for_generation_mode(None) == "i2v"
         assert video_bucket_for_generation_mode("bogus") == "i2v"
@@ -424,7 +502,9 @@ class TestVideoCapabilitiesBucketing:
         assert video_bucket_for_generation_mode(cast(str, ["reference_video"])) == "i2v"
 
     async def test_i2v_bucket_shadows_project_default(self, db_factory):
-        """图生视频项目读 i2v 桶，遮蔽项目默认层。"""
+        """An image-to-video project reads the i2v bucket, shadowing the project default layer.
+
+        图生视频项目读 i2v 桶，遮蔽项目默认层。"""
         caps = await _video_caps(
             db_factory,
             {
@@ -436,7 +516,9 @@ class TestVideoCapabilitiesBucketing:
         assert (caps["provider_id"], caps["model"]) == ("kling", "kling-v3")
 
     async def test_r2v_bucket_shadows_project_default(self, db_factory):
-        """参考生视频项目读 r2v 桶，遮蔽项目默认层。"""
+        """A reference-to-video project reads the r2v bucket, shadowing the project default layer.
+
+        参考生视频项目读 r2v 桶，遮蔽项目默认层。"""
         caps = await _video_caps(
             db_factory,
             {
@@ -448,7 +530,9 @@ class TestVideoCapabilitiesBucketing:
         assert (caps["provider_id"], caps["model"]) == ("dashscope", "happyhorse-1.1-r2v")
 
     async def test_same_config_follows_generation_mode(self, db_factory):
-        """同一份配置下切 generation_mode，能力查询随桶换到另一个模型。"""
+        """Switching generation_mode under the same config makes the capability query switch to another model with the bucket.
+
+        同一份配置下切 generation_mode，能力查询随桶换到另一个模型。"""
         project = {
             "video_provider_i2v": "kling/kling-v3",
             "video_provider_r2v": "dashscope/happyhorse-1.1-r2v",
@@ -457,19 +541,25 @@ class TestVideoCapabilitiesBucketing:
         r2v_caps = await _video_caps(db_factory, {**project, "generation_mode": "reference_video"})
         assert i2v_caps["model"] == "kling-v3"
         assert r2v_caps["model"] == "happyhorse-1.1-r2v"
+        # The capability dict itself changes accordingly: the i2v bucket's model does not accept reference images
         # 能力字典本身随之变：i2v 桶的型号不接受参考图
         assert i2v_caps["max_reference_images"] == 0
         assert r2v_caps["max_reference_images"] == 9
 
     async def test_reference_video_project_errors_when_model_lacks_reference_support(self, db_factory):
-        """参考生视频项目解析到无参考图能力的模型时报结构化错误，不静默换模型。"""
+        """When a reference-to-video project resolves to a model without reference image capability, report a structured error
+        instead of silently switching models.
+
+        参考生视频项目解析到无参考图能力的模型时报结构化错误，不静默换模型。"""
         with pytest.raises(VideoBucketCapabilityError) as excinfo:
             await _video_caps(db_factory, {"video_backend": "kling/kling-v3", "generation_mode": "reference_video"})
         assert excinfo.value.code == "video_capability_missing_r2v"
         assert excinfo.value.params == {"provider": "kling", "model": "kling-v3"}
 
     async def test_storyboard_project_errors_when_model_lacks_first_frame(self, db_factory):
-        """图生视频项目解析到无首帧能力的模型时同样报错（桶换成 i2v）。"""
+        """An image-to-video project resolving to a model without first-frame capability errors too (the bucket becomes i2v).
+
+        图生视频项目解析到无首帧能力的模型时同样报错（桶换成 i2v）。"""
         with pytest.raises(VideoBucketCapabilityError) as excinfo:
             await _video_caps(
                 db_factory, {"video_backend": "dashscope/happyhorse-1.1-r2v", "generation_mode": "storyboard"}
@@ -477,7 +567,9 @@ class TestVideoCapabilitiesBucketing:
         assert excinfo.value.code == "video_capability_missing_i2v"
 
     async def test_reference_project_reads_the_r2v_bucket_model(self, db_factory):
-        """参考生视频项目的能力取 r2v 桶生效模型的声明。"""
+        """A reference-to-video project's capabilities come from the declaration of the r2v bucket's effective model.
+
+        参考生视频项目的能力取 r2v 桶生效模型的声明。"""
         project = {
             "video_provider_i2v": "kling/kling-v3",
             "video_provider_r2v": "gemini-aistudio/veo-3.1-generate-preview",
@@ -488,13 +580,18 @@ class TestVideoCapabilitiesBucketing:
         assert caps["supported_durations"] == [4, 6, 8]
 
     async def test_max_reference_images_follows_backend_declaration(self, db_factory):
-        """viduq3-pro 不在 /reference2video 白名单：能力查询报 0，不报 registry 的并行声明。"""
+        """viduq3-pro is not on the /reference2video allowlist: the capability query reports 0, not the registry's parallel
+        declaration.
+
+        viduq3-pro 不在 /reference2video 白名单：能力查询报 0，不报 registry 的并行声明。"""
         caps = await _video_caps(db_factory, {"video_backend": "vidu/viduq3-pro", "generation_mode": "storyboard"})
         assert caps["max_reference_images"] == 0
 
 
 class TestVideoCapabilities:
-    """验证 video_capabilities_for_project：第一步模型选择 + 第二步 model 能力查询。"""
+    """Verify video_capabilities_for_project: step one model selection + step two model capability query.
+
+    验证 video_capabilities_for_project：第一步模型选择 + 第二步 model 能力查询。"""
 
     async def test_reads_project_default_duration_and_modes(self, db_factory):
         caps = await _video_caps(
@@ -515,7 +612,12 @@ class TestVideoCapabilities:
         assert caps["default_duration"] is None
 
     async def test_video_capabilities_for_project_uses_passed_dict(self, db_factory):
-        """video_capabilities_for_project(dict) 不调用 load_project；直接消费传入 dict。
+        """video_capabilities_for_project(dict) does not call load_project; it consumes the dict passed in directly.
+
+        Defends against the risk codex review pointed out: "a second load by directory name may read the wrong project with
+        the same name".
+
+        video_capabilities_for_project(dict) 不调用 load_project；直接消费传入 dict。
 
         防御 codex review 指出的"按目录名二次 load 可能读到同名错项目"风险。
         """
@@ -527,6 +629,7 @@ class TestVideoCapabilities:
                     "default_duration": 9,
                 }
             )
+            # Key assertion: load_project must not be called even once
             # 关键断言：load_project 一次都不能被调到
             mock_pm.return_value.load_project.assert_not_called()
         assert caps["provider_id"] == "grok"
@@ -535,14 +638,21 @@ class TestVideoCapabilities:
         assert caps["max_reference_images"] == 7
 
     async def test_max_reference_images_reads_backend_caps_for_ark_seedance(self, db_factory):
-        """ark seedance 的 max_reference_images 来自 backend 声明（=9）。"""
+        """ark seedance's max_reference_images comes from the backend declaration (=9).
+
+        ark seedance 的 max_reference_images 来自 backend 声明（=9）。"""
         resolver = ConfigResolver(db_factory)
         with patch("lib.config.resolver.get_project_manager"):
             caps = await resolver.video_capabilities_for_project({"video_backend": "ark/doubao-seedance-2-0-260128"})
         assert caps["max_reference_images"] == 9
 
     async def test_max_reference_images_reads_backend_caps_for_kling_v3_omni(self, db_factory):
-        """kling-v3-omni（多图主体 R2V）的 max_reference_images 来自 backend 声明（=4，保守值）；
+        """kling-v3-omni's (multi-image subject R2V) max_reference_images comes from the backend declaration (=4, conservative);
+
+        the orchestration layer trims the reference image count by it, the same number gate_video_request relies on at
+        execution.
+
+        kling-v3-omni（多图主体 R2V）的 max_reference_images 来自 backend 声明（=4，保守值）；
 
         编排层据此裁剪参考图数量，与执行期 gate_video_request 依据的是同一个数。
         """
@@ -552,14 +662,20 @@ class TestVideoCapabilities:
         assert caps["max_reference_images"] == 4
 
     async def test_max_reference_images_reads_backend_caps_for_kling_video_o1(self, db_factory):
-        """kling-video-o1（多图主体 R2V）的 max_reference_images 来自 backend 声明（=4，保守值）。"""
+        """kling-video-o1's (multi-image subject R2V) max_reference_images comes from the backend declaration (=4,
+        conservative).
+
+        kling-video-o1（多图主体 R2V）的 max_reference_images 来自 backend 声明（=4，保守值）。"""
         resolver = ConfigResolver(db_factory)
         with patch("lib.config.resolver.get_project_manager"):
             caps = await resolver.video_capabilities_for_project({"video_backend": "kling/kling-video-o1"})
         assert caps["max_reference_images"] == 4
 
     async def test_kling_v3_non_reference_model_has_zero_max_refs(self, db_factory):
-        """kling-v3（声明 4K + 首尾帧但非多图主体）max_reference_images=0，不误报参考能力。"""
+        """kling-v3 (declares 4K + first/last frames but not multi-image subject) has max_reference_images=0 and does not
+        falsely report reference capability.
+
+        kling-v3（声明 4K + 首尾帧但非多图主体）max_reference_images=0，不误报参考能力。"""
         resolver = ConfigResolver(db_factory)
         with patch("lib.config.resolver.get_project_manager"):
             caps = await resolver.video_capabilities_for_project({"video_backend": "kling/kling-v3"})
@@ -567,7 +683,9 @@ class TestVideoCapabilities:
 
     @staticmethod
     async def _seed_comfyui_video_model(db_factory, definition: dict, durations: list[int] | None = None) -> str:
-        """落一个 ComfyUI 视频模型行，返回 ``provider/model``。"""
+        """Insert a ComfyUI video model row and return ``provider/model``.
+
+        落一个 ComfyUI 视频模型行，返回 ``provider/model``。"""
         from lib.db.models.custom_endpoint import CustomEndpoint
         from lib.db.models.custom_provider import CustomProvider, CustomProviderModel
 
@@ -597,7 +715,13 @@ class TestVideoCapabilities:
             return f"custom-{provider.id}/my-wan-workflow"
 
     async def test_a_stale_override_is_dropped_when_the_endpoint_lost_its_frames_binding(self, db_factory):
-        """端点说这一维给不出档位时，行上的可选时长覆盖一律作废：空集豁免以端点为准。
+        """When the endpoint says it cannot give tiers for this dimension, the row's selectable-duration override is void: the
+        empty-set exemption follows the endpoint.
+
+        Keeping the row's ``[5]`` would make the capability interface and script planning claim 5 seconds while the endpoint
+        catalog has already disabled the duration control: two different answers to the same question.
+
+        端点说这一维给不出档位时，行上的可选时长覆盖一律作废：空集豁免以端点为准。
 
         沿用行上的 ``[5]``，能力接口与剧本规划就会宣称 5 秒，而端点目录已经把时长
         控件禁掉——同一个问题两处答案不一样。
@@ -607,6 +731,7 @@ class TestVideoCapabilities:
         definition = comfyui_endpoint_definition()
         definition["bindings"]["start_image"] = [{"node": "11", "input": "image", "class_type": "LoadImage"}]
         assert "frames" not in definition["bindings"]
+        # The override stored on the row diverges from the endpoint's current answer.
         # 行上存着的那份覆盖，与端点此刻的答案分叉。
         backend = await self._seed_comfyui_video_model(db_factory, definition, [5])
 
@@ -627,7 +752,9 @@ class TestVideoCapabilities:
         return definition
 
     async def test_without_an_override_the_tier_is_the_endpoint_native_duration(self, db_factory):
-        """端点推得出一档原生时长、行上没有覆盖时，按端点的来。"""
+        """When the endpoint can derive one native duration tier and the row has no override, follow the endpoint.
+
+        端点推得出一档原生时长、行上没有覆盖时，按端点的来。"""
         backend = await self._seed_comfyui_video_model(db_factory, self._drivable_definition())
 
         caps = await _video_caps(db_factory, {"video_backend": backend})
@@ -637,7 +764,10 @@ class TestVideoCapabilities:
         assert caps["duration_endpoint_fixed"] is False
 
     async def test_a_durations_override_wins_once_the_endpoint_can_drive_duration(self, db_factory):
-        """端点驱动得了时长时，用户在模型行上增删过的可选时长优先（docs/adr/0082、0104 的例外）。"""
+        """When the endpoint can drive duration, the selectable durations the user added or removed on the model row win
+        (the exception in docs/adr/0082 and 0104).
+
+        端点驱动得了时长时，用户在模型行上增删过的可选时长优先（docs/adr/0082、0104 的例外）。"""
         backend = await self._seed_comfyui_video_model(db_factory, self._drivable_definition(), [5, 10])
 
         caps = await _video_caps(db_factory, {"video_backend": backend})
@@ -648,11 +778,17 @@ class TestVideoCapabilities:
 
 
 class TestVoiceConsistency:
-    """voice_consistency 三维派生（模型能力 × generation_mode × 角色声音绑定方式）。全员经
+    """Three-way derivation of voice_consistency (model capability x generation_mode x how character voices are bound).
+    All of them use a real in-memory DB via `db_factory`, so per the tier rules in docs/standards/testing.md they belong
+    in integration.
+
+    voice_consistency 三维派生（模型能力 × generation_mode × 角色声音绑定方式）。全员经
     `db_factory` 落真实 in-memory DB，按 docs/standards/testing.md 的分档规则归 integration。"""
 
     async def test_seedance_2_reference_video_is_native(self, db_factory):
-        """reference_audio_mode=direct、generation_mode=reference_video 且项目选了参考音频绑定 → native。"""
+        """reference_audio_mode=direct, generation_mode=reference_video and the project chose reference audio binding -> native.
+
+        reference_audio_mode=direct、generation_mode=reference_video 且项目选了参考音频绑定 → native。"""
         caps = await _video_caps(
             db_factory,
             {
@@ -664,7 +800,10 @@ class TestVoiceConsistency:
         assert caps["voice_consistency"] == "native"
 
     async def test_prompt_binding_downgrades_native_to_soft(self, db_factory):
-        """项目选提示词软约束时，原生音频参考通道的模型同样降格 soft：声音只靠 voice_style 约束。"""
+        """When the project chooses the prompt soft constraint, a model with a native audio reference channel is also
+        downgraded to soft: the voice is constrained only by voice_style.
+
+        项目选提示词软约束时，原生音频参考通道的模型同样降格 soft：声音只靠 voice_style 约束。"""
         caps = await _video_caps(
             db_factory,
             {
@@ -676,7 +815,10 @@ class TestVoiceConsistency:
         assert caps["voice_consistency"] == "soft"
 
     async def test_missing_binding_defaults_to_prompt_and_downgrades(self, db_factory):
-        """字段缺省即默认档（提示词软约束）：新项目不写该字段时不得解出 native。"""
+        """A missing field means the default tier (prompt soft constraint): a new project that does not write the field must
+        not resolve to native.
+
+        字段缺省即默认档（提示词软约束）：新项目不写该字段时不得解出 native。"""
         caps = await _video_caps(
             db_factory,
             {
@@ -687,7 +829,10 @@ class TestVoiceConsistency:
         assert caps["voice_consistency"] == "soft"
 
     async def test_unreadable_binding_falls_back_to_prompt(self, db_factory):
-        """project.json 被手编成非法值时按默认档解读，不得升格成参考音频直传。"""
+        """When project.json is hand-edited to an illegal value, it is read as the default tier and must not be upgraded to
+        passing reference audio directly.
+
+        project.json 被手编成非法值时按默认档解读，不得升格成参考音频直传。"""
         caps = await _video_caps(
             db_factory,
             {
@@ -699,7 +844,11 @@ class TestVoiceConsistency:
         assert caps["voice_consistency"] == "soft"
 
     async def test_requested_generate_audio_is_exposed_separately_from_pricing_value(self, db_factory):
-        """caps 并列透出用户无声意图与计价口径：AI Studio Veo 恒按含音出账，但项目关掉音频时
+        """caps exposes the user's silent intent and the pricing basis side by side: AI Studio Veo is always billed with audio,
+        but when the project turns audio off the orchestration layer must read False (otherwise a silent video would still
+        upload reference audio).
+
+        caps 并列透出用户无声意图与计价口径：AI Studio Veo 恒按含音出账，但项目关掉音频时
         编排层必须读到 False（否则无声视频照旧上传参考音频）。"""
         caps = await _video_caps(
             db_factory,
@@ -717,7 +866,10 @@ class TestVoiceConsistency:
         assert caps["requested_generate_audio"] is True
 
     async def test_seedance_2_non_reference_mode_downgrades_to_soft(self, db_factory):
-        """同一模型非参考生视频路径：native 蕴含有音轨，降格恒落 soft，不落 none。"""
+        """Same model on a non-reference-to-video path: native implies an audio track, so the downgrade always lands on soft,
+        not none.
+
+        同一模型非参考生视频路径：native 蕴含有音轨，降格恒落 soft，不落 none。"""
         caps = await _video_caps(
             db_factory,
             {
@@ -728,12 +880,17 @@ class TestVoiceConsistency:
         assert caps["voice_consistency"] == "soft"
 
     async def test_seedance_2_missing_generation_mode_downgrades_to_soft(self, db_factory):
-        """generation_mode 缺省（非 reference_video）同样降格 soft。"""
+        """A missing generation_mode (not reference_video) also downgrades to soft.
+
+        generation_mode 缺省（非 reference_video）同样降格 soft。"""
         caps = await _video_caps(db_factory, {"video_backend": "ark/doubao-seedance-2-0-260128"})
         assert caps["voice_consistency"] == "soft"
 
     async def test_aistudio_veo_always_soft_regardless_of_generation_mode(self, db_factory):
-        """AI Studio Veo 无参考音频通道，即便走参考生视频路径也只能 soft（恒有声不推 none）。"""
+        """AI Studio Veo has no reference audio channel; even on the reference-to-video path it can only be soft (always has
+        audio, so never none).
+
+        AI Studio Veo 无参考音频通道，即便走参考生视频路径也只能 soft（恒有声不推 none）。"""
         caps = await _video_caps(
             db_factory,
             {
@@ -744,33 +901,46 @@ class TestVoiceConsistency:
         assert caps["voice_consistency"] == "soft"
 
     async def test_grok_imagine_soft(self, db_factory):
-        """Grok Imagine：音轨可开关、无参考音频通道 → soft。"""
+        """Grok Imagine: audio track can be toggled, no reference audio channel -> soft.
+
+        Grok Imagine：音轨可开关、无参考音频通道 → soft。"""
         caps = await _video_caps(db_factory, {"video_backend": "grok/grok-imagine-video"})
         assert caps["voice_consistency"] == "soft"
 
     async def test_kling_v3_audio_models_are_soft(self, db_factory):
-        """可灵 v3 系声明音频能力 → soft（注入 Voice_Profiles）。"""
+        """Kling v3 series declares audio capability -> soft (inject Voice_Profiles).
+
+        可灵 v3 系声明音频能力 → soft（注入 Voice_Profiles）。"""
         for model_id in ("kling-v3", "kling-v3-omni"):
             caps = await _video_caps(db_factory, {"video_backend": f"kling/{model_id}"})
             assert caps["voice_consistency"] == "soft"
 
     async def test_kling_turbo_true_silent_is_none(self, db_factory):
-        """可灵 v2-5-turbo 无音频开关 → none。"""
+        """Kling v2-5-turbo has no audio switch -> none.
+
+        可灵 v2-5-turbo 无音频开关 → none。"""
         caps = await _video_caps(db_factory, {"video_backend": "kling/kling-v2-5-turbo"})
         assert caps["voice_consistency"] == "none"
 
     async def test_minimax_true_silent_is_none(self, db_factory):
-        """MiniMax 真无声模型 → none。"""
+        """MiniMax truly silent model -> none.
+
+        MiniMax 真无声模型 → none。"""
         caps = await _video_caps(db_factory, {"video_backend": "minimax/MiniMax-Hailuo-2.3"})
         assert caps["voice_consistency"] == "none"
 
     async def test_agnes_true_silent_is_none(self, db_factory):
-        """Agnes 真无声模型 → none。"""
+        """Agnes truly silent model -> none.
+
+        Agnes 真无声模型 → none。"""
         caps = await _video_caps(db_factory, {"video_backend": "agnes/agnes-video-v2.0"})
         assert caps["voice_consistency"] == "none"
 
     async def test_custom_provider_without_overrides_defaults_to_soft(self, db_factory):
-        """自定义供应商无 generate_audio 目录声明：与 default_tier_generates_audio 同口径，
+        """Custom provider without a generate_audio catalog declaration: same basis as default_tier_generates_audio; without a
+        signal assume audio, and do not judge it a truly silent model out of nothing.
+
+        自定义供应商无 generate_audio 目录声明：与 default_tier_generates_audio 同口径，
         无信号时假定有声，不凭空判定为真无声模型。"""
         from lib.db.models.custom_provider import CustomProvider, CustomProviderModel
 
@@ -794,12 +964,17 @@ class TestVoiceConsistency:
             project_backend = f"custom-{provider.id}/sora-like"
 
         caps = await _video_caps(db_factory, {"video_backend": project_backend, "generation_mode": "reference_video"})
+        # The openai-video endpoint does not carry reference_audio_capable, so an override cannot claim direct, hence not
+        # native; without an audio-track catalog declaration assume audio -> soft, not none.
         # openai-video endpoint 不带 reference_audio_capable，覆盖无法宣称 direct，故非 native；
         # 无音轨目录声明时假定有声 → soft，不落 none。
         assert caps["voice_consistency"] == "soft"
 
     async def test_custom_provider_with_direct_override_and_reference_video_is_native(self, db_factory):
-        """自定义供应商覆盖 reference_audio_mode=direct + 上限 > 0，参考生视频路径 + 参考音频绑定 → native。"""
+        """Custom provider overriding reference_audio_mode=direct + limit > 0, reference-to-video path + reference audio
+        binding -> native.
+
+        自定义供应商覆盖 reference_audio_mode=direct + 上限 > 0，参考生视频路径 + 参考音频绑定 → native。"""
         from lib.db.models.custom_provider import CustomProvider, CustomProviderModel
 
         async with db_factory() as session:
@@ -816,6 +991,9 @@ class TestVoiceConsistency:
                 model_id="seedance-like",
                 display_name="Seedance-like",
                 endpoint="ark-seedance",
+                # The max_reference_images override is what puts this model into the r2v bucket: a reference-to-video project resolves
+                # with the r2v bucket, and ark-seedance conservatively judges 0 for unlisted models, so without the override the
+                # resolution gate would stop it before the capability query
                 # max_reference_images 覆盖是让该 model 落进 r2v 桶的前提：参考生视频项目按
                 # r2v 定桶解析，ark-seedance 对未上表型号保守判 0，不覆盖会被解析闸挡在能力查询前
                 capability_overrides={
@@ -840,7 +1018,15 @@ class TestVoiceConsistency:
 
 
 class TestUnmatchedCustomVideoModelOverrides:
-    """对应不上条目的视频供应商模型带一维能力覆盖：覆盖的维度整体替换，未覆盖的维度按回落值（docs/adr/0104、0105）。
+    """A video provider model that matches no entry carries a one-dimension capability override: overridden dimensions are
+    replaced whole, the rest use fallback values (docs/adr/0104, 0105).
+
+    The ark-seedance endpoint determines channel facts by name family; when the name is not recognized it falls back to
+    text-to-video + first frame, no tail frame, reference limit 0. Selectable durations, when no entry matches, take the
+    preset inferred from the name, or [4, 8] when no family matches. Fallback results are not written back to the model
+    row.
+
+    对应不上条目的视频供应商模型带一维能力覆盖：覆盖的维度整体替换，未覆盖的维度按回落值（docs/adr/0104、0105）。
 
     ark-seedance 端点按名字族认定通道事实；名字认不得时回落为文生视频 + 首帧、无尾帧、参考上限 0。可选时长
     在对应不上条目时取按名字推断的预设，一个族都匹配不上时为 [4, 8]。回落结果不写回模型行。
@@ -906,32 +1092,49 @@ class TestUnmatchedCustomVideoModelOverrides:
 
 
 class TestVideoPricingGenerateAudio:
-    """video_pricing_generate_audio：能力接口解析不出时的计价降级口径。"""
+    """video_pricing_generate_audio: the degraded pricing basis when the capability interface cannot resolve.
+
+    video_pricing_generate_audio：能力接口解析不出时的计价降级口径。"""
 
     async def test_falls_back_to_provider_rule_for_registry_unknown_model(self, db_factory):
-        """注册表已下线的 veo model id 仍按含音档出价，不因能力解析失败被低估为静音档。"""
+        """A veo model id already removed from the registry is still priced at the with-audio tier, not underestimated as
+        silent because capability resolution failed.
+
+        注册表已下线的 veo model id 仍按含音档出价，不因能力解析失败被低估为静音档。"""
         resolver = ConfigResolver(db_factory)
+        # veo-3.1-generate-001 only remains in the gemini-vertex registry: the capability query raises, while the price query
+        # still falls back to the Gemini family rate.
         # veo-3.1-generate-001 只留在 gemini-vertex 注册表：能力查询抛错，而价目查询
         # 仍会回落到 Gemini 家族费率出价。
         result = await resolver.video_pricing_generate_audio("gemini-aistudio", "veo-3.1-generate-001")
         assert result is True
 
     async def test_falls_back_to_requested_value_for_unknown_provider(self, db_factory):
-        """非恒含音 provider 解析不出能力时保留请求值——价目仍回落 Gemini 家族的含音费率。"""
+        """When a non-always-audio provider cannot resolve capabilities, keep the requested value; the price still falls back
+        to the Gemini family's with-audio rate.
+
+        非恒含音 provider 解析不出能力时保留请求值——价目仍回落 Gemini 家族的含音费率。"""
         resolver = ConfigResolver(db_factory)
         result = await resolver.video_pricing_generate_audio("unknown", "unknown")
         assert result is True
 
     async def test_keeps_requested_audio_for_vertex_unknown_model(self, db_factory):
-        """gemini-vertex 上注册表没有的 model：backend 照请求值下发并结算，估算不得降为静音档。"""
+        """A model not in the registry on gemini-vertex: the backend sends and settles with the requested value, so the
+        estimate must not drop to the silent tier.
+
+        gemini-vertex 上注册表没有的 model：backend 照请求值下发并结算，估算不得降为静音档。"""
         resolver = ConfigResolver(db_factory)
+        # lite is only registered on gemini-aistudio: switching the backend to vertex while keeping the old model id makes the
+        # capability query raise model not found, while the price query still uses the Gemini family's with-audio rate.
         # lite 只登记在 gemini-aistudio：把 backend 切到 vertex 却留着旧 model id 时，
         # 能力查询抛 model not found，而价目查询仍按 Gemini 家族含音费率出价。
         result = await resolver.video_pricing_generate_audio("gemini-vertex", "veo-3.1-lite-generate-preview")
         assert result is True
 
     async def test_project_audio_off_survives_capability_failure(self, db_factory):
-        """项目关掉音频时降级路径同样按静音档出价，不凭空补成含音。"""
+        """When the project turns audio off, the degraded path is also priced at the silent tier, not made up as with-audio.
+
+        项目关掉音频时降级路径同样按静音档出价，不凭空补成含音。"""
         resolver = ConfigResolver(db_factory)
         result = await resolver.video_pricing_generate_audio(
             "gemini-vertex",
@@ -942,10 +1145,15 @@ class TestVideoPricingGenerateAudio:
 
 
 class TestResolveImageBackend:
-    """resolve_image_backend：payload > 项目桶 > 项目默认 > 全局桶 > 全局默认 > 自动推断。"""
+    """resolve_image_backend: payload > project bucket > project default > global bucket > global default > auto-inference.
+
+    resolve_image_backend：payload > 项目桶 > 项目默认 > 全局桶 > 全局默认 > 自动推断。"""
 
     async def test_payload_capability_slot_is_not_a_payload_layer_key(self):
-        """图片任务不锁定执行身份：``image_provider_<cap>`` 只是项目层键，payload 里同名键不参与解析。"""
+        """Image tasks do not pin execution identity: ``image_provider_<cap>`` is only a project-layer key, and a same-named key
+        in the payload plays no part in resolution.
+
+        图片任务不锁定执行身份：``image_provider_<cap>`` 只是项目层键，payload 里同名键不参与解析。"""
         resolver = ConfigResolver.__new__(ConfigResolver)
         fake_svc = _FakeConfigService(settings={})
         project = {"image_provider_t2i": "ark/proj-t2i"}
@@ -970,7 +1178,9 @@ class TestResolveImageBackend:
         assert (i2i.provider_id, i2i.model_id) == ("ark", "proj-i2i")
 
     async def test_project_bucket_wins_over_project_default(self):
-        """项目桶优先于项目默认（default_image_backend）。"""
+        """The project bucket takes priority over the project default (default_image_backend).
+
+        项目桶优先于项目默认（default_image_backend）。"""
         resolver = ConfigResolver.__new__(ConfigResolver)
         fake_svc = _FakeConfigService(settings={})
         project = {"image_provider_t2i": "ark/proj-t2i", "default_image_backend": "openai/proj-default"}
@@ -978,7 +1188,9 @@ class TestResolveImageBackend:
         assert (resolved.provider_id, resolved.model_id) == ("ark", "proj-t2i")
 
     async def test_project_default_wins_over_global_layers(self):
-        """项目桶未配时落项目默认，遮蔽全局桶与全局默认。"""
+        """When the project bucket is not set, use the project default, shadowing the global bucket and global default.
+
+        项目桶未配时落项目默认，遮蔽全局桶与全局默认。"""
         resolver = ConfigResolver.__new__(ConfigResolver)
         fake_svc = _FakeConfigService(
             settings={
@@ -992,7 +1204,9 @@ class TestResolveImageBackend:
             assert (resolved.provider_id, resolved.model_id) == ("openai", "proj-default")
 
     async def test_empty_project_bucket_falls_through_to_project_default(self):
-        """项目桶为空字符串 → 回退项目默认，不跳过默认层。"""
+        """Project bucket is an empty string -> fall back to the project default, without skipping the default layer.
+
+        项目桶为空字符串 → 回退项目默认，不跳过默认层。"""
         resolver = ConfigResolver.__new__(ConfigResolver)
         fake_svc = _FakeConfigService(settings={})
         project = {"image_provider_i2i": "", "default_image_backend": "openai/proj-default"}
@@ -1000,7 +1214,9 @@ class TestResolveImageBackend:
         assert (resolved.provider_id, resolved.model_id) == ("openai", "proj-default")
 
     async def test_only_global_default_covers_both_capabilities(self):
-        """只配全局默认层、两桶皆空 → t2i / i2i 都解析到该模型。"""
+        """Only the global default layer configured, both buckets empty -> t2i / i2i both resolve to that model.
+
+        只配全局默认层、两桶皆空 → t2i / i2i 都解析到该模型。"""
         resolver = ConfigResolver.__new__(ConfigResolver)
         fake_svc = _FakeConfigService(settings={"default_image_backend": "grok/grok-2-image"})
         for generation_type in ("t2i", "i2i"):
@@ -1008,14 +1224,19 @@ class TestResolveImageBackend:
             assert (resolved.provider_id, resolved.model_id) == ("grok", "grok-2-image")
 
     async def test_falls_through_to_global_default(self):
-        """payload/project 都缺 → 落到全局桶（显式 default_image_backend_t2i）。"""
+        """Both payload and project missing -> land on the global bucket (explicit default_image_backend_t2i).
+
+        payload/project 都缺 → 落到全局桶（显式 default_image_backend_t2i）。"""
         resolver = ConfigResolver.__new__(ConfigResolver)
         fake_svc = _FakeConfigService(settings={"default_image_backend_t2i": "grok/grok-2-image"})
         resolved = await resolver._resolve_image_provider_model(fake_svc, None, None, None, "t2i")
         assert (resolved.provider_id, resolved.model_id) == ("grok", "grok-2-image")
 
     async def test_no_legacy_image_backend_fallback(self):
-        """解析链不再认 legacy 单字段 image_backend（由迁移转规范字段），直接落全局默认。"""
+        """The resolution chain no longer recognizes the legacy single field image_backend (migration turns it into canonical
+        fields) and goes straight to the global default.
+
+        解析链不再认 legacy 单字段 image_backend（由迁移转规范字段），直接落全局默认。"""
         resolver = ConfigResolver.__new__(ConfigResolver)
         fake_svc = _FakeConfigService(settings={"default_image_backend_t2i": "grok/grok-2-image"})
         project = {"image_backend": "openai/legacy"}
@@ -1023,16 +1244,21 @@ class TestResolveImageBackend:
         assert resolved.provider_id == "grok"
 
     async def test_project_bare_provider_pins_provider_with_default_model(self):
-        """裸 provider 项目覆盖（写边界放行）→ pin 该 provider 并补全其默认 model，不静默回退全局默认。"""
+        """Bare provider project override (allowed by the write boundary) -> pin that provider and fill in its default model,
+        instead of silently falling back to the global default.
+
+        裸 provider 项目覆盖（写边界放行）→ pin 该 provider 并补全其默认 model，不静默回退全局默认。"""
         resolver = ConfigResolver.__new__(ConfigResolver)
         fake_svc = _FakeConfigService(settings={"default_image_backend_t2i": "grok/grok-2-image"})
-        project = {"image_provider_t2i": "openai"}  # 裸 provider，无 model
+        project = {"image_provider_t2i": "openai"}  # Bare provider, no model / 裸 provider，无 model
         resolved = await resolver._resolve_image_provider_model(fake_svc, None, project, {}, "t2i")
         assert resolved.provider_id == "openai"
-        assert resolved.model_id == "gpt-image-2"  # registry 中 openai 的默认 image model
+        assert resolved.model_id == "gpt-image-2"  # openai's default image model in the registry / registry 中 openai 的默认 image model
 
     async def test_project_unknown_bare_provider_falls_through(self):
-        """裸 provider 不在 registry（无默认 model 可补）→ 退回全局默认。"""
+        """Bare provider not in the registry (no default model to fill in) -> fall back to the global default.
+
+        裸 provider 不在 registry（无默认 model 可补）→ 退回全局默认。"""
         resolver = ConfigResolver.__new__(ConfigResolver)
         fake_svc = _FakeConfigService(settings={"default_image_backend_t2i": "grok/grok-2-image"})
         project = {"image_provider_t2i": "does-not-exist"}
@@ -1040,7 +1266,10 @@ class TestResolveImageBackend:
         assert resolved.provider_id == "grok"
 
     async def test_project_provider_with_trailing_slash_uses_provider_default(self):
-        """脏值 "openai/"（缺 model，写校验器会放行）→ 取 openai 默认 model，不带空 model 下游。"""
+        """Dirty value "openai/" (missing model, the write validator lets it through) -> take openai's default model, not
+        carrying an empty model downstream.
+
+        脏值 "openai/"（缺 model，写校验器会放行）→ 取 openai 默认 model，不带空 model 下游。"""
         resolver = ConfigResolver.__new__(ConfigResolver)
         fake_svc = _FakeConfigService(settings={"default_image_backend_t2i": "grok/grok-2-image"})
         project = {"image_provider_t2i": "openai/"}
@@ -1048,25 +1277,37 @@ class TestResolveImageBackend:
         assert (resolved.provider_id, resolved.model_id) == ("openai", "gpt-image-2")
 
     async def test_payload_legacy_provider_not_trusted_falls_through_to_project(self):
-        """in-flight 历史任务 payload 携带 legacy 名（写边界拦不到）→ 不予信任，回退已迁移的 project。"""
+        """An in-flight historical task payload carrying a legacy name (the write boundary cannot catch it) -> not trusted,
+        fall back to the migrated project.
+
+        in-flight 历史任务 payload 携带 legacy 名（写边界拦不到）→ 不予信任，回退已迁移的 project。"""
         resolver = ConfigResolver.__new__(ConfigResolver)
         fake_svc = _FakeConfigService(settings={})
-        project = {"image_provider_t2i": "openai/gpt-image-2"}  # 启动期已迁移为规范名
-        payload = {"image_provider": "vertex", "image_model": "legacy"}  # legacy，不可识别
+        project = {"image_provider_t2i": "openai/gpt-image-2"}  # Already migrated to the canonical name at startup / 启动期已迁移为规范名
+        payload = {"image_provider": "vertex", "image_model": "legacy"}  # Legacy, not recognizable / legacy，不可识别
         resolved = await resolver._resolve_image_provider_model(fake_svc, None, project, payload, "t2i")
         assert (resolved.provider_id, resolved.model_id) == ("openai", "gpt-image-2")
 
     async def test_payload_known_provider_missing_model_uses_provider_default(self):
-        """半截 payload（已知 provider 但缺 model）→ 补该 provider 默认 model，不带空 model 到执行层。"""
+        """Half a payload (known provider but missing model) -> fill in that provider's default model, not carrying an empty
+        model to the execution layer.
+
+        半截 payload（已知 provider 但缺 model）→ 补该 provider 默认 model，不带空 model 到执行层。"""
         resolver = ConfigResolver.__new__(ConfigResolver)
         fake_svc = _FakeConfigService(settings={"default_image_backend_t2i": "grok/grok-2-image"})
-        payload = {"image_provider": "openai"}  # 只有 provider，无 image_model
+        payload = {"image_provider": "openai"}  # Only provider, no image_model / 只有 provider，无 image_model
         resolved = await resolver._resolve_image_provider_model(fake_svc, None, {}, payload, "t2i")
         assert (resolved.provider_id, resolved.model_id) == ("openai", "gpt-image-2")
 
 
 class TestLayeredBackendSkeleton:
-    """「默认 + 任务类型桶」四级解析骨架：项目桶 > 项目默认 > 全局桶 > 全局默认 > 自动推断。
+    """Four-level resolution skeleton "default + task-type bucket": project bucket > project default > global bucket >
+    global default > auto-inference.
+
+    Tests the skeleton contract directly with a synthetic declaration that has all four layers' keys, independent of any
+    media's concrete keys; wiring a media bucket only adds key declarations, not changes to the skeleton itself.
+
+    「默认 + 任务类型桶」四级解析骨架：项目桶 > 项目默认 > 全局桶 > 全局默认 > 自动推断。
 
     用带全部四层键位的合成声明直测骨架契约，与各媒体的具体键位无关；媒体桶接入只补
     键位声明、不改骨架本身。
@@ -1116,10 +1357,13 @@ class TestLayeredBackendSkeleton:
         elif g_def:
             assert result == ("g-def", "m")
         else:
-            assert result[0] == "gemini-aistudio"  # 全层缺失 → 自动推断到 ready provider
+            assert result[0] == "gemini-aistudio"  # All layers missing -> auto-inferred to a ready provider / 全层缺失 → 自动推断到 ready provider
 
     async def test_none_keys_skip_that_level(self):
-        """键位为 None 的层直接跳过——项目默认层未声明时项目里的同名字段不生效。"""
+        """Layers whose key is None are skipped: when the project default layer is not declared, a same-named field in the
+        project has no effect.
+
+        键位为 None 的层直接跳过——项目默认层未声明时项目里的同名字段不生效。"""
         resolver = ConfigResolver.__new__(ConfigResolver)
         fake_svc = _FakeConfigService(settings={"global_default": "g-def/m"})
         project = {"img_default": "p-def/m"}
@@ -1128,14 +1372,19 @@ class TestLayeredBackendSkeleton:
         assert result == ("g-def", "m")
 
     async def test_empty_global_bucket_follows_default(self):
-        """全局桶键存在但无有效值 → 回退全局默认层（docs/adr/0054）。"""
+        """Global bucket key exists but has no valid value -> fall back to the global default layer (docs/adr/0054).
+
+        全局桶键存在但无有效值 → 回退全局默认层（docs/adr/0054）。"""
         resolver = ConfigResolver.__new__(ConfigResolver)
         fake_svc = _FakeConfigService(settings={"global_bucket": "", "global_default": "g-def/m"})
         result = await resolver._resolve_layered_backend(fake_svc, None, None, self._keys())
         assert result == ("g-def", "m")
 
     async def test_project_bare_provider_supported(self):
-        """项目层兼容裸 provider 覆盖（补该 provider 默认 model），与既有图片/视频项目字段语义一致。"""
+        """The project layer accepts bare provider overrides (filling in that provider's default model), matching the
+        semantics of the existing image/video project fields.
+
+        项目层兼容裸 provider 覆盖（补该 provider 默认 model），与既有图片/视频项目字段语义一致。"""
         resolver = ConfigResolver.__new__(ConfigResolver)
         fake_svc = _FakeConfigService(settings={"global_default": "g-def/m"})
         result = await resolver._resolve_layered_backend(fake_svc, None, {"img_bucket": "openai"}, self._keys())
@@ -1143,7 +1392,9 @@ class TestLayeredBackendSkeleton:
 
 
 class TestResolveVideoBackend:
-    """resolve_video_backend：payload 锁定键 > project > 全局默认。"""
+    """resolve_video_backend: payload pinned key > project > global default.
+
+    resolve_video_backend：payload 锁定键 > project > 全局默认。"""
 
     async def test_project_video_backend_when_no_payload(self):
         resolver = ConfigResolver.__new__(ConfigResolver)
@@ -1153,7 +1404,10 @@ class TestResolveVideoBackend:
         assert (resolved.provider_id, resolved.model_id) == ("ark", "doubao-seedance-2-0-260128")
 
     async def test_disabled_custom_model_resolves_to_runtime_default(self, db_factory):
-        """身份解析直接交付执行层会实际调用的 model，不把禁用身份留给后续构造层修正。"""
+        """Identity resolution hands over directly the model the execution layer will actually call, not leaving a disabled
+        identity for a later construction layer to fix.
+
+        身份解析直接交付执行层会实际调用的 model，不把禁用身份留给后续构造层修正。"""
         from lib.db.models.custom_provider import CustomProvider, CustomProviderModel
 
         async with db_factory() as session:
@@ -1200,16 +1454,23 @@ class TestResolveVideoBackend:
         assert (resolved.provider_id, resolved.model_id) == ("ark", "doubao-seedance-1-5-pro")
 
     async def test_project_bare_provider_pins_provider_with_default_model(self):
-        """裸 video_backend(如 "ark") → pin ark 并补全其默认 video model，不回退全局默认的另一供应商。"""
+        """Bare video_backend (e.g. "ark") -> pin ark and fill in its default video model, instead of falling back to another
+        provider from the global default.
+
+        裸 video_backend(如 "ark") → pin ark 并补全其默认 video model，不回退全局默认的另一供应商。"""
         resolver = ConfigResolver.__new__(ConfigResolver)
         fake_svc = _FakeConfigService(settings={"default_video_backend": "grok/grok-imagine-video"})
-        project = {"video_backend": "ark"}  # 裸 provider
+        project = {"video_backend": "ark"}  # Bare provider / 裸 provider
         resolved = await resolver._resolve_video_provider_model(fake_svc, None, project, {})
         assert resolved.provider_id == "ark"
+        # ark's default video model in the registry
         assert resolved.model_id == "doubao-seedance-2-0-mini-260615"  # registry 中 ark 的默认 video model
 
     async def test_project_bare_provider_without_video_models_is_rejected(self):
-        """裸 provider 在模型目录里没有视频模型（openai 已移出 Sora）→ 报「不在模型清单中」，不回退到全局默认的另一供应商。"""
+        """Bare provider without video models in the model catalog (openai has dropped Sora) -> report "not in the model list",
+        instead of falling back to another provider from the global default.
+
+        裸 provider 在模型目录里没有视频模型（openai 已移出 Sora）→ 报「不在模型清单中」，不回退到全局默认的另一供应商。"""
         from lib.catalog.errors import ModelNotInCatalogError
 
         resolver = ConfigResolver.__new__(ConfigResolver)
@@ -1218,6 +1479,8 @@ class TestResolveVideoBackend:
         with pytest.raises(ModelNotInCatalogError) as exc_info:
             await resolver._resolve_video_provider_model(fake_svc, None, project, {})
         assert (exc_info.value.provider_id, exc_info.value.media_type) == ("openai", "video")
+        # No model name to report: the message says the provider cannot do this kind of generation, without rendering a broken
+        # reference like "openai/"
         # 没有模型名可报：文案说该供应商给不出这一类生成，不渲染出 "openai/" 这样的残缺引用
         assert (exc_info.value.code, exc_info.value.params) == (
             "provider_unsupported_media",
@@ -1225,7 +1488,10 @@ class TestResolveVideoBackend:
         )
 
     async def test_payload_without_pinned_bucket_key_falls_through_to_project(self):
-        """payload 层只认锁定的任务类型桶键：非桶键的 provider 字段不参与解析，一律回退配置层。"""
+        """The payload layer only recognizes the pinned task-type bucket key: provider fields that are not bucket keys play no
+        part and always fall back to the config layer.
+
+        payload 层只认锁定的任务类型桶键：非桶键的 provider 字段不参与解析，一律回退配置层。"""
         resolver = ConfigResolver.__new__(ConfigResolver)
         fake_svc = _FakeConfigService(settings={})
         project = {"video_backend": "ark/doubao-seedance-2-0-260128"}
@@ -1235,7 +1501,14 @@ class TestResolveVideoBackend:
 
 
 class TestResolveVideoBackendBuckets:
-    """generation_type 给定时的视频四级解析（项目桶 > 项目默认 > 全局桶 > 全局默认 > 自动推断）与能力闸。
+    """Four-level video resolution when generation_type is given (project bucket > project default > global bucket > global
+    default > auto-inference) and the capability gate.
+
+    Capability gate samples use the real capability bits the backends declare: vidu/viduq3-pro is i2v only,
+    dashscope/happyhorse-1.0-r2v is r2v only, and the whole ark series has both buckets (see the rule in
+    lib/backends/generation_type_buckets.py).
+
+    generation_type 给定时的视频四级解析（项目桶 > 项目默认 > 全局桶 > 全局默认 > 自动推断）与能力闸。
 
     能力闸样本取 backend 声明的真实能力位：vidu/viduq3-pro 仅 i2v、dashscope/happyhorse-1.0-r2v
     仅 r2v、ark 全系两桶齐备（见 lib/backends/generation_type_buckets.py 的判定口径）。
@@ -1267,7 +1540,10 @@ class TestResolveVideoBackendBuckets:
         assert (resolved.provider_id, resolved.model_id) == ("dashscope", "happyhorse-1.1-r2v")
 
     async def test_empty_global_bucket_falls_back_to_global_default(self):
-        """视频空桶语义（docs/adr/0054）：桶键存在但为空 → 回退全局默认层，不直达自动推断。"""
+        """Empty video bucket semantics (docs/adr/0054): bucket key exists but is empty -> fall back to the global default
+        layer, not straight to auto-inference.
+
+        视频空桶语义（docs/adr/0054）：桶键存在但为空 → 回退全局默认层，不直达自动推断。"""
         resolver = ConfigResolver.__new__(ConfigResolver)
         fake_svc = _FakeConfigService(
             settings={
@@ -1306,7 +1582,10 @@ class TestResolveVideoBackendBuckets:
         assert exc_info.value.code == "video_capability_missing_r2v"
 
     async def test_bucket_reference_to_unknown_model_asks_to_reselect(self):
-        """悬空引用（模型清单已无该 model）由同一解析闸报「请重新选择模型」，不静默换模型。"""
+        """A dangling reference (the model list no longer has that model) is reported by the same resolution gate as "please
+        reselect the model", without silently switching models.
+
+        悬空引用（模型清单已无该 model）由同一解析闸报「请重新选择模型」，不静默换模型。"""
         resolver = ConfigResolver.__new__(ConfigResolver)
         fake_svc = _FakeConfigService(settings={"default_video_backend_i2v": "ark/removed-model"})
         with pytest.raises(ModelNotInCatalogError) as exc_info:
@@ -1315,7 +1594,11 @@ class TestResolveVideoBackendBuckets:
         assert exc_info.value.params == {"provider": "ark", "model": "removed-model"}
 
     async def test_bucket_reference_to_non_video_model_asks_to_reselect(self):
-        """所引模型不是视频模型同属悬空引用：backend caps 函数对同 provider 的图片模型也返回
+        """A referenced model that is not a video model is also a dangling reference: the backend caps function returns static
+        capabilities for image models of the same provider too (``gemini-aistudio/gemini-3.1-flash-image`` would get
+        first_frame=True), so checking membership alone would let it through and blow up at the execution layer.
+
+        所引模型不是视频模型同属悬空引用：backend caps 函数对同 provider 的图片模型也返回
         静态能力（``gemini-aistudio/gemini-3.1-flash-image`` 会拿到 first_frame=True），
         只判成员资格会放行，落到执行层才炸。"""
 
@@ -1326,7 +1609,10 @@ class TestResolveVideoBackendBuckets:
         assert exc_info.value.code == "model_not_in_provider_catalog"
 
     async def test_capability_none_keeps_legacy_resolution_without_gate(self):
-        """不定桶调用（费用估算、限流路由兜底）保持旧三级解析，不读桶键、不过能力闸。"""
+        """Calls without a bucket (cost estimates, rate-limit routing fallback) keep the old three-level resolution, reading no
+        bucket keys and skipping the capability gate.
+
+        不定桶调用（费用估算、限流路由兜底）保持旧三级解析，不读桶键、不过能力闸。"""
         resolver = ConfigResolver.__new__(ConfigResolver)
         fake_svc = _FakeConfigService(
             settings={
@@ -1339,7 +1625,10 @@ class TestResolveVideoBackendBuckets:
 
 
 class TestVideoBucketCapabilityGateCustomProvider:
-    """自定义供应商的能力闸：悬空引用报错而非收敛到默认模型；有效模型正常放行。"""
+    """Capability gate for custom providers: dangling references error instead of converging to a default model; valid
+    models pass normally.
+
+    自定义供应商的能力闸：悬空引用报错而非收敛到默认模型；有效模型正常放行。"""
 
     async def _seed_provider(self, factory, *, models):
         from lib.db.models.custom_provider import CustomProvider, CustomProviderModel
@@ -1370,7 +1659,10 @@ class TestVideoBucketCapabilityGateCustomProvider:
         assert exc_info.value.code == "video_capability_reference_unavailable"
 
     async def test_disabled_custom_model_raises_instead_of_converging(self, db_factory):
-        """桶解析路径不做有效身份收敛：禁用模型直接报悬空，而非静默换成该供应商默认模型。"""
+        """The bucket resolution path does not converge to a valid identity: a disabled model is reported as dangling directly
+        instead of being silently swapped for that provider's default model.
+
+        桶解析路径不做有效身份收敛：禁用模型直接报悬空，而非静默换成该供应商默认模型。"""
         from lib.config.resolver import VideoBucketCapabilityError
 
         provider_id = await self._seed_provider(
@@ -1424,17 +1716,20 @@ def test_parse_int_variants():
     assert _parse_int("100", 7) == 100
     assert _parse_int("", 7) == 7
     assert _parse_int("abc", 7) == 7
-    assert _parse_int("0", 7) == 7  # 非正回 default
+    assert _parse_int("0", 7) == 7  # Non-positive returns default / 非正回 default
     assert _parse_int("-5", 7) == 7  # "-5".isdigit() == False
     assert _parse_int(None, 7) == 7
     assert _parse_int(50, 7) == 50
-    assert _parse_int(True, 7) == 7  # bool 显式排除（避免 True→1）
+    assert _parse_int(True, 7) == 7  # bool explicitly excluded (avoids True -> 1) / bool 显式排除（避免 True→1）
 
 
 class TestReferencePayloadLimits:
-    """验证 reference_payload_limits 的默认、per-provider 覆盖、容错与 None 短路。"""
+    """Verify reference_payload_limits defaults, per-provider overrides, error tolerance and the None short-circuit.
+
+    验证 reference_payload_limits 的默认、per-provider 覆盖、容错与 None 短路。"""
 
     async def test_none_provider_returns_default_without_db(self):
+        # No DB needed: provider_id=None returns the conservative generic default directly
         # 无需 DB：provider_id=None 直接返回保守通用默认
         resolver = ConfigResolver.__new__(ConfigResolver)
         total, single = await resolver.reference_payload_limits(None)
@@ -1473,6 +1768,7 @@ class TestReferencePayloadLimits:
         from lib.config.service import DEFAULT_REFERENCE_TOTAL_MAX_BYTES
 
         resolver = ConfigResolver(db_factory)
+        # Unknown provider -> get_provider_config raises ValueError -> caught, fall back to the default
         # 未知 provider → get_provider_config 抛 ValueError → catch 回退默认
         total, _single = await resolver.reference_payload_limits("totally-unknown-provider")
         assert total == DEFAULT_REFERENCE_TOTAL_MAX_BYTES
@@ -1490,13 +1786,17 @@ class TestReferencePayloadLimits:
             await session.commit()
         resolver = ConfigResolver(db_factory)
         total, single = await resolver.reference_payload_limits("gemini-aistudio")
-        assert total == DEFAULT_REFERENCE_TOTAL_MAX_BYTES  # 非数字回退
+        assert total == DEFAULT_REFERENCE_TOTAL_MAX_BYTES  # Non-numeric falls back / 非数字回退
         assert single == DEFAULT_REFERENCE_SINGLE_MAX_BYTES
 
 
 class TestTextBackendTierResolution:
-    """文本档位五级解析链：项目档位 > 项目默认 > 全局档位 > 全局默认 > 自动推断。"""
+    """Five-level resolution chain for the text tier: project tier > project default > global tier > global default >
+    auto-inference.
 
+    文本档位五级解析链：项目档位 > 项目默认 > 全局档位 > 全局默认 > 自动推断。"""
+
+    # Registry default text model of the ready gemini
     _AUTO = ("gemini-aistudio", "gemini-3-flash-preview")  # ready gemini 的 registry 默认 text model
 
     @pytest.mark.parametrize("p_tier", [False, True])
@@ -1548,7 +1848,9 @@ class TestTextBackendTierResolution:
         assert result == ("g-tier", "m")
 
     async def test_simple_tier_tasks_read_simple_key(self):
-        """OVERVIEW / STYLE_ANALYSIS 归简单档，读 text_backend_simple 而非复杂档键。"""
+        """OVERVIEW / STYLE_ANALYSIS belong to the simple tier and read text_backend_simple rather than the complex-tier key.
+
+        OVERVIEW / STYLE_ANALYSIS 归简单档，读 text_backend_simple 而非复杂档键。"""
         from unittest.mock import MagicMock
 
         from lib.backends.text_backends.base import TextTaskType
@@ -1570,7 +1872,9 @@ class TestTextBackendTierResolution:
         assert result == ("complex", "m")
 
     async def test_malformed_value_without_slash_falls_through(self):
-        """无 "/" 的脏值视为未设置，落到下一级。"""
+        """A dirty value without "/" is treated as unset and falls to the next level.
+
+        无 "/" 的脏值视为未设置，落到下一级。"""
         from unittest.mock import MagicMock
 
         from lib.backends.text_backends.base import TextTaskType
@@ -1581,7 +1885,11 @@ class TestTextBackendTierResolution:
         assert result == ("g-def", "m")
 
     async def test_project_bare_provider_pins_its_default_model(self):
-        """项目档位写裸 provider（写边界放行的合法值）→ pin 住该 provider 补默认 model，
+        """Project tier with a bare provider (a legal value the write boundary allows) -> pin that provider and fill in the
+        default model, without silently falling back to another provider from the global default. Same shape as the image /
+        video project layer.
+
+        项目档位写裸 provider（写边界放行的合法值）→ pin 住该 provider 补默认 model，
         不静默回退到全局默认的另一供应商。与图片 / 视频的项目层同构。"""
         from unittest.mock import MagicMock
 
@@ -1596,7 +1904,10 @@ class TestTextBackendTierResolution:
 
 
 class TestStyleAnalysisVisionGuard:
-    """简单档模型不支持图像输入时，风格分析解析直接报错，不静默换模型。"""
+    """When the simple-tier model does not support image input, style analysis resolution errors directly instead of
+    silently switching models.
+
+    简单档模型不支持图像输入时，风格分析解析直接报错，不静默换模型。"""
 
     async def test_rejects_registry_model_without_vision(self):
         from unittest.mock import MagicMock
@@ -1604,6 +1915,7 @@ class TestStyleAnalysisVisionGuard:
         from lib.backends.text_backends.base import TextTaskType
 
         resolver = ConfigResolver.__new__(ConfigResolver)
+        # qwen3-max does not declare vision in the registry
         # qwen3-max 在 registry 中未声明 vision
         fake_svc = _FakeConfigService(settings={"text_backend_simple": "dashscope/qwen3-max"})
         with pytest.raises(ValueError, match="vision"):
@@ -1633,7 +1945,9 @@ class TestStyleAnalysisVisionGuard:
         assert result == ("gemini-aistudio", "gemini-3-flash-preview")
 
     async def test_unknown_model_passes_without_guess(self):
-        """registry 之外（自定义供应商等）无逐模型能力事实，放行不猜测。"""
+        """Outside the registry (custom providers etc.) there are no per-model capability facts; allow without guessing.
+
+        registry 之外（自定义供应商等）无逐模型能力事实，放行不猜测。"""
         from unittest.mock import MagicMock
 
         from lib.backends.text_backends.base import TextTaskType
@@ -1644,7 +1958,10 @@ class TestStyleAnalysisVisionGuard:
         assert result == ("custom-abc", "some-model")
 
     async def test_custom_model_follows_image_input_override(self, db_factory):
-        """自定义供应商的文本模型：能力覆盖关掉图片输入时报错；对应不上条目且没有覆盖时放行。"""
+        """Text models of custom providers: error when a capability override turns image input off; allow when no entry
+        matches and there is no override.
+
+        自定义供应商的文本模型：能力覆盖关掉图片输入时报错；对应不上条目且没有覆盖时放行。"""
         from lib.backends.text_backends.base import TextTaskType
         from lib.db.models.custom_provider import CustomProvider, CustomProviderModel
 
@@ -1688,7 +2005,9 @@ class TestStyleAnalysisVisionGuard:
 
     @pytest.mark.parametrize("provider_id", ["gemini-aistudio", "gemini-vertex"])
     async def test_complex_tier_task_not_vision_checked(self, provider_id):
-        """vision 校验只针对需要图像输入的任务，SCRIPT 不受限。"""
+        """The vision check only applies to tasks that need image input; SCRIPT is not restricted.
+
+        vision 校验只针对需要图像输入的任务，SCRIPT 不受限。"""
         from unittest.mock import MagicMock
 
         from lib.backends.text_backends.base import TextTaskType
@@ -1700,21 +2019,28 @@ class TestStyleAnalysisVisionGuard:
 
 
 class TestProjectGenerationModeCaps:
-    """能力解析按项目生成模式定轴：创建即定、全项目一种，能力不需要剧集上下文。"""
+    """Capability resolution takes its axis from the project's generation mode: fixed at creation, one per project, so
+    capabilities need no episode context.
+
+    能力解析按项目生成模式定轴：创建即定、全项目一种，能力不需要剧集上下文。"""
 
     def test_caps_generation_mode_reads_project_field(self):
         assert caps_generation_mode({"generation_mode": "reference_video"}) == "reference_video"
         assert caps_generation_mode({"generation_mode": "storyboard"}) == "storyboard"
 
     def test_caps_generation_mode_none_without_project_context(self):
-        """无项目上下文时为 None（未声明 ≠ 显式选择某种生成模式）。"""
+        """None without project context (undeclared != explicitly choosing a generation mode).
+
+        无项目上下文时为 None（未声明 ≠ 显式选择某种生成模式）。"""
         assert caps_generation_mode(None) is None
         assert caps_generation_mode({}) is None
         assert caps_generation_mode({"generation_mode": ""}) is None
         assert caps_generation_mode({"generation_mode": {"nested": "dict"}}) is None
 
     async def test_bucket_follows_project_route(self, db_factory):
-        """定桶按项目生成模式取对应桶键的模型。"""
+        """Bucket selection takes the model of the bucket key matching the project's generation mode.
+
+        定桶按项目生成模式取对应桶键的模型。"""
         storyboard_project = {
             "generation_mode": "storyboard",
             "video_provider_i2v": "kling/kling-v3",
@@ -1725,7 +2051,10 @@ class TestProjectGenerationModeCaps:
         assert (await _video_caps(db_factory, reference_project))["model"] == "happyhorse-1.1-r2v"
 
     async def test_voice_consistency_follows_project_route(self, db_factory):
-        """参考生视频（且项目选了参考音频绑定）按 native 解析，分镜图生视频降格 soft。"""
+        """Reference-to-video (with the project choosing reference audio binding) resolves to native; storyboard-to-video
+        downgrades to soft.
+
+        参考生视频（且项目选了参考音频绑定）按 native 解析，分镜图生视频降格 soft。"""
         project = {
             "generation_mode": "reference_video",
             "character_voice_binding": "reference_audio",
@@ -1740,7 +2069,9 @@ class TestProjectGenerationModeCaps:
         ] == "soft"
 
     async def test_generation_mode_follows_project_route(self, db_factory):
-        """caps 的 generation_mode 与能力位跟随项目路线：参考生视频读 r2v 桶模型。"""
+        """caps' generation_mode and capability bits follow the project route: reference-to-video reads the r2v bucket's model.
+
+        caps 的 generation_mode 与能力位跟随项目路线：参考生视频读 r2v 桶模型。"""
         caps = await _video_caps(
             db_factory, {"generation_mode": "reference_video", "video_provider_r2v": "dashscope/happyhorse-1.1-r2v"}
         )
@@ -1749,7 +2080,10 @@ class TestProjectGenerationModeCaps:
 
 
 class TestPayloadPinnedVideoModel:
-    """入队锁进 payload 任务类型桶键的执行身份：优先级最高，且不承诺桶的调用方（resume）也读得到。"""
+    """Execution identity pinned into the payload's task-type bucket key at enqueue: highest priority, and readable even by
+    callers that do not commit to a bucket (resume).
+
+    入队锁进 payload 任务类型桶键的执行身份：优先级最高，且不承诺桶的调用方（resume）也读得到。"""
 
     async def test_pinned_bucket_key_wins_over_project(self):
         resolver = ConfigResolver.__new__(ConfigResolver)
@@ -1760,7 +2094,12 @@ class TestPayloadPinnedVideoModel:
         assert (resolved.provider_id, resolved.model_id) == ("ark", "doubao-seedance-2-0-260128")
 
     async def test_pinned_bucket_key_skips_capability_gate(self):
-        """锁定身份只过身份可用性、不过能力闸：已入队任务按 payload 照常执行，不回头补校验。
+        """A pinned identity only passes identity availability, not the capability gate: an already-queued task runs per its
+        payload as usual, without retroactive checks.
+
+        What is pinned is the i2v-only viduq3-pro resolved as r2v; going through the capability gate would error.
+
+        锁定身份只过身份可用性、不过能力闸：已入队任务按 payload 照常执行，不回头补校验。
 
         锁的是 i2v-only 的 viduq3-pro 而按 r2v 解析——过能力闸就会报错。
         """
@@ -1771,7 +2110,10 @@ class TestPayloadPinnedVideoModel:
         assert (resolved.provider_id, resolved.model_id) == ("vidu", "viduq3-pro")
 
     async def test_pinned_bucket_key_hit_without_capability(self):
-        """resume 口径（generation_type=None）：入队只写一个桶键，按固定桶序取到即命中。"""
+        """Resume basis (generation_type=None): enqueue writes only one bucket key, which is hit when found in the fixed bucket
+        order.
+
+        resume 口径（generation_type=None）：入队只写一个桶键，按固定桶序取到即命中。"""
         resolver = ConfigResolver.__new__(ConfigResolver)
         fake_svc = _FakeConfigService(settings={})
         project = {"video_backend": "grok/grok-imagine-video"}
@@ -1780,7 +2122,10 @@ class TestPayloadPinnedVideoModel:
         assert (resolved.provider_id, resolved.model_id) == ("ark", "doubao-seedance-2-0-260128")
 
     async def test_pin_of_other_bucket_ignored_when_capability_given(self):
-        """generation_type 明确时只认该桶的键，另一个桶的锁不越桶生效。"""
+        """When generation_type is explicit, only that bucket's key counts; another bucket's pin does not take effect across
+        buckets.
+
+        generation_type 明确时只认该桶的键，另一个桶的锁不越桶生效。"""
         resolver = ConfigResolver.__new__(ConfigResolver)
         fake_svc = _FakeConfigService(settings={})
         project = {"video_backend": "grok/grok-imagine-video"}
@@ -1789,7 +2134,12 @@ class TestPayloadPinnedVideoModel:
         assert (resolved.provider_id, resolved.model_id) == ("grok", "grok-imagine-video")
 
     async def test_pin_of_unavailable_provider_raises_instead_of_falling_back(self):
-        """锁定的供应商已下线：报错，不回退配置层。
+        """The pinned provider has gone offline: error, do not fall back to the config layer.
+
+        Falling back means running on a different provider, and resume would even poll the original provider's
+        provider_job_id with another backend.
+
+        锁定的供应商已下线：报错，不回退配置层。
 
         回退等于换供应商执行，续跑更会拿另一个 backend 去轮原供应商的 provider_job_id。
         """
@@ -1802,7 +2152,9 @@ class TestPayloadPinnedVideoModel:
         assert excinfo.value.provider_id == "seedance"
 
     async def test_pin_of_deleted_builtin_model_raises(self):
-        """锁定的内置 model 被注册表升级删除：报错，不带着悬空身份继续执行。"""
+        """The pinned built-in model was deleted by a registry upgrade: error, do not continue with a dangling identity.
+
+        锁定的内置 model 被注册表升级删除：报错，不带着悬空身份继续执行。"""
         resolver = ConfigResolver.__new__(ConfigResolver)
         fake_svc = _FakeConfigService(settings={})
         project = {"video_backend": "grok/grok-imagine-video"}
@@ -1812,7 +2164,9 @@ class TestPayloadPinnedVideoModel:
         assert excinfo.value.model_id == "retired-model"
 
     async def test_pin_of_non_video_builtin_model_raises(self):
-        """锁定的内置 model 不是视频模型：同样报错，不静默改用配置层的视频模型。"""
+        """The pinned built-in model is not a video model: error too, do not silently use the config layer's video model.
+
+        锁定的内置 model 不是视频模型：同样报错，不静默改用配置层的视频模型。"""
         resolver = ConfigResolver.__new__(ConfigResolver)
         fake_svc = _FakeConfigService(settings={})
         project = {"video_backend": "grok/grok-imagine-video"}
@@ -1821,7 +2175,9 @@ class TestPayloadPinnedVideoModel:
             await resolver._resolve_video_provider_model(fake_svc, None, project, payload, "i2v")
 
     async def test_malformed_pin_falls_through_to_config(self):
-        """非复合形态（缺 model）的桶键按未锁定处理，回退配置层。"""
+        """A bucket key in non-composite form (missing model) is treated as unpinned and falls back to the config layer.
+
+        非复合形态（缺 model）的桶键按未锁定处理，回退配置层。"""
         resolver = ConfigResolver.__new__(ConfigResolver)
         fake_svc = _FakeConfigService(settings={})
         project = {"video_backend": "grok/grok-imagine-video"}
@@ -1829,7 +2185,10 @@ class TestPayloadPinnedVideoModel:
         assert (resolved.provider_id, resolved.model_id) == ("grok", "grok-imagine-video")
 
     async def test_custom_provider_pin_survives_resume_resolution(self, db_factory):
-        """自定义供应商的视频任务中断续跑：沿用 checkpoint 回放的 model，不回落项目配置换模型。"""
+        """Interrupted video task of a custom provider resumes: keep the model replayed from the checkpoint, without falling
+        back to the project config and switching models.
+
+        自定义供应商的视频任务中断续跑：沿用 checkpoint 回放的 model，不回落项目配置换模型。"""
         from lib.db.models.custom_provider import CustomProvider, CustomProviderModel
 
         async with db_factory() as session:
@@ -1863,7 +2222,12 @@ class TestPayloadPinnedVideoModel:
         assert (resolved.provider_id, resolved.model_id) == (provider_id, "pinned-model")
 
     async def test_disabled_pinned_custom_model_raises_instead_of_switching(self, db_factory):
-        """checkpoint 锁定的自定义 model 在 resume 前被禁用：报错，不收敛到默认 model。
+        """The custom model pinned by the checkpoint was disabled before resume: error, do not converge to the default model.
+
+        Running with another model means silently switching models, and resume would even poll the original model's
+        provider_job_id with another backend.
+
+        checkpoint 锁定的自定义 model 在 resume 前被禁用：报错，不收敛到默认 model。
 
         换 model 执行等于静默换模型，续跑更会拿另一个 backend 去轮原 model 的 provider_job_id。
         """
@@ -1913,11 +2277,16 @@ class TestPayloadPinnedVideoModel:
 
 
 class TestAutoResolvedBackendsPreview:
-    """全层留空时自动选中模型的只读预览，与执行期解析同一口径（自动推断层 ``_auto_resolve_backend``）。"""
+    """Read-only preview of the models auto-selected when all layers are empty, on the same basis as execution-time
+    resolution (the auto-inference layer ``_auto_resolve_backend``).
+
+    全层留空时自动选中模型的只读预览，与执行期解析同一口径（自动推断层 ``_auto_resolve_backend``）。"""
 
     @staticmethod
     async def _execution_pairs(resolver: ConfigResolver, svc, session) -> dict[str, tuple[str, str] | None]:
-        """各用途在全部层留空时执行路径解析出的模型；选不出即 None。"""
+        """The model the execution path resolves for each purpose when all layers are empty; None when none can be chosen.
+
+        各用途在全部层留空时执行路径解析出的模型；选不出即 None。"""
         from lib.backends.text_backends.base import TextTaskType
 
         async def _or_none(coro):
@@ -1944,7 +2313,10 @@ class TestAutoResolvedBackendsPreview:
         assert all(pair is not None and pair[0] == "gemini-aistudio" for pair in preview.values())
 
     async def test_custom_fallback_filters_by_bucket_and_reports_missing_media(self, db_factory):
-        """无就绪内置供应商时按桶取自定义默认；该媒体一个候选都没有时为 None，不报错。"""
+        """With no ready built-in provider, take the custom default per bucket; when that media has no candidate at all it is
+        None, without error.
+
+        无就绪内置供应商时按桶取自定义默认；该媒体一个候选都没有时为 None，不报错。"""
         from lib.custom_provider import make_provider_id
         from lib.db.models.custom_provider import CustomProvider, CustomProviderModel
 

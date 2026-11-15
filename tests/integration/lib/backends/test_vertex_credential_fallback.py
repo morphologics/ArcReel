@@ -1,4 +1,6 @@
-"""存量 Vertex 凭证经配置解析与后端装配后仍可用于生成。"""
+"""Existing Vertex credentials remain usable for generation after config resolution and backend assembly.
+
+存量 Vertex 凭证经配置解析与后端装配后仍可用于生成。"""
 
 from __future__ import annotations
 

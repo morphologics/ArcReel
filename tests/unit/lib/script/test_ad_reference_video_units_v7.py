@@ -1,4 +1,6 @@
-"""广告/短片的参考生视频共用自包含 video_units 的模型与解析契约。"""
+"""Ad/short reference-to-video shares the model and parsing contract of self-contained video_units.
+
+广告/短片的参考生视频共用自包含 video_units 的模型与解析契约。"""
 
 import pydantic
 import pytest

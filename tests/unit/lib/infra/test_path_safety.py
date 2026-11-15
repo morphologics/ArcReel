@@ -1,4 +1,6 @@
-"""path_safety：项目目录内路径包含校验，防穿越 + 脏数据容错。"""
+"""path_safety: containment check for paths inside the project directory, guarding against traversal + tolerating dirty data.
+
+path_safety：项目目录内路径包含校验，防穿越 + 脏数据容错。"""
 
 import os
 import sys
@@ -25,7 +27,7 @@ def test_missing_file_returns_false(tmp_path: Path):
 
 
 def test_directory_returns_false(tmp_path: Path):
-    # 素材路径只接受文件，目录视同不存在
+    # Asset paths only accept files; a directory counts as nonexistent / 素材路径只接受文件，目录视同不存在
     (tmp_path / "subdir").mkdir()
     assert safe_exists(tmp_path, "subdir") is False
 
@@ -41,6 +43,7 @@ def test_empty_rel_path_returns_false(tmp_path: Path):
 
 
 def test_dirty_type_returns_false(tmp_path: Path):
+    # rel_path comes from a raw project.json field and may be any JSON type; dirty data is treated as "does not exist"
     # rel_path 来自 project.json 原始字段，可能是任意 JSON 类型；脏数据按「不存在」处理
     assert safe_exists(tmp_path, cast(Any, {"oops": 1})) is False
     assert safe_exists(tmp_path, cast(Any, 42)) is False
@@ -60,6 +63,7 @@ def test_safe_join_rejects_dotdot(tmp_path: Path):
 
 
 def test_safe_join_rejects_absolute_escape(tmp_path: Path):
+    # Absolute paths drop the base prefix per os.path.join semantics, and must still pass the containment check afterwards
     # 绝对路径按 os.path.join 语义丢弃 base 前缀，随后仍要过包含校验
     with pytest.raises(PathTraversalError):
         safe_join(tmp_path, "/etc/passwd")
@@ -71,6 +75,9 @@ def test_safe_join_absolute_within_base_allowed(tmp_path: Path):
 
 
 def test_safe_join_rejects_malformed_path(tmp_path: Path):
+    # Embedded NUL byte: expressible in JSON but illegal for the filesystem, and os.path.realpath raises a
+    # native ValueError directly; safe_join must convert it uniformly into PathTraversalError, otherwise call sites that only catch
+    # PathTraversalError would let such dirty data degrade into an unexpected 500.
     # 内嵌 NUL 字节：JSON 可表达但文件系统非法，os.path.realpath 会直接抛
     # 原生 ValueError；safe_join 需统一转换成 PathTraversalError，否则只捕获
     # PathTraversalError 的调用点会让这类脏数据退化成未预期的 500。
@@ -88,6 +95,8 @@ def test_safe_join_base_itself_allowed_with_flag(tmp_path: Path):
 
 
 def test_safe_join_root_base_itself_rejected_by_default():
+    # When base is the filesystem root, base_prefix == base_real, and a candidate path equal to base would also pass the
+    # startswith prefix comparison; regression coverage that allow_base=False must still reject in this case.
     # base 为文件系统根时 base_prefix == base_real，候选路径与 base 相等也会通过
     # startswith 前缀比较——回归覆盖 allow_base=False 在这种情况下仍需拒绝。
     root = Path(os.path.abspath(os.sep))
@@ -116,7 +125,7 @@ def test_safe_join_rejects_symlink_escape(tmp_path: Path):
     outside.write_text("secret", encoding="utf-8")
     link = base / "link.txt"
     os.symlink(outside, link)
-    # symlink 指向 base 外：realpath 展开后越界，拒绝
+    # symlink points outside base: out of bounds after realpath expansion, rejected / symlink 指向 base 外：realpath 展开后越界，拒绝
     with pytest.raises(PathTraversalError):
         safe_join(base, "link.txt")
 

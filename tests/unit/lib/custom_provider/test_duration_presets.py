@@ -1,4 +1,7 @@
-"""验证 duration_presets 启发式表覆盖排行榜 Top-20 模型 + 未匹配回退。"""
+"""Verify that the duration_presets heuristic table covers the leaderboard Top-20 models + the unmatched
+fallback.
+
+验证 duration_presets 启发式表覆盖排行榜 Top-20 模型 + 未匹配回退。"""
 
 from __future__ import annotations
 
@@ -13,17 +16,19 @@ from lib.custom_provider.duration_presets import (
 @pytest.mark.parametrize(
     ("model_id", "expected"),
     [
-        # OpenAI Sora 第一方
+        # OpenAI Sora first-party / OpenAI Sora 第一方
         ("sora-2", [4, 8, 12]),
         ("sora-2-pro", [4, 8, 12]),
         ("sora-2-pro-2026-01-15", [4, 8, 12]),
+        # Third-party aggregator sora-pro variants (names contain sora and pro but do not match the strict
+        # first-party regex)
         # 第三方聚合 sora-pro 变体（命名含 sora 与 pro 但不匹配第一方严格 regex）
         ("aggregator-sora-pro-v2", [6, 10, 12, 16, 20]),
-        # Veo 系列
+        # Veo series / Veo 系列
         ("veo-3.1-generate-001", [4, 6, 8]),
         ("veo-3.1-fast-generate-preview", [4, 6, 8]),
         ("veo3-lite", [4, 6, 8]),
-        # Kling 全系
+        # Kling, all models / Kling 全系
         ("kling-v3.0", [5, 10]),
         ("kling-3.0-omni-pro", [5, 10]),
         ("kling-2.5-turbo", [5, 10]),
@@ -33,10 +38,10 @@ from lib.custom_provider.duration_presets import (
         ("gen-4.5", [5, 8, 10]),
         # Luma Ray
         ("ray-3", [5, 10]),
-        # ByteDance Seedance / Dreamina（4-15 全展开）
+        # ByteDance Seedance / Dreamina (4-15 fully expanded) / ByteDance Seedance / Dreamina（4-15 全展开）
         ("dreamina-seedance-2-0-260128", list(range(4, 16))),
         ("doubao-seedance-1-5-pro-251215", list(range(4, 16))),
-        # 即梦
+        # Jimeng / 即梦
         ("jimeng-video-3.0", list(range(4, 16))),
         # HappyHorse
         ("happyhorse-1.0", list(range(3, 16))),
@@ -47,39 +52,50 @@ from lib.custom_provider.duration_presets import (
         # PixVerse
         ("pixverse-v6", list(range(1, 16))),
         ("v5.6", list(range(1, 16))),
-        # Hailuo / MiniMax（真实视频 model id 都带 hailuo 品牌名）
+        # Hailuo / MiniMax (real video model ids all carry the hailuo brand name) / Hailuo / MiniMax（真实视频 model id 都带 hailuo 品牌名）
         ("hailuo-02", [6]),
         ("MiniMax-Hailuo-2.3", [6]),
         ("MiniMax-Hailuo-2.3-Fast", [6]),
+        # minimax ids without hailuo no longer hit the fixed 6 and fall back to the default (the bare minimax
+        # token was removed)
         # 不带 hailuo 的 minimax id 不再命中固定 6，落回默认（裸 minimax token 已移除）
         ("minimax-abab-6.5", DEFAULT_FALLBACK),
+        # MiniMax H3 (including case/prefix variants; does not fall into hailuo's fixed 6 preset)
         # MiniMax H3（含大小写/前缀变体，不落入 hailuo 的固定 6 预设）
         ("minimax-h3", list(range(4, 16))),
         ("MiniMax-H3", list(range(4, 16))),
         ("proxy-minimax-h3-turbo", list(range(4, 16))),
+        # Wan (hyphen/underscore/dot separator forms share a tier, matching as widely as endpoint routing and
+        # capability tiers)
         # Wan（连字符/下划线/点号三种分隔符形态同档，与端点路由、能力档的匹配宽度一致）
         ("wan-2.1", [4, 5]),
         ("WAN_2-T2V", [4, 5]),
+        # Wanxiang 2.7 (does not fall into generic Wan's [4, 5] preset; hyphen/underscore/dot forms share a
+        # tier)
         # 万相 2.7（不落入通用 Wan 的 [4, 5] 预设；连字符/下划线/点号三种形态同档）
         ("wan2.7-i2v", list(range(2, 16))),
         ("wan_2.7-i2v", list(range(2, 16))),
         ("wan-2.7-i2v", list(range(2, 16))),
-        # 万相 3.0（不落入通用 Wan 的 [4, 5] 预设）
+        # Wanxiang 3.0 (does not fall into generic Wan's [4, 5] preset) / 万相 3.0（不落入通用 Wan 的 [4, 5] 预设）
         ("wan3.0-video", list(range(2, 31))),
         ("Wan3.0-Video", list(range(2, 31))),
+        # The hyphen form (third-party aggregator naming) matches as widely as the dot form; both are
+        # recognized as Wanxiang 3.0
         # 连字符形态（第三方聚合命名）与点号形态匹配宽度一致，均识别为万相 3.0
         ("wan-3-turbo", list(range(2, 31))),
         ("wan3-turbo", list(range(2, 31))),
-        # 下划线形态匹配宽度同样一致
+        # The underscore form matches equally widely too / 下划线形态匹配宽度同样一致
         ("wan_3_turbo", list(range(2, 31))),
         ("wan_3.0-turbo", list(range(2, 31))),
+        # Identifier boundary: model names containing the substring "wan3" but not from that family do not
+        # fall into the Wanxiang 3.0 tier
         # 标识符边界：含 "wan3" 子串但非该家族的型号名不落入万相 3.0 档位
         ("swan3", [4, 5]),
         ("vendorwan3", [4, 5]),
         ("wan30", [4, 5]),
         # Pika
         ("pika-2.0", [3, 5, 10]),
-        # 未知模型 → fallback
+        # Unknown model -> fallback / 未知模型 → fallback
         ("totally-unknown-model", DEFAULT_FALLBACK),
         ("", DEFAULT_FALLBACK),
     ],
@@ -89,7 +105,10 @@ def test_infer_supported_durations_known_and_unknown(model_id: str, expected: li
 
 
 def test_returned_list_is_independent_copy():
-    """连续两次调用返回的列表应是独立对象（防止外部修改污染预设表）。"""
+    """Two consecutive calls should return independent list objects (so outside edits cannot pollute the
+    preset table).
+
+    连续两次调用返回的列表应是独立对象（防止外部修改污染预设表）。"""
     a = infer_supported_durations("sora-2")
     b = infer_supported_durations("sora-2")
     assert a == b

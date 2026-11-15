@@ -1,4 +1,6 @@
-"""内置图片调用通道的预估用量：每条内置通道都能按请求事实推出用量，并能按目录价目表计价。"""
+"""Estimated usage of built-in image call channels: every built-in channel can derive usage from request facts and be priced by the catalog price list.
+
+内置图片调用通道的预估用量：每条内置通道都能按请求事实推出用量，并能按目录价目表计价。"""
 
 from __future__ import annotations
 
@@ -18,6 +20,7 @@ _IMAGE_PROVIDERS = sorted(provider for provider, media_type in PROVIDER_SPEC_REG
 def test_every_builtin_image_channel_estimates_text_to_image(provider_id: str) -> None:
     model = catalog.default_model(provider_id, "image")
     assert model is not None
+    # The channel sends the tier as is, so take a tier the catalog actually declares (models with no declared resolution use 1K).
     # 通道原样下发档位，所以取目录里确实声明的档位（没声明分辨率的模型用 1K）。
     resolutions = catalog.get_model(provider_id, model, media_type="image").resolutions
     image_size = "1K" if not resolutions or "1K" in resolutions else resolutions[0]
@@ -31,7 +34,9 @@ def test_every_builtin_image_channel_estimates_text_to_image(provider_id: str) -
 
 
 def test_reference_surcharge_beyond_free_allowance() -> None:
-    """Agnes 前 3 张参考图免费，之后每张 $0.003（价目表 free_allowance）。"""
+    """Agnes: first 3 reference images free, then $0.003 each (price list free_allowance).
+
+    Agnes 前 3 张参考图免费，之后每张 $0.003（价目表 free_allowance）。"""
     usage = estimate_builtin_image_usage(
         "agnes",
         ImageRequestFacts(model="agnes-image-2.5-flash", aspect_ratio="9:16", image_size="1K", reference_count=5),

@@ -1,4 +1,7 @@
-"""文件视图接口：按目录懒加载、标角色、隐藏基础设施文件，鉴权预览与下载不跟随符号链接。"""
+"""File view API: lazy loading by directory, role tagging, hiding infrastructure files; authenticated preview and
+download do not follow symlinks.
+
+文件视图接口：按目录懒加载、标角色、隐藏基础设施文件，鉴权预览与下载不跟随符号链接。"""
 
 from __future__ import annotations
 

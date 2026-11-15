@@ -1,4 +1,10 @@
-"""SDK 0.1.76 新字段消费的单元测试。
+"""Unit tests for consuming the new fields of SDK 0.1.76.
+
+Covers:
+- ResultMessage.api_error_status passed through to the SSE status payload
+- ToolPermissionContext.decision_reason appended to the _can_use_tool default-deny hint
+
+SDK 0.1.76 新字段消费的单元测试。
 
 覆盖：
 - ResultMessage.api_error_status 透传到 SSE 状态 payload
@@ -17,7 +23,9 @@ from server.agent_runtime.service import AssistantService
 
 
 class TestApiErrorStatusInStatusPayload:
-    """0.1.76 新字段 api_error_status 透传到 SSE payload。"""
+    """The new 0.1.76 field api_error_status is passed through to the SSE payload.
+
+    0.1.76 新字段 api_error_status 透传到 SSE payload。"""
 
     def test_api_error_status_present_when_set(self):
         result_message: dict[str, Any] = {
@@ -49,7 +57,7 @@ class TestApiErrorStatusInStatusPayload:
         assert "api_error_status" not in payload
 
     def test_api_error_status_absent_when_field_missing(self):
-        # 老 SDK / 老消息没有 api_error_status 字段
+        # Old SDK / old messages have no api_error_status field / 老 SDK / 老消息没有 api_error_status 字段
         result_message: dict[str, Any] = {
             "type": "result",
             "subtype": "success",
@@ -64,7 +72,9 @@ class TestApiErrorStatusInStatusPayload:
 
 
 class TestResultErrorLogging:
-    """result 错误终态在 _finalize_turn 写结构化 logger.warning，含 api_error_status。"""
+    """A result error terminal state writes a structured logger.warning in _finalize_turn, including api_error_status.
+
+    result 错误终态在 _finalize_turn 写结构化 logger.warning，含 api_error_status。"""
 
     @pytest.mark.asyncio
     async def test_logger_warning_emitted_on_error_with_api_status(
@@ -112,7 +122,9 @@ class TestResultErrorLogging:
 
 
 class TestCanUseToolDecisionReason:
-    """0.1.74 新字段 ToolPermissionContext.decision_reason 拼到 default-deny hint。"""
+    """The new 0.1.74 field ToolPermissionContext.decision_reason is appended to the default-deny hint.
+
+    0.1.74 新字段 ToolPermissionContext.decision_reason 拼到 default-deny hint。"""
 
     @pytest.mark.asyncio
     async def test_default_deny_includes_decision_reason(self, tmp_path):

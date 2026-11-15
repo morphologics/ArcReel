@@ -1,4 +1,12 @@
-"""登记依据与期望依据同源：执行器经 ``freeze()`` 得到的依据等于目标态规划器经 ``expected_basis()`` 投影的依据。
+"""Registered basis and expected basis come from the same source: the basis the executor gets via ``freeze()`` equals
+the basis the target-state planner projects via ``expected_basis()``.
+
+One project covers derivative references, products (sheet + original image) and the previous storyboard image; in
+activation mode the planner sees the sheets and previous storyboard image planned in this round. Targets with gaps in
+their generation input are registered as usual, with the gap recorded in the basis, and generation is still refused
+(ADR 0098).
+
+登记依据与期望依据同源：执行器经 ``freeze()`` 得到的依据等于目标态规划器经 ``expected_basis()`` 投影的依据。
 
 同一份项目覆盖衍生引用、商品（资产图 + 原图）与上一分镜图；激活模式下规划器看得到本轮已规划的
 资产图与上一分镜图。生成输入有缺口的目标照常登记，缺口记在依据里，生成仍被拒（ADR 0098）。
@@ -167,7 +175,10 @@ def _registration_basis(project_dir: Path) -> ArtifactBasis:
 
 
 def test_executor_registration_basis_equals_the_planner_expected_basis(tmp_path: Path) -> None:
-    """提交后模式：规划器按磁盘清单判定资产图与上一分镜图可用。"""
+    """Post-commit mode: the planner decides availability of sheets and the previous storyboard image by the on-disk
+    manifest.
+
+    提交后模式：规划器按磁盘清单判定资产图与上一分镜图可用。"""
 
     project_dir = _project_dir(tmp_path, target_generated=True)
     activate_artifact_target_state(project_dir, bump_schema=False)
@@ -179,7 +190,10 @@ def test_executor_registration_basis_equals_the_planner_expected_basis(tmp_path:
 
 
 def test_activation_sees_the_sheets_and_previous_storyboard_planned_in_the_same_round(tmp_path: Path) -> None:
-    """激活模式：清单尚未写入，规划器按本轮已规划的条目判定可用。"""
+    """Activation mode: the manifest is not written yet, and the planner decides availability by the entries planned in
+    this round.
+
+    激活模式：清单尚未写入，规划器按本轮已规划的条目判定可用。"""
 
     project_dir = _project_dir(tmp_path, target_generated=True)
 
@@ -197,7 +211,10 @@ def _absent(basis: ArtifactBasis | None) -> list[object]:
 
 
 def test_activation_registers_a_sheet_and_its_storyboard_despite_an_empty_description(tmp_path: Path) -> None:
-    """生成缺口只拦生成：描述为空的资产图与引用它的分镜图照常登记，缺口记在依据里。"""
+    """Generation gaps only block generation: a sheet with an empty description and the storyboard image referencing it are
+    registered as usual, with the gap recorded in the basis.
+
+    生成缺口只拦生成：描述为空的资产图与引用它的分镜图照常登记，缺口记在依据里。"""
 
     project_dir = _project_dir(tmp_path, target_generated=True)
     project = _read_json(project_dir / "project.json")
@@ -216,6 +233,7 @@ def test_activation_registers_a_sheet_and_its_storyboard_despite_an_empty_descri
     resolver = ArtifactCurrencyResolver(project_dir)
     assert resolver.compare(sheet_key, artifact_path="scenes/祠堂.png").status.value == "current"
     assert resolver.compare(TARGET_KEY, artifact_path="storyboards/scene_E1S02.png").status.value == "current"
+    # Generation is still refused, with the same refusal code.
     # 生成仍被拒，拒绝码不变。
     project = _read_json(project_dir / "project.json")
     refusal = asset_sheet_input(
@@ -316,7 +334,10 @@ def _sheet_registration_basis(project_dir: Path, key: ArtifactKey, reference_cou
 
 @pytest.mark.parametrize(("key", "reference_count"), _SHEET_TARGETS)
 def test_sheet_registration_basis_equals_the_planner_expected_basis(tmp_path: Path, key, reference_count) -> None:
-    """提交后模式：资产图四类与衍生资产图，执行器登记依据等于规划器期望依据。"""
+    """Post-commit mode: for the four sheet kinds and derivative sheets, the executor's registered basis equals the
+    planner's expected basis.
+
+    提交后模式：资产图四类与衍生资产图，执行器登记依据等于规划器期望依据。"""
 
     project_dir = _project_dir(tmp_path)
     activate_artifact_target_state(project_dir, bump_schema=False)
@@ -331,7 +352,10 @@ def test_sheet_registration_basis_equals_the_planner_expected_basis(tmp_path: Pa
 def test_activation_registers_sheets_and_derivatives_planned_after_their_owner(
     tmp_path: Path, key, reference_count
 ) -> None:
-    """激活模式：衍生经本轮已规划的本体资产图判定可用，与执行器同一依据。"""
+    """Activation mode: derivatives are judged available via the owner sheet planned in this round, with the same basis as
+    the executor.
+
+    激活模式：衍生经本轮已规划的本体资产图判定可用，与执行器同一依据。"""
 
     project_dir = _project_dir(tmp_path)
 
@@ -354,12 +378,16 @@ def test_activation_registers_a_derivative_whose_owner_sheet_lost_its_original(t
     assert _absent(resolve_current_artifact_basis(project_dir, owner)) == [
         {"code": "asset_original_missing", "type": "character", "id": "张三"}
     ]
+    # The owner sheet is registered and available, so the derivative's generation input is complete.
     # 本体资产图已登记可用，衍生的生成输入完整。
     assert _absent(resolve_current_artifact_basis(project_dir, derivative)) == []
 
 
 def test_moving_a_shot_stales_the_storyboards_whose_previous_storyboard_changed(tmp_path: Path) -> None:
-    """上一分镜图是分镜图的输入：改序后上一条变了的分镜图转为过期，没变的保持 current。"""
+    """The previous storyboard image is an input of a storyboard image: after reordering, storyboard images whose previous
+    one changed become stale, and unchanged ones stay current.
+
+    上一分镜图是分镜图的输入：改序后上一条变了的分镜图转为过期，没变的保持 current。"""
 
     project_dir = _project_dir(tmp_path / "projects", target_generated=True)
     script_path = project_dir / "scripts" / "episode_1.json"

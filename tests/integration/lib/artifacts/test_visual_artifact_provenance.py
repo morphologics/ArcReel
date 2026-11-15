@@ -241,7 +241,10 @@ def test_storyboard_text_basis_tracks_the_style_sent_to_the_request(tmp_path: Pa
 def test_storyboard_artifact_basis_is_stable_across_template_wording(
     tmp_path: Path, image_prompt: object, video_prompt: object, image_digest: str, video_digest: str
 ) -> None:
-    """正式内容摘要的固定样本不含渲染器的风格块、参考声明与 Avoid 包装。"""
+    """The fixed sample of the canonical content digest excludes the renderer's style block, reference declarations and
+    Avoid wrapper.
+
+    正式内容摘要的固定样本不含渲染器的风格块、参考声明与 Avoid 包装。"""
     start = tmp_path / "start.png"
     start.write_bytes(b"start-frame")
     image = build_storyboard_image_visual_basis(
@@ -442,7 +445,13 @@ def test_grid_composite_tracks_only_the_aspect_ratio_sent_for_the_composite(tmp_
 
 
 def _style_bound_bases(tmp_path: Path, *, style_description: str | None) -> tuple[str, str, str]:
-    """宫格联合图、切格分镜、参考视频三类依据的固定输入；``None`` 表示调用方不传描述。
+    """Fixed inputs for the three bases (grid composite image, cut-grid shots, reference video); ``None`` means the caller
+    passes no description.
+
+    The two grid bases are built the pre-v19 way that recorded asset names: the fixed samples are the existing digests
+    registered back then.
+
+    宫格联合图、切格分镜、参考视频三类依据的固定输入；``None`` 表示调用方不传描述。
 
     宫格两类依据按 v19 之前记资产名的口径构造：固定样本是那时登记的存量摘要。
     """
@@ -498,12 +507,18 @@ _EMPTY_DESCRIPTION_STYLE_BOUND_DIGESTS = (
 def test_grid_and_reference_video_bases_without_style_description_keep_fixed_digests(
     tmp_path: Path, style_description: str | None
 ) -> None:
-    """描述为空的项目，三类依据的摘要固定样本不变：存量产物不因补记描述翻过期。"""
+    """For projects with an empty description, the fixed digest samples of the three bases do not change: existing
+    artifacts do not turn stale because a description is backfilled.
+
+    描述为空的项目，三类依据的摘要固定样本不变：存量产物不因补记描述翻过期。"""
     assert _style_bound_bases(tmp_path, style_description=style_description) == _EMPTY_DESCRIPTION_STYLE_BOUND_DIGESTS
 
 
 def test_grid_and_reference_video_bases_track_style_description(tmp_path: Path) -> None:
-    """自定义风格项目的风格只由描述承载：描述改写后三类依据的目标都变化。"""
+    """In custom-style projects the style is carried only by the description: rewriting the description changes the targets
+    of all three bases.
+
+    自定义风格项目的风格只由描述承载：描述改写后三类依据的目标都变化。"""
     soft = _style_bound_bases(tmp_path / "soft", style_description="柔光水彩")
     hard = _style_bound_bases(tmp_path / "hard", style_description="硬光版画")
     padded = _style_bound_bases(tmp_path / "padded", style_description="  柔光水彩\n")
@@ -531,7 +546,10 @@ def test_grid_and_reference_video_bases_track_style_description(tmp_path: Path) 
 def test_project_basis_style_description_keeps_pre_v14_projects_on_the_undescribed_basis(
     project: dict[str, object], expected: str
 ) -> None:
-    """v13→v14 之前的迁移步沿用不记描述的口径，描述由 v13→v14 统一补记。"""
+    """Migration steps before v13->v14 keep the rule that records no description; the description is backfilled uniformly
+    by v13->v14.
+
+    v13→v14 之前的迁移步沿用不记描述的口径，描述由 v13→v14 统一补记。"""
     assert project_basis_style_description(project) == expected
 
 
@@ -840,7 +858,9 @@ def test_video_component_composition_names_absent_future_components() -> None:
 
 
 class TestTextFormArtifactCurrency:
-    """文本形态提示词照常进产物依据（ADR 0062）：改动它即让对应产物判 stale。"""
+    """Text-form prompts go into the artifact basis as usual (ADR 0062): changing one makes the matching artifact stale.
+
+    文本形态提示词照常进产物依据（ADR 0062）：改动它即让对应产物判 stale。"""
 
     def test_text_form_image_prompt_participates_in_basis(self):
         def _digest(image_prompt: object) -> str:
@@ -877,7 +897,10 @@ class TestTextFormArtifactCurrency:
 
 
 def test_storyboard_image_basis_refuses_a_pending_prompt() -> None:
-    """机械转换后 image_prompt 为 None：没有可取证的视觉输入，构建方拒绝而非以空提示词入基。"""
+    """After mechanical conversion image_prompt is None: there is no visual input to take as evidence, so the builder
+    refuses instead of entering the basis with an empty prompt.
+
+    机械转换后 image_prompt 为 None：没有可取证的视觉输入，构建方拒绝而非以空提示词入基。"""
     with pytest.raises(ValueError, match="pending"):
         build_storyboard_image_visual_basis(
             resource_id="E1S01",
@@ -890,7 +913,10 @@ def test_storyboard_image_basis_refuses_a_pending_prompt() -> None:
 
 
 def test_grid_bases_refuse_a_pending_member_prompt(tmp_path: Path) -> None:
-    """宫格成员的 image_prompt 为 None：联合图与格子的依据都拒绝，不把字面量 "None" 写进摘要。"""
+    """A grid member's image_prompt is None: both the composite image's and the cells' bases refuse, instead of writing the
+    literal "None" into the digest.
+
+    宫格成员的 image_prompt 为 None：联合图与格子的依据都拒绝，不把字面量 "None" 写进摘要。"""
     composite = tmp_path / "grid.png"
     composite.write_bytes(b"grid-v1")
     members = (
@@ -937,6 +963,8 @@ def test_storyboard_video_basis_refuses_a_pending_prompt(tmp_path: Path) -> None
         )
 
 
+#: Fixed digests of each basis kind from before gaps were recorded as absences: with complete input the basis is
+#: byte-for-byte unchanged, and registered entries do not turn stale because of the rule change.
 #: 缺口记为缺席之前各类依据的固定摘要：输入完整时依据逐字节不变，已登记条目不因口径变化翻过期。
 _COMPLETE_INPUT_DIGESTS = {
     "asset": "sha256-v1:cef57d4f7802240b4d935f5bdeaf53bb2fc9f26d38f3b64f29895d17db3f8d8f",
@@ -948,7 +976,10 @@ _COMPLETE_INPUT_DIGESTS = {
 
 
 def _complete_input_digests(tmp_path: Path, *, absent: tuple[InputGap, ...] = ()) -> dict[str, str]:
-    """固定样本是缺口记录之前登记的存量摘要；分镜图与宫格因此按 v19 之前记资产名的口径构造。"""
+    """The fixed samples are existing digests registered before gaps were recorded; storyboard images and grids are
+    therefore built the pre-v19 way that recorded asset names.
+
+    固定样本是缺口记录之前登记的存量摘要；分镜图与宫格因此按 v19 之前记资产名的口径构造。"""
     image = tmp_path / "a.png"
     end_frame = tmp_path / "b.png"
     image.write_bytes(b"image-a")
@@ -1008,19 +1039,28 @@ def _complete_input_digests(tmp_path: Path, *, absent: tuple[InputGap, ...] = ()
 
 
 def test_complete_inputs_keep_the_digests_from_before_gaps_were_recorded(tmp_path: Path) -> None:
-    """输入完整时依据不写缺席键，摘要与缺口改为记录之前的固定样本相同。"""
+    """With complete input the basis writes no absence key, and the digest equals the fixed sample from before gaps were
+    recorded.
+
+    输入完整时依据不写缺席键，摘要与缺口改为记录之前的固定样本相同。"""
     assert _complete_input_digests(tmp_path) == _COMPLETE_INPUT_DIGESTS
 
 
 def test_a_recorded_gap_changes_every_basis_digest(tmp_path: Path) -> None:
-    """同样的输入值多一处缺席记录，依据就不同：补齐缺口让按缺口登记的产物判过期。"""
+    """The same input values with one more absence record give a different basis: filling the gap makes artifacts
+    registered with the gap stale.
+
+    同样的输入值多一处缺席记录，依据就不同：补齐缺口让按缺口登记的产物判过期。"""
     gapped = _complete_input_digests(tmp_path, absent=(InputGap("sheet_missing", "prop", "铜铃"),))
     for kind, digest in gapped.items():
         assert digest != _COMPLETE_INPUT_DIGESTS[kind], kind
 
 
 def test_storyboard_image_basis_records_a_pending_prompt_only_as_a_named_gap() -> None:
-    """待补提示词的分镜图依据只在调用方点名缺口时投影，提示词记为 None、缺口进缺席记录。"""
+    """The basis of a storyboard image with a pending prompt is projected only when the caller names the gap; the prompt is
+    recorded as None and the gap goes into the absence record.
+
+    待补提示词的分镜图依据只在调用方点名缺口时投影，提示词记为 None、缺口进缺席记录。"""
     basis = build_storyboard_image_visual_basis(
         resource_id="E1S01",
         image_prompt=None,
@@ -1037,7 +1077,10 @@ def test_storyboard_image_basis_records_a_pending_prompt_only_as_a_named_gap() -
 
 
 def test_storyboard_video_basis_without_a_storyboard_records_the_gap(tmp_path: Path) -> None:
-    """分镜图不可用时视频依据只在点名缺口时投影，不取证首帧。"""
+    """When the storyboard image is unavailable, the video basis is projected only when the gap is named, and no first
+    frame is taken as evidence.
+
+    分镜图不可用时视频依据只在点名缺口时投影，不取证首帧。"""
     basis = build_storyboard_video_artifact_visual_basis(
         resource_id="E1S01",
         visual_prompt={"action": "推门"},
@@ -1061,7 +1104,10 @@ def test_storyboard_video_basis_without_a_storyboard_records_the_gap(tmp_path: P
 
 
 def _named_image_bases(tmp_path: Path, name: str, *, asset_names: bool = False, sheet: bytes = b"sheet") -> dict:
-    """引用同一张角色资产图的分镜图、宫格联合图与切格分镜；正文用 ``@[name]`` 指认它。"""
+    """A storyboard image, grid composite image and cut-grid shot that reference the same character sheet; the text refers
+    to it with ``@[name]``.
+
+    引用同一张角色资产图的分镜图、宫格联合图与切格分镜；正文用 ``@[name]`` 指认它。"""
     tmp_path.mkdir(parents=True, exist_ok=True)
     image = tmp_path / "sheet.png"
     image.write_bytes(sheet)
@@ -1113,7 +1159,10 @@ def _named_image_bases(tmp_path: Path, name: str, *, asset_names: bool = False, 
 
 
 def test_storyboard_and_grid_bases_do_not_depend_on_asset_names(tmp_path: Path) -> None:
-    """模型看到的是「图N」而不是资产名：只改名不改依据，换图仍改依据。"""
+    """The model sees "image N", not the asset name: renaming alone does not change the basis, swapping the image still
+    does.
+
+    模型看到的是「图N」而不是资产名：只改名不改依据，换图仍改依据。"""
     alice = _named_image_bases(tmp_path / "alice", "Alice")
     alicia = _named_image_bases(tmp_path / "alicia", "Alicia")
     redrawn = _named_image_bases(tmp_path / "redrawn", "Alicia", sheet=b"redrawn")
@@ -1123,13 +1172,18 @@ def test_storyboard_and_grid_bases_do_not_depend_on_asset_names(tmp_path: Path) 
         assert redrawn[kind].digest != basis.digest, kind
         assert "Alice" not in basis.normalized_bytes().decode("utf-8"), kind
     inputs = json.loads(alice["storyboard"].normalized_bytes())["inputs"]
+    # A mention that matches no reference image is sent to the model as the name, so the basis records it; the previous
+    # storyboard image's identity is not an asset name, so it is recorded too.
     # 对不上参考图的 mention 发给模型时就是名字，依据照记；上一分镜图的身份不是资产名，照记。
     assert inputs["image_prompt"]["scene"] == "图1推门，@[路人]回头"
     assert inputs["references"][1]["logical_identity"] == {"type": "storyboard", "id": "E1S00"}
 
 
 def test_dropping_asset_names_from_a_frozen_basis_matches_the_builder(tmp_path: Path) -> None:
-    """v18→v19 按版本记录冻结的记名依据改写，结果与构造器直接投影的不记名依据逐字一致。"""
+    """v18->v19 rewrites name-recording bases frozen in version records; the result matches the name-free basis the builder
+    projects directly, word for word.
+
+    v18→v19 按版本记录冻结的记名依据改写，结果与构造器直接投影的不记名依据逐字一致。"""
     named = _named_image_bases(tmp_path / "named", "Alice", asset_names=True)
     unnamed = _named_image_bases(tmp_path / "unnamed", "Alice")
 

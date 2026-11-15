@@ -1,4 +1,10 @@
-"""任务终态经 project_events 通道发布的测试。
+"""Tests for publishing task terminal states over the project_events channel.
+
+Covers two layers: the pure conversion of `build_task_terminal_change`, and whether each GenerationQueue
+terminal entry point (success / failure / cancel / batch cancel / cascade failure) publishes the event on the
+batch bus after storing it.
+
+任务终态经 project_events 通道发布的测试。
 
 覆盖两层：`build_task_terminal_change` 的纯转换，以及 GenerationQueue 各终态入口
 （成功 / 失败 / 取消 / 批量取消 / 级联失败）落库后是否把事件发上 batch 总线。
@@ -20,7 +26,9 @@ async def queue(db_factory):
 
 @pytest.fixture
 def captured_batches():
-    """收集本测试期间发上 batch 总线的 (project_name, changes)。"""
+    """Collect the (project_name, changes) published on the batch bus during this test.
+
+    收集本测试期间发上 batch 总线的 (project_name, changes)。"""
     batches: list[tuple[str, list[dict]]] = []
 
     def listener(project_name, _source, changes):
@@ -32,7 +40,13 @@ def captured_batches():
 
 
 def _commit_failing_factory(factory):
-    """代理真实 session factory，只把 ``commit`` 换成抛错，其余读写照常落到真实库。
+    """Proxy the real session factory, replacing only ``commit`` with one that raises; other reads and writes go to
+    the real DB as usual.
+
+    The fault thus lands exactly in the window "terminal state collected, transaction not committed"; on session exit
+    the real transaction rolls back as usual.
+
+    代理真实 session factory，只把 ``commit`` 换成抛错，其余读写照常落到真实库。
 
     故障因此正好卡在「终态已收集、事务未提交」这一窗口；会话退出时真实事务照常回滚。
     """
@@ -56,7 +70,9 @@ def _commit_failing_factory(factory):
 
 
 def _task_changes(batches):
-    """只取任务终态变更，忽略同期其它项目变更。"""
+    """Take only task terminal changes, ignoring other project changes in the same period.
+
+    只取任务终态变更，忽略同期其它项目变更。"""
     return [c for _, changes in batches for c in changes if c["entity_type"] == "task"]
 
 
@@ -74,7 +90,9 @@ class TestBuildTaskTerminalChange:
         assert change["task_type"] == "video"
 
     def test_refresh_signal_not_user_facing_notification(self):
-        """终态变更只用于触发刷新：不弹通知、不聚焦跳转。"""
+        """Terminal changes only trigger a refresh: no notification popup, no focus jump.
+
+        终态变更只用于触发刷新：不弹通知、不聚焦跳转。"""
         change = build_task_terminal_change({"task_id": "t1", "status": "succeeded"})
         assert change is not None
         assert change["important"] is False
@@ -159,6 +177,7 @@ class TestQueueEmitsTerminalEvents:
 
         await queue.cancel_all_queued("demo")
 
+        # Three terminal states are merged into one batch, avoiding one snapshot rebuild per task.
         # 三条终态合并进同一批，避免每任务一次快照重建。
         assert len(captured_batches) == 1
         changes = _task_changes(captured_batches)
@@ -166,7 +185,9 @@ class TestQueueEmitsTerminalEvents:
         assert {c["action"] for c in changes} == {"task_cancelled"}
 
     async def test_non_terminal_transitions_emit_nothing(self, queue, captured_batches):
-        """入队与领取只是中间态，不该触发终态事件。"""
+        """Enqueueing and claiming are intermediate states and must not trigger terminal events.
+
+        入队与领取只是中间态，不该触发终态事件。"""
         await queue.enqueue_task(
             project_name="demo",
             task_type="video",
@@ -181,7 +202,17 @@ class TestQueueEmitsTerminalEvents:
         assert _task_changes(captured_batches) == []
 
     async def test_no_publish_when_commit_fails(self, queue, db_factory, captured_batches):
-        """终态已收集但会话提交失败时不得发布——没有终态落库就没有终态可通告。
+        """Must not publish when the terminal state was collected but the session commit failed -- no stored terminal state
+        means no terminal state to announce.
+
+        That is exactly why `_task_repo` publishes after the `async with`; if publishing moved inside the repo or before
+        the commit, the frontend would receive a terminal event whose state was never stored.
+
+        The fault hits the commit of the session collaborator, the same shape as a real commit failure in production:
+        terminal collection happens as usual, then the transaction rolls back, so storing and announcing must both be
+        absent.
+
+        终态已收集但会话提交失败时不得发布——没有终态落库就没有终态可通告。
 
         `_task_repo` 把发布放在 `async with` 之后正是为此；若发布挪进 repo 内部或提到
         提交之前，前端会收到一条对应状态并未落库的终态事件。
@@ -200,7 +231,10 @@ class TestQueueEmitsTerminalEvents:
         assert (await queue.get_task(task_id))["status"] == "running"
 
     async def test_cascade_failure_emits_event_for_dependent(self, queue, captured_batches):
-        """级联失败的下游任务同样进事件——终态收口在 _record_terminal_event，一处覆盖全路径。"""
+        """A cascade-failed downstream task also produces an event -- terminal states converge in _record_terminal_event,
+        one place covering all paths.
+
+        级联失败的下游任务同样进事件——终态收口在 _record_terminal_event，一处覆盖全路径。"""
         parent = await queue.enqueue_task(
             project_name="demo",
             task_type="storyboard",

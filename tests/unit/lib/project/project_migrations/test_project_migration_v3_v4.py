@@ -1,4 +1,7 @@
-"""v3→v4 迁移：旧任务级文本 backend 键 → 档位键；版本守卫、幂等、新旧值状态组合。"""
+"""v3->v4 migration: old task-level text backend keys -> tier keys; version guard, idempotency, combinations
+of old and new value states.
+
+v3→v4 迁移：旧任务级文本 backend 键 → 档位键；版本守卫、幂等、新旧值状态组合。"""
 
 import json
 from pathlib import Path
@@ -32,7 +35,7 @@ class TestMigrateProjectDict:
             ("gemini-aistudio/a", None, "gemini-aistudio/a"),
             (None, "gemini-aistudio/b", "gemini-aistudio/b"),
             ("gemini-aistudio/a", "gemini-aistudio/a", "gemini-aistudio/a"),
-            # 两者不同：取 style 的值（保 vision）
+            # They differ: take the style value (keeps vision) / 两者不同：取 style 的值（保 vision）
             ("gemini-aistudio/a", "gemini-aistudio/b", "gemini-aistudio/b"),
         ],
     )
@@ -65,7 +68,10 @@ class TestMigrateProjectDict:
         assert "text_backend_script" not in after
 
     def test_dirty_values_treated_as_unset(self):
-        """null / 空串 / 非字符串脏值不产出档位键，但旧键仍被清除。"""
+        """null / empty string / non-string dirty values produce no tier key, but the old key is still
+        removed.
+
+        null / 空串 / 非字符串脏值不产出档位键，但旧键仍被清除。"""
         after = migrate_project_dict(
             {"text_backend_script": None, "text_backend_overview": "  ", "text_backend_style": 42}
         )
@@ -101,7 +107,7 @@ class TestMigrateV3ToV4File:
         d = _write(tmp_path, {"schema_version": 4, "text_backend_script": "gemini-aistudio/pro"})
         migrate_v3_to_v4(d)
         data = _load(d)
-        # 已是 v4：不动（旧键残留由该版本自身负责，不重复迁移）
+        # Already v4: untouched (leftover old keys are that version's own responsibility, not migrated again) / 已是 v4：不动（旧键残留由该版本自身负责，不重复迁移）
         assert data["text_backend_script"] == "gemini-aistudio/pro"
 
     def test_missing_project_json_is_noop(self, tmp_path: Path):
@@ -111,7 +117,10 @@ class TestMigrateV3ToV4File:
         assert not (d / "project.json").exists()
 
     def test_string_schema_version_is_normalized(self, tmp_path: Path):
-        """历史 project.json 可能存字符串版本号，守卫做 int 归一化而非抛 TypeError。"""
+        """Historical project.json may store the version as a string; the guard normalizes to int instead of
+        raising TypeError.
+
+        历史 project.json 可能存字符串版本号，守卫做 int 归一化而非抛 TypeError。"""
         d = _write(tmp_path, {"schema_version": "3", "text_backend_script": "gemini-aistudio/pro"})
         migrate_v3_to_v4(d)
         data = _load(d)

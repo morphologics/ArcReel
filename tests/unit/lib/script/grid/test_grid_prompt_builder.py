@@ -55,7 +55,10 @@ class TestExtractImageDesc:
         assert result == ""
 
     def test_pending_image_prompt_refused(self):
-        """机械转换后 image_prompt 为 None：不能渲染成字面量 "None"，投影拒绝。"""
+        """image_prompt is None after the mechanical conversion: it must not render as the literal "None",
+        so the projection refuses.
+
+        机械转换后 image_prompt 为 None：不能渲染成字面量 "None"，投影拒绝。"""
         with pytest.raises(ValueError, match="pending"):
             project_grid_image_prompt(None)
         with pytest.raises(ValueError, match="pending"):
@@ -233,7 +236,10 @@ class TestBuildGridPrompt:
             assert dropped not in prompt
 
     def test_avoid_line_still_closes_the_prompt_when_a_cell_repeats_it(self):
-        """宫格没有纯文本回贴形态，模版不开启判重：画格正文里的同形行不吞掉收尾的 Avoid 行。"""
+        """Grids have no plain-text paste-back form, so the template does not enable dedup: an identical
+        line in a cell's body does not swallow the closing Avoid line.
+
+        宫格没有纯文本回贴形态，模版不开启判重：画格正文里的同形行不吞掉收尾的 Avoid 行。"""
         avoid = "Avoid: 水印、多余文字、Logo、边框、画格间隙或留白、合并 / 缺失 / 错位的画格、连续全景（非分格）"
         scenes = [{"scene_id": "S1", "image_prompt": f"主体描述\n{avoid}", "video_prompt": "a1"}]
 
@@ -322,13 +328,15 @@ class TestBuildGridPrompt:
         total = side * side
         assert f"{side}×{side} 宫格布局" in prompt
         assert f"恰好 {side} 行 {side} 列，共 {total} 个画格" in prompt
-        # 方形切分下单格比例等于整图比例
+        # With a square split the single-cell ratio equals the whole-image ratio / 方形切分下单格比例等于整图比例
         assert "每个画格比例：16:9" in prompt
         for idx in range(total):
             assert f"格{idx}（row{idx // side + 1} col{idx % side + 1}）" in prompt
         assert prompt.count("空占位") == total - n_scenes
 
     def test_more_scenes_than_cells_fails_loud(self):
+        # Overflowing scenes have no matching cell in the composite; callers should chunk by max_cell_count
+        # first
         # 超员场景在成图中没有对应画格，调用方应先按 max_cell_count 切块
         scenes = [self._scene(f"S{i}", f"s{i}", f"a{i}") for i in range(1, 13)]
         with pytest.raises(ValueError, match="切块"):

@@ -1,4 +1,6 @@
-"""市场源登记与刷新：官方源 seed、添加即抓取、五态转换与失败保留快照、ETag 与绕缓存、并发去重。"""
+"""Market source registration and refresh: official source seed, fetch on add, five-state transitions with snapshot kept on failure, ETag and cache bypass, concurrent dedup.
+
+市场源登记与刷新：官方源 seed、添加即抓取、五态转换与失败保留快照、ETag 与绕缓存、并发去重。"""
 
 from __future__ import annotations
 
@@ -92,7 +94,7 @@ async def _add_team_source(service: MarketSourceService) -> MarketSource:
 
 
 # ---------------------------------------------------------------------------
-# 官方源 seed
+# Official source seed / 官方源 seed
 # ---------------------------------------------------------------------------
 
 
@@ -176,7 +178,7 @@ async def test_seed_discards_snapshot_when_the_official_source_moves(
 
 
 # ---------------------------------------------------------------------------
-# 添加
+# Add / 添加
 # ---------------------------------------------------------------------------
 
 
@@ -315,7 +317,7 @@ async def test_add_rejects_malformed_address(service: MarketSourceService) -> No
 
 
 # ---------------------------------------------------------------------------
-# 刷新
+# Refresh / 刷新
 # ---------------------------------------------------------------------------
 
 

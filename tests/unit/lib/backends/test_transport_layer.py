@@ -1,4 +1,7 @@
-"""注入的 transport 层叠在调用通道原有的 httpx 客户端之上：先改写请求，再由原客户端（含出站目的地校验）发出。"""
+"""The injected transport layer stacks on top of the call channel's existing httpx client: it rewrites the request first,
+then the original client (including the outbound destination check) sends it.
+
+注入的 transport 层叠在调用通道原有的 httpx 客户端之上：先改写请求，再由原客户端（含出站目的地校验）发出。"""
 
 from __future__ import annotations
 

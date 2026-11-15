@@ -1,4 +1,7 @@
-"""select_video_version 的 handler 行为：经声明入口调用，断言 ``ToolOutcome`` 与落盘的 current。"""
+"""Handler behavior of select_video_version: called through the declared entry, asserting ``ToolOutcome`` and the
+persisted current.
+
+select_video_version 的 handler 行为：经声明入口调用，断言 ``ToolOutcome`` 与落盘的 current。"""
 
 from __future__ import annotations
 

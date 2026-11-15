@@ -1,4 +1,6 @@
-"""视频调用通道按用量契约上报的计量（docs/adr/0100）：计量项、选择维度与方舟视频 token 估算。"""
+"""Metering reported by video call channels under the usage contract (docs/adr/0100): metered items, selection dimensions and Ark video token estimates.
+
+视频调用通道按用量契约上报的计量（docs/adr/0100）：计量项、选择维度与方舟视频 token 估算。"""
 
 from __future__ import annotations
 
@@ -66,7 +68,7 @@ class TestVideoUsage:
         )
 
         assert usage.quantities["output_seconds"] == billed
-        # 时长档按发出的请求取，不随回报的秒数变
+        # The duration tier follows the request sent, not the seconds reported back. / 时长档按发出的请求取，不随回报的秒数变
         assert usage.dimensions["duration"] == 8
 
     def test_settlement_takes_reported_audio_flag(self) -> None:
@@ -84,9 +86,9 @@ class TestArkVideoTokens:
             ("doubao-seedance-2-0-260128", "720p", "16:9", 5, 5 * 1280 * 720 * 24 / 1024),
             ("doubao-seedance-2-0-260128", "1080p", "9:16", 8, 8 * 1080 * 1920 * 24 / 1024),
             ("doubao-seedance-2-0-260128", "4k", "16:9", 5, 5 * 3840 * 2160 * 24 / 1024),
-            # 不发送分辨率时方舟按 720p 生成
+            # Without a resolution sent, Ark generates at 720p. / 不发送分辨率时方舟按 720p 生成
             ("doubao-seedance-2-0-fast-260128", None, "1:1", 4, 4 * 960 * 960 * 24 / 1024),
-            # 2.5 的 480p 横竖屏像素与 2.0 不同
+            # 2.5's 480p landscape/portrait pixels differ from 2.0's. / 2.5 的 480p 横竖屏像素与 2.0 不同
             ("doubao-seedance-2-5-260628", "480p", "16:9", 5, 5 * 854 * 480 * 24 / 1024),
             ("doubao-seedance-2-5-260628", "480p", "9:16", 5, 5 * 480 * 854 * 24 / 1024),
         ],
@@ -101,11 +103,11 @@ class TestArkVideoTokens:
     @pytest.mark.parametrize(
         ("model", "resolution", "ratio"),
         [
-            # 宽高比交给上游自适应，像素数不可知
+            # Aspect ratio left to upstream to adapt; the pixel count is unknowable. / 宽高比交给上游自适应，像素数不可知
             ("doubao-seedance-2-0-260128", "720p", "adaptive"),
-            # 2.5 没有 4k 档
+            # 2.5 has no 4k tier. / 2.5 没有 4k 档
             ("doubao-seedance-2-5-260628", "4k", "16:9"),
-            # 不在像素表里的型号
+            # A model not in the pixel table. / 不在像素表里的型号
             ("doubao-seedance-1-0-pro-250528", "720p", "16:9"),
         ],
     )
@@ -150,14 +152,16 @@ class TestArkVideoTokens:
 
 
 class TestSeedanceSelectableResolutions:
-    """方舟《创建视频生成任务 API》：Seedance 2.0 可选 480p/720p/1080p/4k，2.5 可选 480p/720p/1080p。"""
+    """Ark "Create video generation task API": Seedance 2.0 offers 480p/720p/1080p/4k, 2.5 offers 480p/720p/1080p.
+
+    方舟《创建视频生成任务 API》：Seedance 2.0 可选 480p/720p/1080p/4k，2.5 可选 480p/720p/1080p。"""
 
     @pytest.mark.parametrize(
         ("provider", "model", "resolutions"),
         [
             ("ark", "doubao-seedance-2-0-260128", ["480p", "720p", "1080p", "4k"]),
             ("ark", "doubao-seedance-2-5-260628", ["480p", "720p", "1080p"]),
-            # agent plan 共用同一条目，套餐未纳入 2.5
+            # agent plan shares the same entry; the plan does not include 2.5. / agent plan 共用同一条目，套餐未纳入 2.5
             ("ark-agent-plan", "doubao-seedance-2.0", ["480p", "720p", "1080p", "4k"]),
         ],
     )
@@ -195,7 +199,9 @@ class TestKlingMetering:
         assert usage.dimensions["resolution"] == dimension
 
     def test_estimate_follows_user_relaxed_audio_track(self) -> None:
-        """用户添加的型号把音轨放宽为可控：预估与执行同一份叠加覆盖后的能力，按有声计。"""
+        """A user-added model relaxes the audio track to controllable: estimate and execution use the same capabilities with overrides applied, billed as with audio.
+
+        用户添加的型号把音轨放宽为可控：预估与执行同一份叠加覆盖后的能力，按有声计。"""
         catalog.install_user_added_models(
             [
                 catalog.UserAddedModel(

@@ -1,4 +1,7 @@
-"""视频时长向上取档规则（容量语义）与两条路线共用的时长投影。"""
+"""Round-up rule for video duration tiers (capacity semantics) and the duration projection shared by both
+routes.
+
+视频时长向上取档规则（容量语义）与两条路线共用的时长投影。"""
 
 import pytest
 
@@ -61,7 +64,10 @@ def test_single_slot_capability():
 
 
 def test_non_integer_total_rounds_up_to_fitting_slot():
-    """非整数秒总时长按容量语义取能装下它的档位，不做截断式归一化。"""
+    """A non-integer total duration takes the tier that can hold it under capacity semantics, with no
+    truncating normalization.
+
+    非整数秒总时长按容量语义取能装下它的档位，不做截断式归一化。"""
     slot = resolve_duration_slot(4.5, [4, 8, 12])
     assert slot.seconds == 8
     assert slot.adjustment == "up"

@@ -1,4 +1,6 @@
-"""BGM 轨的摆放：截到时间线末尾、截断处淡出与淡入淡出收进片段时长。"""
+"""BGM track placement: trimmed to the end of the timeline, a fade-out at the cut, and fade-in/out fitted within the clip duration.
+
+BGM 轨的摆放：截到时间线末尾、截断处淡出与淡入淡出收进片段时长。"""
 
 from __future__ import annotations
 

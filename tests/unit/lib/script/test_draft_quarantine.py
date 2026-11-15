@@ -1,4 +1,13 @@
-"""草稿信封与违约收集的单元测试。
+"""Unit tests for the draft envelope and violation collection.
+
+This covers the foundation of the "artifacts are not discarded" mechanism: envelope read/write round
+trips, the degradation rule for bad JSON, and collecting and rendering reports for multiple violations.
+Tests of the upper loop (split / promotion / gate blocking) are in
+``tests/integration/server/agent_toolset/test_draft_tools.py``,
+``tests/integration/lib/script/test_script_generator_reference_branch.py`` and
+``tests/integration/server/services/project/test_script_review.py``.
+
+草稿信封与违约收集的单元测试。
 
 覆盖的是「产物不丢弃」这条机制的底座：信封读写往返、坏 JSON 的降级口径、多条违约的收集与
 报告渲染。上层闭环（拆分 / 晋升 / gate 阻塞）的测试在 ``tests/integration/server/
@@ -72,7 +81,10 @@ class TestEnvelope:
         assert draft.meta == {"source": "source/episode_3.txt"}
 
     def test_write_creates_missing_drafts_dir(self, tmp_path: Path):
-        """该集从未产出过 script_plan 时目录还不存在——首次拆分就违约是常态，不能因此写不下去。"""
+        """When the episode has never produced a script_plan the directory does not exist yet; violating on
+        the very first split is normal and must not make the write fail.
+
+        该集从未产出过 script_plan 时目录还不存在——首次拆分就违约是常态，不能因此写不下去。"""
         assert not (tmp_path / "drafts").exists()
         write_quarantine(
             tmp_path, 1, QUARANTINE_KIND_PROMPT_AUTHORING, content={"units": []}, violations=[_violation()]
@@ -87,7 +99,11 @@ class TestEnvelope:
         )
 
     def test_broken_json_reads_as_none_but_still_counts_as_present(self, tmp_path: Path):
-        """Agent 手改草稿改坏 JSON 是可预期的中间态：读不出内容，但不能因此被当成「无草稿」
+        """An Agent hand-editing a draft into broken JSON is an expected intermediate state: the content
+        cannot be read, but that must not make it count as "no draft" and let the gate and
+        prompt_authoring through.
+
+        Agent 手改草稿改坏 JSON 是可预期的中间态：读不出内容，但不能因此被当成「无草稿」
         而放行 gate 与 prompt_authoring。"""
         path = quarantine_path(tmp_path, 1, QUARANTINE_KIND_SCRIPT_PLAN)
         path.parent.mkdir(parents=True)
@@ -103,7 +119,10 @@ class TestEnvelope:
         assert read_quarantine(tmp_path, 1, QUARANTINE_KIND_SCRIPT_PLAN) is None
 
     def test_envelope_with_non_numeric_episode_reads_as_none(self, tmp_path: Path):
-        """episode 被手改成非数字与 content 形状坏同口径：返回 None 而非抛出，exists 仍为真。"""
+        """An episode hand-edited into a non-number follows the same rule as a bad content shape: return
+        None instead of raising, and exists is still true.
+
+        episode 被手改成非数字与 content 形状坏同口径：返回 None 而非抛出，exists 仍为真。"""
         path = quarantine_path(tmp_path, 1, QUARANTINE_KIND_SCRIPT_PLAN)
         path.parent.mkdir(parents=True)
         path.write_text(
@@ -126,7 +145,14 @@ class TestEnvelope:
         ids=["kind_mismatch", "episode_mismatch", "kind_missing", "episode_missing"],
     )
     def test_envelope_identity_must_match_requested_draft(self, tmp_path: Path, envelope: dict):
-        """kind / episode 对不上或缺失按形状坏处理，不退回请求值。
+        """A kind / episode that does not match or is missing is treated as a bad shape, not falling back to
+        the requested value.
+
+        Not checking would amount to parsing these two fields and then throwing them away: an envelope
+        copied from another episode would pass the source anchor check with its own meta.source, then be
+        rebuilt by this episode's unit_ids and overwrite this episode's final script_plan.
+
+        kind / episode 对不上或缺失按形状坏处理，不退回请求值。
 
         不校验就等于把这两个字段解析出来又丢掉：一份从别集拷过来的信封会带着它自己的
         meta.source 过原文锚校验，再按本集的 unit_id 重建、覆盖本集的正式 script_plan。
@@ -145,10 +171,15 @@ class TestEnvelope:
 
 
 class TestSchemaVersion:
-    """信封的版本位：写侧固定盖章、读侧缺失即 v1，且不改变任何现有键的语义。"""
+    """The envelope's version bit: the write side always stamps it, the read side treats a missing one as
+    v1, and it changes the semantics of no existing key.
+
+    信封的版本位：写侧固定盖章、读侧缺失即 v1，且不改变任何现有键的语义。"""
 
     def _envelope_with_meta(self, tmp_path: Path, meta: dict) -> Path:
-        """按给定的 meta 原值写一份草稿信封，绕开写侧的盖章。"""
+        """Write a draft envelope with the given raw meta, bypassing the write side's stamping.
+
+        按给定的 meta 原值写一份草稿信封，绕开写侧的盖章。"""
         path = quarantine_path(tmp_path, 1, QUARANTINE_KIND_SCRIPT_PLAN)
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(
@@ -180,7 +211,10 @@ class TestSchemaVersion:
         assert envelope["meta"]["source"] == "source/episode_1.txt"
 
     def test_write_stamps_current_version_over_a_stale_one_carried_in_meta(self, tmp_path: Path):
-        """从读回的草稿改一改再写回时，写出去的这份就是本代码这一版；沿用读到的旧值等于给旧版本贴新语义。"""
+        """When a draft that was read back is edited and written again, what is written is this version of
+        the code; keeping the old value read would label an old version with new semantics.
+
+        从读回的草稿改一改再写回时，写出去的这份就是本代码这一版；沿用读到的旧值等于给旧版本贴新语义。"""
         path = write_quarantine(
             tmp_path,
             1,
@@ -192,7 +226,10 @@ class TestSchemaVersion:
         assert json.loads(path.read_text(encoding="utf-8"))["meta"]["schema_version"] == QUARANTINE_SCHEMA_VERSION
 
     def test_roundtrip_exposes_version_as_field_not_as_meta_key(self, tmp_path: Path):
-        """消费方读解析结果，不去 meta 里摸裸键——版本位不留在 meta 上，meta 只剩重判上下文。"""
+        """Consumers read the parsed result rather than poking at a bare key in meta; the version bit does
+        not stay in meta, which keeps only the recheck context.
+
+        消费方读解析结果，不去 meta 里摸裸键——版本位不留在 meta 上，meta 只剩重判上下文。"""
         write_quarantine(
             tmp_path,
             1,
@@ -207,7 +244,10 @@ class TestSchemaVersion:
         assert draft.meta == {"source": "source/episode_1.txt"}
 
     def test_legacy_envelope_without_version_reads_as_v1_unchanged(self, tmp_path: Path):
-        """不带版本位的信封解析为 v1，其余字段照常读出：它与盖过章的信封走同一条读路。"""
+        """An envelope without a version bit parses as v1 and its other fields read as usual: it takes the
+        same read path as stamped envelopes.
+
+        不带版本位的信封解析为 v1，其余字段照常读出：它与盖过章的信封走同一条读路。"""
         self._envelope_with_meta(tmp_path, {"source": "source/episode_1.txt"})
         draft = read_quarantine(tmp_path, 1, QUARANTINE_KIND_SCRIPT_PLAN)
         assert draft is not None
@@ -217,7 +257,10 @@ class TestSchemaVersion:
         assert draft.violations == []
 
     def test_version_bit_does_not_shift_the_optimistic_concurrency_token(self, tmp_path: Path):
-        """同一份内容盖章前后 revision 相同：版本位若进入令牌，持有未盖章草稿 revision 的 Agent
+        """The same content has the same revision before and after stamping: if the version bit entered the
+        token, an Agent holding the revision of an unstamped draft would get revision_conflict.
+
+        同一份内容盖章前后 revision 相同：版本位若进入令牌，持有未盖章草稿 revision 的 Agent
         会被判 revision_conflict。"""
         self._envelope_with_meta(tmp_path, {"source": "source/episode_1.txt"})
         legacy = read_quarantine(tmp_path, 1, QUARANTINE_KIND_SCRIPT_PLAN)
@@ -240,7 +283,11 @@ class TestSchemaVersion:
         ids=["str", "float", "bool", "null", "list", "dict", "zero", "negative"],
     )
     def test_unusable_version_reads_as_v1(self, tmp_path: Path, raw: object):
-        """版本位不可信时唯一确定的事实是「它不是本代码写出来的」，而只有 v1 一种语义：
+        """When the version bit is untrustworthy, the only certain fact is "it was not written by this
+        code", and only the v1 semantics exist: refusing to read for that would turn a draft the Agent
+        can still fix and promote into "no draft".
+
+        版本位不可信时唯一确定的事实是「它不是本代码写出来的」，而只有 v1 一种语义：
         为此拒读会把一份仍能被 Agent 改好再晋升的草稿变成「无草稿」。"""
         self._envelope_with_meta(tmp_path, {"source": "source/episode_1.txt", "schema_version": raw})
         draft = read_quarantine(tmp_path, 1, QUARANTINE_KIND_SCRIPT_PLAN)
@@ -249,7 +296,10 @@ class TestSchemaVersion:
         assert resolve_schema_version({"schema_version": raw}) == 1
 
     def test_future_version_is_returned_as_is_and_still_readable(self, tmp_path: Path):
-        """未来版本原值返回、不夹取也不拒读：本模块不做迁移框架，夹取会把新版草稿伪装成当前版本。"""
+        """A future version is returned as-is, neither clamped nor refused: this module is not a migration
+        framework, and clamping would disguise a newer draft as the current version.
+
+        未来版本原值返回、不夹取也不拒读：本模块不做迁移框架，夹取会把新版草稿伪装成当前版本。"""
         future = QUARANTINE_SCHEMA_VERSION + 7
         self._envelope_with_meta(tmp_path, {"source": "source/episode_1.txt", "schema_version": future})
         draft = read_quarantine(tmp_path, 1, QUARANTINE_KIND_SCRIPT_PLAN)
@@ -258,7 +308,10 @@ class TestSchemaVersion:
         assert draft.content == {"units": [{"text": "镜头1：门开了"}]}
 
     def test_missing_meta_object_reads_as_v1_with_empty_context(self, tmp_path: Path):
-        """meta 整个缺失（或被改成非对象）与版本位缺失同口径，不抛错。"""
+        """A completely missing meta (or one changed into a non-object) follows the same rule as a missing
+        version bit and does not raise.
+
+        meta 整个缺失（或被改成非对象）与版本位缺失同口径，不抛错。"""
         path = quarantine_path(tmp_path, 1, QUARANTINE_KIND_SCRIPT_PLAN)
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(
@@ -273,7 +326,10 @@ class TestSchemaVersion:
 
 class TestReport:
     def test_report_names_draft_field_and_promote_tool(self, tmp_path: Path):
-        """处置指引要写「改哪个文件的哪个字段、改完调什么」——Agent 不知道产物还在盘上就会重抽。"""
+        """The handling guide must say "which field of which file to change, and what to call afterwards";
+        an Agent that does not know the artifact is still on disk will regenerate it.
+
+        处置指引要写「改哪个文件的哪个字段、改完调什么」——Agent 不知道产物还在盘上就会重抽。"""
         path = quarantine_path(tmp_path, 2, QUARANTINE_KIND_SCRIPT_PLAN)
         text = render_report(path, QUARANTINE_KIND_SCRIPT_PLAN, [_violation()], episode=2)
         assert str(path) in text
@@ -288,7 +344,11 @@ class TestReport:
         assert text.splitlines()[1].startswith("2. [too_many_shots] ")
 
     def test_drama_script_plan_report_points_at_scene_fields(self, tmp_path: Path):
-        """drama 草稿改的是分镜内容表，不是参考生视频的 units——指引里报错字段路径写错，
+        """A drama draft edits the shot content table, not reference-to-video units; if the error field path
+        in the guide were wrong, the Agent would edit a field that does not exist and promote again,
+        wasting a round.
+
+        drama 草稿改的是分镜内容表，不是参考生视频的 units——指引里报错字段路径写错，
         Agent 会照着改一个不存在的字段再晋升，白跑一轮。"""
         path = quarantine_path(tmp_path, 3, QUARANTINE_KIND_DRAMA_SCRIPT_PLAN)
         text = render_report(path, QUARANTINE_KIND_DRAMA_SCRIPT_PLAN, [_violation()], episode=3)
@@ -299,7 +359,10 @@ class TestReport:
         assert 'promote_draft({"episode_id": 3, "doc_type": "drama_script_plan", "base_revision":' in text
 
     def test_narration_script_plan_report_points_at_segment_fields(self, tmp_path: Path):
-        """narration 草稿改的是分镜表：指引里的字段路径写错，Agent 会照着改一个不存在的字段
+        """A narration draft edits the shot table: if the field path in the guide were wrong, the Agent
+        would edit a field that does not exist and promote again, wasting a round.
+
+        narration 草稿改的是分镜表：指引里的字段路径写错，Agent 会照着改一个不存在的字段
         再晋升，白跑一轮。"""
         path = quarantine_path(tmp_path, 4, QUARANTINE_KIND_NARRATION_SCRIPT_PLAN)
         text = render_report(path, QUARANTINE_KIND_NARRATION_SCRIPT_PLAN, [_violation()], episode=4)
@@ -311,7 +374,11 @@ class TestReport:
         assert 'promote_draft({"episode_id": 4, "doc_type": "narration_script_plan", "base_revision":' in text
 
     def test_each_script_plan_variant_has_its_own_draft_file(self, tmp_path: Path):
-        """三条路线的 script_plan 草稿同目录并存而不互相覆盖：共用一个文件名会让换过路线的项目上
+        """The script_plan drafts of the three routes coexist in the same directory without overwriting each
+        other: sharing one file name would make a draft left over on a project that switched routes be
+        read in as a pending item of this route.
+
+        三条路线的 script_plan 草稿同目录并存而不互相覆盖：共用一个文件名会让换过路线的项目上
         残留的草稿被当成本路线的待处置件读进来。"""
         names = {
             quarantine_path(tmp_path, 1, kind).name
@@ -324,7 +391,10 @@ class TestReport:
         assert len(names) == 3
 
     def test_prompt_authoring_report_only_points_at_text(self, tmp_path: Path):
-        """prompt_authoring 的 unit 只有正文可改：时长与原文锚是 script_plan 已确认的内容契约，不在这一层修。"""
+        """A prompt_authoring unit only has its body text to edit: duration and source anchor are the
+        content contract script_plan already confirmed and are not fixed at this layer.
+
+        prompt_authoring 的 unit 只有正文可改：时长与原文锚是 script_plan 已确认的内容契约，不在这一层修。"""
         text = render_report(tmp_path / "d.json", QUARANTINE_KIND_PROMPT_AUTHORING, [_violation()], episode=1)
         assert "content.units[i].text" in text
         assert "source_text" not in text
@@ -347,7 +417,10 @@ class TestCollectViolations:
         assert [v.code for v in found] == ["a", "b"]
 
     def test_non_violation_errors_are_not_swallowed(self):
-        """解析器内部错误 / 脏数据引发的类型错误照常上抛，不被伪装成一条内容违约。"""
+        """Internal parser errors / type errors caused by dirty data are raised as usual, not disguised as a
+        content violation.
+
+        解析器内部错误 / 脏数据引发的类型错误照常上抛，不被伪装成一条内容违约。"""
 
         def boom():
             raise TypeError("脏数据")
@@ -360,6 +433,8 @@ class TestCollectViolations:
         assert [v.code for v in violation_items(aggregate)] == ["a", "b"]
         assert "[a]" in str(aggregate)
         assert "[b]" in str(aggregate)
+        # The aggregate is still a DraftViolation: callers need not fork two handling paths for "one" versus
+        # "many"
         # 聚合体仍是 DraftViolation：调用方不必在「一条」与「多条」之间分叉出两套处置路径
         assert isinstance(aggregate, DraftViolation)
 
@@ -369,7 +444,10 @@ class TestCollectViolations:
 
 
 class TestProjectActivity:
-    """草稿的写入与清除推进项目的最近活动时间：草稿 JSON 的修改时间不计入活动。"""
+    """Writing and clearing drafts advances the project's latest activity time; the modification time of
+    draft JSON does not count as activity.
+
+    草稿的写入与清除推进项目的最近活动时间：草稿 JSON 的修改时间不计入活动。"""
 
     STALE = datetime(2026, 3, 1, 8, 0, tzinfo=UTC)
 

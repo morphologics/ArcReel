@@ -1,4 +1,7 @@
-"""Alembic 迁移：能力覆盖扩到两类维度时，已有覆盖按维度原样保留，ComfyUI 端点上的清除。"""
+"""Alembic migration: when capability overrides expand to two kinds of dimensions, existing overrides are kept per
+dimension as-is, and those on ComfyUI endpoints are cleared.
+
+Alembic 迁移：能力覆盖扩到两类维度时，已有覆盖按维度原样保留，ComfyUI 端点上的清除。"""
 
 from __future__ import annotations
 
@@ -71,14 +74,19 @@ def test_existing_overrides_kept_by_dimension_and_cleared_on_comfyui(alembic_cfg
             _insert_provider(conn, 2, "comfyui")
             _insert_endpoint(conn, 7, "comfyui")
             _insert_endpoint(conn, 8, "declarative")
+            # Video overrides on ordinary providers: each key is one channel-fact dimension, kept as-is
             # 普通供应商上的视频覆盖：每个键就是一个通道事实维度，原样保留
             _insert_model(conn, 1, 1, "openai-video", channel_overrides)
+            # Overrides on declarative custom endpoints are kept too
             # 声明式自定义端点上的覆盖同样保留
             _insert_model(conn, 2, 1, "ce-8", {"max_reference_images": 3})
+            # Overrides on ComfyUI endpoints (recognized by endpoint kind) are cleared
             # ComfyUI 端点（按端点种类认）上的覆盖清除
             _insert_model(conn, 3, 1, "ce-7", {"last_frame": True})
+            # Overrides under ComfyUI-protocol providers are cleared
             # ComfyUI 协议供应商下的覆盖清除
             _insert_model(conn, 4, 2, "ce-7", {"max_reference_images": 1})
+            # Rows without overrides are unaffected
             # 没有覆盖的行不受影响
             _insert_model(conn, 5, 1, "openai-video", None)
 

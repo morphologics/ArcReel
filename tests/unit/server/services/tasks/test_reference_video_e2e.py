@@ -1,4 +1,15 @@
-"""参考生视频完整端到端集成测试。
+"""Full end-to-end integration test for reference-to-video.
+
+Covers:
+  1. Route POST /reference-videos/episodes/{ep}/units -> unit creation
+  2. POST .../generate -> GenerationQueue enqueue (mock)
+  3. dispatch to execute_reference_video_task
+  4. the executor derives reference images for 3 buckets from the body text (character + scene + prop)
+  5. multi-line body parsing + `@mention` -> correct rendering of subject tokens
+  6. mp4 + thumbnail persisted
+  7. generated_assets.status / video_clip / video_thumbnail written back
+
+参考生视频完整端到端集成测试。
 
 覆盖：
   1. 路由 POST /reference-videos/episodes/{ep}/units → unit 创建
@@ -95,6 +106,7 @@ def three_bucket_client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         encoding="utf-8",
     )
 
+    # Production projects are always on the current schema, and the script together with its evidence chain (episode source -> script_plan) is registered in the artifact manifest.
     # 生产项目一律处于当前 schema，剧本连同其取证链（分集原文 → script_plan）都已登记进产物清单。
     (proj_dir / "source" / "episode_1.txt").write_text("原文", encoding="utf-8")
     (proj_dir / "drafts" / "episode_1" / "script_plan_reference_units.json").write_text(
@@ -111,6 +123,7 @@ def three_bucket_client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
 
     custom_pm = ProjectManager(tmp_path)
     use_project_manager(monkeypatch, custom_pm)
+    # Keep the real asset hydration, bucketing and duration projection; only isolate the DB capability queries this case does not care about.
     # 保留真实资产水合、定桶与时长投影，只隔离本用例不关心的 DB 能力查询。
     use_reference_projection(monkeypatch, fake_reference_request_projector(durations=(3, 7)))
 
@@ -124,7 +137,7 @@ def three_bucket_client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
 async def test_e2e_three_bucket_mentions_with_multi_line_body(three_bucket_client):
     client, proj_dir, monkeypatch = three_bucket_client
 
-    # 1) 新建 unit：正文混合 3 bucket mention、跨多行
+    # 1) Create a unit: the body mixes mentions from 3 buckets across multiple lines / 1) 新建 unit：正文混合 3 bucket mention、跨多行
     prompt = "镜头1：@张三 推门进 @酒馆\n镜头2：近景 @张三 握紧 @长剑\n"
     resp = client.post(
         "/api/v1/projects/demo/reference-videos/episodes/1/units",
@@ -134,11 +147,11 @@ async def test_e2e_three_bucket_mentions_with_multi_line_body(three_bucket_clien
     unit = resp.json()["unit"]
     uid = unit["unit_id"]
 
-    # 正文原样落盘，参考图按正文读时派生
+    # The body is persisted as is; reference images are derived when the body is read / 正文原样落盘，参考图按正文读时派生
     assert unit["text"] == prompt
     assert unit["duration_seconds"] == 7
 
-    # 2) generate 入队（mock queue）
+    # 2) generate enqueues (mock queue) / 2) generate 入队（mock queue）
     captured: dict = {}
 
     async def _fake_enqueue(**kwargs):
@@ -154,6 +167,7 @@ async def test_e2e_three_bucket_mentions_with_multi_line_body(three_bucket_clien
     assert captured["task_type"] == "reference_video"
     assert captured["resource_id"] == uid
 
+    # 3) Mock backend: verify @ in the prompt was replaced by subject tokens, with numbering decided by mention order in the body
     # 3) mock backend：校验 prompt 里 @ 已替换为主体记号，正文提及顺序决定编号
     captured_backend_kwargs: dict = {}
 
@@ -199,7 +213,7 @@ async def test_e2e_three_bucket_mentions_with_multi_line_body(three_bucket_clien
 
     use_video_thumbnail_extractor(monkeypatch, _fake_extract)
 
-    # 4) 直接调 executor（绕过真实 worker 轮询）
+    # 4) Call the executor directly (bypassing real worker polling) / 4) 直接调 executor（绕过真实 worker 轮询）
     from server.services.tasks.generation_tasks import execute_generation_task
 
     result = await execute_generation_task(
@@ -212,21 +226,22 @@ async def test_e2e_three_bucket_mentions_with_multi_line_body(three_bucket_clien
         }
     )
 
+    # 5) Assert the three-part rendering: the first part binds in body mention order, and all @mentions in the body are replaced by <X>
     # 5) 断言三段论渲染：第一段按正文提及顺序绑定，正文 @mention 全部替成 <X>
     rendered = captured_backend_kwargs["prompt"]
     assert rendered.startswith("<张三>@图片1、<酒馆>@图片2、<长剑>@图片3。")
-    assert "@张三" not in rendered  # 所有 @ 已替换
+    assert "@张三" not in rendered  # All @ have been replaced / 所有 @ 已替换
     assert "@酒馆" not in rendered
     assert "@长剑" not in rendered
-    assert "[图" not in rendered  # 对照表编号已废除
-    assert "Style: 唐风水墨\nVisual style: 墨色晕染，留白构图\n" in rendered  # 第三段风格块
-    assert "Avoid: " in rendered  # 第三段视频负向提示词
+    assert "[图" not in rendered  # The lookup-table numbering has been removed / 对照表编号已废除
+    assert "Style: 唐风水墨\nVisual style: 墨色晕染，留白构图\n" in rendered  # Third part: style block / 第三段风格块
+    assert "Avoid: " in rendered  # Third part: video negative prompt / 第三段视频负向提示词
 
-    # 6) 断言 reference_images 传了 3 个临时文件
+    # 6) Assert reference_images received 3 temporary files / 6) 断言 reference_images 传了 3 个临时文件
     ref_images = captured_backend_kwargs["reference_images"]
     assert len(ref_images) == 3
 
-    # 7) 断言 mp4 + thumbnail 落盘 + generated_assets 写回
+    # 7) Assert mp4 + thumbnail persisted + generated_assets written back / 7) 断言 mp4 + thumbnail 落盘 + generated_assets 写回
     assert result["file_path"].endswith(f"{uid}.mp4")
     assert (proj_dir / "reference_videos" / f"{uid}.mp4").exists()
 
@@ -240,7 +255,9 @@ async def test_e2e_three_bucket_mentions_with_multi_line_body(three_bucket_clien
 
 @pytest.mark.asyncio
 async def test_e2e_missing_reference_raises(three_bucket_client):
-    """把 scenes/酒馆.png 删掉，executor 应保留 projector 的结构化 blocker。"""
+    """Delete scenes/酒馆.png; the executor should keep the projector's structured blocker.
+
+    把 scenes/酒馆.png 删掉，executor 应保留 projector 的结构化 blocker。"""
     client, proj_dir, monkeypatch = three_bucket_client
     (proj_dir / "scenes" / "酒馆.png").unlink()
 

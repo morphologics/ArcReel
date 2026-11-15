@@ -1,4 +1,6 @@
-"""Alembic 迁移：api_calls 费用可空，新增未定价原因与缓存读写列。"""
+"""Alembic migration: api_calls cost becomes nullable, with new columns for the unpriced reason and cache reads/writes.
+
+Alembic 迁移：api_calls 费用可空，新增未定价原因与缓存读写列。"""
 
 from __future__ import annotations
 
@@ -22,7 +24,9 @@ _INSERT_CALL = (
 
 
 def _column_info(engine: sa.Engine) -> dict[str, tuple[bool, str | None]]:
-    """列名 → (是否 NOT NULL, 服务端默认)。"""
+    """Column name -> (NOT NULL or not, server default).
+
+    列名 → (是否 NOT NULL, 服务端默认)。"""
     with engine.begin() as connection:
         return {row[1]: (bool(row[3]), row[4]) for row in connection.execute(sa.text("PRAGMA table_info(api_calls)"))}
 
@@ -57,10 +61,12 @@ def test_upgrade_makes_cost_nullable_and_adds_columns_without_backfill(
 
         after = _column_info(engine)
         assert after.keys() >= _NEW_COLUMNS
+        # Cost is nullable with the server default unchanged; the new columns are all nullable with no default.
         # 费用可空，服务端默认不变；新列全部可空且没有默认。
         assert after["cost_amount"][0] is False
         assert after["cost_amount"][1] in ("0.0", "'0.0'")
         assert all(after[name] == (False, None) for name in _NEW_COLUMNS)
+        # Historical rows are kept as they are: 0 is not changed to NULL, and new columns are not backfilled.
         # 历史行原样保留：既不把 0 改成 NULL，也不回填新列。
         assert _costs(engine) == {1: 0.0, 2: 1.5}
         with engine.begin() as connection:
@@ -71,8 +77,10 @@ def test_upgrade_makes_cost_nullable_and_adds_columns_without_backfill(
                 )
             ).fetchall()
         assert [tuple(row) for row in rows] == [(None, None, None, None, 10), (None, None, None, None, None)]
+        # Rebuilding the table does not lose existing indexes
         # 重建表不丢既有索引
         assert _indexes(engine) >= {"idx_api_calls_project_name", "idx_api_calls_status", "idx_api_calls_task_id"}
+        # After migration a NULL cost can be written, distinct from 0
         # 迁移后可写入 NULL 费用，与 0 区分
         with engine.begin() as connection:
             connection.execute(sa.text(_INSERT_CALL), {"id": 3, "cost_amount": None, "input_tokens": 5})
@@ -99,6 +107,7 @@ def test_downgrade_restores_not_null_cost_and_drops_new_columns(
         info = _column_info(engine)
         assert not _NEW_COLUMNS & info.keys()
         assert info["cost_amount"][0] is True
+        # After downgrade, unpriced rows can only fall back to 0; priced rows are unchanged.
         # 未定价的行降级后只能回退为 0，已定价的行不变。
         assert _costs(engine) == {1: 0.0, 2: 2.5}
         assert _indexes(engine) >= {"idx_api_calls_project_name", "idx_api_calls_status", "idx_api_calls_task_id"}

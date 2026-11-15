@@ -16,13 +16,17 @@ from lib.db.models.api_call import ApiCall
 
 @dataclass
 class _Wired:
-    """记账写侧注入 Ledger，读侧直查 api_calls 行，共享同一内存库。"""
+    """The accounting write side injects a Ledger; the read side queries api_calls rows directly; both share the same in-memory DB.
+
+    记账写侧注入 Ledger，读侧直查 api_calls 行，共享同一内存库。"""
 
     ledger: Ledger
     session_factory: async_sessionmaker[AsyncSession]
 
     async def stored_calls(self, project_name: str | None = None) -> list[ApiCall]:
-        """按 id 升序读回落库的 api_calls 行。"""
+        """Read back the persisted api_calls rows in ascending id order.
+
+        按 id 升序读回落库的 api_calls 行。"""
         stmt = select(ApiCall).order_by(ApiCall.id)
         if project_name is not None:
             stmt = stmt.where(ApiCall.project_name == project_name)
@@ -53,6 +57,7 @@ def _make_backend(provider="gemini", model="gemini-3-flash-preview"):
 
 class TestTextGenerator:
     async def test_generate_records_usage_on_success(self, wired):
+        # backend.name is a bare "gemini"; accounting must use the resolver's provider_id ("gemini-aistudio").
         # backend.name 为裸 "gemini"，记账须取解析层 provider_id（"gemini-aistudio"）。
         backend = _make_backend()
         gen = TextGenerator(backend, wired.ledger, "gemini-aistudio", purpose=CallPurpose.SCRIPT_GENERATION)
@@ -108,7 +113,9 @@ class TestTextGenerator:
 
 
 class TestOutputTokenCeiling:
-    """文本请求的输出上限取 min(登记值, 64000)，未登记按 64000。"""
+    """The output cap of a text request is min(registered value, 64000); 64000 when unregistered.
+
+    文本请求的输出上限取 min(登记值, 64000)，未登记按 64000。"""
 
     @pytest.mark.parametrize(
         ("registered", "requested", "sent"),

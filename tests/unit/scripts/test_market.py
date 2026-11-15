@@ -1,4 +1,6 @@
-"""市场仓语言边界保留可操作的诊断、迁移指引与汇总。"""
+"""Market repo language boundary keeps actionable diagnostics, migration guidance and summaries.
+
+市场仓语言边界保留可操作的诊断、迁移指引与汇总。"""
 
 import json
 from pathlib import Path

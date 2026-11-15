@@ -1,4 +1,7 @@
-"""Alembic 迁移：用户条目表新增「用户新建」列，存量副本取假（都是改过官方条目产生的），降级时删除。"""
+"""Alembic migration: the user entry table gains a "created by user" column; existing copies get false (all of them
+came from editing official entries); dropped on downgrade.
+
+Alembic 迁移：用户条目表新增「用户新建」列，存量副本取假（都是改过官方条目产生的），降级时删除。"""
 
 from __future__ import annotations
 

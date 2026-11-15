@@ -1,4 +1,12 @@
-"""能力覆盖的 API 面与展示层同源。
+"""The capability override API surface has the same source as the presentation layer.
+
+Covers three things: the config API reads and writes overrides (including stripping keys outside the allowlist,
+4xx and whole-replacement semantics), the resolver returns effective capabilities, and the presentation layer and
+execution layer come from the same synthesis function. The API side follows the in-memory SQLite + TestClient
+pattern of test_custom_providers_api.py; the same-source side follows the real-repo loading pattern of
+test_custom_provider_loader.py.
+
+能力覆盖的 API 面与展示层同源。
 
 覆盖三件事：配置 API 读写覆盖（含白名单外键剔除、4xx 与整体替换语义）、resolver 返回生效能力、
 展示层与执行层出自同一个合成函数。API 侧沿用 test_custom_providers_api.py 的内存 SQLite +
@@ -24,10 +32,18 @@ from server.error_handlers import register_error_handlers
 from tests.auth_deps import AUTH_DEPENDENCIES
 from tests.fakes import use_project_manager
 
+# The system judges last_frame=False, max_reference_images=1 -- the difference before and after override can be
+# asserted
 # 系统判定 last_frame=False、max_reference_images=1 —— 覆盖前后差异可断言
 VIDEO_ENDPOINT = "openai-video"
 VIDEO_MODEL = "sora-2"
 
+# openai-video's delegate does not serialize end_image (see the end_image_capable threshold in
+# _check_capability_overrides), so cases overriding last_frame to True must use an endpoint that really supports end
+# frames. ark-seedance 1.0 pro fast is judged last_frame=False by the system (marked "-" in the capability table of
+# docs/api-docs/providers/ark.md), so the before/after difference can be asserted similarly; the seedance-2 series is
+# not used because those two model families are judged True by the system already, which cannot show the override
+# taking effect.
 # openai-video 的 delegate 不序列化 end_image（见 _check_capability_overrides 的
 # end_image_capable 门槛），last_frame 覆盖为 True 的用例须换一个真正支持尾帧的 endpoint。
 # ark-seedance 的 1.0 pro fast 系统判定 last_frame=False（docs/api-docs/providers/ark.md
@@ -63,7 +79,10 @@ def _create_provider(capability_client: TestClient, models: list[dict]) -> int:
 
 
 async def _seed_provider_with_raw_models(custom_providers_app_session_factory, models: list[dict]) -> int:
-    """绕过 API 直接落库：模拟手工改库产生的、界面无从产生的覆盖字典。"""
+    """Write straight to the DB bypassing the API: simulates an override dict produced by hand-editing the DB that the UI
+    cannot produce.
+
+    绕过 API 直接落库：模拟手工改库产生的、界面无从产生的覆盖字典。"""
     async with custom_providers_app_session_factory() as db_session:
         repo = CustomProviderRepository(db_session)
         provider = await repo.create_provider(
@@ -90,7 +109,10 @@ def _video_model(**overrides) -> dict:
 
 
 class TestModelListExposesCapabilities:
-    """models 列表同时给出系统判定与用户覆盖，设置页平凡合并即可展示。"""
+    """The models list gives both the system judgment and the user override; the settings page can show them with a
+    trivial merge.
+
+    models 列表同时给出系统判定与用户覆盖，设置页平凡合并即可展示。"""
 
     def test_video_model_reports_system_capabilities(self, capability_client: TestClient):
         pid = _create_provider(capability_client, [_video_model()])
@@ -111,7 +133,10 @@ class TestModelListExposesCapabilities:
         assert models[0]["capability_overrides"] is None
 
     def test_system_capabilities_matches_synthesis_source(self, capability_client: TestClient):
-        """判定值不是 API 里另写一份，而是合成函数的系统判定分支。"""
+        """The judged value is not written a second time in the API; it is the system-judgment branch of the synthesis
+        function.
+
+        判定值不是 API 里另写一份，而是合成函数的系统判定分支。"""
         pid = _create_provider(capability_client, [_video_model()])
 
         models = capability_client.get(f"/api/v1/custom-providers/{pid}").json()["models"]
@@ -150,13 +175,21 @@ class TestModelListExposesCapabilities:
 
         models = capability_client.get(f"/api/v1/custom-providers/{pid}").json()["models"]
         assert models[0]["capability_overrides"] == {"last_frame": True}
+        # The judged value is unaffected by overrides: the settings page must be able to show "judged False / effective
+        # True" at once
         # 判定值不受覆盖影响：设置页要能同时显示"判定 False / 生效 True"
         assert models[0]["system_capabilities"]["last_frame"] is False
 
     async def test_stale_incompatible_override_filtered_from_response(
         self, capability_client: TestClient, custom_providers_app_session_factory
     ):
-        """存量行 / 非 API 写入可能留下已不兼容的覆盖（如 openai-video 上的 last_frame=True，
+        """Legacy rows / non-API writes may leave overrides that are no longer compatible (e.g. last_frame=True on
+        openai-video, whose endpoint is not end_image_capable): the write side cannot stop data already in the DB, so it
+        must be filtered before echoing, rather than letting the UI show "override in effect" while the execution layer
+        silently ignores it -- echoing it as is would also make the next plain save rejected with 422 by write
+        validation, blocking edits unrelated to that override.
+
+        存量行 / 非 API 写入可能留下已不兼容的覆盖（如 openai-video 上的 last_frame=True，
         endpoint 不 end_image_capable）：写入侧挡不住这条已落库的数据，回显前须过滤，
         不能让界面呈现"覆盖已生效"而执行层其实静默忽略——原样回显还会让下次普通保存被
         写入校验拒为 422，堵住与该覆盖无关的编辑。"""
@@ -180,7 +213,14 @@ class TestModelListExposesCapabilities:
     async def test_stale_incoherent_audio_override_filtered_from_response(
         self, capability_client: TestClient, custom_providers_app_session_factory
     ):
-        """存量行的 direct ⊕ 上限 0：两维各自合法，故过得了逐键过滤，但执行层会降级到 none。
+        """A legacy row with direct + limit 0: each dimension is valid on its own, so it passes per-key filtering, but the
+        execution layer degrades it to none.
+
+        Echoing it as is has two consequences, from the same source as the last_frame one: the UI shows "direct voice in
+        effect" while generation actually carries no voice input; and the client sending it back with an audio-unrelated
+        edit hits the same invariant on the write side, rejecting the whole save with 422.
+
+        存量行的 direct ⊕ 上限 0：两维各自合法，故过得了逐键过滤，但执行层会降级到 none。
 
         原样回显有两个后果，与 last_frame 那条同源：界面显示"直传音色已生效"而生成其实不带
         音色输入；客户端把它随一次与音频无关的编辑原样回传，会撞上写入侧的同一条不变式，
@@ -201,13 +241,20 @@ class TestModelListExposesCapabilities:
         )
 
         models = capability_client.get(f"/api/v1/custom-providers/{pid}").json()["models"]
+        # Both audio dimensions are stripped as a group; the audio-unrelated last_frame override is kept as is
         # 音频两维整组剔除，与音频无关的 last_frame 覆盖原样保留
         assert models[0]["capability_overrides"] == {"last_frame": True}
 
     async def test_corrupted_non_dict_override_does_not_500_response(
         self, capability_client: TestClient, custom_providers_app_session_factory
     ):
-        """存量行 / 手工 SQL 可能让 JSON 列存了非字典值（字符串、列表等）：执行层的
+        """Legacy rows / hand-written SQL may leave a non-dict value (string, list, etc.) in the JSON column: the execution
+        layer's synthesize_video_capabilities ignores it by design, and the response boundary must be equally tolerant --
+        it must not stuff the raw value into a ModelResponse that only accepts dict | None, triggering a Pydantic
+        validation error and a 500 for the whole list/detail request -- then the user could not even reach the settings
+        page to clean up the bad value.
+
+        存量行 / 手工 SQL 可能让 JSON 列存了非字典值（字符串、列表等）：执行层的
         synthesize_video_capabilities 按容错设计忽略它，响应边界须同样容错，不能把原值
         直接塞进只接受 dict | None 的 ModelResponse 触发 Pydantic 校验错误，让整个列表/详情
         请求 500——用户也就无法进入设置页清理这条坏值。"""
@@ -232,7 +279,11 @@ class TestModelListExposesCapabilities:
     async def test_retired_endpoint_override_does_not_500_response(
         self, capability_client: TestClient, custom_providers_app_session_factory
     ):
-        """endpoint 已从注册表下线（升级移除）时，get_endpoint_spec 会抛 ValueError；响应边界
+        """When an endpoint has been retired from the registry (removed on upgrade), get_endpoint_spec raises ValueError;
+        when filtering last_frame overrides the response boundary must tolerate that lookup failure, not let legacy dirty
+        config blow up list/detail requests into 500 too.
+
+        endpoint 已从注册表下线（升级移除）时，get_endpoint_spec 会抛 ValueError；响应边界
         过滤 last_frame 覆盖时须容错这条查表失败，不能让存量脏配置把列表/详情请求也炸成 500。"""
         pid = await _seed_provider_with_raw_models(
             custom_providers_app_session_factory,
@@ -255,7 +306,12 @@ class TestModelListExposesCapabilities:
     async def test_unallowlisted_key_dropped_from_response(
         self, capability_client: TestClient, custom_providers_app_session_factory
     ):
-        """DB 遗留的白名单外键（如 reference_audio_per_image，语义合法但未开放给用户覆盖）不该在回显中
+        """Keys outside the allowlist left in the DB (e.g. reference_audio_per_image, semantically valid but not open to user
+        override) should not be echoed as is: otherwise the UI shows "override in effect" while the write side strips the
+        key on save -- the key sets of GET and PUT must match; callers should not need the hidden knowledge that "the echo
+        may contain dirty keys but they get stripped on write-back".
+
+        DB 遗留的白名单外键（如 reference_audio_per_image，语义合法但未开放给用户覆盖）不该在回显中
         原样带出：否则界面呈现"覆盖已生效"，而写入侧一保存这条键就会被剔除——GET 与 PUT
         的键集合必须一致，调用方不该额外知道"回显可能含脏键但写回会被剔除"这条隐藏知识。"""
         pid = await _seed_provider_with_raw_models(
@@ -278,7 +334,10 @@ class TestModelListExposesCapabilities:
     async def test_allowlisted_key_kept_when_mixed_with_unallowlisted(
         self, capability_client: TestClient, custom_providers_app_session_factory
     ):
-        """混合了白名单内外键的存量行：白名单内键（last_frame）回显不变，白名单外键
+        """A legacy row mixing allowlisted and non-allowlisted keys: the allowlisted key (last_frame) is echoed unchanged,
+        the non-allowlisted key (reference_audio_per_image) is stripped; the echoed set matches the persisted write set.
+
+        混合了白名单内外键的存量行：白名单内键（last_frame）回显不变，白名单外键
         （reference_audio_per_image）被剔除，回显集合与写入落库集合一致。"""
         pid = await _seed_provider_with_raw_models(
             custom_providers_app_session_factory,
@@ -299,7 +358,13 @@ class TestModelListExposesCapabilities:
 
 
 class TestSaveDropsUnlistedOverrides:
-    """白名单外的键随保存被静默剔除——这是它们唯一的出口。
+    """Keys outside the allowlist are silently stripped on save -- that is their only way out.
+
+    Such keys can only come from hand-editing the DB: the UI neither shows them nor offers a way to delete them; if the
+    write side errored on them, the user would be stuck at a 422 they cannot deal with, unable even to save a display
+    name change.
+
+    白名单外的键随保存被静默剔除——这是它们唯一的出口。
 
     这类键只能由手工改库产生：界面既不显示也没有入口能删，写入侧若为此报错，用户会被堵在一个
     自己无法处置的 422 上，连改显示名都保存不了。
@@ -312,7 +377,10 @@ class TestSaveDropsUnlistedOverrides:
         assert models[0]["capability_overrides"] is None
 
     def test_known_but_unallowlisted_key_stripped_on_create(self, capability_client: TestClient):
-        """reference_audio_per_image 是合法 VideoCapabilities 字段，但它是请求构造的形态，不开放覆盖。"""
+        """reference_audio_per_image is a valid VideoCapabilities field, but it is a request-construction shape, not open to
+        override.
+
+        reference_audio_per_image 是合法 VideoCapabilities 字段，但它是请求构造的形态，不开放覆盖。"""
         pid = _create_provider(
             capability_client, [_video_model(capability_overrides={"reference_audio_per_image": True})]
         )
@@ -323,7 +391,10 @@ class TestSaveDropsUnlistedOverrides:
     async def test_legacy_key_stripped_while_editing_last_frame(
         self, capability_client: TestClient, custom_providers_app_session_factory
     ):
-        """含遗留键的行改动 last_frame 后保存成功（不报 422），落库覆盖字典只剩白名单内的键。"""
+        """A row with a legacy key saves successfully after changing last_frame (no 422); the persisted override dict keeps
+        only allowlisted keys.
+
+        含遗留键的行改动 last_frame 后保存成功（不报 422），落库覆盖字典只剩白名单内的键。"""
         pid = await _seed_provider_with_raw_models(
             custom_providers_app_session_factory,
             [
@@ -347,6 +418,7 @@ class TestSaveDropsUnlistedOverrides:
                     _video_model(
                         endpoint=LAST_FRAME_ENDPOINT,
                         model_id=LAST_FRAME_MODEL,
+                        # The form sends back the legacy key echoed by GET unchanged, while switching last_frame to "force on"
                         # 表单把 GET 回显的遗留键原样带回，同时把 last_frame 切成「强制开」
                         capability_overrides={"reference_audio_per_image": True, "last_frame": True},
                     )
@@ -362,7 +434,10 @@ class TestSaveDropsUnlistedOverrides:
     async def test_legacy_key_stripped_on_full_update(
         self, capability_client: TestClient, custom_providers_app_session_factory
     ):
-        """同上，只改 display_name、不动覆盖时：历史脏值既不该挡住保存，也不该被原样写回去。"""
+        """Same as above, changing only display_name without touching overrides: historic dirty values should neither block
+        the save nor be written back as is.
+
+        同上，只改 display_name、不动覆盖时：历史脏值既不该挡住保存，也不该被原样写回去。"""
         pid = await _seed_provider_with_raw_models(
             custom_providers_app_session_factory,
             [
@@ -390,14 +465,21 @@ class TestSaveDropsUnlistedOverrides:
         assert resp.json()["models"][0]["capability_overrides"] is None
 
     def test_patch_endpoint_absent_from_openapi(self, custom_providers_app):
-        """单模型覆盖 PATCH 端点已删除：按 (provider_id, model_id, endpoint) 定位够不着新建
+        """The single-model override PATCH endpoint is removed: locating by (provider_id, model_id, endpoint) cannot reach new
+        providers / newly added model rows / rows whose model_id changed; override edits all go through the form's
+        whole-table save.
+
+        单模型覆盖 PATCH 端点已删除：按 (provider_id, model_id, endpoint) 定位够不着新建
         provider / 新增模型行 / 改过 model_id 的行，覆盖编辑统一走表单的整表保存。"""
         paths = custom_providers_app.openapi()["paths"]
         assert not [path for path in paths if "capability-overrides" in path]
 
 
 class TestSaveValidatesOpenOverrides:
-    """白名单内的键仍按 endpoint 与值类型从严校验，报错用户能在界面上处置。"""
+    """Allowlisted keys are still strictly validated by endpoint and value type; the user can deal with the errors in
+    the UI.
+
+    白名单内的键仍按 endpoint 与值类型从严校验，报错用户能在界面上处置。"""
 
     @pytest.mark.parametrize("bad_value", ["true", 1, 0, None, [], {}])
     def test_wrong_value_type_rejected_on_create(self, capability_client: TestClient, bad_value):
@@ -405,13 +487,19 @@ class TestSaveValidatesOpenOverrides:
         assert resp.status_code == 422
 
     def test_last_frame_rejected_on_endpoint_without_end_image_support(self, capability_client: TestClient):
-        """openai-video 的 delegate 不下传 end_image：开启覆盖只会让 UI 宣称支持、执行层仍静默丢帧。"""
+        """openai-video's delegate does not pass end_image down: turning the override on only makes the UI claim support
+        while the execution layer still silently drops the frame.
+
+        openai-video 的 delegate 不下传 end_image：开启覆盖只会让 UI 宣称支持、执行层仍静默丢帧。"""
         resp = _post_provider(capability_client, [_video_model(capability_overrides={"last_frame": True})])
         assert resp.status_code == 422
         assert "last_frame" in resp.json()["detail"]
 
     def test_reference_audio_direct_rejected_on_endpoint_without_audio_support(self, capability_client: TestClient):
-        """openai-video 的 delegate 不下传 reference_audio_files：开启覆盖只会让 UI 宣称支持
+        """openai-video's delegate does not pass reference_audio_files down: turning the override on only makes the UI claim
+        voice input support while the execution layer still generates video with a random voice.
+
+        openai-video 的 delegate 不下传 reference_audio_files：开启覆盖只会让 UI 宣称支持
         音色输入，执行层照旧生成随机音色的视频。"""
         resp = _post_provider(
             capability_client, [_video_model(capability_overrides={"reference_audio_mode": "direct"})]
@@ -420,7 +508,10 @@ class TestSaveValidatesOpenOverrides:
         assert "reference_audio_mode" in resp.json()["detail"]
 
     def test_reference_audio_none_accepted_on_endpoint_without_audio_support(self, capability_client: TestClient):
-        """守卫只拦「宣称支持」的方向：关掉音色能力无需运输能力背书。"""
+        """The guard only blocks the "claim support" direction: turning voice capability off needs no backing from transport
+        capability.
+
+        守卫只拦「宣称支持」的方向：关掉音色能力无需运输能力背书。"""
         pid = _create_provider(capability_client, [_video_model(capability_overrides={"reference_audio_mode": "none"})])
 
         models = capability_client.get(f"/api/v1/custom-providers/{pid}").json()["models"]
@@ -440,7 +531,14 @@ class TestSaveValidatesOpenOverrides:
         assert resp.status_code == 201
 
     def test_direct_without_positive_count_rejected(self, capability_client: TestClient):
-        """合并后不变式：宣称支持音色输入却限 0 段的组合在写入侧就拒。
+        """Post-merge invariant: a combination claiming voice input support but limited to 0 segments is rejected on the
+        write side.
+
+        If let through, execution could only silently degrade, and the user would get an impossible-to-follow hint like
+        "supports at most 0 segments". The endpoint's system-judged limit is 0, so overriding only the mode produces that
+        combination.
+
+        合并后不变式：宣称支持音色输入却限 0 段的组合在写入侧就拒。
 
         放行则执行期只能静默降级，用户拿到的是「最多支持 0 段」这种无从遵循的提示。
         该 endpoint 的系统判定上限为 0，只覆盖模式即凑出该组合。
@@ -460,7 +558,10 @@ class TestSaveValidatesOpenOverrides:
 
     @pytest.mark.parametrize("bad_value", ["DIRECT", "native", True, 1, None])
     def test_invalid_reference_audio_mode_rejected(self, capability_client: TestClient, bad_value):
-        """枚举值两侧同判定：写入侧拒的与合成层忽略的必须是同一集合，否则「界面允许、执行反悔」。"""
+        """Enum values are judged the same on both sides: what the write side rejects and what the synthesis layer ignores
+        must be the same set, otherwise "the UI allows it, execution goes back on it".
+
+        枚举值两侧同判定：写入侧拒的与合成层忽略的必须是同一集合，否则「界面允许、执行反悔」。"""
         resp = _post_provider(
             capability_client,
             [
@@ -521,7 +622,10 @@ class TestSaveValidatesOpenOverrides:
 
 
 class TestModelFactOverrides:
-    """模型事实维度（docs/adr/0104）：按端点媒体类型开放，值整维替换，回显与写入键集合一致。"""
+    """Model fact dimensions (docs/adr/0104): opened by endpoint media type, values replace whole dimensions, echo and
+    write key sets match.
+
+    模型事实维度（docs/adr/0104）：按端点媒体类型开放，值整维替换，回显与写入键集合一致。"""
 
     def test_dimensions_of_each_media_type_round_trip(self, capability_client: TestClient):
         video = {
@@ -587,19 +691,25 @@ class TestModelFactOverrides:
         assert resp.status_code == 422
 
     def test_image_capability_the_endpoint_does_not_implement_rejected(self, capability_client: TestClient):
-        """openai-images-generations 只实现文生图：图生图覆盖为开启也打不开，写入侧拒绝。"""
+        """openai-images-generations only implements text-to-image: an image-to-image override set to on cannot open it; the
+        write side rejects it.
+
+        openai-images-generations 只实现文生图：图生图覆盖为开启也打不开，写入侧拒绝。"""
         model = {"model_id": "m", "display_name": "M", "endpoint": "openai-images-generations", "is_enabled": True}
         resp = _post_provider(capability_client, [{**model, "capability_overrides": {"image_to_image": True}}])
         assert resp.status_code == 422
         assert "image_to_image" in resp.json()["detail"]
 
+        # Turning off a dimension the channel implements needs no backing
         # 关掉通道实现了的那一维不需要背书
         resp = _post_provider(capability_client, [{**model, "capability_overrides": {"text_to_image": False}}])
         assert resp.status_code == 201
 
 
 class TestFullUpdateOverrideSemantics:
-    """保存模型列表是整体替换：覆盖必须随列表回传，否则被清空。"""
+    """Saving the models list is whole replacement: overrides must be sent back with the list, or they are cleared.
+
+    保存模型列表是整体替换：覆盖必须随列表回传，否则被清空。"""
 
     def test_invalid_override_rejected_on_full_update(self, capability_client: TestClient):
         pid = _create_provider(capability_client, [_video_model()])
@@ -615,7 +725,11 @@ class TestFullUpdateOverrideSemantics:
         assert resp.status_code == 422
 
     def test_override_written_and_read_back_through_full_update(self, capability_client: TestClient):
-        """设置页表单的覆盖编辑就走这条整表 PUT：从「跟随判定」改成「强制开」保存后，
+        """The settings page form's override edits go through this whole-table PUT: after changing "follow judgment" to
+        "force on" and saving, reloading the page (GET) must read back the same override, otherwise the user's choice was
+        saved for nothing.
+
+        设置页表单的覆盖编辑就走这条整表 PUT：从「跟随判定」改成「强制开」保存后，
         重新加载页面（GET）必须还能读回同一个覆盖，否则用户的选择保存了个寂寞。"""
         pid = _create_provider(
             capability_client,
@@ -644,7 +758,11 @@ class TestFullUpdateOverrideSemantics:
         assert reloaded.json()["models"][0]["capability_overrides"] == {"last_frame": True}
 
     def test_override_cleared_to_null_through_full_update(self, capability_client: TestClient):
-        """控件回到「跟随判定」时前端把该键从稀疏字典移除、字典空则整体收敛回 null。
+        """When a control returns to "follow judgment" the frontend removes the key from the sparse dict, and an empty dict
+        collapses back to null. This PUT must really clear the persisted override so the effective value follows the system
+        judgment again.
+
+        控件回到「跟随判定」时前端把该键从稀疏字典移除、字典空则整体收敛回 null。
         这条 PUT 必须真的把落库的覆盖清掉，生效值才会重新跟随系统判定。"""
         pid = _create_provider(
             capability_client,
@@ -680,7 +798,11 @@ class TestFullUpdateOverrideSemantics:
     async def test_endpoint_change_validated_even_when_override_dict_unchanged(
         self, capability_client: TestClient, custom_providers_app_session_factory
     ):
-        """每行都按提交上来的 (endpoint, 覆盖值) 校验：model_id 与覆盖字典原样不动、只切 endpoint
+        """Each row is validated by the submitted (endpoint, override value): when model_id and the override dict are left
+        unchanged and only the endpoint switches, the validation result naturally changes with the new endpoint (whether
+        last_frame=True is valid depends on the endpoint's end_image_capable) and must be rejected for the new endpoint.
+
+        每行都按提交上来的 (endpoint, 覆盖值) 校验：model_id 与覆盖字典原样不动、只切 endpoint
         时，校验结果天然随新 endpoint 变化（last_frame=True 是否合法依赖 endpoint 的
         end_image_capable），须针对新 endpoint 拒绝。"""
         pid = await _seed_provider_with_raw_models(
@@ -705,6 +827,7 @@ class TestFullUpdateOverrideSemantics:
                 "models": [
                     _video_model(
                         model_id=LAST_FRAME_MODEL,
+                        # The endpoint is quietly switched to openai-video (not end_image_capable); the override dict is left unchanged
                         # endpoint 悄悄换成 openai-video（不 end_image_capable），覆盖字典原样不动
                         endpoint=VIDEO_ENDPOINT,
                         capability_overrides={"last_frame": True},
@@ -716,7 +839,10 @@ class TestFullUpdateOverrideSemantics:
 
 
 class TestResolverReturnsEffectiveCapabilities:
-    """/video-capabilities 走的 resolver 必须回生效能力，且与执行层同源。"""
+    """The resolver behind /video-capabilities must return effective capabilities from the same source as the execution
+    layer.
+
+    /video-capabilities 走的 resolver 必须回生效能力，且与执行层同源。"""
 
     @staticmethod
     async def _seed(
@@ -767,7 +893,9 @@ class TestResolverReturnsEffectiveCapabilities:
         assert caps["max_reference_images"] == system.max_reference_images
 
     async def test_override_changes_resolver_output(self, db_session: AsyncSession):
-        """AC：对自定义模型写入覆盖后，该接口返回值随之变化。"""
+        """AC: after writing an override for a custom model, this endpoint's return value changes accordingly.
+
+        AC：对自定义模型写入覆盖后，该接口返回值随之变化。"""
         pid = await self._seed(
             db_session, overrides={"last_frame": True}, endpoint=LAST_FRAME_ENDPOINT, model_id=LAST_FRAME_MODEL
         )
@@ -777,7 +905,11 @@ class TestResolverReturnsEffectiveCapabilities:
         assert caps["last_frame"] is True
 
     async def test_override_ignored_when_endpoint_lacks_end_image_support(self, db_session: AsyncSession):
-        """openai-video 的 delegate 不下传 end_image：即便存量行/非 API 写入把 last_frame 写成 True，
+        """openai-video's delegate does not pass end_image down: even if a legacy row / non-API write set last_frame to True,
+        the resolver must fall back to the system judgment rather than treat the broken state "synthesis layer claims
+        support, execution layer silently drops the frame" as effective.
+
+        openai-video 的 delegate 不下传 end_image：即便存量行/非 API 写入把 last_frame 写成 True，
         resolver 也须回退系统判定，而不是把「合成层宣称支持、执行层静默丢帧」的错误状态当作生效。"""
         pid = await self._seed(db_session, overrides={"last_frame": True})
 
@@ -786,7 +918,10 @@ class TestResolverReturnsEffectiveCapabilities:
 
     @patch("lib.custom_provider.endpoints.ArkVideoBackend", new=MagicMock())
     async def test_resolver_matches_execution_layer(self, db_session: AsyncSession):
-        """展示层与执行层出自同一合成函数：逐字段比对 resolver 与装载出的 backend。"""
+        """The presentation layer and execution layer come from the same synthesis function: compare the resolver and the
+        loaded backend field by field.
+
+        展示层与执行层出自同一合成函数：逐字段比对 resolver 与装载出的 backend。"""
         pid = await self._seed(
             db_session, overrides={"last_frame": True}, endpoint=LAST_FRAME_ENDPOINT, model_id=LAST_FRAME_MODEL
         )
@@ -801,6 +936,7 @@ class TestResolverReturnsEffectiveCapabilities:
         assert caps["first_frame"] is executed.first_frame
         assert caps["last_frame"] is executed.last_frame
         assert caps["max_reference_images"] == executed.max_reference_images
+        # The same-source criterion: both sides equal the synthesis function's return value for the same input
         # 同源的判据：两侧都等于合成函数在同一输入下的返回值
         expected = synthesize_video_capabilities(
             endpoint=LAST_FRAME_ENDPOINT, model_id=LAST_FRAME_MODEL, overrides={"last_frame": True}
@@ -808,7 +944,11 @@ class TestResolverReturnsEffectiveCapabilities:
         assert executed == expected
 
     async def test_disabled_model_falls_back_to_default_model(self, db_session: AsyncSession):
-        """请求的 model 被禁用时,与执行层同一条回退规则:改用该 provider 的默认启用 video
+        """When the requested model is disabled, apply the same fallback rule as the execution layer: use the provider's
+        default enabled video model instead of erroring -- otherwise /video-capabilities would return 4xx while the actual
+        generation request silently succeeds with the default model, and the presentation and execution layers drift.
+
+        请求的 model 被禁用时,与执行层同一条回退规则:改用该 provider 的默认启用 video
         model,而不是报错——否则 /video-capabilities 会 4xx,而实际生成请求会静默用默认模型
         成功,展示层与执行层因此漂移。"""
         repo = CustomProviderRepository(db_session)
@@ -845,7 +985,10 @@ class TestResolverReturnsEffectiveCapabilities:
         assert caps["first_frame"] is system.first_frame
 
     async def test_media_type_mismatch_falls_back_to_default_model(self, db_session: AsyncSession):
-        """请求的 model 仍启用,但它的 endpoint 不是 video 类型时,与执行层同样
+        """When the requested model is still enabled but its endpoint is not of video type, fall back to the provider's
+        default enabled video model just like the execution layer, so the presentation and execution layers do not drift.
+
+        请求的 model 仍启用,但它的 endpoint 不是 video 类型时,与执行层同样
         回退到该 provider 的默认启用 video model，避免展示层与执行层漂移。"""
         repo = CustomProviderRepository(db_session)
         provider = await repo.create_provider(
@@ -881,7 +1024,9 @@ class TestResolverReturnsEffectiveCapabilities:
         assert caps["first_frame"] is system.first_frame
 
     async def test_builtin_boolean_caps_come_from_backend(self, db_session: AsyncSession):
-        """内置分支的布尔位来自 backend 纯函数，注册表不存第二份。"""
+        """Boolean bits of built-in branches come from backend pure functions; the registry keeps no second copy.
+
+        内置分支的布尔位来自 backend 纯函数，注册表不存第二份。"""
         from lib.backends.backend_assembly.specs import builtin_video_capabilities_for_model
         from lib.config.resolver import ConfigResolver
         from lib.config.service import ConfigService
@@ -899,7 +1044,10 @@ class TestResolverReturnsEffectiveCapabilities:
 
 
 class TestBuiltinBackendsDeclareCapabilityFunction:
-    """每个能承载视频模型的内置 provider 都要能被纯函数问出布尔能力位。"""
+    """Every built-in provider that can host video models must have its boolean capability bits answerable by a pure
+    function.
+
+    每个能承载视频模型的内置 provider 都要能被纯函数问出布尔能力位。"""
 
     def test_every_builtin_video_provider_resolvable(self):
         from arcreel_market_core.video_backend_contract import VideoCapabilities
@@ -923,7 +1071,13 @@ class TestBuiltinBackendsDeclareCapabilityFunction:
 
 
 class TestVideoCapabilitiesEndpoint:
-    """GET /projects/{name}/video-capabilities 的响应形状与覆盖联动。
+    """Response shape and override linkage of GET /projects/{name}/video-capabilities.
+
+    The other same-source tests hit private resolver methods; this covers the HTTP layer: both boolean bits really
+    appear in the response, and after writing an override the endpoint's return value changes (not just the resolver
+    internals).
+
+    GET /projects/{name}/video-capabilities 的响应形状与覆盖联动。
 
     其余同源测试打在 resolver 私有方法上，这里补住 HTTP 这一层：两个布尔位真的
     出现在接口响应里，且写入覆盖后接口返回值随之变化（不只是 resolver 内部变了）。
@@ -961,7 +1115,9 @@ class TestVideoCapabilitiesEndpoint:
         assert body["last_frame"] is system.last_frame is False
 
     async def test_endpoint_follows_written_override(self, custom_providers_app_session_factory, monkeypatch):
-        """AC：对自定义模型写入覆盖后，该接口返回值随之变化。"""
+        """AC: after writing an override for a custom model, this endpoint's return value changes accordingly.
+
+        AC：对自定义模型写入覆盖后，该接口返回值随之变化。"""
         async with custom_providers_app_session_factory() as db_session:
             pid = await TestResolverReturnsEffectiveCapabilities._seed(
                 db_session, overrides={"last_frame": True}, endpoint=LAST_FRAME_ENDPOINT, model_id=LAST_FRAME_MODEL

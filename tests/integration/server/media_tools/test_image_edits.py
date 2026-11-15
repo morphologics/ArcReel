@@ -1,4 +1,6 @@
-"""edit_images handler 的 ``ToolOutcome``。"""
+"""``ToolOutcome`` of the edit_images handler.
+
+edit_images handler 的 ``ToolOutcome``。"""
 
 from __future__ import annotations
 
@@ -61,7 +63,10 @@ async def test_edit_images_happy(fake_ctx: ToolHarness) -> None:
 
 
 async def test_edit_images_failure_preserves_the_untouched_source_path(fake_ctx: ToolHarness) -> None:
-    """编辑任务失败时，源图未被覆盖——结果应带回编辑前的路径而不是 None。"""
+    """When an edit task fails, the source image was not overwritten -- the result should carry back the pre-edit path,
+    not None.
+
+    编辑任务失败时，源图未被覆盖——结果应带回编辑前的路径而不是 None。"""
     _give_zhangsan_a_sheet(fake_ctx)
     use_fake_caps(fake_ctx)
     fake_ctx.pm.mirror_to_disk()
@@ -75,13 +80,18 @@ async def test_edit_images_failure_preserves_the_untouched_source_path(fake_ctx:
 
 
 async def test_edit_images_i2i_unavailable(fake_ctx: ToolHarness) -> None:
-    """i2i 不可用时不创建任何任务（复用服务端 fail-fast 判断点）。"""
+    """When i2i is unavailable no task is created (reuses the server's fail-fast check point).
+
+    i2i 不可用时不创建任何任务（复用服务端 fail-fast 判断点）。"""
     use_fake_caps(fake_ctx, image_backend_error=ValueError("未找到可用的 image 供应商"))
     fake_ctx.pm.mirror_to_disk()
     enqueue = AsyncMock(return_value=([], []))
 
     out = await run_declared_tool("edit_images", fake_ctx, _EDIT_ZHANGSAN, batch_waiter=enqueue)
 
+    # i2i unavailability is a shared precondition before enqueueing, but callers still read results by the per-ID
+    # contract -- each requested ID gets a blocked entry, rather than just a block of text that cannot be consumed
+    # programmatically.
     # i2i 不可用是入队前的共享前置条件，但调用方仍按逐 ID 契约读结果——每个
     # 请求到的 ID 各记一条 blocked，而不是只回一段无法编程消费的文本。
     result = read_generation_result(out)
@@ -132,7 +142,16 @@ async def test_edit_images_one_manifest_fail_loud_error_does_not_abort_the_batch
     fake_ctx: ToolHarness,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """一条编辑的产物状态读取 fail-loud，不该把同批其它编辑的已算结果一起吞掉。
+    """A fail-loud artifact state read for one edit must not swallow the already computed results of other edits in the
+    same batch.
+
+    ``resolve_usable_image_edit_source`` raising ``ArtifactManifestError`` while the Manifest judges that artifact's
+    state is designed behavior (maps to BLOCKED); the per-edit loop of ``_build_specs`` must catch it individually,
+    otherwise it escapes the loop, is caught by the handler-level ``except`` and becomes an unreadable plain-text
+    error for the whole batch -- besides Zhang San, Li Si's edit, which could have been enqueued normally, also loses
+    its verdict.
+
+    一条编辑的产物状态读取 fail-loud，不该把同批其它编辑的已算结果一起吞掉。
 
     ``resolve_usable_image_edit_source`` 在 Manifest 判定该条产物状态时抛
     ``ArtifactManifestError`` 是设计内行为（对应 BLOCKED）；``_build_specs`` 的
@@ -190,7 +209,10 @@ async def test_edit_images_one_manifest_fail_loud_error_does_not_abort_the_batch
 async def test_edit_images_malformed_derivative_id_is_not_found_without_aborting_the_batch(
     fake_ctx: ToolHarness,
 ) -> None:
-    """不合「本体名/衍生名」格式的衍生 ID 只让这一条记为不存在，同批合法衍生照常提交。"""
+    """A derivative ID not in the "base name/derivative name" format only marks that one as not found; valid derivatives
+    in the same batch are submitted as usual.
+
+    不合「本体名/衍生名」格式的衍生 ID 只让这一条记为不存在，同批合法衍生照常提交。"""
     project_path = fake_ctx.project_path
     (project_path / "characters").mkdir()
     (project_path / "characters" / "zhangsan-battle.png").write_bytes(b"png")
@@ -265,17 +287,21 @@ async def test_edit_images_storyboard_rejects_an_unbound_script_before_provider(
 
     assert out.problem is not None
     assert "not bound" in out.problem.detail
+    # An unbound script is refused before the provider check: the resolver was never asked
     # 剧本未绑定在供应商判定之前就拒：解析器一次都没被问过
     assert resolver.image_generation_type_calls == []
     enqueue.assert_not_awaited()
 
 
 async def test_edit_images_skips_missing_current_image(fake_ctx: ToolHarness) -> None:
-    """资产没有可编辑的当前图（sheet 字段未设置）时逐 ID 阻断，不入队。"""
+    """When an asset has no current image to edit (sheet field not set), block per ID and do not enqueue.
+
+    资产没有可编辑的当前图（sheet 字段未设置）时逐 ID 阻断，不入队。"""
     use_fake_caps(fake_ctx)
     fake_ctx.pm.mirror_to_disk()
     enqueue = AsyncMock(return_value=([], []))
 
+    # Li Si has no character_sheet
     # 李四 没有 character_sheet
     out = await run_declared_tool(
         "edit_images",
@@ -293,7 +319,10 @@ async def test_edit_images_skips_missing_current_image(fake_ctx: ToolHarness) ->
 
 
 async def test_edit_images_build_specs_warnings(fake_ctx: ToolHarness) -> None:
-    """畸形条目分两路：有 ID 的进逐 ID blocked，无 ID 可寻址的留在 warnings；合法条目仍正常入队。"""
+    """Malformed entries go two ways: those with an ID go to per-ID blocked, those with no addressable ID stay in
+    warnings; valid entries are still enqueued normally.
+
+    畸形条目分两路：有 ID 的进逐 ID blocked，无 ID 可寻址的留在 warnings；合法条目仍正常入队。"""
     _give_zhangsan_a_sheet(fake_ctx)
     use_fake_caps(fake_ctx)
     fake_ctx.pm.mirror_to_disk()
@@ -304,16 +333,17 @@ async def test_edit_images_build_specs_warnings(fake_ctx: ToolHarness) -> None:
         {
             "resource_type": "character",
             "edits": [
-                {"id": " ", "instruction": "x"},  # 空白 id
-                {"id": "张三", "instruction": "改发型"},  # 合法，唯一入队的一条
-                {"id": "张三", "instruction": "again"},  # 重复 id
-                {"id": "李四", "instruction": ""},  # 缺指令
-                {"id": "王五", "instruction": "改"},  # 资源不存在
+                {"id": " ", "instruction": "x"},  # Blank id / 空白 id
+                {"id": "张三", "instruction": "改发型"},  # Valid, the only one enqueued / 合法，唯一入队的一条
+                {"id": "张三", "instruction": "again"},  # Duplicate id / 重复 id
+                {"id": "李四", "instruction": ""},  # Missing instruction / 缺指令
+                {"id": "王五", "instruction": "改"},  # Resource does not exist / 资源不存在
             ],
         },
         batch_waiter=_succeed_every_spec,
     )
 
+    # Entries with no addressable ID have no unit to report and can only stay in the summary warnings.
     # 无 ID 可寻址的条目没有可报告的 unit，只能留在摘要告警里。
     assert isinstance(out.value, dict)
     summary = out.value["summary"]
@@ -331,7 +361,9 @@ async def test_edit_images_build_specs_warnings(fake_ctx: ToolHarness) -> None:
 
 
 async def test_edit_images_storyboard_happy(fake_ctx: ToolHarness) -> None:
-    """storyboard 分支带合法 script_file 时应正常解析剧本并入队。"""
+    """The storyboard branch with a valid script_file should resolve the script and enqueue normally.
+
+    storyboard 分支带合法 script_file 时应正常解析剧本并入队。"""
     use_fake_caps(fake_ctx)
 
     out = await run_declared_tool(
@@ -349,7 +381,9 @@ async def test_edit_images_storyboard_happy(fake_ctx: ToolHarness) -> None:
 
 
 async def test_edit_images_reports_failures(fake_ctx: ToolHarness) -> None:
-    """批量入队返回失败项时，失败明细要带上失败原因。"""
+    """When batch enqueue returns failures, the failure details must carry the reason.
+
+    批量入队返回失败项时，失败明细要带上失败原因。"""
     _give_zhangsan_a_sheet(fake_ctx)
     use_fake_caps(fake_ctx)
     fake_ctx.pm.mirror_to_disk()
@@ -364,7 +398,10 @@ async def test_edit_images_reports_failures(fake_ctx: ToolHarness) -> None:
 
 
 async def test_edit_images_unexpected_exception(fake_ctx: ToolHarness) -> None:
-    """未预期的异常（如 pm 读取项目失败）要落到统一的 tool_error 兜底，而非向上抛出。"""
+    """Unexpected exceptions (e.g. pm failing to read the project) must land in the unified tool_error fallback instead
+    of propagating.
+
+    未预期的异常（如 pm 读取项目失败）要落到统一的 tool_error 兜底，而非向上抛出。"""
 
     def boom(_name: str) -> dict[str, Any]:
         raise RuntimeError("db down")
@@ -384,6 +421,7 @@ async def test_i2i_unavailable_problem_none_when_available() -> None:
 
     resolver = fake_caps_resolver()
     assert await mod._i2i_unavailable_problem({}, config_resolver=resolver) is None
+    # The check is on the i2i slot, not the project's default image slot
     # 判的是 i2i 槽位，不是项目默认图像槽
     assert resolver.image_generation_type_calls == ["i2i"]
 

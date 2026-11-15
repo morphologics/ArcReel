@@ -1,4 +1,9 @@
-"""广告/短片项目创建：project.json 专属字段与恒单集结构。
+"""Creating ad/short projects: project.json-specific fields and the always-single-episode structure.
+
+Only external behavior is asserted: read the shape of project.json after calling create_project_metadata,
+without touching ProjectManager internals.
+
+广告/短片项目创建：project.json 专属字段与恒单集结构。
 
 只断言外部行为：调用 create_project_metadata 后读 project.json 形状，
 不触碰 ProjectManager 内部实现。
@@ -38,7 +43,7 @@ class TestCreateAdProjectMetadata:
             {"episode": 1, "title": "", "script_file": "scripts/episode_1.json", "source_origin": "none"}
         ]
 
-        # 落盘后的 project.json 与返回值一致
+        # project.json on disk matches the return value / 落盘后的 project.json 与返回值一致
         on_disk = pm.load_project("demo-ad")
         assert on_disk["target_duration"] == 30
         assert on_disk["episodes"] == project["episodes"]

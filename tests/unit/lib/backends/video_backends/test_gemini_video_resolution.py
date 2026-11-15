@@ -1,4 +1,6 @@
-"""测试 GeminiVideoBackend 对 resolution 与 duration 的透传。"""
+"""Tests GeminiVideoBackend's pass-through of resolution and duration.
+
+测试 GeminiVideoBackend 对 resolution 与 duration 的透传。"""
 
 from unittest.mock import AsyncMock, MagicMock
 
@@ -57,7 +59,9 @@ async def test_resolution_string_passed_through(tmp_path):
 @pytest.mark.parametrize("seconds", [3, 4, 5, 6, 7, 8, 10, 12, 15])
 @pytest.mark.asyncio
 async def test_duration_passthrough_str(tmp_path, seconds):
-    """删除 _normalize_duration 后，duration_seconds 应原值（str）透传到 SDK config。"""
+    """With _normalize_duration removed, duration_seconds should be passed to the SDK config with its original value (str).
+
+    删除 _normalize_duration 后，duration_seconds 应原值（str）透传到 SDK config。"""
     backend = _make_backend()
     req = VideoGenerationRequest(
         prompt="x",
@@ -72,6 +76,7 @@ async def test_duration_passthrough_str(tmp_path, seconds):
     assert cfg_call.kwargs["duration_seconds"] == str(seconds)
 
 
+# ── Duration is not checked separately in the backend: duration constraints for reference images / 1080p·4k are judged upstream ──
 # ── 时长不在 backend 另做检查：参考图 / 1080p·4k 的时长约束由上游判定 ──────────────────
 
 
@@ -84,7 +89,9 @@ def _frame(tmp_path, name="frame.png"):
 @pytest.mark.parametrize("resolution", ["1080p", "4k"])
 @pytest.mark.asyncio
 async def test_generate_passes_constrained_duration_through(tmp_path, resolution):
-    """参考图与高分辨率下的非 8 秒请求也原样下发，超出范围由上游拒绝。"""
+    """Non-8-second requests with reference images and at high resolution are also sent as is; out-of-range values are rejected upstream.
+
+    参考图与高分辨率下的非 8 秒请求也原样下发，超出范围由上游拒绝。"""
     backend = _make_backend()
     req = VideoGenerationRequest(
         prompt="x",
@@ -93,7 +100,7 @@ async def test_generate_passes_constrained_duration_through(tmp_path, resolution
         resolution=resolution,
         reference_images=[_frame(tmp_path, "ref.png")],
     )
-    with pytest.raises(RuntimeError):  # SDK mock 的 stop 哨兵，说明已走到调用点
+    with pytest.raises(RuntimeError):  # Stop sentinel of the SDK mock, showing the call site was reached. / SDK mock 的 stop 哨兵，说明已走到调用点
         await backend.generate(req)
 
     backend._client.aio.models.generate_videos.assert_awaited_once()

@@ -1,4 +1,6 @@
-"""迁移测试的共享 alembic 配置。"""
+"""Shared alembic config for migration tests.
+
+迁移测试的共享 alembic 配置。"""
 
 from __future__ import annotations
 
@@ -13,7 +15,13 @@ _PROJECT_ROOT = Path(__file__).resolve().parents[5]
 
 @pytest.fixture
 def migration_revisions() -> Callable[[str], tuple[str, str]]:
-    """按文件名 glob 取出某个迁移脚本的 ``(revision, down_revision)``。
+    """Take ``(revision, down_revision)`` of a migration script by file-name glob.
+
+    Tests chain "upgrade to the parent revision -> create data -> upgrade to this revision" with it instead of
+    hard-coding revision strings: when migration scripts are reordered or backfilled, a hard-coded id would silently
+    point at another migration.
+
+    按文件名 glob 取出某个迁移脚本的 ``(revision, down_revision)``。
 
     用例据此把「升到父版本 → 造数据 → 升到本版本」串起来，而不写死 revision 串——迁移脚本
     重排或补票时，写死的 id 会静默指向另一条迁移。
@@ -38,7 +46,14 @@ def migration_revisions() -> Callable[[str], tuple[str, str]]:
 
 @pytest.fixture
 def alembic_cfg(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[Config, Path]:
-    """指向仓库 alembic 脚本的 Config，与本用例独占的临时 sqlite 库路径。
+    """Config pointing at the repo's alembic scripts, plus the path of a temp sqlite DB owned by this test.
+
+    Deliberately constructed empty without passing ``alembic.ini``: ``env.py`` skips ``fileConfig()`` when
+    ``config_file_name`` is None; otherwise alembic.ini's logging section would reset the root logger and clear pytest
+    caplog's handler along with it. Same for ``init_db()`` in ``lib/db/__init__.py``. The DB location is passed to
+    ``env.py`` via ``DATABASE_URL``.
+
+    指向仓库 alembic 脚本的 Config，与本用例独占的临时 sqlite 库路径。
 
     刻意空构造而不传 ``alembic.ini``：``env.py`` 在 ``config_file_name`` 为 None 时
     跳过 ``fileConfig()``，否则 alembic.ini 的 logging section 会重置 root logger、

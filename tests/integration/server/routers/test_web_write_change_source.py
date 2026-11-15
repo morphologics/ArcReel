@@ -1,4 +1,20 @@
-"""Web 端写入经真实项目事件服务按 ``webui`` 广播；Agent 的同类写入仍按原来源广播。
+"""Web-side writes are broadcast as ``webui`` through the real project event service; the Agent's equivalent writes
+are still broadcast with their original source.
+
+The frontend uses the source to tell its own operations from outside changes: a non-``webui`` new draft jumps to
+that episode automatically; other changes pop a notification and queue a focus. Each test subscribes to the
+event stream, makes one write, collects all batches caused by that write, then asserts the source: besides the
+explicitly broadcast batch, related changes (draft gone, registration changed) found by the event service's
+read-disk rescan or hint-woken scan must also carry the initiator's source.
+
+The source is settled by hints that arrived before the scan reads disk. If one write has several disk steps, a
+scan woken by an earlier step's hint may read a later step's disk state while the later hint has not arrived,
+and the change settles as ``filesystem``; a timed poll landing between write and hint is the same. This is the
+known window of settling the source by scan window, not covered by these tests: they turn off timed polling and
+hold the event service's disk reads while the write is in flight, so after the write returns all steps' hints
+have arrived before the scan reads disk.
+
+Web 端写入经真实项目事件服务按 ``webui`` 广播；Agent 的同类写入仍按原来源广播。
 
 前端据来源区分自己的操作与外部改动：非 ``webui`` 的草稿新建会自动跳到对应集，其余变更弹通知、排队聚焦。
 每个用例订阅事件流后发起一次写入，收齐这次写入引起的全部批次再断言来源：除了显式广播的那一批，
@@ -66,6 +82,8 @@ _SEGMENT = {
     "props": [],
 }
 _DOC_TYPE = "narration_script_plan"
+# # Timed polling takes no part: scans are woken only by write-exit hints and explicit batches; collecting events is
+# # confirmed by an explicit batch barrier.
 # 定时轮询不参与：扫描只由写入出口的 hint 与显式批次唤醒，收齐事件由显式批次屏障确认。
 _POLL_SECONDS = 3600.0
 _AGENT = RevisionAuthor(kind="arcreel_agent")
@@ -89,7 +107,10 @@ class _Env:
 
     @contextlib.contextmanager
     def reads_held(self) -> Generator[None]:
-        """写入在途期间扣住事件服务读盘；退出时各步的 hint 均已送达，被唤醒的扫描才读盘。"""
+        """Hold the event service's disk reads while a write is in flight; on exit all steps' hints have arrived, then
+        woken scans read disk.
+
+        写入在途期间扣住事件服务读盘；退出时各步的 hint 均已送达，被唤醒的扫描才读盘。"""
         self.reads_open.clear()
         try:
             yield
@@ -97,7 +118,9 @@ class _Env:
             self.reads_open.set()
 
     async def batches_until(self, predicate: Callable[[dict], bool]) -> list[dict]:
-        """等待真实变更，再用串行重建的两条屏障批次收齐连带变更。"""
+        """Wait for real changes, then collect related changes with two serially rebuilt barrier batches.
+
+        等待真实变更，再用串行重建的两条屏障批次收齐连带变更。"""
         collected: list[dict] = []
 
         async def _pull_until_match() -> None:
@@ -111,8 +134,12 @@ class _Env:
         return collected + await self.batches_after_barrier()
 
     async def batches_after_barrier(self) -> list[dict]:
-        """用串行重建的两条屏障批次收齐此前写入引起、尚未取走的全部批次。"""
+        """Collect all batches caused by earlier writes and not yet taken, using two serially rebuilt barrier batches.
+
+        用串行重建的两条屏障批次收齐此前写入引起、尚未取走的全部批次。"""
         collected: list[dict] = []
+        # # A batch broadcasts itself first, then rescans; the second arriving proves the first's rescan is done. Barriers send
+        # # no hint and do not change the source of real changes.
         # 批次先广播自身再补扫；第二条到达证明第一条的补扫已结束。屏障不发 hint，不改变真实变更的来源。
         for marker in ("scan", "done"):
             emit_project_change_batch(
@@ -149,13 +176,16 @@ def _changes(batches: list[dict]) -> list[tuple[str, str, str]]:
     return [(c["entity_type"], c["action"], c["entity_id"]) for batch in batches for c in batch["changes"]]
 
 
+#: App dependency overrides: key is the dependency function, value is a factory returning the stand-in.
 #: 应用依赖替换：键是依赖函数，值是返回替身的工厂。
 _Overrides = dict[Callable[..., Any], Callable[[], Any]]
 
 
 @pytest.fixture
 def open_env(monkeypatch) -> Callable[..., contextlib.AbstractAsyncContextManager[_Env]]:
-    """为 *pm* 下的 demo 项目订阅事件流、装好被测路由，产出 :class:`_Env`。"""
+    """Subscribe to the event stream for the demo project under *pm*, install the routes under test, yield :class:`_Env`.
+
+    为 *pm* 下的 demo 项目订阅事件流、装好被测路由，产出 :class:`_Env`。"""
 
     @contextlib.asynccontextmanager
     async def _open(pm: ProjectManager, overrides: _Overrides | None = None) -> AsyncGenerator[_Env]:
@@ -180,6 +210,8 @@ def open_env(monkeypatch) -> Callable[..., contextlib.AbstractAsyncContextManage
         await service.start()
         stream = project_events_router.stream_project_events("demo", _ConnectedRequest(service), service=service)
         assert (await anext(stream)).event == "snapshot"
+        # # The event stream is moved into a queue by a background task: a timeout on the stream itself would cancel the
+        # # generator and close the subscription.
         # 事件流由后台任务转进队列：对流本身设超时会取消生成器、关掉订阅。
         batches: asyncio.Queue[dict] = asyncio.Queue()
 
@@ -203,7 +235,10 @@ def open_env(monkeypatch) -> Callable[..., contextlib.AbstractAsyncContextManage
 
 @pytest.fixture
 async def env(tmp_path: Path, open_env) -> AsyncIterator[_Env]:
-    """已订阅 demo 项目事件流的旁白项目：第 1 集自带原文，已有正式脚本规划。"""
+    """Narration project subscribed to the demo project event stream: episode 1 has its own source and an existing
+    final script plan.
+
+    已订阅 demo 项目事件流的旁白项目：第 1 集自带原文，已有正式脚本规划。"""
     pm = ProjectManager(tmp_path / "projects")
     pm.create_project("demo")
     pm.create_project_metadata("demo", "Demo", "Anime", "narration")
@@ -376,7 +411,9 @@ _UNITS = "/projects/demo/reference-videos/episodes/1/units"
 
 @pytest.fixture
 async def reference_env(timeline_project: ProjectManager, tmp_path: Path, open_env, monkeypatch) -> AsyncIterator[_Env]:
-    """参考生视频项目：第 1 集有 E1U1、E1U2 两个单元，E1U2 已有当前视频。"""
+    """Reference-to-video project: episode 1 has two units E1U1 and E1U2; E1U2 has a current video.
+
+    参考生视频项目：第 1 集有 E1U1、E1U2 两个单元，E1U2 已有当前视频。"""
     use_reference_projection(monkeypatch, fake_reference_request_projector(durations=(4, 8)))
     _install_video(timeline_project, tmp_path, "E1U2")
     async with open_env(timeline_project) as opened:
@@ -410,7 +447,10 @@ async def test_editing_reference_units_broadcasts_as_webui(
 
 
 async def test_deleting_a_reference_unit_with_its_video_broadcasts_as_webui(reference_env: _Env) -> None:
-    """单元连同视频移入回收站：单元删除与回收站这批都按 webui 广播，回收站记录为用户删除。"""
+    """Unit moved to the trash together with its video: the unit deletion and the trash batch are both broadcast as
+    webui, and the trash record is a user deletion.
+
+    单元连同视频移入回收站：单元删除与回收站这批都按 webui 广播，回收站记录为用户删除。"""
     with reference_env.reads_held():
         response = await reference_env.client.delete(f"{_UNITS}/E1U2")
     assert response.status_code == 204
@@ -423,7 +463,10 @@ async def test_deleting_a_reference_unit_with_its_video_broadcasts_as_webui(refe
 
 
 async def test_moving_a_reference_unit_broadcasts_nothing(reference_env: _Env) -> None:
-    """快照按单元编号比对条目、不记顺序，调换单元顺序不产生变更批次，也就不会被当成外部改动。"""
+    """Snapshots compare entries by unit ID, not order; swapping unit order produces no change batch, so it is never
+    taken for an outside change.
+
+    快照按单元编号比对条目、不记顺序，调换单元顺序不产生变更批次，也就不会被当成外部改动。"""
     with reference_env.reads_held():
         response = await reference_env.client.post(f"{_UNITS}/E1U2/move", json={"after_unit_id": None})
     assert [unit["unit_id"] for unit in response.json()["units"]] == ["E1U2", "E1U1"]
@@ -440,7 +483,10 @@ _TIMELINES = "/projects/demo/edit-timelines"
 async def timeline_env(
     timeline_project: ProjectManager, tmp_path: Path, open_env, file_db_factory
 ) -> AsyncIterator[_Env]:
-    """参考生视频项目：E1U1 已有用户上传、登记为当前产物的视频，可按脚本新建剪辑时间线。"""
+    """Reference-to-video project: E1U1 has a user-uploaded video registered as the current artifact; an edit
+    timeline can be created from the script.
+
+    参考生视频项目：E1U1 已有用户上传、登记为当前产物的视频，可按脚本新建剪辑时间线。"""
     timeline_project.update_script_locked(
         "demo",
         "episode_1.json",
@@ -473,7 +519,10 @@ async def timeline_env(
 
 
 async def _agent_timeline(env: _Env) -> str:
-    """Agent 建一条剪辑时间线并改出第 2 个修订，收完它引起的批次；返回时间线 id。"""
+    """The Agent creates an edit timeline and makes a 2nd revision, collecting the batches it causes; returns the
+    timeline id.
+
+    Agent 建一条剪辑时间线并改出第 2 个修订，收完它引起的批次；返回时间线 id。"""
     service = EditTimelineService(env.pm)
     created = await service.create_from_script("demo", episode=1, name="完整版", author=_AGENT)
     timeline_id = created.timeline.id
@@ -529,7 +578,10 @@ async def test_managing_an_edit_timeline_broadcasts_as_webui(
 
 
 async def test_retrying_a_migration_broadcasts_its_changes_as_webui(tmp_path: Path, open_env) -> None:
-    """升级链改写 project.json 与剧本时不发 hint；重试入口补发，这些变更按 webui 广播。"""
+    """The upgrade chain rewriting project.json and scripts sends no hints; the retry entry sends them afterwards and
+    these changes are broadcast as webui.
+
+    升级链改写 project.json 与剧本时不发 hint；重试入口补发，这些变更按 webui 广播。"""
     _old_project(tmp_path)
 
     async with open_env(ProjectManager(tmp_path)) as env:
@@ -543,7 +595,10 @@ async def test_retrying_a_migration_broadcasts_its_changes_as_webui(tmp_path: Pa
 
 
 async def test_acknowledging_a_migration_report_broadcasts_nothing_as_an_outside_change(env: _Env) -> None:
-    """确认报告只改升级报告文件，不是项目状态的输入：不产生任何变更批次。"""
+    """Acknowledging a report only changes the upgrade report file, which is not an input of project state: no change
+    batch is produced.
+
+    确认报告只改升级报告文件，不是项目状态的输入：不产生任何变更批次。"""
     write_migration_report(
         env.project_path,
         build_migration_report(
@@ -565,12 +620,16 @@ async def test_acknowledging_a_migration_report_broadcasts_nothing_as_an_outside
     assert await env.batches_after_barrier() == []
 
 
+# # ---------------------------------------------------------------- Equivalent writes by the Agent
 # ---------------------------------------------------------------- Agent 的同类写入
 
 
 @pytest.mark.parametrize("source", ["filesystem", "worker"])
 async def test_agent_draft_writes_keep_their_original_source(env: _Env, source) -> None:
-    """Agent 或任务的草稿写入、改写与丢弃保留原来源，前端照常提醒创作者。"""
+    """Draft writes, rewrites and discards by the Agent or a task keep their original source, and the frontend
+    alerts the creator as usual.
+
+    Agent 或任务的草稿写入、改写与丢弃保留原来源，前端照常提醒创作者。"""
     workflow = DraftWorkflow(DraftContext(project_name="demo", data_root=env.pm.data_root, pm=env.pm))
 
     with project_change_source(source):

@@ -18,7 +18,9 @@ def _ref_paths(refs: list) -> list:
 
 
 class TestAdProductFidelityStoryboard:
-    """商品保真注入二元化——分镜层。"""
+    """Binary product fidelity injection - shot layer.
+
+    商品保真注入二元化——分镜层。"""
 
     def _patch(self, monkeypatch, pm, generator):
         use_project_manager(monkeypatch, pm)
@@ -26,7 +28,10 @@ class TestAdProductFidelityStoryboard:
         skip_artifact_registration(monkeypatch)
 
     async def test_product_shot_injects_sheet_then_originals_before_other_sheets(self, tmp_path, monkeypatch):
-        """有确认 sheet 的商品分镜：注入集为「sheet 多角度 + 原图压阵」，排序绝对优先于角色/场景 sheet。"""
+        """Product shot with a confirmed sheet: the injected set is "multi-angle sheet + original images as anchor",
+        ordered with absolute priority over character/scene sheets.
+
+        有确认 sheet 的商品分镜：注入集为「sheet 多角度 + 原图压阵」，排序绝对优先于角色/场景 sheet。"""
         project_path = prepare_files(tmp_path)
         (project_path / "products" / "保温杯.png").write_bytes(b"png")
         pm = ad_pm(project_path, with_sheet=True)
@@ -39,11 +44,16 @@ class TestAdProductFidelityStoryboard:
 
         refs = generator.image_calls[0]["reference_images"]
         paths = _ref_paths(refs)
+        # Product references are fully injected and first: sheet first, original images as anchor, ahead of
+        # character/scene sheets
         # 商品参考全量注入且排首位：sheet 在前、原图压阵，先于角色/场景 sheet
         assert [path.name for path in paths[:2]] == ["0000-保温杯.png", "0001-保温杯_1.jpg"]
         assert generator.image_reference_bytes[0][:2] == [b"png", b"jpg"]
+        # Existing assembly follows the product references as usual (character/scene sheets)
         # 既有装配照常跟在商品参考之后（角色/场景 sheet）
         assert [path.name for path in paths[2:]] == ["0002-Alice.png", "0003-祠堂.png"]
+        # Product references are named by position in the declaration line with an exact-match constraint; the
+        # reference images themselves carry no labels
         # 商品参考在声明行里按序位点名并附完全一致约束，参考图本身不带任何标签
         prompt = generator.image_calls[0]["prompt"]
         assert prompt.startswith(
@@ -54,7 +64,9 @@ class TestAdProductFidelityStoryboard:
         assert "保温杯" not in prompt
 
     async def test_product_shot_without_sheet_injects_originals_directly(self, tmp_path, monkeypatch):
-        """无 sheet 的商品分镜：原图直注、仍排首位。"""
+        """Product shot without a sheet: original images injected directly, still first.
+
+        无 sheet 的商品分镜：原图直注、仍排首位。"""
         project_path = prepare_files(tmp_path)
         pm = ad_pm(project_path, with_sheet=False)
         generator = FakeGenerator()
@@ -71,7 +83,10 @@ class TestAdProductFidelityStoryboard:
         assert "Reference_Images: 图1为商品参考图，画面中的商品须与之完全一致；" in generator.image_calls[0]["prompt"]
 
     async def test_declaration_only_numbers_products_with_injected_references(self, tmp_path, monkeypatch):
-        """声明行只为实际注入了参考图的商品编号：既没有资产图也没有原图的商品只用文字，不占序位。"""
+        """The declaration line numbers only products that actually injected reference images: products with neither
+        a sheet nor an original image use text only and take no position.
+
+        声明行只为实际注入了参考图的商品编号：既没有资产图也没有原图的商品只用文字，不占序位。"""
         project_path = prepare_files(tmp_path)
         pm = ad_pm(project_path, with_sheet=False)
         pm.project["products"]["杯刷"] = {
@@ -97,7 +112,10 @@ class TestAdProductFidelityStoryboard:
         assert len(generator.image_calls[0]["reference_images"]) == 3
 
     async def test_atmosphere_shot_zero_product_images(self, tmp_path, monkeypatch):
-        """氛围分镜（products_in_shot 为空）：零商品图，场景/角色 sheet 照常注入，prompt 无保真指令。"""
+        """Atmosphere shot (products_in_shot empty): zero product images, scene/character sheets injected as usual,
+        no fidelity instruction in the prompt.
+
+        氛围分镜（products_in_shot 为空）：零商品图，场景/角色 sheet 照常注入，prompt 无保真指令。"""
         project_path = prepare_files(tmp_path)
         (project_path / "products" / "保温杯.png").write_bytes(b"png")
         pm = ad_pm(project_path, with_sheet=True)
@@ -127,7 +145,10 @@ def _patch_video_path(monkeypatch, pm, generator):
 
 
 class TestAdProductVideoRequest:
-    """商品分镜的视频请求走纯图生视频：分镜图作首帧，不带参考图。"""
+    """The video request for a product shot is pure image-to-video: the storyboard image is the first frame, with no
+    reference images.
+
+    商品分镜的视频请求走纯图生视频：分镜图作首帧，不带参考图。"""
 
     async def test_product_shot_video_request_carries_no_reference_images(self, tmp_path, monkeypatch):
         project_path = prepare_files(tmp_path)
@@ -152,5 +173,7 @@ class TestAdProductVideoRequest:
         call = generator.video_calls[0]
         assert "reference_images" not in call
         assert call["start_image"] == project_path / "storyboards" / "scene_E1S02.png"
+        # Without references, no product fidelity instruction is attached (the instruction points to reference
+        # images and would mislead the model)
         # 参考缺席时不附商品保真指令（指令指向参考图，会误导模型）
         assert "高保真" not in call["prompt"]

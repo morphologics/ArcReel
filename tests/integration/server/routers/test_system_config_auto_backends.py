@@ -1,4 +1,7 @@
-"""自动选模预览接口使用真实配置解析器与数据库，不发供应商请求。"""
+"""The auto model-selection preview endpoint uses the real config resolver and database and sends no provider
+requests.
+
+自动选模预览接口使用真实配置解析器与数据库，不发供应商请求。"""
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient

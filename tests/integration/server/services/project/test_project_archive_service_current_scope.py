@@ -1,4 +1,7 @@
-"""仅当前版本导出：包里的版本记录与快照文件一一对应，导入后版本面板与还原可用。"""
+"""Current-version-only export: version records in the package match the snapshot files one to one; after
+import the version panel and restore work.
+
+仅当前版本导出：包里的版本记录与快照文件一一对应，导入后版本面板与还原可用。"""
 
 import json
 import shutil
@@ -32,7 +35,10 @@ def _resource_id(resource_type: str) -> str:
 
 
 def _project(pm: ProjectManager) -> Path:
-    """启用宫格、带商品与角色衍生登记的项目；各资源的正式文件由用例自行写入。"""
+    """Project with grids enabled and product and character-derivative registrations; each resource's final file
+    is written by the test case itself.
+
+    启用宫格、带商品与角色衍生登记的项目；各资源的正式文件由用例自行写入。"""
 
     pm.create_project("demo")
     pm.create_project_metadata("demo", "Demo", "Anime", "narration")
@@ -54,7 +60,9 @@ def _project(pm: ProjectManager) -> Path:
 
 
 def _generate_versions(project_dir: Path, resource_type: str, resource_id: str, count: int) -> list[bytes]:
-    """按顺序生成 ``count`` 个版本，最后一个为选中的当前内容；返回各版本字节。"""
+    """Generate ``count`` versions in order, the last being the selected current content; return each version's bytes.
+
+    按顺序生成 ``count`` 个版本，最后一个为选中的当前内容；返回各版本字节。"""
 
     current = project_dir / resource_relative_path(resource_type, resource_id)
     current.parent.mkdir(parents=True, exist_ok=True)
@@ -69,7 +77,10 @@ def _generate_versions(project_dir: Path, resource_type: str, resource_id: str, 
 
 
 def _packed_history(archive_path: Path) -> tuple[set[str], set[str], dict]:
-    """返回（包内快照文件、versions.json 记录指向的文件、versions.json）。路径相对项目根。"""
+    """Return (snapshot files in the package, files pointed to by versions.json records, versions.json).
+    Paths are relative to the project root.
+
+    返回（包内快照文件、versions.json 记录指向的文件、versions.json）。路径相对项目根。"""
 
     with zipfile.ZipFile(archive_path) as archive:
         names = archive.namelist()

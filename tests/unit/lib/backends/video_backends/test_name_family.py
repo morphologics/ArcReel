@@ -1,4 +1,6 @@
-"""视频调用通道按名字族认定通道能力：名字的取法、认不得时的统一回落。"""
+"""Video call channels determine channel capabilities by name family: how the name is taken, and the unified fallback when unrecognized.
+
+视频调用通道按名字族认定通道能力：名字的取法、认不得时的统一回落。"""
 
 from __future__ import annotations
 
@@ -40,7 +42,9 @@ def test_alias_of_the_mapped_entry_selects_the_family(monkeypatch: pytest.Monkey
 
 
 def test_relay_spelling_of_an_entry_name_selects_the_family():
-    """命名空间前缀与大小写在对应条目时归一化，调用通道按条目的官方模型名认定能力。"""
+    """Namespace prefixes and case are normalized when matching entries; the call channel determines capabilities by the entry's official model name.
+
+    命名空间前缀与大小写在对应条目时归一化，调用通道按条目的官方模型名认定能力。"""
     caps = video_capabilities_for_model("vidu", "vidu/ViduQ3-Turbo")
 
     assert caps == video_capabilities_for_model("vidu", "viduq3-turbo")

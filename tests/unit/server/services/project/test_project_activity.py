@@ -1,4 +1,6 @@
-"""项目最近活动时间：取账本里的业务时间戳与内容文件修改时间中最晚的一个。"""
+"""A project's latest activity time: the latest of the business timestamps in the ledger and the modification times of content files.
+
+项目最近活动时间：取账本里的业务时间戳与内容文件修改时间中最晚的一个。"""
 
 from __future__ import annotations
 
@@ -35,6 +37,7 @@ def test_takes_the_latest_of_ledger_timestamps_and_content_files(tmp_path):
 
 
 def test_files_rewritten_outside_creative_work_do_not_count(tmp_path):
+    # Migration and config sync rewrite these files uniformly; counting them, every project would show as just updated.
     # 迁移与配置同步会统一改写这些文件；按它们算，所有项目都会显示为刚刚更新。
     _write(tmp_path / "source" / "chapter.txt", OLD)
     for rewritten in (
@@ -71,7 +74,7 @@ def test_project_memory_counts_but_internal_state_does_not(tmp_path):
 
 
 def test_activity_recorded_by_business_writes_counts(tmp_path):
-    # 草稿等 JSON 的改写与删除只在活动账本里留下时刻。
+    # Rewrites and deletions of JSON such as drafts only leave their moment in the activity ledger. / 草稿等 JSON 的改写与删除只在活动账本里留下时刻。
     _write(tmp_path / "source" / "chapter.txt", OLD)
     (tmp_path / ACTIVITY_FILENAME).write_text(NEW.isoformat(), encoding="utf-8")
 

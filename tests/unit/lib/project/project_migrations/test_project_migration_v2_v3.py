@@ -1,4 +1,7 @@
-"""v2→v3 迁移：纯版本盖章；episodes 逐字不变、版本守卫、幂等、余文保留。"""
+"""v2->v3 migration: pure version stamping; episodes unchanged verbatim, version guard, idempotency,
+remaining text kept.
+
+v2→v3 迁移：纯版本盖章；episodes 逐字不变、版本守卫、幂等、余文保留。"""
 
 import json
 from pathlib import Path
@@ -31,7 +34,10 @@ def _load(d: Path) -> dict:
 
 
 def test_bumps_schema_version_only(tmp_path: Path):
-    """只写 schema_version：episodes 逐字不变，不补账本字段、不推导 planning_cursor。"""
+    """Only schema_version is written: episodes unchanged verbatim, no ledger fields added, no
+    planning_cursor derived.
+
+    只写 schema_version：episodes 逐字不变，不补账本字段、不推导 planning_cursor。"""
     episodes = [{"episode": 1, "title": "开端", "script_file": "scripts/episode_1.json"}]
     d = _write(tmp_path, {"schema_version": 2, "episodes": episodes})
     migrate_v2_to_v3(d)
@@ -42,7 +48,16 @@ def test_bumps_schema_version_only(tmp_path: Path):
 
 
 def test_upgraded_project_passes_consumer_side_validation(tmp_path: Path):
-    """升级后的项目对消费链路照常有效：无位置记录的账本条目不被判损坏。
+    """An upgraded project stays valid for the consumer chain: ledger entries without a position record are
+    not judged corrupted.
+
+    The stamping migration deliberately leaves entries without ``source_range`` / ``ledger_status``,
+    which is normal for old projects after upgrade. The validator is the entry guard of every consumer
+    chain (script / media / status / export), and only if it lets them through can we talk about "working
+    as usual after upgrade"; the planning entry has a separate gate that refuses such entries, see
+    ``test_episode_planner``.
+
+    升级后的项目对消费链路照常有效：无位置记录的账本条目不被判损坏。
 
     盖章迁移刻意留下没有 ``source_range`` / ``ledger_status`` 的条目，这是老项目升级后的
     常态。校验器是所有消费链路（剧本 / 媒体 / 状态 / 导出）的入口守卫，它放行才谈得上
@@ -61,6 +76,10 @@ def test_upgraded_project_passes_consumer_side_validation(tmp_path: Path):
             "episodes": [{"episode": 1, "title": "开端", "script_file": "scripts/episode_1.json"}],
         },
     )
+    # The validator asserts against the latest schema shape (e.g. generation_mode is required), and before
+    # entering the consumer chain a project
+    # has always gone through the full migration chain, so by the same rule this runs up to the current
+    # version before validating
     # 校验器按最新 schema 形态断言（如 generation_mode 必填），消费链路入口前项目
     # 必然已走完整迁移链，这里同口径跑到当前版本再校验
     migrate_project_dir(d)
@@ -69,7 +88,10 @@ def test_upgraded_project_passes_consumer_side_validation(tmp_path: Path):
 
 
 def test_existing_ledger_fields_preserved_verbatim(tmp_path: Path):
-    """已带账本字段的 v2 项目（手工或旧版本写入）原样保留，迁移不改写。"""
+    """v2 projects that already have ledger fields (written by hand or by an old version) are kept as-is;
+    the migration does not rewrite them.
+
+    已带账本字段的 v2 项目（手工或旧版本写入）原样保留，迁移不改写。"""
     episodes = [
         {
             "episode": 1,
@@ -88,7 +110,13 @@ def test_existing_ledger_fields_preserved_verbatim(tmp_path: Path):
 
 @pytest.fixture
 def no_write_guard(monkeypatch: pytest.MonkeyPatch):
-    """守卫生效的判据是「一次盘都没写」。
+    """The criterion for the guard working is "not a single disk write".
+
+    The stamping migration only writes schema_version, so for a project already at v3, even if the guard
+    failed and the migration ran again, the written content would equal the original file; asserting only
+    that fields/content are unchanged cannot falsify it, so the write itself must be watched directly.
+
+    守卫生效的判据是「一次盘都没写」。
 
     盖章迁移只写 schema_version，对已是 v3 的项目即便守卫失效、迁移照跑一遍，落盘内容
     也与原文件一致——只断言字段/内容不变无法证伪，必须直接盯写入本身。
@@ -115,7 +143,10 @@ def test_version_guard_skips_already_v3(tmp_path: Path, no_write_guard: list[Pat
 
 
 def test_string_schema_version_is_normalized(tmp_path: Path):
-    """历史 project.json 可能存字符串版本号，守卫做 int 归一化而非抛 TypeError。"""
+    """Historical project.json may store the version as a string; the guard normalizes to int instead of
+    raising TypeError.
+
+    历史 project.json 可能存字符串版本号，守卫做 int 归一化而非抛 TypeError。"""
     d = _write(tmp_path, {"schema_version": "2", "episodes": []})
     migrate_v2_to_v3(d)
     assert _load(d)["schema_version"] == 3
@@ -142,14 +173,18 @@ def test_double_run_idempotent_at_file_level(tmp_path: Path):
 
 
 def test_remaining_file_preserved(tmp_path: Path):
-    """余文文件保留：迁移只碰 project.json，不动 source/ 下任何文件。"""
+    """The remaining-text file is kept: the migration only touches project.json and no file under source/.
+
+    余文文件保留：迁移只碰 project.json，不动 source/ 下任何文件。"""
     d = _write(tmp_path, {"schema_version": 2, "episodes": []})
     migrate_v2_to_v3(d)
     assert (d / "source" / "_remaining.txt").read_text(encoding="utf-8") == NOVEL[len(EP1) :]
 
 
 def test_missing_project_json_is_noop(tmp_path: Path):
-    """没有 project.json 的目录：迁移既不抛错，也不得凭空造出任何文件。"""
+    """A directory without project.json: the migration neither raises nor creates any file out of nothing.
+
+    没有 project.json 的目录：迁移既不抛错，也不得凭空造出任何文件。"""
     empty = tmp_path / "empty"
     empty.mkdir()
 

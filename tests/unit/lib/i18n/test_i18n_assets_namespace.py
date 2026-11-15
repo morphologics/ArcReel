@@ -1,4 +1,6 @@
-"""assets namespace 注册到 MESSAGES。"""
+"""The assets namespace is registered in MESSAGES.
+
+assets namespace 注册到 MESSAGES。"""
 
 from __future__ import annotations
 

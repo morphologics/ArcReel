@@ -40,7 +40,9 @@ class TestTruncate:
         assert truncate_memory_index("   ") == ""
 
     def test_truncation_is_exactly_what_over_limit_predicts(self):
-        """``over_limit`` 与截断同源：文件柜显示的超限与 Agent 实际读到的内容一致。"""
+        """``over_limit`` and truncation share one source: the over-limit shown by the file cabinet matches what the Agent actually reads.
+
+        ``over_limit`` 与截断同源：文件柜显示的超限与 Agent 实际读到的内容一致。"""
         for text in [
             "line\n" * INDEX_MAX_LINES,
             "line\n" * (INDEX_MAX_LINES + 1),

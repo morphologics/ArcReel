@@ -1,4 +1,10 @@
-"""AgnesTextBackend 单元测试（OpenAI 兼容 chat/completions，mock SDK 客户端）。
+"""AgnesTextBackend unit tests (OpenAI-compatible chat/completions, mock SDK client).
+
+AgnesTextBackend reuses OpenAITextBackend's native + Instructor fallback pipeline and only replaces auth (agnes_shared
+single Bearer key + base_url normalization) and the default model / provider billing attribution. Covered here: auth /
+normalization / capability declaration / usage parsing / native structured output / selective Instructor fallback.
+
+AgnesTextBackend 单元测试（OpenAI 兼容 chat/completions，mock SDK 客户端）。
 
 AgnesTextBackend 复用 OpenAITextBackend 的原生 + Instructor 降级流水线，仅替换鉴权
 （agnes_shared Bearer 单 key + base_url 归一化）与默认模型 / provider 计费归因。这里覆盖
@@ -19,7 +25,9 @@ from tests.fakes import captured_openai_clients, patched_instructor_from_openai
 
 
 def _make_mock_response(content="Hello", input_tokens=10, output_tokens=5):
-    """构造 mock ChatCompletion 响应。"""
+    """Build a mock ChatCompletion response.
+
+    构造 mock ChatCompletion 响应。"""
     usage = MagicMock()
     usage.prompt_tokens = input_tokens
     usage.completion_tokens = output_tokens
@@ -72,7 +80,7 @@ class TestConstruction:
             backend = AgnesTextBackend(api_key="sk")
             assert TextCapability.TEXT_GENERATION in backend.capabilities
             assert TextCapability.STRUCTURED_OUTPUT in backend.capabilities
-            # vision 未实测，不声明
+            # vision not tested in practice, not declared. / vision 未实测，不声明
             assert TextCapability.VISION not in backend.capabilities
 
     def test_missing_api_key_raises(self):
@@ -83,6 +91,7 @@ class TestConstruction:
                 AgnesTextBackend(api_key=None)
 
     def test_base_url_normalized_to_v1(self):
+        # User enters a host (no /v1 suffix) -> normalized to {host}/v1 before passing to the SDK.
         # 用户填 host（无 /v1 后缀）→ 归一化为 {host}/v1 后传给 SDK。
         with captured_openai_clients() as created:
             from lib.backends.text_backends.agnes import AgnesTextBackend
@@ -126,7 +135,7 @@ class TestGenerate:
             await backend.generate(TextGenerationRequest(prompt="hi", max_output_tokens=4096))
 
         call_kwargs = mock_client.chat.completions.create.call_args[1]
-        # apihub 网关非官方 OpenAI → 保守沿用 max_tokens
+        # The apihub gateway is not official OpenAI -> conservatively keep max_tokens. / apihub 网关非官方 OpenAI → 保守沿用 max_tokens
         assert call_kwargs["max_tokens"] == 4096
         assert "max_completion_tokens" not in call_kwargs
 
@@ -147,7 +156,7 @@ class TestGenerate:
         assert result.text == schema_response
         call_kwargs = mock_client.chat.completions.create.call_args[1]
         assert call_kwargs["response_format"]["type"] == "json_schema"
-        # 原生成功，不触发降级（instructor 客户端未构造）
+        # Native succeeds, no fallback triggered (instructor client not constructed). / 原生成功，不触发降级（instructor 客户端未构造）
         from_openai.assert_not_called()
 
     async def test_fenced_json_native_structured_output_is_unwrapped_without_fallback(self):
@@ -169,6 +178,7 @@ class TestGenerate:
         from_openai.assert_not_called()
 
     async def test_non_json_response_triggers_instructor_fallback(self):
+        # Native returns 200 but the content is not JSON (proxy silently ignores response_format) -> selective fallback to Instructor.
         # 原生返回 200 但内容非 JSON（代理静默忽略 response_format）→ 选择性降级到 Instructor。
         markdown_text = "## 提取结果\n\n- 姓名: 张三"
         instructor_result = _PersonSchema(name="Bob", age=25)
@@ -180,7 +190,7 @@ class TestGenerate:
         mock_client = AsyncMock()
         mock_client.chat.completions.create = AsyncMock(return_value=_make_mock_response(markdown_text, 100, 60))
 
-        # 钩子注册（on）是同步调用，不能落到 AsyncMock 上
+        # Hook registration (on) is a sync call and must not land on an AsyncMock. / 钩子注册（on）是同步调用，不能落到 AsyncMock 上
         mock_patched = AsyncMock(on=MagicMock())
         mock_patched.chat.completions.create_with_completion = AsyncMock(
             return_value=(instructor_result, instructor_completion)
@@ -197,6 +207,7 @@ class TestGenerate:
 
         assert result.text == instructor_result.model_dump_json()
         assert result.provider == PROVIDER_AGNES
+        # The native 200 call (100/60) was billed; its tokens are merged with the Instructor call's (50/20).
         # 原生 200 调用（100/60）已计费，与 Instructor 调用（50/20）的 token 合并计入
         assert result.input_tokens == 150
         assert result.output_tokens == 80

@@ -1,4 +1,6 @@
-"""前端构建产物挂载行为测试（server/app.py 的 frontend_dist_dir 分支）。"""
+"""Behavior tests for mounting the frontend build output (the frontend_dist_dir branch of server/app.py).
+
+前端构建产物挂载行为测试（server/app.py 的 frontend_dist_dir 分支）。"""
 
 from __future__ import annotations
 
@@ -14,7 +16,12 @@ from server import app as app_module
 
 @pytest.fixture
 def reload_app_cleanup(monkeypatch: pytest.MonkeyPatch):
-    """还原 lib.PROJECT_ROOT 并重新 reload server.app，恢复成真实构建产物路径。
+    """Restore lib.PROJECT_ROOT and reload server.app again, back to the real build output path.
+
+    Setup (writing index.html, monkeypatch, reload) stays inside each test body: the order must be
+    persist the build output first, then reload, so the module-level `if index.html.is_file()` sees the expected state.
+
+    还原 lib.PROJECT_ROOT 并重新 reload server.app，恢复成真实构建产物路径。
 
     setup（写 index.html、monkeypatch、reload）仍留在各测试体内——顺序必须是
     先落盘构建产物再 reload，模块顶层的 `if index.html.is_file()` 才能读到预期状态。
@@ -27,7 +34,9 @@ def reload_app_cleanup(monkeypatch: pytest.MonkeyPatch):
 async def test_deep_link_with_extension_falls_back_to_index_html(
     reload_app_cleanup: None, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ):
-    """构建产物存在时，带扩展名的 SPA 深链应回退到 index.html 而非被当作静态资源返回 404。"""
+    """When the build output exists, an SPA deep link with an extension should fall back to index.html instead of being served as a static asset and returning 404.
+
+    构建产物存在时，带扩展名的 SPA 深链应回退到 index.html 而非被当作静态资源返回 404。"""
     dist_dir = tmp_path / "frontend" / "dist"
     dist_dir.mkdir(parents=True)
     (dist_dir / "index.html").write_text("<html>shell</html>", encoding="utf-8")
@@ -44,7 +53,9 @@ async def test_deep_link_with_extension_falls_back_to_index_html(
 async def test_write_request_to_spa_path_returns_405_not_shell(
     reload_app_cleanup: None, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ):
-    """写请求误入 SPA 页面路径（含带扩展名深链与根路径）应返回 405，而非 SPA 外壳。"""
+    """Write requests that stray into SPA page paths (including deep links with extensions and the root path) should return 405, not the SPA shell.
+
+    写请求误入 SPA 页面路径（含带扩展名深链与根路径）应返回 405，而非 SPA 外壳。"""
     dist_dir = tmp_path / "frontend" / "dist"
     dist_dir.mkdir(parents=True)
     (dist_dir / "index.html").write_text("<html>shell</html>", encoding="utf-8")
@@ -65,7 +76,9 @@ async def test_write_request_to_spa_path_returns_405_not_shell(
 async def test_real_static_file_under_app_path_is_not_shadowed_by_shell(
     reload_app_cleanup: None, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ):
-    """dist/app/ 下若存在真实静态文件，spa_deep_link 应优先返回该文件而非无条件回退到 index.html 外壳。"""
+    """If a real static file exists under dist/app/, spa_deep_link should return that file first instead of unconditionally falling back to the index.html shell.
+
+    dist/app/ 下若存在真实静态文件，spa_deep_link 应优先返回该文件而非无条件回退到 index.html 外壳。"""
     dist_dir = tmp_path / "frontend" / "dist"
     (dist_dir / "app").mkdir(parents=True)
     (dist_dir / "index.html").write_text("<html>shell</html>", encoding="utf-8")
@@ -83,7 +96,9 @@ async def test_real_static_file_under_app_path_is_not_shadowed_by_shell(
 async def test_deep_link_path_traversal_falls_back_to_shell(
     reload_app_cleanup: None, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ):
-    """_rest 携带 "../" 越界读取时不应逃出构建产物目录，应正常回退到 index.html 外壳。"""
+    """When _rest carries "../" for an out-of-bounds read, it must not escape the build output directory and should fall back to the index.html shell normally.
+
+    _rest 携带 "../" 越界读取时不应逃出构建产物目录，应正常回退到 index.html 外壳。"""
     dist_dir = tmp_path / "frontend" / "dist"
     dist_dir.mkdir(parents=True)
     (dist_dir / "index.html").write_text("<html>shell</html>", encoding="utf-8")
@@ -94,6 +109,10 @@ async def test_deep_link_path_traversal_falls_back_to_shell(
 
     transport = ASGITransport(app=app_module.app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
+        # Use %2e%2e instead of a literal "../": httpx collapses a literal "../" on the client side,
+        # so ".." must stay encoded in the request line to verify the server's (not the client's) out-of-bounds protection.
+        # The join order is dist/app/<_rest>, so 3 levels of ".." are needed to get past app/, dist/, frontend/
+        # to reach tmp_path/secret.txt
         # 用 %2e%2e 而非字面 "../"：httpx 会在客户端就地折叠字面 "../"，
         # 必须让 ".." 以编码形式保留到请求行，才能验证服务端（而非客户端）的越界防护。
         # 拼接顺序是 dist/app/<_rest>，需要 3 级 ".." 才能越过 app/、dist/、frontend/
@@ -107,7 +126,9 @@ async def test_deep_link_path_traversal_falls_back_to_shell(
 async def test_missing_index_html_skips_mount_without_crashing(
     reload_app_cleanup: None, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ):
-    """构建产物目录缺 index.html 时跳过前端挂载，应用仍能正常启动且 API 不受影响。"""
+    """When the build output directory lacks index.html, the frontend mount is skipped; the app still starts normally and the API is unaffected.
+
+    构建产物目录缺 index.html 时跳过前端挂载，应用仍能正常启动且 API 不受影响。"""
     dist_dir = tmp_path / "frontend" / "dist"
     dist_dir.mkdir(parents=True)
     monkeypatch.setattr(lib, "PROJECT_ROOT", tmp_path)
@@ -122,7 +143,10 @@ async def test_missing_index_html_skips_mount_without_crashing(
 async def test_spa_shell_responses_are_never_cached(
     reload_app_cleanup: None, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ):
-    """SPA 外壳（无论走 spa_deep_link 还是 app.frontend 原生 fallback）都不能被浏览器缓存，
+    """The SPA shell (whether via spa_deep_link or app.frontend's native fallback) must never be cached by the browser,
+    otherwise after a redeploy the old shell would reference deleted old hashed assets, causing a blank screen.
+
+    SPA 外壳（无论走 spa_deep_link 还是 app.frontend 原生 fallback）都不能被浏览器缓存，
     否则重新部署后旧壳会引用已被删除的旧哈希资源导致白屏。
     """
     dist_dir = tmp_path / "frontend" / "dist"
@@ -133,12 +157,12 @@ async def test_spa_shell_responses_are_never_cached(
 
     transport = ASGITransport(app=app_module.app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
-        # 带扩展名的深链：命中我们自己注册的 spa_deep_link 路由
+        # Deep link with extension: hits the spa_deep_link route we registered ourselves / 带扩展名的深链：命中我们自己注册的 spa_deep_link 路由
         deep_link_res = await client.get("/app/projects/demo/source/chapter1.txt")
         assert deep_link_res.status_code == 200
         assert deep_link_res.headers["cache-control"] == "no-store, no-cache, must-revalidate, max-age=0"
 
-        # 根路径：命中 app.frontend 原生 fallback（非我们自己的路由）
+        # Root path: hits app.frontend's native fallback (not our own route) / 根路径：命中 app.frontend 原生 fallback（非我们自己的路由）
         root_res = await client.get("/", headers={"accept": "text/html"})
         assert root_res.status_code == 200
         assert root_res.headers["cache-control"] == "no-store, no-cache, must-revalidate, max-age=0"
@@ -147,7 +171,9 @@ async def test_spa_shell_responses_are_never_cached(
 async def test_hashed_assets_are_immutable_but_unhashed_public_files_are_not(
     reload_app_cleanup: None, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ):
-    """dist/assets/ 下的哈希资源永久缓存（含 304 再验证）；缺失资源与 dist 根目录的未哈希文件不设 immutable。"""
+    """Hashed assets under dist/assets/ are cached forever (including 304 revalidation); missing assets and unhashed files in the dist root are not immutable.
+
+    dist/assets/ 下的哈希资源永久缓存（含 304 再验证）；缺失资源与 dist 根目录的未哈希文件不设 immutable。"""
     dist_dir = tmp_path / "frontend" / "dist"
     (dist_dir / "assets").mkdir(parents=True)
     (dist_dir / "index.html").write_text("<html>shell</html>", encoding="utf-8")
@@ -163,7 +189,7 @@ async def test_hashed_assets_are_immutable_but_unhashed_public_files_are_not(
         res = await client.get("/assets/index-abc123.js", headers={"accept-encoding": "gzip"})
         assert res.status_code == 200
         assert res.headers["cache-control"] == immutable
-        # 文本类构建产物经响应压缩下发
+        # Text build output is served with response compression / 文本类构建产物经响应压缩下发
         assert res.headers["content-encoding"] == "gzip"
         assert res.text == bundle
 

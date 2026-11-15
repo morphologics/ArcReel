@@ -1,4 +1,6 @@
-"""lib.backends.dashscope_shared 纯函数单元测试（不打真实 HTTP）。"""
+"""Unit tests for the pure functions of lib.backends.dashscope_shared (no real HTTP).
+
+lib.backends.dashscope_shared 纯函数单元测试（不打真实 HTTP）。"""
 
 from __future__ import annotations
 
@@ -33,7 +35,7 @@ class TestBaseUrlDerivation:
         assert dashscope_native_base_url(None) == f"{DASHSCOPE_BASE_URL}/api/v1"
 
     def test_tolerates_native_suffix(self):
-        # 用户填了完整 native base，派生文本 base 时剥后缀再拼
+        # The user entered a full native base; deriving the text base strips the suffix and re-joins. / 用户填了完整 native base，派生文本 base 时剥后缀再拼
         configured = "https://dashscope.aliyuncs.com/api/v1"
         assert dashscope_text_base_url(configured) == "https://dashscope.aliyuncs.com/compatible-mode/v1"
         assert dashscope_native_base_url(configured) == "https://dashscope.aliyuncs.com/api/v1"
@@ -51,6 +53,8 @@ class TestBaseUrlDerivation:
         assert dashscope_native_base_url("https://dashscope.aliyuncs.com/") == f"{DASHSCOPE_BASE_URL}/api/v1"
 
     def test_whitespace_configured_falls_back_to_default(self):
+        # A whitespace-only base_url ("   ") is truthy and would bypass `or`; it must be stripped and fall back to the default host,
+        # not be stripped to an empty string that derives invalid relative URLs like "/api/v1" / "/compatible-mode/v1".
         # 纯空白 base_url（"   "）是真值会绕过 or，须 strip 后回落默认 host，
         # 不能 strip 成空串派生出 "/api/v1" / "/compatible-mode/v1" 这类非法相对 URL
         assert dashscope_native_base_url("   ") == f"{DASHSCOPE_BASE_URL}/api/v1"
@@ -97,6 +101,7 @@ class TestStatusHelpers:
         assert not is_dashscope_expired({"output": {"task_status": "SUCCEEDED"}})
 
     def test_non_dict_output_does_not_crash(self):
+        # When output is a truthy non-dict (malformed upstream), status checks / failure reason do not raise AttributeError.
         # output 为非 dict 真值（畸形上游）时状态判定/失败原因不抛 AttributeError
         assert not is_dashscope_terminal({"output": ["weird"]})
         assert not is_dashscope_succeeded({"output": "weird"})
@@ -124,7 +129,7 @@ class TestFailureReason:
         assert "InvalidApiKey" in reason
 
     def test_unknown_is_not_failure(self):
-        # UNKNOWN（过期）不算失败，交由 expired 单独处理
+        # UNKNOWN (expired) is not a failure; it is handled separately by expired. / UNKNOWN（过期）不算失败，交由 expired 单独处理
         assert dashscope_failure_reason({"output": {"task_status": "UNKNOWN"}}) is None
 
     def test_success_is_not_failure(self):
@@ -148,11 +153,12 @@ class TestExtractors:
 
     def test_extract_billing_duration(self):
         assert extract_billing_duration({"usage": {"duration": 15}}) == 15
-        # 容忍 float / 数字字符串
+        # Tolerate float / numeric strings. / 容忍 float / 数字字符串
         assert extract_billing_duration({"usage": {"duration": 4.8}}) == 5
         assert extract_billing_duration({"usage": {"duration": "10"}}) == 10
 
     def test_extract_billing_duration_half_up_not_bankers(self):
+        # The .5 boundary must round half-up (4.5->5 / 2.5->3), not round()'s banker's rounding (which gives 4 / 2 and under-bills).
         # .5 边界须 half-up（4.5→5 / 2.5→3），而非 round() 的银行家舍入（会得 4 / 2 少计费）
         assert extract_billing_duration({"usage": {"duration": 4.5}}) == 5
         assert extract_billing_duration({"usage": {"duration": 2.5}}) == 3
@@ -161,16 +167,19 @@ class TestExtractors:
     def test_extract_billing_duration_missing(self):
         assert extract_billing_duration({"usage": {}}) is None
         assert extract_billing_duration({}) is None
-        # 非数字字符串无法解析 → None
+        # A non-numeric string cannot be parsed -> None. / 非数字字符串无法解析 → None
         assert extract_billing_duration({"usage": {"duration": "abc"}}) is None
 
     def test_extract_billing_duration_non_positive_falls_back(self):
+        # 0 / negative values are not billed; return None so the caller falls back to the requested duration; (0, 0.5) rounds to 0, also not billed.
         # 0 / 负值不记账，回 None 由 caller 回落请求时长；(0, 0.5) 取整到 0 同样不记账
         assert extract_billing_duration({"usage": {"duration": 0}}) is None
         assert extract_billing_duration({"usage": {"duration": -3}}) is None
         assert extract_billing_duration({"usage": {"duration": 0.3}}) is None
 
     def test_extract_billing_duration_over_limit_falls_back(self):
+        # Above a reasonable cap (24h) counts as an abnormal provider report: return None, preventing a huge value from overflowing the DB
+        # Integer column; the cap applies to the raw value before rounding: 86400.4 is already over 24h and must not be accepted by rounding back under it.
         # 超出合理上限（24h）视为 provider 回报异常，回 None，防超大数值写入 DB Integer 列溢出；
         # 上限基于取整前原始值：86400.4 已超 24h，不得因 half-up 落回上限内被接受
         assert extract_billing_duration({"usage": {"duration": 86401}}) is None
@@ -179,6 +188,7 @@ class TestExtractors:
         assert extract_billing_duration({"usage": {"duration": 86400}}) == 86400
 
     def test_extract_billing_duration_non_dict_usage(self):
+        # usage is a truthy non-dict (malformed upstream) -> normalized to empty, returns None, no AttributeError.
         # usage 为非 dict 真值（畸形上游）→ 归一化为空、回 None，不抛 AttributeError
         assert extract_billing_duration({"usage": [1, 2]}) is None
         assert extract_billing_duration({"usage": "oops"}) is None
@@ -194,6 +204,7 @@ class TestExtractors:
             extract_image_url({"output": {}})
 
     def test_extract_image_url_malformed_choice_raises_runtime_not_attribute(self):
+        # Abnormal upstream structure (choices[0] not a dict / message not a dict) must raise RuntimeError, not leak AttributeError.
         # 上游异常结构（choices[0] 非 dict / message 非 dict）须报 RuntimeError，不能漏出 AttributeError
         with pytest.raises(RuntimeError):
             extract_image_url({"output": {"choices": [None]}})
@@ -201,6 +212,7 @@ class TestExtractors:
             extract_image_url({"output": {"choices": [{"message": "oops"}]}})
 
     def test_extract_image_url_non_dict_output_or_non_list_choices(self):
+        # output not a dict / choices a truthy non-list (malformed upstream) -> RuntimeError, no leaked AttributeError/TypeError.
         # output 非 dict / choices 非 list 真值（畸形上游）→ RuntimeError，不漏 AttributeError/TypeError
         with pytest.raises(RuntimeError):
             extract_image_url({"output": "oops"})
@@ -208,6 +220,7 @@ class TestExtractors:
             extract_image_url({"output": {"choices": "not-a-list"}})
 
     def test_extract_image_url_truthy_non_list_content_raises_runtime(self):
+        # When content is a truthy non-list (int/bool/dict), the for loop must not raise TypeError; it must end in RuntimeError.
         # content 为 truthy 非 list（int/bool/dict）时不得 for 迭代抛 TypeError，须落 RuntimeError
         for content in (5, True, {"image": "x"}):
             payload = {"output": {"choices": [{"message": {"content": content}}]}}
@@ -232,7 +245,7 @@ class TestSafeBodyForLog:
         assert view["model"] == "wan2.7-r2v"
         assert view["resolution"] == "720P"
         assert view["media"] == "<1 item>"
-        # 长 prompt 被截断
+        # A long prompt is truncated. / 长 prompt 被截断
         assert len(view["prompt"]) < 200
 
     def test_image_messages_summarized_to_counts(self):
@@ -257,6 +270,7 @@ class TestSafeBodyForLog:
         assert view["size"] == "2048*2048"
 
     def test_non_dict_first_message_does_not_crash(self):
+        # The logging helper must never raise AttributeError on a malformed messages[0] (not a dict).
         # 日志辅助绝不能因畸形 messages[0]（非 dict）抛 AttributeError
         body = {"model": "qwen-image-2.0", "input": {"messages": ["oops"]}, "parameters": {}}
         view = safe_body_for_log(body)
@@ -264,6 +278,8 @@ class TestSafeBodyForLog:
         assert "content" not in view
 
     def test_non_dict_params_or_input_does_not_crash(self):
+        # When parameters / input are truthy non-dicts (list / str, malformed upstream), the fail-safe logging helper
+        # must not raise AttributeError/TypeError; it must normalize them to empty and return only model.
         # parameters / input 为 truthy 非 dict（list / str，畸形上游）时 fail-safe 日志辅助
         # 不得抛 AttributeError/TypeError，须归一化为空、只回 model
         for body in (
@@ -276,7 +292,7 @@ class TestSafeBodyForLog:
             assert "size" not in view
 
     def test_tts_input_text_not_logged(self):
-        # TTS 合成文本（input.text）不在白名单内，绝不进日志视图
+        # The TTS synthesis text (input.text) is not on the allowlist and never enters the log view. / TTS 合成文本（input.text）不在白名单内，绝不进日志视图
         secret_text = "用户私密旁白文本SECRETNARRATION"
         body = {
             "model": "qwen3-tts-flash",

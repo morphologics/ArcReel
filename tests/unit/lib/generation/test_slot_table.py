@@ -1,4 +1,9 @@
-"""SlotTable 占用台账纯内存单测。
+"""Pure in-memory unit tests for the SlotTable occupancy ledger.
+
+Capacity-agnostic, passive data structure: register / promote / release / has_room / drain_finished /
+occupied_providers / active_task_ids / all_active_tasks. Uses ``loop.create_future()`` to make dummy executors.
+
+SlotTable 占用台账纯内存单测。
 
 容量无关、被动数据结构：register / promote / release / has_room / drain_finished /
 occupied_providers / active_task_ids / all_active_tasks。用 ``loop.create_future()`` 造 dummy 执行体。
@@ -10,12 +15,16 @@ from lib.generation.generation_worker import SlotTable
 
 
 def _pending_future() -> asyncio.Future:
-    """未完成的 future（模拟在跑的 task）。"""
+    """An unfinished future (simulating a running task).
+
+    未完成的 future（模拟在跑的 task）。"""
     return asyncio.get_running_loop().create_future()
 
 
 def _done_future() -> asyncio.Future:
-    """已完成的 future（模拟 done 的 task）。"""
+    """A finished future (simulating a done task).
+
+    已完成的 future（模拟 done 的 task）。"""
     f = asyncio.get_running_loop().create_future()
     f.set_result(None)
     return f
@@ -23,52 +32,62 @@ def _done_future() -> asyncio.Future:
 
 class TestSlotTable:
     async def test_register_counts_toward_occupied_and_has_room(self):
-        """① 容量记账：register → occupied / has_room（capacity 由 caller 传入）。"""
+        """① Capacity bookkeeping: register → occupied / has_room (capacity passed in by the caller).
+
+        ① 容量记账：register → occupied / has_room（capacity 由 caller 传入）。"""
         st = SlotTable()
         st.register("p", "image", "t1", _pending_future())
         assert st.occupied("p", "image") == 1
         assert st.has_room("p", "image", 2) is True
         assert st.has_room("p", "image", 1) is False
-        # capacity<=0 → 永远无空位（容量无关，纯按传入值判定）
+        # capacity<=0 → never any room (capacity-agnostic, judged purely by the passed value) / capacity<=0 → 永远无空位（容量无关，纯按传入值判定）
         assert st.has_room("p", "image", 0) is False
 
     async def test_pending_counts_toward_capacity(self):
-        """② pending 计入容量：pending=1, cap=1 → has_room False。"""
+        """② pending counts toward capacity: pending=1, cap=1 → has_room False.
+
+        ② pending 计入容量：pending=1, cap=1 → has_room False。"""
         st = SlotTable()
         st.register("p", "video", "t1", _pending_future(), pending=True)
         assert st.occupied("p", "video") == 1
         assert st.has_room("p", "video", 1) is False
 
     async def test_register_release_idempotent(self):
-        """③ 登记/释放幂等：重复 register 覆盖、release 不存在 no-op、release 两次幂等。"""
+        """③ Register/release are idempotent: repeated register overwrites, releasing a nonexistent one is a no-op, releasing twice is idempotent.
+
+        ③ 登记/释放幂等：重复 register 覆盖、release 不存在 no-op、release 两次幂等。"""
         st = SlotTable()
         f1 = _pending_future()
         f2 = _pending_future()
         st.register("p", "image", "t1", f1)
-        st.register("p", "image", "t1", f2)  # 同 id 覆盖
+        st.register("p", "image", "t1", f2)  # Same id overwrites / 同 id 覆盖
         assert st.occupied("p", "image") == 1
         assert st.all_active_tasks() == [f2]
-        # release 不存在 → no-op
+        # Release nonexistent → no-op / release 不存在 → no-op
         st.release("p", "image", "ghost")
         assert st.occupied("p", "image") == 1
-        # release 两次 → 幂等
+        # Release twice → idempotent / release 两次 → 幂等
         st.release("p", "image", "t1")
         st.release("p", "image", "t1")
         assert st.occupied("p", "image") == 0
         f1.cancel()
 
     async def test_capacity_change_does_not_disturb_occupancy_grow(self):
-        """④ 改配置不扰占用 3→5：占用容器不变，凭空多出空位。"""
+        """④ Changing config does not disturb occupancy, 3→5: the occupancy container is unchanged and extra room appears.
+
+        ④ 改配置不扰占用 3→5：占用容器不变，凭空多出空位。"""
         st = SlotTable()
         for i in range(3):
             st.register("p", "video", f"t{i}", _pending_future())
         assert st.has_room("p", "video", 3) is False
-        # 容量 3→5 只是换一个 int 实参，占用记账纹丝不动
+        # Capacity 3→5 just passes a different int argument; occupancy bookkeeping does not move at all / 容量 3→5 只是换一个 int 实参，占用记账纹丝不动
         assert st.has_room("p", "video", 5) is True
         assert st.occupied("p", "video") == 3
 
     async def test_capacity_shrink_tolerates_overflow_no_eviction(self):
-        """⑤ 改配置不扰占用 3→1 超额容忍：no room 但绝不驱逐在跑的 3 个。"""
+        """⑤ Changing config does not disturb occupancy, 3→1 overflow tolerated: no room, but the 3 running are never evicted.
+
+        ⑤ 改配置不扰占用 3→1 超额容忍：no room 但绝不驱逐在跑的 3 个。"""
         st = SlotTable()
         for i in range(3):
             st.register("p", "video", f"t{i}", _pending_future())
@@ -77,24 +96,28 @@ class TestSlotTable:
         assert len(st.all_active_tasks()) == 3
 
     async def test_promote_flips_phase_without_changing_count(self):
-        """⑥ promote pending→inflight：占用数不变；promote 前 done 的 pending 不被 drain、后才被。"""
+        """⑥ promote pending→inflight: occupancy count unchanged; a pending that is done before promote is not drained, only after.
+
+        ⑥ promote pending→inflight：占用数不变；promote 前 done 的 pending 不被 drain、后才被。"""
         st = SlotTable()
         done = _done_future()
         st.register("p", "video", "t1", done, pending=True)
-        # promote 前：done 的 PENDING 不被 drain
+        # Before promote: a done PENDING is not drained / promote 前：done 的 PENDING 不被 drain
         assert st.drain_finished() == []
         assert st.occupied("p", "video") == 1
         st.promote("p", "video", "t1")
-        assert st.occupied("p", "video") == 1  # 只翻标志，数量不变
-        # promote 后：done 的 INFLIGHT 被 drain
+        assert st.occupied("p", "video") == 1  # Only flips the flag; the count is unchanged / 只翻标志，数量不变
+        # After promote: a done INFLIGHT is drained / promote 后：done 的 INFLIGHT 被 drain
         drained = st.drain_finished()
         assert [tid for tid, _ in drained] == ["t1"]
         assert st.occupied("p", "video") == 0
-        # promote 不存在 → no-op
+        # Promote nonexistent → no-op / promote 不存在 → no-op
         st.promote("p", "video", "ghost")
 
     async def test_drain_finished_only_done_inflight(self):
-        """⑦ drain_finished 只返回 done 的 INFLIGHT，pending 与未完成保留。"""
+        """⑦ drain_finished only returns done INFLIGHT; pending and unfinished ones are kept.
+
+        ⑦ drain_finished 只返回 done 的 INFLIGHT，pending 与未完成保留。"""
         st = SlotTable()
         done_inflight = _done_future()
         running_inflight = _pending_future()
@@ -105,7 +128,7 @@ class TestSlotTable:
 
         drained = dict(st.drain_finished())
         assert set(drained) == {"done"}
-        # 未完成的 inflight 与 done 但仍是 PENDING 的占用都保留
+        # Unfinished inflight occupancies and done-but-still-PENDING occupancies are both kept / 未完成的 inflight 与 done 但仍是 PENDING 的占用都保留
         assert st.active_task_ids() == {"running", "queued"}
         assert set(st.all_active_tasks()) == {running_inflight, done_pending}
         running_inflight.cancel()
@@ -126,7 +149,12 @@ class TestSlotTable:
         b.cancel()
 
     async def test_occupied_providers_by_media_and_empty_bucket_pruned(self):
-        """⑨ [关键] occupied_providers：按 media 分隔；释放/ drain 掉最后一个占用后不残留。
+        """⑨ [key] occupied_providers: separated by media; nothing remains after releasing/draining the last occupancy.
+
+        This is the pivot of the pool-full blocklist decision: empty buckets must be pruned, otherwise providers already emptied would
+        appear in the blocklist source forever.
+
+        ⑨ [关键] occupied_providers：按 media 分隔；释放/ drain 掉最后一个占用后不残留。
 
         这是池满黑名单决策的支点：空 bucket 必须被剪除，否则已清空的 provider 会
         永远出现在黑名单源里。
@@ -137,18 +165,20 @@ class TestSlotTable:
         st.register("p-both", "image", "i2", _pending_future())
         st.register("p-both", "video", "v2", _pending_future())
 
-        # 按 media_type 分隔：image 占用不出现在 video 集合
+        # Separated by media_type: image occupancies do not appear in the video set / 按 media_type 分隔：image 占用不出现在 video 集合
         assert st.occupied_providers("image") == {"p-img", "p-both"}
         assert st.occupied_providers("video") == {"p-vid", "p-both"}
 
+        # Release p-vid's last video occupancy → that provider no longer appears (empty bucket pruned)
         # release 掉 p-vid 的最后一个 video 占用 → 该 provider 不再出现（空 bucket 剪除）
         st.release("p-vid", "video", "v1")
         assert st.occupied_providers("video") == {"p-both"}
 
+        # The drain path likewise prunes empty buckets: replace p-both's video with a done INFLIGHT occupancy
         # drain 路径同样剪空 bucket：把 p-both 的 video 换成一个 done 的 INFLIGHT 占用
         st.release("p-both", "video", "v2")
         st.register("p-both", "video", "v3", _done_future())
         st.drain_finished()
         assert "p-both" not in st.occupied_providers("video")
-        # image lane 不受影响
+        # The image lane is unaffected / image lane 不受影响
         assert st.occupied_providers("image") == {"p-img", "p-both"}

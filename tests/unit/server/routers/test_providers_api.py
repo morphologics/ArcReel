@@ -1,4 +1,9 @@
 """
+Provider configuration management API tests.
+
+Tests the GET/PATCH/POST /api/v1/providers endpoints via TestClient + dependency_overrides,
+without a real database or app startup.
+
 供应商配置管理 API 测试。
 
 通过 TestClient + dependency_overrides 测试 GET/PATCH/POST /api/v1/providers 端点，
@@ -26,15 +31,17 @@ from tests.factories import make_translator
 from tests.http_capture import capture_http, only_request
 
 # ---------------------------------------------------------------------------
-# 测试应用工厂
+# Test app factory / 测试应用工厂
 # ---------------------------------------------------------------------------
 
 
 def _make_app(mock_svc: ConfigService) -> FastAPI:
-    """创建绑定 mock ConfigService 的最小 FastAPI 应用。"""
+    """Create a minimal FastAPI app bound to a mock ConfigService.
+
+    创建绑定 mock ConfigService 的最小 FastAPI 应用。"""
     app = FastAPI()
 
-    # 覆盖 get_config_service，直接注入 mock 服务
+    # Override get_config_service to inject the mock service directly / 覆盖 get_config_service，直接注入 mock 服务
     app.dependency_overrides[get_config_service] = lambda: mock_svc
 
     override_auth(app)
@@ -47,7 +54,7 @@ def _make_client(mock_svc: ConfigService) -> TestClient:
 
 
 # ---------------------------------------------------------------------------
-# GET /providers — 供应商列表
+# GET /providers: provider list / GET /providers — 供应商列表
 # ---------------------------------------------------------------------------
 
 
@@ -135,7 +142,9 @@ class TestListProviders:
         assert second["status"] == "unconfigured"
 
     def _mock_svc_with_models(self) -> ConfigService:
-        """构造带 models 字段的 ProviderStatus，用于校验 ModelInfoResponse 透传。"""
+        """Build a ProviderStatus with a models field, to verify ModelInfoResponse pass-through.
+
+        构造带 models 字段的 ProviderStatus，用于校验 ModelInfoResponse 透传。"""
         svc = MagicMock(spec=ConfigService)
         svc.get_all_providers_status = AsyncMock(
             return_value=[
@@ -174,7 +183,9 @@ class TestListProviders:
         return svc
 
     def test_models_expose_resolutions_field(self):
-        """ModelInfoResponse 必须包含 resolutions 字段（即便为空列表）。"""
+        """ModelInfoResponse must include the resolutions field (even if it is an empty list).
+
+        ModelInfoResponse 必须包含 resolutions 字段（即便为空列表）。"""
         with _make_client(self._mock_svc_with_models()) as client:
             resp = client.get("/api/v1/providers")
         assert resp.status_code == 200
@@ -187,7 +198,9 @@ class TestListProviders:
             assert isinstance(minfo["resolutions"], list)
 
     def test_models_do_not_expose_duration_constraints(self):
-        """目录不透出时长联动约束：收窄结果与成因只经 video-capabilities 端点回给前端。"""
+        """The catalog does not expose linked duration constraints: the narrowed result and its cause only go back to the frontend via the video-capabilities endpoint.
+
+        目录不透出时长联动约束：收窄结果与成因只经 video-capabilities 端点回给前端。"""
         with _make_client(self._mock_svc_with_models()) as client:
             resp = client.get("/api/v1/providers")
         for minfo in resp.json()["providers"][0]["models"].values():
@@ -195,7 +208,9 @@ class TestListProviders:
             assert "reference_image_durations" not in minfo
 
     def test_models_resolutions_values_passthrough(self):
-        """resolutions 的具体值应按原样透传到 response。"""
+        """The concrete resolutions values should be passed through to the response as is.
+
+        resolutions 的具体值应按原样透传到 response。"""
         with _make_client(self._mock_svc_with_models()) as client:
             resp = client.get("/api/v1/providers")
         models = resp.json()["providers"][0]["models"]
@@ -203,7 +218,9 @@ class TestListProviders:
         assert models["imagen-4.0-generate-001"]["resolutions"] == []
 
     def test_always_audible_model_reports_switch_not_controllable(self):
-        """AI Studio 的 Veo 恒有声、请求里没有开关：两条路径都报 always_on，设置页据此置灰音频开关。"""
+        """AI Studio's Veo always has audio and there is no switch in the request: both paths report always_on, and the settings page grays out the audio switch accordingly.
+
+        AI Studio 的 Veo 恒有声、请求里没有开关：两条路径都报 always_on，设置页据此置灰音频开关。"""
         with _make_client(self._mock_svc_with_models()) as client:
             resp = client.get("/api/v1/providers")
         model = resp.json()["providers"][0]["models"]["veo-3.1-fast-generate-preview"]
@@ -211,7 +228,9 @@ class TestListProviders:
         assert model["reference_route_audio_track"] == "always_on"
 
     def test_non_video_model_reports_always_off(self):
-        """image model 的音轨形态恒 always_off（音轨判定对非视频 model 无意义）。"""
+        """An image model's audio track form is always always_off (audio track rules are meaningless for non-video models).
+
+        image model 的音轨形态恒 always_off（音轨判定对非视频 model 无意义）。"""
         with _make_client(self._mock_svc_with_models()) as client:
             resp = client.get("/api/v1/providers")
         models = resp.json()["providers"][0]["models"]
@@ -219,7 +238,9 @@ class TestListProviders:
         assert models["imagen-4.0-generate-001"]["voice_consistency"] == "none"
 
     def _mock_svc_with_catalog_names(self) -> ConfigService:
-        """一个中文显示名的模型（可灵 v3）与一个纯品牌名模型（Kling 2.1）。"""
+        """A model with a Chinese display name (可灵 v3) and a model with a pure brand name (Kling 2.1).
+
+        一个中文显示名的模型（可灵 v3）与一个纯品牌名模型（Kling 2.1）。"""
         svc = MagicMock(spec=ConfigService)
         svc.get_all_providers_status = AsyncMock(
             return_value=[
@@ -259,21 +280,31 @@ class TestListProviders:
 
     @pytest.mark.parametrize("accept_language", ["zh", "en", "vi"])
     def test_model_display_name_is_the_catalog_name_in_every_locale(self, accept_language: str):
-        """模型显示名只来自目录条目，不随请求语言翻译。"""
+        """The model display name only comes from the catalog entry and is not translated per request language.
+
+        模型显示名只来自目录条目，不随请求语言翻译。"""
         with _make_client(self._mock_svc_with_catalog_names()) as client:
             resp = client.get("/api/v1/providers", headers={"accept-language": accept_language})
         models = resp.json()["providers"][0]["models"]
         assert (models["kling-v3"]["display_name"], models["kling-v2-1"]["display_name"]) == ("可灵 v3", "Kling 2.1")
 
     def test_unknown_mocked_model_id_defaults_safely(self):
-        """mock 里的 model_id 若不在真实 PROVIDER_REGISTRY 中（如本测试的 imagen-4.0-generate-001），
+        """If a model_id in the mock is not in the real PROVIDER_REGISTRY (such as imagen-4.0-generate-001 in this test),
+        the two new fields must fall back safely to defaults without raising.
+
+        mock 里的 model_id 若不在真实 PROVIDER_REGISTRY 中（如本测试的 imagen-4.0-generate-001），
         两个新字段须安全回落默认值，不抛错。"""
         with _make_client(self._mock_svc_with_models()) as client:
             resp = client.get("/api/v1/providers")
         assert resp.status_code == 200
 
     def test_ark_seedance_2_catalog_voice_consistency_degrades_to_soft(self):
-        """目录端点无项目上下文：即便模型支持参考音频直传，generation_mode 未知也只能给 soft。
+        """The catalog endpoint has no project context: even if the model supports direct reference-audio pass-through, with generation_mode unknown it can only give soft.
+
+        native requires both "direct reference-audio pass-through x reference-to-video path" to hold, and the latter is a project property; the catalog endpoint
+        derives along the non-reference path, to avoid promising on the global settings page a tier that may not hold for the current project.
+
+        目录端点无项目上下文：即便模型支持参考音频直传，generation_mode 未知也只能给 soft。
 
         native 需要「参考音频直传 × 参考生视频路径」二者同时成立，后者是项目属性；目录端点
         按非参考路径派生，避免在全局设置页许诺一个当前项目未必成立的档位。
@@ -312,12 +343,14 @@ class TestListProviders:
 
 
 # ---------------------------------------------------------------------------
-# GET /providers/{id}/config — 单个供应商配置
+# GET /providers/{id}/config: single provider config / GET /providers/{id}/config — 单个供应商配置
 # ---------------------------------------------------------------------------
 
 
 def _make_session_app() -> tuple[FastAPI, AsyncMock]:
-    """创建只覆盖 session 依赖的基础应用，供需要进一步 patch 的测试使用。"""
+    """Create a base app that only overrides the session dependency, for tests that need further patching.
+
+    创建只覆盖 session 依赖的基础应用，供需要进一步 patch 的测试使用。"""
     app = FastAPI()
     mock_session = AsyncMock()
 
@@ -391,7 +424,9 @@ class TestGetProviderConfig:
         assert isinstance(body["fields"], list)
 
     def test_credential_fields_not_in_response(self):
-        """api_key / base_url / credentials_path 不应出现在 fields 中。"""
+        """api_key / base_url / credentials_path should not appear in fields.
+
+        api_key / base_url / credentials_path 不应出现在 fields 中。"""
         app, _ = _make_session_app()
         with (
             patch("server.routers.providers.ConfigService", return_value=self._mock_svc_ready()),
@@ -405,7 +440,9 @@ class TestGetProviderConfig:
         assert "credentials_path" not in field_keys
 
     def test_optional_non_credential_field_present(self):
-        """非凭证 optional key（如 image_rpm）应出现在 fields 中。"""
+        """Non-credential optional keys (such as image_rpm) should appear in fields.
+
+        非凭证 optional key（如 image_rpm）应出现在 fields 中。"""
         app, _ = _make_session_app()
         with (
             patch("server.routers.providers.ConfigService", return_value=self._mock_svc_ready()),
@@ -450,7 +487,9 @@ class TestGetProviderConfig:
         ],
     )
     def test_supports_base_url_derived_from_optional_keys(self, provider_id: str, expected: bool):
-        """supports_base_url 取自 registry optional_keys 是否含 base_url，前端据此渲染凭证 URL 输入。"""
+        """supports_base_url comes from whether the registry's optional_keys contain base_url; the frontend uses it to render the credential URL input.
+
+        supports_base_url 取自 registry optional_keys 是否含 base_url，前端据此渲染凭证 URL 输入。"""
         app, _ = _make_session_app()
         with (
             patch("server.routers.providers.ConfigService", return_value=self._mock_svc_empty()),
@@ -462,7 +501,9 @@ class TestGetProviderConfig:
         assert resp.json()["supports_base_url"] is expected
 
     def test_secret_fields_single_secret_provider(self):
-        """单 secret provider（如 gemini-aistudio）→ secret_fields = [api_key]。"""
+        """Single-secret provider (such as gemini-aistudio) -> secret_fields = [api_key].
+
+        单 secret provider（如 gemini-aistudio）→ secret_fields = [api_key]。"""
         app, _ = _make_session_app()
         with (
             patch("server.routers.providers.ConfigService", return_value=self._mock_svc_empty()),
@@ -474,7 +515,9 @@ class TestGetProviderConfig:
         assert [f["key"] for f in resp.json()["secret_fields"]] == ["api_key"]
 
     def test_secret_fields_kling_three_ordered_secrets(self):
-        """可灵 → secret_fields = [api_key, access_key, secret_key]（保留 required_keys 顺序）。"""
+        """Kling -> secret_fields = [api_key, access_key, secret_key] (keeping the required_keys order).
+
+        可灵 → secret_fields = [api_key, access_key, secret_key]（保留 required_keys 顺序）。"""
         app, _ = _make_session_app()
         with (
             patch("server.routers.providers.ConfigService", return_value=self._mock_svc_empty()),
@@ -486,14 +529,16 @@ class TestGetProviderConfig:
         secret_fields = resp.json()["secret_fields"]
         assert [f["key"] for f in secret_fields] == ["api_key", "access_key", "secret_key"]
         assert [f["label"] for f in secret_fields] == ["API Key", "Access Key", "Secret Key"]
-        # 三 secret 走凭证表单，不进 advanced fields
+        # The three secrets go through the credential form, not into advanced fields / 三 secret 走凭证表单，不进 advanced fields
         field_keys = {f["key"] for f in resp.json()["fields"]}
         assert "api_key" not in field_keys
         assert "access_key" not in field_keys
         assert "secret_key" not in field_keys
 
     def test_secret_field_groups_kling_api_key_or_dual_secret(self):
-        """可灵 secret_field_groups 二选一分组：[api_key] 或 [access_key, secret_key]。"""
+        """Kling secret_field_groups either-or grouping: [api_key] or [access_key, secret_key].
+
+        可灵 secret_field_groups 二选一分组：[api_key] 或 [access_key, secret_key]。"""
         app, _ = _make_session_app()
         with (
             patch("server.routers.providers.ConfigService", return_value=self._mock_svc_empty()),
@@ -505,7 +550,9 @@ class TestGetProviderConfig:
         assert resp.json()["secret_field_groups"] == [["api_key"], ["access_key", "secret_key"]]
 
     def test_secret_field_groups_single_secret_provider_falls_back_to_one_group(self):
-        """未声明 credential_groups 的 provider → secret_field_groups 回退为 [全部 secret_fields] 单组。"""
+        """A provider without declared credential_groups -> secret_field_groups falls back to a single group [all secret_fields].
+
+        未声明 credential_groups 的 provider → secret_field_groups 回退为 [全部 secret_fields] 单组。"""
         app, _ = _make_session_app()
         with (
             patch("server.routers.providers.ConfigService", return_value=self._mock_svc_empty()),
@@ -517,7 +564,12 @@ class TestGetProviderConfig:
         assert resp.json()["secret_field_groups"] == [["api_key"]]
 
     def test_secret_fields_vertex_empty(self):
-        """gemini-vertex 凭证是文件路径（非 secret）→ secret_fields 为空，前端走文件上传。
+        """gemini-vertex credentials are a file path (not a secret) -> secret_fields is empty, and the frontend uses file upload.
+
+        The secret_field_groups fallback does not synthesize [[]] (symmetric with the fail-fast semantics for empty groups in registry.py,
+        so a future provider "without secret fields but using the ordinary credential form" cannot bypass validation because an empty group is always true).
+
+        gemini-vertex 凭证是文件路径（非 secret）→ secret_fields 为空，前端走文件上传。
 
         secret_field_groups 回退不合成 [[]]（与 registry.py 的空分组 fail-fast 语义对称，
         避免未来"无 secret 字段但走普通凭证表单"的 provider 因空分组恒真而绕过校验）。
@@ -535,7 +587,7 @@ class TestGetProviderConfig:
 
 
 # ---------------------------------------------------------------------------
-# PATCH /providers/{id}/config — 更新配置
+# PATCH /providers/{id}/config: update config / PATCH /providers/{id}/config — 更新配置
 # ---------------------------------------------------------------------------
 
 
@@ -635,7 +687,11 @@ class TestPatchProviderConfig:
 
 
 class TestPatchProviderConfigMaxWorkersValidation:
-    """容量键（*_max_workers）写入校验：非法值 422 + 可读消息，合法值正常保存。
+    """Capacity key (*_max_workers) write validation: invalid values give 422 + a readable message, valid values save normally.
+
+    Uses the real ConfigService + in-memory DB, covering the full router -> service -> repository chain.
+
+    容量键（*_max_workers）写入校验：非法值 422 + 可读消息，合法值正常保存。
 
     走真实 ConfigService + 内存 DB，覆盖 router → service → repository 全链路。
     """
@@ -648,6 +704,8 @@ class TestPatchProviderConfigMaxWorkersValidation:
 
         from lib.db.base import Base
 
+        # The engine is held by lifespan: it is always disposed when the TestClient context exits. If it were after
+        # the yield of the session dependency, it would be skipped when the route raises HTTPException and the engine would leak
         # engine 由 lifespan 持有：TestClient 上下文退出时必然 dispose——若放在
         # session 依赖的 yield 之后，路由抛 HTTPException 时会被跳过而泄漏 engine
         engine = create_async_engine("sqlite+aiosqlite:///:memory:")
@@ -681,6 +739,7 @@ class TestPatchProviderConfigMaxWorkersValidation:
             resp = client.patch("/api/v1/providers/dashscope/config", json={key: bad_value})
         assert resp.status_code == 422
         detail = resp.json()["detail"]
+        # The message has been rendered by the Translator (not a bare key id) and includes the same field Label as the UI for easy locating
         # 消息已经过 Translator 渲染（非裸 key id），且包含 UI 同款字段 Label 便于定位
         assert detail != "max_workers_must_be_positive_integer"
         assert providers._FIELD_META[key]["label"] in detail
@@ -703,7 +762,7 @@ class TestPatchProviderConfigMaxWorkersValidation:
 
 
 # ---------------------------------------------------------------------------
-# POST /providers/{id}/test — 连接测试
+# POST /providers/{id}/test: connection test / POST /providers/{id}/test — 连接测试
 # ---------------------------------------------------------------------------
 
 
@@ -818,7 +877,9 @@ class TestTestProviderConnection:
         assert "API key invalid" in body["message"]
 
     def test_unsupported_check_survives_a_failing_display_name_catalog(self):
-        """没有连通性检查的供应商走 connectivity_check_unsupported；目录查询失败时仍如实回执。"""
+        """Providers without a connectivity check go to connectivity_check_unsupported; the receipt is still truthful when the catalog query fails.
+
+        没有连通性检查的供应商走 connectivity_check_unsupported；目录查询失败时仍如实回执。"""
         app, session = _make_session_app()
         session.execute.side_effect = RuntimeError("catalog unavailable")
         with (
@@ -833,6 +894,8 @@ class TestTestProviderConnection:
         session.rollback.assert_awaited_once()
 
     def test_dashscope_registered_in_dispatch(self):
+        # dashscope is exposed as a built-in provider on the settings page, so the connection test must have a dispatcher,
+        # otherwise clicking "Test connection" would land in the connectivity_check_unsupported branch (even with a valid API Key)
         # dashscope 作为内置 provider 暴露在设置页，连接测试必须有 dispatcher，
         # 否则点"测试连接"会落到 connectivity_check_unsupported 分支（即便 API Key 有效）
         assert "dashscope" in providers._CONNECTIVITY_CHECK_DISPATCH
@@ -861,14 +924,16 @@ class TestTestProviderConnection:
             resp = providers._check_dashscope(
                 {"api_key": "sk", "base_url": "https://dashscope.aliyuncs.com"}, lambda k, **kw: k
             )
-        # host → compatible-mode base（OpenAI 协议），api_key 透传
+        # host -> compatible-mode base (OpenAI protocol), api_key passed through / host → compatible-mode base（OpenAI 协议），api_key 透传
         assert captured["base_url"] == "https://dashscope.aliyuncs.com/compatible-mode/v1"
         assert captured["api_key"] == "sk"
-        # 仅暴露 qwen/wan 模型，过滤掉 embedding 等
+        # Only expose qwen/wan models, filtering out embedding etc. / 仅暴露 qwen/wan 模型，过滤掉 embedding 等
         assert resp.available_models == ["qwen-plus", "wan2.7-image"]
         assert resp.success is True
 
     def test_minimax_registered_in_dispatch(self):
+        # minimax is exposed as a built-in provider on the settings page, so the connection test must have a dispatcher,
+        # otherwise clicking "Test connection" would land in the connectivity_check_unsupported branch (even with a valid API Key)
         # minimax 作为内置 provider 暴露在设置页，连接测试必须有 dispatcher，
         # 否则点"测试连接"会落到 connectivity_check_unsupported 分支（即便 API Key 有效）
         assert "minimax" in providers._CONNECTIVITY_CHECK_DISPATCH
@@ -895,14 +960,16 @@ class TestTestProviderConnection:
 
         with patch("openai.OpenAI", _FakeOpenAI):
             resp = providers._check_minimax({"api_key": "sk", "base_url": "https://api.minimax.io"}, lambda k, **kw: k)
-        # host → {host}/v1（OpenAI 协议），api_key 透传
+        # host -> {host}/v1 (OpenAI protocol), api_key passed through / host → {host}/v1（OpenAI 协议），api_key 透传
         assert captured["base_url"] == "https://api.minimax.io/v1"
         assert captured["api_key"] == "sk"
-        # 仅暴露 minimax/abab 模型，过滤掉 embedding 等
+        # Only expose minimax/abab models, filtering out embedding etc. / 仅暴露 minimax/abab 模型，过滤掉 embedding 等
         assert resp.available_models == ["MiniMax-M2.7", "abab6.5s-chat"]
         assert resp.success is True
 
     def test_kling_registered_in_dispatch(self):
+        # kling is exposed as a built-in provider on the settings page, so the connection test must have a dispatcher,
+        # otherwise clicking "Test connection" would land in the connectivity_check_unsupported branch (even with valid credentials)
         # kling 作为内置 provider 暴露在设置页，连接测试必须有 dispatcher，
         # 否则点"测试连接"会落到 connectivity_check_unsupported 分支（即便凭证有效）
         assert "kling" in providers._CONNECTIVITY_CHECK_DISPATCH
@@ -919,7 +986,9 @@ class TestTestProviderConnection:
             return self._payload
 
     def test_kling_test_fn_uses_bearer_when_api_key_set(self):
-        """填了 api_key → bearer 静态头，不走 JWT（与 _build_kling 的优先级一致）。"""
+        """api_key set -> static bearer header, no JWT (consistent with _build_kling's precedence).
+
+        填了 api_key → bearer 静态头，不走 JWT（与 _build_kling 的优先级一致）。"""
         captured: dict = {}
 
         def _fake_get(url, params=None, headers=None, timeout=None):
@@ -930,13 +999,16 @@ class TestTestProviderConnection:
             resp = providers._check_kling({"api_key": "sk-kling"}, lambda k, **kw: k)
         assert resp.success is True
         assert captured["headers"]["Authorization"] == "Bearer sk-kling"
+        # account/costs hangs off the domain root path without /v1; the default base_url has moved to api-beijing
         # account/costs 挂域名根路径，不带 /v1；默认 base_url 已迁移至 api-beijing
         assert captured["url"] == "https://api-beijing.klingai.com/account/costs"
         assert "start_time" in captured["params"]
         assert "end_time" in captured["params"]
 
     def test_kling_test_fn_uses_jwt_when_only_dual_secret_set(self):
-        """只填 access_key + secret_key（无 api_key）→ JWT Bearer token（三段式）。"""
+        """Only access_key + secret_key set (no api_key) -> JWT Bearer token (three-part).
+
+        只填 access_key + secret_key（无 api_key）→ JWT Bearer token（三段式）。"""
         captured: dict = {}
 
         def _fake_get(url, params=None, headers=None, timeout=None):
@@ -951,7 +1023,9 @@ class TestTestProviderConnection:
         assert auth.removeprefix("Bearer ").count(".") == 2  # JWT: header.payload.signature
 
     def test_kling_test_fn_api_key_takes_priority_when_both_set(self):
-        """两者都填时 api_key 优先，与 _build_kling 分派顺序一致。"""
+        """When both are set api_key wins, consistent with _build_kling's dispatch order.
+
+        两者都填时 api_key 优先，与 _build_kling 分派顺序一致。"""
         captured: dict = {}
 
         def _fake_get(url, params=None, headers=None, timeout=None):
@@ -965,7 +1039,9 @@ class TestTestProviderConnection:
         assert captured["headers"]["Authorization"] == "Bearer sk-kling"
 
     def test_kling_test_fn_strips_v1_suffix_for_account_costs_root_path(self):
-        """自定义 base_url 带 /v1 后缀 → account/costs 请求剥离该后缀，落到域名根路径。"""
+        """A custom base_url with a /v1 suffix -> the account/costs request strips the suffix and goes to the domain root path.
+
+        自定义 base_url 带 /v1 后缀 → account/costs 请求剥离该后缀，落到域名根路径。"""
         captured: dict = {}
 
         def _fake_get(url, params=None, headers=None, timeout=None):
@@ -979,12 +1055,16 @@ class TestTestProviderConnection:
         assert captured["url"] == "https://relay.example.com/account/costs"
 
     def test_kling_test_fn_raises_clear_error_when_no_credentials(self):
-        """两种凭证形态都未填 → 明确报错（不静默发出无鉴权请求）。"""
+        """Neither credential form set -> explicit error (no silent unauthenticated request).
+
+        两种凭证形态都未填 → 明确报错（不静默发出无鉴权请求）。"""
         with pytest.raises(ValueError, match="Access Key"):
             providers._check_kling({}, lambda k, **kw: k)
 
     def test_kling_test_fn_raises_on_code_error(self):
-        """响应 code != 0 → RuntimeError 携带官方错误信息，经上层转 connectivity_check_failed 文案。"""
+        """Response code != 0 -> RuntimeError carrying the official error message, turned into the connectivity_check_failed message upstream.
+
+        响应 code != 0 → RuntimeError 携带官方错误信息，经上层转 connectivity_check_failed 文案。"""
 
         def _fake_get(url, params=None, headers=None, timeout=None):
             return self._FakeKlingResponse({"code": 1101, "message": "auth failed", "data": {}})
@@ -993,7 +1073,9 @@ class TestTestProviderConnection:
             providers._check_kling({"api_key": "sk-kling"}, lambda k, **kw: k)
 
     def test_kling_test_fn_prefers_json_body_error_over_raise_for_status(self):
-        """HTTP 状态非 2xx 但响应体带 JSON 业务错误 → 优先暴露具体原因，而非泛化的 HTTP 状态文案。"""
+        """HTTP status not 2xx but the body carries a JSON business error -> expose the specific reason first, rather than a generic HTTP status message.
+
+        HTTP 状态非 2xx 但响应体带 JSON 业务错误 → 优先暴露具体原因，而非泛化的 HTTP 状态文案。"""
 
         class _FailingResponse(self._FakeKlingResponse):
             def raise_for_status(self) -> None:
@@ -1006,7 +1088,9 @@ class TestTestProviderConnection:
             providers._check_kling({"api_key": "sk-kling"}, lambda k, **kw: k)
 
     def test_kling_test_fn_raises_http_status_error_when_body_not_json(self):
-        """非 JSON 响应体（如网关错误页）跳过业务错误解析，走状态码兜底暴露 HTTP 状态。"""
+        """A non-JSON response body (such as a gateway error page) skips business-error parsing and falls back to the status code to expose the HTTP status.
+
+        非 JSON 响应体（如网关错误页）跳过业务错误解析，走状态码兜底暴露 HTTP 状态。"""
         with capture_http() as http:
             http.get(host="api-beijing.klingai.com", path="/account/costs").respond(
                 status_code=502, text="<html>bad gateway</html>", headers={"content-type": "text/html"}
@@ -1018,7 +1102,9 @@ class TestTestProviderConnection:
         assert "502" in str(exc_info.value)
 
     def test_kling_test_fn_falls_back_to_raise_for_status_on_malformed_json(self):
-        """content-type 声称 JSON 但响应体非法/空（如异常网关截断）→ 解析失败不崩溃，走状态码兜底。"""
+        """content-type claims JSON but the body is invalid/empty (e.g. truncated by a faulty gateway) -> parse failure does not crash, falls back to the status code.
+
+        content-type 声称 JSON 但响应体非法/空（如异常网关截断）→ 解析失败不崩溃，走状态码兜底。"""
         with capture_http() as http:
             http.get(host="api-beijing.klingai.com", path="/account/costs").respond(
                 status_code=504, text="", headers={"content-type": "application/json"}
@@ -1030,7 +1116,12 @@ class TestTestProviderConnection:
         assert "504" in str(exc_info.value)
 
     def test_kling_test_fn_keeps_credentials_out_of_status_error_message(self):
-        """状态码兜底抛的是脱敏后的 HTTPStatusError：base_url 权限段里的口令不进异常消息。
+        """The status-code fallback raises a redacted HTTPStatusError: the password in the base_url authority section does not enter the exception message.
+
+        base_url is entered by the user; written as https://user:pw@host, httpx keeps the password in the request URL's authority section,
+        and a bare raise_for_status would put the whole URL into the message, which goes back to the settings page unchanged via the connection test endpoint.
+
+        状态码兜底抛的是脱敏后的 HTTPStatusError：base_url 权限段里的口令不进异常消息。
 
         base_url 由用户自填，写成 https://user:pw@host 时 httpx 把口令留在请求 URL 的权限段，
         裸 raise_for_status 会把整条 URL 写进消息，而这条消息经连接测试端点原样回到设置页。
@@ -1045,13 +1136,16 @@ class TestTestProviderConnection:
                     lambda k, **kw: k,
                 )
 
+        # The leak surface really exists: the request URL kept by the exception carries the password and query string, and the message has neither
         # 泄漏面真实存在：异常保留的请求 URL 里带着口令与查询串，消息里两者都没有
         assert "sk-leaked-kling" in str(exc_info.value.request.url)
         assert str(exc_info.value) == "401 response for https://relay.example.com/account/costs"
         assert exc_info.value.response.status_code == 401
 
     def test_kling_connection_test_via_router_keeps_credentials_out_of_message(self):
-        """端到端：连接测试失败时回给前端的 message 不含 base_url 权限段里的口令。"""
+        """End to end: the message returned to the frontend when the connection test fails does not contain the password from the base_url authority section.
+
+        端到端：连接测试失败时回给前端的 message 不含 base_url 权限段里的口令。"""
         cred = ProviderCredential(
             provider="kling",
             name="可灵账号",
@@ -1075,6 +1169,9 @@ class TestTestProviderConnection:
             with TestClient(app) as client:
                 resp = client.post("/api/v1/providers/kling/test")
 
+        # The request really was sent, so the message is the product of the status-code fallback path. That the password enters the exception message is asserted by
+        # test_kling_test_fn_keeps_credentials_out_of_status_error_message on exc.request.url:
+        # httpx moves the authority section into the Authorization header before sending, so it is not visible on the outbound URL.
         # 请求真的发出去了，message 才是走完状态码兜底那条路的产物。口令进异常消息这件事由
         # test_kling_test_fn_keeps_credentials_out_of_status_error_message 在 exc.request.url
         # 上断言：httpx 出站前会把权限段挪进 Authorization 头，出站 URL 上看不到它。
@@ -1085,7 +1182,9 @@ class TestTestProviderConnection:
         assert "sk-leaked-kling" not in body["message"]
 
     def test_kling_test_fn_raises_on_inner_data_code_error(self):
-        """顶层 code=0 但 data 内嵌业务级 code != 0（如资源包查询失败）→ 同样 RuntimeError。"""
+        """Top-level code=0 but a nested business-level code != 0 in data (such as a resource pack query failure) -> also RuntimeError.
+
+        顶层 code=0 但 data 内嵌业务级 code != 0（如资源包查询失败）→ 同样 RuntimeError。"""
 
         def _fake_get(url, params=None, headers=None, timeout=None):
             return self._FakeKlingResponse(
@@ -1096,7 +1195,12 @@ class TestTestProviderConnection:
             providers._check_kling({"api_key": "sk-kling"}, lambda k, **kw: k)
 
     def test_kling_connection_test_via_router_with_api_key_only(self):
-        """端到端：只填 api_key 的可灵凭证通过 /test 端点即可测通（验收标准之一）。
+        """End to end: a Kling credential with only api_key passes via the /test endpoint (one of the acceptance criteria).
+
+        Uses a real ProviderCredential (not MagicMock): the route calls cred.overlay_config(config), relying on the
+        real method to merge api_key into the config dict; MagicMock's overlay_config would not actually modify config.
+
+        端到端：只填 api_key 的可灵凭证通过 /test 端点即可测通（验收标准之一）。
 
         用真实 ProviderCredential（而非 MagicMock）：路由调用 cred.overlay_config(config) 靠
         真实方法把 api_key 合入 config dict，MagicMock 的 overlay_config 不会真的修改 config。
@@ -1118,7 +1222,9 @@ class TestTestProviderConnection:
         assert resp.json()["success"] is True
 
     def test_specific_credential_id(self):
-        """使用 credential_id 参数测试特定凭证。"""
+        """Test a specific credential using the credential_id parameter.
+
+        使用 credential_id 参数测试特定凭证。"""
         repo = MagicMock(spec=CredentialRepository)
         cred = self._fake_cred()
         repo.get_by_id = AsyncMock(return_value=cred)
@@ -1137,7 +1243,9 @@ class TestTestProviderConnection:
 
 
 class TestArkAgentPlanConnectionTest:
-    """ark-agent-plan 必须复用 _check_ark 并自动注入 default_base_url。"""
+    """ark-agent-plan must reuse _check_ark and inject default_base_url automatically.
+
+    ark-agent-plan 必须复用 _check_ark 并自动注入 default_base_url。"""
 
     def _fake_cred(self):
         cred = MagicMock()

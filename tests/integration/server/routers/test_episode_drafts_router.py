@@ -1,4 +1,7 @@
-"""草稿路由：视频模型配置或正式剧本单元阻断手修保存时，返回真实原因并保留草稿。"""
+"""Draft routes: when the video model config or a final-script unit blocks a hand-fixed save, return the real reason
+and keep the draft.
+
+草稿路由：视频模型配置或正式剧本单元阻断手修保存时，返回真实原因并保留草稿。"""
 
 from pathlib import Path
 
@@ -96,7 +99,10 @@ def test_web_save_blocked_by_the_video_model_reports_the_real_reason(
 def test_web_save_blocked_by_a_formal_unit_names_it_by_position(
     tmp_path: Path, video_request_facts, monkeypatch, unit: dict, phrase: str, locale: str, unit_label: str
 ) -> None:
-    """提示词编写草稿手修保存后，晋升被正式剧本单元挡下：按「视频单元 N」说明原因，不含内部单元 ID。"""
+    """After a hand-fixed save of a prompt authoring draft, promotion is blocked by a final-script unit: the reason is
+    given as "video unit N", without internal unit IDs.
+
+    提示词编写草稿手修保存后，晋升被正式剧本单元挡下：按「视频单元 N」说明原因，不含内部单元 ID。"""
     pm = ProjectManager(tmp_path / "projects")
     pm.create_project("demo")
     pm.create_project_metadata("demo", "Demo", "Anime", "narration")
@@ -119,6 +125,8 @@ def test_web_save_blocked_by_a_formal_unit_names_it_by_position(
         violations=[],
         meta={"unit_ids": ["E1U01"]},
     )
+    # The pre-check comes before calling the text model: the stand-in only wires ScriptGenerator for promotion and is
+    # never called.
     # 预判在调用文本模型之前：替身只为晋升装配 ScriptGenerator，不会被调用。
     use_text_generator(monkeypatch, FakeTextGenerator("").create)
     use_project_manager(monkeypatch, pm)

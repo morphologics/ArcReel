@@ -1,4 +1,6 @@
-"""基本路由存在性测试：验证 grids router 注册了预期路径。"""
+"""Basic route existence tests: verify the grids router registers the expected paths.
+
+基本路由存在性测试：验证 grids router 注册了预期路径。"""
 
 from server.routers.grids import router
 from tests.auth_deps import AUTH_DEPENDENCIES
@@ -38,7 +40,9 @@ class TestGridRouterExists:
 
 class TestAdProjectRejected:
     def test_generate_grid_rejects_ad_project(self, monkeypatch):
-        """广告/短片项目不开放宫格生视频：动作端点直接 400。"""
+        """Ad/short projects do not offer grid-to-video: the action endpoint returns 400 directly.
+
+        广告/短片项目不开放宫格生视频：动作端点直接 400。"""
         from fastapi import FastAPI
         from fastapi.testclient import TestClient
 
@@ -64,7 +68,9 @@ class TestAdProjectRejected:
         assert resp.status_code == 400
 
     def test_regenerate_grid_rejects_ad_project(self, monkeypatch):
-        """重生成端点同样封禁 ad:残留的历史 grid 记录不得被重新入队。"""
+        """The regenerate endpoint also blocks ad: leftover historical grid records must not be re-enqueued.
+
+        重生成端点同样封禁 ad:残留的历史 grid 记录不得被重新入队。"""
         from fastapi import FastAPI
         from fastapi.testclient import TestClient
 

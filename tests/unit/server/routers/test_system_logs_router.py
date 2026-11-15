@@ -1,4 +1,6 @@
-"""GET /api/v1/system/logs/download 行为测试。"""
+"""Behavior tests for GET /api/v1/system/logs/download.
+
+GET /api/v1/system/logs/download 行为测试。"""
 
 from __future__ import annotations
 
@@ -15,6 +17,10 @@ def auth_disabled(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("AUTH_ENABLED", "false")
 
 
+# Three importlib.reload(app_module) calls: the FastAPI app mounts routers and reads env immediately at import time,
+# so for env set via monkeypatch to take effect in a test, server.app must run its top-level code again. This differs from
+# tests/test_logging_persistence.py, where setup_logging() rereads env on every call and
+# no reload is needed.
 # 三处 importlib.reload(app_module)：FastAPI app 在 import 时立刻 mount router 与读取 env，
 # monkeypatch 设的 env 要在测试中生效必须让 server.app 重新走一次顶层代码。这一点与
 # tests/test_logging_persistence.py 不同——那里 setup_logging() 在每次调用都重新读 env，
@@ -92,7 +98,7 @@ async def test_oversized_file_skipped(logs_client) -> None:
 
 
 async def test_missing_logs_dir(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, auth_disabled: None) -> None:
-    # 数据根下的日志目录故意不创建
+    # The log directory under the data root is deliberately not created / 数据根下的日志目录故意不创建
     assert not (tmp_path / "data" / "logs").exists()
     monkeypatch.setenv("ARCREEL_DATA_DIR", str(tmp_path / "data"))
     from lib.infra.app_data_dir import reset_for_tests

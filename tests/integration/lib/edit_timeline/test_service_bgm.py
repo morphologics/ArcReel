@@ -1,4 +1,7 @@
-"""剪辑时间线的 BGM 片段：在真实临时项目上经公开服务命令验证增删改、摆放规则、读取形态与乐观并发。"""
+"""BGM clips of the edit timeline: verify add/remove/change, placement rules, read shape and optimistic concurrency
+through the public service commands on a real temp project.
+
+剪辑时间线的 BGM 片段：在真实临时项目上经公开服务命令验证增删改、摆放规则、读取形态与乐观并发。"""
 
 from __future__ import annotations
 
@@ -17,7 +20,9 @@ AGENT = RevisionAuthor(kind="arcreel_agent")
 
 @pytest.fixture
 async def bgm_id(pm: ProjectManager) -> str:
-    """一首 2 秒的 BGM。"""
+    """A 2-second BGM.
+
+    一首 2 秒的 BGM。"""
     track = await BgmLibraryService(pm).upload("demo", filename="雨夜.wav", content=wav_bytes(2.0, tone_hz=330))
     return track.id
 
@@ -73,6 +78,8 @@ async def test_inserted_bgm_takes_defaults_and_is_cut_at_the_timeline_end(
     assert [clip.id for clip in result.bgm] == ["b1", "b2"]
     readout = await service.read("demo", timeline_id)
     assert readout.duration == 3.0
+    # b1 is only 1.5 seconds, so the default 1-second fades in and out shrink proportionally; b2 plays the whole 2 seconds
+    # from 1.5 s, passing the 3-second end, so it is cut at the end with a 1-second fade-out at the cut
     # b1 只有 1.5 秒，默认各 1 秒的淡入淡出按比例缩短；b2 从 1.5 秒起放整首 2 秒，越过 3 秒的末尾，
     # 截到末尾，截断处淡出 1 秒
     assert _rows(readout.bgm) == [
@@ -117,9 +124,9 @@ async def test_set_and_delete_bgm_change_only_the_named_clip(service: EditTimeli
 @pytest.mark.parametrize(
     ("operation", "field"),
     [
-        ({"start": 0.5}, "start"),  # 与 b1（0–1 秒）重叠
-        ({"start": 3.0}, "start"),  # 起点在时间线末尾之后
-        ({"start": 1.5, "source_in": 1.5, "source_out": 3}, "source_in/source_out"),  # 出点超过 BGM 时长
+        ({"start": 0.5}, "start"),  # Overlaps b1 (0-1 s) / 与 b1（0–1 秒）重叠
+        ({"start": 3.0}, "start"),  # Start is after the end of the timeline / 起点在时间线末尾之后
+        ({"start": 1.5, "source_in": 1.5, "source_out": 3}, "source_in/source_out"),  # Out point exceeds the BGM duration / 出点超过 BGM 时长
         ({"start": 1.5, "volume": 1.5}, "volume"),
     ],
 )
@@ -170,6 +177,7 @@ async def test_editing_a_bgm_clip_someone_else_just_changed_conflicts_on_that_cl
     assert raised.value.code == "revision_conflict"
     assert raised.value.params["conflicting_clip_ids"] == ["b1"]
 
+    # An old-baseline batch that only changes video clips is not affected by BGM changes
     # 只改视频片段的旧基线批次不受 BGM 改动影响
     result = await _edit(service, timeline_id, 2, {"op": "set_volume", "clip": "c2", "volume": 0.5})
     assert result.revision == 4

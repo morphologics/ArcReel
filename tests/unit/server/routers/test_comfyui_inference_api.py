@@ -1,4 +1,9 @@
-"""ComfyUI 节点绑定推断接口。
+"""ComfyUI node binding inference API.
+
+Same shape as the import entry point: the request body is the payload as is; payloads with ``kind`` are taken as an endpoint definition, others as a raw API workflow.
+The path is mounted at ``/custom-endpoints/comfyui/infer`` and must match before ``/{endpoint_id}``.
+
+ComfyUI 节点绑定推断接口。
 
 与导入入口同形：请求体是载荷原样，带 ``kind`` 的按端点定义收、其余按原始 API workflow 收。
 路径挂在 ``/custom-endpoints/comfyui/infer``，须先于 ``/{endpoint_id}`` 匹配。
@@ -23,7 +28,9 @@ INFER_PATH = "/api/v1/custom-endpoints/comfyui/infer"
 
 @pytest.fixture
 def inference_app() -> FastAPI:
-    """只挂端点路由：推断接口不读库，也不在服务端留任何状态。"""
+    """Mount only the endpoint routes: the inference API does not read the DB and keeps no state on the server.
+
+    只挂端点路由：推断接口不读库，也不在服务端留任何状态。"""
     app = FastAPI()
     app.dependency_overrides[get_current_user] = lambda: CurrentUserInfo(id="test", sub="test", role="admin")
     app.include_router(custom_endpoints.router, prefix="/api/v1", dependencies=AUTH_DEPENDENCIES)
@@ -77,7 +84,9 @@ def test_an_endpoint_definition_is_taken_as_is_and_its_bindings_are_rematched(in
 
 
 def test_a_definition_whose_bindings_no_longer_fit_is_still_accepted(inference_client: TestClient):
-    """重导入的正是「结构立得住、绑定对不上」的定义，拒绝它就没有重匹配可言。"""
+    """What gets reimported is exactly a definition whose "structure holds but bindings do not fit"; rejecting it would leave nothing to rematch.
+
+    重导入的正是「结构立得住、绑定对不上」的定义，拒绝它就没有重匹配可言。"""
     definition = comfyui_endpoint_definition()
     definition["workflow"]["106"] = definition["workflow"].pop("6")
     definition["workflow"]["3"]["inputs"]["positive"] = ["106", 0]
@@ -116,7 +125,12 @@ def test_a_payload_that_is_not_an_object_is_refused_with_a_located_diagnostic(in
 
 
 def test_the_infer_path_is_registered_before_the_endpoint_id_route(inference_app: FastAPI):
-    """字面路径必须排在 ``/{endpoint_id}`` 之前：撞上路径参数只会拿到解析失败的 422。
+    """The literal path must come before ``/{endpoint_id}``: hitting the path parameter would only get a 422 parse failure.
+
+    Assert the registration order rather than some response code: today ``/{endpoint_id}`` has no POST, so even a reversed order still reaches
+    the inference API; only once it gains a POST would this constraint break, in the hardest way to track down.
+
+    字面路径必须排在 ``/{endpoint_id}`` 之前：撞上路径参数只会拿到解析失败的 422。
 
     断言注册序而不是某个响应码——今天 ``/{endpoint_id}`` 上没有 POST，颠倒注册序也还是能走到
     推断接口，等哪天它多出一个 POST，这条约束才会以最难查的方式失效。

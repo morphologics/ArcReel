@@ -1,4 +1,6 @@
-"""图片生效能力：模型条目与调用通道都满足的部分。"""
+"""Effective image capabilities: the part satisfied by both the model entry and the call channel.
+
+图片生效能力：模型条目与调用通道都满足的部分。"""
 
 from __future__ import annotations
 
@@ -48,11 +50,12 @@ def test_custom_model_matches_entry_by_name(channel, model_id, expected):
 @pytest.mark.parametrize(
     ("model_id", "overrides", "expected"),
     [
+        # The entry says image-to-image only; the capability override replaces the text-to-image dimension wholesale with enabled.
         # 条目说只接受图生图，能力覆盖把文生图整维替换为开启
         ("qwen-image-edit-plus", {"text_to_image": True}, {T2I, I2I}),
-        # 覆盖关掉一维，另一维仍取条目
+        # The override turns one dimension off; the other still comes from the entry. / 覆盖关掉一维，另一维仍取条目
         ("qwen-image-edit-plus", {"image_to_image": False}, set()),
-        # 对应不上条目：只覆盖的那一维受约束，另一维不加约束
+        # No matching entry: only the overridden dimension is constrained, the other is unconstrained. / 对应不上条目：只覆盖的那一维受约束，另一维不加约束
         ("relay-image-x", {"image_to_image": False}, {T2I}),
     ],
 )
@@ -62,7 +65,9 @@ def test_custom_override_replaces_entry_fact_per_dimension(model_id, overrides, 
 
 
 def test_comfyui_endpoint_ignores_entry_and_overrides():
-    """ComfyUI 端点的能力只从节点绑定推导：名字对上条目也不取交集，存量覆盖不生效。"""
+    """ComfyUI endpoint capabilities are derived only from node bindings: no intersection even when the name matches an entry; stored overrides do not apply.
+
+    ComfyUI 端点的能力只从节点绑定推导：名字对上条目也不取交集，存量覆盖不生效。"""
     model = custom_image_model_capabilities(
         "qwen-image-edit-plus", overrides={"image_to_image": False}, endpoint_kind="comfyui"
     )

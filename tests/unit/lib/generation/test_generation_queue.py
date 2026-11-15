@@ -90,7 +90,7 @@ class TestGenerationQueue:
         assert done["status"] == "succeeded"
         assert done["result"]["file_path"] == "storyboards/scene_E1S01.png"
 
-        # 终态后允许再次入队
+        # Enqueuing again is allowed after a terminal state / 终态后允许再次入队
         second = await queue.enqueue_task(
             project_name="demo",
             task_type="storyboard",
@@ -160,7 +160,9 @@ class TestGenerationQueue:
     async def test_script_file_aliases_dedupe_to_one_active_reference_video_task(
         self, queue, db_factory, first_alias, second_alias
     ):
-        """账本原值与纯文件名指向同一剧本：无论哪种写法先入队，第二次都判为已在队列中。"""
+        """The ledger's raw value and the bare file name point at the same script: whichever form enqueues first, the second is judged already queued.
+
+        账本原值与纯文件名指向同一剧本：无论哪种写法先入队，第二次都判为已在队列中。"""
 
         enqueue = {
             "project_name": "demo",
@@ -203,7 +205,9 @@ class TestGenerationQueue:
         assert [task["task_id"] for task in active] == [first["task_id"]]
 
     async def test_active_reference_video_task_ignores_a_legacy_delivery_key_when_deduping(self, queue, db_factory):
-        """旧版本入队的 reference_request_options 里还带着 narration_delivery；比对请求选项时忽略它。"""
+        """reference_request_options enqueued by older versions still carry narration_delivery; it is ignored when comparing request options.
+
+        旧版本入队的 reference_request_options 里还带着 narration_delivery；比对请求选项时忽略它。"""
 
         first = await queue.enqueue_task(
             project_name="demo",
@@ -408,6 +412,8 @@ class TestGenerationQueue:
         assert third_task is not None
         assert second_task["status"] == "failed"
         assert third_task["status"] == "failed"
+        # Each layer only records the direct blocker's task_id, and reason passes the root cause along the chain unchanged (not re-nested per layer),
+        # avoiding the near-exponential growth from deep dependency chains nesting the previous layer's full encoded string into a new layer of JSON.
         # 每层只记直接阻塞方 task_id，reason 沿链条原样传递根因（不随层数重新嵌套）——
         # 避免深层依赖链把上一层的完整编码串再嵌套进新一层 JSON 造成的近指数增长。
         expected_second = encode_failure(
@@ -497,7 +503,9 @@ class TestGenerationQueue:
         assert remaining["status"] == "queued"
 
     async def test_persist_provider_job_id_wrapper(self, queue):
-        """persist_provider_job_id 是 wrapper,只验证不抛(行为细节在 repo 层测过)。"""
+        """persist_provider_job_id is a wrapper; only check it does not raise (behaviour details are tested at the repo layer).
+
+        persist_provider_job_id 是 wrapper,只验证不抛(行为细节在 repo 层测过)。"""
         enqueued = await queue.enqueue_task(
             project_name="demo",
             task_type="video",
@@ -506,6 +514,7 @@ class TestGenerationQueue:
             payload={},
             script_file="ep1.json",
         )
+        # The enqueued task is queued at this point, but persist does not check status (separate commit)
         # 入队的 task 此时是 queued,但 persist 不校验 status(独立 commit)
         await queue.persist_provider_job_id(enqueued["task_id"], "job-abc-123")
         task = await queue.get_task(enqueued["task_id"])
@@ -513,7 +522,9 @@ class TestGenerationQueue:
         assert task["provider_job_id"] == "job-abc-123"
 
     async def test_mark_task_interrupted_finalizes_running_task_and_cascades_queued_dependents(self, queue):
-        """进程级打断兜底：running 任务落 cancelled，排队中下游级联取消；终态再调返回 0。"""
+        """Process-level interruption fallback: running tasks land as cancelled, queued downstream tasks are cascade-cancelled; calling again at a terminal state returns 0.
+
+        进程级打断兜底：running 任务落 cancelled，排队中下游级联取消；终态再调返回 0。"""
         parent = await queue.enqueue_task(
             project_name="demo",
             task_type="storyboard",
@@ -601,7 +612,9 @@ class TestGenerationQueue:
 
 @pytest.fixture
 def stub_enqueue_resolution(monkeypatch):
-    """把入队解析链（视频 / 图片 / 音频三条）换成固定身份，返回一个可改写解析结果的 holder。"""
+    """Replace the enqueue resolution chain (video / image / audio) with a fixed identity, and return a holder whose resolution result can be changed.
+
+    把入队解析链（视频 / 图片 / 音频三条）换成固定身份，返回一个可改写解析结果的 holder。"""
     from lib.config.resolver import ProviderModel
 
     holder = {"resolved": ProviderModel("custom-7", "advisory-video-model")}
@@ -624,7 +637,7 @@ def stub_enqueue_resolution(monkeypatch):
             return {}
 
         def get_project_path(self, project_name):
-            # 项目不在磁盘上：迁移守卫按「无从判定」放行
+            # Project not on disk: the migration guard lets it through as "cannot determine" / 项目不在磁盘上：迁移守卫按「无从判定」放行
             raise FileNotFoundError(project_name)
 
     monkeypatch.setattr("lib.config.resolver.ConfigResolver", _FakeResolver)
@@ -633,7 +646,9 @@ def stub_enqueue_resolution(monkeypatch):
 
 
 class TestProjectExecutionProviderOnEnqueue:
-    """两种视频生成模式入队都只保存 advisory provider，不冻结执行 model。"""
+    """Enqueue in both video generation modes only stores the advisory provider and does not freeze the execution model.
+
+    两种视频生成模式入队都只保存 advisory provider，不冻结执行 model。"""
 
     async def test_video_task_keeps_only_advisory_provider(self, queue, stub_enqueue_resolution):
         enqueued = await queue.enqueue_task(
@@ -680,7 +695,9 @@ class TestProjectExecutionProviderOnEnqueue:
         assert task["provider_id"] == "custom-7"
 
     async def test_non_video_task_pins_nothing(self, queue, stub_enqueue_resolution):
-        """图片任务的任务类型执行时才定，入队不锁——只落 provider_id。"""
+        """An image task's task type is decided only at execution, so enqueue locks nothing; only provider_id is stored.
+
+        图片任务的任务类型执行时才定，入队不锁——只落 provider_id。"""
         enqueued = await queue.enqueue_task(
             project_name="demo",
             task_type="storyboard",
@@ -694,7 +711,9 @@ class TestProjectExecutionProviderOnEnqueue:
         assert task["provider_id"] == "custom-7"
 
     async def test_unresolvable_model_leaves_payload_untouched(self, queue, stub_enqueue_resolution):
-        """解析补不出 provider → payload 不变，provider_id 保持 NULL 兜底。"""
+        """Resolution cannot fill in a provider → payload unchanged, provider_id stays NULL as the fallback.
+
+        解析补不出 provider → payload 不变，provider_id 保持 NULL 兜底。"""
         from lib.config.resolver import ProviderModel
 
         stub_enqueue_resolution["resolved"] = ProviderModel("", "")
@@ -711,7 +730,9 @@ class TestProjectExecutionProviderOnEnqueue:
         assert task["provider_id"] is None
 
     async def test_provider_without_model_pins_nothing(self, queue, stub_enqueue_resolution):
-        """解析出 provider 但补不出 model → 只落 provider_id，不锁半截桶键。"""
+        """Resolution yields a provider but no model → only provider_id is stored; no half bucket key is locked.
+
+        解析出 provider 但补不出 model → 只落 provider_id，不锁半截桶键。"""
         from lib.config.resolver import ProviderModel
 
         stub_enqueue_resolution["resolved"] = ProviderModel("custom-7", "")
@@ -728,7 +749,9 @@ class TestProjectExecutionProviderOnEnqueue:
         assert task["provider_id"] == "custom-7"
 
     async def test_caller_payload_not_mutated(self, queue, stub_enqueue_resolution):
-        """锁入走新 dict：调用方常复用同一份 payload 批量入队。"""
+        """Locking in uses a new dict: callers often reuse the same payload to enqueue in bulk.
+
+        锁入走新 dict：调用方常复用同一份 payload 批量入队。"""
         payload = {"prompt": "p"}
         await queue.enqueue_task(
             project_name="demo",

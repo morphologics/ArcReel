@@ -1,4 +1,6 @@
-"""供应商产物下载入口：出站目的地校验与有上限的响应体读取。"""
+"""Provider artifact download entry: outbound destination check and size-capped response body reads.
+
+供应商产物下载入口：出站目的地校验与有上限的响应体读取。"""
 
 from __future__ import annotations
 

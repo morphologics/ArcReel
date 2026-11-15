@@ -1,4 +1,6 @@
-"""Alembic 迁移：asset_derivatives 建表的 upgrade / downgrade 与外键级联。"""
+"""Alembic migration: upgrade / downgrade of the asset_derivatives table and foreign-key cascade.
+
+Alembic 迁移：asset_derivatives 建表的 upgrade / downgrade 与外键级联。"""
 
 from __future__ import annotations
 
@@ -76,7 +78,9 @@ def test_derivative_name_is_unique_within_one_asset(
     alembic_cfg: tuple[Config, Path],
     migration_revisions: Callable[[str], tuple[str, str]],
 ):
-    """同一条资产下衍生名唯一；不同资产下的同名衍生互不冲突。"""
+    """Derivative names are unique within one asset; same-named derivatives under different assets do not conflict.
+
+    同一条资产下衍生名唯一；不同资产下的同名衍生互不冲突。"""
     revision_id, _parent_id = migration_revisions(_MIGRATION)
     cfg, db_path = alembic_cfg
     command.upgrade(cfg, revision_id)
@@ -100,7 +104,10 @@ def test_deleting_an_asset_cascades_to_its_derivatives(
     alembic_cfg: tuple[Config, Path],
     migration_revisions: Callable[[str], tuple[str, str]],
 ):
-    """衍生行随本体资产被外键级联删除，不需要应用层逐条清理。"""
+    """Derivative rows are deleted by foreign-key cascade along with their owner asset, without app-level cleanup row by
+    row.
+
+    衍生行随本体资产被外键级联删除，不需要应用层逐条清理。"""
     revision_id, _parent_id = migration_revisions(_MIGRATION)
     cfg, db_path = alembic_cfg
     command.upgrade(cfg, revision_id)
@@ -108,6 +115,7 @@ def test_deleting_an_asset_cascades_to_its_derivatives(
     engine = sa.create_engine(f"sqlite:///{db_path}")
     try:
         with engine.begin() as conn:
+            # SQLite does not enforce foreign keys by default; the production engine turns this pragma on when connecting.
             # SQLite 默认不强制外键；生产 engine 在连接建立时开这个 pragma。
             conn.execute(sa.text("PRAGMA foreign_keys=ON"))
             conn.execute(_INSERT_ASSET, {"id": "a1", "name": "王"})

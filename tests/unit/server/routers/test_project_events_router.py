@@ -9,7 +9,12 @@ from server.routers import project_events as project_events_router
 
 class _FakeRequest:
     def __init__(self, app, *, disconnect_after: int | None = None):
-        """断线检测在循环顶部进行,每次 anext 前都会调用一次 is_disconnected。
+        """Disconnect detection happens at the top of the loop; is_disconnected is called once before every anext.
+
+        ``disconnect_after`` = None  -> never disconnects
+        ``disconnect_after`` = N     -> returns False for the first N calls, True from call N+1 on
+
+        断线检测在循环顶部进行,每次 anext 前都会调用一次 is_disconnected。
 
         ``disconnect_after`` = None  → 永不断线
         ``disconnect_after`` = N     → 前 N 次返回 False,第 N+1 次起返回 True
@@ -57,7 +62,7 @@ class _FakeService:
                     "changes": [],
                 },
             )
-            # 之后进入空闲;消费方在 _idle 上轮询 is_disconnected。
+            # Then it goes idle; the consumer polls is_disconnected on _idle. / 之后进入空闲;消费方在 _idle 上轮询 is_disconnected。
             while True:
                 yield {"type": "_idle"}
 
@@ -69,7 +74,9 @@ class _FakeService:
 
 @pytest.mark.asyncio
 async def test_project_events_service_raises_not_found_when_project_missing():
-    """项目不存在(FileNotFoundError)-> NotFoundError,须在流开始前抛出。"""
+    """Project does not exist (FileNotFoundError) -> NotFoundError, which must be raised before the stream starts.
+
+    项目不存在(FileNotFoundError)-> NotFoundError,须在流开始前抛出。"""
 
     class _MissingPM:
         def get_project_path(self, project_name: str):
@@ -85,7 +92,9 @@ async def test_project_events_service_raises_not_found_when_project_missing():
 
 @pytest.mark.asyncio
 async def test_project_events_service_raises_bad_request_for_invalid_project_name():
-    """非法项目名(路径穿越等,ValueError)-> BadRequestError,而非「不存在」。"""
+    """Invalid project name (path traversal, etc., ValueError) -> BadRequestError, not "not found".
+
+    非法项目名(路径穿越等,ValueError)-> BadRequestError,而非「不存在」。"""
 
     class _InvalidNamePM:
         def get_project_path(self, project_name: str):
@@ -124,9 +133,13 @@ async def test_stream_project_events_emits_snapshot_and_changes():
 
 @pytest.mark.asyncio
 async def test_stream_project_events_breaks_on_disconnect_in_idle():
-    """空闲期间断线:_idle 哨兵被路由查到断线后 break,流结束并注销。"""
+    """Disconnect while idle: when the route finds the disconnect on the _idle sentinel it breaks, the stream ends and unregisters.
+
+    空闲期间断线:_idle 哨兵被路由查到断线后 break,流结束并注销。"""
     service = _FakeService()
     app = SimpleNamespace(state=SimpleNamespace(project_event_service=service))
+    # The first 2 is_disconnected calls (at the iteration top of snapshot and changes) return False,
+    # then from the 3rd call on (entering the _idle phase) they return True.
     # 前 2 次 is_disconnected(snapshot 与 changes 的迭代顶部)返回 False,
     # 之后第 3 次起(进入 _idle 阶段)返回 True。
     request = _FakeRequest(app, disconnect_after=2)
@@ -142,7 +155,12 @@ async def test_stream_project_events_breaks_on_disconnect_in_idle():
 
 @pytest.mark.asyncio
 async def test_stream_project_events_breaks_on_disconnect_during_continuous_events():
-    """持续事件流(无 _idle)期间断线:循环顶部的检测也能立即触发 break。
+    """Disconnect during a continuous event stream (no _idle): the check at the loop top also triggers break immediately.
+
+    Regression guard: the old implementation put disconnect detection in the _idle branch, so an event stream with intervals continuously below idle_timeout
+    would never trigger _idle and disconnect discovery was delayed until events stopped. The new implementation checks at the top of every iteration.
+
+    持续事件流(无 _idle)期间断线:循环顶部的检测也能立即触发 break。
 
     回归保护:旧实现把断线检测放在 _idle 分支里,持续 <idle_timeout 间隔的事件流
     会让 _idle 永不触发、断线发现被推迟到事件停歇。新实现每轮迭代顶部都查。
@@ -157,7 +175,7 @@ async def test_stream_project_events_breaks_on_disconnect_during_continuous_even
         async def stream_events(self, project_name: str, *, idle_timeout: float = 1.0):
             async def _iter():
                 yield ("snapshot", {"project_name": project_name, "fingerprint": "fp-0"})
-                # 持续吐真事件,不吐 _idle。
+                # Keep emitting real events, never _idle. / 持续吐真事件,不吐 _idle。
                 i = 0
                 while True:
                     i += 1
@@ -170,13 +188,15 @@ async def test_stream_project_events_breaks_on_disconnect_during_continuous_even
 
     service = _BusyService()
     app = SimpleNamespace(state=SimpleNamespace(project_event_service=service))
+    # 1st call (snapshot top) False, from the 2nd call (top of the first changes) on True.
     # 第 1 次(snapshot 顶部)False,第 2 次(第一条 changes 顶部)起 True。
     request = _FakeRequest(app, disconnect_after=1)
 
     stream = project_events_router.stream_project_events("demo", request, service=service)
 
-    # snapshot 通过(第 1 次 is_disconnected 返回 False)
+    # snapshot passes (the 1st is_disconnected returns False) / snapshot 通过(第 1 次 is_disconnected 返回 False)
     assert (await anext(stream)).event == "snapshot"
+    # The check at the next iteration top hits the disconnect -> break, even though _iter() keeps emitting changes afterwards.
     # 下一轮迭代顶部的检测命中断线 → break,即使后面 _iter() 还在持续吐 changes。
     with pytest.raises(StopAsyncIteration):
         await anext(stream)
@@ -185,7 +205,12 @@ async def test_stream_project_events_breaks_on_disconnect_during_continuous_even
 
 @pytest.mark.asyncio
 async def test_stream_project_events_ends_naturally_after_project_deleted_event():
-    """终止事件（project_deleted）之后流自然结束——非因客户端断线，路由层原样透传该事件。
+    """After the terminal event (project_deleted) the stream ends naturally, not because of a client disconnect; the router layer passes the event through as is.
+
+    ``_FakeRequest`` never disconnects (``disconnect_after=None``), so the end of the stream can only come from the
+    service-side ``_iter()`` returning on its own after the terminal event, verifying the router layer does not specially intercept it.
+
+    终止事件（project_deleted）之后流自然结束——非因客户端断线，路由层原样透传该事件。
 
     ``_FakeRequest`` 永不断线（``disconnect_after=None``），流的结束只能来自
     service 侧 ``_iter()`` 在终止事件后主动 return，验证路由层对该事件不作特殊拦截。

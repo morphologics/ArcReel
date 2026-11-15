@@ -1,4 +1,6 @@
-"""KeyedLocks — 按键弱引用锁注册表。"""
+"""KeyedLocks: per-key weak-reference lock registry.
+
+KeyedLocks — 按键弱引用锁注册表。"""
 
 from __future__ import annotations
 
@@ -33,7 +35,9 @@ class TestKeyedLocks:
         assert order in (["a-in", "a-out", "b-in", "b-out"], ["b-in", "b-out", "a-in", "a-out"])
 
     async def test_unreferenced_lock_is_collected(self):
-        """无协程持有/等待时锁对象自动回收，不为每个键永久驻留内存。"""
+        """When no coroutine holds/waits, the lock object is collected automatically instead of staying in memory forever for each key.
+
+        无协程持有/等待时锁对象自动回收，不为每个键永久驻留内存。"""
         locks = KeyedLocks()
         locks.lock_for("k1")
         gc.collect()
@@ -46,8 +50,8 @@ class TestKeyedLocks:
         assert "k1" in locks
         locks.discard("k1")
         assert "k1" not in locks
-        # 已持有的锁对象仍可正常使用
+        # A lock object already held can still be used normally / 已持有的锁对象仍可正常使用
         async with held:
             pass
-        # discard 后再取拿到新实例
+        # After discard, fetching again yields a new instance / discard 后再取拿到新实例
         assert locks.lock_for("k1") is not held

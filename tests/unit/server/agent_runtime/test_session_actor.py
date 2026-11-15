@@ -1,4 +1,9 @@
-"""SessionActor 单元测试。
+"""SessionActor unit tests.
+
+Covers: command protocol, main loop, SDK same-task contract, interleaving semantics, exception propagation. The actor does not pair query and result:
+user messages are always sent to the CLI immediately, and the message stream is read continuously across turns.
+
+SessionActor 单元测试。
 
 覆盖：命令协议、主循环、SDK 同 task 契约、交织语义、异常传播。actor 不撮合 query 与 result：
 用户消息一律立即送入 CLI，消息流跨轮次持续读取。
@@ -74,7 +79,7 @@ async def test_fake_client_records_current_task_per_method():
     async with client:
         await client.query("hello")
         await client.interrupt()
-    # disconnect 由 __aexit__ 触发
+    # disconnect is triggered by __aexit__ / disconnect 由 __aexit__ 触发
 
     current = asyncio.current_task()
     assert client.method_tasks["connect"] == [current]
@@ -123,7 +128,7 @@ async def test_actor_start_connects_fake_client():
     await actor.start()
     assert actor._started.is_set()
     assert "connect" in client.method_tasks
-    # 立即发 disconnect 把 actor 收尾
+    # Send disconnect immediately to wind down the actor / 立即发 disconnect 把 actor 收尾
     cmd = SessionCommand(type="disconnect")
     await actor.enqueue(cmd)
     await cmd.done.wait()
@@ -161,7 +166,9 @@ async def test_actor_connect_and_disconnect_same_task():
 
 
 class _Collector(list):
-    """on_message / on_command_lifecycle 替身：按到达顺序收集，可等到收满 n 条。"""
+    """on_message / on_command_lifecycle stand-in: collects in arrival order and can wait until n items are collected.
+
+    on_message / on_command_lifecycle 替身：按到达顺序收集，可等到收满 n 条。"""
 
     def __init__(self) -> None:
         super().__init__()
@@ -188,7 +195,9 @@ async def _disconnect(actor: SessionActor, *, interrupt_first: bool = False) -> 
 
 
 async def test_query_writes_the_message_frame_with_its_uuid_and_completes_once_sent():
-    """消息带 uuid 原样写给 CLI；命令在写入后即完成，不等这一轮的 result。"""
+    """The message is written to the CLI as is with its uuid; the command completes once written, without waiting for this turn's result.
+
+    消息带 uuid 原样写给 CLI；命令在写入后即完成，不等这一轮的 result。"""
     client = FakeSDKClient()
     actor = SessionActor(client_factory=lambda: client, on_message=lambda m: None)
     await actor.start()
@@ -204,7 +213,9 @@ async def test_query_writes_the_message_frame_with_its_uuid_and_completes_once_s
 
 
 async def test_messages_keep_flowing_across_turns_without_new_queries():
-    """result 只代表一轮结束：之后 CLI 自主开启的一轮照常读出。"""
+    """A result only marks the end of one turn: a turn the CLI starts on its own afterwards is read as usual.
+
+    result 只代表一轮结束：之后 CLI 自主开启的一轮照常读出。"""
     collected = _Collector()
     client = FakeSDKClient(frames=[assistant_frame(uuid="a1"), result_frame(uuid="r1")])
     actor = SessionActor(client_factory=lambda: client, on_message=collected)
@@ -223,7 +234,9 @@ async def test_messages_keep_flowing_across_turns_without_new_queries():
 
 
 async def test_queries_go_straight_to_the_cli_while_a_turn_is_running():
-    """消息排队由 CLI 负责（并入当前轮或之后另开一轮），actor 不暂存也不拒绝。"""
+    """Message queueing is the CLI's job (merged into the current turn or opening another turn later); the actor neither buffers nor rejects.
+
+    消息排队由 CLI 负责（并入当前轮或之后另开一轮），actor 不暂存也不拒绝。"""
     client = FakeSDKClient()
     actor = SessionActor(client_factory=lambda: client, on_message=lambda m: None)
     await actor.start()
@@ -241,7 +254,10 @@ async def test_queries_go_straight_to_the_cli_while_a_turn_is_running():
 
 @pytest.mark.asyncio
 async def test_all_sdk_calls_recorded_on_same_task():
-    """契约锁定：connect / query / interrupt / disconnect 都在 actor 主 task 内调用，
+    """Contract lock: connect / query / interrupt / disconnect are all called inside the actor's main task,
+    with the exact same current_task.
+
+    契约锁定：connect / query / interrupt / disconnect 都在 actor 主 task 内调用，
     current_task 完全相同。"""
     client = FakeSDKClient(interrupt_frame=_INTERRUPTED_RESULT)
     actor = SessionActor(client_factory=lambda: client, on_message=lambda m: None)
@@ -255,6 +271,8 @@ async def test_all_sdk_calls_recorded_on_same_task():
     await i.done.wait()
     await _disconnect(actor, interrupt_first=True)
 
+    # Only lock method calls (the raw frame stream is async generator iteration,
+    # whose body being driven in a child task is allowed by asyncio and not part of the SDK same-task contract)
     # 仅锁定 method 调用（原始帧流是 async generator iteration，
     # 其 body 在子 task driven 是 asyncio 允许的，不属于 SDK 同 task 契约）
     sdk_methods = ("connect", "query", "interrupt", "disconnect")
@@ -269,7 +287,9 @@ async def test_all_sdk_calls_recorded_on_same_task():
 
 @pytest.mark.asyncio
 async def test_interrupt_during_long_turn_is_immediate():
-    """一轮进行中送 interrupt：不必等这一轮流式结束，actor 立即调用 client.interrupt()。"""
+    """Send interrupt during a turn: no need to wait for the turn's streaming to finish; the actor calls client.interrupt() immediately.
+
+    一轮进行中送 interrupt：不必等这一轮流式结束，actor 立即调用 client.interrupt()。"""
     client = FakeSDKClient(interrupt_frame=_INTERRUPTED_RESULT)
     actor = SessionActor(client_factory=lambda: client, on_message=lambda m: None)
     await actor.start()
@@ -291,7 +311,9 @@ async def test_interrupt_during_long_turn_is_immediate():
 
 
 async def test_interrupt_always_reaches_the_cli():
-    """是否有轮次在途由会话层按 CLI 报告的状态判断，actor 收到 interrupt 就送给 CLI。"""
+    """Whether a turn is in flight is judged by the session layer from the state the CLI reports; the actor forwards any interrupt it receives to the CLI.
+
+    是否有轮次在途由会话层按 CLI 报告的状态判断，actor 收到 interrupt 就送给 CLI。"""
     client = FakeSDKClient()
     actor = SessionActor(client_factory=lambda: client, on_message=lambda m: None)
     await actor.start()
@@ -353,13 +375,13 @@ async def test_actor_error_propagates_to_waiter():
     assert str(q.error) == "sdk boom"
     assert actor._fatal is q.error
 
-    # actor 已死亡；后续命令应 fast-fail
+    # The actor is dead; later commands should fast-fail / actor 已死亡；后续命令应 fast-fail
     q2 = _query("another")
     await actor.enqueue(q2)
     await q2.done.wait()
     assert q2.error is not None
 
-    # 消费异常避免 Task exception was never retrieved 警告
+    # Consume the exception to avoid the "Task exception was never retrieved" warning / 消费异常避免 Task exception was never retrieved 警告
     if actor._task is not None:
         with pytest.raises(RuntimeError):
             await actor._task
@@ -367,18 +389,20 @@ async def test_actor_error_propagates_to_waiter():
 
 @pytest.mark.asyncio
 async def test_actor_fatal_drains_queued_commands():
-    """actor 异常退出前，队列中的命令也会被 drain，不会挂死。"""
+    """Before the actor exits abnormally, queued commands are drained too, so nothing hangs.
+
+    actor 异常退出前，队列中的命令也会被 drain，不会挂死。"""
     client = _ExplodingClient()
     actor = SessionActor(client_factory=lambda: client, on_message=lambda m: None)
     await actor.start()
 
     q = _query("hi")
-    # 排在后面的命令：在 _run 捕获异常后被 finally 的 drain 清理
+    # Commands queued behind: cleaned up by the drain in finally after _run catches the exception / 排在后面的命令：在 _run 捕获异常后被 finally 的 drain 清理
     q_queued = _query("queued")
     await actor.enqueue(q)
     await actor.enqueue(q_queued)
 
-    # 等 actor task 结束
+    # Wait for the actor task to finish / 等 actor task 结束
     if actor._task is not None:
         with pytest.raises(RuntimeError):
             await actor._task
@@ -391,7 +415,9 @@ async def test_actor_fatal_drains_queued_commands():
 
 @pytest.mark.asyncio
 async def test_enqueue_after_actor_closed_fails_fast():
-    """正常 disconnect 后，enqueue 不会挂起。"""
+    """After a normal disconnect, enqueue does not hang.
+
+    正常 disconnect 后，enqueue 不会挂起。"""
     client = FakeSDKClient()
     actor = SessionActor(client_factory=lambda: client, on_message=lambda m: None)
     await actor.start()
@@ -406,7 +432,9 @@ async def test_enqueue_after_actor_closed_fails_fast():
 
 @pytest.mark.asyncio
 async def test_start_is_not_reentrant():
-    """重复 start() 应立即触发断言，避免孤儿 task。"""
+    """A repeated start() should trigger an assertion immediately, avoiding orphan tasks.
+
+    重复 start() 应立即触发断言，避免孤儿 task。"""
     client = FakeSDKClient()
     actor = SessionActor(client_factory=lambda: client, on_message=lambda m: None)
     await actor.start()
@@ -419,7 +447,10 @@ async def test_start_is_not_reentrant():
 
 @pytest.mark.asyncio
 async def test_interrupt_failure_still_wakes_waiter():
-    """client.interrupt() 抛异常时仍要 set done 并传递 error，
+    """When client.interrupt() raises, done must still be set and the error passed along,
+    so ManagedSession.send_interrupt does not hang on cmd.done.wait().
+
+    client.interrupt() 抛异常时仍要 set done 并传递 error，
     避免 ManagedSession.send_interrupt 挂在 cmd.done.wait()。"""
 
     class _BoomClient(FakeSDKClient):
@@ -433,16 +464,18 @@ async def test_interrupt_failure_still_wakes_waiter():
     try:
         i = SessionCommand(type="interrupt")
         await actor.enqueue(i)
-        # interrupt 抛异常，actor crash；cmd 仍应被唤醒并携带 error
+        # interrupt raises and the actor crashes; cmd should still be woken with the error / interrupt 抛异常，actor crash；cmd 仍应被唤醒并携带 error
         await asyncio.wait_for(i.done.wait(), timeout=1.0)
         assert i.error is not None
     finally:
-        # actor 已 crash；cancel 清理
+        # The actor has crashed; cancel to clean up / actor 已 crash；cancel 清理
         await actor.cancel_and_wait()
 
 
 class _HangingCancelClient(FakeSDKClient):
-    """撤回请求发出后 CLI 一直不答复。"""
+    """After the withdrawal request is sent, the CLI never answers.
+
+    撤回请求发出后 CLI 一直不答复。"""
 
     def __init__(self) -> None:
         super().__init__()
@@ -458,7 +491,9 @@ class _HangingCancelClient(FakeSDKClient):
 
 
 async def test_cancelling_the_actor_while_a_withdrawal_waits_for_the_cli_still_wakes_the_caller():
-    """驱逐等不到断开时会取消 actor：正在等 CLI 答复的撤回也要唤醒调用方，不能挂住它。"""
+    """Eviction cancels the actor when the disconnect does not complete: a withdrawal waiting for the CLI's answer must also wake its caller, not leave it hanging.
+
+    驱逐等不到断开时会取消 actor：正在等 CLI 答复的撤回也要唤醒调用方，不能挂住它。"""
     client = _HangingCancelClient()
     actor = SessionActor(client_factory=lambda: client, on_message=lambda m: None)
     await actor.start()
@@ -473,7 +508,9 @@ async def test_cancelling_the_actor_while_a_withdrawal_waits_for_the_cli_still_w
 
 
 class _HangingClient(FakeSDKClient):
-    """query 与 interrupt 写出后 CLI 一直不回应。"""
+    """After query and interrupt are written, the CLI never responds.
+
+    query 与 interrupt 写出后 CLI 一直不回应。"""
 
     def __init__(self) -> None:
         super().__init__()
@@ -492,7 +529,12 @@ class _HangingClient(FakeSDKClient):
 
 @pytest.mark.parametrize("in_flight_type", ["query", "interrupt"])
 async def test_cancelling_the_actor_reports_actor_closed_on_every_command_it_abandons(in_flight_type: str):
-    """取消是 actor 自己的控制流：在途命令、队列里的命令与退出后的命令都以 actor 已关闭唤醒调用方。
+    """Cancellation is the actor's own control flow: in-flight commands, queued commands and commands after exit all wake the caller with actor-closed.
+
+    The caller does ``raise cmd.error`` in its own task, and ``CancelledError`` would slip past ``except Exception``
+    out of the HTTP request; a cancelled interrupt must not be reported as success either.
+
+    取消是 actor 自己的控制流：在途命令、队列里的命令与退出后的命令都以 actor 已关闭唤醒调用方。
 
     调用方在自己的 task 里 ``raise cmd.error``，``CancelledError`` 会越过 ``except Exception``
     穿出 HTTP 请求；被取消的 interrupt 也不能报成成功。
@@ -534,6 +576,7 @@ async def test_actor_exits_when_message_stream_closes():
     assert client.sent_queries == []
 
 
+# --- Raw frame stream ------------------------------------------------------------------
 # --- 原始帧流 ------------------------------------------------------------------
 
 

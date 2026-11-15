@@ -1,4 +1,15 @@
-"""任务类型桶候选模型过滤 API：GET /system/config/model-candidates。
+"""Task type bucket candidate model filtering API: GET /system/config/model-candidates.
+
+Only external behavior is asserted -- given ready providers and custom provider models, assert membership of each
+bucket's candidate list. The source-of-truth decision of bucket membership (registry image capability declarations
+/ backend video capabilities / endpoint system judgment + overrides) is covered separately at the
+lib.backends.generation_type_buckets layer.
+
+dashscope is picked as the built-in sample provider: it offers i2v-only, t2v-only and r2v video models plus
+t2i+i2i and i2i-only image models, so one ready provider can tell apart the filtering differences of all four
+buckets.
+
+任务类型桶候选模型过滤 API：GET /system/config/model-candidates。
 
 只断言外部行为——给定 ready 供应商与自定义供应商模型，断言各桶候选列表的成员关系。
 桶归属的真相源判定（registry 图片能力声明 / backend 视频能力 / endpoint 系统判定 ⊕ 覆盖）
@@ -36,20 +47,27 @@ CANDIDATES_URL = "/api/v1/system/config/model-candidates"
 
 
 def _custom_option(body: dict, model_id: str) -> str:
-    """从响应里取自定义供应商那一项的 "provider/model"。
+    """Take the "provider/model" of the custom provider item from the response.
+
+    provider_names also contains built-in ready providers, so pick by the custom- prefix rather than the first key.
+
+    从响应里取自定义供应商那一项的 "provider/model"。
 
     provider_names 同时含内置 ready 供应商，故按 custom- 前缀挑，不能取第一个键。
     """
     return next(pid for pid in body["provider_names"] if pid.startswith("custom-")) + f"/{model_id}"
 
 
+# dashscope video models (video capability values come from backend declarations, see the module docstring)
 # dashscope 视频模型（视频能力值取自 backend 声明，见模块 docstring）
 DS_I2V_ONLY = "dashscope/wan2.7-i2v"  # i2v ✓ / r2v ✗
 DS_T2V_ONLY = "dashscope/wan2.7-t2v"  # i2v ✗ / r2v ✗
 DS_R2V = "dashscope/wan2.7-r2v"  # i2v ✓ / r2v ✓
+# dashscope image models
 # dashscope 图片模型
 DS_IMAGE_BOTH = "dashscope/qwen-image-2.0"
 DS_IMAGE_I2I_ONLY = "dashscope/qwen-image-edit-plus"
+# Sample of a media type with no bucket dimension (audio has no bucket)
 # 无桶维度的媒体类型样本（audio 不设桶）
 DS_AUDIO = "dashscope/qwen3-tts-flash"
 
@@ -74,6 +92,7 @@ def _make_mock_svc(ready_providers: list[str]) -> ConfigService:
                 capabilities=catalog.provider_capabilities(name),
                 required_keys=list(meta.required_keys),
                 credential_count=1 if name in ready else 0,
+                # An instance with no built-in provider model status row: models whose entry was delisted are disabled
                 # 没有内置供应商模型状态行的实例：条目已下架的模型为停用
                 disabled_models=disabled_without_state(name),
             )
@@ -134,6 +153,9 @@ async def _seed_custom_models(factory, models: list[dict]) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Bucket filtering of built-in models
+# ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
 # 内置模型的桶过滤
 # ---------------------------------------------------------------------------
 
@@ -166,6 +188,7 @@ class TestBuiltinBucketFiltering:
     def test_default_tier_is_unfiltered(self, make_client):
         with make_client(["dashscope"]) as client:
             body = client.get(CANDIDATES_URL).json()
+        # The default tier promises no capability: models without i2v or r2v are listed anyway
         # 默认层不承诺能力：无 i2v、无 r2v 的模型照样在列
         assert DS_T2V_ONLY in body["video"]["default"]
         assert DS_IMAGE_I2I_ONLY in body["image"]["default"]
@@ -210,6 +233,9 @@ class TestBuiltinBucketFiltering:
 
 
 # ---------------------------------------------------------------------------
+# Bucket filtering of custom provider models
+# ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
 # 自定义供应商模型的桶过滤
 # ---------------------------------------------------------------------------
 
@@ -220,6 +246,7 @@ class TestCustomProviderBucketFiltering:
     ):
         factory, _engine = session_factory_and_engine
         with make_client([]) as client:
+            # openai-video is system-judged max_reference_images=1, first_frame=True
             # openai-video 系统判定 max_reference_images=1、first_frame=True
             await _seed_custom_models(
                 factory,
@@ -249,6 +276,7 @@ class TestCustomProviderBucketFiltering:
             body = client.get(CANDIDATES_URL).json()
         option = _custom_option(body, "sora-2")
         assert option not in body["video"]["buckets"]["r2v"]
+        # The override only touches the reference image dimension; i2v and the default tier are unaffected
         # 覆盖只动了参考图维度，i2v 与默认层不受影响
         assert option in body["video"]["buckets"]["i2v"]
         assert option in body["video"]["default"]
@@ -256,6 +284,7 @@ class TestCustomProviderBucketFiltering:
     async def test_custom_image_model_filtered_by_endpoint_capabilities(self, make_client, session_factory_and_engine):
         factory, _engine = session_factory_and_engine
         with make_client([]) as client:
+            # openai-images-edits only declares image_to_image
             # openai-images-edits 只声明 image_to_image
             await _seed_custom_models(
                 factory,
@@ -277,10 +306,13 @@ class TestCustomProviderBucketFiltering:
     @pytest.mark.parametrize(
         ("endpoint", "model_id", "buckets"),
         [
+            # The endpoint implements both; the entry only accepts image-to-image
             # 端点两者都实现，条目只接受图生图
             ("dashscope-image", "qwen-image-edit-plus", {"i2i"}),
+            # The endpoint only implements text-to-image and the entry only accepts image-to-image: no combination satisfies both
             # 端点只实现文生图，条目只接受图生图：没有两者都满足的组合
             ("openai-images-generations", "qwen-image-edit-plus", set()),
+            # No matching entry: model facts add no constraint; go by the endpoint declaration
             # 对应不上条目：模型事实不加约束，按端点声明
             ("dashscope-image", "relay-image-x", {"t2i", "i2i"}),
         ],
@@ -311,6 +343,9 @@ class TestCustomProviderBucketFiltering:
 
 
 # ---------------------------------------------------------------------------
+# Catalog names: provider names translated by language, model names from catalog entries
+# ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
 # 目录名称：供应商名按语言翻译，模型名取目录条目
 # ---------------------------------------------------------------------------
 
@@ -322,6 +357,8 @@ class TestCatalogDisplayNames:
             en = client.get(CANDIDATES_URL, headers={"Accept-Language": "en"}).json()
         assert zh["provider_names"]["ark"] == "火山方舟"
         assert en["provider_names"]["ark"] == "Volcengine Ark"
+        # Model display names come from catalog entries, regardless of language; model numbers come from the catalog so they
+        # do not go stale with factory snapshot updates
         # 模型显示名取目录条目，不分语言；型号从目录取，免得随出厂快照更新失效
         model_id = catalog.default_model("ark", "text")
         assert model_id is not None
@@ -331,7 +368,9 @@ class TestCatalogDisplayNames:
         assert en["model_names"][f"ark/{model_id}"] == model.display_name
 
     def test_model_names_cover_media_types_without_buckets(self, make_client):
-        """model_names 不按 image/video 收窄——文本 / 音频下拉共用同一份译名表。"""
+        """model_names is not narrowed by image/video -- text / audio dropdowns share the same name table.
+
+        model_names 不按 image/video 收窄——文本 / 音频下拉共用同一份译名表。"""
         with make_client(["dashscope"]) as client:
             body = client.get(CANDIDATES_URL).json()
         assert DS_AUDIO in body["model_names"]
@@ -361,6 +400,9 @@ class TestCatalogDisplayNames:
 
 
 # ---------------------------------------------------------------------------
+# Bucket membership decision (reading the source of truth directly, not via HTTP)
+# ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
 # 桶归属判定（真相源直读，不经 HTTP）
 # ---------------------------------------------------------------------------
 
@@ -373,7 +415,13 @@ class TestBucketJudgement:
         assert builtin_model_buckets(provider_id, model_id, model_info) == frozenset()
 
     def test_builtin_video_r2v_reads_backend_declaration(self):
-        """r2v 归属只看 backend 的 max_reference_images，目录的模型事实不参与。
+        """r2v membership looks only at the backend's max_reference_images; catalog model facts do not take part.
+
+        viduq3-pro is not on the allowlist of Vidu's /reference2video endpoint, so the backend declares
+        max_reference_images=0; viduq3 of the same provider is on the allowlist and declares 7. Neither one's catalog
+        model facts carry capability bits; bucket membership is still split by backend.
+
+        r2v 归属只看 backend 的 max_reference_images，目录的模型事实不参与。
 
         viduq3-pro 不在 Vidu 的 /reference2video 端点白名单内，backend 据此声明
         max_reference_images=0；同 provider 的 viduq3 在白名单内、声明 7。两者的目录
@@ -388,12 +436,18 @@ class TestBucketJudgement:
     @pytest.mark.parametrize(
         ("provider_id", "model_id"),
         [
+            # Only on the /reference2video allowlist; submitting a first frame errors while building the request
             ("vidu", "viduq3"),  # 只在 /reference2video 白名单内，提交首帧会在构造请求时报错
             ("dashscope", "happyhorse-1.0-r2v"),
         ],
     )
     def test_builtin_video_i2v_reads_backend_declaration(self, provider_id: str, model_id: str):
-        """i2v 归属只看 backend 的 first_frame，目录的模型事实不参与。
+        """i2v membership looks only at the backend's first_frame; catalog model facts do not take part.
+
+        These two models' backend first_frame=False comes from the same source as request construction, and execution does
+        not accept a first frame -- putting them in the i2v bucket would let users configure a combination bound to fail.
+
+        i2v 归属只看 backend 的 first_frame，目录的模型事实不参与。
 
         这两个 model 的 backend first_frame=False 与请求构造同源，执行期不接首帧——放进 i2v 桶
         就等于让用户配出必败的组合。
@@ -409,13 +463,19 @@ class TestBucketJudgement:
         assert custom_model_buckets(endpoint="openai-chat", model_id="gpt-4o") == frozenset()
 
     def test_chat_image_endpoint_declares_both_image_buckets(self):
-        """openai-chat-image 与 openai-chat 打同一个 API，但按图片端点入桶：文生图、图生图都可选。"""
+        """openai-chat-image hits the same API as openai-chat but is bucketed as an image endpoint: both text-to-image and
+        image-to-image are selectable.
+
+        openai-chat-image 与 openai-chat 打同一个 API，但按图片端点入桶：文生图、图生图都可选。"""
         assert custom_model_buckets(endpoint="openai-chat-image", model_id="gemini-3-pro-image") == frozenset(
             {"t2i", "i2i"}
         )
 
     def test_a_comfyui_model_row_takes_its_buckets_from_the_node_bindings(self):
-        """ComfyUI 模型行的桶归属只看绑定表：首帧格子进 i2v，参考图格子进 r2v。"""
+        """A ComfyUI model row's bucket membership looks only at the binding table: first-frame slots go to i2v, reference
+        image slots to r2v.
+
+        ComfyUI 模型行的桶归属只看绑定表：首帧格子进 i2v，参考图格子进 r2v。"""
         from lib.custom_provider.endpoints import comfyui_endpoint_spec
         from tests.factories import comfyui_endpoint_definition
 
@@ -433,16 +493,23 @@ class TestBucketJudgement:
                 endpoint="ce-7", model_id="my-wan-workflow", endpoint_spec=comfyui_endpoint_spec("ce-7", definition)
             )
 
+        # Pure text-to-video: the i2v bucket judges first frame with has_image=True; without a first-frame slot it cannot
+        # get in.
         # 纯文生：i2v 桶按 has_image=True 判首帧，没有首帧格子就进不去。
         assert buckets(t2v) == frozenset()
         assert buckets(i2v) == frozenset({"i2v"})
+        # End frame is "support", not another bucket: first/last-frame workflows stay in i2v, with end frame exposed as a
+        # separate capability bit.
         # 尾帧是「支持」而非另一个桶：首尾帧 workflow 仍在 i2v，尾帧作为能力位单独透出。
         assert buckets(flf) == frozenset({"i2v"})
         assert comfyui_endpoint_spec("ce-7", flf).end_image_capable is True
         assert buckets(r2v) == frozenset({"r2v"})
 
     def test_a_stored_capability_override_does_not_move_a_comfyui_row(self):
-        """该协议关闭能力覆盖：存量脏值在合成侧被丢弃，桶归属仍只由绑定决定。"""
+        """This protocol turns capability overrides off: legacy dirty values are dropped on the synthesis side; bucket
+        membership is still decided only by bindings.
+
+        该协议关闭能力覆盖：存量脏值在合成侧被丢弃，桶归属仍只由绑定决定。"""
         from lib.custom_provider.endpoints import comfyui_endpoint_spec
         from tests.factories import comfyui_endpoint_definition
 

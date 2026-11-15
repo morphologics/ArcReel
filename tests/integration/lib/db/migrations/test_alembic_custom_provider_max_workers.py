@@ -1,4 +1,6 @@
-"""Alembic 迁移：custom_provider 三个并发上限定型列的 upgrade / downgrade。"""
+"""Alembic migration: upgrade / downgrade of the three typed concurrency-limit columns of custom_provider.
+
+Alembic 迁移：custom_provider 三个并发上限定型列的 upgrade / downgrade。"""
 
 from __future__ import annotations
 
@@ -13,7 +15,9 @@ from alembic import command
 
 @pytest.fixture
 def revisions() -> tuple[str, str]:
-    """读出加列迁移的 (revision, down_revision)。"""
+    """Read (revision, down_revision) of the add-column migration.
+
+    读出加列迁移的 (revision, down_revision)。"""
     repo_root = Path(__file__).resolve().parents[5]
     versions_dir = repo_root / "alembic" / "versions"
     matches = list(versions_dir.glob("*_add_max_workers_columns_to_custom_.py"))
@@ -41,7 +45,10 @@ def _columns(engine: sa.Engine) -> set[str]:
 
 
 def test_upgrade_adds_columns_existing_row_null(alembic_cfg: tuple[Config, Path], revisions: tuple[str, str]):
-    """升到加列前插一行，升级后三列存在且该行为 NULL（零回归）。"""
+    """Insert a row before the add-column revision; after upgrade the three columns exist and the row has NULL (zero
+    regression).
+
+    升到加列前插一行，升级后三列存在且该行为 NULL（零回归）。"""
     revision_id, parent_id = revisions
     cfg, db_path = alembic_cfg
     command.upgrade(cfg, parent_id)
@@ -78,13 +85,18 @@ def test_upgrade_adds_columns_existing_row_null(alembic_cfg: tuple[Config, Path]
 def test_upgrade_rejects_non_positive_workers(
     alembic_cfg: tuple[Config, Path], revisions: tuple[str, str], col: str, bad_value: int
 ):
-    """升级后三列各带正整数 CHECK 约束，写入 0 与负值被 DB 拒绝；NULL 与 ≥1 仍合法。"""
+    """After upgrade each of the three columns has a positive-integer CHECK constraint, so the DB rejects 0 and negative
+    values; NULL and >= 1 remain legal.
+
+    升级后三列各带正整数 CHECK 约束，写入 0 与负值被 DB 拒绝；NULL 与 ≥1 仍合法。"""
     revision_id, _ = revisions
     cfg, db_path = alembic_cfg
     command.upgrade(cfg, revision_id)
 
     engine = sa.create_engine(f"sqlite:///{db_path}")
     try:
+        # The failing write goes on a non-autocommit connection, so it rolls back when the constraint fires and does not
+        # pollute later assertions
         # 失败写入放在非自动提交连接里，约束触发即回滚，不污染后续断言
         with engine.connect() as conn, pytest.raises(sa.exc.IntegrityError):
             conn.execute(
@@ -95,6 +107,7 @@ def test_upgrade_rejects_non_positive_workers(
                     "'2026-06-29 00:00:00', '2026-06-29 00:00:00')"
                 )
             )
+        # >= 1 is legal
         # ≥1 合法
         with engine.begin() as conn:
             conn.execute(
@@ -112,7 +125,9 @@ def test_upgrade_rejects_non_positive_workers(
 
 
 def test_downgrade_drops_columns(alembic_cfg: tuple[Config, Path], revisions: tuple[str, str]):
-    """downgrade 回退后三列消失，其余数据保留。"""
+    """After downgrade the three columns are gone, and other data is kept.
+
+    downgrade 回退后三列消失，其余数据保留。"""
     revision_id, parent_id = revisions
     cfg, db_path = alembic_cfg
     command.upgrade(cfg, revision_id)

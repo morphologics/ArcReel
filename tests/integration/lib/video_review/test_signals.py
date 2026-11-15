@@ -1,4 +1,7 @@
-"""视频信号：对随包 ffmpeg 合成的带黑屏、定格与切点的素材断言三类信号的区间，以及联系表的抽帧与标注。"""
+"""Video signals: asserts the ranges of the three signal kinds on material with black screens, freezes and cuts
+synthesized with the bundled ffmpeg, plus the contact sheet's frame sampling and labels.
+
+视频信号：对随包 ffmpeg 合成的带黑屏、定格与切点的素材断言三类信号的区间，以及联系表的抽帧与标注。"""
 
 from __future__ import annotations
 
@@ -28,6 +31,8 @@ async def test_black_freeze_and_cut_signals_cover_the_synthesised_intervals(clip
 
     assert signals.duration_seconds == pytest.approx(5.0)
     assert [(span.start, span.end) for span in signals.black] == [pytest.approx((1.0, 2.0))]
+    # A black screen is necessarily still, but is not double-counted as a frozen segment; the video ends on a freeze, so
+    # the frozen segment extends to the end.
     # 黑屏必然静止，但不重复计入卡帧段；视频以定格收尾，卡帧延续到片尾。
     assert [(span.start, span.end) for span in signals.freeze] == [pytest.approx((3.0, 5.0))]
     assert signals.cuts == pytest.approx((1.0, 2.0, 3.0))
@@ -115,10 +120,12 @@ async def test_frames_around_each_signal_are_densified_and_marked(clip: Path) ->
     def tags_at(time_seconds: float) -> tuple[str, ...]:
         return tags[next(time for time in tags if time == pytest.approx(time_seconds))]
 
+    # Both sides of a cut: the cut frame itself and the frame before it.
     # 切点两侧：切点帧本身与它前一帧。
     for cut in (1.0, 2.0, 3.0):
         assert TAG_CUT in tags_at(cut)
         assert frame_before(cut) in tags
+    # The first and last frames of both the black segment and the frozen segment are sampled and labeled.
     # 黑屏段与卡帧段各自的首尾帧都被抽到并标注。
     assert tags_at(1.0) == (TAG_CUT, TAG_BLACK)
     assert tags[frame_before(2.0)] == (TAG_BLACK,)

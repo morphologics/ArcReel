@@ -1,4 +1,6 @@
-"""重导入重匹配：已保存的节点绑定对上一份改过的 workflow。"""
+"""Re-import rematching: saved node bindings matched against a modified workflow.
+
+重导入重匹配：已保存的节点绑定对上一份改过的 workflow。"""
 
 from lib.custom_provider.comfyui.inference import BindingSignal, BindingState, InferenceNote, infer_bindings
 
@@ -32,21 +34,28 @@ def workflow() -> dict:
 
 
 def renumbered(old: str, new: str) -> dict:
-    """把一个节点换个 id，并把指向它的连线一并改过去——重新导出 workflow 就是这种变化。"""
+    """Give a node a new id and move the links pointing at it along with it; re-exporting a workflow
+    produces exactly this change.
+
+    把一个节点换个 id，并把指向它的连线一并改过去——重新导出 workflow 就是这种变化。"""
     graph = workflow()
     graph[new] = graph.pop(old)
     return rewired(graph, {old: new})
 
 
 def swapped(first: str, second: str) -> dict:
-    """两个节点互换编号，指向它们的连线一并改过去。"""
+    """Two nodes swap ids, and the links pointing at them move along.
+
+    两个节点互换编号，指向它们的连线一并改过去。"""
     graph = workflow()
     graph[first], graph[second] = graph[second], graph[first]
     return rewired(graph, {first: second, second: first})
 
 
 def rewired(graph: dict, moves: dict[str, str]) -> dict:
-    """把图里指向旧 id 的连线改到新 id。"""
+    """Move links in the graph that point at the old id to the new id.
+
+    把图里指向旧 id 的连线改到新 id。"""
     for node in graph.values():
         for name, raw in node["inputs"].items():
             if isinstance(raw, list) and raw[0] in moves:
@@ -70,7 +79,10 @@ def test_an_unchanged_node_and_class_type_is_carried_over():
 
 
 def test_a_carried_over_entry_outscores_anything_inference_can_produce():
-    """用户确认过的落点压过一切信号：重导入不会把它挤到某条自动识别结果后面。"""
+    """A user-confirmed target beats every signal: re-import does not push it behind some auto-detected
+    result.
+
+    用户确认过的落点压过一切信号：重导入不会把它挤到某条自动识别结果后面。"""
     kept = rematch(workflow(), {"prompt": [POSITIVE]}).keys["prompt"].candidates[0]
     best_inferred = max(candidate.score for candidate in rematch(workflow(), {}).keys["prompt"].candidates)
     assert [hit.signal for hit in kept.signals] == [BindingSignal.MANUAL_BINDING]
@@ -110,7 +122,10 @@ def test_a_vanished_node_drops_the_entry_and_reruns_inference_for_that_key():
 
 
 def test_a_field_that_became_a_wire_drops_the_entry():
-    """节点还在、字段却改接了上游：往那里填值运行时会被覆盖，不能算沿用。"""
+    """The node is still there but the field is now wired to an upstream: a value filled there would be
+    overwritten at runtime, so it does not count as carried over.
+
+    节点还在、字段却改接了上游：往那里填值运行时会被覆盖，不能算沿用。"""
     graph = workflow()
     graph["6"]["inputs"]["text"] = ["4", 3]
     result = rematch(graph, {"prompt": [POSITIVE]})
@@ -118,7 +133,10 @@ def test_a_field_that_became_a_wire_drops_the_entry():
 
 
 def test_a_surviving_sibling_is_kept_but_still_waits_for_confirmation():
-    """同一个语义键上有条目丢了，整键都要在用户眼前过一遍，沿用下来的那条也不自动选。"""
+    """When an entry on a semantic key is lost, the whole key must go before the user again, and the
+    carried-over entry is not auto-selected either.
+
+    同一个语义键上有条目丢了，整键都要在用户眼前过一遍，沿用下来的那条也不自动选。"""
     gone = {"node": "99", "input": "text", "class_type": "CLIPTextEncode", "title": "不存在了"}
     result = rematch(workflow(), {"prompt": [POSITIVE, gone]})
     assert result.keys["prompt"].state is BindingState.NEEDS_CONFIRMATION
@@ -136,7 +154,10 @@ def test_a_migrated_entry_refreshes_the_class_type_and_title_it_carries():
 
 
 def test_entry_level_extras_survive_the_migration():
-    """``step`` / ``policy`` 一类用户改过的值随条目走，不会被重匹配抹回默认。"""
+    """User-edited values like ``step`` / ``policy`` travel with the entry and are not reset to defaults by
+    rematching.
+
+    ``step`` / ``policy`` 一类用户改过的值随条目走，不会被重匹配抹回默认。"""
     seed = {"node": "3", "input": "seed", "class_type": "KSampler", "title": "KSampler", "policy": "keep"}
     result = rematch(renumbered("3", "103"), {"seed": [seed]})
     assert result.keys["seed"].selected_targets[0]["policy"] == "keep"
@@ -144,7 +165,10 @@ def test_entry_level_extras_survive_the_migration():
 
 
 def test_an_entry_bound_to_an_explicit_null_literal_is_not_reported_lost():
-    """``null`` 是个存在的字面值字段，填得进去；校验器那侧也按键判在不在，两边同口径。"""
+    """``null`` is an existing literal field that can be filled; the validator side also checks presence by
+    key, so both sides agree.
+
+    ``null`` 是个存在的字面值字段，填得进去；校验器那侧也按键判在不在，两边同口径。"""
     graph = workflow()
     graph["6"]["inputs"]["text"] = None
 
@@ -155,7 +179,10 @@ def test_an_entry_bound_to_an_explicit_null_literal_is_not_reported_lost():
 
 
 def reference_workflow() -> dict:
-    """两个参考图格子经 ``ImageStitch`` 汇成一路，再进视频节点的参考图入口。"""
+    """Two reference image slots are merged into one stream by ``ImageStitch`` and fed into the video node's
+    reference image input.
+
+    两个参考图格子经 ``ImageStitch`` 汇成一路，再进视频节点的参考图入口。"""
     graph = workflow()
     graph["20"] = {"class_type": "LoadImage", "inputs": {"image": "ref_a.png"}, "_meta": {"title": "参考图 A"}}
     graph["21"] = {"class_type": "LoadImage", "inputs": {"image": "ref_b.png"}, "_meta": {"title": "参考图 B"}}
@@ -189,7 +216,10 @@ def reference_entry(node: str, title: str, consumer_node: str, consumer_input: s
 
 
 def test_a_migrated_entry_re_derives_its_consumer_from_the_live_graph():
-    """读图节点与它的消费者常常一起换号：``consumer`` 只由推断得出，照搬旧值会指向不存在的节点。"""
+    """Image-reading nodes are often renumbered together with their consumers: ``consumer`` is only
+    inferred, and copying the old value would point at a node that does not exist.
+
+    读图节点与它的消费者常常一起换号：``consumer`` 只由推断得出，照搬旧值会指向不存在的节点。"""
     graph = reference_workflow()
     graph["122"] = graph.pop("22")
     graph["30"]["inputs"]["reference_image"] = ["122", 0]
@@ -202,7 +232,11 @@ def test_a_migrated_entry_re_derives_its_consumer_from_the_live_graph():
 
 
 def test_a_consumer_that_no_longer_exists_is_dropped_from_the_entry():
-    """重推不出消费者即「这张图接到了谁没看懂」，与从未推断出 ``consumer`` 同义——留着旧值会让
+    """Failing to re-infer the consumer means "it is unclear what this image feeds", the same as
+    ``consumer`` never having been inferred; keeping the old value would make the request builder change
+    the graph at a target that does not exist.
+
+    重推不出消费者即「这张图接到了谁没看懂」，与从未推断出 ``consumer`` 同义——留着旧值会让
     实发构造按一个不存在的落点去改图。"""
     graph = reference_workflow()
     graph["30"]["inputs"]["reference_image"] = ["8", 0]
@@ -216,7 +250,10 @@ def test_a_consumer_that_no_longer_exists_is_dropped_from_the_entry():
 
 
 def test_a_carried_over_entry_picks_up_a_consumer_it_never_had():
-    """条目上没记 ``consumer`` 不是用户的选择，是上次没推出来；这次推得出就补上。"""
+    """A missing ``consumer`` on an entry is not the user's choice but a failed inference last time; fill it
+    in when it can be inferred now.
+
+    条目上没记 ``consumer`` 不是用户的选择，是上次没推出来；这次推得出就补上。"""
     entry = {"node": "20", "input": "image", "class_type": "LoadImage", "title": "参考图 A"}
 
     target = rematch(reference_workflow(), {"reference_images": [entry]}).keys["reference_images"].selected_targets[0]
@@ -225,7 +262,10 @@ def test_a_carried_over_entry_picks_up_a_consumer_it_never_had():
 
 
 def test_two_nodes_of_one_class_that_swapped_numbers_are_not_carried_over_by_id():
-    """正负两个 ``CLIPTextEncode`` 互换编号：标题对不上就不按 id 沿用，两条提示词各自迁到标题对得上的节点。"""
+    """The positive and negative ``CLIPTextEncode`` swap ids: when titles do not match, do not carry over by
+    id; each prompt migrates to the node whose title matches.
+
+    正负两个 ``CLIPTextEncode`` 互换编号：标题对不上就不按 id 沿用，两条提示词各自迁到标题对得上的节点。"""
     result = rematch(swapped("6", "7"), {"prompt": [POSITIVE], "negative_prompt": [NEGATIVE]})
 
     assert origins(result, "prompt") == ["rematched"]
@@ -234,7 +274,10 @@ def test_two_nodes_of_one_class_that_swapped_numbers_are_not_carried_over_by_id(
 
 
 def test_a_swapped_node_whose_title_is_nowhere_in_the_new_graph_needs_confirmation():
-    """标题对不上又按标题定位不到：条目算丢，整键重跑推断并等用户确认，不静默沿用。"""
+    """Titles do not match and the title cannot be located either: the entry counts as lost, the whole key
+    reruns inference and waits for user confirmation, with no silent carry-over.
+
+    标题对不上又按标题定位不到：条目算丢，整键重跑推断并等用户确认，不静默沿用。"""
     graph = swapped("6", "7")
     del graph["6"]["_meta"]
     del graph["7"]["_meta"]
@@ -247,7 +290,10 @@ def test_a_swapped_node_whose_title_is_nowhere_in_the_new_graph_needs_confirmati
 
 
 def test_an_entry_and_a_node_that_both_have_no_title_are_still_carried_over():
-    """导出物里 ``_meta`` 可能整节缺失：两边都没有标题时核对不出任何东西，照旧沿用。"""
+    """The ``_meta`` section may be missing from the export entirely: when neither side has a title nothing
+    can be checked, so carry over as before.
+
+    导出物里 ``_meta`` 可能整节缺失：两边都没有标题时核对不出任何东西，照旧沿用。"""
     graph = workflow()
     del graph["6"]["_meta"]
     untitled = {**POSITIVE, "title": ""}
@@ -259,7 +305,10 @@ def test_an_entry_and_a_node_that_both_have_no_title_are_still_carried_over():
 
 
 def test_an_entry_that_never_recorded_a_title_is_still_carried_over():
-    """``title`` 在定义 schema 上是可选字段：手写的定义没记它，不等于当时那个节点没有标题。"""
+    """``title`` is optional in the definition schema: a hand-written definition that did not record it does
+    not mean the node had no title back then.
+
+    ``title`` 在定义 schema 上是可选字段：手写的定义没记它，不等于当时那个节点没有标题。"""
     entry = {"node": "6", "input": "text", "class_type": "CLIPTextEncode"}
 
     result = rematch(workflow(), {"prompt": [entry]})

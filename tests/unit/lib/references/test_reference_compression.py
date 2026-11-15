@@ -1,4 +1,9 @@
-"""lib.references.reference_compression 单元测试。
+"""lib.references.reference_compression unit tests.
+
+Like tests/test_image_utils.py, uses PIL to generate image bytes, checking per-role compression, the step-down ladder, tempfile
+lifecycle and non-regression pass-through.
+
+lib.references.reference_compression 单元测试。
 
 仿 tests/test_image_utils.py 用 PIL 生成图片字节，验证按角色压缩、降档梯子、tempfile
 生命周期与非回归透传。
@@ -29,7 +34,9 @@ from lib.references.reference_compression import (
 
 
 def _noise_jpeg_bytes(w: int, h: int) -> bytes:
-    """高熵噪声图（压缩体积随分辨率变化），存为 JPEG。"""
+    """High-entropy noise image (compressed size varies with resolution), saved as JPEG.
+
+    高熵噪声图（压缩体积随分辨率变化），存为 JPEG。"""
     img = Image.effect_noise((w, h), 80).convert("RGB")
     buf = BytesIO()
     img.save(buf, format="JPEG", quality=95)
@@ -67,6 +74,7 @@ def _fmt(data: bytes) -> str:
         return (img.format or "").upper()
 
 
+# ── Constant consistency ──────────────────────────────────────────────────────────────
 # ── 常量一致性 ──────────────────────────────────────────────────────────────
 
 
@@ -94,20 +102,20 @@ def test_array_floor_step_scales_to_1024():
 
 
 def test_array_step0_passthrough_small_jpeg():
-    raw = _solid_jpeg_bytes(800, 600)  # 已是 JPEG、小、尺寸合规
+    raw = _solid_jpeg_bytes(800, 600)  # Already JPEG, small, compliant size / 已是 JPEG、小、尺寸合规
     out = compress_single_at_step(raw, RefRole.ARRAY, 0, single_max_bytes=DEFAULT_SINGLE_MAX_BYTES)
-    assert out is raw  # 原样透传，不二压
+    assert out is raw  # Passed through as is, not recompressed / 原样透传，不二压
 
 
 def test_array_step0_png_is_reencoded():
-    raw = _solid_png_bytes(800, 600)  # 重格式 → 不透传
+    raw = _solid_png_bytes(800, 600)  # Heavy format → not passed through / 重格式 → 不透传
     out = compress_single_at_step(raw, RefRole.ARRAY, 0, single_max_bytes=DEFAULT_SINGLE_MAX_BYTES)
     assert out != raw
     assert _fmt(out) == "JPEG"
 
 
 def test_frame_never_resizes_even_above_2048():
-    # 重格式触发重编码，但 FRAME 永不缩尺寸：输出尺寸保持 3000x2000
+    # A heavy format triggers re-encoding, but FRAME never shrinks: output size stays 3000x2000 / 重格式触发重编码，但 FRAME 永不缩尺寸：输出尺寸保持 3000x2000
     raw = _noise_png_bytes(3000, 2000)
     out = compress_single_at_step(raw, RefRole.FRAME, 0, single_max_bytes=DEFAULT_SINGLE_MAX_BYTES)
     assert _dims(out) == (3000, 2000)
@@ -121,6 +129,8 @@ def test_frame_small_jpeg_passthrough():
 
 
 def test_frame_small_heavy_format_passthrough():
+    # Heavy format (PNG) but within the single budget → FRAME passed through without rewriting (protects first/last frame pixels, ADR "do not make Sora worse"),
+    # not force-converted to JPEG for format reasons (unlike ARRAY).
     # 重格式（PNG）但在 single 预算内 → FRAME 透传不改写（护首/尾帧像素，ADR「不使 Sora 恶化」），
     # 不因格式强转 JPEG（与 ARRAY 不同）。
     raw = _solid_png_bytes(1200, 800)
@@ -130,7 +140,7 @@ def test_frame_small_heavy_format_passthrough():
 
 def test_frame_over_single_budget_reencoded_no_resize():
     raw = _solid_jpeg_bytes(2048, 2048)
-    # single_max 设极小 → 超预算才重编码（仍不缩尺寸）
+    # single_max set very small → re-encode only when over budget (still no shrinking) / single_max 设极小 → 超预算才重编码（仍不缩尺寸）
     out = compress_single_at_step(raw, RefRole.FRAME, 0, single_max_bytes=1)
     assert _dims(out) == (2048, 2048)
 
@@ -148,7 +158,7 @@ def test_ladder_fits_at_step0():
 def test_ladder_downgrades_when_over_total():
     raw = _noise_jpeg_bytes(2048, 2048)
     size0 = len(compress_single_at_step(raw, RefRole.ARRAY, 0, single_max_bytes=DEFAULT_SINGLE_MAX_BYTES))
-    # total 卡在 step0 体积之下 → 必须至少降一档
+    # total set below the step0 size → must step down at least once / total 卡在 step0 体积之下 → 必须至少降一档
     limits = PayloadLimits(total_max_bytes=size0 - 1, single_max_bytes=DEFAULT_SINGLE_MAX_BYTES)
     landed, out = select_ladder_step([raw], [RefRole.ARRAY], limits, start_step=0)
     assert landed >= 1
@@ -170,6 +180,7 @@ def test_ladder_floor_error_has_code():
 
 def test_ladder_single_over_budget_raises_floor():
     raw = _noise_jpeg_bytes(2048, 2048)
+    # total ample but single=1 → effective_single=1, floor still over → raises floor
     # total 充裕但 single=1 → effective_single=1，floor 仍超 → 抛 floor
     limits = PayloadLimits(total_max_bytes=DEFAULT_TOTAL_MAX_BYTES, single_max_bytes=1)
     with pytest.raises(ReferencePayloadFloorError):
@@ -177,19 +188,21 @@ def test_ladder_single_over_budget_raises_floor():
 
 
 def test_ladder_frame_over_single_does_not_floor():
+    # A single large FRAME over the single budget but still ≤ total: FRAME takes no part in the single hard gate → it is not floored before the provider
+    # is called (the passive 413 is the fallback), and is let through as long as it does not exceed total (re-encoded but not shrunk, no raise).
     # 单张大 FRAME 超 single 预算但仍 ≤ total：FRAME 不参与 single 硬门控 → 不在 provider
     # 被调前 floor 掉（交被动 413 兜底），只要不超 total 就放行（会重编码但不缩尺寸、不抛）。
     raw = _noise_jpeg_bytes(2048, 2048)
-    single = len(raw) - 1  # 强制超 single → FRAME 会重编码（但不 floor）
+    single = len(raw) - 1  # Force over single → FRAME is re-encoded (but not floored) / 强制超 single → FRAME 会重编码（但不 floor）
     limits = PayloadLimits(total_max_bytes=DEFAULT_TOTAL_MAX_BYTES, single_max_bytes=single)
     landed, out = select_ladder_step([raw], [RefRole.FRAME], limits, start_step=0)
     assert landed == 0
     assert len(out) == 1
-    assert _dims(out[0]) == (2048, 2048)  # 永不缩尺寸
+    assert _dims(out[0]) == (2048, 2048)  # Never shrinks / 永不缩尺寸
 
 
 def test_ladder_frame_over_total_still_floors():
-    # FRAME 连 total 都超 → 仍 floor（真·数据过多）
+    # FRAME exceeds even total → still floored (truly too much data) / FRAME 连 total 都超 → 仍 floor（真·数据过多）
     raw = _noise_jpeg_bytes(2048, 2048)
     limits = PayloadLimits(total_max_bytes=1, single_max_bytes=DEFAULT_SINGLE_MAX_BYTES)
     with pytest.raises(ReferencePayloadFloorError):
@@ -200,7 +213,7 @@ def test_ladder_start_step_respected():
     raws = [_solid_jpeg_bytes(512, 512)]
     landed, _ = select_ladder_step(raws, [RefRole.ARRAY], PayloadLimits(), start_step=2)
     assert landed >= 2
-    assert landed == 2  # 小图在 prompt_authoring 即满足，不再下压
+    assert landed == 2  # Small images are satisfied at prompt_authoring and not pushed down further / 小图在 prompt_authoring 即满足，不再下压
 
 
 def test_ladder_empty_input():
@@ -233,10 +246,10 @@ def test_payload_writes_and_cleans_tempfiles(tmp_path: Path):
         for r in refs:
             assert r.path.exists()
             written.append(r.path)
-    # 退出后临时文件清理
+    # Temp files cleaned up after exit / 退出后临时文件清理
     for p in written:
         assert not p.exists()
-    # 源文件未被改动
+    # Source file not modified / 源文件未被改动
     assert a.exists()
     assert b.exists()
 
@@ -264,9 +277,9 @@ def test_payload_passthrough_non_local_source_no_raise(tmp_path: Path):
     ]
     with compressed_reference_payload(specs, limits=PayloadLimits()) as (_landed, refs):
         assert len(refs) == 2
-        # 透传项保留原路径、序位不变（[图N] 对齐）
+        # Pass-through items keep their original path and position ([图N] (image N) alignment) / 透传项保留原路径、序位不变（[图N] 对齐）
         assert refs[1].path == missing
-        # 可压缩项写成临时文件
+        # Compressible items are written as temp files / 可压缩项写成临时文件
         assert refs[0].path != real
         assert refs[0].path.exists()
 
@@ -276,10 +289,11 @@ def test_payload_passthrough_undecodable_source(tmp_path: Path):
     specs = [ReferenceSpec(source=bad, role=RefRole.ARRAY)]
     with compressed_reference_payload(specs, limits=PayloadLimits()) as (_landed, refs):
         assert len(refs) == 1
-        assert refs[0].path == bad  # 不可解码 → 透传原路径，不 raise
+        assert refs[0].path == bad  # Undecodable → pass the original path through, no raise / 不可解码 → 透传原路径，不 raise
 
 
 def test_payload_passthrough_excluded_from_budget(tmp_path: Path):
+    # Pass-through items do not count against the byte budget: even with a tiny total, no raise as long as the compressible subset is empty
     # 透传项不计入字节预算：即便 total 极小，只要可压缩子集为空也不抛
     missing = tmp_path / "missing.png"
     specs = [ReferenceSpec(source=missing, role=RefRole.ARRAY)]
@@ -291,6 +305,8 @@ def test_payload_passthrough_excluded_from_budget(tmp_path: Path):
 
 
 def test_payload_tempfiles_cleaned_on_floor_error(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    # The active precheck raises floor inside __enter__, and select_ladder_step runs before writing the tempfile → no leak.
+    # The temp root points at this case's private directory: the process-shared system tempdir gets refcomp-* written by parallel cases / other worktrees.
     # 主动预检在 __enter__ 内抛 floor，select_ladder_step 在写 tempfile 之前 → 无泄漏。
     # 临时根指向本用例私有目录：进程共享的系统 tempdir 会被并行用例/其他 worktree 写入 refcomp-*。
     temp_root = tmp_path / "tmp"
@@ -310,16 +326,18 @@ def test_payload_tempfiles_cleaned_on_floor_error(tmp_path: Path, monkeypatch: p
 
 
 def test_payload_reencoded_tempfile_preserves_source_stem(tmp_path: Path):
+    # Re-encoded copies keep the source stem as file name (e.g. 张三), so they can still be matched back to the source image by name in the temp directory.
     # 重编码副本的文件名沿用源 stem（如 张三），临时目录里仍能按名对应回源图。
     src = _write(tmp_path, "张三.png", _solid_png_bytes(800, 600))
     specs = [ReferenceSpec(source=src, role=RefRole.ARRAY)]
     with compressed_reference_payload(specs, limits=PayloadLimits()) as (_landed, refs):
-        assert refs[0].path != src  # 是临时副本
-        assert refs[0].path.stem == "张三"  # 但保留源 stem
+        assert refs[0].path != src  # It is a temp copy / 是临时副本
+        assert refs[0].path.stem == "张三"  # But keeps the source stem / 但保留源 stem
         assert refs[0].path.suffix == ".jpg"
 
 
 def test_payload_passthrough_uses_original_path_not_copy(tmp_path: Path):
+    # An ARRAY that is already a small JPEG → passed through: uses the original source path, no temp copy written (saves a copy, avoids suffix mismatch, maximum fidelity).
     # 已是小 JPEG 的 ARRAY → 透传：用原始源路径，不写临时副本（省拷贝、避免后缀错配、最大保真）。
     src = _write(tmp_path, "small.jpg", _solid_jpeg_bytes(600, 400))
     specs = [ReferenceSpec(source=src, role=RefRole.ARRAY)]
@@ -328,6 +346,7 @@ def test_payload_passthrough_uses_original_path_not_copy(tmp_path: Path):
 
 
 def test_payload_frame_under_budget_uses_original_path(tmp_path: Path):
+    # FRAME within budget → original path passed through (including PNG, not force-converted to JPEG), protecting first/last frame pixels
     # FRAME 在预算内 → 透传原始路径（含 PNG，不强转 JPEG），护首/尾帧像素
     src = _write(tmp_path, "frame.png", _solid_png_bytes(1000, 1600))
     specs = [ReferenceSpec(source=src, role=RefRole.FRAME)]
@@ -336,10 +355,11 @@ def test_payload_frame_under_budget_uses_original_path(tmp_path: Path):
 
 
 def test_payload_truncated_image_passthrough_no_raise(tmp_path: Path):
+    # Truncated JPEG: passes verify() but load() fails → pass the original path through, never let compress's ValueError escape
     # 截断 JPEG：能过 verify() 但 load() 会失败 → 透传原路径，绝不让 compress 的 ValueError 逃逸
     full = _solid_jpeg_bytes(1200, 900)
     truncated = full[: len(full) // 2]
     src = _write(tmp_path, "truncated.jpg", truncated)
     specs = [ReferenceSpec(source=src, role=RefRole.ARRAY)]
     with compressed_reference_payload(specs, limits=PayloadLimits()) as (_landed, refs):
-        assert refs[0].path == src  # 透传，不 raise
+        assert refs[0].path == src  # Passed through, no raise / 透传，不 raise

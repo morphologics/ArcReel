@@ -1,4 +1,7 @@
-"""内容确认覆盖清单的丢失清单文本：服务端唯一成文处，Web 确认框与 Agent 回执共用。"""
+"""Loss-list text of the content review overwrite list: the single place on the server where it is written,
+shared by the Web confirmation dialog and the Agent receipt.
+
+内容确认覆盖清单的丢失清单文本：服务端唯一成文处，Web 确认框与 Agent 回执共用。"""
 
 from __future__ import annotations
 

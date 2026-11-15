@@ -1,4 +1,10 @@
-"""sdk_frames 契约测试：真实 ClaudeSDKClient，只把传输层换成 CLI 替身。
+"""sdk_frames contract tests: a real ClaudeSDKClient, with only the transport layer replaced by a CLI stand-in.
+
+sdk_frames depends entirely on non-public SDK entry points (Query's raw frame stream, the message parser, the control-request entry).
+If this fails after upgrading claude-agent-sdk, those entry points changed and sdk_frames must be updated before upgrading.
+The frames cover user message replay, command lifecycle and withdrawal control responses in local stdio mode.
+
+sdk_frames 契约测试：真实 ClaudeSDKClient，只把传输层换成 CLI 替身。
 
 sdk_frames 依赖的都是 SDK 未公开的入口（Query 的原始帧流、消息解析器、控制请求入口）。
 升级 claude-agent-sdk 后这里失败，说明这些入口变了，需要先改 sdk_frames 再升级。
@@ -22,7 +28,9 @@ _EOF = object()
 
 
 class _ScriptedCLITransport(Transport):
-    """CLI 替身：应答 initialize 与 cancel_async_message，其余帧由测试脚本发出。"""
+    """CLI stand-in: answers initialize and cancel_async_message; other frames are emitted by the test script.
+
+    CLI 替身：应答 initialize 与 cancel_async_message，其余帧由测试脚本发出。"""
 
     def __init__(self, *, queued_uuids: set[str] | None = None):
         self._queued_uuids = set(queued_uuids or ())
@@ -52,7 +60,7 @@ class _ScriptedCLITransport(Transport):
         if request["subtype"] == "initialize":
             self._answer(message["request_id"], {})
         elif request["subtype"] == "cancel_async_message":
-            # 与 CLI 一致：只有仍在命令队列里的消息能撤回
+            # Same as the CLI: only messages still in the command queue can be withdrawn / 与 CLI 一致：只有仍在命令队列里的消息能撤回
             cancelled = request["message_uuid"] in self._queued_uuids
             self._queued_uuids.discard(request["message_uuid"])
             self._answer(message["request_id"], {"cancelled": cancelled})

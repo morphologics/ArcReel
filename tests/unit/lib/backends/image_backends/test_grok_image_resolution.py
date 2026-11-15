@@ -1,4 +1,6 @@
-"""测试 GrokImageBackend 对 image_size 的新逻辑：None 不传，非 None 直接透传。"""
+"""Tests GrokImageBackend's new image_size logic: None is not sent, non-None is passed through directly.
+
+测试 GrokImageBackend 对 image_size 的新逻辑：None 不传，非 None 直接透传。"""
 
 from unittest.mock import MagicMock
 

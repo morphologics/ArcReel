@@ -1,4 +1,23 @@
-"""mutmut 拉起的 pytest 会话的进程隔离：私有 basetemp，且不触碰 macOS 的系统代理发现。
+"""Process isolation for pytest sessions spawned by mutmut: a private basetemp, and no touching macOS system
+proxy discovery.
+
+Loaded only by ``[tool.mutmut] pytest_add_cli_args`` in ``pyproject.toml`` as ``-p tests.mutmut_plugin``;
+local and CI pytest do not load it.
+
+mutmut forks several pytest sessions per mutant to run in parallel. Two fork-related measures:
+
+- At session teardown they would all clean the ``pytest-current`` symlink under the shared root at once; the
+  ``FileNotFoundError`` raised by the race bubbles out of ``pytest.main``, making the child take the normal
+  exit path with exit code 1, recorded as killed. An explicitly given basetemp registers no cleanup, so there
+  is nothing to do at teardown; the directory is reclaimed by this session itself at unconfigure.
+- On macOS, ``urllib.request.getproxies()`` with no ``*_proxy`` variables in the environment calls
+  SystemConfiguration via ``_scproxy`` to read the system proxy, and that framework segfaults outright in
+  forked multithreaded children. Any case constructing ``openai.OpenAI`` / ``httpx.Client`` reaches this,
+  and the whole batch of mutants is recorded as -11. Here the two macOS-only entries are replaced with
+  "no system proxy" constant implementations: tests never depend on a real system proxy, and proxies given
+  by env vars still take effect as before.
+
+mutmut 拉起的 pytest 会话的进程隔离：私有 basetemp，且不触碰 macOS 的系统代理发现。
 
 只由 ``pyproject.toml`` 的 ``[tool.mutmut] pytest_add_cli_args`` 以 ``-p tests.mutmut_plugin``
 加载，本地与 CI 的 pytest 不加载它。
@@ -34,7 +53,12 @@ def _never_bypass_by_system_settings(host: str) -> bool:
 
 @pytest.hookimpl(tryfirst=True)
 def pytest_configure(config: pytest.Config) -> None:
-    """``tryfirst`` 使赋值先于 pytest 自带 tmpdir 插件读取 ``config.option.basetemp``。
+    """``tryfirst`` makes the assignment happen before pytest's own tmpdir plugin reads ``config.option.basetemp``.
+
+    After command-line parsing the option is a str, and what xdist hands to workers is also a str; the same type
+    is kept here.
+
+    ``tryfirst`` 使赋值先于 pytest 自带 tmpdir 插件读取 ``config.option.basetemp``。
 
     该选项经命令行解析后是 str，xdist 派给 worker 的也是 str，这里保持同一类型。
     """

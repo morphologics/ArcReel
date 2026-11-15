@@ -1,4 +1,6 @@
-"""Anthropic probe 单元测试：respx 在 transport 层拦截，不打真实网络。"""
+"""Anthropic probe unit tests: respx intercepts at the transport layer, no real network calls.
+
+Anthropic probe 单元测试：respx 在 transport 层拦截，不打真实网络。"""
 
 from __future__ import annotations
 
@@ -23,7 +25,11 @@ _ANTHROPIC_OK = {"id": "msg_1", "type": "message", "content": [{"type": "text", 
 
 @pytest.fixture
 async def probe_client() -> AsyncIterator[httpx.AsyncClient]:
-    """真实 httpx 客户端；出站流量由 respx 在 transport 层接管。
+    """Real httpx client; outbound traffic is taken over by respx at the transport layer.
+
+    The production shared singleton is initialized by lifespan; unit tests inject it explicitly via the `http_client` seam.
+
+    真实 httpx 客户端；出站流量由 respx 在 transport 层接管。
 
     生产的共享单例要靠 lifespan 初始化，单测经 `http_client` seam 显式注入。
     """
@@ -74,7 +80,9 @@ async def test_probe_messages_401_marks_failure(probe_client: httpx.AsyncClient)
 
 
 async def test_probe_messages_200_but_not_anthropic_marks_failure(probe_client: httpx.AsyncClient) -> None:
-    """OpenAI 兼容协议响应：200 但缺 type=message 应判失败。"""
+    """OpenAI-compatible protocol response: 200 but missing type=message should be judged a failure.
+
+    OpenAI 兼容协议响应：200 但缺 type=message 应判失败。"""
     with capture_http() as router:
         router.post("https://api.example.com/v1/messages").mock(
             return_value=httpx.Response(200, json={"id": "chatcmpl-1", "object": "chat.completion", "choices": []})
@@ -104,7 +112,9 @@ async def test_probe_messages_200_but_not_anthropic_marks_failure(probe_client: 
 async def test_probe_messages_timeout_only_read_timeout_means_upstream_slow(
     probe_client: httpx.AsyncClient, exc: httpx.TimeoutException, expected: DiagnosisCode
 ) -> None:
-    """只有 ReadTimeout 证明服务可达；其余超时与网络不通同类。"""
+    """Only ReadTimeout proves the service is reachable; other timeouts are in the same class as network unreachable.
+
+    只有 ReadTimeout 证明服务可达；其余超时与网络不通同类。"""
     with capture_http() as router:
         router.post("https://api.example.com/v1/messages").mock(side_effect=exc)
         result = await probe_messages(
@@ -178,7 +188,9 @@ def test_classify_probe_failure_unknown_404_no_model() -> None:
 
 
 async def test_run_test_probes_only_messages_endpoint(probe_client: httpx.AsyncClient) -> None:
-    """测试连接只打 Agent 真正调用的 messages 端点：不发 /v1/models，也不补 /anthropic 重试。"""
+    """The connection test only hits the messages endpoint the Agent really calls: no /v1/models, and no /anthropic retry.
+
+    测试连接只打 Agent 真正调用的 messages 端点：不发 /v1/models，也不补 /anthropic 重试。"""
     with capture_http() as router:
         messages = router.post("https://api.deepseek.com/v1/messages").mock(
             return_value=httpx.Response(404, text="not found")
@@ -209,7 +221,9 @@ async def test_run_test_probes_only_messages_endpoint(probe_client: httpx.AsyncC
 async def test_run_test_preset_with_base_url_override_probes_stored_value(
     probe_client: httpx.AsyncClient,
 ) -> None:
-    """preset 凭证覆盖 base_url：整条完整端点归一后即为调用值，探测打的就是它。"""
+    """A preset credential overrides base_url: the whole full endpoint, once normalized, is the call value, and that is what the probe hits.
+
+    preset 凭证覆盖 base_url：整条完整端点归一后即为调用值，探测打的就是它。"""
     with capture_http() as router:
         messages = router.post("https://proxy.internal/anthropic/v1/messages").mock(
             return_value=httpx.Response(200, json=_ANTHROPIC_OK)
@@ -238,7 +252,9 @@ async def test_run_test_preset_with_base_url_override_probes_stored_value(
     ],
 )
 async def test_run_test_rejects_unsupported_base_url(base_url: str) -> None:
-    """带 query / fragment / userinfo 或缺 scheme 的地址在探测前就被拒，文案不回显输入。"""
+    """Addresses with query / fragment / userinfo or a missing scheme are rejected before probing, and the message does not echo the input.
+
+    带 query / fragment / userinfo 或缺 scheme 的地址在探测前就被拒，文案不回显输入。"""
     with pytest.raises(InvalidAnthropicBaseUrlError) as exc_info:
         await run_test(preset_id=CUSTOM_SENTINEL_ID, base_url=base_url, api_key="sk", model="m")
     assert "sk-x" not in str(exc_info.value)
@@ -255,7 +271,9 @@ async def test_run_test_unknown_preset_raises() -> None:
 
 
 def test_classify_probe_failure_400_missing_model_is_model_required() -> None:
-    """火山方舟缺 model 参数时返回 400 MissingParameter，不该落到 UNKNOWN。"""
+    """Volcengine Ark returns 400 MissingParameter when the model parameter is missing; that should not land in UNKNOWN.
+
+    火山方舟缺 model 参数时返回 400 MissingParameter，不该落到 UNKNOWN。"""
     p = ProbeResult(
         success=False,
         status_code=400,
@@ -274,7 +292,9 @@ def test_classify_probe_failure_400_missing_model_is_model_required() -> None:
     ],
 )
 def test_classify_probe_failure_400_missing_model_wording_variants(message: str) -> None:
-    """缺参措辞与 model 之间夹着单词时同样归为 model_required。"""
+    """Missing-parameter wording with words between it and model is likewise classed as model_required.
+
+    缺参措辞与 model 之间夹着单词时同样归为 model_required。"""
     p = ProbeResult(success=False, status_code=400, latency_ms=10, error=message)
     assert classify_probe_failure(p) == DiagnosisCode.MODEL_REQUIRED
 
@@ -295,7 +315,9 @@ def test_classify_probe_failure_400_without_model_keyword_stays_unknown() -> Non
 
 
 async def test_run_test_preset_without_model_short_circuits(probe_client: httpx.AsyncClient) -> None:
-    """预设默认模型为空且用户未填：不发 messages 请求，直接给 MODEL_REQUIRED。"""
+    """Preset default model empty and the user filled none: no messages request is sent, MODEL_REQUIRED is returned directly.
+
+    预设默认模型为空且用户未填：不发 messages 请求，直接给 MODEL_REQUIRED。"""
     preset = get_preset("anthropic-official")
     assert preset is not None
 
@@ -323,7 +345,9 @@ async def test_run_test_preset_without_model_short_circuits(probe_client: httpx.
 
 
 async def test_run_test_ark_preset_uses_default_model(probe_client: httpx.AsyncClient) -> None:
-    """火山方舟 Agent Plan：预设默认模型直接可用。"""
+    """Volcengine Ark Agent Plan: the preset default model is usable directly.
+
+    火山方舟 Agent Plan：预设默认模型直接可用。"""
     preset = get_preset("ark-agent-plan")
     assert preset is not None
 
@@ -345,7 +369,9 @@ async def test_run_test_ark_preset_uses_default_model(probe_client: httpx.AsyncC
 
 
 async def test_run_test_custom_mode_without_model_uses_fallback(probe_client: httpx.AsyncClient) -> None:
-    """自定义模式不受空模型短路影响，仍用内置兜底模型。"""
+    """Custom mode is not affected by the empty-model short circuit and still uses the built-in fallback model.
+
+    自定义模式不受空模型短路影响，仍用内置兜底模型。"""
     with capture_http() as router:
         messages = router.post("https://api.example.com/anthropic/v1/messages").mock(
             return_value=httpx.Response(200, json=_ANTHROPIC_OK)
@@ -364,7 +390,9 @@ async def test_run_test_custom_mode_without_model_uses_fallback(probe_client: ht
 
 
 def test_classify_probe_failure_400_missing_other_param_is_not_model_required() -> None:
-    """缺参提示指向别的字段时不连坐到 model。"""
+    """When the missing-parameter hint points at another field, model is not dragged in.
+
+    缺参提示指向别的字段时不连坐到 model。"""
     p = ProbeResult(
         success=False,
         status_code=400,

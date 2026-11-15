@@ -1,4 +1,8 @@
-"""openai-chat-image：经 Chat Completions（modalities 含 image）出图的调用通道。
+"""openai-chat-image: the call channel that produces images via Chat Completions (modalities include image).
+
+The call channel is built per provider model through the endpoint registry; the HTTP layer is intercepted by respx outside the real SDK.
+
+openai-chat-image：经 Chat Completions（modalities 含 image）出图的调用通道。
 
 按供应商模型经端点注册表构造调用通道，HTTP 层由 respx 在真实 SDK 外拦截。
 """
@@ -37,6 +41,7 @@ def _chat_response(message: dict) -> httpx.Response:
 
 
 async def test_image_to_image_sends_reference_and_saves_returned_image(tmp_path):
+    # Extension does not match the actual encoding: the data URI takes the MIME from the file header.
     ref = tmp_path / "ref.png"  # 扩展名与实际编码不符：data URI 按文件头取 MIME
     ref.write_bytes(_REF)
     out = tmp_path / "out" / "storyboard.png"
@@ -76,6 +81,7 @@ async def test_image_to_image_sends_reference_and_saves_returned_image(tmp_path)
 
 
 async def test_text_to_image_extracts_markdown_image_from_content(tmp_path):
+    # Some relays do not fill message.images and instead return the image inline as Markdown in content.
     # 部分中转站不填 message.images，把图片以 Markdown 内联在 content 里返回
     out = tmp_path / "out.png"
     backend = get_endpoint_spec("openai-chat-image").build_backend(_provider(), "gemini-2.5-flash-image")
@@ -94,6 +100,7 @@ async def test_text_to_image_extracts_markdown_image_from_content(tmp_path):
 
 
 async def test_download_failure_retries_download_only(tmp_path, poll_clock):
+    # The image is already billed: transient fetch failures are retried only at the download layer; the Chat Completions request is not re-sent.
     # 出图已计费：取件的瞬态失败只在下载层重试，不重发 Chat Completions 请求
     out = tmp_path / "out.png"
     backend = get_endpoint_spec("openai-chat-image").build_backend(_provider(), "gemini-2.5-flash-image")

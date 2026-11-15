@@ -1,4 +1,11 @@
-"""同一个比对器按集建出的规划共享版本历史的解析结果，但只在读到的字节完全相同时复用。
+"""Plans the same comparer builds per episode share the parsed version history, but reuse it only when the bytes read
+are exactly the same.
+
+Each test first compares episode 1, so the comparer parses the version history once, then changes
+``versions/versions.json``, and then compares episode 2: episode 2's plan must see the changed file and must not get
+the parse result left over from episode 1.
+
+同一个比对器按集建出的规划共享版本历史的解析结果，但只在读到的字节完全相同时复用。
 
 每条用例先比对第一集，让比对器解析过一次版本历史，再改动 ``versions/versions.json``，
 随后比对第二集：第二集的规划必须看到改动后的文件，不能拿到第一集留下的解析结果。
@@ -60,6 +67,7 @@ def test_replaced_versions_reach_the_next_episode(
     versions_path.write_text(json.dumps(versions), encoding="utf-8")
     versions_parses = count_versions_parses(monkeypatch)
 
+    # Episode 2's video version records were removed from the new content; missing execution facts mean stale.
     # 第二集视频的版本记录已从新内容里移除，执行事实缺失即判 stale。
     assert _compare_video(resolver_after_first_episode, 2) is ArtifactStatus.STALE
     assert versions_parses["parses"] == 1

@@ -78,7 +78,10 @@ class TestProjectsRouter:
             assert data["default_duration"] == 8
 
     def test_create_project_persists_episode_target_duration(self, tmp_path, monkeypatch):
-        """单集目标时长在创建向导写入；越界值 422 且不留下半成品项目。"""
+        """The per-episode target duration is written in the creation wizard; out-of-range values return 422 and leave no
+        half-built project.
+
+        单集目标时长在创建向导写入；越界值 422 且不留下半成品项目。"""
         fake_pm = _FakePM(tmp_path)
         client = build_projects_client(monkeypatch, fake_pm)
 
@@ -108,7 +111,9 @@ class TestProjectsRouter:
             assert "etd-bad" not in fake_pm.project_data
 
     def test_create_project_with_image_default_layer(self, tmp_path, monkeypatch):
-        """项目默认图片模型（default_image_backend）可在创建时写入，不必配桶。"""
+        """The project default image model (default_image_backend) can be written at creation without configuring buckets.
+
+        项目默认图片模型（default_image_backend）可在创建时写入，不必配桶。"""
         fake_pm = _FakePM(tmp_path)
         client = build_projects_client(monkeypatch, fake_pm)
 
@@ -129,7 +134,10 @@ class TestProjectsRouter:
             assert "image_provider_i2i" not in data
 
     def test_video_bucket_fields_create_patch_and_clear(self, tmp_path, monkeypatch):
-        """项目级视频桶键（video_provider_i2v/r2v）可创建时写入、PATCH 设置；空值 = 清除、回退默认层。"""
+        """Project-level video bucket keys (video_provider_i2v/r2v) can be written at creation and set via PATCH; an empty
+        value = clear, falling back to the default tier.
+
+        项目级视频桶键（video_provider_i2v/r2v）可创建时写入、PATCH 设置；空值 = 清除、回退默认层。"""
         fake_pm = _FakePM(tmp_path)
         client = build_projects_client(monkeypatch, fake_pm)
 
@@ -164,7 +172,9 @@ class TestProjectsRouter:
             assert "video_provider_r2v" not in fake_pm.project_data["ready"]
 
     def test_create_project_ignores_legacy_image_backend(self, tmp_path, monkeypatch):
-        """退役的 image_backend 字段已从写模型移除，传入时被静默忽略。"""
+        """The retired image_backend field was removed from the write model and is silently ignored when passed.
+
+        退役的 image_backend 字段已从写模型移除，传入时被静默忽略。"""
         fake_pm = _FakePM(tmp_path)
         client = build_projects_client(monkeypatch, fake_pm)
 
@@ -179,6 +189,8 @@ class TestProjectsRouter:
                 },
             )
             assert resp.status_code == 200
+            # Key guarantee: a retired field must not land in project.json, otherwise the resolution chain ignores it and
+            # silently mismatches the provider
             # 关键保证：退役字段不得落进 project.json，否则解析链会忽略它、静默错配供应商
             assert "image_backend" not in fake_pm.project_data["legacy-1"]
 
@@ -203,7 +215,10 @@ class TestProjectsRouter:
             assert "image_backend" not in data
 
     def test_create_project_persists_speech_rate(self, tmp_path, monkeypatch):
-        """创建时可选填口播语速估算：区间内落盘，未填不落盘（回退语言默认）。"""
+        """Optional speech rate estimate at creation: persisted when in range, not persisted when unset (falls back to the
+        language default).
+
+        创建时可选填口播语速估算：区间内落盘，未填不落盘（回退语言默认）。"""
         fake_pm = _FakePM(tmp_path)
         client = build_projects_client(monkeypatch, fake_pm)
 
@@ -246,7 +261,10 @@ class TestProjectsRouter:
 
     @pytest.mark.parametrize("value", [True, False])
     def test_create_project_rejects_boolean_speech_rate(self, tmp_path, monkeypatch, value):
-        """JSON 布尔不得被 Pydantic 折成 1.0 / 0.0 混进语速覆盖，两个取值都应 422 且不建目录。"""
+        """JSON booleans must not be folded by Pydantic into 1.0 / 0.0 and mixed into the speech rate override; both values
+        should return 422 and create no directory.
+
+        JSON 布尔不得被 Pydantic 折成 1.0 / 0.0 混进语速覆盖，两个取值都应 422 且不建目录。"""
         fake_pm = _FakePM(tmp_path)
         client = build_projects_client(monkeypatch, fake_pm)
 
@@ -264,7 +282,9 @@ class TestProjectsRouter:
             assert "sr-bool" not in fake_pm.project_data
 
     def test_create_project_with_invalid_backend_returns_400(self, tmp_path, monkeypatch):
-        """非法 backend 字符串应被校验器拒绝。"""
+        """An illegal backend string should be rejected by the validator.
+
+        非法 backend 字符串应被校验器拒绝。"""
         fake_pm = _FakePM(tmp_path)
         client = build_projects_client(monkeypatch, fake_pm)
 
@@ -275,7 +295,7 @@ class TestProjectsRouter:
                     "generation_mode": "storyboard",
                     "title": "Bad Backend",
                     "name": "bad-bk",
-                    "video_backend": "garbage",  # 无 "/"，且不在 PROVIDER_REGISTRY
+                    "video_backend": "garbage",  # No "/", and not in PROVIDER_REGISTRY / 无 "/"，且不在 PROVIDER_REGISTRY
                 },
             )
             assert resp.status_code == 400
@@ -283,6 +303,7 @@ class TestProjectsRouter:
     def test_create_requires_binary_generation_mode(self, tmp_path, monkeypatch):
         client = build_projects_client(monkeypatch, _FakePM(tmp_path))
         with client:
+            # Missing generation_mode: required with no default, not quietly locked into some generation mode
             # 缺失 generation_mode：必填无默认值，不被悄悄锁进某种生成模式
             missing = client.post(
                 "/api/v1/projects",
@@ -290,6 +311,7 @@ class TestProjectsRouter:
             )
             assert missing.status_code == 422
 
+            # The old three-value grid is no longer a valid creation value
             # 旧三值 grid 不再是合法创建值
             legacy_grid = client.post(
                 "/api/v1/projects",
@@ -297,6 +319,7 @@ class TestProjectsRouter:
             )
             assert legacy_grid.status_code == 422
 
+            # Both generation modes can be created
             # 两种生成模式均可创建
             for mode in ("storyboard", "reference_video"):
                 created = client.post(
@@ -309,6 +332,7 @@ class TestProjectsRouter:
     def test_create_persists_grid_storyboard(self, tmp_path, monkeypatch):
         client = build_projects_client(monkeypatch, _FakePM(tmp_path))
         with client:
+            # The default false is also persisted as an explicit value
             # 缺省 false 也落盘为显式值
             default_off = client.post(
                 "/api/v1/projects",
@@ -326,7 +350,10 @@ class TestProjectsRouter:
 
 
 class TestProjectCreationNarrationDelivery:
-    """旁白交付方式是必填的项目配置：缺省后期配音，TTS 配音以全局默认预填快照。"""
+    """Narration delivery is required project config: defaults to post-production voiceover; TTS voiceover is prefilled
+    with a snapshot of the global defaults.
+
+    旁白交付方式是必填的项目配置：缺省后期配音，TTS 配音以全局默认预填快照。"""
 
     def _create(self, client, **fields):
         return client.post(

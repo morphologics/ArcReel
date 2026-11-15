@@ -10,6 +10,7 @@ class TestProjectsRouter:
     def test_create_ad_project(self, tmp_path, monkeypatch):
         client = build_projects_client(monkeypatch, _FakePM(tmp_path))
         with client:
+            # Default tier: no target_duration -> 60; brief may be empty; episodes is always a single entry; no default_duration
             # 默认档位：不传 target_duration → 60；brief 可空；episodes 恒单条；无 default_duration
             created = client.post(
                 "/api/v1/projects",
@@ -31,6 +32,7 @@ class TestProjectsRouter:
             ]
             assert "default_duration" not in project
 
+            # The data layer does not hard-enumerate: any positive integer seconds is valid
             # 数据层不硬枚举：任意正整数秒合法
             custom = client.post(
                 "/api/v1/projects",
@@ -49,6 +51,7 @@ class TestProjectsRouter:
     def test_create_ad_project_rejects_incompatible_fields(self, tmp_path, monkeypatch):
         client = build_projects_client(monkeypatch, _FakePM(tmp_path))
         with client:
+            # ad does not expose default_duration
             # ad 不暴露 default_duration
             with_default = client.post(
                 "/api/v1/projects",
@@ -56,6 +59,7 @@ class TestProjectsRouter:
             )
             assert with_default.status_code == 400
 
+            # ad does not expose episode_target_duration (the episode size is planned from the target_duration budget)
             # ad 不暴露 episode_target_duration（整集体量按 target_duration 预算规划）
             with_episode_target = client.post(
                 "/api/v1/projects",
@@ -68,6 +72,7 @@ class TestProjectsRouter:
             )
             assert with_episode_target.status_code == 400
 
+            # ad does not offer multi-grid storyboards
             # ad 不开放宫格分镜
             with_grid = client.post(
                 "/api/v1/projects",
@@ -75,6 +80,7 @@ class TestProjectsRouter:
             )
             assert with_grid.status_code == 400
 
+            # A non-positive-integer target_duration is rejected by the request model
             # 非正整数 target_duration 被请求模型拒绝
             bad_duration = client.post(
                 "/api/v1/projects",
@@ -82,6 +88,7 @@ class TestProjectsRouter:
             )
             assert bad_duration.status_code == 422
 
+            # target_duration / brief are only available for ad
             # target_duration / brief 仅 ad 可用
             narration_with_td = client.post(
                 "/api/v1/projects",
@@ -110,6 +117,7 @@ class TestProjectsRouter:
             assert ignored_mode.status_code == 200
             assert "content_mode" not in fake_pm.project_data["ready"]
 
+            # ad projects accept any positive integer seconds for target_duration
             # ad 项目 target_duration 接受任意正整数秒
             updated = client.patch(
                 "/api/v1/projects/ad-ready",
@@ -118,6 +126,7 @@ class TestProjectsRouter:
             assert updated.status_code == 200
             assert updated.json()["project"]["target_duration"] == 23
 
+            # brief can be changed or cleared (cleared to an empty string)
             # brief 可改可清（清为空字符串）
             brief_set = client.patch(
                 "/api/v1/projects/ad-ready",
@@ -132,8 +141,11 @@ class TestProjectsRouter:
             assert brief_clear.status_code == 200
             assert brief_clear.json()["project"]["brief"] == ""
 
+            # ad projects hold no default_duration / do not offer multi-grid storyboards / target_duration cannot be cleared
             # ad 项目不持有 default_duration / 不开放宫格分镜 / target_duration 不可清空
             assert client.patch("/api/v1/projects/ad-ready", json={"default_duration": 8}).status_code == 400
+            # Rejected whenever the field appears: null is not allowed either (otherwise it would silently delete and return
+            # 200, inconsistent with the write-ban contract)
             # 字段出现即拒绝:null 也不允许(否则会静默删除返回 200,与禁写契约不一致)
             assert client.patch("/api/v1/projects/ad-ready", json={"default_duration": None}).status_code == 400
             assert client.patch("/api/v1/projects/ad-ready", json={"episode_target_duration": 120}).status_code == 400
@@ -141,6 +153,7 @@ class TestProjectsRouter:
             assert client.patch("/api/v1/projects/ad-ready", json={"grid_storyboard": True}).status_code == 400
             assert client.patch("/api/v1/projects/ad-ready", json={"target_duration": None}).status_code == 400
 
+            # Non-ad projects do not accept target_duration / brief
             # 非 ad 项目不接受 target_duration / brief
             assert client.patch("/api/v1/projects/ready", json={"target_duration": 60}).status_code == 400
             assert client.patch("/api/v1/projects/ready", json={"brief": "x"}).status_code == 400

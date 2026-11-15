@@ -1,4 +1,14 @@
-"""剧本骨架注册表与规范/取证双解析器的集中矩阵测试。
+"""Centralized matrix tests for the script skeleton registry and the declared/evidence-based resolvers.
+
+Five quadrants:
+- table self-consistency: all four rows present, fields valid, import-time validation triggers
+- all combinations of declared resolution: 3 content_mode × storyboard/grid/reference_video
+- the evidence ladder step by step
+- fail-loud: unknown/missing content_mode raises ValueError (the old "unknown falls to drama" semantics
+  are reversed)
+- generation mode gate: cross-family mismatches are refused, differences within a family are allowed
+
+剧本骨架注册表与规范/取证双解析器的集中矩阵测试。
 
 五象限：
 - 表自洽：四行齐全、字段合法、import 期校验触发
@@ -26,7 +36,7 @@ from lib.script.script_skeleton import (
 
 class TestRegistrySelfConsistency:
     def test_four_kinds_complete(self):
-        # 键即条目数组键，四骨架齐全。
+        # Keys are the entry array keys; all four skeletons present. / 键即条目数组键，四骨架齐全。
         assert set(SKELETONS) == {"segments", "scenes", "shots", "video_units"}
 
     def test_id_fields(self):
@@ -39,12 +49,17 @@ class TestRegistrySelfConsistency:
         assert SKELETONS["segments"].chars_field == "characters_in_segment"
         assert SKELETONS["scenes"].chars_field == "characters_in_scene"
         assert SKELETONS["shots"].chars_field == "characters_in_shot"
+        # video_units has no per-entry character list (characters exist as character entries in references):
+        # the table honestly declares the absence (None) rather than giving a fake field name.
         # video_units 无逐条角色名单（角色以 references 中 character 条目形态存在）：
         # 表如实声明缺位（None），不给假字段名。
         assert SKELETONS["video_units"].chars_field is None
 
     def test_real_registry_passes_validation(self):
-        """真实注册表自洽：校验器放行的契约就是「不抛且无返回」。"""
+        """The real registry is self-consistent: the contract for the validator letting it through is "does
+        not raise and returns nothing".
+
+        真实注册表自洽：校验器放行的契约就是「不抛且无返回」。"""
         assert script_skeleton._validate_registry() is None
 
     def test_missing_kind_fails_fast(self, monkeypatch):
@@ -61,7 +76,7 @@ class TestRegistrySelfConsistency:
             script_skeleton._validate_registry()
 
     def test_empty_chars_field_fails_fast(self, monkeypatch):
-        # None 合法（显式缺位），空串非法。
+        # None is valid (explicit absence); an empty string is invalid. / None 合法（显式缺位），空串非法。
         broken = dict(SKELETONS)
         broken["scenes"] = Skeleton("scene_id", "")
         monkeypatch.setattr(script_skeleton, "SKELETONS", broken)
@@ -70,10 +85,13 @@ class TestRegistrySelfConsistency:
 
 
 class TestDeclaredResolver:
-    """规范解析全组合：(content_mode, generation_mode) → kind。"""
+    """All combinations of declared resolution: (content_mode, generation_mode) -> kind.
+
+    规范解析全组合：(content_mode, generation_mode) → kind。"""
 
     @pytest.mark.parametrize("generation_mode", [None, "storyboard", "grid_4", "grid_6", "grid_9"])
     def test_storyboard_and_grid_paths(self, generation_mode):
+        # Non-reference generation paths: content_mode -> content skeleton, not varying with storyboard/grid.
         # 非 reference 生成路径：content_mode → 内容骨架，不随 storyboard/grid 变。
         assert resolve_declared_kind("narration", generation_mode) == "segments"
         assert resolve_declared_kind("drama", generation_mode) == "scenes"
@@ -87,23 +105,32 @@ class TestDeclaredResolver:
     @pytest.mark.parametrize("content_mode", [None, "", "reference_video", "unknown"])
     @pytest.mark.parametrize("generation_mode", [None, "reference_video"])
     def test_unknown_or_missing_content_mode_raises(self, content_mode, generation_mode):
-        # fail-loud：不静默落 drama/narration。
+        # fail-loud: do not silently fall to drama/narration. / fail-loud：不静默落 drama/narration。
         with pytest.raises(ValueError, match=r"未知或缺失 content_mode"):
             resolve_declared_kind(content_mode, generation_mode)
 
 
 class TestScriptResolver:
-    """取证解析阶梯逐台阶（判别顺序 1→4 + 终兜底）。"""
+    """The evidence-based resolution ladder step by step (decision order 1->4 + final fallback).
+
+    取证解析阶梯逐台阶（判别顺序 1→4 + 终兜底）。"""
 
     def test_script_plan_video_units_alone(self):
+        # video_units present and none of segments/scenes/shots present -> reference.
         # video_units 在场且 segments/scenes/shots 都不在 → reference。
         assert resolve_script_kind({"video_units": []}) == "video_units"
 
     def test_script_plan_floating_video_units_does_not_hijack_storyboard(self):
-        # 游离 video_units 不抢走 storyboard 脚本的判别。
+        # Stray video_units do not take over the decision for a storyboard script. / 游离 video_units 不抢走 storyboard 脚本的判别。
         assert resolve_script_kind({"video_units": [], "segments": [], "content_mode": "narration"}) == "segments"
 
     def test_script_plan_floating_video_units_hijack_guard_without_content_mode(self):
+        # Stray video_units + segments together but no content_mode: the script_plan guard still stops
+        # video_units from taking over,
+        # and with content_mode missing it falls to the key-existence ladder (step4/final fallback) and
+        # returns segments. Covers the evidence path for
+        # historical dirty storyboard scripts (stray video_units stuffed in by mistake, no content_mode
+        # stamp) not being misjudged as reference.
         # 游离 video_units + segments 并存但无 content_mode：script_plan 守卫仍挡住 video_units 抢判，
         # 缺 content_mode 落键存在性阶梯（step4/终兜底）返回 segments。覆盖历史脏数据 storyboard
         # 脚本（被误塞游离 video_units、无 content_mode 戳）不被误判为 reference 的取证路径。
@@ -115,10 +142,13 @@ class TestScriptResolver:
         assert resolve_script_kind({"content_mode": "narration", "segments": []}) == "segments"
 
     def test_step3_narration_falls_back_to_scenes_key(self):
+        # content_mode=narration but the data is under the scenes key (no segments) -> fall back to scenes.
         # content_mode=narration 但数据落 scenes 键（无 segments）→ 回退 scenes。
         assert resolve_script_kind({"content_mode": "narration", "scenes": []}) == "scenes"
 
     def test_residual_generation_mode_field_is_ignored(self):
+        # A generation mode marker left on existing scripts is an unknown field: evidence-based resolution
+        # only looks at data shape and returns segments, so editing is not lost.
         # 存量剧本残留的生成模式标记是未知字段：取证解析只看数据形状，按 segments 返回，编辑能力不丢失。
         script = {"content_mode": "narration", "generation_mode": "reference_video", "segments": []}
         assert resolve_script_kind(script) == "segments"
@@ -132,7 +162,10 @@ class TestScriptResolver:
 
 
 class TestRouteSkeletonGate:
-    """生成模式闸门：剧本骨架与项目生成模式跨族即拒，族内差异放行。"""
+    """Generation mode gate: a script skeleton and the project's generation mode from different families are
+    refused; differences within a family are allowed.
+
+    生成模式闸门：剧本骨架与项目生成模式跨族即拒，族内差异放行。"""
 
     def test_matched_reference_route_passes(self):
         script = {"content_mode": "narration", "video_units": []}
@@ -153,11 +186,17 @@ class TestRouteSkeletonGate:
         assert (exc.value.expected, exc.value.actual) == ("video_units", "shots")
 
     def test_narration_data_in_scenes_key_is_not_a_mismatch(self):
+        # Historical shapes within a family (narration data under the scenes key) are returned as they are and
+        # not refused as mismatches.
         # 族内历史形态（narration 数据落 scenes 键）照实返回，不当失配拒绝。
         script = {"content_mode": "narration", "scenes": []}
         assert ensure_route_skeleton(script, "narration", "storyboard") == "scenes"
 
     def test_reference_route_passes_with_residual_storyboard_array(self):
+        # A reference-to-video script with a leftover storyboard-family array: evidence resolution answers
+        # segments by shape first, but the generation side reads video_units,
+        # so the leftover array takes no part in the vote and the gate must allow it (same rule as cost
+        # estimation pricing by units).
         # 参考生视频剧本残留分镜族数组：取证解析按形状优先答 segments，但生成侧读的是 video_units，
         # 残留数组不参与投票，闸门须放行（与费用估算按 units 计价同口径）。
         script = {
@@ -168,6 +207,8 @@ class TestRouteSkeletonGate:
         assert ensure_route_skeleton(script, "narration", "reference_video") == "video_units"
 
     def test_storyboard_route_passes_with_residual_unit_array(self):
+        # Reverse: a storyboard-to-video script with leftover video_units is allowed as long as the shot array
+        # is present.
         # 反向：分镜图生视频剧本残留 video_units，分镜数组在场即放行。
         script = {"content_mode": "narration", "segments": [{"segment_id": "E1S1"}], "video_units": []}
         assert ensure_route_skeleton(script, "narration", "storyboard") == "segments"
@@ -178,7 +219,7 @@ class TestRouteSkeletonGate:
             ensure_route_skeleton(script, "narration", "storyboard")
         assert exc.value.expected == "segments"
         assert exc.value.actual == "video_units"
-        # 结构报错 + 重拆指引，并说明查看/编辑/导出不受影响。
+        # Structural error + re-split guidance, stating that viewing/editing/export are not affected. / 结构报错 + 重拆指引，并说明查看/编辑/导出不受影响。
         assert "骨架" in str(exc.value)
         assert "重新拆分" in str(exc.value)
         assert "查看" in str(exc.value)
@@ -192,6 +233,10 @@ class TestRouteSkeletonGate:
         assert "generate_script_plan" in str(exc.value)
 
     def test_storyboard_route_rejects_script_without_any_skeleton_array(self):
+        # All three shot keys missing: resolve_script_kind would synthesize segments from content_mode, and
+        # allowing it on that basis
+        # would make storyboard image enqueueing land in the false success "all shots' storyboard images are
+        # already generated". The criterion is key presence, so it is refused.
         # 三个分镜键全缺：resolve_script_kind 会按 content_mode 合成 segments，若据此放行，
         # 分镜图入队会落进"所有分镜的分镜图都已生成"的假成功。判据是键在场性，故拒绝。
         script = {"content_mode": "narration", "title": "第一集"}
@@ -199,6 +244,8 @@ class TestRouteSkeletonGate:
             ensure_route_skeleton(script, "narration", "storyboard")
         assert exc.value.expected == "segments"
         assert exc.value.actual is None
+        # "No skeleton array" and "an array that belongs to another family" are worded separately, so it never
+        # reports "requires segments, currently segments".
         # 无骨架数组与「有数组但属另一族」分开措辞，不报出「要求 segments、当前 segments」。
         assert "没有任何骨架数组" in str(exc.value)
         assert "当前剧本是" not in str(exc.value)
@@ -219,6 +266,8 @@ class TestRouteSkeletonGate:
         assert exc.value.actual is None
 
     def test_empty_skeleton_array_is_present_and_passes(self):
+        # Key present means allowed: an empty array is "split but no entries", which differs from "not split
+        # at all" and is not refused by this gate.
         # 键在场即放行——空数组是"已拆分但没有条目"，与"根本没拆分"不同，不由本闸门拒绝。
         assert ensure_route_skeleton({"content_mode": "narration", "segments": []}, "narration", "storyboard") == (
             "segments"
@@ -230,10 +279,12 @@ class TestRouteSkeletonGate:
 
 
 class TestKindItemsAccessor:
-    """条目访问唯一入口：种类判别的两条来路 × 条目值原样返回。"""
+    """The single entry point for entry access: two sources of kind decision × entry values returned as-is.
+
+    条目访问唯一入口：种类判别的两条来路 × 条目值原样返回。"""
 
     def test_forensic_kind_when_not_given(self):
-        # kind 缺省 → 走取证解析，与 resolve_script_kind 同一判别。
+        # kind omitted -> evidence-based resolution, the same decision as resolve_script_kind. / kind 缺省 → 走取证解析，与 resolve_script_kind 同一判别。
         script = {"content_mode": "drama", "scenes": [{"scene_id": "E1S01"}]}
         items, id_field, kind = resolve_kind_items(script)
         assert kind == "scenes"
@@ -241,6 +292,8 @@ class TestKindItemsAccessor:
         assert items == [{"scene_id": "E1S01"}]
 
     def test_explicit_kind_skips_forensics(self):
+        # An explicit kind overrides the data shape: evidence resolution would say segments, but specifying
+        # video_units takes values from the latter.
         # 显式 kind 覆盖数据形状：取证解析会判 segments，指定 video_units 则按后者取值。
         script = {"content_mode": "narration", "segments": [], "video_units": [{"unit_id": "E1U01"}]}
         items, id_field, kind = resolve_kind_items(script, kind="video_units")
@@ -248,7 +301,7 @@ class TestKindItemsAccessor:
         assert items == [{"unit_id": "E1U01"}]
 
     def test_id_field_per_kind(self):
-        # 四骨架各自的条目身份不被通用化。
+        # The entry identity of each of the four skeletons is not generalized. / 四骨架各自的条目身份不被通用化。
         for kind, expected in (
             ("segments", "segment_id"),
             ("scenes", "scene_id"),
@@ -258,6 +311,8 @@ class TestKindItemsAccessor:
             assert resolve_kind_items({}, kind=kind)[1] == expected
 
     def test_items_returned_by_reference(self):
+        # What is returned is the actual reference inside script, so in-place edits take effect for the
+        # caller.
         # 返回的是 script 内实际引用，就地编辑对调用方生效。
         items_in_script: list[dict[str, object]] = []
         script = {"content_mode": "narration", "segments": items_in_script}
@@ -265,12 +320,14 @@ class TestKindItemsAccessor:
         assert items is items_in_script
 
     def test_missing_key_yields_none_not_empty_list(self):
+        # A missing key is not backfilled with an empty array: "key missing" and "key present but empty" get
+        # their own policies from the caller.
         # 不把缺失兜底成空数组——「键缺失」与「键在场但空」由调用方各自定策略。
         items, id_field, kind = resolve_kind_items({"content_mode": "narration"})
         assert (items, kind) == (None, "segments")
         assert id_field == "segment_id"
 
     def test_non_list_value_returned_as_is(self):
-        # 脏值原样上交，不在此 fail-loud、也不静默降级。
+        # Dirty values are handed up as-is, neither failing loudly here nor silently degrading. / 脏值原样上交，不在此 fail-loud、也不静默降级。
         assert resolve_kind_items({"content_mode": "narration", "segments": None})[0] is None
         assert resolve_kind_items({"content_mode": "drama", "scenes": "E1S01"})[0] == "E1S01"

@@ -1,4 +1,7 @@
-"""任务与调用记录里出现过的最大集 ID：项目历史最高号的数据库侧来源。"""
+"""The largest episode ID that appeared in task and call records: the DB-side source of the project's historical
+highest number.
+
+任务与调用记录里出现过的最大集 ID：项目历史最高号的数据库侧来源。"""
 
 from __future__ import annotations
 

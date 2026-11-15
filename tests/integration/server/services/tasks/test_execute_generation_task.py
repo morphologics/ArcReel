@@ -54,6 +54,9 @@ class TestGenerationTasks:
         )
         assert storyboard_result["resource_type"] == "storyboards"
         storyboard_refs = fake_generator.image_calls[0]["reference_images"]
+        # Reference images are transmitted only by array position, without any labels; identity is pointed out by
+        # "image N" in the Reference_Images declaration line in the prompt.
+        # What the provider receives is a task-private snapshot.
         # 参考图只按数组序位传输、不带任何标签；身份由 prompt 内的 Reference_Images 声明行按「图N」指认。
         # provider 收到的是任务私有快照。
         assert [sorted(ref) for ref in storyboard_refs] == [["image"]] * 4
@@ -149,7 +152,10 @@ class TestGenerationTasks:
     async def test_image_provider_changed_since_claim_is_raised_before_the_provider_call(
         self, tmp_path, monkeypatch, task_type, resource_id, payload, claimed, drifted
     ):
-        """执行入口解析出的图片供应商与认领槽不一致时，在出图之前抛出，交给 worker 改记录并回队。"""
+        """When the image provider resolved at the execution entry differs from the claimed slot, raise before
+        generating the image, handing it to the worker to update the record and requeue.
+
+        执行入口解析出的图片供应商与认领槽不一致时，在出图之前抛出，交给 worker 改记录并回队。"""
         project_path = prepare_files(tmp_path)
         fake_pm = _FakePM(project_path)
         register_asset_sheet_claims(fake_pm)
@@ -217,7 +223,12 @@ class TestGenerationTasks:
 
     @pytest.mark.parametrize("failure", [RuntimeError("event emission failed"), asyncio.CancelledError()])
     async def test_generation_event_failure_keeps_committed_media(self, tmp_path, monkeypatch, failure):
-        """成功事件发出失败不回撤已写入的产物：普通异常在通知边界内记录后任务照常返回，
+        """A failure to send the success event does not roll back written artifacts: ordinary exceptions are logged
+        inside the notification boundary and the task returns as usual; BaseException passes through the
+        notification boundary and propagates as usual; in both cases artifacts, versions and manifest registration
+        stay valid.
+
+        成功事件发出失败不回撤已写入的产物：普通异常在通知边界内记录后任务照常返回，
         BaseException 穿透通知边界照常上抛；两种情况下产物、版本与清单登记都保持有效。"""
         project_path = prepare_files(tmp_path)
         fake_pm = _FakePM(project_path)
@@ -284,7 +295,12 @@ class TestGenerationTasks:
             assert excinfo.value.params["name"] == name
 
     async def test_tasks_declare_only_needed_lanes(self, monkeypatch, tmp_path):
-        """任务只声明自己用到的 lane：图片类任务不声明 video/audio（只配置图片供应商的项目
+        """Tasks declare only the lanes they use: image tasks do not declare video/audio (projects configuring only an
+        image provider do not fail because the video provider is unconfigured; undeclared lanes are not resolved, see
+        tests/server/test_generation_context.py); video tasks declare only video; with reference images the image
+        lane requests the i2i capability.
+
+        任务只声明自己用到的 lane：图片类任务不声明 video/audio（只配置图片供应商的项目
         不因视频供应商缺配置失败，未声明 lane 不解析见 tests/server/test_generation_context.py），
         视频任务只声明 video；带参考图时 image lane 请求 i2i 能力。"""
         project_path = prepare_files(tmp_path)
@@ -299,6 +315,8 @@ class TestGenerationTasks:
         use_generation_context(monkeypatch, resolve_ctx)
         use_video_thumbnail_extractor(monkeypatch, async_return(None))
 
+        # E1S02 references character/scene/prop sheets -> has reference images -> i2i; character has reference_image
+        # -> i2i
         # E1S02 引用角色/场景/道具 sheet → 带参考图 → i2i；character 带 reference_image → i2i
         await generation_tasks.execute_storyboard_task(
             "demo", "E1S02", {"script_file": "episode_1.json", "prompt": "画面"}

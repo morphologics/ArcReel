@@ -1,4 +1,6 @@
-"""FakeSDKClient 驱动会话：事件日志端到端产出（验收：seq 单调、类型正确）。"""
+"""FakeSDKClient drives a session: end-to-end event log output (acceptance: seq monotonic, types correct).
+
+FakeSDKClient 驱动会话：事件日志端到端产出（验收：seq 单调、类型正确）。"""
 
 from __future__ import annotations
 
@@ -39,7 +41,9 @@ def user_frame(
     session_id: str = "default",
     tool_use_result: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """CLI 输出的 user 原始帧：工具结果或注入消息。"""
+    """A raw user frame output by the CLI: a tool result or an injected message.
+
+    CLI 输出的 user 原始帧：工具结果或注入消息。"""
     frame: dict[str, Any] = {
         "type": "user",
         "message": {"role": "user", "content": content},
@@ -53,7 +57,9 @@ def user_frame(
 
 
 def started_frame(index: int = -1, *, session_id: str = "default") -> Callable[[FakeSDKClient], dict[str, Any]]:
-    """CLI 开始处理第 ``index`` 条送入的用户消息（``command_lifecycle`` started）。"""
+    """The CLI starts handling the ``index``-th user message sent in (``command_lifecycle`` started).
+
+    CLI 开始处理第 ``index`` 条送入的用户消息（``command_lifecycle`` started）。"""
     return lambda client: command_lifecycle_frame(client.sent_messages[index]["uuid"], "started", session_id=session_id)
 
 
@@ -65,12 +71,16 @@ def _session_state_frame(state: str) -> dict[str, Any]:
 
 
 def _idle_frame() -> dict[str, Any]:
-    """CLI 报告空闲：会话据此离开 running。"""
+    """The CLI reports idle: the session leaves running based on this.
+
+    CLI 报告空闲：会话据此离开 running。"""
     return _session_state_frame("idle")
 
 
 def _billed_assistant_frame(message_id: str) -> dict[str, Any]:
-    """带用量的一次 API 请求：所在的轮次收尾时会写一条用量记录。"""
+    """One API request with usage: a usage record is written when its turn wraps up.
+
+    带用量的一次 API 请求：所在的轮次收尾时会写一条用量记录。"""
     return assistant_frame(
         {"type": "text", "text": "好的"},
         session_id=SDK_ID,
@@ -89,9 +99,13 @@ async def manager(tmp_path, file_db_factory):
 
 
 def _new_session_frames() -> list[ScriptedFrame]:
-    """一轮完整对话：init → 用户回放 → 流式 → assistant(工具) → tool_result → subagent → result。"""
+    """One full conversation turn: init -> user replay -> streaming -> assistant(tool) -> tool_result -> subagent -> result.
+
+    一轮完整对话：init → 用户回放 → 流式 → assistant(工具) → tool_result → subagent → result。"""
     return [
         system_frame("init", session_id=SDK_ID, uuid="init-1"),
+        # User message replayed by the CLI (the first message was already logged when sdk_session_id became ready, so it must
+        # be skipped)
         # CLI 回放的用户消息（首条消息在 sdk_session_id 就绪时已写日志，须被跳过）
         replay_frame(session_id=SDK_ID),
         stream_event_frame({"type": "message_start", "message": {"id": "msg_01"}}, uuid="se-1", session_id=SDK_ID),
@@ -123,7 +137,7 @@ def _new_session_frames() -> list[ScriptedFrame]:
     ]
 
 
-async def _wait_for_entries(store: EventLogStore, session_id: str, count: int, timeout: float = 5.0) -> list[dict]:  # noqa: ASYNC109 -- 测试轮询 helper 的等待上限，非生产取消语义
+async def _wait_for_entries(store: EventLogStore, session_id: str, count: int, timeout: float = 5.0) -> list[dict]:  # noqa: ASYNC109 -- Wait limit of a test polling helper, not production cancellation semantics. / 测试轮询 helper 的等待上限，非生产取消语义
     deadline = asyncio.get_running_loop().time() + timeout
     while True:
         entries = await store.list_after(session_id)
@@ -134,8 +148,12 @@ async def _wait_for_entries(store: EventLogStore, session_id: str, count: int, t
         await asyncio.sleep(0.02)
 
 
-async def _wait_for_status(manager: SessionManager, session_id: str, status: str, timeout: float = 5.0) -> None:  # noqa: ASYNC109 -- 测试轮询 helper 的等待上限，非生产取消语义
-    """轮询内存状态。CLI idle 结算先切内存状态、再落库 meta、最后广播 runtime_status：
+async def _wait_for_status(manager: SessionManager, session_id: str, status: str, timeout: float = 5.0) -> None:  # noqa: ASYNC109 -- Wait limit of a test polling helper, not production cancellation semantics. / 测试轮询 helper 的等待上限，非生产取消语义
+    """Poll the in-memory status. CLI idle settlement first switches the in-memory status, then stores meta, finally
+    broadcasts runtime_status: cases that afterwards read meta, create a subscription or send again should subscribe
+    and wait for the terminal broadcast instead.
+
+    轮询内存状态。CLI idle 结算先切内存状态、再落库 meta、最后广播 runtime_status：
     之后还要读 meta、新建订阅或再次发送的用例，改为订阅后等终态广播。"""
     deadline = asyncio.get_running_loop().time() + timeout
     while asyncio.get_running_loop().time() < deadline:
@@ -147,7 +165,9 @@ async def _wait_for_status(manager: SessionManager, session_id: str, status: str
 
 
 class _InterruptingClient(FakeSDKClient):
-    """interrupt() 时按真实 CLI 行为注入中断回显（可选）与 result 消息。"""
+    """On interrupt(), inject the interrupt echo (optional) and the result message as the real CLI does.
+
+    interrupt() 时按真实 CLI 行为注入中断回显（可选）与 result 消息。"""
 
     def __init__(self, *, echo: bool = True):
         super().__init__(frames=[started_frame(session_id=SDK_ID)])
@@ -257,6 +277,7 @@ class TestNewSessionEventLogFlow:
             )
 
         assert sdk_id == SDK_ID
+        # The authoritative entry of the POST acceptance response: seq 0, identity assigned
         # POST 受理响应的权威条目：seq 0、身份已分配
         managed = manager.sessions[SDK_ID]
         assert managed.initial_user_log_entry is not None
@@ -268,28 +289,36 @@ class TestNewSessionEventLogFlow:
             assert [e["seq"] for e in entries] == [0, 1, 2, 3]
             assert [e["type"] for e in entries] == ["user", "assistant", "tool_result", "assistant"]
 
+            # User entry (written on acceptance; the SDK replay copy produced no duplicate)
             # 用户条目（受理写入，SDK 回放副本未产生重复）
             assert entries[0]["content"] == [{"type": "text", "text": "帮我写分镜"}]
 
+            # Assistant entries carry message_id (identity for exact draft replacement)
             # assistant 条目携带 message_id（draft 精确替换身份）
             assert entries[1]["message_id"] == "msg_01"
             assert entries[1]["content"][1]["type"] == "tool_use"
 
+            # tool_result is a separate entry referencing tool_use_id, not disguised as a user message
             # tool_result 是独立条目且引用 tool_use_id，不伪装成 user 消息
             assert entries[2]["tool_use_id"] == "tu-1"
             assert entries[2]["content"] == "file.txt"
             assert entries[2]["is_error"] is False
 
+            # Subagent entries are recorded with parent_tool_use_id
             # subagent 条目带 parent_tool_use_id 收录
             assert entries[3]["parent_tool_use_id"] == "tu-1"
 
+            # After a turn ends the draft has been discarded with the result
             # 一轮结束后 draft 已随 result 丢弃
             assert manager.get_draft_state(SDK_ID)["draft"] is None
         finally:
             await manager.close_session(SDK_ID)
 
     async def test_replayed_echo_persists_user_message_identity_mapping(self, manager: SessionManager):
-        """回放副本被丢弃前先落映射：条目 uuid 可查回 transcript entry 身份。"""
+        """The mapping is stored before the replay copy is discarded: the entry uuid can be looked up back to the transcript
+        entry identity.
+
+        回放副本被丢弃前先落映射：条目 uuid 可查回 transcript entry 身份。"""
         client = FakeSDKClient(frames=_new_session_frames())
         fake_options = SimpleNamespace(env=None)
 
@@ -302,6 +331,7 @@ class TestNewSessionEventLogFlow:
 
         entries = await _wait_for_entries(manager.event_log_store, SDK_ID, 4)
         try:
+            # Timeline unchanged: the replay copy still produced no second user entry
             # 时间线不变：回放副本仍未产生第二条 user 条目
             assert [e["type"] for e in entries] == ["user", "assistant", "tool_result", "assistant"]
             linked = await manager.event_log_store.find_user_message_link(SDK_ID, entries[0]["uuid"])
@@ -327,6 +357,8 @@ class TestNewSessionEventLogFlow:
         )
         assistant_error["error"] = "invalid_request"
         assistant_error["message"]["stop_reason"] = "stop_sequence"
+        # The result frame carries no result text: the summary must come from assistant text blocks serialized via the real
+        # parsing path
         # result 帧不带 result 文本：摘要必须取自经真实解析路径序列化的 assistant 文本块
         result_error = result_frame(
             is_error=True,
@@ -394,7 +426,10 @@ class TestNewSessionEventLogFlow:
             await manager.close_session(SDK_ID)
 
     async def test_interrupt_flow_produces_single_typed_entry(self, manager: SessionManager):
-        """中断动作与结果是时间线事件：SDK 回显 + result 兜底（竞态双写）只产出一条 typed 条目。"""
+        """Interrupt actions and results are timeline events: SDK echo + result fallback (racing double write) produce only one
+        typed entry.
+
+        中断动作与结果是时间线事件：SDK 回显 + result 兜底（竞态双写）只产出一条 typed 条目。"""
         meta = await manager.meta_store.create("demo", SDK_ID)
         client = _InterruptingClient(echo=True)
         fake_options = SimpleNamespace(env=None)
@@ -410,7 +445,7 @@ class TestNewSessionEventLogFlow:
                 user_entry=build_user_entry([{"type": "text", "text": "写分镜"}]),
                 client_key="ck-int",
             )
-            await _wait_for_status(manager, SDK_ID, "running")  # 让 query 进入 drain
+            await _wait_for_status(manager, SDK_ID, "running")  # Let the query enter drain / 让 query 进入 drain
             await manager.interrupt_session(SDK_ID)
 
         try:
@@ -419,6 +454,7 @@ class TestNewSessionEventLogFlow:
             assert [e["type"] for e in entries] == ["user", "system"]
             assert entries[1]["subtype"] == "interrupt"
             assert manager.sessions[SDK_ID].status == "interrupted"
+            # The race between result fallback and echo produces no second interrupt entry
             # result 兜底与回显竞态不产生第二条中断条目
             final_entries = await manager.event_log_store.list_after(SDK_ID)
             assert [e["type"] for e in final_entries] == ["user", "system"]
@@ -426,7 +462,10 @@ class TestNewSessionEventLogFlow:
             await manager.close_session(SDK_ID)
 
     async def test_interrupt_without_sdk_echo_still_produces_typed_entry(self, manager: SessionManager):
-        """回显缺席的中断：result(session_status=interrupted) 兜底定型，时间线仍有稳定条目。"""
+        """Interrupt without echo: result(session_status=interrupted) settles it as a fallback, and the timeline still has a
+        stable entry.
+
+        回显缺席的中断：result(session_status=interrupted) 兜底定型，时间线仍有稳定条目。"""
         meta = await manager.meta_store.create("demo", SDK_ID)
         client = _InterruptingClient(echo=False)
         fake_options = SimpleNamespace(env=None)
@@ -453,7 +492,9 @@ class TestNewSessionEventLogFlow:
             await manager.close_session(SDK_ID)
 
     async def test_ask_user_question_flow_produces_question_and_answer_entries(self, manager: SessionManager):
-        """AskUserQuestion 提问（assistant tool_use）与答复（typed 答复条目）都出现在日志。"""
+        """Both the AskUserQuestion question (assistant tool_use) and the answer (typed answer entry) appear in the log.
+
+        AskUserQuestion 提问（assistant tool_use）与答复（typed 答复条目）都出现在日志。"""
         meta = await manager.meta_store.create("demo", SDK_ID)
         client = FakeSDKClient(
             frames=[
@@ -501,8 +542,10 @@ class TestNewSessionEventLogFlow:
         try:
             entries = await _wait_for_entries(manager.event_log_store, SDK_ID, 3)
             assert [e["type"] for e in entries] == ["user", "assistant", "user"]
+            # Question entry: the AskUserQuestion tool_use inside the assistant entry (structured questions)
             # 提问条目：assistant 条目内的 AskUserQuestion tool_use（结构化 questions）
             assert entries[1]["content"][0]["name"] == "AskUserQuestion"
+            # Answer entry: typed, carrying the structured answer and linked by tool_use_id
             # 答复条目：typed、携带结构化答案与 tool_use_id 关联
             assert entries[2]["subtype"] == "question_answer"
             assert entries[2]["tool_use_id"] == "tu-q"
@@ -512,7 +555,10 @@ class TestNewSessionEventLogFlow:
             await manager.close_session(SDK_ID)
 
     async def test_task_notification_flow_produces_typed_entries(self, manager: SessionManager):
-        """task 通知双通道（typed 系统消息 + 注入 XML 用户消息）都定型为 system 条目，无通用 user 条目。"""
+        """Both task notification channels (typed system message + injected XML user message) settle as system entries, with no
+        generic user entry.
+
+        task 通知双通道（typed 系统消息 + 注入 XML 用户消息）都定型为 system 条目，无通用 user 条目。"""
         xml = (
             "<task-notification>\n<task-id>t1</task-id>\n<tool-use-id>tu-a</tool-use-id>\n"
             "<status>completed</status>\n<summary>分析完成</summary>\n</task-notification>"
@@ -554,7 +600,10 @@ class TestNewSessionEventLogFlow:
             await manager.close_session(SDK_ID)
 
     async def test_retry_with_the_same_client_key_is_not_sent_again(self, manager: SessionManager):
-        """排队期间重试返回同一条排队消息，被接纳后重试返回权威条目，CLI 都只收到一次。"""
+        """A retry while queued returns the same queued message, a retry after acceptance returns the authoritative entry, and
+        the CLI receives it only once.
+
+        排队期间重试返回同一条排队消息，被接纳后重试返回权威条目，CLI 都只收到一次。"""
         meta = await manager.meta_store.create("demo", SDK_ID)
         client = FakeSDKClient()
 
@@ -583,7 +632,10 @@ class TestNewSessionEventLogFlow:
             await manager.close_session(SDK_ID)
 
     async def test_send_failure_withdraws_the_queued_message_and_retry_delivers(self, manager: SessionManager):
-        """投递失败即受理失败：排队消息撤下，同幂等键重试重新送达 CLI。"""
+        """A delivery failure is an acceptance failure: the queued message is withdrawn, and a retry with the same idempotency
+        key delivers it to the CLI again.
+
+        投递失败即受理失败：排队消息撤下，同幂等键重试重新送达 CLI。"""
         meta = await manager.meta_store.create("demo", SDK_ID)
 
         class _FlakyQueryClient(FakeSDKClient):
@@ -614,6 +666,7 @@ class TestNewSessionEventLogFlow:
             try:
                 assert manager.get_queued_messages_snapshot(SDK_ID) == []
 
+                # The actor has exited with the failure; close the session to simulate a cold restore, then retry
                 # actor 已随失败退出；关闭会话模拟冷恢复后重试
                 await manager.close_session(SDK_ID)
                 retry = await _send()
@@ -624,7 +677,10 @@ class TestNewSessionEventLogFlow:
                 await manager.close_session(SDK_ID)
 
     async def test_initial_user_entry_write_failure_reports_error(self, manager: SessionManager):
-        """新会话首条用户消息落库失败：受理显式失败，会话进入可观察的 error 态。"""
+        """The new session's first user message fails to store: acceptance fails explicitly, and the session enters an
+        observable error state.
+
+        新会话首条用户消息落库失败：受理显式失败，会话进入可观察的 error 态。"""
         client = FakeSDKClient(frames=_new_session_frames())
         fake_options = SimpleNamespace(env=None)
         update_status_spy = AsyncMock(wraps=manager.meta_store.update_status)
@@ -647,13 +703,17 @@ class TestNewSessionEventLogFlow:
                 client_key="ck-fail-new",
             )
 
+        # Status write-back: the session enters an observable error state rather than silently succeeding
         # 状态回写：会话进入可观察的 error 态而非静默成功
         meta = await manager.meta_store.get(SDK_ID)
         assert meta is not None
         assert meta.status == "error"
+        # The session was cleaned up with the failure: no in-memory state left, SDK connection disconnected
         # 会话已随失败清理：不残留内存态、SDK 连接已断开
         assert SDK_ID not in manager.sessions
         assert client.disconnected is True
+        # In-memory status set to error early: when cleanup cancels _process_task it must not take the interrupted branch and
+        # write a terminal state again (or the DB would first store interrupted, then error)
         # 内存态提前置 error：cleanup 取消 _process_task 时不应再走 interrupted
         # 分支多写一次终态（否则 DB 会先落 interrupted 再落 error）
         statuses_written = [call.args[1] for call in update_status_spy.call_args_list]
@@ -661,7 +721,11 @@ class TestNewSessionEventLogFlow:
         assert statuses_written.count("error") == 1
 
     async def test_initial_user_entry_failure_skips_finalize_for_early_result(self, manager: SessionManager):
-        """首条用户消息落库失败后，同一轮内紧跟到达的 result 不应被 finalize：
+        """After the first user message fails to store, a result arriving right after in the same turn must not be finalized:
+        otherwise a non-error terminal state (e.g. completed) would first be broadcast/stored and then rewritten to error by
+        the error cleanup path, causing a brief status jump.
+
+        首条用户消息落库失败后，同一轮内紧跟到达的 result 不应被 finalize：
         否则会先广播/落库非 error 终态（如 completed），随后又被错误清理路径改写为
         error，造成状态短暂跳变。"""
         client = FakeSDKClient(
@@ -694,13 +758,18 @@ class TestNewSessionEventLogFlow:
         meta = await manager.meta_store.get(SDK_ID)
         assert meta is not None
         assert meta.status == "error"
+        # "running" is the regular write when a new session is set up; the result was short-circuited and not finalized, so
+        # intermediate terminal states like completed/idle that only finalize writes must not appear
         # "running" 是新会话建立时的常规写入；result 被短路未 finalize，
         # 不应出现 finalize 才会写入的 completed/idle 等中间终态
         statuses_written = [call.args[1] for call in update_status_spy.call_args_list]
         assert statuses_written == ["running", "error"]
 
     async def test_initial_user_entry_retry_after_failure_delivers(self, manager: SessionManager):
-        """落库失败后同幂等键重试：条目无残留短路，重试重新受理并分配 seq 0。"""
+        """Retry with the same idempotency key after the store failure: no leftover entry short-circuits it, and the retry is
+        accepted again and assigned seq 0.
+
+        落库失败后同幂等键重试：条目无残留短路，重试重新受理并分配 seq 0。"""
         retry_sdk_id = "sdk-e2e-retry"
         failing_client = FakeSDKClient(frames=_new_session_frames())
         retry_client = FakeSDKClient(
@@ -731,6 +800,7 @@ class TestNewSessionEventLogFlow:
                     client_key="ck-retry-new",
                 )
 
+            # The failed session (SDK_ID) itself has no leftover entries: the append write really failed, not a partial write
             # 失败会话（SDK_ID）本身无任何条目残留：append 写入真失败，非部分写入
             assert not await manager.event_log_store.has_entries(SDK_ID)
 
@@ -746,6 +816,8 @@ class TestNewSessionEventLogFlow:
             assert managed.initial_user_log_entry is not None
             assert managed.initial_user_log_entry["seq"] == 0
             assert managed.initial_user_entry_error is None
+            # The same idempotency key resolves correctly to the newly written entry under the retry session, not short-circuited
+            # to the failed session
             # 同幂等键在重试会话下正确解析到新写入的条目，未短路到失败会话
             resolved = await manager.event_log_store.find_by_client_key(retry_sdk_id, "ck-retry-new")
             assert resolved == managed.initial_user_log_entry
@@ -753,8 +825,10 @@ class TestNewSessionEventLogFlow:
             await manager.close_session(retry_sdk_id)
 
 
-async def _next_broadcast(stream, msg_type: str, timeout: float = 5.0) -> dict[str, Any]:  # noqa: ASYNC109 -- 测试等待上限，非生产取消语义
-    """读到下一条指定类型的会话广播。"""
+async def _next_broadcast(stream, msg_type: str, timeout: float = 5.0) -> dict[str, Any]:  # noqa: ASYNC109 -- Test wait limit, not production cancellation semantics. / 测试等待上限，非生产取消语义
+    """Read the next session broadcast of the given type.
+
+    读到下一条指定类型的会话广播。"""
 
     async def _read() -> dict[str, Any]:
         async for event in stream:
@@ -766,7 +840,9 @@ async def _next_broadcast(stream, msg_type: str, timeout: float = 5.0) -> dict[s
 
 
 class TestSessionStatusFollowsCliIdle:
-    """会话状态以 CLI 报告的空闲为准：result 只代表一轮结束。"""
+    """Session status follows the idle reported by the CLI: result only means a turn ended.
+
+    会话状态以 CLI 报告的空闲为准：result 只代表一轮结束。"""
 
     async def _send(self, manager: SessionManager, client: FakeSDKClient) -> None:
         meta = await manager.meta_store.create("demo", SDK_ID)
@@ -806,7 +882,10 @@ class TestSessionStatusFollowsCliIdle:
                 await manager.close_session(SDK_ID)
 
     async def test_autonomous_turn_before_cli_idle_does_not_flash_a_terminal_status(self, manager: SessionManager):
-        """一轮结束后、CLI 报 idle 之前开启的自主轮次：轮次之间不闪烁为终态，最后取最近一轮的结局。"""
+        """An autonomous turn started after a turn ended and before the CLI reports idle: no flash of a terminal status between
+        turns, and the outcome of the latest turn wins.
+
+        一轮结束后、CLI 报 idle 之前开启的自主轮次：轮次之间不闪烁为终态，最后取最近一轮的结局。"""
         client = FakeSDKClient(
             frames=[
                 _session_state_frame("running"),
@@ -820,6 +899,7 @@ class TestSessionStatusFollowsCliIdle:
             await self._send(manager, client)
             try:
                 await _next_broadcast(stream, "log_turn_complete")
+                # The subagent completes, and the CLI starts the next turn without a user message
                 # 子智能体完成，CLI 不经用户消息开启下一轮
                 client.push_frame(assistant_frame({"type": "text", "text": "汇总"}, uuid="a-2", session_id=SDK_ID))
                 client.push_frame(result_frame(session_id=SDK_ID, uuid="r-2"))
@@ -836,7 +916,10 @@ class TestSessionStatusFollowsCliIdle:
                 await manager.close_session(SDK_ID)
 
     async def test_interrupt_that_reaches_no_turn_does_not_carry_past_cli_idle(self, manager: SessionManager):
-        """result 之后、idle 之前的中断落空：CLI 报 idle 后，下一轮的失败仍记为 error。"""
+        """An interrupt after result and before idle hits nothing: after the CLI reports idle, a failure in the next turn is
+        still recorded as error.
+
+        result 之后、idle 之前的中断落空：CLI 报 idle 后，下一轮的失败仍记为 error。"""
         client = FakeSDKClient(
             frames=[
                 _session_state_frame("running"),
@@ -874,7 +957,9 @@ class TestSessionStatusFollowsCliIdle:
     async def test_evicting_a_session_that_is_not_idle_settles_a_terminal_status(
         self, manager: SessionManager, turn_frames, expected
     ):
-        """驱逐时 CLI 还没报 idle：这一轮已收尾取其结局，否则记为中断。"""
+        """The CLI has not reported idle at eviction: if the turn has wrapped up take its outcome, otherwise record interrupted.
+
+        驱逐时 CLI 还没报 idle：这一轮已收尾取其结局，否则记为中断。"""
         client = FakeSDKClient(
             frames=[
                 _session_state_frame("running"),
@@ -895,7 +980,9 @@ class TestSessionStatusFollowsCliIdle:
 
 @contextlib.contextmanager
 def _scripted_client(manager: SessionManager, client: FakeSDKClient) -> Generator[None]:
-    """会话连接 CLI 时拿到这个替身。"""
+    """The session gets this double when it connects to the CLI.
+
+    会话连接 CLI 时拿到这个替身。"""
     with (
         patch.object(manager, "_build_options", new=AsyncMock(return_value=SimpleNamespace(env=None))),
         patch("server.agent_runtime.session_manager.ClaudeSDKClient", lambda options: client),
@@ -915,7 +1002,9 @@ class _NoTranscript:
 
 
 class _EntryStream:
-    """在后台消费会话的 entry 流，按到达顺序逐个取出指定事件。"""
+    """Consume the session's entry stream in the background and take the given events one by one in arrival order.
+
+    在后台消费会话的 entry 流，按到达顺序逐个取出指定事件。"""
 
     def __init__(self, service: AssistantService, session_id: str) -> None:
         self.events: list[tuple[str, dict[str, Any]]] = []
@@ -929,7 +1018,9 @@ class _EntryStream:
             self._changed.set()
 
     async def next(self, name: str) -> dict[str, Any]:
-        """取出游标之后的第一个 ``name`` 事件，游标移到它之后。"""
+        """Take the first ``name`` event after the cursor and move the cursor past it.
+
+        取出游标之后的第一个 ``name`` 事件，游标移到它之后。"""
 
         async def _wait() -> dict[str, Any]:
             while True:
@@ -950,7 +1041,9 @@ class _EntryStream:
 
 @pytest.fixture
 async def service(manager: SessionManager, tmp_path) -> AssistantService:
-    """接上真实 SessionManager 的 AssistantService：发送与 entry 流都走生产路径。"""
+    """AssistantService wired to a real SessionManager: sending and the entry stream both go through production paths.
+
+    接上真实 SessionManager 的 AssistantService：发送与 entry 流都走生产路径。"""
     (DataRootLayout(tmp_path).projects_dir / "demo").mkdir(parents=True)
     svc = AssistantService(project_root=tmp_path)
     svc.pm = ProjectManager(tmp_path)
@@ -963,7 +1056,10 @@ async def service(manager: SessionManager, tmp_path) -> AssistantService:
 
 
 class TestQueuedMessages:
-    """回复进行中发出的消息先成为排队消息，CLI 开始处理它时才进入时间线。"""
+    """Messages sent while a reply is in progress first become queued messages, and enter the timeline only when the CLI
+    starts handling them.
+
+    回复进行中发出的消息先成为排队消息，CLI 开始处理它时才进入时间线。"""
 
     async def test_duplicate_send_waits_for_delivery_and_does_not_accept_a_failed_write(
         self, service: AssistantService
@@ -1005,7 +1101,10 @@ class TestQueuedMessages:
     async def test_a_send_abandoned_by_eviction_fails_as_a_plain_error_and_leaves_nothing_queued(
         self, service: AssistantService
     ):
-        """驱逐时 actor 被取消：在途的发送拿到普通异常而不是 CancelledError，排队消息不残留，会话落终态。"""
+        """The actor is cancelled on eviction: an in-flight send gets a plain exception rather than CancelledError, no queued
+        message is left, and the session settles in a terminal state.
+
+        驱逐时 actor 被取消：在途的发送拿到普通异常而不是 CancelledError，排队消息不残留，会话落终态。"""
         entered = asyncio.Event()
 
         class HangingClient(FakeSDKClient):
@@ -1013,6 +1112,8 @@ class TestQueuedMessages:
                 entered.set()
                 await asyncio.Event().wait()
 
+        # Disconnect timeout set to 0: with the query suspended (entered handshake) the disconnect cannot complete, so go
+        # straight to the cancel fallback without waiting on the wall clock
         # 断开超时设为 0：query 已挂起（entered 握手）时断开不可能完成，不等墙钟直接走取消兜底
         service.session_manager._session_actor_shutdown_timeout = 0
         with _scripted_client(service.session_manager, HangingClient()):
@@ -1025,6 +1126,8 @@ class TestQueuedMessages:
         outcome = (await asyncio.gather(sending, return_exceptions=True))[0]
         assert isinstance(outcome, Exception)
         assert service.session_manager.get_queued_messages_snapshot(SDK_ID) == []
+        # The send path first writes error for the failure, and the eviction wrap-up writes interrupted last: the eviction's
+        # conclusion wins
         # 发送路径先按失败写 error，驱逐收尾最后写 interrupted：以驱逐的结论为准
         meta = await service.meta_store.get(SDK_ID)
         assert meta is not None
@@ -1033,7 +1136,10 @@ class TestQueuedMessages:
     async def test_a_send_that_resumes_after_a_graceful_eviction_keeps_the_eviction_status(
         self, service: AssistantService
     ):
-        """发送在 running 落库期间挂起、会话被完整驱逐后才恢复：拿到普通异常，不把驱逐写的终态改成 error。"""
+        """A send suspended while storing running resumes only after the session was fully evicted: it gets a plain exception
+        and does not change the terminal state written by the eviction to error.
+
+        发送在 running 落库期间挂起、会话被完整驱逐后才恢复：拿到普通异常，不把驱逐写的终态改成 error。"""
         client = self._running_turn_client()
         await self._start_running_turn(service, client)
         await self._finish_running_turn(service, client)
@@ -1049,6 +1155,7 @@ class TestQueuedMessages:
         with patch.object(service.meta_store, "update_status", new=_suspend_running):
             sending = asyncio.create_task(service.send_or_create("demo", "加一段旁白", session_id=SDK_ID))
             await asyncio.wait_for(suspended.wait(), timeout=5.0)
+            # No in-flight command, the actor disconnects normally, and the eviction wraps up fully and writes the terminal state
             # 没有在途命令，actor 正常断开，驱逐完整收尾并写入终态
             await service.session_manager.close_session(SDK_ID)
             release.set()
@@ -1056,20 +1163,28 @@ class TestQueuedMessages:
 
         assert isinstance(outcome, Exception)
         assert SDK_ID not in service.session_manager.sessions
+        # The eviction sees a session registered as running and wraps it up as interrupted; what is written back after the
+        # late running store is also this terminal state
         # 驱逐看到的是已登记 running 的会话，按中断收尾；晚到的 running 落库之后补写回的也是这个终态
         meta = await service.meta_store.get(SDK_ID)
         assert meta is not None
         assert meta.status == "interrupted"
 
     async def _start_running_turn(self, service: AssistantService, client: FakeSDKClient) -> None:
-        """发出第一条消息并等 Agent 开始输出：会话此后一直 running。"""
+        """Send the first message and wait for the Agent to start output: the session stays running from then on.
+
+        发出第一条消息并等 Agent 开始输出：会话此后一直 running。"""
         with _scripted_client(service.session_manager, client):
             await service.send_or_create("demo", "写分镜", session_id=SDK_ID)
         await _wait_for_entries(service.event_log_store, SDK_ID, 2)
 
     @staticmethod
     async def _finish_running_turn(service: AssistantService, client: FakeSDKClient) -> None:
-        """CLI 结束这一轮并报 idle，等结算走完：终态广播在 meta 落库之后，只等内存状态会让
+        """The CLI ends this turn and reports idle; wait for settlement to finish: the terminal broadcast comes after meta is
+        stored, and waiting only for the in-memory status would make later subscriptions receive a late completed frame and
+        interleave later sends with the still-storing settlement.
+
+        CLI 结束这一轮并报 idle，等结算走完：终态广播在 meta 落库之后，只等内存状态会让
         之后的订阅多收一帧迟到的 completed、之后的发送与仍在落库的结算交错。"""
         async with service.session_manager.stream_messages(SDK_ID, idle_timeout=5) as stream:
             client.push_frame(result_frame(session_id=SDK_ID, uuid="r-1"))
@@ -1119,6 +1234,7 @@ class TestQueuedMessages:
         stream = _EntryStream(service, SDK_ID)
         try:
             queued = (await service.send_or_create("demo", "加一段旁白", session_id=SDK_ID))["queued_message"]
+            # After sending and before acceptance the Agent is still outputting
             # 发送之后、接纳之前 Agent 仍在输出
             client.push_frame(assistant_frame({"type": "text", "text": "读完了"}, uuid="a-2", session_id=SDK_ID))
             client.push_frame(started_frame(session_id=SDK_ID))
@@ -1131,6 +1247,7 @@ class TestQueuedMessages:
             assert entries[3]["uuid"] == queued["id"]
             assert entries[3]["content"] == queued["content"]
             assert removed["id"] == queued["id"]
+            # The entry arrives before the removal: when the message disappears from the tray, it is already on the timeline
             # 条目先于移出到达：托盘里的消息消失时，时间线上已经有它
             order = [(name, data.get("uuid") or data.get("id")) for name, data in stream.events]
             assert order.index(("entry", queued["id"])) < order.index(("queue_remove", queued["id"]))
@@ -1154,6 +1271,7 @@ class TestQueuedMessages:
         await self._start_running_turn(service, client)
         try:
             await service.send_or_create("demo", "加一段旁白", session_id=SDK_ID)
+            # The first turn ends first, and the queued message then starts a new turn
             # 第一轮先结束，排队消息随后开始新的一轮
             client.push_frame(_billed_assistant_frame("msg-1"))
             client.push_frame(result_frame(session_id=SDK_ID, uuid="r-1"))
@@ -1181,6 +1299,7 @@ class TestQueuedMessages:
         client = self._running_turn_client()
         await self._start_running_turn(service, client)
         try:
+            # The CLI merges the queued message into the in-progress turn at a tool boundary: two starteds and only one result
             # CLI 在工具边界把排队消息并入进行中的轮次：两次 started 之后只有一个 result
             await service.send_or_create("demo", "加一段旁白", session_id=SDK_ID)
             client.push_frame(started_frame(1, session_id=SDK_ID))
@@ -1204,6 +1323,8 @@ class TestQueuedMessages:
         await self._start_running_turn(service, client)
         try:
             queued = (await service.send_or_create("demo", "加一段旁白", session_id=SDK_ID))["queued_message"]
+            # A message merged into the in-progress turn: the replay arrives before started, and the CLI replays it once more
+            # afterwards
             # 并入进行中轮次的消息：回放先于 started 到达，之后 CLI 又回放了一次
             client.push_frame(replay_frame(session_id=SDK_ID))
             client.push_frame(started_frame(session_id=SDK_ID))
@@ -1276,7 +1397,10 @@ class TestQueuedMessages:
     async def test_a_failed_send_does_not_strand_an_idle_the_cli_reported(
         self, service: AssistantService, monkeypatch, idle_timing: str
     ):
-        """回复进行中的发送在送入 CLI 之前失败：CLI 在发送前后报的 idle 照常结算，会话不会一直 running。"""
+        """A send during a reply fails before reaching the CLI: idles the CLI reports before or after the send settle as usual,
+        and the session does not stay running forever.
+
+        回复进行中的发送在送入 CLI 之前失败：CLI 在发送前后报的 idle 照常结算，会话不会一直 running。"""
         client = self._running_turn_client()
         await self._start_running_turn(service, client)
         manager = service.session_manager
@@ -1310,11 +1434,13 @@ class TestQueuedMessages:
                         client.push_frame(_idle_frame())
                         await _idle_read()
                     elif idle_timing == "handled_during_write":
+                        # The replay comes after idle: by the time it is stored, the inbox already handled idle during this write
                         # 回放排在 idle 之后：它落库时，inbox 已在本次写入期间处理过 idle
                         inbox_released.set()
                         await replay_linked.wait()
                     raise RuntimeError("db down")
 
+                # Usage accounting holds up the result, and the frames after it queue in the inbox
                 # 用量记账卡住 result，其后的帧都排在 inbox 里
                 client.push_frame(_billed_assistant_frame("msg-1"))
                 client.push_frame(result_frame(session_id=SDK_ID, uuid="r-1"))
@@ -1327,6 +1453,8 @@ class TestQueuedMessages:
                     await service.send_or_create("demo", "加一段旁白", session_id=SDK_ID)
                 inbox_released.set()
 
+                # The in-memory status switches before meta is stored, and the terminal broadcast comes after storing: wait for the
+                # broadcast, then read meta
                 # 内存状态先于 meta 落库切换，终态广播在落库之后：等广播再读 meta
                 while (await _next_broadcast(stream, "runtime_status"))["status"] != "completed":
                     pass
@@ -1353,6 +1481,8 @@ class TestQueuedMessages:
             with patch.object(service.meta_store, "update_status", new=_fail_running), pytest.raises(RuntimeError):
                 await service.send_or_create("demo", "加一段旁白", session_id=SDK_ID)
 
+            # The stream may already have aligned to running with the queued message; the failed terminal state arrives
+            # afterwards, without waiting for a heartbeat
             # 流可能已随排队消息对齐到 running；失败的终态随后送达，不等心跳
             statuses = [(await stream.next("status"))["status"]]
             if statuses[0] == "running":
@@ -1414,7 +1544,9 @@ class TestQueuedMessages:
 
 
 def _cancel_queued(client: FakeSDKClient) -> Callable[[dict[str, Any]], dict[str, Any]]:
-    """CLI 撤回仍在队列里的消息：先发 cancelled 帧，再应答 ``{cancelled: true}``。"""
+    """The CLI withdraws a message still in the queue: first send a cancelled frame, then reply ``{cancelled: true}``.
+
+    CLI 撤回仍在队列里的消息：先发 cancelled 帧，再应答 ``{cancelled: true}``。"""
 
     def _respond(request: dict[str, Any]) -> dict[str, Any]:
         client.push_frame(command_lifecycle_frame(request["message_uuid"], "cancelled", session_id=SDK_ID))
@@ -1424,7 +1556,10 @@ def _cancel_queued(client: FakeSDKClient) -> Callable[[dict[str, Any]], dict[str
 
 
 class TestQueuedMessageWithdrawal:
-    """托盘里的排队消息可以编辑或删除：先向 CLI 撤回，撤回成功才退回输入框或丢弃。"""
+    """Queued messages in the tray can be edited or deleted: first withdraw from the CLI, and only on successful withdrawal
+    return to the input box or discard.
+
+    托盘里的排队消息可以编辑或删除：先向 CLI 撤回，撤回成功才退回输入框或丢弃。"""
 
     @staticmethod
     def _client() -> FakeSDKClient:
@@ -1461,6 +1596,8 @@ class TestQueuedMessageWithdrawal:
             removed = await stream.next("queue_remove")
             assert removed["id"] == queued["id"]
             assert service.session_manager.get_queued_messages_snapshot(SDK_ID) == []
+            # A withdrawn message does not enter the timeline; its idempotency key is released, so resending the same content
+            # delivers it to the CLI again
             # 撤回的消息不进时间线；幂等键随之释放，重新发送同一内容会再次送入 CLI
             retry = await service.send_or_create("demo", "加一段旁白", session_id=SDK_ID, client_key="ck-1")
             assert retry["queued_message"]["id"] != queued["id"]
@@ -1528,6 +1665,7 @@ class TestQueuedMessageWithdrawal:
             result = await service.withdraw_queued_message("demo", SDK_ID, queued["id"], intent=intent)
             assert result["outcome"] == "accepted"
 
+            # The CLI already took it from the queue but did not merge it into the turn
             # CLI 已从队列取走它，却没把它并入轮次
             client.push_frame(
                 lambda c: command_lifecycle_frame(c.sent_messages[-1]["uuid"], "cancelled", session_id=SDK_ID)
@@ -1582,7 +1720,10 @@ class TestQueuedMessageWithdrawal:
 
 
 class TestUnsentQueuedMessages:
-    """CLI 退出时仍在排队的消息转为「未发送」，留给用户发送、编辑或删除，从不自动重发。"""
+    """Messages still queued when the CLI exits become "unsent", left for the user to send, edit or delete; never resent
+    automatically.
+
+    CLI 退出时仍在排队的消息转为「未发送」，留给用户发送、编辑或删除，从不自动重发。"""
 
     async def _queue_then_exit(self, service: AssistantService, client: FakeSDKClient, **kwargs: Any) -> dict[str, Any]:
         await TestQueuedMessages()._start_running_turn(service, client)
@@ -1610,6 +1751,7 @@ class TestUnsentQueuedMessages:
             upsert = await stream.next("queue_upsert")
             assert upsert["message"] == {**queued, "state": "unsent"}
             assert service.session_manager.get_queued_messages_snapshot(SDK_ID) == [upsert["message"]]
+            # A retry with the same key gets the same unsent message and does not deliver it to the CLI again
             # 同键重试拿到同一条未发送消息，不再送入 CLI
             retry = await service.send_or_create("demo", "加一段旁白", session_id=SDK_ID, client_key="ck-1")
             assert retry["queued_message"] == upsert["message"]
@@ -1636,6 +1778,7 @@ class TestUnsentQueuedMessages:
             assert resent["message"]["content"] == "加一段旁白"
             assert resent["uuid"] != client.sent_messages[-1]["uuid"]
             assert service.session_manager.get_queued_messages_snapshot(SDK_ID) == [queued]
+            # Repeated clicks do not send it again
             # 重复点击不会再送一次
             await service.resend_queued_message("demo", SDK_ID, queued["id"])
             assert len(revived.sent_messages) == 1
@@ -1659,6 +1802,7 @@ class TestUnsentQueuedMessages:
                 result = await service.send_or_create("demo", "换个结局", session_id=SDK_ID)
 
             assert service.session_manager.sessions[SDK_ID] is not stale
+            # Only the new message is delivered; the "unsent" one is not resent automatically and stays at the front of the tray
             # 只送入新消息，「未发送」的那条不自动重发，仍在托盘里排在前面
             assert [sent["message"]["content"] for sent in revived.sent_messages] == ["换个结局"]
             assert service.session_manager.get_queued_messages_snapshot(SDK_ID) == [
@@ -1722,6 +1866,8 @@ class TestUnsentQueuedMessages:
 
         try:
             with _scripted_client(manager, revived), patch.object(stale, "send_disconnect", _slow_disconnect):
+                # Eviction starts first and takes long to finish: the send waits for the eviction to complete and rebuilds as a cold
+                # session, not removed together with the eviction wrap-up
                 # 驱逐先开始、迟迟不结束：发送等驱逐完成后按冷会话重建，不被驱逐收尾时一并移出
                 eviction = asyncio.create_task(manager.close_session(SDK_ID))
                 await asyncio.wait_for(disconnect_entered.wait(), timeout=5.0)
@@ -1744,6 +1890,7 @@ class TestUnsentQueuedMessages:
             managed = manager.sessions[SDK_ID]
             assert managed is not stale
             assert managed.actor_exited is False
+            # Eviction still discards "unsent" messages
             # 驱逐照旧丢弃「未发送」消息
             assert manager.get_queued_messages_snapshot(SDK_ID) == [result["queued_message"]]
             assert [sent["message"]["content"] for sent in revived.sent_messages] == ["换个结局"]
@@ -1786,6 +1933,8 @@ class TestUnsentQueuedMessages:
                 patch.object(service.session_manager, "_build_options", _build_options),
                 patch("server.agent_runtime.session_manager.ClaudeSDKClient", lambda options: revived),
             ):
+                # The new message triggers a connection rebuild: before the connection is established the "unsent" message has left
+                # the old session and not yet moved into the new connection
                 # 新消息触发重建连接：连接建立前「未发送」消息已离开旧会话，还没转入新连接
                 sending = asyncio.create_task(service.send_or_create("demo", "换个结局", session_id=SDK_ID))
                 await asyncio.wait_for(building.wait(), timeout=5.0)
@@ -1795,6 +1944,8 @@ class TestUnsentQueuedMessages:
                 async def _get_meta(session_id: str) -> Any:
                     meta = await get_meta(session_id)
                     if asyncio.current_task() is acting:
+                        # After reading meta the operation proceeds synchronously to the withdrawal or stops at the wait, and only then does
+                        # the test resume
                         # 读完 meta 后操作同步走到撤回或停在等待处，测试随后才恢复
                         checked.set()
                     return meta
@@ -1827,7 +1978,10 @@ class TestUnsentQueuedMessages:
 
 
 class TestSendQueuedMessageNow:
-    """立即发送：先撤回，撤回成功以 ``now`` 优先级重发同一条排队消息，打断当前轮先处理它。"""
+    """Send now: withdraw first, and on successful withdrawal resend the same queued message with ``now`` priority,
+    interrupting the current turn to handle it first.
+
+    立即发送：先撤回，撤回成功以 ``now`` 优先级重发同一条排队消息，打断当前轮先处理它。"""
 
     async def test_a_withdrawn_message_is_sent_again_with_now_priority(self, service: AssistantService):
         client = TestQueuedMessageWithdrawal._client()
@@ -1848,12 +2002,15 @@ class TestSendQueuedMessageNow:
             assert resent["priority"] == "now"
             assert resent["message"]["content"] == "先停下改结局"
             assert resent["uuid"] != first_uuid
+            # The frontend still sees the same queued message: it is not removed from the tray, and the idempotency key still
+            # points to it
             # 前端看到的仍是同一条排队消息：不移出托盘，幂等键照旧指向它
             assert service.session_manager.get_queued_messages_snapshot(SDK_ID) == [queued]
             retry = await service.send_or_create("demo", "先停下改结局", session_id=SDK_ID, client_key="ck-1")
             assert retry["queued_message"] == queued
             assert len(client.sent_messages) == 3
 
+            # The CLI accepts it with a new uuid: written to the log and leaves the tray
             # CLI 以新的 uuid 接纳它：写入日志并离开托盘
             client.push_frame(started_frame(session_id=SDK_ID))
             entries = await _wait_for_entries(service.event_log_store, SDK_ID, 3)
@@ -1875,6 +2032,7 @@ class TestSendQueuedMessageNow:
 
             assert (await service.send_queued_message_now("demo", SDK_ID, urgent["id"]))["outcome"] == "sent"
 
+            # Tray order follows the CLI's processing order: the whole snapshot is replayed once, with the jumping message first
             # 托盘顺序跟随 CLI 的处理顺序：整份快照重播一次，插队消息排到最前
             assert service.session_manager.get_queued_messages_snapshot(SDK_ID) == [urgent, earlier]
             assert (await stream.next("queue")) == {"session_id": SDK_ID, "messages": [urgent, earlier]}
@@ -1910,6 +2068,9 @@ class TestSendQueuedMessageNow:
             assert (await service.send_queued_message_now("demo", SDK_ID, urgent["id"]))["outcome"] == "sent"
             now_uuid = client.sent_messages[-1]["uuid"]
 
+            # The CLI interrupts the current turn: result still reports success and can only be recognized by terminal_reason;
+            # the messages of this turn all get cancelled, the first message already in the conversation is unaffected, and the
+            # one that never entered the conversation is dropped
             # CLI 打断当前轮：result 仍报 success，只能凭 terminal_reason 认出；这一轮的消息都收到 cancelled，
             # 已进入对话的首条消息不受影响，从未进入对话的那条被丢掉
             client.push_frame(result_frame(session_id=SDK_ID, terminal_reason="aborted_streaming", result=""))
@@ -1917,6 +2078,8 @@ class TestSendQueuedMessageNow:
             client.push_frame(command_lifecycle_frame(dropped_uuid, "cancelled", session_id=SDK_ID))
             client.push_frame(command_lifecycle_frame(now_uuid, "started", session_id=SDK_ID))
 
+            # Acceptance stores first, broadcasts the entry, and removes from the tray last: wait for the removal broadcast rather
+            # than the log entry visible mid-poll
             # 接纳先落库、广播条目，最后才移出托盘：等移出广播，而不是轮询中途就可见的日志条目
             assert (await stream.next("queue_remove")) == {"session_id": SDK_ID, "id": urgent["id"]}
             entries = await service.event_log_store.list_after(SDK_ID)
@@ -1928,6 +2091,8 @@ class TestSendQueuedMessageNow:
             ]
             assert entries[3]["uuid"] == urgent["id"]
 
+            # The dropped message gets a new uuid and is redelivered at normal priority, after the jumping message; it is still the
+            # same message in the tray
             # 被丢掉的消息换一个 uuid、按普通优先级重新送入，排在插队消息之后，托盘里仍是同一条
             assert len(client.sent_messages) == 5
             requeued = client.sent_messages[4]
@@ -1936,6 +2101,8 @@ class TestSendQueuedMessageNow:
             assert "priority" not in requeued
             assert service.session_manager.get_queued_messages_snapshot(SDK_ID) == [dropped]
 
+            # The jumping message's turn ends normally and is not treated as an interrupt; the requeued message is then accepted
+            # as usual
             # 插队消息这一轮正常结束，不被当成中断；重排的消息之后照常被接纳
             client.push_frame(assistant_frame({"type": "text", "text": "结局改好了"}, uuid="a-2", session_id=SDK_ID))
             client.push_frame(result_frame(session_id=SDK_ID, terminal_reason="completed"))
@@ -1958,6 +2125,7 @@ class TestSendQueuedMessageNow:
         try:
             assert (await service.send_queued_message_now("demo", SDK_ID, queued["id"]))["outcome"] == "accepted"
 
+            # The CLI already took it from the queue but did not merge it into the turn: redeliver it per the send-now intent
             # CLI 已从队列取走它，却没把它并入轮次：按立即发送的意图重新送入
             delivered = asyncio.Event()
             query = client.query
@@ -1990,6 +2158,7 @@ class TestSendQueuedMessageNow:
             assert (await service.send_queued_message_now("demo", SDK_ID, urgent["id"]))["outcome"] == "accepted"
             assert service.session_manager.get_queued_messages_snapshot(SDK_ID) == [earlier, urgent]
 
+            # The CLI still reports cancelled after the withdrawal reply failed: the redelivery on the inbox also puts it first
             # 撤回答复失败后 CLI 仍报 cancelled：inbox 上的重送同样把它排到最前
             delivered = asyncio.Event()
             query = client.query

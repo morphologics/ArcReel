@@ -18,13 +18,17 @@ from tests.integration.lib.generation.worker_support import (
 
 
 async def _stored_calls(session) -> list[ApiCall]:
-    """按 started_at 倒序读回 api_calls 行。"""
+    """Read back api_calls rows ordered by started_at descending.
+
+    按 started_at 倒序读回 api_calls 行。"""
     stmt = select(ApiCall).order_by(ApiCall.started_at.desc(), ApiCall.id.desc())
     return list((await session.execute(stmt)).scalars().all())
 
 
 class TestVideoResumeRunner:
-    """续跑：分流、provider 锁定、调用行结算与 staging 清理。"""
+    """Resume: dispatch, provider locking, call row settlement and staging cleanup.
+
+    续跑：分流、provider 锁定、调用行结算与 staging 清理。"""
 
     @pytest.mark.asyncio
     async def test_video_orphan_cleanup_removes_provider_media_and_task_output(self, tmp_path, monkeypatch):
@@ -56,12 +60,16 @@ class TestVideoResumeRunner:
         assert not staged_output.exists()
         assert not provider_media.exists()
 
+    # VideoResumeRunner.run: dispatch + provider locking
     # ------------------------------------------------------------------
     # VideoResumeRunner.run：分流 + provider 锁定
     # ------------------------------------------------------------------
     @pytest.mark.asyncio
     async def test_run_uses_storyboard_checkpoint_identity(self, monkeypatch):
-        """分镜视频只有 checkpoint + job 齐备才续跑；enqueue payload 不再承担身份锁定。"""
+        """Shot videos resume only when both checkpoint and job are present; the enqueue payload no longer carries identity
+        locking.
+
+        分镜视频只有 checkpoint + job 齐备才续跑；enqueue payload 不再承担身份锁定。"""
         queue = FakeWorkerQueue()
         worker = GenerationWorker(
             queue=queue, executor=stub_executors.execute, resume_executor=stub_executors.execute_resume
@@ -86,7 +94,9 @@ class TestVideoResumeRunner:
 
     @pytest.mark.asyncio
     async def test_run_resume_expired(self, monkeypatch):
-        """ResumeExpiredError → mark_failed [resume_expired]。"""
+        """ResumeExpiredError -> mark_failed [resume_expired].
+
+        ResumeExpiredError → mark_failed [resume_expired]。"""
         from arcreel_market_core.video_backend_contract import ResumeExpiredError
 
         queue = FakeWorkerQueue()
@@ -107,7 +117,15 @@ class TestVideoResumeRunner:
     @pytest.mark.asyncio
     @pytest.mark.parametrize("failed_rows", [1, 0])
     async def test_run_settles_the_call_row_with_the_failure_text(self, monkeypatch, worker_db, failed_rows: int):
-        """派发侧终态失败：判死这次续跑的异常要随补账落到调用行，不能只翻任务。
+        """Terminal failure on the dispatch side: the exception that killed this resume must be settled on the call row
+        too, not just flip the task.
+
+        The task side stores the task failure code (``[resume_expired_detail]``) while the records table reads the call
+        row's error_message / error_code -- each table has its own failure record, and the call row's can only be
+        written here. When the task terminal write hits 0 rows, the call row is still settled as failed, not changed to
+        cancelled.
+
+        派发侧终态失败：判死这次续跑的异常要随补账落到调用行，不能只翻任务。
 
         任务侧落的是任务失败码（``[resume_expired_detail]``），记录表读的是调用行的
         error_message / error_code——两张表各有自己的失败登记，调用行那份只能从这里落。
@@ -137,12 +155,16 @@ class TestVideoResumeRunner:
             row = await session.get(ApiCall, call_id)
         assert (row.status, row.cost_amount) == ("failed", 0)
         assert row.error_message == "resume job x expired or not found on provider ark"
+        # The expiry exception carries neither an HTTP status nor an upstream error code, so classification finds
+        # nothing -- the read side shows the original text
         # 过期异常不带 HTTP 状态也不带上游错误码，分类落空——读侧按原文显示
         assert (row.error_code, row.error_params) == (None, None)
 
     @pytest.mark.asyncio
     async def test_run_endpoint_changed(self, monkeypatch):
-        """ResumeEndpointChangedError → mark_failed [resume_endpoint_changed]，错误可归因。"""
+        """ResumeEndpointChangedError -> mark_failed [resume_endpoint_changed]; the error is attributable.
+
+        ResumeEndpointChangedError → mark_failed [resume_endpoint_changed]，错误可归因。"""
         from arcreel_market_core.video_backend_contract import ResumeEndpointChangedError
 
         queue = FakeWorkerQueue()
@@ -164,13 +186,17 @@ class TestVideoResumeRunner:
         assert queue.failed
         assert queue.failed[0][0] == "ep"
         assert "[resume_endpoint_changed_detail]" in queue.failed[0][1]
+        # Both endpoints go into the error details, so the user can attribute it to "the API was switched" rather than a
+        # generic failure
         # 两侧 endpoint 都进错误详情，用户能归因到「接口被换过」而非泛化失败
         assert "openai-video" in queue.failed[0][1]
         assert "minimax-video" in queue.failed[0][1]
 
     @pytest.mark.asyncio
     async def test_run_resume_unsupported(self, monkeypatch):
-        """NotImplementedError → mark_failed [resume_unsupported]。"""
+        """NotImplementedError -> mark_failed [resume_unsupported].
+
+        NotImplementedError → mark_failed [resume_unsupported]。"""
         queue = FakeWorkerQueue()
         worker = GenerationWorker(
             queue=queue, executor=stub_executors.execute, resume_executor=stub_executors.execute_resume
@@ -188,7 +214,9 @@ class TestVideoResumeRunner:
 
     @pytest.mark.asyncio
     async def test_run_generic_exception(self, monkeypatch):
-        """通用 Exception → mark_failed（无前缀，与运行期 backend 失败同款）。"""
+        """Generic Exception -> mark_failed (no prefix, same as a runtime backend failure).
+
+        通用 Exception → mark_failed（无前缀，与运行期 backend 失败同款）。"""
         queue = FakeWorkerQueue()
         worker = GenerationWorker(
             queue=queue, executor=stub_executors.execute, resume_executor=stub_executors.execute_resume
@@ -202,12 +230,17 @@ class TestVideoResumeRunner:
         await worker._resume.run(task)
         assert queue.failed
         assert queue.failed[0][0] == "boom"
+        # No [resume_*] prefix
         # 无 [resume_*] 前缀
         assert not queue.failed[0][1].startswith("[resume_")
 
     @pytest.mark.asyncio
     async def test_run_script_edit_error_encodes_key(self, monkeypatch, staged_project):
-        """resume_executor 复用 finalize_reference_video_unit 等 finalize helper，同样会抛
+        """resume_executor reuses finalize helpers such as finalize_reference_video_unit, which can also raise
+        ScriptEditError; the resume path uses the same encode_task_failure_message as the regular _process_task and must
+        not fall back to the fixed Chinese str(exc) just because it is the separate restart self-heal call chain.
+
+        resume_executor 复用 finalize_reference_video_unit 等 finalize helper，同样会抛
         ScriptEditError；resume 路径与常规 _process_task 走同一份 encode_task_failure_message，
         不能因为是重启自愈这条独立调用链就退回 str(exc) 的固定中文。"""
         queue = FakeWorkerQueue()
@@ -242,7 +275,9 @@ class TestVideoResumeRunner:
 
     @pytest.mark.asyncio
     async def test_run_cancelled_error(self, monkeypatch, worker_db):
-        """进程级打断（CancelledError）→ task / ApiCall 都结算 cancelled，再重新抛出。"""
+        """Process-level interruption (CancelledError) -> both task and ApiCall settle as cancelled, then it is re-raised.
+
+        进程级打断（CancelledError）→ task / ApiCall 都结算 cancelled，再重新抛出。"""
         from lib.db.repositories.usage_repo import UsageRepository
 
         async with worker_db() as session:
@@ -275,7 +310,9 @@ class TestVideoResumeRunner:
 
     @pytest.mark.asyncio
     async def test_run_no_job_id_fails_fast(self):
-        """无 provider_job_id 的 task 被派发到 VideoResumeRunner.run 时直接 mark_failed。"""
+        """A task without provider_job_id dispatched to VideoResumeRunner.run is mark_failed directly.
+
+        无 provider_job_id 的 task 被派发到 VideoResumeRunner.run 时直接 mark_failed。"""
         queue = FakeWorkerQueue()
         worker = GenerationWorker(
             queue=queue, executor=stub_executors.execute, resume_executor=stub_executors.execute_resume
@@ -294,7 +331,10 @@ class TestVideoResumeRunner:
         assert "[restart_lost_no_job_id]" in queue.failed[0][1]
 
     async def test_run_fails_a_task_of_a_deleted_project_as_deleted_during_task(self, monkeypatch, worker_db):
-        """重启前已删除的项目，任务挂在墓碑名下：续跑不按墓碑名解析目录，以 project_deleted_during_task 失败。"""
+        """A project deleted before the restart has its task under the tombstone name: resume does not resolve the
+        directory by the tombstone name and fails with project_deleted_during_task.
+
+        重启前已删除的项目，任务挂在墓碑名下：续跑不按墓碑名解析目录，以 project_deleted_during_task 失败。"""
         from lib.db.repositories.usage_repo import UsageRepository
 
         deleted_name = "demo#deleted-20261002T034309Z"

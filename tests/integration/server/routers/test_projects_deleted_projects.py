@@ -1,4 +1,7 @@
-"""删除的项目成为已删除项目：整体恢复时记录改回项目名，原名被占用时换名；彻底删除后不可恢复。"""
+"""A deleted project becomes a deleted-project entry: on whole restore the records switch back to the project name,
+with a new name if the original is taken; after permanent deletion it cannot be restored.
+
+删除的项目成为已删除项目：整体恢复时记录改回项目名，原名被占用时换名；彻底删除后不可恢复。"""
 
 import asyncio
 import threading
@@ -52,6 +55,7 @@ async def test_restored_project_takes_a_new_name_when_the_original_is_taken(tmp_
     assert (manager.get_project_path("demo-2") / "source" / "chapter.txt").read_text(encoding="utf-8") == "old text"
     async with db_factory() as session:
         tasks = TaskRepository(session)
+        # Records switch back with the project to the restored name; tasks queued at deletion stay cancelled
         # 记录随项目改回到恢复后的名字；删除时排队的任务仍是已取消
         assert (await tasks.get(old["queued"]) or {})["project_name"] == "demo-2"
         assert (await tasks.get(old["queued"]) or {})["status"] == "cancelled"
@@ -81,7 +85,9 @@ def _files_size(root) -> int:
 
 
 async def test_deleted_projects_report_the_space_they_take(tmp_path, monkeypatch, db_factory):
-    """列表给出每个已删除项目目录占用的字节数，包括里面的子目录。"""
+    """The list gives the bytes taken by each deleted project directory, including its subdirectories.
+
+    列表给出每个已删除项目目录占用的字节数，包括里面的子目录。"""
     manager = ProjectManager(tmp_path)
     _create(manager, "Old")
     project_dir = manager.get_project_path("demo")
@@ -97,7 +103,9 @@ async def test_deleted_projects_report_the_space_they_take(tmp_path, monkeypatch
 
 
 async def test_deleted_project_sizes_are_counted_off_the_event_loop(tmp_path, monkeypatch, db_factory):
-    """统计目录大小是阻塞的磁盘遍历，不在事件循环线程上执行。"""
+    """Computing directory size is a blocking disk walk and does not run on the event loop thread.
+
+    统计目录大小是阻塞的磁盘遍历，不在事件循环线程上执行。"""
     manager = ProjectManager(tmp_path)
     _create(manager, "Old")
     with build_projects_client(monkeypatch, manager, session_factory=db_factory) as client:
@@ -120,7 +128,10 @@ async def test_deleted_project_sizes_are_counted_off_the_event_loop(tmp_path, mo
 
 
 async def test_restore_cancelled_while_moving_out_still_finishes(tmp_path, monkeypatch, db_factory):
-    """目录移出途中请求被取消：恢复照常做完，记录改回、迁移照跑，不会只留下移回的目录。"""
+    """The request is cancelled while the directory is being moved out: restore still finishes, records switch back and
+    migration runs, not leaving only the moved-back directory.
+
+    目录移出途中请求被取消：恢复照常做完，记录改回、迁移照跑，不会只留下移回的目录。"""
     manager = ProjectManager(tmp_path)
     _create(manager, "Old")
     old = await seed_project_records(db_factory)
@@ -157,7 +168,10 @@ async def test_restore_cancelled_while_moving_out_still_finishes(tmp_path, monke
 
 
 async def test_project_stays_in_place_when_its_records_cannot_be_retired(tmp_path, monkeypatch, db_factory):
-    """目录已移走而记录提交失败时，目录移回原处，记录仍挂在原项目名下。"""
+    """When the directory has been moved away but the record commit fails, the directory is moved back and the records
+    stay under the original project name.
+
+    目录已移走而记录提交失败时，目录移回原处，记录仍挂在原项目名下。"""
     manager = ProjectManager(tmp_path)
     _create(manager, "Old")
     old = await seed_project_records(db_factory)
@@ -188,6 +202,8 @@ async def test_purged_project_cannot_be_restored(tmp_path, monkeypatch, db_facto
         missing = client.post(f"{DELETED}/{quote(entry['id'], safe='')}/restore")
         assert missing.status_code == 404
         assert missing.json()["detail"].startswith("已删除项目里没有这个项目")
+        # Any input that is not a deleted-project ID is treated as nonexistent and never resolves to another location in the
+        # data root
         # 不是已删除项目 ID 的输入一律按不存在处理，不会解析到数据根里的其他位置
         assert client.delete(f"{DELETED}/projects").status_code == 404
 
@@ -195,7 +211,10 @@ async def test_purged_project_cannot_be_restored(tmp_path, monkeypatch, db_facto
 
 
 async def test_embedded_agent_token_cannot_purge_a_deleted_project(tmp_path, monkeypatch, db_factory):
-    """内嵌 Agent 持有本地服务的令牌：彻底删除已删除项目在服务端拒绝它，恢复照常可用。"""
+    """The embedded Agent holds the local service token: the server refuses it permanent deletion of deleted projects,
+    while restore stays available.
+
+    内嵌 Agent 持有本地服务的令牌：彻底删除已删除项目在服务端拒绝它，恢复照常可用。"""
     manager = ProjectManager(tmp_path)
     _create(manager, "Old")
 

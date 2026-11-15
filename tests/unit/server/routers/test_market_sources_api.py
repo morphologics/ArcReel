@@ -1,4 +1,6 @@
-"""市场源 API：列表摘要、添加即抓取、改名与启停、官方源不可删、全排列重排、单源与全部刷新。"""
+"""Market sources API: list summaries, fetch on add, rename and enable/disable, official source undeletable, full-permutation reordering, single-source and all refresh.
+
+市场源 API：列表摘要、添加即抓取、改名与启停、官方源不可删、全排列重排、单源与全部刷新。"""
 
 from __future__ import annotations
 

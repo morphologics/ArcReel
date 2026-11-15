@@ -1,4 +1,9 @@
-"""分享提交的 HTTP 契约：本地预检、代理创建提交、状态查询与错误码落地。
+"""HTTP contract for share submissions: local pre-check, proxied submission creation, status query and error code
+mapping.
+
+Outbound calls to the official service are intercepted by respx at the transport layer.
+
+分享提交的 HTTP 契约：本地预检、代理创建提交、状态查询与错误码落地。
 
 官方服务出站由 respx 在 transport 层拦截。
 """
@@ -33,7 +38,9 @@ ClientFactory = Callable[..., AbstractAsyncContextManager[httpx.AsyncClient]]
 
 
 def _client_factory(session_factory: async_sessionmaker[AsyncSession]) -> ClientFactory:
-    """``base_url`` 为官方服务地址，空串即关闭。"""
+    """``base_url`` is the official service address; empty string means off.
+
+    ``base_url`` 为官方服务地址，空串即关闭。"""
 
     async def session_override():
         async with session_factory() as session:
@@ -63,7 +70,9 @@ async def client_factory(session_factory: async_sessionmaker[AsyncSession]) -> C
 
 @pytest.fixture
 async def concurrent_client_factory(concurrent_session_factory: async_sessionmaker[AsyncSession]) -> ClientFactory:
-    """请求各用独立连接，用于并发写入。"""
+    """Each request uses its own connection, for concurrent writes.
+
+    请求各用独立连接，用于并发写入。"""
     return _client_factory(concurrent_session_factory)
 
 
@@ -253,6 +262,7 @@ async def test_status_refresh_lands_in_local_response(client_factory: ClientFact
             status = remote.get(f"{SUBMISSIONS_URL}/{TOKEN}").respond(200, json=_status_body("merged"))
             merged = await client.get("/market/submissions")
             assert status.call_count == 1
+        # Adopted is a terminal state; later page visits no longer query.
         # 已采纳是终态，之后进入页面不再查询。
         after = await _list_without_outbound(client)
     assert [(s["endpoint_id"], s["status"], s["pr_url"], s["stale"]) for s in merged.json()["submissions"]] == [
@@ -290,6 +300,8 @@ async def test_status_for_another_submission_is_not_recorded(client_factory: Cli
             other = {**_status_body("merged", slug="other"), "token": "c" * 32}
             remote.get(f"{SUBMISSIONS_URL}/{TOKEN}").respond(200, json=other)
             response = await client.get("/market/submissions")
+        # The returned submission is not the one queried: keep the local record and mark it as not refreshed; later queries
+        # still use the original token.
         # 返回的不是所查询的提交：保留本地记录并标记未能刷新，之后仍按原令牌查询。
         with respx.mock(assert_all_called=True) as remote:
             again = remote.get(f"{SUBMISSIONS_URL}/{TOKEN}").respond(200, json=_status_body())
@@ -337,7 +349,10 @@ async def test_literal_credentials_block_sharing_without_outbound(client_factory
 
 
 async def _checked_credential_paths(client_factory: ClientFactory, definition: dict[str, Any]) -> list[str]:
-    """保存定义后预检并提交，确认两者都不出站、提交被拒；返回凭证诊断的定位路径。"""
+    """Save the definition, then pre-check and submit, confirming neither goes outbound and the submission is rejected;
+    return the locating paths of the credential diagnostics.
+
+    保存定义后预检并提交，确认两者都不出站、提交被拒；返回凭证诊断的定位路径。"""
     async with client_factory() as client:
         saved = await client.post("/custom-endpoints", json=definition)
         assert saved.status_code == 201, saved.text
@@ -355,12 +370,18 @@ async def _checked_credential_paths(client_factory: ClientFactory, definition: d
 async def test_credential_in_comfyui_workflow_blocks_sharing_without_outbound(client_factory: ClientFactory):
     definition = comfyui_endpoint_definition()
     inputs = definition["workflow"]["6"]["inputs"]
+    # The workflow is embedded as is, without template rendering: secrets a node needs can only be written in as
+    # literals, and sharing would make them public with the definition.
     # workflow 原样内嵌、不做模板渲染：节点要的密钥只能以字面值写进去，分享会随定义公开。
     inputs["api_key"] = "sk-live-abcdef"
+    # Credentials at any depth of structured input are intercepted too: dict inside list inside dict.
     # 结构化输入里任意层级的凭证同样拦截：字典套列表套字典。
     inputs["config"] = {"providers": [{"name": "main", "authToken": "tok-123"}], "client_secret": "s3cret"}
+    # Lists under a credential name are intercepted item by item.
     # 凭证名下的列表逐项拦截。
     inputs["api_keys"] = ["sk-a", ""]
+    # Only tokenized fragments of key names are checked: input names like tokenizer and long model file names do not
+    # match.
     # 只看键名的分词片段：tokenizer 之类的输入名与长串模型文件名不命中。
     inputs["tokenizer"] = "flux1-dev-fp8-e4m3fn-2024"
     assert await _checked_credential_paths(client_factory, definition) == [
@@ -373,6 +394,8 @@ async def test_credential_in_comfyui_workflow_blocks_sharing_without_outbound(cl
 
 async def test_credential_in_declarative_request_body_blocks_sharing(client_factory: ClientFactory):
     definition = custom_endpoint_definition()
+    # The request body template becomes public with the definition; values referenced by placeholders are not
+    # credentials.
     # 请求体模板随定义公开；占位符引用的值不是凭证。
     definition["submit"]["body"]["options"] = {"auth": [{"token": "tok-live-123"}], "session_token": "{{ model }}"}
     assert await _checked_credential_paths(client_factory, definition) == ["submit.body.options.auth[0].token"]
@@ -400,6 +423,8 @@ async def test_authorization_headers_block_sharing(client_factory: ClientFactory
 
 async def test_credential_shaped_header_values_block_sharing(client_factory: ClientFactory):
     definition = custom_endpoint_definition()
+    # Header values are judged separately by literal credential shape: key-like values under custom header names match,
+    # ordinary values do not.
     # 请求头的值另按字面凭证形态判定：自定义头名下形似密钥的值命中，普通取值不命中。
     definition["poll"]["headers"] = {
         "X-Goog-Key": "AIzaSyD1234567890abcdefgh",
@@ -423,6 +448,8 @@ async def test_credential_in_declarative_result_request_blocks_sharing(client_fa
 
 async def test_credential_in_declarative_url_query_blocks_sharing(client_factory: ClientFactory):
     definition = custom_endpoint_definition()
+    # Query strings are judged by parameter name: literal values of credential-named parameters match, placeholder
+    # values and ordinary parameters do not.
     # 查询串按参数名判定：凭证名参数的字面值命中，占位符值与普通参数不命中。
     definition["submit"]["url"] = "{{ base_url }}/v1/video/create?model={{ model }}&access_token=tok-live-123"
     definition["poll"]["url"] = "{{ base_url }}/v1/video/fetch/{{ task_id }}?session_token={{ model }}&lang=zh"
@@ -431,6 +458,8 @@ async def test_credential_in_declarative_url_query_blocks_sharing(client_factory
 
 async def test_response_extract_paths_are_not_credentials(client_factory: ClientFactory):
     definition = custom_endpoint_definition()
+    # extract keys are value names and values are JSONPaths, not part of the request: value names like output_tokens are
+    # not false positives.
     # extract 的键是取值名、值是 JSONPath，不进请求：output_tokens 之类的取值名不误报。
     definition["poll"]["extract"]["usage"] = {"output_tokens": ["$.usage.output_tokens"]}
     async with client_factory() as client:
@@ -446,6 +475,7 @@ async def test_concurrent_submissions_for_one_endpoint_both_succeed(concurrent_c
     both_arrived = asyncio.Barrier(2)
 
     async def accept(request: httpx.Request) -> httpx.Response:
+        # Both requests persist only after each gets the official service's result; neither local record existed before.
         # 两个请求都拿到官方服务的结果后才各自落库，本地记录此前都不存在。
         await both_arrived.wait()
         return httpx.Response(201, json=_status_body())
@@ -472,6 +502,7 @@ async def test_status_refresh_does_not_overwrite_a_newer_submission(concurrent_c
     resubmitted = asyncio.Event()
 
     async def old_status(request: httpx.Request) -> httpx.Response:
+        # While a status query with the old token is in flight, the same endpoint completed a new submission.
         # 旧令牌的状态查询在途时，同一端点完成了一次新提交。
         refreshing.set()
         await resubmitted.wait()
@@ -496,6 +527,8 @@ async def test_status_refresh_does_not_overwrite_a_newer_submission(concurrent_c
                     resubmitted.set()
                 await listing
         assert created.status_code == 200
+        # When the official service is unreachable the list shows locally saved values: these should be the new
+        # submission's token and status, not the old token's query result.
         # 官方服务不可达时列表展示本地保存的值：应是新提交的令牌与状态，而不是旧令牌的查询结果。
         with respx.mock(assert_all_called=True) as remote:
             latest = remote.get(f"{SUBMISSIONS_URL}/{new_token}").mock(side_effect=httpx.ConnectError("down"))
@@ -507,7 +540,9 @@ async def test_status_refresh_does_not_overwrite_a_newer_submission(concurrent_c
 
 
 async def _list_without_outbound_after_merge(client: httpx.AsyncClient) -> list[dict[str, Any]]:
-    """把唯一的开放中提交刷新为已采纳，再确认之后的列表不再出站。"""
+    """Refresh the only open submission to adopted, then confirm later lists no longer go outbound.
+
+    把唯一的开放中提交刷新为已采纳，再确认之后的列表不再出站。"""
     with respx.mock(assert_all_called=True) as remote:
         remote.get(f"{SUBMISSIONS_URL}/{TOKEN}").respond(200, json=_status_body("merged"))
         await client.get("/market/submissions")

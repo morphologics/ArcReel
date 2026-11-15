@@ -1,4 +1,7 @@
-"""从全局资产库应用到项目的用例共享的库资产构造与资产图时效读取。"""
+"""Shared library-asset construction and sheet freshness reads for cases that apply assets from the global asset
+library to a project.
+
+从全局资产库应用到项目的用例共享的库资产构造与资产图时效读取。"""
 
 from __future__ import annotations
 
@@ -12,9 +15,12 @@ from lib.project.project_manager import ProjectManager
 from tests.integration.server.derivative_sheet_support import solid_png_bytes
 
 _OWNER = "王"
+#: The two derivatives of library character "Wang": name, change description and the image's solid color.
 #: 库角色「王」带的两个衍生：名、变化描述与图的纯色。
 _DERIVATIVES = (("战斗装", "黑甲", (120, 0, 0)), ("便装", "布衣", (0, 120, 0)))
 
+#: After applying the library character stored by :func:`store_character_with_derivatives`, all current verdicts
+#: read by :func:`character_sheet_statuses`.
 #: 应用 :func:`store_character_with_derivatives` 存入的库角色后，按 :func:`character_sheet_statuses`
 #: 读出的全部 current 结论。
 LIBRARY_SHEETS_ALL_CURRENT = dict.fromkeys(
@@ -23,7 +29,10 @@ LIBRARY_SHEETS_ALL_CURRENT = dict.fromkeys(
 
 
 def store_character_with_derivatives(client: TestClient, pm: ProjectManager, *, owner_description: str) -> str:
-    """在源项目 source 里造一个带资产图和两个衍生资产图的角色「王」，经 ``/assets/from-project`` 存入资产库，返回库资产 id。"""
+    """In source project source, create character "Wang" with a sheet and two derivative sheets, store it in the asset
+    library via ``/assets/from-project``, and return the library asset id.
+
+    在源项目 source 里造一个带资产图和两个衍生资产图的角色「王」，经 ``/assets/from-project`` 存入资产库，返回库资产 id。"""
 
     pm.create_project("source")
     pm.create_project_metadata("source", "Source", "Anime", "narration")
@@ -48,7 +57,10 @@ def store_character_with_derivatives(client: TestClient, pm: ProjectManager, *, 
 
 
 def character_sheet_statuses(pm: ProjectManager, project_name: str, owner: str) -> dict[str, ArtifactStatus]:
-    """角色资产图（键为角色名）与它每个衍生资产图（键为衍生名）当前的时效。"""
+    """Current freshness of the character sheet (keyed by character name) and of each of its derivative sheets (keyed by
+    derivative name).
+
+    角色资产图（键为角色名）与它每个衍生资产图（键为衍生名）当前的时效。"""
 
     project_dir = pm.get_project_path(project_name)
     resolver = ArtifactCurrencyResolver(project_dir)

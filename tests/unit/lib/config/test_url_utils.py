@@ -1,4 +1,6 @@
-"""URL 规范化工具单元测试。"""
+"""Unit tests for URL normalization helpers.
+
+URL 规范化工具单元测试。"""
 
 from __future__ import annotations
 
@@ -36,7 +38,9 @@ class TestNormalizeAnthropicBaseUrl:
         ],
     )
     def test_keeps_everything_else(self, raw: str) -> None:
-        """不再剥 /vN、单独的 /messages，也不识别 anthropic 子路径。"""
+        """No longer strips /vN or a lone /messages, and does not recognize anthropic subpaths.
+
+        不再剥 /vN、单独的 /messages，也不识别 anthropic 子路径。"""
         assert normalize_anthropic_base_url(raw) == raw
 
 
@@ -75,6 +79,7 @@ class TestAnthropicEndpointUrl:
             ("https://x", "https://x/v1/messages"),
             ("https://x/anthropic", "https://x/anthropic/v1/messages"),
             ("https://api.deepseek.com/anthropic/v1", "https://api.deepseek.com/anthropic/v1/v1/messages"),
+            # Escaped path separators are kept verbatim: the runtime CLI also concatenates strings, so the probe must not hit a different endpoint.
             # 已转义的路径分隔符逐字保留：运行时 CLI 也是字符串拼接，探测不能打到另一个端点。
             ("https://example.com/gateway%2Ftenant", "https://example.com/gateway%2Ftenant/v1/messages"),
         ],

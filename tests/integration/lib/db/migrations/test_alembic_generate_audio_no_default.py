@@ -1,4 +1,6 @@
-"""Alembic api_calls.generate_audio 去默认迁移的双向测试。"""
+"""Up/down tests for the Alembic migration removing the default of api_calls.generate_audio.
+
+Alembic api_calls.generate_audio 去默认迁移的双向测试。"""
 
 from __future__ import annotations
 
@@ -28,7 +30,10 @@ def _generate_audio_by_call_type(engine: sa.Engine) -> dict[str, object]:
 
 
 def test_upgrade_clears_non_video_rows_and_stops_defaulting_new_ones(alembic_cfg):
-    """前置：旧默认把未声明的图像行填成 1；迁移后历史图像行清空、视频行原样、新插入未声明即 NULL。"""
+    """Setup: the old default filled undeclared image rows with 1; after migration historical image rows are cleared,
+    video rows unchanged, and new undeclared inserts are NULL.
+
+    前置：旧默认把未声明的图像行填成 1；迁移后历史图像行清空、视频行原样、新插入未声明即 NULL。"""
     cfg, db_path = alembic_cfg
     command.upgrade(cfg, _PREVIOUS_REVISION)
 

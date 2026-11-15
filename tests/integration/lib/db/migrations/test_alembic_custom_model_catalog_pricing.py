@@ -1,4 +1,11 @@
-"""Alembic 迁移：自定义供应商模型迁入模型目录（docs/adr/0106）。
+"""Alembic migration: custom provider models move into the model catalog (docs/adr/0106).
+
+Old price columns are dropped; selectable durations and max output tokens are dropped when equal to the matched
+entry's value or the preset inferred from the name, otherwise turned into capability overrides; existing overrides,
+default resolution and call endpoints are kept as-is; provider model multiplier (default 1) and entry binding are
+added.
+
+Alembic 迁移：自定义供应商模型迁入模型目录（docs/adr/0106）。
 
 旧价格列丢弃；可选时长与最大输出 token 等于所对应条目的值或按名字推断的预设时丢弃，其余转为能力覆盖；已有覆盖、
 默认分辨率与调用端点原样保留；新增供应商模型倍率（默认 1）与条目绑定。
@@ -21,7 +28,10 @@ _TS = "'2026-10-15 00:00:00'"
 
 
 def _comfyui_with_native_five_seconds() -> dict[str, Any]:
-    """帧数可驱动的 ComfyUI 视频定义：``length`` 字面 81、``fps`` 读出 16 → 原生 5 秒。"""
+    """ComfyUI video definition whose frame count can be driven: ``length`` literal 81, ``fps`` reads 16 -> native 5
+    seconds.
+
+    帧数可驱动的 ComfyUI 视频定义：``length`` 字面 81、``fps`` 读出 16 → 原生 5 秒。"""
     definition = comfyui_endpoint_definition()
     definition["workflow"]["5"]["inputs"]["length"] = 81
     definition["bindings"]["frames"] = [{"node": "5", "input": "length", "class_type": "EmptyLatentImage"}]
@@ -122,6 +132,8 @@ def test_values_equal_to_entry_or_preset_are_dropped_and_the_rest_become_overrid
             _insert_provider(conn, 2, "comfyui")
             _insert_comfyui_endpoint(conn, 7, _comfyui_with_native_five_seconds())
             _insert_comfyui_endpoint(conn, 8, comfyui_endpoint_definition())
+            # Video: equal to the matched entry's value (and to the name preset) -> dropped; the price is dropped too, default
+            # resolution kept
             # 视频：等于对应条目的值（也等于名字预设）→ 丢弃；价格一并丢弃，默认分辨率保留
             _insert_model(
                 conn,
@@ -132,14 +144,19 @@ def test_values_equal_to_entry_or_preset_are_dropped_and_the_rest_become_overrid
                 resolution="1080p",
                 price=0.4,
             )
+            # Video: no matching entry, equal to the current name preset ([4, 8] when no family matches) -> dropped
             # 视频：对应不上条目，等于当前名字预设（一个族都匹配不上时的 [4, 8]）→ 丢弃
             _insert_model(conn, 2, model_id="relay-video-x", endpoint="openai-video", durations=[4, 8])
+            # Video: equal to the value an early backfill migration wrote per the preset at the time -> dropped
             # 视频：等于早年回填迁移按当时预设写入的值 → 丢弃
             _insert_model(conn, 3, model_id="relay-minimax-x1", endpoint="openai-video", durations=[6])
+            # Video: matches an entry, differs from both the entry and the preset -> turned into a capability override
             # 视频：对应上条目，与条目和预设都不同 → 转为能力覆盖
             _insert_model(conn, 4, model_id="kling-v2-6", endpoint="openai-video", durations=[5])
+            # Video: no matching entry, differs from the preset -> turned into a capability override
             # 视频：对应不上条目，与预设不同 → 转为能力覆盖
             _insert_model(conn, 5, model_id="mystery-video", endpoint="openai-video", durations=[7, 3])
+            # An existing same-named override wins; other overrides are kept as-is
             # 已有的同名覆盖优先，其余覆盖原样保留
             _insert_model(
                 conn,
@@ -149,8 +166,10 @@ def test_values_equal_to_entry_or_preset_are_dropped_and_the_rest_become_overrid
                 durations=[5],
                 overrides={"durations": [10], "last_frame": True},
             )
+            # Text: equal to the entry's max output tokens -> dropped
             # 文本：等于条目的最大输出 token → 丢弃
             _insert_model(conn, 7, model_id="gpt-5.4", endpoint="openai-chat", max_output_tokens=128000)
+            # Text: differs from the entry -> turned into a capability override; other overrides kept
             # 文本：与条目不同 → 转为能力覆盖，其余覆盖保留
             _insert_model(
                 conn,
@@ -160,13 +179,17 @@ def test_values_equal_to_entry_or_preset_are_dropped_and_the_rest_become_overrid
                 max_output_tokens=8192,
                 overrides={"image_input": False},
             )
+            # Text: no matching entry, no comparable value -> turned into a capability override
             # 文本：对应不上条目、没有可比的值 → 转为能力覆盖
             _insert_model(conn, 9, model_id="my-private-llm", endpoint="openai-chat", max_output_tokens=4096)
+            # ComfyUI: equal to the workflow's native duration -> dropped; added/removed -> turned into a durations override
             # ComfyUI：等于 workflow 原生时长 → 丢弃；增删过 → 转为 durations 覆盖
             _insert_model(conn, 10, provider_id=2, model_id="wf-a", endpoint="ce-7", durations=[5])
             _insert_model(conn, 11, provider_id=2, model_id="wf-b", endpoint="ce-7", durations=[5, 10])
+            # ComfyUI: the endpoint cannot drive duration (pinned to the empty set) -> dropped
             # ComfyUI：端点驱动不了时长（钉为空集）→ 丢弃
             _insert_model(conn, 12, provider_id=2, model_id="wf-c", endpoint="ce-8", durations=[])
+            # Old values not belonging to this media type -> dropped
             # 不属于该媒体类型的旧值 → 丢弃
             _insert_model(
                 conn, 13, model_id="gpt-image-2", endpoint="openai-images", durations=[4], max_output_tokens=10

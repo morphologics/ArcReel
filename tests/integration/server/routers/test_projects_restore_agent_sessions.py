@@ -1,4 +1,7 @@
-"""已删除项目换名恢复后，项目会话的 Agent 上下文跟着改到新目录派生的存储键下，续聊与界面历史照常可读。"""
+"""After a deleted project is restored under a new name, the Agent context of project sessions moves to the storage
+key derived from the new directory; resuming chat and UI history stay readable.
+
+已删除项目换名恢复后，项目会话的 Agent 上下文跟着改到新目录派生的存储键下，续聊与界面历史照常可读。"""
 
 import json
 from collections.abc import AsyncGenerator
@@ -69,7 +72,10 @@ def _create(manager: ProjectManager, title: str) -> Path:
 
 @asynccontextmanager
 async def _client(monkeypatch, manager: ProjectManager, session_factory) -> AsyncGenerator[AsyncClient]:
-    """与用例同一个事件循环发请求：PostgreSQL 连接池不能跨事件循环使用。"""
+    """Send requests on the same event loop as the case: the PostgreSQL connection pool cannot be used across event
+    loops.
+
+    与用例同一个事件循环发请求：PostgreSQL 连接池不能跨事件循环使用。"""
     app = build_projects_client(monkeypatch, manager, session_factory=session_factory).app
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://testserver") as http:
         yield http
@@ -96,11 +102,14 @@ async def test_renamed_restore_moves_session_transcripts_to_the_new_key(tmp_path
             await SessionRepository(session).create("demo", sid, title="旧会话")
     adapter = SdkTranscriptAdapter(store)
     event_log = EventLogService(EventLogStore(session_factory=session_factory), adapter)
+    # SID already has an event log (the UI was opened); OLD_ONLY_SID has only a transcript (an old session from before
+    # the event log existed)
     # SID 已有事件日志（界面打开过）；OLD_ONLY_SID 只有 transcript（事件日志上线前的旧会话）
     assert len(await event_log.list_entries(SID, old_dir)) == 2
 
     async with _client(monkeypatch, manager, session_factory) as client:
         assert (await client.delete("/api/v1/projects/demo")).status_code == 200
+        # A new same-named project occupies the same storage key; its sessions do not move with the restore
         # 同名新项目占用同一个存储键，它的会话不随恢复搬走
         _create(manager, "New")
         await store.append({"project_key": old_key, "session_id": NEW_DEMO_SID}, _transcript(NEW_DEMO_SID, old_dir))
@@ -121,14 +130,18 @@ async def test_renamed_restore_moves_session_transcripts_to_the_new_key(tmp_path
     assert {summary["session_id"] for summary in await store.list_session_summaries(new_key)} == {SID, OLD_ONLY_SID}
     assert {summary["session_id"] for summary in await store.list_session_summaries(old_key)} == {NEW_DEMO_SID}
     assert {row["session_id"] for row in await store.list_sessions(new_key)} == {SID, OLD_ONLY_SID}
+    # Sessions of the newly created same-named demo stay under the old key as is
     # 新建的同名 demo 的会话原样留在旧键下
     assert len(await store.load({"project_key": old_key, "session_id": NEW_DEMO_SID}) or []) == 2
     assert await store.load({"project_key": new_key, "session_id": NEW_DEMO_SID}) is None
 
+    # UI history: those with an event log stay complete; old sessions with only a transcript are lazily generated at the
+    # new path and are readable too
     # 界面历史：已有事件日志的仍完整；只有 transcript 的旧会话按新路径懒生成，同样读得到
     assert len(await event_log.list_entries(SID, new_dir)) == 2
     assert len(await event_log.list_entries(OLD_ONLY_SID, new_dir)) == 2
 
+    # Resume chat: the SDK materializes resume from the store using the key derived from the new path
     # 续聊：SDK 按新路径派生的键从 store 物化 resume
     materialized = await materialize_resume_session(
         ClaudeAgentOptions(cwd=str(new_dir), resume=SID, session_store=store)
@@ -138,7 +151,10 @@ async def test_renamed_restore_moves_session_transcripts_to_the_new_key(tmp_path
 
 
 async def test_renamed_restore_moves_local_sdk_transcripts(tmp_path, monkeypatch, session_factory):
-    """``ARCREEL_SDK_SESSION_STORE=off`` 时 SDK 只读本地 jsonl，它们同样移到新键目录下。"""
+    """With ``ARCREEL_SDK_SESSION_STORE=off`` the SDK reads only local jsonl, and those also move to the new key
+    directory.
+
+    ``ARCREEL_SDK_SESSION_STORE=off`` 时 SDK 只读本地 jsonl，它们同样移到新键目录下。"""
     sdk_projects_dir = tmp_path / "cfg" / "projects"
     monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path / "cfg"))
     monkeypatch.setenv("ARCREEL_SDK_SESSION_STORE", "off")
@@ -220,6 +236,8 @@ async def test_moved_data_root_then_renamed_restore_keeps_both_projects_sessions
     async with session_factory() as session:
         await SessionRepository(session).create("demo", NEW_DEMO_SID)
 
+    # The startup migration chain uses the real implementation: layout migration -> session key alignment -> local
+    # transcript import.
     # 启动迁移链使用真实实现：布局迁移 → 会话键对齐 → 本地 transcript 导入。
     await migrate_data_root_layout(new_root, session_factory=session_factory, sdk_config_dir=sdk_config_dir)
     await align_session_keys(

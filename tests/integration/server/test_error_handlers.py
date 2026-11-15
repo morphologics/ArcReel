@@ -1,4 +1,6 @@
-"""app 级异常处理器测试：状态码映射、Accept-Language 翻译、脱敏。"""
+"""App-level exception handler tests: status code mapping, Accept-Language translation, redaction.
+
+app 级异常处理器测试：状态码映射、Accept-Language 翻译、脱敏。"""
 
 import tempfile
 from pathlib import Path
@@ -16,6 +18,7 @@ from lib.infra.api_errors import ApiError, BadRequestError, NotFoundError, Unpro
 from lib.script.script_editor import ScriptEditError
 from server.error_handlers import register_error_handlers
 
+# Built at runtime from the system tmp directory; no machine-specific absolute paths committed.
 # 运行时基于系统 tmp 目录构造，不提交机器特定的绝对路径。
 _SERVER_PATH = str(Path(tempfile.gettempdir()) / "projects" / "demo" / "episode_1.json")
 
@@ -127,13 +130,19 @@ class TestApiErrorHandler:
         assert resp.json()["detail"] == "Đoạn 'E1S01' không tồn tại"
 
     def test_diagnostic_absent_when_not_supplied(self):
-        """未带诊断信息时响应体只有摘要，既有消费方读到的形状不变。"""
+        """Without diagnostic info the response body has only the summary; the shape existing consumers read is
+        unchanged.
+
+        未带诊断信息时响应体只有摘要，既有消费方读到的形状不变。"""
         client = _make_client()
         resp = client.get("/api-error-404")
         assert "diagnostic" not in resp.json()
 
     def test_diagnostic_carries_technical_detail_beside_summary(self):
-        """字段名 / schema 这类技术信息只进 diagnostic，detail 保持产品语言摘要。"""
+        """Technical info such as field names / schema goes only into diagnostic; detail stays a product-language
+        summary.
+
+        字段名 / schema 这类技术信息只进 diagnostic，detail 保持产品语言摘要。"""
         client = _make_client()
         resp = client.get("/api-error-422-with-diagnostic")
         assert resp.status_code == 422
@@ -161,6 +170,7 @@ class TestLibExceptionHandlers:
         client = _make_client()
         resp = client.get("/task-spec-error")
         assert resp.status_code == 400
+        # detail is the translated finished text, not a bare code
         # detail 是翻译后的成品文案，不是裸 code
         assert resp.json()["detail"] != "prompt_text_empty"
 
@@ -187,7 +197,10 @@ class TestLibExceptionHandlers:
         assert "损坏" in resp.json()["detail"]
 
     def test_script_edit_error_keyed_reason_translated_en(self):
-        """带 key/params 的 ScriptEditError（如 resolve_items 抛出的那种）en 请求下，
+        """For a ScriptEditError with key/params (like those raised by resolve_items) in an en request,
+        reason must be translated to English, without mixing in the original Chinese.
+
+        带 key/params 的 ScriptEditError（如 resolve_items 抛出的那种）en 请求下，
         reason 须按英文翻译，不得混入中文原文。"""
         client = _make_client()
         resp = client.get("/script-edit-error-keyed", headers={"Accept-Language": "en"})
@@ -247,7 +260,11 @@ def _make_cors_client(allow_origins, allow_credentials) -> TestClient:
 
 
 class TestUnexpectedErrorCorsHeaders:
-    """ServerErrorMiddleware 兜底发 500 时绕过 CORSMiddleware（走最外层原始 send），
+    """When ServerErrorMiddleware sends the fallback 500 it bypasses CORSMiddleware (using the outermost raw send),
+    so the handler must add CORS headers by hand, otherwise a cross-origin frontend treats the 500 as a network
+    error.
+
+    ServerErrorMiddleware 兜底发 500 时绕过 CORSMiddleware（走最外层原始 send），
     handler 需手工补齐 CORS 头，否则跨域前端把 500 当成 network error。"""
 
     def test_wildcard_origin_gets_wildcard_header(self):
@@ -278,6 +295,7 @@ class TestUnexpectedErrorCorsHeaders:
         assert "access-control-allow-origin" not in resp.headers
 
     def test_default_kwargs_fall_back_to_wildcard(self):
+        # Conservative default when register_error_handlers gets no cors argument: wildcard origins, no credentials.
         # register_error_handlers 不传 cors 参数时的保守默认值：通配 origins，不开 credentials。
         app = FastAPI()
         register_error_handlers(app)

@@ -1,4 +1,6 @@
-"""广告/短片剧本生成 prompt 构建器测试。"""
+"""Tests for the ad/short script generation prompt builder.
+
+广告/短片剧本生成 prompt 构建器测试。"""
 
 import pytest
 
@@ -35,10 +37,10 @@ class TestTierSelection:
     @pytest.mark.parametrize(
         ("target", "expected_tier"),
         [
-            (20, 15),  # 距 15 更近
+            (20, 15),  # Closer to 15 / 距 15 更近
             (25, 30),
-            (45, 30),  # 等距 30/60，取更接近默认推荐档 30 的一侧
-            (75, 60),  # 等距 60/90，取更接近 30 的 60
+            (45, 30),  # Equidistant from 30/60: take the side closer to the default recommended tier 30 / 等距 30/60，取更接近默认推荐档 30 的一侧
+            (75, 60),  # Equidistant from 60/90: take 60, closer to 30 / 等距 60/90，取更接近 30 的 60
             (100, 90),
             (8, 15),
         ],
@@ -81,24 +83,32 @@ class TestProductsInjection:
         assert "突出速干卖点，面向通勤人群" in prompt
 
     def test_voiceover_rate_injected_from_single_source(self):
-        """口播字数→时长折算语速由 lib.speech.speech_rate 注入，不写死数字；带货与通用短片两分支同源。"""
+        """The speech rate for converting voiceover character count → duration is injected from lib.speech.speech_rate, not hard-coded; the product promo and generic short branches share the source.
+
+        口播字数→时长折算语速由 lib.speech.speech_rate 注入，不写死数字；带货与通用短片两分支同源。"""
+        # The default target_language "中文" is not in the language code table → fall back to the default speech rate (zh measure, unit word "字" (character))
         # 默认 target_language「中文」不在语言代码表内 → 回退默认语速（zh 口径，量词「字」）
         default_rate = speech_rate_units_per_second(None)
         for prompt in (_build(), _build(products={})):
             assert f"约 {default_rate:g} 字/秒" in prompt
+        # Speech rate and unit word switch with target_language (en counts words), proving they are injected rather than hard-coded
         # 语速与量词随 target_language 切换（en 计词），证明是注入而非写死
         en_rate = speech_rate_units_per_second("en")
         assert en_rate != default_rate
         assert f"约 {en_rate:g} 词/秒" in _build(target_language="en")
 
     def test_project_override_wins_over_language_default(self):
-        """项目级语速覆盖生效时注入覆盖值；量词仍随语言。"""
+        """When a project-level speech rate override is in effect, the override value is injected; the unit word still follows the language.
+
+        项目级语速覆盖生效时注入覆盖值；量词仍随语言。"""
         assert "约 7.5 字/秒" in _build(speech_rate_override=7.5)
         assert "约 7.5 词/秒" in _build(target_language="en", speech_rate_override=7.5)
 
 
 class TestGenericFallback:
-    """products 为空 → 通用短片 prompt 自动分流（无带货框架，不设显式子模式开关）。"""
+    """Empty products → automatically routed to the generic short prompt (no product promo framework, no explicit sub-mode switch).
+
+    products 为空 → 通用短片 prompt 自动分流（无带货框架，不设显式子模式开关）。"""
 
     def test_no_products_drops_selling_framework(self):
         generic_prompt = _build(products={})

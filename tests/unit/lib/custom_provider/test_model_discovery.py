@@ -1,4 +1,6 @@
-"""模型发现（discover_models / infer_endpoint smoke check）单元测试。"""
+"""Unit tests for model discovery (discover_models / infer_endpoint smoke check).
+
+模型发现（discover_models / infer_endpoint smoke check）单元测试。"""
 
 from __future__ import annotations
 
@@ -17,7 +19,13 @@ from tests.http_capture import capture_http, only_request
 
 @contextmanager
 def _recorded_genai_clients(models: list[Any] | None = None) -> Generator[list[dict[str, Any]]]:
-    """genai 客户端构造的记录器：收下建客户端的参数，回一个列出给定模型的替身。
+    """Recorder for genai client construction: takes the client construction arguments and returns a
+    stand-in that lists the given models.
+
+    The contract for passing through auth and base_url is the constructor arguments themselves, so
+    assertions target the recorded arguments rather than the stand-in's call object.
+
+    genai 客户端构造的记录器：收下建客户端的参数，回一个列出给定模型的替身。
 
     鉴权与 base_url 透传的契约就是构造参数本身，断言落在记录的参数上，而不是替身的调用对象。
     """
@@ -34,12 +42,15 @@ def _recorded_genai_clients(models: list[Any] | None = None) -> Generator[list[d
 
 
 # ---------------------------------------------------------------------------
-# infer_endpoint smoke check（主体已在 test_custom_provider_endpoints.py 覆盖）
+# infer_endpoint smoke check (the main coverage is in test_custom_provider_endpoints.py) / infer_endpoint smoke check（主体已在 test_custom_provider_endpoints.py 覆盖）
 # ---------------------------------------------------------------------------
 
 
 class TestInferEndpointSmoke:
-    """轻量 smoke check：确认 infer_endpoint 仍可从 endpoints 模块导入并返回合理值。"""
+    """Lightweight smoke check: confirm infer_endpoint can still be imported from the endpoints module and
+    returns sensible values.
+
+    轻量 smoke check：确认 infer_endpoint 仍可从 endpoints 模块导入并返回合理值。"""
 
     def test_text_model(self):
         from lib.custom_provider.endpoints import infer_endpoint
@@ -54,6 +65,8 @@ class TestInferEndpointSmoke:
     def test_video_model(self):
         from lib.custom_provider.endpoints import infer_endpoint
 
+        # Kling video converges to the native kling-video (the video family includes kling, no longer defaults
+        # to openai-video)
         # 可灵视频收敛到原生 kling-video（视频 family 含 kling，不再默认落 openai-video）
         assert infer_endpoint("kling-v2", "openai") == "kling-video"
         assert infer_endpoint("sora-2", "openai") == "openai-video"
@@ -72,7 +85,9 @@ class TestInferEndpointSmoke:
 class TestDiscoverModelsOpenAI:
     @patch("lib.custom_provider.discovery.OpenAI")
     async def test_basic_discovery(self, mock_openai_cls):
-        """基本模型发现流程，返回 endpoint 字段。"""
+        """Basic model discovery flow, returning the endpoint field.
+
+        基本模型发现流程，返回 endpoint 字段。"""
         mock_client = MagicMock()
         mock_openai_cls.return_value = mock_client
 
@@ -92,22 +107,25 @@ class TestDiscoverModelsOpenAI:
             api_key="sk-test",
         )
 
-        # 鉴权与 base_url 原样透传到 SDK 客户端构造参数
+        # Auth and base_url are passed through as-is to the SDK client constructor arguments / 鉴权与 base_url 原样透传到 SDK 客户端构造参数
         mock_openai_cls.assert_called_once_with(
             api_key="sk-test",
             base_url="https://api.example.com/v1",
         )
         assert len(result) == 3
-        # 按 id 排序
+        # Sorted by id / 按 id 排序
         ids = [m["model_id"] for m in result]
         assert ids == ["dall-e-3", "gpt-4o", "kling-v2"]
-        # 每项都有 endpoint 字段
+        # Every item has an endpoint field / 每项都有 endpoint 字段
         for m in result:
             assert "endpoint" in m
 
     @patch("lib.custom_provider.discovery.OpenAI")
     async def test_each_model_reports_the_entry_it_maps_to(self, mock_openai_cls):
-        """发现结果带出按名字对应到的条目，对应不上时为 None：新建模型时就能看到哪些会记为未定价。"""
+        """Discovery results carry the entry matched by name, or None when nothing matches: when creating
+        models you can see which will be recorded as unpriced.
+
+        发现结果带出按名字对应到的条目，对应不上时为 None：新建模型时就能看到哪些会记为未定价。"""
         mock_client = MagicMock()
         mock_openai_cls.return_value = mock_client
         known = MagicMock()
@@ -126,7 +144,10 @@ class TestDiscoverModelsOpenAI:
 
     @patch("lib.custom_provider.discovery.OpenAI")
     async def test_amphibious_model_maps_by_name_inferred_media_type(self, mock_openai_cls):
-        """两栖模型不限媒体类型时对应不上，按名字推断的媒体类型取条目，端点在条目的媒体类型内选。"""
+        """An amphibious model does not match when media type is unrestricted; take the entry by the media
+        type inferred from the name, and pick the endpoint within the entry's media type.
+
+        两栖模型不限媒体类型时对应不上，按名字推断的媒体类型取条目，端点在条目的媒体类型内选。"""
         mock_client = MagicMock()
         mock_openai_cls.return_value = mock_client
         omni = MagicMock()
@@ -143,7 +164,9 @@ class TestDiscoverModelsOpenAI:
 
     @patch("lib.custom_provider.discovery.OpenAI")
     async def test_default_marking(self, mock_openai_cls):
-        """每种 media_type 的第一个模型（排序后）标为 is_default=True。"""
+        """The first model of each media_type (after sorting) is marked is_default=True.
+
+        每种 media_type 的第一个模型（排序后）标为 is_default=True。"""
         mock_client = MagicMock()
         mock_openai_cls.return_value = mock_client
 
@@ -165,6 +188,7 @@ class TestDiscoverModelsOpenAI:
             api_key="sk-test",
         )
 
+        # Sorted by id: dall-e-4, gpt-5.4, gpt-5.4-mini, gpt-image-1.5
         # 按 id 排序: dall-e-4, gpt-5.4, gpt-5.4-mini, gpt-image-1.5
         # openai-images: dall-e-4 (default), gpt-image-1.5
         # openai-chat: gpt-5.4 (default), gpt-5.4-mini
@@ -178,7 +202,10 @@ class TestDiscoverModelsOpenAI:
 
     @patch("lib.custom_provider.discovery.OpenAI")
     async def test_tts_model_derives_audio_media_type(self, mock_openai_cls):
-        """TTS 模型推到 openai-tts，audio 自成 media_type 默认组（不与 text 默认互斥）。"""
+        """TTS models are inferred as openai-tts, and audio forms its own media_type default group (not
+        mutually exclusive with the text default).
+
+        TTS 模型推到 openai-tts，audio 自成 media_type 默认组（不与 text 默认互斥）。"""
         mock_client = MagicMock()
         mock_openai_cls.return_value = mock_client
 
@@ -201,14 +228,16 @@ class TestDiscoverModelsOpenAI:
         audio_models = [m for m in result if m["endpoint"] == "openai-tts"]
         text_models = [m for m in result if m["endpoint"] == "openai-chat"]
         assert [m["model_id"] for m in audio_models] == ["tts-1", "tts-1-hd"]
-        # audio 组首个为默认，且不影响 text 组自己的默认
+        # The first of the audio group is the default, without affecting the text group's own default / audio 组首个为默认，且不影响 text 组自己的默认
         assert audio_models[0]["is_default"] is True
         assert audio_models[1]["is_default"] is False
         assert text_models[0]["is_default"] is True
 
     @patch("lib.custom_provider.discovery.OpenAI")
     async def test_all_enabled(self, mock_openai_cls):
-        """所有发现的模型都应标记为 is_enabled=True。"""
+        """All discovered models should be marked is_enabled=True.
+
+        所有发现的模型都应标记为 is_enabled=True。"""
         mock_client = MagicMock()
         mock_openai_cls.return_value = mock_client
 
@@ -228,7 +257,9 @@ class TestDiscoverModelsOpenAI:
 
     @patch("lib.custom_provider.discovery.OpenAI")
     async def test_display_name_equals_model_id(self, mock_openai_cls):
-        """display_name 应等于 model_id。"""
+        """display_name should equal model_id.
+
+        display_name 应等于 model_id。"""
         mock_client = MagicMock()
         mock_openai_cls.return_value = mock_client
 
@@ -248,7 +279,9 @@ class TestDiscoverModelsOpenAI:
 
     @patch("lib.custom_provider.discovery.OpenAI")
     async def test_api_unreachable(self, mock_openai_cls):
-        """API 不可达时应抛出异常。"""
+        """An exception should be raised when the API is unreachable.
+
+        API 不可达时应抛出异常。"""
         mock_client = MagicMock()
         mock_openai_cls.return_value = mock_client
         mock_client.models.list.side_effect = Exception("Connection refused")
@@ -264,7 +297,9 @@ class TestDiscoverModelsOpenAI:
 
     @patch("lib.custom_provider.discovery.OpenAI")
     async def test_empty_model_list(self, mock_openai_cls):
-        """返回空模型列表时结果为空。"""
+        """An empty model list gives an empty result.
+
+        返回空模型列表时结果为空。"""
         mock_client = MagicMock()
         mock_openai_cls.return_value = mock_client
         mock_client.models.list.return_value = []
@@ -288,7 +323,9 @@ class TestDiscoverModelsOpenAI:
 class TestDiscoverModelsGoogle:
     @patch("lib.custom_provider.discovery.genai")
     async def test_basic_discovery(self, mock_genai):
-        """Google 格式基本模型发现。"""
+        """Basic model discovery in Google format.
+
+        Google 格式基本模型发现。"""
         mock_client = MagicMock()
         mock_genai.Client.return_value = mock_client
 
@@ -312,7 +349,9 @@ class TestDiscoverModelsGoogle:
 
     @patch("lib.custom_provider.discovery.genai")
     async def test_infer_from_model_id(self, mock_genai):
-        """通过 model_id 关键字推断 endpoint。"""
+        """Infer the endpoint from model_id keywords.
+
+        通过 model_id 关键字推断 endpoint。"""
         mock_client = MagicMock()
         mock_genai.Client.return_value = mock_client
 
@@ -338,11 +377,14 @@ class TestDiscoverModelsGoogle:
         by_id = {m["model_id"]: m for m in result}
         assert by_id["gemini-3-flash"]["endpoint"] == "gemini-generate"
         assert by_id["gemini-3-flash-image-preview"]["endpoint"] == "gemini-image"
+        # Veo under the google discovery protocol uses the native endpoint
         assert by_id["veo-3"]["endpoint"] == "gemini-video"  # google 发现协议下的 Veo 走原生端点
 
     @patch("lib.custom_provider.discovery.genai")
     async def test_default_marking_google(self, mock_genai):
-        """Google 格式的 default 标记逻辑。"""
+        """Default marking logic in Google format.
+
+        Google 格式的 default 标记逻辑。"""
         mock_client = MagicMock()
         mock_genai.Client.return_value = mock_client
 
@@ -366,7 +408,9 @@ class TestDiscoverModelsGoogle:
 
     @patch("lib.custom_provider.discovery.genai")
     async def test_strips_models_prefix(self, mock_genai):
-        """Google API 返回的模型名带 'models/' 前缀，应去除。"""
+        """Model names returned by the Google API carry a 'models/' prefix, which should be removed.
+
+        Google API 返回的模型名带 'models/' 前缀，应去除。"""
         mock_client = MagicMock()
         mock_genai.Client.return_value = mock_client
 
@@ -386,7 +430,10 @@ class TestDiscoverModelsGoogle:
         assert result[0]["display_name"] == "gemini-3-flash"
 
     async def test_text_models_prefill_output_token_limit(self):
-        """文本模型用 outputTokenLimit 预填最大输出长度；其他媒体类型与缺这一项的模型不预填。"""
+        """Text models prefill the max output length from outputTokenLimit; other media types and models
+        lacking this item are not prefilled.
+
+        文本模型用 outputTokenLimit 预填最大输出长度；其他媒体类型与缺这一项的模型不预填。"""
         from lib.custom_provider.discovery import discover_models
 
         models = [
@@ -404,7 +451,9 @@ class TestDiscoverModelsGoogle:
         }
 
     async def test_no_base_url(self):
-        """base_url 为 None 时不传 http_options。"""
+        """When base_url is None, http_options is not passed.
+
+        base_url 为 None 时不传 http_options。"""
         from lib.custom_provider.discovery import discover_models
 
         with _recorded_genai_clients() as created:
@@ -417,7 +466,9 @@ class TestDiscoverModelsGoogle:
         assert created == [{"api_key": "test-key"}]
 
     async def test_with_base_url(self):
-        """base_url 不为空时传 http_options。"""
+        """When base_url is not empty, http_options is passed.
+
+        base_url 不为空时传 http_options。"""
         from lib.custom_provider.discovery import discover_models
 
         with _recorded_genai_clients() as created:
@@ -454,11 +505,14 @@ class TestUnknownFormat:
 
 class TestDiscoverModelsAnthropic:
     async def test_basic_discovery(self):
-        """Anthropic 协议返回的模型按 id 排序，返回项与 OpenAI/Google 路径同形态且 endpoint 为空。"""
+        """Models returned by the Anthropic protocol are sorted by id; items have the same shape as the
+        OpenAI/Google paths, with an empty endpoint.
+
+        Anthropic 协议返回的模型按 id 排序，返回项与 OpenAI/Google 路径同形态且 endpoint 为空。"""
         from lib.custom_provider.discovery import discover_models
 
         with capture_http() as http:
-            # 归一到调用根后在 path 上追加 /v1/models，子路径保留
+            # After normalizing to the call root, append /v1/models to the path, keeping the sub-path / 归一到调用根后在 path 上追加 /v1/models，子路径保留
             route = http.get("https://example.com/anthropic/v1/models").respond(
                 json={
                     "data": [
@@ -469,7 +523,7 @@ class TestDiscoverModelsAnthropic:
             )
             result = await discover_models(
                 discovery_format="anthropic",
-                base_url="https://example.com/anthropic/v1/messages",  # 整条端点，验证归一
+                base_url="https://example.com/anthropic/v1/messages",  # Full endpoint, to verify normalization / 整条端点，验证归一
                 api_key="sk-ant-test",
             )
 
@@ -494,7 +548,9 @@ class TestDiscoverModelsAnthropic:
         assert request.headers["anthropic-version"] == "2023-06-01"
 
     async def test_default_base_url_when_none(self):
-        """base_url 缺省时使用官方 https://api.anthropic.com。"""
+        """When base_url is missing, the official https://api.anthropic.com is used.
+
+        base_url 缺省时使用官方 https://api.anthropic.com。"""
         from lib.custom_provider.discovery import discover_models
 
         with capture_http() as http:
@@ -504,7 +560,10 @@ class TestDiscoverModelsAnthropic:
         assert route.call_count == 1
 
     async def test_skips_entries_without_id(self):
-        """data 中 id 缺失的条目被跳过；缺 display_name 的条目以 id 作显示名。"""
+        """Entries in data missing an id are skipped; entries missing display_name use the id as the display
+        name.
+
+        data 中 id 缺失的条目被跳过；缺 display_name 的条目以 id 作显示名。"""
         from lib.custom_provider.discovery import discover_models
 
         with capture_http() as http:
@@ -526,7 +585,10 @@ class TestDiscoverModelsAnthropic:
         ],
     )
     async def test_rejects_unsupported_base_url(self, base_url: str):
-        """带 query / fragment / userinfo 或缺 scheme 的地址在发起请求前就被拒，消息不回显输入。"""
+        """URLs with query / fragment / userinfo or without a scheme are refused before any request, and the
+        message does not echo the input.
+
+        带 query / fragment / userinfo 或缺 scheme 的地址在发起请求前就被拒，消息不回显输入。"""
         from lib.config.url_utils import InvalidAnthropicBaseUrlError
         from lib.custom_provider.discovery import discover_models
 
@@ -535,7 +597,10 @@ class TestDiscoverModelsAnthropic:
         assert "sk-leaked" not in str(exc_info.value)
 
     async def test_status_error_message_drops_request_url(self):
-        """4xx 抛的是脱敏后的 HTTPStatusError：消息只留 status 与请求 URL，不带响应体。"""
+        """A 4xx raises a sanitized HTTPStatusError: the message keeps only the status and the request URL,
+        without the response body.
+
+        4xx 抛的是脱敏后的 HTTPStatusError：消息只留 status 与请求 URL，不带响应体。"""
         base_url = "https://relay.example.com/anthropic"
         from lib.custom_provider.discovery import discover_models
 
@@ -549,7 +614,9 @@ class TestDiscoverModelsAnthropic:
         assert exc_info.value.response.status_code == 401
 
     async def test_unknown_format_raises(self):
-        """anthropic 仍是已知 format；未知 format 抛 ValueError 含 anthropic。"""
+        """anthropic is still a known format; an unknown format raises ValueError mentioning anthropic.
+
+        anthropic 仍是已知 format；未知 format 抛 ValueError 含 anthropic。"""
         from lib.custom_provider.discovery import discover_models
 
         with pytest.raises(ValueError, match="anthropic"):
@@ -557,12 +624,14 @@ class TestDiscoverModelsAnthropic:
 
 
 # ---------------------------------------------------------------------------
-# Task spec 示例 fixture
+# Task spec example fixture / Task spec 示例 fixture
 # ---------------------------------------------------------------------------
 
 
 def test_discover_openai_returns_endpoints(monkeypatch):
-    """discover_models(discovery_format='openai', ...) 返回项含 endpoint 字段。"""
+    """discover_models(discovery_format='openai', ...) returns items with an endpoint field.
+
+    discover_models(discovery_format='openai', ...) 返回项含 endpoint 字段。"""
     from lib.custom_provider import discovery
 
     fake_models = [MagicMock(id="gpt-4o"), MagicMock(id="kling-v2"), MagicMock(id="dall-e-3")]
@@ -581,6 +650,6 @@ def test_discover_openai_returns_endpoints(monkeypatch):
     assert by_id["gpt-4o"]["endpoint"] == "openai-chat"
     assert by_id["kling-v2"]["endpoint"] == "kling-video"
     assert by_id["dall-e-3"]["endpoint"] == "openai-images"
-    # 每种 media_type 仅一个 default
+    # Only one default per media_type / 每种 media_type 仅一个 default
     defaults = [m for m in result if m["is_default"]]
     assert {m["endpoint"] for m in defaults} == {"openai-chat", "kling-video", "openai-images"}

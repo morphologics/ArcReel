@@ -1,4 +1,10 @@
-"""市场路由与官方服务的 HTTP 契约：安装上报、评分代理与聚合代理。
+"""HTTP contract between the market routes and the official service: install reporting, rating proxy and aggregate
+proxy.
+
+Outbound calls to the official service are intercepted by respx at the transport layer; install reporting is a
+background task that completes along with the response under the ASGI transport.
+
+市场路由与官方服务的 HTTP 契约：安装上报、评分代理与聚合代理。
 
 官方服务出站由 respx 在 transport 层拦截；安装上报是后台任务，ASGI 传输下随响应一并完成。
 """
@@ -73,7 +79,10 @@ def _source(source_id: int, *, kind: str, canonical_key: str, index_url: str, sl
 
 @pytest.fixture
 async def market_client_factory(session_factory: async_sessionmaker[AsyncSession]) -> ClientFactory:
-    """官方市场源 1 与第三方源 2 各列出 ``example``；``base_url`` 为官方服务地址（空串即关闭）。"""
+    """Official market source 1 and third-party source 2 both list ``example``; ``base_url`` is the official service
+    address (empty string means off).
+
+    官方市场源 1 与第三方源 2 各列出 ``example``；``base_url`` 为官方服务地址（空串即关闭）。"""
     async with session_factory() as session:
         session.add(
             _source(
@@ -348,6 +357,8 @@ async def test_aggregates_only_query_official_entries(market_client_factory: Cli
                 ("other", {"installs": 0, "rating_count": -1, "rating_average": None}),
                 ("other", {"installs": 0, "rating_count": 3, "rating_average": 0.5}),
                 ("other", {"installs": 0, "rating_count": 3, "rating_average": 5.01}),
+                # The count matches but the entry identity does not: another entry's numbers must not be attached to the requested
+                # entry.
                 # 数量对得上但条目身份不符：不能把别的条目的数字挂到请求的条目上。
                 ("example", {"installs": 0, "rating_count": 0, "rating_average": None}),
             )

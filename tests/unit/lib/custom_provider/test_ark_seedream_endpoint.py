@@ -1,4 +1,11 @@
-"""自定义供应商的方舟 Seedream 图片端点：经端点注册表构造调用通道，respx 捕获真实发出的请求。
+"""Ark Seedream image endpoint of a custom provider: build the call channel through the endpoint registry,
+and capture the real outgoing request with respx.
+
+Ark has no ``/images/edits``; text-to-image and generation with reference images both go to
+``/images/generations``, with reference images in the JSON ``image`` field. The reference image limit,
+size derivation and metering are the same as the built-in Ark backend.
+
+自定义供应商的方舟 Seedream 图片端点：经端点注册表构造调用通道，respx 捕获真实发出的请求。
 
 方舟没有 ``/images/edits``，文生图与带参考图生成都走 ``/images/generations``，参考图放在 JSON 的
 ``image`` 字段。参考图上限、尺寸推导与计量都与内置方舟后端同一份。
@@ -82,7 +89,7 @@ async def test_text_to_image_posts_generations_with_the_ark_size(tmp_path: Path)
     assert body["model"] == _MODEL
     assert body["prompt"] == "猫"
     assert body["size"] == "1600x2848"
-    # 方舟 SDK 把未传的字段序列化为 null
+    # The Ark SDK serializes unset fields as null / 方舟 SDK 把未传的字段序列化为 null
     assert body.get("image") is None
     assert result.usage is not None
     assert result.usage.quantities["output_images"] == 1
@@ -121,7 +128,10 @@ async def test_reference_images_beyond_the_ark_limit_are_truncated(tmp_path: Pat
 
 
 async def test_seedream_5_pro_on_the_custom_endpoint_caps_references_at_ten(tmp_path: Path):
-    """5.0 pro / flash 经 ark-seedream 复用内置后端时按型号取 10 张上限，截断、计量同口径。"""
+    """5.0 pro / flash reusing the built-in backend via ark-seedream get a per-model limit of 10 images,
+    with truncation and metering on the same rule.
+
+    5.0 pro / flash 经 ark-seedream 复用内置后端时按型号取 10 张上限，截断、计量同口径。"""
     model = "doubao-seedream-5-0-pro-260628"
     backend = ENDPOINT_REGISTRY["ark-seedream"].build_backend(_PROVIDER, model)
     assert await backend.reference_image_limit() == 10
@@ -154,9 +164,9 @@ async def test_generate_path_override_is_relative_to_the_raw_base_url(tmp_path: 
 @pytest.mark.parametrize(
     ("base_url", "generations_url"),
     [
-        # 只填 host：补全方舟协议挂载路径 /api/v3
+        # Only the host is filled: add the Ark protocol mount path /api/v3 / 只填 host：补全方舟协议挂载路径 /api/v3
         ("https://ark.cn-beijing.volces.com", "https://ark.cn-beijing.volces.com/api/v3/images/generations"),
-        # 已写到 /api/v3：不重复拼接
+        # Already ends with /api/v3: do not append it again / 已写到 /api/v3：不重复拼接
         ("https://relay.example.com/api/v3/", "https://relay.example.com/api/v3/images/generations"),
     ],
 )
@@ -188,7 +198,10 @@ def test_estimate_matches_the_builtin_ark_backend(reference_count):
 
 
 async def test_seedream_saved_on_openai_images_explains_the_404_from_images_edits(tmp_path: Path):
-    """OpenAI 图片端点上的 Seedream 配置：带参考图遇到 404 时提示更换端点。"""
+    """Seedream configured on the OpenAI image endpoint: on a 404 with reference images, hint to switch
+    endpoints.
+
+    OpenAI 图片端点上的 Seedream 配置：带参考图遇到 404 时提示更换端点。"""
     backend = ENDPOINT_REGISTRY["openai-images"].build_backend(_PROVIDER, _MODEL)
     with capture_http() as router:
         router.post("https://relay.example/proxy/v1/images/edits").mock(

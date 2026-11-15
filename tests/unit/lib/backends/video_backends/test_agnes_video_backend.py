@@ -1,4 +1,6 @@
-"""AgnesVideoBackend 单元测试（respx 捕获出站请求，假表压缩轮询等待）。"""
+"""AgnesVideoBackend unit tests (respx captures outbound requests; a fake clock compresses polling waits).
+
+AgnesVideoBackend 单元测试（respx 捕获出站请求，假表压缩轮询等待）。"""
 
 from __future__ import annotations
 
@@ -28,12 +30,15 @@ from tests.http_capture import capture_http, only_request, request_json
 
 _BASE_URL = "https://x/v1"
 _GATEWAY_BASE_URL = "https://apihub.agnes-ai.com/v1"
+# The two download domains, the final-video CDN and the gateway's video library, for the download route to intercept as a whole.
 # 成片 CDN 与网关成片库两个下载域名，供下载路由整体拦截。
 _DOWNLOAD_HOSTS = r"https://(cdn\.agnes|platform-outputs\.agnes-ai\.com)/"
 
 
 class _AgnesRoutes(NamedTuple):
-    """Agnes 的四条出站流量：建任务、任务轮询、成片查询、成片下载。"""
+    """The four outbound flows of Agnes: task creation, task polling, final-video query, final-video download.
+
+    Agnes 的四条出站流量：建任务、任务轮询、成片查询、成片下载。"""
 
     submit: respx.Route
     poll: respx.Route
@@ -62,7 +67,10 @@ def _queued(task_id: str = "task-1") -> httpx.Response:
 
 
 def _completed(task_id: str = "task-1", url: str = "https://cdn.agnes/out.mp4", **extra) -> dict:
-    """完成态响应：成片 URL 落在直接字段 ``url``；``remixed_from_video_id`` 是 remix 来源，
+    """Completed-state response: the final-video URL is in the direct field ``url``; ``remixed_from_video_id`` is the remix source,
+    always null for plain image/text-to-video; only an explicit override via extra takes the old-gateway compatibility path.
+
+    完成态响应：成片 URL 落在直接字段 ``url``；``remixed_from_video_id`` 是 remix 来源，
     普通图生/文生视频恒为 null，用 extra 显式覆盖才走旧网关兼容路径。
     """
     body = {
@@ -140,7 +148,7 @@ class TestNumFramesAndSize:
 
         frames = _duration_to_num_frames(duration)
         assert frames == expected_frames
-        assert (frames - 1) % 8 == 0  # 形如 8n+1
+        assert (frames - 1) % 8 == 0  # Of the form 8n+1. / 形如 8n+1
 
     def test_resolve_size_portrait_explicit_hw(self):
         from lib.backends.video_backends.agnes import _resolve_size
@@ -157,10 +165,10 @@ class TestDurationCoercion:
         [
             (10, 10),
             ("10.0", 10),
-            ("9.6", 10),  # half-up 取整，不少计费秒
+            ("9.6", 10),  # half-up rounding, no billed seconds lost. / half-up 取整，不少计费秒
             ("9.4", 9),
             (4.5, 5),
-            (0, None),  # 非正值回 None，由 caller 回落请求时长
+            (0, None),  # Non-positive values return None; the caller falls back to the requested duration. / 非正值回 None，由 caller 回落请求时长
             ("0", None),
             (-3, None),
             ("abc", None),
@@ -175,22 +183,28 @@ class TestDurationCoercion:
     def test_extract_duration_reads_top_level_seconds_not_usage(self):
         from lib.backends.video_backends.agnes import _extract_duration_seconds
 
+        # Top-level seconds is the source of truth for the final-video duration; usage.duration_seconds is task processing time and must not be read.
         # 顶层 seconds 是成片时长真相源；usage.duration_seconds 是任务处理耗时，不得读取
         assert _extract_duration_seconds({"seconds": "8.0", "usage": {"duration_seconds": 184}}, None, fallback=5) == 8
         assert _extract_duration_seconds({"seconds": "7"}, None, fallback=5) == 7
+        # seconds missing (including non-positive/unparseable) always falls back to the requested duration, usage is ignored.
         # seconds 缺失（含非正值/不可解析）一律回落请求时长，不看 usage
         assert _extract_duration_seconds({"usage": {"duration_seconds": 184}}, None, fallback=5) == 5
         assert _extract_duration_seconds({"seconds": "0"}, None, fallback=5) == 5
         assert _extract_duration_seconds({}, None, fallback=5) == 5
+        # When the terminal state has no seconds, read seconds from the video_id follow-up query response instead.
         # 终态无 seconds 时改读 video_id 二次查询响应的 seconds
         assert _extract_duration_seconds({}, {"seconds": "8.0"}, fallback=5) == 8
+        # Only when neither the terminal state nor the query response has seconds, fall back to the requested duration.
         # 终态与查询响应均无 seconds 才回落请求时长
         assert _extract_duration_seconds({}, {}, fallback=5) == 5
 
 
 class TestTextToVideo:
     async def test_reference_audio_rejected_before_submit(self, tmp_path: Path):
-        """请求体没有参考音频字段，拒绝而不是丢弃后照常提交。"""
+        """The request body has no reference-audio field: reject rather than drop it and submit as usual.
+
+        请求体没有参考音频字段，拒绝而不是丢弃后照常提交。"""
         audio = tmp_path / "voice.mp3"
         audio.write_bytes(b"ID3")
         with _agnes_api(base_url=_GATEWAY_BASE_URL) as routes:
@@ -224,7 +238,7 @@ class TestTextToVideo:
         assert result.duration_seconds == 5
         assert result.task_id == "task-42"
         assert result.video_uri == "https://cdn.agnes/out.mp4"
-        # Agnes 无音频能力，成片恒无声
+        # Agnes has no audio capability; the final video is always silent. / Agnes 无音频能力，成片恒无声
         assert result.generate_audio is False
 
         submitted = only_request(routes.submit)
@@ -237,20 +251,22 @@ class TestTextToVideo:
         assert body["num_frames"] == 121
         assert body["frame_rate"] == 24
         assert body["seed"] == 7
-        # 文生视频：无任何图像通道
+        # Text-to-video: no image channel at all. / 文生视频：无任何图像通道
         assert "image" not in body
         assert "extra_body" not in body
         assert submitted.headers["Authorization"] == "Bearer sk-test"
-        # submit 用长超时覆盖上游长阻塞
+        # submit uses a long timeout to cover upstream long blocking. / submit 用长超时覆盖上游长阻塞
         assert submitted.extensions["timeout"]["read"] == 300.0
 
-        # 下载打完成态的成片 URL，不带鉴权头
+        # The download hits the completed state's final-video URL, without auth headers. / 下载打完成态的成片 URL，不带鉴权头
         downloaded = only_request(routes.download)
         assert str(downloaded.url) == "https://cdn.agnes/out.mp4"
         assert "Authorization" not in downloaded.headers
 
     async def test_submit_prefers_task_id_for_v20(self, tmp_path: Path):
-        """v2.0 的轮询路径按 task_id；响应同时带 video_id 时不得改用后者。"""
+        """v2.0 polls by task_id; when the response also carries video_id, it must not switch to that.
+
+        v2.0 的轮询路径按 task_id；响应同时带 video_id 时不得改用后者。"""
         with _agnes_api(base_url=_GATEWAY_BASE_URL) as routes:
             routes.submit.mock(return_value=_json({"task_id": "task-v20", "video_id": "video-v20", "status": "queued"}))
             routes.poll.mock(return_value=_json(_completed("task-v20", seconds="5")))
@@ -281,7 +297,9 @@ class TestTextToVideo:
 
 class TestImageChannels:
     async def test_start_image_is_bare_base64_top_level_image(self, tmp_path: Path):
-        """起始图为裸 base64（无 data: 前缀），未复用 data-URI helper。"""
+        """The start image is bare base64 (no data: prefix); the data-URI helper is not reused.
+
+        起始图为裸 base64（无 data: 前缀），未复用 data-URI helper。"""
         img_bytes = b"\x89PNG\r\nfake-start"
         img_path = _write_image(tmp_path / "start.png", img_bytes)
 
@@ -296,7 +314,7 @@ class TestImageChannels:
 
         sent = body["image"]
         assert sent == base64.b64encode(img_bytes).decode("ascii")
-        # 裸 base64，绝不带 data: 前缀
+        # Bare base64, never with a data: prefix. / 裸 base64，绝不带 data: 前缀
         assert not sent.startswith("data:")
         assert "extra_body" not in body
 
@@ -313,6 +331,7 @@ class TestImageChannels:
 
             body = _sent_payload(routes)
 
+        # Single channel: keyframes go via extra_body, not the top-level image.
         assert "image" not in body  # 单通道：keyframes 走 extra_body，不占顶层 image
         extra = body["extra_body"]
         assert extra["mode"] == "keyframes"
@@ -337,7 +356,7 @@ class TestImageChannels:
 
         assert "image" not in body
         extra = body["extra_body"]
-        assert "mode" not in extra  # 参考生视频不带 keyframes mode
+        assert "mode" not in extra  # Reference-to-video carries no keyframes mode. / 参考生视频不带 keyframes mode
         assert extra["image"] == [
             base64.b64encode(b"ref-1").decode("ascii"),
             base64.b64encode(b"ref-2").decode("ascii"),
@@ -356,7 +375,9 @@ class TestImageChannels:
 
     @pytest.mark.parametrize("with_start", [True, False])
     async def test_reference_images_with_frame_fails_loud(self, tmp_path: Path, with_start: bool):
-        """参考图与首/尾帧同时给出时 fail-loud（单通道互斥），不静默走参考图分支丢掉关键帧。"""
+        """Reference images given together with first/end frames fail loudly (single channel, mutually exclusive), rather than silently taking the reference branch and dropping keyframes.
+
+        参考图与首/尾帧同时给出时 fail-loud（单通道互斥），不静默走参考图分支丢掉关键帧。"""
         ref = _write_image(tmp_path / "r.png", b"ref")
         frame = _write_image(tmp_path / "f.png", b"frame")
 
@@ -376,7 +397,9 @@ class TestImageChannels:
             assert routes.submit.call_count == 0
 
     async def test_end_image_only_fails_loud(self, tmp_path: Path):
-        """仅提供尾帧（无首帧）时 fail-loud——Agnes 无独立尾帧通道，不静默退化为文生视频。"""
+        """Only an end frame (no first frame) fails loudly -- Agnes has no separate end-frame channel, so it does not silently degrade to text-to-video.
+
+        仅提供尾帧（无首帧）时 fail-loud——Agnes 无独立尾帧通道，不静默退化为文生视频。"""
         end = _write_image(tmp_path / "e.png", b"end")
 
         with _agnes_api() as routes:
@@ -397,7 +420,9 @@ class TestImageChannels:
             assert routes.submit.call_count == 0
 
     async def test_missing_end_image_fails_loud_with_end_code(self, tmp_path: Path):
-        """首尾帧模式下尾帧缺失：错误码指向尾帧而非首帧。"""
+        """End frame missing in first-last mode: the error code points at the end frame, not the first frame.
+
+        首尾帧模式下尾帧缺失：错误码指向尾帧而非首帧。"""
         start = _write_image(tmp_path / "s.png", b"start-bytes")
 
         with _agnes_api() as routes:
@@ -409,7 +434,9 @@ class TestImageChannels:
             assert routes.submit.call_count == 0
 
     async def test_empty_path_objects_degrade_to_text_to_video(self, tmp_path: Path):
-        """空 Path（``Path("")`` 塌成 ``Path(".")``）应归一化为 None，回落文生视频而非误报无法读取。"""
+        """An empty Path (``Path("")`` collapses to ``Path(".")``) should be normalized to None and fall back to text-to-video, not misreported as unreadable.
+
+        空 Path（``Path("")`` 塌成 ``Path(".")``）应归一化为 None，回落文生视频而非误报无法读取。"""
         with _agnes_api() as routes:
             routes.submit.mock(return_value=_queued("t-empty"))
             routes.poll.mock(return_value=_json(_completed("t-empty")))
@@ -438,7 +465,9 @@ class TestFailureAndTimeout:
             assert routes.download.call_count == 0
 
     async def test_non_failed_terminal_status_fails_fast(self, tmp_path: Path):
-        """上游以 cancelled 等非 failed 失败态收尾时快速失败，不轮询到 timeout。"""
+        """When upstream ends in a non-failed failure state such as cancelled, fail fast rather than polling until timeout.
+
+        上游以 cancelled 等非 failed 失败态收尾时快速失败，不轮询到 timeout。"""
         with _agnes_api() as routes:
             routes.submit.mock(return_value=_queued("t-cxl"))
             routes.poll.mock(
@@ -464,7 +493,10 @@ class TestFailureAndTimeout:
             assert routes.download.call_count == 0
 
     async def test_completed_with_null_remixed_from_video_id_uses_video_id_query(self, tmp_path: Path):
-        """普通图生/文生视频完成态 remixed_from_video_id 恒为 null，成片地址须按 video_id
+        """For plain image/text-to-video the completed state's remixed_from_video_id is always null; the final-video URL must be
+        fetched by a follow-up query with video_id.
+
+        普通图生/文生视频完成态 remixed_from_video_id 恒为 null，成片地址须按 video_id
         二次查询取得。"""
         recorded: list[tuple[ProviderResponseStage, object]] = []
 
@@ -490,6 +522,7 @@ class TestFailureAndTimeout:
             backend = AgnesVideoBackend(api_key="k", model="agnes-video-v2.0", base_url=_GATEWAY_BASE_URL)
             result = await backend.generate(_request(tmp_path, on_provider_response=_record))
 
+            # The follow-up query hits /agnesapi under the gateway root with video_id as the param (no /v1, no task_id).
             # 二次查询打网关根下的 /agnesapi，按 video_id 传参（不带 /v1，也不用 task_id）
             assert str(only_request(routes.query).url) == "https://apihub.agnes-ai.com/agnesapi?video_id=vid-123"
 
@@ -499,7 +532,9 @@ class TestFailureAndTimeout:
         assert [stage for stage, _body in recorded] == ["submit", "poll", "result"]
 
     async def test_completed_with_direct_url_field_skips_video_id_query(self, tmp_path: Path):
-        """完成态直接带 url 字段时直接下载，不发起 video_id 二次查询。"""
+        """When the completed state carries a url field directly, download it directly without a video_id follow-up query.
+
+        完成态直接带 url 字段时直接下载，不发起 video_id 二次查询。"""
         with _agnes_api() as routes:
             routes.submit.mock(return_value=_queued("t-direct"))
             routes.poll.mock(
@@ -517,12 +552,15 @@ class TestFailureAndTimeout:
             backend = AgnesVideoBackend(api_key="k", model="agnes-video-v2.0", base_url=_BASE_URL)
             result = await backend.generate(_request(tmp_path))
 
-            assert routes.query.call_count == 0  # 未发起二次查询
+            assert routes.query.call_count == 0  # No follow-up query made. / 未发起二次查询
 
         assert result.video_uri == "https://cdn.agnes/direct.mp4"
 
     async def test_completed_with_url_shaped_remixed_from_video_id_downloads_directly(self, tmp_path: Path):
-        """旧网关把成片 URL 回填在 remixed_from_video_id：值是 URL 形态时仍作下载地址，
+        """Old gateways backfill the final-video URL into remixed_from_video_id: when the value is URL-shaped it is still used as
+        the download URL, without a video_id follow-up query.
+
+        旧网关把成片 URL 回填在 remixed_from_video_id：值是 URL 形态时仍作下载地址，
         不发起 video_id 二次查询。"""
         with _agnes_api() as routes:
             routes.submit.mock(return_value=_queued("t-legacy"))
@@ -545,7 +583,9 @@ class TestFailureAndTimeout:
         assert result.video_uri == "https://cdn.agnes/legacy.mp4"
 
     async def test_remixed_from_video_id_non_url_value_not_used_as_download_url(self, tmp_path: Path):
-        """remixed_from_video_id 是非 URL 形态的 remix 来源 ID 时不得当下载地址，转向 video_id 二次查询。"""
+        """When remixed_from_video_id is a non-URL remix source ID it must not be used as the download URL; switch to the video_id follow-up query.
+
+        remixed_from_video_id 是非 URL 形态的 remix 来源 ID 时不得当下载地址，转向 video_id 二次查询。"""
         with _agnes_api() as routes:
             routes.submit.mock(return_value=_queued("t-remix-id"))
             routes.poll.mock(
@@ -554,7 +594,7 @@ class TestFailureAndTimeout:
                         "task_id": "t-remix-id",
                         "video_id": "vid-456",
                         "status": "completed",
-                        # 非 URL 形态：真正的 remix 来源 ID
+                        # Non-URL shape: a real remix source ID. / 非 URL 形态：真正的 remix 来源 ID
                         "remixed_from_video_id": "src-video-abc",
                     }
                 )
@@ -567,7 +607,10 @@ class TestFailureAndTimeout:
         assert result.video_uri == "https://cdn.agnes/from-query.mp4"
 
     async def test_metadata_url_takes_priority_over_url_shaped_remixed_from_video_id(self, tmp_path: Path):
-        """顶层 remixed_from_video_id 是 URL 形态、metadata.url 也存在时，metadata.url
+        """When the top-level remixed_from_video_id is URL-shaped and metadata.url also exists, metadata.url is the authoritative
+        final-video URL; remixed_from_video_id is only a compatibility fallback and must not win first.
+
+        顶层 remixed_from_video_id 是 URL 形态、metadata.url 也存在时，metadata.url
         才是权威成片地址，remixed_from_video_id 只是兼容兜底，不得抢先命中。"""
         with _agnes_api() as routes:
             routes.submit.mock(return_value=_queued("t-meta-priority"))
@@ -585,13 +628,15 @@ class TestFailureAndTimeout:
             backend = AgnesVideoBackend(api_key="k", model="agnes-video-v2.0", base_url=_BASE_URL)
             result = await backend.generate(_request(tmp_path))
 
-            # 顶层/metadata 已命中权威字段，未发起二次查询
+            # Top level/metadata already hit the authoritative field; no follow-up query made. / 顶层/metadata 已命中权威字段，未发起二次查询
             assert routes.query.call_count == 0
 
         assert result.video_uri == "https://cdn.agnes/authoritative.mp4"
 
     async def test_video_id_query_url_under_metadata_is_used(self, tmp_path: Path):
-        """成片查询把下载地址放在 metadata.url：顶层无直接 URL 字段时下探 metadata 取到。"""
+        """The final-video query puts the download URL in metadata.url: with no direct top-level URL field, look into metadata for it.
+
+        成片查询把下载地址放在 metadata.url：顶层无直接 URL 字段时下探 metadata 取到。"""
         with _agnes_api() as routes:
             routes.submit.mock(return_value=_queued("t-meta"))
             routes.poll.mock(
@@ -621,6 +666,7 @@ class TestFailureAndTimeout:
 
         assert result.video_uri == "https://platform-outputs.agnes-ai.com/videos/meta.mp4"
         assert result.video_path.read_bytes() == b"meta-bytes"
+        # The terminal response has no seconds; the duration must be parsed from the follow-up query response, not fall back to the requested duration.
         # 终态响应无 seconds，时长须从二次查询响应解析，而非回落请求时长
         assert result.duration_seconds == 8
 
@@ -639,7 +685,9 @@ class TestFailureAndTimeout:
             assert routes.download.call_count == 0
 
     async def test_polling_timeout_raises(self, tmp_path: Path):
-        """终态迟迟不来时按 max_wait 抛 TimeoutError，不无限轮询下去。"""
+        """When the terminal state takes too long, raise TimeoutError at max_wait instead of polling forever.
+
+        终态迟迟不来时按 max_wait 抛 TimeoutError，不无限轮询下去。"""
         with _agnes_api() as routes, bounded_poll_clock():
             routes.submit.mock(return_value=_queued("t-timeout"))
             routes.poll.mock(return_value=_json({"task_id": "t-timeout", "status": "in_progress"}))
@@ -654,7 +702,9 @@ class TestFailureAndTimeout:
 
 class TestSubmitResilience:
     async def test_submit_retries_on_503_busy(self, tmp_path: Path):
-        """503 Service busy → 经 should_retry_submit 的 status_code 闸门重试。"""
+        """503 Service busy -> retried via should_retry_submit's status_code gate.
+
+        503 Service busy → 经 should_retry_submit 的 status_code 闸门重试。"""
         busy = httpx.Response(503, text="Service busy")
 
         with _agnes_api() as routes, bounded_poll_clock():
@@ -677,7 +727,7 @@ class TestSubmitResilience:
                 await backend.generate(_request(tmp_path))
 
             assert routes.submit.call_count == 1
-            assert routes.poll.call_count == 0  # 4xx 在提交阶段失败，不该轮询
+            assert routes.poll.call_count == 0  # 4xx failed in the submit phase, should not poll. / 4xx 在提交阶段失败，不该轮询
 
     async def test_submit_read_timeout_wraps_ambiguous(self, tmp_path: Path):
         with _agnes_api() as routes, bounded_poll_clock():
@@ -688,7 +738,7 @@ class TestSubmitResilience:
                 await backend.generate(_request(tmp_path))
 
             assert routes.submit.call_count == 1
-            assert routes.poll.call_count == 0  # 歧义态不该轮询
+            assert routes.poll.call_count == 0  # Ambiguous state should not poll. / 歧义态不该轮询
 
 
 class TestResume:
@@ -726,14 +776,17 @@ class TestResume:
             backend = AgnesVideoBackend(api_key="k", model="agnes-video-v2.0", base_url=_BASE_URL)
             result = await backend.resume_video("task-resume", _request(tmp_path, output_path=tmp_path / "out.mp4"))
 
-            assert routes.submit.call_count == 0  # resume 不 POST create
+            assert routes.submit.call_count == 0  # resume does not POST create. / resume 不 POST create
             assert only_request(routes.poll).url.path.endswith("/videos/task-resume")
 
         assert result.task_id == "task-resume"
         assert (tmp_path / "out.mp4").read_bytes() == b"resumed"
 
     async def test_resume_completed_with_only_video_id_queries_and_downloads(self, tmp_path: Path):
-        """resume 已完成任务、完成态只带 video_id 时，与首跑共用同一套终态解析：经二次查询取回
+        """When resuming a completed task whose completed state carries only video_id, the same terminal parsing as the first run is
+        used: the final video is fetched via the follow-up query, with no task-creation POST at all (no double billing).
+
+        resume 已完成任务、完成态只带 video_id 时，与首跑共用同一套终态解析：经二次查询取回
         成片，全程不 POST 建任务（不重复计费）。
         """
         with _agnes_api(base_url=_GATEWAY_BASE_URL) as routes:
@@ -779,7 +832,9 @@ class TestResume:
 
 class TestDurationPassthrough:
     async def test_duration_beyond_frame_limit_is_submitted_unclamped(self, tmp_path: Path):
-        """时长不在 backend 另做检查：超出上游帧数上限的请求按原秒数换算帧数下发，由上游判定。"""
+        """Duration is not checked separately in the backend: a request over the upstream frame limit is sent with frames converted from the original seconds, judged upstream.
+
+        时长不在 backend 另做检查：超出上游帧数上限的请求按原秒数换算帧数下发，由上游判定。"""
         with _agnes_api() as routes:
             routes.submit.mock(return_value=_queued("task-30"))
             routes.poll.mock(return_value=_json(_completed("task-30", seconds="30.0")))
@@ -793,7 +848,9 @@ class TestDurationPassthrough:
 
 class TestProviderJobIdPersistence:
     async def test_persists_agnes_task_id_for_worker_request(self, tmp_path: Path):
-        """worker 路径（request.task_id 非空）下，submit 返回的 Agnes task_id 作为 job_id 写回，覆盖 resume 契约。"""
+        """On the worker path (non-empty request.task_id), the Agnes task_id returned by submit is written back as job_id, covering the resume contract.
+
+        worker 路径（request.task_id 非空）下，submit 返回的 Agnes task_id 作为 job_id 写回，覆盖 resume 契约。"""
         with _agnes_api() as routes, captured_provider_job_ids() as persisted:
             routes.submit.mock(return_value=_queued("agnes-task-42"))
             routes.poll.mock(return_value=_json(_completed("agnes-task-42")))
@@ -803,7 +860,8 @@ class TestProviderJobIdPersistence:
 
         assert persisted == [
             {
-                "task_id": "worker-task-99",  # worker 任务 id
+                "task_id": "worker-task-99",  # worker task id / worker 任务 id
+                # The task_id returned by Agnes submit is written back as job_id.
                 "job_id": "agnes-task-42",  # Agnes submit 返回的 task_id 作为 job_id 写回
                 "provider": PROVIDER_AGNES,
                 "endpoint": None,
@@ -812,7 +870,9 @@ class TestProviderJobIdPersistence:
         ]
 
     async def test_non_worker_request_skips_persistence(self, tmp_path: Path):
-        """非 worker 路径（task_id=None）不调用持久化，避免空 task_id 写库。"""
+        """The non-worker path (task_id=None) does not call persistence, avoiding writing an empty task_id to the DB.
+
+        非 worker 路径（task_id=None）不调用持久化，避免空 task_id 写库。"""
         with _agnes_api() as routes, captured_provider_job_ids() as persisted:
             routes.submit.mock(return_value=_queued("agnes-task-1"))
             routes.poll.mock(return_value=_json(_completed("agnes-task-1")))
@@ -833,7 +893,10 @@ class TestRegistration:
 
 
 class TestPollErrorRedaction:
-    """轮询与成片查询的 4xx 异常消息会经 str(exc) 落进 task.error_message 与日志；按 query
+    """The 4xx exception messages of polling and the final-video query land in task.error_message and logs via str(exc); credentials
+    passed in the query are rendered in the URL that raise_for_status writes into the message, so they must be redacted before raising.
+
+    轮询与成片查询的 4xx 异常消息会经 str(exc) 落进 task.error_message 与日志；按 query
     传的凭证渲染在 raise_for_status 写进消息的那条 URL 里，须先脱敏再抛。"""
 
     async def test_poll_4xx_message_drops_query_credentials(self):

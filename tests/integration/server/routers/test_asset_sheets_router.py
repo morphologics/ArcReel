@@ -1,4 +1,10 @@
-"""资产图 HTTP 面：卡片状态、批量生成的预览与提交、单张重生的连带影响。
+"""Asset sheet HTTP surface: card status, batch generation preview and submission, knock-on effects of a single
+regeneration.
+
+Preview and submission use a real project, artifact manifest, queue and provider config; costs are computed from
+the per-channel unit prices in the test database.
+
+资产图 HTTP 面：卡片状态、批量生成的预览与提交、单张重生的连带影响。
 
 预览与提交使用真实项目、产物清单、队列与供应商配置；费用按测试数据库中的各通道单价计算。
 """
@@ -50,6 +56,7 @@ async def sheet_client(
                     "model_id": "text-image",
                     "display_name": "Text image",
                     "endpoint": "openai-images-generations",
+                    # Priced per entry: Grok Imagine Pro 0.07 USD per image
                     # 按条目计价：Grok Imagine Pro 每张 0.07 USD
                     "entry_binding": "xai/grok-imagine-image-pro",
                 },

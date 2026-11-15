@@ -100,7 +100,9 @@ async def test_migrate_skips_already_in_store_when_marker_missing(
     fake_sdk_home,
     session_factory,
 ):
-    """Marker误删后重启应通过 store.load 探测跳过已迁会话。"""
+    """After the marker is deleted by mistake, a restart should skip already-migrated sessions by probing store.load.
+
+    Marker误删后重启应通过 store.load 探测跳过已迁会话。"""
     from lib.agent.agent_session_store.import_local import migrate_local_transcripts_to_store
 
     data_root = tmp_path / "data"

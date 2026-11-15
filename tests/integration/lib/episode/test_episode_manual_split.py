@@ -1,4 +1,7 @@
-"""手工切分的服务命令：在真实的临时项目目录上只经公开命令验证账本、集文件与确认出口。"""
+"""Manual split service commands: verify the ledger, episode files and confirmation exit only through the public
+commands on a real temp project directory.
+
+手工切分的服务命令：在真实的临时项目目录上只经公开命令验证账本、集文件与确认出口。"""
 
 from __future__ import annotations
 
@@ -384,6 +387,7 @@ class TestAcrossFiles:
         }
 
     def test_unsplit_text_across_files_is_counted_in_the_merged_volume(self, tmp_path: Path):
+        # Between the two episodes lie a.txt's "Chapter 3. Night rain." and b.txt's "Chapter 4. Reunion.", 7 characters each
         # 两集之间夹着 a.txt 的「第三章。夜雨。」与 b.txt 的「第四章。重逢。」，各 7 字
         project_dir = _project_dir(tmp_path, [_cut(1, "a.txt", 0, CH3), _cut(2, "b.txt", CH5, len(B))])
 

@@ -1,4 +1,10 @@
-"""旧版本代码写出的项目目录形态，供迁移与读侧测试共用。
+"""Project directory shapes written by older code, shared by migration and read-side tests.
+
+For the list of shapes see "Known old shapes" in ``docs/agents/project-migrations.md``. The built directory
+stops at the version given by the ``schema_version`` argument; ``advance_project_schema`` advances it step by
+step along the migration chain to a given version, simulating an already upgraded installation.
+
+旧版本代码写出的项目目录形态，供迁移与读侧测试共用。
 
 形态清单见 ``docs/agents/project-migrations.md``「已知旧形态」。构造出的目录停在
 ``schema_version`` 参数指定的版本；``advance_project_schema`` 按迁移链逐级推进到指定版本，
@@ -61,7 +67,9 @@ def _legacy_video_version_record(
     prompt: str = "Action: 环顾四周\nCamera_Motion: Pan Right\n",
     duration_seconds: int | str = 4,
 ) -> dict[str, Any]:
-    """一条旧版视频版本记录：没有任何类型化来源字段。"""
+    """An old-style video version record: without any typed source fields.
+
+    一条旧版视频版本记录：没有任何类型化来源字段。"""
 
     return {
         "version": version,
@@ -110,7 +118,10 @@ def write_legacy_storyboard_project(
     schema_version: int = 7,
     unit_ids: tuple[str, ...] = ("E1S1", "E1S2"),
 ) -> Path:
-    """narration + storyboard 路线的旧项目：分镜图 + 视频齐全，版本记录是旧形态。"""
+    """Old project on the narration + storyboard route: storyboard images + videos complete, version records in
+    the old shape.
+
+    narration + storyboard 路线的旧项目：分镜图 + 视频齐全，版本记录是旧形态。"""
 
     project_dir = root / name
     project_dir.mkdir(parents=True)
@@ -178,7 +189,9 @@ def write_legacy_storyboard_project(
 
 
 def write_legacy_retired_flash_lite_project(root: Path, *, provider_id: str) -> Path:
-    """schema 16 项目仍把 Flash-Lite preview ID 写在默认与简单档文本 backend 字段。"""
+    """A schema 16 project still writes the Flash-Lite preview ID in the default and simple-tier text backend fields.
+
+    schema 16 项目仍把 Flash-Lite preview ID 写在默认与简单档文本 backend 字段。"""
 
     project_dir = write_legacy_storyboard_project(
         root,
@@ -200,7 +213,12 @@ def write_legacy_retired_flash_lite_project(root: Path, *, provider_id: str) -> 
 
 
 def write_legacy_retired_model_references_project(root: Path) -> Path:
-    """schema 17 项目的图片字段引用已改名的 Gemini 图片 preview ID，视频字段引用已下架而没有后继的模型。
+    """A schema 17 project whose image fields reference renamed Gemini image preview IDs, and whose video fields
+    reference a model withdrawn without a successor.
+
+    ``model_settings`` stores resolution under the old ID; one successor ID has separate settings of its own.
+
+    schema 17 项目的图片字段引用已改名的 Gemini 图片 preview ID，视频字段引用已下架而没有后继的模型。
 
     ``model_settings`` 按旧 ID 存了分辨率；其中一个后继 ID 下另有设置。
     """
@@ -226,7 +244,10 @@ def write_legacy_retired_model_references_project(root: Path) -> Path:
 
 
 def write_legacy_timeline_agent_turn_project(root: Path) -> Path:
-    """schema 17 项目的剪辑时间线修订仍带 Agent 轮次字段（新建与编辑各一个修订）。"""
+    """Edit timeline revisions of a schema 17 project still carry the Agent turn field (one revision each for
+    create and edit).
+
+    schema 17 项目的剪辑时间线修订仍带 Agent 轮次字段（新建与编辑各一个修订）。"""
 
     project_dir = write_legacy_storyboard_project(root, name="legacy-timeline-agent-turn")
     advance_project_schema(project_dir, to_version=17)
@@ -266,7 +287,14 @@ def write_legacy_timeline_agent_turn_project(root: Path) -> Path:
 
 
 def write_legacy_item_id_reuse_project(root: Path, name: str = "legacy-item-id-reuse") -> Path:
-    """schema 18 项目：新增条目只避开剧本里现存的编号，删掉的条目在别处留下更大的编号。
+    """Schema 18 project: new entries only avoid IDs existing in the script, while deleted entries left larger IDs
+    elsewhere.
+
+    The script has E1S1, E1S2; the deleted E1S5 survives only in version history, E1S7 is in a project trash
+    deletion record, and an edit timeline clip still references the deleted E1S9. Before the upgrade, appending
+    at the end of the script would take E1S3, inheriting the history of these old IDs.
+
+    schema 18 项目：新增条目只避开剧本里现存的编号，删掉的条目在别处留下更大的编号。
 
     剧本里是 E1S1、E1S2；删掉的 E1S5 只剩版本历史，E1S7 在项目回收站的删除记录里，剪辑时间线的片段还引用
     已删掉的 E1S9。升级前在剧本末尾新增会取 E1S3，接上这些旧编号的历史。
@@ -322,7 +350,16 @@ def write_legacy_episode_id_remnants_project(
     record_remnant: Literal["version_history", "grid"] | None = None,
     asset_named_like_an_item: bool = False,
 ) -> Path:
-    """集号仍是「账本最大号 + 1」时期的项目：账本只剩第 1 集，更大的集号只留在磁盘残留里。
+    """A project from when episode numbers were still "ledger max + 1": the ledger has only episode 1 left, and
+    larger episode numbers survive only as leftovers on disk.
+
+    Reset and replanning used to roll back and reuse episode numbers; episodes cleared from the ledger left draft
+    directories (``drafts/episode_5/``), source backups (``source/_episode_6.txt.bak``) and media files
+    (``videos/scene_E8S01.mp4``).
+    ``asset_named_like_an_item`` also adds a character whose name looks like an entry ID
+    (``E12345678901234567A1``): the sheet, version snapshots and version history all carry that name.
+
+    集号仍是「账本最大号 + 1」时期的项目：账本只剩第 1 集，更大的集号只留在磁盘残留里。
 
     重置与重新规划曾把集号退回复用，被清出账本的集留下草稿目录（``drafts/episode_5/``）、
     源文留底（``source/_episode_6.txt.bak``）与媒体文件（``videos/scene_E8S01.mp4``）。
@@ -374,7 +411,23 @@ def write_legacy_episode_sources_project(
     content_mode: str = "narration",
     source_kind: str = "novel",
 ) -> Path:
-    """整本源文按 ``source/`` 文件名排序认定、没有账本条目的集文件读时补登的项目。
+    """A project whose whole source is determined by sorting ``source/`` file names, and whose episode files without
+    ledger entries are registered at read time.
+
+    ``content_mode`` and the project-level ``source_kind`` are written into ``project.json`` as is (the source
+    file type shape of schema <= 15).
+
+    Default shape: ``<chapter 10>.txt`` sorts before ``<chapter 2>.txt`` by file name, the ledger cuts two
+    episodes, ``planning_cursor`` stops in the middle of ``<chapter 10>.txt``, and there is also an
+    ``episode_7.txt`` with no ledger entry. With ``pre_split=True``, ``source/`` has only ``episode_1.txt`` /
+    ``episode_2.txt`` split by the user, and the ledger is empty.
+
+    ``legacy_split=True``: two episodes cut by the old split flow; the ledger entries have no ``source_range``,
+    no source fingerprint and no cursor, and ``source/`` keeps ``_remaining.txt``; there is also an episode 3
+    entry with no episode file. ``edited_outside=True``: ``<chapter 10>.txt`` was changed outside the service
+    after its fingerprint was recorded.
+
+    整本源文按 ``source/`` 文件名排序认定、没有账本条目的集文件读时补登的项目。
 
     ``content_mode`` 与项目级的 ``source_kind`` 原样写入 ``project.json``（schema ≤ 15 的源文件类型形态）。
 
@@ -451,7 +504,16 @@ def write_legacy_tts_narration_project(
     ),
     raised_video_duration_seconds: int | None = None,
 ) -> Path:
-    """在 ``write_legacy_storyboard_project`` 上补旁白配音：每个分镜一条选中的音频版本，带完整 TTS 设置。
+    """Adds narration audio on top of ``write_legacy_storyboard_project``: one selected audio version per shot, with
+    full TTS settings.
+
+    ``project.json`` follows the old rule: no narration delivery mode, the audio backend is a bare provider, and
+    voice and speech rate are "left empty to follow the global default".
+    The i-th shot's narration is synthesized with ``settings[i]``, and ``created_at`` increases in shot order.
+    When ``raised_video_duration_seconds`` is set, it stops at schema 13, the video request is raised a tier by
+    the narration lower bound, and the planned duration is still 4 seconds.
+
+    在 ``write_legacy_storyboard_project`` 上补旁白配音：每个分镜一条选中的音频版本，带完整 TTS 设置。
 
     ``project.json`` 是旧口径：没有旁白交付方式，音频后端写裸供应商，音色与语速「留空跟随全局默认」。
     第 i 个分镜的旁白用 ``settings[i]`` 合成，``created_at`` 按分镜顺序递增。
@@ -496,6 +558,7 @@ def write_legacy_tts_narration_project(
         metadata_path = project_dir / "versions" / "versions.json"
         metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
         metadata["audio"][unit_id]["versions"][-1]["created_at"] = f"2026-04-0{index}T10:00:00Z"
+        # Version records from 0.33 and earlier have no content fingerprint (backfilled by v17->v18).
         # 0.33 及更早的版本记录没有内容指纹（v17→v18 补录）。
         metadata["audio"][unit_id]["versions"][-1].pop(VERSION_CONTENT_DIGEST)
         _write_json(metadata_path, metadata)
@@ -540,7 +603,10 @@ def write_legacy_tts_narration_project(
 
 
 def write_legacy_unregistrable_asset_sheet_project(root: Path) -> Path:
-    """旧资产图有缺原图、空描述和依赖不可登记本体的衍生。"""
+    """Old sheets with a missing original image, an empty description, and derivatives depending on an
+    unregistrable base look.
+
+    旧资产图有缺原图、空描述和依赖不可登记本体的衍生。"""
 
     project_dir = write_legacy_storyboard_project(root, "legacy-asset-sheet-unregistrable-input")
     project_path = project_dir / "project.json"
@@ -589,7 +655,10 @@ def write_legacy_reference_video_project(
     style_description: str = "电影感",
     split_unit_text: bool = False,
 ) -> Path:
-    """drama + reference_video 路线的旧项目：视频单元直出，版本记录是旧形态。"""
+    """Old project on the drama + reference_video route: video units output directly, version records in the old
+    shape.
+
+    drama + reference_video 路线的旧项目：视频单元直出，版本记录是旧形态。"""
 
     project_dir = root / name
     project_dir.mkdir(parents=True)
@@ -673,7 +742,10 @@ def write_legacy_reference_video_project(
 
 
 def write_legacy_ad_reference_video_project(root: Path, *, converted: bool = False) -> Path:
-    """schema 6 广告的旧镜头索引，或镜头已转换、项目版本尚未提交的中断形态。"""
+    """Old shot index of a schema 6 ad, or the interrupted shape where shots were converted but the project version
+    was not yet committed.
+
+    schema 6 广告的旧镜头索引，或镜头已转换、项目版本尚未提交的中断形态。"""
 
     project_dir = write_legacy_reference_video_project(root, schema_version=6)
     project_path = project_dir / "project.json"
@@ -722,7 +794,15 @@ def write_legacy_style_project(
     style_description: str = "淡彩",
     style_template_id: str | None = None,
 ) -> Path:
-    """风格值还是遗留形态的旧项目：资产图、宫格与单张分镜图齐全，四类视觉依据都在场。
+    """An old project whose style value is still in the legacy shape: sheets, grids and single storyboard images
+    are complete, with all four kinds of visual basis present.
+
+    ``style`` takes a value with the "art style:" prefix or a short label like ``Photographic``; when
+    ``style_template_id`` is None the field is not written, which is exactly the precondition for short-label
+    resolution. Grids and single storyboard images exist together because the style value is normalized in only
+    two kinds of basis, and both sides must be assertable.
+
+    风格值还是遗留形态的旧项目：资产图、宫格与单张分镜图齐全，四类视觉依据都在场。
 
     ``style`` 收「画风：」前缀值或 ``Photographic`` 这类短标签；``style_template_id`` 为 None
     时不写该字段，正是短标签解析的前置条件。宫格与单张分镜图同时存在，因为风格值只在其中
@@ -837,7 +917,16 @@ def write_legacy_style_project(
 
 
 def write_legacy_named_reference_bases_project(root: Path, name: str = "legacy-named-references") -> Path:
-    """schema 18 项目：分镜图、宫格与切格分镜的依据记着资产名（v19 起不记）。
+    """Schema 18 project: the bases of storyboard images, grids and split-cell shots record asset names (not
+    recorded from v19).
+
+    On top of :func:`write_legacy_style_project`, make all three cell shots reference the character
+    "A-Li", pointing at it with ``@[...]`` in the frame description, and the grid record freezes the same
+    character sheet; advance along the migration chain to v18, and the manifest registers by the name-recording
+    rule of that time. Then, by the v18 rule, write one selected version record (frozen basis) for the grid and
+    E1S03, and two versions for E1S01, with version 2 selected.
+
+    schema 18 项目：分镜图、宫格与切格分镜的依据记着资产名（v19 起不记）。
 
     在 :func:`write_legacy_style_project` 上让三格分镜都引用角色「阿离」、画面描述用 ``@[阿离]`` 指认它，
     宫格记录冻结同一张角色资产图；按迁移链推进到 v18，清单按那时记名的口径登记。再按 v18 口径给宫格与
@@ -888,6 +977,8 @@ def write_legacy_named_reference_bases_project(root: Path, name: str = "legacy-n
 
 ScriptPlanVariantName = Literal["drama", "narration", "reference_video"]
 
+#: Retired entry fingerprint and episode fingerprint: the sample only requires the fields to be present; the
+#: values do not matter.
 #: 退役的条目指纹与整集指纹：样本里只要求字段在场，取值无关紧要。
 _LEGACY_ENTRY_REVISION = "sha256-legacy-entry-revision"
 _LEGACY_SCRIPT_REVISION = "sha256-legacy-script-revision"
@@ -927,14 +1018,19 @@ def _legacy_plan_entry(variant: ScriptPlanVariantName, episode: int, index: int)
 def _legacy_script_entry(
     variant: ScriptPlanVariantName, plan_entry: dict[str, Any], *, authored: bool, with_revisions: bool
 ) -> dict[str, Any]:
-    """已有正式脚本里的一条：``authored=False`` 是视觉层两侧皆空、也没有待编写标记的旧形态。"""
+    """One entry in an existing final script: ``authored=False`` is the old shape where both sides of the visual
+    layer are empty and there is no pending-authoring marker.
+
+    已有正式脚本里的一条：``authored=False`` 是视觉层两侧皆空、也没有待编写标记的旧形态。"""
 
     entry = dict(plan_entry)
     if variant == "reference_video":
+        # Old reference units carry no source text.
         # 旧参考单元不带对应原文。
         entry.pop("source_text")
     else:
         if variant == "drama":
+            # Old drama shots carry no visual adaptation description.
             # 旧 drama 分镜不带视觉改编描述。
             entry.pop("scene_description")
         entry["image_prompt"] = {"scene": "画面", "composition": {"shot_type": "Medium Shot"}} if authored else None
@@ -953,7 +1049,24 @@ def write_legacy_script_plan_project(
     schema_version: int = 14,
     source_kind: str = "novel",
 ) -> Path:
-    """条目指纹时期写出的脚本规划项目，三集各是一种要在 v15 收编的旧形态。
+    """A script plan project written in the entry-fingerprint era; each of the three episodes is an old shape to be
+    consolidated in v15.
+
+    ``source_kind`` is the project-level source file type (the schema <= 15 shape; v15->v16 moved it to the source
+    file record).
+
+    - Episode 1: confirmed; the final script carries entry fingerprints and an episode fingerprint; the 2nd
+      entry's visual layer is empty without a pending-authoring marker; drama shots lack the visual adaptation
+      description, and reference units lack source text.
+    - Episode 2: confirmed; the bound final script is not on disk yet (in the old version prompt authoring
+      produced it, and confirmation itself did not convert to a final script).
+    - Episode 3: has a final script and a script plan, no confirmation record (grandfather episode).
+
+    When ``schema_version < 10``, drafts, confirmation records and the episode fingerprint use the pre-v9 old
+    names, and entry fingerprints are not written (they did not exist yet); the artifact manifest is backfilled
+    by the v7->v8 activation on the chain.
+
+    条目指纹时期写出的脚本规划项目，三集各是一种要在 v15 收编的旧形态。
 
     ``source_kind`` 是项目级的源文件类型（schema ≤ 15 的形态，v15→v16 改为随源文件记录）。
 
@@ -1042,7 +1155,12 @@ def write_legacy_drama_storyboard_project(
     *,
     schema_version: int = 7,
 ) -> Path:
-    """剧情演绎项目，``project.json`` 没有 ``aspect_ratio`` 字段；第 1 集首条分镜已有分镜图。
+    """Drama project whose ``project.json`` has no ``aspect_ratio`` field; the first shot of episode 1 already has a
+    storyboard image.
+
+    Script plan and final script shapes are the same as ``write_legacy_script_plan_project(variant="drama")``.
+
+    剧情演绎项目，``project.json`` 没有 ``aspect_ratio`` 字段；第 1 集首条分镜已有分镜图。
 
     脚本规划与正式脚本形态同 ``write_legacy_script_plan_project(variant="drama")``。
     """
@@ -1064,7 +1182,10 @@ def write_legacy_drama_storyboard_project(
 
 
 def _mark_asset_inventory_current(project_dir: Path) -> None:
-    """旧项目都跑过全书资产提取：``project.json`` 留有与当时源文一致的资产清单标记。"""
+    """Old projects have all run whole-book asset extraction: ``project.json`` keeps an asset inventory marker
+    consistent with the source at that time.
+
+    旧项目都跑过全书资产提取：``project.json`` 留有与当时源文一致的资产清单标记。"""
 
     project_path = project_dir / "project.json"
     project = json.loads(project_path.read_text(encoding="utf-8"))
@@ -1082,7 +1203,18 @@ def write_undescribed_style_bases_project(
     style_description: str = "胶片颗粒，低饱和",
     schema_version: Literal[12, 13] = 13,
 ) -> Path:
-    """停在 v12 或 v13 的自定义风格项目：宫格、切格分镜或参考视频的依据不含风格描述。
+    """A custom style project stopped at v12 or v13: the bases of grids, split-cell shots or reference videos do not
+    include the style description.
+
+    Version records from 0.27 on freeze typed bases, and basis construction then did not record
+    ``style_description``: the project runs the migration chain with an empty description to register all
+    artifacts, then the description is written, giving exactly the manifest and version records left at that
+    time. The sample stopped at v12 represents projects left by 0.27-0.29; both have the same on-disk shape,
+    differing only in ``schema_version``. Bases of sheets and single storyboard images always recorded the
+    description, so built the same way they are already stale before migration - the description appeared after
+    they were registered. ``style`` may take a legacy style value, combined with the description being added.
+
+    停在 v12 或 v13 的自定义风格项目：宫格、切格分镜或参考视频的依据不含风格描述。
 
     0.27 起的版本记录冻结类型化依据，那时的依据构造不记 ``style_description``：项目以空描述走完
     迁移链登记全部产物，再写入描述，得到的清单与版本记录正是那时留下的形态。停在 v12 的样本
@@ -1105,7 +1237,13 @@ def write_undescribed_style_bases_project(
 
 
 def bind_episode_script_to_filename(project_dir: Path, episode: int, filename: str) -> None:
-    """SSE 索引同步曾把带 ``episode`` 整数的任意 ``scripts/*.json`` 登记为集绑定（schema ≤ 14）。
+    """SSE index sync used to register any ``scripts/*.json`` with an ``episode`` integer as an episode binding
+    (schema <= 14).
+
+    Rename the episode's script to ``scripts/<filename>`` and rebind; the manifest registration of that
+    episode's script points to the new file name accordingly.
+
+    SSE 索引同步曾把带 ``episode`` 整数的任意 ``scripts/*.json`` 登记为集绑定（schema ≤ 14）。
 
     把该集剧本改名为 ``scripts/<filename>`` 并改绑；清单里该集剧本的登记随之指向新文件名。
     """
@@ -1135,7 +1273,13 @@ def _ledger_entry(project: dict[str, Any], episode: int) -> dict[str, Any]:
 
 
 def add_duplicate_ledger_entry(project_dir: Path, episode: int, filename: str) -> None:
-    """旧版 SSE 索引同步按剧本自报的集号登记，同一集号可登记出多条（schema ≤ 14）。
+    """Old SSE index sync registered by the episode number the script claimed, so the same episode number could be
+    registered multiple times (schema <= 14).
+
+    Copy the episode's script to ``scripts/<filename>`` and register another ledger entry with the same number
+    bound to the copy.
+
+    旧版 SSE 索引同步按剧本自报的集号登记，同一集号可登记出多条（schema ≤ 14）。
 
     把该集剧本复制成 ``scripts/<filename>``，账本里再登记一条绑到副本的同号条目。
     """
@@ -1150,7 +1294,12 @@ def add_duplicate_ledger_entry(project_dir: Path, episode: int, filename: str) -
 
 
 def share_episode_script(project_dir: Path, episode: int, *, with_episode: int) -> None:
-    """旧版同步按剧本自报的集号建条目：剧本的集号改过后再同步，两个集号绑到同一份剧本。
+    """Old sync created entries by the episode number the script claimed: after the script's episode number was
+    changed and synced again, two episode numbers were bound to the same script.
+
+    Register ``with_episode`` in the ledger, bound to ``episode``'s script file.
+
+    旧版同步按剧本自报的集号建条目：剧本的集号改过后再同步，两个集号绑到同一份剧本。
 
     账本里新登记 ``with_episode``，绑到 ``episode`` 的剧本文件。
     """
@@ -1165,7 +1314,10 @@ def share_episode_script(project_dir: Path, episode: int, *, with_episode: int) 
 
 
 def set_script_episode(project_dir: Path, episode: int, value: int | None) -> None:
-    """旧版同步与保存都接受顶层不写集号、或集号与绑定不符的剧本；``None`` 表示删去该字段。"""
+    """Old sync and save both accepted scripts with no top-level episode number, or one not matching the binding;
+    ``None`` means deleting the field.
+
+    旧版同步与保存都接受顶层不写集号、或集号与绑定不符的剧本；``None`` 表示删去该字段。"""
 
     project = _load_json_object(project_dir / "project.json")
     script_path = project_dir / _ledger_entry(project, episode)["script_file"]
@@ -1178,7 +1330,12 @@ def set_script_episode(project_dir: Path, episode: int, value: int | None) -> No
 
 
 def add_colliding_asset_name(project_dir: Path, bucket: str, name: str) -> str:
-    """资产名比对坐标系（去两端空白、Unicode NFC）引入前，可登记出归一后同名的两条资产。
+    """Before the asset name comparison coordinate system (trim both ends, Unicode NFC) was introduced, two assets
+    with the same normalized name could be registered.
+
+    Add an asset to ``bucket`` differing from ``name`` only by a trailing space, and return the new name.
+
+    资产名比对坐标系（去两端空白、Unicode NFC）引入前，可登记出归一后同名的两条资产。
 
     在 ``bucket`` 里加一条与 ``name`` 只差尾随空格的资产，返回新名字。
     """
@@ -1192,7 +1349,12 @@ def add_colliding_asset_name(project_dir: Path, bucket: str, name: str) -> str:
 
 
 def add_asset_names_differing_only_in_case(project_dir: Path, bucket: str, sheet_field: str, name: str) -> str:
-    """旧版在同一资产表可登记出只差大小写的两条资产。
+    """The old version could register two assets differing only by case in the same asset table.
+
+    Append ``name`` and its all-uppercase variant to the end of ``bucket``, each with a sheet (on a
+    case-insensitive file system the two images land in the same file), and return the variant name.
+
+    旧版在同一资产表可登记出只差大小写的两条资产。
 
     在 ``bucket`` 末尾加 ``name`` 与它的全大写变体，各带一张资产图（不区分大小写的文件系统上两张图
     落到同一个文件），返回变体名。
@@ -1211,7 +1373,10 @@ def add_asset_names_differing_only_in_case(project_dir: Path, bucket: str, sheet
 
 
 def write_legacy_shared_reference_project(root: Path, *, padded_names: bool = False) -> Path:
-    """schema 5 的跨资产共用：角色共用图与音频，同名商品也引用角色的图。"""
+    """Cross-asset sharing in schema 5: characters share images and audio, and a same-named product also references
+    the character's image.
+
+    schema 5 的跨资产共用：角色共用图与音频，同名商品也引用角色的图。"""
     project_dir = root / "demo"
     owner, borrower = (" Alice ", " Bob ") if padded_names else ("Alice", "Bob")
     image, audio = f"characters/refs/{owner}.png", f"characters/refs_audio/{owner}.wav"
@@ -1238,7 +1403,15 @@ def write_legacy_shared_reference_project(root: Path, *, padded_names: bool = Fa
 
 
 def share_reference_files(project_dir: Path) -> dict[str, bytes]:
-    """旧版资产 PATCH 接受任意路径，参考图与参考音频可以指向别的资产名下的文件。
+    """Old asset PATCH accepted any path, so reference images and reference audio could point to files under
+    another asset's name.
+
+    Character "A-Li" has a reference image and reference audio under its own name; the newly added character
+    "A-Qing" points both fields at these two files; "A-Qing" also has an unreferenced reference image under its
+    own name. Product "coffee" has original image 1, and the original image list of the newly added product
+    "tea" points to it. Returns each file's content.
+
+    旧版资产 PATCH 接受任意路径，参考图与参考音频可以指向别的资产名下的文件。
 
     角色「阿离」带自己名下的参考图与参考音频，新加的角色「阿青」两个字段都指着这两份；「阿青」名下另有
     一张没被引用的参考图。商品「咖啡」带第 1 张原图，新加的商品「茶」的原图列表指着它。返回各份文件的内容。
@@ -1269,7 +1442,16 @@ def share_reference_files(project_dir: Path) -> dict[str, bytes]:
 
 
 def share_asset_sheets(project_dir: Path) -> dict[str, bytes]:
-    """旧版资产 PATCH 接受任意路径，资产图字段也可以指向别的资产名下的图。
+    """Old asset PATCH accepted any path, so the sheet field could also point to an image under another asset's name.
+
+    Character "A-Li" has a reference image under its own name; the sheet of the newly added character "A-Qing"
+    points to it, and "A-Qing" also has an unreferenced sheet under its own name.
+    When written before v8, the full v7->v8 activation registers "A-Qing"'s sheet by this shared path (no other
+    registration for the same path).
+    Returns the reference image's content (the sample uses a project with character "A-Li", such as
+    ``write_legacy_storyboard_project``).
+
+    旧版资产 PATCH 接受任意路径，资产图字段也可以指向别的资产名下的图。
 
     角色「阿离」带自己名下的参考图，新加的角色「阿青」的资产图指着它，「阿青」名下另有一张没被引用的资产图。
     在 v8 之前写下时，v7→v8 的整份激活按这个共用的路径登记「阿青」的资产图（同一路径没有别的登记）。
@@ -1289,7 +1471,9 @@ def share_asset_sheets(project_dir: Path) -> dict[str, bytes]:
 
 
 def share_derivative_sheet(project_dir: Path) -> str:
-    """旧版 PATCH 允许本体资产图指向另一个资产的衍生图。"""
+    """Old PATCH allowed a base-look sheet to point to another asset's derivative image.
+
+    旧版 PATCH 允许本体资产图指向另一个资产的衍生图。"""
     project_path = project_dir / "project.json"
     project = _load_json_object(project_path)
     derivative = "characters/derivatives/阿离/雨衣.png"
@@ -1302,7 +1486,16 @@ def share_derivative_sheet(project_dir: Path) -> str:
 
 
 def repoint_registered_asset_sheet(project_dir: Path) -> dict[str, bytes]:
-    """资产图登记之后才经 PATCH 改指别的资产名下的图：场景「雨巷」的资产图改指道具「伞」的资产图。
+    """A sheet repointed via PATCH after registration to an image under another asset's name: the sheet of scene
+    "rainy alley" is repointed to the sheet of prop "umbrella".
+
+    "rainy alley"'s own image and registration stay in place, and the registration reads as missing because the
+    path does not match; two entries declare the same image, and the planner before repointing refuses the whole
+    project.
+    Returns both images' content before repointing (the sample uses a project with scene "rainy alley" and prop
+    "umbrella" with existing manifest registrations).
+
+    资产图登记之后才经 PATCH 改指别的资产名下的图：场景「雨巷」的资产图改指道具「伞」的资产图。
 
     「雨巷」自己的图与登记留在原处，登记因路径对不上读作缺失；两个条目声明同一张图，改指前的规划器拒绝整个项目。
     返回两张图改指前的内容（样本取带场景「雨巷」与道具「伞」、已有清单登记的项目）。
@@ -1317,7 +1510,13 @@ def repoint_registered_asset_sheet(project_dir: Path) -> dict[str, bytes]:
 
 
 def refer_to_asset_in_episode(project_dir: Path, episode: int, field: str, name: str) -> None:
-    """只差大小写的两条资产并存时，剧本与草稿可以写其中任何一个的名字。
+    """When two assets differing only by case coexist, scripts and drafts may write either one's name.
+
+    Make the first shot of the episode's script write ``name`` in the reference array ``field`` and in the ``@``
+    mention of the frame description; the same reference array in the first segment of the script plan draft
+    writes it too (the script shape is a commentary shot like ``write_legacy_storyboard_project``).
+
+    只差大小写的两条资产并存时，剧本与草稿可以写其中任何一个的名字。
 
     让该集剧本第一个分镜在引用数组 ``field`` 与画面描述的 ``@`` 提及里写 ``name``，脚本规划草稿
     第一段的同一引用数组也写它（剧本形态取 ``write_legacy_storyboard_project`` 一类的解说分镜）。
@@ -1337,7 +1536,12 @@ def refer_to_asset_in_episode(project_dir: Path, episode: int, field: str, name:
 
 
 def break_script_item_ids(project_dir: Path, episode: int) -> None:
-    """降级保存的剧本可以有重复或缺失的条目 id。
+    """Scripts saved in degraded mode can have duplicate or missing entry ids.
+
+    Append after the first entry an entry with the same id (different prompt) and an entry with no id and no
+    artifacts.
+
+    降级保存的剧本可以有重复或缺失的条目 id。
 
     在第一个条目后追加一条同 id 的条目（提示词不同）与一条没有 id、没有产物的条目。
     """
@@ -1356,7 +1560,10 @@ def break_script_item_ids(project_dir: Path, episode: int) -> None:
 
 
 def duplicate_legacy_ad_ids(project_dir: Path) -> None:
-    """schema 6 广告旧镜头索引里的重复编号：第二个镜头与第二个单元沿用第一个的编号。"""
+    """Duplicate IDs in the old shot index of a schema 6 ad: the second shot and the second unit reuse the first
+    one's ID.
+
+    schema 6 广告旧镜头索引里的重复编号：第二个镜头与第二个单元沿用第一个的编号。"""
 
     script_path = project_dir / "scripts" / "episode_1.json"
     script = _load_json_object(script_path)
@@ -1367,7 +1574,10 @@ def duplicate_legacy_ad_ids(project_dir: Path) -> None:
 
 
 def blank_reference_unit_shots(project_dir: Path, unit_id: str) -> None:
-    """v8 的单元模型只要求至少一个镜头、不要求镜头有正文：拼回正文后是空的，时长却不为 0。"""
+    """The v8 unit model only requires at least one shot and does not require shots to have text: after joining
+    back the text is empty, yet the duration is not 0.
+
+    v8 的单元模型只要求至少一个镜头、不要求镜头有正文：拼回正文后是空的，时长却不为 0。"""
 
     script_path = project_dir / "scripts" / "episode_1.json"
     script = _load_json_object(script_path)
@@ -1379,7 +1589,9 @@ def blank_reference_unit_shots(project_dir: Path, unit_id: str) -> None:
 
 
 def write_unreadable_grid_record(project_dir: Path, grid_id: str = "grid_0123456789ab") -> Path:
-    """单个宫格记录损坏（不是合法 JSON）。"""
+    """A single grid record is corrupt (not valid JSON).
+
+    单个宫格记录损坏（不是合法 JSON）。"""
 
     record = project_dir / "grids" / f"{grid_id}.json"
     record.parent.mkdir(parents=True, exist_ok=True)
@@ -1388,7 +1600,9 @@ def write_unreadable_grid_record(project_dir: Path, grid_id: str = "grid_0123456
 
 
 def write_unreadable_script_plan_draft(project_dir: Path, episode: int, name: str) -> Path:
-    """单份脚本规划草稿损坏（不是合法 JSON）。"""
+    """A single script plan draft is corrupt (not valid JSON).
+
+    单份脚本规划草稿损坏（不是合法 JSON）。"""
 
     draft = project_dir / "drafts" / f"episode_{episode}" / name
     draft.parent.mkdir(parents=True, exist_ok=True)
@@ -1397,7 +1611,9 @@ def write_unreadable_script_plan_draft(project_dir: Path, episode: int, name: st
 
 
 def write_non_utf8_episode_source(project_dir: Path, episode: int, text: str) -> Path:
-    """集原文不是 UTF-8（上传时没有转码的 GBK 文本）。"""
+    """The episode source is not UTF-8 (GBK text not transcoded at upload).
+
+    集原文不是 UTF-8（上传时没有转码的 GBK 文本）。"""
 
     source = project_dir / "source" / f"episode_{episode}.txt"
     source.parent.mkdir(parents=True, exist_ok=True)
@@ -1412,7 +1628,14 @@ def write_legacy_presentation_project(
     transition: str = "fade",
     schema_version: int = 7,
 ) -> Path:
-    """旁白项目，唯一分镜的后期配音呈现模型已物化；剧本条目与呈现模型文件都带转场。
+    """Narration project whose only shot has a materialized post-production voiceover presentation model; both the
+    script entry and the presentation model file carry a transition.
+
+    The presentation model basis follows the rule of that time: the inputs include ``transition_to_next``. The
+    video version record carries a typed source, the presentation model file proves itself, and the activation
+    on the migration chain registers it and the subtitle draft based on that.
+
+    旁白项目，唯一分镜的后期配音呈现模型已物化；剧本条目与呈现模型文件都带转场。
 
     呈现模型依据是当时的口径：输入里有 ``transition_to_next``。视频版本记录带类型化来源，
     呈现模型文件自证成立，迁移链上的激活据此登记它与字幕草稿。
@@ -1561,7 +1784,10 @@ def legacy_transition_presentation_basis(
     narration_audio: dict[str, object] | None,
     provider_audio_enabled: bool,
 ) -> ArtifactBasis:
-    """schema ≤ 15 的代码给呈现模型算的依据：输入含脚本条目上的转场。"""
+    """The basis schema <= 15 code computed for presentation models: inputs include the transition on the script
+    entry.
+
+    schema ≤ 15 的代码给呈现模型算的依据：输入含脚本条目上的转场。"""
 
     return ArtifactBasis.build(
         "artifact-speech/presentation",
@@ -1590,7 +1816,13 @@ def add_legacy_manual_uploads(
     storyboard_unit: str,
     storyboard_shape: Literal["blank-prompt", "missing-sheet", "generated-basis"] = "blank-prompt",
 ) -> None:
-    """按 schema ≤ 15 的上传代码写出一段上传视频与一张上传分镜图。
+    """Write an uploaded video and an uploaded storyboard image the way schema <= 15 upload code did.
+
+    The uploaded video selects only one ``manual_upload`` version record, not registered in the manifest; the
+    uploaded storyboard image's registration is deleted when the prompt is empty or a referenced asset lacks an
+    image, and when generation inputs hold the registration computed from generation inputs is kept.
+
+    按 schema ≤ 15 的上传代码写出一段上传视频与一张上传分镜图。
 
     上传视频只选中一条 ``manual_upload`` 版本记录，清单不登记；上传分镜图在提示词为空或
     引用资产缺图时删去登记，生成输入成立时仍保留按生成输入计算的登记。
@@ -1649,7 +1881,10 @@ def add_legacy_manual_uploads(
 
 
 def without_version_content_digests(versions: dict[str, Any]) -> dict[str, Any]:
-    """去掉 v17→v18 补录在版本记录上的内容指纹，用来断言更早的迁移步没有改写其余字段。"""
+    """Remove the content fingerprints the v17->v18 backfill added to version records, to assert that earlier
+    migration steps did not rewrite the other fields.
+
+    去掉 v17→v18 补录在版本记录上的内容指纹，用来断言更早的迁移步没有改写其余字段。"""
 
     return {
         resource_type: {
@@ -1667,7 +1902,10 @@ def without_version_content_digests(versions: dict[str, Any]) -> dict[str, Any]:
 
 
 def advance_project_schema(project_dir: Path, *, to_version: int) -> None:
-    """按迁移链把项目从当前 ``schema_version`` 逐级推进到 ``to_version``。"""
+    """Advance the project step by step along the migration chain from the current ``schema_version`` to
+    ``to_version``.
+
+    按迁移链把项目从当前 ``schema_version`` 逐级推进到 ``to_version``。"""
 
     version = json.loads((project_dir / "project.json").read_text(encoding="utf-8"))["schema_version"]
     while version < to_version:
@@ -1708,7 +1946,14 @@ __all__ = [
 
 
 def reuse_item_id_across_episodes(project_dir: Path, item_id: str) -> None:
-    """旧版剧本 id 只在本集内判重：复制来的剧本可以和另一集有同号条目，两边认领同一个媒体文件。
+    """Old script ids were only deduplicated within the episode: a copied script can have entries with the same
+    number as another episode, both claiming the same media file.
+
+    Register episode 2 in the ledger with its script copied from episode 1; change the first entry of both
+    episodes to ``item_id``, point the storyboard image reference to its canonical path, and place a storyboard
+    image at that path on disk.
+
+    旧版剧本 id 只在本集内判重：复制来的剧本可以和另一集有同号条目，两边认领同一个媒体文件。
 
     账本里新登记第 2 集，剧本复制自第 1 集；两集首个条目都改成 ``item_id``，分镜图引用指向它的规范路径，
     盘上放一张该路径的分镜图。
@@ -1732,7 +1977,15 @@ def reuse_item_id_across_episodes(project_dir: Path, item_id: str) -> None:
 
 
 def cross_bind_episode_scripts(project_dir: Path, filenames: dict[int, str], *, ledger_order: list[int]) -> None:
-    """旧版 SSE 索引同步按剧本自报的集号建绑定，文件名与集号可以交叉（如第 1 集的剧本叫 ``episode_2.json``）。
+    """Old SSE index sync built bindings by the episode number the script claimed, so file names and episode numbers
+    could cross (e.g. episode 1's script named ``episode_2.json``).
+
+    Register episode 2 in the ledger (script copied from episode 1, entries renumbered for episode 2, without
+    media), then rename each episode's script to ``scripts/<filenames[episode number]>`` and rebind, with the
+    ledger ordered by ``ledger_order``; the manifest registration of episode 1's script points to the new file
+    name accordingly.
+
+    旧版 SSE 索引同步按剧本自报的集号建绑定，文件名与集号可以交叉（如第 1 集的剧本叫 ``episode_2.json``）。
 
     账本里补登第 2 集（剧本复制自第 1 集，条目换成第 2 集的号、不带媒体），再把各集剧本改名为
     ``scripts/<filenames[集号]>`` 并改绑，账本按 ``ledger_order`` 排列；清单里第 1 集剧本的登记随之指向新文件名。

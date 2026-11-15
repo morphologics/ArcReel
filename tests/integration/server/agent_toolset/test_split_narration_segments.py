@@ -31,16 +31,21 @@ async def test_split_narration_segments_dry_run(fake_ctx: ToolHarness, video_req
     assert out.problem is None, out
     prompt_text = said(out)
     assert "DRY RUN" in prompt_text
+    # episode injects the segment_id prefix, asset candidates and capability tiers into the prompt
     # episode 注入 segment_id 前缀、资产候选与能力档位进 prompt
     assert "E1S" in prompt_text
     assert "张三" in prompt_text
     assert "4" in prompt_text
+    # Without instructions there is no instructions section
     # 未传 instructions 时无附加指令分节
     assert "# 附加指令" not in prompt_text
 
 
 async def test_split_narration_segments_injects_instructions(fake_ctx: ToolHarness, video_request_facts) -> None:
-    """instructions 原样进 prompt 末尾的中性「附加指令」分节，不附加强度措辞。"""
+    """instructions go verbatim into the neutral 'instructions' section at the end of the prompt, with no intensity wording
+    added.
+
+    instructions 原样进 prompt 末尾的中性「附加指令」分节，不附加强度措辞。"""
 
     nr_source(fake_ctx)
 
@@ -57,7 +62,10 @@ async def test_split_narration_segments_injects_instructions(fake_ctx: ToolHarne
 
 
 async def test_split_narration_segments_rejects_bad_instructions(fake_ctx: ToolHarness, video_request_facts) -> None:
-    """instructions 超长 / 非字符串按参数错误拒绝；空白 strip 后视同未传（校验为四个生成工具共享）。"""
+    """instructions too long / not a string are rejected as argument errors; blank after strip counts as not given
+    (validation shared by the four generation tools).
+
+    instructions 超长 / 非字符串按参数错误拒绝；空白 strip 后视同未传（校验为四个生成工具共享）。"""
 
     nr_source(fake_ctx)
 
@@ -80,7 +88,10 @@ async def test_split_narration_segments_rejects_bad_instructions(fake_ctx: ToolH
 
 
 async def test_split_narration_segments_happy(fake_ctx: ToolHarness, monkeypatch, video_request_facts) -> None:
-    """happy path：结构化分镜 script_plan 落盘；模型经文本管道按 SCRIPT 任务解析并携带 project_name 入账。"""
+    """happy path: structured shot script_plan persisted; the model is resolved via the text pipeline for the SCRIPT task
+    and billed with project_name.
+
+    happy path：结构化分镜 script_plan 落盘；模型经文本管道按 SCRIPT 任务解析并携带 project_name 入账。"""
     from server import text_generation as mod
 
     rv_project(fake_ctx, generation_mode="storyboard")
@@ -102,8 +113,10 @@ async def test_split_narration_segments_happy(fake_ctx: ToolHarness, monkeypatch
     script_plan_path = fake_ctx.project_path / "drafts" / "episode_1" / "script_plan_segments.json"
     assert script_plan_path.exists()
     saved = json.loads(script_plan_path.read_text(encoding="utf-8"))
+    # Numbers written by the model are placeholders; the server issues numbers on persist: the fixture script already used E1S01
     # 模型写的编号只是占位，落盘时由服务端发号：夹具剧本已用过 E1S01
     assert [s["segment_id"] for s in saved["segments"]] == ["E1S02", "E1S03"]
+    # novel_text kept verbatim
     # novel_text 逐字保留
     assert saved["segments"][0]["novel_text"] == "张三走向村口。"
     assert captured["task_type"] is mod.TextTaskType.SCRIPT
@@ -137,6 +150,7 @@ async def test_split_narration_segments_registers_the_frozen_default_source_basi
 
     class _Generator:
         async def generate(self, _request, project_name=None):
+            # Rewrites while waiting for the provider come from another writer, not on the event loop of the call under test.
             # 等待供应商期间的改写来自别的写方，不在被测调用的事件循环上。
             await asyncio.to_thread(episode_source.write_text, "等待供应商期间改过的原文。", encoding="utf-8")
             latest = {**project, "source_language": "English"}
@@ -168,7 +182,10 @@ async def test_split_narration_segments_registers_the_frozen_default_source_basi
 async def test_split_narration_segments_rejects_out_of_enum_duration(
     fake_ctx: ToolHarness, monkeypatch, video_request_facts
 ) -> None:
-    """静态分镜 schema 的 duration 是开区间，超出 supported_durations 的时长由工具后校验拦截，不落盘。"""
+    """duration in the static shot schema is open-ended; durations outside supported_durations are blocked by the tool's
+    post-validation and not persisted.
+
+    静态分镜 schema 的 duration 是开区间，超出 supported_durations 的时长由工具后校验拦截，不落盘。"""
 
     nr_source(fake_ctx)
     segments = [nr_segment("E1S01", 5)]
@@ -197,7 +214,10 @@ async def test_split_narration_segments_rejects_duplicate_segment_ids(
 async def test_split_narration_segments_rejects_blank_novel_text(
     fake_ctx: ToolHarness, monkeypatch, video_request_facts
 ) -> None:
-    """novel_text 为纯空白（如单个空格）满足 schema min_length=1 却无实际旁白内容，须被后校验拦截，不落盘。"""
+    """novel_text that is pure whitespace (e.g. a single space) satisfies schema min_length=1 but has no actual narration;
+    it must be blocked by post-validation and not persisted.
+
+    novel_text 为纯空白（如单个空格）满足 schema min_length=1 却无实际旁白内容，须被后校验拦截，不落盘。"""
 
     nr_source(fake_ctx)
     segments = [nr_segment("E1S01", 4, "张三在村口等人"), nr_segment("E1S02", 4, novel_text=" ")]
@@ -225,7 +245,10 @@ async def test_split_narration_segments_rejects_empty_segments(
 async def test_split_narration_segments_rejects_missing_field(
     fake_ctx: ToolHarness, monkeypatch, video_request_facts
 ) -> None:
-    """缺资产字段（characters_in_segment 等）由既有分镜 schema（NarrationScriptPlanSegment strict）拦截。"""
+    """Missing asset fields (characters_in_segment etc.) are blocked by the existing shot schema
+    (NarrationScriptPlanSegment strict).
+
+    缺资产字段（characters_in_segment 等）由既有分镜 schema（NarrationScriptPlanSegment strict）拦截。"""
 
     nr_source(fake_ctx)
     bad = {"segment_id": "E1S01", "novel_text": "缺字段", "duration_seconds": 4, "segment_break": False}
@@ -240,7 +263,10 @@ async def test_split_narration_segments_rejects_missing_field(
 async def test_split_narration_segments_rejects_unregistered_asset_reference(
     fake_ctx: ToolHarness, monkeypatch, video_request_facts
 ) -> None:
-    """characters_in_segment / scenes / props 引用了 project.json 未登记的名称须被拦截，不落盘。"""
+    """characters_in_segment / scenes / props referencing names not registered in project.json must be blocked, not
+    persisted.
+
+    characters_in_segment / scenes / props 引用了 project.json 未登记的名称须被拦截，不落盘。"""
 
     nr_source(fake_ctx)
     segments = [nr_segment("E1S01", 4, "张三在村口等人", characters_in_segment=["王五"])]
@@ -256,7 +282,14 @@ async def test_split_narration_segments_rejects_unregistered_asset_reference(
 async def test_split_narration_segments_accepts_asset_name_in_other_unicode_form(
     fake_ctx: ToolHarness, monkeypatch, video_request_facts
 ) -> None:
-    """资产表记 NFC、模型写回 NFD（或反之）指的是同一个已登记资产，不该判成未登记。
+    """The asset table storing NFC while the model writes back NFD (or vice versa) refers to the same registered asset and
+    should not be judged unregistered.
+
+    Same comparison frame as ``validate_unit_text`` on the rv side: both normalize to ``asset_name_comparison_key`` before
+    comparing, otherwise a registered Vietnamese character name would be blocked from the split, and the Agent could not
+    tell the difference from the report.
+
+    资产表记 NFC、模型写回 NFD（或反之）指的是同一个已登记资产，不该判成未登记。
 
     与 rv 侧 ``validate_unit_text`` 同一比对坐标系：两侧都归一到 ``asset_name_comparison_key``
     再判等，否则一个登记过的越南语角色名会被拦在拆分之外，且 Agent 从报告上看不出差别在哪。
@@ -290,7 +323,9 @@ async def _nr_source_and_call(fake_ctx: ToolHarness, monkeypatch, source_text: s
 async def test_split_narration_segments_rejects_truncated_novel_text(
     fake_ctx: ToolHarness, monkeypatch, video_request_facts
 ) -> None:
-    """分镜合并后比源文短（模型删减）：novel_text 完整性校验拦截，不落盘。"""
+    """Shots joined are shorter than the source (model cut text): blocked by the novel_text integrity check, not persisted.
+
+    分镜合并后比源文短（模型删减）：novel_text 完整性校验拦截，不落盘。"""
     out = await _nr_source_and_call(
         fake_ctx,
         monkeypatch,
@@ -305,7 +340,9 @@ async def test_split_narration_segments_rejects_truncated_novel_text(
 async def test_split_narration_segments_rejects_rewritten_novel_text(
     fake_ctx: ToolHarness, monkeypatch, video_request_facts
 ) -> None:
-    """分镜文字被模型改写（非逐字）：novel_text 完整性校验拦截，不落盘。"""
+    """Shot text rewritten by the model (not verbatim): blocked by the novel_text integrity check, not persisted.
+
+    分镜文字被模型改写（非逐字）：novel_text 完整性校验拦截，不落盘。"""
     out = await _nr_source_and_call(
         fake_ctx,
         monkeypatch,
@@ -323,7 +360,9 @@ async def test_split_narration_segments_rejects_rewritten_novel_text(
 async def test_split_narration_segments_rejects_reordered_novel_text(
     fake_ctx: ToolHarness, monkeypatch, video_request_facts
 ) -> None:
-    """分镜顺序被模型打乱：novel_text 完整性校验拦截，不落盘。"""
+    """Shot order shuffled by the model: blocked by the novel_text integrity check, not persisted.
+
+    分镜顺序被模型打乱：novel_text 完整性校验拦截，不落盘。"""
     out = await _nr_source_and_call(
         fake_ctx,
         monkeypatch,
@@ -341,7 +380,10 @@ async def test_split_narration_segments_rejects_reordered_novel_text(
 async def test_split_narration_segments_rejects_dropped_word_space(
     fake_ctx: ToolHarness, monkeypatch, video_request_facts
 ) -> None:
-    """空格分词语言里模型丢失词间空格（"Hello world" -> "Helloworld"）属实质内容损坏，须拦截。"""
+    """In space-delimited languages, the model dropping spaces between words ('Hello world' -> 'Helloworld') is real content
+    damage and must be blocked.
+
+    空格分词语言里模型丢失词间空格（"Hello world" -> "Helloworld"）属实质内容损坏，须拦截。"""
     out = await _nr_source_and_call(
         fake_ctx,
         monkeypatch,
@@ -356,7 +398,13 @@ async def test_split_narration_segments_rejects_dropped_word_space(
 async def test_split_narration_segments_accepts_unicode_form_difference(
     fake_ctx: ToolHarness, monkeypatch, video_request_facts
 ) -> None:
-    """源文以 NFD 落盘、模型回写 NFC：纯编码形式差异不是删字改字，覆盖校验不该误判。
+    """Source persisted as NFD, model writes back NFC: a pure encoding-form difference is not cutting or changing text; the
+    coverage check must not misjudge it.
+
+    Languages with combining diacritics (e.g. vi) show both forms in real corpora; a misjudgment would keep a verbatim-correct
+    shot table out of the official file and also block content review and prompt_authoring generation.
+
+    源文以 NFD 落盘、模型回写 NFC：纯编码形式差异不是删字改字，覆盖校验不该误判。
 
     带组合附加符的语种（如 vi）两种形式都在真实语料里出现，误判会把一份逐字正确的分镜表
     挡在正式文件外、连带堵住内容确认与 prompt_authoring 生成。
@@ -375,7 +423,10 @@ async def test_split_narration_segments_accepts_unicode_form_difference(
 async def test_split_narration_segments_accepts_split_at_paragraph_break(
     fake_ctx: ToolHarness, monkeypatch, video_request_facts
 ) -> None:
-    """分镜边界恰好落在源文的段落换行处：边界处允许可选空格，不应误报删减。"""
+    """A shot boundary falling exactly on a paragraph line break in the source: optional whitespace is allowed at
+    boundaries; must not be reported as a cut.
+
+    分镜边界恰好落在源文的段落换行处：边界处允许可选空格，不应误报删减。"""
     out = await _nr_source_and_call(
         fake_ctx,
         monkeypatch,
@@ -393,7 +444,10 @@ async def test_split_narration_segments_accepts_split_at_paragraph_break(
 async def test_split_narration_segments_accepts_split_at_halfwidth_punctuation(
     fake_ctx: ToolHarness, monkeypatch, video_request_facts
 ) -> None:
-    """分镜边界落在半角标点后（源文无空白分隔）：边界处允许可选空格，不应误报删减。"""
+    """A shot boundary after half-width punctuation (no whitespace separator in the source): optional whitespace is allowed
+    at boundaries; must not be reported as a cut.
+
+    分镜边界落在半角标点后（源文无空白分隔）：边界处允许可选空格，不应误报删减。"""
     out = await _nr_source_and_call(
         fake_ctx,
         monkeypatch,
@@ -411,7 +465,10 @@ async def test_split_narration_segments_accepts_split_at_halfwidth_punctuation(
 async def test_split_narration_segments_rejects_dropped_space_after_punctuation(
     fake_ctx: ToolHarness, monkeypatch, video_request_facts
 ) -> None:
-    """标点后的词间空格在分镜内部（非边界）丢失："Hello, world." -> "Hello,world."，属实质内容损坏，须拦截。"""
+    """A space between words after punctuation is lost inside a shot (not at a boundary): 'Hello, world.' -> 'Hello,world.'
+    is real content damage and must be blocked.
+
+    标点后的词间空格在分镜内部（非边界）丢失："Hello, world." -> "Hello,world."，属实质内容损坏，须拦截。"""
     out = await _nr_source_and_call(
         fake_ctx,
         monkeypatch,

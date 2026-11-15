@@ -1,4 +1,13 @@
-"""drama 两段式流水线切分（script_plan 内容 / prompt_authoring 视觉）的模型与校验测试。
+"""Model and validation tests for the drama two-stage pipeline split (script_plan content / prompt_authoring
+visuals).
+
+Covers:
+- the DramaScene.source_text field
+- the script_plan content models DramaSceneContent / DramaNormalizedScript (including the hard duration
+  enum constraint)
+- the prompt_authoring visual models DramaSceneVisual / DramaVisualScript
+
+drama 两段式流水线切分（script_plan 内容 / prompt_authoring 视觉）的模型与校验测试。
 
 覆盖：
 - DramaScene.source_text 字段
@@ -100,7 +109,7 @@ class TestDramaSceneContent:
         assert content.scene_description
 
     def test_content_scene_rejects_visual_fields(self):
-        # 视觉字段不属于 script_plan 内容；extra=forbid 应拒绝
+        # Visual fields are not part of script_plan content; extra=forbid should refuse them / 视觉字段不属于 script_plan 内容；extra=forbid 应拒绝
         with pytest.raises(ValidationError):
             DramaSceneContent.model_validate(_content_scene(image_prompt={"scene": "x"}))
 
@@ -111,6 +120,8 @@ class TestDramaSceneContent:
             )
 
     def test_content_scene_rejects_empty_scene_id(self):
+        # An empty scene_id should be refused at the schema layer: merge treats an empty scene_id as an error,
+        # so fail fast earlier at validation
         # 空 scene_id 应在 schema 层被拒：merge 把空 scene_id 当错误，提前到校验层 fail-fast
         with pytest.raises(ValidationError):
             DramaSceneContent.model_validate(_content_scene(scene_id=""))
@@ -125,9 +136,9 @@ class TestDramaSceneContent:
 class TestDramaNormalizedDurationEnum:
     def test_duration_constrained_to_supported(self):
         model = build_drama_normalized_script_model([4, 6, 8])
-        # 合法
+        # Valid / 合法
         model.model_validate({"title": "t", "scenes": [_content_scene(duration_seconds=6)]})
-        # 非成员（5）应被枚举硬约束拒绝
+        # A non-member (5) should be refused by the hard enum constraint / 非成员（5）应被枚举硬约束拒绝
         with pytest.raises(ValidationError):
             model.model_validate({"title": "t", "scenes": [_content_scene(duration_seconds=5)]})
 
@@ -142,12 +153,14 @@ class TestDramaSceneVisual:
             DramaSceneVisual.model_validate(_visual_scene(utterances=[]))
 
     def test_visual_scene_rejects_empty_scene_id(self):
+        # The alignment anchor scene_id must not be an empty string, otherwise it only surfaces at the merge
+        # stage
         # 对齐锚 scene_id 不得为空串，否则合并阶段才暴露
         with pytest.raises(ValidationError):
             DramaSceneVisual.model_validate(_visual_scene(scene_id=""))
 
     def test_visual_video_prompt_rejects_dialogue(self):
-        # drama 视觉层用 DramaVideoPrompt（无 dialogue）
+        # The drama visual layer uses DramaVideoPrompt (no dialogue) / drama 视觉层用 DramaVideoPrompt（无 dialogue）
         with pytest.raises(ValidationError):
             DramaSceneVisual.model_validate(
                 _visual_scene(
@@ -166,7 +179,9 @@ class TestDramaSceneVisual:
 
 
 class TestEpisodeOutlineContext:
-    """分集大纲（故事节点 / 钩子）是 script_plan 内容生成的规划输入。"""
+    """The episode outline (story beats / hooks) is planning input for script_plan content generation.
+
+    分集大纲（故事节点 / 钩子）是 script_plan 内容生成的规划输入。"""
 
     def _project(self) -> dict:
         return {
@@ -178,7 +193,7 @@ class TestEpisodeOutlineContext:
                     "hook": "少年坠崖",
                     "outline": {"story_beats": ["下山", "遇敌"], "next_episode_teaser": "神秘人相救"},
                 },
-                {"episode": 2, "title": "绝处逢生"},  # 旧式条目：无规划数据
+                {"episode": 2, "title": "绝处逢生"},  # Old-style entry: no planning data / 旧式条目：无规划数据
             ],
         }
 
@@ -227,6 +242,8 @@ class TestEpisodeOutlineContext:
         assert cur["story_beats"] == []
 
     def test_non_string_story_beats_items_filtered(self):
+        # Non-string items in the list (hand-edited corruption) are filtered out too, so dirty data does not
+        # go into the script_plan prompt as-is
         # list 内非字符串项（手编损坏）一并过滤，避免脏数据原样进 script_plan prompt
         project = {"episodes": [{"episode": 1, "hook": "钩子", "outline": {"story_beats": ["下山", 42, None, "遇敌"]}}]}
         cur, _ = episode_outline_context(project, 1)

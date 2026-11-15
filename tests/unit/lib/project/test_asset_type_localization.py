@@ -1,10 +1,18 @@
-"""共享 helper ``lib.project.asset_types.localize_asset_type`` 的映射与降级语义单测。"""
+"""Unit tests for the mapping and fallback semantics of the shared helper
+``lib.project.asset_types.localize_asset_type``.
+
+共享 helper ``lib.project.asset_types.localize_asset_type`` 的映射与降级语义单测。"""
 
 import pytest
 
 from lib.i18n import _ as translate_message
 from lib.project.asset_types import ASSET_SPECS, localize_asset_type
 
+# Explicit expected values independent of the helper under test and of translate_message's internals: if some
+# asset_type_*
+# key is missing, translate_message falls back to the key itself, and computing the expectation with it again
+# would make
+# the test blind to missing translations, so literal values are hand-written here as the oracle.
 # 独立于被测 helper 与 translate_message 内部实现的显式期望值——若某个 asset_type_*
 # key 缺失，translate_message 会回退成 key 本身，用它自己再算一遍期望值会让测试对
 # 漏翻译失明，因此这里手写字面量作为 oracle。
@@ -31,5 +39,8 @@ class TestLocalizeAssetType:
         assert rendered == _EXPECTED_DISPLAY_NAMES[locale][asset_type]
 
     def test_unregistered_type_passes_through_unmapped(self):
-        """未登记值原样透传，不做语义映射，也不回落成 ``asset_type_widget`` 这样的 key。"""
+        """Unregistered values pass through as-is, without semantic mapping and without falling back to a
+        key like ``asset_type_widget``.
+
+        未登记值原样透传，不做语义映射，也不回落成 ``asset_type_widget`` 这样的 key。"""
         assert localize_asset_type("widget", _translator("zh")) == "widget"

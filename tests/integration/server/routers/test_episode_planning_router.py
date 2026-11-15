@@ -1,4 +1,7 @@
-"""「AI 规划分集」与重新规划的 Web 入口：规划的准入拒绝，候选的采纳与放弃。"""
+"""Web entry for "AI episode planning" and replanning: planning admission refusal, adopting and discarding
+candidates.
+
+「AI 规划分集」与重新规划的 Web 入口：规划的准入拒绝，候选的采纳与放弃。"""
 
 from pathlib import Path
 
@@ -41,6 +44,8 @@ def test_instructions_are_the_only_accepted_field(planning_client: TestClient) -
     with planning_client:
         resp = planning_client.post("/api/v1/projects/demo/episode-planning", json={"continue_to_end": False})
 
+    # Request body validation comes before admission: detail is a per-field validation error list, not the admission
+    # refusal message
     # 请求体校验在准入之前：detail 是逐字段的校验错误列表，不是准入拒绝的文案
     assert resp.status_code == 422
     detail = resp.json()["detail"]
@@ -64,7 +69,10 @@ def _cut(episode: int, start: int, end: int) -> dict:
 
 @pytest.fixture
 def replan_client(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> tuple[TestClient, ProjectManager, str]:
-    """两集的项目带一份从第 2 集起、已生成完的候选：把后两句拆成两集。"""
+    """A two-episode project with a fully generated candidate from episode 2 on: split the last two sentences into two
+    episodes.
+
+    两集的项目带一份从第 2 集起、已生成完的候选：把后两句拆成两集。"""
     pm = ProjectManager(tmp_path / "projects")
     monkeypatch.setenv("ARCREEL_DATA_DIR", str(pm.data_root))
     pm.create_project("demo")

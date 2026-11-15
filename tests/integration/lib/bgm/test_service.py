@@ -1,4 +1,7 @@
-"""BGM 登记：在真实临时项目上用随包 ffmpeg 实测响度，按字节登记为项目级产物。"""
+"""BGM registration: measure loudness with the bundled ffmpeg on a real temp project and register it by bytes as a
+project-level artifact.
+
+BGM 登记：在真实临时项目上用随包 ffmpeg 实测响度，按字节登记为项目级产物。"""
 
 from __future__ import annotations
 

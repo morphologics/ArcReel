@@ -1,4 +1,7 @@
-"""v11→v12 迁移：给存量角色补空衍生表；未开启衍生能力的资产不受影响；版本守卫与幂等。"""
+"""v11->v12 migration: add an empty derivative table to existing characters; assets without derivative
+capability are unaffected; version guard and idempotency.
+
+v11→v12 迁移：给存量角色补空衍生表；未开启衍生能力的资产不受影响；版本守卫与幂等。"""
 
 import json
 from pathlib import Path
@@ -44,11 +47,17 @@ class TestMigrateProjectDict:
 
     @pytest.mark.parametrize("characters", ["dirty", ["阿岚"], {"阿岚": "dirty"}])
     def test_unreadable_character_data_is_skipped(self, characters):
-        """手编脏值不在迁移里修复，其结构错误由 DataValidator 另行报告。"""
+        """Hand-edited dirty values are not repaired in the migration; their structural errors are reported
+        separately by DataValidator.
+
+        手编脏值不在迁移里修复，其结构错误由 DataValidator 另行报告。"""
         assert migrate_project_dict({"characters": characters})["characters"] == characters
 
     def test_non_object_derivative_table_preserved(self):
-        """脏衍生表原样留给 DataValidator 报告，迁移不覆盖用户手写的内容。"""
+        """A dirty derivative table is left as-is for DataValidator to report; the migration does not
+        overwrite what the user wrote by hand.
+
+        脏衍生表原样留给 DataValidator 报告，迁移不覆盖用户手写的内容。"""
         after = migrate_project_dict({"characters": {"阿岚": {"description": "少女", "derivatives": "dirty"}}})
         assert after["characters"]["阿岚"]["derivatives"] == "dirty"
 

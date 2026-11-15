@@ -88,7 +88,9 @@ class TestCloseSession:
         assert managed._process_task.done()
 
     async def test_close_noop_for_missing_session(self, tmp_path):
-        """关闭未登记的会话是空操作：不抛错，也不动别的会话。"""
+        """Closing an unregistered session is a no-op: it does not raise and does not touch other sessions.
+
+        关闭未登记的会话是空操作：不抛错，也不动别的会话。"""
         mgr = _make_manager(tmp_path)
         managed, client = _make_managed("s1")
         await _start(managed)
@@ -129,7 +131,9 @@ class TestConfigReading:
 
 class TestCleanup:
     async def test_cleanup_disconnects_after_delay(self, tmp_path):
-        """会话应在配置的延迟后被清理。"""
+        """The session should be cleaned up after the configured delay.
+
+        会话应在配置的延迟后被清理。"""
         mgr = _make_manager(tmp_path)
         managed, client = _make_managed("s1", status="completed")
         await _start(managed)
@@ -143,7 +147,9 @@ class TestCleanup:
         assert client.disconnected is True
 
     async def test_cleanup_skips_if_session_resumed(self, tmp_path):
-        """会话在清理前恢复为 running 则跳过。"""
+        """Skip if the session resumed to running before cleanup.
+
+        会话在清理前恢复为 running 则跳过。"""
         mgr = _make_manager(tmp_path)
         managed, client = _make_managed("s1", status="completed")
         await _start(managed)
@@ -162,7 +168,9 @@ class TestCleanup:
             await mgr.close_session("s1")
 
     async def test_cleanup_cancels_previous_task(self, tmp_path):
-        """多次调度应取消旧的 cleanup task。"""
+        """Scheduling multiple times should cancel the old cleanup task.
+
+        多次调度应取消旧的 cleanup task。"""
         mgr = _make_manager(tmp_path)
         managed, _ = _make_managed("s1", status="completed")
         await _start(managed)
@@ -183,7 +191,9 @@ class TestCleanup:
             await mgr.close_session("s1")
 
     async def test_result_alone_neither_settles_nor_schedules_cleanup(self, tmp_path):
-        """result 只代表一轮结束：会话仍在 running，不调度清理，等 CLI 报 idle。"""
+        """A result only marks the end of one turn: the session is still running, no cleanup is scheduled, wait for the CLI to report idle.
+
+        result 只代表一轮结束：会话仍在 running，不调度清理，等 CLI 报 idle。"""
         mgr = _make_manager(tmp_path)
         managed, _ = _make_managed("s1", status="running")
         await _start(managed)
@@ -204,7 +214,9 @@ class TestCleanup:
             await mgr.close_session("s1")
 
     async def test_cleanup_task_cancelled_on_new_schedule(self, tmp_path):
-        """error 状态的 cleanup task 在重新调度时应被取消。"""
+        """The cleanup task in error state should be cancelled when rescheduled.
+
+        error 状态的 cleanup task 在重新调度时应被取消。"""
         mgr = _make_manager(tmp_path)
         managed, _ = _make_managed("s1", status="error")
         await _start(managed)
@@ -228,7 +240,9 @@ class TestCleanup:
 
 class TestEnsureCapacity:
     async def test_under_limit_no_eviction(self, tmp_path):
-        """活跃数低于上限时不淘汰。"""
+        """No eviction while the active count is below the limit.
+
+        活跃数低于上限时不淘汰。"""
         mgr = _make_manager(tmp_path)
         managed, _ = _make_managed("s1")
         await _start(managed)
@@ -243,7 +257,9 @@ class TestEnsureCapacity:
             await mgr.close_session("s1")
 
     async def test_evicts_oldest_non_running(self, tmp_path):
-        """超限时淘汰最久未活跃的非 running 会话。"""
+        """Over the limit, evict the non-running session that has been inactive the longest.
+
+        超限时淘汰最久未活跃的非 running 会话。"""
         mgr = _make_manager(tmp_path)
         old, old_client = _make_managed("s_old", status="idle")
         await _start(old)
@@ -267,7 +283,9 @@ class TestEnsureCapacity:
             await mgr.close_session("s_new")
 
     async def test_skips_session_once_cli_reports_work_before_the_inbox_runs(self, tmp_path):
-        """CLI 自主开启一轮、报告 running 的帧已读出而 inbox 还没处理：会话已在进行中，不能断开。"""
+        """The CLI started a turn on its own and the frame reporting running has been read, but the inbox has not processed it yet: the session is already in progress and must not be disconnected.
+
+        CLI 自主开启一轮、报告 running 的帧已读出而 inbox 还没处理：会话已在进行中，不能断开。"""
         mgr = _make_manager(tmp_path)
         busy, busy_client = _make_managed("s_busy", status="idle")
         await _start(busy)
@@ -290,7 +308,9 @@ class TestEnsureCapacity:
             await mgr.close_session("s_quiet")
 
     async def test_evicts_completed_session_when_no_idle(self, tmp_path):
-        """无 idle 会话时，应淘汰 completed/error/interrupted 状态的会话。"""
+        """With no idle session, sessions in completed/error/interrupted state should be evicted.
+
+        无 idle 会话时，应淘汰 completed/error/interrupted 状态的会话。"""
         mgr = _make_manager(tmp_path)
         completed, completed_client = _make_managed("s_completed", status="completed")
         await _start(completed)
@@ -314,7 +334,9 @@ class TestEnsureCapacity:
             await mgr.close_session("s_running")
 
     async def test_all_running_raises_capacity_error(self, tmp_path):
-        """所有会话都在 running 时应抛出 SessionCapacityError。"""
+        """When all sessions are running, SessionCapacityError should be raised.
+
+        所有会话都在 running 时应抛出 SessionCapacityError。"""
         mgr = _make_manager(tmp_path)
         managed_list: list[ManagedSession] = []
         for i in range(3):
@@ -334,7 +356,9 @@ class TestEnsureCapacity:
                 await mgr.close_session(f"s{i}")
 
     async def test_capacity_error_message_includes_count(self, tmp_path):
-        """错误消息中应包含当前 running 会话数。"""
+        """The error message should include the current number of running sessions.
+
+        错误消息中应包含当前 running 会话数。"""
         mgr = _make_manager(tmp_path)
         for i in range(3):
             m, _ = _make_managed(f"s{i}", status="running")
@@ -354,7 +378,9 @@ class TestEnsureCapacity:
 
 class TestPatrolLoop:
     async def test_patrol_cleans_stale_session(self, tmp_path):
-        """巡检应清理超时的非 running 会话。"""
+        """The patrol should clean up timed-out non-running sessions.
+
+        巡检应清理超时的非 running 会话。"""
         mgr = _make_manager(tmp_path)
         managed, client = _make_managed("s1", status="completed")
         await _start(managed)
@@ -371,7 +397,9 @@ class TestPatrolLoop:
             await mgr.close_session("s1")
 
     async def test_patrol_skips_running(self, tmp_path):
-        """巡检不应清理 running 会话。"""
+        """The patrol should not clean up running sessions.
+
+        巡检不应清理 running 会话。"""
         mgr = _make_manager(tmp_path)
         managed, client = _make_managed("s1", status="running")
         await _start(managed)
@@ -387,11 +415,13 @@ class TestPatrolLoop:
             await mgr.close_session("s1")
 
     async def test_patrol_skips_recent_session(self, tmp_path):
-        """巡检不应清理近期活跃的会话。"""
+        """The patrol should not clean up recently active sessions.
+
+        巡检不应清理近期活跃的会话。"""
         mgr = _make_manager(tmp_path)
         managed, client = _make_managed("s1", status="completed")
         await _start(managed)
-        managed.last_activity = time.monotonic()  # 刚刚活跃
+        managed.last_activity = time.monotonic()  # Just active / 刚刚活跃
         mgr.sessions["s1"] = managed
 
         try:
@@ -404,6 +434,7 @@ class TestPatrolLoop:
             await mgr.close_session("s1")
 
 
+# --- Sessions not yet idle: disconnecting the CLI before it reports idle (turn in flight, background subagents still alive between turns) would abort it ------
 # --- 未空闲的会话：CLI 报 idle 之前（在途轮次、轮次之间仍有后台子智能体）断开 CLI 会中止它 ------
 
 
@@ -411,7 +442,9 @@ _RESULT = {"type": "result", "subtype": "success", "is_error": False}
 
 
 async def _feed(mgr: SessionManager, managed: ManagedSession, *frames: dict) -> None:
-    """经真实读取回调与 inbox 处理喂入消息帧，处理完即返回。"""
+    """Feed message frames through the real read callback and inbox processing; returns once processed.
+
+    经真实读取回调与 inbox 处理喂入消息帧，处理完即返回。"""
     managed.resolved_sdk_id = managed.session_id
     on_message = mgr._make_actor_message_callback([managed])
     for frame in frames:
@@ -423,7 +456,9 @@ async def _feed(mgr: SessionManager, managed: ManagedSession, *frames: dict) -> 
 class TestNotIdleSessionProtection:
     @pytest.mark.parametrize("state", ["running", "requires_action"])
     async def test_idle_cleanup_spares_session_after_result_until_cli_reports_idle(self, tmp_path, state):
-        """一轮的 result 之后 CLI 仍在工作（后台子智能体存活、还欠一轮）：会话未空闲，不能断开。"""
+        """After a turn's result the CLI is still working (background subagents alive, one more turn owed): the session is not idle and must not be disconnected.
+
+        一轮的 result 之后 CLI 仍在工作（后台子智能体存活、还欠一轮）：会话未空闲，不能断开。"""
         mgr = _make_manager(tmp_path)
         managed, client = _make_managed("s1")
         await _start(managed)
@@ -450,6 +485,7 @@ class TestNotIdleSessionProtection:
         try:
             with patch.object(mgr, "_get_cleanup_delay", new_callable=AsyncMock, return_value=0):
                 await _feed(mgr, managed, session_state_message("running"), _RESULT, session_state_message("idle"))
+                # Cleanup disconnecting the CLI means the actor exits; shield makes a timeout only report failure without also cancelling the actor
                 # 清理断开 CLI 即 actor 退出；shield 让超时只报失败，不顺带取消 actor
                 await asyncio.wait_for(asyncio.shield(actor_task), timeout=1.0)
 
@@ -515,7 +551,9 @@ class TestNotIdleSessionProtection:
             await mgr.close_session("s1")
 
     async def test_patrol_counts_idle_time_from_when_cli_reported_idle(self, tmp_path):
-        """后台工作跑得比两倍清理延迟还久：CLI 报 idle 时不能按它开始前的活跃时间被巡检立即驱逐。"""
+        """Background work ran longer than twice the cleanup delay: when the CLI reports idle, the patrol must not evict it immediately based on the activity time before it started.
+
+        后台工作跑得比两倍清理延迟还久：CLI 报 idle 时不能按它开始前的活跃时间被巡检立即驱逐。"""
         mgr = _make_manager(tmp_path)
         managed, client = _make_managed("s1", status="completed")
         await _start(managed)
@@ -534,7 +572,9 @@ class TestNotIdleSessionProtection:
             await mgr.close_session("s1")
 
     async def test_cli_exit_settles_the_session_and_releases_protection(self, tmp_path):
-        """CLI 退出时不会再报 idle：会话照常收尾为终态，不能永久占着名额。"""
+        """On CLI exit there will be no more idle report: the session still settles to a terminal state and must not hold a slot forever.
+
+        CLI 退出时不会再报 idle：会话照常收尾为终态，不能永久占着名额。"""
         mgr = _make_manager(tmp_path)
         managed, client = _make_managed("s1")
         await _start(managed)

@@ -44,7 +44,9 @@ class TestTextTaskType:
 
 class TestTextTaskTiers:
     def test_every_task_type_is_mapped(self):
-        """穷举校验：TextTaskType 新增成员必须显式归档到 TEXT_TASK_TIERS。"""
+        """Exhaustive check: new TextTaskType members must be explicitly filed into TEXT_TASK_TIERS.
+
+        穷举校验：TextTaskType 新增成员必须显式归档到 TEXT_TASK_TIERS。"""
         assert set(TEXT_TASK_TIERS) == set(TextTaskType)
 
     def test_tier_assignments(self):
@@ -109,7 +111,9 @@ class TestTextGenerationResult:
 
 
 def _field_descriptions(raw: dict) -> set[str]:
-    """Pydantic 默认 schema 中字段级的 ``description``。"""
+    """Field-level ``description`` values in Pydantic's default schema.
+
+    Pydantic 默认 schema 中字段级的 ``description``。"""
     nodes = [raw, *raw.get("$defs", {}).values()]
     return {
         prop["description"]
@@ -212,6 +216,7 @@ class TestResolveSchema:
         class Outer(BaseModel):
             """顶层实现说明：ADR 编号、迁移口径"""
 
+            # The field description equals the referenced model's docstring: Pydantic keeps it only on the definition by default; after stripping the definition description it must still remain on the field.
             # 字段说明与被引用模型的 docstring 同文：Pydantic 默认只留在定义上，剥除定义说明后仍须保留在字段上
             inner: Inner = Field(description="构图信息")
             bare: Inner
@@ -228,20 +233,24 @@ class TestResolveSchema:
         assert props["explicit"]["description"] == "显式给模型的说明"
 
     def test_response_schema_models_carry_docstrings_and_field_descriptions_by_default(self):
-        """前提自检：默认 schema 确实带类 docstring 说明与字段说明，否则下面的参数化断言形同虚设。"""
+        """Precondition self-check: the default schema really carries class-docstring descriptions and field descriptions, otherwise the parametrized assertions below are meaningless.
+
+        前提自检：默认 schema 确实带类 docstring 说明与字段说明，否则下面的参数化断言形同虚设。"""
         models = response_schema_models()
         assert any(_class_docstring_texts(model) for model in models)
         assert any(_field_descriptions(model.model_json_schema()) for model in models)
 
     @pytest.mark.parametrize("model", response_schema_params())
     def test_response_schema_models_drop_class_docstrings_keep_field_descriptions(self, model: type[BaseModel]):
-        """类 docstring 是写给维护者的实现说明，字段 description 才是给模型的说明。"""
+        """Class docstrings are implementation notes for maintainers; field descriptions are what the model is told.
+
+        类 docstring 是写给维护者的实现说明，字段 description 才是给模型的说明。"""
         raw = model.model_json_schema()
         field_descriptions = _field_descriptions(raw)
         resolved = resolve_schema(model)
         descriptions = _description_values(resolved)
 
-        # 顶层与内联后的嵌套模型都不带类 docstring 说明
+        # Neither the top level nor the inlined nested models carry class-docstring descriptions. / 顶层与内联后的嵌套模型都不带类 docstring 说明
         assert "description" not in resolved
         assert _class_docstring_texts(model).isdisjoint(descriptions)
         assert field_descriptions <= set(descriptions)
@@ -304,7 +313,9 @@ class _Person(BaseModel):
 
 
 class TestStructuredFallbackReason:
-    """共享复验纯函数：openai/ark/gemini 复用同一实现。"""
+    """Shared re-validation pure function: openai/ark/gemini reuse the same implementation.
+
+    共享复验纯函数：openai/ark/gemini 复用同一实现。"""
 
     def test_valid_json_satisfying_pydantic_returns_none(self):
         import json
@@ -325,7 +336,7 @@ class TestStructuredFallbackReason:
 
         from lib.backends.text_backends.base import structured_fallback_reason
 
-        # 合法 JSON 但 age 为中文字符串、违反 int 约束
+        # Valid JSON, but age is a Chinese string, violating the int constraint. / 合法 JSON 但 age 为中文字符串、违反 int 约束
         violating = json.dumps({"name": "A", "age": "三十"}, ensure_ascii=False)
         assert structured_fallback_reason(violating, _Person) is not None
 
@@ -334,7 +345,7 @@ class TestStructuredFallbackReason:
 
         from lib.backends.text_backends.base import structured_fallback_reason
 
-        # strict=True 下 "30" 不被强转为 30，判定为未强制 schema
+        # Under strict=True "30" is not coerced to 30, judged as schema not enforced. / strict=True 下 "30" 不被强转为 30，判定为未强制 schema
         assert structured_fallback_reason(json.dumps({"name": "A", "age": "30"}), _Person) is not None
 
     def test_strict_false_tolerates_coercible_returns_none(self):
@@ -342,6 +353,7 @@ class TestStructuredFallbackReason:
 
         from lib.backends.text_backends.base import structured_fallback_reason
 
+        # strict=False (matching backends that do not declare strict) tolerates the coercible "30" without triggering fallback.
         # strict=False（对齐未声明 strict 的后端）容忍可强转值 "30"，不触发降级
         assert structured_fallback_reason(json.dumps({"name": "A", "age": "30"}), _Person, strict=False) is None
 
@@ -350,6 +362,7 @@ class TestStructuredFallbackReason:
 
         from lib.backends.text_backends.base import structured_fallback_reason
 
+        # strict=False still falls back for output that truly cannot satisfy the schema: a non-coercible int + a missing required field.
         # strict=False 仍对真正无法满足 schema 的输出降级：不可强转的 int + 缺必填字段
         non_coercible = json.dumps({"name": "A", "age": "三十"}, ensure_ascii=False)
         assert structured_fallback_reason(non_coercible, _Person, strict=False) is not None
@@ -367,6 +380,7 @@ class TestStructuredFallbackReason:
 
         from lib.backends.text_backends.base import structured_fallback_reason
 
+        # A dict schema only checks for valid JSON; it does not tighten even if types violate the declaration.
         # dict schema 仅校验是否合法 JSON，即便类型违反声明也不收紧
         violating = json.dumps({"name": "A", "age": "thirty"})
         schema = {"type": "object", "properties": {"name": {"type": "string"}, "age": {"type": "integer"}}}
@@ -380,6 +394,7 @@ class TestStructuredFallbackReason:
     def test_none_schema_never_triggers_fallback(self):
         from lib.backends.text_backends.base import structured_fallback_reason
 
+        # When response_schema is None (plain text generation), plain text must not be misjudged as needing fallback.
         # response_schema 为 None（纯文本生成）时，纯文本不得被误判为需降级
         assert structured_fallback_reason("plain text, not json", None) is None
         assert structured_fallback_reason('{"a": 1}', None) is None
@@ -387,7 +402,9 @@ class TestStructuredFallbackReason:
 
 
 class TestStripLeadingThinkBlock:
-    """思考模型内嵌在 content 开头的 <think> 块：只剥开头一个闭合块，其余形态原样返回。"""
+    """A <think> block embedded at the start of a thinking model's content: only one leading closed block is stripped; other shapes are returned as is.
+
+    思考模型内嵌在 content 开头的 <think> 块：只剥开头一个闭合块，其余形态原样返回。"""
 
     def test_strips_leading_block_and_surrounding_whitespace(self):
         from lib.backends.text_backends.base import strip_leading_think_block
@@ -420,7 +437,9 @@ class TestStripLeadingThinkBlock:
 
 
 class TestMergeBilledTokens:
-    """降级路径的原生调用计量并账：仅在至少一侧有值时相加，两侧皆 None 保持 None。"""
+    """Merging native-call metering on the fallback path: add only when at least one side has a value; both None stays None.
+
+    降级路径的原生调用计量并账：仅在至少一侧有值时相加，两侧皆 None 保持 None。"""
 
     def test_both_sides_have_values(self):
         from lib.backends.text_backends.base import merge_billed_tokens
@@ -475,7 +494,7 @@ class TestSummarizeValidationError:
         except ValidationError as exc:
             summary = summarize_validation_error(exc)
         assert "age" in summary
-        # 摘要不含模型原始输入值
+        # The summary does not contain the model's raw input values. / 摘要不含模型原始输入值
         assert "三十" not in summary
 
 
@@ -513,7 +532,9 @@ class TestWarnIfTruncated:
 
 
 class TestCheckTruncation:
-    """结构化输出截断升级为硬错误，自由文本维持仅告警（见 docs/adr/0044）。"""
+    """Structured-output truncation is escalated to a hard error; free text keeps warning only (see docs/adr/0044).
+
+    结构化输出截断升级为硬错误，自由文本维持仅告警（见 docs/adr/0044）。"""
 
     def test_structured_truncation_raises(self, caplog):
         import logging
@@ -530,13 +551,15 @@ class TestCheckTruncation:
         assert exc.provider == "ark"
         assert exc.model == "doubao"
         assert exc.output_tokens == 8192
-        # 点名当前模型 + 换模型建议
+        # Names the current model + suggests switching models. / 点名当前模型 + 换模型建议
         assert "ark/doubao" in str(exc)
         assert "输出能力更高的文本模型" in str(exc)
         assert "output_tokens=8192" in str(exc)
 
     def test_structured_truncation_without_output_tokens_omits_placeholder(self):
-        """供应商响应缺失 usage 信息时 output_tokens 为 None，错误消息不应显示 "output_tokens=None"。"""
+        """When the provider response lacks usage info, output_tokens is None, and the error message should not show "output_tokens=None".
+
+        供应商响应缺失 usage 信息时 output_tokens 为 None，错误消息不应显示 "output_tokens=None"。"""
 
         from lib.backends.text_backends.base import TextOutputTruncatedError, check_truncation
 
@@ -566,7 +589,11 @@ class TestCheckTruncation:
         check_truncation(None, provider="ark", model="doubao", structured=True)
 
     def test_truncated_error_is_non_retryable(self):
-        """TextOutputTruncatedError 须是 NonRetryableError,否则消息里的 output_tokens 整数
+        """TextOutputTruncatedError must be a NonRetryableError, otherwise the output_tokens integer in the message could
+        accidentally hit a transient-error substring of with_retry_async (e.g. 429/500) and be retried by mistake
+        (see lib/infra/retry.py::NonRetryableError).
+
+        TextOutputTruncatedError 须是 NonRetryableError,否则消息里的 output_tokens 整数
         偶然命中 with_retry_async 的瞬态错误模式子串（如 429/500）时会被误判重试
         （见 lib/infra/retry.py::NonRetryableError）。"""
         from lib.backends.text_backends.base import TextOutputTruncatedError

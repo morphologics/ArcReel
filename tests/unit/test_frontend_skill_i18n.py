@@ -34,7 +34,13 @@ def _is_user_invocable(skill_md: Path) -> bool:
 
 
 def _find_skill_md(skill_dir: Path) -> Path | None:
-    """优先 SKILL.md；否则任一 SKILL.<mode>.md 变体。
+    """Prefer SKILL.md; otherwise any SKILL.<mode>.md variant.
+
+    When both variants exist, all variants must agree on user-invocable; otherwise, if one
+    has user-invocable=true and another false, the frontend only shows the translation key of one of them and the CI check
+    would miss that drift. A failed check raises directly so the regression case fails explicitly.
+
+    优先 SKILL.md；否则任一 SKILL.<mode>.md 变体。
 
     双变体同时存在时，要求所有变体的 user-invocable 状态一致——否则若一份
     user-invocable=true 另一份 false，前端只会显示其中一份的翻译 key，CI 校验
@@ -102,7 +108,9 @@ def test_every_user_invocable_skill_has_frontend_display_name(locale: str) -> No
 
 
 def test_no_orphan_skill_name_keys_in_any_locale() -> None:
-    """Frontend skill_name_* keys 必须都对应 user-invocable SKILL.md —— 防止过时翻译堆积。"""
+    """Frontend skill_name_* keys must all map to a user-invocable SKILL.md, to keep stale translations from piling up.
+
+    Frontend skill_name_* keys 必须都对应 user-invocable SKILL.md —— 防止过时翻译堆积。"""
     skill_ids = _user_invocable_skill_ids()
     expected = {f"skill_name_{sid}" for sid in skill_ids}
     for locale in LOCALES:

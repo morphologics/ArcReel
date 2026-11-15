@@ -1,4 +1,10 @@
-"""KlingImageBackend 单元测试（respx 在 transport 层拦截，不打真实 HTTP）。
+"""KlingImageBackend unit tests (respx intercepts at the transport layer, no real HTTP).
+
+Covers: JWT / Bearer dual-mode auth injection, request body building (text-to-image / image-to-image image array), reference
+image limit truncation, fail-loud on a missing reference image, the redacted log view, end to end submit -> poll -> take
+image_url -> download, the failed terminal state, and taking the first of several images.
+
+KlingImageBackend 单元测试（respx 在 transport 层拦截，不打真实 HTTP）。
 
 覆盖：JWT / Bearer 双模式鉴权注入、请求体构建（文生图 / 图生图 image 数组）、参考图上限截断、
 缺失参考图 fail-loud、脱敏日志视图、submit→轮询→取 image_url→下载端到端、失败终态、多图取首张。
@@ -34,7 +40,9 @@ _GENERATIONS_URL = "https://api-beijing.klingai.com/v1/images/generations"
 
 
 class _KlingImageRoutes(NamedTuple):
-    """Kling 图像的三条出站流量：建任务、任务轮询、成图下载。"""
+    """The three outbound flows of Kling images: task creation, task polling, result-image download.
+
+    Kling 图像的三条出站流量：建任务、任务轮询、成图下载。"""
 
     submit: respx.Route
     poll: respx.Route
@@ -99,6 +107,7 @@ class TestConstructionAndCapabilities:
         assert b.model == "kling-image-o1"
 
     def test_explicit_model_keeps_registry_key(self):
+        # The model property = the registry key (result.model / billing lookup key), even when it has an API-name alias.
         # model 属性 = registry 键名（result.model / 计费查表键），即使带 API 名别名。
         b = _jwt_backend("kling-v3-omni-image", api_model_name="kling-v3-omni")
         assert b.model == "kling-v3-omni-image"
@@ -136,13 +145,14 @@ class TestAuthHeaders:
 
 class TestApiModelNameResolution:
     def test_alias_key_sends_api_model_name(self, tmp_path):
+        # Alias key (registry key != API name): the request body's model_name sends the real API name.
         # 别名键（registry 键 ≠ API 名）：请求体 model_name 发真实 API 名。
         b = _jwt_backend("kling-v3-omni-image", api_model_name="kling-v3-omni")
         payload = b._build_payload(_request(tmp_path))
         assert payload["model_name"] == "kling-v3-omni"
 
     def test_plain_key_sends_itself(self, tmp_path):
-        # 普通键（无别名）：请求体 model_name 回退到键名自身。
+        # Plain key (no alias): the request body's model_name falls back to the key itself. / 普通键（无别名）：请求体 model_name 回退到键名自身。
         b = _jwt_backend("kling-image-o1")
         payload = b._build_payload(_request(tmp_path))
         assert payload["model_name"] == "kling-image-o1"
@@ -165,13 +175,14 @@ class TestPayloadBuilding:
         payload = _jwt_backend()._build_payload(_request(tmp_path, reference_images=refs))
         assert isinstance(payload["image"], list)
         assert len(payload["image"]) == 2
-        # 纯 base64，无 data URI 前缀
+        # Plain base64, no data URI prefix. / 纯 base64，无 data URI 前缀
         assert all(isinstance(u, str) and u and not u.startswith("data:") for u in payload["image"])
 
     def test_reference_over_limit_truncated(self, tmp_path):
         refs = [_ref(tmp_path, f"r{i}.png") for i in range(12)]
         backend = _jwt_backend()
         payload = backend._build_payload(_request(tmp_path, reference_images=refs))
+        # o1 limit is 10, extras truncated; the declared limit is the number actually sent, and the orchestration layer trims and numbers by it.
         # o1 上限 10 张，超出截断；声明的上限即实际下传张数，编排层按它裁剪后编号。
         assert len(payload["image"]) == asyncio.run(backend.reference_image_limit()) == 10
 
@@ -182,6 +193,7 @@ class TestPayloadBuilding:
         assert exc.value.code == "image_reference_images_unreadable"
 
     def test_empty_filename_path_uses_index_placeholder(self, tmp_path):
+        # "." resolves to an empty file name (not a file): the error identifies it by index #N, with no empty token leaking.
         # "." 解析出空文件名（非文件）：报错按序号 #N 标识，不漏空 token。
         bad = ReferenceImage(path=".")
         with pytest.raises(ImageCapabilityError) as exc:
@@ -216,14 +228,14 @@ class TestGenerateHappyPath:
 
             result = await _jwt_backend().generate(_request(tmp_path))
 
-            # images/generations 提交端点
+            # images/generations submit endpoint. / images/generations 提交端点
             assert only_request(routes.submit).url.path == "/v1/images/generations"
             assert routes.poll.calls.last.request.url.path == "/v1/images/generations/task-9"
 
         assert result.provider == PROVIDER_KLING
         assert result.image_uri == "https://x/final.png"
         assert result.image_path.read_bytes() == b"png-bytes"
-        # 请求体不带分辨率，不报分辨率
+        # The request body has no resolution, so none is reported. / 请求体不带分辨率，不报分辨率
         assert result.usage is not None
         assert result.usage.dimensions == {}
         assert result.usage.quantities == {"output_images": 1, "input_images": 0}
@@ -274,6 +286,8 @@ class TestGenerateHappyPath:
             assert routes.download.call_count == 0
 
     async def test_http_error_raises_and_no_retry_on_4xx(self, tmp_path):
+        # A 4xx in the submit phase raises HTTPStatusError via raise_for_status; a definitive 4xx is not retried
+        # (non-idempotent task-creation POST), the submit is sent only once, no duplicate task + double billing.
         # submit 阶段 4xx 经 raise_for_status 抛 HTTPStatusError；确定性 4xx 不重试
         # （非幂等建任务 POST），提交仅发一次，不重复建任务 + 重复计费。
         with _kling_image_api() as routes, bounded_poll_clock():
@@ -287,7 +301,7 @@ class TestGenerateHappyPath:
 
 class TestRegistration:
     def test_kling_image_backend_registered(self):
-        # 触发 image_backends 包级自动注册
+        # Triggers the image_backends package-level auto registration. / 触发 image_backends 包级自动注册
         from lib.backends.image_backends import create_backend, get_registered_backends
 
         assert PROVIDER_KLING in get_registered_backends()

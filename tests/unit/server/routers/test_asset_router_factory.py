@@ -1,4 +1,9 @@
-"""统一资产工厂单测：覆盖 character 的 extra 字段透传与 409 冲突响应。
+"""Unified asset factory unit tests: covers pass-through of character extra fields and 409 conflict responses.
+
+scenes/props CRUD behavior is covered by test_scenes_router / test_props_router; this file focuses on
+the new capabilities the factory introduced (character extras + extra='allow' creation semantics).
+
+统一资产工厂单测：覆盖 character 的 extra 字段透传与 409 冲突响应。
 
 scenes/props 的 CRUD 行为由 test_scenes_router / test_props_router 覆盖；本文件聚焦
 factory 引入的新能力（character extras + extra='allow' 创建语义）。
@@ -17,6 +22,8 @@ from tests.auth_deps import AUTH_DEPENDENCIES
 from tests.factories import make_translator
 from tests.fakes import FakeProjectAssetMutationMixin, use_project_manager
 
+# Default-locale message of the fallback 500: the tests do not override get_translator, so the endpoint falls back to DEFAULT_LOCALE("zh"),
+# consistent with make_translator()'s default locale.
 # 兜底 500 的默认 locale 文案：测试未覆盖 get_translator，端点回落到 DEFAULT_LOCALE("zh")，
 # 与 make_translator() 默认 locale 一致。
 _INTERNAL_ERROR_DETAIL = make_translator()("internal_server_error")
@@ -116,11 +123,15 @@ class TestAssetRouterFactory:
             entry = fake_pm.projects["demo"]["characters"]["Bob"]
             assert entry["voice_style"] == "calm"
             assert entry["character_sheet"] == ""
+            # reference_image is a character extra field; if not passed on create it defaults to ""
             # reference_image 是 character 的 extra 字段，create 时未传则默认 ""
             assert entry["reference_image"] == ""
 
     def test_character_post_with_reference_audio_stamps_voice_updated_at(self, monkeypatch):
-        """创建即携带 reference_audio 时同样须机械戳 voice_updated_at，与 PATCH/上传/
+        """Creating with reference_audio must also mechanically stamp voice_updated_at, the same as PATCH/upload/
+        library import and the other write points, otherwise that character's existing-clip banner would never notice this setting.
+
+        创建即携带 reference_audio 时同样须机械戳 voice_updated_at，与 PATCH/上传/
         入库导入等其它写点同一口径，否则该角色的存量片段横幅永远感知不到这次设置。"""
         client, fake_pm = _client(monkeypatch)
         with client:
@@ -146,7 +157,10 @@ class TestAssetRouterFactory:
             assert "voice_updated_at" not in entry
 
     def test_character_post_rejects_dismissed_at(self, monkeypatch):
-        """新建角色尚无 voice_updated_at，PATCH 侧的等值校验在创建时恒不成立；创建
+        """A new character has no voice_updated_at yet, so PATCH's equality check can never hold at creation; the create
+        endpoint rejects the field outright, preventing a far-future timestamp from being written while bypassing the PATCH check.
+
+        新建角色尚无 voice_updated_at，PATCH 侧的等值校验在创建时恒不成立；创建
         端点直接拒绝携带该字段，防止绕过 PATCH 校验写入远未来时间戳。"""
         client, fake_pm = _client(monkeypatch)
         with client:
@@ -158,7 +172,10 @@ class TestAssetRouterFactory:
             assert "Bob" not in fake_pm.projects["demo"]["characters"]
 
     def test_character_post_400_on_path_unsafe_name(self, monkeypatch):
-        """名字含路径分隔符须在 HTTP 边界拒绝：这类名字会让生成（嵌套文件路径）
+        """Names containing path separators must be rejected at the HTTP boundary: such names break generation (nested file paths)
+        and all later single-segment routes (PATCH/DELETE/{name}).
+
+        名字含路径分隔符须在 HTTP 边界拒绝：这类名字会让生成（嵌套文件路径）
         与后续单段路由（PATCH/DELETE/{name}）全部失效。"""
         client, fake_pm = _client(monkeypatch)
         with client:
@@ -247,11 +264,15 @@ class TestAssetRouterFactory:
                 json={"reference_image": {"foo": "bar"}},
             )
             assert resp.status_code == 422
-            # entry 未被污染
+            # The entry was not polluted / entry 未被污染
             assert fake_pm.projects["demo"]["characters"]["Alice"]["reference_image"] == ""
 
     def test_character_patch_reference_audio_stamps_voice_updated_at(self, monkeypatch):
-        """reference_audio 本应只经 update_character_reference_audio 写入，但该字段仍在通用
+        """reference_audio should only be written via update_character_reference_audio, but the field is still in the generic
+        PATCH-writable set; changing the voice via this path must also stamp voice_updated_at, otherwise the existing-clip transition banner
+        does not notice the change.
+
+        reference_audio 本应只经 update_character_reference_audio 写入，但该字段仍在通用
         PATCH 可写集合内；经这条路径改声音时也须补戳 voice_updated_at，否则存量过渡横幅
         感知不到变化。"""
         client, fake_pm = _client(monkeypatch)
@@ -311,7 +332,10 @@ class TestAssetRouterFactory:
             assert entry["voice_notice_dismissed_at"] == "2026-01-01T00:00:00+00:00"
 
     def test_character_patch_rejects_dismissed_at_not_matching_voice_updated_at(self, monkeypatch):
-        """voice_notice_dismissed_at 只能确认到角色当前实际的 voice_updated_at，不接受任意
+        """voice_notice_dismissed_at can only acknowledge the character's actual current voice_updated_at, not an arbitrary
+        string; otherwise a client could write a far-future timestamp and suppress the existing-clip transition banner forever.
+
+        voice_notice_dismissed_at 只能确认到角色当前实际的 voice_updated_at，不接受任意
         字符串——否则客户端可写入远未来时间戳，永久压制存量过渡横幅。"""
         client, fake_pm = _client(monkeypatch)
         fake_pm.projects["demo"]["characters"]["Alice"] = {
@@ -328,7 +352,7 @@ class TestAssetRouterFactory:
                 json={"voice_notice_dismissed_at": "9999-12-31T00:00:00+00:00"},
             )
             assert resp.status_code == 422
-            # entry 未被污染
+            # The entry was not polluted / entry 未被污染
             assert "voice_notice_dismissed_at" not in fake_pm.projects["demo"]["characters"]["Alice"]
 
     def test_unknown_asset_type_raises(self):
@@ -339,7 +363,13 @@ class TestAssetRouterFactory:
 
 
 class TestAssetRouterNoLeak:
-    """末端 catch-all：未预期异常返回通用 500，内部异常细节不泄露给客户端。
+    """Final catch-all: unexpected exceptions return a generic 500, and internal exception details are not leaked to the client.
+
+    The pm_getter (get_project_manager) called first inside each try block of add/update/delete is
+    monkeypatched to raise a RuntimeError carrying a sentinel string, bypassing the earlier FileNotFoundError/HTTPException
+    branches into the final except Exception; asserts 500, a generic i18n detail message, and no sentinel string in the response body.
+
+    末端 catch-all：未预期异常返回通用 500，内部异常细节不泄露给客户端。
 
     把 add/update/delete 各自 try 块里最早调用的 pm_getter（get_project_manager）
     monkeypatch 成抛带哨兵串的 RuntimeError，绕过前置的 FileNotFoundError/HTTPException
@@ -385,7 +415,9 @@ class TestAssetRouterNoLeak:
 
 
 class TestNfcConvergence:
-    """PATCH/DELETE 的路径参数与桶 key 形态可以不同：登记闸口落 NFC，存量 key 未迁移。"""
+    """PATCH/DELETE path parameters and bucket keys can differ in form: the registration gate stores NFC, while existing keys are not migrated.
+
+    PATCH/DELETE 的路径参数与桶 key 形态可以不同：登记闸口落 NFC，存量 key 未迁移。"""
 
     def test_patch_resolves_across_normalization_forms(self, monkeypatch):
         client, fake_pm = _client(monkeypatch)
@@ -409,7 +441,9 @@ class TestNfcConvergence:
 
 
 class TestRenameEndpoint:
-    """级联重命名端点：dry_run 预览与执行同一路由，错误按 400/404/409 映射。"""
+    """Cascading rename endpoint: dry_run preview and execution share one route; errors map to 400/404/409.
+
+    级联重命名端点：dry_run 预览与执行同一路由，错误按 400/404/409 映射。"""
 
     def test_rename_executes_and_returns_counts(self, monkeypatch):
         client, fake_pm = _client(monkeypatch)
@@ -460,7 +494,9 @@ class TestRenameEndpoint:
 
 
 class TestDeleteDryRun:
-    """删除端点的 dry_run：只返回按集列出的引用数，资产保留。"""
+    """dry_run of the delete endpoint: only returns per-episode reference counts; the asset is kept.
+
+    删除端点的 dry_run：只返回按集列出的引用数，资产保留。"""
 
     def test_dry_run_returns_references_by_episode_and_keeps_the_asset(self, monkeypatch):
         client, fake_pm = _client(monkeypatch)

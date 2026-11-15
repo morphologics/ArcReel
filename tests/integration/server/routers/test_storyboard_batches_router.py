@@ -1,4 +1,10 @@
-"""一集分镜图 / 分镜视频批量的 HTTP 面：预览与提交、跳过项、整批拒绝与错误映射。
+"""HTTP surface of an episode's storyboard image / storyboard video batches: preview and submit, skipped items,
+whole-batch refusal and error mapping.
+
+Uses a real project, artifact manifest, queue and provider config; storyboard image cost is computed from
+per-channel unit prices in the test database.
+
+一集分镜图 / 分镜视频批量的 HTTP 面：预览与提交、跳过项、整批拒绝与错误映射。
 
 使用真实项目、产物清单、队列与供应商配置；分镜图费用按测试数据库中的各通道单价计算。
 """
@@ -58,6 +64,7 @@ async def board_client(
                     "model_id": "text-image",
                     "display_name": "Text image",
                     "endpoint": "openai-images-generations",
+                    # # Priced per entry: Grok Imagine Pro 0.07 USD per image
                     # 按条目计价：Grok Imagine Pro 每张 0.07 USD
                     "entry_binding": "xai/grok-imagine-image-pro",
                 },
@@ -144,6 +151,8 @@ async def test_storyboard_preview_lists_targets_skips_and_cost_without_queueing(
     body = response.json()
     assert body["targets"] == [{"unit_id": "E1S01"}, {"unit_id": "E1S02"}]
     assert body["skipped"] == [{"unit_id": "E1S03", "reason": "missing_prompt"}]
+    # # The first image has no reference image and uses text-to-image (0.04); the second follows the previous storyboard
+    # # image and uses image-to-image (0.09).
     # 首张没有参考图走文生图（0.04），第二张接在上一张分镜图之后走图生图（0.09）。
     assert body["estimated_cost"] == {"USD": pytest.approx(0.07 + 0.07 * 2)}
     assert body["unpriced_count"] == 0
@@ -190,6 +199,7 @@ async def test_video_batch_without_a_video_model_is_refused_whole_with_reasons(
     assert body["targets"] == [{"unit_id": "E1S01"}]
     assert body["skipped"] == [{"unit_id": "E1S02", "reason": "missing_storyboard"}]
     assert body["admission"]["decision"] == "blocked"
+    # # No usable video model, so this target cannot be priced: no total given, listed as one unpriced item
     # 没有可用的视频模型，这一个目标报不出价：不给合计，列为一项未定价
     assert body["estimated_cost"] is None
     assert body["unpriced_count"] == 1

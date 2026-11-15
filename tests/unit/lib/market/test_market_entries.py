@@ -1,4 +1,6 @@
-"""市场条目浏览：启用源条目合并与排序、相对路径解析、定义原文抓取、icon 二次把关与进程内缓存。"""
+"""Market entry browsing: merging and sorting entries from enabled sources, relative path resolution, fetching the raw definition, icon double check and in-process cache.
+
+市场条目浏览：启用源条目合并与排序、相对路径解析、定义原文抓取、icon 二次把关与进程内缓存。"""
 
 from __future__ import annotations
 
@@ -92,7 +94,7 @@ async def _store(market_sessions: async_sessionmaker[AsyncSession], *sources: Ma
 
 
 # ---------------------------------------------------------------------------
-# 合并与路径解析
+# Merging and path resolution / 合并与路径解析
 # ---------------------------------------------------------------------------
 
 
@@ -143,7 +145,7 @@ def test_entry_asset_url_resolves_against_index_directory(index_url: str, relati
 
 
 # ---------------------------------------------------------------------------
-# 定义原文
+# Raw definition / 定义原文
 # ---------------------------------------------------------------------------
 
 

@@ -1,4 +1,6 @@
-"""安装记录迁移往返、唯一约束及端点删除级联。"""
+"""Installation record migration round trip, unique constraint and cascade on endpoint deletion.
+
+安装记录迁移往返、唯一约束及端点删除级联。"""
 
 from collections.abc import Callable
 from datetime import UTC, datetime

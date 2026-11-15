@@ -1,4 +1,6 @@
-"""内容摘要原语的口径测试。"""
+"""Tests of the measure of the content digest primitives.
+
+内容摘要原语的口径测试。"""
 
 from __future__ import annotations
 
@@ -34,7 +36,9 @@ from lib.infra.content_digest import (
 
 
 def test_sha256_file_streams_large_payload(tmp_path: Path) -> None:
-    """流式读避免大文件 OOM；跨 CHUNK_BYTES 边界的多块读取结果应与标准 hashlib 一致。"""
+    """Streaming reads avoid OOM on large files; multi-chunk reads crossing the CHUNK_BYTES boundary should match standard hashlib.
+
+    流式读避免大文件 OOM；跨 CHUNK_BYTES 边界的多块读取结果应与标准 hashlib 一致。"""
 
     big = tmp_path / "big.bin"
     payload = b"abc" * (CHUNK_BYTES // len(b"abc") + 1)
@@ -70,6 +74,7 @@ def test_unprefixed_strips_only_a_valid_algorithm_prefix() -> None:
     hexdigest = "ab" * 32
     assert unprefixed(prefixed(hexdigest)) == hexdigest
     assert unprefixed(hexdigest) == hexdigest
+    # When what follows the prefix is not a valid hexdigest, return it as is and let the caller's comparison judge it as different.
     # 前缀后不是合法 hexdigest 时原样返回，交给调用方的比对判为不一致。
     assert unprefixed(f"{HASH_ALGORITHM}:xyz") == f"{HASH_ALGORITHM}:xyz"
     assert unprefixed(f"{HASH_ALGORITHM}:{hexdigest}\n") == f"{HASH_ALGORITHM}:{hexdigest}\n"
@@ -97,7 +102,9 @@ def test_canonical_json_keeps_non_ascii_literal() -> None:
 
 
 def test_canonical_json_accepts_non_finite_floats_by_default() -> None:
-    """项目与剧本快照沿用 json 默认口径：能被 ``json.loads`` 读进来的就能算出摘要。"""
+    """Project and script snapshots keep json's default measure: anything ``json.loads`` can read in can be digested.
+
+    项目与剧本快照沿用 json 默认口径：能被 ``json.loads`` 读进来的就能算出摘要。"""
 
     payload = json.loads('{"value": NaN}')
     assert math.isnan(payload["value"])
@@ -149,7 +156,9 @@ def test_text_mode_digest_matches_whole_read_view(content: bytes) -> None:
     ],
 )
 def test_text_mode_digest_folds_across_chunk_boundaries(chunks: tuple[bytes, ...], content: bytes) -> None:
-    """块边界上的 ``\\r`` 要等到下一块才能决定是否折叠，结果须与一次性读取一致。"""
+    """A ``\\r`` at a chunk boundary can only be folded or not once the next chunk arrives; the result must match a one-shot read.
+
+    块边界上的 ``\\r`` 要等到下一块才能决定是否折叠，结果须与一次性读取一致。"""
     digest = TextModeDigest()
     for chunk in chunks:
         digest.update(chunk)
@@ -157,7 +166,7 @@ def test_text_mode_digest_folds_across_chunk_boundaries(chunks: tuple[bytes, ...
     assert digest.hexdigest() == hashlib.sha256(_text_mode_view(content)).hexdigest()
 
 
-# --- 文件摘要缓存：键为 (st_dev, st_ino, st_size, st_mtime_ns) ---
+# --- File digest cache: key is (st_dev, st_ino, st_size, st_mtime_ns) --- / --- 文件摘要缓存：键为 (st_dev, st_ino, st_size, st_mtime_ns) ---
 
 
 @pytest.fixture(autouse=True)
@@ -167,7 +176,9 @@ def fresh_digest_cache() -> None:
 
 @pytest.fixture
 def hashed_files(monkeypatch: pytest.MonkeyPatch) -> list[int]:
-    """在摘要循环上记录每次真正哈希的字节数；缓存命中不会调到这里。"""
+    """Records the bytes actually hashed on each pass of the digest loop; cache hits do not reach here.
+
+    在摘要循环上记录每次真正哈希的字节数；缓存命中不会调到这里。"""
 
     hashed: list[int] = []
     original = content_digest.digest_stream
@@ -182,7 +193,9 @@ def hashed_files(monkeypatch: pytest.MonkeyPatch) -> list[int]:
 
 
 def _aged_file(path: Path, payload: bytes, *, age_seconds: int = 3600) -> Path:
-    """写文件并把 mtime 拨到足够久以前：刚写的文件不入缓存，要观察缓存行为得先让它「老」。"""
+    """Write a file and set its mtime far enough back: freshly written files are not cached, so to observe cache behaviour it must first be made "old".
+
+    写文件并把 mtime 拨到足够久以前：刚写的文件不入缓存，要观察缓存行为得先让它「老」。"""
 
     path.write_bytes(payload)
     aged = time.time_ns() - age_seconds * 1_000_000_000
@@ -227,7 +240,9 @@ def test_replaced_content_is_rehashed_when_only_the_mtime_changes(tmp_path: Path
 
 
 def test_touched_file_with_identical_content_keeps_its_digest(tmp_path: Path, hashed_files: list[int]) -> None:
-    """复制、导入、恢复只改 mtime：重算一次，摘要不变。"""
+    """Copy, import and restore only change mtime: recompute once, the digest is unchanged.
+
+    复制、导入、恢复只改 mtime：重算一次，摘要不变。"""
 
     target = _aged_file(tmp_path / "sheet.png", b"same bytes")
     before = sha256_file(target)
@@ -239,7 +254,9 @@ def test_touched_file_with_identical_content_keeps_its_digest(tmp_path: Path, ha
 
 
 def test_rewrite_within_the_racy_window_is_never_served_stale(tmp_path: Path, hashed_files: list[int]) -> None:
-    """同一时间戳下的连续改写可能不改任何一项 stat 标识；刚写的文件不入缓存，所以每次都读到最新内容。"""
+    """Consecutive rewrites at the same timestamp may change none of the stat identifiers; freshly written files are not cached, so the latest content is always read.
+
+    同一时间戳下的连续改写可能不改任何一项 stat 标识；刚写的文件不入缓存，所以每次都读到最新内容。"""
 
     target = tmp_path / "sheet.png"
     for payload in (b"aaaa", b"bbbb", b"cccc"):
@@ -261,14 +278,15 @@ def test_cache_is_bounded_and_evicts_the_least_recently_used(tmp_path: Path, has
 
     for target in files[:FILE_DIGEST_CACHE_CAPACITY]:
         sha256_file(target)
-    sha256_file(files[0])  # 0 变成最近用过的：满容量后被挤出的是 1，不是 0
+    sha256_file(files[0])  # 0 becomes the most recently used: after reaching capacity, 1 is evicted, not 0 / 0 变成最近用过的：满容量后被挤出的是 1，不是 0
     sha256_file(files[-1])
     hashed_before = len(hashed_files)
     assert hashed_before == FILE_DIGEST_CACHE_CAPACITY + 1
 
     sha256_file(files[0])
     sha256_file(files[-1])
-    assert len(hashed_files) == hashed_before  # 最近用过的两个仍命中
+    assert len(hashed_files) == hashed_before  # The two most recently used still hit / 最近用过的两个仍命中
 
     sha256_file(files[1])
+    # The least recently used is evicted; the cache does not grow without bound
     assert len(hashed_files) == hashed_before + 1  # 最久未用的被淘汰，缓存没有无界增长

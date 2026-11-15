@@ -121,7 +121,10 @@ class TestProjectManager:
         assert captured["purpose"] is CallPurpose.PROJECT_OVERVIEW
 
     def test_delete_continues_after_a_concurrent_cleanup_removed_an_empty_subdirectory(self, tmp_path, monkeypatch):
-        """删除中途并发的残余目录清理先删掉了一个空目录：rmtree 报目录不存在，但项目目录还在，要接着删净。"""
+        """A concurrent leftover-directory cleanup removed an empty directory mid-delete: rmtree reports the directory
+        missing, but the project directory is still there and must be fully deleted.
+
+        删除中途并发的残余目录清理先删掉了一个空目录：rmtree 报目录不存在，但项目目录还在，要接着删净。"""
         pm = ProjectManager(tmp_path / "projects")
         project_dir = pm.create_project("demo")
         real_rmtree = shutil.rmtree
@@ -169,6 +172,7 @@ class TestProjectManager:
         project_dir = pm.create_project("demo")
         pm.create_project_metadata("demo", "Demo", "Anime", "narration")
 
+        # products is part of the project scaffold like the other three asset kinds
         # products 与其他三类资产一样属于项目脚手架
         assert (project_dir / "products").is_dir()
 
@@ -197,7 +201,10 @@ class TestProjectManager:
         assert pm.load_project("demo")["style"] == "Noir"
 
     def test_create_project_metadata_rejects_legacy_image_backend(self, tmp_path):
-        """数据层守卫：extras 含退役的 image_backend → 直接 ValueError，绝不写回 legacy 形态。"""
+        """Data-layer guard: extras containing the retired image_backend -> ValueError right away, never write back the
+        legacy shape.
+
+        数据层守卫：extras 含退役的 image_backend → 直接 ValueError，绝不写回 legacy 形态。"""
         pm = ProjectManager(tmp_path / "projects")
         pm.create_project("demo")
         with pytest.raises(ValueError, match="image_backend"):
@@ -206,7 +213,9 @@ class TestProjectManager:
             )
 
     def test_create_project_metadata_accepts_new_image_provider_fields(self, tmp_path):
-        """新字段 image_provider_t2i/i2i 正常写入（不受守卫影响）。"""
+        """New fields image_provider_t2i/i2i are written normally (unaffected by the guard).
+
+        新字段 image_provider_t2i/i2i 正常写入（不受守卫影响）。"""
         pm = ProjectManager(tmp_path / "projects")
         pm.create_project("demo")
         project = pm.create_project_metadata(
@@ -215,7 +224,10 @@ class TestProjectManager:
         assert project["image_provider_t2i"] == "openai/gpt-image-1"
 
     def test_create_project_metadata_is_latest_schema_with_empty_whole_source_files(self, tmp_path):
-        """新项目即最新 schema 形态：版本对齐迁移目标版本，整本源文清单以空列表初始。"""
+        """A new project is in the latest schema shape: the version matches the migration target, and the whole-source file
+        list starts as an empty list.
+
+        新项目即最新 schema 形态：版本对齐迁移目标版本，整本源文清单以空列表初始。"""
         from lib.project.project_migrations import CURRENT_SCHEMA_VERSION
 
         pm = ProjectManager(tmp_path / "projects")
@@ -236,6 +248,8 @@ class TestProjectManager:
         pm.create_project("demo")
         project = pm.create_project_metadata("demo", "")
 
+        # An empty title is kept as an empty string, with the frontend i18n as fallback; no longer falls back to
+        # project_name (slug)
         # 空 title 直接保留为空字符串,由前端 i18n 兜底,不再 fallback 为 project_name(slug)
         assert project["title"] == ""
 
@@ -254,6 +268,7 @@ class TestProjectManager:
         third = pm.generate_project_name("第1集")
 
         assert first.startswith("my-demo-project-")
+        # CJK titles / titles reduced to isolated digits all collapse to the neutral prefix proj-, avoiding a misleading slug
         # CJK 标题 / 只剩孤立数字的标题统一塌成中性前缀 proj-,避免误导性 slug
         assert second.startswith("proj-")
         assert third.startswith("proj-")
@@ -263,6 +278,8 @@ class TestProjectManager:
         assert pm.normalize_project_name(third) == third
 
     def test_generate_project_name_truncates_before_letter_check(self, tmp_path):
+        # When the first 24 characters of a long ASCII title are all digits/hyphens and the letters get cut off, it should
+        # collapse to proj- rather than return a digits-only slug like "1234567890-1234567890-12".
         # 长 ASCII 标题前 24 字符全是数字/连字符、字母被截掉时,应塌成 proj-,
         # 而不是返回 "1234567890-1234567890-12" 这种纯数字 slug。
         pm = ProjectManager(tmp_path / "projects")
@@ -280,7 +297,7 @@ class TestProjectManager:
             "content_mode": "narration",
             "segments": [{"segment_id": "E1S01", "duration_seconds": 4}],
         }
-        path = pm.save_script("demo", script, "episode_1.json", validate=False)  # helper 测试用简化替身
+        path = pm.save_script("demo", script, "episode_1.json", validate=False)  # Simplified double for helper tests / helper 测试用简化替身
         assert path.name == "episode_1.json"
 
         loaded = pm.load_script("demo", "episode_1.json")
@@ -326,7 +343,9 @@ class TestProjectManager:
             pm.update_scene_asset("demo", "episode_1.json", "NOT_FOUND", "video_clip", "x.mp4")
 
     def test_locked_script_helpers_drama_paths(self, tmp_path):
-        """覆盖经 locked_script 迁移的 helper 在 drama/scenes 分支。"""
+        """Covers the helpers migrated to locked_script on the drama/scenes branch.
+
+        覆盖经 locked_script 迁移的 helper 在 drama/scenes 分支。"""
         pm = ProjectManager(tmp_path / "projects")
         pm.create_project("demo")
         pm.create_project_metadata("demo", "Demo", "Anime", "drama")
@@ -342,6 +361,7 @@ class TestProjectManager:
         }
         pm.save_script("demo", drama_script, "episode_1.json", validate=False)
 
+        # update_scene_asset takes the drama/scenes branch (else: scene_id)
         # update_scene_asset 走 drama/scenes 分支（else: scene_id）
         pm.update_scene_asset("demo", "episode_1.json", "001", "storyboard_image", "sb/001.png")
         loaded = pm.load_script("demo", "episode_1.json")
@@ -370,7 +390,9 @@ class TestProjectManager:
         assert pm.load_project("demo")["episodes"][0]["script_file"] == "scripts/episode_1.json"
 
     def test_batch_update_scene_assets_persists_all(self, tmp_path):
-        """batch_update_scene_assets 单次锁内写多个分镜，命中全部 id 时持久化所有更新。"""
+        """batch_update_scene_assets writes several shots within a single lock and persists all updates when every id hits.
+
+        batch_update_scene_assets 单次锁内写多个分镜，命中全部 id 时持久化所有更新。"""
         pm = ProjectManager(tmp_path / "projects")
         pm.create_project("demo")
         pm.create_project_metadata("demo", "Demo", "Anime", "drama")
@@ -386,9 +408,10 @@ class TestProjectManager:
                 ],
             },
             "episode_1.json",
-            validate=False,  # helper 测试用简化替身
+            validate=False,  # Simplified double for helper tests / helper 测试用简化替身
         )
 
+        # Empty updates return early
         # 空 updates 提前返回
         assert pm.batch_update_scene_assets("demo", "episode_1.json", []) == {}
 
@@ -405,6 +428,7 @@ class TestProjectManager:
         assert by_id["001"]["generated_assets"]["storyboard_image"] == "sb/001.png"
         assert by_id["002"]["generated_assets"]["video_clip"] == "v/002.mp4"
 
+        # narration/segments branch: the same helper indexes by segment_id
         # narration/segments 分支：同 helper 走 segment_id 索引
         pm.save_script(
             "demo",
@@ -422,7 +446,13 @@ class TestProjectManager:
         assert seg["generated_assets"]["storyboard_image"] == "sb/E2S01.png"
 
     def test_batch_update_scene_assets_fails_loud_on_missing_ids(self, tmp_path):
-        """batch_update 遇到不存在的 scene_id 抛 KeyError 列出所有缺失 id,with 体整体回滚不写回。
+        """batch_update raises KeyError listing all missing ids when a scene_id does not exist, and the whole with body rolls
+        back without writing.
+
+        Aligned with the single update_scene_asset fail-loud: a silent no-op would make the worker think all N clips were
+        updated, SSE broadcast all updated, and the UI stay pending forever; failures must be explicitly visible.
+
+        batch_update 遇到不存在的 scene_id 抛 KeyError 列出所有缺失 id,with 体整体回滚不写回。
 
         与 update_scene_asset 单个版本对齐 fail-loud:静默 no-op 会让 worker 误以为 N 个
         clip 全部更新成功、SSE 广播 all updated、UI 永远 pending,失败必须显式可见。
@@ -450,16 +480,21 @@ class TestProjectManager:
                 "episode_1.json",
                 [
                     ("001", "storyboard_image", "sb/001.png"),
-                    ("999", "video_clip", "ignored.mp4"),  # 不存在 → 抛错
+                    ("999", "video_clip", "ignored.mp4"),  # Does not exist -> raises / 不存在 → 抛错
                 ],
             )
 
+        # Whole rollback: the matched "001" is not persisted either (same as single update_scene_asset: raising inside the
+        # with body skips write-back)
         # 整体回滚:命中的 "001" 也未持久化(与 update_scene_asset 单个版本同款 with 体内抛错跳过写回)
         loaded = pm.load_script("demo", "episode_1.json")
         assert loaded["scenes"][0]["generated_assets"] == {}
 
     def test_update_character_sheet_success_and_missing(self, tmp_path):
-        """update_character_sheet 写入 sheet 路径；角色缺失时锁内 raise 且跳过写回。"""
+        """update_character_sheet writes the sheet path; when the character is missing it raises inside the lock and skips
+        the write-back.
+
+        update_character_sheet 写入 sheet 路径；角色缺失时锁内 raise 且跳过写回。"""
         pm = ProjectManager(tmp_path / "projects")
         pm.create_project("demo")
         pm.create_project_metadata("demo", "Demo", "Anime", "drama")
@@ -484,7 +519,12 @@ class TestProjectManager:
             pm.update_character_sheet("demo", "episode_1.json", "李四", "sheets/lisi.png")
 
     def test_save_script_rejects_mismatch_before_write(self, tmp_path):
-        """save_script 在 filename/内部 episode 不一致时必须写盘前 fail-fast。
+        """save_script must fail fast before writing when filename and the internal episode disagree.
+
+        Regression (codex review): the old version put the check in sync_episode_from_script, causing a partial commit
+        where the script file was atomically written but project.json not synced.
+
+        save_script 在 filename/内部 episode 不一致时必须写盘前 fail-fast。
 
         回归（codex 评审）：旧版把校验放在 sync_episode_from_script，会造成
         脚本文件已原子写、project.json 未同步的部分提交状态。
@@ -494,24 +534,34 @@ class TestProjectManager:
         pm.create_project_metadata("demo", "Demo", "Anime", "narration")
 
         bad = {
-            "episode": 1,  # 与文件名 episode_10.json 错配
+            "episode": 1,  # Mismatches the file name episode_10.json / 与文件名 episode_10.json 错配
             "title": "第十集错误标题",
             "content_mode": "narration",
             "summary": "摘要",
             "novel": {"title": "小说", "chapter": "第一章"},
             "segments": [],
         }
+        # bad is structurally valid (only the episode mismatches): after the guard lets it through, the consistency check
+        # fails fast, verifying the guard does not misfire
         # bad 结构合法（仅 episode 错配）：守卫放行后由一致性校验 fail-fast，验证守卫不误伤
         with pytest.raises(ValueError, match="不一致"):
             pm.save_script("demo", bad, "episode_10.json")
 
+        # Key assertion: the file must not be written to disk (atomicity preserved)
         # 关键断言：文件不应被写入磁盘（原子性保持）
         scripts_dir = pm.get_project_path("demo") / "scripts"
         assert not (scripts_dir / "episode_10.json").exists()
 
     @pytest.mark.parametrize("bogus_episode", [True, 0, -1])
     def test_malformed_script_episode_does_not_reach_the_ledger(self, tmp_path, bogus_episode):
-        """剧本 JSON 也是裸读进来的：内部 episode 不是正整数时按「没记集号」处理，归属仍看文件名。
+        """Script JSON is also read raw: an internal episode that is not a positive integer is treated as "no episode number
+        recorded", and ownership still follows the file name.
+
+        Accepting it as an episode number would make episode metadata sync write an `episode: True` / `0` entry into the
+        ledger, while the ledger only accepts positive integers as episode numbers; that entry would then be claimed by no
+        episode and make target state planning reject the whole project.
+
+        剧本 JSON 也是裸读进来的：内部 episode 不是正整数时按「没记集号」处理，归属仍看文件名。
 
         认它作集号会让集元数据同步往账本里写一条 `episode: True` / `0`，而账本的集号判据只认
         正整数，那条条目此后既不被任何一集认领，又让目标态规划整体拒绝这个项目。
@@ -524,11 +574,16 @@ class TestProjectManager:
         pm.save_script("demo", script, "episode_1.json", validate=False)
 
         [entry] = pm.load_project("demo")["episodes"]
+        # True == 1, so comparing by value cannot tell them apart: the type of the episode number is itself part of the
+        # assertion.
         # True == 1，按值比分不出来：集号的类型本身就是断言的一部分。
         assert (type(entry["episode"]), entry["episode"], entry["script_file"]) == (int, 1, "scripts/episode_1.json")
 
     def test_filename_whose_episode_number_is_not_positive_is_rejected(self, tmp_path):
-        """`episode_0.json`：0 不对应任何一集，认它作归属会让账本多出一条 `episode: 0`。"""
+        """`episode_0.json`: 0 corresponds to no episode; accepting it as ownership would add an `episode: 0` entry to the
+        ledger.
+
+        `episode_0.json`：0 不对应任何一集，认它作归属会让账本多出一条 `episode: 0`。"""
         pm = ProjectManager(tmp_path / "projects")
         project_dir = pm.create_project("demo")
         pm.create_project_metadata("demo", "Demo", "Anime", "narration")
@@ -542,7 +597,10 @@ class TestProjectManager:
 
     @pytest.mark.parametrize("filename", ["episode_1.json", "scripts/episode_1.json"])
     def test_canonical_filename_matching_the_script_episode_goes_through(self, tmp_path, filename):
-        """规范名的两种写法都指向同一份剧本：写盘收下它并登记为第 1 集的绑定。"""
+        """Both spellings of the canonical name point to the same script: the write accepts it and registers it as
+        episode 1's binding.
+
+        规范名的两种写法都指向同一份剧本：写盘收下它并登记为第 1 集的绑定。"""
         pm = ProjectManager(tmp_path / "projects")
         project_dir = pm.create_project("demo")
         pm.create_project_metadata("demo", "Demo", "Anime", "narration")
@@ -557,6 +615,7 @@ class TestProjectManager:
                 "source_origin": "none",
                 "title": "Episode 1",
                 "script_file": "scripts/episode_1.json",
+                # When the script is written, record the highest entry number used in this episode
                 # 剧本落盘时记下本集条目编号用过的最大号
                 "item_id_high_water": 1,
             }
@@ -566,7 +625,10 @@ class TestProjectManager:
         "filename", ["custom.json", "scripts/ep1.json", "episode_1_old.json", "scripts/drafts/episode_1.json"]
     )
     def test_filename_that_is_not_the_canonical_name_is_rejected(self, tmp_path, filename):
-        """文件名不是规范名时拒绝：写盘前不落盘，外部落盘的文件也不登记为集绑定。"""
+        """Reject a file name that is not the canonical name: nothing is written, and externally written files are not
+        registered as episode bindings either.
+
+        文件名不是规范名时拒绝：写盘前不落盘，外部落盘的文件也不登记为集绑定。"""
         pm = ProjectManager(tmp_path / "projects")
         project_dir = pm.create_project("demo")
         pm.create_project_metadata("demo", "Demo", "Anime", "narration")
@@ -586,7 +648,13 @@ class TestProjectManager:
         assert pm.load_project("demo").get("episodes", []) == []
 
     def test_sync_episode_rejects_filename_episode_mismatch(self, tmp_path):
-        """文件名隐含集号与脚本内 episode 字段不一致时必须拒绝同步。
+        """Sync must be refused when the episode number implied by the file name differs from the episode field in the
+        script.
+
+        Regression: AI generated episode_10.json with internal episode=1, which overwrote episode 1's entry, lost
+        episode 10, and triggered an SSE loop that kept touching metadata.updated_at.
+
+        文件名隐含集号与脚本内 episode 字段不一致时必须拒绝同步。
 
         回归：AI 生成 episode_10.json 但内部 episode=1 曾导致第 1 集条目被覆盖、
         第 10 集丢失，并触发 SSE 循环不停 touch metadata.updated_at。
@@ -603,6 +671,7 @@ class TestProjectManager:
         }
         pm.save_script("demo", ep1, "episode_1.json", validate=False)
 
+        # Forge a bad script: file name episode_10.json but internal episode=1 (AI hallucination scenario)
         # 伪造错误脚本：文件名是 episode_10.json，但内部 episode=1（AI 幻觉场景）
         corrupted = {
             "episode": 1,
@@ -610,6 +679,7 @@ class TestProjectManager:
             "content_mode": "narration",
             "segments": [{"segment_id": "E10S01", "duration_seconds": 4}],
         }
+        # Bypass potential future validation in save_script and write directly to disk to simulate a historical artifact
         # 绕过 save_script 的潜在未来校验，直接落盘模拟历史产物
         scripts_dir = pm.get_project_path("demo") / "scripts"
         (scripts_dir / "episode_10.json").write_text(json.dumps(corrupted, ensure_ascii=False), encoding="utf-8")
@@ -617,6 +687,7 @@ class TestProjectManager:
         with pytest.raises(ValueError, match="不一致"):
             pm.sync_episode_from_script("demo", "episode_10.json")
 
+        # Episode 1's entry in project.json must stay unpolluted
         # project.json 中第 1 集条目必须保持不被污染
         proj = pm.load_project("demo")
         ep1_entry = next(ep for ep in proj["episodes"] if ep["episode"] == 1)
@@ -624,7 +695,9 @@ class TestProjectManager:
         assert ep1_entry["script_file"] == "scripts/episode_1.json"
 
     def test_load_script_strips_scripts_prefix(self, tmp_path):
-        """load_script / save_script / update_scene_asset 应兼容带 scripts/ 前缀的文件名"""
+        """load_script / save_script / update_scene_asset should accept file names with a scripts/ prefix
+
+        load_script / save_script / update_scene_asset 应兼容带 scripts/ 前缀的文件名"""
         pm = ProjectManager(tmp_path / "projects")
         pm.create_project("demo")
         pm.create_project_metadata("demo", "Demo", "Anime", "narration")
@@ -637,20 +710,24 @@ class TestProjectManager:
         }
         pm.save_script("demo", script, "episode_1.json", validate=False)
 
+        # Plain file name
         # 纯文件名
         loaded1 = pm.load_script("demo", "episode_1.json")
         assert loaded1["episode"] == 1
 
+        # With scripts/ prefix (the format the frontend sends)
         # 带 scripts/ 前缀（前端传入的格式）
         loaded2 = pm.load_script("demo", "scripts/episode_1.json")
         assert loaded2["episode"] == 1
 
+        # save_script should also accept a prefixed file name
         # save_script 也应兼容带前缀的文件名
         script["title"] = "修改后"
         pm.save_script("demo", script, "scripts/episode_1.json", validate=False)
         loaded3 = pm.load_script("demo", "episode_1.json")
         assert loaded3["title"] == "修改后"
 
+        # update_scene_asset should also accept it
         # update_scene_asset 也应兼容
         pm.update_scene_asset(
             "demo", "scripts/episode_1.json", "E1S01", "storyboard_image", "storyboards/scene_E1S01.png"
@@ -674,7 +751,10 @@ class TestProjectManager:
 
     @pytest.mark.parametrize("dirty", [None, "bad", ["bad"], 123, False])
     def test_update_scene_status_recovers_from_corrupted_generated_assets(self, tmp_path, dirty):
-        """外部编辑把 generated_assets 损坏成非 dict 形态时按无资产处理，不抛 AttributeError。"""
+        """When an external edit corrupts generated_assets into a non-dict shape, treat it as no assets instead of raising
+        AttributeError.
+
+        外部编辑把 generated_assets 损坏成非 dict 形态时按无资产处理，不抛 AttributeError。"""
         pm = ProjectManager(tmp_path / "projects")
         scene = {"scene_id": "S1", "generated_assets": dirty}
 
@@ -683,7 +763,10 @@ class TestProjectManager:
 
     @pytest.mark.parametrize("dirty", [None, "bad", ["bad"], 123, False])
     def test_normalize_scene_recovers_from_corrupted_generated_assets(self, tmp_path, dirty):
-        """normalize_scene 是 update_scene_status 之前的公共入口，同样需容错损坏的 generated_assets。"""
+        """normalize_scene is the public entry before update_scene_status and also needs to tolerate corrupted
+        generated_assets.
+
+        normalize_scene 是 update_scene_status 之前的公共入口，同样需容错损坏的 generated_assets。"""
         pm = ProjectManager(tmp_path / "projects")
         scene = {"scene_id": "S1", "generated_assets": dirty}
 
@@ -708,6 +791,7 @@ class TestProjectManager:
         assert isinstance(first_stamp, str)
         assert first_stamp
 
+        # Clearing the reference audio must also refresh voice_updated_at (the basis of the existing transition banner)
         # 清空参考音频也须刷新 voice_updated_at（存量过渡横幅的判定基准）
         pm.update_character_reference_audio("demo", "Alice", "")
         cleared = pm.get_project_character("demo", "Alice")
@@ -739,7 +823,7 @@ class TestProjectManager:
         assert added_chars == 1
         added_scenes = pm.add_scenes_batch(
             "demo", {"卧室": {"description": "d"}, "书房": {"description": "d"}}
-        )  # 卧室已存在
+        )  # Bedroom already exists / 卧室已存在
         assert added_scenes == 1
         added_props = pm.add_props_batch("demo", {"玉佩": {"description": "d"}, "铜钱": {"description": "d"}})
         assert added_props == 1
@@ -772,7 +856,9 @@ class TestProjectManager:
             pm.update_prop_sheet("demo", "none", "x")
 
     def test_add_project_character_keeps_the_derivative_table(self, tmp_path):
-        """角色条目一律带衍生表，覆盖写不抹掉已登记的衍生。"""
+        """Character entries always carry a derivative table; an overwrite does not erase registered derivatives.
+
+        角色条目一律带衍生表，覆盖写不抹掉已登记的衍生。"""
         pm = ProjectManager(tmp_path / "projects")
         pm.create_project("demo")
         pm.create_project_metadata("demo", "Demo")
@@ -808,7 +894,10 @@ class TestProjectManager:
         assert {record.object["kind"] for record in records} == {"reference_audio"}
 
     def test_clearing_reference_audio_under_another_name_leaves_the_file(self, tmp_path):
-        """参考音频按名归属：清空或替换只回收角色自己名下的旧文件，指向别处的旧值只是解除引用。"""
+        """Reference audio is owned by name: clearing or replacing only reclaims old files under the character's own name; an
+        old value pointing elsewhere is just unreferenced.
+
+        参考音频按名归属：清空或替换只回收角色自己名下的旧文件，指向别处的旧值只是解除引用。"""
         pm = ProjectManager(tmp_path / "projects")
         pm.create_project("demo")
         pm.create_project_metadata("demo", "Demo")
@@ -868,6 +957,7 @@ class TestProjectManager:
         assert overview["genre"] == "悬疑"
         assert "generated_at" in overview
         assert overview["language"] == "zh"
+        # Top-level source_language must be written by generate_overview, from the same source as overview.language
         # 顶层 source_language 必须由 generate_overview 写入,与 overview.language 同源
         assert pm.load_project("demo")["source_language"] == "zh"
 
@@ -901,7 +991,9 @@ class TestProjectManager:
 
     @pytest.mark.asyncio
     async def test_generate_overview_invalid_language_raises(self, tmp_path, monkeypatch):
-        """schema 违反 → ValidationError 干净抛出,source_language 不被写入."""
+        """Schema violation -> ValidationError raised cleanly, source_language not written.
+
+        schema 违反 → ValidationError 干净抛出,source_language 不被写入."""
         from pydantic import ValidationError
 
         pm = ProjectManager(tmp_path / "projects")
@@ -910,7 +1002,7 @@ class TestProjectManager:
         _write(pm.get_project_path("demo") / "source" / "1.txt", "source body")
 
         async def _fake_create_backend(*args, **kwargs):
-            return _FakeTextBackend(language="chinese"), "gemini-aistudio"  # 非枚举值
+            return _FakeTextBackend(language="chinese"), "gemini-aistudio"  # Not an enum value / 非枚举值
 
         monkeypatch.setattr("lib.backends.text_generator.create_text_backend_for_task", _fake_create_backend)
         with pytest.raises(ValidationError):
@@ -930,7 +1022,10 @@ class TestProjectManager:
     async def test_generate_overview_routes_prompt_by_source_kinds(
         self, tmp_path, monkeypatch, content_mode, kinds, expected
     ):
-        """剧情演绎全部源文都是剧本时 overview 走「提取优先」分支；混合、缺省或非剧情演绎按小说口径。"""
+        """For drama, when all sources are screenplays the overview takes the "extraction first" branch; mixed, default or
+        non-drama use the novel rule.
+
+        剧情演绎全部源文都是剧本时 overview 走「提取优先」分支；混合、缺省或非剧情演绎按小说口径。"""
         from lib.prompts.prompt_builders_script import build_overview_prompt
 
         pm = ProjectManager(tmp_path / "projects")
@@ -961,7 +1056,10 @@ class TestProjectManager:
     async def test_generate_overview_dirty_source_language_falls_back_to_default(
         self, tmp_path, monkeypatch, dirty_source_language
     ):
-        """project.json 的 source_language 是非字符串或空白脏数据时，target_language 回退默认值，
+        """When project.json's source_language is non-string or blank dirty data, target_language falls back to the default
+        instead of passing the dirty object straight into the prompt text.
+
+        project.json 的 source_language 是非字符串或空白脏数据时，target_language 回退默认值，
         不把脏对象直接传入 prompt 文本。"""
         from lib.prompts.prompt_builders_script import build_overview_prompt
 
@@ -987,7 +1085,9 @@ class TestProjectManager:
 
 
 class TestForProjectDir:
-    """ProjectManager.for_project_dir() 由项目目录经数据根布局求出其所在数据根。"""
+    """ProjectManager.for_project_dir() derives the data root from the project directory via the data root layout.
+
+    ProjectManager.for_project_dir() 由项目目录经数据根布局求出其所在数据根。"""
 
     def test_for_project_dir_addresses_the_project_by_name(self, tmp_path):
         data_root = tmp_path / "projects"
@@ -999,11 +1099,14 @@ class TestForProjectDir:
 
 
 class TestPathTraversalProtection:
-    """路径遍历防护测试"""
+    """Path traversal protection tests
+
+    路径遍历防护测试"""
 
     def test_get_project_path_rejects_traversal(self, tmp_path):
         pm = ProjectManager(tmp_path / "projects")
         pm.create_project("demo")
+        # The normalize_project_name regex catches it first
         # normalize_project_name 的正则先拦截
         with pytest.raises(ValueError, match=r"项目标识仅允许英文字母、数字和中划线"):
             pm.get_project_path("../etc")
@@ -1040,6 +1143,7 @@ class TestPathTraversalProtection:
         project_dir = pm.get_project_path("demo")
         scripts_dir = project_dir / "scripts"
         scripts_dir.mkdir(exist_ok=True)
+        # Normal file names should not be blocked
         # 正常文件名不应被拦截
         real = pm._safe_subpath(scripts_dir, "episode_1.json")
         assert real.endswith("episode_1.json")
@@ -1061,12 +1165,17 @@ class TestResolveEpisodeFromScript:
         assert ProjectManager.resolve_episode_from_script({}, "episode-5.json") == 5
 
     def test_ignores_non_int_episode_field(self):
-        """非整数的 episode 字段（如 '1'）应回退到文件名。"""
+        """A non-integer episode field (e.g. '1') should fall back to the file name.
+
+        非整数的 episode 字段（如 '1'）应回退到文件名。"""
         ep = ProjectManager.resolve_episode_from_script({"episode": "1"}, "episode_9.json")
         assert ep == 9
 
     def test_ignores_bool_episode_field(self):
-        """bool 是 int 子类：episode: true 当作字段缺失走文件名，不静默算成第 1 集。"""
+        """bool is an int subclass: episode: true is treated as a missing field and falls back to the file name, not silently
+        counted as episode 1.
+
+        bool 是 int 子类：episode: true 当作字段缺失走文件名，不静默算成第 1 集。"""
         assert ProjectManager.resolve_episode_from_script({"episode": True}, "episode_9.json") == 9
 
     def test_raises_when_unresolvable(self):
@@ -1075,7 +1184,9 @@ class TestResolveEpisodeFromScript:
 
 
 class TestScenePropLifecycle:
-    """scene / prop 生命周期测试（Task 9）"""
+    """scene / prop lifecycle tests (Task 9)
+
+    scene / prop 生命周期测试（Task 9）"""
 
     def test_add_scene_creates_entry(self, tmp_path):
         pm = ProjectManager(tmp_path / "projects")
@@ -1083,7 +1194,7 @@ class TestScenePropLifecycle:
         pm.create_project_metadata("demo", "Demo")
 
         assert pm.add_project_scene("demo", "客厅", "宽敞的客厅") is True
-        assert pm.add_project_scene("demo", "客厅", "宽敞的客厅") is False  # 重复返回 False
+        assert pm.add_project_scene("demo", "客厅", "宽敞的客厅") is False  # Duplicate returns False / 重复返回 False
 
         project = pm.load_project("demo")
         assert "客厅" in project["scenes"]
@@ -1096,7 +1207,7 @@ class TestScenePropLifecycle:
         pm.create_project_metadata("demo", "Demo")
 
         assert pm.add_prop("demo", "玉佩", "一块古玉") is True
-        assert pm.add_prop("demo", "玉佩", "一块古玉") is False  # 重复返回 False
+        assert pm.add_prop("demo", "玉佩", "一块古玉") is False  # Duplicate returns False / 重复返回 False
 
         project = pm.load_project("demo")
         assert "玉佩" in project["props"]
@@ -1113,8 +1224,10 @@ class TestScenePropLifecycle:
         assert added == 1
 
         project = pm.load_project("demo")
+        # Existing ones are not overwritten
         # 已有的不被覆盖
         assert project["scenes"]["客厅"]["description"] == "已有的客厅"
+        # New ones are added
         # 新的被添加
         assert "书房" in project["scenes"]
 
@@ -1122,7 +1235,7 @@ class TestScenePropLifecycle:
         pm = ProjectManager(tmp_path / "projects")
         pm.create_project("demo")
         pm.create_project_metadata("demo", "Demo")
-        pm.add_prop("demo", "玉佩", "已有的玉佩")  # add_prop 无命名冲突
+        pm.add_prop("demo", "玉佩", "已有的玉佩")  # add_prop has no naming conflict / add_prop 无命名冲突
 
         added = pm.add_props_batch("demo", {"玉佩": {"description": "新描述"}, "宝剑": {"description": "宝剑"}})
         assert added == 1
@@ -1141,6 +1254,7 @@ def test_read_source_files_raises_on_non_utf8(tmp_path):
     project_dir = pm.projects_dir / "demo"
     (project_dir / "source").mkdir(parents=True)
     bad = project_dir / "source" / "broken.txt"
+    # Use a seeded PRNG to generate high-entropy random bytes, ensuring decode_txt's 5% garbage threshold is triggered
     # 使用种子化 PRNG 生成高熵随机字节，确保触发 decode_txt 的 5% 乱码阈值
     bad.write_bytes(random.Random(42).randbytes(4000))
 

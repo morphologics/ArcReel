@@ -104,7 +104,9 @@ def _assert_v25_core_body(body: dict, *, mode: str, seconds: str, size: str) -> 
 
 class TestV25RequestBodies:
     async def test_duration_is_passed_through_without_backend_check(self, tmp_path: Path):
-        """时长不在 backend 另做检查，4–12 秒之外的值也原样下发，由上游判定。"""
+        """Duration is not checked separately in the backend; values outside 4-12 seconds are sent as is and judged upstream.
+
+        时长不在 backend 另做检查，4–12 秒之外的值也原样下发，由上游判定。"""
         with _agnes_api() as routes:
             routes.submit.mock(return_value=_queued())
             routes.query.mock(return_value=_completed(seconds="13"))

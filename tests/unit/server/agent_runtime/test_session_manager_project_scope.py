@@ -22,7 +22,9 @@ class _FakeHookMatcher:
 
 
 async def _fake_provider_env():
-    """Stub for OptionsAssembler 凭证注入 — 跳过 DB 访问。"""
+    """Stub for OptionsAssembler credential injection: skips DB access.
+
+    Stub for OptionsAssembler 凭证注入 — 跳过 DB 访问。"""
     return {}
 
 
@@ -234,6 +236,8 @@ class TestAllowedToolsAndConstants:
         assert "AskUserQuestion" in tools
         assert "MultiEdit" not in tools
         assert "LS" not in tools
+        # Task 4.2: Bash is now in allowed_tools; the SDK Sandbox autoAllowBashIfSandboxed
+        # together with SandboxSettings.enabled=True allows commands automatically.
         # Task 4.2: Bash 现在在 allowed_tools，由 SDK Sandbox autoAllowBashIfSandboxed
         # 配合 SandboxSettings.enabled=True 自动放行命令。
         assert "Bash" in tools

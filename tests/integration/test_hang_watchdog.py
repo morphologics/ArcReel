@@ -1,4 +1,17 @@
-"""挂起诊断插件（`tests/hang_watchdog.py`）的端到端契约。
+"""End-to-end contract of the hang diagnosis plugin (`tests/hang_watchdog.py`).
+
+Each case starts a separate pytest session in a temp directory, loading only this plugin. Contract:
+
+- When the process is slow to exit after the session ends (blocked by a non-daemon thread), the dump has the
+  current phase and the blocking thread's call stack.
+- When a worker is killed outright, the last entry in the progress file is the case it was running.
+- When the process calls ``os._exit``, the dump has the exit code and the calling stack; on SIGTERM, the
+  signal file has the stack at that time and the process is ended as usual. Child processes forked by a case
+  ending with ``os._exit`` do not count; a failed dump still exits as usual.
+- When an xdist worker dies, the controller's progress file records it and the signal that ended it.
+- With no dump directory set, the plugin writes no files.
+
+挂起诊断插件（`tests/hang_watchdog.py`）的端到端契约。
 
 每条用例在临时目录里另起一个 pytest 会话，只加载该插件。契约：
 
@@ -151,6 +164,8 @@ def test_forked_child_exiting_via_os_exit_leaves_no_dump(tmp_path: Path) -> None
     )
 
     assert result.returncode == 0, result.stdout + result.stderr
+    # The threshold is only 0.4s, so under high load there may be no-progress dumps; only assert that the child
+    # process's os._exit left no dump.
     # 阈值只有 0.4s，负载高时可能有无进展转储；只断言子进程的 os._exit 没有留下转储。
     assert "os._exit" not in _single(dump_dir, "stacks")
 

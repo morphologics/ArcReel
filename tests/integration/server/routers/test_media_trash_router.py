@@ -1,4 +1,7 @@
-"""宫格、尾帧与角色参考音频进项目回收站：删除成为删除记录，恢复时原位置空闲则回原位，被占用则换新名。"""
+"""Grids, end frames and character reference audio into the project trash: deletion becomes a deletion record;
+restore goes back to the original location if free, otherwise under a new name.
+
+宫格、尾帧与角色参考音频进项目回收站：删除成为删除记录，恢复时原位置空闲则回原位，被占用则换新名。"""
 
 from __future__ import annotations
 
@@ -134,7 +137,10 @@ def test_a_cleared_end_frame_returns_to_its_shot(media_trash_pm, media_trash_cli
 
 
 def test_an_end_frame_record_names_its_shot_by_position_and_text(media_trash_pm):
-    """回收站按分镜在集里的位置与正文摘录称呼尾帧，不露分镜的内部编号。"""
+    """The trash refers to an end frame by the shot's position in the episode and a text excerpt, without exposing the
+    shot's internal ID.
+
+    回收站按分镜在集里的位置与正文摘录称呼尾帧，不露分镜的内部编号。"""
     _set_end_frame(media_trash_pm, b"frame")
     _clear_end_frame(media_trash_pm)
 
@@ -143,7 +149,10 @@ def test_an_end_frame_record_names_its_shot_by_position_and_text(media_trash_pm)
 
 
 def test_an_end_frame_record_takes_its_episode_from_the_script_file_when_the_script_has_none(media_trash_pm):
-    """剧本内没有整数 episode 时，尾帧记录的集号取自规范文件名，回收站仍按位置称呼分镜。"""
+    """When the script has no integer episode, the end frame record takes its episode number from the canonical file
+    name, and the trash still refers to the shot by position.
+
+    剧本内没有整数 episode 时，尾帧记录的集号取自规范文件名，回收站仍按位置称呼分镜。"""
     _set_end_frame(media_trash_pm, b"frame")
     with media_trash_pm.locked_script("demo", "episode_1.json", validate=False) as script:
         del script["episode"]
@@ -206,6 +215,8 @@ def test_a_reference_audio_restored_to_a_new_name_does_not_relink_to_another_cha
     first, second = record_ids
     mp3 = "characters/refs_audio/Alice.mp3"
     media_trash_pm.install_character_reference_audio("demo", "Alice", mp3, b"current")
+    # The current voice is still valid: the copy restored first is only added back to its place as an unreferenced
+    # file.
     # 当前音色仍有效：先恢复的一份只作为未引用文件加回原位。
     project_trash.restore(project_dir, first)
     media_trash_pm.clear_character_reference_audio("demo", "Alice")

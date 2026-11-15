@@ -1,4 +1,6 @@
-"""价目表计算器按计量项类别处理价目表之外的用量（docs/adr/0100）。"""
+"""The price table calculator handles usage outside the price table by meter item kind (docs/adr/0100).
+
+价目表计算器按计量项类别处理价目表之外的用量（docs/adr/0100）。"""
 
 from __future__ import annotations
 
@@ -22,6 +24,7 @@ _PER_SECOND = _table(_flat("output_seconds", 0.5))
 def test_meter_kinds_are_declared_in_the_vocabulary() -> None:
     kinds = {name: spec.kind for name, spec in METERS.items()}
     assert {kinds[name] for name in ("uncached_input_tokens", "output_tokens", "cache_read_tokens")} == {"token"}
+    # Video tokens are converted from seconds, but by Seedance's pricing axis they count as a count kind; character counts are also a count kind
     # 视频 token 由秒数换算而来，但按 Seedance 的计价轴算作计数类；字符数同属计数类
     assert {
         kinds[name]
@@ -68,7 +71,9 @@ def test_settlement_with_no_usage_on_any_table_meter_is_unpriced(usage: Usage) -
 
 
 def test_zero_reported_usage_is_priced_as_zero() -> None:
-    """上报了 0 就是确实没有这项用量，不是落空。"""
+    """A reported 0 means there really was no such usage, not a missing value.
+
+    上报了 0 就是确实没有这项用量，不是落空。"""
     assert price_usage(_PER_SECOND, Usage(quantities={"output_seconds": 0}), multiplier=1.0) == Priced(0.0, "USD")
 
 

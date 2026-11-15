@@ -1,4 +1,7 @@
-"""generate_videos 的整批准入：全有或全无、逐单元结论与按调用方隔离的在途任务。"""
+"""Whole-batch admission of generate_videos: all or nothing, per-unit verdicts, and in-flight tasks isolated by
+caller.
+
+generate_videos 的整批准入：全有或全无、逐单元结论与按调用方隔离的在途任务。"""
 
 from __future__ import annotations
 
@@ -30,6 +33,8 @@ def storyboard_request_facts(set_admission_video_request_facts) -> None:
 
 _EPISODE_1 = {"scope": "episode", "episode_id": 1}
 _ALL = {"scope": "all"}
+# A final cut path outside the project root: the manifest cannot check this artifact; its state is neither
+# "missing" nor "usable".
 # 越出项目根的成片路径：清单无从检查这份产物，它的状态既不是「缺失」也不是「可用」。
 _UNREADABLE_CLIP = "../outside/E1S02.mp4"
 
@@ -45,7 +50,10 @@ def _admission_codes(out: ToolOutcome[Any]) -> dict[str, list[str]]:
 async def test_generate_videos_episode_scope_batch_is_all_or_nothing_when_a_unit_is_occupied(
     idle_fake_ctx: ToolHarness, concurrent_session_factory
 ) -> None:
-    """在途任务冲突拦下整批：一个都不入队，其余 unit 报告自己是被谁扣下的。"""
+    """An in-flight task conflict stops the whole batch: nothing is enqueued, and the other units report who held them
+    back.
+
+    在途任务冲突拦下整批：一个都不入队，其余 unit 报告自己是被谁扣下的。"""
     fake_ctx = idle_fake_ctx
     fake_ctx.pm.script_payload["segments"] = [
         {"segment_id": "E1S01", "novel_text": "第一段旁白。", "video_prompt": "第一镜"},
@@ -103,6 +111,7 @@ async def test_generate_videos_episode_scope_batch_is_all_or_nothing_when_a_unit
     assert codes["E1S01"] == "generation_batch_admission_withheld"
 
 
+# The Web route passes the ledger's raw value; the Agent tool passes a bare file name
 _WEB_SCRIPT_FILE = "scripts/episode_1.json"  # Web 路由传账本原值；Agent 工具传纯文件名
 
 
@@ -121,7 +130,10 @@ def _enqueue_reference_video_as_web(fake_ctx: ToolHarness) -> Any:
 async def test_generate_reference_videos_refuses_a_unit_the_web_route_already_queued(
     idle_fake_ctx: ToolHarness, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Web 先入队同一单元：Agent 整集生成在准入处被「已在队列中」拦下，不再入队计费。"""
+    """Web enqueued the same unit first: the Agent's episode generation is stopped at admission by "already queued" and
+    does not enqueue or bill again.
+
+    Web 先入队同一单元：Agent 整集生成在准入处被「已在队列中」拦下，不再入队计费。"""
     fake_ctx = idle_fake_ctx
     use_reference_projection(monkeypatch, fake_reference_projection())
     use_reference_route(fake_ctx)
@@ -145,7 +157,10 @@ async def test_generate_reference_videos_refuses_a_unit_the_web_route_already_qu
 async def test_web_route_enqueue_dedupes_to_the_task_the_agent_tool_already_queued(
     idle_fake_ctx: ToolHarness, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Agent 先入队同一单元：Web 路由随后的入队落在同一个任务上，只产生一个任务。"""
+    """The Agent enqueued the same unit first: the Web route's later enqueue lands on the same task; only one task
+    results.
+
+    Agent 先入队同一单元：Web 路由随后的入队落在同一个任务上，只产生一个任务。"""
     fake_ctx = idle_fake_ctx
     use_reference_projection(monkeypatch, fake_reference_projection())
     use_reference_route(fake_ctx)
@@ -178,7 +193,10 @@ async def test_web_route_enqueue_dedupes_to_the_task_the_agent_tool_already_queu
 async def test_generate_reference_videos_ignores_narration_audio_state(
     idle_fake_ctx: ToolHarness, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """TTS 配音项目里旁白配音缺失或正在生成，都不影响参考生视频的准入与入队。"""
+    """In a TTS voiceover project, missing or generating narration audio does not affect reference-to-video admission
+    or enqueueing.
+
+    TTS 配音项目里旁白配音缺失或正在生成，都不影响参考生视频的准入与入队。"""
     fake_ctx = idle_fake_ctx
     use_reference_projection(monkeypatch, fake_reference_projection())
     use_reference_route(fake_ctx)
@@ -223,7 +241,10 @@ async def test_generate_reference_videos_ignores_narration_audio_state(
 async def test_generate_videos_all_scope_creates_zero_tasks_when_one_artifact_state_is_unreadable(
     fake_ctx: ToolHarness,
 ) -> None:
-    """产物状态读不出的场景属于这次请求：它带着自己的问题进准入，整批停下，健康的场景不入队计费。"""
+    """A scene whose artifact state cannot be read belongs to this request: it enters admission with its own problem, the
+    whole batch stops, and healthy scenes are not enqueued or billed.
+
+    产物状态读不出的场景属于这次请求：它带着自己的问题进准入，整批停下，健康的场景不入队计费。"""
     fake_ctx.pm.script_payload["segments"].append(
         {
             "segment_id": "E1S02",
@@ -250,7 +271,10 @@ async def test_generate_videos_all_scope_creates_zero_tasks_when_one_artifact_st
 async def test_generate_videos_all_scope_blocks_a_reference_gap_and_withholds_the_batch(
     fake_ctx: ToolHarness,
 ) -> None:
-    """图生视频的整批准入与单条提交同判：引用有缺口的场景阻断，整批一个都不入队。"""
+    """Image-to-video whole-batch admission judges the same as a single submission: a scene with a reference gap is
+    blocked; nothing in the batch is enqueued.
+
+    图生视频的整批准入与单条提交同判：引用有缺口的场景阻断，整批一个都不入队。"""
 
     fake_ctx.pm.script_payload["segments"].append(
         {
@@ -282,7 +306,10 @@ async def test_generate_videos_all_scope_blocks_a_reference_gap_and_withholds_th
 async def test_generate_videos_all_scope_admits_legacy_narration_stored_under_scenes(
     fake_ctx: ToolHarness,
 ) -> None:
-    """narration 数据落在 scenes 键的历史剧本按实际骨架做发声准入，不被整批判成解析失败。"""
+    """Legacy scripts with narration data stored under the scenes key get voice admission by their actual skeleton, not
+    judged a parse failure for the whole batch.
+
+    narration 数据落在 scenes 键的历史剧本按实际骨架做发声准入，不被整批判成解析失败。"""
 
     fake_ctx.pm.script_payload = {
         "content_mode": "narration",
@@ -327,7 +354,10 @@ async def test_generate_videos_all_scope_admits_legacy_narration_stored_under_sc
 async def test_generate_videos_all_scope_reports_an_all_unreadable_selection_as_blocked(
     fake_ctx: ToolHarness,
 ) -> None:
-    """全部目标的产物状态都读不出时不能报成空的成功：那会把每一条状态问题都藏起来。"""
+    """When the artifact state of every target cannot be read, it must not be reported as an empty success: that would
+    hide every state problem.
+
+    全部目标的产物状态都读不出时不能报成空的成功：那会把每一条状态问题都藏起来。"""
     fake_ctx.pm.script_payload["segments"][0]["generated_assets"]["video_clip"] = _UNREADABLE_CLIP
     enqueue = AsyncMock(return_value=([], []))
 
@@ -341,7 +371,10 @@ async def test_generate_videos_all_scope_reports_an_all_unreadable_selection_as_
 async def test_generate_reference_episode_refuses_a_non_scalar_unit_id(
     fake_ctx: ToolHarness,
 ) -> None:
-    """整集参考生成遇到非标量 unit_id：它按位置记名拒收，健康的兄弟条目不会独自入队计费。"""
+    """Episode reference generation meets a non-scalar unit_id: it is rejected by position and name; healthy siblings are
+    not enqueued and billed on their own.
+
+    整集参考生成遇到非标量 unit_id：它按位置记名拒收，健康的兄弟条目不会独自入队计费。"""
 
     use_reference_route(fake_ctx)
     script = reference_video_script()
@@ -361,7 +394,10 @@ async def test_generate_reference_episode_refuses_a_non_scalar_unit_id(
 async def test_generate_reference_units_refuses_a_duplicated_named_unit(
     fake_ctx: ToolHarness,
 ) -> None:
-    """点名的 unit 在剧本里有两份：无从判定要做哪一条，整批停在建任务之前。"""
+    """A named unit appears twice in the script: there is no way to decide which one to make; the whole batch stops before
+    tasks are created.
+
+    点名的 unit 在剧本里有两份：无从判定要做哪一条，整批停在建任务之前。"""
 
     use_reference_route(fake_ctx)
     script = reference_video_script()

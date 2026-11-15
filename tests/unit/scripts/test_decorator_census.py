@@ -47,7 +47,9 @@ _SOURCE = textwrap.dedent(
 
 
 def test_tally_counts_decorated_functions_decorated_classes_and_nesting_by_mutmut_rules() -> None:
-    """`outer` 里的 `inner` 单独计一个函数，但它的 2 行已在 `outer` 的区间内，行数只算一次。"""
+    """`inner` inside `outer` counts as a separate function, but its 2 lines are already within `outer`'s range, so the lines count only once.
+
+    `outer` 里的 `inner` 单独计一个函数，但它的 2 行已在 `outer` 的区间内，行数只算一次。"""
     tally = tally_tree(ast.parse(_SOURCE))
 
     assert tally == Tally(functions=8, skipped_functions=4, lines=23, skipped_lines=13)

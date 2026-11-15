@@ -1,4 +1,6 @@
-"""GeminiAudioBackend：respx 拦截 generateContent，验证 PCM→WAV 封装与请求体。"""
+"""GeminiAudioBackend: respx intercepts generateContent; verifies the PCM->WAV wrapping and the request body.
+
+GeminiAudioBackend：respx 拦截 generateContent，验证 PCM→WAV 封装与请求体。"""
 
 from __future__ import annotations
 
@@ -37,6 +39,7 @@ async def backend():
     from google import genai
 
     backend = GeminiAudioBackend(api_key="sk-test", model="gemini-3.8-flash-tts", provider_name="custom-7")
+    # With aiohttp installed the SDK does not use httpx by default; inject an httpx client so respx can intercept.
     # SDK 装有 aiohttp 时默认不走 httpx，注入 httpx 客户端让 respx 截获
     async with httpx.AsyncClient() as http_client:
         backend._client = genai.Client(api_key="sk-test", http_options={"httpx_async_client": http_client})
@@ -57,6 +60,7 @@ async def test_pcm_is_wrapped_as_wav_matching_rate_and_channels(backend, tmp_pat
 
     body = request_json(only_request(route))
     assert body["generationConfig"]["responseModalities"] == ["AUDIO"]
+    # google-genai 2.25 serializes the inner speechConfig as snake_case; the server accepts both proto3 JSON field name styles.
     # google-genai 2.25 把 speechConfig 内层按 snake_case 序列化；proto3 JSON 两种字段名服务端都接受
     voice_config = _field(body["generationConfig"]["speechConfig"], "voice_config")
     assert _field(_field(voice_config, "prebuilt_voice_config"), "voice_name") == "Kore"
@@ -65,7 +69,7 @@ async def test_pcm_is_wrapped_as_wav_matching_rate_and_channels(backend, tmp_pat
         assert (wav.getframerate(), wav.getnchannels(), wav.getsampwidth()) == (16000, 2, 2)
         assert wav.readframes(wav.getnframes()) == pcm
     assert (result.provider, result.model, result.text) == ("custom-7", "gemini-3.8-flash-tts", "你好，世界")
-    # 按 token 计价：输入 token 与输出音频 token 取自响应的 usage
+    # Priced per token: input tokens and output audio tokens come from the response usage. / 按 token 计价：输入 token 与输出音频 token 取自响应的 usage
     assert (result.input_tokens, result.audio_output_tokens) == (7, 120)
 
 

@@ -1,4 +1,6 @@
-"""Alembic 迁移：api_calls.last_provider_response 加列与回退。"""
+"""Alembic migration: adding and reverting the api_calls.last_provider_response column.
+
+Alembic 迁移：api_calls.last_provider_response 加列与回退。"""
 
 from collections.abc import Callable
 from pathlib import Path

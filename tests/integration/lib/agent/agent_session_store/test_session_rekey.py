@@ -1,4 +1,7 @@
-"""SessionRekey 只把点名的会话改到目标存储键下；两边都有记录的会话原样不动，重复执行是空操作。"""
+"""SessionRekey moves only the named sessions under the target storage key; sessions with records on both sides are left
+as they are, and rerunning is a no-op.
+
+SessionRekey 只把点名的会话改到目标存储键下；两边都有记录的会话原样不动，重复执行是空操作。"""
 
 from __future__ import annotations
 
@@ -32,6 +35,7 @@ async def test_rekey_without_source_moves_named_sessions_from_any_key(session_fa
     assert await _keys_of(store, "s2", keys) == ["new"]
     assert await _keys_of(store, "other", keys) == ["old-a"]
     assert {row["session_id"] for row in await store.list_session_summaries("new")} == {"s1", "s2"}
+    # Already under the target key: running again changes no records
     # 已在目标键下：再跑一次不改任何记录
     assert await _rekey(session_factory, rekey) == set()
 

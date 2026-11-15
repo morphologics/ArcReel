@@ -1,4 +1,7 @@
-"""资产合并命令：真实 ProjectManager 走 扫描 → 校验 → 落盘，以 dry_run 报告与执行后的项目状态断言。"""
+"""Asset merge command: the real ProjectManager goes scan -> validate -> write; asserts on the dry_run report and
+the project state after execution.
+
+资产合并命令：真实 ProjectManager 走 扫描 → 校验 → 落盘，以 dry_run 报告与执行后的项目状态断言。"""
 
 from __future__ import annotations
 
@@ -172,7 +175,9 @@ class TestMergeIntoAsset:
 
 
 def _write_confirmed_plan(pm: ProjectManager, plan: dict[str, Any]) -> Path:
-    """写下第 1 集的正式脚本规划并确认它。"""
+    """Write episode 1's formal script plan and confirm it.
+
+    写下第 1 集的正式脚本规划并确认它。"""
     pm.save_script(PROJECT, _narration_script(), "episode_1.json")
     project_dir = pm.get_project_path(PROJECT)
     path = script_plan_path(project_dir, pm.load_project(PROJECT), 1)
@@ -190,7 +195,9 @@ def _write_confirmed_plan(pm: ProjectManager, plan: dict[str, Any]) -> Path:
 
 
 def _plan_review(pm: ProjectManager) -> tuple[str, bool]:
-    """第 1 集的内容确认状态，以及正式脚本规划是否因已确认而只读。"""
+    """Episode 1's content review status, and whether the formal script plan is read-only because it is confirmed.
+
+    第 1 集的内容确认状态，以及正式脚本规划是否因已确认而只读。"""
     project_dir = pm.get_project_path(PROJECT)
     project = pm.load_project(PROJECT)
     return review_status(project_dir, project, 1), formal_script_plan_confirmed(project_dir, project, 1)
@@ -206,7 +213,10 @@ def _plan_with_merged_new_asset() -> dict[str, Any]:
 
 
 class TestMergeKeepsScriptPlanConfirmation:
-    """合并只换资产的名字：已确认的集不退回待确认，规划里「并入」项的目标随之改指保留方。"""
+    """Merging only changes the asset's name: confirmed episodes do not return to awaiting confirmation, and the
+    targets of "merge into" items in the plan are repointed to the kept asset.
+
+    合并只换资产的名字：已确认的集不退回待确认，规划里「并入」项的目标随之改指保留方。"""
 
     def test_confirmed_episode_stays_confirmed_and_read_only(self, pm: ProjectManager) -> None:
         path = _write_confirmed_plan(pm, _plan_with_merged_new_asset())
@@ -227,7 +237,7 @@ class TestMergeKeepsScriptPlanConfirmation:
         pm.merge_asset(PROJECT, "characters", "老王", "王建国")
 
         impact = next(item for item in preview.episodes if item.episode == 1)
-        assert impact.script_plan == 2  # 引用数组一处 + 并入目标一处
+        assert impact.script_plan == 2  # One in the reference array + one merge target / 引用数组一处 + 并入目标一处
         plan = load_json_or_none(path)
         assert plan is not None
         resolution = resolve_new_assets(pm.load_project(PROJECT), plan["new_assets"])
@@ -245,7 +255,10 @@ class TestMergeKeepsScriptPlanConfirmation:
         assert plan["new_assets"][0]["target"] == "王建国"
 
     def test_plan_edited_after_confirmation_stays_pending(self, pm: ProjectManager) -> None:
-        """确认指纹本就对不上（确认后又改过规划）时不平移：合并不替用户确认一份没看过的规划。"""
+        """No carry-over when the confirmation fingerprint already does not match (the plan was edited after confirmation):
+        merging does not confirm, on the user's behalf, a plan they have not seen.
+
+        确认指纹本就对不上（确认后又改过规划）时不平移：合并不替用户确认一份没看过的规划。"""
         path = _write_confirmed_plan(pm, _plan_with_merged_new_asset())
         edited = _plan_with_merged_new_asset()
         edited["segments"][0]["scenes"] = ["杂货店"]
@@ -344,7 +357,10 @@ _ALICE_COAT = {"description": "旧大衣", "character_sheet": "characters/deriva
 
 
 class TestMergeFoldsCaseOnlyDerivatives:
-    """衍生名只差大小写即视为同一衍生：并入保留方已有的那条，引用改写到它的名字。"""
+    """Derivative names differing only in case count as the same derivative: fold into the one the kept asset already
+    has, and rewrite references to its name.
+
+    衍生名只差大小写即视为同一衍生：并入保留方已有的那条，引用改写到它的名字。"""
 
     @pytest.fixture
     def cast(self, pm: ProjectManager) -> ProjectManager:
@@ -497,7 +513,10 @@ def _unit(unit_id: str, text: str) -> dict[str, Any]:
 
 
 class TestMergeWithProducedArtifacts:
-    """产物文件、输入依据与版本记录均落盘，现行与过期由真实产物清单判定。"""
+    """Artifact files, input bases and version records are all on disk; current vs stale is judged by the real artifact
+    manifest.
+
+    产物文件、输入依据与版本记录均落盘，现行与过期由真实产物清单判定。"""
 
     @pytest.fixture
     def produced(self, tmp_path: Path) -> ProjectManager:
@@ -566,6 +585,8 @@ class TestMergeWithProducedArtifacts:
     def test_the_report_counts_exactly_the_artifacts_the_merge_outdates(self, produced: ProjectManager) -> None:
         preview = produced.merge_asset(PROJECT, "characters", "老王", "王建国", dry_run=True)
 
+        # The derivative "Battle-worn" referenced by E1S03 moves with its image to Wang Jianguo: the storyboard image basis
+        # records only the image, not the name, so it stays current.
         # E1S03 引用的衍生「战损」连图迁到王建国名下：分镜图依据只记图，不记名字，它保持现行。
         assert [(item.episode, item.storyboards, item.videos) for item in preview.episodes] == [(1, 1, 0), (2, 0, 2)]
 
@@ -582,13 +603,16 @@ class TestMergeWithProducedArtifacts:
             for unit_id in ("E2U1", "E2U2", "E2U3")
         }
         assert storyboards == {"E1S01": False, "E1S02": True, "E1S03": True}
-        assert videos == {"E2U1": False, "E2U2": True, "E2U3": False}  # E2U3 只换了说话人
+        assert videos == {"E2U1": False, "E2U2": True, "E2U3": False}  # E2U3 only changed speaker / E2U3 只换了说话人
 
     @pytest.mark.parametrize("uploaded", [False, True])
     def test_a_selected_uploaded_video_is_not_counted_as_outdated(
         self, produced: ProjectManager, uploaded: bool
     ) -> None:
-        """选中手动上传的视频只由上传字节决定时效：合并换了它的画面引用和说话人，预览也不计入。"""
+        """A selected manually uploaded video's currency is decided only by the uploaded bytes: the merge changed its visual
+        references and speaker, and the preview does not count it.
+
+        选中手动上传的视频只由上传字节决定时效：合并换了它的画面引用和说话人，预览也不计入。"""
         project_dir = produced.get_project_path(PROJECT)
         if uploaded:
             for unit_id in ("E2U1", "E2U3"):
@@ -616,7 +640,10 @@ class TestMergeWithProducedArtifacts:
         assert preview.episodes[-1].videos == actual.count(False)
 
     def test_a_storyboard_on_a_folded_derivative_is_counted_as_outdated(self, produced: ProjectManager) -> None:
-        """并入保留方已有衍生的换成了另一张图：引用它的分镜图照常计入、照常过期。"""
+        """The one folded into the kept asset's existing derivative now has a different image: storyboard images
+        referencing it are counted and go stale as usual.
+
+        并入保留方已有衍生的换成了另一张图：引用它的分镜图照常计入、照常过期。"""
         project_dir = produced.get_project_path(PROJECT)
         script_path = project_dir / "scripts" / "episode_1.json"
         script = json.loads(script_path.read_text(encoding="utf-8"))
@@ -634,7 +661,10 @@ class TestMergeWithProducedArtifacts:
     _GRID_ID = "grid_123456789abc"
 
     def _split_storyboard(self, produced: ProjectManager, reference: str) -> tuple[ArtifactKey, ...]:
-        """E1S03 改为宫格切格分镜，宫格记录冻结 *reference* 的衍生图；宫格与切格分镜都是现行。"""
+        """E1S03 becomes a grid-split shot, and the grid record freezes *reference*'s derivative image; both the grid and the
+        split shots are current.
+
+        E1S03 改为宫格切格分镜，宫格记录冻结 *reference* 的衍生图；宫格与切格分镜都是现行。"""
         project_dir = produced.get_project_path(PROJECT)
         grid_id = self._GRID_ID
         script = _script(produced, 1)
@@ -681,13 +711,16 @@ class TestMergeWithProducedArtifacts:
         )
 
     def test_a_grid_on_a_moved_derivative_stays_current(self, produced: ProjectManager) -> None:
-        """衍生连图迁到保留方名下，宫格记录随之改写名字与路径：宫格与切格分镜保持现行，预览不计入。"""
+        """The derivative moves with its image to the kept asset and the grid record's name and path are rewritten: the grid
+        and split shots stay current, and the preview does not count them.
+
+        衍生连图迁到保留方名下，宫格记录随之改写名字与路径：宫格与切格分镜保持现行，预览不计入。"""
         self._split_storyboard(produced, "老王/战损")
 
         preview = produced.merge_asset(PROJECT, "characters", "老王", "王建国", dry_run=True)
         produced.merge_asset(PROJECT, "characters", "老王", "王建国")
 
-        assert (preview.episodes[0].episode, preview.episodes[0].storyboards) == (1, 1)  # 只有 E1S01
+        assert (preview.episodes[0].episode, preview.episodes[0].storyboards) == (1, 1)  # Only E1S01 / 只有 E1S01
         assert self._grid_currency(produced) == (True, True)
         record = load_json_or_none(produced.get_project_path(PROJECT) / "grids" / f"{self._GRID_ID}.json")
         assert record["reference_images"] == [
@@ -734,7 +767,10 @@ class TestMergeWithProducedArtifacts:
         assert self._current(produced, ArtifactKey.episode_storyboard(1, "E1S02"), "storyboards/scene_E1S02.png")
 
     def test_a_grid_on_a_folded_derivative_is_counted_as_outdated(self, produced: ProjectManager) -> None:
-        """并入保留方已有衍生的换成了另一张图：宫格记录不改指，宫格与切格分镜照常计入、照常过期。"""
+        """The one folded into the kept asset's existing derivative now has a different image: the grid record is not
+        repointed, and the grid and split shots are counted and go stale as usual.
+
+        并入保留方已有衍生的换成了另一张图：宫格记录不改指，宫格与切格分镜照常计入、照常过期。"""
         self._split_storyboard(produced, "老王/便装")
 
         preview = produced.merge_asset(PROJECT, "characters", "老王", "王建国", dry_run=True)
@@ -750,7 +786,10 @@ class TestMergeWithProducedArtifacts:
     def test_a_lost_shared_grid_reference_outdates_every_split_storyboard(
         self, produced: ProjectManager, script_still_references_source: bool, uploaded_cell: bool
     ) -> None:
-        """选中手动上传的格子按上传字节判定时效：宫格丢了共享参考图也保持现行，预览不计入。"""
+        """A selected manually uploaded cell is judged by its uploaded bytes: even if the grid lost a shared reference
+        image it stays current, and the preview does not count it.
+
+        选中手动上传的格子按上传字节判定时效：宫格丢了共享参考图也保持现行，预览不计入。"""
         self._split_storyboard(produced, "老王/战损")
         project_dir = produced.get_project_path(PROJECT)
         script = _script(produced, 1)
@@ -842,6 +881,7 @@ class TestMergeWithProducedArtifacts:
         moved = ArtifactCurrencyResolver(project_dir).compare(
             derivative_artifact_key("王建国", "战损"), artifact_path="characters/derivatives/王建国/战损.png"
         )
+        # The registration moved with the image, but the base look changed, so the image needs regeneration
         assert moved.status is ArtifactStatus.STALE  # 登记随图迁来，本体换了，图待重新生成
         adapter = ProjectArtifactManifestAdapter(project_dir)
         assert adapter.get_entry(derivative_artifact_key("老王", "便装")) is None

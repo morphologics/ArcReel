@@ -1,4 +1,6 @@
-"""渲染产物验收与登记失败时的可观察状态。"""
+"""Observable state when rendered artifact acceptance and registration fail.
+
+渲染产物验收与登记失败时的可观察状态。"""
 
 import asyncio
 from pathlib import Path
@@ -72,6 +74,7 @@ async def test_failed_replacement_never_claims_new_content_as_current(
 
     formal = tmp_path / path
     manifest = ArtifactManifest(ProjectArtifactManifestAdapter(tmp_path))
+    # If the formal file was not replaced, the old registration is kept; if writing the record fails after replacement, the registration is withdrawn so new content is not paired with an old basis.
     # 正式文件没被替换时旧登记保留；替换后记录写入失败时撤下登记，不把新内容配旧依据。
     assert manifest.compare(key, artifact_path=path, basis=original).status is (
         ArtifactStatus.MISSING if failure == "record" else ArtifactStatus.CURRENT

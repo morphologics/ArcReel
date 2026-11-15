@@ -1,4 +1,6 @@
-"""Alembic d4f8b1c73a20（tasks.submitted_base_url）双向迁移测试。"""
+"""Up/down migration tests for Alembic d4f8b1c73a20 (tasks.submitted_base_url).
+
+Alembic d4f8b1c73a20（tasks.submitted_base_url）双向迁移测试。"""
 
 from __future__ import annotations
 
@@ -30,7 +32,10 @@ def _tasks_indexes(db_path: Path) -> set[str]:
 
 
 def test_upgrade_adds_nullable_submitted_base_url(alembic_cfg):
-    """升级加列；存量任务该列为 NULL —— 提交时未记域名，续跑退回按当下配置的域名轮询。"""
+    """Upgrade adds the column; existing tasks have NULL there, since no host was recorded at submit, so resume falls back
+    to polling the currently configured host.
+
+    升级加列；存量任务该列为 NULL —— 提交时未记域名，续跑退回按当下配置的域名轮询。"""
     cfg, db_path = alembic_cfg
     command.upgrade(cfg, DOWN_REVISION)
 
@@ -65,7 +70,10 @@ def test_downgrade_drops_column(alembic_cfg):
 
 
 def test_downgrade_keeps_dedupe_index(alembic_cfg):
-    """降级重建表后去重索引仍在——反射不出的表达式 partial 索引丢了等于去重闸失效。"""
+    """After the downgrade rebuilds the table the dedupe index is still there; losing the unreflectable expression partial
+    index would disable the dedupe gate.
+
+    降级重建表后去重索引仍在——反射不出的表达式 partial 索引丢了等于去重闸失效。"""
     cfg, db_path = alembic_cfg
     command.upgrade(cfg, REVISION)
     assert "idx_tasks_dedupe_active" in _tasks_indexes(db_path)

@@ -1,5 +1,11 @@
 """Text backend factory tests.
 
+Factory construction now funnels into assemble_backend (media_type=text): the text factory only resolves provider/model, and
+construction sinks through the unified seam into the ProviderSpec table. Per-provider constructor arg tables are covered by
+test_backend_assembly_specs.py; here only the factory's own two contracts remain: the provider/model/credentials from the
+resolver really reach the spec closure; the returned provider_id is the resolver id (not the backend registry name), the
+single source of truth for billing attribution.
+
 工厂构造已收口到 assemble_backend（media_type=text）：文本工厂只解析 provider/model，构造经统一缝
 下沉到 ProviderSpec 表。逐 provider 的构造参数表由 test_backend_assembly_specs.py 覆盖，这里只保工厂
 自身的两条契约：解析层给出的 provider/model/凭证真到达 spec 闭包；返回的 provider_id 取解析层 id
@@ -17,7 +23,9 @@ from tests.fakes import captured_backend_construction
 
 
 def _make_mock_resolver(**async_methods):
-    """创建带 session() 上下文管理器的 mock resolver。"""
+    """Create a mock resolver with a session() context manager.
+
+    创建带 session() 上下文管理器的 mock resolver。"""
     mock = MagicMock()
     for name, return_value in async_methods.items():
         setattr(mock, name, AsyncMock(return_value=return_value))
@@ -58,6 +66,8 @@ async def test_resolved_provider_model_and_credentials_reach_the_spec():
 @pytest.mark.parametrize(
     ("provider_id", "model", "credentials", "registry_backend"),
     [
+        # Two families where the resolver id differs from the backend registry name: the two gemini ids share the "gemini" registry name;
+        # ark-agent-plan reuses ArkTextBackend (name reports "ark"). Accounting must use the resolver id.
         # 解析层 id 与 backend 注册名不同的两族：gemini 双 id 共用 "gemini" 注册名；
         # ark-agent-plan 复用 ArkTextBackend（name 报 "ark"）。记账须取解析层 id。
         ("gemini-aistudio", "gemini-3-flash-preview", {"api_key": "test-key", "base_url": ""}, "gemini"),

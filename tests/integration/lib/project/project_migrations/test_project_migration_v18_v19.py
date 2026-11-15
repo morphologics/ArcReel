@@ -1,4 +1,8 @@
-"""v18→v19 迁移：每集记下条目编号用过的最大号，此后的新增不再取回删掉的编号；分镜图与宫格的依据平移到不记资产名的口径，时效不变。"""
+"""v18->v19 migration: each episode records the highest entry number used, so later additions no longer reuse
+deleted numbers; storyboard image and grid bases move to a rule that does not record asset names, currency
+unchanged.
+
+v18→v19 迁移：每集记下条目编号用过的最大号，此后的新增不再取回删掉的编号；分镜图与宫格的依据平移到不记资产名的口径，时效不变。"""
 
 from __future__ import annotations
 
@@ -47,6 +51,7 @@ async def test_schema_18_project_records_the_highest_number_without_renaming_any
 
     assert _read_json(project_dir / "project.json") == {
         **legacy,
+        # Script up to E1S2, version history up to E1S5, deletion records up to E1S7, edit timeline clips up to E1S9
         # 剧本到 E1S2，版本历史到 E1S5，删除记录到 E1S7，剪辑时间线的片段到 E1S9
         "episodes": [{**entry, "item_id_high_water": 9} for entry in legacy["episodes"]],
         "schema_version": CURRENT_SCHEMA_VERSION,
@@ -54,6 +59,8 @@ async def test_schema_18_project_records_the_highest_number_without_renaming_any
     assert _structure_bytes(project_dir) == files_before
 
     pm = ProjectManager(tmp_path)
+    # The sample script fails self-check under the current model and batch editing would refuse; append one entry
+    # directly with the same numbering rule (batch editing's numbering is covered by its own tests)
     # 样本剧本按当前模型自检不过，批量编辑会拒绝；直接走同一取号规则追加一条（批量编辑的发号见其测试）
     with pm.locked_script(project_dir.name, "episode_1.json", validate=False) as script:
         floor = pm.item_id_floor(pm.load_project(project_dir.name), script, 1)
@@ -76,6 +83,7 @@ def test_rerunning_the_step_keeps_the_recorded_number(tmp_path: Path) -> None:
     assert (project_dir / "project.json").read_bytes() == migrated
 
 
+# -- Storyboard image and grid bases no longer record asset names --
 # —— 分镜图与宫格的依据不再记资产名 ——
 
 _GRID = ArtifactKey.episode_grid(1, "grid_123456789abc")
@@ -94,7 +102,10 @@ def _status(project_dir: Path, key: ArtifactKey) -> str:
 
 
 def _is_current_before_migration(project_dir: Path, key: ArtifactKey) -> bool:
-    """迁移前的时新性判定。读模型只服务当前 schema 的项目，此处直接比对登记与目标态。"""
+    """Currency check before migration. The read model only serves projects at the current schema, so registrations are
+    compared to the target state directly here.
+
+    迁移前的时新性判定。读模型只服务当前 schema 的项目，此处直接比对登记与目标态。"""
     return _entries(project_dir).get(key) == TargetStatePlanner(project_dir).plan().entries.get(key)
 
 
@@ -130,6 +141,8 @@ def test_storyboards_and_grids_keep_their_currency_across_the_upgrade(tmp_path: 
         assert _status(project_dir, key) == "current"
     summary = WorkflowStateService(ProjectManager(tmp_path)).get_project_summary(project_dir.name)
     assert (summary.episodes[0].storyboards.available, summary.episodes[0].storyboards.stale) == (3, 0)
+    # The player and version restore read the frozen basis: both selected and unselected versions are rewritten to the
+    # new rule and no longer contain asset names.
     # 播放器与版本恢复读冻结依据：选中与未选中的版本都改写到新口径，且不再含资产名。
     frozen = _frozen_bases(project_dir)
     assert "阿离" not in json.dumps(list(frozen.values()), ensure_ascii=False)

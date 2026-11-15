@@ -1,4 +1,8 @@
 """
+Authentication core module tests
+
+Tests password generation, JWT tokens, credential checks, etc. in server.auth.
+
 认证核心模块测试
 
 测试 server.auth 中的密码生成、JWT token、凭据校验等功能。
@@ -16,13 +20,17 @@ import server.auth as auth_module
 
 class TestGeneratePassword:
     def test_generate_password(self):
-        """默认长度 16，仅字母数字"""
+        """Default length 16, alphanumeric only
+
+        默认长度 16，仅字母数字"""
         pwd = auth_module.generate_password()
         assert len(pwd) == 16
         assert pwd.isalnum()
 
     def test_generate_password_custom_length(self):
-        """自定义长度"""
+        """Custom length
+
+        自定义长度"""
         pwd = auth_module.generate_password(length=32)
         assert len(pwd) == 32
         assert pwd.isalnum()
@@ -30,17 +38,23 @@ class TestGeneratePassword:
 
 class TestTokenSecret:
     def setup_method(self):
-        """每个测试前重置缓存"""
+        """Reset the cache before each test
+
+        每个测试前重置缓存"""
         auth_module._cached_token_secret = None
 
     def test_get_token_secret_from_env(self):
-        """优先使用 AUTH_TOKEN_SECRET 环境变量"""
+        """The AUTH_TOKEN_SECRET env var takes precedence
+
+        优先使用 AUTH_TOKEN_SECRET 环境变量"""
         with patch.dict(os.environ, {"AUTH_TOKEN_SECRET": "my-secret-key"}):
             secret = auth_module.get_token_secret()
             assert secret == "my-secret-key"
 
     def test_get_token_secret_auto_generate(self):
-        """自动生成并缓存"""
+        """Generated automatically and cached
+
+        自动生成并缓存"""
         env = os.environ.copy()
         env.pop("AUTH_TOKEN_SECRET", None)
         with patch.dict(os.environ, env, clear=True):
@@ -48,19 +62,23 @@ class TestTokenSecret:
             assert secret1 is not None
             assert len(secret1) > 0
 
-            # 再次调用应返回相同的缓存值
+            # Calling again should return the same cached value / 再次调用应返回相同的缓存值
             secret2 = auth_module.get_token_secret()
             assert secret1 == secret2
 
 
 def _simulate_restart() -> None:
-    """进程重启：进程内缓存全部丢失，数据目录与 .env 保留。"""
+    """Process restart: all in-process caches are lost, the data directory and .env are kept.
+
+    进程重启：进程内缓存全部丢失，数据目录与 .env 保留。"""
     auth_module.reset_token_secret_for_tests()
     auth_module._cached_password_hash = None
 
 
 class TestTokenSecretPersistence:
-    """未设置 AUTH_TOKEN_SECRET 时签名密钥落在数据目录，重启后沿用。"""
+    """When AUTH_TOKEN_SECRET is not set, the signing key lands in the data directory and is reused after restart.
+
+    未设置 AUTH_TOKEN_SECRET 时签名密钥落在数据目录，重启后沿用。"""
 
     def setup_method(self):
         _simulate_restart()
@@ -114,13 +132,15 @@ class TestTokenSecretPersistence:
         assert auth_module.verify_token(token_signed_with_persisted) is None
 
     def test_unwritable_data_dir_falls_back_to_process_secret(self, monkeypatch, tmp_path, caplog):
-        """数据目录写不进密钥时不阻断启动，退回进程内随机密钥（重启后需重新登录）。"""
+        """When the key cannot be written to the data directory, startup is not blocked and falls back to an in-process random key (re-login needed after restart).
+
+        数据目录写不进密钥时不阻断启动，退回进程内随机密钥（重启后需重新登录）。"""
         from lib.infra.app_data_dir import reset_for_tests
 
         monkeypatch.delenv("AUTH_TOKEN_SECRET", raising=False)
         data_root = tmp_path / "data-root"
         data_root.mkdir()
-        (data_root / "runtime").write_text("", encoding="utf-8")  # runtime/ 建不出来
+        (data_root / "runtime").write_text("", encoding="utf-8")  # runtime/ cannot be created / runtime/ 建不出来
         monkeypatch.setenv("ARCREEL_DATA_DIR", str(data_root))
         reset_for_tests()
 
@@ -138,7 +158,9 @@ class TestCreateAndVerifyToken:
         auth_module._cached_token_secret = None
 
     def test_create_and_verify_token(self):
-        """创建后验证往返一致"""
+        """Round trip of create then verify is consistent
+
+        创建后验证往返一致"""
         with patch.dict(os.environ, {"AUTH_TOKEN_SECRET": "test-secret-key-that-is-at-least-32-bytes"}):
             token = auth_module.create_token("admin")
             payload = auth_module.verify_token(token)
@@ -148,7 +170,9 @@ class TestCreateAndVerifyToken:
             assert "exp" in payload
 
     def test_create_token_accepts_a_shorter_expiry(self):
-        """内嵌 Agent 可签发短时效会话 JWT，不改变网页登录默认时效。"""
+        """The embedded Agent can issue short-lived session JWTs without changing the default lifetime of web logins.
+
+        内嵌 Agent 可签发短时效会话 JWT，不改变网页登录默认时效。"""
         with patch.dict(os.environ, {"AUTH_TOKEN_SECRET": "test-secret-key-that-is-at-least-32-bytes"}):
             token = auth_module.create_token("embedded-agent", expiry_seconds=900)
             payload = auth_module.verify_token(token)
@@ -157,22 +181,26 @@ class TestCreateAndVerifyToken:
         assert payload["exp"] - payload["iat"] == 900
 
     def test_verify_token_invalid(self):
-        """无效 token 返回 None"""
+        """An invalid token returns None
+
+        无效 token 返回 None"""
         with patch.dict(os.environ, {"AUTH_TOKEN_SECRET": "test-secret-key-that-is-at-least-32-bytes"}):
             result = auth_module.verify_token("this-is-not-a-valid-jwt")
             assert result is None
 
     def test_verify_token_expired(self):
-        """过期 token 返回 None"""
+        """An expired token returns None
+
+        过期 token 返回 None"""
         import jwt
 
         secret = "test-secret-key-that-is-at-least-32-bytes"
         with patch.dict(os.environ, {"AUTH_TOKEN_SECRET": secret}):
-            # 手动创建一个已过期的 token
+            # Manually create an already expired token / 手动创建一个已过期的 token
             payload = {
                 "sub": "admin",
                 "iat": time.time() - 3600,
-                "exp": time.time() - 1,  # 已过期
+                "exp": time.time() - 1,  # Already expired / 已过期
             }
             expired_token = jwt.encode(payload, secret, algorithm="HS256")
             result = auth_module.verify_token(expired_token)
@@ -180,7 +208,9 @@ class TestCreateAndVerifyToken:
 
     @pytest.mark.parametrize("purpose", ["download", "other"])
     def test_verify_token_rejects_purpose_bound_token(self, purpose):
-        """带 purpose 声明的 token（任意取值）不被会话校验接受"""
+        """Tokens with a purpose claim (any value) are not accepted by session verification
+
+        带 purpose 声明的 token（任意取值）不被会话校验接受"""
         import jwt
 
         secret = "test-secret-key-that-is-at-least-32-bytes"
@@ -190,7 +220,9 @@ class TestCreateAndVerifyToken:
             assert auth_module.verify_token(token) is None
 
     def test_verify_token_accepts_session_token(self):
-        """不带 purpose 的会话 token（登录与内嵌 Agent 均经 create_token 签发）照常通过"""
+        """Session tokens without purpose (both login and the embedded Agent issue via create_token) pass as usual
+
+        不带 purpose 的会话 token（登录与内嵌 Agent 均经 create_token 签发）照常通过"""
         with patch.dict(os.environ, {"AUTH_TOKEN_SECRET": "test-secret-key-that-is-at-least-32-bytes"}):
             payload = auth_module.verify_token(auth_module.create_token("embedded-agent", expiry_seconds=60))
             assert payload is not None
@@ -202,18 +234,24 @@ class TestCheckCredentials:
         auth_module._cached_password_hash = None
 
     def test_check_credentials_valid(self):
-        """正确凭据返回 True"""
+        """Correct credentials return True
+
+        正确凭据返回 True"""
         with patch.dict(os.environ, {"AUTH_USERNAME": "admin", "AUTH_PASSWORD": "pass123"}):
             assert auth_module.check_credentials("admin", "pass123") is True
 
     def test_check_credentials_invalid(self):
-        """错误凭据返回 False"""
+        """Wrong credentials return False
+
+        错误凭据返回 False"""
         with patch.dict(os.environ, {"AUTH_USERNAME": "admin", "AUTH_PASSWORD": "pass123"}):
             assert auth_module.check_credentials("admin", "wrong") is False
             assert auth_module.check_credentials("nobody", "pass123") is False
 
     def test_check_credentials_default_username(self):
-        """AUTH_USERNAME 未设置时默认为 admin"""
+        """When AUTH_USERNAME is not set it defaults to admin
+
+        AUTH_USERNAME 未设置时默认为 admin"""
         env = os.environ.copy()
         env.pop("AUTH_USERNAME", None)
         env["AUTH_PASSWORD"] = "secret"
@@ -223,17 +261,23 @@ class TestCheckCredentials:
 
 class TestEnsureAuthPassword:
     def setup_method(self):
-        """每个测试前重置缓存"""
+        """Reset the cache before each test
+
+        每个测试前重置缓存"""
         auth_module._cached_token_secret = None
 
     def test_existing_password_returned(self):
-        """AUTH_PASSWORD 已存在时直接返回现有密码"""
+        """When AUTH_PASSWORD already exists, return the existing password directly
+
+        AUTH_PASSWORD 已存在时直接返回现有密码"""
         with patch.dict(os.environ, {"AUTH_PASSWORD": "existing-pwd"}):
             result = auth_module.ensure_auth_password()
             assert result == "existing-pwd"
 
     def test_auto_generate_when_empty(self, tmp_path):
-        """AUTH_PASSWORD 为空时自动生成密码并写入 os.environ"""
+        """When AUTH_PASSWORD is empty, generate a password automatically and write it to os.environ
+
+        AUTH_PASSWORD 为空时自动生成密码并写入 os.environ"""
         env = os.environ.copy()
         env.pop("AUTH_PASSWORD", None)
         env_file = tmp_path / ".env"
@@ -242,11 +286,13 @@ class TestEnsureAuthPassword:
             result = auth_module.ensure_auth_password(env_path=str(env_file))
             assert len(result) == 16
             assert result.isalnum()
-            # 应该同步写入 os.environ
+            # It should also be written to os.environ / 应该同步写入 os.environ
             assert os.environ["AUTH_PASSWORD"] == result
 
     def test_writeback_replace_existing_line(self, tmp_path):
-        """回写 .env 文件：替换已有 AUTH_PASSWORD= 行"""
+        """Write back to the .env file: replace the existing AUTH_PASSWORD= line
+
+        回写 .env 文件：替换已有 AUTH_PASSWORD= 行"""
         env_file = tmp_path / ".env"
         env_file.write_text("SOME_VAR=hello\nAUTH_PASSWORD=\nOTHER=world\n")
         env = os.environ.copy()
@@ -255,12 +301,14 @@ class TestEnsureAuthPassword:
             password = auth_module.ensure_auth_password(env_path=str(env_file))
             content = env_file.read_text()
             assert f"AUTH_PASSWORD={password}" in content
-            # 原有的其他行应保留
+            # Other existing lines should be kept / 原有的其他行应保留
             assert "SOME_VAR=hello" in content
             assert "OTHER=world" in content
 
     def test_writeback_append_when_no_line(self, tmp_path):
-        """回写 .env 文件：追加，原文件无 AUTH_PASSWORD 行"""
+        """Write back to the .env file: append when the file has no AUTH_PASSWORD line
+
+        回写 .env 文件：追加，原文件无 AUTH_PASSWORD 行"""
         env_file = tmp_path / ".env"
         env_file.write_text("SOME_VAR=hello\n")
         env = os.environ.copy()
@@ -269,26 +317,33 @@ class TestEnsureAuthPassword:
             password = auth_module.ensure_auth_password(env_path=str(env_file))
             content = env_file.read_text()
             assert f"AUTH_PASSWORD={password}" in content
-            # 原有内容应保留
+            # Existing content should be kept / 原有内容应保留
             assert "SOME_VAR=hello" in content
 
     def test_env_file_not_exist_no_error(self, tmp_path):
-        """.env 文件不存在时不抛异常，并创建新文件"""
+        """No exception when the .env file does not exist, and a new file is created
+
+        .env 文件不存在时不抛异常，并创建新文件"""
         env_file = tmp_path / "nonexistent" / ".env"
         env = os.environ.copy()
         env.pop("AUTH_PASSWORD", None)
         with patch.dict(os.environ, env, clear=True):
-            # 父目录不存在会触发 OSError，函数不应抛异常
+            # A missing parent directory triggers OSError; the function should not raise / 父目录不存在会触发 OSError，函数不应抛异常
             password = auth_module.ensure_auth_password(env_path=str(env_file))
             assert len(password) == 16
             assert password.isalnum()
 
     def test_env_file_non_utf8_does_not_block_startup(self, tmp_path):
-        """历史 .env 用 cp936 / ANSI 等本地编码时，``read_text(encoding="utf-8")``
+        """When a legacy .env uses a local encoding such as cp936 / ANSI, ``read_text(encoding="utf-8")``
+        raises ``UnicodeDecodeError``. The function is called during server lifespan startup, so it must catch
+        it and degrade (not persist, keep the in-process password), otherwise the service cannot start.
+
+        历史 .env 用 cp936 / ANSI 等本地编码时，``read_text(encoding="utf-8")``
         会抛 ``UnicodeDecodeError``。该函数被 server lifespan 启动期调用，必须捕获
         并降级（不持久化、保留进程内密码），否则服务无法启动。
         """
         env_file = tmp_path / ".env"
+        # A cp936-encoded Chinese comment + an existing AUTH_PASSWORD; UTF-8 decoding is bound to fail
         # cp936 编码的中文注释 + 现有 AUTH_PASSWORD，UTF-8 解码必失败
         env_file.write_bytes("# 注释\nAUTH_PASSWORD=old\n".encode("cp936"))
         env = os.environ.copy()
@@ -297,18 +352,21 @@ class TestEnsureAuthPassword:
             password = auth_module.ensure_auth_password(env_path=str(env_file))
             assert len(password) == 16
             assert password.isalnum()
-            # .env 内容未被破坏（不强制覆写避免丢用户内容）
+            # .env content is not damaged (no forced overwrite, to avoid losing user content) / .env 内容未被破坏（不强制覆写避免丢用户内容）
             assert env_file.read_bytes() == "# 注释\nAUTH_PASSWORD=old\n".encode("cp936")
 
 
 class TestPasswordAcrossRestarts:
-    """Docker 重启不重建容器时，compose 注入的 AUTH_PASSWORD 一直是空串。"""
+    """When Docker restarts without recreating the container, the AUTH_PASSWORD injected by compose stays an empty string.
+
+    Docker 重启不重建容器时，compose 注入的 AUTH_PASSWORD 一直是空串。"""
 
     def _restart(self, env_file, monkeypatch) -> str:
         from lib.infra.env_init import load_env_file
 
         _simulate_restart()
-        monkeypatch.delenv("PYTHON_DOTENV_DISABLED", raising=False)  # 根 conftest 关掉了 .env 读取
+        monkeypatch.delenv("PYTHON_DOTENV_DISABLED", raising=False)  # The root conftest turned off .env reading / 根 conftest 关掉了 .env 读取
+        # The value fixed by the template `AUTH_PASSWORD=` when the container was created
         monkeypatch.setenv("AUTH_PASSWORD", "")  # 容器创建时由模板 `AUTH_PASSWORD=` 固定下来的值
         load_env_file(env_file)
         return auth_module.ensure_auth_password(env_path=str(env_file))
@@ -340,7 +398,9 @@ class TestDownloadToken:
         auth_module._cached_token_secret = None
 
     def test_create_and_verify_download_token(self):
-        """签发并验证下载 token"""
+        """Issue and verify a download token
+
+        签发并验证下载 token"""
         with patch.dict(os.environ, {"AUTH_TOKEN_SECRET": "test-secret-key-that-is-at-least-32-bytes"}):
             token = auth_module.create_download_token("admin", "my-project")
             payload = auth_module.verify_download_token(token, "my-project")
@@ -349,7 +409,9 @@ class TestDownloadToken:
             assert payload["purpose"] == "download"
 
     def test_verify_download_token_wrong_project(self):
-        """项目不匹配应抛出 ValueError"""
+        """A project mismatch should raise ValueError
+
+        项目不匹配应抛出 ValueError"""
         with patch.dict(os.environ, {"AUTH_TOKEN_SECRET": "test-secret-key-that-is-at-least-32-bytes"}):
             token = auth_module.create_download_token("admin", "project-a")
             import pytest
@@ -358,7 +420,9 @@ class TestDownloadToken:
                 auth_module.verify_download_token(token, "project-b")
 
     def test_verify_download_token_expired(self):
-        """过期 token 应抛出 ExpiredSignatureError"""
+        """An expired token should raise ExpiredSignatureError
+
+        过期 token 应抛出 ExpiredSignatureError"""
         import jwt
 
         secret = "test-secret-key-that-is-at-least-32-bytes"
@@ -375,7 +439,9 @@ class TestDownloadToken:
                 auth_module.verify_download_token(expired_token, "demo")
 
     def test_verify_download_token_wrong_purpose(self):
-        """purpose 不匹配应抛出 ValueError"""
+        """A purpose mismatch should raise ValueError
+
+        purpose 不匹配应抛出 ValueError"""
         import jwt
 
         secret = "test-secret-key-that-is-at-least-32-bytes"
@@ -393,32 +459,42 @@ class TestDownloadToken:
 
 
 class TestPasswordHash:
-    """密码哈希功能测试"""
+    """Password hashing tests
+
+    密码哈希功能测试"""
 
     def setup_method(self):
         auth_module._cached_password_hash = None
 
     def test_check_credentials_wrong_password_with_hash(self):
-        """错误密码哈希比对失败"""
+        """Hash comparison fails for a wrong password
+
+        错误密码哈希比对失败"""
         with patch.dict(os.environ, {"AUTH_USERNAME": "admin", "AUTH_PASSWORD": "pass123"}):
             assert auth_module.check_credentials("admin", "wrong") is False
 
     def test_check_credentials_wrong_username_timing_safe(self):
-        """错误用户名也执行哈希验证（防时序攻击）"""
+        """A wrong username also runs hash verification (guarding against timing attacks)
+
+        错误用户名也执行哈希验证（防时序攻击）"""
         with patch.dict(os.environ, {"AUTH_USERNAME": "admin", "AUTH_PASSWORD": "pass123"}):
             assert auth_module.check_credentials("nobody", "pass123") is False
 
     def test_password_hash_cached(self):
-        """哈希值应被缓存"""
+        """The hash value should be cached
+
+        哈希值应被缓存"""
         with patch.dict(os.environ, {"AUTH_USERNAME": "admin", "AUTH_PASSWORD": "pass123"}):
             auth_module.check_credentials("admin", "pass123")
             first_hash = auth_module._cached_password_hash
             auth_module.check_credentials("admin", "pass123")
-            assert auth_module._cached_password_hash is first_hash  # 同一对象
+            assert auth_module._cached_password_hash is first_hash  # Same object / 同一对象
 
 
 class TestGetCurrentUser:
-    """FastAPI 依赖函数测试"""
+    """FastAPI dependency function tests
+
+    FastAPI 依赖函数测试"""
 
     def setup_method(self):
         auth_module._cached_token_secret = None

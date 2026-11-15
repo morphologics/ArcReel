@@ -1,4 +1,6 @@
-"""Alembic 迁移：新建用户条目表，降级时删除。"""
+"""Alembic migration: create the user entry table, dropped on downgrade.
+
+Alembic 迁移：新建用户条目表，降级时删除。"""
 
 from __future__ import annotations
 

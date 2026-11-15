@@ -1,4 +1,6 @@
-"""OpenAIImageBackend 单元测试。"""
+"""OpenAIImageBackend unit tests.
+
+OpenAIImageBackend 单元测试。"""
 
 from __future__ import annotations
 
@@ -25,7 +27,13 @@ def _make_mock_image_response(
     url: str | None = None,
     usage=None,
 ):
-    """构造 mock ImagesResponse。
+    """Build a mock ImagesResponse.
+
+    - usage=None explicitly attaches no usage attribute (simulating the SDK returning no usage)
+    - passing a dict {"input_tokens": ..., "output_tokens": ..., "input_tokens_details": {...}, "output_tokens_details": {...}}
+      builds nested MagicMocks from the dict keys
+
+    构造 mock ImagesResponse。
 
     - usage=None 时显式不挂 usage 属性（模拟 SDK 不返回 usage 的情况）
     - 传 dict {"input_tokens": ..., "output_tokens": ..., "input_tokens_details": {...}, "output_tokens_details": {...}}
@@ -35,7 +43,7 @@ def _make_mock_image_response(
     datum.b64_json = b64_data
     datum.url = url
 
-    # spec 限定属性集，避免 MagicMock 自动创造未知属性
+    # spec limits the attribute set so MagicMock does not auto-create unknown attributes. / spec 限定属性集，避免 MagicMock 自动创造未知属性
     response = MagicMock(spec=["data", "usage"])
     response.data = [datum]
     if usage is None:
@@ -89,7 +97,9 @@ class TestOpenAIImageBackend:
             assert ImageCapability.IMAGE_TO_IMAGE in backend.capabilities
 
     async def test_text_to_image(self, tmp_path: Path):
-        """T2I 路径应调用 images.generate()。"""
+        """The T2I path should call images.generate().
+
+        T2I 路径应调用 images.generate()。"""
         b64_data = base64.b64encode(b"fake-png-data").decode()
         mock_client = AsyncMock()
         mock_client.images.generate = AsyncMock(return_value=_make_mock_image_response(b64_data))
@@ -115,13 +125,16 @@ class TestOpenAIImageBackend:
         mock_client.images.generate.assert_awaited_once()
         call_kwargs = mock_client.images.generate.call_args[1]
         assert call_kwargs["model"] == "gpt-image-2"
-        assert call_kwargs["size"] == "1008x1792"  # 9:16 精确（1K 短边 1024）
+        assert call_kwargs["size"] == "1008x1792"  # Exact 9:16 (1K short edge 1024). / 9:16 精确（1K 短边 1024）
         assert call_kwargs["quality"] == "medium"  # 1K
+        # The GPT Image model family does not support response_format; strictly compatible gateways return 400, so it must never be sent.
         # GPT Image 模型族不支持 response_format；严格兼容网关会 400，因此绝不能传
         assert "response_format" not in call_kwargs
 
     async def test_declared_reference_limit_equals_what_it_sends(self, tmp_path: Path):
-        """声明的上限即超量时实际下传的张数——编排层按它裁剪，编号才不会指认没发出的图。"""
+        """The declared limit is the number actually sent when there are too many -- the orchestration layer trims by it so numbering never points at an image that was not sent.
+
+        声明的上限即超量时实际下传的张数——编排层按它裁剪，编号才不会指认没发出的图。"""
         mock_client = AsyncMock()
         mock_client.images.edit = AsyncMock(return_value=_make_mock_image_response())
 
@@ -149,7 +162,9 @@ class TestOpenAIImageBackend:
         assert len(mock_client.images.edit.call_args[1]["image"]) == (await backend.reference_image_limit()) == 16
 
     async def test_image_to_image(self, tmp_path: Path):
-        """I2I 路径应调用 images.edit()。"""
+        """The I2I path should call images.edit().
+
+        I2I 路径应调用 images.edit()。"""
         b64_data = base64.b64encode(b"edited-image").decode()
         mock_client = AsyncMock()
         mock_client.images.edit = AsyncMock(return_value=_make_mock_image_response(b64_data))
@@ -175,12 +190,16 @@ class TestOpenAIImageBackend:
         mock_client.images.generate.assert_not_awaited()
         edit_kwargs = mock_client.images.edit.call_args[1]
         assert "response_format" not in edit_kwargs
+        # I2I sends size symmetrically with T2I: default 9:16 + image_size=None -> fallback short edge 720 -> 720x1280.
+        # Before the fix images.edit sent no size at all, and the ratio was overridden by the upstream default.
         # I2I 与 T2I 对称下传 size：默认 9:16 + image_size=None → 兜底 720 短边 → 720x1280。
         # 修复前 images.edit 完全不传 size，比例被上游默认覆盖。
         assert edit_kwargs["size"] == "720x1280"
 
     async def test_empty_data_raises(self, tmp_path: Path):
-        """OpenAI 返回空 data 数组时，应抛出清晰的 RuntimeError 而非 IndexError。"""
+        """When OpenAI returns an empty data array, a clear RuntimeError should be raised rather than IndexError.
+
+        OpenAI 返回空 data 数组时，应抛出清晰的 RuntimeError 而非 IndexError。"""
         empty_response = MagicMock(spec=["data", "usage"])
         empty_response.data = []
         empty_response.usage = None
@@ -203,7 +222,9 @@ class TestOpenAIImageBackend:
                 await backend.generate(request)
 
     async def test_text_to_image_url_fallback(self, tmp_path: Path):
-        """网关只返回 url 时，应走 httpx 下载分支。"""
+        """When the gateway returns only url, the httpx download branch should be used.
+
+        网关只返回 url 时，应走 httpx 下载分支。"""
         mock_client = AsyncMock()
         mock_client.images.generate = AsyncMock(
             return_value=_make_mock_image_response(b64_data=None, url="https://gateway/img.png")
@@ -235,7 +256,9 @@ class TestOpenAIImageBackend:
         assert output_path.read_bytes() == downloaded
 
     async def test_size_mapping(self, tmp_path: Path):
-        """验证 aspect_ratio 精确决定 size（1K 短边 1024，比例零偏差）。"""
+        """Verify aspect_ratio determines size exactly (1K short edge 1024, zero ratio deviation).
+
+        验证 aspect_ratio 精确决定 size（1K 短边 1024，比例零偏差）。"""
         b64_data = base64.b64encode(b"img").decode()
         mock_client = AsyncMock()
         mock_client.images.generate = AsyncMock(return_value=_make_mock_image_response(b64_data))
@@ -245,6 +268,7 @@ class TestOpenAIImageBackend:
 
             backend = OpenAIImageBackend(api_key="test-key")
 
+            # Iterate over aspect_ratios under image_size="1K" (short edge 1024); the ratio is exact.
             # image_size="1K"（短边 1024）下遍历不同 aspect_ratio，比例精确
             for aspect, expected_size in [("16:9", "1792x1008"), ("1:1", "1024x1024"), ("9:16", "1008x1792")]:
                 output_path = tmp_path / f"output_{aspect.replace(':', '_')}.png"
@@ -259,7 +283,9 @@ class TestOpenAIImageBackend:
                 assert call_kwargs["size"] == expected_size, f"aspect={aspect}"
 
     async def test_quality_mapping(self, tmp_path: Path):
-        """验证 image_size → quality 映射（标准 token）。"""
+        """Verify the image_size -> quality mapping (standard tokens).
+
+        验证 image_size → quality 映射（标准 token）。"""
         b64_data = base64.b64encode(b"img").decode()
         mock_client = AsyncMock()
         mock_client.images.generate = AsyncMock(return_value=_make_mock_image_response(b64_data))
@@ -269,6 +295,7 @@ class TestOpenAIImageBackend:
 
             backend = OpenAIImageBackend(api_key="test-key")
 
+            # quality is still mapped from the image_size tier; iterate over the tiers that have a mapping.
             # quality 仍按 image_size 档位映射；遍历有映射的档位
             for img_size, expected_quality in [("512px", "low"), ("1K", "medium"), ("2K", "high")]:
                 output_path = tmp_path / f"output_{img_size}.png"
@@ -283,7 +310,9 @@ class TestOpenAIImageBackend:
                 assert call_kwargs["quality"] == expected_quality, f"size={img_size}"
 
     async def test_text_to_image_captures_usage(self, tmp_path: Path):
-        """SDK 返回 usage 时，结果应携带 token 拆分字段。"""
+        """When the SDK returns usage, the result should carry the token breakdown fields.
+
+        SDK 返回 usage 时，结果应携带 token 拆分字段。"""
         b64_data = base64.b64encode(b"img").decode()
         mock_client = AsyncMock()
         mock_client.images.generate = AsyncMock(
@@ -293,6 +322,7 @@ class TestOpenAIImageBackend:
                     "input_tokens": 500,
                     "output_tokens": 2200,
                     "input_tokens_details": {"text_tokens": 500, "image_tokens": 0},
+                    # No output_tokens_details returned; img_out should fall back to the top-level output_tokens.
                     # 不返回 output_tokens_details；img_out 应回退到顶层 output_tokens
                 },
             )
@@ -312,8 +342,9 @@ class TestOpenAIImageBackend:
 
         assert result.text_input_tokens == 500
         assert result.image_input_tokens == 0
-        assert result.image_output_tokens == 2200  # 顶层 fallback
+        assert result.image_output_tokens == 2200  # Top-level fallback. / 顶层 fallback
         assert result.text_output_tokens is None
+        # Usage contract: reported per token; selection dimensions come from the request's size and quality.
         # 用量契约：按 token 上报，选择维度取自请求里的 size 与 quality
         assert result.usage is not None
         assert result.usage.quantities == {
@@ -324,7 +355,9 @@ class TestOpenAIImageBackend:
         assert result.usage.dimensions == {"resolution": "1008x1792", "quality": "medium"}
 
     async def test_text_to_image_no_usage_returns_none(self, tmp_path: Path):
-        """SDK 不返回 usage 时，4 个 token 字段全部为 None。"""
+        """When the SDK returns no usage, all 4 token fields are None.
+
+        SDK 不返回 usage 时，4 个 token 字段全部为 None。"""
         b64_data = base64.b64encode(b"img").decode()
         mock_client = AsyncMock()
         mock_client.images.generate = AsyncMock(return_value=_make_mock_image_response(b64_data))
@@ -345,12 +378,17 @@ class TestOpenAIImageBackend:
         assert result.image_output_tokens is None
         assert result.text_input_tokens is None
         assert result.text_output_tokens is None
+        # No usage available: report only the output image count; do not estimate tokens from size and quality for billing.
         # 拿不到 usage：只报输出张数，不按尺寸与质量估 token 记账
         assert result.usage is not None
         assert result.usage.quantities == {"output_images": 1}
 
     async def test_partial_usage_no_input_details_falls_back(self, tmp_path: Path):
-        """usage 顶层 input_tokens 存在但 input_tokens_details 缺失：4 字段全 None，让 cost 走静态 fallback。
+        """usage has a top-level input_tokens but no input_tokens_details: all 4 fields None, so cost takes the static fallback.
+
+        Defends against compatible gateways or trimmed responses: taking the token path without the input breakdown would systematically under-count input cost.
+
+        usage 顶层 input_tokens 存在但 input_tokens_details 缺失：4 字段全 None，让 cost 走静态 fallback。
 
         防御兼容网关或字段裁剪响应：缺 input 拆分时若仍走 token 路径会系统性漏算 input 成本。
         """
@@ -360,9 +398,9 @@ class TestOpenAIImageBackend:
             return_value=_make_mock_image_response(
                 b64_data,
                 usage={
-                    "input_tokens": 500,  # 顶层有
+                    "input_tokens": 500,  # Present at the top level / 顶层有
                     "output_tokens": 2200,
-                    "input_tokens_details": None,  # 但拆分缺失
+                    "input_tokens_details": None,  # but the breakdown is missing. / 但拆分缺失
                 },
             )
         )
@@ -385,7 +423,9 @@ class TestOpenAIImageBackend:
         assert result.text_output_tokens is None
 
     async def test_input_details_empty_inner_fields_falls_back(self, tmp_path: Path):
-        """input_tokens_details 对象在但 image_tokens / text_tokens 都为 None：等同于无拆分，fallback。"""
+        """input_tokens_details exists but image_tokens / text_tokens are both None: same as no breakdown, fallback.
+
+        input_tokens_details 对象在但 image_tokens / text_tokens 都为 None：等同于无拆分，fallback。"""
         b64_data = base64.b64encode(b"img").decode()
         mock_client = AsyncMock()
         mock_client.images.generate = AsyncMock(
@@ -417,14 +457,16 @@ class TestOpenAIImageBackend:
         assert result.text_output_tokens is None
 
     async def test_input_details_present_but_no_output_falls_back(self, tmp_path: Path):
-        """input 拆分到手但完全拿不到 output 信息：4 字段全部撤回，避免只算 input 漏算 output。"""
+        """Input breakdown available but no output info at all: all 4 fields are withdrawn, so input is not counted while output is missed.
+
+        input 拆分到手但完全拿不到 output 信息：4 字段全部撤回，避免只算 input 漏算 output。"""
         b64_data = base64.b64encode(b"img").decode()
         mock_client = AsyncMock()
         mock_client.images.generate = AsyncMock(
             return_value=_make_mock_image_response(
                 b64_data,
                 usage={
-                    # 没有 output_tokens 顶层、没有 output_tokens_details
+                    # No top-level output_tokens, no output_tokens_details. / 没有 output_tokens 顶层、没有 output_tokens_details
                     "input_tokens": 500,
                     "input_tokens_details": {"text_tokens": 500, "image_tokens": 0},
                 },
@@ -449,7 +491,9 @@ class TestOpenAIImageBackend:
         assert result.text_output_tokens is None
 
     async def test_image_to_image_captures_image_input_tokens(self, tmp_path: Path):
-        """I2I 路径应能解析 input_tokens_details.image_tokens（参考图 token）。"""
+        """The I2I path should parse input_tokens_details.image_tokens (reference image tokens).
+
+        I2I 路径应能解析 input_tokens_details.image_tokens（参考图 token）。"""
         b64_data = base64.b64encode(b"edited").decode()
         mock_client = AsyncMock()
         mock_client.images.edit = AsyncMock(
@@ -540,11 +584,13 @@ class TestModeGating:
 
     @pytest.mark.asyncio
     async def test_all_refs_failed_to_open_raises(self, tmp_path):
-        """所有 ref 图都打不开时，应抛 ImageCapabilityError 而非回退到 T2I。"""
+        """When none of the ref images can be opened, raise ImageCapabilityError rather than falling back to T2I.
+
+        所有 ref 图都打不开时，应抛 ImageCapabilityError 而非回退到 T2I。"""
         with captured_openai_clients():
             from lib.backends.image_backends.openai import OpenAIImageBackend
 
-            b = OpenAIImageBackend(api_key="x", model="m")  # mode="both" 默认
+            b = OpenAIImageBackend(api_key="x", model="m")  # mode="both" by default. / mode="both" 默认
             req = ImageGenerationRequest(
                 prompt="p",
                 output_path=tmp_path / "o.png",
@@ -558,7 +604,9 @@ class TestModeGating:
 
 
 class TestOutputTokenEstimate:
-    """gpt-image-2 输出 token 估算与官方计算器、官方单图价一致。"""
+    """gpt-image-2 output token estimates match the official calculator and the official per-image price.
+
+    gpt-image-2 输出 token 估算与官方计算器、官方单图价一致。"""
 
     @pytest.mark.parametrize(
         ("size", "quality", "tokens", "official_price"),
@@ -575,6 +623,7 @@ class TestOutputTokenEstimate:
         from lib.backends.image_backends.openai import estimate_gpt_image_2_output_tokens
 
         assert estimate_gpt_image_2_output_tokens(size, quality) == tokens
+        # The official table converts $30 per million output tokens into a per-image price, to three decimals.
         # 官方表按 $30 / 百万输出 token 折成单图价，保留三位小数
         assert round(tokens * 30 / 1_000_000, 3) == official_price
 
@@ -593,6 +642,7 @@ class TestOutputTokenEstimate:
         )
         assert usage.dimensions == {"resolution": "1008x1792", "quality": "medium"}
         assert usage.quantities["image_output_tokens"] == 1234
+        # Prompt text tokens are unavailable, recorded as 0; text-to-image has no reference images, so image input tokens are 0.
         # 提示词文字 token 拿不到，记 0；文生图没有参考图，图片输入 token 记 0
         assert usage.quantities["uncached_input_tokens"] == 0
         assert usage.quantities["uncached_image_input_tokens"] == 0

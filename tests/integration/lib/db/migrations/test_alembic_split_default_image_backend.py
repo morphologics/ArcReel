@@ -1,4 +1,6 @@
-"""Alembic split_default_image_backend_setting 双向迁移测试。"""
+"""Up/down migration tests for Alembic split_default_image_backend_setting.
+
+Alembic split_default_image_backend_setting 双向迁移测试。"""
 
 from __future__ import annotations
 
@@ -10,6 +12,8 @@ from alembic import command
 
 PROJECT_ROOT = Path(__file__).resolve().parents[5]
 
+# This file only covers the split migration itself and stops at that revision; later revisions converge the two
+# buckets back into the default layer.
 # 本文件只覆盖拆分迁移本身，停在该 revision——后续 revision 会把两桶重新收敛回默认层。
 _SPLIT_REVISION = "5b87accc10dd"
 
@@ -19,7 +23,9 @@ def _sync_engine(db_path: Path) -> sa.Engine:
 
 
 def test_upgrade_copies_legacy_setting_to_two_new_keys(alembic_cfg):
-    """前置：写入旧 default_image_backend；执行迁移；验证两条新 key 同值。"""
+    """Setup: write the old default_image_backend; run the migration; verify the two new keys have the same value.
+
+    前置：写入旧 default_image_backend；执行迁移；验证两条新 key 同值。"""
     cfg, db_path = alembic_cfg
     command.upgrade(cfg, "eedf0aa985e6")
 
@@ -48,7 +54,9 @@ def test_upgrade_copies_legacy_setting_to_two_new_keys(alembic_cfg):
 
 
 def test_upgrade_preserves_already_set_new_keys(alembic_cfg):
-    """前置：旧 default_image_backend + _t2i 都已有；迁移不应覆盖 _t2i。"""
+    """Setup: the old default_image_backend and _t2i both exist; the migration must not overwrite _t2i.
+
+    前置：旧 default_image_backend + _t2i 都已有；迁移不应覆盖 _t2i。"""
     cfg, db_path = alembic_cfg
     command.upgrade(cfg, "eedf0aa985e6")
 
@@ -72,14 +80,18 @@ def test_upgrade_preserves_already_set_new_keys(alembic_cfg):
             )
         ).fetchall()
     settings = {r.key: r.value for r in rows}
+    # _t2i exists -> not overwritten
     # _t2i 已存在 → 不覆盖
     assert settings.get("default_image_backend_t2i") == "openai/already-set"
+    # _i2i does not exist -> filled with the legacy value
     # _i2i 不存在 → 用 legacy 值填充
     assert settings.get("default_image_backend_i2i") == "openai/legacy"
 
 
 def test_upgrade_no_op_when_no_legacy(alembic_cfg):
-    """前置：未写入旧 default_image_backend；迁移应无副作用。"""
+    """Setup: no old default_image_backend written; the migration should have no side effects.
+
+    前置：未写入旧 default_image_backend；迁移应无副作用。"""
     cfg, db_path = alembic_cfg
     command.upgrade(cfg, _SPLIT_REVISION)
 

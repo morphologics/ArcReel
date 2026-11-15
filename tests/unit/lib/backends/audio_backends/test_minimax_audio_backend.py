@@ -1,4 +1,6 @@
-"""MiniMaxAudioBackend：同步 ``t2a_v2`` 一次合成，respx 在 transport 层捕获真实请求。"""
+"""MiniMaxAudioBackend: one synchronous ``t2a_v2`` synthesis; respx captures the real request at the transport layer.
+
+MiniMaxAudioBackend：同步 ``t2a_v2`` 一次合成，respx 在 transport 层捕获真实请求。"""
 
 from __future__ import annotations
 
@@ -28,7 +30,7 @@ def _ok(audio: bytes) -> httpx.Response:
 async def test_synthesize_decodes_hex_audio_to_file(tmp_path: Path):
     with capture_http() as router:
         route = router.post(_T2A_URL).mock(return_value=_ok(b"RIFFwavbytes"))
-        # 用户填 host 不带 /v1 也应补齐
+        # A user-entered host without /v1 should get it added. / 用户填 host 不带 /v1 也应补齐
         b = MiniMaxAudioBackend(api_key="sk", base_url="https://api.minimaxi.com", model="speech-2.8-hd")
         out = tmp_path / "o.wav"
         result = await b.synthesize(
@@ -43,7 +45,7 @@ async def test_synthesize_decodes_hex_audio_to_file(tmp_path: Path):
     assert body["stream"] is False
     assert body["output_format"] == "hex"
     assert body["voice_setting"] == {"voice_id": "female-shaonv", "speed": 1.2}
-    # 输出格式跟随落盘扩展名，文件内容与 .wav 一致
+    # Output format follows the on-disk extension; file content matches .wav. / 输出格式跟随落盘扩展名，文件内容与 .wav 一致
     assert body["audio_setting"]["format"] == "wav"
     assert out.read_bytes() == b"RIFFwavbytes"
     assert result.provider == "minimax"

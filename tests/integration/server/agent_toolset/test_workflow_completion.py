@@ -1,4 +1,9 @@
-"""待补全工具（complete_script_plan_rebuild）经声明入口的 ``ToolOutcome``。
+"""``ToolOutcome`` of the pending-completion tool (complete_script_plan_rebuild) via the declared entry.
+
+The service function that commits the completion fact and the thread offload are injected as stand-ins via the
+handler's keyword arguments; request validation goes through the declared entry shared by both hosts.
+
+待补全工具（complete_script_plan_rebuild）经声明入口的 ``ToolOutcome``。
 
 提交完成事实的服务函数与线程卸载经 handler 的关键字参数注入替身；请求校验走两宿主共用的声明入口。
 """

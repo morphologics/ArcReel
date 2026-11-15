@@ -1,4 +1,9 @@
-"""容量表：provider × media_type → 上限的三个装载路径（env / 声明默认 / DB）与三态 get。
+"""Capacity table: provider x media_type -> limit, three load paths (env / declared default / DB) and tri-state get.
+
+Belongs to the generation worker like ``test_generation_worker_module``, but the object under test is
+``CapacityTable`` itself; scheduling, leases and the orphan scan do not go through it, hence a separate file.
+
+容量表：provider × media_type → 上限的三个装载路径（env / 声明默认 / DB）与三态 get。
 
 与 ``test_generation_worker_module`` 同属生成 worker，但被测对象是 ``CapacityTable`` 自身——
 调度、租约与孤儿扫描不经过它，故单独成文件。
@@ -12,18 +17,23 @@ from tests.fakes import bind_safe_session_factory
 
 
 class TestCapacityTable:
-    """容量表：provider × media_type → 上限，三态 get + reload 只换数字。"""
+    """Capacity table: provider x media_type -> limit, tri-state get + reload only swaps the numbers.
+
+    容量表：provider × media_type → 上限，三态 get + reload 只换数字。"""
 
     def test_get_three_states(self):
         table = CapacityTable(
             _limits={"known": {"image": 4, "video": 0}},
             _defaults={"image": 5, "video": 3},
         )
+        # Known + lane in table -> registered value (including 0 = lane not supported)
         # 已知 + lane 在表 → 登记值（含 0=不支持该 lane）
         assert table.get("known", "image") == 4
         assert table.get("known", "video") == 0
+        # Known + lane not in table -> 0
         # 已知 + lane 不在表 → 0
         assert table.get("known", "audio") == 0
+        # Completely unknown -> default, and a pure lookup does not write back
         # 完全未知 → 默认，且纯查询不写回
         assert table.get("unknown", "image") == 5
         assert table.get("unknown", "video") == 3
@@ -34,6 +44,7 @@ class TestCapacityTable:
         table.replace({"p": {"image": 9, "video": 1}})
         assert table.get("p", "image") == 9
         assert table.get("p", "video") == 1
+        # Default not affected by replace
         # 默认不受 replace 影响
         assert table.get("unknown", "image") == 5
 
@@ -48,8 +59,12 @@ class TestCapacityTable:
             assert pid in table._limits
             for lane, global_default in (("image", 5), ("video", 3), ("audio", 10)):
                 if lane not in catalog.provider_media_types(pid):
-                    assert table.get(pid, lane) == 0  # 不支持的 lane → 投影为 0
+                    assert table.get(pid, lane) == 0  # Unsupported lane -> projected to 0 / 不支持的 lane → 投影为 0
                 elif lane not in meta.default_concurrency:
+                    # Lanes with no declared factory default must fall to the hard-coded global default. This assertion does not read
+                    # meta.default_concurrency, so it is not a tautology and catches drift in the load fallback. Lanes with a declared
+                    # default (e.g. agnes video) have their literal values pinned by that provider's own tests; we do not derive from meta
+                    # here, otherwise it would hold for any declared value and guard nothing.
                     # 未声明出厂默认的 lane 必须落到硬编码全局默认。这条断言不读
                     # meta.default_concurrency，故非重言——能抓住装载回退漂移。声明了默认的
                     # lane（如 agnes video）由该 provider 的专项测试钉死字面值；此处不用 meta
@@ -60,12 +75,18 @@ class TestCapacityTable:
         monkeypatch.setenv("IMAGE_MAX_WORKERS", "7")
         monkeypatch.setenv("VIDEO_MAX_WORKERS", "2")
         table = CapacityTable.from_env()
+        # The lazy default for unknown providers follows env
         # 未知 provider 的懒默认跟随 env
         assert table.get("unknown", "image") == 7
         assert table.get("unknown", "video") == 2
 
     async def test_from_db_known_providers_and_unsupported_lanes_zero(self):
-        """from_db：所有 registry provider 已知，不支持的 lane 强制 0。
+        """from_db: all registry providers are known, unsupported lanes are forced to 0.
+
+        Only assert invariants independent of config values (known + unsupported -> 0), to avoid env coupling from config
+        overrides in a local dev DB.
+
+        from_db：所有 registry provider 已知，不支持的 lane 强制 0。
 
         只断言与 config 数值无关的确定不变量（已知 + 不支持→0），避免本地 dev DB
         的 config 覆盖导致 env 耦合。
@@ -87,7 +108,14 @@ class TestCapacityTable:
         custom_providers=None,
         custom_endpoints=None,
     ) -> None:
-        """把 from_db 的三个数据源（provider config / 自定义供应商 / 自定义端点）替换为内存数据。
+        """Replace the three data sources of from_db (provider config / custom providers / custom endpoints) with in-memory data.
+
+        custom_providers: return value of ``list_providers_with_models``, shaped like ``[(provider, models), ...]``;
+        empty by default.
+        custom_endpoints: ``auto-increment id -> custom_endpoint row``, used to resolve model rows attached to a ``ce-``
+        endpoint; empty by default.
+
+        把 from_db 的三个数据源（provider config / 自定义供应商 / 自定义端点）替换为内存数据。
 
         custom_providers：``list_providers_with_models`` 的返回值，形如
         ``[(provider, models), ...]``；默认空。
@@ -131,7 +159,9 @@ class TestCapacityTable:
         endpoints=("openai-images",),
         discovery_format="openai",
     ):
-        """构造 ``(provider, models)`` 元组，供 list_providers_with_models 返回。"""
+        """Build a ``(provider, models)`` tuple for list_providers_with_models to return.
+
+        构造 ``(provider, models)`` 元组，供 list_providers_with_models 返回。"""
         from types import SimpleNamespace
 
         provider = SimpleNamespace(
@@ -145,7 +175,9 @@ class TestCapacityTable:
         return provider, models
 
     async def test_from_db_custom_provider_columns_used(self, monkeypatch):
-        """自定义供应商：列有值 → 取列值（投影到其支持的 lane）。"""
+        """Custom provider: column has a value -> take the column value (projected onto its supported lanes).
+
+        自定义供应商：列有值 → 取列值（投影到其支持的 lane）。"""
         self._stub_from_db_sources(
             monkeypatch,
             {},
@@ -163,11 +195,15 @@ class TestCapacityTable:
 
         assert table.get("custom-1", "image") == 2
         assert table.get("custom-1", "video") == 7
+        # Unsupported lane (no audio model) is projected to 0
         # 不支持的 lane（无 audio 模型）投影为 0
         assert table.get("custom-1", "audio") == 0
 
     async def test_from_db_custom_endpoint_model_takes_its_lane_from_the_definition(self, monkeypatch):
-        """模型行挂 ce- 端点：lane 由解析出的端点 spec 的媒体类型决定，键前缀不蕴含媒体类型。"""
+        """Model row attached to a ce- endpoint: the lane is decided by the media type of the resolved endpoint spec; the key
+        prefix implies no media type.
+
+        模型行挂 ce- 端点：lane 由解析出的端点 spec 的媒体类型决定，键前缀不蕴含媒体类型。"""
         from types import SimpleNamespace
 
         from tests.factories import custom_endpoint_definition
@@ -192,7 +228,13 @@ class TestCapacityTable:
         assert table.get("custom-2", "image") == 0
 
     async def test_from_db_reads_the_endpoint_lane_through_the_real_repositories(self, monkeypatch, file_db_factory):
-        """ce- 端点的 lane 投影走真实库与真实仓储跑一遍。
+        """Run the lane projection of ce- endpoints through the real database and real repositories.
+
+        The rest of this group swap the three data sources for in-memory values, which is fast but never touches real SQL or
+        row shapes; this case writes real rows and uses real repositories, so it fails if a query or column name on the
+        endpoint-resolution path drifts.
+
+        ce- 端点的 lane 投影走真实库与真实仓储跑一遍。
 
         同组其余用例把三个数据源换成内存值，跑得快但碰不到真实的 SQL 与行形状——这条用例落真行、
         用真仓储，端点解析那一路上的查询或列名走样时它会失败。
@@ -231,12 +273,18 @@ class TestCapacityTable:
 
         table = await CapacityTable.from_db()
 
+        # The endpoint definition says it is an image endpoint, so the lane lands on image; the key prefix implies no media
+        # type.
         # 端点定义说这是图像端点，lane 就落在 image 上——键前缀不蕴含媒体类型。
         assert table.get("custom-1", "image") == 6
         assert table.get("custom-1", "video") == 0
 
     async def test_from_db_comfyui_provider_defaults_each_lane_to_one(self, monkeypatch):
-        """comfyui 协议、并发列为 NULL：图像与视频各 1，而不是全局默认的 5 / 3。
+        """comfyui protocol with NULL concurrency columns: image and video get 1 each, not the global defaults 5 / 3.
+
+        A ComfyUI instance usually has a single GPU behind it; running more in parallel just queues on the remote side.
+
+        comfyui 协议、并发列为 NULL：图像与视频各 1，而不是全局默认的 5 / 3。
 
         一台 ComfyUI 后面通常只有一张显卡，多开只是在远端排队。
         """
@@ -267,7 +315,10 @@ class TestCapacityTable:
         assert table.get("custom-9", "image") == 1
 
     async def test_from_db_comfyui_provider_keeps_an_explicit_column(self, monkeypatch):
-        """用户显式调高的列值优先于协议默认——默认只是列为 NULL 时的回退。"""
+        """A column value the user explicitly raised wins over the protocol default; the default is only the fallback when the
+        column is NULL.
+
+        用户显式调高的列值优先于协议默认——默认只是列为 NULL 时的回退。"""
         from types import SimpleNamespace
 
         from tests.factories import comfyui_endpoint_definition
@@ -291,7 +342,9 @@ class TestCapacityTable:
         assert table.get("custom-9", "video") == 3
 
     async def test_from_db_other_protocols_keep_the_global_default(self, monkeypatch):
-        """协议默认只属于 comfyui：别的自定义供应商列为 NULL 时仍走全局默认。"""
+        """The protocol default belongs only to comfyui: other custom providers with NULL columns still use the global default.
+
+        协议默认只属于 comfyui：别的自定义供应商列为 NULL 时仍走全局默认。"""
         self._stub_from_db_sources(
             monkeypatch,
             {},
@@ -303,7 +356,9 @@ class TestCapacityTable:
         assert table.get("custom-4", "video") == 3
 
     async def test_from_db_skips_a_model_row_whose_endpoint_is_gone(self, monkeypatch):
-        """端点解析不出来：不凭该行开 lane，其余供应商的容量照常刷新。"""
+        """Endpoint cannot be resolved: do not open a lane from that row; the capacity of the other providers refreshes as usual.
+
+        端点解析不出来：不凭该行开 lane，其余供应商的容量照常刷新。"""
         self._stub_from_db_sources(
             monkeypatch,
             {},
@@ -320,7 +375,9 @@ class TestCapacityTable:
         assert table.get("custom-3", "video") == 5
 
     async def test_from_db_custom_provider_null_falls_back_to_global_default(self, monkeypatch):
-        """自定义供应商：列为 None → 回退全局默认（两层回退，无声明默认层）。"""
+        """Custom provider: column is None -> fall back to the global default (two fallback levels, no declared-default level).
+
+        自定义供应商：列为 None → 回退全局默认（两层回退，无声明默认层）。"""
         self._stub_from_db_sources(
             monkeypatch,
             {},
@@ -336,13 +393,17 @@ class TestCapacityTable:
 
         table = await CapacityTable.from_db()
 
+        # Global defaults image=5 / video=3 (env already cleared in _stub)
         # 全局默认 image=5 / video=3（env 已在 _stub 中清除）
         assert table.get("custom-9", "image") == 5
         assert table.get("custom-9", "video") == 3
 
     @pytest.mark.parametrize("dirty", ["", "3.7", "abc"])
     async def test_from_db_dirty_value_falls_back_per_key(self, monkeypatch, caplog, dirty):
-        """单个 key 的存量脏值只回退该 key 默认值并告警，不拖垮整表加载。"""
+        """A dirty stored value for a single key only falls back that key's default with a warning; it does not break loading
+        the whole table.
+
+        单个 key 的存量脏值只回退该 key 默认值并告警，不拖垮整表加载。"""
         import logging
 
         self._stub_from_db_sources(
@@ -356,15 +417,20 @@ class TestCapacityTable:
         with caplog.at_level(logging.WARNING, logger="lib.generation.generation_worker"):
             table = await CapacityTable.from_db()
 
+        # The dirty key falls back to the env default (image=5) with a warning
         # 脏 key 回退 env 默认值（image=5）并告警
         assert table.get("ark", "image") == 5
         assert "image_max_workers" in caplog.text
+        # Other valid keys of the same provider and other providers' config take effect normally
         # 同 provider 其余合法 key、其他 provider 的配置正常生效
         assert table.get("ark", "video") == 2
         assert table.get("gemini-aistudio", "image") == 7
 
     async def test_from_db_negative_value_clamps_to_zero(self, monkeypatch, caplog):
-        """可解析的负数沿用 clamp 语义（→0），不视为脏值回退默认，但留告警可观测。"""
+        """A parseable negative number keeps the clamp semantics (-> 0); it is not treated as a dirty value falling back to the
+        default, but a warning is left for observability.
+
+        可解析的负数沿用 clamp 语义（→0），不视为脏值回退默认，但留告警可观测。"""
         import logging
 
         self._stub_from_db_sources(monkeypatch, {"ark": {"video_max_workers": "-1"}})
@@ -377,7 +443,16 @@ class TestCapacityTable:
 
     @staticmethod
     def _registry_with_declared_defaults(monkeypatch) -> None:
-        """注入带 per-lane 默认并发声明的合成注册表，避免耦合任何真实供应商真值。
+        """Inject a synthetic registry with per-lane default concurrency declarations, to avoid coupling to any real provider's
+        values.
+
+        - ``declared-video``: supports image+video, declares video default 1 (declared default < global default 3).
+        - ``declared-audio``: supports audio, declares audio default 12 (declared default > global default 10), covering
+          the upward fallback of the audio lane (declared default beats global default).
+        - ``plain-video``: supports video, no declaration -> uses the global default.
+        - ``declared-unsupported``: supports only video but declares an image default -> that lane is still projected to 0.
+
+        注入带 per-lane 默认并发声明的合成注册表，避免耦合任何真实供应商真值。
 
         - ``declared-video``：支持 image+video，声明 video 默认 1（声明默认 < 全局默认 3）。
         - ``declared-audio``：支持 audio，声明 audio 默认 12（声明默认 > 全局默认 10），覆盖
@@ -420,19 +495,28 @@ class TestCapacityTable:
 
         table = CapacityTable.from_env()
 
+        # Declared video=1 -> take the declared default, not the global default 3
         # 声明了 video=1 → 取声明默认，而非全局默认 3
         assert table.get("declared-video", "video") == 1
+        # Undeclared image lane of the same provider -> global default 5
         # 同 provider 未声明的 image lane → 全局默认 5
         assert table.get("declared-video", "image") == 5
+        # Supports audio and declares audio=12 -> take the declared default (above global default 10), upward fallback of the
+        # audio lane
         # 支持 audio 且声明 audio=12 → 取声明默认（高于全局默认 10），audio lane 正向回退
         assert table.get("declared-audio", "audio") == 12
+        # Provider with no declared default -> global default
         # 未声明默认的 provider → 全局默认
         assert table.get("plain-video", "video") == 3
+        # Declared an image default but the provider does not support image -> projected to 0 (_lane_limits does not regress)
         # 声明了 image 默认但该 provider 不支持 image → 投影为 0（_lane_limits 不回归）
         assert table.get("declared-unsupported", "image") == 0
 
     async def test_from_db_declared_default_when_user_unconfigured(self, monkeypatch):
-        """用户未配 → 取注册表声明默认（而非全局默认）；未声明 provider 仍走全局默认。"""
+        """User has not configured -> take the registry's declared default (not the global default); undeclared providers still
+        use the global default.
+
+        用户未配 → 取注册表声明默认（而非全局默认）；未声明 provider 仍走全局默认。"""
         self._registry_with_declared_defaults(monkeypatch)
         self._stub_from_db_sources(monkeypatch, {})
 
@@ -445,7 +529,9 @@ class TestCapacityTable:
         assert table.get("declared-unsupported", "image") == 0
 
     async def test_from_db_user_value_overrides_declared_default(self, monkeypatch):
-        """用户配了值 → 覆盖注册表声明默认。"""
+        """User configured a value -> overrides the registry's declared default.
+
+        用户配了值 → 覆盖注册表声明默认。"""
         self._registry_with_declared_defaults(monkeypatch)
         self._stub_from_db_sources(monkeypatch, {"declared-video": {"video_max_workers": "4"}})
 
@@ -454,7 +540,9 @@ class TestCapacityTable:
         assert table.get("declared-video", "video") == 4
 
     async def test_from_db_and_from_env_consistent_fallback(self, monkeypatch):
-        """两条装载路径对同一回退语义（用户未配）逐 lane 结果一致。"""
+        """Both load paths give the same per-lane results for the same fallback semantics (user not configured).
+
+        两条装载路径对同一回退语义（用户未配）逐 lane 结果一致。"""
         self._registry_with_declared_defaults(monkeypatch)
         self._stub_from_db_sources(monkeypatch, {})
 
@@ -466,7 +554,17 @@ class TestCapacityTable:
                 assert db_table.get(pid, lane) == env_table.get(pid, lane)
 
     def test_agnes_video_default_one_outranks_active_global_env(self, monkeypatch):
-        """真实注册表：Agnes 视频 lane 出厂钉死 1，即便部署把全局 VIDEO_MAX_WORKERS 调高也不解除。
+        """Real registry: Agnes's video lane is pinned to 1 at the factory, and a deployment raising the global
+        VIDEO_MAX_WORKERS does not lift it.
+
+        This is the 503-avoidance guarantee this slice wants: the declared default beats an active global env (not merely
+        the fallback value). It also checks two isolation properties: the declaration only affects the video lane (image
+        still follows the global default); the pin is Agnes-specific, so a video provider with no declared default (ark)
+        still follows the global env. The mechanism itself (declared default > global, user value > declared default,
+        consistent across from_env/from_db) is covered by the synthetic declared-* tests above; here we only pin the wiring
+        of the real entry.
+
+        真实注册表：Agnes 视频 lane 出厂钉死 1，即便部署把全局 VIDEO_MAX_WORKERS 调高也不解除。
 
         这是本切片要的 503 规避保证——声明默认压过「活跃的」全局 env（而非仅压过缺省值）。
         顺带验证两条隔离性质：声明只作用于 video lane（image 仍随全局默认）；钉死是 Agnes 专属，
@@ -478,6 +576,7 @@ class TestCapacityTable:
 
         table = CapacityTable.from_env()
 
-        assert table.get("agnes", "video") == 1  # 声明默认压过活跃的全局 5
-        assert table.get("agnes", "image") == 5  # 声明不外溢到未声明的 image lane
+        assert table.get("agnes", "video") == 1  # Declared default beats the active global 5 / 声明默认压过活跃的全局 5
+        assert table.get("agnes", "image") == 5  # The declaration does not spill over to the undeclared image lane / 声明不外溢到未声明的 image lane
+        # A video provider with no declared default still follows the global env
         assert table.get("ark", "video") == 5  # 未声明默认的视频供应商仍跟随全局 env

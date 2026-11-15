@@ -1,4 +1,6 @@
-"""Alembic 迁移：custom_provider_model.path_overrides 的 upgrade / downgrade。"""
+"""Alembic migration: upgrade / downgrade of custom_provider_model.path_overrides.
+
+Alembic 迁移：custom_provider_model.path_overrides 的 upgrade / downgrade。"""
 
 from __future__ import annotations
 

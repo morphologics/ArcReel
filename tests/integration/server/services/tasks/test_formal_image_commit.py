@@ -86,7 +86,10 @@ class TestGenerationTasks:
         assert isinstance(kwargs["basis"], ArtifactBasis)
 
     async def test_schema8_storyboard_refuses_unclaimed_asset_sheets_before_provider(self, tmp_path, monkeypatch):
-        """资产图文件在但清单未登记即不可用：生成在解析供应商之前被拒，一次报全；未登记的上一分镜图只是略去。"""
+        """A sheet file present but not registered in the manifest is unusable: generation is refused before resolving
+        the provider, reporting everything at once; an unregistered previous storyboard image is just omitted.
+
+        资产图文件在但清单未登记即不可用：生成在解析供应商之前被拒，一次报全；未登记的上一分镜图只是略去。"""
 
         project_path = prepare_files(tmp_path)
         fake_pm = _FakePM(project_path)
@@ -241,6 +244,10 @@ class TestGenerationTasks:
             finally:
                 writer_done.set()
 
+        # The mutual exclusion criterion is given both ways by "the other side cannot enter while the main thread holds
+        # the lock": manifest activation and formal artifact commit each queue on the project metadata lock, so they
+        # cannot interleave either. Both wait windows are one-way refutations - if mutual exclusion were broken, a slow
+        # machine might miss it because the window has not finished, but a well-behaved implementation is never failed.
         # 互斥判据由「主线程持锁时对方进不来」双向给出：清单激活与形式产物提交各自在项目
         # 元数据锁上排队，因而彼此也不可能交错。两段等待窗口都是单向否证——互斥若被破坏，
         # 慢机上也可能因窗口内尚未跑完而漏报，但绝不会把守规矩的实现判成失败。
@@ -251,6 +258,8 @@ class TestGenerationTasks:
             assert not activation_done.wait(timeout=0.2), "清单激活没有在项目元数据锁上排队"
         activation_thread.join(timeout=5)
 
+        # Manifest activation only brings the project to v8; formal artifact registration requires the current schema,
+        # and the remaining migrations are run by the startup scan.
         # 清单激活只把项目送到 v8；形式产物注册要求当前 schema，剩余迁移由启动扫描跑完。
         migrate_project_dir(project_path)
 
@@ -284,6 +293,8 @@ class TestGenerationTasks:
 
         use_project_manager(monkeypatch, fake_pm)
         use_generation_context(monkeypatch, fake_resolve_ctx(fake_generator))
+        # Registration deleted after the reference images are frozen and before they are sent to the provider: the
+        # pre-submit recheck must stop it here.
         # 参考图冻结之后、发给供应商之前登记被删：提交前的复核须在此拦下。
         hook_claim_recheck(monkeypatch, before=lambda: ProjectArtifactManifestAdapter(project_path).delete_entry(key))
 
@@ -309,6 +320,8 @@ class TestGenerationTasks:
 
         use_project_manager(monkeypatch, fake_pm)
         use_generation_context(monkeypatch, fake_resolve_ctx(fake_generator))
+        # Bytes swapped after the reference images are frozen and before they are sent to the provider: the pre-submit
+        # recheck must stop it here.
         # 参考图冻结之后、发给供应商之前字节被换：提交前的复核须在此拦下。
         hook_claim_recheck(monkeypatch, before=lambda: (project_path / artifact_path).write_bytes(b"replacement"))
 
@@ -338,6 +351,8 @@ class TestGenerationTasks:
 
         use_project_manager(monkeypatch, fake_pm)
         use_generation_context(monkeypatch, fake_resolve_ctx(fake_generator))
+        # Bytes swapped only after the first recheck (pre-submit) passed: the second recheck (the checkpoint before the
+        # provider call) must stop it.
         # 首次复核（提交前）通过后才换字节：第二道复核（进供应商调用前的 checkpoint）须拦下。
         hook_claim_recheck(monkeypatch, after_first_pass=lambda: character_path.write_bytes(b"replacement"))
 
@@ -411,6 +426,8 @@ class TestGenerationTasks:
                 refs = kwargs["reference_images"]
 
                 def _race_then_read() -> list[bytes]:
+                    # Another party rewrote the original reference image during generation; the provider should read the bytes
+                    # from freeze time
                     # 生成期间另一方改写了原始参考图；供应商读到的应是冻结时的字节
                     character_path.write_bytes(b"changed-character")
                     previous_path.write_bytes(b"changed-previous")
@@ -618,6 +635,8 @@ class TestGenerationTasks:
             versions = version_manager
 
             async def generate_image_async(self, **kwargs):
+                # Direct calls (not queued tasks) have no task_id: the staging identity is made inside the generator, and the
+                # double makes one itself.
                 # 直接调用（非队列任务）没有 task_id：staging 身份由生成器内部造，替身自造一个。
                 staged = task_image_staging_path(current, kwargs["task_id"] or "inline-test")
                 version = await stage_and_commit(
@@ -701,7 +720,10 @@ class TestGenerationTasks:
 
 
 async def test_frozen_generation_input_cleans_snapshots_when_cancelled_during_freeze():
-    """取消落在线程里冻结的那一程：冻结完成后照样回收参考图快照，不进入正文。"""
+    """Cancellation landing on the freeze run in a thread: after the freeze completes the reference image snapshots
+    are still reclaimed, without entering the main body.
+
+    取消落在线程里冻结的那一程：冻结完成后照样回收参考图快照，不进入正文。"""
     freezing = threading.Event()
     release = threading.Event()
     cleaned: list[bool] = []

@@ -1,4 +1,11 @@
-"""测试 OpenAIImageBackend 的「比例优先、清晰度其次」尺寸语义：
+"""Tests OpenAIImageBackend's "ratio first, clarity second" size semantics:
+
+- image_size=None -> still sends an exact-ratio size with the default 720P short edge (no longer omits size and lets upstream decide the ratio)
+- image_size=tier -> short edge from the tier, ratio from aspect_ratio, plus quality
+- image_size=custom WxH -> its own ratio is dropped (min taken as the short edge); the ratio is still set by aspect_ratio
+- I2I (images.edit) sends size symmetrically with T2I
+
+测试 OpenAIImageBackend 的「比例优先、清晰度其次」尺寸语义：
 
 - image_size=None → 仍按默认 720P 短边下传精确比例 size（不再省略 size 让上游决定比例）
 - image_size=档位 → 短边来自档位、比例来自 aspect_ratio、附 quality
@@ -19,6 +26,7 @@ def _make_backend():
     backend = OpenAIImageBackend.__new__(OpenAIImageBackend)
     backend._client = MagicMock()
     backend._model = "gpt-image-2"
+    # Full capabilities (default mode="both"), so generate()'s capability gating lets T2I and I2I through.
     # 全能力（默认 mode="both"），让 generate() 的 capability gating 放行 T2I 与 I2I
     backend._capabilities = {ImageCapability.TEXT_TO_IMAGE, ImageCapability.IMAGE_TO_IMAGE}
     return backend
@@ -56,7 +64,9 @@ def _stub_edit(backend) -> dict:
 
 @pytest.mark.asyncio
 async def test_image_size_none_still_sends_ratio_correct_size(tmp_path):
-    """image_size=None 时按 720P 兜底下传精确比例 size（修复：旧行为省略 size 丢比例）。"""
+    """With image_size=None, send an exact-ratio size with the 720P fallback (fix: the old behavior omitted size and lost the ratio).
+
+    image_size=None 时按 720P 兜底下传精确比例 size（修复：旧行为省略 size 丢比例）。"""
     backend = _make_backend()
     captured = _stub_generate(backend)
 
@@ -69,7 +79,7 @@ async def test_image_size_none_still_sends_ratio_correct_size(tmp_path):
     await backend.generate(req)
 
     assert captured["size"] == "720x1280"
-    assert "quality" not in captured  # None 无档位 → 不传 quality
+    assert "quality" not in captured  # None has no tier -> no quality sent. / None 无档位 → 不传 quality
 
 
 @pytest.mark.asyncio
@@ -85,13 +95,15 @@ async def test_image_size_tier_maps_to_short_edge(tmp_path):
     )
     await backend.generate(req)
 
-    assert captured["size"] == "1008x1792"  # 1K 短边 1024 → 9:16 精确
+    assert captured["size"] == "1008x1792"  # 1K short edge 1024 -> exact 9:16. / 1K 短边 1024 → 9:16 精确
     assert captured["quality"] == "medium"
 
 
 @pytest.mark.asyncio
 async def test_custom_wh_strips_embedded_ratio(tmp_path):
-    """自定义 WxH 只贡献 min 当短边，比例仍由 aspect_ratio 决定（不被 16:9 的 1920x1080 带偏）。"""
+    """A custom WxH only contributes min as the short edge; the ratio is still set by aspect_ratio (not skewed by 16:9's 1920x1080).
+
+    自定义 WxH 只贡献 min 当短边，比例仍由 aspect_ratio 决定（不被 16:9 的 1920x1080 带偏）。"""
     backend = _make_backend()
     captured = _stub_generate(backend)
 
@@ -99,19 +111,21 @@ async def test_custom_wh_strips_embedded_ratio(tmp_path):
         prompt="hi",
         output_path=tmp_path / "o.png",
         aspect_ratio="9:16",
-        image_size="1920x1080",  # 16:9 的值，但项目要 9:16
+        image_size="1920x1080",  # A 16:9 value, but the project wants 9:16. / 16:9 的值，但项目要 9:16
     )
     await backend.generate(req)
 
     w, h = (int(x) for x in captured["size"].split("x"))
-    assert w * 16 == h * 9  # 精确 9:16，而非输入的 16:9
-    assert w < h  # 竖屏
-    assert "quality" not in captured  # 自定义值无档位映射
+    assert w * 16 == h * 9  # Exact 9:16, not the input 16:9. / 精确 9:16，而非输入的 16:9
+    assert w < h  # Portrait. / 竖屏
+    assert "quality" not in captured  # Custom values have no tier mapping. / 自定义值无档位映射
 
 
 @pytest.mark.asyncio
 async def test_noncanonical_tier_casing_still_maps_quality(tmp_path):
-    """档位词大小写/空白不规范（如 '2k'）时 size 与 quality 都应解析，不能 size 成功而 quality 丢失。"""
+    """With an irregular tier word (case/whitespace, e.g. '2k') both size and quality should parse; size must not succeed while quality is lost.
+
+    档位词大小写/空白不规范（如 '2k'）时 size 与 quality 都应解析，不能 size 成功而 quality 丢失。"""
     backend = _make_backend()
     captured = _stub_generate(backend)
 
@@ -119,7 +133,7 @@ async def test_noncanonical_tier_casing_still_maps_quality(tmp_path):
         prompt="hi",
         output_path=tmp_path / "o.png",
         aspect_ratio="9:16",
-        image_size="2k ",  # 小写 + 尾随空格
+        image_size="2k ",  # Lowercase + trailing space. / 小写 + 尾随空格
     )
     await backend.generate(req)
 
@@ -140,13 +154,15 @@ async def test_2k_tier(tmp_path):
     )
     await backend.generate(req)
 
-    assert captured["size"] == "1440x2560"  # 2K 短边 1440
+    assert captured["size"] == "1440x2560"  # 2K short edge 1440. / 2K 短边 1440
     assert captured["quality"] == "high"
 
 
 @pytest.mark.asyncio
 async def test_i2i_edit_sends_size_symmetric_with_t2i(tmp_path):
-    """I2I 路径（images.edit）也下传 size——修复用户实测的 I2I 比例丢失。"""
+    """The I2I path (images.edit) also sends size -- fixes the I2I ratio loss the user observed.
+
+    I2I 路径（images.edit）也下传 size——修复用户实测的 I2I 比例丢失。"""
     backend = _make_backend()
     captured = _stub_edit(backend)
 

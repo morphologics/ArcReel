@@ -1,4 +1,10 @@
-"""OptionsAssembler 单元测试：以注入假依赖驱动，不 monkeypatch 私有方法。
+"""OptionsAssembler unit tests: driven by injected fake dependencies, no monkeypatching of private methods.
+
+The assembler holds dependencies, may do I/O, and an async build produces the SDK options. Here the assembler is built directly
+from an injected fake policy / project_cwd resolver / credential loader, asserting the empty-value override of credential injection,
+prompt assembly, options fields and hook registration, decoupled from SessionManager.
+
+OptionsAssembler 单元测试：以注入假依赖驱动，不 monkeypatch 私有方法。
 
 装配器持依赖、允许 I/O，异步 build 产出 SDK options。这里用注入的假 policy /
 project_cwd 解析器 / 凭证 loader 直接构造装配器，断言凭证注入的空值覆盖、prompt
@@ -72,7 +78,9 @@ def _make_assembler(
 
 @pytest.mark.asyncio
 async def test_load_provider_env_overrides_injects_anthropic_and_empties() -> None:
-    """凭证注入：ANTHROPIC_* 取真值，其他 provider env 全部空值覆盖。"""
+    """Credential injection: ANTHROPIC_* take real values; all other provider env vars are overridden with empty values.
+
+    凭证注入：ANTHROPIC_* 取真值，其他 provider env 全部空值覆盖。"""
     fake_dict = {
         "ANTHROPIC_API_KEY": "sk-from-db",
         "ANTHROPIC_BASE_URL": "https://anthropic.example.com",
@@ -90,7 +98,7 @@ async def test_load_provider_env_overrides_injects_anthropic_and_empties() -> No
     assert env["ANTHROPIC_BASE_URL"] == "https://anthropic.example.com"
     assert env["ANTHROPIC_AUTH_TOKEN"] == ""
     assert env["CLAUDE_CODE_OAUTH_TOKEN"] == ""
-    # 其他 provider 空值覆盖
+    # Other providers overridden with empty values / 其他 provider 空值覆盖
     assert env["ARK_API_KEY"] == ""
     assert env["XAI_API_KEY"] == ""
     assert env["GEMINI_API_KEY"] == ""
@@ -100,7 +108,9 @@ async def test_load_provider_env_overrides_injects_anthropic_and_empties() -> No
 
 @pytest.mark.asyncio
 async def test_build_provider_env_overrides_uses_injected_loader(tmp_path: Path) -> None:
-    """注入 provider_env_loader 时，build_provider_env_overrides 走注入源而非 DB。"""
+    """With provider_env_loader injected, build_provider_env_overrides uses the injected source instead of the DB.
+
+    注入 provider_env_loader 时，build_provider_env_overrides 走注入源而非 DB。"""
     sentinel = {"ANTHROPIC_API_KEY": "injected"}
 
     async def fake_loader():
@@ -112,7 +122,9 @@ async def test_build_provider_env_overrides_uses_injected_loader(tmp_path: Path)
 
 @pytest.mark.asyncio
 async def test_build_threads_injected_deps_into_options(tmp_path: Path) -> None:
-    """build 把注入的 cwd / 凭证 / max_turns 逐一装进 ClaudeAgentOptions。"""
+    """build puts the injected cwd / credentials / max_turns into ClaudeAgentOptions one by one.
+
+    build 把注入的 cwd / 凭证 / max_turns 逐一装进 ClaudeAgentOptions。"""
     projects_root = (tmp_path / "projects").resolve()
 
     async def fake_loader():
@@ -125,14 +137,17 @@ async def test_build_threads_injected_deps_into_options(tmp_path: Path) -> None:
     assert options.env["ANTHROPIC_API_KEY"] == "sk"
     assert options.max_turns == 7
     assert list(options.setting_sources) == _SETTING_SOURCES
-    # file access hook 恒注册
+    # The file access hook is always registered / file access hook 恒注册
     assert "PreToolUse" in options.hooks
-    # sandbox 启用 → sandbox settings 编译进 options
+    # Sandbox enabled: sandbox settings are compiled into options / sandbox 启用 → sandbox settings 编译进 options
     assert options.sandbox.get("enabled") is True
+    # User message replay switch: if missing, the SDK does not replay copies and the identity mapping cannot be built
     # 用户消息回放开关：缺失则 SDK 不回放副本，身份映射无从建立
     assert options.extra_args == {"replay-user-messages": None}
+    # Buffer limit for a single NDJSON line on CLI stdout: the default 1 MiB would be blown by replayed copies of requests with attached images
     # CLI stdout 单条 NDJSON 行的缓冲上限：默认 1 MiB 会被附图请求的回放副本撞穿
     assert options.max_buffer_size == CLI_STDOUT_MAX_BUFFER_BYTES == 32 * 1024 * 1024
+    # Session state frames: while the CLI owes further turns it keeps reporting running, and the session layer uses this to protect the session from disconnection
     # 会话状态帧：CLI 欠后续轮次时一直报 running，会话层据此保护会话不被断开
     assert options.env["CLAUDE_CODE_EMIT_SESSION_STATE_EVENTS"] == "1"
 
@@ -141,7 +156,9 @@ async def test_build_threads_injected_deps_into_options(tmp_path: Path) -> None:
 async def test_build_injects_short_lived_arcreel_api_credentials(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """每次会话 options 都拿到 localhost API 地址与 15 分钟 JWT。"""
+    """Every session's options get the localhost API address and a 15-minute JWT.
+
+    每次会话 options 都拿到 localhost API 地址与 15 分钟 JWT。"""
 
     async def fake_loader():
         return {"ANTHROPIC_API_KEY": "sk"}
@@ -161,7 +178,9 @@ async def test_build_injects_short_lived_arcreel_api_credentials(
 
 @pytest.mark.asyncio
 async def test_build_adds_keep_alive_hook_with_can_use_tool(tmp_path: Path) -> None:
-    """can_use_tool 存在时，keep-alive hook 排在 file access hook 之前。"""
+    """When can_use_tool is present, the keep-alive hook comes before the file access hook.
+
+    can_use_tool 存在时，keep-alive hook 排在 file access hook 之前。"""
 
     async def fake_loader():
         return {}
@@ -186,7 +205,9 @@ async def test_build_adds_keep_alive_hook_with_can_use_tool(tmp_path: Path) -> N
     [("zh", "中文"), ("en", "English"), ("vi", "Tiếng Việt")],
 )
 async def test_build_system_prompt_renders_language_rule_for_locale(tmp_path: Path, locale: str, language: str) -> None:
-    """追加的系统提示按 locale 渲染语言规范，只含语言规范、项目上下文与用户记忆三段。"""
+    """The appended system prompt renders the language rules per locale and contains only three sections: language rules, project context and user memory.
+
+    追加的系统提示按 locale 渲染语言规范，只含语言规范、项目上下文与用户记忆三段。"""
 
     async def fake_loader():
         return {}
@@ -202,13 +223,16 @@ async def test_build_system_prompt_renders_language_rule_for_locale(tmp_path: Pa
         "## 当前项目上下文",
         "## 用户记忆",
     ]
+    # The persona is loaded by the SDK from the content-mode CLAUDE.md and is no longer appended by the server
     # 人设随创作类型 CLAUDE.md 由 SDK 加载，不再由服务端追加
     assert "ArcReel Agent" not in append
 
 
 @pytest.mark.asyncio
 async def test_build_sandbox_disabled_strips_bash(tmp_path: Path) -> None:
-    """sandbox 关闭（Windows 回退）→ Bash 系列剥离出 allowed_tools。"""
+    """Sandbox off (Windows fallback): the Bash family is stripped from allowed_tools.
+
+    sandbox 关闭（Windows 回退）→ Bash 系列剥离出 allowed_tools。"""
 
     async def fake_loader():
         return {}
@@ -227,7 +251,9 @@ async def test_build_sandbox_disabled_strips_bash(tmp_path: Path) -> None:
 async def test_json_pre_validation_hook_keeps_event_loop_running(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """PreToolUse JSON 校验读整份剧本 JSON，必须卸载到线程，否则事件循环被读堵住。"""
+    """PreToolUse JSON validation reads the whole script JSON and must be offloaded to a thread, otherwise the read blocks the event loop.
+
+    PreToolUse JSON 校验读整份剧本 JSON，必须卸载到线程，否则事件循环被读堵住。"""
     project_cwd = tmp_path / "projects" / "demo"
     project_cwd.mkdir(parents=True, exist_ok=True)
     script = project_cwd / "script.json"
@@ -246,7 +272,7 @@ async def test_json_pre_validation_hook_keeps_event_loop_running(
         result = await task
         gate.assert_read_was_offloaded()
 
-    # 替换后仍是合法 JSON → 放行
+    # Still valid JSON after replacement: allow / 替换后仍是合法 JSON → 放行
     assert result == {}
 
 
@@ -254,7 +280,9 @@ async def test_json_pre_validation_hook_keeps_event_loop_running(
 async def test_json_post_validation_hook_keeps_event_loop_running(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """PostToolUse JSON 校验回读落盘结果，必须卸载到线程，否则事件循环被读堵住。"""
+    """PostToolUse JSON validation reads back the written result and must be offloaded to a thread, otherwise the read blocks the event loop.
+
+    PostToolUse JSON 校验回读落盘结果，必须卸载到线程，否则事件循环被读堵住。"""
     project_cwd = tmp_path / "projects" / "demo"
     project_cwd.mkdir(parents=True, exist_ok=True)
     script = project_cwd / "script.json"
@@ -275,7 +303,10 @@ async def test_json_post_validation_hook_keeps_event_loop_running(
 
 @pytest.mark.asyncio
 async def test_build_settings_redirects_auto_memory_to_project_memory_dir(tmp_path: Path) -> None:
-    """settings JSON 把原生 auto memory 重定向到项目记忆目录；sandbox 仍是独立字段，
+    """The settings JSON redirects native auto memory to the project memory directory; sandbox is still a separate field,
+    merged into the same JSON by the SDK when building the command line.
+
+    settings JSON 把原生 auto memory 重定向到项目记忆目录；sandbox 仍是独立字段，
     由 SDK 在拼命令行时并进同一份 JSON。"""
 
     async def fake_loader():
@@ -285,6 +316,7 @@ async def test_build_settings_redirects_auto_memory_to_project_memory_dir(tmp_pa
 
     project_cwd = (tmp_path / "projects").resolve() / "demo"
     assert json.loads(options.settings) == {"autoMemoryDirectory": str(project_memory_dir(project_cwd))}
+    # Explicitly setting autoMemoryEnabled would override the native default; assembly does not touch it
     # 显式设 autoMemoryEnabled 会覆盖原生默认，装配不碰它
     assert "autoMemoryEnabled" not in options.settings
     assert options.sandbox.get("enabled") is True
@@ -292,7 +324,9 @@ async def test_build_settings_redirects_auto_memory_to_project_memory_dir(tmp_pa
 
 @pytest.mark.asyncio
 async def test_append_prompt_carries_user_memory_dir_and_index(tmp_path: Path) -> None:
-    """用户记忆段给出目录绝对路径、两级分流规则与索引全文。"""
+    """The user memory section gives the absolute directory path, the two-level routing rules and the full index.
+
+    用户记忆段给出目录绝对路径、两级分流规则与索引全文。"""
     assembler = _make_assembler(tmp_path)
     memory_dir = DataRootLayout((tmp_path / "projects").resolve()).user_memory_dir(DEFAULT_USER_ID)
     memory_dir.mkdir(parents=True)
@@ -303,6 +337,7 @@ async def test_append_prompt_carries_user_memory_dir_and_index(tmp_path: Path) -
     assert "## 用户记忆" in prompt
     assert memory_dir.as_posix() in prompt
     assert "拿不准留项目记忆" in prompt
+    # The kernel sandbox denies reads and does not allow writes for the user memory directory; memory reads/writes can only go through the built-in file tools
     # 内核沙箱对用户记忆目录拒读且不放行写，记忆读写只能走内置文件工具
     assert "Bash 读写不了该目录" in prompt
     assert "- [配音偏好](voice.md) — 固定用女声" in prompt
@@ -310,7 +345,9 @@ async def test_append_prompt_carries_user_memory_dir_and_index(tmp_path: Path) -
 
 @pytest.mark.asyncio
 async def test_append_prompt_omits_index_when_user_memory_absent(tmp_path: Path) -> None:
-    """目录不存在：段落照给（Agent 要知道该往哪写），索引要点省略，且不建目录。"""
+    """Directory does not exist: the section is still given (the Agent needs to know where to write), the index points are omitted, and no directory is created.
+
+    目录不存在：段落照给（Agent 要知道该往哪写），索引要点省略，且不建目录。"""
     assembler = _make_assembler(tmp_path)
     memory_dir = DataRootLayout((tmp_path / "projects").resolve()).user_memory_dir(DEFAULT_USER_ID)
 
@@ -323,7 +360,9 @@ async def test_append_prompt_omits_index_when_user_memory_absent(tmp_path: Path)
 
 @pytest.mark.asyncio
 async def test_append_prompt_omits_index_when_user_memory_index_blank(tmp_path: Path) -> None:
-    """索引存在但只有空白：省略索引要点，不注入一段空索引。"""
+    """Index exists but is only whitespace: omit the index points instead of injecting an empty index.
+
+    索引存在但只有空白：省略索引要点，不注入一段空索引。"""
     assembler = _make_assembler(tmp_path)
     memory_dir = DataRootLayout((tmp_path / "projects").resolve()).user_memory_dir(DEFAULT_USER_ID)
     memory_dir.mkdir(parents=True)
@@ -337,7 +376,9 @@ async def test_append_prompt_omits_index_when_user_memory_index_blank(tmp_path: 
 
 @pytest.mark.asyncio
 async def test_append_prompt_truncates_user_memory_index_over_line_limit(tmp_path: Path) -> None:
-    """索引超 200 行：只注入前 200 行并附超限提示。"""
+    """Index over 200 lines: inject only the first 200 lines plus an over-limit note.
+
+    索引超 200 行：只注入前 200 行并附超限提示。"""
     assembler = _make_assembler(tmp_path)
     memory_dir = DataRootLayout((tmp_path / "projects").resolve()).user_memory_dir(DEFAULT_USER_ID)
     memory_dir.mkdir(parents=True)
@@ -352,16 +393,20 @@ async def test_append_prompt_truncates_user_memory_index_over_line_limit(tmp_pat
 
 @pytest.mark.asyncio
 async def test_append_prompt_truncates_user_memory_index_over_byte_limit(tmp_path: Path) -> None:
-    """索引行数不超但字节超 25 000：按最后一个换行截断并附超限提示。"""
+    """Index within the line limit but over 25 000 bytes: truncate at the last newline and append an over-limit note.
+
+    索引行数不超但字节超 25 000：按最后一个换行截断并附超限提示。"""
     assembler = _make_assembler(tmp_path)
     memory_dir = DataRootLayout((tmp_path / "projects").resolve()).user_memory_dir(DEFAULT_USER_ID)
     memory_dir.mkdir(parents=True)
+    # 10 lines x 3 000+ bytes each (Chinese is 3 bytes/char) ~ 30 KB, line count well under 200
     # 10 行 × 每行 3 000 余字节（中文 3 字节/字）≈ 30 KB，行数远在 200 以内
     index = "\n".join(f"- 第 {i} 条：" + "记" * 1000 for i in range(10))
     (memory_dir / "MEMORY.md").write_text(index, encoding="utf-8")
 
     prompt = await assembler._build_append_prompt("demo")
 
+    # 25 000 bytes falls within line 9; back off to the previous newline, so the first 8 lines are kept intact
     # 25 000 字节落在第 9 行内，回退到上一个换行 → 前 8 行完整保留
     assert "- 第 7 条：" in prompt
     assert "- 第 8 条：" not in prompt
@@ -370,7 +415,9 @@ async def test_append_prompt_truncates_user_memory_index_over_byte_limit(tmp_pat
 
 @pytest.mark.asyncio
 async def test_append_prompt_omits_index_when_user_memory_index_not_utf8(tmp_path: Path) -> None:
-    """索引不是 UTF-8（用户用别的编码存回）：省略索引要点，会话照常装配。"""
+    """Index is not UTF-8 (the user saved it back in another encoding): omit the index points; the session assembles as usual.
+
+    索引不是 UTF-8（用户用别的编码存回）：省略索引要点，会话照常装配。"""
     assembler = _make_assembler(tmp_path)
     memory_dir = DataRootLayout((tmp_path / "projects").resolve()).user_memory_dir(DEFAULT_USER_ID)
     memory_dir.mkdir(parents=True)
@@ -384,7 +431,9 @@ async def test_append_prompt_omits_index_when_user_memory_index_not_utf8(tmp_pat
 
 @pytest.mark.asyncio
 async def test_append_prompt_omits_user_memory_for_invalid_user_id(tmp_path: Path) -> None:
-    """user_id 不是单个路径段：整段省略，与围栏的 fail-closed 同向。"""
+    """user_id is not a single path segment: omit the whole section, in the same direction as the fence's fail-closed.
+
+    user_id 不是单个路径段：整段省略，与围栏的 fail-closed 同向。"""
     assembler = _make_assembler(tmp_path, user_id="../escape")
 
     prompt = await assembler._build_append_prompt("demo")
@@ -393,6 +442,7 @@ async def test_append_prompt_omits_user_memory_for_invalid_user_id(tmp_path: Pat
     assert "## 语言规范" in prompt
 
 
+# Built-in tools: besides the three read-only ones, covers writing files, running commands, spawning sub-sessions, networking and asking questions.
 #: 内置工具：只读三件之外，涵盖写文件、跑命令、派生子会话、联网与提问。
 _BUILTIN_TOOLS = (
     "Read",
@@ -413,6 +463,7 @@ _BUILTIN_TOOLS = (
     "AskUserQuestion",
 )
 
+# All tools read-only subagents may call: footage review only looks at footage, image review only at images; both can read project files.
 #: 只读子智能体能调用的全部工具：审片只看素材、审图只看图，两者都能读项目文件。
 _READ_ONLY_SUBAGENT_TOOLS = {
     "review-footage": {"Read", "Glob", "Grep", "mcp__arcreel__inspect_video_units"},
@@ -421,7 +472,9 @@ _READ_ONLY_SUBAGENT_TOOLS = {
 
 
 async def _denied_by_pre_tool_use(options, tool_name: str, **context: str) -> bool:
-    """按 SDK 的做法把一次调用依次交给匹配的 PreToolUse hook，任一 hook 拒绝即拒绝。"""
+    """Following the SDK's approach, hand one call to the matching PreToolUse hooks in turn; if any hook denies, it is denied.
+
+    按 SDK 的做法把一次调用依次交给匹配的 PreToolUse hook，任一 hook 拒绝即拒绝。"""
 
     payload = {"hook_event_name": "PreToolUse", "tool_name": tool_name, "tool_input": {}, **context}
     for matcher in options.hooks["PreToolUse"]:
@@ -437,7 +490,9 @@ async def _denied_by_pre_tool_use(options, tool_name: str, **context: str) -> bo
 @pytest.mark.asyncio
 @pytest.mark.parametrize("agent_type", sorted(_READ_ONLY_SUBAGENT_TOOLS))
 async def test_read_only_subagents_cannot_call_any_tool_beyond_reading(tmp_path: Path, agent_type: str) -> None:
-    """只读子智能体只能看图与读文件：任何写入、命令、派生、生成与其余 ArcReel 工具都在 PreToolUse 被拒。"""
+    """Read-only subagents can only view images and read files: any write, command, spawn, generation and all other ArcReel tools are denied at PreToolUse.
+
+    只读子智能体只能看图与读文件：任何写入、命令、派生、生成与其余 ArcReel 工具都在 PreToolUse 被拒。"""
 
     async def fake_loader():
         return {}

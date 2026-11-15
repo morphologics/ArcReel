@@ -1,4 +1,6 @@
-"""env_keys 模块集合不变量测试。"""
+"""Set invariant tests for the env_keys module.
+
+env_keys 模块集合不变量测试。"""
 
 from __future__ import annotations
 
@@ -11,7 +13,9 @@ from lib.config.env_keys import (
 
 
 def test_provider_secret_keys_is_subset_of_all_provider_keys():
-    """密钥集合必须在「其他 provider env」的并集中（防漏列）。"""
+    """The secret key set must be within the union of the "other provider env" sets (guards against omissions).
+
+    密钥集合必须在「其他 provider env」的并集中（防漏列）。"""
     for k in PROVIDER_SECRET_KEYS:
         if k == "ANTHROPIC_API_KEY":
             assert k in ANTHROPIC_ENV_KEYS
@@ -20,7 +24,12 @@ def test_provider_secret_keys_is_subset_of_all_provider_keys():
 
 
 def test_openai_api_key_in_secret_lists():
-    """OpenAI 是内置 provider，其 SDK 在 api_key 缺省时回落读 OPENAI_API_KEY，
+    """OpenAI is a built-in provider whose SDK falls back to reading OPENAI_API_KEY when api_key is not given,
+    so this key must be on the fail-fast list. OPENAI_API_KEY is pinned explicitly as a regression guard:
+    if it is accidentally removed from PROVIDER_SECRET_KEYS this assertion fails directly, whereas the parametrized startup assertion
+    test would only silently shrink its coverage. Its presence in OTHER_PROVIDER_ENV_KEYS is guaranteed by the subset invariant above.
+
+    OpenAI 是内置 provider，其 SDK 在 api_key 缺省时回落读 OPENAI_API_KEY，
     因此该密钥必须进入 fail-fast 名单。显式 pin OPENAI_API_KEY 作回归守卫：
     若它被从 PROVIDER_SECRET_KEYS 误删，此断言会直接失败，而参数化的启动断言
     测试只会静默缩小覆盖。其在 OTHER_PROVIDER_ENV_KEYS 的存在由上方子集不变量保证。"""
@@ -28,7 +37,12 @@ def test_openai_api_key_in_secret_lists():
 
 
 def test_openai_nonsecret_env_fallbacks_in_override_list():
-    """OpenAI SDK 在 client 未显式传值时会回落读的非密钥 env 旋钮（base_url /
+    """Non-secret env knobs the OpenAI SDK falls back to reading when the client is not given a value explicitly (base_url /
+    org / project / custom headers) are not on the fail-fast secret list, but must be included as a whole group in the
+    SDK subprocess env override list: they are not named like secrets, _SECRET_ENV_NAME_PATTERNS cannot catch them,
+    so only the static list can strip them.
+
+    OpenAI SDK 在 client 未显式传值时会回落读的非密钥 env 旋钮（base_url /
     org / project / custom headers），均不进 fail-fast 密钥名单，但须整组纳入
     SDK 子进程 env 覆盖名单——它们非密钥命名，_SECRET_ENV_NAME_PATTERNS 兜不到，
     只能靠静态名单剥离。"""
@@ -38,7 +52,9 @@ def test_openai_nonsecret_env_fallbacks_in_override_list():
 
 
 def test_anthropic_keys_complete():
-    """ANTHROPIC_ENV_KEYS 必须覆盖 SDK 子进程读取的全部 ANTHROPIC_* + CLAUDE_CODE_*。"""
+    """ANTHROPIC_ENV_KEYS must cover all ANTHROPIC_* + CLAUDE_CODE_* read by the SDK subprocess.
+
+    ANTHROPIC_ENV_KEYS 必须覆盖 SDK 子进程读取的全部 ANTHROPIC_* + CLAUDE_CODE_*。"""
     required = {
         "ANTHROPIC_API_KEY",
         "ANTHROPIC_BASE_URL",
@@ -52,7 +68,9 @@ def test_anthropic_keys_complete():
 
 
 def test_claude_auth_tokens_are_isolated_with_correct_secret_scope():
-    """Claude 旁路认证令牌必须隔离；仅 Anthropic token 触发启动拒绝。"""
+    """Claude bypass auth tokens must be isolated; only the Anthropic token triggers startup rejection.
+
+    Claude 旁路认证令牌必须隔离；仅 Anthropic token 触发启动拒绝。"""
     for key in ("ANTHROPIC_AUTH_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN"):
         assert key in OTHER_PROVIDER_ENV_KEYS
         assert is_provider_env_key(key)

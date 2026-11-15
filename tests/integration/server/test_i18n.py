@@ -1,4 +1,7 @@
-"""请求级显示名目录：路由依赖加载失败时退回内置名称，不改变路由自身的响应。"""
+"""Request-level display name catalog: when the route dependency fails to load, fall back to built-in names
+without changing the route's own response.
+
+请求级显示名目录：路由依赖加载失败时退回内置名称，不改变路由自身的响应。"""
 
 from collections.abc import AsyncIterator
 

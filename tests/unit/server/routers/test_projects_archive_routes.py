@@ -288,12 +288,16 @@ class TestProjectArchiveRoutes:
 
 
 def _has_cjk(payload: object) -> bool:
-    """响应体里是否残留中日韩表意文字——en/vi 请求下的诊断文案不应命中。"""
+    """Whether CJK ideographs remain in the response body: diagnostic messages for en/vi requests should not match.
+
+    响应体里是否残留中日韩表意文字——en/vi 请求下的诊断文案不应命中。"""
     return bool(re.search(r"[一-鿿]", json.dumps(payload, ensure_ascii=False)))
 
 
 class TestProjectArchiveDiagnosticsLocalization:
-    """归档导入/导出诊断按 Accept-Language 渲染（结构化消息在 router 边界成文）。"""
+    """Archive import/export diagnostics render per Accept-Language (structured messages become text at the router boundary).
+
+    归档导入/导出诊断按 Accept-Language 渲染（结构化消息在 router 边界成文）。"""
 
     def test_import_failure_payload_uses_request_locale(self, tmp_path, monkeypatch):
         pm = ProjectManager(tmp_path / "projects")
@@ -360,7 +364,9 @@ class TestProjectArchiveDiagnosticsLocalization:
 
 
 async def test_export_cancelled_while_packing_leaves_no_archive(tmp_path, monkeypatch):
-    """打包进行中被取消：等线程打包完再传播取消，调用方按登记回收 zip。"""
+    """Cancelled while packing: wait for the thread to finish packing before propagating the cancel; the caller reclaims the zip per registration.
+
+    打包进行中被取消：等线程打包完再传播取消，调用方按登记回收 zip。"""
     started = threading.Event()
     release = threading.Event()
     packed = threading.Event()

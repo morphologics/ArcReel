@@ -1,4 +1,12 @@
-"""参考生视频单元正文的贯穿验收：v8 项目 → v9 迁移 → 两条写路径 → 真实生成请求投影。
+"""End-to-end acceptance of reference-to-video unit body text: v8 project -> v9 migration -> two write paths -> real
+generation request projection.
+
+Covers one full seam: after the old on-disk shape (``shots[]`` + ``references[]``) migrates to the body-text form,
+REST and the Agent script tools read and write the same body text, while the reference image set is derived at
+projection in order of first mention of ``@[name]`` in the body -- nothing persisted holds a reference list that
+could diverge from the body.
+
+参考生视频单元正文的贯穿验收：v8 项目 → v9 迁移 → 两条写路径 → 真实生成请求投影。
 
 覆盖一条完整的缝：磁盘上的旧形状（``shots[]`` + ``references[]``）迁到正文形态后，REST 与
 Agent 剧本工具读写的是同一份正文，而参考图集合按正文里 ``@[名称]`` 的首次提及顺序在投影时
@@ -37,6 +45,8 @@ _TINY_PNG = (
 _SCRIPT_FILE = "episode_1.json"
 _UNIT_ID = "E1U1"
 _UNIT_DURATION = 8
+#: The provider capability stand-in's tiers include the units' planned durations, so the projection produces no
+#: tier-change confirmation problems.
 #: 供应商能力替身的档位含单元编排时长，投影因此不产生改档确认类问题。
 _SUPPORTED_DURATIONS = (4, 8, 12)
 
@@ -51,7 +61,9 @@ def _read_json(path: Path) -> dict[str, Any]:
 
 
 class _Acceptance:
-    """一个已迁到 v9 的参考生视频项目，连同它的 REST 客户端与 Agent 工具上下文。"""
+    """A reference-to-video project already migrated to v9, together with its REST client and Agent tool context.
+
+    一个已迁到 v9 的参考生视频项目，连同它的 REST 客户端与 Agent 工具上下文。"""
 
     def __init__(
         self,
@@ -101,7 +113,10 @@ class _Acceptance:
         return outcome.value
 
     async def project_request(self, unit_id: str = _UNIT_ID):
-        """按磁盘上的当前正文投影一次真实生成请求（仅替换供应商能力查询）。"""
+        """Project one real generation request from the current body text on disk (replacing only the provider capability
+        lookup).
+
+        按磁盘上的当前正文投影一次真实生成请求（仅替换供应商能力查询）。"""
         projector = fake_reference_request_projector(durations=_SUPPORTED_DURATIONS)
         return await projector(
             project=self.pm.load_project("demo"),
@@ -154,6 +169,8 @@ def acceptance(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> _Acceptance:
             "陆沉": {"description": "旧友", "character_sheet": "characters/陆沉.png"},
         }
         project["products"] = {
+            # A product without a sheet: at execution all its registered original images are injected, and it is not moved to
+            # the front because of its type.
             # 无资产图的商品：执行期注入它登记的全部原图，且不因类型排到最前。
             "灵犀手环": {
                 "description": "银色腕表",
@@ -161,6 +178,8 @@ def acceptance(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> _Acceptance:
             },
         }
         project["episodes"] = [{"episode": 1, "title": "雨夜", "script_file": f"scripts/{_SCRIPT_FILE}"}]
+        # The migration entry decides whether to rewrite by the persisted version, so roll the project back to the old shape
+        # and run the whole chain.
         # 迁移入口按落盘版本决定是否改写，故把项目退回旧形态再跑整条链。
         project["schema_version"] = 8
 
@@ -185,6 +204,7 @@ def acceptance(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> _Acceptance:
         },
     )
     _write_json(
+        # The v8 project's drafts still have the names from before the v9->v10 rename.
         # v8 项目的草稿仍是 v9→v10 改名前的名字。
         episode_drafts_dir(project_dir, 1) / "step1_reference_units.json",
         {
@@ -225,7 +245,9 @@ def acceptance(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> _Acceptance:
 
 
 def test_migrated_body_is_the_only_shape_rest_serves(acceptance: _Acceptance) -> None:
-    """迁移后剧本与草稿都只剩正文，REST 读到的正是磁盘上那一段。"""
+    """After migration both script and drafts have only body text, and REST reads exactly that segment on disk.
+
+    迁移后剧本与草稿都只剩正文，REST 读到的正是磁盘上那一段。"""
     project = _read_json(acceptance.project_dir / "project.json")
     assert project["schema_version"] == CURRENT_PROJECT_SCHEMA_VERSION
 
@@ -244,7 +266,10 @@ def test_migrated_body_is_the_only_shape_rest_serves(acceptance: _Acceptance) ->
 
 
 async def test_rest_and_agent_tool_write_the_same_body(acceptance: _Acceptance) -> None:
-    """两条写路径读写同一份正文：后写的覆盖先写的，落盘与 REST 始终同形。"""
+    """The two write paths read and write the same body text: the later write overwrites the earlier, and disk and REST
+    always have the same shape.
+
+    两条写路径读写同一份正文：后写的覆盖先写的，落盘与 REST 始终同形。"""
     rest_body = "@[陆沉] 收伞进门"
     patched = acceptance.patch_body_over_rest(rest_body)
     assert patched["text"] == rest_body
@@ -316,7 +341,10 @@ async def test_body_shape_drives_the_reference_images_of_the_real_request(
 async def test_unresolved_mention_warns_in_the_editor_but_blocks_the_generation(
     acceptance: _Acceptance,
 ) -> None:
-    """未登记的 ``@[名称]`` 在编辑器仍只警告，到生成入口阻断并列出名称。"""
+    """An unregistered ``@[name]`` still only warns in the editor, but blocks at the generation entry and lists the
+    names.
+
+    未登记的 ``@[名称]`` 在编辑器仍只警告，到生成入口阻断并列出名称。"""
     body = "@[无名氏] 从巷口走过，@[阿离] 回头"
     acceptance.patch_body_over_rest(body)
 
@@ -327,5 +355,7 @@ async def test_unresolved_mention_warns_in_the_editor_but_blocks_the_generation(
     blockers = [problem for problem in projection.problems if problem.blocking]
     assert [problem.code for problem in blockers] == ["reference_asset_unregistered"]
     assert blockers[0].parameters()["missing_text"] == "无名氏"
+    # Other mentions resolve as usual: what is blocked is this request, not dropping the registered references along
+    # with it.
     # 其余提及照常解析：阻断的是这次请求，不是把已登记的引用一并丢掉。
     assert [asset.path.name for asset in projection.request_assets] == ["阿离.png"]
