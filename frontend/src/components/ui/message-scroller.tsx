@@ -40,6 +40,9 @@ function MessageScrollerViewport({
   return (
     <MessageScrollerPrimitive.Viewport
       data-slot="message-scroller-viewport"
+      // Drop upstream's scrollbar-thin and the thumb hiding during auto-scroll: once an element sets scrollbar-width / scrollbar-color,
+      // Chromium no longer uses the unified scrollbar style from index.css. Add relative: the scroll container must be a positioned element.
+      // Scroll following is handled by the primitive; disable browser anchoring so upward compensation when async content shrinks isn't mistaken for the user scrolling up.
       // 去掉上游的 scrollbar-thin 与自动滚动时隐藏滑块：元素一旦设置 scrollbar-width / scrollbar-color，
       // Chromium 就不再使用 index.css 里统一的滚动条样式。补 relative：滚动容器须是定位元素。
       // 滚动跟随由原语负责；禁用浏览器锚定，避免异步正文缩短时向上补偿被原语误判为用户上翻。
@@ -59,6 +62,7 @@ function MessageScrollerContent({
   return (
     <MessageScrollerPrimitive.Content
       data-slot="message-scroller-content"
+      // Message spacing and padding live in the primitive (callers don't change spacing): the only user is the Agent panel, where each message carries an action row with a permanent line height
       // 消息间距与内边距收在原语里（调用处不改间距）：唯一的使用处是 Agent 面板，每条消息自带一行常驻行高的操作行
       className={cn("flex h-max min-h-full flex-col gap-3 px-3 py-4", className)}
       {...props}
@@ -76,6 +80,7 @@ function MessageScrollerItem({
       data-slot="message-scroller-item"
       scrollAnchor={scrollAnchor}
       className={cn(
+        // On-demand Markdown rendering changes off-screen item heights; keep real layout so stick-to-bottom following uses the full content height.
         // Markdown 按需渲染会改变离屏项高度；保持真实排版，使贴底跟随使用完整内容高度。
         "min-w-0 shrink-0",
         className
@@ -104,6 +109,9 @@ function MessageScrollerButton({
       data-size={size}
       direction={direction}
       className={cn(
+        // Enter/exit use this repo's duration and easing tokens: upstream's 400ms exit exceeds the 300ms UI motion limit;
+        // "Jump to latest" is a round icon button, distinct from the square buttons in the input area; when hidden it only shifts within the margin;
+        // upstream shifting by the full button height would leave the root's overflow-hidden, and the overflow probe would flag content as clipped
         // 进出场改用本仓库的时长与缓动 token：上游退场 400ms 超过界面动效 300ms 的上限；
         // 「跳到最新」是圆形图标按钮，与输入区的方形按钮区分开；隐藏时只在边距内位移，
         // 上游位移整个按钮高度会越出根节点的 overflow-hidden，溢出探针判为内容被裁切

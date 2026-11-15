@@ -4,13 +4,16 @@ import { Button } from "@/components/ui/button";
 import type { EndpointInstallation } from "@/types";
 import { MarketInstallBadges } from "../market/MarketInstallBadges";
 
-/** 两轴状态徽标；不是从市场安装的端点不显示。两种 kind 的详情页头共用。 */
+/** Two-axis status badges; not shown for endpoints not installed from the market. Shared by the detail headers of both kinds. / 两轴状态徽标；不是从市场安装的端点不显示。两种 kind 的详情页头共用。 */
 export function EndpointInstallBadges({ installation }: { installation: EndpointInstallation | null }) {
   if (installation === null) return null;
   return <MarketInstallBadges state={installation.state} modified={installation.modified} />;
 }
 
 /**
+ * Source description of the install record: when the source is deleted only the raw canonical key remains; disabled or deleted is noted.
+ * Not shown for endpoints not installed from the market. Shared by the detail headers of both kinds.
+ *
  * 安装记录的来源描述：来源被删除时只剩规范键原文，禁用或删除都注明。
  * 不是从市场安装的端点不显示。两种 kind 的详情页头共用。
  */
@@ -28,6 +31,9 @@ export function MarketOrigin({ installation }: { installation: EndpointInstallat
 }
 
 /**
+ * "Update" in the detail action row: only appears when the market axis is updatable; on click the parent fetches entry details and opens the install dialog's update state.
+ * Spins and is disabled while entry details load.
+ *
  * 详情动作行的「更新」：只在市场轴可更新时出现，点击后由上层拉取条目详情并打开安装弹窗的更新态。
  * 条目详情加载期间转圈并禁用。
  */

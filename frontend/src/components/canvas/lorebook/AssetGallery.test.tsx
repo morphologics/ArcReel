@@ -159,6 +159,7 @@ describe("AssetGallery", () => {
     const user = userEvent.setup();
     renderGallery();
     const menu = await openMenu(user, "庭院");
+    // After the menu opens, the scene is occupied by an Agent enqueue; the menu should disable write entries immediately.
     // 菜单打开之后，该场景被 Agent 入队占用，菜单应即时禁用写入入口。
     act(() => useTasksStore.setState({
       tasks: [makeTask({ project_name: "demo", task_type: "scene", media_type: "image", resource_id: "庭院", status: "running" })],
@@ -366,6 +367,7 @@ describe("AssetGallery", () => {
       });
       renderGallery();
 
+      // A sheet is being uploaded on the card of the kept side, "Study"
       // 保留方「书房」的卡片上正在上传资产图
       const target = screen.getByRole("article", { name: "书房" });
       const file = new File(["sheet"], "scene.png", { type: "image/png" });
@@ -415,6 +417,7 @@ describe("AssetGallery", () => {
     async function openViewer(user: ReturnType<typeof userEvent.setup>, name: string) {
       await user.click(within(await openMenu(user, name)).getByRole("menuitem", { name: "查看大图" }));
       const viewer = await screen.findByRole("dialog", { name });
+      // Closing the menu returns focus to the trigger button; wait for the viewer to take focus before acting
       // 菜单关闭时会把焦点还给触发按钮，等查看器接过焦点再操作
       await waitFor(() => expect(viewer).toContainElement(document.activeElement as HTMLElement));
       return viewer;
@@ -426,6 +429,7 @@ describe("AssetGallery", () => {
 
       let viewer = await openViewer(user, "庭院");
       expect(within(viewer).getByText("1 / 2")).toBeInTheDocument();
+      // The study has no sheet, -> jump straight to the bedroom
       // 书房没有资产图，→ 直接跳到卧室
       await user.keyboard("{ArrowRight}");
       viewer = await screen.findByRole("dialog", { name: "卧室" });
@@ -498,6 +502,7 @@ describe("AssetGallery", () => {
       renderGallery();
       const viewer = await openViewer(user, "庭院");
       const current = within(viewer).getByRole("img", { name: "「庭院」的资产图，第 2 版" });
+      // The large image area (the version strip has its own thumbnails)
       // 大图区域（版本条另有缩略图）
       const stage = current.closest("span")?.parentElement as HTMLElement;
       fireEvent.load(current);
@@ -505,6 +510,7 @@ describe("AssetGallery", () => {
       await user.click(await within(viewer).findByRole("button", { name: "第 1 版" }));
       fireEvent.error(within(viewer).getByRole("img", { name: "「庭院」的资产图，第 1 版" }));
 
+      // Version 1 cannot be read: show a placeholder; version 2's picture must not pose as version 1
       // 第 1 版读不出来：显示占位，不能让第 2 版的画面冒充第 1 版
       expect(stage.querySelector("img")).toBeNull();
     });

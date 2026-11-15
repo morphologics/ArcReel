@@ -10,7 +10,7 @@ interface PromptFieldSelectProps<T extends string> {
   disabled?: boolean;
 }
 
-/** 结构化提示词里的枚举字段（景别、镜头运动）：左侧标签、右侧下拉，放在 `PromptFieldGrid` 的两列里。 */
+/** Enum field in a structured prompt (shot size, camera movement): label on the left, dropdown on the right, placed in the two columns of `PromptFieldGrid`. / 结构化提示词里的枚举字段（景别、镜头运动）：左侧标签、右侧下拉，放在 `PromptFieldGrid` 的两列里。 */
 export function PromptFieldSelect<T extends string>({
   label,
   value,

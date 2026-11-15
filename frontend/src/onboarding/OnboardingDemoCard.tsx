@@ -1,4 +1,13 @@
 /**
+ * "Sample project" section in the lobby during the tour (the step 6 anchor is on the demo card).
+ *
+ * It uses the lobby's real `ProjectCard`, only switched to read-only: the claim "this is what a project looks like as it progresses" stays true over time only if the demo card and
+ * the real card share one implementation. The section sits above the project grid or empty state, with a note beside the title that it only shows during the tour,
+ * making clear it is not the user's own project.
+ *
+ * Mounted only while the tour runs: the caller renders it per the store's `active`; on exit only this section unmounts,
+ * the grid and empty state below are unaffected.
+ *
  * 引导期间大厅里的「示例项目」区块（第 6 步的锚点在演示卡上）。
  *
  * 用的是大厅真实的 `ProjectCard`，只切到只读形态：「项目推进后长这样」这句话只有在演示卡与

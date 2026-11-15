@@ -17,7 +17,7 @@ class CatchError extends Component<{ children: ReactNode }, { message: string | 
   }
 }
 
-/** 模拟一次真正离开页面的刷新：派发未被拦下的 beforeunload。 */
+/** Simulate a refresh that really leaves the page: dispatch a beforeunload that is not blocked. / 模拟一次真正离开页面的刷新：派发未被拦下的 beforeunload。 */
 function unloadingReload() {
   return vi.fn(() => {
     window.dispatchEvent(new Event("beforeunload", { cancelable: true }));
@@ -50,6 +50,7 @@ describe("lazyNamed", () => {
 
   it("reloads the page once and keeps the fallback while the page unloads", async () => {
     vi.useFakeTimers();
+    // No leave guard: beforeunload is not blocked and the page is leaving
     // 无离开拦截：beforeunload 未被拦下，页面正在离开
     const reload = unloadingReload();
     const load = vi.fn().mockRejectedValue(new Error("chunk 404"));
@@ -61,6 +62,7 @@ describe("lazyNamed", () => {
     renderLazy(<LazyGreeting name="arc" />);
 
     await vi.waitFor(() => expect(reload).toHaveBeenCalledTimes(1));
+    // Run through the "refresh was blocked" detection time, confirming the page stays on the placeholder while leaving
     // 走完「刷新被拦下」的判定时长，确认页面离开期间仍停在占位上
     await act(() => vi.advanceTimersByTimeAsync(10));
     expect(screen.getByText("loading")).toBeInTheDocument();
@@ -68,6 +70,7 @@ describe("lazyNamed", () => {
   });
 
   it("surfaces the error and clears the mark when a leave prompt keeps the page", async () => {
+    // Unsaved changes: the leave guard calls preventDefault, and the user chooses to stay in the browser prompt
     // 有未保存修改：离开拦截 preventDefault，用户在浏览器提示里选择留下
     const keepPage = (event: Event) => event.preventDefault();
     window.addEventListener("beforeunload", keepPage);
@@ -101,6 +104,7 @@ describe("lazyNamed", () => {
     await vi.waitFor(() => expect(reload).toHaveBeenCalledTimes(1));
     unmount();
 
+    // The new page after refresh: fails again within the same session
     // 刷新后的新页面：同一会话内再次失败
     const LazyGreeting = lazyNamed<"Greeting", { name: string }>(
       () => Promise.reject(new Error("chunk still 404")),
@@ -114,7 +118,7 @@ describe("lazyNamed", () => {
     expect(reload).toHaveBeenCalledTimes(1);
   });
 
-  /** 一次失败的加载触发刷新后卸载，模拟刷新后的新页面。 */
+  /** A failed load triggers a refresh and then unmounts, simulating the new page after refresh. / 一次失败的加载触发刷新后卸载，模拟刷新后的新页面。 */
   async function failOnceAndReload(reload: () => void, name: "Greeting" | "Farewell" = "Greeting") {
     const Broken = lazyNamed<typeof name, { name: string }>(() => Promise.reject(new Error("chunk 404")), name, {
       reload,
@@ -138,6 +142,7 @@ describe("lazyNamed", () => {
   });
 
   it("keeps the reload guard when only a different chunk loads", async () => {
+    // After refresh other chunks such as the tour load as usual, and the failed route chunk still cannot be fetched: must not refresh again
     // 刷新后引导等别的 chunk 照常加载，失败的路由 chunk 依旧拉不到：不得再次刷新
     const reload = unloadingReload();
     await failOnceAndReload(reload);

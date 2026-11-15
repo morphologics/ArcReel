@@ -3,6 +3,12 @@ import { createParser } from "eventsource-parser";
 import i18n from "@/i18n";
 
 /**
+ * Streaming client consuming `text/event-stream` with `fetch`.
+ *
+ * The browser's native `EventSource` can't carry an `Authorization` header, so this connects with `fetch` and its own headers,
+ * and itself takes on the two things `EventSource` provides: automatic reconnection with exponential backoff after disconnects, and sending
+ * `Last-Event-ID` on reconnect so the server resumes from the cursor. Headers are re-fetched on every reconnect, so refreshed credentials take effect naturally.
+ *
  * 以 `fetch` 消费 `text/event-stream` 的流式客户端。
  *
  * 浏览器原生 `EventSource` 带不了 `Authorization` header，这里用 `fetch` 自带 header 建连，
@@ -11,7 +17,7 @@ import i18n from "@/i18n";
  */
 
 export interface SseMessage {
-  /** 服务端 `event:` 字段；未声明时与浏览器行为一致，视为 `message`。 */
+  /** The server's `event:` field; when undeclared, same as browser behavior, treated as `message`. / 服务端 `event:` 字段；未声明时与浏览器行为一致，视为 `message`。 */
   event: string;
   data: string;
   id?: string;
@@ -19,7 +25,7 @@ export interface SseMessage {
 
 export class SseStreamError extends Error {
   readonly status: number | null;
-  /** false 表示服务端明确拒绝（认证失败、资源不存在等），客户端不再重连。 */
+  /** false means the server explicitly refused (auth failure, resource not found, etc.), and the client won't reconnect. / false 表示服务端明确拒绝（认证失败、资源不存在等），客户端不再重连。 */
   readonly retryable: boolean;
 
   constructor(message: string, options: { status?: number | null; retryable: boolean; cause?: unknown }) {
@@ -32,30 +38,30 @@ export class SseStreamError extends Error {
 
 export interface SseStreamOptions {
   url: string;
-  /** 每次建连前调用，返回附加的请求头（凭证、语言等）。 */
+  /** Called before each connection, returning extra request headers (credentials, language, etc.). / 每次建连前调用，返回附加的请求头（凭证、语言等）。 */
   headers?: () => HeadersInit;
   onMessage: (message: SseMessage) => void;
-  /** 每次成功建立连接（含重连）后调用一次。 */
+  /** Called once after each successful connection (including reconnects). / 每次成功建立连接（含重连）后调用一次。 */
   onOpen?: () => void;
-  /** 连接失败或中断时调用；`error.retryable` 为 true 时随后按退避重连。 */
+  /** Called when the connection fails or is interrupted; when `error.retryable` is true, a backoff reconnect follows. / 连接失败或中断时调用；`error.retryable` 为 true 时随后按退避重连。 */
   onError?: (error: SseStreamError) => void;
-  /** 首次退避延迟（毫秒），服务端 `retry:` 字段可覆盖。 */
+  /** Initial backoff delay (ms); can be overridden by the server's `retry:` field. / 首次退避延迟（毫秒），服务端 `retry:` 字段可覆盖。 */
   initialRetryDelayMs?: number;
   maxRetryDelayMs?: number;
 }
 
 export interface SseStreamHandle {
-  /** 关闭连接并停止重连；幂等。 */
+  /** Close the connection and stop reconnecting; idempotent. / 关闭连接并停止重连；幂等。 */
   close(): void;
   readonly closed: boolean;
-  /** 最近一次收到的事件 id，重连时作为 `Last-Event-ID` 发送。 */
+  /** The most recently received event id, sent as `Last-Event-ID` on reconnect. / 最近一次收到的事件 id，重连时作为 `Last-Event-ID` 发送。 */
   readonly lastEventId: string | null;
 }
 
 const DEFAULT_INITIAL_RETRY_DELAY_MS = 1000;
 const DEFAULT_MAX_RETRY_DELAY_MS = 30_000;
 
-/** 这些状态是服务端对请求本身的否定，重试不会改变结果。 */
+/** These statuses are the server rejecting the request itself; retrying won't change the result. / 这些状态是服务端对请求本身的否定，重试不会改变结果。 */
 const NON_RETRYABLE_STATUSES = new Set([400, 401, 403, 404, 410]);
 
 function isAbortError(error: unknown): boolean {
@@ -94,6 +100,10 @@ export function openSseStream(options: SseStreamOptions): SseStreamHandle {
   };
 
   /**
+   * Long connections in background tabs are often cut by the system or proxies, and repeated reconnect failures in the background push backoff to its cap. When the user switches back,
+   * preempt the remaining wait and reset backoff to zero: returning to the foreground is a strong signal that "network conditions changed", and waiting out the remaining tens of seconds would only
+   * leave the page on stale data. Does nothing while connecting or connected (`retryTimer` empty).
+   *
    * 后台标签页的长连接常被系统或代理断开，重连在后台反复失败会把退避推到上限。用户切回时
    * 抢占剩余等待并把退避归零：切回前台是「网络条件已变」的强信号，等待剩下的几十秒只会让
    * 页面继续停在旧数据上。连接中或已连接（`retryTimer` 为空）时不做任何事。
@@ -109,7 +119,7 @@ export function openSseStream(options: SseStreamOptions): SseStreamHandle {
 
   const visibilityHost = typeof document === "undefined" ? null : document;
 
-  /** 两条终态路径共用：`close()` 与不可重试的失败都必须摘掉监听，否则句柄已死仍挂在 `document` 上。 */
+  /** Shared by both terminal paths: `close()` and non-retryable failures must both remove the listener, otherwise a dead handle stays attached to `document`. / 两条终态路径共用：`close()` 与不可重试的失败都必须摘掉监听，否则句柄已死仍挂在 `document` 上。 */
   const stopWatchingVisibility = () => {
     visibilityHost?.removeEventListener("visibilitychange", handleVisibilityChange);
   };
@@ -127,11 +137,14 @@ export function openSseStream(options: SseStreamOptions): SseStreamHandle {
 
   const consume = async (body: ReadableStream<Uint8Array>, signal: AbortSignal) => {
     const parser = createParser({
+      // Per the EventSource spec: an id in a block without data still updates the resume position; an empty id clears it, and reconnects no longer send the header.
       // 按 EventSource 规范：不带 data 的块里的 id 同样更新续传位置；空 id 清空续传位置，重连不再带头。
       onId(id) {
         lastEventId = id === "" ? null : id;
       },
       onEvent(message) {
+        // Only receiving an event proves this connection really works, and backoff resets from then on. Resetting on 2xx response headers alone,
+        // a bad proxy that "accepts the connection then immediately drops the stream" would keep every reconnect at the first backoff step, and the client would reconnect every second endlessly.
         // 收到事件才算这条连接真的可用，退避从此归零。只按 2xx 响应头归零的话，
         // 「接受连接后立刻断流」的坏代理会让每次重连都停留在首个退避档，客户端按秒重连不止。
         attempt = 0;
@@ -148,6 +161,7 @@ export function openSseStream(options: SseStreamOptions): SseStreamHandle {
         const { value, done } = await reader.read();
         if (done) break;
         parser.feed(decoder.decode(value, { stream: true }));
+        // The connection may be closed inside an event-handling callback; after closing, don't parse further chunks.
         // 连接可能在处理事件的回调里被关闭；关闭后不再解析后续分块。
         if (closed) break;
       }
@@ -170,6 +184,8 @@ export function openSseStream(options: SseStreamOptions): SseStreamHandle {
     }
     if (closed) return;
     if (!response.ok || !response.body) {
+      // A refused response's body won't be read, so cancel first to release the connection: retryable statuses reconnect repeatedly with backoff,
+      // and leaving an unconsumed stream each time would hold the connection until GC.
       // 拒绝响应的响应体不会被读取，先取消释放连接：可重试状态会按退避反复重连，
       // 每次留一条未消费的流会把连接占住直到 GC。
       void response.body?.cancel().catch(() => {});
@@ -187,6 +203,7 @@ export function openSseStream(options: SseStreamOptions): SseStreamHandle {
       return;
     }
     if (closed) return;
+    // The server closed the stream normally: like EventSource, treat it as a disconnect and reconnect with backoff.
     // 服务端正常关流：与 EventSource 一致，视为断线并按退避重建。
     fail(new SseStreamError(i18n.t("errors:event_stream_ended"), { retryable: true }));
   };

@@ -8,6 +8,8 @@ import { useActiveResourceIds } from "@/stores/tasks-store";
 import type { AssetSheetStatusRow, AssetSheetType } from "@/types";
 
 /**
+ * Batch entry "Generate pending X (N)" on the gallery toolbar; next to it notes how many others will not generate because they lack a description.
+ *
  * 画廊工具栏上的「生成待生成的 X（N）」批量入口；旁边注明另有几个因缺描述不会生成。
  */
 export function AssetSheetBatchControls({

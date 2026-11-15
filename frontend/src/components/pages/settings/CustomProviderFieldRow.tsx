@@ -2,15 +2,15 @@ import { useId, type ReactNode } from "react";
 
 interface FieldRowProps {
   label: ReactNode;
-  /** 单个控件：标签用 `<label htmlFor>` 关联它。 */
+  /** A single control: the label links to it via `<label htmlFor>`. / 单个控件：标签用 `<label htmlFor>` 关联它。 */
   htmlFor?: string;
-  /** 一行里有多个控件（如价格）：整行作为以标签命名的 group，控件各自带 `aria-label`。 */
+  /** Multiple controls in one row (e.g. price): the row is a group named by the label, each control with its own `aria-label`. / 一行里有多个控件（如价格）：整行作为以标签命名的 group，控件各自带 `aria-label`。 */
   group?: boolean;
   hint?: ReactNode;
   children: ReactNode;
 }
 
-/** 自定义供应商表单的一行属性：左侧是共用宽度的标签列，右侧是控件与说明。 */
+/** One property row of the custom provider form: a shared-width label column on the left, control and note on the right. / 自定义供应商表单的一行属性：左侧是共用宽度的标签列，右侧是控件与说明。 */
 export function FieldRow({ label, htmlFor, group, hint, children }: FieldRowProps) {
   const labelId = useId();
   return (
@@ -36,7 +36,7 @@ export function FieldRow({ label, htmlFor, group, hint, children }: FieldRowProp
   );
 }
 
-/** 控件下方的一行说明；`tone="warn"` 用于格式错误等需要用户修改的提示。 */
+/** A note line under the control; `tone="warn"` for hints requiring user correction, such as format errors. / 控件下方的一行说明；`tone="warn"` 用于格式错误等需要用户修改的提示。 */
 export function FieldHint({ children, tone }: { children: ReactNode; tone?: "warn" }) {
   return <p className={tone === "warn" ? "text-xs text-warn" : "text-xs text-muted-foreground"}>{children}</p>;
 }

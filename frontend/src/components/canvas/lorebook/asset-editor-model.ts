@@ -3,6 +3,9 @@ import type { AssetSheetType, Character, Product } from "@/types";
 import type { GalleryAssetSource } from "./gallery-model";
 
 /**
+ * Fields in the details editor that go into unsaved changes. The four asset types share one shape, each type using only some of them:
+ * characters have voice style, products have brand and selling points. Rename, upload and adding/removing aliases are immediate actions and are not here.
+ *
  * 详情编辑器里进入未保存修改的字段。四类资产共用一个形状，按类型只用到其中几项：
  * 角色有声音风格，商品有品牌与卖点。改名、上传、增删别名是立即执行的动作，不在这里。
  */
@@ -10,11 +13,11 @@ export interface AssetFields {
   description: string;
   voiceStyle: string;
   brand: string;
-  /** 卖点，每行一条。 */
+  /** Selling points, one per line. / 卖点，每行一条。 */
   sellingPoints: string;
 }
 
-/** 新建资产时多一个名称。 */
+/** Creating an asset adds a name. / 新建资产时多一个名称。 */
 export interface NewAssetFields extends AssetFields {
   name: string;
 }
@@ -30,7 +33,7 @@ export function assetFieldsOf(type: AssetSheetType, asset: GalleryAssetSource): 
   };
 }
 
-/** 卖点文本按行拆开，去掉空行与两端空白。 */
+/** Split selling-point text into lines, dropping empty lines and surrounding whitespace. / 卖点文本按行拆开，去掉空行与两端空白。 */
 export function parseSellingPoints(text: string): string[] {
   return text
     .split("\n")
@@ -38,7 +41,7 @@ export function parseSellingPoints(text: string): string[] {
     .filter(Boolean);
 }
 
-/** 卖点只比较拆分后的条目：多一个空行不算修改。 */
+/** Selling points compare only the split entries: an extra empty line is not a change. / 卖点只比较拆分后的条目：多一个空行不算修改。 */
 export function assetFieldsEqual(a: AssetFields, b: AssetFields): boolean {
   return (
     a.description === b.description &&
@@ -48,7 +51,7 @@ export function assetFieldsEqual(a: AssetFields, b: AssetFields): boolean {
   );
 }
 
-/** 只带改过的字段，键名是资产接口的字段名。 */
+/** Carries only changed fields, keyed by the asset API's field names. / 只带改过的字段，键名是资产接口的字段名。 */
 export function assetFieldsPatch(type: AssetSheetType, value: AssetFields, saved: AssetFields): Record<string, unknown> {
   const patch: Record<string, unknown> = {};
   if (value.description !== saved.description) patch.description = value.description;
@@ -61,7 +64,7 @@ export function assetFieldsPatch(type: AssetSheetType, value: AssetFields, saved
   return patch;
 }
 
-/** 保存后的规范形状：卖点去掉空行，与服务端回写的内容一致。 */
+/** Normalized shape after save: selling points without empty lines, matching what the server writes back. / 保存后的规范形状：卖点去掉空行，与服务端回写的内容一致。 */
 export function normalizeAssetFields(value: AssetFields): AssetFields {
   return { ...value, sellingPoints: parseSellingPoints(value.sellingPoints).join("\n") };
 }

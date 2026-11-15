@@ -4,6 +4,9 @@ import { cn } from "cn";
 import type { MarketEntryAggregate } from "@/types";
 
 /**
+ * Install count and rating from the official service: install count shown as-is; with ratings, show the average and count of raters, and when the average is null (too few raters) only the count.
+ * The full description next to the numbers is for screen readers only; the card stays on one line.
+ *
  * 官方服务的安装量与评分：安装量原样展示；有评分时显示平均分与人数，平均分为 null（人数不足）时只显示人数。
  * 数字旁的完整说明只给读屏，卡片上保持一行。
  */

@@ -5,6 +5,9 @@ import { projectSettingsPath } from "@/app-routes";
 import { buttonVariants } from "@/components/ui/button";
 
 /**
+ * "Video model unresolved" notice on the content review page: confirming assigns duration options to shots based on video model capabilities,
+ * and when the server explicitly answers that the model is unconfigured or can't be resolved, confirmation is bound to be rejected, so explain near the confirm button first and point to project settings.
+ *
  * 内容确认页的「视频模型未解析」提示：确认转出要按视频模型能力给分镜定时长档位，
  * 服务端明确答复模型未配置或无法解析时，确认必然被拒，先在确认按钮附近说明并指引到项目设置。
  */

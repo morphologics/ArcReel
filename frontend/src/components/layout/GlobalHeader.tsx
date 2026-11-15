@@ -28,6 +28,11 @@ import { RenderQueueIndicator } from "./RenderQueueIndicator";
 import { COMPACT_HEADER_QUERY, useMediaQuery } from "@/hooks/useMediaQuery";
 
 /**
+ * Workspace top bar, three sections:
+ * - Left: back to the project lobby + project switcher (demo projects also get a "Demo · read-only" badge)
+ * - Middle: ProjectStatusBar (episode progress and the project-level next step; migration retry when the data upgrade failed)
+ * - Right: notifications / usage records / export / asset library / global settings / Agent panel toggle
+ *
  * 工作区顶栏，三段：
  * - 左：回到项目大厅 + 项目切换器（演示项目另带「演示 · 只读」徽标）
  * - 中：ProjectStatusBar（集进度与项目层的下一步；数据升级失败时是迁移重试）
@@ -45,6 +50,7 @@ export function GlobalHeader() {
   // under 768px wide: Projects and Export Project as icons only
   const phone = useMediaQuery(COMPACT_HEADER_QUERY);
 
+  // Edit-view link in the export hint: on an episode page it points to the current episode, otherwise to the first episode in episode order; the text uses the episode name.
   // 导出提示里的剪辑视图链接：在集页时指向当前集，否则指向播出顺序上的第一集；文案用集名。
   const routeEpisode = /\/episodes\/(\d+)/.exec(location)?.[1];
   const projectEpisodes = currentProjectData?.episodes ?? [];
@@ -62,11 +68,16 @@ export function GlobalHeader() {
   });
   const exporting = projectExport.exporting !== null;
 
+  // Demo projects have no usage records on the backend, so the entry is not rendered at all. On a demo -> real switch, demoMode becomes false before the store does;
+  // currentProjectName is checked separately to cover the frame that still reads the old demo project name.
   // 演示项目在后端没有用量记录，入口整个不渲染。demoMode 在演示→真实切换时先于 store
   // 变为 false，currentProjectName 单独判一次兜住这一帧仍读到旧演示项目名的窗口。
   const usageProjectName =
     demoMode || !currentProjectName || isDemoProject(currentProjectName) ? null : currentProjectName;
 
+  // Close the export dialog right away if the user switches to another project or a demo project while it is open (e.g. browser back / forward reusing the same route instance):
+  // the dialog captured the project when it opened, and leaving it open would export the previous project after a scope is chosen; the trigger button is already disabled by demoMode,
+  // but an already open dialog is unaffected and "Export" would still be clickable.
   // 导出对话框打开期间切到别的项目或演示项目（如浏览器前进 / 后退复用同一路由实例）时随即关闭：
   // 对话框在打开时记下了当时的项目，留着会在选定范围后导出上一个项目；触发按钮已按 demoMode
   // 禁用，但已打开的对话框不受影响，仍可点击「导出」。
@@ -75,6 +86,7 @@ export function GlobalHeader() {
     closeExport();
   }, [currentProjectName, demoMode, closeExport]);
 
+  // The entry's data follows the project: switching to another project or a demo project clears the previous project's usage and closes the popover.
   // 入口的数据随项目走：切到别的项目或演示项目时清空上一项目的用量，并收起悬浮层。
   useEffect(() => {
     void useUsageHeaderStore.getState().setProject(usageProjectName);
@@ -200,7 +212,7 @@ function IconLink({ href, label, children }: { href: string; label: string; chil
           <Link
             href={href}
             aria-label={label}
-            // eslint-disable-next-line shadcn/require-static-classes -- 链接借用 buttonVariants 的 ghost/icon 外观；Button 渲染为链接会被 Base UI 加上 role="button"，故不能换成 render={<Button />}，TooltipTrigger 自身不带样式（见 eslint.config.js 的 UNSTYLED_PRIMITIVES）
+            // eslint-disable-next-line shadcn/require-static-classes -- the link borrows the ghost/icon look of buttonVariants; Button rendered as a link gets role="button" from Base UI, so it cannot become render={<Button />}, and TooltipTrigger itself has no styling (see UNSTYLED_PRIMITIVES in eslint.config.js) / 链接借用 buttonVariants 的 ghost/icon 外观；Button 渲染为链接会被 Base UI 加上 role="button"，故不能换成 render={<Button />}，TooltipTrigger 自身不带样式（见 eslint.config.js 的 UNSTYLED_PRIMITIVES）
             className={buttonVariants({ variant: "ghost", size: "icon", className: "relative" })}
           />
         }

@@ -32,17 +32,17 @@ export interface WizardGenerationData {
     textDefault: string;
     textSimple: string;
     textComplex: string;
-    /** 各层全空时后端自动选中的模型；拉取失败即缺席。 */
+    /** Model the backend auto-selects when every layer is empty; absent if the fetch fails. / 各层全空时后端自动选中的模型；拉取失败即缺席。 */
     auto?: AutoBackendsResponse | null;
   };
 }
 
 export interface WizardDurationValue {
-  /** 广告项目的目标总时长（秒）；「自定义」输入无效时为 null。 */
+  /** Target total duration of an ad project (seconds); null when the "Custom" input is invalid. / 广告项目的目标总时长（秒）；「自定义」输入无效时为 null。 */
   targetDuration: number | null;
-  /** 单集目标时长（秒）；null = 不设目标。广告项目不使用。 */
+  /** Target duration per episode (seconds); null = no target. Not used by ad projects. / 单集目标时长（秒）；null = 不设目标。广告项目不使用。 */
   episodeTargetDuration: number | null;
-  /** 口播语速估算（阅读单位 / 秒）；null = 按项目语言的默认值估算。 */
+  /** Voiceover speech rate estimate (reading units / second); null = estimate from the project language's default. / 口播语速估算（阅读单位 / 秒）；null = 按项目语言的默认值估算。 */
   speechRate: number | null;
 }
 
@@ -91,7 +91,7 @@ export function WizardStepGeneration({
               onChange={(episodeTargetDuration) => onDurationChange({ ...duration, episodeTargetDuration })}
             />
           )}
-          {/* 项目还没有语言事实（由内容分析写入），单位按未知语言呈现 */}
+          {/* The project has no language fact yet (written by content analysis), so units are shown for an unknown language / 项目还没有语言事实（由内容分析写入），单位按未知语言呈现 */}
           <SpeechRateField
             value={duration.speechRate}
             onChange={(speechRate) => onDurationChange({ ...duration, speechRate })}
@@ -112,7 +112,7 @@ export function WizardStepGeneration({
             <AlertDescription>{error}</AlertDescription>
           </Alert>
         )}
-        {/* 创建向导只暴露默认层（docs/adr/0054），按用途细分留给项目设置页 */}
+        {/* The create wizard exposes only the default layer (docs/adr/0054); per-purpose refinement is left to the project settings page / 创建向导只暴露默认层（docs/adr/0054），按用途细分留给项目设置页 */}
         {data && (
           <ModelConfigSection
             showSubFields={false}
@@ -129,6 +129,7 @@ export function WizardStepGeneration({
             }}
             globalDefaults={data.globalDefaults}
             usesReferenceImages={usesReferenceImages}
+            // Ad projects plan shot by shot against the target total duration; the default duration isn't exposed
             // 广告项目按目标总时长逐个分镜规划，不暴露默认时长
             enable={isAd ? { duration: false } : undefined}
           />

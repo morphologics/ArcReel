@@ -5,6 +5,9 @@ import { Button } from "@/components/ui/button";
 import { useHandoffTipStore } from "./useHandoffTip";
 
 /**
+ * One-time tip at the bottom of the story setting section: the story setting is extracted; next, send "Start production" to the Agent.
+ * Disappears for good after "Got it" or after sending the Agent a message in this project; not shown for projects that sent messages before the tip appeared.
+ *
  * 故事设定区底部的一次性提示：故事设定已提炼完成，接下来向 Agent 发送「开始制作」。
  * 点「知道了」或在这个项目里向 Agent 发出消息后消失，不再出现；提示出现之前已发过消息的项目不显示。
  */

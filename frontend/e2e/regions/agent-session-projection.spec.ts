@@ -3,6 +3,9 @@ import { defineRegionScenarios } from "../support/scenarios.ts";
 import { expect, type ApiOverrides } from "../support/test.ts";
 import { idleSessionApi } from "../support/assistant-session.ts";
 
+// Session projection in the Agent message area: a compaction continuation summary shows as a "Context compacted" divider, a subagent
+// without an anchor shows its inferred description and final state, an Agent failure shows as a card with a one-sentence conclusion.
+// Sessions are hand-written stress data: a very long continuation summary, a very long exception stack.
 // Agent 消息区的会话投影：压缩续接摘要显示为「上下文已压缩」分隔线、缺锚点的子代理显示
 // 推断出的描述与终态、Agent 失败显示为一句话结论的卡片。会话是手写的压力数据：很长的续接
 // 摘要、很长的异常堆栈。
@@ -78,6 +81,8 @@ function entryLog(build: (push: (entry: Omit<Entry, "seq" | "uuid" | "timestamp"
   return entries;
 }
 
+// A session lazily generated after compaction continuation: the main line starts from the continuation summary; the footage-review subagent
+// started before the summary has no anchor, and its sub-timeline and inferred final state are attached at the end.
 // 压缩续接后懒生成的会话：主线从续接摘要开始，摘要之前发起的审片子代理没有锚点，
 // 子时间线与推断出的终态附在末尾。
 const CONTINUED_ENTRIES = entryLog((push) => {
@@ -122,6 +127,7 @@ function sessionApi(sessionId: string, title: string, entries: Entry[]): ApiOver
     updated_at: "2026-01-01T07:00:00.000Z",
   };
   return {
+    // The project event stream is SSE, not recorded; reject with a non-retryable status so the page stays on the recorded project data.
     // 项目事件流是 SSE，没有录制；按不可重试的状态拒绝，页面停在录制的项目数据上。
     "GET /api/v1/projects/demo/events/stream": { status: 404, body: { detail: "页面级套件不回放事件流" } },
     [`GET ${SESSIONS_PATH}`]: { status: 200, body: { sessions: [session] } },
@@ -135,9 +141,11 @@ const FAILURE_API = sessionApi("session-failure", "重新生成 shot_04", FAILUR
 
 const agentPanel = (page: Page) => page.getByRole("complementary", { name: "Agent 面板" });
 const transcript = (page: Page) => page.getByRole("region", { name: "对话记录" });
+// A failure already present when the session opens is shown, not announced; the card is a region named by its title
 // 打开会话时已有的失败只显示、不播报，卡片是以标题命名的区域
 const failureCard = (page: Page) => page.getByRole("region", { name: "这一轮没有完成" });
 
+/** Wait for message rendering to settle: the Markdown renderer loads on demand, off-screen items lay out once with final content (same as agent-messages.spec.ts). */
 /** 等消息渲染落定：Markdown 渲染器按需加载，离屏项按最终内容排版一次（同 agent-messages.spec.ts）。 */
 async function settleTranscript(page: Page, lastText: string) {
   await transcript(page).waitFor();
@@ -164,6 +172,7 @@ defineRegionScenarios("Agent 会话投影", [
     ready: continuedReady,
     act: async (page) => {
       const card = page.getByRole("button", { name: /审片：核对第 8 集 shot_01 到 shot_06/ });
+      // A successful work row gets no mark: a finished subagent is neither "Stopped" nor "Running"
       // 工序行成功不加标记：完成的子智能体既不是「已停止」，也不是「运行中」
       await expect(card).not.toContainText("已停止");
       await expect(card).not.toContainText("运行中");
@@ -183,6 +192,8 @@ defineRegionScenarios("Agent 会话投影", [
       await expect(marker).toHaveAttribute("aria-expanded", "true");
       await expect(page.getByRole("heading", { name: "主要请求" })).toBeVisible();
       await marker.scrollIntoViewIfNeeded();
+      // scrollIntoView is a programmatic scroll and interleaves with the primitive's initial stick-to-bottom state; exit following with a real
+      // scroll up, then check the button.
       // scrollIntoView 是程序滚动，会与原语的初始贴底状态交错；用真实上翻退出跟随，再核对按钮。
       await transcript(page).hover();
       const overflow = await transcript(page).evaluate((el) => el.scrollHeight - el.clientHeight > 8);

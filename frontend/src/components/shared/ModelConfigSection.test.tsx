@@ -89,6 +89,8 @@ const EMPTY_GLOBALS = {
   textDefault: "", textSimple: "", textComplex: "",
 } as const;
 
+// Stand-in for the server's video-capabilities endpoint: the full duration set looks up the current test's catalog, and Veo's linked constraints give preset answers by context
+// (the narrowing rules themselves live only in the backend lib/config/resolver.py; this is a fixed reply, not a recomputation).
 // 服务端 video-capabilities 端点的替身：时长全集查当前测试的目录，Veo 的联动约束按上下文给出
 // 预设答案（收窄规则本体只在后端 lib/config/resolver.py，这里是固定应答而非复算）。
 let fakeCatalog: ProviderInfo[] = PROVIDERS;
@@ -207,6 +209,7 @@ describe("ModelConfigSection", () => {
         }}
       />,
     );
+    // The create wizard path has only three default-layer main dropdowns: video + image + text
     // 创建向导路径只剩三个默认层主下拉：video + image + text
     const comboboxes = screen.getAllByRole("combobox");
     expect(comboboxes).toHaveLength(3);
@@ -220,6 +223,7 @@ describe("ModelConfigSection", () => {
   });
 
   it("keeps text tiers when media candidates are unavailable", async () => {
+    // When the candidates request fails the caller passes candidates=null; the text tier does not use that data and should not vanish with it
     // 候选接口失败时调用方传入 candidates=null；文本档位不取用该数据，不应随之消失
     render(
       <ModelConfigSection
@@ -231,6 +235,7 @@ describe("ModelConfigSection", () => {
         globalDefaults={{ ...EMPTY_GLOBALS, textDefault: "gemini/g25" }}
       />,
     );
+    // Only the text collapsible section remains; video/image sub-items do not render for lack of candidate data
     // 只剩文本这一个折叠区，视频/图片细分因无候选数据而不渲染
     const disclosures = screen.getAllByRole("button", { name: /按用途指定模型/ });
     expect(disclosures).toHaveLength(1);
@@ -240,6 +245,7 @@ describe("ModelConfigSection", () => {
   });
 
   it("keeps configured sub-fields visible and clearable when candidates are unavailable", async () => {
+    // A failed candidates fetch should not hide saved overrides; they still apply on the backend, and hidden the user could neither see nor clear them
     // 候选拉取失败不应把已保存的覆盖藏起来——它在后端仍生效，藏起来用户既看不见也无法清除
     const user = userEvent.setup();
     const onChange = vi.fn();
@@ -254,11 +260,13 @@ describe("ModelConfigSection", () => {
       />,
     );
 
+    // The configured "text-to-image" is still there and shows the saved value; the unconfigured "image-to-image" has no candidates and does not render
     // 已配置的「文生图」仍在，且展示的是已保存值；未配置的「图生图」无候选可选，不渲染
     const t2i = screen.getByRole("combobox", { name: "文生图" });
     expect(t2i).toHaveTextContent("nano-banana");
     expect(screen.queryByRole("combobox", { name: "图生图" })).not.toBeInTheDocument();
 
+    // Clearing this override does not depend on candidate data
     // 清空这条覆盖不依赖候选数据
     await user.click(t2i);
     await user.click(await screen.findByRole("option", { name: /跟随默认/ }));
@@ -266,6 +274,7 @@ describe("ModelConfigSection", () => {
   });
 
   it("shows an explicit error notice with a retry entry when candidatesError is set, even with no saved overrides", async () => {
+    // The candidates-fetch failure state differs from "still loading" (candidates=null but not marked failed): the former must give a perceivable error signal
     // 候选拉取失败态与「仍在加载中」（candidates=null 但未标记失败）不同：前者要给出可感知的错误信号
     const user = userEvent.setup();
     const onRetry = vi.fn();
@@ -281,6 +290,7 @@ describe("ModelConfigSection", () => {
       />,
     );
     const alerts = screen.getAllByRole("alert");
+    // video + image; the text tier does not use candidate data and is not included
     expect(alerts).toHaveLength(2); // video + image；文本档位不取用候选数据，不参与
     for (const alert of alerts) {
       expect(alert).toHaveTextContent(/模型列表加载失败/);
@@ -341,6 +351,7 @@ describe("ModelConfigSection", () => {
     it("collapses the sub-fields by default and names each row after its generation path", async () => {
       const user = userEvent.setup();
       renderWithCandidates();
+      // One collapsible section per media, initially collapsed
       // 三个媒体各一个折叠区，初始收起
       const sections = screen.getAllByRole("button", { name: /按用途指定模型/ });
       expect(sections).toHaveLength(3);
@@ -352,6 +363,7 @@ describe("ModelConfigSection", () => {
       for (const name of ["图生视频", "参考生视频", "文生图", "图生图", "简单任务", "复杂任务"]) {
         expect(screen.getByRole("combobox", { name })).toBeInTheDocument();
       }
+      // UI text shows no internal terms
       // 界面文案不出现内部术语
       expect(document.body).not.toHaveTextContent(/能力桶|任务类型桶|capability bucket/i);
     });
@@ -361,12 +373,14 @@ describe("ModelConfigSection", () => {
       renderWithCandidates();
       await user.click(screen.getAllByText("按用途指定模型")[0]);
 
+      // The default layer does not filter: both video models are there
       // 默认层不过滤：两个视频模型都在
       await user.click(screen.getByRole("combobox", { name: "默认视频模型" }));
       expect(await screen.findByRole("option", { name: /veo-3/ })).toBeInTheDocument();
       expect(await screen.findByRole("option", { name: /seedance/ })).toBeInTheDocument();
       await user.keyboard("{Escape}");
 
+      // The image-to-video bucket lists only i2v candidates
       // 图生视频桶只列 i2v 候选
       await user.click(screen.getByRole("combobox", { name: "图生视频" }));
       expect(await screen.findByRole("option", { name: /veo-3/ })).toBeInTheDocument();
@@ -391,6 +405,7 @@ describe("ModelConfigSection", () => {
         globalDefaults: { ...EMPTY_GLOBALS, video: "gemini/veo-3", videoR2V: "ark/seedance" },
       });
       await user.click(screen.getAllByText("按用途指定模型")[0]);
+      // r2v has a global bucket -> use the bucket value; i2v has none -> fall to the global default model
       // r2v 有全局桶 → 用桶值；i2v 无 → 落到全局默认模型
       expect(screen.getByRole("combobox", { name: "参考生视频" })).toHaveTextContent(
         /跟随默认 · Ark · seedance/,
@@ -401,6 +416,7 @@ describe("ModelConfigSection", () => {
     });
 
     it("revalidates duration and resolution when a sub-field switches the executing model", async () => {
+      // A sub-item change also swaps the execution model, and resolution has no out-of-range hint as a fallback, so it must be cleared here
       // 细分项改动同样换掉执行模型，分辨率没有越界提示兜底，必须在此清掉
       const user = userEvent.setup();
       const onChange = vi.fn();
@@ -412,6 +428,7 @@ describe("ModelConfigSection", () => {
           videoResolution: "1080p",
         },
         onChange,
+        // Put a separate model in the i2v bucket to reach the "execution bucket changes model" branch
         // i2v 桶另放一个模型，才能走到「执行桶换模型」这条分支
         candidates: {
           ...CANDIDATES,
@@ -424,12 +441,14 @@ describe("ModelConfigSection", () => {
       expect(onChange).toHaveBeenCalledWith(
         expect.objectContaining({
           videoProviderR2V: "ark/seedance",
+          // The project uses the image-to-video path and r2v is not the execution bucket: the execution model is unchanged, so both are kept as is
           // 项目走图生视频路径，r2v 不是执行桶——执行模型没变，两者原样保留
           defaultDuration: 4,
           videoResolution: "1080p",
         }),
       );
 
+      // The execution bucket changed: resolution clears, and 4 seconds is not in seedance's supported set, so duration falls back to auto
       // 换的是执行桶：分辨率清空，4 秒不在 seedance 的支持集里，时长退回自动
       onChange.mockClear();
       await user.click(screen.getByRole("combobox", { name: "图生视频" }));
@@ -499,6 +518,8 @@ describe("ModelConfigSection", () => {
   });
 
   it("derives duration options from the bucket that the project actually executes", async () => {
+    // Default layer veo-3 (4/6/8), but the image-to-video bucket overrides it with seedance (5/8/10); the latter executes,
+    // and listing durations by the default layer would let the user save values rejected at execution
     // 默认层 veo-3（4/6/8），但图生视频桶覆盖成 seedance（5/8/10）——执行的是后者，
     // 按默认层列时长会让用户存下执行时被拒的取值
     const { rerender } = render(
@@ -513,6 +534,7 @@ describe("ModelConfigSection", () => {
     expect(await screen.findByRole("radio", { name: "10 秒" })).toBeInTheDocument();
     expect(screen.queryByRole("radio", { name: "4 秒" })).not.toBeInTheDocument();
 
+    // A reference-to-video project uses the r2v bucket instead, and the i2v override does not count for it
     // 参考生视频项目改走 r2v 桶，i2v 的覆盖对它不作数
     rerender(
       <ModelConfigSection
@@ -548,6 +570,7 @@ describe("ModelConfigSection", () => {
     );
     await user.click(screen.getByRole("combobox", { name: "默认视频模型" }));
     await user.click(await screen.findByRole("option", { name: /seedance/ }));
+    // The execution model is unchanged (the bucket still points to seedance), so duration and resolution should not be reset
     // 执行模型没变（桶仍指向 seedance），时长与分辨率不该被重置
     expect(onChange).toHaveBeenCalledWith(
       expect.objectContaining({ videoBackend: "ark/seedance", defaultDuration: 10, videoResolution: "1080p" }),
@@ -616,6 +639,7 @@ describe("ModelConfigSection", () => {
         globalDefaults={EMPTY_GLOBALS}
       />,
     );
+    // No projectName (global settings case): options take the server-derived value of the catalog endpoint directly; the frontend no longer derives them itself.
     // 无 projectName（全局设置场景）：档位直接取目录端点的服务端派生值，前端不再自行推导。
     expect(screen.getByText("有声")).toBeInTheDocument();
     expect(screen.getByText("软约束")).toBeInTheDocument();
@@ -682,6 +706,7 @@ describe("ModelConfigSection", () => {
         globalDefaults={EMPTY_GLOBALS}
       />,
     );
+    // No more fallback to [4,6,8]: the whole duration card does not render; with no candidate model there is no capability to query, so no request is sent
     // 不再 fallback 到 [4,6,8] —— 整个时长卡片不渲染；没有候选模型也就没有可查的能力，不发请求
     expect(screen.queryByRole("radio", { name: "4 秒" })).not.toBeInTheDocument();
     expect(screen.queryByRole("radio", { name: "6 秒" })).not.toBeInTheDocument();
@@ -789,6 +814,7 @@ describe("ModelConfigSection", () => {
         globalDefaults={EMPTY_GLOBALS}
       />,
     );
+    // Continuous range -> slider, no more button group (apart from auto + the slider's own radio)
     // 连续区间 → slider，不再有按钮组（除 auto + slider 自身的 radio）
     expect(await screen.findByRole("slider")).toBeInTheDocument();
     expect(screen.queryByRole("radio", { name: "3 秒" })).not.toBeInTheDocument();
@@ -862,14 +888,17 @@ describe("ModelConfigSection", () => {
         globalDefaults={EMPTY_GLOBALS}
       />,
     );
+    // The out-of-range hint contains the invalid seconds (10 is not in gemini/veo-3's [4,6,8])
     // 越界提示含失效秒数（10 不在 gemini/veo-3 的 [4,6,8] 内）
     expect(await screen.findByText(/不再受当前模型支持/)).toBeInTheDocument();
     expect(screen.getByText(/10/)).toBeInTheDocument();
+    // No duration button is active: auto and all number buttons have aria-checked false
     // 无任何时长钮处于激活态：auto 与所有数字钮 aria-checked 均为 false
     expect(screen.getByRole("radio", { name: "auto" })).not.toBeChecked();
     for (const sec of ["4 秒", "6 秒", "8 秒"]) {
       expect(screen.getByRole("radio", { name: sec })).not.toBeChecked();
     }
+    // In the out-of-range state auto serves as the focusable fallback entry, so the keyboard can still Tab into the radiogroup to reselect (no element with tabIndex=0 would be a keyboard trap)
     // 越界态下 auto 兜底为可聚焦入口，键盘仍能 Tab 进 radiogroup 重选（无元素 tabIndex=0 会成键盘陷阱）
     expect(screen.getByRole("radio", { name: "auto" })).toHaveAttribute("tabindex", "0");
   });
@@ -942,10 +971,13 @@ describe("ModelConfigSection", () => {
         globalDefaults={EMPTY_GLOBALS}
       />,
     );
+    // Slider branch: 20 is not within [3..15]
     // slider 分支：20 不在 [3..15] 内
     const slider = await screen.findByRole("slider");
     expect(slider).toBeInTheDocument();
     expect(screen.getByText(/不再受当前模型支持/)).toBeInTheDocument();
+    // The out-of-range value's readout/aria-valuetext faithfully shows the original value rather than misreporting auto, consistent with the inactive auto button and
+    // the out-of-range hint naming the seconds
     // 越界值的读数/aria-valuetext 忠实显示原值，而非误报为 auto——与未激活的 auto 钮及
     // 点名秒数的越界提示一致
     expect(slider).toHaveAttribute("aria-valuetext", expect.stringMatching(/20/));
@@ -954,6 +986,7 @@ describe("ModelConfigSection", () => {
     expect(onChange).toHaveBeenCalledWith(expect.objectContaining({ defaultDuration: null }));
   });
 
+  // ── Linked constraints: resolution / reference image path narrow the selectable durations ──
   // ── 联动约束：分辨率 / 参考图路径收窄可选时长 ──────────────────
 
   const VEO_PROVIDERS: ProviderInfo[] = [
@@ -1028,6 +1061,7 @@ describe("ModelConfigSection", () => {
     expect(await screen.findByRole("radio", { name: "8 秒" })).toBeInTheDocument();
     expect(screen.queryByRole("radio", { name: "4 秒" })).not.toBeInTheDocument();
     expect(screen.queryByRole("radio", { name: "6 秒" })).not.toBeInTheDocument();
+    // The form's unsaved resolution is handed to the server explicitly for evaluation, rather than computed after saving
     // 表单里未保存的分辨率显式交给服务端求值，而不是等保存后再算
     expect(API.getModelVideoCapabilities).toHaveBeenLastCalledWith(
       "gemini-aistudio/veo",
@@ -1036,10 +1070,13 @@ describe("ModelConfigSection", () => {
   });
 
   it("stops accepting duration选择 while the new context's constraints are still in flight", async () => {
+    // The constraint context changed but the model did not: the old narrowed result stays (no loading flash), but those are the previous option's choices.
+    // During this window the control only displays and accepts no selection, or the user could pick 4 seconds for 4K from the 720p list.
     // 约束上下文变了但模型没变：旧收窄结果继续挂着（不闪加载态），但那是上一个档位的选项。
     // 这段窗口内控件只展示不接受选择，否则用户能从 720p 的列表里给 4K 挑一个 4 秒。
     const user = userEvent.setup();
     const onChange = vi.fn();
+    // The gate is put in an object: with a plain let assigned in a closure, TS control-flow analysis still narrows it to null at the use site.
     // 闸口放在对象里：直接用 let + 闭包赋值时 TS 的控制流分析在使用点仍把它收窄成 null。
     const gate: { release?: () => void } = {};
     const original = fakeVideoCapabilities;
@@ -1063,6 +1100,7 @@ describe("ModelConfigSection", () => {
       />,
     );
 
+    // The old options are still there (no layout jump), but the whole group is marked inoperable and clicks produce no writes.
     // 旧选项还在（布局不跳），但整组已标记为不可操作，点击不产生任何写入。
     const group = await screen.findByRole("radiogroup", { name: "默认时长" });
     await waitFor(() => expect(group).toHaveAttribute("aria-disabled", "true"));
@@ -1070,6 +1108,7 @@ describe("ModelConfigSection", () => {
     expect(onChange).not.toHaveBeenCalled();
 
     gate.release?.();
+    // Once the new context lands it becomes selectable again, with only the options 4K allows.
     // 新上下文落地后恢复可选，且只剩 4K 允许的档位。
     expect(await screen.findByRole("radio", { name: "8 秒" })).toBeInTheDocument();
     await waitFor(() => expect(screen.queryByRole("radio", { name: "4 秒" })).not.toBeInTheDocument());
@@ -1090,6 +1129,7 @@ describe("ModelConfigSection", () => {
   it("sends the project name and an explicit auto resolution when editing a saved project", async () => {
     renderVeo({ projectName: "saved-project", videoResolution: null });
     await screen.findByRole("radio", { name: "4 秒" });
+    // The form's "Auto" explicitly passes null: the server must not fall back to the project's saved option for narrowing
     // 表单里的「自动」显式传 null：服务端不得回退到该项目已保存的档位来收窄
     expect(API.getVideoCapabilities).toHaveBeenLastCalledWith(
       "saved-project",
@@ -1098,6 +1138,7 @@ describe("ModelConfigSection", () => {
     expect(API.getModelVideoCapabilities).not.toHaveBeenCalled();
   });
 
+  // Warning text is split by out-of-range cause: the model itself still supports 4 seconds, and pointing to "model does not support" would send the user to change models.
   // 警告文案按越界成因分开：模型本身仍支持 4 秒，指向「模型不支持」会把用户引去换模型。
   it.each([
     ["1080p 分辨率", { videoResolution: "1080p" }, /当前分辨率下不可用/],
@@ -1141,6 +1182,7 @@ describe("音频开关的模型可控性", () => {
       },
     },
     {
+      // Shape of Kling v3-omni: the image-to-video sub-path has an audio track toggle; the reference-to-video sub-path's native schema lacks the field.
       // 可灵 v3-omni 的形状：图生子路径带音轨开关，参考生子路径的原生 schema 不含该字段。
       id: "kling",
       display_name: "Kling",
@@ -1264,6 +1306,7 @@ describe("音频开关的模型可控性", () => {
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });
 
+  // Existing config stored "Off" but the model cannot turn it off: after greying out a correction path must remain, or the setting cannot be changed back.
   // 存量配置存了「关闭」而模型关不掉：置灰后仍须留一条修正路径，否则设置改不回来。
   it("offers a one-click fix when a stored off setting contradicts an always-audible model", async () => {
     const user = userEvent.setup();
@@ -1273,6 +1316,8 @@ describe("音频开关的模型可控性", () => {
     expect(onChange).toHaveBeenCalledWith(true);
   });
 
+  // Leaving it empty at project level means "follow global": with global set to off it likewise lands on an always-sound model, so the hint uses the effective value,
+  // or the UI would show only a greyed "On" and the user would learn of the contradiction only when enqueue is rejected.
   // 项目级留空是「跟随全局」：全局为关闭时同样落在恒有声模型上，提示按生效值给，
   // 否则界面只显示置灰的「开启」，用户要到入队被拒才知道配置有矛盾。
   it("offers the same fix when the project follows a global off setting", async () => {
@@ -1288,6 +1333,8 @@ describe("音频开关的模型可控性", () => {
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });
 
+  // Audio track form branches by execution path: the same model is controllable on the image-to-video route but has no toggle to send in reference-to-video. Taking the value by model (instead of
+  // by path) would give reference-to-video users a silent final cut with audio switched on, with no hint at all.
   // 音轨形态按执行路径分叉：同一模型在图生路线可控、在参考生视频没有开关可下发。按模型（而非
   // 按路径）取值会让参考生视频的用户开着音频却拿到无声成片，且全程无提示。
   it("keeps the switch interactive for a route-split model on the first-frame route", () => {
@@ -1303,6 +1350,8 @@ describe("音频开关的模型可控性", () => {
     expect(screen.getByText(/没有声音/)).toBeInTheDocument();
   });
 
+  // The three video dropdowns on the same screen belong to three different paths: the default layer follows the one the project actually executes, the two sub-items each follow their own bucket.
+  // The audio track cell and the toggle below must give the same answer; with two contradicting statements on one screen, users choosing by the dropdown preview would choose wrong.
   // 同屏三个视频下拉分属三条不同路径：默认层跟着项目实际执行的那条，两个细分项各按自己的桶。
   // 音轨格与下方开关必须给出同一个答案——一屏之内两句话互相矛盾，用户按下拉预览选型就会选错。
   describe("候选下拉的音轨能力线", () => {
@@ -1328,6 +1377,7 @@ describe("音频开关的模型可控性", () => {
           usesReferenceImages={usesReferenceImages}
           options={{
             videoBackends: ["kling/v3-omni"],
+            // The image dropdown deliberately uses the same model: if the audio track cell were wired to the image side by mistake, it would show here.
             // 图片下拉刻意放同一个模型：音轨格若被错接到图片侧，这里会显形。
             imageBackends: ["kling/v3-omni"],
             textBackends: [],
@@ -1340,6 +1390,7 @@ describe("音频开关的模型可控性", () => {
       );
     }
 
+    /** Open the given dropdown, read the v3-omni row's capability line, then close it; only one dropdown open at a time. */
     /** 打开指定下拉，读出 v3-omni 那一行的能力线，再关掉——同时只开一个下拉。 */
     async function omniRowIn(user: ReturnType<typeof userEvent.setup>, comboboxName: string) {
       await user.click(screen.getByRole("combobox", { name: comboboxName }));
@@ -1351,11 +1402,13 @@ describe("音频开关的模型可控性", () => {
     it("参考生视频项目：默认层与参考生桶标无声，图生桶不受牵连仍标有声", async () => {
       const user = userEvent.setup();
       renderDropdowns(true);
+      // When the default layer is empty the r2v bucket executes, and the capability line follows it
       // 默认层留空时执行的是 r2v 桶，能力线跟着走
       expect(await omniRowIn(user, "默认视频模型")).toContain("无声");
 
       await user.click(screen.getAllByText("按用途指定模型")[0]);
       expect(await omniRowIn(user, "参考生视频")).toContain("无声");
+      // A project on the reference-to-video route does not mean the "image-to-video" cell should be labelled by reference-to-video too; it is the image-to-video path itself
       // 项目走参考生路线不代表「图生视频」这一格也该按参考生标注——它就是图生路径本身
       expect(await omniRowIn(user, "图生视频")).toContain("有声");
     });
@@ -1367,6 +1420,7 @@ describe("音频开关的模型可控性", () => {
 
       await user.click(screen.getAllByText("按用途指定模型")[0]);
       expect(await omniRowIn(user, "图生视频")).toContain("有声");
+      // The project is not currently on the reference-to-video route, but this cell describes the reference-to-video path's capability, independent of project settings
       // 项目当前不走参考生路线，但这一格描述的是参考生路径的能力，与项目设置无关
       expect(await omniRowIn(user, "参考生视频")).toContain("无声");
     });
@@ -1376,6 +1430,7 @@ describe("音频开关的模型可控性", () => {
       renderDropdowns(true);
       expect(await omniRowIn(user, "默认图片模型")).not.toMatch(/有声|无声/);
 
+      // The image collapsible section comes after video
       // 图片折叠区排在视频之后
       await user.click(screen.getAllByText("按用途指定模型")[1]);
       expect(await omniRowIn(user, "文生图")).not.toMatch(/有声|无声/);
@@ -1384,6 +1439,7 @@ describe("音频开关的模型可控性", () => {
   });
 });
 
+// ComfyUI model row: when size / duration are fixed by the workflow, the matching controls are disabled with the reason explained
 // -------------------------------------------------------------------------
 // ComfyUI 模型行：尺寸 / 时长被 workflow 固定时，对应控件禁用并说清原因
 // -------------------------------------------------------------------------
@@ -1440,6 +1496,7 @@ describe("dimensions a ComfyUI workflow fixes", () => {
 
   const BACKEND = "custom-3/my-wan-workflow";
 
+  /** A project carrying one ComfyUI model row: the endpoint catalog replies with the constraints given by the case. */
   /** 挂着一个 ComfyUI 模型行的项目：端点目录按用例给出的约束应答。 */
   function renderWithConstraints(overrides: Partial<EndpointDescriptor>, durations: number[]) {
     useEndpointCatalogStore.setState(useEndpointCatalogStore.getInitialState(), true);
@@ -1488,6 +1545,7 @@ describe("dimensions a ComfyUI workflow fixes", () => {
     const picker = await screen.findByRole("combobox", { name: "分辨率" });
     expect(picker).toBeDisabled();
     expect(picker).toHaveAttribute("placeholder", "workflow 原生（480p）");
+    // The disabled reason needs a visible line of explanation, not just title.
     // 禁用原因要有一行可见说明，不能只靠 title。
     expect(screen.getByText(/此 workflow 尺寸固定：宽高没有绑定到节点/)).toBeInTheDocument();
   });
@@ -1516,6 +1574,7 @@ describe("dimensions a ComfyUI workflow fixes", () => {
   });
 
   it("says why the duration control is absent when the frame rate cannot be read either", async () => {
+    // frames is bound but there is no frame rate source: the project page sees the same result as the fixed-duration branch, and also needs a line of explanation.
     // frames 绑了却没有帧率来源：项目页看到的结果与时长固定那一支一样，也要有一行说明。
     renderWithConstraints({ duration_fixed: false, duration_tier_empty: true }, []);
 

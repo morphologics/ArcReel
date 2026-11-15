@@ -25,6 +25,15 @@ function paramsText(params: Record<string, unknown> | undefined): string {
 }
 
 /**
+ * Reason and remedy when the episode's most recent text task (AI plan script, author prompts, draft repair, ad/short AI generate script) failed,
+ * pinned to the top of the episode page and visible on the content review page, timeline and episode source page. Once dismissed it reappears only on the next failure.
+ *
+ * Ad/short whole-script generation and prompt authoring share the script text task: with no final script yet, such a task can only be whole-script generation;
+ * with a final script they are told apart by the task's own flags (full redo, violation failure).
+ *
+ * The summary shows only the reason rendered by the backend in the UI language; problem codes, parameters and the server original go into the expandable "Details". When the backend could not
+ * localize the reason (external or unknown errors) there is no original field; the original itself is the summary, so there are no details.
+ *
  * 本集最近一次文本任务（AI 规划脚本、编写提示词、AI 修复、广告/短片 AI 生成脚本）失败时的原因与出路，
  * 挂在集页顶部，内容确认页、时间线与集原文页都看得到。关掉后，直到下一次失败才再出现。
  *

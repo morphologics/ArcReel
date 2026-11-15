@@ -1,14 +1,21 @@
 /**
+ * Replicates Anthropic's official reference implementation: before processing, the model scales an image to the largest proportional size satisfying both the edge-length and visual token
+ * limits. See https://platform.claude.com/docs/en/build-with-claude/vision-coordinates
+ *
  * 复刻 Anthropic 官方参考实现：模型在处理前把图片缩到同时满足边长与视觉 token 两条
  * 限制的最大等比尺寸。见 https://platform.claude.com/docs/en/build-with-claude/vision-coordinates
  */
 
-/** 视觉 token 数：每 28×28 像素一块，一块 1 个 token。 */
+/** Visual token count: one block per 28×28 pixels, 1 token per block. / 视觉 token 数：每 28×28 像素一块，一块 1 个 token。 */
 function countImageTokens(width: number, height: number): number {
   return Math.ceil(width / 28) * Math.ceil(height / 28);
 }
 
 /**
+ * Round half to even (banker's rounding), consistent with Python's `round()`.
+ * The server resolves a short edge of exactly .5 to the even neighbor, while `Math.round` always rounds up, so for some images the two
+ * compute sizes 1 pixel apart.
+ *
  * 四舍六入五取偶（banker's rounding），与 Python 的 `round()` 一致。
  * 服务端把恰好 .5 的短边解析为偶数邻值，`Math.round` 一律进位，两者对部分图片
  * 会算出相差 1 像素的尺寸。
@@ -20,6 +27,10 @@ function roundTiesToEven(value: number): number {
 }
 
 /**
+ * Pixel size after model scaling (before padding), returning `[width, height]`.
+ *
+ * Default parameters are the standard resolution tier. Images already within both limits are returned unchanged.
+ *
  * 模型缩放（补边之前）后的像素尺寸，返回 `[width, height]`。
  *
  * 默认参数是标准分辨率档。已经落在两条限制内的图片原样返回。
@@ -41,10 +52,10 @@ export function resizedSize(
     return [resizedW, resizedH];
   }
 
-  // 沿长边二分：找出仍然合规的最大等比尺寸。
+  // Binary search along the long edge: find the largest proportional size that still complies. / 沿长边二分：找出仍然合规的最大等比尺寸。
   const aspectRatio = width / height;
-  let lo = 1; // lo 恒合规
-  let hi = width; // hi 恒不合规
+  let lo = 1; // lo always complies / lo 恒合规
+  let hi = width; // hi never complies / hi 恒不合规
   while (lo + 1 < hi) {
     const mid = Math.floor((lo + hi) / 2);
     if (fits(mid, Math.max(roundTiesToEven(mid / aspectRatio), 1))) {

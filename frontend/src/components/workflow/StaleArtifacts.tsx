@@ -6,15 +6,21 @@ import { EpisodeItemRef } from "@/components/shared/episode-item/EpisodeItemRef"
 
 interface Props {
   staleIds: string[];
-  /** 跳到画布上的该单元；那里已经有预览与版本历史。 */
+  /** Jumps to the unit on the canvas; preview and version history are already there. / 跳到画布上的该单元；那里已经有预览与版本历史。 */
   onView?: (unitId: string) => void;
-  /** 显式重生。没有回调时只陈述状态，不长出一个点了没反应的按钮。 */
+  /** Explicit regenerate. Without a callback it only states the status, without growing a button that does nothing when clicked. / 显式重生。没有回调时只陈述状态，不长出一个点了没反应的按钮。 */
   onRegenerate?: (unitIds: string[]) => void;
-  /** 重生请求在途；同一步骤的兄弟控件同步禁用。 */
+  /** Regenerate request in flight; sibling controls of the same step are disabled together. / 重生请求在途；同一步骤的兄弟控件同步禁用。 */
   busy?: boolean;
 }
 
 /**
+ * Artifacts that are stale but still usable.
+ *
+ * The stance of this section is "keeping is the default, redoing needs your own click": stale only means the artifact is older than the current content; the file is still there,
+ * still takes part in the final cut as usual, and doesn't block this episode from reaching export. So it neither regenerates automatically nor counts it as a gap,
+ * and only lays out two entries, "take a look" and "really redo"; the latter costs money and must be pressed by the user.
+ *
  * 已过时但仍然可用的产物。
  *
  * 这一段的立场是「保留是默认，重做要你亲自点」：过时只说明产物比当前内容旧，文件还在、

@@ -24,6 +24,9 @@ function isAssetType(value: string | null): value is AssetType {
 }
 
 /**
+ * Global asset library: full-width page shell; type tabs show each type's match count under the current search, and the grid loads the next page when scrolled to the bottom.
+ * Current type and search term live in the address `tab` and `q` params. Clicking a card opens the detail Sheet; the form opens only after clicking "Edit" in the detail.
+ *
  * 全局资产库：铺满档的页面外壳，类型标签显示当前搜索下各类型的匹配数，网格滚动到底时自动加载下一页。
  * 当前类型与搜索词记在地址的 `tab`、`q` 参数里。点卡片打开详情 Sheet，在详情里点「编辑」才进入表单。
  */
@@ -56,6 +59,7 @@ export function AssetLibraryPage() {
   );
 
   const [input, setInput] = useState({ urlQ, value: urlQ });
+  // A URL change immediately voids the old input and its debounced publish, so browser back/forward isn't overwritten by stale values.
   // URL 变化立即作废旧输入与其防抖发布，浏览器前进/后退不会被旧值回写。
   if (input.urlQ !== urlQ) setInput({ urlQ, value: urlQ });
   const q = input.urlQ === urlQ ? input.value : urlQ;
@@ -74,6 +78,8 @@ export function AssetLibraryPage() {
   const [applyTarget, setApplyTarget] = useState<Asset | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<Asset | null>(null);
   const detailAsset = detail ? (pages.items.find((asset) => asset.id === detail.id) ?? null) : null;
+  // When the selected asset leaves the current results (no longer matches after rename, deleted, search changed) the detail closes;
+  // the selection is cleared too, so the detail doesn't reopen by itself when it reappears in the results
   // 选中的资产离开当前结果（改名后不再匹配、被删除、换了搜索词）时详情随之关闭；
   // 同时清掉选中，之后它重新出现在结果里时详情不会自己打开
   if (detail && detailAsset === null) setDetail(null);

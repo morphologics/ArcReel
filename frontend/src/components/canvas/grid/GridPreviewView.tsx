@@ -55,6 +55,7 @@ function GridGroupCard({
   const { t } = useTranslation("dashboard");
   const titleId = useId();
   const activeGridIds = useActiveResourceIds("grid", projectName);
+  // "Generate this group" and the panel's actions write the same group's grid composite: while either is in flight, they disable each other
   // 「生成这一组」与面板里的动作写同一组联合图：任一在途时互相禁用
   const groupBusy = submitting || gridIds.some((id) => activeGridIds.has(id));
 
@@ -99,7 +100,7 @@ function GridGroupCard({
   );
 }
 
-/** 多宫格分镜图视图：按章节切分点分组，每组一张卡片；视图自己滚动，联合图高度按视图高度封顶。 */
+/** Multi-grid storyboard view: grouped by segment break, one card per group; the view scrolls itself and the grid composite height is capped by the view height. / 多宫格分镜图视图：按章节切分点分组，每组一张卡片；视图自己滚动，联合图高度按视图高度封顶。 */
 export function GridPreviewView({
   projectName,
   episode,
@@ -113,6 +114,8 @@ export function GridPreviewView({
   const invalidateGrids = useAppStore((s) => s.invalidateGrids);
   const [grids, setGrids] = useState<GridGeneration[]>([]);
   const [generatingGroups, setGeneratingGroups] = useState<Set<string>>(new Set());
+  // The per-image cell limit comes from the backend: the 4K gating for 4×4 / 5×5 can only be decided after provider resolution, so a frontend-side derivation
+  // would inevitably drift from the enqueue basis. When unavailable, computeGridSize uses a conservative default.
   // 单张宫格的格数上限由后端给：4×4 / 5×5 的 4K 门控要经供应商解析才能定，前端自行推导
   // 必然与入队口径漂移。取不到时 computeGridSize 用保守默认值。
   const [maxCellCount, setMaxCellCount] = useState<number | undefined>(undefined);
@@ -130,6 +133,7 @@ export function GridPreviewView({
     return () => controller.abort();
   }, [projectName]);
 
+  // The grid list is refetched on the global invalidation signal: generation, upload and restore all trigger it via invalidateGrids
   // 宫格列表随全局失效信号重拉：生成、上传、还原之后都经 invalidateGrids 触发
   useEffect(() => {
     if (!projectName) return;
@@ -144,6 +148,7 @@ export function GridPreviewView({
   }, [projectName, gridsRevision]);
 
   const handleGenerateGroup = useCallback(
+    // The group key is the sorted sceneIds joined, so the spinner does not attach to the wrong card when groups reorder
     // group key 用 sceneIds 排序后 join，分组重排时 spinner 不会挂错卡片
     async (groupKey: string, group: Segment[]) => {
       if (!onGenerateGrid || !scriptFile) return;
@@ -164,6 +169,7 @@ export function GridPreviewView({
   );
 
   const stats = useMemo(() => {
+    // When a group exceeds the per-image cell limit the backend splits it into several grids; the count accumulates the actually enqueued count
     // 一个分组超过单张格数上限时后端会切成多张宫格，张数按实际入队张数累计
     const batches = groups.reduce(
       (sum, group) => sum + computeGridSize(group.length, maxCellCount).batchCount,
@@ -171,6 +177,7 @@ export function GridPreviewView({
     );
     const readyGroups = groups.filter((group) => {
       const sceneIds = group.map((s) => getSegmentId(s, contentMode));
+      // When a group is split into several chunks, it is ready only when every chunk has a matching grid and all are complete.
       // 一组切成多块时，每一块都有对上的宫格且全部完成才算就绪。
       const groupGrids = matchGridsForGroup(grids, sceneIds, episode, maxCellCount);
       return (

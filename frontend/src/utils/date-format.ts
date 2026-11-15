@@ -14,6 +14,8 @@ function getFormatter(lang: string | undefined, options: Intl.DateTimeFormatOpti
   return fmt;
 }
 
+// An ISO string without an explicit timezone suffix (Z / ±HH(:MM)) is treated as UTC to avoid browser ambiguity.
+// The timestamp parsing rule is shared between time display and duration computation, hence exported.
 // ISO 字符串若没有显式时区后缀（Z / ±HH(:MM)），按 UTC 处理避免浏览器歧义。
 // 时间戳解析规则在时刻展示与时长计算之间共用，故导出。
 export function parseIsoTimestamp(value: string): Date {
@@ -33,6 +35,7 @@ export function formatDate(
   return getFormatter(lang, options).format(date);
 }
 
+// Local time HH:mm, for same-day conversation flow; returns null on parse failure for the caller to handle
 // 本地时刻 HH:mm，用于同一天内的对话流；解析失败返回 null 由调用方兜底
 export function formatClockTime(value: string | null | undefined): string | null {
   if (!value) return null;
@@ -42,6 +45,7 @@ export function formatClockTime(value: string | null | undefined): string | null
   return `${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }
 
+// Compact local time MM/DD HH:mm, for dense lists/titles; returns null on parse failure for the caller to handle
 // 紧凑本地时间 MM/DD HH:mm，用于信息密集的列表/标题；解析失败返回 null 由调用方兜底
 export function formatShortDateTime(value: string | null | undefined): string | null {
   if (!value) return null;
@@ -74,6 +78,8 @@ function getRelativeFormatter(lang: string): Intl.RelativeTimeFormat {
   return fmt;
 }
 
+// Less than a minute from now (including slightly later than now due to clock skew) counts as "just now"; returns false on parse failure.
+// "Just now" is embedded in whole sentences with wording varying by sentence, so callers choose their own text rather than Intl's "now".
 // 与当前相差不足一分钟（含时钟偏差造成的略晚于当前）算「刚刚」；解析失败返回 false。
 // 「刚刚」要嵌进整句话，措辞因句子而异，由调用方各自选文案，不交给 Intl 的「现在」。
 export function isJustNow(value: string | null | undefined, now: number = Date.now()): boolean {
@@ -82,6 +88,8 @@ export function isJustNow(value: string | null | undefined, now: number = Date.n
   return !Number.isNaN(time) && Math.abs(time - now) < JUST_NOW_MS;
 }
 
+// Coarse time relative to now ("3 hours ago"), worded per UI language; under a minute is left to Intl ("now"), returns null on parse failure.
+// Callers needing "just now" check isJustNow first.
 // 相对当前的粗粒度时间（「3 小时前」），按界面语言成文；不足一分钟交给 Intl 成文（「现在」），解析失败返回 null。
 // 需要「刚刚」的调用方先用 isJustNow 判断。
 export function formatRelativeTime(

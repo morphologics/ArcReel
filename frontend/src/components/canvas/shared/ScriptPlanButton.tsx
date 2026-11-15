@@ -9,14 +9,17 @@ import { useScriptPlanStore, type ScriptPlanReplacement } from "@/stores/script-
 interface Props {
   projectName: string;
   episode: number;
-  /** 新规划会替换的现有内容。集页的首次规划走起步区（`ScriptPlanStart`），不经这里。 */
+  /** Existing content the new plan would replace. The episode page's first plan goes through the start area (`ScriptPlanStart`), not here. / 新规划会替换的现有内容。集页的首次规划走起步区（`ScriptPlanStart`），不经这里。 */
   replaces: ScriptPlanReplacement;
   className?: string;
-  /** 额外的禁用条件（如页面上有未保存的编辑）与对应的说明。 */
+  /** Extra disabling condition (e.g. unsaved edits on the page) and its explanation. / 额外的禁用条件（如页面上有未保存的编辑）与对应的说明。 */
   disabledReason?: string | null;
 }
 
 /**
+ * Entry that opens the "AI plan script" dialog. Reads "AI plan script" when the episode has no plan yet, otherwise "Replan".
+ * While planning runs or admission fails it still shows but is disabled; hover and screen readers both give the reason.
+ *
  * 打开「AI 规划脚本」对话框的入口。本集还没有规划时文字为「AI 规划脚本」，否则为「重新规划」。
  * 规划在跑或准入不成立时照常显示、置灰，悬停与读屏都给出原因。
  */
@@ -29,6 +32,7 @@ export function ScriptPlanButton({ projectName, episode, replaces, className, di
   const firstPlan = replaces === "formal_script";
   const Icon = busy ? Loader2 : firstPlan ? Sparkles : RotateCcw;
   return (
+    // When disabled keep focusability instead of native disabled so screen readers can read the reason; the button's own disabled fading does not apply, so the outer wrapper fades
     // 置灰时保留聚焦而不用原生 disabled，读屏才读得到置灰原因；按钮自带的禁用淡化不生效，由外层淡化
     <span className={cn("inline-flex", reason !== null && "cursor-not-allowed opacity-50")}>
       <Button

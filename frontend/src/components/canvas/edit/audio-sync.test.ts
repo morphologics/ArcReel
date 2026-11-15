@@ -14,6 +14,7 @@ import {
 } from "./audio-sync";
 import type { AudioPlacement } from "./preview-tracks";
 
+// Narration plays from global 4s to 9s, source audio starts at 0
 // 旁白从全局 4s 放到 9s，源音频从 0 开始
 const NARRATION: AudioPlacement = {
   id: "narration-c2",
@@ -27,6 +28,7 @@ const NARRATION: AudioPlacement = {
   fadeOut: 0,
 };
 
+// BGM plays from global 2s to 12s, taking source audio from 10s, volume 0.25, 1s fade in and out
 // BGM 从全局 2s 放到 12s，取源音频 10s 起，音量 0.25，淡入淡出各 1s
 const BGM: AudioPlacement = {
   id: "bgm-b1",
@@ -147,11 +149,13 @@ describe("syncAudio", () => {
     const ended = { currentTime: 4.98, paused: true, seeking: false, ended: true };
 
     expect(syncAudio(NARRATION, 8.99, true, ended)).toEqual({ play: false, seekTo: null, playbackRate: 1, volume: 1 });
+    // Jumping back to an earlier position within the range aligns and plays as usual
     // 跳回区间内更早的位置时照常对齐再播
     expect(syncAudio(NARRATION, 6, true, ended)).toMatchObject({ play: true, seekTo: 2 });
   });
 
   it("corrects drift that accumulates over a long placement", () => {
+    // Wall clock advanced 60s and the element's own clock is 0.2s behind: nudge the playback rate to catch up instead of letting it drift
     // 墙钟走了 60s，元素自己的时钟慢了 0.2s：微调速度追，而不是一直放任
     const longBgm = { ...BGM, start: 0, end: 120, fadeIn: 0, fadeOut: 0 };
 

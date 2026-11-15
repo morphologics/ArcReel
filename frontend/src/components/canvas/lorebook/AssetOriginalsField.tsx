@@ -27,14 +27,17 @@ interface AssetOriginalsFieldProps {
   projectName: string;
   name: string;
   assetType: OriginalsAssetType;
-  /** 已上传的原图路径：角色最多一张，商品可以多张。 */
+  /** Uploaded original image paths: at most one for characters, several for products. / 已上传的原图路径：角色最多一张，商品可以多张。 */
   paths: string[];
   readOnly?: boolean;
-  /** 详情里其它写入或生成占用中：上传入口一起禁用。 */
+  /** Another write or generation in the details holds a lock: the upload entry is disabled too. / 详情里其它写入或生成占用中：上传入口一起禁用。 */
   busy?: boolean;
 }
 
 /**
+ * Original images: reference pictures uploaded by the creator, used as input when generating the asset sheet. Characters have only one and upload replaces it; products can have several,
+ * and upload appends. Upload is an immediate action, not an unsaved change, with no toast on success.
+ *
  * 原图：创作者上传的参考图片，生成资产图时作为输入。角色只有一张，上传即替换；商品可以有多张，
  * 上传即追加。上传是立即执行的动作，不进入未保存修改，成功不弹提示。
  */
@@ -51,10 +54,12 @@ export function AssetOriginalsField({
   const [uploading, setUploading] = useState(false);
   const [viewing, setViewing] = useState<number | null>(null);
   const track = useTrackWrite();
+  // Subscribe to the fingerprint map itself: taking only the getAssetFingerprint function would not re-render on fingerprint updates, leaving the URL on the old version
   // 订阅指纹表本身：只取 getAssetFingerprint 函数时指纹更新不会触发重渲染，地址停在旧版本
   const fingerprints = useProjectsStore((s) => s.assetFingerprints);
   const multiple = assetType === "product";
   const urls = paths.map((path) => API.getFileUrl(projectName, path, fingerprints[path] ?? null));
+  // The list shows only thumbnails (64px squares for several, 112px tall for one); the original is fetched only when opened for viewing
   // 列表只显示缩略图（多张 64px 方块，单张 112px 高），点开查看时才拉原图
   const thumbUrls = paths.map((path) =>
     API.getFileUrl(projectName, path, fingerprints[path] ?? null, { width: multiple ? 160 : 640 }),
@@ -78,7 +83,7 @@ export function AssetOriginalsField({
       await track(
         (async () => {
           for (const file of files) {
-            // react-doctor-disable-next-line react-doctor/async-await-in-loop -- 同一资产的原图逐张写入：保持选择顺序、避免并发改写同一条资产记录，中途失败即停并按已传张数刷新
+            // react-doctor-disable-next-line react-doctor/async-await-in-loop -- original images of one asset are written one at a time: keeps the selection order and avoids concurrently rewriting the same asset record; stop on the first failure and refresh by the count uploaded / 同一资产的原图逐张写入：保持选择顺序、避免并发改写同一条资产记录，中途失败即停并按已传张数刷新
             await API.uploadFile(projectName, UPLOAD_TYPE[assetType], file, name);
             uploaded += 1;
           }
@@ -87,6 +92,7 @@ export function AssetOriginalsField({
     } catch (err) {
       useAppStore.getState().pushToast(errMsg(err), "error");
     } finally {
+      // When a multi-image upload fails midway, those already uploaded must still show; if none uploaded there is no write to refresh
       // 多张上传中途失败时，前面已上传的也要反映出来；一张都没传上就没有可刷新的写入
       if (uploaded > 0) {
         await track(refreshAfterWrite(projectName, t, { invalidateKeys: [buildEntityRevisionKey(assetType, name)] }));

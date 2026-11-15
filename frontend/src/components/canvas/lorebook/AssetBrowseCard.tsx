@@ -46,31 +46,33 @@ type DialogKey = "image-edit" | "versions" | "library" | "merge" | "delete";
 export interface AssetBrowseCardProps {
   projectName: string;
   asset: GalleryAsset;
-  /** 产物清单对这张资产图的判定；未取到时按条目上是否登记了资产图展示。 */
+  /** The artifact manifest's verdict on this asset sheet; when unavailable, display by whether the entry has a sheet registered. / 产物清单对这张资产图的判定；未取到时按条目上是否登记了资产图展示。 */
   sheetStatus: AssetSheetStatusRow | undefined;
   marker: GalleryMarker;
-  /** 资产图任务占用中（生成或局部修改）。 */
+  /** An asset sheet task holds the lock (generation or partial edit). / 资产图任务占用中（生成或局部修改）。 */
   generating: boolean;
-  /** 本体或衍生文件被任务占用。 */
+  /** The base look or derivative file is held by a task. / 本体或衍生文件被任务占用。 */
   busy?: boolean;
-  /** 只读展示（引导演示项目）：菜单只保留查看大图，没有删除。 */
+  /** Read-only display (guided demo project): the menu keeps only view full image, no delete. / 只读展示（引导演示项目）：菜单只保留查看大图，没有删除。 */
   readOnly: boolean;
-  /** 入库预览的内容；商品不入资产库，不传。 */
+  /** Content for the library-import preview; products are not imported into the asset library and do not pass it. / 入库预览的内容；商品不入资产库，不传。 */
   libraryPreview?: LibraryImportPreview;
-  /** 点卡片：打开该资产的详情。需传稳定引用。 */
+  /** Card click: open this asset's details. Must be a stable reference. / 点卡片：打开该资产的详情。需传稳定引用。 */
   onOpen: (name: string) => void;
-  /** 「查看大图」。需传稳定引用。 */
+  /** "View full image". Must be a stable reference. / 「查看大图」。需传稳定引用。 */
   onView: (name: string) => void;
   onGenerate: (name: string) => void;
   onRestoreVersion?: () => Promise<unknown> | void;
   onReload?: () => Promise<unknown> | void;
-  /** 卡片上的上传、版本恢复或删除开始与结束时回报，画廊据此禁用同一资产的其他写入入口。需传稳定引用。 */
+  /** Reported when an upload, version restore or delete on the card starts and ends, so the gallery disables other write entries of the same asset. Must be a stable reference. / 卡片上的上传、版本恢复或删除开始与结束时回报，画廊据此禁用同一资产的其他写入入口。需传稳定引用。 */
   onWritingChange?: (name: string, writing: boolean) => void;
-  /** 画廊里所有卡片在途的本地写入，供合并对话框判断保留方是否被占用。 */
+  /** In-flight local writes of all cards in the gallery, used by the merge dialog to tell whether the kept asset is locked. / 画廊里所有卡片在途的本地写入，供合并对话框判断保留方是否被占用。 */
   writingNames?: ReadonlySet<string>;
 }
 
 /**
+ * Gallery browse card shared by the four asset types. The card only views and selects; editing happens in the details; secondary actions live under "More".
+ *
  * 画廊浏览卡：四类资产共用。卡片只负责看和选中，编辑在详情里进行；次要操作都收在「更多」里。
  */
 export const AssetBrowseCard = memo(function AssetBrowseCard({
@@ -109,6 +111,7 @@ export const AssetBrowseCard = memo(function AssetBrowseCard({
       : null;
   const imageUrl = sheetUrl && sheetUrl !== failedUrl ? sheetUrl : null;
 
+  // When the asset sheet is held by generation, partial edit, upload or version restore, or the asset is being deleted, sibling actions are disabled too.
   // 资产图被生成、局部修改、上传或版本恢复占用，或资产正在删除时，兄弟操作一起禁用。
   const busy = externalBusy || generating || uploading || restoring || deleting;
   const writing = uploading || restoring || deleting;
@@ -117,6 +120,7 @@ export const AssetBrowseCard = memo(function AssetBrowseCard({
     onWritingChange(name, true);
     return () => onWritingChange(name, false);
   }, [writing, name, onWritingChange]);
+  // Merge is offered only for types with aliases that sync with the asset library; products do not pass a library-import preview.
   // 合并只开放带别名、与资产库互通的类型；商品不传入库预览。
   const mergeable = libraryPreview !== undefined && type !== "product";
   const describable = asset.description.trim().length > 0;
@@ -143,11 +147,12 @@ export const AssetBrowseCard = memo(function AssetBrowseCard({
     } catch (err) {
       useAppStore.getState().pushToast(errMsg(err), "error");
     } finally {
-      // react-doctor-disable-next-line react-doctor/no-unowned-async-error-clear -- 上传在途时 busy 禁用入口并在开头拦截，同一卡片不会有更新的上传共享这个标志；错误走提示，不存本地 state
+      // react-doctor-disable-next-line react-doctor/no-unowned-async-error-clear -- while an upload is in flight busy disables the entry and blocks at the start, so no newer upload on the same card shares this flag; errors go to toasts, not local state / 上传在途时 busy 禁用入口并在开头拦截，同一卡片不会有更新的上传共享这个标志；错误走提示，不存本地 state
       setUploading(false);
     }
   };
 
+  // Re-check lock state before opening a dialog that writes the asset sheet: beyond the render snapshot, the resource may have just been locked by the Agent or another tab.
   // 打开会写资产图的对话框前复核占用态：渲染快照之外，资源可能刚被 Agent 或其他标签页占用。
   const openGuarded = (key: DialogKey) => {
     if (rejectIfAssetBusy(type, projectName, name, t, "assets:gallery_busy_hint")) return;
@@ -177,7 +182,7 @@ export const AssetBrowseCard = memo(function AssetBrowseCard({
       <div className="flex min-w-0 flex-1 flex-col gap-1 p-3 pt-2.5">
         <div className="flex min-w-0 items-center gap-1">
           <h3 id={titleId} className="min-w-0 flex-1 text-sm font-medium">
-            {/* 名称按钮的伪元素铺满整张卡片，点卡片任意处都打开详情；「更多」在 DOM 中靠后、自身定位，盖在它上面。 */}
+            {/* The name button's pseudo-element covers the whole card, so clicking anywhere opens details; "More" comes later in the DOM, is self-positioned, and sits on top of it. / 名称按钮的伪元素铺满整张卡片，点卡片任意处都打开详情；「更多」在 DOM 中靠后、自身定位，盖在它上面。 */}
             <button
               type="button"
               onClick={() => onOpen(name)}
@@ -285,6 +290,7 @@ export const AssetBrowseCard = memo(function AssetBrowseCard({
             resourceType={VERSION_RESOURCE[type]}
             resourceId={name}
             onRestore={onRestoreVersion}
+            // In-flight restore is managed by the panel itself; other locks (including derivative tasks and external locks aggregated by the gallery) disable it too
             // 恢复在途由面板自己管；其余占用（含衍生任务与画廊汇总的外部占用）一并禁用
             busy={externalBusy || generating || uploading || deleting}
             onRestoringChange={setRestoring}
@@ -329,7 +335,7 @@ export const AssetBrowseCard = memo(function AssetBrowseCard({
   );
 });
 
-/** 卡片底部的计数：衍生、别名与商品原图，只列非零项。 */
+/** Card footer counts: derivatives, aliases and product originals, listing only non-zero items. / 卡片底部的计数：衍生、别名与商品原图，只列非零项。 */
 function CardCounts({ asset }: { asset: GalleryAsset }) {
   const { t } = useTranslation("assets");
   const items = [

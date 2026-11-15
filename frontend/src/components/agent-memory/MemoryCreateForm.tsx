@@ -12,6 +12,9 @@ import { errMsg } from "@/utils/async";
 import { checkNewName, newFileTemplate, type MemoryEntry } from "./memory-files";
 
 /**
+ * Create a memory file: created right after the name is entered (same PUT as save, body is the frontmatter template), then the new file is selected.
+ * The file name is a parameter of the create action, not an unsaved change, so it does not register a leave guard.
+ *
  * 新建记忆文件：输入文件名后立即创建（与保存同一个 PUT，正文是带 frontmatter 的模板），成功后选中新文件。
  * 文件名是创建动作的参数，不是未保存修改，不登记离开拦截。
  */
@@ -25,12 +28,15 @@ export function MemoryCreateForm({
 }: {
   scope: AgentMemoryScope;
   entries: MemoryEntry[];
-  /** 目录里一个文件都没有：先说明记忆从哪里来。 */
+  /** The directory has no files at all: first explain where memory comes from. / 目录里一个文件都没有：先说明记忆从哪里来。 */
   empty: boolean;
-  /** 记忆层级的说明；所在页面已有说明时不传。 */
+  /** Description of the memory level; omit when the page already has one. / 记忆层级的说明；所在页面已有说明时不传。 */
   intro?: string;
   heading: "h2" | "h3";
   /**
+   * Select the new file after creation; if it returns a Promise, wait for it before ending the submitting state.
+   * `signal` aborts when the form unmounts (switched to another file or left the page); then we no longer jump to the new file.
+   *
    * 创建成功后选中新文件；返回 Promise 时等它完成再结束提交态。
    * `signal` 在表单卸载（已切到别的文件或离开本页）时中止，此时不再跳到新文件。
    */

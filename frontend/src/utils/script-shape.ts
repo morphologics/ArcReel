@@ -1,4 +1,8 @@
 /**
+ * Script shape dispatch (same rule as the backend SCRIPT_SHAPES): content_mode -> entry ID / character reference field.
+ *
+ * Shared by the timeline editor components (list / split view / details / reference area) so the ternary mappings don't drift across places.
+ *
  * 剧本形状分派（与后端 SCRIPT_SHAPES 同口径）：content_mode → 条目 ID / 角色引用字段。
  *
  * 时间线编辑器各组件（列表 / 分屏 / 详情 / 引用区）共用，避免三元映射在多处漂移。
@@ -22,7 +26,7 @@ export type CharactersField =
   | "characters_in_scene"
   | "characters_in_shot";
 
-/** 取条目 ID（segment_id / scene_id / shot_id）。 */
+/** Get the entry ID (segment_id / scene_id / shot_id). / 取条目 ID（segment_id / scene_id / shot_id）。 */
 export function getScriptItemId(item: ScriptItem, mode: EditorContentMode): string {
   if (mode === "narration") return (item as NarrationSegment).segment_id;
   if (mode === "ad") return (item as AdShot).shot_id;
@@ -30,6 +34,10 @@ export function getScriptItemId(item: ScriptItem, mode: EditorContentMode): stri
 }
 
 /**
+ * Get the episode script's entry array for that mode (segments / shots / scenes).
+ *
+ * Unregistered modes return an empty array: rendering with another mode's shape would dispatch saves to the wrong endpoint.
+ *
  * 取剧集剧本在该模式下的条目数组（segments / shots / scenes）。
  *
  * 未注册的模式返回空数组：以其他模式的形状渲染会让保存分派到错误端点。
@@ -45,7 +53,7 @@ export function getScriptItems(
   return [];
 }
 
-/** 取该模式下条目的角色引用字段名。 */
+/** Get the character reference field name of entries in that mode. / 取该模式下条目的角色引用字段名。 */
 export function charactersFieldFor(mode: EditorContentMode): CharactersField {
   if (mode === "drama") return "characters_in_scene";
   if (mode === "ad") return "characters_in_shot";
@@ -53,6 +61,11 @@ export function charactersFieldFor(mode: EditorContentMode): CharactersField {
 }
 
 /**
+ * Episode total duration = sum of each entry's `duration_seconds`.
+ *
+ * It is a derived value, not persisted in the script (the server computes it on read from the project summary by the same rule). All canvases share this one
+ * implementation, so the same number isn't written twice in the timeline and grid with inconsistent robustness.
+ *
  * 集总时长 = 逐条目 `duration_seconds` 求和。
  *
  * 它是派生值，剧本不落盘一份（服务端由项目摘要按同一口径读时计算）。各画布共用这一份

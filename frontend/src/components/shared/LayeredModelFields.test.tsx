@@ -21,12 +21,12 @@ function subField(overrides: Partial<LayeredSubField> = {}): LayeredSubField {
   };
 }
 
-/** 「按用途指定模型」折叠区的开关按钮。 */
+/** Toggle button of the "Specify models by purpose" collapsible section. / 「按用途指定模型」折叠区的开关按钮。 */
 function disclosure() {
   return screen.queryByRole("button", { name: /按用途指定模型/ });
 }
 
-/** 弹层异步打开：点击后等列表出现再查询选项。 */
+/** The popover opens asynchronously: after clicking, wait for the list to appear before querying options. / 弹层异步打开：点击后等列表出现再查询选项。 */
 async function openSelect(user: ReturnType<typeof userEvent.setup>, name: string) {
   await user.click(screen.getByRole("combobox", { name }));
   await screen.findByRole("listbox");
@@ -62,11 +62,13 @@ describe("LayeredModelFields", () => {
     renderFields();
     expect(screen.getByRole("combobox", { name: "默认视频模型" })).toBeInTheDocument();
     expect(disclosure()).toHaveAttribute("aria-expanded", "false");
+    // Collapsed state has no count badge, since no sub-item is specified
     // 收起态没有计数徽标，因为无任何细分项被指定
     expect(screen.queryByText(/已指定/)).not.toBeInTheDocument();
   });
 
   it("reads as following the default rather than requiring a pick when the whole chain is empty", async () => {
+    // With all layers empty no concrete model can be derived: the trigger button must still carry empty-value semantics; the generic "Select model" would read as required
     // 全层皆空时演算不出具体模型：触发按钮上必须仍是空值语义，通用的「选择模型」会读成必填
     const user = userEvent.setup();
     renderFields();
@@ -123,6 +125,9 @@ describe("LayeredModelFields", () => {
     expect(onDefaultChange).not.toHaveBeenCalled();
   });
 
+  // The default layer and each sub-item share one renderOptionMeta. Path-dependent values (audio track) are only right with "which sub-item
+  // is asking", so here we lock in the forwarding itself: the default layer passes no key, each sub-item passes only its own key. Assertions use
+  // the rendered option text (renderOptionMeta's return value shows in dropdown options), not mock call records.
   // 默认层与各细分项共用一个 renderOptionMeta。路径相关的取值（音轨）只有拿到「是哪个细分项
   // 在问」才算得对，所以这里锁住转发本身：默认层不带 key，细分项带且只带自己的 key。断言走
   // 渲染出的选项文本（renderOptionMeta 的返回值会显示在下拉选项里），不读 mock 调用记录。
@@ -169,6 +174,7 @@ describe("LayeredModelFields", () => {
   it("force-opens the disclosure and shows an error notice with retry when subFieldsError is set, even with no sub-fields", () => {
     const onRetry = vi.fn();
     renderFields({ subFields: [], subFieldsError: { onRetry } });
+    // Having no sub-items should make the whole collapsible section vanish, but in the error state it must still show so the user notices the failure and retries
     // 无任何细分项本应让整块折叠区消失，但错误态下仍需展示，用户才能感知失败并重试
         expect(disclosure()).toHaveAttribute("aria-expanded", "true");
     expect(screen.getByRole("alert")).toHaveTextContent(/模型列表加载失败/);
@@ -193,6 +199,8 @@ describe("LayeredModelFields", () => {
   });
 
   it("expands the collapsed disclosure when the error appears after mount", () => {
+    // The candidates request usually fails after mount, when the initial open has already been computed; only in cases that render with an error from the start
+    // is the useState initial value true, so deleting the post-mount force-expand would still pass there.
     // 候选请求失败通常晚于挂载，初始 open 已经算过；只在初始渲染就带错误的用例下，
     // useState 初值即为 true，删掉挂载后的强制展开也照样通过。
     const { rerender } = renderFields();

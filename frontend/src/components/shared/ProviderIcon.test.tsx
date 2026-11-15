@@ -20,6 +20,9 @@ describe("ProviderIcon", () => {
     expect(screen.getByText("z")).toBeInTheDocument();
   });
 
+  // Regression test: keeps wired-up built-in provider icons from regressing.
+  // Note this is not a coverage guarantee: built-in providers the icon library lacks (e.g. Agnes) legitimately use a letter badge,
+  // so this table lists only "wired-up" ids; adding a provider without an icon will not, and should not, turn it red.
   // 回归测试：守住已接线的内置 provider 图标不退化。
   // 注意这不是覆盖保证——图标库没有的内置 provider（如 Agnes）合法地走字母徽章，
   // 故本表只列「已接线」的 id，新增无图标 provider 不会、也不该让它变红。
@@ -40,6 +43,7 @@ describe("ProviderIcon", () => {
     expect(screen.getByTestId("lobehub-stub-icon")).toBeInTheDocument();
   });
 
+  // Guard the Array.from fallback: when the first character is an astral (non-BMP) character, take the whole character, not half a surrogate pair.
   // 守住 Array.from 回退：首字符为星平面（非 BMP）字符时取整字，而非半个代理对。
   it("renders the full first Unicode character in the monogram fallback", () => {
     render(<ProviderIcon providerId="𠮷-provider" />);

@@ -2,10 +2,10 @@ import type { EpisodesView, ReplanSummary } from "@/types";
 
 import { toGlobal } from "./manual-split-model";
 
-/** 原文右侧色条的一种分法：新方案的第 `index` 集，或重新规划范围里还没生成到的原文。 */
+/** One kind of segment in the bar right of the source: episode `index` of the new plan, or source in the replan range not yet generated. / 原文右侧色条的一种分法：新方案的第 `index` 集，或重新规划范围里还没生成到的原文。 */
 export type CompareLane = { kind: "new"; index: number } | { kind: "pending" };
 
-/** 一行原文里右侧色条的一段：`[from, to)` 是文件内的码位偏移。 */
+/** A segment of the right bar within one source row: `[from, to)` are in-file code point offsets. / 一行原文里右侧色条的一段：`[from, to)` 是文件内的码位偏移。 */
 export interface LanePiece {
   from: number;
   to: number;
@@ -13,18 +13,24 @@ export interface LanePiece {
 }
 
 /**
+ * Comparison of the old and new splits by source position: the left bar is current episodes (the source sectioning itself), the right bar the new plan.
+ * Only covers after the replan start; parts the plan hasn't reached yet are "Awaiting planning".
+ *
  * 新旧两种分法按源文位置的对照：左侧色条是现有分集（原文分段本身），右侧色条是新方案。
  * 只覆盖重新规划的起点之后；方案还没生成到的部分是「等待规划」。
  */
 export interface ReplanCompare {
-  /** 一行原文 `[start, end)` 的右侧色条分段，按位置升序；起点之前的部分不出现。 */
+  /** Right bar segments of source row `[start, end)`, ascending by position; the part before the start does not appear. / 一行原文 `[start, end)` 的右侧色条分段，按位置升序；起点之前的部分不出现。 */
   lanes: (file: number, start: number, end: number) => LanePiece[];
   /**
+   * Positions in the file where old and new boundaries differ, ascending. Boundaries compare by source position: a cross-file episode's file junction is not a boundary; a boundary in whitespace takes
+   * the first non-whitespace character after it, and one in whitespace at file end takes the start of the next file.
+   *
    * 文件内新旧分界不同的位置，升序。分界按源文位置比较：跨文件的一集在文件交界处不算分界；分界落在空白里时取其后
    * 第一个非空白字符，落在文件末尾的空白里时取下一个文件的开头。
    */
   diffs: (file: number) => number[];
-  /** 原文全部在方案还没生成到的范围里的现有集。 */
+  /** Current episodes whose source lies entirely in the range the plan hasn't reached yet. / 原文全部在方案还没生成到的范围里的现有集。 */
   waiting: ReadonlySet<number>;
 }
 
@@ -39,12 +45,12 @@ function sameLane(a: CompareLane | undefined, b: CompareLane | undefined): boole
   return a.kind === "pending" || a.index === (b as { index: number }).index;
 }
 
-/** 两段相邻色条是否连成一条：前一段的结尾与后一段的开头属于同一集或都在等待规划。 */
+/** Whether two adjacent bar segments join into one: the end of the first and start of the second belong to the same episode or are both awaiting planning. / 两段相邻色条是否连成一条：前一段的结尾与后一段的开头属于同一集或都在等待规划。 */
 export function lanesContinue(previous: LanePiece[], next: LanePiece[]): boolean {
   return sameLane(previous.at(-1)?.lane, next[0]?.lane);
 }
 
-/** `pos` 处起跳过空白后的第一个位置；到文件结尾时接着下一个文件的开头。段文字读不到时原样返回。 */
+/** First position after skipping whitespace from `pos`; at file end continues at the next file's start. Returned unchanged when segment text is unreadable. / `pos` 处起跳过空白后的第一个位置；到文件结尾时接着下一个文件的开头。段文字读不到时原样返回。 */
 function skipWhitespace(view: EpisodesView, pos: Pos): Pos {
   let [file, at] = pos;
   for (;;) {
@@ -63,7 +69,7 @@ function skipWhitespace(view: EpisodesView, pos: Pos): Pos {
   }
 }
 
-/** 候选过时（生成之后分集或源文有改动）或没有候选时为 null：位置已对不上，不做对照。 */
+/** null when the candidate is outdated (episodes or source changed after generation) or absent: positions no longer match, no comparison. / 候选过时（生成之后分集或源文有改动）或没有候选时为 null：位置已对不上，不做对照。 */
 export function replanCompare(view: EpisodesView, replan: ReplanSummary | null): ReplanCompare | null {
   if (replan === null || replan.stale !== null) return null;
   const fileIndex = new Map(view.files.map((file, index) => [file.source_file, index]));
@@ -86,7 +92,7 @@ export function replanCompare(view: EpisodesView, replan: ReplanSummary | null):
       pieces.push({ from: Math.max(draft.start, from), to: Math.min(draft.end, to), lane: { kind: "new", index: draft.index } });
     }
     if (!replan.complete) {
-      // 等待规划：方案的结尾之后，且不早于起点
+      // Awaiting planning: after the plan's end and not before the start / 等待规划：方案的结尾之后，且不早于起点
       const pendingFrom =
         file < end[0] || file < start[0]
           ? Infinity
@@ -96,7 +102,7 @@ export function replanCompare(view: EpisodesView, replan: ReplanSummary | null):
     return pieces.sort((a, b) => a.from - b.from);
   };
 
-  // 分界按全局码位比较：文件 A 的结尾与文件 B 的开头是同一处
+  // Boundaries compare by global code point: the end of file A and the start of file B are the same place / 分界按全局码位比较：文件 A 的结尾与文件 B 的开头是同一处
   const global = (pos: Pos) => toGlobal(view, { file: pos[0], offset: pos[1] });
   const [startAt, endAt] = [global(start), end[0] < view.files.length ? global(end) : Infinity];
   const boundarySet = (positions: Pos[]) => {
@@ -123,6 +129,7 @@ export function replanCompare(view: EpisodesView, replan: ReplanSummary | null):
   }
   const diffs = (file: number): number[] => [...new Set(byFile.get(file) ?? [])].sort((a, b) => a - b);
 
+  // Current episodes whose source lies entirely after the plan's end; cross-file episodes are judged by the segment in their start file
   // 原文全在方案结尾之后的现有集；跨文件的集按起点所在文件的那一段判断
   const waiting = new Set<number>();
   if (!replan.complete) {

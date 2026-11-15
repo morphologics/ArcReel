@@ -60,6 +60,7 @@ const VIEW: EpisodesViewData = {
   external_changes: [],
 };
 
+/** IntersectionObserver for tests: records observed elements; the test manually reports which elements entered the band at the top of the viewport. */
 /** 测试里的 IntersectionObserver：记下观察的元素，由测试手动报告哪些元素进入了视口上沿一带。 */
 let observer: { callback: IntersectionObserverCallback; targets: Element[] } | null = null;
 
@@ -89,14 +90,14 @@ function reportIntersecting(target: Element) {
 const findManuscript = () => screen.findByRole("region", { name: "整本源文" });
 const findOutline = () => screen.findByRole("navigation", { name: "集目录" });
 
-/** 打开集目录里一集的「⋯」菜单并选一项。 */
+/** Open the "..." menu of an episode in the episode list and choose an item. / 打开集目录里一集的「⋯」菜单并选一项。 */
 async function chooseEpisodeAction(episodeName: string, action: string) {
   const outline = await findOutline();
   fireEvent.click(within(outline).getByRole("button", { name: `「${episodeName}」的操作` }));
   fireEvent.click(await screen.findByRole("menuitem", { name: action }));
 }
 
-/** 打开页头的「AI 规划分集」弹层。 */
+/** Open the header's "AI episode planning" popover. / 打开页头的「AI 规划分集」弹层。 */
 async function openPlanning(label: string) {
   fireEvent.click(await screen.findByRole("button", { name: label }));
   return within(await screen.findByRole("dialog"));
@@ -199,6 +200,7 @@ describe("EpisodesView", () => {
     const { location } = renderView("/episodes?upload=episode");
 
     await findManuscript();
+    // The open-dialog state is written from URL params during render, a separate render from loading the body; wait for it to appear.
     // 打开对话框的状态在渲染期间从地址参数写入，与正文加载是两次独立的渲染，要等它出现。
     expect(await screen.findByRole("dialog", { name: "上传原文" })).toBeInTheDocument();
     expect(screen.getByRole("radio", { name: /逐集原文/ })).toBeChecked();
@@ -344,6 +346,7 @@ describe("EpisodesView", () => {
       const outline = await findOutline();
 
       fireEvent.click(within(outline).getByRole("button", { name: "「转折」的操作" }));
+      // The turning point is the last cut episode: there are no later episodes to merge or clear
       // 转折是最后一个切出集：后面没有可合并或清除的集
       expect(await screen.findByRole("menuitem", { name: "与下一集合并" })).toHaveAttribute("aria-disabled", "true");
       expect(screen.getByRole("menuitem", { name: "清除之后的分集" })).toHaveAttribute("aria-disabled", "true");
@@ -560,6 +563,7 @@ describe("EpisodesView", () => {
       fireEvent.click(within(dialog).getByRole("button", { name: "开始重新规划" }));
 
       await waitFor(() => expect(start).toHaveBeenCalledWith("demo", 2, "节奏放慢"));
+      // The source scrolls to the replan start
       // 原文滚到重新规划的起点
       await waitFor(() => expect(scroll).toHaveBeenCalled());
       expect(scroll.mock.contexts.at(-1)).toHaveTextContent("转折");
@@ -579,6 +583,7 @@ describe("EpisodesView", () => {
       renderView();
 
       const manuscript = await findManuscript();
+      // 14 falls in the middle of the episode 2 row, 20 is the end of episode 2, where the new plan does not split
       // 14 落在第 2 集那一行中间，20 是第 2 集的结尾、新方案在这里不分集
       await waitFor(() => expect(manuscript.querySelectorAll("[data-replan-diff]")).toHaveLength(2));
       expect(within(manuscript).getAllByText("新旧分界不同")).toHaveLength(2);
@@ -679,6 +684,7 @@ describe("EpisodesView", () => {
       expect(within(panel).getByText("番外（第 3 → 4 集）")).toBeInTheDocument();
       expect(within(panel).getByText("节奏放慢")).toBeInTheDocument();
       expect(within(panel).getByText("与「转折」的原文相同")).toBeInTheDocument();
+      // While a new plan exists the episode list gives way to the plan column, and the header's planning entry is unavailable
       // 新方案在时集目录让位给方案栏，页头的规划入口不可用
       expect(screen.queryByRole("navigation", { name: "集目录" })).not.toBeInTheDocument();
       expect(screen.getByRole("button", { name: "有新的分集方案" })).toBeDisabled();

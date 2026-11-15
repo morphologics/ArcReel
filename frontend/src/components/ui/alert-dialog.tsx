@@ -29,6 +29,7 @@ function AlertDialogOverlay({
   return (
     <AlertDialogPrimitive.Backdrop
       data-slot="alert-dialog-overlay"
+      // Backdrop is opaque and unblurred, same spec as the onboarding backdrop; layering uses the z-index token
       // 遮罩不透明、不模糊，与新手引导遮罩同一规范；层级取 z-index token
       className={cn(
         "fixed inset-0 isolate z-overlay bg-scrim duration-100 data-open:animate-in data-open:fade-in-0 data-closed:animate-out data-closed:fade-out-0",
@@ -51,6 +52,10 @@ function AlertDialogContent({
   return (
     <AlertDialogPortal>
       <AlertDialogOverlay />
+      {/*
+       * The primitive handles max height: Header / Body / Footer stack vertically, only AlertDialogBody scrolls.
+       * On open, focus defaults to "Cancel", so an accidental Enter won't run an irreversible action.
+       */}
       {/* 原语负责限高：Header / Body / Footer 纵向排布，只有 AlertDialogBody 滚动。
           打开时焦点默认落在「取消」，误按回车不会执行不可逆操作。 */}
       <AlertDialogPrimitive.Popup
@@ -81,7 +86,7 @@ function AlertDialogHeader({
   return (
     <div
       data-slot="alert-dialog-header"
-      // 不随 Body 滚动；只支持桌面端，去掉按视口居中的移动端排布
+      // Doesn't scroll with Body; desktop only, the viewport-centered mobile layout is removed / 不随 Body 滚动；只支持桌面端，去掉按视口居中的移动端排布
       className={cn(
         "grid shrink-0 grid-rows-[auto_1fr] place-items-start gap-1.5 px-5 pt-5 pb-2 text-left has-data-[slot=alert-dialog-media]:grid-rows-[auto_auto_1fr] has-data-[slot=alert-dialog-media]:gap-x-4 group-data-[size=default]/alert-dialog-content:has-data-[slot=alert-dialog-media]:grid-rows-[auto_1fr]",
         className
@@ -91,6 +96,7 @@ function AlertDialogHeader({
   )
 }
 
+// Local addition: when the description is too long only this section scrolls. If content may overflow, the caller adds tabIndex={0} so the keyboard can scroll; the focus ring is drawn inside so the overlay doesn't clip it
 // 本地新增：说明文字过长时只有这一段滚动。内容可能超高时由使用方加 tabIndex={0}，键盘才能滚动，聚焦环画在内侧以免被弹层裁掉
 function AlertDialogBody({
   className,
@@ -115,6 +121,7 @@ function AlertDialogFooter({
   return (
     <div
       data-slot="alert-dialog-footer"
+      // Fixed at the bottom, doesn't scroll with Body; desktop only, buttons always one row, right-aligned
       // 固定在底部、不随 Body 滚动；只支持桌面端，按钮恒为一行靠右
       className={cn(
         "flex shrink-0 items-center justify-end gap-2 border-t bg-muted/50 px-5 py-3 group-data-[size=sm]/alert-dialog-content:grid group-data-[size=sm]/alert-dialog-content:grid-cols-2",

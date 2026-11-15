@@ -36,11 +36,14 @@ interface PresentationPlayerProps {
   posterPath?: string | null;
   initialVariant?: PresentationVariant;
   /**
+   * After loading, start playing from this time (seconds, on the unit video's own timeline); clamped into range when outside the playable range.
+   * The same `requestId` only takes effect once; a new `requestId` seeks again. When the browser blocks autoplay, it stops at that position waiting for the user to press play.
+   *
    * 载入后从该时间（秒，单元视频自身的时间轴）开始播放；超出可播放范围时夹到范围内。
    * 同一个 `requestId` 只生效一次，换一个 `requestId` 就再定位一次。浏览器拦截自动播放时停在该位置等用户点播放。
    */
   startAt?: { seconds: number; requestId: string };
-  /** `startAt` 生效后回调，参数为该请求的 `requestId`。 */
+  /** Called after `startAt` takes effect, with that request's `requestId` as the argument. / `startAt` 生效后回调，参数为该请求的 `requestId`。 */
   onStartApplied?: (requestId: string) => void;
   className?: string;
   /**
@@ -50,7 +53,7 @@ interface PresentationPlayerProps {
   statusSlot?: HTMLElement | null;
 }
 
-/** 起始位置离可播放范围末尾至少留出这么多，免得一播放就撞上边界停住。 */
+/** Leave at least this much between the start position and the end of the playable range, so playback doesn't hit the boundary and stop right away. / 起始位置离可播放范围末尾至少留出这么多，免得一播放就撞上边界停住。 */
 const START_END_MARGIN_SECONDS = 0.05;
 
 interface PresentationLoadState {
@@ -256,7 +259,7 @@ export function PresentationPlayer({
     const apply = () => {
       appliedStartRef.current = startAt.requestId;
       video.currentTime = target;
-      // 播放器可能在可滚动栏里的折叠位置之下，先滚到可见处。
+      // The player may be below the fold inside a scrollable pane, so scroll it into view first. / 播放器可能在可滚动栏里的折叠位置之下，先滚到可见处。
       video.scrollIntoView?.({ block: "nearest", behavior: "smooth" });
       void video.play().catch(() => undefined);
       onStartApplied?.(startAt.requestId);
@@ -267,6 +270,7 @@ export function PresentationPlayer({
     }
     video.addEventListener("loadedmetadata", apply, { once: true });
     return () => video.removeEventListener("loadedmetadata", apply);
+    // The video element only mounts once the presentation is ready, so rerun when the load result changes.
     // 视频元素在 presentation 就绪后才挂载，所以载入结果变化时要重跑。
   }, [startAt, presentation, onStartApplied]);
 
@@ -358,11 +362,12 @@ export function PresentationPlayer({
         .getState()
         .pushToast(t("presentation_download_failed", { message: errMsg(cause) }), "error");
     } finally {
-      // react-doctor-disable-next-line react-doctor/no-unowned-async-error-clear -- 下载在途时按钮禁用且入口先判 downloading，不会有更新的下载同时持有这个标志
+      // react-doctor-disable-next-line react-doctor/no-unowned-async-error-clear -- while a download is in flight the button is disabled and the entry checks downloading first, so no newer download holds this flag at the same time / 下载在途时按钮禁用且入口先判 downloading，不会有更新的下载同时持有这个标志
       setDownloading(false);
     }
   };
 
+  // All player states are fixed dark: status colors and controls overlaid on the picture use dark-theme values
   // 播放器各状态都固定深色：叠在画面上的状态色和控件按深色取值
   if (loading && !presentation) {
     return (

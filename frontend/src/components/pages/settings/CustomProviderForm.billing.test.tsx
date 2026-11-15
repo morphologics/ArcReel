@@ -12,6 +12,9 @@ import type {
 } from "@/types";
 import { CustomProviderForm } from "./CustomProviderForm";
 
+// CustomProviderForm: billing-related: the model's matching entry, model multiplier and provider multiplier
+// Models carry no price: pricing takes the matching entry's price list, times the provider multiplier and model multiplier. The new-provider form's model table shows the match
+// and edits model multipliers; a saved provider edits only the provider multiplier, and models are saved one by one in the model list and Sheet.
 // ---------------------------------------------------------------------------
 // CustomProviderForm —— 计费相关：模型对应的条目、模型倍率与供应商倍率
 // ---------------------------------------------------------------------------
@@ -90,13 +93,14 @@ function provider(models: CustomProviderModelInfo[]): CustomProviderInfo {
   };
 }
 
+/** Render a saved provider and wait for the endpoint catalog: before it arrives, saving is blocked by "endpoint catalog not loaded yet". */
 /** 渲染已保存的供应商，并等端点目录就绪：目录未到时保存会被「端点目录还没加载完」拦下。 */
 async function renderExisting(existing: CustomProviderInfo, providerMultiplier?: ProviderMultiplierInfo) {
   render(<CustomProviderForm existing={existing} providerMultiplier={providerMultiplier} onSaved={vi.fn()} />);
   await waitFor(() => expect(useEndpointCatalogStore.getState().initialized).toBe(true));
 }
 
-/** 新建表单：填好名称、接口地址与密钥。 */
+/** New-provider form: fill in name, API address and key. / 新建表单：填好名称、接口地址与密钥。 */
 function renderNew(onSaved = vi.fn()) {
   render(<CustomProviderForm onSaved={onSaved} />);
   fireEvent.change(screen.getByLabelText("名称"), { target: { value: "我的中转站" } });
@@ -105,6 +109,7 @@ function renderNew(onSaved = vi.fn()) {
   return onSaved;
 }
 
+/** Manually add a model row in the new-provider form and fill in the model ID; newly added rows are expanded by default. */
 /** 新建表单里手动添加一行模型并填上模型 ID；新加的行默认展开。 */
 function addModelRow(modelId: string) {
   fireEvent.click(screen.getByRole("button", { name: "手动添加模型" }));
@@ -169,6 +174,7 @@ describe("CustomProviderForm（计费）", () => {
       renderNew();
 
       fireEvent.click(screen.getByRole("button", { name: "获取模型" }));
+      // Models that match no entry are unchecked by default
       // 对应不上条目的模型默认不勾选
       fireEvent.click(await screen.findByRole("checkbox", { name: /relay-only/ }));
       fireEvent.click(screen.getByRole("button", { name: "添加 2 个模型" }));
@@ -290,6 +296,7 @@ describe("CustomProviderForm（计费）", () => {
       save();
 
       expect(await screen.findByRole("alert")).toHaveTextContent("供应商已保存，供应商倍率未保存：网关拒绝");
+      // Only the multiplier is unsaved: input is kept and the save button stays available
       // 未保存的只剩倍率：输入保留，保存按钮仍可用
       expect(providerMultiplierInput()).toHaveValue("0.5");
       expect(screen.getByRole("button", { name: "保存" })).toBeEnabled();
@@ -329,6 +336,7 @@ describe("CustomProviderForm（计费）", () => {
 
       save();
 
+      // The provider is already created: hand it to the host to switch to as usual, report the multiplier failure separately, and do not let the user click save again and create a second one
       // 供应商已经建好：照常交给宿主切过去，倍率失败另行提示，不能让用户再点一次保存建出第二个
       await waitFor(() => expect(onSaved).toHaveBeenCalledWith(expect.objectContaining({ id: 12 })));
       expect(useAppStore.getState().toast?.text).toBe(

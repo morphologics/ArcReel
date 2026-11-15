@@ -9,23 +9,26 @@ import type { ExportDiagnostics } from "@/types";
 import { ExportScopeDialog, type ExportScope } from "./ExportScopeDialog";
 
 interface ProjectExportOptions {
-  /** 对话框提示里「打开『集名』的剪辑视图」链接指向的集；不传时只显示成片在剪辑视图导出的说明。 */
+  /** Episode the dialog hint's "Open the edit view of <episode name>" link points to; when omitted, only the note that final cuts are exported from the edit view is shown. / 对话框提示里「打开『集名』的剪辑视图」链接指向的集；不传时只显示成片在剪辑视图导出的说明。 */
   editViewEpisode?: { episode: number; name: string } | null;
   onOpenEditView?: (episode: number) => void;
 }
 
 interface ProjectExport {
-  /** 打开导出范围对话框，选定范围后导出 `projectName`。 */
+  /** Open the export scope dialog; export `projectName` once a scope is chosen. / 打开导出范围对话框，选定范围后导出 `projectName`。 */
   open: (projectName: string) => void;
-  /** 关闭尚未选定范围的对话框，如切到别的项目或演示项目时。 */
+  /** Close the dialog before a scope is chosen, e.g. when switching to another project or a demo project. / 关闭尚未选定范围的对话框，如切到别的项目或演示项目时。 */
   close: () => void;
-  /** 正在为哪个项目请求导出；下载开始后复位。 */
+  /** Which project an export is being requested for; reset once the download starts. / 正在为哪个项目请求导出；下载开始后复位。 */
   exporting: string | null;
-  /** 导出范围对话框与诊断对话框，渲染在调用方组件树里。 */
+  /** Export scope dialog and diagnostics dialog, rendered in the caller's component tree. / 导出范围对话框与诊断对话框，渲染在调用方组件树里。 */
   element: ReactNode;
 }
 
 /**
+ * Export a project ZIP: shared by the workspace top bar and the lobby card menu. After a scope is chosen the browser downloads it; no toast when it starts fine,
+ * when the export package has diagnostics show the count and list them, and on failure show the reason and record it in workspace notifications.
+ *
  * 导出项目 ZIP：工作区顶栏与大厅卡片菜单共用。选定范围后由浏览器下载；顺利开始时不提示，
  * 导出包带诊断时提示条数并列出诊断，失败时提示原因并记入工作区通知。
  */

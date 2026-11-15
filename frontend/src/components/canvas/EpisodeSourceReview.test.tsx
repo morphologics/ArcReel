@@ -284,6 +284,7 @@ describe("EpisodeSourceReview", () => {
 
     render(<EpisodeSourceReview projectName="demo" episode={6} episodes={[OWN]} />);
     const box = await sourceBox();
+    // The source box mounts outside act and the subscribing effect may not be committed yet; flush first, or a request delivered before subscribing is dropped
     // 原文框在 act 之外挂载，订阅请求的 effect 可能还没提交；先冲刷，否则请求投递在订阅之前被丢掉
     await act(async () => {});
 

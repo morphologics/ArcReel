@@ -54,6 +54,7 @@ function item(overrides: Partial<ProviderModelItem> = {}): ProviderModelItem {
   };
 }
 
+/** A video model under a custom provider that matches no entry: the media type comes from the call endpoint, and the original value is a runtime fallback. */
 /** 自定义供应商下对应不上条目的视频模型：媒体类型来自调用端点，原值是运行时回落。 */
 function unmatchedVideo(overrides: Partial<ProviderModelDetail> = {}): ProviderModelDetail {
   return {
@@ -121,6 +122,7 @@ describe("ProviderModelSheet", () => {
 
     const sheet = await screen.findByRole("dialog");
     await within(sheet).findByText("这个供应商支持的参数");
+    // Video dimensions, not text model dimensions
     // 视频的维度，没有文本模型的维度
     expect(within(rowOf("可选时长")).getByText("4, 8 秒")).toBeInTheDocument();
     expect(within(rowOf("首帧")).getByText("支持")).toBeInTheDocument();
@@ -209,6 +211,7 @@ describe("ProviderModelSheet", () => {
 
     expect(screen.getByText("更换调用端点后，修改过的请求地址会恢复默认。")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "请求路径 /videos" })).toBeInTheDocument();
+    // Parameters vary with the call endpoint; after changing the endpoint, save first, then edit
     // 参数随调用端点变化，换了端点先保存再改
     expect(screen.queryByRole("button", { name: "修改「可选时长」" })).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "保存" }));
@@ -296,6 +299,7 @@ describe("ProviderModelSheet", () => {
     expect(within(info).getByText("「Vertex AI」也使用这些信息，修改会一起生效。")).toBeInTheDocument();
     await user.clear(within(info).getByLabelText("显示名称"));
     await user.type(within(info).getByLabelText("显示名称"), "My Veo");
+    // Pre-save notice: stop following the official values; the shared provider changes too
     // 保存前提示：停止跟随官方，共用的供应商一起改变
     expect(screen.getByText(/保存后，这个模型改用你修改的信息，不再随官方更新。/)).toHaveTextContent(
       "「Vertex AI」也会一起改变。",
@@ -325,6 +329,7 @@ describe("ProviderModelSheet", () => {
     expect(within(info).getByText("信息由官方维护，随官方数据更新。")).toBeInTheDocument();
     expect(get).toHaveBeenCalledTimes(2);
     expect(onSaved).toHaveBeenLastCalledWith(official.model, "relay-video");
+    // Restore does not go through the save bar
     // 恢复不经保存栏
     expect(update).toHaveBeenCalledTimes(1);
   });
@@ -341,6 +346,7 @@ describe("ProviderModelSheet", () => {
     await user.click(within(info).getByRole("button", { name: "添加计费项" }));
     await user.click(await screen.findByRole("menuitem", { name: "视频时长" }));
 
+    // Unit price not filled yet: saving is blocked and no request is sent
     // 单价还没填：保存被拦下，不发请求
     expect(within(info).getByText("请填写单价。")).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "保存" }));
@@ -444,6 +450,7 @@ describe("ProviderModelSheet", () => {
       await waitFor(() =>
         expect(update).toHaveBeenCalledWith("custom-3", "relay-video", { entry_binding: "google/veo-3" }),
       );
+      // The linked entry is referred to by display name, without "vendor/official model name"
       // 关联的条目按显示名称呼，不出现「厂商/官方模型名」
       expect(await within(info).findByText("已关联到「Veo 3」，不再按名字对应。")).toBeInTheDocument();
     });
@@ -490,6 +497,7 @@ describe("ProviderModelSheet", () => {
       const info = await infoSection();
       await user.click(within(info).getByRole("button", { name: "手动填写" }));
       const dialog = await screen.findByRole("dialog", { name: "手动填写模型信息" });
+      // The model name takes the model ID; the video's selectable durations are prefilled from the name preset
       // 模型名称取模型 ID；视频的可选时长按名字预设预填
       expect(within(dialog).getByLabelText("模型名称")).toHaveValue("relay-video");
       await waitFor(() => expect(within(dialog).getByRole("textbox", { name: "「可选时长」的值" })).toHaveValue("5, 10"));
@@ -500,6 +508,7 @@ describe("ProviderModelSheet", () => {
       await user.type(within(dialog).getByLabelText("显示名称"), "My Video");
       await user.click(within(dialog).getByRole("button", { name: "确定" }));
 
+      // Only the draft changes: the entry is not written yet
       // 只改草稿：条目还没有写入
       expect(update).not.toHaveBeenCalled();
       expect(within(info).getByText(/保存后新增模型信息「My Video」/)).toBeInTheDocument();
@@ -597,7 +606,7 @@ describe("ProviderModelSheet", () => {
   });
 });
 
-/** 自定义供应商下对应到 Veo 3 条目的视频模型。 */
+/** A video model under a custom provider that maps to the Veo 3 entry. / 自定义供应商下对应到 Veo 3 条目的视频模型。 */
 function veoDetail(entry: Partial<NonNullable<ProviderModelDetail["entry"]>> = {}): ProviderModelDetail {
   return unmatchedVideo({
     model: item({ display_name: entry.display_name ?? "Veo 3", flags: [] }),

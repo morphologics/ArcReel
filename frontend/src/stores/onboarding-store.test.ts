@@ -45,6 +45,7 @@ describe("useOnboardingStore", () => {
       await useOnboardingStore.getState().loadStatus();
       expect(useOnboardingStore.getState().seen).toBe(true);
 
+      // The backend may have recovered by now; the local seen:true is only a temporary suppression for this session, not a confirmation.
       // 后端此时可能已经恢复；本地 seen:true 只是本次会话的临时抑制，不是确认。
       useOnboardingStore.getState().start();
       useOnboardingStore.getState().exit();
@@ -62,6 +63,7 @@ describe("useOnboardingStore", () => {
       vi.spyOn(API, "markOnboardingSeen").mockResolvedValue({ seen: true });
 
       const pending = useOnboardingStore.getState().loadStatus();
+      // While the query is in flight the user starts a replay from the settings page and exits immediately; seen: true is established locally.
       // 查询飞行途中，用户从设置页启动重看并立即退出——本地已确立 seen: true。
       useOnboardingStore.getState().start();
       useOnboardingStore.getState().exit();

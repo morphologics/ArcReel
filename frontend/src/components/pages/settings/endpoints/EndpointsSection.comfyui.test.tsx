@@ -34,6 +34,7 @@ describe("EndpointsSection", () => {
     const PROMPT_TARGET = { node: "6", input: "text", class_type: "CLIPTextEncode" };
     const OUTPUT_TARGET = { node: "9", class_type: "SaveVideo" };
 
+    /** "Reimport" swaps the file directly in the already open endpoint dialog, without pickFile's open step, so the file input is fetched separately. */
     /** 「重新导入」直接在已打开的端点弹窗里换文件，不经过 pickFile 的打开步骤，所以单独取 file input。 */
     function importFileInput(): HTMLInputElement {
       const picker = screen.getByRole("dialog").querySelector<HTMLInputElement>('input[type="file"]');
@@ -97,6 +98,7 @@ describe("EndpointsSection", () => {
       renderSection("section=endpoints&endpoint=ce-8");
 
       expect(await screen.findByLabelText("端点名称")).toHaveValue("我的 ComfyUI");
+      // The server keeps no state: entering details reruns with the current definition, and its confirmed node bindings are the rematch input.
       // 服务端不留状态：进详情拿当前这份定义重跑一次，它已确认的节点绑定即重匹配的输入。
       await waitFor(() => expect(infer).toHaveBeenCalledOnce());
       expect(infer.mock.calls[0][0]).toEqual(COMFYUI_MINE.definition);
@@ -116,6 +118,8 @@ describe("EndpointsSection", () => {
     });
 
     it("keeps the export action so a saved definition can still be backed up", async () => {
+      // Endpoint definitions carry no credentials, so export is the backup and sharing step. What is exported is the editor's definition at this moment: workflow
+      // and the current node bindings together, including those not yet saved.
       // 端点定义不含凭证，导出即备份与分享的那一步。导出的是编辑器里这一刻的定义：workflow
       // 与当前的节点绑定一并在内，包括还没保存的那几条。
       const downloads = captureDownloads();
@@ -132,6 +136,7 @@ describe("EndpointsSection", () => {
       });
     });
 
+    /** ce-8 installed from the market: currently v1.0.0, the market has v1.1.0; updated is the entry in the list after a successful update. */
     /** 市场安装的 ce-8：当前 v1.0.0、市场有 v1.1.0；updated 是更新成功后列表里的那一条。 */
     function marketUpdateFixtures() {
       const installed = {
@@ -208,6 +213,7 @@ describe("EndpointsSection", () => {
       return { installed, entryResponse, updated, installResult };
     }
 
+    /** Run "Reimport" on the currently open workflow endpoint, stopping in the binding editor with the draft unsaved. */
     /** 在当前打开的 workflow 端点上走一遍「重新导入」，停在绑定编辑器里、草稿未保存。 */
     async function reimportDraft(fileName: string, definition = COMFYUI_MINE.definition) {
       vi.spyOn(API, "validateCustomEndpoint").mockResolvedValue(validation({ import_shape: "endpoint_definition" }));
@@ -228,6 +234,7 @@ describe("EndpointsSection", () => {
 
       expect(await screen.findByText("来自市场 ArcReel 官方市场")).toBeInTheDocument();
       expect(screen.getByText("可更新")).toBeInTheDocument();
+      // The reimported workflow differs from the saved one, so a backup export can tell which one is taken.
       // 重新导入的 workflow 与已保存的不同，备份导出才分得清带走的是哪一份。
       const saved = COMFYUI_MINE.definition as ComfyuiEndpointDefinition;
       const reimportedWorkflow = { ...saved.workflow, "12": { class_type: "VHS_VideoCombine", inputs: {} } };
@@ -263,6 +270,7 @@ describe("EndpointsSection", () => {
     });
 
     it("keeps another endpoint's re-import draft when a market update replaces this one", async () => {
+      // An update overwrites only the endpoint installed from the market; unsaved reimport drafts on other endpoints must not be lost with it.
       // 更新只覆盖市场安装的那一个端点；别的端点上还没保存的重新导入草稿不能跟着丢。
       const { installed, entryResponse, updated, installResult } = marketUpdateFixtures();
       vi.mocked(API.listCustomEndpoints).mockResolvedValue({ endpoints: [MINE, installed, IMAGE_MINE] });
@@ -312,6 +320,7 @@ describe("EndpointsSection", () => {
       expect(await screen.findByLabelText("端点名称")).toHaveValue("ComfyUI workflow");
       expect(screen.queryByRole("button", { name: "去绑定节点" })).not.toBeInTheDocument();
       expect(create).not.toHaveBeenCalled();
+      // The placeholder name must be changed first: two workflows with the same author and name are judged the same one.
       // 占位名要先改掉：同作者同名的两份 workflow 会被判成同一份。
       expect(screen.getByText(/先给这份 workflow 起个名字/)).toBeInTheDocument();
     });
@@ -342,6 +351,8 @@ describe("EndpointsSection", () => {
     });
 
     it("drops an inference that comes back after the dialog was dismissed", { timeout: 15_000 }, async () => {
+      // Cancel while inference is in flight: the late result would load an already abandoned workflow into details and jump to it.
+      // Relaxed timeout: after pasting it really waits out the 400ms validation debounce, plus whole-page rendering and several userEvents, exceeding the default 5 seconds under load.
       // 推断在途时取消：迟到的那一份会把一个已经被放弃的 workflow 装进详情并跳过去。
       // 放宽超时：粘贴后要真实等完 400ms 的校验防抖，再加整页渲染与多次 userEvent，高负载下超过默认 5 秒。
       const workflow = { "9": { class_type: "SaveVideo", inputs: { fps: 16 } } };
@@ -398,6 +409,7 @@ describe("EndpointsSection", () => {
       expect(validate.mock.calls[0][0]).toEqual(workflow);
       expect(infer).toHaveBeenCalledWith(wrapped, { mediaType: "video" });
       expect(await screen.findByLabelText("端点名称")).toHaveValue("ComfyUI workflow");
+      // Pasted content has no file name, so the header's "Source file" is not shown.
       // 粘贴进来的没有文件名，头部的「来源文件」因此不显示。
       expect(screen.queryByText(/^来自 /)).not.toBeInTheDocument();
     });
@@ -446,9 +458,11 @@ describe("EndpointsSection", () => {
       });
       await userEvent.click(await screen.findByRole("button", { name: "去绑定节点" }));
 
+      // The rematch input is "the new workflow plus its original node bindings", carrying over identity and media type.
       // 重匹配的输入是「新 workflow 加它原来那份节点绑定」，身份与媒体类型一并沿用。
       await waitFor(() => expect(infer).toHaveBeenCalledTimes(2));
       expect(infer.mock.calls[1][0]).toEqual({ ...COMFYUI_MINE.definition, workflow });
+      // The duplicate check must exclude this endpoint itself, or it would share a name with itself.
       // 判重时要把这个端点自己排除掉，不然它跟自己同名。
       expect(validate.mock.calls[0][1]).toMatchObject({ excludeId: 8 });
       expect(await screen.findByText("来自 v2_api.json")).toBeInTheDocument();
@@ -456,6 +470,8 @@ describe("EndpointsSection", () => {
     });
 
     it("puts the re-imported workflow on screen instead of the one it replaced", async () => {
+      // Details keep the definition in their own state, taken from props only at mount: if reimport did not replace the instance, the source
+      // file name would change while the workflow on screen stays old, and the old one would be saved.
       // 详情把定义收在自己的 state 里，只在挂载那一刻取自 props：重新导入不换实例的话，来源
       // 文件名换了、屏幕上的 workflow 还是旧的，保存下去的也是旧的。
       const workflow = { "12": { class_type: "VHS_VideoCombine", inputs: {} } };
@@ -490,6 +506,8 @@ describe("EndpointsSection", () => {
     });
 
     it("re-imports onto the endpoint the user is looking at, not the one a stale draft came from", async () => {
+      // With an unsaved draft of endpoint A in hand but going to endpoint B to click reimport, carrying over A's identity would save B's
+      // workflow onto A; an overwrite nobody asked for.
       // 手上留着端点 A 的未保存草稿、人却走到端点 B 上点重新导入时，沿用 A 的身份会把 B 的
       // workflow 存到 A 身上——那是一次谁都没要求过的覆盖。
       const workflow = { "12": { class_type: "SaveVideo", inputs: {} } };
@@ -519,12 +537,14 @@ describe("EndpointsSection", () => {
       await pickFile("v2_api.json");
       await screen.findByText("来自 v2_api.json");
 
+      // Without saving this draft, go to another workflow endpoint and click reimport.
       // 不保存这份草稿，直接走到另一个 workflow 端点上再点重新导入。
       await clickRail(/我的画图 workflow/);
       await screen.findByLabelText("端点名称");
       await userEvent.click(screen.getByRole("button", { name: "重新导入" }));
       await pickFile("v3_api.json");
 
+      // excludeId is exactly the record.id this draft carries, which is also the row written back on save.
       // excludeId 取的就是这份草稿背着的 record.id，它也是保存时会被写回的那一行。
       expect(validate.mock.calls.at(-1)?.[1]).toMatchObject({ excludeId: 9 });
     });

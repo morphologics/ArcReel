@@ -61,7 +61,7 @@ const TABS: Record<ProjectSettingsTab, { labelKey: string; icon: LucideIcon }> =
   agent: { labelKey: "agent_profile_title", icon: Bot },
 };
 
-/** 侧栏分组：「项目」四个表单分页共用一个编辑单元，「Agent」两页各管各的保存。 */
+/** Sidebar groups: the four "Project" form tabs share one edit unit; the two "Agent" tabs each manage their own save. / 侧栏分组：「项目」四个表单分页共用一个编辑单元，「Agent」两页各管各的保存。 */
 const TAB_GROUPS: { id: string; labelKey: string; tabs: ProjectSettingsTab[] }[] = [
   { id: "project", labelKey: "project_settings_group_project", tabs: ["basics", "style", "models", "voice"] },
   { id: "agent", labelKey: "project_settings_group_agent", tabs: ["memory", "agent"] },
@@ -77,7 +77,7 @@ interface LoadedSettings {
   title: string;
   facts: ProjectFacts & { sourceLanguage: string | null };
   globals: GlobalModelDefaults;
-  /** 全局「生成有声视频」的生效值，项目跟随全局时据此判定与执行模型的矛盾。未保存过时为 true。 */
+  /** Effective value of global "Generate video with audio"; when the project follows global, used to detect conflicts with the executing model. true if never saved. / 全局「生成有声视频」的生效值，项目跟随全局时据此判定与执行模型的矛盾。未保存过时为 true。 */
   globalGenerateAudio: boolean;
   options: {
     videoBackends: string[];
@@ -99,6 +99,7 @@ async function loadSettings(projectName: string, signal: AbortSignal): Promise<L
     getProviderModels({ signal }).catch(() => [] as ProviderInfo[]),
     getCustomProviderModels({ signal }).catch(() => [] as CustomProviderInfo[]),
     API.getNarrationDefaults({ signal }).catch(() => null),
+    // The auto-selected actual model is only for display and capability lookups; if unreadable fall back to showing just "Auto select"
     // 自动选择的实际模型只用于展示与能力查询，读不到时退回只显示「自动选择」
     API.getAutoBackends({ signal }).catch(() => null),
   ]);
@@ -122,6 +123,7 @@ async function loadSettings(projectName: string, signal: AbortSignal): Promise<L
     facts: {
       contentMode: typeof project.content_mode === "string" ? project.content_mode : "narration",
       generationRoute: normalizeRoute(project.generation_mode),
+      // Source language is written by content analysis; read-only on this page, only used to pick the speech rate unit noun (characters / words)
       // 源文语言由内容分析写入，此页只读，只用来决定语速的单位名词（字 / 词）
       sourceLanguage: typeof project.source_language === "string" ? project.source_language : null,
     },
@@ -141,10 +143,11 @@ async function loadSettings(projectName: string, signal: AbortSignal): Promise<L
   };
 }
 
-/** 项目设置：侧栏分页，「项目」组的四个表单分页共用一条保存栏，「Agent」组是项目记忆与 Agent 配置。 */
+/** Project settings: sidebar tabs; the four "Project" form tabs share one save bar, the "Agent" group is project memory and Agent config. / 项目设置：侧栏分页，「项目」组的四个表单分页共用一条保存栏，「Agent」组是项目记忆与 Agent 配置。 */
 export function ProjectSettingsPage() {
   const params = useParams<{ projectName: string }>();
   const projectName = params.projectName || "";
+  // Switching projects rebuilds the whole page; the previous project's unsaved changes and in-flight requests don't carry over
   // 换项目即整页重建，上一个项目的未保存修改与在途请求不会带过来
   return <ProjectSettingsView key={projectName} projectName={projectName} />;
 }
@@ -155,7 +158,7 @@ function ProjectSettingsView({ projectName }: { projectName: string }) {
   const [loadError, setLoadError] = useState<string | null>(null);
   const [loadCount, setLoadCount] = useState(0);
 
-  // react-doctor-disable-next-line react-doctor/no-set-state-after-await-in-effect -- await 后的写入都先检查 controller.signal.aborted，cleanup 中 abort 作废上一轮
+  // react-doctor-disable-next-line react-doctor/no-set-state-after-await-in-effect -- writes after await all check controller.signal.aborted first; cleanup aborts to void the previous round / await 后的写入都先检查 controller.signal.aborted，cleanup 中 abort 作废上一轮
   useEffect(() => {
     const controller = new AbortController();
     voidCall(
@@ -204,7 +207,7 @@ function ProjectSettingsView({ projectName }: { projectName: string }) {
   );
 }
 
-/** 外壳：顶栏「返回」回到项目工作台，侧栏分页记在 `?tab=`。 */
+/** Shell: the top bar "Back" returns to the project workbench; sidebar tab kept in `?tab=`. / 外壳：顶栏「返回」回到项目工作台，侧栏分页记在 `?tab=`。 */
 function SettingsShell({
   projectName,
   title,
@@ -212,7 +215,7 @@ function SettingsShell({
   children,
 }: {
   projectName: string;
-  /** 项目显示名，加载完成前不显示。 */
+  /** Project display name, hidden until loaded. / 项目显示名，加载完成前不显示。 */
   title?: string;
   badges?: Partial<Record<ProjectSettingsTab, ReactNode>>;
   children: ReactNode;
@@ -272,7 +275,7 @@ function TabBadge({ overrides, dirty }: { overrides?: number; dirty: boolean }) 
   );
 }
 
-/** 基础分页里校验未通过的字段；行内已有提示，保存时只需指出分页。 */
+/** Fields that failed validation in the basics tab; inline hints already exist, saving only needs to point out the tab. / 基础分页里校验未通过的字段；行内已有提示，保存时只需指出分页。 */
 function basicsInvalid(value: ProjectSettingsForm, facts: ProjectFacts): boolean {
   return (
     !isValidSpeechRate(value.speechRate) ||
@@ -289,6 +292,7 @@ function LoadedProjectSettings({ projectName, loaded }: { projectName: string; l
 
   const { candidates, error: candidatesError, retrying: candidatesRetrying, reload: reloadCandidates } =
     useModelCandidates();
+  // Candidates are global config, unrelated to the project; the reload key changes with the UI language, so a language switch refreshes only candidates and translated names
   // 候选是全局配置，与项目无关；reload 的标识随界面语言变化，语言切换时只刷新候选与译名
   useEffect(() => {
     void reloadCandidates();
@@ -304,6 +308,8 @@ function LoadedProjectSettings({ projectName, loaded }: { projectName: string; l
     candidates,
   );
 
+  // One save submits the project PATCH, then the new reference image upload. If the upload fails the PATCH has already been written: say so honestly,
+  // advance saved content to the PATCH result; only the new reference image remains unsaved, and saving again re-uploads it.
   // 一次保存依次提交项目 PATCH 与新参考图上传。上传失败时 PATCH 已经落盘：如实说明，
   // 已保存内容推进到 PATCH 的结果，只有新参考图仍是未保存修改，再次保存会重新上传。
   const save = useCallback(
@@ -316,6 +322,7 @@ function LoadedProjectSettings({ projectName, loaded }: { projectName: string; l
         throw new Error(t(narrationProblem === "model" ? "project_tts_model_required" : "project_narration_voice_required"));
       }
       const res = await API.updateProject(projectName, buildProjectPatch(value, saved, facts, globals));
+      // After grid_storyboard, video_backend are written /video-capabilities resolves from stored values with an unchanged query key, so invalidate explicitly
       // grid_storyboard、video_backend 落盘后 /video-capabilities 按已存值解析，查询 key 不变，需显式失效
       useCapabilitiesStore.getState().invalidate();
       const next = keepSavedStylePreview(deriveForm(res.project, projectName, globals, null), saved);
@@ -331,6 +338,8 @@ function LoadedProjectSettings({ projectName, loaded }: { projectName: string; l
           cause: error,
         });
       }
+      // Reference image file names are fixed, so the URL needs a version to avoid the old image's cache. The upload response has no file mtime;
+      // use the upload completion time as the version: only within this page session, replaced by the asset fingerprint from project detail on re-entry.
       // 参考图文件名固定，地址要换版本才不会沿用旧图的缓存。上传响应不带文件 mtime，
       // 以上传完成的时刻作版本：只在本页这次会话里用，重新进入时换成项目详情里的资产指纹。
       const preview = styleImageUrl(projectName, uploaded.style_image, Date.now());
@@ -339,6 +348,7 @@ function LoadedProjectSettings({ projectName, loaded }: { projectName: string; l
     [projectName, facts, globals, t],
   );
 
+  // Switching among the four form tabs doesn't unmount the edit unit, no guard; guard when switching to project memory, Agent config or leaving the page
   // 四个表单分页之间切换不卸载编辑单元，不拦截；切到项目记忆、Agent 配置或离开本页时拦截
   const allowNavigation = useCallback(
     (to: string) => {
@@ -355,6 +365,7 @@ function LoadedProjectSettings({ projectName, loaded }: { projectName: string; l
   const unit = useEditUnit({ source: loaded.source, save, isEqual: formEqual, allowNavigation });
   const { value, savedValue, setValue } = unit;
 
+  // Preview URLs of pending reference images are owned by the page: revoked when no longer used (image change, discard, save) or on leaving the page
   // 待上传参考图的预览地址由页面持有：不再使用（换图、放弃、保存）或离开页面时收回
   const stylePreview = value.style.kind === "image" ? value.style.preview : null;
   useEffect(() => {

@@ -1,6 +1,10 @@
 import { useScriptGenerationNotice } from "@/hooks/useScriptGenerationNotice";
 
 /**
+ * UI-less listener component: isolates useScriptGenerationNotice's subscription to the assistant store in a leaf node,
+ * so mounting it directly in StudioLayout does not re-render the whole layout on every Agent stream update. Being permanently mounted keeps its dedup
+ * records persistent across session/project switches.
+ *
  * 无 UI 监听组件：把 useScriptGenerationNotice 对 assistant store 的订阅隔离在叶子节点，
  * 避免直接挂在 StudioLayout 时 Agent 流每次更新都触发整个布局重渲染。常驻挂载使其去重
  * 记录跨会话/项目切换持久。

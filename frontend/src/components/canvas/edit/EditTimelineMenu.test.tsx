@@ -160,6 +160,7 @@ describe("EditTimelineView tab menu", () => {
     await waitFor(() => expect(remove).toHaveBeenCalledWith("demo", "tl-00000002"));
     await waitFor(() => expect(screen.queryByRole("tab", { name: "快节奏版" })).not.toBeInTheDocument());
     expect(screen.getByRole("tab", { name: "完整版" })).toHaveAttribute("aria-selected", "true");
+    // A successful delete is signalled only by the tab disappearing, no toast
     // 删除成功只以标签消失为反馈，不弹提示
     expect(useAppStore.getState().toast).toBeNull();
   });

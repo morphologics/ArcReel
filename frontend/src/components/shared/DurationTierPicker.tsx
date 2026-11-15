@@ -3,7 +3,7 @@ import { useTranslation } from "react-i18next";
 import { cn } from "cn";
 import { Input } from "@/components/ui/input";
 
-/** 目标时长的常用档位（秒）；其他正整数秒走「自定义」。 */
+/** Common target duration options (seconds); other positive integer seconds go through "Custom". / 目标时长的常用档位（秒）；其他正整数秒走「自定义」。 */
 const DURATION_TIERS = [15, 30, 60, 90] as const;
 
 function isTier(value: number | null): boolean {
@@ -25,15 +25,19 @@ function chipClass(active: boolean, disabled: boolean): string {
 }
 
 export interface DurationTierPickerProps {
-  /** 当前时长（秒）；「自定义」里的输入不是正整数时为 null，调用方据此拦住提交。 */
+  /** Current duration (seconds); null when the input in "Custom" isn't a positive integer, and the caller blocks submission based on it. / 当前时长（秒）；「自定义」里的输入不是正整数时为 null，调用方据此拦住提交。 */
   value: number | null;
   onChange: (value: number | null) => void;
-  /** 已翻译的字段名，同时作为单选组的可访问名称；默认「目标总时长」。 */
+  /** Translated field name, also the accessible name of the radio group; defaults to "Target total duration". / 已翻译的字段名，同时作为单选组的可访问名称；默认「目标总时长」。 */
   label?: string;
   disabled?: boolean;
 }
 
 /**
+ * Duration option picker: single choice of 15 / 30 / 60 / 90 seconds; other positive integer seconds are entered in "Custom".
+ * When the custom input isn't a positive integer it reports null and explains why inline.
+ * When the value is changed externally to a number outside the options (e.g. discarding edits) it switches to "Custom" automatically and fills it in.
+ *
  * 时长档位选择器：15 / 30 / 60 / 90 秒单选，其余正整数秒在「自定义」里填写。
  * 自定义输入不是正整数时回报 null，并在行内说明原因。
  * 外部把值改成档位之外的数（例如放弃修改）时自动切到「自定义」并回填。
@@ -48,6 +52,7 @@ export function DurationTierPicker({ value, onChange, label, disabled = false }:
   const [custom, setCustom] = useState(value !== null && !isTier(value));
   const [customText, setCustomText] = useState(value !== null && !isTier(value) ? String(value) : "");
   const [prevValue, setPrevValue] = useState(value);
+  // Adjust internal state on external writes: when the value being typed in the custom box comes back, don't interrupt input
   // 随外部写入调整内部状态：自定义框里正在输入的值回传过来时不打断输入
   if (value !== prevValue) {
     setPrevValue(value);

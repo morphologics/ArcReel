@@ -22,6 +22,9 @@ interface ProviderModelSelectProps {
   options: string[]; // ["gemini-aistudio/veo-3.1-generate-001", ...]
   providerNames: Record<string, string>; // {"gemini-aistudio": "AI Studio", ...}
   /**
+   * "provider/model" -> model name written in the current language, from the same catalog fetch as `providerNames`. Entries with missing keys
+   * (custom providers, combinations not covered by the backend) fall back to model id, so this can be omitted.
+   *
    * "provider/model" → 按当前语言成文的模型名，与 `providerNames` 同一次目录拉取。缺键的
    * 条目（自定义供应商、后端未覆盖的组合）退回 model id，故本项可省略。
    */
@@ -33,15 +36,21 @@ interface ProviderModelSelectProps {
   allowDefault?: boolean;
   /** Label for the default option */
   defaultLabel?: string;
-  defaultHint?: string; // "当前: gemini-aistudio/veo-3.1-generate-001"
+  defaultHint?: string; // "Current: gemini-aistudio/veo-3.1-generate-001" / "当前: gemini-aistudio/veo-3.1-generate-001"
   /** When value is empty, show this "provider/model" as the effective fallback in the trigger */
   fallbackValue?: string;
   /**
+   * Prefix wording of the effective value on the trigger button (already passed through t()). Defaults to "Follow global default"; task-type bucket breakdown items fall back to the
+   * same layer's default model rather than the global layer, so the caller rewrites it to "Follow default".
+   *
    * 触发按钮上生效值的前缀措辞（已 t()）。默认「跟随全局默认」；任务类型桶细分项回退的是同层
    * 默认模型而非全局层，由调用方改写为「跟随默认」。
    */
   fallbackLabel?: string;
   /**
+   * The "provider/model" auto-selected by the backend when both value and `fallbackValue` are empty (all layers empty); the trigger button shows
+   * "Auto select (current: ...)"; null means no provider is available and auto-selection would fail. Omitted shows the placeholder.
+   *
    * 值与 `fallbackValue` 都为空（各层全空）时后端自动选中的 "provider/model"，触发按钮显示
    * 「自动选择（当前：…）」；null 表示没有可用供应商、自动选择会失败。省略即显示 placeholder。
    */
@@ -53,6 +62,10 @@ interface ProviderModelSelectProps {
   /** Minimum option count to actually render the search input. Defaults to 6. */
   searchThreshold?: number;
   /**
+   * Extra info below each option row (e.g. the capability line of video models: duration/resolution/audio track).
+   * Receives `fullValue` ("provider/model"); when it returns null the line isn't rendered; the component itself makes no
+   * video/image/text assumptions about the content, and the display logic is up to the caller.
+   *
    * 每个选项行下方的补充信息（如视频模型的能力线：时长/分辨率/音轨）。
    * 传入 `fullValue`（"provider/model"），返回值为 null 时不渲染该行——组件本身对内容
    * 不作视频/图像/文本假设，具体展示逻辑由调用方决定。
@@ -60,10 +73,11 @@ interface ProviderModelSelectProps {
   renderOptionMeta?: (fullValue: string) => React.ReactNode;
 }
 
-/** 下拉里的一组：默认项单独成组（没有组标题），其余按供应商分组。 */
+/** A group in the dropdown: the default item forms its own group (no group title), the rest are grouped by provider. / 下拉里的一组：默认项单独成组（没有组标题），其余按供应商分组。 */
+// Use type rather than interface: Combobox's group type has an index signature, and an interface can't be assigned to it.
 // 用 type 而非 interface：Combobox 的分组类型带索引签名，interface 不能赋给它。
 type OptionGroup = {
-  /** 供应商 id；默认项组为 null。 */
+  /** Provider id; null for the default item group. / 供应商 id；默认项组为 null。 */
   provider: string | null;
   items: string[];
 };
@@ -106,11 +120,15 @@ export function ProviderModelSelect({
   const [query, setQuery] = useState("");
 
   const showSearch = searchable && options.length >= searchThreshold;
+  // When the search box is hidden, don't let a leftover query keep filtering, otherwise the user sees a list filtered "invisibly".
   // 搜索框隐藏时不让残留的查询继续过滤，否则用户会看到一个被「隐形」过滤的列表。
   const activeQuery = showSearch ? query.trim().toLowerCase() : "";
 
   const groups = useMemo(() => groupByProvider(options), [options]);
 
+  // When the provider name matches, keep all of that provider's models; otherwise match item by item on model id and translated name; once translated names apply, searching by id
+  // must still hit (the id is the string users see in docs / the provider console), and conversely searching by the Chinese name must also find it.
+  // Don't show the default item while there's a query: it isn't a model, and mixed into results it would be mistaken for a match.
   // 供应商名命中时保留该供应商的全部模型；否则按 model id 与译名逐项匹配——译名生效后按 id
   // 搜索仍要命中（id 是用户在文档 / 供应商控制台里见到的那一串），反之按中文名搜也要能找到。
   // 有查询时不显示默认项：它不是一个模型，混在结果里会被误当成匹配项。
@@ -139,6 +157,8 @@ export function ProviderModelSelect({
     [allowDefault, groups],
   );
 
+  // A config value can also be a bare provider id without model (downstream runs the provider's default model). Hard-splitting by "provider/model"
+  // would show it as an empty " · ", so when no model can be split out the whole string is shown as the provider name.
   // 配置值也可以是不带 model 的裸 provider id（下游按该供应商默认模型执行）。按 "provider/model"
   // 硬拆会让它显示成空的「 · 」，故拆不出 model 时整串当作 provider 名呈现。
   const describe = (fullValue: string) => {
@@ -165,6 +185,7 @@ export function ProviderModelSelect({
     <Combobox<string>
       items={allGroups}
       filteredItems={filteredGroups}
+      // The default item's value is the empty string; without a default item, the empty string means "not selected", left to null to show placeholder text.
       // 默认项的值是空串；没有默认项时空串表示「未选择」，交给 null 显示占位文案。
       value={value || allowDefault ? value : null}
       onValueChange={(next) => {
@@ -235,7 +256,7 @@ function ModelOption({ value, label, meta }: { value: string; label: string; met
     <ComboboxItem value={value} className="items-start">
       <span className="flex min-w-0 flex-1 flex-col gap-0.5">
         <span className="truncate">{label}</span>
-        {/* 译名与 id 不同才补 id 行：品牌名类模型（译名 = id）补一行等于重复。 */}
+        {/* Only add an id line when the translated name differs from the id: for brand-name models (translated name = id) an extra line would just repeat. / 译名与 id 不同才补 id 行：品牌名类模型（译名 = id）补一行等于重复。 */}
         {label !== modelId && <span className="truncate font-mono text-xs text-muted-foreground">{modelId}</span>}
         {meta && <span className="truncate text-xs text-muted-foreground tabular-nums">{meta}</span>}
       </span>

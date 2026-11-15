@@ -20,14 +20,14 @@ import { getScriptItems, type EditorContentMode } from "@/utils/script-shape";
 import { stripScriptsPrefix } from "@/utils/task-target";
 import { itemPositionLabel } from "@/utils/episode-display";
 
-/** 可选的项目内图片：path 是项目内相对路径，交给 /end-frame/select 做快照复制。 */
+/** A selectable image within the project: path is the project-relative path, handed to /end-frame/select for a snapshot copy. / 可选的项目内图片：path 是项目内相对路径，交给 /end-frame/select 做快照复制。 */
 interface PickableImage {
   path: string;
   label: string;
 }
 
 interface ImageGroup {
-  /** 分组标题（已翻译） */
+  /** Group title (already translated) / 分组标题（已翻译） */
   title: string;
   images: PickableImage[];
 }
@@ -38,17 +38,23 @@ interface EndFramePickerProps {
   contentMode: EditorContentMode;
   aspectRatio: "9:16" | "16:9";
   onClose: () => void;
-  /** 选定项目内图片：交由父级调用设置 API（父级负责提交时刻的占用复核）。 */
+  /** An image within the project was picked: the parent calls the set API (the parent rechecks occupancy at submit time). / 选定项目内图片：交由父级调用设置 API（父级负责提交时刻的占用复核）。 */
   onPickProjectImage: (sourcePath: string) => void;
-  /** 选定本地文件上传：同上。 */
+  /** A local file was picked for upload: same as above. / 选定本地文件上传：同上。 */
   onPickUpload: (file: File) => void;
-  /** 设置请求在途：禁用确认，避免重复提交。 */
+  /** Set request in flight: disable confirm to avoid duplicate submits. / 设置请求在途：禁用确认，避免重复提交。 */
   submitting?: boolean;
-  /** 弹窗打开后占用态发生变化（如本分镜被入队）：与提交在途一并禁用写入通道。 */
+  /** Occupancy changed after the dialog opened (e.g. this shot was enqueued): disable the write channels together with the in-flight submit. / 弹窗打开后占用态发生变化（如本分镜被入队）：与提交在途一并禁用写入通道。 */
   disabled?: boolean;
 }
 
 /**
+ * End frame picker: single selection, two channels landing in the same place.
+ *
+ * Channel one lays out project images grouped by source (this episode's storyboard images / this episode's grid cuts);
+ * after picking it goes through `/end-frame/select` to snapshot-copy by relative path; channel two is the upload entry in the header,
+ * going through `/end-frame/upload`. Neither creates a reference to the source image, so later changes to the source do not affect the end frame.
+ *
  * 尾帧选图器：单选，两条通道同一落点。
  *
  * 通道一是项目内图片按来源分组平铺（本集分镜图 / 本集宫格切图），
@@ -74,6 +80,8 @@ export function EndFramePicker({
   const script = useProjectsStore((s) => s.currentScripts[scriptFile]);
   const [gridImages, setGridImages] = useState<PickableImage[]>([]);
 
+  // Grid cuts are not in the store, so fetch them once when the dialog opens. Cancellation uses an AbortSignal:
+  // when the dialog is closed before the response arrives, no more state is written to the unmounted component.
   // 宫格切图不在 store 里，弹窗打开时拉一次。取消走 AbortSignal：
   // 弹窗在响应到达前被关闭时，不再往已卸载组件写 state。
   useEffect(() => {
@@ -101,6 +109,7 @@ export function EndFramePicker({
       })
       .catch(() => {
         if (signal.aborted) return;
+        // Failing to fetch grids does not block picking: other groups remain usable, and empty groups simply do not render.
         // 宫格取不到不阻断选图：其余分组仍可用，空分组自然不渲染。
         setGridImages([]);
       });
@@ -126,6 +135,7 @@ export function EndFramePicker({
     <Dialog
       open
       onOpenChange={(open) => {
+        // Ignore close while a set request is in flight: closing before the result returns would leave success and failure nowhere to land.
         // 设置请求在途时忽略关闭：结果回来前关掉，成功与失败都无处落脚。
         if (!open && !submitting) onClose();
       }}

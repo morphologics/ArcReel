@@ -27,24 +27,31 @@ import {
 } from "@/components/ui/alert-dialog";
 
 export interface LeaveGuardOptions {
-  /** 有未保存修改；为 false 时不拦截。 */
+  /** Has unsaved changes; when false nothing is intercepted. / 有未保存修改；为 false 时不拦截。 */
   dirty: boolean;
   /**
+   * A save request is in flight. Leaving then waits for the save to settle before deciding: proceed directly if it succeeded with no new changes; ask only on failure or new changes.
+   * Otherwise "Discard changes" would let an already-sent save through, and "Save and leave" would submit twice.
+   *
    * 保存请求在途。此时的离开先等保存落定再判断：成功且没有新修改就直接放行，失败或又有修改才询问。
    * 否则「放弃修改」会放走已经发出的保存，「保存并离开」会重复提交。
    */
   saving?: boolean;
-  /** 「保存并离开」时调用，返回是否保存成功。失败时留在原处，错误由编辑单元自己显示。 */
+  /** Called on "Save and leave", returns whether the save succeeded. On failure stay in place; the edit unit shows its own error. / 「保存并离开」时调用，返回是否保存成功。失败时留在原处，错误由编辑单元自己显示。 */
   save: () => Promise<boolean>;
-  /** 「放弃修改」时调用。不传时只放行跳转，适用于被拦截的出口都会卸载或重新加载编辑单元的页面。 */
+  /** Called on "Discard changes". When omitted it only lets navigation proceed, suitable for pages where every intercepted exit unmounts or reloads the edit unit. / 「放弃修改」时调用。不传时只放行跳转，适用于被拦截的出口都会卸载或重新加载编辑单元的页面。 */
   discard?: () => void;
-  /** 对话框标题，如「分镜 3 有未保存的修改」；只有一个编辑单元有修改时采用。 */
+  /** Dialog title, e.g. "Shot 3 has unsaved changes"; used only when exactly one edit unit has changes. / 对话框标题，如「分镜 3 有未保存的修改」；只有一个编辑单元有修改时采用。 */
   title?: string;
-  /** 对返回 true 的应用内导航不拦截。参数是带查询串的目标路径。 */
+  /** In-app navigations for which this returns true are not intercepted. The argument is the target path with query string. / 对返回 true 的应用内导航不拦截。参数是带查询串的目标路径。 */
   allowNavigation?: (to: string) => boolean;
 }
 
 /**
+ * An action wrapped by the leave guard. Synchronous actions return `void`; proceeding discards changes. Actions that settle (requests like delete or remove)
+ * return `Promise<boolean>`: edit units' changes are discarded only on success; on failure, a server re-confirmation demand or an occupancy block they
+ * return `false` and changes stay intact. The action itself reports failure reasons; a reject counts as failure and the error is thrown as usual.
+ *
  * 被离开拦截包住的动作。同步动作返回 `void`，放行即丢弃修改。会落定的动作（删除、移除这类请求）
  * 返回 `Promise<boolean>`：成功时才丢弃各编辑单元的修改，失败、被服务端要求再次确认或被占用拦下时
  * 返回 `false`，修改原样保留。动作自己负责提示失败原因；reject 按失败处理，错误照常抛出。
@@ -52,12 +59,12 @@ export interface LeaveGuardOptions {
 export type LeaveAction = () => void | Promise<boolean>;
 
 export interface ConfirmLeaveOptions {
-  /** 第三个按钮的文案，缺省为「保存并离开」；如切换分镜时传「保存并切换」。 */
+  /** Label of the third button, defaults to "Save and leave"; e.g. pass "Save and switch" when switching shots. / 第三个按钮的文案，缺省为「保存并离开」；如切换分镜时传「保存并切换」。 */
   saveLabel?: string;
 }
 
 interface LeaveRequest extends ConfirmLeaveOptions {
-  /** 被这次离开影响的编辑单元。 */
+  /** Edit units affected by this leave. / 被这次离开影响的编辑单元。 */
   unitIds: string[];
   title?: string;
   proceed: LeaveAction;
@@ -65,7 +72,7 @@ interface LeaveRequest extends ConfirmLeaveOptions {
 
 interface RequestLeaveOptions extends ConfirmLeaveOptions {
   to?: string;
-  /** 来自被截住的浏览器前进后退：异步动作在途期间，已放弃的修改也照常询问。 */
+  /** From an intercepted browser back/forward: while an async action is in flight, already-discarded changes are still asked about. / 来自被截住的浏览器前进后退：异步动作在途期间，已放弃的修改也照常询问。 */
   fromHistory?: boolean;
 }
 
@@ -75,7 +82,7 @@ interface PendingLeave {
 }
 
 interface RegisteredUnit extends LeaveGuardOptions {
-  /** 用户已对一个仍在途的异步动作选择「放弃修改」：动作落定前为 true。 */
+  /** The user chose "Discard changes" for an async action still in flight: true until the action settles. / 用户已对一个仍在途的异步动作选择「放弃修改」：动作落定前为 true。 */
   setDiscarding: (discarding: boolean) => void;
 }
 
@@ -92,6 +99,13 @@ function isPromise(value: unknown): value is Promise<boolean> {
 const LeaveGuardContext = createContext<LeaveGuardRegistry | null>(null);
 
 /**
+ * Register an edit unit with the leave guard: while mounted with unsaved changes, in-app route navigation, switches wrapped by `useConfirmLeave`
+ * and closing the tab all ask first. `useEditUnit` registers automatically; pages managing their own form state call this directly.
+ * Function arguments must be stable references.
+ *
+ * Returns true when the user has chosen to discard changes and is waiting for the wrapped async action to settle: changes remain, discarded only on success.
+ * Units participating in external-removal retention no longer ask to be retained then; removal caused by the action itself takes effect directly.
+ *
  * 把一个编辑单元登记到离开拦截：挂载期间有未保存修改时，应用内路由跳转、`useConfirmLeave`
  * 包住的切换与关闭标签页都会先询问。`useEditUnit` 已自动登记；自行管理表单状态的页面直接调用。
  * 函数型参数需传稳定引用。
@@ -111,6 +125,14 @@ export function useLeaveGuard({ dirty, saving, save, discard, title, allowNaviga
 }
 
 /**
+ * Use when switching the selected item in a master-detail layout (previous/next provider, memory file, shot, asset):
+ * with unsaved changes the guard dialog appears first, and `proceed` runs only after the user allows it. Switch-type `proceed` must complete the switch synchronously;
+ * route navigations it starts are not intercepted again. Selections kept in the URL and switched via route navigation are already covered by route interception; no need to wrap.
+ *
+ * Actions that may fail, like delete or remove, return `Promise<boolean>` (see `LeaveAction`): after the user chooses to discard,
+ * changes are kept until the action settles and discarded only on success; while the action is in flight, these discarded changes no longer intercept its own route navigations and
+ * `useConfirmLeave`; new changes in other edit units are asked about as usual.
+ *
  * 主从布局内切换选中项（供应商、记忆文件、分镜、资产的上一个与下一个）时使用：
  * 有未保存修改先弹出拦截对话框，用户放行后才执行 `proceed`。切换类的 `proceed` 需同步完成切换，
  * 其中发起的路由跳转不再重复拦截。选中项记在 URL 里、经路由跳转切换的，路由拦截已经覆盖，不必再包。
@@ -131,6 +153,9 @@ export function useConfirmLeave(): (proceed: LeaveAction, options?: ConfirmLeave
 }
 
 /**
+ * Returns a stable query function: whether any mounted edit unit currently has unsaved changes.
+ * For automatic behavior that should not interrupt editing (e.g. auto-locate from Agent changes); user-initiated switches still go through `useConfirmLeave`.
+ *
  * 返回一个稳定的查询函数：此刻是否有挂载中的编辑单元带着未保存修改。
  * 供不该打断编辑的自动行为使用（如 Agent 改动带来的自动定位），用户发起的切换仍走 `useConfirmLeave`。
  */
@@ -143,7 +168,7 @@ function currentUrl(): string {
   return window.location.pathname + window.location.search + window.location.hash;
 }
 
-/** 目标与当前地址的路径和查询参数都相同（参数顺序不计）。`to` 可以是只有查询串的相对地址。 */
+/** Target and current address have the same path and query params (param order ignored). `to` may be a relative address with only a query string. / 目标与当前地址的路径和查询参数都相同（参数顺序不计）。`to` 可以是只有查询串的相对地址。 */
 function isSameLocation(to: string, here: string): boolean {
   const current = new URL(here, "http://leave-guard.invalid");
   const target = new URL(to, current);
@@ -153,6 +178,10 @@ function isSameLocation(to: string, here: string): boolean {
 }
 
 /**
+ * Registry for the leave guard and the single guard dialog, mounted at the route root (where `base` is empty).
+ * In-app route navigation is intercepted via wouter's `aroundNav`; browser back/forward first returns to the original address and then asks;
+ * closing the tab and reloading use the browser's native `beforeunload` prompt.
+ *
  * 离开拦截的注册中心与唯一的拦截对话框，挂在路由根部（`base` 为空的位置）。
  * 应用内路由跳转经 wouter 的 `aroundNav` 拦截；浏览器前进后退先退回原地址再询问；
  * 关闭标签页与刷新用浏览器原生的 `beforeunload` 提示。
@@ -161,19 +190,25 @@ export function LeaveGuardProvider({ children }: { children: ReactNode }) {
   const { t } = useTranslation("common");
   const [path] = useLocation();
   const search = useSearch();
+  // Router's current address (path plus query string), so aroundNav can recognize navigation to the current address
   // 路由的当前地址（路径加查询串），供 aroundNav 识别跳到当前地址
   const hereRef = useRef("");
   useLayoutEffect(() => {
     hereRef.current = search ? `${path}?${search}` : path;
   }, [path, search]);
   const unitsRef = useRef(new Map<string, RegisteredUnit>());
+  // Navigations started during synchronous execution of a switch the user already allowed are not intercepted again
   // 用户已放行的那次切换在同步执行期间发起的跳转，不再重复拦截
   const passingRef = useRef(false);
+  // Edit units involved in allowed, still in-flight async actions and their action counts: until settled these units' changes are approved for discard,
+  // and navigations started by the action itself are not intercepted; other units ask as usual. Browser back/forward asks as usual
   // 已放行、仍在途的异步动作涉及的编辑单元及其动作数：落定前这些单元的修改已获准丢弃，
   // 不再拦截动作自己发起的跳转；其他单元照常询问。浏览器前进后退照常询问
   const settlingRef = useRef(new Map<string, number>());
+  // After the user allows an intercepted back/forward, the popstate caused by history.back() goes straight to wouter
   // 用户放行被截住的前进后退后，由 history.back() 引起的那次 popstate 直接交给 wouter
   const releasingPopRef = useRef(false);
+  // Leave request waiting for an in-flight save to settle; re-evaluated when registrations change, only the latest is kept
   // 等在途保存落定的离开请求；登记变化时重新判断，只保留最近一次
   const pendingLeaveRef = useRef<PendingLeave | null>(null);
   const lastUrlRef = useRef("");
@@ -181,7 +216,7 @@ export function LeaveGuardProvider({ children }: { children: ReactNode }) {
   const [open, setOpen] = useState(false);
   const [saving, setSaving] = useState(false);
 
-  /** 这次离开会影响的编辑单元：排除放行该目标的单元。 */
+  /** Edit units this leave affects: excluding units that allow this target. / 这次离开会影响的编辑单元：排除放行该目标的单元。 */
   const leavingUnits = useCallback(
     (to?: string) => [...unitsRef.current].filter(([, unit]) => !(to !== undefined && unit.allowNavigation?.(to))),
     [],
@@ -193,6 +228,9 @@ export function LeaveGuardProvider({ children }: { children: ReactNode }) {
   );
 
   /**
+   * Run the action the user allowed and discard changes of the units in `discardIds`. Sync actions discard right after running;
+   * async actions discard only after settling successfully; while in flight these units are told to stop asking for external-removal retention, restored on failure.
+   *
    * 执行用户放行的动作，并丢弃 `discardIds` 中各单元的修改。同步动作执行完即丢弃；
    * 异步动作落定且成功后才丢弃，在途期间通知这些单元不再要求外部移除保留，失败时恢复。
    */
@@ -222,7 +260,7 @@ export function LeaveGuardProvider({ children }: { children: ReactNode }) {
         if (count > 0) settling.set(id, count);
         else settling.delete(id);
       }
-      // 取最新登记：动作成功后已卸载的单元不必再丢弃
+      // Take the latest registrations: units already unmounted after the action succeeded need not be discarded / 取最新登记：动作成功后已卸载的单元不必再丢弃
       for (const unit of units()) {
         unit.setDiscarding(false);
         if (succeeded) unit.discard?.();
@@ -261,6 +299,7 @@ export function LeaveGuardProvider({ children }: { children: ReactNode }) {
   );
 
   const registry = useMemo<LeaveGuardRegistry>(() => {
+    // After an edit unit's save settles it updates its registration; re-evaluate the deferred leave then, running outside the effect
     // 编辑单元的保存落定后会更新登记，此时重新判断被推迟的离开；放到 effect 之外执行
     const retryPendingLeave = () => {
       const pending = pendingLeaveRef.current;
@@ -288,6 +327,7 @@ export function LeaveGuardProvider({ children }: { children: ReactNode }) {
         go(to, options);
         lastUrlRef.current = currentUrl();
       };
+      // Navigating to the current address (e.g. clicking the already selected section again) unmounts no edit unit, so do not ask
       // 跳到当前地址（如再点一次已选中的分区）不会卸载任何编辑单元，不询问
       if (isSameLocation(to, hereRef.current)) navigate();
       else requestLeave(navigate, { to });
@@ -295,12 +335,15 @@ export function LeaveGuardProvider({ children }: { children: ReactNode }) {
     [requestLeave],
   );
 
+  // Register before wouter's location subscription (children's passive effects) and listen in the capture phase,
+  // so wouter does not receive this popstate when there are unsaved changes.
   // 先于 wouter 的位置订阅（子组件的 passive effect）登记，并在捕获阶段监听，
   // 保证有未保存修改时 wouter 收不到这次 popstate。
   useLayoutEffect(() => {
     lastUrlRef.current = currentUrl();
     const onPopState = (event: PopStateEvent) => {
       const target = currentUrl();
+      // Units with a save in flight are not let through even without changes right now: must still ask if the save fails or they changed meanwhile
       // 保存在途的单元即使此刻没有修改也不放行：保存失败或期间又改过时还要询问
       const unaffected =
         dirtyUnitIds(target).length === 0 && !leavingUnits(target).some(([, unit]) => unit.saving);
@@ -309,6 +352,8 @@ export function LeaveGuardProvider({ children }: { children: ReactNode }) {
         lastUrlRef.current = target;
         return;
       }
+      // Browser back/forward does not go through aroundNav and the address has already changed: push the pre-leave address first, so the target entry sits right before it.
+      // After the user allows it, go back one entry to the history entry the browser originally wanted, without pushing a new entry
       // 浏览器前进后退不经过 aroundNav，地址已经变了：先压入离开前的地址，目标记录正好在它前一条。
       // 用户放行后退回一条，回到浏览器原本要去的那条历史记录，不另压新记录
       event.stopImmediatePropagation();
@@ -345,6 +390,7 @@ export function LeaveGuardProvider({ children }: { children: ReactNode }) {
     let saved = true;
     try {
       for (const id of request.unitIds) {
+        // Take the latest registrations each time: the previous unit re-renders and updates its registration after saving
         // 每次取最新登记：前一个单元保存后会重新渲染并更新登记
         const unit = unitsRef.current.get(id);
         if (unit && !(await unit.save())) {
@@ -356,7 +402,7 @@ export function LeaveGuardProvider({ children }: { children: ReactNode }) {
       setSaving(false);
       setOpen(false);
     }
-    // 保存失败留在原处，错误显示在编辑单元的保存栏或提示条上
+    // On save failure stay in place; the error shows in the edit unit's save bar or notice bar / 保存失败留在原处，错误显示在编辑单元的保存栏或提示条上
     if (saved) pass(request.proceed);
   };
 
@@ -366,7 +412,7 @@ export function LeaveGuardProvider({ children }: { children: ReactNode }) {
       <AlertDialog
         open={open}
         onOpenChange={(next) => {
-          // 保存中不响应 Esc，避免请求在途时对话框先关掉
+          // Ignore Esc while saving, so the dialog does not close while the request is in flight / 保存中不响应 Esc，避免请求在途时对话框先关掉
           if (!next && !saving) setOpen(false);
         }}
       >

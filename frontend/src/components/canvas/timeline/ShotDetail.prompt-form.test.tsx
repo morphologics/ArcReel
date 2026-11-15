@@ -61,6 +61,7 @@ describe("ShotDetail 提示词形态切换", () => {
     fireEvent.click(imageToText);
 
     await waitFor(() => expect(spy).toHaveBeenCalledWith("demo", "E1S01", "episode_1.json"));
+    // The structured editor gives way to a plain text box containing the final prompt rendered by the backend
     // 结构化编辑器让位给纯文本框，框里就是后端渲染的最终提示词
     expect(await screen.findByDisplayValue(/Scene: 雨夜街道/)).toBeInTheDocument();
     expect(screen.queryByDisplayValue("雨夜街道")).not.toBeInTheDocument();
@@ -98,6 +99,7 @@ describe("ShotDetail 提示词形态切换", () => {
 
     await waitFor(() => expect(spy).toHaveBeenCalled());
     expect(await screen.findByText("该分镜没有分镜图提示词")).toBeInTheDocument();
+    // The structured editor stays in place: a text form of an empty body loses the reason and would only be rejected by the non-empty check at save
     // 结构化编辑器留在原地：空正文的文本形态既丢原因、又只会在保存时被非空校验拒掉
     expect(screen.getByDisplayValue("雨夜街道")).toBeInTheDocument();
   });
@@ -121,6 +123,7 @@ describe("ShotDetail 结构化 → 文本切换在途", () => {
 
     fireEvent.click(screen.getAllByRole("button", { name: "文本" })[0]);
 
+    // On return that side's prompt is replaced as a whole: edits made to it while in flight are silently overwritten
     // 返回后整体替换该侧提示词：在途期间对它的编辑会被静默覆盖
     expect(screen.getByDisplayValue("雨夜街道")).toHaveAttribute("readonly");
     expect(screen.getByRole("button", { name: /添加引用/ })).toBeDisabled();

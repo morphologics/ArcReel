@@ -40,14 +40,16 @@ const EMPTY_MODELS: ModelConfigValue = {
   imageResolution: null,
 };
 
-/** 读取第二步的可选模型与全局默认；供应商与模型名由后端按界面语言成文。 */
+/** Read step two's available models and global defaults; provider and model names are written by the backend in the UI language. / 读取第二步的可选模型与全局默认；供应商与模型名由后端按界面语言成文。 */
 async function loadGenerationData(signal: AbortSignal) {
   const [sysConfig, providersRes, customRes, narrationDefaults, auto] = await Promise.all([
     API.getSystemConfig({ signal }),
     API.getProviders({ signal }),
     API.listCustomProviders({ signal }),
+    // Prefill is only a convenience: if global defaults can't be read, TTS fields stay empty for the user to pick
     // 预填只是便利：读不到全局默认时 TTS 字段留空，由用户自选
     API.getNarrationDefaults({ signal }).catch(() => null),
+    // The auto-selected actual model is only for display and capability lookups; if unreadable fall back to showing just "Auto select"
     // 自动选择的实际模型只用于展示与能力查询，读不到时退回只显示「自动选择」
     API.getAutoBackends({ signal }).catch(() => null),
   ]);
@@ -58,6 +60,7 @@ async function loadGenerationData(signal: AbortSignal) {
       image: sysConfig.options.image_backends,
       text: sysConfig.options.text_backends,
       audio: sysConfig.options.audio_backends ?? [],
+      // The catalog fallback layer is below: candidates list only ready providers, while the configured effective value may point to one that lost its credential.
       // 目录兜底层在下：候选只列 ready 供应商，而已配置的生效值可能指向失去凭证的那个。
       providerNames: { ...catalogNames.providerNames, ...(sysConfig.options.provider_names ?? {}) },
       modelNames: { ...catalogNames.modelNames, ...(sysConfig.options.model_names ?? {}) },
@@ -81,6 +84,9 @@ async function loadGenerationData(signal: AbortSignal) {
 }
 
 /**
+ * New project wizard: basics, generation settings and style in three steps; create only after all three.
+ * Mounted by the project lobby when `useProjectsStore().showCreateModal` is true; closing sets it back to false.
+ *
  * 新建项目向导：基础信息、生成设置、风格三步，走完三步才能创建。
  * 由项目大厅在 `useProjectsStore().showCreateModal` 为 true 时挂载，关闭时把它置回 false。
  */
@@ -106,6 +112,7 @@ export function CreateProjectModal() {
     speechRate: null,
   });
   const [models, setModels] = useState<ModelConfigValue>(EMPTY_MODELS);
+  // Narration delivery defaults to post-dubbing; TTS fields are prefilled once global defaults arrive, so switching to TTS shows the global defaults
   // 旁白交付缺省后期配音；TTS 字段在全局默认取回后预填，用户切到 TTS 时看到的即全局默认
   const [narration, setNarration] = useState<NarrationDeliveryValue>({
     delivery: "post_production",
@@ -123,12 +130,14 @@ export function CreateProjectModal() {
   });
   const [creating, setCreating] = useState(false);
 
+  // Step two's remote data is read when the wizard mounts, not re-requested on step switches; refetched when the UI language changes,
+  // otherwise the catalog stays in the previous language.
   // 第二步的远端数据在向导挂载时读取，切换步骤不重复请求；界面语言变化后重取，
   // 否则目录停留在切换前的语言。
   const [generationData, setGenerationData] = useState<WizardGenerationData | null>(null);
   const [generationError, setGenerationError] = useState<string | null>(null);
 
-  // react-doctor-disable-next-line react-doctor/no-set-state-after-await-in-effect -- await 后的写入都先检查 controller.signal.aborted，cleanup 中 abort 作废上一轮
+  // react-doctor-disable-next-line react-doctor/no-set-state-after-await-in-effect -- writes after await all check controller.signal.aborted first; cleanup aborts to void the previous round / await 后的写入都先检查 controller.signal.aborted，cleanup 中 abort 作废上一轮
   useEffect(() => {
     const controller = new AbortController();
     voidCall((async () => {
@@ -145,6 +154,7 @@ export function CreateProjectModal() {
           }));
         }
         setGenerationData(data);
+        // Clear the previous round's error once a refetch succeeds, otherwise the error would keep hiding new data.
         // 重取成功即清掉上一轮的错误，否则错误会一直遮住新数据。
         setGenerationError(null);
       } catch (err) {
@@ -156,6 +166,9 @@ export function CreateProjectModal() {
 
   const close = () => setShowCreateModal(false);
 
+  // After choosing duration and resolution in step two one can still go back to step one and change the generation mode. Resolution depends only on the executing model and stays if the model is unchanged;
+  // duration is validated against the new executing model's declared full set, falling back to auto if outside it. When the reference image path narrows the value away,
+  // step two guides re-selection with the server's cause-based notice; only the server can give the narrowed result, and this is a synchronous event handler.
   // 第二步选好时长与分辨率后还能退回第一步改生成模式。分辨率只由执行模型决定，模型没换就不动；
   // 时长按新执行模型的声明全集校验，落在全集外的退回自动。参考图路径把该值收窄掉的情形由
   // 第二步按服务端成因的提示引导重选——收窄结果只有服务端能给，这里是同步事件处理器。
@@ -180,6 +193,7 @@ export function CreateProjectModal() {
 
   const isAd = basics.contentMode === "ad";
 
+  // Required items still missing and fields needing correction in the current step, listed in on-screen order
   // 当前步骤还缺的必填项与需要修正的字段，按界面上的顺序列出
   const missing: string[] = [];
   const invalid: string[] = [];
@@ -208,7 +222,7 @@ export function CreateProjectModal() {
 
   const goTo = (next: WizardStep) => {
     setStep(next);
-    // 三步共用一个滚动区，进入新步骤时从顶部开始
+    // The three steps share one scroll area; entering a new step starts at the top / 三步共用一个滚动区，进入新步骤时从顶部开始
     if (bodyRef.current) bodyRef.current.scrollTop = 0;
   };
 
@@ -217,6 +231,8 @@ export function CreateProjectModal() {
     if (!contentMode || !generationRoute) return;
     setCreating(true);
     try {
+      // The resolution model_settings key uses the executing model: the backend looks up this table by executing model, and the wizard only exposes the default layer,
+      // but if a global sub-layer points to another model, the executed one isn't the default layer's; with mismatched keys the resolution would be silently ignored.
       // resolution 的 model_settings key 用执行模型：后端按执行模型查这张表，向导只暴露默认层，
       // 但全局细分层若指向别的模型，执行的就不是默认层那个——键位对不上分辨率会被静默忽略。
       const globals = generationData?.globalDefaults ?? {
@@ -242,13 +258,16 @@ export function CreateProjectModal() {
         aspect_ratio: basics.aspectRatio,
         generation_mode: generationRoute,
         grid_storyboard: basics.gridStoryboard,
+        // Don't send the voiceover speech rate estimate when empty (server doesn't store it, falls back to the language default)
         // 口播语速估算未填即不传（服务端不落盘，回退语言默认）
         ...(duration.speechRate !== null ? { speech_rate_units_per_second: duration.speechRate } : {}),
+        // Ad projects don't expose default_duration (planned per shot by target total duration); send target_duration instead
         // 广告项目不暴露 default_duration（按目标总时长逐个分镜规划），改传 target_duration
         ...(contentMode === "ad"
           ? { target_duration: duration.targetDuration ?? undefined }
           : {
               default_duration: models.defaultDuration,
+              // Don't send when no target is set (server doesn't store it, script planning doesn't inject the soft constraint)
               // 未设目标即不传（服务端不落盘，脚本规划不注入该软约束）
               ...(duration.episodeTargetDuration !== null
                 ? { episode_target_duration: duration.episodeTargetDuration }
@@ -262,6 +281,7 @@ export function CreateProjectModal() {
         text_backend_complex: models.textBackendComplex || null,
         ...(Object.keys(modelSettings).length > 0 ? { model_settings: modelSettings } : {}),
         narration_delivery: narration.delivery,
+        // The three TTS snapshot fields are submitted explicitly: what's stored is what the wizard showed; the server no longer fills from global defaults
         // TTS 快照三项显式提交：落盘的就是向导里看到的值，服务端不再按全局默认补
         ...(narration.delivery === "use_tts"
           ? {
@@ -301,7 +321,7 @@ export function CreateProjectModal() {
     <Dialog
       open
       onOpenChange={(open) => {
-        // 创建请求在途时忽略关闭请求（Esc、关闭按钮、点击遮罩）
+        // Ignore close requests (Esc, close button, backdrop click) while the create request is in flight / 创建请求在途时忽略关闭请求（Esc、关闭按钮、点击遮罩）
         if (!open && !creating) close();
       }}
     >

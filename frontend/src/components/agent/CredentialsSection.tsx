@@ -30,6 +30,9 @@ import type {
 import { errMsg, voidCall } from "@/utils/async";
 
 /**
+ * Agent provider list (Agent credentials in the data). Create/edit, delete and activate are immediate actions: success is shown by the list changing,
+ * failure shows a toast; delete is irreversible and is confirmed first via AlertDialog.
+ *
  * Agent 供应商列表（数据上是 Agent 凭证）。增改、删除、切换生效都是即时动作：成功以列表变化为反馈，
  * 失败弹出提示；删除不可撤销，先经 AlertDialog 确认。
  */
@@ -40,9 +43,11 @@ export function CredentialsSection() {
   const [presets, setPresets] = useState<PresetProvider[]>([]);
   const [customSentinelId, setCustomSentinelId] = useState("__custom__");
   const [addModalOpen, setAddModalOpen] = useState(false);
+  // Use a new key each time the create dialog opens, so the dialog remounts without the previous draft and diagnostics
   // 每次打开新建弹窗换一个 key，弹窗重挂载，不带上一轮的草稿与诊断结果
   const [addSession, setAddSession] = useState(0);
   const [busyCredId, setBusyCredId] = useState<number | null>(null);
+  // Tier bindings are bucketed per Agent provider: requests on different providers can be in flight together; one finishing does not release another.
   // 档位绑定按 Agent 供应商分桶：不同供应商上的请求可以同时在途，一个结束不放开另一个。
   const [tierBusyIds, setTierBusyIds] = useState<ReadonlySet<number>>(() => new Set());
   const [testResult, setTestResult] = useState<TestConnectionResponse | null>(null);
@@ -69,7 +74,7 @@ export function CredentialsSection() {
   }, []);
 
   useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect -- mount 时异步拉取 Agent 供应商后回写，属于受控的初始化加载
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- asynchronously fetching Agent providers on mount and writing back is a controlled initial load / mount 时异步拉取 Agent 供应商后回写，属于受控的初始化加载
     void loadCreds();
     return () => loadController.current?.abort();
   }, [loadCreds]);
@@ -135,6 +140,7 @@ export function CredentialsSection() {
     }
   }, []);
 
+  // Bind and unbind responses are the full updated credential; swap it into the list directly without refetching.
   // 绑定与解除绑定的响应是更新后的整条凭证，直接换进列表，不重新拉取。
   const changeTierBinding = useCallback(async (id: number, change: () => Promise<AgentCredential>) => {
     setTierBusyIds((prev) => new Set(prev).add(id));
@@ -251,6 +257,7 @@ export function CredentialsSection() {
       <AlertDialog
         open={deleteTarget !== null}
         onOpenChange={(next) => {
+          // While the delete request is in flight, ignore Esc so the dialog does not disappear before the result
           // 删除请求在途时不响应 Esc，避免对话框先于结果消失
           if (!next && !deletingCred) setDeleteTarget(null);
         }}

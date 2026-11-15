@@ -44,6 +44,7 @@ describe("SecondaryRail", () => {
       "page",
     );
 
+    // When the selection moves to another group, a tab never switched manually follows it
     // 选中项换到另一组时，没手动切过的 Tab 跟过去
     select("preset:a");
     expect(activeTab()).toHaveTextContent("预置");

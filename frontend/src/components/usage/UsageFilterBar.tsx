@@ -14,7 +14,7 @@ import { MEDIA_META, projectTitleResolver, providerLabelResolver, usageProjectLa
 interface UsageFilterBarProps {
   filters: UsageRecordsFilters;
   summary: UsageSummary | null;
-  /** 分镜筛选值所属集的标题与播出位置，取自已载入的记录；没有时显示未命名集与集内 ID。 */
+  /** Title and episode order of the episode the shot filter value belongs to, taken from loaded records; when absent show an untitled episode and the in-episode ID. / 分镜筛选值所属集的标题与播出位置，取自已载入的记录；没有时显示未命名集与集内 ID。 */
   segmentRef?: EpisodeItemRef | null;
   onChange: (patch: Partial<UsageRecordsFilters>) => void;
   onRefresh: () => void;
@@ -48,6 +48,7 @@ function FilterSelect({
   options: FilterOption[];
   onChange: (value: string | null) => void;
 }) {
+  // "All" is represented by null: project names can be empty strings (endpoint trial-run records) and custom model IDs are unrestricted, so any string sentinel could collide with a real value.
   // 「全部」用 null 表示：项目名可以是空串（端点试跑记录），自定义模型 ID 不受限制，任何字符串哨兵都可能与真实取值相撞。
   const items: { value: string | null; label: string }[] = [{ value: null, label: allLabel }, ...options];
   return (
@@ -55,7 +56,7 @@ function FilterSelect({
       <SelectTrigger size="sm" aria-label={label} className="w-40">
         <SelectValue />
       </SelectTrigger>
-      {/* 项目标题、供应商名可能很长：下拉可比触发器宽，超过上限的选项截断，悬停看全文 */}
+      {/* Project titles and provider names can be long: the dropdown may be wider than the trigger, options beyond the cap truncate, hover for full text / 项目标题、供应商名可能很长：下拉可比触发器宽，超过上限的选项截断，悬停看全文 */}
       <SelectContent alignItemWithTrigger={false} align="start" className="w-auto max-w-md min-w-(--anchor-width)">
         <SelectItem value={null}>
           <TruncatedText text={allLabel} focusable={false} />
@@ -82,6 +83,7 @@ export function UsageFilterBar({
   const providerLabel = providerLabelResolver(summary);
   const titleOf = projectTitleResolver(summary);
   const options = summary?.filter_options;
+  // Once a provider is selected list only its models: same-name models across providers mixed together are neither precisely selectable nor readable.
   // 选定供应商后只列它的模型：跨供应商的同名模型混在一起既选不准也读不懂。
   const models = (options?.models ?? []).filter(
     (option) => !filters.provider || option.provider === filters.provider,
@@ -102,6 +104,8 @@ export function UsageFilterBar({
   if (filters.mediaType) {
     chips.push({ key: "media", label: t(MEDIA_META[filters.mediaType].labelKey), clear: { mediaType: null } });
   }
+  // Shots have no dropdown; they are written only by consecutive-failure entries in "Needs attention", and the chip is their only way out.
+  // Only shots and video units carry a type prefix; grids and other entries use the reference label directly.
   // 分镜没有下拉可选，只由「需要关注」的连续失败条目写入；chip 是它唯一的出口。
   // 只有分镜与视频单元带类型前缀；宫格等其他条目直接用指称标签。
   if (filters.segment) {
@@ -153,11 +157,12 @@ export function UsageFilterBar({
           label={t("usage_filter_model")}
           value={filters.model}
           allLabel={t("usage_filter_all_models")}
+          // A same-name model appears once under each provider; the dropdown filters only by model name, listed after dedup.
           // 同名模型在不同供应商下各出现一次；下拉只按模型名筛选，去重后列出。
           options={[...new Set(models.map((option) => option.model))].map((model) => ({ value: model, label: model }))}
           onChange={(model) => onChange({ model })}
         />
-        {/* Agent 记录的媒体类型都是文本，筛不出东西；这一维只属于「生成调用」 */}
+        {/* Agent records' media type is always text, so filtering finds nothing; this dimension belongs only to "Generation calls" / Agent 记录的媒体类型都是文本，筛不出东西；这一维只属于「生成调用」 */}
         {filters.view === "generation" && (
           <FilterSelect
             label={t("usage_filter_media_type")}

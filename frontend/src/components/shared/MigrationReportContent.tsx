@@ -126,6 +126,9 @@ function Section({
 const ITEM = "flex min-w-0 flex-col gap-1 rounded-md border bg-card px-3 py-2 text-sm text-subtle-foreground";
 
 /**
+ * Read-only content of the migration report: "Adjusted" lists normalization trade-offs, added placeholders and repaired structures; "Not carried over" lists files kept in place
+ * and not registered. Shared by the project page upgrade notice and the pre-import confirmation dialog.
+ *
  * 迁移报告的只读内容：「已调整」列出规整的取舍、补的占位与修复的结构，「未能带入」列出原地保留、
  * 没有登记的文件。项目页的升级提示与导入前确认窗共用。
  */
@@ -142,7 +145,7 @@ export function MigrationReportContent({
       {report.adjusted.length > 0 && (
         <Section icon={Wrench} tone="text-primary" title={t("migration_report_adjusted")} count={report.adjusted.length}>
           {report.adjusted.map((item, index) => (
-            // react-doctor-disable-next-line react-doctor/no-array-index-as-key -- 迁移报告的只读列表，同一代码与文件可出现多条且无唯一标识；条目不带状态，界面不重排也不筛选
+            // react-doctor-disable-next-line react-doctor/no-array-index-as-key -- read-only migration report list; the same code and file can appear multiple times with no unique id; items have no state, and the UI neither reorders nor filters / 迁移报告的只读列表，同一代码与文件可出现多条且无唯一标识；条目不带状态，界面不重排也不筛选
             <li key={`${item.code}-${item.file ?? ""}-${index}`} className={ITEM}>
               <p className="wrap-break-word">{adjustmentText(t, item, episodes)}</p>
               {item.backup && (

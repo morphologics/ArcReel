@@ -4,8 +4,11 @@ import { defineRegionScenarios } from "../support/scenarios.ts";
 import { FIXED_NOW, recorded } from "../support/recorded.ts";
 import { expect, type ApiOverrides } from "../support/test.ts";
 
+// Episode page edit view: player on the left, detail column on the right, tracks across the bottom; the whole view does not scroll, only the
+// detail column does. Plus the render dialog.
 // 集页剪辑视图：播放器在左、详情栏在右，轨道横跨底部；整个视图不滚动，只有详情栏滚动。以及出片对话框。
 const EDIT_PATH = "/app/projects/demo/episodes/1?view=edit";
+// The project event stream is SSE, not recorded; reject with a non-retryable status so the page stays on the recorded project data.
 // 项目事件流是 SSE，没有录制；按不可重试的状态拒绝，页面停在录制的项目数据上。
 const API: ApiOverrides = {
   "GET /api/v1/projects/demo/events/stream": { status: 404, body: { detail: "页面级套件不回放事件流" } },
@@ -19,6 +22,8 @@ interface RecordedProject {
 
 const recordedProject = recorded<RecordedProject>("project-demo.json");
 
+// Stress variant: many long-named edit timelines, 36 clips of about 2.5 minutes, narration, long subtitles, two BGM segments, 40+ issues
+// and 30 unused video units.
 // 压力变体：多条长名称的剪辑时间线，36 个片段约 2 分半，旁白、长字幕、两段 BGM、40 多条问题与 30 个未使用的视频单元。
 const TIMELINE_ID = "tl-00000006";
 const unit = (index: number) => `E1S${String(index + 1).padStart(2, "0")}`;
@@ -153,11 +158,13 @@ function finalCut(status: "current" | "stale" | "missing", narration = "without_
 
 const NO_TASKS = { status: 200, body: { items: [], total: 0, page: 1, page_size: 20 } };
 const TIMELINE_BASE = `/api/v1/projects/demo/edit-timelines/${TIMELINE_ID}`;
+// The player loads the current clip's source video and preloads the next once playing; the suite does not serve media files, treated as missing.
 // 播放器装载当前片段的源视频，开始播放后再预载下一段；套件不回放媒体文件，按不存在处理。
 const videoMissing = (index: number) => ({
   [`GET /api/v1/files/demo/videos/scene_${unit(index)}.mp4?v=1`]: { status: 404, body: { detail: "页面级套件不回放媒体" } },
 });
 
+// Clips refer by the video unit's current position in this episode: the script holds the 36 used in the timeline and the 30 unused.
 // 片段按视频单元在本集的当前位置指称：剧本放进时间线用到的 36 个与未使用的 30 个。
 const project: RecordedProject = {
   ...recordedProject,
@@ -188,6 +195,7 @@ const TIMELINE: ApiOverrides = {
   ...videoMissing(1),
   "GET /api/v1/files/demo/bgm/bgm-0001.mp3": { status: 404, body: { detail: "页面级套件不回放媒体" } },
   "GET /api/v1/files/demo/bgm/bgm-0002.mp3": { status: 404, body: { detail: "页面级套件不回放媒体" } },
+  // Render dialog: the final cut is stale, the JianYing draft not yet generated; no in-flight tasks.
   // 出片对话框：成片过时，剪映草稿尚未生成；没有在途任务。
   [`GET ${TIMELINE_BASE}/final-cut?narration=without_narration&subtitles=burned_subtitles`]: {
     status: 200,
@@ -203,6 +211,7 @@ const TIMELINE: ApiOverrides = {
   "GET /api/v1/tasks?project_name=demo&status=queued&task_type=render_jianying_draft": NO_TASKS,
 };
 
+// TTS voiceover project: the render dialog gains narration versions; tallest with the JianYing draft.
 // TTS 配音项目：出片对话框多出旁白版本，剪映草稿时最高。
 const TTS_TIMELINE: ApiOverrides = {
   ...TIMELINE,
@@ -230,8 +239,10 @@ const renderDialog = (page: Page) => page.getByRole("dialog", { name: /^出片 �
 
 
 
+/** Popovers have an entry animation; wait for it to stop before measuring and running axe; looping animations like in-progress spinners are not awaited. */
 /** 弹层带入场动画，量尺寸、跑 axe 之前等它停下；进行中的转圈等循环动画不等。 */
 
+/** The compact-tier Agent panel covers the right side of the canvas, with the detail column and the render button at the end of the header row underneath: collapse it first. */
 /** 紧凑档 Agent 面板盖在画布右侧，详情栏与页头行尾的出片按钮在它底下：先收起再操作。 */
 
 async function timelineReady(page: Page) {
@@ -246,7 +257,7 @@ async function openRenderDialog(page: Page) {
   await expect(renderDialog(page).getByTestId("edit-render-artifact-status")).toBeVisible();
 }
 
-/** 主操作完整落在视口内。 */
+/** The main action lies fully within the viewport. / 主操作完整落在视口内。 */
 async function expectInViewport(page: Page, target: Locator) {
   const rect = await box(target);
   const { width, height } = viewport(page);
@@ -277,11 +288,13 @@ defineRegionScenarios("剪辑视图", [
     ready: timelineReady,
     act: async (page) => {
       await clearAgentOverlay(page);
+      // Select a clip with a long description so the detail column grows very tall
       // 选中带长说明的片段，详情栏撑到超高
       await page.getByTestId("edit-clip-c1").click();
       await expect(page.getByTestId("edit-clip-inspector")).toContainText("开场保留巡夜人");
       await expect(timelineTabs(page).getByRole("tab", { name: timelineNames[5] })).toHaveAttribute("aria-selected", "true");
 
+      // The four tracks lie fully within the viewport; the bottom edge of the track group does not exceed the view
       // 四条轨道完整落在视口内，轨道组的底边不超出视图
       const { height } = viewport(page);
       const group = await box(tracks(page));
@@ -290,6 +303,7 @@ defineRegionScenarios("剪辑视图", [
       expect(group.y + group.height).toBeLessThanOrEqual(view.y + view.height);
       await expect(page.getByTestId("edit-bgm-b2")).toBeAttached();
 
+      // The detail column scrolls itself when its content is too tall; the player is not squeezed away
       // 详情栏内容超高时自己滚动，播放器不被压没
       const scrollable = await details(page).evaluate((el) => el.scrollHeight > el.clientHeight);
       expect(scrollable).toBe(true);
@@ -316,6 +330,7 @@ defineRegionScenarios("剪辑视图", [
     ready: timelineReady,
     act: async (page) => {
       await openRenderDialog(page);
+      // The native radio is hidden in the card; click the name on the card
       // 原生单选框藏在卡片里，点卡片上的名称
       await renderDialog(page).getByText("剪映草稿", { exact: true }).click();
       await expect(renderDialog(page).getByRole("radiogroup", { name: "剪映版本" })).toBeVisible();

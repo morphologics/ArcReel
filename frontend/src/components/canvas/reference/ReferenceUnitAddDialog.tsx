@@ -16,6 +16,9 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 
 /**
+ * Fill in the body before adding a video unit. The body is the unit's only content truth; the server rejects creating a unit with an empty body with needs_replan,
+ * so it cannot be submitted while empty. The body is held by the caller: kept as is after failure, cleared on reopen.
+ *
  * 新增视频单元前填写正文。正文是单元唯一的内容真相，空正文的单元服务端以 needs_replan
  * 拒绝创建，因此正文为空时不能提交。正文由调用方持有：失败后原样保留，重新打开时清空。
  */
@@ -40,7 +43,7 @@ export function ReferenceUnitAddDialog({
     <Dialog
       open={open}
       onOpenChange={(next) => {
-        // 提交中不关闭，结果出来前对话框保持原样
+        // Don't close while submitting; the dialog stays as is until the result is in / 提交中不关闭，结果出来前对话框保持原样
         if (!next && !submitting) onClose();
       }}
     >

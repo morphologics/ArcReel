@@ -8,6 +8,16 @@ import { LoadingState } from "@/components/shared/LoadingState";
 type LazyBoundaryVariant = "screen" | "pane" | "none";
 
 /**
+ * Outer boundary for lazy-loaded regions (`lazyNamed` components): shows a loading placeholder while the chunk hasn't arrived, and when loading finally fails
+ * shows a failure notice and "Reload", so the error doesn't unmount the whole app root.
+ *
+ * - `screen`: fills the viewport, for whole-page routes.
+ * - `pane`: fills the parent container, for local regions such as the workspace canvas; header and view switching stay usable.
+ * - `none`: renders nothing for either loading or failure, for components that produce no DOM (such as onboarding).
+ *
+ * React.lazy caches the failure, and retrying in place can't get a new chunk, so after failure only a full page reload is offered;
+ * the failure state is cleared on route change, so other pages show normally after the user leaves the failed page.
+ *
  * 懒加载区域（`lazyNamed` 组件）的外层边界：chunk 未到达时显示加载占位，最终加载失败时
  * 显示失败提示与「重新加载」，不让错误卸载整个应用根节点。
  *

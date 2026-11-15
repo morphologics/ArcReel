@@ -19,6 +19,9 @@ interface UsageAttentionCardProps {
 }
 
 /**
+ * "Needs attention" renders only when there really is an anomaly; the caller decides by whether `summary.attention` is empty;
+ * an empty card takes more space than no card and carries less information.
+ *
  * 需要关注只在真有异常时渲染，由调用方按 `summary.attention` 是否为空决定；
  * 空卡片比没有卡片更占地方也更没信息。
  */
@@ -92,6 +95,8 @@ function AttentionItem({
         time: formatShortDateTime(item.last_failed_at) ?? "—",
       });
 
+  // A high failure rate also switches status to failed, so clicking in shows exactly those failed rows; consecutive failures only set the target's three dimensions,
+  // because the shot's successes and failures must be seen together to know whether the problem persists.
   // 失败率偏高把状态一并切到失败，用户点进去看到的就是那些失败行；连续失败只写目标三维，
   // 该分镜的成功与失败要连起来看才知道问题是不是还在。
   const patch: Partial<UsageRecordsFilters> = isRate

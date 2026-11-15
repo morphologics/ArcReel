@@ -13,6 +13,7 @@ const EMPTY_PAGE: UsageRecordPage = { items: [], next_cursor: null, total: 0 };
 const PROJECT = "星海列车";
 const PROJECT_QUERY = `section=usage&u_project=${encodeURIComponent(PROJECT)}`;
 
+/** A queued storyboard image task; the backend-attached reference says it is at position `position` in episode 1. */
 /** 排队中的分镜图任务；后端附上的指称说它在第 1 集里排第 `position` 位。 */
 function queuedTask(taskId: string, resourceId: string, position = 3) {
   return makeTask({

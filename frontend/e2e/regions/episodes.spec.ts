@@ -5,13 +5,16 @@ import { defineRegionScenarios } from "../support/scenarios.ts";
 import { RECORDED_DIR, type RecordedResponse } from "../support/recorded.ts";
 import { expect, type ApiOverrides } from "../support/test.ts";
 
+// Project "Episodes" view: header tool row, episode list and source text, plan column, and popovers for upload, new and unregistered files.
 // 项目「分集」视图：页头工具行、集目录与原文、方案栏，以及上传、新建、未登记文件等弹层。
 const PATH = "/app/projects/demo/episodes";
+// The project event stream is SSE, not recorded; reject with a non-retryable status so the page stays on the recorded project data.
 // 项目事件流是 SSE，没有录制；按不可重试的状态拒绝，页面停在录制的项目数据上。
 const API: ApiOverrides = {
   "GET /api/v1/projects/demo/events/stream": { status: 404, body: { detail: "页面级套件不回放事件流" } },
 };
 
+// Boundary between standard and compact tiers, matching the shell's media query; the compact-tier Agent panel covers the right of the canvas.
 // 标准档与紧凑档的分界，与外壳的媒体查询一致；紧凑档的 Agent 面板盖在画布右侧。
 const STANDARD_TIER_MIN_WIDTH = 1280;
 
@@ -24,6 +27,10 @@ const recordedProject = (
 ).body as RecordedProject;
 const [firstEpisode] = recordedProject.project.episodes;
 
+// ---------------------------------------------------------------------------
+// Stress data: two whole-source files, dozens of episodes, long titles and long file names, a gap left between cut episodes, and
+// unassigned source text at the end
+// ---------------------------------------------------------------------------
 // ---------------------------------------------------------------------------
 // 压力数据：两个整本源文文件、几十集、长标题与长文件名，切出集之间留一段空当，结尾还有未分集的原文
 // ---------------------------------------------------------------------------
@@ -72,6 +79,7 @@ const FILES = [
     name: "上卷：雨夜里的旧城茶馆与修表匠的约定（作者手改第三稿，含删去的支线与批注）.txt",
     original_filename: "上卷 第三稿 批注版 最终 最终.docx",
     episodes: 14,
+    // Gap left after episode 6 was deleted
     // 第 6 集删掉后留下的空当
     gapAfter: 5,
     tail: 3,
@@ -126,6 +134,7 @@ const files = FILES.map((spec) => {
   };
 });
 
+// Episodes whose source is not in the whole source: two with their own source, one with no source yet
 // 原文不在整本源文里的集：两集自带原文、一集还没有原文
 for (const origin of ["own", "own", "none"] as const) {
   infos.push({
@@ -191,6 +200,7 @@ const POPULATED: ApiOverrides = {
   "GET /api/v1/projects/demo/episodes-view": { status: 200, body: VIEW },
 };
 
+// Replan from episode 7: the new plan re-cuts episodes 7-9 into four episodes
 // 从第 7 集起重新规划：新方案把第 7–9 集重新切成四集
 const [upper] = files;
 const replanFrom = upper.segments.find((segment) => segment.episode === 7);
@@ -255,6 +265,7 @@ async function box(locator: Locator) {
   return rect;
 }
 
+/** The compact-tier Agent panel covers the right of the canvas: collapse it before clicking controls on the canvas's right side. */
 /** 紧凑档的 Agent 面板盖在画布右侧：点画布右侧的控件之前先收起它。 */
 async function revealCanvasRight(page: Page) {
   if (viewport(page).width >= STANDARD_TIER_MIN_WIDTH) return;
@@ -267,6 +278,7 @@ async function populatedReady(page: Page) {
   await manuscript(page).getByRole("article").first().waitFor();
 }
 
+/** Only the episode list and source text scroll in the canvas; the document itself is checked by the overflow probe. */
 /** 画布里只有集目录与原文两处在滚动；文档本身由溢出探针检查。 */
 async function expectOnlyColumnsScroll(page: Page) {
   const scrolling = await canvas(page).evaluate((main) =>
@@ -301,6 +313,7 @@ defineRegionScenarios("分集视图", [
     act: async (page) => {
       await expectOnlyColumnsScroll(page);
       const text = await box(page.locator("[data-manuscript]"));
+      // The body column is at most 40em: about 630px at 1440 wide with the Agent panel expanded, and no wider at 2560
       // 正文栏最宽 40em：Agent 面板展开的 1440 宽下约 630px，2560 宽下也不再变宽
       expect(text.width).toBeLessThanOrEqual(641);
       if (viewport(page).width === 1440) expect(text.width).toBeGreaterThan(600);

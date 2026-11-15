@@ -29,23 +29,24 @@ function toPickerValue(style: ProjectStyle): StylePickerValue {
   return { mode: "template", templateId, activeCategory: category, uploadedFile: null, uploadedPreview: null };
 }
 
-/** 选择器里是否已选定风格：模版选了卡片，或参考图有图。 */
+/** Whether a style is chosen in the picker: a template card picked, or a reference image present. / 选择器里是否已选定风格：模版选了卡片，或参考图有图。 */
 function draftComplete(draft: StylePickerValue): boolean {
   return draft.mode === "template" ? !!draft.templateId : !!(draft.uploadedFile ?? draft.uploadedPreview);
 }
 
-/** 选择器里的选择换算成项目风格；还没选定时返回 null。只在采用时调用：新参考图会新建预览地址。 */
+/** Convert the picker's choice to a project style; null when nothing chosen yet. Call only on adopt: a new reference image creates a new preview URL. / 选择器里的选择换算成项目风格；还没选定时返回 null。只在采用时调用：新参考图会新建预览地址。 */
 function fromPickerValue(draft: StylePickerValue, current: ProjectStyle): ProjectStyle | null {
   if (draft.mode === "template") {
     return draft.templateId ? { kind: "template", templateId: draft.templateId } : null;
   }
   if (draft.uploadedFile) {
     if (current.kind === "image" && current.file === draft.uploadedFile) return current;
+    // The picker holds file preview URLs only while mounted; the one written into the project style belongs to the page, which revokes it when no longer used
     // 选择器只在自己挂载期间持有文件的预览地址；写进项目风格的这一个归页面，由页面在不再使用时收回
-    // react-doctor-disable-next-line react-doctor/no-create-object-url-without-revoke -- 地址经 onChange 存入表单值，ProjectSettingsPage 的 effect 在换图、放弃、保存或卸载时 revoke
+    // react-doctor-disable-next-line react-doctor/no-create-object-url-without-revoke -- the URL is stored in the form value via onChange; ProjectSettingsPage's effect revokes it on image change, discard, save or unmount / 地址经 onChange 存入表单值，ProjectSettingsPage 的 effect 在换图、放弃、保存或卸载时 revoke
     return { kind: "image", preview: URL.createObjectURL(draft.uploadedFile), description: "", file: draft.uploadedFile };
   }
-  // 沿用已保存的参考图
+  // Keep the saved reference image / 沿用已保存的参考图
   return draft.uploadedPreview && current.kind === "image" ? current : null;
 }
 
@@ -84,7 +85,7 @@ function CurrentStyle({ value: style }: { value: ProjectStyle }) {
   );
 }
 
-/** 「风格」：只显示当前风格；「更换」在对话框里选，「使用此风格」写回未保存修改，随其他修改一起保存。 */
+/** "Style": shows only the current style; "Change" picks in a dialog, "Use this style" writes back as an unsaved change, saved with other changes. / 「风格」：只显示当前风格；「更换」在对话框里选，「使用此风格」写回未保存修改，随其他修改一起保存。 */
 export function StyleTab({ value: style, onChange }: { value: ProjectStyle; onChange: (next: ProjectStyle) => void }) {
   const { t } = useTranslation("dashboard");
   const [open, setOpen] = useState(false);

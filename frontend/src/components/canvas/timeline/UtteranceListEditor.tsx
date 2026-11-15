@@ -20,7 +20,7 @@ interface UtteranceListEditorProps {
   utterances: Utterance[];
   onChange: (next: Utterance[]) => void;
   disabled?: boolean;
-  /** 说话人输入框的候选名字；输入框仍可以写候选之外的名字（群演，不绑定声音）。 */
+  /** Candidate names for the speaker input; the input can still take names outside the candidates (extras, not bound to a voice). / 说话人输入框的候选名字；输入框仍可以写候选之外的名字（群演，不绑定声音）。 */
   speakerCandidates?: readonly string[];
 }
 
@@ -30,6 +30,10 @@ function makeUtterance(kind: UtteranceKind): Utterance {
     : { kind: "voiceover", speaker: null, text: "" };
 }
 
+/**
+ * Next stable key: max numeric suffix of existing keys + 1; an empty sequence starts at u0, matching initial naming.
+ * Pure function, idempotent under StrictMode double invocation.
+ */
 /** 下一个稳定 key：取现有 key 数字后缀最大值 +1；空序列从 u0 起，与初始化命名对齐。
  *  纯函数，StrictMode 双调用幂等。 */
 function nextKey(keys: string[]): string {
@@ -51,7 +55,7 @@ interface UtteranceRowProps {
   index: number;
   total: number;
   disabled: boolean;
-  /** 说话人候选的 datalist id；没有候选时为 undefined。 */
+  /** datalist id for speaker candidates; undefined when there are none. / 说话人候选的 datalist id；没有候选时为 undefined。 */
   speakerListId?: string;
   onUpdate: (next: Utterance) => void;
   onMove: (delta: -1 | 1) => void;
@@ -59,6 +63,9 @@ interface UtteranceRowProps {
 }
 
 /**
+ * One ordered utterance: a timeline node on the left (dialogue line filled, voiceover hollow), type toggle, speaker (dialogue lines only),
+ * text that grows with its content, and move up / move down / delete. A dialogue line missing a speaker is marked invalid (backend kind ⇄ speaker constraint, rejected on save).
+ *
  * 一条有序发声条目：左侧时序节点（台词实心、画外音空心）、类型切换、说话人（仅台词）、
  * 随内容撑高的文本与上移 / 下移 / 删除。台词缺说话人时标为无效（后端 kind ⇄ speaker 约束，保存时会拒）。
  */
@@ -79,7 +86,7 @@ function UtteranceRow({
 
   return (
     <div className="relative flex gap-2.5">
-      {/* 时序线 + 节点：实心 = 台词，空心 = 画外音 */}
+      {/* Timeline + node: filled = dialogue line, hollow = voiceover / 时序线 + 节点：实心 = 台词，空心 = 画外音 */}
       <div className="relative flex w-4 shrink-0 flex-col items-center">
         {index > 0 && <span aria-hidden="true" className="absolute top-0 h-2.5 w-px bg-border" />}
         <span
@@ -162,6 +169,10 @@ function UtteranceRow({
 }
 
 /**
+ * Rich editor for a drama shot's ordered utterance sequence.
+ * Dialogue lines (with speaker) and voiceover (no speaker) are ordered in one sequence; insertion order is the order within the scene;
+ * supports add / delete / edit text and speaker / switch type / move up and down to reorder.
+ *
  * Drama 分镜级有序发声序列的富编辑器。
  * 台词（带说话人）与画外音（无说话人）按时序排在同一序列，插入顺序即幕内先后；
  * 支持增 / 删 / 改文本与说话人 / 切换类型 / 上下移调整顺序。
@@ -176,10 +187,14 @@ export function UtteranceListEditor({
   const listId = useId();
   const speakerListId = speakerCandidates?.length ? listId : undefined;
 
+  // The data model has no id: in edit state, derive stable keys bound one-to-one to entries and carry them along on add/delete/move,
+  // so controlled input nodes are reused per entry (not per position), avoiding focus jumping rows or edits leaking into neighboring rows after deleting a middle item / moving.
   // 数据模型无 id：在编辑态派生与条目一一绑定的稳定 key，增删移动时同步搬运，
   // 使受控输入节点按条目（而非按位置）复用，避免删除中间项 / 移动后焦点跳行、编辑内容串到相邻行。
   const [keys, setKeys] = useState<string[]>(() => utterances.map((_, i) => `u${i}`));
 
+  // When an external whole replacement (adopt after mount / silent revision refresh) makes the entry count drift from the key count, realign: reuse existing keys by position,
+  // append new keys at the tail, trim the excess. Local add/delete/move already carries keys along so lengths stay equal and this branch is not triggered.
   // 外部整体替换（挂载后 adopt / revision 静默刷新）导致条目数与 key 数漂移时对齐：按位复用已有 key、
   // 尾部补新 key、裁掉多余。本地增删移动已同步搬运 key，长度恒等，不触发此分支。
   let renderKeys = keys;

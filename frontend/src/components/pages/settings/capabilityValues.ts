@@ -24,12 +24,12 @@ export function asConstraints(value: unknown): Constraints {
   return value && typeof value === "object" ? (value) : {};
 }
 
-/** 时长联动约束的分辨率键与可选分辨率按小写比较（与服务端一致）。 */
+/** Resolution keys of duration linkage constraints and available resolutions are compared in lowercase (consistent with the server). / 时长联动约束的分辨率键与可选分辨率按小写比较（与服务端一致）。 */
 export function sameResolution(a: string, b: string): boolean {
   return a.trim().toLowerCase() === b.trim().toLowerCase();
 }
 
-/** 去掉时长联动约束里已不在可选分辨率中的分辨率。 */
+/** Remove resolutions from duration linkage constraints that are no longer among the available resolutions. / 去掉时长联动约束里已不在可选分辨率中的分辨率。 */
 export function withoutDroppedResolutions(constraints: unknown, resolutions: string[]): Constraints {
   const value = asConstraints(constraints);
   const byResolution = Object.fromEntries(
@@ -44,7 +44,7 @@ export function scalarText(value: unknown): string {
     : JSON.stringify(value);
 }
 
-/** 维度取值的文字：原值与修改后的值共用。`null` 表示不加约束。 */
+/** Text for a dimension value: shared by the original and edited values. `null` means no constraint. / 维度取值的文字：原值与修改后的值共用。`null` 表示不加约束。 */
 export function capabilityValueText(t: TFunction, key: CapabilityKey, value: unknown): string {
   if (value === null || value === undefined) return t("pm_cap_value_unlimited");
   if (BOOL_KEYS.has(key)) return t(value ? "pm_cap_value_supported" : "pm_cap_value_unsupported");

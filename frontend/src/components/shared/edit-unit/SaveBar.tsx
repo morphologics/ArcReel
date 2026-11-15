@@ -7,6 +7,10 @@ import { Button } from "@/components/ui/button";
 import { SaveStatus, type EditUnitControls } from "./SaveStatus";
 
 /**
+ * Persistent save bar for settings forms: buttons disabled with no changes; with changes you can discard or save. A successful save shows no toast;
+ * failure shows the error in the bar and keeps the changes. The save bar has content only; background, border and padding come from its row:
+ * constrained and full-width tiers go in the shell footer row (`PageShellFooter`), the full-bleed tier at the bottom of the detail pane.
+ *
  * 设置表单的常驻保存栏：没有修改时按钮置灰，有修改时可以放弃或保存；保存成功不弹提示，
  * 失败在栏内显示错误并保留修改。保存栏只有内容，底色、描边与内边距由所在的行提供：
  * 限宽与铺满档放进外壳底行（`PageShellFooter`），全出血档放在详情栏的底部。

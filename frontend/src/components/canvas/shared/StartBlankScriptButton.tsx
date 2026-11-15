@@ -24,14 +24,17 @@ import { errMsg } from "@/utils/async";
 interface Props {
   projectName: string;
   episode: number;
-  /** 本集有未确认的脚本规划或待修复草稿：先确认弃置再建正式脚本。 */
+  /** The episode has an unconfirmed script plan or invalid draft: confirm discarding it before creating the final script. / 本集有未确认的脚本规划或待修复草稿：先确认弃置再建正式脚本。 */
   discardsPlan: boolean;
   variant?: "outline" | "ghost";
-  /** 只用于布局（如 `ml-auto`）。 */
+  /** For layout only (e.g. `ml-auto`). / 只用于布局（如 `ml-auto`）。 */
   className?: string;
 }
 
 /**
+ * "Start from blank": when the episode has no final script, create an empty final script, then add shots one by one on the timeline.
+ * On success refresh the project; the episode page switches to shots as the final script appears. Confirms with AlertDialog first when it would discard a plan.
+ *
  * 「从空白开始」：本集没有正式脚本时建出空的正式脚本，之后在时间线上逐条添加分镜。
  * 成功后刷新项目，集页随正式脚本出现切到分镜。会弃置规划时先用 AlertDialog 确认。
  */
@@ -104,6 +107,9 @@ export function StartBlankScriptButton({ projectName, episode, discardsPlan, var
 }
 
 /**
+ * Canvas for episodes without a script plan path (ad/short) when there is no final script: explains the current state, with "AI generate script" and "Start from blank" side by side.
+ * When the brief and products are missing, "AI generate script" is disabled and links to where to fill them in.
+ *
  * 没有脚本规划可走的集（广告/短片）在没有正式脚本时的画布：说明现状，「AI 生成脚本」与「从空白开始」并排。
  * 缺创作灵感与商品时「AI 生成脚本」置灰，并给出去填写的链接。
  */

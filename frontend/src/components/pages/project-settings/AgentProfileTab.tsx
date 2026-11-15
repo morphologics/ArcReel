@@ -37,7 +37,7 @@ function FileList({ files, label }: { files: string[]; label?: string }) {
   );
 }
 
-/** 「Agent 配置」：项目内 Agent 配置的状态，以及「重置为内置配置」。重置不可撤销，经 AlertDialog 确认。 */
+/** "Agent config": status of the in-project Agent config, and "Reset to built-in config". Reset is irreversible and confirmed via AlertDialog. / 「Agent 配置」：项目内 Agent 配置的状态，以及「重置为内置配置」。重置不可撤销，经 AlertDialog 确认。 */
 export function AgentProfileTab({ projectName }: { projectName: string }) {
   const { t } = useTranslation("dashboard");
   const [status, setStatus] = useState<AgentProfileStatus | null>(null);
@@ -46,7 +46,7 @@ export function AgentProfileTab({ projectName }: { projectName: string }) {
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [resetting, setResetting] = useState(false);
 
-  // react-doctor-disable-next-line react-doctor/no-set-state-after-await-in-effect -- await 后的写入都先检查 controller.signal.aborted，cleanup 中 abort 作废上一轮
+  // react-doctor-disable-next-line react-doctor/no-set-state-after-await-in-effect -- writes after await all check controller.signal.aborted first; cleanup aborts to void the previous round / await 后的写入都先检查 controller.signal.aborted，cleanup 中 abort 作废上一轮
   useEffect(() => {
     const controller = new AbortController();
     voidCall(
@@ -65,7 +65,7 @@ export function AgentProfileTab({ projectName }: { projectName: string }) {
     return () => controller.abort();
   }, [projectName, loadCount]);
 
-  // 打开确认前取一次最新状态，列出的就是将被丢弃的文件
+  // Fetch the latest status before opening the confirm, so the listed files are exactly those to be discarded / 打开确认前取一次最新状态，列出的就是将被丢弃的文件
   const openReset = async () => {
     try {
       const latest = await API.getAgentProfileStatus(projectName);
@@ -79,6 +79,7 @@ export function AgentProfileTab({ projectName }: { projectName: string }) {
   const reset = async () => {
     setResetting(true);
     try {
+      // Don't reset if customized files changed during confirmation: refresh the list and let the creator confirm the new list again
       // 确认期间定制文件有变化时不重置：刷新列表，由创作者对新列表再确认一次
       const latest = await API.getAgentProfileStatus(projectName);
       if (!status || !sameFiles(status.customized_files, latest.customized_files)) {
@@ -135,7 +136,7 @@ export function AgentProfileTab({ projectName }: { projectName: string }) {
       <AlertDialog
         open={confirmOpen}
         onOpenChange={(next) => {
-          // 重置请求在途时不响应关闭，Esc 也关不掉
+          // Ignore close while the reset request is in flight; Esc can't close it either / 重置请求在途时不响应关闭，Esc 也关不掉
           if (!next && !resetting) setConfirmOpen(false);
         }}
       >
@@ -144,7 +145,7 @@ export function AgentProfileTab({ projectName }: { projectName: string }) {
             <AlertDialogTitle>{t("agent_profile_reset_confirm_title")}</AlertDialogTitle>
             <AlertDialogDescription>{t("agent_profile_reset_confirm_description")}</AlertDialogDescription>
           </AlertDialogHeader>
-          {/* 文件多时正文滚动，可聚焦以便键盘滚动 */}
+          {/* With many files the body scrolls; focusable for keyboard scrolling / 文件多时正文滚动，可聚焦以便键盘滚动 */}
           <AlertDialogBody
             tabIndex={0}
             role="region"

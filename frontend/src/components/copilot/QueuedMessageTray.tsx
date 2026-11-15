@@ -10,6 +10,20 @@ import { dismissOnEscape, dismissOnFocusLeave, keepFocusInside } from "@/utils/i
 import { turnPlainText } from "./chat/utils";
 
 // ---------------------------------------------------------------------------
+// QueuedMessageTray — the queued-message tray right above the input.
+// Messages sent while a reply is in progress and not yet accepted by the Agent stack in send order; accepted messages leave the tray
+// and appear on the timeline as user messages. Not rendered when there are no queued messages.
+// Each message row ends with per-item actions, in order send now, edit, delete: send now makes the Agent interrupt the current round to handle it first, edit returns the content
+// to the input. All three first retract from the Agent; while that request is in flight this message's actions are unavailable.
+// Delete is irreversible: clicking it swaps this row in place for confirm and cancel, with focus on cancel so an accidental Enter won't delete;
+// cancel or Esc exits confirmation and returns focus to the delete button; focus leaving the confirmation area also exits. After confirming, both buttons are disabled while the request is in flight;
+// on failure it stays in the confirm state, on success the row leaves with the message.
+// While the Agent is asking a question the tray still shows below the questionnaire, but without send now, so the question isn't interrupted.
+// When the Agent process exits, messages still queued become "not sent": the top of the tray explains the session was interrupted, and these rows get an extra send;
+// the creator decides to resend, edit or delete; nothing is resent automatically.
+// Max height is 30% of the Agent panel height, same as the todo list; beyond that it scrolls inside the tray so the input and send button aren't pushed out of the panel.
+// During a question it shares the questionnaire's existing height, with the max reduced to 15% so the message area still has room.
+// ---------------------------------------------------------------------------
 // QueuedMessageTray — 输入框正上方的排队消息托盘。
 // 回复进行中发出、Agent 尚未接纳的消息按发送顺序堆叠；被接纳的消息离开托盘，
 // 作为用户消息出现在时间线上。没有排队消息时不渲染。
@@ -26,15 +40,15 @@ import { turnPlainText } from "./chat/utils";
 // ---------------------------------------------------------------------------
 
 interface QueuedMessageTrayProps {
-  /** 编辑或删除一条排队消息。 */
+  /** Edit or delete a queued message. / 编辑或删除一条排队消息。 */
   onWithdraw: (id: string, intent: QueuedMessageWithdrawal) => Promise<void>;
-  /** 重新发送一条「未发送」消息。 */
+  /** Resend a "not sent" message. / 重新发送一条「未发送」消息。 */
   onResend: (id: string) => Promise<void>;
-  /** 立即发送一条排队消息。 */
+  /** Send a queued message immediately. / 立即发送一条排队消息。 */
   onSendNow: (id: string) => Promise<void>;
-  /** Agent 正在提问：托盘与问卷同时在场，降低高度上限，且不提供立即发送。 */
+  /** The Agent is asking a question: tray and questionnaire are both present, so lower the max height and offer no send now. / Agent 正在提问：托盘与问卷同时在场，降低高度上限，且不提供立即发送。 */
   questionPending: boolean;
-  /** 发送请求在途：受理后会清空输入框，此时退回的内容会被一并清掉，暂不能编辑。 */
+  /** Send request in flight: once accepted the input is cleared, and returned content would be cleared along with it, so editing is unavailable for now. / 发送请求在途：受理后会清空输入框，此时退回的内容会被一并清掉，暂不能编辑。 */
   editDisabled: boolean;
 }
 
@@ -42,9 +56,13 @@ export function QueuedMessageTray(props: QueuedMessageTrayProps) {
   const { t } = useTranslation("dashboard");
   const messages = useAssistantStore((s) => s.queuedMessages);
   const listRef = useRef<HTMLUListElement>(null);
+  // Message ids in the tray at the last render, in order; used to tell whether the end is a newly sent message or one moved there by reordering
   // 上一次渲染时托盘里的消息 id，按顺序；据此分辨末尾是新发出的消息还是重排后换上来的
   const previousIdsRef = useRef<string[]>([]);
 
+  // Newly sent messages go at the end: when an unseen message appears at the end, scroll it to the tray's bottom edge; no jump when earlier messages are accepted and leave.
+  // Send now moves an existing message to the front: if the previous first item is still present it's a reorder, so scroll to the top edge to reveal it.
+  // Scroll only the tray itself: when the panel is collapsed its width is 0 and scrollIntoView would also scroll the outer clipping container
   // 新发出的消息排在末尾：末尾出现没见过的消息就把它滚到托盘底边，前面的消息被接纳离开时不跳动。
   // 立即发送把已有消息排到最前：原先的首条仍在时说明是重排，滚到顶边露出它。
   // 只滚托盘自身：面板收起时宽度为 0，scrollIntoView 会连带滚动外层裁切容器
@@ -73,11 +91,11 @@ export function QueuedMessageTray(props: QueuedMessageTrayProps) {
           {t("queued_messages_unsent_notice")}
         </p>
       )}
-      {/* 列表自身可聚焦，键盘才能滚动 */}
+      {/* The list itself is focusable so the keyboard can scroll it / 列表自身可聚焦，键盘才能滚动 */}
       <ul
         ref={listRef}
         aria-label={t("queued_messages_label")}
-        // eslint-disable-next-line jsx-a11y/no-noninteractive-tabindex -- 只读的滚动区域需要键盘聚焦才能滚动
+        // eslint-disable-next-line jsx-a11y/no-noninteractive-tabindex -- a read-only scroll area needs keyboard focus to scroll / 只读的滚动区域需要键盘聚焦才能滚动
         tabIndex={0}
         className={cn(
           "relative flex flex-col gap-1 overflow-y-auto rounded-md outline-none focus-visible:ring-3 focus-visible:ring-ring/50",
@@ -102,9 +120,10 @@ function QueuedMessageItem({
 }: { message: QueuedMessage } & QueuedMessageTrayProps) {
   const { t } = useTranslation("dashboard");
   const [withdrawing, setWithdrawing] = useState(false);
-  // 编辑、删除与立即发送都先向 Agent 撤回
+  // Edit, delete and send now all first retract from the Agent / 编辑、删除与立即发送都先向 Agent 撤回
   const withdrawThen = (request: () => Promise<void>) => {
     setWithdrawing(true);
+    // On successful retraction this row unmounts as the queued message leaves; the reset applies only to rows still in the tray
     // 撤回成功时这一行随排队消息移出而卸载，复位只对仍在托盘里的行生效
     voidCall(request().finally(() => setWithdrawing(false)));
   };
@@ -122,6 +141,9 @@ function QueuedMessageItem({
   const deleteRef = useRef<HTMLButtonElement>(null);
   const cancelDeleteRef = useRef<HTMLButtonElement>(null);
   const returnFocusRef = useRef(false);
+  // In the confirm state focus is on cancel; while the request is in flight both buttons are disabled; if the request fails the row remains and focus returns to cancel when busy resets.
+  // Cancel or Esc exits the confirm state and returns focus to the delete button; focus leaving the confirmation area (Tab away or click elsewhere) also exits, leaving focus where the user went.
+  // After a successful confirm the row unmounts as the message leaves.
   // 确认态焦点落在取消上；请求在途时两个按钮禁用，请求失败后这一行还在，busy 复位时焦点回到取消。
   // 取消或 Esc 退出确认态时把焦点交还删除按钮；焦点离开确认区域（Tab 走或点别处）也退出，焦点留在用户去的地方。
   // 确认成功后这一行随消息移出而卸载。
@@ -146,6 +168,7 @@ function QueuedMessageItem({
         {imageCount > 0 && <p className="text-muted-foreground">{t("queued_message_images", { count: imageCount })}</p>}
       </div>
       {confirmingDelete ? (
+        // At the panel's narrowest 320px the hint text plus two buttons don't fit on one line: allow wrapping, so when width runs short the hint text wraps to the line above first.
         // 面板最窄 320px 时提示文字加两个按钮放不下一行：允许换行，宽度不够时提示文字先折到上一行。
         <div
           role="group"
@@ -174,7 +197,7 @@ function QueuedMessageItem({
           <span className="shrink-0 text-muted-foreground">
             {t(unsent ? "queued_message_state_unsent" : "queued_message_state_queued")}
           </span>
-          {/* 「未发送」消息的发送与排队中消息的立即发送都排在最前 */}
+          {/* Send for "not sent" messages and send now for queued messages both come first / 「未发送」消息的发送与排队中消息的立即发送都排在最前 */}
           <div className="-my-0.5 flex shrink-0 items-center">
             {unsent && (
               <Button variant="ghost" size="icon-xs" disabled={busy} onClick={resend} aria-label={t("queued_message_resend")}>

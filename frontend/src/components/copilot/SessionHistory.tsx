@@ -49,12 +49,15 @@ function SessionStatusDot({ status }: { status: SessionMeta["status"] }) {
 
 interface SessionHistoryProps {
   onPick: (sessionId: string) => void;
-  /** 删除会话，返回是否删除成功。 */
+  /** Delete a session; returns whether deletion succeeded. / 删除会话，返回是否删除成功。 */
   onDelete: (sessionId: string) => Promise<boolean>;
-  /** 收起历史视图，回到消息区。 */
+  /** Collapse the history view and return to the message area. / 收起历史视图，回到消息区。 */
   onClose: () => void;
 }
 
+// ---------------------------------------------------------------------------
+// SessionHistory — the session list that replaces the message area when the "History" toggle is on.
+// Searchable by title; rows show a status dot and relative time, delete at row end, irreversible once confirmed.
 // ---------------------------------------------------------------------------
 // SessionHistory — 「历史」开关打开后替换消息区的会话列表。
 // 可按标题搜索；行上显示状态点与相对时间，删除在行尾，确认后不可恢复。
@@ -78,12 +81,14 @@ export function SessionHistory({ onPick, onDelete, onClose }: SessionHistoryProp
     isJustNow(iso) ? t("dashboard:session_updated_just_now") : (formatRelativeTime(iso, i18n.language) ?? "");
 
   return (
-    // 只接住从搜索框与列表行冒泡上来的 Esc，区域本身不可交互
-    // eslint-disable-next-line jsx-a11y/no-noninteractive-element-interactions -- 见上一行
+    // Only catches Esc bubbling up from the search box and list rows; the region itself isn't interactive / 只接住从搜索框与列表行冒泡上来的 Esc，区域本身不可交互
+    // eslint-disable-next-line jsx-a11y/no-noninteractive-element-interactions -- see the previous line / 见上一行
     <section
       aria-labelledby={headingId}
       className="flex min-h-0 flex-1 flex-col"
       onKeyDown={(event) => {
+        // Esc first returns to the message area; prevent the default so the shell doesn't collapse the panel on this Esc.
+        // The delete confirmation renders via a Portal and its Esc also bubbles here in the React tree; handle only keys within this view's DOM
         // Esc 先回到消息区；阻止默认行为，外壳不会因这次 Esc 收起面板。
         // 删除确认框经 Portal 渲染，它的 Esc 在 React 树里也会冒泡到这里，只处理本视图 DOM 内的按键
         if (
@@ -172,7 +177,7 @@ function DeleteSessionDialog({
   onClose: () => void;
 }) {
   const { t } = useTranslation(["dashboard", "common"]);
-  // 关闭动画期间保留上一次的会话，标题不闪成空白
+  // Keep the last session during the close animation so the title doesn't flash blank / 关闭动画期间保留上一次的会话，标题不闪成空白
   const [shown, setShown] = useState(session);
   if (session !== null && session !== shown) setShown(session);
   const [deleting, setDeleting] = useState(false);
@@ -193,7 +198,7 @@ function DeleteSessionDialog({
     } finally {
       setDeleting(false);
     }
-    // 删除失败时会话还在：留在对话框里说明，用户可以重试
+    // If deletion fails the session is still there: explain in the dialog so the user can retry / 删除失败时会话还在：留在对话框里说明，用户可以重试
     if (!deleted) {
       setFailed(true);
       return;
@@ -207,7 +212,7 @@ function DeleteSessionDialog({
     <AlertDialog
       open={session !== null}
       onOpenChange={(open) => {
-        // 删除中不响应 Esc 与遮罩点击，请求落定前对话框不消失
+        // While deleting, ignore Esc and backdrop clicks; the dialog stays until the request settles / 删除中不响应 Esc 与遮罩点击，请求落定前对话框不消失
         if (!open && !deleting) close();
       }}
     >
@@ -217,6 +222,7 @@ function DeleteSessionDialog({
           <AlertDialogDescription>{t("dashboard:delete_session_desc")}</AlertDialogDescription>
         </AlertDialogHeader>
         {failed && (
+          // The failure message goes in the only scroll area: in a very short window it won't be squeezed between header and footer and clipped
           // 失败说明放进唯一的滚动区：窗口很矮时不会被头尾夹住裁掉
           <AlertDialogBody tabIndex={0} role="region" aria-label={t("dashboard:delete_session_title", { title })}>
             <p role="alert" className="text-destructive">

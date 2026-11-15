@@ -86,6 +86,7 @@ describe("useModelCandidates", () => {
     expect(signals[0].aborted).toBe(true);
     expect(result.current.candidates).toEqual(CANDIDATES);
 
+    // A stale response must not write back even if it arrives late, or the old result would overwrite the value the takeover just landed.
     // 过期响应即便晚到也不得回写，否则会用旧结果盖掉接管方刚落地的值。
     const stale = { video: null, image: null } as unknown as ModelCandidatesResponse;
     await act(async () => {
@@ -124,6 +125,7 @@ describe("useModelCandidates – 语言切换", () => {
     const spy = vi.spyOn(API, "getModelCandidates").mockResolvedValue(CANDIDATES);
     renderHook(() => {
       const { reload } = useModelCandidates();
+      // The usual call-site pattern: put reload into the dependency array
       // 调用点惯常写法：把 reload 放进依赖数组
       useEffect(() => {
         void reload();

@@ -3,7 +3,7 @@ import { useTranslation } from "react-i18next";
 import { Badge } from "@/components/ui/badge";
 import type { MarketInstallationState } from "@/types";
 
-/** 已安装端点的两轴徽标：市场轴（已安装 / 可更新 / 市场中不可用）× 本地修改轴（已修改）。 */
+/** Two-axis badges for installed endpoints: market axis (installed / updatable / unavailable in market) x local modification axis (modified). / 已安装端点的两轴徽标：市场轴（已安装 / 可更新 / 市场中不可用）× 本地修改轴（已修改）。 */
 export function MarketInstallBadges({ state, modified }: { state: MarketInstallationState; modified: boolean }) {
   const { t } = useTranslation("dashboard");
   return (

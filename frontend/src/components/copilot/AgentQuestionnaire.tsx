@@ -23,7 +23,7 @@ import type { PendingQuestion } from "@/types";
 
 type Question = PendingQuestion["questions"][number];
 
-// Agent 自带的「其他」选项由自由输入框代替，不再单独列出
+// The Agent's own "Other" option is replaced by a free-text input and not listed separately / Agent 自带的「其他」选项由自由输入框代替，不再单独列出
 function isOtherOption(label: string | undefined): boolean {
   const normalized = (label ?? "").trim().toLowerCase();
   return normalized === "其他" || normalized === "other";
@@ -39,7 +39,7 @@ function choicesOf(question: Question) {
   );
 }
 
-/** 按 Agent 提问的原文回传答案；多选与自由输入合并成一句，用逗号分隔。 */
+/** Return answers in the wording of the Agent's question; multi-select and free text are merged into one sentence, comma-separated. / 按 Agent 提问的原文回传答案；多选与自由输入合并成一句，用逗号分隔。 */
 function collectAnswers(questions: Question[], form: FormData): Record<string, string> {
   const answers: Record<string, string> = {};
   questions.forEach((question, index) => {
@@ -61,6 +61,11 @@ interface AgentQuestionnaireProps {
   onSubmit: (questionId: string, answers: Record<string, string>) => void;
 }
 
+// ---------------------------------------------------------------------------
+// AgentQuestionnaire — takes the input's place when the Agent asks a question.
+// Header and footer buttons are fixed, only the question area scrolls; max height is 70% of the Agent panel height;
+// with a queued-message tray below, it shares that height with the tray and the questionnaire drops to 50%; an expanded todo list taking space compresses the question area further.
+// Number keys pick options; "Other" is written in the input at the end of each question.
 // ---------------------------------------------------------------------------
 // AgentQuestionnaire — Agent 提问时占用输入框的位置。
 // 头部与底部按钮固定，只有题目区滚动；高度上限是 Agent 面板高度的 70%，
@@ -106,7 +111,7 @@ export function AgentQuestionnaire({ pendingQuestion, answering, error, onSubmit
           <span className="min-w-0 flex-1 truncate text-subtle-foreground">{t("question_waiting")}</span>
           <QuestionnaireProgress
             className="min-w-0"
-            // 原语的进度名称与朗读文字写死为英文，按界面语言覆盖
+            // The primitive's progress name and spoken text are hard-coded in English; override per UI language / 原语的进度名称与朗读文字写死为英文，按界面语言覆盖
             render={(props, state) => {
               const text = t("question_progress", { current: state.current, total: state.total });
               return (
@@ -118,7 +123,7 @@ export function AgentQuestionnaire({ pendingQuestion, answering, error, onSubmit
           />
         </div>
 
-        {/* 只有题目区滚动，头部与按钮始终可见 */}
+        {/* Only the question area scrolls; the header and buttons are always visible / 只有题目区滚动，头部与按钮始终可见 */}
         <div className="relative min-h-0 flex-1 overflow-y-auto overscroll-contain">
           {questions.map((question, index) => (
             <QuestionnaireItem key={itemName(index)} name={itemName(index)} multiple={question.multiSelect} required>

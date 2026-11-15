@@ -43,6 +43,9 @@ const json = (body: unknown, status = 200) =>
   new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
 
 /**
+ * Replay responses by route at the fetch boundary: the real API methods and the HTTP status -> ApiRequestError mapping both take part in the test.
+ * Each route takes replies from a queue, reusing the last one; a numeric reply is an error status with detail.
+ *
  * 在 fetch 边界按路由回放响应：真实的 API 方法与 HTTP 状态到 ApiRequestError 的映射都参与测试。
  * 每条路由按队列取回复，最后一条重复使用；数字回复是带 detail 的错误状态。
  */

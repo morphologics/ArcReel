@@ -7,38 +7,48 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 
 export interface SecondaryRailItem {
-  /** 在整个二级栏内唯一，与 `activeId` 比较。 */
+  /** Unique within the whole secondary rail; compared with `activeId`. / 在整个二级栏内唯一，与 `activeId` 比较。 */
   id: string;
   label: string;
-  /** 第二行：状态或数量，如「已配置 2 个密钥」「3 个模型」。 */
+  /** Second line: status or count, e.g. "2 keys configured", "3 models". / 第二行：状态或数量，如「已配置 2 个密钥」「3 个模型」。 */
   description?: string;
-  /** 标准档放在名称左侧，紧凑档是唯一可见的内容。尺寸由调用方给（`size-4`）。 */
+  /** Left of the name in the standard tier, the only visible content in the compact tier. Size is given by the caller (`size-4`). / 标准档放在名称左侧，紧凑档是唯一可见的内容。尺寸由调用方给（`size-4`）。 */
   icon: ReactNode;
-  /** 选中这一项的地址。选中项记在地址里，切换经路由，离开拦截因此覆盖切换。 */
+  /** URL that selects this item. The selection lives in the URL and switching goes through the router, so the leave guard covers switching. / 选中这一项的地址。选中项记在地址里，切换经路由，离开拦截因此覆盖切换。 */
   href: string;
 }
 
 export interface SecondaryRailGroup {
   id: string;
-  /** 多组时是 Tab 名；紧凑档是这一组列表的可访问名称。 */
+  /** Tab name when there are several groups; in the compact tier, the accessible name of this group's list. / 多组时是 Tab 名；紧凑档是这一组列表的可访问名称。 */
   label: string;
   items: SecondaryRailItem[];
-  /** 组末尾的动作条目，如「添加自定义供应商」。不计入 Tab 上的数量。 */
+  /** Action entry at the end of the group, e.g. "Add custom provider". Not counted in the Tab's count. / 组末尾的动作条目，如「添加自定义供应商」。不计入 Tab 上的数量。 */
   action?: SecondaryRailItem;
-  /** 组内没有条目时的说明，只在标准档显示。 */
+  /** Explanation when the group has no entries; only shown in the standard tier. / 组内没有条目时的说明，只在标准档显示。 */
   emptyText?: string;
 }
 
 interface SecondaryRailProps {
-  /** 导航区的可访问名称，如「供应商列表」。 */
+  /** Accessible name of the navigation region, e.g. "Provider list". / 导航区的可访问名称，如「供应商列表」。 */
   label: string;
   groups: SecondaryRailGroup[];
   activeId: string | null;
-  /** 切换时替换当前历史记录，浏览器「后退」不在条目之间来回。 */
+  /** Replace the current history entry on switching, so browser "Back" does not step between entries. / 切换时替换当前历史记录，浏览器「后退」不在条目之间来回。 */
   replace?: boolean;
 }
 
 /**
+ * Secondary rail of the full-bleed master-detail layout (shared by providers, endpoints and Agent memory); scrolls on its own.
+ *
+ * Switches between two forms by the width of `@container/page`, not the viewport:
+ * - Standard tier (content area at least 64rem): 264px, two-line entries (name; status or count). With several groups there are Tabs at the top listing one group at a time,
+ *   with counts on the Tabs; until switched manually the Tab follows the group of the selected item, and remembers once switched manually.
+ * - Compact tier: 56px icon rail, name and second line shown on hover or focus, groups stacked vertically.
+ *
+ * Both forms are in the DOM and container queries show only one; the hidden one is `display: none` and not in the accessibility tree.
+ * jsdom does not compute styles, so both are visible in Vitest: scope entry queries within `getByRole("tabpanel")`, or use `getAllBy*`.
+ *
  * 全出血主从布局的二级栏（供应商、调用端点、Agent 记忆共用），自己滚动。
  *
  * 按 `@container/page` 的宽度切换两种形态，不读视口：
@@ -103,6 +113,9 @@ export function SecondaryRail({ label, groups, activeId, replace }: SecondaryRai
 }
 
 /**
+ * Standard-tier entry list: two-line entries (name; status or count) plus the group's trailing action entry; does not scroll by itself.
+ * When a width-capped page has no room for a secondary rail (e.g. "Project memory" in project settings), use it alone to list entries, scrolled by the page body.
+ *
  * 标准档的条目列表：两行条目（名称；状态或数量）加组末尾的动作条目，自身不滚动。
  * 限宽页里放不下二级栏时（如项目设置的「项目记忆」），单独用它列出条目，由页面主体滚动。
  */
@@ -171,7 +184,7 @@ function CompactItem({ item, active, replace }: { item: SecondaryRailItem; activ
         <span aria-hidden className="flex">
           {item.icon}
         </span>
-        {/* 图标栏只显示图标，名称与第二行留给读屏 */}
+        {/* The icon rail only shows icons; the name and second line are left for screen readers / 图标栏只显示图标，名称与第二行留给读屏 */}
         <span className="sr-only">{item.label}</span>
         {item.description && <span className="sr-only"> {item.description}</span>}
       </TooltipTrigger>

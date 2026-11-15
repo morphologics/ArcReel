@@ -34,7 +34,7 @@ function toBase64(buffer: ArrayBuffer): string {
   return btoa(binary);
 }
 
-/** 本地或官方服务预检的诊断清单；422 响应的 `diagnostic.diagnostics`。 */
+/** Diagnostics list from local or official service pre-check; `diagnostic.diagnostics` of a 422 response. / 本地或官方服务预检的诊断清单；422 响应的 `diagnostic.diagnostics`。 */
 function diagnosticsOf(error: unknown): MarketSubmissionDiagnostic[] | null {
   if (!(error instanceof ApiRequestError) || error.status !== 422) return null;
   const raw =
@@ -61,7 +61,7 @@ function DiagnosticList({ diagnostics }: { diagnostics: MarketSubmissionDiagnost
       <ul className="divide-y divide-border">
         {diagnostics.map((diagnostic, index) => (
           <li
-            // react-doctor-disable-next-line react-doctor/no-array-index-as-key -- 服务端一次返回的只读诊断列表，不重排不增删；同文件同路径同代码的诊断可重复，下标只用于去重
+            // react-doctor-disable-next-line react-doctor/no-array-index-as-key -- read-only diagnostics list returned once by the server, never reordered, inserted or deleted; diagnostics with the same file, path and code may repeat, and the index is only used to dedupe / 服务端一次返回的只读诊断列表，不重排不增删；同文件同路径同代码的诊断可重复，下标只用于去重
             key={`${diagnostic.file}-${diagnostic.path}-${diagnostic.code}-${index}`}
             className="flex items-start gap-2.5 px-4 py-2.5"
           >
@@ -80,6 +80,9 @@ function DiagnosticList({ diagnostics }: { diagnostics: MarketSubmissionDiagnost
 }
 
 /**
+ * Share to the official market: first show local validation results; submission is only possible after passing. What's submitted is the endpoint's saved definition and an optional icon;
+ * resubmitting the same slug before the PR merges goes into the same PR.
+ *
  * 分享到官方市场：先展示本地校验结果，通过后才可提交。提交的是端点已保存的定义与可选图标；
  * 同一 slug 的提交在 PR 合并前再次提交会进入同一个 PR。
  */
@@ -104,11 +107,12 @@ export function ShareToMarketDialog({
   const [slug, setSlug] = useState(initialSlug);
   const [githubUsername, setGithubUsername] = useState("");
   const [icon, setIcon] = useState<{ name: string; value: MarketSubmissionIcon } | null>(null);
+  // Incremented on every icon selection or removal; if the sequence changed when reading finishes, it was superseded by a newer selection and the result is discarded.
   // 每次选择或移除图标都递增；读取完成时序号已变说明被更新的选择取代，结果丢弃。
   const iconRead = useRef(0);
   const [readingIcon, setReadingIcon] = useState(false);
   const [iconError, setIconError] = useState<string | null>(null);
-  // null：校验中或尚未取回。
+  // null: validating or not yet fetched. / null：校验中或尚未取回。
   const [diagnostics, setDiagnostics] = useState<MarketSubmissionDiagnostic[] | null>(null);
   const [checkError, setCheckError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
@@ -117,7 +121,7 @@ export function ShareToMarketDialog({
   const iconValue = icon?.value ?? null;
   useEffect(() => {
     const controller = new AbortController();
-    // eslint-disable-next-line react-hooks/set-state-in-effect -- 预检请求换参时立即清除旧结果，避免等待期间提交未校验的内容
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- clear old results immediately when the pre-check request's parameters change, so unvalidated content isn't submitted while waiting / 预检请求换参时立即清除旧结果，避免等待期间提交未校验的内容
     setDiagnostics(null);
     setCheckError(null);
     const timer = setTimeout(() => {
@@ -189,6 +193,7 @@ export function ShareToMarketDialog({
     <Dialog
       open
       onOpenChange={(next: boolean) => {
+        // Ignore Esc and overlay clicks while submitting, so the dialog doesn't disappear before the result
         // 提交在途时不响应 Esc 与遮罩点击，避免对话框先于结果消失
         if (!next && !submitting) onClose();
       }}

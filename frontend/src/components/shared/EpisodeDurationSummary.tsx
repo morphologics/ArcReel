@@ -3,6 +3,14 @@ import { AlertTriangle } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
 /**
+ * "Episode total X s / target N s" comparison in the script plan review panel.
+ *
+ * The target is soft: exceeding it only switches to a hint style stating by how much; the confirm button and later generation are unaffected;
+ * the product doesn't hard-cap creative dimensions (see `.out-of-scope/product-enforced-creative-limits.md` in the repo).
+ * Renders nothing when no target is set (`targetSeconds` is null): without a target there's no fact to compare.
+ *
+ * The total is the sum of per-entry durations of the current draft (including the user's unsaved changes), so changing one duration is reflected immediately.
+ *
  * 脚本规划审核面板的「本集合计 X 秒 / 目标 N 秒」对比。
  *
  * 目标是软的：超出只换成提示样式并说明超了多少，确认按钮与后续生成都不受影响——
@@ -12,9 +20,9 @@ import { useTranslation } from "react-i18next";
  * 合计取当前草稿（含用户未保存的改动）逐条时长之和，因此改一条时长即时反映在对比上。
  */
 export interface EpisodeDurationSummaryProps {
-  /** 本集各条目时长之和（秒）。 */
+  /** Sum of this episode's entry durations (seconds). / 本集各条目时长之和（秒）。 */
   totalSeconds: number;
-  /** 项目级单集目标时长（秒）；null = 未设目标，不渲染。 */
+  /** Project-level per-episode target duration (seconds); null = no target, nothing rendered. / 项目级单集目标时长（秒）；null = 未设目标，不渲染。 */
   targetSeconds: number | null;
   className?: string;
 }

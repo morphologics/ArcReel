@@ -17,6 +17,7 @@ function ga(overrides: Partial<UnitGeneratedAssets>): UnitGeneratedAssets {
   };
 }
 
+// A voice applies only to dialogue lines the character speaks, so the fixture makes the character speak: whether it appears on screen does not decide voice staleness.
 // 音色只作用于该角色说出的台词，因此夹具让角色开口说话：出镜与否不决定语音过期。
 function unit(id: string, characterName: string, generatedAssets: UnitGeneratedAssets): ReferenceVideoUnit {
   return {
@@ -30,6 +31,7 @@ function unit(id: string, characterName: string, generatedAssets: UnitGeneratedA
 
 const character = (overrides: Partial<Character>): Character => ({ description: "", ...overrides });
 
+// The banner appears only in the reference-audio binding tier; except for the group of cases testing the gate, this file evaluates everything in that tier.
 // 横幅只在参考音频绑定档下出现；除专测门控的一组用例外，本文件一律按该档求值。
 const notice = (units: readonly ReferenceVideoUnit[], characters: Record<string, Character>) =>
   computeVoiceLegacyNotice(units, characters, "reference_audio");
@@ -108,6 +110,7 @@ describe("computeVoiceLegacyNotice", () => {
     expect(notice([u], characters)).toEqual({ count: 0, characterNames: [] });
   });
 
+  // The speaker slot does not go into reference images, but it is exactly where the voice applies: changing the voice of a character that only speaks off screen still makes the video stale.
   // 说话人位不进参考图，但它正是音色的作用点：只发声不出镜的角色换音色照样让视频过期。
   it("counts a character that only occupies a speaker slot", () => {
     const u = unit("E1U1", "王", ga({ video_generated_at: null }));
@@ -132,6 +135,8 @@ describe("computeVoiceLegacyNotice", () => {
   });
 
   it("compares timestamps as parsed instants across differing ISO precision/format", () => {
+    // video_generated_at of a restored historical version is in second-precision "Z" format; normal voice updates are microsecond "+00:00".
+    // Within the same second, string comparison would wrongly judge "...10Z" later than "...10.500000+00:00", missing staleness.
     // 还原历史版本的 video_generated_at 是秒级 "Z" 格式；正常声音更新是微秒级 "+00:00"。
     // 同一秒内，字符串比较会把 "...10Z" 误判为晚于 "...10.500000+00:00"，导致漏判 stale。
     const units = [unit("E1U1", "王", ga({ video_generated_at: "2026-01-02T00:00:10Z" }))];

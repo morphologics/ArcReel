@@ -8,7 +8,7 @@ interface AddUnitPayload {
   prompt: string;
   duration_seconds?: number;
   note?: string | null;
-  /** 插在这个单元之后；缺省时追加到末尾。 */
+  /** Insert after this unit; when omitted, append at the end. / 插在这个单元之后；缺省时追加到末尾。 */
   after_unit_id?: string;
 }
 
@@ -28,6 +28,9 @@ interface ReferenceVideoStore {
   /** Keyed by `${projectName}::${episode}`. */
   unitsByEpisode: Record<string, ReferenceVideoUnit[]>;
   /**
+   * Per-unit server-side bucketing conclusions under the same key (bucket, duration option, reference split), arriving with the unit list; write-entry
+   * responses merge per unit: when the body changes references, bucket and option update from the response on the spot, and the canvas does not judge them itself.
+   *
    * 同 key 下逐单元的服务端定桶结论（桶、档位、引用分裂），随单元列表一起到达，写入口的
    * 响应按单元合并——正文改了引用，桶与档位当场随响应更新，画布不自判。
    */
@@ -44,6 +47,10 @@ interface ReferenceVideoStore {
   select: (unitId: string | null) => void;
 }
 
+// Sequence number of the latest loadUnits on each cache key: `loadUnits` has several entry points (the canvas effect rerunning on
+// project/episode/task-completion invalidation, refetch after a unit write, manual retry), so several requests may be in flight concurrently on the same key.
+// Without this check, an old response sent earlier but arriving later would overwrite a final cut already generated in the new response, and the UI would stay at "no final cut"
+// until the next invalidation. When a response settles and its sequence number has been taken over by a newer request, it is dropped; only the latest writes back.
 // 每个 cache key 上最新一次 loadUnits 的序号：`loadUnits` 有多个入口（画布 effect 随
 // 项目/剧集/任务完成失效重跑、单元写入后重拉、手动重试），同一 key 上可能有多个请求并发
 // 在途。没有这道校验时，先发后到的旧响应会盖掉新响应里已经生成的成片，界面停在「无成片」
@@ -52,6 +59,14 @@ const _loadSeqByKey = new Map<string, number>();
 let _loadSeq = 0;
 
 /**
+ * Void all in-flight loads on this cache key.
+ *
+ * Called after a write entry (add/delete/edit/reorder) settles: a late GET reads the list from before the write, and writing it back would temporarily undo
+ * the user's just-made edit, add/delete or reorder in the UI until the next invalidation restores it.
+ *
+ * Also settles `loading`: the voided load is dropped when its response settles and no longer resets itself, and what voided it is
+ * a write entry, not another load, so there is no taker to finish up; without settling here, the canvas would stay in the loading state.
+ *
  * 作废该 cache key 上所有在途加载。
  *
  * 写入口（增删改排序）落定后调用：迟到的 GET 读的是写入之前的列表，直接写回会把用户刚做的

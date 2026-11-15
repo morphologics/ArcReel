@@ -14,16 +14,17 @@ const ENSURED_SUFFIX: Partial<Record<EndpointRequest["base_url_rule"], string>> 
   ensure_ent_v2: "/ent/v2",
 };
 const DASHSCOPE_SUFFIX = /\/(?:compatible-mode\/v1|api\/v1)$/;
+// Same convention as the server's normalize_anthropic_base_url: only strip endpoint suffixes copied in with the whole URL
 // 与服务端 normalize_anthropic_base_url 同口径：只剥整条复制进来的端点后缀
 const MESSAGES_SUFFIX = /\/+v1\/messages$/;
 
-/** 供应商填写的 base_url 原样值（补缺失的协议、去尾斜杠），与服务端 raw_base_url 同口径。 */
+/** Raw value of the base_url the provider entered (add a missing protocol, strip trailing slash), same convention as the server's raw_base_url. / 供应商填写的 base_url 原样值（补缺失的协议、去尾斜杠），与服务端 raw_base_url 同口径。 */
 function rawBaseUrl(baseUrl: string): string {
   const stripped = baseUrl.trim().replace(/\/+$/, "");
   return stripped && !stripped.includes("://") ? `https://${stripped}` : stripped;
 }
 
-/** 没有修改时端点按声明的规则归一化接口地址；有修改的请求一律相对原样值。 */
+/** Without edits the endpoint normalizes the API address by its declared rules; edited requests are always relative to the raw value. / 没有修改时端点按声明的规则归一化接口地址；有修改的请求一律相对原样值。 */
 function normalizedBase(raw: string, request: EndpointRequest) {
   if (request.base_url_rule === "strip_version") return { base: raw.replace(VERSION_SUFFIX, ""), autoV1: false };
   if (request.base_url_rule === "append_v1") return { base: raw, autoV1: !/\/v\d+$/.test(raw) };
@@ -44,7 +45,7 @@ interface RequestAddressesProps {
   onChange: (next: PathOverrides | null) => void;
 }
 
-/** 调用端点的每条请求一条分段地址条：接口地址灰显，路径部分点击就地修改。 */
+/** One segmented address bar per request of the call endpoint: the API address is greyed out, and clicking the path part edits it in place. / 调用端点的每条请求一条分段地址条：接口地址灰显，路径部分点击就地修改。 */
 export function RequestAddresses({ requests, baseUrl, modelId, overrides, onChange }: RequestAddressesProps) {
   const { t } = useTranslation("dashboard");
   const raw = rawBaseUrl(baseUrl);
@@ -55,6 +56,7 @@ export function RequestAddresses({ requests, baseUrl, modelId, overrides, onChan
     const path = trimmed && !trimmed.startsWith("/") ? `/${trimmed}` : trimmed;
     const { [request.name]: _previous, ...rest } = overrides ?? {};
     const { base, autoV1 } = normalizedBase(raw, request);
+    // Empty values don't count as edits; a path with the same text as the default leaves the request address unchanged only when the API address isn't normalized
     // 空值不算修改；与默认同文本的路径只在接口地址不经归一化时才不改变请求地址
     const unchanged = !path || (path === request.default_path && base === raw && !autoV1);
     const next = unchanged ? rest : { ...rest, [request.name]: path };
@@ -96,12 +98,12 @@ interface AddressBarProps {
   request: EndpointRequest;
   rawBase: string;
   override: string | undefined;
-  /** 展示用路径，模型名占位符已换成模型 ID。 */
+  /** Display path, with the model name placeholder replaced by the model ID. / 展示用路径，模型名占位符已换成模型 ID。 */
   display: string;
   onCommit: (draft: string) => void;
 }
 
-/** 一条请求的地址条：点击路径进入行内输入，Enter 或失焦提交，Esc 取消。 */
+/** Address bar of one request: clicking the path enters inline input; Enter or blur submits, Esc cancels. / 一条请求的地址条：点击路径进入行内输入，Enter 或失焦提交，Esc 取消。 */
 function AddressBar({ request, rawBase, override, display, onCommit }: AddressBarProps) {
   const { t } = useTranslation("dashboard");
   const [draft, setDraft] = useState<string | null>(null);
@@ -123,7 +125,7 @@ function AddressBar({ request, rawBase, override, display, onCommit }: AddressBa
   };
 
   if (editing) {
-    // 修改后的路径相对原样接口地址，编辑时前缀即原样值
+    // The edited path is relative to the raw API address; while editing, the prefix is the raw value / 修改后的路径相对原样接口地址，编辑时前缀即原样值
     return (
       <InputGroup>
         <InputGroupAddon className="max-w-3/5">
@@ -137,10 +139,11 @@ function AddressBar({ request, rawBase, override, display, onCommit }: AddressBa
           spellCheck={false}
           autoComplete="off"
           onChange={(e) => setDraft(e.target.value)}
+          // Blurring without changes doesn't submit, otherwise opening the path on a normalized endpoint and leaving would create an edit; Enter is an explicit confirm and submits as usual
           // 没改动就失焦不提交，否则归一化端点上点开路径再离开就会生成一条修改；Enter 是明确确认，照常提交
           onBlur={() => finish(draft !== (override ?? request.default_path))}
           onKeyDown={(e) => {
-            // 输入法组合输入中按 Enter 是在确认候选词，不应提交
+            // Pressing Enter during IME composition confirms a candidate and should not submit / 输入法组合输入中按 Enter 是在确认候选词，不应提交
             if (e.nativeEvent.isComposing) return;
             if (e.key === "Enter") {
               e.preventDefault();

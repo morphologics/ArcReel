@@ -28,7 +28,7 @@ interface LobbyHeaderProps {
   onOpenDeleted: () => void;
 }
 
-/** 大厅顶栏：品牌与搜索靠左；资产库、外部 Agent 接入、已删除项目、「新建项目」分体按钮与设置靠右。 */
+/** Lobby top bar: brand and search on the left; asset library, external Agent access, deleted projects, the "New project" split button and settings on the right. / 大厅顶栏：品牌与搜索靠左；资产库、外部 Agent 接入、已删除项目、「新建项目」分体按钮与设置靠右。 */
 export function LobbyHeader({ query, onQueryChange, onCreate, onImport, importing, onOpenDeleted }: LobbyHeaderProps) {
   const { t } = useTranslation(["dashboard", "common", "assets"]);
   const configComplete = useConfigStatusStore((s) => s.isComplete);
@@ -157,7 +157,7 @@ function IconLink({
             href={href}
             aria-label={label}
             data-onboarding={onboardingAnchor}
-            // eslint-disable-next-line shadcn/require-static-classes -- 链接借用 buttonVariants 的 ghost/icon 外观；Button 渲染为链接会被 Base UI 加上 role="button"，故不能换成 render={<Button />}，TooltipTrigger 自身不带样式（见 eslint.config.js 的 UNSTYLED_PRIMITIVES）
+            // eslint-disable-next-line shadcn/require-static-classes -- the link borrows the ghost/icon look of buttonVariants; Button rendered as a link gets role="button" from Base UI, so it cannot become render={<Button />}, and TooltipTrigger itself has no styling (see UNSTYLED_PRIMITIVES in eslint.config.js) / 链接借用 buttonVariants 的 ghost/icon 外观；Button 渲染为链接会被 Base UI 加上 role="button"，故不能换成 render={<Button />}，TooltipTrigger 自身不带样式（见 eslint.config.js 的 UNSTYLED_PRIMITIVES）
             className={cn(buttonVariants({ variant: "ghost", size: "icon" }), "relative")}
           />
         }

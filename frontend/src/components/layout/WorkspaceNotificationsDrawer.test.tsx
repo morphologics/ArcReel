@@ -24,6 +24,7 @@ describe("WorkspaceNotifications", () => {
     expect(bell()).toHaveAccessibleName("工作区通知");
     expect(within(panel).getByText(/新通知/)).toBeInTheDocument();
 
+    // Notifications arriving while the panel is open likewise no longer count toward the badge, and are highlighted too
     // 面板开着时新到的通知同样不再计入角标，也一并高亮
     act(() => useAppStore.getState().pushWorkspaceNotification({ text: "第 2 集分镜已生成" }));
     expect(bell()).toHaveAccessibleName("工作区通知");

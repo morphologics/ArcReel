@@ -13,6 +13,7 @@ import type { EpisodeScript, ProjectData } from "@/types";
 import type { EditTimelineReadout, EditTimelineSummary } from "@/types/edit-timeline";
 import { stubMediaElementPlayback } from "@/test/media-element";
 
+// The edit view itself is not mocked: here we verify the route layer wires the empty state and the render button to its two mount points.
 // 剪辑视图本体不 mock：这里验证路由层把空状态与出片按钮接到它的两个挂载点上。
 vi.mock("@/components/workflow/WorkflowPanel", () => ({
   WorkflowPanel: () => <div data-testid="workflow-panel" />,
@@ -174,6 +175,7 @@ describe("StudioCanvasRouter edit view mounts", () => {
 
     const renderButton = await screen.findByRole("button", { name: "出片" });
     expect(renderButton).toBeDisabled();
+    // The episode's only shot, E1S03, is referred to by position
     // 本集唯一的分镜 E1S03 以位置称呼
     expect(renderButton.parentElement).toHaveAttribute(
       "title",

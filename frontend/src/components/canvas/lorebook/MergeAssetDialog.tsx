@@ -32,9 +32,9 @@ interface MergeAssetDialogProps {
   assetType: MergeableAssetType;
   name: string;
   description: string;
-  /** 与卡片兄弟控件共享的禁用态（生成中 / 上传中）。 */
+  /** Disabled state shared with the card's sibling controls (generating / uploading). / 与卡片兄弟控件共享的禁用态（生成中 / 上传中）。 */
   busy?: boolean;
-  /** 画廊各卡片在途的本地写入（上传、版本恢复、删除），任务队列里读不到，保留方命中时不能合并。 */
+  /** In-flight local writes on gallery cards (upload, version restore, delete), not visible in the task queue; merging is blocked when the kept asset is hit. / 画廊各卡片在途的本地写入（上传、版本恢复、删除），任务队列里读不到，保留方命中时不能合并。 */
   writingNames?: ReadonlySet<string>;
 }
 
@@ -44,7 +44,7 @@ type PreviewState =
   | { phase: "ready"; result: AssetMergeResult }
   | { phase: "failed"; message: string };
 
-/** 引用改写数按落点列出的顺序，与后端报告字段一一对应。 */
+/** Order in which reference rewrite counts are listed by location, matching the backend report fields one-to-one. / 引用改写数按落点列出的顺序，与后端报告字段一一对应。 */
 const REFERENCE_COUNTS = ["script_plan", "script", "draft", "prompt_text", "speaker"] as const;
 
 function sameTypeNames(project: ProjectData | null, assetType: MergeableAssetType): string[] {
@@ -54,6 +54,13 @@ function sameTypeNames(project: ProjectData | null, assetType: MergeableAssetTyp
 }
 
 /**
+ * "Merge into…" dialog: pick a kept asset of the same type (characters can also merge as a derivative), preview per episode the references to be rewritten and the
+ * storyboard images and videos that will go stale, then merge on confirm. The merged asset's description is shown in the dialog for the creator to copy.
+ *
+ * The preview is refetched (dry-run) on every change of kept asset or merge mode, with old requests voided via AbortSignal; confirming requires the preview
+ * matching the current selection to be ready. Merging rewrites all episode references and deletes the merged asset, irreversibly, so both sides' locks are re-checked on open and submit.
+ * Controlled open: the entry is "Merge into…" in the gallery card's "More" menu.
+ *
  * 「并入…」对话框：选同类型的保留方（角色还可选并为衍生），按集预览将改写的引用数与将过期的
  * 分镜图、视频数，确认后执行合并。被并方的描述在对话框里展示，供创作者复制取用。
  *
@@ -84,7 +91,7 @@ export function MergeAssetDialog({
 
   useEffect(() => () => controllerRef.current?.abort(), []);
 
-  // 每次打开都从空白开始；打开时资源已被占用则不打开。
+  // Each open starts blank; if the resource is already locked on open, do not open. / 每次打开都从空白开始；打开时资源已被占用则不打开。
   const [wasOpen, setWasOpen] = useState(open);
   if (open !== wasOpen) {
     setWasOpen(open);
@@ -97,6 +104,7 @@ export function MergeAssetDialog({
   }
 
   const occupiedNames = useAssetBusyNames(assetType, projectName);
+  // Merge is a one-click destructive confirmation: if the kept asset becomes locked after the dialog opens, disable live and explain why
   // 合并是一键执行的破坏性确认：保留方在对话框打开后被占用时实时禁用，并说明原因
   const targetBusyReason = !target
     ? null
@@ -157,6 +165,7 @@ export function MergeAssetDialog({
     try {
       await API.mergeProjectAsset(projectName, assetType, name, target, { asDerivative });
       onOpenChange(false);
+      // The merge was submitted; refresh is a separate follow-up step: the merged asset's card disappears on refresh, and stays on the page if refresh fails.
       // 合并已提交，刷新是独立的后续步骤：被并方的卡片随刷新消失，刷新失败时它会停在页面上。
       const refreshed = await useProjectsStore.getState().refreshProject(projectName);
       if (refreshed === "failed") {
@@ -237,7 +246,7 @@ export function MergeAssetDialog({
     <AlertDialog
       open={open}
       onOpenChange={(next) => {
-        // 合并在途时不响应 Esc，避免请求还在途时对话框先消失
+        // Ignore Esc while merging, so the dialog does not disappear while the request is in flight / 合并在途时不响应 Esc，避免请求还在途时对话框先消失
         if (!next && !merging) close();
       }}
     >
@@ -290,7 +299,7 @@ export function MergeAssetDialog({
                   disabled={merging}
                 >
                   {(["asset", "derivative"] as const).map((mode) => (
-                    // eslint-disable-next-line jsx-a11y/label-has-associated-control -- 控件是嵌套的 RadioGroupItem（Base UI 单选），规则识别不到
+                    // eslint-disable-next-line jsx-a11y/label-has-associated-control -- the control is a nested RadioGroupItem (Base UI radio) the rule cannot detect / 控件是嵌套的 RadioGroupItem（Base UI 单选），规则识别不到
                     <label key={mode} className="flex cursor-pointer items-start gap-2.5">
                       <RadioGroupItem value={mode} className="mt-0.5" />
                       <span className="flex min-w-0 flex-col gap-0.5">

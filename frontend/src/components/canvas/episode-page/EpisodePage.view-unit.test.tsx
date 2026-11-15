@@ -23,7 +23,7 @@ const SCRIPT: EpisodeScript = {
 };
 
 const saveNothing = async () => true;
-/** 宫格视图里带着未保存修改的编辑单元，切到分镜视图时会卸载。 */
+/** An editing unit with unsaved changes in the grid view is unmounted when switching to the shot view. / 宫格视图里带着未保存修改的编辑单元，切到分镜视图时会卸载。 */
 function DirtyGridUnit() {
   useLeaveGuard({ dirty: true, save: saveNothing });
   return null;

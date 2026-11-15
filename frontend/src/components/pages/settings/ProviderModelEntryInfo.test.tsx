@@ -21,6 +21,7 @@ describe("FactField", () => {
     fireEvent.change(screen.getByRole("textbox", { name: "「可选时长」的值" }), { target: { value: "8-4" } });
     expect(onValidityChange).toHaveBeenLastCalledWith("entry:durations", false);
 
+    // External value changes such as adopting the official value or discarding changes
     // 采用官方值、放弃修改这类外部改值
     rerender(field([5, 10]));
 

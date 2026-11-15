@@ -7,7 +7,7 @@ const EMPTY: TextTierValue = { default: "", simple: "", complex: "" };
 const OPTIONS = ["gemini/g25", "ark/qwen"];
 const PROVIDER_NAMES = { gemini: "Gemini", ark: "Ark" };
 
-/** 细分档收在折叠区内，测试前先展开。 */
+/** Sub-tiers are inside the collapsible section; expand it before testing. / 细分档收在折叠区内，测试前先展开。 */
 async function expandTiers(user: ReturnType<typeof userEvent.setup>) {
   await user.click(screen.getByText("按用途指定模型"));
 }
@@ -24,14 +24,17 @@ describe("TextTierFields", () => {
         defaultLabel="自动选择"
       />,
     );
+    // The default model main dropdown is always present
     // 默认模型主下拉常驻
     expect(screen.getByRole("combobox", { name: "默认模型" })).toBeInTheDocument();
+    // The Agent provider boundary note is always present outside the collapsible section
     // Agent 供应商边界说明在折叠区之外常驻
     expect(screen.getByText(/Agent 供应商/)).toBeInTheDocument();
 
     await expandTiers(user);
     expect(screen.getByRole("combobox", { name: "简单任务" })).toBeInTheDocument();
     expect(screen.getByRole("combobox", { name: "复杂任务" })).toBeInTheDocument();
+    // The simple tier caption notes it needs image input; the complex tier caption lists the call sites it covers
     // 简单档 caption 注明需图像输入，复杂档 caption 列出覆盖调用点
     expect(screen.getByText(/图像输入/)).toBeInTheDocument();
     expect(screen.getByText(/脚本生成/)).toBeInTheDocument();
@@ -49,12 +52,14 @@ describe("TextTierFields", () => {
         fallbacks={{ default: "gemini/g25", simple: "gemini/g25", complex: "gemini/g25" }}
       />,
     );
+    // Default tier empty -> the effective value comes from the global layer
     // 默认档留空 → 生效值来自全局层
     expect(screen.getByRole("combobox", { name: "默认模型" })).toHaveTextContent(
       /跟随全局默认 · Gemini · g25/,
     );
 
     await expandTiers(user);
+    // Sub-tiers fall back to the same layer's default model, worded as "follow default"
     // 细分档回退的是同层默认模型，措辞为「跟随默认」
     for (const name of ["简单任务", "复杂任务"]) {
       expect(screen.getByRole("combobox", { name })).toHaveTextContent(/跟随默认 · Gemini · g25/);

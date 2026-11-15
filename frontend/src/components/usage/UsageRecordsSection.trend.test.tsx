@@ -14,6 +14,7 @@ const COST_NAME = "按天堆叠的参考费用";
 
 describe("UsageRecordsSection trend", () => {
   beforeAll(async () => {
+    // Value assertions wait for the real chart to render, not counting the cold chunk's load time against query waits.
     // 数值断言等待真实图表渲染，不把冷 chunk 的加载耗时算进查询等待。
     await import("./UsageTrendChart");
   });
@@ -38,6 +39,8 @@ describe("UsageRecordsSection trend", () => {
   });
 
   it("renders the call counts with the language's thousands separator", async () => {
+    // In the tooltip and accessible table the call count sits next to the success rate rendered in the UI language; `toLocaleString()` following the browser language
+    // would put two separator conventions in one place.
     // tooltip 与无障碍表格里，调用次数紧挨着按界面语言渲染的成功率；跟浏览器语言的
     // `toLocaleString()` 会让同一处出现两种分隔习惯。
     for (const [language, expected] of [
@@ -49,6 +52,7 @@ describe("UsageRecordsSection trend", () => {
       mockSummary({ daily: makeUsageDaily(1, "2026-03-14", () => ({ success: 12_340 })) });
       const { unmount } = renderUsageRecordsSection();
 
+      // One each in the success column and the total column: both are output of the same formatter.
       // 成功列与合计列各一个：两处都是同一个格式器的输出。
       expect(await screen.findAllByText(expected)).toHaveLength(2);
       unmount();
@@ -69,6 +73,7 @@ describe("UsageRecordsSection trend", () => {
 
     const table = screen.getByRole("table", { name: CALLS_NAME });
     const rows = within(table).getAllByRole("row");
+    // Header + two day buckets.
     // 表头 + 两个日桶。
     expect(rows).toHaveLength(3);
     expect(within(rows[1]).getByRole("rowheader")).toHaveTextContent("3/14");
@@ -88,6 +93,7 @@ describe("UsageRecordsSection trend", () => {
     await userEvent.click(screen.getByRole("button", { name: "参考费用" }));
 
     expect(await screen.findByRole("img", { name: COST_NAME })).toBeInTheDocument();
+    // The $4.59 outside the main currency CNY is neither converted nor charted, only explained in the footnote.
     // 主币种 CNY 之外的 $4.59 不折算也不上图，只在脚注里说明。
     expect(screen.getByText("只按 CNY 作图，$4.59 未计入")).toBeInTheDocument();
   });
@@ -111,6 +117,7 @@ describe("UsageRecordsSection trend", () => {
 
     const table = await screen.findByRole("table", { name: "按周合并堆叠的调用次数" });
     expect(screen.getByText("按周合并")).toBeInTheDocument();
+    // 95 days merged into 14 buckets, header + 14 rows.
     // 95 天并成 14 桶，表头 + 14 行。
     expect(within(table).getAllByRole("row")).toHaveLength(15);
     expect(within(table).getAllByRole("rowheader")[0]).toHaveTextContent("3/1 – 3/4 · 4 天合并");

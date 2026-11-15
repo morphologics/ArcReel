@@ -60,6 +60,7 @@ describe("useCharacterDerivativeSheets", () => {
     render(<Probe />);
     await waitFor(() => expect(spy).toHaveBeenCalledTimes(1));
 
+    // A task leaving the occupied set means a generation just finished: fetch again to get the new image and the new staleness verdict.
     // 任务离开占用集即代表刚有一次生成结束：重新取一次才能拿到新图与新的过期判定。
     spy.mockResolvedValue({
       success: true,

@@ -47,15 +47,21 @@ interface RenderDialogProps {
   projectName: string;
   timelineId: string;
   timelineName: string;
-  /** 当前修订的 issues；按所选旁白版本筛出阻断，对话框打开期间出现阻断时，出片按钮随之不可点。 */
+  /** Issues of the current revision; blocks are filtered by the selected narration version, and if a block appears while the dialog is open the render button becomes unclickable. / 当前修订的 issues；按所选旁白版本筛出阻断，对话框打开期间出现阻断时，出片按钮随之不可点。 */
   issues: readonly EditTimelineIssueRef[];
-  /** 项目用 TTS 配音时可以选旁白版本；否则只出不带旁白版本。 */
+  /** When the project uses TTS voiceover the narration version can be chosen; otherwise only the without-narration version is rendered. / 项目用 TTS 配音时可以选旁白版本；否则只出不带旁白版本。 */
   narrationAvailable: boolean;
   /** Prefix of the final cut's download name (e.g. "Project title - E1"); the timeline name, version and render time follow. Without it: the timeline name only. */
   fileStem?: string;
 }
 
 /**
+ * The "Render · <edit timeline name>" dialog: based on the edit timeline of the edit view's current tab,
+ * choose final cut or JianYing draft and its version, view the freshness of existing artifacts, download directly or re-render, and show task progress after submitting.
+ *
+ * The narration version defaults to with narration (TTS voiceover projects), the final cut defaults to burned-in subtitles; each version is a separate artifact.
+ * Close requests are ignored while a submit or download request is in flight; after the task starts it can be closed, and reopening picks up the in-flight task of the same artifact.
+ *
  * 「出片 · <剪辑时间线名称>」对话框：以剪辑视图当前标签的剪辑时间线为准，
  * 选成片或剪映草稿及其版本，查看已有产物的时效，直接下载或重新渲染，提交后显示任务进度。
  *
@@ -74,6 +80,7 @@ export function RenderDialog({
 }: RenderDialogProps) {
   const { t } = useTranslation("dashboard");
   const [kind, setKind] = useState<RenderKind>("final_cut");
+  // The draft directory and JianYing version are kept across deliverable switches; written back to localStorage only on download.
   // 草稿目录与剪映版本跨交付物切换保留；下载时才写回 localStorage。
   const [draftPath, setDraftPath] = useState(() => localStorage.getItem(DRAFT_PATH_STORAGE_KEY) ?? "");
   const [jianyingVersion, setJianyingVersion] = useState<JianyingVersion>(() =>
@@ -125,7 +132,7 @@ export function RenderDialog({
   );
 }
 
-/** 对话框的 Body 与 Footer：按交付物与版本重新挂载，产物现状与任务进度不跨版本残留。 */
+/** The dialog's Body and Footer: remounted per deliverable and version, so artifact state and task progress do not carry over across versions. / 对话框的 Body 与 Footer：按交付物与版本重新挂载，产物现状与任务进度不跨版本残留。 */
 function RenderPanel({
   projectName,
   timelineId,
@@ -150,7 +157,7 @@ function RenderPanel({
   fileStem?: string;
   kind: RenderKind;
   onKindChange: (kind: RenderKind) => void;
-  /** 所选旁白版本；项目不能选旁白版本时为 null，按不带旁白版本出片。 */
+  /** The selected narration version; null when the project cannot choose a narration version, rendering the without-narration version. / 所选旁白版本；项目不能选旁白版本时为 null，按不带旁白版本出片。 */
   narration: TimelineNarration | null;
   onNarrationChange: (narration: TimelineNarration) => void;
   burnSubtitles: boolean;
@@ -160,12 +167,13 @@ function RenderPanel({
   jianyingVersion: JianyingVersion;
   onJianyingVersionChange: (version: JianyingVersion) => void;
   blockedReason: string | null;
-  /** 提交或下载请求在途与否，对话框据此忽略关闭请求。 */
+  /** Whether a submit or download request is in flight; the dialog ignores close requests accordingly. / 提交或下载请求在途与否，对话框据此忽略关闭请求。 */
   onBusyChange: (busy: boolean) => void;
 }) {
   const { t, i18n } = useTranslation("dashboard");
   const draftPathId = useId();
   const draftHintId = useId();
+  // The two deliverable cards share one name so they form one native radio group: arrow keys switch within the group, Tab stops only once
   // 两张交付物卡片共用一个 name 才是同一组原生单选：方向键在组内切换，Tab 只停一次
   const kindGroupName = useId();
   const state = useRenderArtifact(
@@ -181,9 +189,10 @@ function RenderPanel({
 
   const busy = requesting || downloading;
   useEffect(() => {
-    // react-doctor-disable-next-line react-doctor/no-pass-data-to-parent, react-doctor/no-pass-live-state-to-parent, react-doctor/no-prop-callback-in-effect -- 在途状态来自按版本 key 重新挂载的面板与其 useRenderArtifact，父级无法持有；父级只需据此忽略关闭请求，卸载时由下方 cleanup 复位
+    // react-doctor-disable-next-line react-doctor/no-pass-data-to-parent, react-doctor/no-pass-live-state-to-parent, react-doctor/no-prop-callback-in-effect -- the in-flight state comes from the panel remounted by version key and its useRenderArtifact, which the parent cannot hold; the parent only needs it to ignore close requests, and the cleanup below resets it on unmount / 在途状态来自按版本 key 重新挂载的面板与其 useRenderArtifact，父级无法持有；父级只需据此忽略关闭请求，卸载时由下方 cleanup 复位
     onBusyChange(busy);
   }, [busy, onBusyChange]);
+  // When remounting for a version change or when the dialog closes, the previous panel's in-flight state no longer blocks closing.
   // 换版本重新挂载或对话框关闭时，上一份面板的在途状态不再拦住关闭。
   useEffect(() => () => onBusyChange(false), [onBusyChange]);
 
@@ -241,6 +250,7 @@ function RenderPanel({
   const renderLabel = hasFile
     ? t(isDraft ? "edit_render_reexport_draft" : "edit_render_rerender_final_cut")
     : t(isDraft ? "edit_render_export_draft" : "edit_render_render_final_cut");
+  // When already up to date, download is the primary action; when outdated or no artifact exists, (re-)render is the primary action.
   // 已是最新时下载是主动作；过时或没有产物时（重新）出片是主动作。
   const downloadIsPrimary = artifact?.status === "current";
 
@@ -420,14 +430,14 @@ function KindOption({
       <span className={cn("mt-0.5 shrink-0", selected ? "text-primary" : "text-muted-foreground")}>{icon}</span>
       <span className="flex min-w-0 flex-col gap-1">
         <span className="text-sm leading-tight font-medium text-foreground">{title}</span>
-        {/* 选中项浅底上用中间档文字，保证对比度 */}
+        {/* Use the mid-tone text on the selected item's light background to ensure contrast / 选中项浅底上用中间档文字，保证对比度 */}
         <span className={cn("text-xs", selected ? "text-subtle-foreground" : "text-muted-foreground")}>{hint}</span>
       </span>
     </label>
   );
 }
 
-/** 两三个互斥选项的一行单选：旁白版本、剪映版本。 */
+/** A one-row radio group for two or three mutually exclusive options: narration version, JianYing version. / 两三个互斥选项的一行单选：旁白版本、剪映版本。 */
 function ChoiceRow({
   label,
   value,

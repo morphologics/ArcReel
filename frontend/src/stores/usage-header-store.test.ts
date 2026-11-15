@@ -41,6 +41,7 @@ describe("usage-header-store", () => {
     stubRecords();
     await useUsageHeaderStore.getState().setProject("星海列车");
 
+    // The top bar re-registers the same project after returning from the settings page: events during the absence were missed, so refetch once.
     // 顶栏从设置页返回后重新登记同一项目：离开期间的事件已错过，要补一轮重取。
     await useUsageHeaderStore.getState().setProject("星海列车");
 
@@ -69,6 +70,7 @@ describe("usage-header-store", () => {
     vi.mocked(API.getUsageSummary).mockRejectedValueOnce(new Error("network down"));
     await useUsageHeaderStore.getState().refresh();
 
+    // The panel would rather show the previous round's data plus a notice line than silently clear or quietly stay on old data.
     // 面板宁可显示上一轮的数据加一行提示，也不该悄悄清空或停在旧数据上不作声。
     expect(useUsageHeaderStore.getState().loadFailed).toBe(true);
     expect(useUsageHeaderStore.getState().summary?.primary_currency).toBe("CNY");
@@ -110,6 +112,7 @@ describe("usage-header-store", () => {
     await vi.waitFor(() =>
       expect(useUsageHeaderStore.getState().summary).not.toBeNull(),
     );
+    // The first round was voided deliberately by the takeover, not an API failure, and should not report an error on the panel.
     // 第一轮是被接管方主动作废的，不是接口失败，不该在面板上报错。
     expect(useUsageHeaderStore.getState().loadFailed).toBe(false);
   });
@@ -136,6 +139,7 @@ describe("usage-header-store", () => {
     void useUsageHeaderStore.getState().setProject("雨夜侦探");
     await vi.waitFor(() => expect(pending).toHaveLength(2));
 
+    // The late first-round response belongs to a project already left and must not be written back.
     // 迟到的第一轮响应属于已离开的项目，不得写回。
     pending[0].resolve(makeUsageSummary({ primary_currency: "JPY" }));
     pending[1].resolve(makeUsageSummary({ primary_currency: "USD" }));

@@ -10,6 +10,11 @@ export interface GridStoryboardBarProps {
 }
 
 /**
+ * Multi-grid storyboard assembly bar.
+ *
+ * Structurally independent of the generation mode cards: grids only change how storyboard images are produced, not the input contract fed to the video model,
+ * so it is an option within storyboard mode rather than a third generation mode. The wizard and settings page share the same text and the same toggle semantics.
+ *
  * 多宫格分镜装配条。
  *
  * 结构上独立于生成模式卡：宫格只改变分镜图的生产方式，不改变喂给视频模型的输入契约，

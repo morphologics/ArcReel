@@ -9,16 +9,19 @@ type SearchResult =
   | { status: "error"; key: string; message: string };
 
 export interface CatalogEntrySearch {
-  /** 最近一次返回的结果；还没有返回过时为 null。结果就绪前仍是上一次的结果。 */
+  /** Most recently returned results; null when nothing has returned yet. Until results are ready these are still the previous results. / 最近一次返回的结果；还没有返回过时为 null。结果就绪前仍是上一次的结果。 */
   entries: CatalogEntryHit[] | null;
-  /** 最近一次请求失败的原因；成功后清空。 */
+  /** Reason the most recent request failed; cleared on success. / 最近一次请求失败的原因；成功后清空。 */
   error: string | null;
-  /** 结果对应当前搜索词与筛选：防抖未到期或请求未返回时为 false。 */
+  /** Results correspond to the current search term and filter: false while the debounce hasn't elapsed or the request hasn't returned. / 结果对应当前搜索词与筛选：防抖未到期或请求未返回时为 false。 */
   settled: boolean;
   retry: () => void;
 }
 
 /**
+ * Searches the model catalog by name and media type: server-side filtering, 200ms debounce, cancelling the previous request when a new one is sent.
+ * Shared by the "Choose from model catalog" panel and the "Add model" dialog.
+ *
  * 按名称与媒体类型搜索模型目录：服务端过滤，200ms 防抖，新请求发出时取消上一次。
  * 「从模型目录选择」面板与「添加模型」对话框共用。
  */

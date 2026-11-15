@@ -1,6 +1,8 @@
 import * as React from "react"
 import { cn } from "cn"
 
+// Auto-grow: prefer CSS field-sizing: content, so programmatic writes and width changes are reflowed by the browser.
+// Unsupported browsers fall back to JS measurement: recompute on value change and input events, ResizeObserver watches width changes.
 // 自动撑高：优先 CSS field-sizing: content，程序写入与宽度变化都由浏览器重排。
 // 不支持的浏览器回退到 JS 测量：值变化与 input 事件时重算，ResizeObserver 监听宽度变化。
 function supportsFieldSizing() {
@@ -9,6 +11,7 @@ function supportsFieldSizing() {
 
 function fitToContent(el: HTMLTextAreaElement) {
   const style = getComputedStyle(el)
+  // scrollHeight excludes borders; under border-box add them back, or the last line gets clipped.
   // scrollHeight 不含边框，border-box 下要补上，否则最后一行被裁掉。
   const border =
     style.boxSizing === "border-box"
@@ -47,6 +50,12 @@ function useFieldSizingFallback(
   }, [fallback, ref, value])
 }
 
+// Changes from the generated code: default max is 40% of the enclosing size container's height (the viewport if there is none),
+// scrolling internally beyond that; height follows content, manual drag-resize removed; desktop only, font size fixed at text-sm, the viewport-switched md:text-sm removed.
+// Also adds variant="plain": body fields edited directly on the canvas (e.g. story setting), no border or background at rest, looser line height, border shown on hover or focus.
+// Body fields on long pages get max-h-none from the caller, growing with content and scrolling with the page, no nested scroll inside the box.
+// Also adds mono: switches to a monospace font for JSON, code and request bodies; it controls the font, variant controls the look, independent and usable together.
+// Versus upstream: lower the input fill opacity to preserve text contrast; the invalid state uses a full red border and a stronger glow.
 // 相对生成代码的改动：默认上限为所在尺寸容器高度的 40%（没有尺寸容器时按视口），
 // 超出后在内部滚动；高度随内容变化，去掉手动拖拽；只支持桌面端，字号固定为 text-sm，去掉按视口切换的 md:text-sm。
 // 另加 variant="plain"：画布里直接编辑的正文字段（如故事设定），静止时没有边框与底色、行高放宽，悬停或聚焦时显出边框。
@@ -75,6 +84,7 @@ function Textarea({
   return (
     <textarea
       ref={setRef}
+      // Add relative: written as a positioned element like other scroll containers (textarea has no children, layout unaffected)
       // 补 relative：与其他滚动容器一致写成定位元素（textarea 没有子元素，不影响布局）
       data-slot="textarea"
       className={cn(

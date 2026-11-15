@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import { makeTask } from "@/test/factories";
 import { taskToUsageRecordView } from "./usage-record-view";
 
-/** 只有落库时会拿到 `segment_id` 的任务才在进行中行上挂分镜标签。 */
+/** Only tasks that get a `segment_id` when booked carry a shot label on in-progress rows. / 只有落库时会拿到 `segment_id` 的任务才在进行中行上挂分镜标签。 */
 function segmentIdOf(overrides: Parameters<typeof makeTask>[0]) {
   return taskToUsageRecordView(makeTask(overrides))?.segmentId;
 }
@@ -22,6 +22,7 @@ describe("taskToUsageRecordView", () => {
     expect(
       segmentIdOf({ task_type: "reference_video", media_type: "video", resource_id: "E1U1" }),
     ).toBe("E1U1");
+    // Audio booking has no allowlist; resource_id unconditionally serves as segment_id.
     // audio 记账无白名单，resource_id 无条件作 segment_id。
     expect(segmentIdOf({ task_type: "tts", media_type: "audio", resource_id: "E1S10" })).toBe(
       "E1S10",
@@ -62,6 +63,8 @@ describe("taskToUsageRecordView", () => {
   });
 
   it("keeps the label for an unmapped audio task, as the audio ledger would", () => {
+    // Audio booking has no allowlist: the backend records resource_id as segment_id for any resource_type,
+    // so on this branch the frontend should not fall back to a generic label just because the resource kind is not registered.
     // audio 记账无白名单：后端对任何 resource_type 都把 resource_id 记成 segment_id，
     // 前端在这一支上也不该因为资源种类没登记就退回泛化标签。
     expect(

@@ -10,6 +10,7 @@ import { makePlan, makeStatus } from "@/test/factories";
 import type { EditTimelineReadout, EditTimelineSummary } from "@/types/edit-timeline";
 import { EditTimelineEmptyState } from "./EditTimelineEmptyState";
 
+/** The workflow status precondition for this episode's "New edit timeline" is not met: no usable video yet. */
 /** 制作状态里本集「新建剪辑时间线」的准入不成立：还没有可用视频。 */
 function refuseCreate(projectName: string, episode: number) {
   const status = makeStatus({ operations: { create_edit_timeline: { state: "refused", reason: "no_available_video" } } });
@@ -72,6 +73,7 @@ describe("EditTimelineEmptyState", () => {
     expect(create).toHaveBeenCalledWith("demo", 2, "完整版");
     expect(useProjectsStore.getState().refreshProject).toHaveBeenCalledWith("demo", undefined);
     expect(useAppStore.getState().assistantPanelOpen).toBe(false);
+    // The newly created edit timeline immediately becomes the selected tab, no extra toast
     // 新建的剪辑时间线随即成为选中的标签，不另弹提示
     expect(useAppStore.getState().toast).toBeNull();
   });
@@ -109,6 +111,7 @@ describe("EditTimelineEmptyState", () => {
     render(<EditTimelineEmptyState projectName="demo" episode={3} onCreated={vi.fn()} />);
     await userEvent.click(screen.getByRole("button", { name: "交给 Agent 剪辑" }));
 
+    // Episode ID 3 is 2nd in the ledger: the prefill refers to it by episode name plus episode ID, not treating the episode ID as the episode number
     // 集 ID 3 在账本里排第 2：预填按集名称呼并附集 ID，不把集 ID 当第几集
     expect(useAssistantStore.getState().input).toBe(PREFILL);
     expect(useAppStore.getState().assistantPanelOpen).toBe(true);

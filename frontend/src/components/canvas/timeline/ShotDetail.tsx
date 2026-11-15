@@ -78,9 +78,9 @@ import { PromptAuthoringButton } from "@/components/canvas/shared/PromptAuthorin
 type Segment = NarrationSegment | DramaScene | AdShot;
 type DetailContentMode = "narration" | "drama" | "ad";
 
-/** 提示词形态切换与预览按分镜图 / 视频两侧分别作用。 */
+/** Prompt form switching and preview act separately on the storyboard image / video sides. / 提示词形态切换与预览按分镜图 / 视频两侧分别作用。 */
 type PromptSide = "image" | "video";
-/** `null` = 待编写：机械转换落盘的条目还没有这一侧提示词。 */
+/** `null` = pending authoring: an entry persisted by mechanical conversion has no prompt for this side yet. / `null` = 待编写：机械转换落盘的条目还没有这一侧提示词。 */
 type ImagePromptValue = ImagePrompt | string | null;
 type VideoPromptValue = VideoPrompt | string | null;
 
@@ -90,9 +90,9 @@ interface ShotDetailProps {
   contentMode: DetailContentMode;
   aspectRatio: "9:16" | "16:9";
   projectName: string;
-  /** 当前集号；给了才提供单条「编写提示词」入口 */
+  /** Current episode number; only when given is the single-entry "Write prompt" entry offered / 当前集号；给了才提供单条「编写提示词」入口 */
   episode?: number;
-  /** 当前剧集剧本文件名，分镜图/视频自主上传需要它定位剧本条目 */
+  /** Script file name of the current episode; own uploads of storyboard images/videos need it to locate the script entry / 当前剧集剧本文件名，分镜图/视频自主上传需要它定位剧本条目 */
   scriptFile?: string;
   /** Total shot count for "1/N" indicator */
   selectedIndex: number;
@@ -100,39 +100,42 @@ interface ShotDetailProps {
   onPrev: () => void;
   onNext: () => void;
   /**
+   * Submit incremental changes to shot fields, throwing on failure. Resolves to whether the project was refreshed after saving:
+   * when false the script on screen is still the old one, and "Save and generate" must not go on to generate. When omitted, read-only display.
+   *
    * 提交分镜字段的增量修改，失败时抛错。resolve 为保存后项目是否已刷新：
    * 为 false 时界面上的剧本还是旧的，「保存并生成」不能接着生成。缺省时只读展示。
    */
   onUpdatePrompt?: (segmentId: string, patch: Record<string, unknown>) => Promise<boolean>;
-  /** 分镜改序：向前或向后移动一位 */
+  /** Shot reorder: move one position forward or backward / 分镜改序：向前或向后移动一位 */
   onMoveShot?: (shotId: string, direction: "earlier" | "later") => void | Promise<void>;
-  /** 分镜重排请求在途，移动按钮禁用 */
+  /** A shot reorder request is in flight; move buttons are disabled / 分镜重排请求在途，移动按钮禁用 */
   movePending?: boolean;
-  /** 在当前分镜之后新增分镜（旁白带正文），resolve 为是否成功；缺省时不渲染入口。 */
+  /** Add a shot after the current one (narration with body); resolves to whether it succeeded; when omitted, no entry is rendered. / 在当前分镜之后新增分镜（旁白带正文），resolve 为是否成功；缺省时不渲染入口。 */
   onInsertShot?: InsertShotHandler;
-  /** 移除当前分镜，resolve 为是否成功；缺省时不渲染入口。 */
+  /** Remove the current shot; resolves to whether it succeeded; when omitted, no entry is rendered. / 移除当前分镜，resolve 为是否成功；缺省时不渲染入口。 */
   onRemoveShot?: (itemId: string) => Promise<boolean>;
-  /** 分镜新增 / 移除请求在途，切镜与增删入口禁用 */
+  /** A shot add / remove request is in flight; shot switching and add/remove entries are disabled / 分镜新增 / 移除请求在途，切镜与增删入口禁用 */
   structurePending?: boolean;
   /** `imageModel`: "provider/model" for this request only ("Generate with …"). */
   onGenerateStoryboard?: (segmentId: string, scriptFile?: string, imageModel?: string) => void;
   /** `videoModel`: "provider/model" for this request only ("Regenerate with …"). */
   onGenerateVideo?: (segmentId: string, scriptFile?: string, videoModel?: string) => void | Promise<void>;
   onGenerateNarration?: (segmentId: string) => void;
-  /** 版本恢复与媒体上传之后刷新项目；resolve 为 false 时刷新没成功（父级已提示），不再报告成功。 */
+  /** Refresh the project after version restore and media upload; when it resolves false the refresh failed (the parent has reported it), so no success is reported. / 版本恢复与媒体上传之后刷新项目；resolve 为 false 时刷新没成功（父级已提示），不再报告成功。 */
   onRestoreStoryboard?: () => Promise<unknown> | void;
   onRestoreVideo?: () => Promise<unknown> | void;
   generatingStoryboard?: boolean;
   generatingVideo?: boolean;
   generatingNarration?: boolean;
   durationOptions?: number[];
-  /** 档位为空是因为这一维由端点固定（workflow 自己定片长），不是型号没登记时长。 */
+  /** The options are empty because this dimension is fixed by the endpoint (the workflow sets its own clip length), not because the model has no registered durations. / 档位为空是因为这一维由端点固定（workflow 自己定片长），不是型号没登记时长。 */
   durationEndpointFixed?: boolean;
   lastFrame?: boolean | null;
   capabilitiesLoading?: boolean;
-  /** 已保存时长越界的成因判定；缺省时退回不区分成因的通用警告文案。 */
+  /** Cause determination for a saved duration out of range; when omitted, fall back to the generic warning text that does not distinguish causes. / 已保存时长越界的成因判定；缺省时退回不区分成因的通用警告文案。 */
   durationWarningReason?: (seconds: number) => DurationOutOfRangeReason | null;
-  /** 分镜视图经它读当前分镜有无未保存修改、用 ⌘S / Ctrl+S 保存；卸载时清空。 */
+  /** The shot view reads through it whether the current shot has unsaved changes and saves with Cmd+S / Ctrl+S; cleared on unmount. / 分镜视图经它读当前分镜有无未保存修改、用 ⌘S / Ctrl+S 保存；卸载时清空。 */
   editRef?: RefObject<ShotEditHandle | null>;
   /**
    * Header with only notes and delete: no move, insert or previous / next buttons (the storyboard strip,
@@ -141,14 +144,17 @@ interface ShotDetailProps {
   minimalHeader?: boolean;
 }
 
-/** 分镜视图需要的当前分镜编辑状态。 */
+/** Current shot edit state needed by the shot view. / 分镜视图需要的当前分镜编辑状态。 */
 export interface ShotEditHandle {
   dirty: boolean;
-  /** 保存当前分镜；保存在途或没有修改时什么都不做。 */
+  /** Save the current shot; does nothing when a save is in flight or there are no changes. / 保存当前分镜；保存在途或没有修改时什么都不做。 */
   save: () => void;
 }
 
 /**
+ * Edit unit of shot details: prompts, voiceover copy and dialogue, narration body, duration, note, references and segment break.
+ * All these fields go into unsaved changes first, saved or discarded together by the prompt bar. Optional fields exist only for the corresponding content mode.
+ *
  * 分镜详情的编辑单元：提示词、口播与台词、旁白正文、时长、备注、引用与切分点。
  * 这些字段都先进入未保存修改，由提示条统一保存或放弃。可选字段只在对应内容类型下存在。
  */
@@ -160,14 +166,14 @@ interface ShotFields {
   characters: string[];
   scenes: string[];
   props: string[];
-  /** 旁白 / 剧情演绎：章节切分点 */
+  /** Narration / drama: segment break / 旁白 / 剧情演绎：章节切分点 */
   segment_break?: boolean;
-  /** 广告 / 短片：口播文案与带货框架段落标签 */
+  /** Ad / short: voiceover copy and the sales-framework section label / 广告 / 短片：口播文案与带货框架段落标签 */
   voiceover_text?: string;
   section?: string;
-  /** 剧情演绎：分镜级有序发声序列（台词 + 画外音） */
+  /** Drama: shot-level ordered utterance sequence (dialogue lines + voiceover) / 剧情演绎：分镜级有序发声序列（台词 + 画外音） */
   utterances?: Utterance[];
-  /** 旁白 / 解说：旁白正文 */
+  /** Narration / commentary: narration body / 旁白 / 解说：旁白正文 */
   novel_text?: string;
 }
 
@@ -190,6 +196,9 @@ type ShotFieldKey = (typeof SHOT_FIELD_KEYS)[number];
 
 const EMPTY_UTTERANCES: Utterance[] = [];
 
+// A voiceover's speaker may be omitted or null; both spellings mean the same (no speaker). Normalize before comparing:
+// voiceover speaker unified to null with fixed key order, so `{}` and `{ speaker: null }` are not judged different;
+// otherwise after upstream normalizes the voiceover field, the modified flag could not be cleared.
 // voiceover 的 speaker 允许缺省或 null，两种写法语义等价（无说话人）。比较前归一：
 // voiceover speaker 统一为 null、并固定键序，避免 `{}` 与 `{ speaker: null }` 判成不同，
 // 否则上游把画外音字段规范化后修改标记清不掉。
@@ -199,6 +208,9 @@ const canonicalUtterance = (u: Utterance): Utterance =>
     : { kind: "voiceover", speaker: null, text: u.text };
 
 /**
+ * Equality signature of the fields. The field set is stable, so JSON is enough: key order differences can only come from the same construction path.
+ * No prompt yet (null) equals empty text: there is no content to save, and PATCH does not accept clearing a prompt.
+ *
  * 字段的等值签名。字段集合稳定，JSON 即可：键序差异只会来自同一构造路径。
  * 尚无提示词（null）与空文本等价：既没有内容可保存，PATCH 也不接受清空提示词。
  */
@@ -216,7 +228,7 @@ function shotFieldsEqual(a: ShotFields, b: ShotFields): boolean {
   return a === b || SHOT_FIELD_KEYS.every((key) => fieldEqual(key, a, b));
 }
 
-/** 只提交改过的字段；角色引用按内容类型写回对应的字段名。 */
+/** Submit only changed fields; character references are written back to the field name matching the content mode. / 只提交改过的字段；角色引用按内容类型写回对应的字段名。 */
 function shotPatch(value: ShotFields, saved: ShotFields, charField: CharactersField): Record<string, unknown> {
   const patch: Record<string, unknown> = {};
   for (const key of SHOT_FIELD_KEYS) {
@@ -262,7 +274,7 @@ function shotFieldsOf(seg: Segment, mode: DetailContentMode): ShotFields {
   };
 }
 
-/** 配音的文本：旁白取正文，广告取口播；剧情演绎只在没有台词时取画外音。 */
+/** Text for voiceover: narration takes the body, ad takes the voiceover copy; drama takes the voiceover only when there are no dialogue lines. / 配音的文本：旁白取正文，广告取口播；剧情演绎只在没有台词时取画外音。 */
 function narrationTextOf(fields: ShotFields, mode: DetailContentMode): string {
   if (mode === "narration") return fields.novel_text ?? "";
   if (mode === "ad") return fields.voiceover_text ?? "";
@@ -276,6 +288,10 @@ function narrationTextOf(fields: ShotFields, mode: DetailContentMode): string {
 }
 
 /**
+ * Whether the duration is locked by running tasks: storyboard image and video tasks have captured the old duration, so changing it would make the two sides inconsistent.
+ * Grid tasks are judged by scriptFile instead: their resource_id is grid_id, and the split phase overwrites several shots in this episode.
+ * Reads the current value of tasks-store, catching tasks started after render.
+ *
  * 时长是否被在跑的任务锁住：分镜图与视频任务已捕获旧时长，改了两边就不一致。
  * 宫格任务另按 scriptFile 判：它的 resource_id 是 grid_id，切割阶段会覆写本集内多个分镜。
  * 读 tasks-store 的当前值，不吃渲染之后才启动的任务。
@@ -292,14 +308,14 @@ interface DurationPillProps {
   seconds: number;
   segmentId: string;
   projectName: string;
-  /** 本集剧本文件名；宫格任务按它做 scriptFile 粒度的占用判定。 */
+  /** Script file name of this episode; grid tasks use it for scriptFile-level occupancy checks. / 本集剧本文件名；宫格任务按它做 scriptFile 粒度的占用判定。 */
   scriptFile?: string;
   durationOptions: number[];
   durationEndpointFixed?: boolean;
   durationWarningReason?: ShotDetailProps["durationWarningReason"];
-  /** 选中的时长写进未保存修改；缺省时只读展示。 */
+  /** The selected duration is written into unsaved changes; when omitted, read-only display. / 选中的时长写进未保存修改；缺省时只读展示。 */
   onChange?: (seconds: number) => void;
-  /** 该分镜有分镜图 / 视频任务在跑；置真时禁止改时长。 */
+  /** This shot has a storyboard image / video task running; when true, changing the duration is forbidden. / 该分镜有分镜图 / 视频任务在跑；置真时禁止改时长。 */
   busy?: boolean;
 }
 
@@ -318,6 +334,7 @@ function DurationPill({
   const hintId = useId();
   const [open, setOpen] = useState(false);
 
+  // Recheck occupancy both on open and on select: a task may only start after the panel opens, and the busy prop only reflects the last render.
   // 打开时与选中时都复核占用态：面板打开后任务可能才启动，busy prop 只反映上次渲染。
   const rejectIfBusy = useCallback(() => {
     if (!busy && !durationLockedByTasks(projectName, segmentId, scriptFile)) return false;
@@ -327,6 +344,7 @@ function DurationPill({
 
   const noOptions = durationOptions.length === 0;
   const locked = noOptions || busy;
+  // When entering the locked state, actually close the panel rather than just masking it: if only visibility were derived, the old panel would reappear on its own after the task ends.
   // 转入锁定态时真正收起面板，而不只是遮蔽：只派生可见性的话，任务结束后旧面板会自行重现。
   const [prevLocked, setPrevLocked] = useState(locked);
   if (locked !== prevLocked) {
@@ -335,6 +353,7 @@ function DurationPill({
   }
 
   const isIncompatible = durationOptions.length > 0 && !durationOptions.includes(seconds);
+  // Same determination as the three hints for the project default duration (see useModelCapabilities.durationOutOfRangeReason).
   // 与项目默认时长的三种提示同一套判定（见 useModelCapabilities.durationOutOfRangeReason）。
   const incompatibleLabel = durationIncompatibleLabel(t, seconds, durationOptions, durationWarningReason?.(seconds));
   const useSlider = isContinuousIntegerRange(durationOptions) && durationOptions.length >= 5;
@@ -394,7 +413,7 @@ function DurationPill({
       }}
     >
       <PopoverTrigger render={<Button variant="outline" size="xs" />}>{content}</PopoverTrigger>
-      {/* 弹层盖在编辑栏与媒体栏的控件上，fixed 定位与对话框同属浮层 */}
+      {/* The popover covers controls of the edit column and media column; fixed positioning makes it a floating layer like dialogs / 弹层盖在编辑栏与媒体栏的控件上，fixed 定位与对话框同属浮层 */}
       <PopoverContent
         align="start"
         positionMethod="fixed"
@@ -495,6 +514,7 @@ export function ShotDetail({
   const readOnly = !onUpdatePrompt;
   const charField = charactersFieldFor(contentMode);
 
+  // The parent ShotSplitView mounts keyed by segmentId: before switching shots the leave guard asks.
   // 父级 ShotSplitView 按 segmentId 作 key 挂载：切换分镜前由离开拦截询问。
   const source = useMemo(() => shotFieldsOf(segment, contentMode), [segment, contentMode]);
   const save = useCallback(
@@ -502,6 +522,7 @@ export function ShotDetail({
       if (!onUpdatePrompt) return;
       const patch = shotPatch(value, saved, charField);
       if (Object.keys(patch).length === 0) return;
+      // Running tasks have captured the old duration: recheck once more on save, catching tasks started after the duration was changed
       // 在跑的任务已捕获旧时长：保存时再复核一次，不吃改完时长之后才启动的任务
       if (
         "duration_seconds" in patch &&
@@ -510,6 +531,7 @@ export function ShotDetail({
         throw new Error(t("duration_locked_generating"));
       }
       const refreshed = await onUpdatePrompt(segmentId, patch);
+      // Persisted but the on-screen script was not refreshed: must not count as a successful save, otherwise "Save and generate" would go on to generate with the old script
       // 已落盘但界面上的剧本没刷新：不能当作保存成功，否则「保存并生成」会接着用旧剧本生成
       if (!refreshed) throw new PartialSaveError(t("shot_saved_not_refreshed"), { saved: value });
     },
@@ -525,10 +547,13 @@ export function ShotDetail({
   });
   const { value: fields, setValue, dirty } = unit;
   const saving = unit.status === "saving";
+  // Structured -> text switch in flight: on return, this side's prompt is replaced wholesale, and edits to this side meanwhile would be overwritten.
+  // Like saving, it occupies the edit unit: the structured edit entry and all save entries are disabled together.
   // 结构化 → 文本切换在途：返回后整体替换该侧提示词，期间该侧的编辑会被覆盖。
   // 与保存中一样占用编辑单元：结构化编辑入口与各保存入口一并禁用。
   const [formSwitching, setFormSwitching] = useState<PromptSide | null>(null);
   const editBusy = saving || formSwitching !== null;
+  // When PATCH persisted but the refresh failed, savedValue is ahead of the script; regenerating or previewing is allowed only after the new source arrives.
   // PATCH 已落盘但刷新失败时 savedValue 领先于剧本；直到新 source 到达才允许再生成或预览。
   const refreshPending = !shotFieldsEqual(source, unit.savedValue);
   const saveForPreview = unit.save;
@@ -561,12 +586,14 @@ export function ShotDetail({
   const [uploadingKind, setUploadingKind] = useState<"storyboard" | "video" | null>(null);
   const [endFrameSubmitting, setEndFrameSubmitting] = useState(false);
   const handleUpload = async (kind: "storyboard" | "video", file: File) => {
+    // Only one upload per shot at a time: both cards write the same backend resource family, avoiding concurrent overwrites
     // 单个分镜同时只允许一个上传：两张卡写同一后端资源族，避免并发覆写
     if (!scriptFile || uploadingKind || restoringMedia || isResourceBusy(kind, projectName, segmentId) || isScriptFileBusy("grid", scriptFile, projectName)) return;
     setUploadingKind(kind);
     try {
       const result = await API.uploadShotMedia(projectName, scriptFile, segmentId, kind, file);
       useProjectsStore.getState().updateAssetFingerprints(result.asset_fingerprints);
+      // Reuses the version restore refresh pipeline (refreshProject etc. carried by the parent callback); when the refresh fails the parent has reported it, so do not also report success
       // 复用版本恢复的刷新管线（refreshProject 等由父级回调承载）；刷新失败时父级已提示，不同时报告成功
       const refreshed = kind === "storyboard" ? await onRestoreStoryboard?.() : await onRestoreVideo?.();
       if (refreshed === false) return;
@@ -605,6 +632,8 @@ export function ShotDetail({
 
   const handleDialogueChange = (dialogue: Dialogue[]) => handleVidUpdate({ dialogue });
 
+  // Prompt form switching. Structured -> text uses the backend-rendered result as the initial value (the frontend does not replicate rendering logic);
+  // text -> structured does no parsing and requires explicit confirmation to discard the text.
   // 提示词形态切换。结构化 → 文本以后端渲染结果为初值（前端不复刻渲染逻辑）；
   // 文本 → 结构化不做解析，须显式确认丢弃文本。
   const [pendingStructSwitch, setPendingStructSwitch] = useState<PromptSide | null>(null);
@@ -619,6 +648,8 @@ export function ShotDetail({
       const preview = await API.previewScriptItemPrompts(projectName, segmentId, scriptFile);
       const rendered = side === "image" ? preview.storyboard_image : preview.video;
       if (rendered.text === null) {
+        // When the final text cannot be rendered (the entry lacks this prompt field, or the shape is invalid), do not switch: landing in text form with an empty body
+        // would both lose the reason it is unavailable and only get rejected on save by the backend's non-empty check with an unrelated message.
         // 渲染不出最终文本（条目缺该提示词字段、或形状不合规）时不切换：以空正文落进文本形态，
         // 既丢掉了不可用的原因，也只会在保存时被后端的非空校验以无关文案拒掉。
         setFormSwitchError({ side, message: rendered.unavailable ?? t("prompt_form_switch_unavailable") });
@@ -645,6 +676,8 @@ export function ShotDetail({
   };
 
   const renderFormToggle = (side: PromptSide, isStructured: boolean) => {
+    // The initial value for structured -> text comes from saved content; switching with unsaved changes would silently discard them, so save first;
+    // text -> structured discards the text anyway, guarded by the confirmation dialog.
     // 结构化 → 文本的初值取自已保存内容，带着未保存修改切换会静默丢弃它们，须先保存；
     // 文本 → 结构化本就丢弃文本，由确认框把关。
     const needsSave = isStructured && dirty;
@@ -659,7 +692,7 @@ export function ShotDetail({
         spacing={0}
         value={[current]}
         onValueChange={(next: string[]) => {
-          // 再点当前形态会清空选择，忽略
+          // Clicking the current form again would clear the selection; ignore / 再点当前形态会清空选择，忽略
           if (next[0] === "text") void switchToTextForm(side);
           else if (next[0] === "structured") setPendingStructSwitch(side);
         }}
@@ -681,6 +714,7 @@ export function ShotDetail({
     );
   };
 
+  // Preview and generation share the saved script; unsaved changes must first be saved and refreshed successfully.
   // 预览与生成共用已保存剧本；未保存修改必须先保存并刷新成功。
   const renderPromptPreview = (side: PromptSide) => {
     if (!scriptFile) return null;
@@ -705,9 +739,11 @@ export function ShotDetail({
   const assets = segment.generated_assets;
   const hasStoryboard = !!assets?.storyboard_image;
 
+  // Dedup for display: products_in_shot has no uniqueness constraint (the same product appearing multiple times is valid), and duplicate names used directly as keys would collide
   // 展示用去重：products_in_shot 无唯一性约束（同一商品多次入画合法），重复名直接作 key 会撞
   const productNames = isAd ? Array.from(new Set((segment as AdShot).products_in_shot ?? [])) : [];
 
+  // The reference dialog's "OK" only writes changes into unsaved changes, saved together with the other fields
   // 引用弹窗的「确定」只把改动写进未保存修改，与其他字段一起保存
   const handleRefsApply = (patch: Record<string, string[]>) => {
     setValue((prev) => ({
@@ -718,6 +754,7 @@ export function ShotDetail({
     }));
   };
 
+  // The ad/short section label, voiceover copy and products belong with references to the "References" group at the top of the middle column.
   // 广告/短片的段落标签、口播与商品与引用同属中栏顶部的「引用」组。
   const refsGroup = (
     <ShotGroup>
@@ -871,6 +908,9 @@ export function ShotDetail({
     </ShotGroup>
   );
 
+  // Dialogue: ad edits the flat video_prompt.dialogue; drama edits shot-level utterances (dialogue lines + voiceover).
+  // narration offers no dialogue editing (the narration body is the voiceover, and coexisting with dialogue would be judged mixed utterance): existing dialogue is listed read-only and can be cleared.
+  // When the draft is in text form, dialogue stays in the rendered text and does not count as cleared.
   // 台词：ad 编辑扁平 video_prompt.dialogue；drama 编辑分镜级 utterances（台词 + 画外音）。
   // narration 不提供台词编辑（旁白正文即画外音，与台词并存会被判为混合发声）：已有台词只读列出，可清除。
   // 草稿是文本形态时台词留在渲染文本里，不算清除。
@@ -907,7 +947,7 @@ export function ShotDetail({
                 <p className="mb-2 text-xs text-muted-foreground">{t("detail_legacy_dialogue_hint")}</p>
                 <ul className="flex flex-col gap-1.5">
                   {legacyDialogue.map((d, i) => (
-                    // react-doctor-disable-next-line react-doctor/no-array-index-as-key -- 旧版对白只读展示、只能整体清空，不重排增删，行内无状态，条目没有 ID
+                    // react-doctor-disable-next-line react-doctor/no-array-index-as-key -- legacy dialogue is shown read-only and can only be cleared wholesale, never reordered, added or removed; no row state, and entries have no ID / 旧版对白只读展示、只能整体清空，不重排增删，行内无状态，条目没有 ID
                     <li key={i} className="flex items-start gap-2 text-sm">
                       <TruncatedText text={d.speaker} className="w-20 shrink-0 text-muted-foreground" />
                       <span className="min-w-0 flex-1 wrap-break-word whitespace-pre-wrap">{d.line}</span>
@@ -945,7 +985,7 @@ export function ShotDetail({
             </span>
           }
         >
-          {/* 旁白正文用衬线字体，与配音卡里的正文一致；字体由外层继承 */}
+          {/* The narration body uses a serif font, consistent with the body in the voiceover card; the font is inherited from the outer element / 旁白正文用衬线字体，与配音卡里的正文一致；字体由外层继承 */}
           <div className="display-serif">
             <Textarea
               id={`shot-narration-text-${segmentId}`}
@@ -978,7 +1018,7 @@ export function ShotDetail({
     </ShotGroup>
   ) : null;
 
-  // 有未保存修改时生成按钮先保存再生成；保存失败不生成
+  // With unsaved changes, the generate button saves first then generates; no generation if the save fails / 有未保存修改时生成按钮先保存再生成；保存失败不生成
   const generateLabel = dirty ? t("common:save_and_generate") : undefined;
   // the configured models, named on the Generate buttons with their estimated cost
   const storyboardModel = useStoryboardModel(projectName, segmentId, scriptFile ?? null);
@@ -1016,6 +1056,8 @@ export function ShotDetail({
   }, [segmentId]);
   const savingHint = saving ? t("common:save_status_saving") : undefined;
 
+  // Shot switching must also be locked while a reorder is in flight: ShotSplitView offsets by the current selectedIndex in the move-complete callback,
+  // and switching shots mid-flight would apply the offset to the newly selected item, making the selection jump to the wrong shot. With unsaved changes, shot switching is asked by the leave guard.
   // 重排在途也要锁定切镜：ShotSplitView 在移动完成回调里按当前 selectedIndex 偏移，
   // 在途切换分镜会让偏移作用到新选中项，选中态跳到错误分镜。有未保存修改时切镜由离开拦截询问。
   const navDisabled = !!movePending || !!structurePending;
@@ -1024,6 +1066,7 @@ export function ShotDetail({
     : structurePending
       ? t("shot_structure_pending")
       : undefined;
+  // Add/remove refreshes the whole script and changes the selected item; with unsaved changes, save or discard first
   // 增删会刷新整份剧本并改变选中项，有未保存修改时先保存或放弃
   const structureDisabled = navDisabled || dirty || saving;
   const structureDisabledHint = navDisabledHint ?? (dirty || saving ? t("shot_detail_save_first") : undefined);
@@ -1044,6 +1087,7 @@ export function ShotDetail({
       onInsert={minimalHeader ? undefined : onInsertShot}
       onRemove={onRemoveShot}
       beforeInsert={
+        // A note is only meaningful once persisted: no entry in read-only display, so a typed note is not silently discarded
         // 备注只有落库才有意义：只读展示下不给入口，免得输入的备注静默丢弃
         readOnly ? null : (
           <NotesDrawer

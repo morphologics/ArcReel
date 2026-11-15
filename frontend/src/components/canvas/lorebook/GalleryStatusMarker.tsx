@@ -9,7 +9,7 @@ const TONE: Record<Exclude<GalleryMarker, "current">, string> = {
   stale: "text-warn",
 };
 
-/** 浏览卡图片左上角的状态标记：生成中用呼吸点，资产图已是最新时不显示。 */
+/** Status marker at the top-left of the browse card image: a pulsing dot while generating, hidden when the asset sheet is up to date. / 浏览卡图片左上角的状态标记：生成中用呼吸点，资产图已是最新时不显示。 */
 export function GalleryStatusMarker({ marker, className }: { marker: GalleryMarker; className?: string }) {
   const { t } = useTranslation("assets");
   if (marker === "current") return null;

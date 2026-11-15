@@ -7,6 +7,10 @@ import type { AppLink } from "@/utils/app-link";
 import { normalizeRoute } from "@/utils/generation-mode";
 
 /**
+ * Open a link in-app: navigate to the target route; links pointing at a video unit also reuse the existing scroll-focus (selecting that unit)
+ * and request opening the unit preview, starting playback from the time point when one is given.
+ * The focus target type and playback resource type come from the current project's generation mode, so links to other projects only navigate, without focus or start-playback requests.
+ *
  * 在应用内打开链接：跳转到目标路由；指向视频单元的链接再复用既有的滚动聚焦（选中该单元），
  * 并请求打开单元预览，带了时间点时从该时间开始播放。
  * 聚焦目标类型与播放资源类型取自当前项目的生成模式，所以链接指向其他项目时只跳转，不发聚焦与起播请求。

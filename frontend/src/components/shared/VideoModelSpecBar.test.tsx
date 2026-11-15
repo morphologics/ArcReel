@@ -22,11 +22,13 @@ describe("VideoModelSpecBar", () => {
 
   it("renders the silent audio cell text when tier is none", () => {
     render(<VideoModelSpecBar durations={[5]} resolutions={[]} tier="none" />);
+    // The audio track cell and the option badge share the "Silent" text; both must render.
     // 音轨格与档位徽章共用「无声」文案，两处均须渲染。
     expect(screen.getAllByText("无声")).toHaveLength(2);
   });
 });
 
+// Key echo: assert the selected key rather than its Chinese translation, same approach as task-target.test.ts.
 // key 回显：断言选中的 key 而非其中文译文，与 task-target.test.ts 同口径。
 const t = ((key: string) => key) as unknown as TFunction;
 
@@ -38,6 +40,7 @@ function makeOmniModel(overrides: Partial<ModelInfoResponse> = {}): ModelInfoRes
     default: false,
     supported_durations: [5],
     resolutions: ["720p"],
+    // Kling v3-omni: image-to-video controllable, reference-to-video always silent; the kind of model where the two paths give different answers.
     // 可灵 v3-omni：图生可控、参考生恒无声，两条路径给出不同答案的那一类模型。
     audio_track: "controllable",
     reference_route_audio_track: "always_off",
@@ -78,6 +81,8 @@ describe("videoOptionMetaRenderer", () => {
     expect(renderer("r2v")("kling/v3-omni")).toContain("video_spec_audio_none");
   });
 
+  // Without path context (the default model on the global settings page) read the catalog slot. This also pins it to agree with lookupCatalogVideoAudio:
+  // the catalog's audio_track is the i2v slot; each place computes it once, and if one changes the other must follow.
   // 无路径上下文（全局设置页的默认模型）时读目录位。这里连带钉住它与 lookupCatalogVideoAudio
   // 同解：目录的 audio_track 就是 i2v 位，两处各算一遍，其中一处改了另一处必须跟着改。
   it("省略 defaultRoute 时按目录位取值，与 lookupCatalogVideoAudio 同解", () => {
@@ -89,6 +94,8 @@ describe("videoOptionMetaRenderer", () => {
     );
   });
 
+  // The three video dropdowns on one screen share one renderer, and a sub-item's own path must override the default layer's: otherwise in a reference-to-video project
+  // the "image-to-video" cell would be labelled silent by r2v.
   // 同屏三个视频下拉共用一个渲染器，细分项自己的路径必须压过默认层的：否则参考生项目里
   // 「图生视频」那一格会按 r2v 标成无声。
   it("细分项 key 压过 defaultRoute：参考生项目里 i2v 桶仍按图生路径标有声", () => {
@@ -100,6 +107,8 @@ describe("videoOptionMetaRenderer", () => {
   });
 
   it("图片桶的 key 不是视频路径，取值仍按 defaultRoute 判定", () => {
+    // The renderer is called by LayeredModelFields per sub-item, and image bucket keys get passed in too; t2i / i2i must not
+    // be interpreted as video paths.
     // 渲染器由 LayeredModelFields 逐细分项调用，图片桶的 key 同样会传进来；t2i / i2i 不得
     // 被当成视频路径解读。
     expect(renderer("r2v")("kling/v3-omni", "t2i")).toContain("video_spec_audio_none");

@@ -9,11 +9,11 @@ interface Props {
   onRestoreProductVersion?: () => Promise<unknown> | void;
   onRefreshProject?: () => Promise<unknown> | void;
   generatingProductNames?: Set<string>;
-  /** 只读展示（引导演示项目）：不渲染新增、生成、上传入口。 */
+  /** Read-only display (guided demo project): do not render create, generate or upload entries. / 只读展示（引导演示项目）：不渲染新增、生成、上传入口。 */
   readOnly?: boolean;
 }
 
-/** 商品画廊。商品不入全局资产库（多图列表模型），没有「从资产库选择」「加入资产库」与「并入…」。 */
+/** Product gallery. Products are not in the global asset library (multi-image list model), so there is no "Pick from asset library", "Add to asset library" or "Merge into…". / 商品画廊。商品不入全局资产库（多图列表模型），没有「从资产库选择」「加入资产库」与「并入…」。 */
 export function ProductsPage({
   projectName,
   products,

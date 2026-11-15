@@ -5,13 +5,13 @@ import { Button } from "@/components/ui/button";
 
 import type { EditUnit } from "./useEditUnit";
 
-/** 保存栏与内联提示条只用到编辑单元里与内容类型无关的部分。 */
+/** The save bar and inline notice bar only use the content-type-independent parts of the edit unit. / 保存栏与内联提示条只用到编辑单元里与内容类型无关的部分。 */
 export type EditUnitControls = Pick<
   EditUnit<unknown>,
   "dirty" | "status" | "error" | "externallyUpdated" | "externalChangeMessage" | "save" | "discard"
 >;
 
-/** 保存栏与内联提示条左侧的状态：有未保存的修改、正在保存、已保存、保存失败、外部更新。 */
+/** Status on the left of the save bar and inline notice bar: unsaved changes, saving, saved, save failed, external update. / 保存栏与内联提示条左侧的状态：有未保存的修改、正在保存、已保存、保存失败、外部更新。 */
 export function SaveStatus({ unit }: { unit: EditUnitControls }) {
   const { t } = useTranslation("common");
 
@@ -45,7 +45,7 @@ export function SaveStatus({ unit }: { unit: EditUnitControls }) {
         ) : null}
       </p>
       {unit.externallyUpdated && unit.status !== "saving" ? (
-        // 采用新内容即放弃本地修改，回到外部更新后的已保存内容
+        // Adopting new content discards local changes and returns to the externally updated saved content / 采用新内容即放弃本地修改，回到外部更新后的已保存内容
         <Button variant="link" size="sm" onClick={unit.discard}>
           {t("adopt_new_content")}
         </Button>

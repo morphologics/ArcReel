@@ -1,4 +1,30 @@
 /**
+ * Tour anchor registry.
+ *
+ * Anchor names are registered here once and both ends reference them: components set `data-onboarding={ONBOARDING_ANCHORS.x}`,
+ * step definitions write `anchor: ONBOARDING_ANCHORS.x`. Name drift is thus a typecheck error rather than a highlight silently
+ * dropped at runtime. When changing elements with `data-onboarding`, come back and check that this table and the step copy still hold.
+ *
+ * | Anchor | Step | Points to |
+ * |---|---|---|
+ * | `lobby-create-project` | Lobby 2 | Main button of the "New project" split button in the project lobby header |
+ * | `lobby-settings` | Lobby 3 | Settings icon in the project lobby header (with a warning-color dot when config is incomplete) |
+ * | `settings-providers` | Settings 4 | "Providers" entry in the settings sidebar |
+ * | `settings-agent` | Settings 5 | "ArcReel Agent" entry in the settings sidebar (not the whole "Agent" group) |
+ * | `lobby-demo-card` | Lobby 6 | Demo card in the lobby "Sample project" section during the tour (bridge into the demo workbench) |
+ * | `workbench-agent` | Workbench 7 | The Agent panel itself on the right of the demo workbench (static demo conversation) |
+ * | `workbench-overview` | Workbench 8 | Story settings area of the project overview |
+ * | `workbench-lorebook` | Workbench 9 | Grid container of the character gallery |
+ * | `workbench-timeline` | Workbench 10 | Body of the episode page shot view (step route carries `?view=board`) |
+ * | `workbench-export` | Workbench 11 | Export button in the header |
+ *
+ * The five workbench steps land on the demo project's read-only workbench (see `demo-project.ts`). Anchors for overview, character gallery, shots and export
+ * are on the real workbench components, not demo-only copies: demo and real projects share one implementation, so the anchors
+ * hold for both. `workbench-agent` is the exception: the real Agent panel is a write path and is not mounted in the demo, so the anchor
+ * is on the root of the demo-only `DemoAssistantPanel`, which fills the Agent panel.
+ *
+ * Lobby step 1 and the closing step are centered popovers without anchors.
+ *
  * 引导锚点注册表。
  *
  * 锚点名在这里登记一次，两头都从这里引用：组件挂 `data-onboarding={ONBOARDING_ANCHORS.x}`，

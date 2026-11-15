@@ -22,20 +22,23 @@ import { MEDIA_LABEL_KEY } from "./providerModelDisplay";
 interface Props {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  /** 内置供应商 ID，或自定义供应商的 `custom-<id>`。 */
+  /** Built-in provider ID, or `custom-<id>` for a custom provider. / 内置供应商 ID，或自定义供应商的 `custom-<id>`。 */
   providerId: string;
   providerName: string;
-  /** 内置供应商：「未启用的模型」一组只有内置供应商有，选中即启用。 */
+  /** Built-in provider: only built-in providers have the "Disabled models" group; selecting one enables it. / 内置供应商：「未启用的模型」一组只有内置供应商有，选中即启用。 */
   builtin: boolean;
-  /** 供应商当前的模型列表：取「未启用的模型」，并把已添加的目录条目标出来。 */
+  /** The provider's current model list: take "Disabled models" and mark catalog entries already added. / 供应商当前的模型列表：取「未启用的模型」，并把已添加的目录条目标出来。 */
   models: ProviderModelItem[];
-  /** 添加或启用成功后调用，带新模型的列表行。 */
+  /** Called after a successful add or enable, with the new model's list row. / 添加或启用成功后调用，带新模型的列表行。 */
   onAdded: (model: ProviderModelItem) => void;
-  /** 「目录中找不到？手动填写」：带当前搜索词；不给时不显示这一入口。 */
+  /** "Not in the catalog? Enter manually": carries the current search term; the entry is hidden when not given. / 「目录中找不到？手动填写」：带当前搜索词；不给时不显示这一入口。 */
   onManualEntry?: (query: string) => void;
 }
 
 /**
+ * "Add model" dialog: search model names or type a model ID, filterable by media type. Groups are "Disabled models" (built-in providers only, selecting enables),
+ * "Add by model ID" and "Model catalog". Model ID-to-name mapping rules are enforced by the server (docs/adr/0105).
+ *
  * 「添加模型」对话框：搜索模型名称或输入模型 ID，可按媒体类型筛选。分组为「未启用的模型」（仅内置供应商，选中即启用）、
  * 「按模型 ID 添加」与「模型目录」。模型 ID 与名字的对应规则由服务端执行（docs/adr/0105）。
  */
@@ -167,7 +170,7 @@ function AddModelBody({
                   <CommandItem
                     key={`${entry.maker}/${entry.name}/${entry.media_type}`}
                     value={`entry:${entry.maker}/${entry.name}/${entry.media_type}`}
-                    // 结果就绪前，上一次的结果仍显示但不可选
+                    // Until results are ready, the previous results still show but aren't selectable / 结果就绪前，上一次的结果仍显示但不可选
                     disabled={busy || already || !search.settled}
                     onSelect={() =>
                       add({
@@ -185,7 +188,7 @@ function AddModelBody({
             </CommandGroup>
           )}
       </CommandList>
-      {/* 列表只放选项（listbox 的子元素要求），目录读取失败的说明与重试放在列表之外 */}
+      {/* The list holds only options (listbox children requirement); the catalog read failure note and retry sit outside the list / 列表只放选项（listbox 的子元素要求），目录读取失败的说明与重试放在列表之外 */}
       {search.error !== null && (
         <div role="alert" className="flex flex-col items-start gap-2 border-t border-border px-3 py-3 text-sm">
           <p>{t("catalog_picker_load_failed")}</p>

@@ -5,6 +5,10 @@ import { memoryLocation } from "wouter/memory-location";
 import { LoginPage } from "@/components/pages/LoginPage";
 import { useAuthStore } from "@/stores/auth-store";
 
+// wouter's useLocation/useSearch hooks expose only pathname / search, not hash,
+// so a render probe cannot assert #fragment. Use memoryLocation's record history instead: navigate's
+// argument is pushed into history verbatim, so we can assert the full target navigated to after login
+// (including query and hash), locking in hash preservation along the return path.
 // wouter 的 useLocation/useSearch 钩子只暴露 pathname / search，不暴露 hash，
 // 无法用渲染探针断言 #fragment。改用 memoryLocation 的 record 历史：navigate
 // 入参被逐字 push 进 history，因此可直接断言登录成功后导航到的完整目标
@@ -19,6 +23,8 @@ function renderLoginAt(path: string) {
   return { ...view, history: memory.history };
 }
 
+// Fill and submit the form. Input ids come from LoginPage (login-username / login-password);
+// selecting by id avoids depending on i18n-resolved labels / button text.
 // 填表并提交。input id 来自 LoginPage（login-username / login-password），
 // 用 id 选择避免依赖 i18n 解析后的 label / 按钮文案。
 function submitLogin(container: HTMLElement) {
@@ -48,6 +54,8 @@ describe("LoginPage returnTo consumption", () => {
     );
   });
 
+  // Lock in the branch that "consumes" ?from after login: read from -> validate with safeReturnPath -> return.
+  // Prevents a later change back to a fixed redirect to /app/projects slipping past as a main-flow regression.
   // 锁住登录成功后对 ?from 的「消费」分支：读取 from → safeReturnPath 校验 → 回跳。
   // 防止以后误改回固定跳转 /app/projects 而主流程回归漏过。
   it("navigates to a valid internal ?from path after successful login", async () => {
@@ -58,6 +66,8 @@ describe("LoginPage returnTo consumption", () => {
     });
   });
 
+  // Lock in hash survival along the return path: from carries #shot-3, and the navigation target after login must keep that anchor.
+  // If the source (AuthGuard / 401 interception / safeReturnPath) drops the hash, this assertion fails.
   // 锁住 hash 在回跳链路中存活：from 携带 #shot-3，登录后导航目标须保留该锚点。
   // 若源码（AuthGuard / 401 拦截 / safeReturnPath）丢掉 hash，此断言会失败。
   it("preserves the URL hash in the return path", async () => {

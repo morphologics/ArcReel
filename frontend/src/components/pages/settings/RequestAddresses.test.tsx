@@ -48,6 +48,7 @@ describe("RequestAddresses", () => {
     expect(screen.getByText("查询进度")).toBeInTheDocument();
     expect(pathButton("/v1/videos/veo-3")).toBeInTheDocument();
     expect(pathButton("/v1/videos/{{ task_id }}")).toBeInTheDocument();
+    // The endpoint stripped the version segment; the greyed part is the normalized API address
     // 端点剥掉了版本段，灰显部分是归一化后的接口地址
     expect(screen.getAllByText("https://relay.test/api")).toHaveLength(2);
   });
@@ -63,6 +64,7 @@ describe("RequestAddresses", () => {
     await user.type(input, "api/tasks/{{{{ task_id }}{Enter}");
 
     expect(overrides()).toEqual({ poll: "/api/tasks/{{ task_id }}" });
+    // Requests with changes are relative to the raw API address and no longer strip the version segment
     // 有修改的请求相对原样接口地址，不再剥版本段
     expect(screen.getByText("https://relay.test/api/v1")).toBeInTheDocument();
     expect(screen.getByText("默认：/v1/videos/{{ task_id }}")).toBeInTheDocument();

@@ -20,6 +20,7 @@ afterAll(async () => {
   await i18n.changeLanguage("zh");
 });
 
+// Entries are referred to by their current position in this episode; the order is deliberately offset from ID numbers.
 // 条目按本集里的当前位置称呼，排列故意与 ID 序号错开。
 const SCRIPTS = {
   "episode_1.json": { episode: 1, segments: [{ segment_id: "E1S02" }, { segment_id: "E1S01" }] },
@@ -103,6 +104,7 @@ describe("project-changes utils", () => {
   });
 
   it("renders the label from label_key rather than the payload's default-language label", () => {
+    // The backend label is only a default-language rendering; UI text follows stable keys + params.
     // 后端 label 只是默认语言渲染结果，界面文案以稳定 key + 参数为准。
     const [group] = groupChangesByType([
       makeChange({
@@ -198,6 +200,7 @@ describe("project-changes utils", () => {
   });
 
   it("labels each skeleton kind's group title and item nouns consistently", () => {
+    // The title nouns of the four skeletons' created groups must match the entry nouns: three shot skeletons / video units.
     // 四种骨架 created 分组的标题名词须与条目名词一致：三种分镜骨架 / 视频单元。
     const cases: Array<{
       entityType: ProjectChange["entity_type"];
@@ -227,6 +230,7 @@ describe("project-changes utils", () => {
           }),
         ),
       );
+      // Group titles use the entity_type noun; without a ledger the entry list uses an unnamed episode and the in-episode ID.
       // 分组标题用 entity_type 名词，条目名单在缺账本时用未命名集与集内 ID。
       expect(formatGroupedNotificationText(group, t)).toBe(
         `新增了 2 个${noun}：未命名集 · X01、未命名集 · X02`,
@@ -235,6 +239,8 @@ describe("project-changes utils", () => {
   });
 
   it("labels reference_unit notifications as 视频单元, not the 内容 fallback", () => {
+    // The entity_type of the reference-to-video task completion event must match the frontend union type's "reference_unit",
+    // so the group title shows "Video unit" rather than the entity-noun fallback "Content".
     // 参考生视频任务完成事件的 entity_type 必须与前端联合类型的 "reference_unit"
     // 一致，分组标题才显示「视频单元」而非 entity 名词兜底的「内容」。
     const [group] = groupChangesByType(
@@ -298,6 +304,8 @@ describe("project-changes utils", () => {
     expect(formatGroupedNotificationText(groupedTts, t, [], SCRIPTS)).not.toContain("更新了");
   });
 
+  // With a missing key i18next falls back to the bare key, which also has no Chinese, so besides "no Chinese leftovers" also assert two representative
+  // exact texts (single-item sentence + group sentence); only then is a missing key caught by this guard.
   // 缺 key 时 i18next 回落到裸 key，同样不含中文，所以「无中文残留」之外还断言两条代表性
   // 全等文案（单条句式 + 分组句式），缺 key 才会被这条护栏抓住。
   it.each([

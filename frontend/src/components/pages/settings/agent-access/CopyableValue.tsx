@@ -10,17 +10,20 @@ import { copyText } from "@/utils/clipboard";
 const COPIED_RESET_MS = 2000;
 
 interface CopyableValueProps {
-  /** 值上方的可见标签；不传时由 copyLabel 单独说明按钮。 */
+  /** Visible label above the value; when not given, copyLabel describes the button on its own. / 值上方的可见标签；不传时由 copyLabel 单独说明按钮。 */
   label?: string;
   value: string;
-  /** 复制按钮的可访问名称，写明复制的对象，如「复制安装命令」。 */
+  /** Accessible name of the copy button, stating what is copied, e.g. "Copy install command". / 复制按钮的可访问名称，写明复制的对象，如「复制安装命令」。 */
   copyLabel: string;
-  /** 长文本（如提示词）按行折行显示；默认单行、在词内断开。 */
+  /** Long text (e.g. prompts) wraps by line; by default single-line, breaking within words. / 长文本（如提示词）按行折行显示；默认单行、在词内断开。 */
   multiline?: boolean;
   className?: string;
 }
 
 /**
+ * A read-only command, address or token with a copy button beside it.
+ * After a successful copy the button briefly shows "Copied" and announces it via status; when the clipboard is unavailable an error toast pops up, and the content stays selectable for manual copying.
+ *
  * 只读的命令、地址或令牌，旁边一个复制按钮。
  * 复制成功后按钮短暂显示「已复制」并经 status 播报；剪贴板不可用时弹错误提示，内容保持可选中以便手动复制。
  */
@@ -66,6 +69,7 @@ export function CopyableValue({ label, value, copyLabel, multiline = false, clas
           variant="ghost"
           size="sm"
           onClick={handleCopy}
+          // Drop aria-label while showing "Copied", so the accessible name matches the visible text (WCAG 2.5.3)
           // 「已复制」时去掉 aria-label，让可访问名称与可见文字一致（WCAG 2.5.3）
           aria-label={copied ? undefined : copyLabel}
           className="shrink-0"

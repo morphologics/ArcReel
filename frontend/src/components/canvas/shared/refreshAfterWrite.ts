@@ -3,6 +3,15 @@ import { useAppStore } from "@/stores/app-store";
 import { useProjectsStore, type RefreshProjectResult } from "@/stores/projects-store";
 
 /**
+ * Refresh project data after a successful write (instant actions and edit unit saves).
+ *
+ * The write is already committed; refreshing is a separate follow-up step: `refreshProject` reports failure as a settled value rather than rejecting.
+ * Without a notice the UI stays on stale data, looking as if the write did not take effect, and creators tend to repeat the action.
+ * `cancelled` means the project was switched away; stay silent. The settled value is returned as is, so callers can decide whether follow-up actions are still reliable.
+ *
+ * Writes that already have a dedicated notice may skip this function and consume `refreshProject`'s settled value with their own notice:
+ * shot saves (via `PartialSaveError`), and timeline shot add/remove, rename, merge and delete.
+ *
  * 写入（即时动作与编辑单元的保存）成功后刷新项目数据。
  *
  * 写入已提交，刷新是独立的后续步骤：`refreshProject` 以结算值报告失败而不 reject。

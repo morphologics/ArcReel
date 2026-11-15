@@ -25,24 +25,25 @@ const DEFAULT_EXPIRES_DAYS = "30";
 interface CreateAccessTokenDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  /** 创建成功后立即回调（完整令牌仍在对话框里展示），调用方据此更新列表。 */
+  /** Called right after a successful create (the full token is still shown in the dialog); the caller updates the list with it. / 创建成功后立即回调（完整令牌仍在对话框里展示），调用方据此更新列表。 */
   onCreated?: (token: ApiKeyInfo) => void;
 }
 
-/** 创建访问令牌：填名称与有效期，创建成功后在同一对话框里一次性展示完整令牌。「外部 Agent 接入」与「访问令牌」共用。 */
+/** Create an access token: fill in name and expiry; after success the full token is shown once in the same dialog. Shared by "External Agent access" and "Access tokens". / 创建访问令牌：填名称与有效期，创建成功后在同一对话框里一次性展示完整令牌。「外部 Agent 接入」与「访问令牌」共用。 */
 export function CreateAccessTokenDialog({ open, onOpenChange, onCreated }: CreateAccessTokenDialogProps) {
   const [creating, setCreating] = useState(false);
   return (
     <Dialog
       open={open}
       onOpenChange={(next) => {
+        // Ignore Esc and overlay clicks while the request is in flight, so a token isn't issued without being shown
         // 请求在途时不响应 Esc 与遮罩点击，避免令牌已签发却没能展示
         if (!next && creating) return;
         onOpenChange(next);
       }}
     >
       <DialogContent showCloseButton={!creating}>
-        {/* 每次打开都从空表单开始：内容只在打开期间挂载 */}
+        {/* Every open starts from an empty form: content is only mounted while open / 每次打开都从空表单开始：内容只在打开期间挂载 */}
         <CreateAccessTokenForm creating={creating} setCreating={setCreating} onCreated={onCreated} />
       </DialogContent>
     </Dialog>
@@ -107,7 +108,7 @@ function CreateAccessTokenForm({
           <div className="flex flex-col gap-4">
             <div className="flex items-start gap-2 rounded-lg border border-warn/30 bg-warn/10 p-3">
               <AlertTriangle aria-hidden className="mt-0.5 size-4 shrink-0 text-warn" />
-              {/* 琥珀浅底上 muted-foreground 达不到 4.5:1，提示文字用中间档 */}
+              {/* muted-foreground on the light amber background doesn't reach 4.5:1, so the hint text uses a middle shade / 琥珀浅底上 muted-foreground 达不到 4.5:1，提示文字用中间档 */}
               <p className="text-sm text-subtle-foreground">{t("dashboard:access_token_created_warning")}</p>
             </div>
             <CopyableValue

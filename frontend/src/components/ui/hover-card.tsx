@@ -30,10 +30,10 @@ function HoverCardContent({
         alignOffset={alignOffset}
         side={side}
         sideOffset={sideOffset}
-        // 层级用仓库的弹层 token，与 Popover、Tooltip 同层
+        // Layering uses the repo's overlay token, same layer as Popover and Tooltip / 层级用仓库的弹层 token，与 Popover、Tooltip 同层
         className="isolate z-overlay"
       >
-        {/* 弹层阴影统一用 shadow-overlay */}
+        {/* Overlay shadow is unified as shadow-overlay / 弹层阴影统一用 shadow-overlay */}
         <PreviewCardPrimitive.Popup
           data-slot="hover-card-content"
           className={cn(

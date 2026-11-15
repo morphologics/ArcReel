@@ -3,6 +3,9 @@ import { useTranslation } from "react-i18next";
 import { Textarea } from "@/components/ui/textarea";
 
 /**
+ * JSON snippet editor. The text is the source of truth while editing, and is only written back to the definition when it parses;
+ * otherwise the user's half-typed intermediate state would be reformatted over and over, making input impossible.
+ *
  * JSON 片段编辑器。文本是编辑期的真相源，只有解析成功才写回定义——
  * 否则用户敲到一半的中间态会被反复重排，无法输入。
  */

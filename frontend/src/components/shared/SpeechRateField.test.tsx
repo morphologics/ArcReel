@@ -17,6 +17,7 @@ describe("SpeechRateField", () => {
   });
 
   it("stays unit-neutral and flags the pending unit while the language is unknown", () => {
+    // Giving a concrete unit while the language is undecided is a false promise: a number entered as "characters/sec" would be read as "words/sec" once the language is detected as en / vi
     // 语言未定时给出具体单位是错误承诺：按「字/秒」填的数会在语言检测为 en / vi 后被按「词/秒」解释
     const { rerender } = render(<SpeechRateField value={null} onChange={() => {}} sourceLanguage={null} />);
     expect(screen.getByText("字或词/秒")).toBeInTheDocument();
@@ -43,6 +44,7 @@ describe("SpeechRateField", () => {
   });
 
   it("keeps native constraints no stricter than isValidSpeechRate", () => {
+    // If min / step were stricter than isValidSpeechRate, the same value would show both custom-valid and browser :invalid
     // min / step 若比 isValidSpeechRate 严，同一个值会同时显示自定义有效与浏览器 :invalid
     render(<SpeechRateField value={0.05} onChange={() => {}} />);
     const input = screen.getByRole("spinbutton");
@@ -62,6 +64,7 @@ describe("SpeechRateField", () => {
   });
 
   it("rejects rates below the lower bound", () => {
+    // Same yardstick as the backend's is_valid_speech_rate: a rate below the lower bound would overflow the downstream duration conversion
     // 与后端 is_valid_speech_rate 同一把尺：下界之下的语速会让下游时长换算溢出
     expect(isValidSpeechRate(0.001)).toBe(true);
     expect(isValidSpeechRate(0.0009)).toBe(false);

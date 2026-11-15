@@ -9,7 +9,7 @@ import { useAppStore } from "@/stores/app-store";
 import { useAssistantStore } from "@/stores/assistant-store";
 import { AGENT_PANEL_ID, AGENT_PANEL_TOGGLE_ID } from "./workspace-layout";
 
-/** Agent 需要关注的状态：等待回答优先于运行中。 */
+/** States of the Agent that need attention: waiting for an answer takes priority over running. / Agent 需要关注的状态：等待回答优先于运行中。 */
 function useAgentAttention(): "waiting" | "running" | null {
   const waiting = useAssistantStore((s) => s.pendingQuestion !== null);
   const running = useAssistantStore((s) => s.sessionStatus === "running");
@@ -19,6 +19,9 @@ function useAgentAttention(): "waiting" | "running" | null {
 }
 
 /**
+ * The "Agent" toggle always at the right end of the top bar: pressed means the panel is expanded. When the panel is collapsed, a status dot on the toggle shows
+ * the Agent is running (breathing dot) or waiting for your answer (amber dot). The demo workspace's panel cannot be collapsed, so no toggle is shown.
+ *
  * 顶栏右端常驻的「Agent」开关：按下态表示面板展开。面板收起时，开关上的状态点提示
  * Agent 正在运行（呼吸点）或在等你回答（琥珀点）。演示工作台的面板不可收起，不显示开关。
  */
@@ -57,7 +60,7 @@ export function AgentPanelToggle() {
             className={cn("size-2 rounded-full", status === "waiting" ? "bg-warn" : "animate-breath bg-primary")}
           />
         )}
-        {/* 状态只作为开关的描述朗读，不并入「Agent」这个名称：aria-describedby 可以引用 hidden 的元素 */}
+        {/* The state is only read out as the toggle's description, not merged into the name "Agent": aria-describedby can reference hidden elements / 状态只作为开关的描述朗读，不并入「Agent」这个名称：aria-describedby 可以引用 hidden 的元素 */}
         {statusText && (
           <span id={statusId} hidden>
             {statusText}

@@ -2,6 +2,8 @@ import type { Page } from "@playwright/test";
 import { defineRegionScenarios } from "../support/scenarios.ts";
 import { expect, type ApiOverrides } from "../support/test.ts";
 
+// "Market" section: full-width tier, top tabs (Browse | My shares | Settings). Browse is an entry grid and a filter row;
+// Settings holds the sortable market source list, the GitHub access proxy (bottom save bar) and official services.
 // 「市场」分区：铺满档，顶部 Tab（浏览 | 我的分享 | 设置）。浏览是条目网格与筛选行，
 // 设置里是可排序的市场源列表、GitHub 访问代理（底部保存栏）与官方服务。
 
@@ -36,6 +38,7 @@ function source(id: number, overrides: Record<string, unknown> = {}) {
   };
 }
 
+// Stress variant: 8 market sources, including a refresh failure (very long error), an invalid index and a disabled source.
 // 压力变体：8 个市场源，含刷新失败（错误信息很长）、索引无效与停用的源。
 const SOURCES = [
   source(1),
@@ -92,6 +95,7 @@ const ENTRIES = [1, 2, 3, 4, 6].flatMap((sourceId) => Array.from({ length: 6 }, 
 
 const OFFICIAL_SEEN = { available: true, enabled: true, notice_seen: true, instance_id: "8f14e45f-ceea-467a-9575-1c3a4d5e6f70" };
 
+// Auto refresh on opening the market page and official service aggregation both hit the internet; every scenario replaces them.
 // 打开市场页时的自动刷新与官方服务聚合都访问外网，所有场景都替换。
 const OFFLINE: ApiOverrides = {
   "POST /api/v1/market/refresh?stale_only=true": { status: 200, body: { sources: [] } },
@@ -164,6 +168,7 @@ const DEFINITION = {
   status_map: { succeed: "succeeded", failed: "failed" },
 };
 
+// Install dialog: an entry from a third-party source, long definition, not installed yet.
 // 安装弹窗：第三方源的条目，定义长、尚未安装。
 const INSTALL: ApiOverrides = {
   ...MANY,
@@ -225,6 +230,7 @@ defineRegionScenarios("市场", [
       await expect(page.getByRole("article")).toHaveCount(ENTRIES.length);
     },
     act: async (page) => {
+      // In a wide window the content column is left-aligned: the first card's left edge lines up with the tab bar's left edge
       // 宽窗口下内容列靠左：第一张卡片的左缘与 Tab 栏的左缘对齐
       const tabs = await page.getByRole("tablist").boundingBox();
       const card = await page.getByRole("article").first().boundingBox();
@@ -305,6 +311,8 @@ defineRegionScenarios("市场", [
       await handle.focus();
       await page.keyboard.press("Space");
       await expect(page.getByText(`已拿起「${LONG_SOURCE} 2」，位于第 2 项，共 8 项。`)).toBeAttached();
+      // After pick-up, dnd-kit responds to arrow keys only once measuring finishes; earlier key presses are dropped; press until the move is announced.
+      // The target is item 1; pressing up again when already first does not move further, so re-pressing is safe.
       // dnd-kit 拿起后要等测量完成才响应方向键，之前的按键会被丢掉；按到播报移动为止。
       // 目标是第 1 项，已在最前时再按上移不会继续移动，重按是安全的。
       await expect(async () => {

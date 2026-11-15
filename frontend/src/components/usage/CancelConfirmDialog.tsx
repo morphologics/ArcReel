@@ -11,13 +11,20 @@ interface CancelConfirmDialogProps {
   request: CancelRequest;
   cancelling: boolean;
   failed: boolean;
-  /** 服务端拒绝取消的已本地化原因；为空时显示通用失败文案。 */
+  /** Localized reason the server refused to cancel; when empty, generic failure copy is shown. / 服务端拒绝取消的已本地化原因；为空时显示通用失败文案。 */
   failureDetail?: string | null;
   onConfirm: () => Promise<void>;
   onDismiss: () => void;
 }
 
 /**
+ * Cancel confirmation. An inline `alertdialog`: it belongs to one operation in its list, and popping it to the screen center would make the user
+ * lose the context of "which row is being cancelled".
+ *
+ * Focus follows the inline confirmation convention (docs/standards/frontend.md): on open it lands on "Back"; while the request is in flight both buttons
+ * are disabled, and after a failed request re-enables them focus returns to "Back"; "Back" or Esc exits the confirmation and returns focus to the trigger; focus leaving the confirmation area
+ * also exits, leaving focus where the user went. After a successful confirmation the caller unmounts it.
+ *
  * 取消确认。行内 `alertdialog`：它属于所在列表的一次操作，弹到屏幕中央会让用户
  * 失去「取消的是哪一行」的上下文。
  *
@@ -38,6 +45,7 @@ export function CancelConfirmDialog({
   const backRef = useRef<HTMLButtonElement>(null);
   const triggerRef = useRef<HTMLElement | null>(null);
 
+  // Until the preview request returns, focus is still on the button that triggered cancel; record it on mount and return it on exit
   // 预览请求返回前焦点仍在触发取消的按钮上，挂载时记下它，退出确认时交还
   useEffect(() => {
     const active = document.activeElement;
@@ -51,7 +59,7 @@ export function CancelConfirmDialog({
   const dismissedRef = useRef(false);
 
   const dismiss = (returnFocus: boolean) => {
-    // 交还焦点会触发区域的 blur，已退出时不再重复退出
+    // Returning focus triggers the area's blur; do not exit again once already exited / 交还焦点会触发区域的 blur，已退出时不再重复退出
     if (cancelling || dismissedRef.current) return;
     dismissedRef.current = true;
     const trigger = triggerRef.current;
@@ -59,7 +67,7 @@ export function CancelConfirmDialog({
     if (returnFocus && trigger?.isConnected) trigger.focus();
   };
   return (
-    // react-doctor-disable-next-line react-doctor/prefer-html-dialog -- 行内非模态确认，留在所在列表里不进顶层；原生 <dialog> 的价值在 showModal 的模态行为，这里不需要
+    // react-doctor-disable-next-line react-doctor/prefer-html-dialog -- Inline non-modal confirmation that stays in its list, not in the top layer; native <dialog>'s value is showModal's modal behavior, not needed here / 行内非模态确认，留在所在列表里不进顶层；原生 <dialog> 的价值在 showModal 的模态行为，这里不需要
     <div
       role="alertdialog"
       aria-label={t("cancel_confirm_aria")}

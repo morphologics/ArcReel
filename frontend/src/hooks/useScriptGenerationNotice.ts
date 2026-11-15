@@ -5,6 +5,13 @@ import { useAppStore } from "@/stores/app-store";
 import type { ContentBlock, Turn } from "@/types";
 
 /**
+ * Script generation is minute-scale LLM text generation; progress feedback must be given as soon as the Agent call starts so users don't think
+ * it is stuck. This hook listens to the Agent session stream and, when a script-generation tool call starts, pops a transient toast
+ * (a process hint, no persistent review needed) saying the step takes a while.
+ *
+ * Tool names are the SDK-registered fully qualified name mcp__arcreel__<id>, parsed the same way as ToolCallWithResult.
+ * Covers only script/script-plan text generation tools; long-running tools such as media generation already have the task queue HUD.
+ *
  * 剧本生成是分钟级的 LLM 文本生成，Agent 调用开始时必须立即提供进度反馈，避免用户误以为
  * 卡死。本 hook 监听 Agent 会话流，识别到剧本生成类工具调用开始时弹一条瞬时 toast
  * （过程性提示，无需持久回看），告知该步骤耗时较长。
@@ -28,6 +35,7 @@ function collectBlocks(turns: Turn[], draftTurn: Turn | null): ContentBlock[] {
 
 export function useScriptGenerationNotice(): void {
   const { t } = useTranslation("dashboard");
+  // Expose the latest t via ref so switching language doesn't rebuild the effect and lose the already-shown records.
   // 经 ref 暴露最新 t，避免切语言重建 effect、丢失已弹记录。
   const tRef = useRef(t);
   useEffect(() => {
@@ -38,17 +46,25 @@ export function useScriptGenerationNotice(): void {
   const draftTurn = useAssistantStore((s) => s.draftTurn);
   const sessionStatus = useAssistantStore((s) => s.sessionStatus);
 
+  // tool_use ids already notified. Persists across session/project switches (StudioLayout stays mounted),
+  // so switching away and back to the same in-progress call doesn't re-notify; an SSE reconnect re-delivering the same draft doesn't either.
   // 已弹过提示的 tool_use id。跨会话/项目切换持久（StudioLayout 常驻），
   // 切走再回同一进行中调用不重弹；SSE 重连重投同一 draft 也不重弹。
   const notifiedRef = useRef<Set<string>>(new Set());
 
   useEffect(() => {
+    // Show the "takes a while" hint only while the session is running: when a completed/interrupted session is reloaded, its historical tool_use or
+    // leftover draft may still lack a result; the running-state gate keeps such stale state out.
     // 仅在会话运行中弹"耗时"提示：已完成/已中断会话重新载入时，其历史 tool_use 或
     // 残留 draft 可能仍缺 result，运行态门槛把这类陈旧状态挡在外面。
     if (sessionStatus !== "running") return;
 
     const blocks = collectBlocks(turns, draftTurn);
 
+    // The main completion signal is the tool_use block itself carrying result/is_error: the frontend projection layer (entry-projection)
+    // backfills the paired tool_result entry into the originating tool_use block (same as ToolCallWithResult's rendering),
+    // so completed calls no longer have a standalone tool_result block. Scanning only tool_result blocks would misjudge replayed historical completed calls
+    // as in progress, re-popping the "takes a while" hint when reloading a session stopped at AskUserQuestion (status still running).
     // 完成判定的主信号是 tool_use 块自身带 result/is_error：前端投影层（entry-projection）
     // 把配对的 tool_result 条目回填进发起调用的 tool_use 块（与 ToolCallWithResult 的渲染口径
     // 一致），已完成调用不会再有独立 tool_result 块。仅扫描 tool_result 块会把回放的历史完成调用

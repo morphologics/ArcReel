@@ -5,12 +5,18 @@ import type { ProblemView } from "./problem-views";
 
 interface Props {
   problems: ProblemView[];
-  /** 列表的无障碍名，通常绑到上方的小标题。 */
+  /** Accessible name of the list, usually bound to the subtitle above. / 列表的无障碍名，通常绑到上方的小标题。 */
   labelledBy?: string;
   className?: string;
 }
 
 /**
+ * List of individual problems. Each row is stated in the fixed order "where · what reason · next step"; rows with server raw text (data corruption
+ * blockers, batch endpoint conclusions) put the raw text into `<details>`: first a readable sentence, and troubleshooting details appear only when expanded.
+ *
+ * This only states; it offers no action buttons: actions belong to steps, presented by the step itself from the backend's `next_action`.
+ * Problem rows growing buttons would mean the UI inferring the next step for the user, which is exactly what this panel avoids.
+ *
  * 逐条问题的清单。每行按「在哪 · 什么原因 · 下一步」固定顺序陈述；带服务端原文的（数据损坏的
  * 阻断、批量端点的结论）把原文收进 `<details>`——先给一句能读懂的，排障细节要展开才出现。
  *

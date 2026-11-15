@@ -84,8 +84,10 @@ describe("EndpointsSection", () => {
 
     await pickFile(new File([JSON.stringify(workflow)], "workflow_api.json", { type: "application/json" }));
 
+    // The raw workflow has no kind and it is what gets sent for validation; the returned wrapped result takes over as the definition to save.
     // 原始 workflow 没有 kind，送去校验的是它本身；回来的包装结果接手成为待保存的定义。
     expect(await screen.findByText(/已包装成 ComfyUI 端点定义/)).toBeInTheDocument();
+    // The editor's debounced validation of the default definition may happen first, so call order is undefined; only confirm the raw workflow was sent for checking.
     // 编辑区对默认定义的防抖校验可能先于它发生，调用次序不定，只确认原始 workflow 曾被送检。
     expect(validate.mock.calls.map(([definition]) => definition)).toContainEqual(workflow);
     expect(screen.getByText(/workflow_api\.json · ComfyUI workflow · v1\.0\.0/)).toBeInTheDocument();
@@ -108,6 +110,7 @@ describe("EndpointsSection", () => {
   });
 
   it("leaves built-in image endpoints out", async () => {
+    // This section is the management surface for custom endpoints; built-in image endpoints have nothing to do here.
     // 本节是自定义端点的管理面；内置图像端点在这里没有可做的事。
     renderSection();
     const list = await screen.findByRole("navigation");
@@ -193,6 +196,7 @@ describe("EndpointsSection", () => {
       }),
     );
     renderSection("section=endpoints&endpoint=ce-7");
+    // The diagnostics card waits out the 400ms validation debounce before requesting; the default 1s wait is not enough under parallel load.
     // 诊断卡要等 400ms 校验防抖再发请求，默认 1s 等待在并行负载下不够。
     expect(
       await screen.findByText("不支持递归下降语法", undefined, { timeout: 4000 }),
@@ -398,6 +402,7 @@ describe("EndpointsSection", () => {
       expect.stringContaining("backup-video"),
     ]);
     expect(within(rows[1]).getByText("Backup relay")).toBeInTheDocument();
+    // The secondary column's second line shows the same data
     // 二级栏第二行写的是同一份数据
     expect(screen.getAllByRole("link", { name: /Example Video API.*2 个模型使用/ })[0]).toBeInTheDocument();
 

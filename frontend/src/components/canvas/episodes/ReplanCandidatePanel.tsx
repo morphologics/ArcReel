@@ -26,7 +26,7 @@ interface Props {
   view: EpisodesView;
   replan: ReplanSummary;
   episodes: EpisodeMeta[];
-  /** 方案还在逐窗生成。 */
+  /** The plan is still being generated window by window. / 方案还在逐窗生成。 */
   generating: boolean;
   onChanged: () => void;
 }
@@ -34,11 +34,15 @@ interface Props {
 interface PendingAdoption {
   impact: ReplanAdoptionImpact & { text: string; delete_text: string };
   deleteRetired: boolean;
-  /** 确认时服务端的后果已变，这是更新后的后果。 */
+  /** The server-side consequences changed at confirm time; these are the updated consequences. / 确认时服务端的后果已变，这是更新后的后果。 */
   changed: boolean;
 }
 
 /**
+ * "New episode plan" in the "Episodes" view plan pane: the candidate produced by replanning. While generating, shows progress and stop; when done, shows a change summary,
+ * per-episode changes and "Discard new plan" / "Adopt new plan". When stopped midway, explains where and why it stopped; you can continue generating, adopt the finished part
+ * or discard; the summary names episodes beyond the plan's range that are also replaced. The episode ledger is unchanged until adopted.
+ *
  * 「分集」视图方案栏的「新的分集方案」：重新规划生成的候选。生成中显示进度与停止；生成完显示变化摘要、
  * 逐集变化与「放弃新方案」「采纳新方案」。中途停止时说明停在哪里、为什么停，可以继续生成、采纳已完成的部分
  * 或放弃，摘要点名超出方案范围、同样被替换的集。采纳前分集账本不变。
@@ -317,7 +321,7 @@ export function ReplanCandidatePanel({ projectName, view, replan, episodes, gene
   );
 }
 
-/** 原文旁并排色条的图例：左侧现有分集、右侧新方案、琥珀色虚线是分界不同处；`pending` 时加上等待规划。 */
+/** Legend of the side-by-side bars next to the source: left current episodes, right new plan, amber dashed line where boundaries differ; adds awaiting planning when `pending`. / 原文旁并排色条的图例：左侧现有分集、右侧新方案、琥珀色虚线是分界不同处；`pending` 时加上等待规划。 */
 function CompareLegend({ pending }: { pending: boolean }) {
   const { t } = useTranslation("dashboard");
   return (
@@ -359,7 +363,7 @@ function SummaryRow({ label, children }: { label: string; children: ReactNode })
   );
 }
 
-/** 源文位置的读法：文件名与在这个文件里的百分比。 */
+/** How to read a source position: file name and percentage within that file. / 源文位置的读法：文件名与在这个文件里的百分比。 */
 function point(view: EpisodesView, at: SourcePoint): string {
   const file = view.files.find((entry) => entry.source_file === at.source_file);
   if (!file) return at.source_file;

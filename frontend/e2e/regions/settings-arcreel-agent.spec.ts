@@ -2,6 +2,7 @@ import type { Page } from "@playwright/test";
 import { defineRegionScenarios } from "../support/scenarios.ts";
 import { expect, type ApiOverrides } from "../support/test.ts";
 
+// Global settings "ArcReel Agent": Agent provider list, run parameters collapsed by default, popovers to add and delete Agent providers.
 // 全局设置「ArcReel Agent」：Agent 供应商列表、默认折叠的运行参数、添加与删除 Agent 供应商的弹层。
 
 const PATH = "/app/settings?section=arcreel-agent";
@@ -16,6 +17,8 @@ function tierStatus(
   return { tier, model_name, entry_display_name, manually_bound, binding_stale, priced: entry_display_name !== null };
 }
 
+// Stress variant: many Agent providers with long names and URLs, each with all model routes set; tiers in four states: priced, unpriced,
+// manually selected, and selected model delisted.
 // 压力变体：Agent 供应商多、名称与地址长，每条都设置了全部模型路由，档位有已定价、未定价、手动选择与所选模型已下架四种状态。
 const MANY_AGENT_PROVIDERS: ApiOverrides = {
   "GET /api/v1/agent/credentials": {

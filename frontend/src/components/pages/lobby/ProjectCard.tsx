@@ -1,4 +1,7 @@
 /**
+ * Poster card in the project lobby. The guide's demo card uses it too, switched to a read-only form: the claim "this is what a project looks like further along" only stays truthful over time
+ * if the demo card and real cards share one implementation. Clicking a read-only card opens a read-only workbench, and the card has no "More" menu.
+ *
  * 项目大厅的海报卡。引导的演示卡也用它，切到只读形态：「项目推进后长这样」这句话只有在演示卡与
  * 真实卡片是同一份实现时才不会随时间说谎。只读卡点进去是只读工作台，卡上不带「更多」菜单。
  */
@@ -28,7 +31,7 @@ export interface ProjectCardActions {
   onDelete: (project: ProjectSummary) => void;
 }
 
-/** 大厅里的真实卡片必须给 `actions`；只读演示卡不接受它。 */
+/** Real cards in the lobby must get `actions`; read-only demo cards do not accept it. / 大厅里的真实卡片必须给 `actions`；只读演示卡不接受它。 */
 type ProjectCardProps = { project: ProjectSummary } & (
   | { readOnly: true; actions?: never }
   | { readOnly?: false; actions: ProjectCardActions }
@@ -83,6 +86,7 @@ export function ProjectCard({ project, readOnly, actions }: ProjectCardProps) {
       </Link>
 
       {actions && (
+        // On hover-capable devices hidden normally, shown on hover, focus or while the menu is open; always visible on touch devices.
         // 有悬停能力的设备上平时隐藏，悬停、聚焦或菜单打开时出现；触屏设备上常驻。
         <div className="absolute top-2 right-2 transition-opacity duration-fast pointer-fine:opacity-0 pointer-fine:group-hover:opacity-100 pointer-fine:group-has-focus-visible:opacity-100 pointer-fine:has-aria-expanded:opacity-100">
           <DropdownMenu>
@@ -118,6 +122,9 @@ export function ProjectCard({ project, readOnly, actions }: ProjectCardProps) {
 const FILES_URL_PREFIX = `${API_BASE}/files/`;
 
 /**
+ * When the cover goes through the project file route, request a 640-wide thumbnail: cards fill columns from 280px, and posters are usually under 400px wide.
+ * The backend URL may already carry a `?v=` version key; other sources such as the demo card's data: are returned as is.
+ *
  * 封面走项目文件路由时请求 640 宽的缩略图：卡片从 280px 起按列铺满，海报通常不到 400px 宽。
  * 后端给的地址可能已带 `?v=` 版本键；演示卡的 data: 等其他来源原样返回。
  */
@@ -126,7 +133,7 @@ function posterSrc(url: string): string {
   return `${url}${url.includes("?") ? "&" : "?"}w=640`;
 }
 
-/** 海报 2:1。没有缩略图时用衬线字把标题写在海报上，不留一块无意义的色块。 */
+/** Poster 2:1. Without a thumbnail, write the title on the poster in a serif font instead of leaving a meaningless block of color. / 海报 2:1。没有缩略图时用衬线字把标题写在海报上，不留一块无意义的色块。 */
 function Poster({ project, title }: { project: ProjectSummary; title: string }) {
   return (
     <div className="relative aspect-2/1 overflow-hidden bg-linear-to-br from-primary/30 via-muted to-background">
@@ -147,11 +154,11 @@ function Poster({ project, title }: { project: ProjectSummary; title: string }) 
   );
 }
 
-/** 每集一格：已完成、制作中、已有脚本、尚未开始。数量已写在下方的次要文字里，这里只作示意。 */
+/** One cell per episode: done, in production, has script, not started. Counts are already in the secondary text below; this is only illustrative. / 每集一格：已完成、制作中、已有脚本、尚未开始。数量已写在下方的次要文字里，这里只作示意。 */
 function EpisodeStrip({ summary }: { summary: ProjectStatus["episodes_summary"] | undefined }) {
   if (!summary || summary.total === 0) return null;
   const inProductionEnd = summary.completed + summary.in_production;
-  // `scripted` 数的是有脚本的集，已包含完成与制作中的集。
+  // `scripted` counts episodes that have a script, already including done and in-production episodes. / `scripted` 数的是有脚本的集，已包含完成与制作中的集。
   const scriptedEnd = Math.max(summary.scripted, inProductionEnd);
   return (
     <div aria-hidden className="flex gap-0.5">

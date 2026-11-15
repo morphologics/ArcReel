@@ -4,7 +4,7 @@ import { describe, it, expect, vi } from "vitest";
 import "@/i18n";
 import { ProviderModelSelect } from "./ProviderModelSelect";
 
-/** 弹层异步打开：点击触发按钮后等列表出现再查询。 */
+/** The popover opens asynchronously: after clicking the trigger, wait for the list to appear before querying. / 弹层异步打开：点击触发按钮后等列表出现再查询。 */
 async function open(user: ReturnType<typeof userEvent.setup>, trigger = screen.getAllByRole("combobox")[0]) {
   await user.click(trigger);
   await screen.findByRole("listbox");
@@ -58,6 +58,8 @@ describe("ProviderModelSelect – trigger display", () => {
   });
 
   it("shows the provider name for a bare provider id carrying no model", () => {
+    // The backend accepts a bare provider id without model (downstream runs that provider's default model); splitting hard by provider/model
+    // would show the trigger as an empty " . ", and the user could not tell this item is actually configured
     // 后端接受不带 model 的裸 provider id（下游按该供应商默认模型执行）；按 provider/model
     // 硬拆会把触发按钮显示成空的「 · 」，用户看不出这项其实已配置
     render(
@@ -321,6 +323,7 @@ describe("ProviderModelSelect – model display names", () => {
 
     await open(user, trigger);
     const option = screen.getByRole("option", { name: /Seedance 1\.5 Pro/ });
+    // The model id stays identifiable in the option row; with identical translated names users rely on it to tell entries apart
     // model id 仍在选项行内可辨识——同名译名下用户靠它区分具体条目
     expect(option).toHaveTextContent("seedance");
   });
@@ -337,6 +340,7 @@ describe("ProviderModelSelect – model display names", () => {
       />,
     );
     await open(user);
+    // Without a translated name no second line is added, or the same id would appear twice
     // 无译名时不补第二行，否则同一串 id 会重复出现两遍
     expect(screen.getByRole("option", { name: /seedance/ })).toHaveTextContent(/^seedance$/);
   });

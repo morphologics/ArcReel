@@ -2,6 +2,8 @@ import { act, fireEvent, render, screen, waitFor } from "@testing-library/react"
 import { describe, it, expect, vi, afterEach } from "vitest";
 import { CopyButton } from "./CopyButton";
 
+// The clipboard is a repo boundary (browser API) not implemented by jsdom; install success/failure implementations as each branch needs;
+// the @/utils/clipboard in between is in-repo code and runs with its real implementation.
 // 剪贴板是仓库边界（浏览器 API），jsdom 不实现，按分支需要装成功/失败两种实现；
 // 中间的 @/utils/clipboard 是仓库内代码，用真实实现一起走到。
 function stubClipboard(writeText: (text: string) => Promise<void>) {
@@ -45,6 +47,7 @@ describe("CopyButton", () => {
 
     act(() => vi.advanceTimersByTime(1500));
 
+    // Only after reset can "Copied" feedback be given again, or a second copy shows no visible change
     // 复位后才能再次给出「已复制」反馈，否则第二次复制无可见变化
     expect(screen.getByRole("button", { name: "复制消息" })).toBeInTheDocument();
   });
@@ -57,6 +60,7 @@ describe("CopyButton", () => {
 
     await waitFor(() => expect(writeText).toHaveBeenCalledWith("sk-secret"));
     await act(async () => {});
+    // If copying failed, "Copied" must not show: the user would think the clipboard has the content
     // 复制没成功就不能显示「已复制」：用户会以为剪贴板里已有内容
     expect(screen.getByRole("button", { name: "复制消息" })).toBeInTheDocument();
   });

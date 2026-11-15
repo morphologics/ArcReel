@@ -8,7 +8,7 @@ import { ProviderModelSelect } from "@/components/shared/ProviderModelSelect";
 import { voidCall } from "@/utils/async";
 import { narrationDeliveryProblem, type NarrationDeliveryValue } from "./narration-delivery";
 
-/** 所选 TTS 模型是否支持配音语速；查询中、查询失败或未选模型时为 null。 */
+/** Whether the selected TTS model supports voiceover speech rate; null while querying, on query failure, or when no model is selected. / 所选 TTS 模型是否支持配音语速；查询中、查询失败或未选模型时为 null。 */
 function useTtsSpeedSupport(backend: string): boolean | null {
   const [answer, setAnswer] = useState<{ backend: string; supportsSpeed: boolean } | null>(null);
   useEffect(() => {
@@ -20,6 +20,7 @@ function useTtsSpeedSupport(backend: string): boolean | null {
         if (controller.signal.aborted) return;
         setAnswer({ backend, supportsSpeed: res.supports_speed });
       } catch {
+        // Don't grey out when capabilities can't be found: whether speech rate takes effect is still up to the provider
         // 查不到能力时不置灰：语速仍由供应商自行决定是否生效
       }
     })());
@@ -30,7 +31,7 @@ function useTtsSpeedSupport(backend: string): boolean | null {
 
 const FIELD_LABEL_CLS = "text-xs font-medium text-muted-foreground";
 
-/** 交付方式的单选卡片：整块可点，选中项用品牌色描边与浅底。 */
+/** Radio card for the delivery mode: the whole block is clickable, and the selected item uses a brand-colored border and light background. / 交付方式的单选卡片：整块可点，选中项用品牌色描边与浅底。 */
 function deliveryCardClass(selected: boolean): string {
   return cn(
     "flex flex-1 cursor-pointer items-center justify-center rounded-lg border px-3 py-2.5 text-sm transition-colors has-focus-visible:ring-3 has-focus-visible:ring-ring/50",
@@ -138,6 +139,7 @@ export function NarrationDeliveryFields({ value, onChange, audioBackends, provid
                   return;
                 }
                 const next = Number(raw);
+                // Only filter out non-finite numbers: NaN/Infinity would be serialized as null and wrongly trigger the "clear" semantics; the positive constraint is left to backend validation
                 // 仅过滤非有限数：NaN/Infinity 会被序列化为 null 误触「清除」语义；正数约束交由后端校验
                 if (Number.isFinite(next)) onChange({ ...value, narrationSpeed: next });
               }}

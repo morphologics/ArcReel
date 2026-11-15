@@ -2,6 +2,13 @@ type VoidPromiseOptions = {
   onError?: (err: unknown) => void;
 };
 
+/**
+ * Wrap a Promise-returning function as a fire-and-forget callback: discard the return value, route rejections to onError
+ * (default console.error), in exchange for a `() => void` signature safe to pass to synchronous event handlers.
+ * The wrapped function returns immediately without waiting for the Promise to settle — callers that rely on awaiting the callback for ordering
+ * (e.g. saving state, serial submits) can't use it; to only discard the return value, write
+ * `async (...args) => { await fn(...args); }` yourself to keep await semantics.
+ */
 /** 把返回 Promise 的函数包装成 fire-and-forget 回调：丢弃返回值、拒绝走 onError
  *  （默认 console.error），换取可安全传给同步事件处理器的 `() => void` 签名。
  *  包装后的函数立即返回、不等待 Promise 结算——调用方若靠 await 回调维持时序

@@ -29,18 +29,21 @@ import { formatNameList } from "@/utils/list-format";
 
 import { ImpactConfirmDialog } from "./ImpactConfirmDialog";
 
-/** 提示条里最多点名的文件数，其余以「等」概括。 */
+/** Max number of files named in the notice bar; the rest are summarized as "etc.". / 提示条里最多点名的文件数，其余以「等」概括。 */
 const NAMED_FILES = 2;
 
 interface UnregisteredFilesProps {
   projectName: string;
   files: UnregisteredSourceFile[];
   episodes: EpisodeMeta[];
-  /** 处置完成后重新拉取「分集」视图。 */
+  /** Refetch the "Episodes" view after handling completes. / 处置完成后重新拉取「分集」视图。 */
   onChanged: () => void;
 }
 
 /**
+ * Notice bar below the header: source/ has files that are neither in the whole source nor any episode's source. "Handle" opens a dialog to handle each:
+ * add to the whole source, use as an episode's source (a new episode or an episode without source), or delete. Not rendered when there are no such files.
+ *
  * 页头下方的提示条：source/ 里有不属于整本源文、也不是任何一集原文的文件。点「处理」打开对话框逐个处置：
  * 加入整本源文、作为某一集的原文（新的一集或一集无原文的集），或者删除。没有这类文件时不渲染。
  */
@@ -72,7 +75,7 @@ export function UnregisteredFilesBanner({ projectName, files, episodes, onChange
       <Dialog
         open={open}
         onOpenChange={(next) => {
-          // 处置请求在途时不响应 Esc 与遮罩点击
+          // Ignore Esc and backdrop clicks while a handling request is in flight / 处置请求在途时不响应 Esc 与遮罩点击
           if (!next && !busy) setOpen(false);
         }}
       >
@@ -110,7 +113,7 @@ function UnregisteredFileList({
   const [error, setError] = useState<string | null>(null);
   const noSourceEpisodes = episodes.filter((episode) => episode.source_origin === "none");
 
-  /** 处置一个文件：成功后文件从列表里消失，失败时在列表上方说明原因。 */
+  /** Handle one file: on success it disappears from the list; on failure the reason is shown above the list. / 处置一个文件：成功后文件从列表里消失，失败时在列表上方说明原因。 */
   const run = async (name: string, action: () => Promise<unknown>) => {
     setBusy(true);
     setError(null);

@@ -29,13 +29,16 @@ import { formatSpoken, formatVolume } from "./episodes-view-model";
 interface Props {
   projectName: string;
   view: EpisodesView;
-  /** 本项目有分集规划在排队或执行。 */
+  /** This project has episode planning queued or running. / 本项目有分集规划在排队或执行。 */
   active: boolean;
-  /** 已提交规划或交给 Agent：调用方据此收起弹层。 */
+  /** Planning submitted or handed to the Agent: the caller closes the popover accordingly. / 已提交规划或交给 Agent：调用方据此收起弹层。 */
   onStarted?: () => void;
 }
 
 /**
+ * Content of the "AI plan episodes" popover in the "Episodes" view header: instructions, "Hand to Agent" and direct call; shows progress and stop while running,
+ * gives the reason and a way out when the last planning failed, and size stats after the whole book is planned.
+ *
  * 「分集」视图页头「AI 规划分集」弹层的内容：附加指令、「交给 Agent」与直接调用，进行中显示进度与停止，
  * 上一次规划失败时给出原因与出路，整本规划完后给出体量统计。
  */
@@ -57,12 +60,14 @@ export function EpisodePlanningPanel({ projectName, view, active, onStarted }: P
       (EPISODE_PLANNING_SLOTS as readonly string[]).includes(task.resource_id),
   );
 
+  // Stop timing: the running window queues the next window only right before calling the model; a stop landing before that cannot cancel it;
+  // while a stop request is unresolved, stop again whenever a queued window shows up.
   // 停止的时机：执行中的那一窗在请求模型前才把下一窗排进队列，停止若落在这之前就取消不到它；
   // 停止请求未了结时，再看到排队的窗口就再停一次。
   useEffect(() => {
     if (active && stopRequested && queuedWindow) void API.stopEpisodePlanning(projectName).catch(() => undefined);
   }, [active, stopRequested, queuedWindow, projectName]);
-  // 规划结束即了结停止请求，下一次规划从头开始
+  // Planning ending resolves the stop request; the next planning starts fresh / 规划结束即了结停止请求，下一次规划从头开始
   if (!active && (stopRequested || finishingWindow)) {
     setStopRequested(false);
     setFinishingWindow(false);
@@ -70,6 +75,7 @@ export function EpisodePlanningPanel({ projectName, view, active, onStarted }: P
 
   const remaining = remainingUnits(view);
   const started = view.cut_units > 0;
+  // Gaps left by deleting middle sliced episodes are outside continued planning; plan them separately with the button on the gap
   // 删除中间的切出集留下的空段不在接续规划的范围里，要用空段上的按钮单独规划
   const hasGaps = view.files.some((file) => file.segments.some((segment) => segment.gap && segment.units > 0));
   const percent = view.units === 0 ? 0 : Math.round((view.cut_units / view.units) * 100);

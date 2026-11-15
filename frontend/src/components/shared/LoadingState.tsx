@@ -2,6 +2,11 @@ import { Loader2 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
 /**
+ * Loading placeholder: a spinner plus "Loading", with `role="status"` for screen reader announcement.
+ *
+ * - `screen`: fills the viewport, for undetermined login state and whole-page lazy chunks not yet arrived.
+ * - `pane`: fills the parent container, for lazy loading of local regions such as the workspace canvas.
+ *
  * 加载占位：转圈加「加载中」，`role="status"` 供读屏播报。
  *
  * - `screen`：占满视口，用于登录态未确定、整页懒加载的 chunk 未到达。

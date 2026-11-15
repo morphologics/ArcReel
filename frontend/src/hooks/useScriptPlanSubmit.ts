@@ -10,15 +10,18 @@ import { errMsg } from "@/utils/async";
 import { episodeAgentRef } from "@/utils/episode-display";
 
 export interface ScriptPlanSubmit {
-  /** 提交或交接的请求在途。 */
+  /** A submit or hand-off request is in flight. / 提交或交接的请求在途。 */
   submitting: boolean;
-  /** 直接 AI 规划：本集已有进行中的规划时提示并不提交。返回是否已提交。 */
+  /** Direct AI planning: if this episode already has planning in progress, notify and don't submit. Returns whether it was submitted. / 直接 AI 规划：本集已有进行中的规划时提示并不提交。返回是否已提交。 */
   submit: (instructions: string) => Promise<boolean>;
-  /** 交给 Agent：先按集保存附加指令，再把规划请求预填进 Agent 输入框并打开面板。返回是否已交接。 */
+  /** Hand to the Agent: first save the instructions per episode, then prefill the planning request into the Agent input and open the panel. Returns whether it was handed off. / 交给 Agent：先按集保存附加指令，再把规划请求预填进 Agent 输入框并打开面板。返回是否已交接。 */
   handOff: (instructions: string) => Promise<boolean>;
 }
 
 /**
+ * The two submit paths of "AI plan script", one implementation shared by the start area and the "Replan script" dialog.
+ * `replacing` means the new plan will wholly replace the unconfirmed plan or invalid draft: when handing to the Agent, the prefill states that edits will be lost.
+ *
  * 「AI 规划脚本」的两种提交方式，起步区与「重新规划脚本」对话框共用这一份实现。
  * `replacing` 表示新规划会整份替换未确认的规划或待修复草稿：交给 Agent 时在预填里写明修改会丢失。
  */

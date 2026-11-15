@@ -341,6 +341,7 @@ describe("MessageRow", () => {
     );
     fireEvent.change(screen.getByLabelText("改写消息内容"), { target: { value: "写到一半的草稿" } });
 
+    // The session starts running during editing: the draft stays, resend is locked
     // 会话在编辑期间开跑：草稿留着，重新发送锁住
     rerender(<MessageRow turn={userTurn} editable={false} editing onSubmitEdit={onSubmitEdit} />);
 
@@ -380,6 +381,7 @@ describe("MessageRow", () => {
 
     expect(screen.queryByText("第 8 集已审完三个镜头")).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "上下文已压缩" }));
+    // The summary renders as Markdown, and once the renderer loads it replaces the plain text shown first, so re-query each time
     // 摘要按 Markdown 渲染，渲染器加载完会替换先显示的纯文本，所以每次重新查询
     await waitFor(() => expect(screen.getByText("第 8 集已审完三个镜头")).toBeInTheDocument());
   });

@@ -1,30 +1,31 @@
 import { vi } from "vitest";
 import { createDeferred } from "./deferred";
 
-/** 一次 `canvas.toDataURL` 调用：画布尺寸即重编码后的像素尺寸。 */
+/** One `canvas.toDataURL` call: the canvas size is the pixel size after re-encoding. / 一次 `canvas.toDataURL` 调用：画布尺寸即重编码后的像素尺寸。 */
 export interface EncodeCall {
   width: number;
   height: number;
   quality: number;
 }
 
-/** 一次在途的 `createImageBitmap` 解码，完成时机由测试决定。 */
+/** One in-flight `createImageBitmap` decode, completed when the test decides. / 一次在途的 `createImageBitmap` 解码，完成时机由测试决定。 */
 export interface PendingDecode {
   readonly file: File;
-  /** 以给定像素尺寸完成解码，并把附件流程推进到静止。 */
+  /** Finish decoding at the given pixel size and advance the attachment flow until it settles. / 以给定像素尺寸完成解码，并把附件流程推进到静止。 */
   finish(size: { width: number; height: number }): Promise<void>;
-  /** 让浏览器解码这张图失败（损坏文件、不支持的编码）。 */
+  /** Make the browser fail to decode this image (corrupt file, unsupported encoding). / 让浏览器解码这张图失败（损坏文件、不支持的编码）。 */
   fail(): Promise<void>;
 }
 
 export interface ImageCanvasStub {
-  /** 按发起顺序收集的解码请求。 */
+  /** Decode requests collected in the order they were made. / 按发起顺序收集的解码请求。 */
   readonly decodes: PendingDecode[];
-  /** 按发起顺序收集的重编码调用。 */
+  /** Re-encode calls collected in the order they were made. / 按发起顺序收集的重编码调用。 */
   readonly encodes: EncodeCall[];
 }
 
 interface StubOptions {
+  /** The base64 payload encoded at each quality level; its length is the byte-budget criterion. Defaults to a fixed short string. */
   /** 每档质量编码出的 base64 负载；长度即字节预算的判据。默认为一段固定短串。 */
   encodedBase64?: (quality: number) => string;
 }
@@ -36,6 +37,14 @@ async function flushMicrotasks(): Promise<void> {
 }
 
 /**
+ * Replace the browser's image decoding and canvas encoding with controllable doubles; returns a handle that records the calls.
+ *
+ * jsdom has no `createImageBitmap`, and `canvas.getContext("2d")` is always null, so the attachment flow can never
+ * finish under the real implementation. The doubles only replace these two browser boundaries; the resize dimensions
+ * are still computed by the production `resizedSize` and land on `encodes`.
+ *
+ * Callers restore with `vi.unstubAllGlobals()` in `afterEach`.
+ *
  * 把浏览器的图片解码与 canvas 编码换成可控替身，返回记录调用的句柄。
  *
  * jsdom 既没有 `createImageBitmap`，`canvas.getContext("2d")` 也恒为 null，

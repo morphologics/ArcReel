@@ -100,6 +100,7 @@ describe("VersionTimeMachine", () => {
       expect(onRestore).toHaveBeenCalledWith(1);
       expect(API.getVersions).toHaveBeenCalledTimes(2);
     });
+    // The switch result shows in the "Current" mark; success shows no toast
     // 切换结果体现在「当前」标记上，成功不弹提示
     expect(await screen.findByText("当前 v1")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /切换到此版本/ })).not.toBeInTheDocument();
@@ -137,6 +138,7 @@ describe("VersionTimeMachine", () => {
 
     fireEvent.click(await screen.findByRole("button", { name: "v1" }));
     expect(screen.getByAltText("版本 v1 预览")).toBeInTheDocument();
+    // A new version was generated elsewhere (e.g. by the Agent): the preview selection does not carry over to the new version list
     // 别处（如 Agent）生成了新版本：预览选中不沿用到新的版本列表
     act(() => useProjectsStore.getState().updateAssetFingerprints({ "products/Cup.png": 2 }));
     expect(screen.queryByAltText("版本 v1 预览")).not.toBeInTheDocument();
@@ -144,6 +146,7 @@ describe("VersionTimeMachine", () => {
     fireEvent.click(await screen.findByRole("button", { name: "v1" }));
     fireEvent.click(screen.getByRole("button", { name: "切换到此版本" }));
     await waitFor(() => expect(API.restoreVersion).toHaveBeenCalledWith("demo", "products", "Cup", 1));
+    // The restore itself changed the fingerprint; the just-restored version stays selected
     // 恢复本身换了指纹，刚恢复的版本仍保持选中
     await waitFor(() => expect(useProjectsStore.getState().assetFingerprints["products/Cup.png"]).toBe(3));
     expect(await screen.findByAltText("版本 v1 预览")).toBeInTheDocument();
@@ -408,6 +411,7 @@ describe("VersionTimeMachine", () => {
       subtitles_webvtt: null,
     });
 
+    // The preview's accessible name refers to the shot by its position in this episode: E1S01 is in position 2
     // 预览的可访问名称按本集位置称呼分镜：E1S01 排在第 2 位
     useProjectsStore.setState({
       currentScripts: {
@@ -485,6 +489,9 @@ describe("VersionTimeMachine", () => {
     expect(restoreSpy).not.toHaveBeenCalled();
   });
 
+  // busy is a render snapshot: while the version panel is open, Agent enqueues, batch entries or polling landings may occupy
+  // the resource, and a click before the new prop flushes to the button would still send a restore request, writing the same resource file
+  // concurrently with the running task. So do another fresh read in the submit handler.
   // busy 是渲染快照：版本面板打开着的这段时间里 Agent 入队、批量入口或轮询落库都可能
   // 占用该资源，新 prop 冲刷到按钮之前的一次点击仍会发出恢复请求，与在跑的任务并发写
   // 同一个资源文件。故提交处理器里再做一次新鲜读。
@@ -514,6 +521,7 @@ describe("VersionTimeMachine", () => {
       ],
     });
     const restoreSpy = vi.spyOn(API, "restoreVersion").mockResolvedValue({ success: true });
+    // Idle at render time (busy defaults to false, button clickable), but occupied by another entry at submit time
     // 渲染期空闲（busy 缺省为 false，按钮可点），提交时刻已被别的入口占用
     const checkBusy = vi.fn().mockReturnValue(true);
 

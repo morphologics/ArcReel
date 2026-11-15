@@ -1,13 +1,14 @@
-/** 风格模版前端清单（id + category + thumbnail，prompt 由后端展开）。 */
+/** Frontend list of style templates (id + category + thumbnail; the prompt is expanded by the backend). / 风格模版前端清单（id + category + thumbnail，prompt 由后端展开）。 */
 export type StyleCategory = "live" | "anim";
 
 export interface StyleTemplate {
   id: string;
   category: StyleCategory;
-  thumbnail: string;  // 静态资源 URL（public/style-thumbnails/）
+  thumbnail: string;  // Static asset URL (public/style-thumbnails/) / 静态资源 URL（public/style-thumbnails/）
 }
 
 export const STYLE_TEMPLATES: StyleTemplate[] = [
+  // ===== Live action (18) =====
   // ===== 真人 (18) =====
   { id: "live_cinematic_ancient", category: "live", thumbnail: "/style-thumbnails/live_cinematic_ancient.png" },
   { id: "live_zhang_yimou",       category: "live", thumbnail: "/style-thumbnails/live_zhang_yimou.png" },
@@ -27,6 +28,7 @@ export const STYLE_TEMPLATES: StyleTemplate[] = [
   { id: "live_wong",              category: "live", thumbnail: "/style-thumbnails/live_wong.png" },
   { id: "live_shaw",              category: "live", thumbnail: "/style-thumbnails/live_shaw.png" },
   { id: "live_cyberpunk",         category: "live", thumbnail: "/style-thumbnails/live_cyberpunk.png" },
+  // ===== Animation (18) =====
   // ===== 动画 (18) =====
   { id: "anim_3d_cg",             category: "anim", thumbnail: "/style-thumbnails/anim_3d_cg.png" },
   { id: "anim_cn_3d",             category: "anim", thumbnail: "/style-thumbnails/anim_cn_3d.png" },

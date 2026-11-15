@@ -50,6 +50,8 @@ export function LoginPage() {
 
       const data = await resp.json() as LoginResponse;
       login(data.access_token, username);
+      // After login, return to the original address before the login page (passed as ?from by AuthGuard / the 401 interceptor),
+      // validated by safeReturnPath as a safe in-site path; invalid or missing falls back to the project list.
       // 登录成功后回跳到进入登录页前的原始地址（由 AuthGuard / 401 拦截以 ?from 传入），
       // 经 safeReturnPath 校验为站内安全路径；非法或缺失时回退到项目列表。
       const returnTo = safeReturnPath(new URLSearchParams(search).get("from"));

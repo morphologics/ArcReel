@@ -13,6 +13,7 @@ function translatorFor(catalog: Record<string, string>) {
     catalog[key] ?? options?.defaultValue ?? key) as unknown as TFunction<"workflow">;
 }
 
+/** Problem codes that appear in plan steps: utterance admission of script structure, project data upgrades, and video request facts. */
 /** 计划步骤里会出现的问题码：脚本结构的发声准入、项目数据升级，以及视频请求事实。 */
 const PLAN_PROBLEM_CODES = [
   "mixed_speech",

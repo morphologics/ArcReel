@@ -13,9 +13,11 @@ import "@fontsource/instrument-serif/400-italic.css";
 import "driver.js/dist/driver.css";
 
 import "./index.css";
-// driver 默认皮肤之后加载，覆盖生效
+// Loaded after the driver default skin so the overrides take effect / driver 默认皮肤之后加载，覆盖生效
 import "./css/onboarding.css";
 
+// At startup, set the document title and meta description from BRAND (the <title> and
+// <meta name="description"> in index.html are only placeholders during loading).
 // 启动时按 BRAND 设置文档标题与 meta description（index.html 中的
 // <title> 与 <meta name="description"> 仅作为加载阶段的占位）。
 document.title = BRAND_DOCUMENT_TITLE;
@@ -26,11 +28,15 @@ if (metaDescription) {
 
 initTheme();
 
-// 从 localStorage 恢复登录状态
+// Restore login state from localStorage / 从 localStorage 恢复登录状态
 useAuthStore.getState().initialize();
 
 const root = document.getElementById("app-root");
 if (root) {
+  // Wait until the namespaces for the current i18n language + fallback are all loaded before rendering, to avoid keys flashing on first paint.
+  // The chunks are all local lazy imports; even on a weak network it is only a few tens of ms delay (cold start).
+  // An i18n load failure must not block app startup (still render, letting t() fall back to key strings),
+  // but the failure must be observable, so log an error explicitly instead of using finally to merge success/failure silently.
   // 等 i18n 当前语言 + fallback 的 namespace 全部加载完再渲染，避免首屏闪 key。
   // chunk 都是本地 lazy import，弱网下也只是几十 ms 延迟（cold start）。
   // i18n 加载失败时不能阻塞应用启动（仍 render，让 t() 退回 key 字符串），

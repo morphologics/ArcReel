@@ -11,6 +11,9 @@ interface LobbyGreetingProps {
 }
 
 /**
+ * Greeting area: a greeting plus a purple status sentence, with completion info in the secondary color on the next line. The typewriter plays only once per session, and with reduced motion the full text shows directly.
+ * With no projects the status sentence points to the first work, and no completion info is written.
+ *
  * 问候区：问候句加紫色状态句，下一行次要色写完成情况。打字机每个会话只播放一次，减少动态效果时直接显示全文。
  * 没有项目时状态句引向第一部作品，不写完成情况。
  */

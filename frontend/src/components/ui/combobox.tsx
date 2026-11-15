@@ -84,6 +84,7 @@ function ComboboxInput({
   )
 }
 
+// Versus upstream: the search box keeps an opaque border to meet 3:1; lower the input fill opacity to preserve text contrast.
 // 相对上游：搜索框保留不透明描边以满足 3:1，降低 input 填充不透明度以保留文字对比度。
 function ComboboxContent({
   className,
@@ -106,10 +107,10 @@ function ComboboxContent({
         align={align}
         alignOffset={alignOffset}
         anchor={anchor}
-        // 层级用 z-index token，与其他弹层原语一致
+        // Layering uses the z-index token, consistent with the other overlay primitives / 层级用 z-index token，与其他弹层原语一致
         className="isolate z-overlay"
       >
-        {/* 弹层动画使用项目时长 token。 */}
+        {/* Overlay animation uses the project duration token. / 弹层动画使用项目时长 token。 */}
         <ComboboxPrimitive.Popup
           data-slot="combobox-content"
           data-chips={!!anchor}
@@ -121,10 +122,12 @@ function ComboboxContent({
   )
 }
 
+// Scrollbar visible at rest: no upstream no-scrollbar (this repo's index.css styles scrollbars centrally)
 // 滚动条静止时可见：不用上游的 no-scrollbar（本仓 index.css 统一滚动条样式）
 function ComboboxList({ className, ...props }: ComboboxPrimitive.List.Props) {
   return (
     <ComboboxPrimitive.List
+      // Add relative: the scroll container must be a positioned element so absolutely positioned children don't stretch the document scroll
       // 补 relative：滚动容器须是定位元素，绝对定位的子元素才不会撑出文档滚动
       data-slot="combobox-list"
       className={cn(
@@ -217,6 +220,7 @@ function ComboboxSeparator({
   )
 }
 
+// Versus upstream: lower the input fill opacity to preserve text contrast; the invalid state uses a full red border and a stronger glow.
 // 相对上游：降低 input 填充不透明度以保留文字对比度；失败态用完整红色描边与较强光晕。
 function ComboboxChips({
   className,

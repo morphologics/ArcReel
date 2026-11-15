@@ -17,6 +17,7 @@ function SelectGroup({ className, ...props }: SelectPrimitive.Group.Props) {
 
 function SelectValue({ className, ...props }: SelectPrimitive.Value.Props) {
   return (
+    // A selected value that doesn't fit is truncated to one line with an ellipsis: upstream's line-clamp-1 is overridden by flex, so long values get clipped outright
     // 放不下的选中值单行截断并显示省略号：上游的 line-clamp-1 被 flex 覆盖，长值会被直接裁掉
     <SelectPrimitive.Value
       data-slot="select-value"
@@ -26,6 +27,7 @@ function SelectValue({ className, ...props }: SelectPrimitive.Value.Props) {
   )
 }
 
+// Versus upstream: lower the input fill opacity to preserve text contrast; the invalid state uses a full red border and a stronger glow.
 // 相对上游：降低 input 填充不透明度以保留文字对比度；失败态用完整红色描边与较强光晕。
 function SelectTrigger({
   className,
@@ -77,10 +79,10 @@ function SelectContent({
         align={align}
         alignOffset={alignOffset}
         alignItemWithTrigger={alignItemWithTrigger}
-        // 层级用 z-index token，与其他弹层原语一致
+        // Layering uses the z-index token, consistent with the other overlay primitives / 层级用 z-index token，与其他弹层原语一致
         className="isolate z-overlay"
       >
-        {/* 弹层动画使用项目时长 token。 */}
+        {/* Overlay animation uses the project duration token. / 弹层动画使用项目时长 token。 */}
         <SelectPrimitive.Popup
           data-slot="select-content"
           data-align-trigger={alignItemWithTrigger}
@@ -123,7 +125,7 @@ function SelectItem({
       )}
       {...props}
     >
-      {/* 允许选项文字收缩：弹层有宽度上限时，长选项由调用处截断，不再横向溢出被裁切 */}
+      {/* Let option text shrink: when the popover has a max width, long options are truncated by the caller instead of overflowing sideways and getting clipped / 允许选项文字收缩：弹层有宽度上限时，长选项由调用处截断，不再横向溢出被裁切 */}
       <SelectPrimitive.ItemText className="flex min-w-0 flex-1 gap-2 whitespace-nowrap">
         {children}
       </SelectPrimitive.ItemText>

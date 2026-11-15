@@ -1,6 +1,9 @@
 import type { GenerationRoute } from "@/utils/generation-mode";
 
 /**
+ * Text and input contract labels of generation modes. The wizard's two cards and the settings page's read-only display share the same set,
+ * so the two places don't each maintain the "generation mode -> name / description / I2V-R2V" mapping and drift apart.
+ *
  * 生成模式的文案与输入契约标签。向导二卡与设置页只读展示共用同一份，
  * 避免两处各自维护「生成模式 → 名称 / 描述 / I2V-R2V」的对应关系而漂移。
  */

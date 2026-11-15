@@ -35,9 +35,9 @@ import { formatSeconds, rulerStep, unitHue, unitPositionLabel } from "./timeline
 function percentOf(seconds: number, duration: number): string {
   return duration > 0 ? `${(seconds / duration) * 100}%` : "0%";
 }
-/** 每秒至少占这么宽，长时间线横向滚动而不是把片段挤成细条。 */
+/** Minimum width per second, so long timelines scroll horizontally instead of squeezing clips into slivers. / 每秒至少占这么宽，长时间线横向滚动而不是把片段挤成细条。 */
 const MIN_PIXELS_PER_SECOND = 14;
-/** 轨道名一列的宽度，与下方 `pl-16` / `-left-16` 一致。 */
+/** Width of the track-name column, matching `pl-16` / `-left-16` below. / 轨道名一列的宽度，与下方 `pl-16` / `-left-16` 一致。 */
 /** Pointer travel (px) before a mouse press on the tracks counts as a drag-scroll rather than a click. */
 const DRAG_THRESHOLD = 4;
 const LABEL_WIDTH = 64;
@@ -57,7 +57,7 @@ interface EditTimelineTracksProps {
   activeClipId: string | null;
   trimIgnored: ReadonlySet<string>;
   unusedUnits: readonly string[];
-  /** 视频单元 ID → 它在本集里的当前位置；轨道上以位置称呼单元。 */
+  /** Video unit ID → its current position in this episode; the tracks refer to units by position. / 视频单元 ID → 它在本集里的当前位置；轨道上以位置称呼单元。 */
   positions: ReadonlyMap<string, number>;
   thumbnails: ReadonlyMap<string, string>;
   narration: readonly NarrationSpan[];
@@ -71,6 +71,9 @@ interface EditTimelineTracksProps {
 }
 
 /**
+ * Horizontal timeline: ruler, the four tracks video, narration, subtitle and BGM, plus unused video units. Each track is a TrackRow; the BGM track has an upload entry.
+ * Fixed height that does not grow with entries: long timelines and many unused video units each scroll horizontally within their own row.
+ *
  * 横向时间线：标尺，视频、旁白、字幕与 BGM 四条轨道，以及未使用的视频单元。每条轨道是一个 TrackRow；BGM 轨带上传入口。
  * 高度固定、不随条目增多而变高：长时间线与很多未使用的视频单元都在各自一行里横向滚动。
  */
@@ -326,12 +329,12 @@ export function EditTimelineTracks({
         </div>
       </div>
 
-      {/* 视图矮时不显示这一行：未使用的视频单元同时列在详情栏的问题里 */}
+      {/* Hide this row when the view is short: unused video units are also listed under issues in the details panel / 视图矮时不显示这一行：未使用的视频单元同时列在详情栏的问题里 */}
       {unusedUnits.length > 0 && (
         <div
           role="region"
           aria-label={translate("edit_view_unused")}
-          // eslint-disable-next-line jsx-a11y/no-noninteractive-tabindex -- 条目多时这一行横向滚动，里面没有可聚焦的元素，键盘要能聚焦后滚动
+          // eslint-disable-next-line jsx-a11y/no-noninteractive-tabindex -- with many entries this row scrolls horizontally and has no focusable elements inside, so the keyboard must be able to focus it to scroll / 条目多时这一行横向滚动，里面没有可聚焦的元素，键盘要能聚焦后滚动
           tabIndex={0}
           className="focus-ring relative flex items-center gap-2 overflow-x-auto border-t edit-short:hidden border-border/50 pt-2 text-xs whitespace-nowrap text-muted-foreground">
           <span className="shrink-0">{translate("edit_view_unused")}</span>
@@ -353,7 +356,7 @@ export function EditTimelineTracks({
   );
 }
 
-/** 未使用单元的小缩略图；单独订阅这张图的指纹，指纹变化只重渲这一张。 */
+/** Small thumbnail of an unused unit; subscribes to this image's fingerprint alone, so a fingerprint change re-renders only this one. / 未使用单元的小缩略图；单独订阅这张图的指纹，指纹变化只重渲这一张。 */
 function UnusedUnitThumbnail({ projectName, path }: { projectName: string; path: string }) {
   const fingerprint = useProjectsStore((s) => s.getAssetFingerprint(path));
   return (
@@ -388,9 +391,9 @@ function Ruler({ duration, percent }: { duration: number; percent: (seconds: num
 
 interface TrackRowProps {
   label: string;
-  /** 轨道高度的类名，如 `h-10`。 */
+  /** Class name for track height, e.g. `h-10`. / 轨道高度的类名，如 `h-10`。 */
   height: string;
-  /** 轨道名旁的操作按钮。 */
+  /** Action button next to the track name. / 轨道名旁的操作按钮。 */
   action?: ReactNode;
   children: ReactNode;
 }
@@ -410,6 +413,9 @@ function TrackRow({ label, height, action, children }: TrackRowProps) {
 const BGM_ACCEPT = ".mp3,.wav,.m4a,audio/mpeg,audio/wav,audio/mp4";
 
 /**
+ * Upload a BGM track to the project. Pressing the button does not trigger the track's seek; after upload the Agent places the BGM on the edit timeline.
+ * Nothing else changes in the UI after a successful upload, so a toast still tells the creator the next step.
+ *
  * 上传一首 BGM 到项目。按下按钮不触发轨道的跳转；上传后由 Agent 把 BGM 摆进剪辑时间线。
  * 上传成功后界面上没有别的变化，所以仍用提示告诉创作者下一步。
  */
@@ -472,6 +478,9 @@ interface VideoClipsProps {
 }
 
 /**
+ * Clip width is proportional to duration; clips of deleted units have duration 0 and are drawn as a red mark on the cut. The playhead moves every frame without redrawing clips.
+ * Stacking relies on render order, no z-index: clips below, transitions and delete marks above, the playhead rendered last on top.
+ *
  * 片段宽度与时长成比例；已删除单元的片段时长为 0，画成切点上的红色标记。播放头每帧移动，片段不随之重绘。
  * 叠放靠渲染顺序，不写 z-index：片段在下，转场与删除标记在上，播放头最后渲染、盖在最上面。
  */
@@ -561,7 +570,7 @@ interface ClipBlockProps {
   selected: boolean;
   active: boolean;
   trimIgnored: boolean;
-  /** 片段所用单元在本集里的当前位置。 */
+  /** Current position in this episode of the unit used by the clip. / 片段所用单元在本集里的当前位置。 */
   position: number | null;
   onSelect: () => void;
   /** Its right-click menu items. */
@@ -607,7 +616,7 @@ function ClipBlock({ clip, left, width, selected, active, trimIgnored, position,
         </span>
         {trimIgnored && <AlertTriangle aria-hidden className="size-3 shrink-0 text-warn" />}
       </span>
-      {/* 视图矮时轨道变矮，只留第一行；时长仍在悬停提示里 */}
+      {/* When the view is short tracks shrink to the first row only; duration remains in the hover tooltip / 视图矮时轨道变矮，只留第一行；时长仍在悬停提示里 */}
       <span className="tabular-nums edit-short:hidden">{t("edit_view_seconds", { value: formatSeconds(clip.duration) })}</span>
     </span>
   );
@@ -624,6 +633,9 @@ function ClipBlock({ clip, left, width, selected, active, trimIgnored, position,
 }
 
 /**
+ * Narration is drawn at its actual start/end and may cross its carrying clip; overlapping narrations use two rows. In TTS projects narration without audio holds the carrying clip as a dashed placeholder;
+ * in post-production voiceover projects narration is drawn as a neutral placeholder, indicating post-production voiceover and silent preview.
+ *
  * 旁白按实际起止画在轨上，可以越过承载片段；重叠的旁白分两行。TTS 项目没有旁白配音的按承载片段占位，画成虚线；
  * 后期配音项目的旁白画成中性占位，提示由后期配音、预览不出声。
  */
@@ -713,7 +725,7 @@ const SubtitleBlocks = memo(function SubtitleBlocks({
   );
 });
 
-/** BGM 片段的淡入淡出画成两端的渐变。 */
+/** BGM clip fades are drawn as gradients at both ends. / BGM 片段的淡入淡出画成两端的渐变。 */
 const BgmBlocks = memo(function BgmBlocks({ items, duration }: { items: readonly AudioPlacement[]; duration: number }) {
   const { t } = useTranslation("dashboard");
   return (

@@ -14,6 +14,9 @@ import { makeUsageSummary } from "./usage-fixtures";
 import { HEADER_PROJECT, resetHeaderStores } from "./usage-header-test-utils";
 
 /**
+ * The top bar entry is mounted inside the workbench subscribed to the project event stream; both render together, and the assertion is the end-to-end behavior
+ * "refetch after an event arrives", not which internals the hook called.
+ *
  * 顶栏入口挂在订阅项目事件流的工作台里；两者一起渲染，断言的是「事件到达后重新取数」
  * 这条端到端行为，而不是 hook 内部调了谁。
  */
@@ -121,6 +124,7 @@ describe("UsagePopover event-driven refresh", () => {
     renderHarness();
     await waitFor(() => expect(API.getUsageSummary).toHaveBeenCalledTimes(1));
 
+    // The first snapshot is the connection, not a reconnect; every later snapshot means the line dropped once.
     // 首个快照是建连，不是重连；此后每个快照都意味着断过一次线。
     act(() => stream.emitSnapshot("f1"));
     expect(API.getUsageSummary).toHaveBeenCalledTimes(1);

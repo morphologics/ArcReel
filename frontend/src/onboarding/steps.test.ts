@@ -1,4 +1,11 @@
 /**
+ * Shape of the step outline: three lobby steps (welcome + new project + settings entry) cross into two settings page steps, back to the lobby for the demo card,
+ * then five demo workbench steps (Agent -> overview -> characters, scenes and props -> shots -> export), finally landing back in the lobby to finish.
+ *
+ * Anchor name drift is caught by types; a step deleted along the way is caught only here: the finishing bubble carries the "Replay tour" destination,
+ * and no segment landing in the middle should push it out. `route` is asserted too, so a wrong navigation target for a cross-page step is also
+ * caught here, without waiting for the `OnboardingTour` integration test to find it.
+ *
  * 步骤大纲的形状：大厅三步（欢迎 + 新建项目 + 设置入口）跨页进设置页两步，回大厅讲演示卡，
  * 再进演示工作台五步（Agent → 概览 → 角色、场景与道具 → 分镜 → 导出），最后落回大厅收尾。
  *
@@ -14,7 +21,7 @@ import { ONBOARDING_ANCHORS } from "./anchors";
 import { DEMO_PROJECT_NAME, DEMO_SCRIPTED_EPISODE } from "./demo-project";
 import { buildTourSteps } from "./steps";
 
-/** 文案在别处测，这里只关心结构，所以把 key 原样返回。 */
+/** Text is tested elsewhere; here we only care about structure, so return the key as is. / 文案在别处测，这里只关心结构，所以把 key 原样返回。 */
 const t = ((key: string) => key) as unknown as TFunction<"onboarding">;
 
 const WORKBENCH = `${ROUTE_APP_PROJECTS}/${DEMO_PROJECT_NAME}`;

@@ -19,6 +19,11 @@ interface SourceFileKindControlProps {
 }
 
 /**
+ * Source file kind dropdown on the file bar. Changing the kind changes neither the source nor the episodes.
+ *
+ * If it would mark the script plans of episodes already in production stale, list those episodes for the creator to confirm first; with none, change directly.
+ * Paused when the file was changed outside ArcReel and the episode ledger hasn't been updated.
+ *
  * 文件条上的源文件类型下拉。改类型不改原文，也不动分集。
  *
  * 会让已开始制作的集的脚本规划判 stale 时，先列出这些集请创作者确认；没有这类集时直接改。

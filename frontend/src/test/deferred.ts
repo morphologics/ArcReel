@@ -1,4 +1,7 @@
 /**
+ * A manually controllable deferred promise: holds an async call (such as `getProject`) "in flight", so tests can
+ * orchestrate the overlap timing of several batches of requests precisely.
+ *
  * 手动可控的 deferred promise：把一次异步调用（如 `getProject`）卡在「在途」状态，
  * 供测试精确编排多批请求的重叠时序。
  */

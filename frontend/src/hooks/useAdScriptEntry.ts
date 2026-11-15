@@ -4,15 +4,18 @@ import { useActiveResourceIds, useLatestTasksByResource } from "@/stores/tasks-s
 import { useWorkflowStore } from "@/stores/workflow-store";
 import type { TaskItem } from "@/types";
 
-/** 制作状态里广告/短片整份生成的操作键，与后端 `WorkflowActionType.GENERATE_SCRIPT` 一致。 */
+/** Action key of whole-script ad/short generation in the workflow status, matching the backend `WorkflowActionType.GENERATE_SCRIPT`. / 制作状态里广告/短片整份生成的操作键，与后端 `WorkflowActionType.GENERATE_SCRIPT` 一致。 */
 const GENERATE_SCRIPT_OPERATION = "generate_script";
 
 export interface AdScriptEntry {
-  /** 本集的脚本文本任务在排队或生成中（整份生成与提示词编写共用一个占用槽）。 */
+  /** This episode's script text task is queued or generating (whole-script generation and prompt authoring share one occupancy slot). / 本集的脚本文本任务在排队或生成中（整份生成与提示词编写共用一个占用槽）。 */
   busy: boolean;
-  /** 本集最近一次脚本文本任务；没有时为 undefined。 */
+  /** This episode's most recent script text task; undefined if none. / 本集最近一次脚本文本任务；没有时为 undefined。 */
   latestTask: TaskItem | undefined;
   /**
+   * Reason for graying out when the brief and products are missing, shared by "AI generate script" and "Regenerate script";
+   * null when inputs are complete or the workflow status isn't fetched yet (the server re-checks with the same predicate on submit).
+   *
    * 缺创作灵感与商品时的置灰原因，「AI 生成脚本」与「重新生成脚本」共用；
    * 输入齐备或制作状态尚未取回时为 null（提交时服务端按同一谓词复核）。
    */
@@ -20,6 +23,9 @@ export interface AdScriptEntry {
 }
 
 /**
+ * Ad/short whole-script generation task: a full redo, a failure due to violations, or one that handed back newly registered assets.
+ * Prompt authoring tasks on the same occupancy slot are not this kind.
+ *
  * 广告/短片整份生成任务：整份重做、因违约失败，或交回了新登记的资产。
  * 同一占用槽上的提示词编写任务不属于这一类。
  */
@@ -33,6 +39,12 @@ export function isAdScriptTask(task: TaskItem | undefined): boolean {
 }
 
 /**
+ * State of the ad/short "AI generate script" entry: task occupancy, the most recent task and admission.
+ *
+ * Admission takes the `generate_script` conclusion from the episode page's workflow status, the same source as the server's rejection reasons on submit. The server reports missing inputs first,
+ * then an existing final script, so only `ad_brief_and_products_missing` grays the entry out: `formal_script_exists`
+ * blocks only the first generation, and the first-generation entry appears only when there is no final script; full redo stays available.
+ *
  * 广告/短片「AI 生成脚本」入口的状态：任务占用、最近一次任务与准入。
  *
  * 准入取集页制作状态里 `generate_script` 的结论，与服务端提交时的拒绝理由同源。服务端先报输入缺失、

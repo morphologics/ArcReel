@@ -21,6 +21,15 @@ import { ONBOARDING_ANCHORS } from "./anchors";
 const DEMO_TOOL = "mcp__arcreel__generate_assets";
 
 /**
+ * Agent panel of the demo workbench.
+ *
+ * The real Agent panel (`AgentCopilot`) is a write path end to end: creating sessions, SSE subscriptions, running tools; the demo state wires none of it.
+ * Here the same message-area primitives act out the timing of a first production: the user sends "Start production" -> two completed steps -> the Agent reports
+ * progress. Step rows' names and summaries come from the same `toolLabel` as real sessions, but are not expandable and carry no arguments or results;
+ * the input is disabled and says "Unavailable in demo".
+ *
+ * The `workbench-agent` anchor of tour step 7 is on the root node, which fills the Agent panel (see `anchors.ts`).
+ *
  * 演示工作台的 Agent 面板。
  *
  * 真实 Agent 面板（`AgentCopilot`）从头到尾都是写路径：建会话、SSE 订阅、跑工具，演示态一概不接。
@@ -33,7 +42,7 @@ const DEMO_TOOL = "mcp__arcreel__generate_assets";
 export function DemoAssistantPanel() {
   const { t } = useTranslation(["onboarding", "dashboard"]);
 
-  // 工序摘要列出演示项目里的资产名，随界面语言重建。
+  // Step summaries list asset names from the demo project, rebuilt with the UI language. / 工序摘要列出演示项目里的资产名，随界面语言重建。
   const work = useMemo(() => {
     const names = (kind: "character" | "scene") => [1, 2, 3].map((n) => t(`onboarding:demo_${kind}_${n}_name`));
     return [
@@ -44,7 +53,7 @@ export function DemoAssistantPanel() {
 
   return (
     <div data-onboarding={ONBOARDING_ANCHORS.workbenchAgent} className="relative isolate flex h-full flex-col">
-      {/* 头部：真实面板在这里显示会话标题与历史、新建入口；演示里没有会话可管理，只写面板名 */}
+      {/* Header: the real panel shows the session title, history and a new-session entry here; the demo has no sessions to manage, so it only shows the panel name / 头部：真实面板在这里显示会话标题与历史、新建入口；演示里没有会话可管理，只写面板名 */}
       <header className="flex h-12 shrink-0 items-center border-b border-border px-3">
         <h2 className="min-w-0 truncate text-sm font-medium">{t("dashboard:arcreel_agent")}</h2>
       </header>
@@ -67,7 +76,7 @@ export function DemoAssistantPanel() {
               <MessageScrollerItem messageId="demo-reply">
                 <Message align="start">
                   <MessageContent>
-                    {/* 连续的工序排成没有段距的一列，与真实消息区一致 */}
+                    {/* Consecutive steps stack in one column without paragraph spacing, matching the real message area / 连续的工序排成没有段距的一列，与真实消息区一致 */}
                     <div className="flex min-w-0 flex-col">
                       {work.map(({ key, icon, name, summary }) => (
                         <WorkRow key={key} icon={icon} name={name} summary={summary} status="ok" />
@@ -85,7 +94,7 @@ export function DemoAssistantPanel() {
         </MessageScroller>
       </MessageScrollerProvider>
 
-      {/* 输入区：与真实面板同一外形，只作展示，演示中不可用 */}
+      {/* Input area: same shape as the real panel, display only, unavailable in the demo / 输入区：与真实面板同一外形，只作展示，演示中不可用 */}
       <div className="shrink-0 border-t border-border p-3">
         <InputGroup>
           <InputGroupTextarea

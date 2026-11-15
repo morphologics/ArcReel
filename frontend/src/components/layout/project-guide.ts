@@ -6,6 +6,12 @@ import type { WorkflowNextAction, WorkflowStatus } from "@/types/workflow";
 import { episodeDisplayName, episodePosition, type EpisodeLedger } from "@/utils/episode-display";
 
 /**
+ * Presentation shape of the top-bar status bar's "Next step": projected from the project-level workflow status's `next_action` and `next_alternatives`;
+ * the UI does not infer the next step itself.
+ *
+ * Three kinds of button: `nav` jumps to the place in the workbench where this step can be done; `agent` prefills the request into the Agent input for the user to confirm and send;
+ * `ai` submits this step directly (currently only AI episode planning). Actions with no direct Web entry yet only get `agent`.
+ *
  * 顶栏状态条「下一步」的呈现形状：由项目层制作状态的 `next_action` 与 `next_alternatives` 投影而来，
  * 界面不自行推断下一步。
  *
@@ -18,19 +24,19 @@ export type GuideButton =
   | { kind: "ai"; label: string; action: "plan_episodes" };
 
 export interface ProjectNextGuide {
-  /** 状态条右段「下一步」后面的短语。 */
+  /** Phrase after "Next step" in the status bar's right segment. / 状态条右段「下一步」后面的短语。 */
   title: string;
-  /** 弹层里的一句说明。 */
+  /** One-sentence explanation in the popover. / 弹层里的一句说明。 */
   detail: string;
-  /** 是否带附加指令输入框；附加指令只写进交给 Agent 的消息。 */
+  /** Whether it has an instructions input; instructions are only written into the message handed to the Agent. / 是否带附加指令输入框；附加指令只写进交给 Agent 的消息。 */
   instruction: boolean;
   primary: GuideButton[];
   alternatives: GuideButton[];
-  /** 下一步落在哪一集（集 ID）；项目层动作为 null。 */
+  /** Which episode the next step lands on (episode ID); null for project-level actions. / 下一步落在哪一集（集 ID）；项目层动作为 null。 */
   episodeId: number | null;
 }
 
-/** 下一步动作的祈使短语，与集页面板同一套译文。 */
+/** Imperative phrase for the next action, the same translations as the episode page panel. / 下一步动作的祈使短语，与集页面板同一套译文。 */
 export function actionPhrase(t: TFunction, action: WorkflowNextAction["type"]): string {
   return t(`workflow:action_${action}`, { defaultValue: t("workflow:action_unknown") });
 }
@@ -53,6 +59,9 @@ function alternativeButton(t: TFunction, action: WorkflowNextAction): GuideButto
 }
 
 /**
+ * Project-level next step. Returns null when there is no next step (`none`) or the project data upgrade failed (taken over by the status bar's migration form).
+ * While episode planning is queued or running (`planningActive`), the next step yields to "Episode planning in progress".
+ *
  * 项目层的下一步。没有下一步（`none`）或项目数据升级失败（由状态条的迁移形态接管）时返回 null。
  * 有分集规划在排队或执行时（`planningActive`），下一步让位给「分集规划进行中」。
  */
@@ -75,6 +84,7 @@ export function projectNextGuide(
     };
   }
   if (action.type === "none") return null;
+  // Alternatives that land on an episode (start from blank, add episode source, etc.) get their entry in place in the episode page panel; the top bar does not rewrite them as "Hand to Agent"
   // 落在某一集的备选（从空白开始、补充集原文等）在集页面板就地给出入口，顶栏不改写成「交给 Agent」
   const alternatives = status.next_alternatives
     .filter((alternative) => episodeIdArg(alternative) === null)
@@ -87,9 +97,10 @@ export function projectNextGuide(
   });
 
   if (status.project.content_mode === "ad") {
-    // 短片只有一集：跳到账本里唯一的那一集，不假定它的集 ID。
+    // A short has only one episode: jump to the only episode in the ledger without assuming its episode ID. / 短片只有一集：跳到账本里唯一的那一集，不假定它的集 ID。
     const adEpisodeId = episodeIdArg(action) ?? episodes[0]?.episode ?? null;
     if (action.type === "collect_project_input") {
+      // Without a brief and product, script generation is not possible; go fill them in on the overview page first, the same destination as the episode page panel's reminder
       // 缺创作灵感和商品时生成脚本不可做，先去概览页填写，与集页面板的提醒同一去处
       return {
         title: t("workflow:next_title_generate_script"),
@@ -187,13 +198,13 @@ export function projectNextGuide(
   }
 }
 
-/** 交给 Agent 的消息：附加指令非空时另起一行附上。 */
+/** Message handed to the Agent: non-empty instructions are appended on a new line. / 交给 Agent 的消息：附加指令非空时另起一行附上。 */
 export function withInstruction(t: TFunction, prefill: string, instruction: string): string {
   const text = instruction.trim();
   return text ? `${prefill}\n${t("dashboard:guide_prefill_instruction", { instruction: text })}` : prefill;
 }
 
-/** 集的产物里有比当前内容旧的（分镜图或视频）。 */
+/** The episode's artifacts include ones older than the current content (storyboard images or videos). / 集的产物里有比当前内容旧的（分镜图或视频）。 */
 export function episodeNeedsUpdate(episode: Pick<EpisodeMeta, "storyboards" | "videos">): boolean {
   return (episode.storyboards?.stale ?? 0) + (episode.videos?.stale ?? 0) > 0;
 }

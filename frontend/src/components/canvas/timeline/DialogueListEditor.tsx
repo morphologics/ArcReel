@@ -10,7 +10,7 @@ import { TooltipIconButton } from "./TooltipIconButton";
 interface DialogueListEditorProps {
   dialogue: Dialogue[];
   onChange: (dialogue: Dialogue[]) => void;
-  /** 只读展示（引导演示项目）：对白可读，不能增删改。 */
+  /** Read-only display (onboarding demo project): dialogue is readable but cannot be added, deleted or edited. / 只读展示（引导演示项目）：对白可读，不能增删改。 */
   readOnly?: boolean;
 }
 
@@ -21,7 +21,7 @@ interface DialogueRowProps {
   readOnly?: boolean;
 }
 
-/** 一条「说话人 + 台词」。台词随内容撑高折行，长台词完整可见。 */
+/** One "speaker + line". The line grows in height and wraps with its content, so long lines are fully visible. / 一条「说话人 + 台词」。台词随内容撑高折行，长台词完整可见。 */
 function DialogueRow({ value, onUpdate, onRemove, readOnly }: DialogueRowProps) {
   const { t } = useTranslation("dashboard");
 
@@ -39,6 +39,7 @@ function DialogueRow({ value, onUpdate, onRemove, readOnly }: DialogueRowProps) 
         value={value.line}
         onChange={(e) => onUpdate({ line: e.target.value })}
         onKeyDown={(e) => {
+          // A dialogue line is a single paragraph: Enter does not insert a newline, long text only wraps; Enter used by the IME to confirm a candidate is let through.
           // 一条台词只占一段：回车不换行，只折行显示长文本；输入法用回车确认候选时放行。
           if (e.key === "Enter" && !e.nativeEvent.isComposing) {
             e.preventDefault();
@@ -59,6 +60,10 @@ function DialogueRow({ value, onUpdate, onRemove, readOnly }: DialogueRowProps) 
   );
 }
 
+/**
+ * Next stable key: the max numeric suffix of existing keys +1; an empty sequence starts at d0, aligned with the initial naming.
+ * Pure function, idempotent under StrictMode double calls.
+ */
 /** 下一个稳定 key：取现有 key 数字后缀最大值 +1；空序列从 d0 起，与初始化命名对齐。
  *  纯函数，StrictMode 双调用幂等。 */
 function nextKey(keys: string[]): string {
@@ -75,10 +80,14 @@ export function DialogueListEditor({
 }: DialogueListEditorProps) {
   const { t } = useTranslation("dashboard");
 
+  // The data model has no id: in edit mode, derive stable keys bound one-to-one to entries, moved in sync on add/delete, so controlled input
+  // nodes are reused per entry (not per position), preventing focus jumping rows or edits leaking into the adjacent row after deleting a middle row.
   // 数据模型无 id：在编辑态派生与条目一一绑定的稳定 key，增删时同步搬运，使受控输入
   // 节点按条目（而非按位置）复用，避免删除中间行后焦点跳行、编辑内容串到相邻行。
   const [keys, setKeys] = useState<string[]>(() => dialogue.map((_, i) => `d${i}`));
 
+  // Align when an external wholesale replacement (adopt after mount / silent revision refresh) makes the entry count and key count drift: reuse
+  // existing keys by position, append new keys at the end, trim extras. Local add/delete already moves keys in sync, so lengths stay equal and this branch is not hit.
   // 外部整体替换（挂载后 adopt / revision 静默刷新）导致条目数与 key 数漂移时对齐：按位复用
   // 已有 key、尾部补新 key、裁掉多余。本地增删已同步搬运 key，长度恒等，不触发此分支。
   let renderKeys = keys;

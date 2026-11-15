@@ -5,17 +5,20 @@ import { TruncatedText } from "@/components/shared/TruncatedText";
 import { Button } from "@/components/ui/button";
 
 interface PageHeaderProps {
-  /** 「返回」按钮；返回到进入页面之前的位置时，用 `useReturnTo` 取得 `onClick`。 */
+  /** "Back" button; to return to where you were before entering the page, get `onClick` from `useReturnTo`. / 「返回」按钮；返回到进入页面之前的位置时，用 `useReturnTo` 取得 `onClick`。 */
   back?: { label: string; onClick: () => void };
   title?: string;
   subtitle?: string;
-  /** 标题组之后的自定义内容，如项目大厅的品牌与搜索。 */
+  /** Custom content after the title group, e.g. the project lobby's brand and search. / 标题组之后的自定义内容，如项目大厅的品牌与搜索。 */
   children?: ReactNode;
-  /** 靠右的页面级动作。 */
+  /** Page-level actions on the right. / 靠右的页面级动作。 */
   actions?: ReactNode;
 }
 
 /**
+ * Top bar of the page shell, 56px tall: "Back | Title | Subtitle" grouped on the left, with the back arrow on the same vertical line as the sidebar icons,
+ * and page-level actions on the right.
+ *
  * 页面外壳的顶栏，高 56px：「返回 | 标题 | 副标题」成组靠左，返回箭头与侧栏图标在同一条竖线上，
  * 页面级动作靠右。
  */

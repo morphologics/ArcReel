@@ -6,13 +6,27 @@ import type { ModelCandidatesResponse, SystemConfigOptions } from "@/types/syste
 import type { CustomProviderInfo } from "@/types/custom-provider";
 import type { ProviderInfo } from "@/types/provider";
 
-/** 一份目录译名快照连同它成文所用的语言——语言对不上的快照一律不参与叠加。 */
+/** A catalog translation snapshot together with the language it was written in — snapshots whose language doesn't match never take part in layering. / 一份目录译名快照连同它成文所用的语言——语言对不上的快照一律不参与叠加。 */
 interface LocalizedSnapshot {
   language: string;
   names: CatalogDisplayNames;
 }
 
 /**
+ * Provider and model names shown in dropdowns, four layers stacked from oldest to newest: catalog (`/providers`, including non-ready providers,
+ * covering entries still in effect such as built-in providers that lost their credentials and disabled custom models) -> built-in catalog
+ * re-fetched after a language switch -> options (whole-page config, re-fetched on save) -> candidates (re-fetched per language).
+ *
+ * A language switch doesn't re-fetch the whole-page config — that would also wipe unsaved edits in the form. Candidates are re-fetched per language, but they list only ready
+ * providers; when the effective value points at a provider that lost its credentials, only the catalog layer can supply the name, and the caller's catalog snapshot
+ * was fetched along with the form and doesn't follow the language. So this hook fetches its own catalog translations to put under the candidates: translations only, without writing back
+ * to the caller's catalog — capability fields are language-independent, re-fetching them gains nothing and would disturb downstream computations that depend on it.
+ *
+ * Only the built-in catalog is self-fetched: names of custom providers and models are user-entered and don't change with language, so the bottom layer is final.
+ *
+ * In the mount language nothing is fetched and no self-fetched snapshot is layered: the caller's catalog is already in that language, a repeat request brings nothing new. The snapshot records
+ * the language it was written in, so switching back to the mount language naturally drops it, without covering the caller's catalog with names from the previous language.
+ *
  * 下拉里显示的供应商名与模型名，四层叠加、由旧到新：目录（`/providers`，含未 ready 的供应商，
  * 兜住已失去凭证的内置供应商与被停用的自定义模型这类仍是生效值的条目）→ 语言切换后重取的
  * 内置目录 → options（整页配置，随保存重取）→ 候选（随语言重取）。
@@ -47,6 +61,7 @@ export function useDisplayNames(
          
         setSnapshot({ language, names: catalogDisplayNames(res.providers) });
       },
+      // On failure keep the previous snapshot: names staying in the old language beat falling back to bare provider ids.
       // 失败保留上一份快照：名字停留在旧语言，好过退回裸 provider id。
       () => undefined,
     );

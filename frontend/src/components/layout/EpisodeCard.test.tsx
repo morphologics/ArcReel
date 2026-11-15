@@ -6,6 +6,9 @@ import type { EpisodeMeta } from "@/types/project";
 import type { GenerationRoute } from "@/utils/generation-mode";
 
 /**
+ * Both numbers on the episode card come from the project summary, counted by the artifact manifest: available = current U stale,
+ * with stale counted separately. The workbench reads the same counts, and the two places must not disagree.
+ *
  * 剧集卡上的两个数字都来自项目摘要，口径是产物清单：可用 = current ∪ stale，
  * stale 另计。工作台读的是同一份计数，两处不得各说各话。
  */
@@ -32,6 +35,7 @@ function renderCard(ep: EpisodeMeta, route: GenerationRoute = "storyboard") {
 
 describe("EpisodeCard", () => {
   it("reports available videos against the total, not the script item count", () => {
+    // item_count and videos.total deliberately differ: an implementation reading the wrong field would show 4/4 or a bare 4.
     // item_count 与 videos.total 刻意取不同值：读错字段的实现会显示 4/4 或裸 4。
     renderCard(makeEpisode({ item_count: 9 }));
 
@@ -46,6 +50,7 @@ describe("EpisodeCard", () => {
       }),
     );
 
+    // stale is not subtracted from available: all 4 videos are available, and 3 more artifacts are older than the current content
     // stale 不从可用里扣：4 件视频全部可用，另有 3 件产物比当前内容旧
     expect(screen.getByText(/4\/4/)).toBeInTheDocument();
     expect(screen.getByText("3 件产物比当前内容旧")).toBeInTheDocument();
@@ -67,6 +72,7 @@ describe("EpisodeCard", () => {
   it("names the fallback count 分镜数 on the storyboard route", () => {
     renderCard(unplannedEpisode(), "storyboard");
 
+    // Nouns go in the body, not title: touch screens have no hover, and screen readers need not rely on tooltips
     // 名词进正文而不是 title：触屏没有悬停，读屏也不必依赖 tooltip
     expect(screen.getByText(/^4 分镜/)).toBeInTheDocument();
   });
@@ -78,6 +84,7 @@ describe("EpisodeCard", () => {
   });
 });
 
+/** An episode with only a script and no video artifacts scheduled yet: the card can only show the entry count itself. */
 /** 一集只有脚本、还没排视频产物：卡片只能显示条目数本身。 */
 function unplannedEpisode(): EpisodeMeta {
   return makeEpisode({

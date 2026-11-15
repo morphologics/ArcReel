@@ -29,23 +29,25 @@ interface ShotListProps {
   onSelect: (index: number) => void;
   contentMode: ListContentMode;
   projectName: string;
-  /** 竖屏分镜图的缩略图是竖条，横屏是横条。 */
+  /** For portrait storyboard images the thumbnail is a vertical strip, for landscape a horizontal one. / 竖屏分镜图的缩略图是竖条，横屏是横条。 */
   aspectRatio?: "9:16" | "16:9";
   collapsed: boolean;
   onToggleCollapse: () => void;
-  /** 追加一条分镜到末尾；缺省时列表头部不显示新增按钮。 */
+  /** Append a shot at the end; when omitted, the list header shows no add button. / 追加一条分镜到末尾；缺省时列表头部不显示新增按钮。 */
   onAppend?: InsertShotHandler;
-  /** 增删或保存在途时禁用新增。 */
+  /** Disable adding while an add/remove or save is in flight. / 增删或保存在途时禁用新增。 */
   appendDisabled?: boolean;
-  /** 改序：把分镜移到 afterId 之后，null 移到最前；缺省时列表不可排序。 */
+  /** Reorder: move the shot after afterId, null moves it to the front; when omitted, the list is not sortable. / 改序：把分镜移到 afterId 之后，null 移到最前；缺省时列表不可排序。 */
   onMove?: (itemId: string, afterId: string | null) => void | Promise<void>;
-  /** 改序或增删在途时禁用排序。 */
+  /** Disable sorting while a reorder or add/remove is in flight. / 改序或增删在途时禁用排序。 */
   moveDisabled?: boolean;
-  /** 展开时固定在列表底部的内容（快捷键提示）；收起时不显示。 */
+  /** Content pinned to the bottom of the list when expanded (shortcut hint); hidden when collapsed. / 展开时固定在列表底部的内容（快捷键提示）；收起时不显示。 */
   footer?: ReactNode;
 }
 
 function getImagePromptScene(seg: Segment): string {
+  // Check that scene is a string, not just that the key exists: the type allows ImagePrompt | string, and in real data
+  // scene may be null/undefined (hand-edited JSON, half-generated state); returning null avoids downstream toLowerCase() blowing up.
   // 校验 scene 是 string 而非仅 key 存在 —— 类型允许 ImagePrompt | string，且实际数据中
   // scene 可能为 null/undefined（手编 JSON、半生成态），返回 null 后下游 toLowerCase() 会炸。
   const ip = seg.image_prompt;
@@ -60,16 +62,21 @@ function getImagePromptScene(seg: Segment): string {
 function getSegmentText(seg: Segment, mode: ListContentMode): string {
   if (mode === "narration") return (seg as NarrationSegment).novel_text || "";
   if (mode === "ad") {
+    // Ad/short: the voiceover copy is first-class content, so the list preview shows it first; pure-visual shots without voiceover fall back to the visual description
     // 广告/短片：口播文案是一等内容，列表预览优先展示；无口播的纯画面分镜退回画面描述
     const voiceover = (seg as AdShot).voiceover_text;
     if (typeof voiceover === "string" && voiceover.trim()) return voiceover;
     return getImagePromptScene(seg);
   }
+  // Drama: use image_prompt.scene as the visual preview, symmetric with narration's novel_text
   // 剧情演绎：用 image_prompt.scene 作为画面预览，与 narration 的 novel_text 对称
   return getImagePromptScene(seg);
 }
 
 /**
+ * Shot list: 220px expanded, collapsed to a 44px position rail. When expanded it is searchable and sortable by drag handle or keyboard;
+ * while filtering by a search term sorting has no clear meaning, so the handles are disabled.
+ *
  * 分镜列表：展开 220px，收起为 44px 的位置栏。展开时可搜索，并用把手拖动或键盘排序；
  * 按搜索词筛选时排序没有明确含义，把手禁用。
  */
@@ -90,6 +97,7 @@ export function ShotList({
 }: ShotListProps) {
   const { t } = useTranslation("dashboard");
   const [search, setSearch] = useState("");
+  // While a reorder request is in flight, show the new order first; once settled, go back to segments (on success it is already the new order, on failure it reverts).
   // 改序请求在途时先按新顺序显示，落定后回到 segments（成功时它已是新顺序，失败时回到原序）。
   const [pendingOrder, setPendingOrder] = useState<string[] | null>(null);
   const fingerprints = useProjectsStore((s) => s.assetFingerprints);
@@ -107,6 +115,7 @@ export function ShotList({
     return pendingOrder;
   }, [indexById, pendingOrder]);
 
+  // Displayed positions follow display order: numbered by the new order while a reorder is in flight, matching the script once settled.
   // 显示的位置跟着显示顺序走：改序在途时按新顺序编号，落定后与剧本一致。
   const positionById = useMemo(() => new Map(orderedIds.map((id, i) => [id, i + 1])), [orderedIds]);
   const positionLabel = (id: string) => t("common:item_position_shot", { position: positionById.get(id) });
@@ -124,6 +133,7 @@ export function ShotList({
 
   const selectedId = segments[selectedIndex] ? getScriptItemId(segments[selectedIndex], contentMode) : null;
 
+  // When the selection is moved away by the keyboard or paging in the detail, the list scrolls to it; no scroll if it is already visible.
   // 选中项被键盘或详情里的翻页切走时，列表跟着滚到它；已在可见范围内时不动。
   useEffect(() => {
     if (!selectedId) return;

@@ -18,6 +18,18 @@ import {
  *
  * Output tokens are non-overlapping and concatenate back to the original text.
  *
+ * Matching runs on the raw text — tokens must concatenate back verbatim to overlay the textarea, so the source text can't be normalized — only
+ * the `name` extracted by `mentionNameFromMatch` is canonical. This leaves one residue: when a BOM falls inside a bare mention
+ * (`@张<U+FEFF>三`), `MENTION_RE`'s bare-name character class excludes U+FEFF, so highlighting only recognizes the part before the BOM
+ * and judges it unregistered. Reference image derivation goes through `extractMentions` (lines already normalized) and is unaffected; the two differ only in editor coloring;
+ * the wrapped form `@[名<U+FEFF>称]` has no such residue — the BOM is inside the brackets, and the name is taken whole and then normalized.
+ *
+ * @mention / speech tokenizer for the reference-video unit body editor.
+ *
+ * Regex mirrors lib/script/reference_video/text_parser.py via reference-mentions.MENTION_RE.
+ *
+ * Output tokens are non-overlapping and concatenate back to the original text.
+ *
  * 匹配跑在原始文本上——token 要逐字拼回原文覆盖在 textarea 上，源文本不能归一——只有
  * `mentionNameFromMatch` 取出的 `name` 是规范形。据此留一处残留：BOM 落在裸提及内部
  * （`@张<U+FEFF>三`）时 `MENTION_RE` 的裸名字符类不含 U+FEFF，高亮只认到 BOM 之前那截、
@@ -26,6 +38,10 @@ import {
  */
 
 /**
+ * Keys are always normalized asset names (callers must `normalizeAssetName` when building). The lookup side doesn't normalize again:
+ * mention names and speakers both come from `reference-mentions` parsing primitives, which promise canonical form — the two sides have different sources,
+ * and only a shared coordinate system hits reliably.
+ *
  * key 一律是归一后的资产名（callers 构建时须先 `normalizeAssetName`）。查询侧不再补归一：
  * mention 名与说话人都出自 `reference-mentions` 的解析原语，已承诺是规范形——两侧不同源，
  * 同一坐标系才能稳定命中。
@@ -33,6 +49,10 @@ import {
 export type { MentionLookup } from "@/utils/reference-mentions";
 
 /**
+ * `speech` is a voicing token recognized by the parser (`@[character]{line}` / `{line}`). `text` is always the whole span it occupies in the original
+ * (including `@[name]` and the braces), so the token sequence still concatenates back verbatim; an empty `speaker`
+ * means voiceover. The dialogue line body isn't a separate field — the render layer wants the whole original span; split out, nobody would consume it.
+ *
  * `speech` 是解析器认出的发声记号（`@[角色]{台词}` / `{台词}`）。`text` 恒为它在原文里
  * 占据的整段原文（含 `@[名称]` 与花括号），token 序列因此仍能逐字拼回原文；`speaker`
  * 为空串即画外音。台词正文不单列一个字段——渲染层要的是原文整段，拆出来无人消费。
@@ -45,6 +65,8 @@ export type Token =
 export function tokenizePrompt(text: string, lookup: MentionLookup): Token[] {
   if (text.length === 0) return [];
   const tokens: Token[] = [];
+  // Separators stay in the result via the capture group, so tokens still concatenate back to the original; the newline set matches the backend's splitlines.
+  // Splitting with a capture group yields "body, separator, body, ..."; odd positions are always separators, so judging by index suffices.
   // 分隔符随捕获组留在结果里，token 仍可拼回原文；换行集合与后端 splitlines 一致。
   // 捕获组分割的结果是「正文, 分隔符, 正文, …」，奇数位恒为分隔符，按下标判定即可。
   const lines = text.split(LINE_BREAK_RE);
@@ -61,6 +83,9 @@ export function tokenizePrompt(text: string, lookup: MentionLookup): Token[] {
 }
 
 /**
+ * Tokenizing a line (or a segment within a line): first split by voicing tokens, each token becoming one token, the rest then split by mention.
+ * The token is colored as a whole rather than per mention — the speaker slot doesn't feed reference images and is different from references in descriptions.
+ *
  * 一行（或行内一段）的分词：先按发声记号切开，记号成一个 token，其余部分再按 mention 切。
  * 记号整体着色而不再逐个 mention 上色——说话人位不进参考图，与描述里的引用是两回事。
  */
@@ -79,7 +104,7 @@ function pushLineTokens(out: Token[], text: string, lookup: MentionLookup): void
   }
 }
 
-/** 说话人只有登记角色才算解析成功——场景 / 道具名占说话人位在后端同样出 warning。 */
+/** A speaker parses successfully only if it is a registered character — scene / prop names in the speaker slot produce a warning on the backend too. / 说话人只有登记角色才算解析成功——场景 / 道具名占说话人位在后端同样出 warning。 */
 function speakerKindOf(speaker: string, lookup: MentionLookup): MentionKind {
   return Object.hasOwn(lookup, speaker) && lookup[speaker] === "character" ? "character" : "unknown";
 }
@@ -92,6 +117,8 @@ function pushMentionTokens(out: Token[], text: string, lookup: MentionLookup): v
       out.push({ kind: "text", text: text.slice(lastIdx, idx) });
     }
     const name = normalizeAssetName(mentionNameFromMatch(m));
+    // hasOwn rather than direct indexing: prototype-chain properties like `toString` are valid asset names, and when unregistered, indexing would fetch
+    // a function from Object.prototype and treat it as a resolved type.
     // hasOwn 而非直接下标：`toString` 等原型链属性是合法资产名，未登记时下标会取到
     // Object.prototype 上的函数并被当成已解析的类型。
     const resolved = Object.hasOwn(lookup, name) ? lookup[name] : undefined;
@@ -99,6 +126,8 @@ function pushMentionTokens(out: Token[], text: string, lookup: MentionLookup): v
       kind: "mention",
       text: m[0],
       name,
+      // All four asset kinds derive reference images by the same rule (ADR 0064); products, like characters / scenes / props, are colored with their own
+      // palette; only names that can't be found get the unknown style.
       // 四类资产同规则派生参考图（ADR 0064），商品与角色 / 场景 / 道具一样按自己的
       // 色板着色；只有查不到的名字才落 unknown 样式。
       assetKind: resolved ?? "unknown",
@@ -125,6 +154,20 @@ export function useUnitPromptHighlight(text: string, lookup: MentionLookup): Tok
  * textarea; this one groups by line so the preview can set apart the lines the
  * parser actually recognized as utterances.
  *
+ * A line holds a `dialogue` / `voiceover` by itself only when, apart from whitespace, the whole line is one voicing token; lines mixing tokens and description
+ * fall under `text`, with the token colored in place within the line as a `speech` token. Indentation and trailing whitespace don't affect this —
+ * the backend also strips before judging when parsing per line, so an indented dialogue line is dialogue on both sides.
+ *
+ * `sourceLine` is the 0-based raw line index (`splitScriptLines` order — one entry per
+ * physical line), the same coordinate system as the backend's `DraftViolation.line`
+ * (`lib/script/reference_video/draft_validation.py`, `text.splitlines()` coordinate system).
+ *
+ * Line-level view of the same unit body, for the read-only parse preview.
+ *
+ * `tokenizePrompt` stays character-exact because the editor overlays it on a
+ * textarea; this one groups by line so the preview can set apart the lines the
+ * parser actually recognized as utterances.
+ *
  * 整行除空白外只有一个发声记号时才独占一条 `dialogue` / `voiceover`；记号与描述混写的行
  * 归 `text`，记号作为 `speech` token 在行内就地着色。缩进与行尾空白不影响这一判定——
  * 后端按行解析时同样先 strip 再判，缩进写的台词两侧都是台词。
@@ -142,6 +185,9 @@ export function toScriptLines(text: string, lookup: MentionLookup): ScriptLine[]
   const lines: ScriptLine[] = [];
   for (const [sourceLine, raw] of splitScriptLines(text).entries()) {
     const parts = splitSpeechLine(raw.trim());
+    // When a line has only one token it stands alone, with speaker and dialogue line shown in columns; lines mixing tokens and description render as ordinary
+    // description lines, with tokens colored in place, so the reading order matches what the author wrote.
+    // Whitespace around a token doesn't count as "description": `  @[张三]：{我来了}  ` is the same dialogue line as one written flush left.
     // 整行只有一个记号时单独成行，说话人与台词分栏显示；记号与描述混写的行按普通
     // 描述行渲染，记号在行内就地着色，行文顺序因此与作者所写一致。
     // 记号两侧的空白不算「描述」：`  @[张三]：{我来了}  ` 与顶格写的是同一条台词。

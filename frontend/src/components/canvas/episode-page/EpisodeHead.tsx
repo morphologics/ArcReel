@@ -24,12 +24,15 @@ import { useDeleteEpisode } from "../episodes/useDeleteEpisode";
 import { EditableEpisodeTitle } from "./EditableEpisodeTitle";
 
 function formatDuration(seconds: number): string {
-  // 先对总秒数取整再拆分，否则 119.6 秒会写成 1:60
+  // Round the total seconds before splitting, otherwise 119.6 seconds would be written as 1:60 / 先对总秒数取整再拆分，否则 119.6 秒会写成 1:60
   const total = Math.round(seconds);
   return `${Math.floor(total / 60)}:${String(total % 60).padStart(2, "0")}`;
 }
 
 /**
+ * An episode's cost: "Spent" includes historical spend (left by deleted or changed entries), "Remaining" is settled only against the current script and deducted on the current script's basis.
+ * Without amounts all three show "—", not distinguishing 0 from unknown.
+ *
  * 一集的费用：「已花」含历史支出（已删改条目留下的），「剩余」只对当前剧本结算，按当前剧本口径扣减。
  * 没有金额时三项都写「—」，不区分 0 与未知。
  */
@@ -48,6 +51,9 @@ function episodeCostSummary(cost: EpisodeCost) {
 }
 
 /**
+ * The episode head on the first row of the episode page header: episode badge, editable episode title, stats icon (entry count, duration, video progress, estimated cost and spent / remaining, kept in
+ * the popover it opens rather than taking space on this row), and the "⋯" menu. All data comes from project details and the cost estimate; the canvas is not involved.
+ *
  * 集页页头第一行的集头：集徽标、可编辑的集标题、统计图标（条目数、时长、视频进度、预估费用与已花 / 剩余，收在它打开的
  * 弹层里，不占这一行），以及「⋯」菜单。数据都来自项目详情与费用估算，画布不参与。
  * The stats open on hover, click or tap; a hover-opened one closes when the pointer leaves, a clicked one on a click
@@ -68,18 +74,20 @@ export function EpisodeHead({
   route: GenerationRoute;
   canEditTitle: boolean;
   onSaveTitle: (title: string) => Promise<void>;
-  /** 广告/短片恒单集、演示项目只读：不给删除。 */
+  /** Ad/short is always a single episode and demo projects are read-only: no delete. / 广告/短片恒单集、演示项目只读：不给删除。 */
   canDelete: boolean;
 }) {
   const { t } = useTranslation("dashboard");
   const [, setLocation] = useLocation();
   const ledger = useEpisodeLedger();
   const position = episodePosition(ledger, episode);
+  // The cost table is a singleton: after switching projects it still holds the previous project's data until new data arrives, so use it only after checking the project name.
   // 费用表是单例：切项目后到新数据到达前仍是上一个项目的，按项目名核对后才用。
   const cost = useCostStore((s) =>
     s.costData?.project_name === projectName ? s._episodeIndex.get(episode) : undefined,
   );
   const confirmLeave = useConfirmLeave();
+  // The leave guard sits at the confirm-delete step: ask about unsaved changes first, then confirm delete; otherwise cancelling the delete after discarding would lose the changes for nothing
   // 离开拦截放在确认删除这一步：先问未保存修改再确认删除，放弃后取消删除就白丢了修改
   const deletion = useDeleteEpisode(projectName, () => setLocation(episodesViewPath()), confirmLeave);
 

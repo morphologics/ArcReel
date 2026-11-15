@@ -4,6 +4,9 @@ import { formatNameList } from "@/utils/list-format";
 import { bucketLabel } from "./unit-tier-problem";
 
 /**
+ * Structured notice for a split between declared references and available reference images: names each missing-image / unregistered reference and bucket change. The server has already bucketed
+ * by available images, and execution will block on the same issues; the canvas and the content review panel share this one, never silently changing buckets.
+ *
  * 声明引用与可用参考图分裂的结构化提示：逐条点名缺图 / 未登记的引用与桶的改变。服务端已按
  * 可用图定桶，执行侧会以同样的问题阻断；画布与内容确认面板共用这一份，不静默换桶。
  */

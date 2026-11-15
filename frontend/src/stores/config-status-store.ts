@@ -1,4 +1,8 @@
 /**
+ * Config problems of global settings. Each problem carries its section, and `useSectionConfigIssues(section)` fetches them by section:
+ * the sidebar only shows a warning marker on that section's entry, and inside the section `settings/ConfigIssueNotice` shows the hint; no global banner.
+ * "Embedded Agent not configured" is only hinted in the "ArcReel Agent" section, is not counted in `isComplete`, and does not light the red dot in the lobby and top bar.
+ *
  * 全局设置的配置问题。每条问题带所属分区，由 `useSectionConfigIssues(section)` 按分区取用：
  * 侧栏只在该分区的条目上显示警告标记，分区内用 `settings/ConfigIssueNotice` 提示，不做全局横幅。
  * 「内嵌 Agent 未配置」只在「ArcReel Agent」分区提示，不计入 `isComplete`，大厅与顶栏的红点不因它亮起。
@@ -15,10 +19,10 @@ import { useEndpointCatalogStore } from "./endpoint-catalog-store";
 
 export interface ConfigIssue {
   key: string;
-  /** 问题所属的全局设置分区。 */
+  /** Global settings section the problem belongs to. / 问题所属的全局设置分区。 */
   section: SettingsSection;
   label: string;
-  /** 补充说明的 i18n 键：后果与处理方式。 */
+  /** i18n key of the supplementary note: consequences and how to handle it. / 补充说明的 i18n 键：后果与处理方式。 */
   description?: string;
 }
 
@@ -38,6 +42,8 @@ async function getConfigStatus(): Promise<{
   // Check any provider supports each required media type.
   const readyProviders = providers.filter((p) => p.status === "ready");
 
+  // The endpoint->mediaType map for custom providers must be derived from the catalog: only fetch when there are custom providers
+  // (otherwise the empty map is never read, avoiding a pointless HTTP request for existing users already running).
   // 自定义 provider 的 endpoint→mediaType 映射要从 catalog 派生：仅在有自定义 provider 时
   // 才需要 fetch（否则空映射也不会被读到，避免给已运行的旧用户加一次无谓 HTTP）。
   if (customProviders.length > 0) {
@@ -78,6 +84,8 @@ async function getConfigStatus(): Promise<{
     });
   }
 
+  // audio is an optional capability (only for narration/commentary); missing it does not add to the issues red dot;
+  // availability is exposed via availableMediaTypes for generation entries to show the "configure an audio provider first" precondition hint.
   // audio 是可选能力（仅旁白/解说用），缺失不进 issues 红点；
   // 可用性经 availableMediaTypes 暴露给生成入口做"请先配置 audio 供应商"前置提示。
   const availableMediaTypes = ["image", "video", "text", "audio"].filter(hasMediaType);
@@ -96,30 +104,33 @@ async function getConfigStatus(): Promise<{
 interface ConfigStatusState {
   issues: ConfigIssue[];
   isEmbeddedAgentConfigured: boolean;
-  /** 当前已就绪供应商（含自定义）覆盖到的媒体类型集合。 */
+  /** Set of media types covered by currently ready providers (including custom ones). / 当前已就绪供应商（含自定义）覆盖到的媒体类型集合。 */
   availableMediaTypes: string[];
   isComplete: boolean;
   loading: boolean;
   initialized: boolean;
-  /** 进行中刷新期间又收到 refresh() 时置位,本轮完成后补跑一次,避免丢掉最后一次请求的数据。 */
+  /** Set when refresh() is received during an in-progress refresh; runs once more after this round, so the last request's data is not lost. / 进行中刷新期间又收到 refresh() 时置位,本轮完成后补跑一次,避免丢掉最后一次请求的数据。 */
   pendingRefresh: boolean;
-  /** 是否有就绪供应商支持该媒体类型（如 hasMediaType("audio")）。 */
+  /** Whether a ready provider supports this media type (e.g. hasMediaType("audio")). / 是否有就绪供应商支持该媒体类型（如 hasMediaType("audio")）。 */
   hasMediaType: (type: string) => boolean;
   fetch: () => Promise<void>;
   refresh: () => Promise<void>;
 }
 
 export const useConfigStatusStore = create<ConfigStatusState>((set, get) => {
+  // Single in-flight refresh chain: concurrent refresh()/fetch() all reuse it,
+  // and the returned Promise only resolves after the data (including the rerun) has actually landed; finishing await means the state is current.
   // 单条在途刷新链:并发 refresh()/fetch() 都复用它,
   // 返回的 Promise 只在数据(含补跑)真正落地后才 resolve——await 完即代表状态最新。
   let inflight: Promise<void> | null = null;
 
   const run = async (): Promise<void> => {
+    // Loop until there is no new pending: the rerun completes on the same chain instead of resolving early.
     // 循环直到没有新的 pending:补跑在同一条链上完成,而非提前 resolve。
     for (;;) {
       set({ loading: true, pendingRefresh: false });
       try {
-        // react-doctor-disable-next-line react-doctor/async-await-in-loop -- 补跑必须等上一轮落地后再读 pendingRefresh，并发会让旧响应覆盖新数据
+        // react-doctor-disable-next-line react-doctor/async-await-in-loop -- the rerun must wait for the previous round to land before reading pendingRefresh; concurrency would let an old response overwrite new data / 补跑必须等上一轮落地后再读 pendingRefresh，并发会让旧响应覆盖新数据
         const { issues, availableMediaTypes, isEmbeddedAgentConfigured } = await getConfigStatus();
         set({
           issues,
@@ -129,10 +140,13 @@ export const useConfigStatusStore = create<ConfigStatusState>((set, get) => {
           initialized: true,
         });
       } catch {
+        // On failure fall back to uninitialized and clear the capability set: so no consumer (including future callers that do not check initialized)
+        // trusts the last successful stale data, while the next fetch() can still retry.
         // 失败回退未初始化并清空能力集：避免任何消费方（含未来不检查 initialized 的调用方）
         // 把上一次成功的过期数据当作可信，同时让下次 fetch() 仍可重试。
         set({ initialized: false, availableMediaTypes: [], isEmbeddedAgentConfigured: false });
       }
+      // loading is set false only when the whole chain ends: it stays true between reruns to avoid a true->false->true flicker.
       // loading 仅在整条链终止时才置 false:补跑间隙保持 true,避免 true→false→true 闪烁。
       if (!get().pendingRefresh) {
         set({ loading: false });
@@ -154,11 +168,15 @@ export const useConfigStatusStore = create<ConfigStatusState>((set, get) => {
 
     fetch: async () => {
       if (get().initialized) return;
+      // A refresh is already in flight: wait for it instead of starting another round; if none is in flight, start one.
       // 已有刷新在途:等它,而不是另起一轮;无在途则发起一次。
       await (inflight ?? get().refresh());
     },
 
     refresh: () => {
+      // A refresh is already in flight: mark a rerun and reuse the same completion chain, so all concurrent callers await the final landing.
+      // Otherwise the "refresh() after saving a provider" would be silently swallowed by the in-progress initial load/previous refresh,
+      // leaving the red dot/warnings at the old pre-save value.
       // 已有刷新在途:标记补跑并复用同一条完成链,所有并发调用方都 await 到最终落地。
       // 否则"保存供应商后的 refresh()"会被进行中的初始加载/前一次刷新静默吞掉,
       // 红点/警示停留在保存前的旧值。
@@ -182,6 +200,10 @@ const EMBEDDED_AGENT_ISSUE: ConfigIssue = {
 };
 
 /**
+ * Config problems a global settings section should hint in place; without a section, returns problems of all sections.
+ * Adds "Embedded Agent not configured" on top of `issues`: the embedded Agent is optional, not counted in `isComplete`,
+ * does not light the red dot in the lobby and top bar, and is only hinted in the "ArcReel Agent" section and its sidebar entry.
+ *
  * 全局设置里某个分区要就地提示的配置问题；不传分区时返回全部分区的问题。
  * 在 `issues` 之外加上「内嵌 Agent 未配置」：内嵌 Agent 是可选项，它不计入 `isComplete`，
  * 大厅与顶栏的红点不因它亮起，只在「ArcReel Agent」分区与其侧栏项提示。

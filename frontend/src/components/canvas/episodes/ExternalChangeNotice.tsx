@@ -21,6 +21,11 @@ function fileName(sourceFile: string): string {
 }
 
 /**
+ * Notice at the top of the "Episodes" view: whole-source files changed outside ArcReel, each listing affected episodes computed by snapshot alignment.
+ *
+ * "Update episode ledger" submits with this list's `revision`, i.e. confirms this list; if the list changes meanwhile, confirm again with the new list.
+ * The notice disappears after updating, with no further notice.
+ *
  * 「分集」视图顶部的提示：整本源文里在 ArcReel 之外被改动过的文件，各列出按快照对齐算出的受影响集。
  *
  * 「更新分集账本」带着提示里这份清单的 `revision` 提交，即确认这份清单；清单在此期间变了时换成新清单再确认一次。

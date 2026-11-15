@@ -21,15 +21,18 @@ export type MediaFilter = MediaType | "all";
 interface Props {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  /** 面板打开时的媒体类型筛选；不给就从「全部」开始。 */
+  /** Media type filter when the panel opens; if not given, start from "All". / 面板打开时的媒体类型筛选；不给就从「全部」开始。 */
   mediaType?: MediaType;
-  /** 选中一个条目。面板只把条目交回调用方并关闭，不保存任何东西。 */
+  /** Selects an entry. The panel only hands the entry back to the caller and closes; it saves nothing. / 选中一个条目。面板只把条目交回调用方并关闭，不保存任何东西。 */
   onSelect: (entry: CatalogEntryHit) => void;
-  /** 面板标题（读屏可见）；不给用「从模型目录选择」。 */
+  /** Panel title (visible to screen readers); defaults to "Choose from model catalog". / 面板标题（读屏可见）；不给用「从模型目录选择」。 */
   title?: string;
 }
 
 /**
+ * Model catalog picker panel: search by name, filter by media type, and hand the selected entry to the caller.
+ * Shared by "Link another model", "Matched model" in the fetch models dialog, and tier binding of Agent credentials.
+ *
  * 模型目录选择面板：按名称搜索、按媒体类型筛选，选中后把条目交给调用方。
  * 「关联其他模型」、获取模型对话框里的「对应模型」和 Agent 凭证的档位绑定共用它。
  */
@@ -82,6 +85,7 @@ function PickerBody({
           </Button>
         </div>
       ) : (
+        // Before results are ready, the previous results stay visible but unselectable, to avoid picking an entry that doesn't match the current search term or filter
         // 结果就绪前，上一次的结果仍显示但不可选，避免选中与当前搜索词或筛选不符的条目
         <CommandList label={t("dashboard:catalog_picker_list")} className="max-h-[50dvh]" aria-busy={!settled}>
           {search.entries !== null && (
@@ -107,7 +111,7 @@ function PickerBody({
   );
 }
 
-/** 目录条目在列表里的两行：显示名（已下架另标），厂商与媒体类型。 */
+/** Two lines of a catalog entry in the list: display name (delisted marked separately), vendor and media type. / 目录条目在列表里的两行：显示名（已下架另标），厂商与媒体类型。 */
 export function CatalogEntryLabel({ entry }: { entry: CatalogEntryHit }) {
   const { t } = useTranslation("dashboard");
   return (
@@ -125,7 +129,7 @@ export function CatalogEntryLabel({ entry }: { entry: CatalogEntryHit }) {
   );
 }
 
-/** 按媒体类型筛选：全部、文本、图片、视频、音频，总有一项选中。 */
+/** Filter by media type: All, Text, Image, Video, Audio; one item is always selected. / 按媒体类型筛选：全部、文本、图片、视频、音频，总有一项选中。 */
 export function CatalogMediaFilter({ value, onChange }: { value: MediaFilter; onChange: (next: MediaFilter) => void }) {
   const { t } = useTranslation("dashboard");
   return (
@@ -136,7 +140,7 @@ export function CatalogMediaFilter({ value, onChange }: { value: MediaFilter; on
         size="sm"
         value={[value]}
         onValueChange={(next: string[]) => {
-          // 再点已选中的一项不取消选择，筛选总有一项生效
+          // Clicking the selected item again doesn't deselect, so one filter is always in effect / 再点已选中的一项不取消选择，筛选总有一项生效
           if (next[0]) onChange(next[0] as MediaFilter);
         }}
       >

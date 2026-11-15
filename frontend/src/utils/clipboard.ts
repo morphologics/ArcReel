@@ -11,6 +11,7 @@ export async function copyText(text: string): Promise<void> {
   ta.select();
   const copied = document.execCommand("copy");
   document.body.removeChild(ta);
+  // execCommand reports failure via its return value, not by throwing; without turning it into a reject, callers would treat failure as success
   // execCommand 以返回值报告失败，不抛异常；不转成 reject 的话调用方会把失败当成功
   if (!copied) throw new Error("clipboard copy failed");
 }

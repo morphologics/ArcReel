@@ -16,21 +16,21 @@ interface NarrationAudioCardProps {
   readOnly?: boolean;
   projectName: string;
   segmentId: string;
-  /** 只读小说原文（旁白文本来源） */
+  /** Read-only novel source text (source of the narration text) / 只读小说原文（旁白文本来源） */
   novelText: string;
-  /** narration_audio 相对路径，如 audio/segment_E1S01.wav */
+  /** narration_audio relative path, e.g. audio/segment_E1S01.wav / narration_audio 相对路径，如 audio/segment_E1S01.wav */
   assetPath: string | null;
-  /** 进行中状态 */
+  /** In-progress state / 进行中状态 */
   generating?: boolean;
-  /** 生成按钮是否禁用 */
+  /** Whether the generate button is disabled / 生成按钮是否禁用 */
   generateDisabled?: boolean;
-  /** 自定义禁用 tooltip */
+  /** Custom disabled tooltip / 自定义禁用 tooltip */
   generateDisabledHint?: string;
-  /** 估算费用（按币种 breakdown） */
+  /** Estimated cost (breakdown by currency) / 估算费用（按币种 breakdown） */
   estimatedCost?: CostBreakdown;
-  /** 触发生成 */
+  /** Trigger generation / 触发生成 */
   onGenerate?: () => void;
-  /** 生成按钮文案，缺省按有无产物写「生成」或「重新生成」；有未保存修改时传「保存并生成」。 */
+  /** Generate button text; defaults to "Generate" or "Regenerate" depending on whether an artifact exists; pass "Save and generate" when there are unsaved changes. / 生成按钮文案，缺省按有无产物写「生成」或「重新生成」；有未保存修改时传「保存并生成」。 */
   generateLabel?: string;
 }
 
@@ -54,6 +54,7 @@ export function NarrationAudioCard({
   const restoringRef = useRef(false);
   const checkBusy = () => restoringRef.current || isResourceBusy("tts", projectName, segmentId);
   const onRestoringChange = (next: boolean) => { restoringRef.current = next; setRestoring(next); };
+  // Shares the same trim rule as ShotDetail's button disable check, avoiding the contradictory state of "card has text but button is disabled"
   // 与 ShotDetail 的按钮禁用判定共用同一套 trim 规则，避免"卡片有正文、按钮却禁用"的矛盾态
   const hasNovelText = novelText.trim().length > 0;
 
@@ -84,14 +85,14 @@ export function NarrationAudioCard({
         </div>
       </div>
 
-      {/* 只读原文 + 播放器 */}
+      {/* Read-only source text + player / 只读原文 + 播放器 */}
       <div className="rounded-lg border border-border/50 border-l-2 border-l-primary/25 bg-muted/30 px-3 py-2.5">
         <p className="display-serif max-w-[40em] text-sm leading-relaxed whitespace-pre-wrap text-foreground">
           {hasNovelText ? novelText : t("no_original_text")}
         </p>
 
         {audioUrl ? (
-          // eslint-disable-next-line jsx-a11y/media-has-caption -- 生成式旁白暂无字幕源，文本内容即上方只读原文
+          // eslint-disable-next-line jsx-a11y/media-has-caption -- generated narration has no caption source yet; the text content is the read-only source text above / 生成式旁白暂无字幕源，文本内容即上方只读原文
           <audio
             controls
             src={audioUrl}

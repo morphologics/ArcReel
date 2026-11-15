@@ -23,6 +23,14 @@ import type { SourceKind } from "@/types/episodes-view";
 import { episodeDisplayName, episodePosition } from "@/utils/episode-display";
 
 /**
+ * Starting state of the "Script plan" tab: the episode has neither a script plan nor a final script. Top to bottom: the starter area (the only entry for first-time planning)
+ * and the episode source. The episode guide sits in a right sidebar fixed while scrolling when the view is wider than 860px; narrower, it moves back above the source and is collapsible.
+ * Applies to narration, drama and reference-to-video; ad projects are always single-episode with no source slices and are excluded by the episode page.
+ *
+ * Episode source differs by origin: episodes sliced from the whole source are read-only (episode files derive from episode planning; edit them in the "Episodes" view); episodes with their own source
+ * and episodes without source are edited in place, the source being one edit unit. Drama projects also pick the source file kind; if changing the kind would make the episode's existing
+ * script plan stale, confirm before saving.
+ *
  * 「脚本规划」tab 的起步态：本集既没有脚本规划也没有正式脚本。自上而下是起步区（首次规划的唯一入口）
  * 与本集原文；本集导览在视图宽 860px 以上放右侧栏并随滚动固定，更窄时回到原文上方、可折叠。
  * 适用 narration、drama 与参考生视频；广告项目恒单集、没有源文切片，由集页排除。
@@ -39,7 +47,7 @@ function sourceOriginOf(meta: EpisodeMeta | undefined): SourceOrigin {
 }
 
 // ---------------------------------------------------------------------------
-// 本集导览：节拍是顺序，保留编号；尾钩子单独一块
+// Episode guide: beats are ordered, numbering kept; the end hook is its own block / 本集导览：节拍是顺序，保留编号；尾钩子单独一块
 // ---------------------------------------------------------------------------
 
 function hasGuide(meta: EpisodeMeta | undefined): boolean {
@@ -55,7 +63,7 @@ function GuideContent({ meta }: { meta: EpisodeMeta | undefined }) {
       {beats.length > 0 && (
         <ol className="flex flex-col gap-2.5">
           {beats.map((beat, index) => (
-            // react-doctor-disable-next-line react-doctor/no-array-index-as-key -- 节拍是只读的有序文本，不重排不增删、无行内状态，位置即身份，文本可能重复不能作 key
+            // react-doctor-disable-next-line react-doctor/no-array-index-as-key -- beats are read-only ordered text, never reordered/added/removed, no row state; position is identity and text may repeat so it cannot be the key / 节拍是只读的有序文本，不重排不增删、无行内状态，位置即身份，文本可能重复不能作 key
             <li key={index} className="flex gap-2.5 text-sm leading-relaxed">
               <span aria-hidden className="w-4 shrink-0 text-right font-semibold text-primary tabular-nums">
                 {index + 1}
@@ -86,7 +94,7 @@ function guideSummary(meta: EpisodeMeta | undefined, t: (key: string, options?: 
   ].filter((part): part is string => part !== null);
 }
 
-/** 窄视图：导览放在原文上方，默认展开，可以收起。 */
+/** Narrow view: guide sits above the source, expanded by default, collapsible. / 窄视图：导览放在原文上方，默认展开，可以收起。 */
 function GuideCollapsible({ meta, className }: { meta: EpisodeMeta | undefined; className?: string }) {
   const { t } = useTranslation("dashboard");
   return (
@@ -111,7 +119,7 @@ function GuideCollapsible({ meta, className }: { meta: EpisodeMeta | undefined; 
   );
 }
 
-/** 宽视图：导览在右侧栏，随滚动固定在视野里。 */
+/** Wide view: guide in the right sidebar, fixed in view while scrolling. / 宽视图：导览在右侧栏，随滚动固定在视野里。 */
 function GuideRail({ meta, className }: { meta: EpisodeMeta | undefined; className?: string }) {
   const { t } = useTranslation("dashboard");
   const titleId = useId();
@@ -128,10 +136,10 @@ function GuideRail({ meta, className }: { meta: EpisodeMeta | undefined; classNa
 }
 
 // ---------------------------------------------------------------------------
-// 本集原文
+// Episode source / 本集原文
 // ---------------------------------------------------------------------------
 
-/** 切片的来源说明：文件名、起止偏移与约略字数；跨文件的切片起止偏移不能相减，只写起止文件。 */
+/** Slice origin note: file name, start/end offsets and approximate character count; offsets of cross-file slices cannot be subtracted, so only the start and end files are shown. / 切片的来源说明：文件名、起止偏移与约略字数；跨文件的切片起止偏移不能相减，只写起止文件。 */
 function SourceRangeNote({ meta }: { meta: EpisodeMeta | undefined }) {
   const { t } = useTranslation("dashboard");
   const r = meta?.source_range;
@@ -162,17 +170,17 @@ const READING_CLS = "max-w-[40em] font-editorial text-base leading-loose whitesp
 
 interface SourceValue {
   text: string;
-  /** 源文件类型；null 时不提供类型选择（非剧情演绎项目）。 */
+  /** Source file kind; null means no kind picker (non-drama project). / 源文件类型；null 时不提供类型选择（非剧情演绎项目）。 */
   kind: SourceKind | null;
 }
 
-/** 原文编辑单元交给同页规划入口的句柄：规划读的是已保存的原文。 */
+/** Handle the source edit unit gives the same-page planning entry: planning reads the saved source. / 原文编辑单元交给同页规划入口的句柄：规划读的是已保存的原文。 */
 interface SourceEditHandle {
-  /** 保存未保存的修改，返回是否可以继续；没有修改时直接返回 true，保存在途时返回 false。 */
+  /** Save unsaved changes and return whether to proceed; returns true directly when there are no changes, false while a save is in flight. / 保存未保存的修改，返回是否可以继续；没有修改时直接返回 true，保存在途时返回 false。 */
   save: () => Promise<boolean>;
 }
 
-/** 自带原文与无原文的集：原文就地编辑，保存前按需确认改类型。保存后由调用方采用新内容并刷新项目。 */
+/** Episodes with own source or no source: edit in place, confirm the kind change before saving when needed. After saving, the caller adopts the new content and refreshes the project. / 自带原文与无原文的集：原文就地编辑，保存前按需确认改类型。保存后由调用方采用新内容并刷新项目。 */
 function SourceEditor({
   projectName,
   episode,
@@ -191,7 +199,7 @@ function SourceEditor({
   const { t } = useTranslation("dashboard");
   const fieldRef = useRef<HTMLTextAreaElement>(null);
   const barRef = useRef<HTMLDivElement>(null);
-  // 改类型的确认：受影响的集，以及等确认结果的保存
+  // Kind-change confirmation: affected episodes, plus the save waiting on the confirmation result / 改类型的确认：受影响的集，以及等确认结果的保存
   const [pending, setPending] = useState<number[] | null>(null);
   const [confirming, setConfirming] = useState(false);
   const resolveRef = useRef<((confirmed: boolean) => void) | null>(null);
@@ -199,7 +207,7 @@ function SourceEditor({
     resolveRef.current?.(confirmed);
     resolveRef.current = null;
   };
-  // 卸载时还在等确认：按取消结算，保存随之失败
+  // Still awaiting confirmation on unmount: settle as cancel, so the save fails / 卸载时还在等确认：按取消结算，保存随之失败
   useEffect(() => () => resolveRef.current?.(false), []);
 
   const save = useCallback(
@@ -230,6 +238,7 @@ function SourceEditor({
     },
     [projectName, episode, onSaved, t],
   );
+  // Only let through navigation that stays in the script plan view; going to episodes, another episode or another view asks as usual
   // 只放行仍停留在脚本规划视图的跳转；去分集、别的集或别的视图照常询问
   const allowNavigation = useStaysInEpisodeView();
   const unit = useEditUnit({ source: saved, save, allowNavigation });
@@ -241,6 +250,7 @@ function SourceEditor({
       save: async () => {
         if (saving) return false;
         const done = await saveUnit();
+        // The save failure reason shows in the notice bar under the source: bring it into view and do not submit planning
         // 保存失败的原因显示在原文下方的提示条上：把它带到眼前，规划不提交
         if (!done) barRef.current?.scrollIntoView({ block: "nearest" });
         return done;
@@ -270,13 +280,14 @@ function SourceEditor({
           />
         </label>
       )}
-      {/* 正文用编辑体，与只读的原文同一字族；框随内容撑高，由起步态整体滚动 */}
+      {/* Body uses the editor font, same family as the read-only source; the box grows with content, the starting state scrolls as a whole / 正文用编辑体，与只读的原文同一字族；框随内容撑高，由起步态整体滚动 */}
       <div className="max-w-[calc(40em+1.25rem)] font-editorial">
         <Textarea
           ref={fieldRef}
           variant="plain"
           value={unit.value.text}
           onChange={(event) => unit.setValue((prev) => ({ ...prev, text: event.target.value }))}
+          // Read-only while saving: planning reads the saved source after this save settles; editing meanwhile would make planning use stale content
           // 保存期间只读：规划等这次保存落定后读已保存的原文，期间再改会让规划用上旧内容
           readOnly={saving}
           placeholder={t("episode_workspace_source_placeholder")}
@@ -336,10 +347,12 @@ function EpisodeSource({
   const isDrama = useProjectsStore((s) => s.currentProjectData?.content_mode === "drama");
   const origin = sourceOriginOf(meta);
   const editable = origin !== "whole_source";
+  // Episodes without source have no episode source file: a same-named episode_N.txt on disk is an unregistered file, not read as this episode's source
   // 无原文的集没有集原文文件：盘上同名的 episode_N.txt 是未登记文件，不当作本集原文读取
   const withoutSource = meta !== undefined && origin === "none";
   const fetchKey = `${projectName}::${episode}`;
   const sourceRevision = useAppStore((s) => s.getEntityRevision(`episode:${episode}`) + s.getEntityRevision("project:project"));
+  // Fetched source carries its owner key; loading is derived from whether the key matches; episodes without source show only the content just saved on this page
   // 取到的原文带上归属 key，加载中由 key 是否匹配派生；无原文的集只显示本页刚保存的内容
   const [fetched, setFetched] = useState<{ key: string; text: string | null } | null>(null);
 
@@ -410,7 +423,7 @@ function EpisodeSource({
 }
 
 // ---------------------------------------------------------------------------
-// 入口
+// Entry / 入口
 // ---------------------------------------------------------------------------
 
 export function EpisodeSourceReview({
@@ -424,6 +437,7 @@ export function EpisodeSourceReview({
 }) {
   const meta = episodes.find((e) => e.episode === episode);
   const guide = hasGuide(meta);
+  // Planning reads the saved source: if the same-page source has unsaved changes save first; don't submit if the save fails or the kind change is not confirmed
   // 规划读的是已保存的原文：同页原文有未保存修改时先保存，保存失败或不确认改类型时不提交
   const sourceRef = useRef<SourceEditHandle | null>(null);
   const saveSource = useCallback(() => sourceRef.current?.save() ?? Promise.resolve(true), []);

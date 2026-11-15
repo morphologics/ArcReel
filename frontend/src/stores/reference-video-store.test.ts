@@ -56,6 +56,7 @@ describe("reference-video-store", () => {
 
     const state = useReferenceVideoStore.getState();
     expect(state.unitsByEpisode["proj::1"]).toHaveLength(2);
+    // Per-unit bucket and option verdicts land together with the list; the canvas only reads this server result.
     // 逐单元的桶与档位结论随列表一起落地，画布只读这份服务端结果。
     expect(state.unitCapabilitiesByEpisode["proj::1"].E1U2.hydrated_capability).toBe("r2v");
     expect(state.loading).toBe(false);
@@ -75,6 +76,8 @@ describe("reference-video-store", () => {
   });
 
   it("loadUnits 丢弃迟到响应，不让旧结果盖住新结果", async () => {
+    // The canvas effect and task-completion invalidation may stack two loadUnits on the same key: if the earlier one returns later,
+    // it overwrites the final cut already generated in the newer response with old data, and the UI stays on "no final cut" until the next invalidation.
     // 画布 effect 与任务完成失效可能在同一 key 上叠出两次 loadUnits：先发的那次若后返回，
     // 会把新响应里已经生成的成片盖成旧数据，界面停在「无成片」直到下一次失效。
     const releases: Array<(units: ReferenceVideoUnit[]) => void> = [];
@@ -87,6 +90,7 @@ describe("reference-video-store", () => {
     await act(async () => {
       first = useReferenceVideoStore.getState().loadUnits("proj", 1);
       second = useReferenceVideoStore.getState().loadUnits("proj", 1);
+      // The later one returns first (with final cut), the earlier one is late (no final cut).
       // 后发的先返回（带成片），先发的迟到（无成片）。
       releases[1]([mkUnit("E1U1", { generated_assets: { ...mkUnit("E1U1").generated_assets, video_clip: "v.mp4" } })]);
       releases[0]([mkUnit("E1U1")]);
@@ -98,6 +102,8 @@ describe("reference-video-store", () => {
   });
 
   it("迟到的加载不撤销加载期间落定的增删改排序", async () => {
+    // The write entry reads the list after the write, while the in-flight GET reads the one before it. If the late response were written back as usual,
+    // the user's just-made edit would be undone in the UI until the next invalidation restores it.
     // 写入口读到的是写入之后的列表，在途的那次 GET 读的是写入之前的。迟到响应若照样写回，
     // 用户刚做的编辑会在界面上被撤销，直到下一次失效才复原。
     const releases: Array<(units: ReferenceVideoUnit[]) => void> = [];
@@ -118,6 +124,7 @@ describe("reference-video-store", () => {
 
     const state = useReferenceVideoStore.getState();
     expect(state.unitsByEpisode["proj::1"].map((u) => u.unit_id)).toEqual(["E1U9"]);
+    // The voided load is discarded and no longer resets itself; if the write entry did not settle it, the canvas would stay in loading state forever.
     // 被作废的那次加载直接丢弃、不再自己复位，写入口不结算的话画布会一直停在加载态。
     expect(state.loading).toBe(false);
   });
@@ -178,6 +185,7 @@ describe("reference-video-store", () => {
     });
 
     expect(useReferenceVideoStore.getState().unitsByEpisode["proj::1"][0].note).toBe("updated");
+    // Body changes may change the available reference images, so buckets and options refresh in sync with the PATCH response.
     // 正文改动可能改变可用参考图，桶与档位随 PATCH 回包同步刷新。
     expect(useReferenceVideoStore.getState().unitCapabilitiesByEpisode["proj::1"].E1U1).toMatchObject({
       hydrated_capability: "r2v",

@@ -1,4 +1,8 @@
 /**
+ * The demo Agent panel plays out the timing of a first production, and the order is part of the content: the user sends "Start production" -> completed
+ * steps -> the Agent reports progress. If the order were reversed, the flow described in tour step 7 would not match, and that neither fails typecheck
+ * nor is caught by anchor tests.
+ *
  * 演示 Agent 面板演的是首次制作的时序，先后顺序是内容的一部分：用户发「开始制作」→ 已完成的
  * 工序 → Agent 汇报推进。顺序反了，引导第 7 步讲的流程就对不上，而这既不会让 typecheck 报错，
  * 也不会被锚点测试发现。
@@ -29,6 +33,7 @@ describe("DemoAssistantPanel", () => {
   it("shows the finished work as plain rows that cannot be expanded", () => {
     render(<DemoAssistantPanel />);
 
+    // Step rows have no collapse trigger, so they carry no parameters or results
     // 工序行没有折叠触发器，也就不带参数与结果
     expect(screen.queryByRole("button", { name: /生成资产/ })).not.toBeInTheDocument();
     expect(screen.getAllByText(t("dashboard:tool_name_generate_assets"))).toHaveLength(2);

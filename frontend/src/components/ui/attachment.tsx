@@ -185,6 +185,8 @@ function AttachmentGroup({ className, ...props }: React.ComponentProps<"div">) {
   return (
     <div
       data-slot="attachment-group"
+      // Drop upstream's scrollbar-none: the scrollbar is always visible, styled centrally in index.css.
+      // Add relative: the scroll container must be a positioned element so absolutely positioned children don't stretch the document scroll
       // 去掉上游的 scrollbar-none：滚动条始终可见，样式统一由 index.css 定义。
       // 补 relative：滚动容器须是定位元素，绝对定位的子元素才不会撑出文档滚动
       className={cn(

@@ -5,7 +5,7 @@ import type { SourceFileImpact } from "@/types/episodes-view";
 
 import { ImpactConfirmDialog } from "./ImpactConfirmDialog";
 
-/** 整本源文文件改动命令的响应：上传接口在 `status` 之外还带别的字段，这里只看确认协议需要的部分。 */
+/** Response of whole-source file change commands: the upload API returns fields beyond `status`; only the part the confirm protocol needs is read here. / 整本源文文件改动命令的响应：上传接口在 `status` 之外还带别的字段，这里只看确认协议需要的部分。 */
 export interface SourceFileChangeReply {
   status?: "applied" | "confirmation_required";
   impact?: SourceFileImpact & { text?: string };
@@ -17,17 +17,25 @@ interface PendingConfirmation {
   confirmLabel: string;
   text: string;
   danger: boolean;
-  /** 确认时服务端的清单已变，这是更新后的清单。 */
+  /** The server list changed at confirm time; this is the updated list. / 确认时服务端的清单已变，这是更新后的清单。 */
   changed: boolean;
 }
 
-/** 清单里有会标 stale、退下或移除的集时按危险操作确认。 */
+/** Confirm as a dangerous action when the list has episodes that will be marked stale, retired or removed. / 清单里有会标 stale、退下或移除的集时按危险操作确认。 */
 function isDanger(impact: SourceFileImpact | undefined): boolean {
   if (!impact) return false;
   return impact.changed_with_products.length + impact.retired.length + impact.removed.length > 0;
 }
 
 /**
+ * Shared confirm flow for inserting, replacing, editing, deleting and reordering whole-source files.
+ *
+ * `run(title, confirmLabel, call)` first submits `call(null)`: the server runs directly when no episode is affected. When confirmation is needed, the confirm box shows only
+ * the server-written affected episode list; after confirming resubmit with the list's `revision`; if the list changed meanwhile, confirm again with the new list.
+ * Returns the response after running, null when the creator cancels. On request error close the confirm box and throw the error to the caller.
+ *
+ * `busy` is true during each submit and false while awaiting the creator's confirmation. Calling while a previous `run` is unfinished returns null without a request.
+ *
  * 整本源文文件的插入、替换、编辑、删除与调序共用的确认流程。
  *
  * `run(title, confirmLabel, call)` 先以 `call(null)` 提交：没有受影响的集时服务端直接执行。需要确认时，确认框只呈现

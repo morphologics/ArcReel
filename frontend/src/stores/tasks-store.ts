@@ -4,10 +4,16 @@ import { API } from "@/api";
 import { useAppStore } from "@/stores/app-store";
 import type { TaskItem, TaskStats, TaskStatus } from "@/types";
 
-/** 单次刷新拉取的任务条数上限。 */
+/** Maximum number of tasks fetched per refresh. / 单次刷新拉取的任务条数上限。 */
 const TASKS_PAGE_SIZE = 200;
 
 /**
+ * All resource kinds the occupancy check cares about (excluding image_edit, which is classified into one of them by resource_type).
+ *
+ * The read and write sides of the occupancy set share this one source of truth: the write side {@link TasksState.beginOptimisticActive} marks,
+ * the read side {@link selectActiveResourceIds} filters, and the kind spelling on both sides must match to hit the same slot.
+ * Narrowing it to a union type moves the "misspelled means silently not occupied" failure mode to compile time.
+ *
  * 占用判定关心的全量资源种类（不含 image_edit——它按 resource_type 归入其中之一）。
  *
  * 占用集的读写两侧共用这一个真相源：写侧 {@link TasksState.beginOptimisticActive} 打标、
@@ -30,13 +36,18 @@ export type ResourceKind =
   | "text_script_plan"
   | "text_draft_repair";
 
-/** 可做指令式编辑的资源种类；`image_edit` 任务按此归入对应资源槽。 */
+/** Resource kinds that support instruction editing; `image_edit` tasks are classified into the matching resource slot by this. / 可做指令式编辑的资源种类；`image_edit` 任务按此归入对应资源槽。 */
 export type ImageEditResourceKind = Extract<
   ResourceKind,
   "character" | "character_derivative" | "scene" | "prop" | "product" | "storyboard"
 >;
 
 /**
+ * Refresh scope: `projectName === null` means "do not filter by project" (fetch global tasks), and the whole scope being
+ * `null` means "disabled": then {@link TasksState.refreshTasks} sends no request. The scope is registered at a single point by
+ * `useTaskRefresh`; other entries (task terminal states pushed by the project event SSE) only call refreshTasks
+ * without each deciding which project to fetch, so the global task list is not overwritten by project-filtered results.
+ *
  * 刷新作用域：`projectName === null` 表示「不按项目过滤」（拉全局任务），整个 scope 为
  * `null` 表示「未启用」——此时 {@link TasksState.refreshTasks} 不发请求。作用域由
  * `useTaskRefresh` 单点登记，其余入口（项目事件 SSE 推来的任务终态）只调 refreshTasks、
@@ -47,6 +58,15 @@ export interface TasksRefreshScope {
 }
 
 /**
+ * Optimistic occupancy handle for one enqueue submit. Obtained by the enqueue action layer **before the request is sent**, and fulfilled one of two ways when the request ends:
+ *
+ * - `settle(taskIds)`: the backend created (or dedup-matched) task rows; the mark switches to waiting for these task_ids to land in the DB;
+ *   an empty array means this time produced no task rows, equivalent to `rollback()` (otherwise the mark would wait forever for real rows).
+ * - `rollback()`: the request failed; revoke the mark.
+ *
+ * Before fulfillment the mark is "in flight" and is not cleared by any poll write-back: this is exactly the request round-trip window,
+ * which each caller used to need its own in-flight ref to cover.
+ *
  * 一次入队提交的乐观占用句柄。由入队动作层在**请求发出前**取得，请求结束时二选一兑现：
  *
  * - `settle(taskIds)` —— 后端已建（或去重命中）任务行，标记转为等待这些 task_id 落库；
@@ -66,9 +86,9 @@ interface TasksState {
   stats: TaskStats;
   connected: boolean;
   refreshScope: TasksRefreshScope | null;
-  /** 乐观占用标记，见下方 {@link selectActiveResourceIds} 的乐观占用小节。 */
+  /** Optimistic occupancy marks; see the optimistic occupancy subsection of {@link selectActiveResourceIds} below. / 乐观占用标记，见下方 {@link selectActiveResourceIds} 的乐观占用小节。 */
   optimisticActive: Set<string>;
-  /** 乐观占用标记（scriptFile 粒度），见下方 {@link selectHasActiveTaskForScriptFile} 的乐观占用小节。 */
+  /** Optimistic occupancy marks (scriptFile granularity); see the optimistic occupancy subsection of {@link selectHasActiveTaskForScriptFile} below. / 乐观占用标记（scriptFile 粒度），见下方 {@link selectHasActiveTaskForScriptFile} 的乐观占用小节。 */
   optimisticActiveScriptFile: Set<string>;
 
   // Actions
@@ -77,6 +97,12 @@ interface TasksState {
   setConnected: (connected: boolean) => void;
   setRefreshScope: (scope: TasksRefreshScope | null) => void;
   /**
+   * Fetch the task list and stats of the current scope and write them back to the store.
+   *
+   * Shared by several entries (the polling timer + task terminal states pushed by the project event SSE), so consolidated into a single action that
+   * merges in-flight work internally: when a refresh is already in flight, new requests merge into "run one more round afterwards", and each caller settles
+   * its own round. Otherwise two entries refreshing at once would interleave write-backs, and an old result sent earlier but arriving later would overwrite the new one.
+   *
    * 拉取当前作用域的任务列表与统计并写回 store。
    *
    * 多入口共享（轮询定时器 + 项目事件 SSE 推来的任务终态）故收敛为单个 action，并在
@@ -102,6 +128,22 @@ export const defaultTaskStats: TaskStats = {
 };
 
 // ---------------------------------------------------------------------------
+// Encoding of optimistic occupancy marks and the yield check
+// Marks are stored as string keys in a Set; the last two segments are the "mark sequence number" and the "fulfilled task_id list":
+//   resource granularity   project \0 resourceKind \0 resourceId \0 pendingTaskType \0 seq \0 taskIds
+//   scriptFile             project \0 taskType \0 scriptFile \0 seq \0 taskIds
+// seq lets two concurrent submits on the same resource roll back independently; an empty taskIds means "in flight": the request was sent,
+// the backend task id is unknown, and the mark cannot be cleared by any poll write-back. The two granularities differ in field count, but taskIds
+// is always the last segment, so the yield check needs only one parsing rule, {@link markTaskIds}, and adding fields cannot misalign it.
+// The yield check looks at task_id, not timestamps: only when **all** of this submit's own task rows appear in tasks does the mark
+// hand over to real data; ids already in the DB are subtracted from the key round by round, so they need not appear in the same snapshot.
+// This criterion closes two timing holes at once:
+//   1. A terminal state arriving first no longer lingers forever: on a dedup match against an existing task the backend returns that existing row's task_id,
+//      which is already (or will soon be) in tasks, so the mark yields right away; comparing timestamps would never yield because that row's updated_at
+//      is not greater than the baseline when the mark was made.
+//   2. A late old poll result no longer overwrites a newer mark: the old snapshot lacks this submit's task_id, so the check does not hold.
+// ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
 // 乐观占用标记的编码与让位判定
 //
 // 标记以字符串 key 存于 Set，尾部两段是「标记序号」与「已兑现的 task_id 列表」：
@@ -122,7 +164,7 @@ export const defaultTaskStats: TaskStats = {
 //   2. 晚到的旧轮询结果不再覆盖较新的标记——旧快照里没有本次的 task_id，判定不成立。
 // ---------------------------------------------------------------------------
 
-/** 已兑现 task_id 之间的分隔符；与字段分隔符 \0 区分开，便于解析。 */
+/** Separator between fulfilled task_ids; distinct from the field separator \0 for easy parsing. / 已兑现 task_id 之间的分隔符；与字段分隔符 \0 区分开，便于解析。 */
 const TASK_ID_SEP = "\u0001";
 
 let optimisticSeq = 0;
@@ -131,7 +173,7 @@ function encodeTaskIds(taskIds: readonly string[]): string {
   return taskIds.join(TASK_ID_SEP);
 }
 
-/** 取标记 key 末段的 taskIds；在途标记（末段为空串）返回空数组。 */
+/** Get taskIds from the last segment of a mark key; an in-flight mark (empty last segment) returns an empty array. / 取标记 key 末段的 taskIds；在途标记（末段为空串）返回空数组。 */
 function markTaskIds(key: string): string[] {
   const encoded = key.split("\0").at(-1);
   return encoded ? encoded.split(TASK_ID_SEP) : [];
@@ -158,17 +200,26 @@ function optimisticScriptFileKey(
   return `${projectName}\0${taskType}\0${stripScriptsPrefix(scriptFile)}\0${seq}\0${encodeTaskIds(taskIds)}`;
 }
 
-/** 把 key 末段的 taskIds 换成 `taskIds`，其余字段原样保留。 */
+/** Replace the taskIds in the key's last segment with `taskIds`, keeping the other fields as is. / 把 key 末段的 taskIds 换成 `taskIds`，其余字段原样保留。 */
 function withTaskIds(key: string, taskIds: readonly string[]): string {
   return key.slice(0, key.lastIndexOf("\0") + 1) + encodeTaskIds(taskIds);
 }
 
-/** 本次快照里已落库的 task_id。 */
+/** task_ids already in the DB in this snapshot. / 本次快照里已落库的 task_id。 */
 function landedTaskIds(tasks: TaskItem[]): Set<string> {
   return new Set(tasks.map((t) => t.task_id));
 }
 
 /**
+ * In what form this mark should remain after this snapshot: fully subtracted (all awaited task_ids in the DB) returns null
+ * meaning yield; otherwise returns the key after subtraction (returned as is when unchanged, to avoid pointless Set churn).
+ *
+ * In-flight marks (empty taskIds) remain as is and never yield: during the request round trip there is no basis to judge
+ * the resource idle. When one submit creates several task rows (grid enqueues one per group), it yields only once **all** are in the DB:
+ * handing back after just one would misjudge the resource as idle in the window where "the first is terminal and the rest are not yet in the snapshot".
+ * Subtraction accumulates round by round and does not require all task_ids to appear in one snapshot: each poll only takes the latest
+ * 200 rows, while one enqueue has no upper bound on task rows produced.
+ *
  * 该标记经本次快照后应以什么形态留下：已扣完（等待的 task_id 全部落库）返回 null
  * 表示让位，否则返回扣除后的 key（无变化时原样返回，避免无谓的 Set 抖动）。
  *
@@ -180,12 +231,15 @@ function landedTaskIds(tasks: TaskItem[]): Set<string> {
  */
 function keepMark(key: string, landed: ReadonlySet<string>): string | null {
   const taskIds = markTaskIds(key);
-  if (taskIds.length === 0) return key; // 在途标记
+  if (taskIds.length === 0) return key; // in-flight mark / 在途标记
   const remaining = taskIds.filter((id) => !landed.has(id));
   if (remaining.length === 0) return null;
   return remaining.length === taskIds.length ? key : withTaskIds(key, remaining);
 }
 
+// Trim optimistic occupancy marks by the current tasks (adds no marks, only subtracts task_ids in the DB and cleans up those that yielded).
+// Besides the incidental cleanup at fulfillment, this must also run on every setTasks (poll write-back): real task rows enter the store via polling,
+// and that is the only moment a mark can find its rows have landed.
 // 按当前 tasks 修剪乐观占用标记（不新增标记，仅扣除已落库的 task_id 并清理已让位者）。
 // 除兑现时机的顺带清理外，也要在每次 setTasks（轮询写回）时执行——真实任务行是经轮询
 // 进入 store 的，标记只能在那一刻发现自己的行已落库。
@@ -200,16 +254,35 @@ function pruneSupersededOptimistic(tasks: TaskItem[], marks: ReadonlySet<string>
 }
 
 export const useTasksStore = create<TasksState>((set, get) => {
+  // Coordination state for refresh in-flight merging (non-reactive singleton, not in store state, to avoid triggering subscriber re-renders).
+  // Isomorphic to projects-store.refreshProject; created with the store and not left over across store instances.
   // 刷新的在途合并协调状态（非响应式单例，不进 store state，避免触发订阅重渲染）。
   // 与 projects-store.refreshProject 同构，随 store 一同创建，不跨 store 实例残留。
   let refreshRunning = false;
   let refreshQueued = false;
+  // Each queued-round caller's own resolve: each caller is only answered by the result of the round that actually served it.
   // 排队轮调用方各自的 resolve：每个调用方只对自己实际服务的那一轮结果负责。
   let queuedResolvers: Array<() => void> = [];
+  // Scope whose task baseline has been established; null means the next round is this scope's first, which only builds the baseline without terminal-state judging.
   // 已建立任务基线的作用域；null 表示下一轮是该作用域的第一轮，只建基线不做终态判定。
   let baselineScopeKey: string | null = null;
 
   /**
+   * Whether in this fetch round any task that writes back to a reference unit just went from non-terminal to succeeded.
+   *
+   * The reference-to-video canvas refetches final cuts and narration paths via `referenceVideoUnitsRevision`, whose main increment channel is the project
+   * event SSE: when the SSE disconnects, silently stalls or drops this event, task status can still recover via the poll fallback, but the unit
+   * snapshot never updates until the canvas remounts. Here a reference_video / tts poll success also triggers the same
+   * invalidation, filling the gap in the fallback path; non-reference-to-video projects do not mount that canvas, so an extra revision increment triggers no request.
+   *
+   * The criterion is "succeeded this round, not succeeded last round", where "not seen last round" also counts as not succeeded: when a task's enqueue and completion
+   * fall entirely between two polls (the idle tier interval is long, and a provider cache hit may return within seconds), it first appears as
+   * succeeded, and requiring it to have been seen last round would miss this kind. In the next round it is already succeeded in the old snapshot,
+   * so it does not invalidate twice.
+   *
+   * A scope's first round only builds the baseline without judging: that round's old snapshot is either empty or belongs to the previous project, and treating historical
+   * successful tasks as just completed is meaningless. The baseline is marked by `baselineScopeKey` and reset on project switch or disable.
+   *
    * 本轮拉取里是否有会写回 reference unit 的任务刚由非终态转成功。
    *
    * 参考生视频画布靠 `referenceVideoUnitsRevision` 重拉成片和旁白路径，而自增主通道是项目
@@ -238,12 +311,15 @@ export const useTasksStore = create<TasksState>((set, get) => {
     );
   };
 
+  // One fetch round; does not throw itself, a failure only sets connected false and keeps old data.
   // 单轮拉取；自身不抛错，失败只把 connected 置 false 并留旧数据。
   const runTasksRefresh = async (): Promise<void> => {
     const scope = get().refreshScope;
     if (!scope) return;
     const { projectName } = scope;
 
+    // By the time it settles the scope may have been rewritten by a project switch/disable: a late response is not written back, otherwise the old project's task list would overwrite
+    // data the taker just wrote (or, when disabled, overwrite a store that should be empty).
     // 落定时作用域可能已被切项目/停用改写：迟到响应不写回，否则旧项目的任务列表会盖住
     // 接管方刚写入的数据（停用时则会盖住本该清空的 store）。
     const scopeUnchanged = () => {
@@ -265,6 +341,9 @@ export const useTasksStore = create<TasksState>((set, get) => {
       get().setTasks(tasksRes.items);
       get().setStats(statsRes.stats);
       get().setConnected(true);
+      // Staying inside try is intentional: invalidation is just one zustand set with no throw path; moving it outside try would make
+      // this function no longer satisfy "does not throw itself": the project event SSE path calls refreshTasks as a bare void call,
+      // so a throw would become an unhandled rejection, and callers queued in the in-flight merge would never be settled.
       // 留在 try 内是有意的：失效只是一次 zustand set，没有抛出路径；而把它挪到 try 外会让
       // 本函数不再满足「自身不抛错」——项目事件 SSE 那一路是裸 void 调用 refreshTasks，
       // 抛出会变成未处理的 rejection，且在途合并里排队的调用方永远等不到结算。
@@ -278,6 +357,9 @@ export const useTasksStore = create<TasksState>((set, get) => {
   };
 
   /**
+   * Common skeleton of the begin/settle/rollback three states: the two granularities differ only in key encoding and which Set they land in.
+   * `field` picks the Set, and `keyOf(taskIds)` encodes the key from fulfilled task_ids (an empty array gives the in-flight key).
+   *
    * begin/settle/rollback 三态的公共骨架：两种粒度只在 key 编码与落到哪个 Set 上不同。
    * `field` 选定 Set，`keyOf(taskIds)` 按已兑现的 task_id 编码出 key（空数组即在途 key）。
    */
@@ -287,6 +369,7 @@ export const useTasksStore = create<TasksState>((set, get) => {
   ): OptimisticHandle {
     const pendingKey = keyOf([]);
     set((s) => {
+      // Incidentally clean up old marks that have yielded, so the Set does not grow unboundedly over the session.
       // 顺带清理已让位的旧标记，避免 Set 在会话周期内无界增长。
       const next = pruneSupersededOptimistic(s.tasks, s[field]);
       next.add(pendingKey);
@@ -294,11 +377,13 @@ export const useTasksStore = create<TasksState>((set, get) => {
     });
 
     const drop = (replacement: string | null): void => {
-      if (!get()[field].has(pendingKey)) return; // 已被回滚或被 store 重置
+      if (!get()[field].has(pendingKey)) return; // already rolled back or reset by the store / 已被回滚或被 store 重置
       set((s) => {
         const next = new Set(s[field]);
         next.delete(pendingKey);
         if (replacement !== null) {
+          // On a dedup match against an existing task the row is often already in the store, so subtract it right now without waiting for the next poll;
+          // once fully subtracted, yield on the spot.
           // 去重命中既有任务时该行往往已在 store 里，此刻即扣除，不必等下一轮轮询；
           // 全部扣完即当场让位。
           const kept = keepMark(replacement, landedTaskIds(s.tasks));
@@ -323,6 +408,7 @@ export const useTasksStore = create<TasksState>((set, get) => {
     optimisticActiveScriptFile: new Set(),
 
     setRefreshScope: (scope) => {
+      // Project switch and disable both clear/replace the task snapshot, so the old baseline is no longer comparable: rebuild the baseline next round.
       // 切项目与停用都会清空/替换任务快照，旧基线不再可比：下一轮重新建基线。
       baselineScopeKey = null;
       set({ refreshScope: scope });
@@ -351,6 +437,8 @@ export const useTasksStore = create<TasksState>((set, get) => {
 
     setTasks: (tasks) =>
       set((s) => {
+        // When a function is passed, it is evaluated against the snapshot at write time: reading getState() first and then passing an array would wholly overwrite
+        // SSE updates arriving between those two steps.
         // 传函数时按写入那一刻的快照求值：先读 getState() 再传数组，会把这两步之间到达的
         // SSE 更新整份覆盖掉。
         const next = typeof tasks === "function" ? tasks(s.tasks) : tasks;
@@ -378,6 +466,18 @@ export const useTasksStore = create<TasksState>((set, get) => {
 });
 
 // ---------------------------------------------------------------------------
+// Derived selectors: the single source of truth for the task queue's two invariants
+// Consumers (canvas loading derivation, video unit status, etc.) must follow these two contracts:
+//   1. "What counts as active": occupancy and display are two predicates: the occupancy check (isOccupyingStatus) aligns with the backend
+//      dedupe index's ACTIVE_TASK_STATUSES; the display check (isActiveStatus) decides whether
+//      to show as in progress. Both currently contain only queued / running.
+//   2. "Latest row wins": the same resource may have several task rows: a retry after failure has a new task_id,
+//      and tasks is written wholesale from the server list with no guaranteed order, so the check must take the row with the latest updated_at,
+//      so a retry's new row is not hidden by an old failed row (selectLatestTaskByResource).
+// The pure-function versions consolidate both invariants here and are directly testable with vitest; the hook versions use useShallow to compare
+// Set/Map contents, keeping references stable when contents do not change, to avoid returning new collections on every render and triggering re-renders.
+// ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
 // 派生 selector —— 任务队列两条不变量的单一真相源
 //
 // 消费点（画布 loading 派生、视频单元状态等）必须遵守以下两条契约：
@@ -392,12 +492,18 @@ export const useTasksStore = create<TasksState>((set, get) => {
 // Set/Map 内容，保证内容不变时引用稳定，避免每次渲染返回新集合触发重渲染。
 // ---------------------------------------------------------------------------
 
-/** 显示谓词：排队或运行中的任务显示为进行中。 */
+/** Display predicate: queued or running tasks are shown as in progress. / 显示谓词：排队或运行中的任务显示为进行中。 */
 export function isActiveStatus(status: TaskStatus): boolean {
   return status === "queued" || status === "running";
 }
 
 /**
+ * Whether the mark set has entries belonging to the current refresh scope. Keys of both kinds of optimistic marks start with `projectName`,
+ * so judge uniformly by prefix; when the scope is "do not filter by project" (`projectName === null`), count them all.
+ *
+ * Filter by scope rather than looking at `size` directly: marks are only trimmed when real task rows of the same project land; after switching to another project
+ * the original project's leftover marks are never trimmed, and counting them would pin the fallback polling permanently at the high-frequency tier.
+ *
  * 标记集中是否有属于当前刷新作用域的条目。两类乐观标记的 key 均以 `projectName` 打头，
  * 故统一按前缀判定；作用域为「不按项目过滤」（`projectName === null`）时全部计入。
  *
@@ -418,6 +524,18 @@ function hasOptimisticInScope(
 }
 
 /**
+ * Whether the fallback polling needs to stay at the high-frequency tier. Three cases count as "needed":
+ *
+ * - **Some task has not reached a terminal state**. stats is the main criterion: it covers the whole scope, while tasks is only the first N after paging.
+ *   Intermediate states (queued->running) have no event push and only polling sees them. tasks is counted too because the two are read by two
+ *   concurrent requests and are not the same snapshot: when something elsewhere (another client or a Skill) enqueues during this refresh,
+ *   stats may read zero active while tasks already contains that queued row; looking only at stats would judge this round idle, and that task's
+ *   intermediate state would only become visible after a full idle interval.
+ * - **There are optimistic occupancy marks in the current scope**. There is a gap between a successful enqueue and the task appearing in stats;
+ *   judging idle then would make the new task appear in the UI only after a whole idle interval.
+ * - **The previous fetch failed** (`connected === false`). stats is then stale data, and judging idle from it would delay
+ *   recovery by a whole idle interval; after a failure it should retry soon anyway.
+ *
  * 兜底轮询是否需要留在高频档。三种情形都算「需要」：
  *
  * - **有任务未落终态**。以 stats 为主判据：它覆盖整个作用域，而 tasks 只是分页后的前 N 条。
@@ -438,6 +556,7 @@ export function selectNeedsFastPolling(s: {
   optimisticActive: ReadonlySet<string>;
   optimisticActiveScriptFile: ReadonlySet<string>;
 }): boolean {
+  // When the scope is disabled refreshTasks sends no request, so marks cannot be reconciled whatever project they belong to; none are counted.
   // 作用域未启用时 refreshTasks 不发请求，标记落在哪个项目都无从对账，一律不计入。
   const scope = s.refreshScope;
   return (
@@ -451,6 +570,10 @@ export function selectNeedsFastPolling(s: {
 }
 
 /**
+ * Occupancy predicate: tasks in this status still occupy their resource (button disabled, occupancy set check). Aligned with the backend dedupe
+ * index's ACTIVE_TASK_STATUSES: the backend dedups repeat submits on the same resource onto the existing task;
+ * if the frontend judged idle at that point, it would falsely report "button clickable, but no new task after submitting".
+ *
  * 占用谓词：该状态的任务仍占用其 resource（按钮禁用、占用集判定）。与后端 dedupe
  * 索引的 ACTIVE_TASK_STATUSES 对齐——后端会把同资源的重复提交去重到既有任务上；
  * 若前端此时判定空闲，会出现「按钮可点、提交后没有新任务」的谎报。
@@ -459,7 +582,7 @@ export function isOccupyingStatus(status: TaskStatus): boolean {
   return status === "queued" || status === "running";
 }
 
-/** 脚本规划按项目模式分三种任务类型，一个项目只用其中一种。 */
+/** Script planning has three task types by project mode; a project uses only one of them. / 脚本规划按项目模式分三种任务类型，一个项目只用其中一种。 */
 export const SCRIPT_PLAN_TASK_TYPES: ReadonlySet<string> = new Set([
   "text_drama_script_plan",
   "text_narration_script_plan",
@@ -467,6 +590,19 @@ export const SCRIPT_PLAN_TASK_TYPES: ReadonlySet<string> = new Set([
 ]);
 
 /**
+ * The "resource kind" a task occupies. Except for image_edit, the task_type itself is the resource kind; image_edit shares one task_type across
+ * character/scene/prop/product/storyboard and the real kind is in resource_type,
+ * so it is slotted by resource_type: edit tasks and generation tasks of the same resource fall into the same occupancy set and are mutually exclusive.
+ * `voice_sample` (character TTS preview sample) likewise goes into `character`: it shares one occupancy slot with that character's asset sheet generation/
+ * editing/upload (see {@link enqueueCharacterVoiceSample}); the optimistic mark is made with the `character` kind before the request
+ * is sent, so once the real task row lands it must map to the same kind to yield without a gap.
+ * The three script planning task types ({@link SCRIPT_PLAN_TASK_TYPES}) all go into `text_script_plan`,
+ * so entries need not pick the occupancy slot by project mode.
+ *
+ * The two assertions are a data boundary: {@link TaskItem} fields come from the backend and TS cannot control their value range. If the backend emits a kind not
+ * registered in {@link ResourceKind}, that row matches no occupancy slot (degrading to not taking part in the occupancy check),
+ * consistent with the behavior before narrowing; what the union type really blocks is frontend callers misspelling kind themselves.
+ *
  * 任务占用的「资源种类」。除 image_edit 外，task_type 本身即资源种类；image_edit 跨
  * character/scene/prop/product/storyboard 共用一个 task_type，真正的种类在 resource_type，
  * 故按 resource_type 归槽——编辑任务与同资源的生成任务落入同一占用集、彼此互斥。
@@ -494,6 +630,9 @@ export function taskResourceKind(task: TaskItem): ResourceKind | "" {
 }
 
 /**
+ * Invariant 2: group tasks by resource_id, taking the row with the latest updated_at when a resource has several rows.
+ * Optional prefilter by projectName / taskType; the store does not guarantee order, so updated_at is compared explicitly.
+ *
  * 不变量 2：按 resource_id 归并任务，同一 resource 多行时取 updated_at 最新的一行。
  * 可选按 projectName / taskType 预筛；store 不保证顺序，故显式比较 updated_at。
  */
@@ -512,6 +651,28 @@ export function selectLatestTaskByResource(
 }
 
 /**
+ * Set of resource_ids matching taskType + projectName whose "latest row" is active.
+ * "Latest row wins" groups separately by the two-level key (resource_id, task.task_type): within the same native task_type,
+ * a retry's new running/queued row is not covered by an old failed row of the same resource; but image_edit and
+ * the generation task of its target resource are two independent task_types (sharing one occupancy slot only via taskResourceKind),
+ * with no mutual exclusion guaranteed by the backend, so both may really coexist. Judging by a single "latest row" would let a newer landed edit terminal state
+ * (success/failure) mask a still-running generation task (or vice versa), misjudging the resource as idle. So take the latest row per
+ * task_type separately, and count as occupied when the latest row of any task_type is active.
+ *
+ * Optimistic occupancy: between sending the enqueue request and the next refresh writing the new task row into the store, the resource has
+ * no matching task row in the store yet and is judged idle. This gap spans the request round trip and one polling interval (the mark itself pulls fallback
+ * polling back to the busy tier, see {@link selectNeedsFastPolling}, so the bound is one busy-tier interval rather than an idle-tier
+ * interval); meanwhile other entries for the same resource would misjudge it as submittable; image_edit sharing an occupancy slot with its target resource is the first
+ * scenario that submits concurrently with "another task_type of this resource" in this gap (concurrent submits of the same task_type are already blocked by the backend
+ * dedupe index, see `idx_tasks_dedupe_active`, but that index uses task_type as part of its key
+ * and does not block concurrency across task_types).
+ *
+ * `optimisticActive` is marked by the enqueue action layer via {@link OptimisticHandle} **before the request is sent**,
+ * and rolled back if the request fails, so the whole gap is covered; here it is filtered by (projectName, resourceKind) and merged into
+ * the occupancy set until the real task rows the mark waits for appear (the comparison ignores status; appearing means yielding to real data).
+ * Marks claim their real rows by task_id; for the criterion and residual risks see "Encoding of optimistic occupancy marks and
+ * the yield check" at the top of the file.
+ *
  * 命中 taskType + projectName 且「最新行」处于活跃态的 resource_id 集合。
  * 「最新行胜出」按 (resource_id, task.task_type) 二级键分别归并——同一原生 task_type
  * 内，重试的新 running/queued 行不被同 resource 的旧 failed 行盖住；但 image_edit 与
@@ -552,6 +713,7 @@ export function selectActiveResourceIds(
   for (const task of latestByResourceAndTaskType.values()) {
     if (isOccupyingStatus(task.status)) ids.add(task.resource_id);
   }
+  // Trimming happens in setTasks, and the selector may see a new snapshot before it, so compute by the same criterion here.
   // 修剪发生在 setTasks 时，selector 可能先于它看到新快照，故这里按同一判据现算。
   const landed = landedTaskIds(tasks);
   for (const key of optimisticActive) {
@@ -565,6 +727,9 @@ export function selectActiveResourceIds(
 const EMPTY_OPTIMISTIC: ReadonlySet<string> = new Set();
 
 /**
+ * Unified entry for re-checking occupancy at submit time: wraps the `getState()` fresh read + {@link selectActiveResourceIds} +
+ * key assembly, so each write control can judge directly at the moment of submit without repeating these three steps.
+ *
  * 提交时刻复核占用态的统一入口：封装 `getState()` 新鲜读 + {@link selectActiveResourceIds} +
  * key 拼装，供各写入控件在提交那一刻直接判定，不必各自重复这三步。
  */
@@ -573,6 +738,10 @@ export function isResourceBusy(kind: ResourceKind, projectName: string, resource
   return selectActiveResourceIds(tasks, kind, projectName, optimisticActive).has(resourceId);
 }
 
+// Same normalization rule as stripScriptsPrefix in task-target.ts: script_file in episode metadata
+// always carries the `scripts/` prefix (see ProjectManager._apply_episode_sync), but a task row's script_file
+// is passed by each enqueue caller: the router passes the webui form value directly, while Agent tools force a bare filename via validate_script_filename,
+// so the two formats are not guaranteed to match. Do not rely on callers trimming beforehand; normalize here before comparing.
 // 与 task-target.ts 的 stripScriptsPrefix 同一归一化规则：episode 元数据的 script_file
 // 固定带 `scripts/` 前缀（见 ProjectManager._apply_episode_sync），但任务行的 script_file
 // 由各入队调用方各自传入——router 直传 webui 表单值，Agent 工具经 validate_script_filename
@@ -582,6 +751,17 @@ function stripScriptsPrefix(path: string): string {
 }
 
 /**
+ * Whether an active task of type taskType exists under the given scriptFile. No "latest row wins" grouping:
+ * existence counts, for a coarse episode-level occupancy check: a grid task's resource_id is the grid_id, not a
+ * shot segment_id, so it cannot go into selectActiveResourceIds' per-resource check; but the grid split phase
+ * overwrites storyboard files of several shots in this episode, so judge by scriptFile "whether this episode has a grid task
+ * running", used to disable shot editing entries when grid assembly is on, avoiding editing and splitting writing the same file concurrently.
+ *
+ * Optimistic occupancy: between sending the grid enqueue request and the next poll writing the new grid task row into the store there is a gap, during which
+ * this episode has no matching grid task row in the store, and shot editing entries would misjudge it as idle and, with the following split phase,
+ * write the same storyboard current image concurrently. Same semantics as the optimistic occupancy subsection of {@link selectActiveResourceIds},
+ * but the grouping key becomes scriptFile (grid tasks cannot be grouped by resource_id, see above).
+ *
  * 是否存在指定 scriptFile 下、taskType 类型的活跃任务。不做「最新行胜出」归并——
  * 存在即算，用于粗粒度剧集级占用判定：grid 任务的 resource_id 是 grid_id 而非
  * 分镜 segment_id，无法归入 selectActiveResourceIds 的按资源判定；但 grid 切割阶段
@@ -621,6 +801,13 @@ export function selectHasActiveTaskForScriptFile(
 }
 
 /**
+ * scriptFile-granularity submit-time re-check entry, isomorphic to {@link isResourceBusy} (`getState()` fresh read).
+ *
+ * The reason it exists is the same as the resource-granularity one: a prop at render time reflects the last render, and between a store update and the re-render
+ * being committed the user may still click. The granularity is scriptFile because a grid task's resource_id is the grid_id,
+ * which cannot go into the per-shot resource_id check (see {@link selectHasActiveTaskForScriptFile}).
+ * Returns false when scriptFile/projectName is missing, on the same basis as the hook version.
+ *
  * scriptFile 粒度的提交时刻复核入口，与 {@link isResourceBusy} 同构（`getState()` 新鲜读）。
  *
  * 存在的理由与 resource 粒度那条相同——渲染时刻的 prop 反映的是上次渲染，store 更新到重渲染
@@ -644,7 +831,7 @@ export function isScriptFileBusy(
   );
 }
 
-/** hook 版 {@link selectHasActiveTaskForScriptFile}；scriptFile/projectName 缺失时返回 false。 */
+/** Hook version of {@link selectHasActiveTaskForScriptFile}; returns false when scriptFile/projectName is missing. / hook 版 {@link selectHasActiveTaskForScriptFile}；scriptFile/projectName 缺失时返回 false。 */
 export function useHasActiveTaskForScriptFile(
   taskType: string,
   scriptFile: string | undefined | null,
@@ -663,10 +850,10 @@ export function useHasActiveTaskForScriptFile(
   );
 }
 
-// projectName 缺失时复用同一空集，保证 hook 引用稳定。
+// Reuse the same empty set when projectName is missing, keeping the hook reference stable. / projectName 缺失时复用同一空集，保证 hook 引用稳定。
 const EMPTY_ACTIVE_IDS: Set<string> = new Set();
 
-/** hook 版 {@link selectActiveResourceIds}；projectName 缺失时返回稳定空集。 */
+/** Hook version of {@link selectActiveResourceIds}; returns a stable empty set when projectName is missing. / hook 版 {@link selectActiveResourceIds}；projectName 缺失时返回稳定空集。 */
 export function useActiveResourceIds(
   taskType: ResourceKind,
   projectName: string | undefined | null,
@@ -680,7 +867,7 @@ export function useActiveResourceIds(
   );
 }
 
-/** hook 版 {@link selectLatestTaskByResource}，按 project + type 预筛。 */
+/** Hook version of {@link selectLatestTaskByResource}, prefiltered by project + type. / hook 版 {@link selectLatestTaskByResource}，按 project + type 预筛。 */
 export function useLatestTasksByResource(
   projectName: string,
   taskType: string,
@@ -691,6 +878,14 @@ export function useLatestTasksByResource(
 }
 
 /**
+ * Get these tasks' queue rows by task_id.
+ *
+ * Task observations in the workflow panel come from the workflow status API, which has no timestamps; the source of truth for durations is the task queue,
+ * so look up by task_id rather than having the workflow API carry another copy of timestamps: the same task carrying a timestamp on each of two paths,
+ * refreshed at different rhythms, would sooner or later contradict each other. When the queue has no matching row the id is not put in the Map,
+ * and the caller does not render that block at all. Return the original objects in the store rather than trimmed subsets, so shallow comparison hits when the task list
+ * refreshes but contents are unchanged.
+ *
  * 按 task_id 取这些任务的队列行。
  *
  * 工作流面板的任务观测由工作流状态接口给出，其中不含时间戳；时长的真相源是任务队列，

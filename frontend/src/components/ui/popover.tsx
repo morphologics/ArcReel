@@ -33,14 +33,17 @@ function PopoverContent({
         side={side}
         sideOffset={sideOffset}
         collisionAvoidance={collisionAvoidance}
+        // Pass anchor through: popovers without a Trigger (e.g. the slash command menu above the input) position against the given element
         // 透传 anchor：没有 Trigger 的弹层（如输入框上方的斜杠命令菜单）按指定元素定位
         anchor={anchor}
+        // Pass positionMethod through: edit popovers covering page controls use fixed, a fixed-position overlay like dialogs
         // 透传 positionMethod：盖在页面控件上的编辑弹层用 fixed，与对话框同属固定定位的浮层
         positionMethod={positionMethod}
         className="isolate z-overlay"
       >
-        {/* 高度夹到触发点与视口边缘之间的可用空间，超出时弹层内部滚动，不越出视口 */}
+        {/* Height is clamped to the space between the trigger and the viewport edge; overflow scrolls inside the popover instead of leaving the viewport / 高度夹到触发点与视口边缘之间的可用空间，超出时弹层内部滚动，不越出视口 */}
         <PopoverPrimitive.Popup
+          // Add relative: the scroll container must be a positioned element so absolutely positioned children don't stretch the document scroll
           // 补 relative：滚动容器须是定位元素，绝对定位的子元素才不会撑出文档滚动
           data-slot="popover-content"
           className={cn(

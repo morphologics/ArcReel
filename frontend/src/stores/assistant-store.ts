@@ -22,7 +22,7 @@ import {
   type DraftMirror,
 } from "@/utils/entry-projection";
 
-/** 启动失败的来源入口——决定故障卡片的重试重放哪一处输入。 */
+/** Entry point a startup failure came from: decides which input the fault card's retry replays. / 启动失败的来源入口——决定故障卡片的重试重放哪一处输入。 */
 export type StartupFailureOrigin = "send" | "rewrite";
 
 export type SessionResumeSignal =
@@ -35,33 +35,40 @@ interface AssistantState {
   currentSessionId: string | null;
   sessionsLoading: boolean;
 
-  // Timeline（事件日志唯一读源）
+  // Timeline (the single read source of the event log) / Timeline（事件日志唯一读源）
   entries: TimelineEntry[];
   draft: DraftMirror | null;
   draftRev: number;
-  // 由 entries/draft 投影派生，仅 timeline actions 写入
+  // Derived from the entries/draft projection; only timeline actions write it / 由 entries/draft 投影派生，仅 timeline actions 写入
   turns: Turn[];
   draftTurn: Turn | null;
   messagesLoading: boolean;
   /**
+   * seq of the last entry already present when the session was loaded: entries not greater than it are history from before opening the session, entries greater than it
+   * arrived while viewing, and failure cards are only announced for the latter. null means history is still replaying (a running session re-sends existing entries via
+   * the entry stream), and entries arriving then all count as history. Sessions with no load phase (new, draft) use -1.
+   *
    * 载入会话时已有的最后一条条目的 seq：不大于它的条目是打开会话前的历史，大于它的是
    * 查看期间新到达的，失败卡片只为后者播报。null 表示历史仍在回放（running 会话经
    * entry 流补发存量），此时到达的条目都算历史。没有载入过程的会话（新建、草稿）为 -1。
    */
   historySeq: number | null;
-  /** 排队消息托盘：已发出、Agent 尚未接纳的消息，按发送顺序排列；不进时间线。 */
+  /** Queued message tray: messages sent but not yet accepted by the Agent, in send order; not in the timeline. / 排队消息托盘：已发出、Agent 尚未接纳的消息，按发送顺序排列；不进时间线。 */
   queuedMessages: QueuedMessage[];
 
   // Input
   input: string;
-  /** 待追加到输入框末尾的消息内容（编辑排队消息时退回），由输入框取走。 */
+  /** Message content waiting to be appended to the end of the input (returned when editing a queued message); taken by the input. / 待追加到输入框末尾的消息内容（编辑排队消息时退回），由输入框取走。 */
   composerAppends: ContentBlock[][];
   sending: boolean;
   interrupting: boolean;
   error: string | null;
-  /** 当前面板生命周期内最近一次 Agent 启动失败观测；不做跨刷新持久化。 */
+  /** The most recent Agent startup failure observed in the current panel lifecycle; not persisted across refreshes. / 当前面板生命周期内最近一次 Agent 启动失败观测；不做跨刷新持久化。 */
   startupFailure: FailureObservation | null;
   /**
+   * Which entry point produced this startup failure. The fault card's retry only replays the one that still holds the original input:
+   * `send` input stays in the main input box, `rewrite` input stays in the still-open in-place editor.
+   *
    * 该次启动失败由哪条入口产生。故障卡片的重试只重放仍保留原始输入的那一处：
    * `send` 的输入留在主输入框，`rewrite` 的留在仍开着的原地编辑器里。
    */
@@ -80,6 +87,9 @@ interface AssistantState {
   skillsLoading: boolean;
 
   /**
+   * The user message (entry uuid) currently in in-place edit state; at most one at a time.
+   * Kept in the store rather than component-local state so the "at most one" constraint holds across the whole timeline.
+   *
    * 正处于原地编辑态的用户消息（条目 uuid）；同一时刻至多一条。
    * 收在 store 而非组件本地 state，才能让「至多一条」这条约束在整个时间线上成立。
    */
@@ -92,6 +102,10 @@ interface AssistantState {
   isDraftSession: boolean;
 
   /**
+   * Session resume signals sent by the project event stream and not yet consumed; the session hook takes them as a batch. resumed: the session went back to running
+   * on its own without a send; resync: the event stream (re)connected, earlier resume notifications may have been missed and need checking.
+   * Queued rather than keeping only the latest: several signals in the same event batch arrive before the hook consumes them, and later ones would overwrite earlier ones.
+   *
    * 项目事件流送来、尚未消费的会话恢复信号，由会话 hook 整批取走。resumed：会话未经发送、
    * 自主回到 running；resync：事件流（重新）建连，此前的恢复通知可能已错过，需要核对。
    * 排队而非只留最新一条：同一批事件里的多条信号在 hook 消费前到达，后者会覆盖前者。
@@ -102,34 +116,34 @@ interface AssistantState {
   setSessions: (sessions: SessionMeta[]) => void;
   setCurrentSessionId: (id: string | null) => void;
   setSessionsLoading: (loading: boolean) => void;
-  /** 整帧替换日志条目（冷读 / 切换会话）。 */
+  /** Replace log entries wholesale (cold read / session switch). / 整帧替换日志条目（冷读 / 切换会话）。 */
   setEntries: (entries: TimelineEntry[]) => void;
-  /** 追加单条权威条目；seq 门槛去重（身份比对，非内容比对）。 */
+  /** Append one authoritative entry; dedup by seq threshold (identity comparison, not content comparison). / 追加单条权威条目；seq 门槛去重（身份比对，非内容比对）。 */
   appendEntry: (entry: TimelineEntry) => void;
-  /** draft 首帧快照（重连携带累积态 + rev 过滤门槛）。 */
+  /** First-frame draft snapshot (reconnect carries accumulated state + rev filter threshold). / draft 首帧快照（重连携带累积态 + rev 过滤门槛）。 */
   setDraftSnapshot: (draft: DraftState | null, rev: number) => void;
-  /** 应用一条流式 delta；rev 未超过门槛时忽略。 */
+  /** Apply one streaming delta; ignored when rev does not exceed the threshold. / 应用一条流式 delta；rev 未超过门槛时忽略。 */
   applyDelta: (payload: DraftDeltaPayload) => void;
   clearDraft: () => void;
-  /** 清空时间线（项目切换 / 新会话）。 */
+  /** Clear the timeline (project switch / new session). / 清空时间线（项目切换 / 新会话）。 */
   resetTimeline: () => void;
   setMessagesLoading: (loading: boolean) => void;
-  /** 开始载入会话历史：此后到达的条目都算历史，直到 settleHistory。 */
+  /** Start loading session history: entries arriving from now on count as history until settleHistory. / 开始载入会话历史：此后到达的条目都算历史，直到 settleHistory。 */
   beginHistory: () => void;
-  /** 会话历史载入完毕：以当前最后一条条目为界；已经定界时不变。 */
+  /** Session history finished loading: bounded by the current last entry; unchanged if already bounded. / 会话历史载入完毕：以当前最后一条条目为界；已经定界时不变。 */
   settleHistory: () => void;
-  /** 整体替换排队消息（entry 流开场快照）。 */
+  /** Replace queued messages wholesale (entry stream opening snapshot). / 整体替换排队消息（entry 流开场快照）。 */
   setQueuedMessages: (messages: QueuedMessage[]) => void;
-  /** 加入或更新一条排队消息；已离开排队的消息不再加回。 */
+  /** Add or update a queued message; messages that have left the queue are not added back. / 加入或更新一条排队消息；已离开排队的消息不再加回。 */
   upsertQueuedMessage: (message: QueuedMessage) => void;
-  /** 移出一条排队消息（已被接纳或已被丢弃）。 */
+  /** Remove a queued message (accepted or discarded). / 移出一条排队消息（已被接纳或已被丢弃）。 */
   removeQueuedMessage: (id: string) => void;
-  /** 这条消息是否已经离开排队（被接纳或被丢弃）。 */
+  /** Whether this message has left the queue (accepted or discarded). / 这条消息是否已经离开排队（被接纳或被丢弃）。 */
   hasLeftQueue: (id: string) => boolean;
   setInput: (input: string) => void;
-  /** 把一条消息的内容交给输入框，追加在已有内容之后。 */
+  /** Hand a message's content to the input, appended after existing content. / 把一条消息的内容交给输入框，追加在已有内容之后。 */
   appendToComposer: (content: ContentBlock[]) => void;
-  /** 输入框取走待追加的内容。 */
+  /** The input takes the content waiting to be appended. / 输入框取走待追加的内容。 */
   takeComposerAppends: () => ContentBlock[][];
   setSending: (sending: boolean) => void;
   setInterrupting: (interrupting: boolean) => void;
@@ -146,11 +160,21 @@ interface AssistantState {
   setIsDraftSession: (draft: boolean) => void;
   notifySessionResumed: (projectName: string, sessionId: string) => void;
   requestSessionResync: (projectName: string) => void;
-  /** 取走并清空待处理的恢复信号。 */
+  /** Take and clear pending resume signals. / 取走并清空待处理的恢复信号。 */
   takeSessionResumeSignals: () => SessionResumeSignal[];
 }
 
 export const useAssistantStore = create<AssistantState>((set, get) => {
+  // Projection-derived caches (non-reactive state): the projector incrementally folds entries->turns,
+  // committedIds is the O(1) index for draft-replacement checks. Both self-heal by entries reference:
+  // when an external whole-frame setState (e.g. a test reset) replaces entries without going through this store's actions,
+  // the next read rebuilds on a reference mismatch, avoiding misjudging a draft as replaced via a stale message_id,
+  // or misjudging an incremental prefix continuation via stale projector internal state. The projector's own prefix check
+  // only compares references of the first and last elements of entries (O(1); it cannot compare the whole array, or every append would
+  // count as "changed" and lose the point of being incremental); here an extra coarser but more reliable self-heal guard by container reference
+  // is added, fully isomorphic to committedSource: every legitimate mutation
+  // updates xxxSource to the reference the next get().entries will return, so only an external
+  // whole-frame replacement bypassing actions triggers it.
   // 投影派生缓存（非响应式状态）：projector 增量折叠 entries→turns，
   // committedIds 是 draft 替换判定的 O(1) 索引。两者都按 entries 引用自愈——
   // 外部整帧 setState（如测试 reset）替换 entries 却不经本 store 的 action
@@ -165,6 +189,7 @@ export const useAssistantStore = create<AssistantState>((set, get) => {
   let projectorSource: TimelineEntry[] | null = null;
   let committedIds = new Set<string>();
   let committedSource: TimelineEntry[] | null = null;
+  // ids of messages that have left the queue: the send response may arrive after the removal event on the stream, so this keeps them from being added back to the tray
   // 已离开排队的消息 id：发送响应可能晚于流上的移出事件到达，据此不把它加回托盘
   let settledQueuedIds = new Set<string>();
 
@@ -173,6 +198,14 @@ export const useAssistantStore = create<AssistantState>((set, get) => {
     return messages.some((m) => m.id === id) ? messages.filter((m) => m.id !== id) : messages;
   };
 
+  // base is the reference get().entries held before this mutation, next is the new reference about to be written to state
+  // (the two are never equal: every mutation builds a new array). The self-heal check must
+  // compare base against the last recorded projectorSource, not next: next
+  // is a brand-new reference by definition, so comparing it would make every legitimate call count as "changed", rebuilding the
+  // projector and deep-copying all history entries again, degrading to O(n²) full replay, which is exactly
+  // what incremental projection is meant to eliminate. Only an external whole-frame replacement bypassing actions (e.g. a test's
+  // useAssistantStore.setState(..., true)) makes base differ from the last recorded
+  // projectorSource and correctly triggers a rebuild.
   // base 是本次 mutation 之前 get().entries 持有的引用，next 是即将写入 state
   // 的新引用（二者恒不相等——每次 mutation 都会构造新数组）。自愈检查必须
   // 拿 base 去比对上一次记录的 projectorSource，而不是拿 next 比对：next
@@ -233,6 +266,8 @@ export const useAssistantStore = create<AssistantState>((set, get) => {
     setSessionsLoading: (loading) => set({ sessionsLoading: loading }),
 
     setEntries: (entries) => {
+      // Merge as a union instead of a whole-frame overwrite: on slow networks the cold-read response may arrive after the send response/SSE entries,
+      // and a whole-frame overwrite would erase newer entries; a union by seq is always safe for an append-only log.
       // 并集合并而非整帧覆盖：慢网络下冷读响应可能晚于发送响应/SSE 条目到达，
       // 整帧覆盖会抹掉更新的条目；append-only 日志按 seq 并集恒安全。
       const prevEntries = get().entries;
@@ -254,6 +289,7 @@ export const useAssistantStore = create<AssistantState>((set, get) => {
       const ids = committedFor(entries);
       if (entry.type === "assistant" && entry.message_id != null) ids.add(entry.message_id);
       committedSource = next;
+      // Once an authoritative entry is persisted, replace the draft with the same message_id exactly (identity comparison)
       // 权威条目落库即按同 message_id 精确替换 draft（身份比对）
       const draftReplaced =
         draft !== null &&
@@ -261,6 +297,7 @@ export const useAssistantStore = create<AssistantState>((set, get) => {
         entry.message_id != null &&
         entry.message_id === draft.message_id;
       const nextDraft = draftReplaced ? null : draft;
+      // A user entry is the accepted queued message; the same identity does not appear both in the tray and in the timeline
       // 用户条目即被接纳的排队消息，同一身份不在托盘与时间线上各出现一次
       const queuedMessages =
         entry.type === "user" && entry.uuid ? withoutQueued(get().queuedMessages, entry.uuid) : get().queuedMessages;
@@ -273,6 +310,8 @@ export const useAssistantStore = create<AssistantState>((set, get) => {
       });
     },
     setDraftSnapshot: (draft, rev) => {
+      // tool_json is the raw partial JSON the server has accumulated: keep concatenating
+      // subsequent input_json_delta onto it as a prefix, otherwise a bare suffix never parses and the argument preview freezes.
       // tool_json 是服务端已累积的原始 partial JSON——以此为前缀继续拼接
       // 后续 input_json_delta，否则纯后缀永远解析失败、参数预览冻结。
       const mirror: DraftMirror | null = draft
@@ -312,6 +351,7 @@ export const useAssistantStore = create<AssistantState>((set, get) => {
         startupFailure: null,
         startupFailureOrigin: null,
         interrupting: false,
+        // The edit state is anchored on the timeline that was cleared; after the rebuild the anchor no longer exists
         // 编辑态锚在被清空的那条时间线上，重建后锚点不再存在
         editingTurnUuid: null,
       });
@@ -350,7 +390,7 @@ export const useAssistantStore = create<AssistantState>((set, get) => {
     setSending: (sending) => set({ sending }),
     setInterrupting: (interrupting) => set({ interrupting }),
     setError: (error) => set({ error }),
-    // origin 与 failure 同一次写入，两者不会各自漂移
+    // origin and failure are written in the same write, so they cannot drift apart / origin 与 failure 同一次写入，两者不会各自漂移
     setStartupFailure: (failure, origin = "send") =>
       set({ startupFailure: failure, startupFailureOrigin: failure ? origin : null }),
     setSessionStatus: (status) => set({ sessionStatus: status }),

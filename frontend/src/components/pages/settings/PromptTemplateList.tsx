@@ -10,17 +10,17 @@ import { errMsg } from "@/utils/async";
 import { categoryLabel } from "./promptTemplateCategory";
 import { EmptyCard, ErrorCard, LoadingCard, type Load } from "./promptTemplateShared";
 
-/** 按流水线顺序排列；接口返回的其他类别按首次出现顺序排在最后。 */
+/** Ordered by pipeline order; other categories returned by the API go last in order of first appearance. / 按流水线顺序排列；接口返回的其他类别按首次出现顺序排在最后。 */
 const CATEGORY_ORDER = ["text", "asset", "storyboard", "video", "style"];
 
-/** 默认折叠为紧凑表的类别。 */
+/** Categories collapsed into a compact table by default. / 默认折叠为紧凑表的类别。 */
 const COMPACT_CATEGORIES = new Set(["style"]);
 
 const FILTER_AXES = ["content_mode", "generation_mode", "source_kind"] as const;
 type FilterAxis = (typeof FILTER_AXES)[number];
 type AxisFilter = Partial<Record<FilterAxis, string>>;
 
-/** 轴值沿用新建项目与项目设置里的用户文案；未收录的取值原样显示。 */
+/** Axis values reuse the user-facing text from new project and project settings; unlisted values are shown as-is. / 轴值沿用新建项目与项目设置里的用户文案；未收录的取值原样显示。 */
 const AXIS_VALUE_LABEL_KEYS: Record<FilterAxis, Record<string, string>> = {
   content_mode: {
     narration: "narration_visuals",
@@ -38,6 +38,9 @@ const AXIS_VALUE_LABEL_KEYS: Record<FilterAxis, Record<string, string>> = {
 };
 
 /**
+ * Concrete trigger names reuse the tool names from the Agent session panel and the task type text from the task queue;
+ * user actions and asset sheet tasks have no existing text and are mapped separately. Unlisted values are shown as-is.
+ *
  * 触发方的具体名沿用 Agent 会话面板的工具名与任务队列的任务类型文案；
  * 用户操作与资产图任务没有现成的对应文案，单独映射。未收录的取值原样显示。
  */
@@ -53,7 +56,7 @@ function stageLabel(t: Translate, stage: string): string {
   return t(`prompt_templates_stage_${stage}`, { defaultValue: stage });
 }
 
-/** 「种类 · 名字」，如「Agent 工具 · 生成脚本」。 */
+/** "Kind · name", e.g. "Agent tool · Generate script". / 「种类 · 名字」，如「Agent 工具 · 生成脚本」。 */
 function triggerLabel(t: Translate, trigger: PromptTemplateTrigger): string {
   const kind = t(`prompt_templates_trigger_kind_${trigger.kind}`, { defaultValue: trigger.kind });
   const name = t(TRIGGER_NAME_KEYS[trigger.kind](trigger.name), { defaultValue: trigger.name });
@@ -74,7 +77,7 @@ function groupByCategory(templates: PromptTemplateMeta[]): [string, PromptTempla
   return [...byCategory].sort(([a], [b]) => rank(a) - rank(b));
 }
 
-/** 各筛选轴在全部模版 `applies_to` 中出现过的取值，按首次出现顺序。 */
+/** Values of each filter axis that appear in all templates' `applies_to`, in order of first appearance. / 各筛选轴在全部模版 `applies_to` 中出现过的取值，按首次出现顺序。 */
 function collectAxisValues(templates: PromptTemplateMeta[]): [FilterAxis, string[]][] {
   return FILTER_AXES.map((axis): [FilterAxis, string[]] => {
     const values = new Set<string>();
@@ -85,7 +88,7 @@ function collectAxisValues(templates: PromptTemplateMeta[]): [FilterAxis, string
   }).filter(([, values]) => values.length > 0);
 }
 
-/** 未声明某轴的模版对该轴全部取值适用，任何筛选下都保留。 */
+/** A template that doesn't declare an axis applies to all values of that axis and is kept under any filter. / 未声明某轴的模版对该轴全部取值适用，任何筛选下都保留。 */
 function matchesFilter(template: PromptTemplateMeta, filter: AxisFilter): boolean {
   return FILTER_AXES.every((axis) => {
     const selected = filter[axis];
@@ -94,7 +97,7 @@ function matchesFilter(template: PromptTemplateMeta, filter: AxisFilter): boolea
   });
 }
 
-/** 模版列表：按流水线顺序分组，画风组默认折叠，可按创作类型、生成模式、源文件类型筛选。 */
+/** Template list: grouped by pipeline order, the style group collapsed by default, filterable by content mode, generation mode and source file type. / 模版列表：按流水线顺序分组，画风组默认折叠，可按创作类型、生成模式、源文件类型筛选。 */
 export function PromptTemplateList({ onSelect }: { onSelect: (id: string) => void }) {
   const { t } = useTranslation("dashboard");
   const [state, setState] = useState<Load<PromptTemplateMeta[]>>({ status: "loading" });
@@ -231,6 +234,7 @@ function CategoryGroup({
   const label = categoryLabel(t, category);
   const count = <span className="text-xs text-muted-foreground">{t("prompt_templates_count", { count: items.length })}</span>;
 
+  // Long-tail categories such as style are collapsed into a two-column compact table by default; other categories are laid out flat as rows with descriptions.
   // 画风等长尾类别默认收起为两列紧凑表；其余类别平铺带说明的行。
   if (compact) {
     return (

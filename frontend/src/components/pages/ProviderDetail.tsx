@@ -17,6 +17,8 @@ import { Input } from "@/components/ui/input";
 import type { ProviderConfigDetail, ProviderField, ProviderMultiplierInfo } from "@/types";
 import { parseMultiplier } from "@/utils/multiplier";
 
+// Capability badge order: image -> video -> text -> audio; unlisted types go last.
+// media_types come from the backend in registration order; the frontend sorts uniformly so new types like audio don't jump to the front.
 // 能力徽标展示顺序：图片→视频→文本→音频，未列出的类型排到末尾。
 // media_types 由后端按注册顺序返回，前端统一排序避免 audio 等新类型插到队首。
 const MEDIA_TYPE_ORDER = ["image", "video", "text", "audio"];
@@ -38,6 +40,7 @@ const STATUS_LABEL_KEY: Record<ProviderConfigDetail["status"], string> = {
   error: "status_error",
 };
 
+// UI names of advanced config fields: the backend only gives English labels; known fields use localized copy, unknown ones fall back to the backend label.
 // 高级配置字段的界面名：后端只给英文 label，已知字段走本地化文案，未知字段回退后端 label。
 const FIELD_LABEL_KEY: Record<string, string> = {
   image_max_workers: "cp_image_max_workers_label",
@@ -61,23 +64,23 @@ function fieldPlaceholder(t: TFunction, field: ProviderField): string | undefine
   return field.placeholder;
 }
 
-/** 高级配置的已保存内容：字段 key → 当前值，未设置为空串。 */
+/** Saved advanced config: field key -> current value, empty string when unset. / 高级配置的已保存内容：字段 key → 当前值，未设置为空串。 */
 type AdvancedValues = Record<string, string>;
 
 function advancedValues(detail: ProviderConfigDetail | null): AdvancedValues {
   return Object.fromEntries((detail?.fields ?? []).map((field) => [field.key, field.value ?? ""]));
 }
 
-// 订阅制供应商：倍率默认 0，不计算费用。
+// Subscription providers: multiplier defaults to 0, no cost computed. / 订阅制供应商：倍率默认 0，不计算费用。
 const SUBSCRIPTION_PROVIDERS = new Set(["ark-agent-plan"]);
 
-/** 供应商倍率的输入值：等于默认值时为空串，表示跟随默认；保存空串即恢复默认。 */
+/** Input value of the provider multiplier: empty string when equal to the default, meaning follow default; saving an empty string restores the default. / 供应商倍率的输入值：等于默认值时为空串，表示跟随默认；保存空串即恢复默认。 */
 function multiplierText(info: ProviderMultiplierInfo | null): string {
   if (!info || info.multiplier === info.default) return "";
   return String(info.multiplier);
 }
 
-/** 保存栏管理的内容：顶部的供应商倍率与高级配置。 */
+/** Content managed by the save bar: the provider multiplier at the top and advanced config. / 保存栏管理的内容：顶部的供应商倍率与高级配置。 */
 interface DetailValues {
   multiplier: string;
   advanced: AdvancedValues;
@@ -89,13 +92,16 @@ function isMultiplierValid(text: string): boolean {
 
 interface Props {
   providerId: string;
-  /** 深链里的模型 ID：打开时直接打开它的 Sheet。 */
+  /** Model ID from a deep link: opens its Sheet directly. / 深链里的模型 ID：打开时直接打开它的 Sheet。 */
   initialModelId?: string;
-  /** 高级配置或密钥改动入库之后调用，供上层刷新供应商目录（二级栏的密钥数量与状态）。 */
+  /** Called after advanced config or key changes are stored, so the parent refreshes the provider catalog (key count and status in the secondary column). / 高级配置或密钥改动入库之后调用，供上层刷新供应商目录（二级栏的密钥数量与状态）。 */
   onSaved?: () => void;
 }
 
 /**
+ * Preset provider detail. On provider change the parent rebuilds the whole pane by `providerId`; the component only handles language refetch and retry for the same provider.
+ * Key add/edit/delete and switching, and model list enable toggles take effect immediately; the bottom save bar handles the provider multiplier and advanced config (concurrency limit etc.).
+ *
  * 预置供应商详情。换供应商时由上层按 `providerId` 重建整栏，组件内只处理同一供应商的语言重取与重试。
  * 密钥区的增改删与切换、模型列表的启用开关立即生效；底部保存栏负责供应商倍率与高级配置（并发上限等）。
  */
@@ -103,6 +109,7 @@ export function ProviderDetail({ providerId, initialModelId, onSaved }: Props) {
   const { t, i18n } = useTranslation(["dashboard", "common"]);
   const [detail, setDetail] = useState<ProviderConfigDetail | null>(null);
   const [multiplier, setMultiplier] = useState<ProviderMultiplierInfo | null>(null);
+  // Detail and multiplier track read errors separately: one succeeding must not clear the other's error, or the page sits loading with no retry entry.
   // 详情与倍率各自记读取错误：一方成功不能清掉另一方的错误，否则页面停在加载态且没有重试入口。
   const [detailError, setDetailError] = useState<string | null>(null);
   const [multiplierError, setMultiplierError] = useState<string | null>(null);
@@ -119,6 +126,10 @@ export function ProviderDetail({ providerId, initialModelId, onSaved }: Props) {
     setDetail(next);
   }, []);
 
+  /**
+   * The detail has three initiators (effect, refetch after save, refetch after key change). A new round voids the in-flight one first,
+   * otherwise an earlier language refetch returning late would overwrite the just-saved result with old values.
+   */
   /** 详情有三个发起方（effect、保存后重取、密钥变更后重取）。新一轮先作废在途的那次，
    *  否则先发出的语言重取后返回时会把刚保存的结果覆盖回旧值。 */
   const startDetailRequest = useCallback(() => {
@@ -138,6 +149,8 @@ export function ProviderDetail({ providerId, initialModelId, onSaved }: Props) {
           setDetailError(null);
         })
         .catch((err: unknown) => {
+          // When a language refetch fails the old detail is still readable, stay silent; with no detail to show at all an error is required,
+          // otherwise the page sits loading with no retry entry.
           // 语言重取失败时旧详情仍可读，静默即可；手上没有详情可展示就必须报错，
           // 否则页面停在加载态且没有重试入口。
           if (!controller.signal.aborted && detailRef.current === null) setDetailError(errMsg(err));
@@ -146,6 +159,7 @@ export function ProviderDetail({ providerId, initialModelId, onSaved }: Props) {
     return () => controller.abort();
   }, [i18n.language, providerId, reloadKey, applyDetail, startDetailRequest]);
 
+  // The multiplier is language-independent, fetched once per provider; the save bar isn't rendered until both arrive, so a late multiplier isn't treated as an external update overwriting edits.
   // 倍率与语言无关，只随供应商取一次；取齐之前不渲染保存栏，后到的倍率不会被当成外部更新覆盖编辑。
   useEffect(() => {
     const controller = new AbortController();
@@ -170,7 +184,7 @@ export function ProviderDetail({ providerId, initialModelId, onSaved }: Props) {
   }, [providerId, applyDetail, startDetailRequest]);
 
   const handleCredentialChanged = useCallback(() => {
-    // 密钥已经改完了：目录刷新与这次详情重取是否落地无关。
+    // The key change is done: the catalog refresh doesn't depend on whether this detail refetch lands. / 密钥已经改完了：目录刷新与这次详情重取是否落地无关。
     onSaved?.();
     voidCall(refetchDetail().catch(() => undefined));
   }, [onSaved, refetchDetail]);
@@ -188,15 +202,17 @@ export function ProviderDetail({ providerId, initialModelId, onSaved }: Props) {
       }
       let advanced = value.advanced;
       if (Object.keys(patch).length > 0) {
+        // Backend validation failures (e.g. invalid concurrency limit) return a localized detail, shown by the save bar
         // 后端校验失败（如并发上限非法）返回已本地化的 detail，由保存栏显示
         await API.patchProviderConfig(providerId, patch);
         onSaved?.();
+        // Stored values are normalized by the backend (e.g. "+5" stored as "5"); the refetch result wins; a failed refetch isn't a failed save.
         // 入库值经后端规范化（如「+5」存为「5」），以重取结果为准；重取失败不算保存失败。
         try {
           const updated = await refetchDetail();
           if (updated) advanced = advancedValues(updated);
         } catch {
-          // 详情停在旧值即可
+          // Leaving the detail at old values is fine / 详情停在旧值即可
         }
       }
       if (value.multiplier === saved.multiplier) return { multiplier: value.multiplier, advanced };
@@ -206,7 +222,7 @@ export function ProviderDetail({ providerId, initialModelId, onSaved }: Props) {
         return { multiplier: multiplierText(info), advanced };
       } catch (err) {
         if (Object.keys(patch).length === 0) throw err;
-        // 高级配置已经落库，按部分保存报告
+        // Advanced config is already stored; report as partial save / 高级配置已经落库，按部分保存报告
         throw new PartialSaveError(t("pm_multiplier_save_failed", { message: errMsg(err) }), {
           saved: { multiplier: saved.multiplier, advanced },
           cause: err,
@@ -280,6 +296,7 @@ export function ProviderDetail({ providerId, initialModelId, onSaved }: Props) {
           </div>
         </div>
       }
+      // The save bar matches the body form column's width and start (body max-w-190 incl. 24px padding each side), not spanning the whole pane in wide windows
       // 保存栏与正文的表单列同宽同起点（正文 max-w-190 含左右各 24px 内边距），宽窗口下不横跨整栏
       footer={<SaveBar unit={unit} className="max-w-178" />}
     >

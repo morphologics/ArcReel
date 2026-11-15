@@ -10,6 +10,11 @@ import VolcengineColor from "@lobehub/icons/es/Volcengine/components/Color";
 import type { ComponentType } from "react";
 
 /**
+ * Canonical id of a built-in provider -> named lobehub icon component. Each is statically imported to keep tree-shaking.
+ * Keys are normalized lowercase ids (a-z0-9 only); ids that differ from lobehub icon names (e.g. ark/dashscope)
+ * are folded into the canonical keys here by resolveIconKey. Built-in providers the icon library doesn't have at all (e.g. Agnes) aren't registered
+ * and naturally fall back to a letter badge; the badge is a legitimate end state, not a gap, so no fake icons are needed to "cover all providers".
+ *
  * 内置 provider 的 canonical id → lobehub 具名图标组件。逐个静态 import 保持 tree-shaking。
  * 键为规范化后的小写 id（仅 a-z0-9）；id 与 lobehub 图标名不一致的（如 ark/dashscope）
  * 由 resolveIconKey 折叠到这里的规范键。图标库本就没有的内置 provider（如 Agnes）不登记，
@@ -28,6 +33,11 @@ const ICON_REGISTRY: Record<string, ComponentType<{ className?: string }>> = {
 };
 
 /**
+ * Canonical id of a built-in provider -> canonical key of ICON_REGISTRY.
+ * Prefix/alias families of ids (gemini-vertex, gemini-*, grok-*, ark-*, dashscope) are folded here.
+ * Only takes canonical ids: custom providers don't go through here (always a letter badge, no guessing the brand from the name),
+ * so prefix rules don't mismatch free-text names (e.g. Arknights won't hit Volcano Ark via ark-*).
+ *
  * 内置 provider 的 canonical id → ICON_REGISTRY 的规范键。
  * id 的前缀/别名家族（gemini-vertex、gemini-*、grok-*、ark-*、dashscope）在此折叠。
  * 仅吃 canonical id：自定义 provider 不走这里（恒用字母徽章、不按名字猜品牌），
@@ -44,6 +54,9 @@ function resolveIconKey(providerId: string): string {
 }
 
 /**
+ * Renders the brand icon by a built-in provider's canonical id: an icon if it hits ICON_REGISTRY,
+ * otherwise falls back to a letter badge (the legitimate end state when the icon library lacks the provider).
+ *
  * 按内置 provider 的 canonical id 渲染品牌图标，命中 ICON_REGISTRY 则出图标，
  * 否则回落字母徽章（图标库没有该供应商时的合法终态）。
  */
@@ -51,6 +64,8 @@ export function ProviderIcon({ providerId, className }: { providerId: string; cl
   const cls = className ?? "h-6 w-6";
   const Icon = ICON_REGISTRY[resolveIconKey(providerId)];
   if (Icon) return <Icon className={cls} />;
+  // Fallback: letter badge. providerId is typed as string (resolveIconKey already calls .toLowerCase() directly),
+  // so here too the contract is trusted without ?? ""; Array.from takes the first character so astral-plane characters aren't cut into half a surrogate pair.
   // Fallback: 字母徽章。providerId 类型即 string（resolveIconKey 已直接 .toLowerCase()），
   // 这里同样信任契约不再 ?? ""；Array.from 取首字符避免星平面字符被截成半个代理对。
   return (

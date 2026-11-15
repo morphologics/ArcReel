@@ -6,20 +6,28 @@ export interface InlineWarningAction {
   label: string;
   onClick: () => void;
   disabled?: boolean;
-  /** 灰化时的 hover 原因。 */
+  /** Hover reason when greyed out. / 灰化时的 hover 原因。 */
   title?: string;
 }
 
 export interface InlineWarningProps {
-  /** 警告正文。 */
+  /** Warning body. / 警告正文。 */
   message: string;
-  /** 一键修正入口；只读上下文等不给入口的场景省略。 */
+  /** One-click fix entry; omitted in cases that offer no entry, such as read-only contexts. / 一键修正入口；只读上下文等不给入口的场景省略。 */
   action?: InlineWarningAction;
-  /** 外层间距，由使用处的版式决定；排版与配色由本组件固定。 */
+  /** Outer spacing, decided by the layout at the usage site; typography and colors are fixed by this component. / 外层间距，由使用处的版式决定；排版与配色由本组件固定。 */
   className?: string;
 }
 
 /**
+ * Inline warning: amber text + an optional one-click fix button.
+ *
+ * Carries hints like "this setting will make later operations fail at execution time, but doesn't block now": the warning doesn't gate controls,
+ * it only explains the consequence and gives one fix path. `role="alert"` makes it read out immediately when the condition is met, so it sits on
+ * the conditionally rendered outer element: the whole block appears with the condition, instead of rendering an empty shell first and filling it in.
+ *
+ * The fix button lives in this component rather than a slot: both usage sites' buttons must look and disable the same way, and a slot would let them drift apart.
+ *
  * 行内警告：琥珀文案 + 可选的一键修正按钮。
  *
  * 承载「这项设置会让后续操作在执行期失败，但现在不阻断」这类提示——警告不门控控件，

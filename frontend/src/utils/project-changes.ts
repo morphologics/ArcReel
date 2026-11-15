@@ -5,12 +5,16 @@ import { episodeDisplayName, episodeItemLabel, type ProjectScripts } from "@/uti
 
 const GROUP_NAME_LIMIT = 5;
 
-/** 事件通知文案的翻译函数，由调用方从 `events` 命名空间取得。 */
+/** Translation function for event notification text, obtained by the caller from the `events` namespace. / 事件通知文案的翻译函数，由调用方从 `events` 命名空间取得。 */
 export type EventsT = TFunction<"events">;
 
-/** 把事件里的集 ID 与条目 ID 换成「标题 · S01」所需的账本，按播出顺序排列。 */
+/** Ledger needed to turn episode IDs and entry IDs in events into "title · S01", ordered by episode order. / 把事件里的集 ID 与条目 ID 换成「标题 · S01」所需的账本，按播出顺序排列。 */
 export type EpisodeLedger = readonly Pick<EpisodeMeta, "episode" | "title">[];
 
+// Completion events: the signal that one generation run finished. Serves two purposes at once —
+// 1. notification category (the action itself is the category, independent of entity_type): priority lookup, navigation behavior and notification text are not
+//     split by entity_type; the five skeleton/task kinds share one set of rules;
+// 2. billing signal: completed generation may incur provider costs, so a hit re-fetches costs.
 // 完成事件：一次生成跑完的信号。同时承担两种用途——
 // 一、通知类别（action 本身即类别，与 entity_type 无关）：优先级查表、导航行为、通知文案均不按
 //     entity_type 拆分，五类骨架/任务共用同一套判定；
@@ -61,9 +65,13 @@ export function groupChangesByType(
   return [...groups.values()];
 }
 
+// Entities whose entry ID carries an episode prefix (E1S01); asset names are free text and shown by original name even if they look like entry IDs.
 // 条目 ID 带集前缀（E1S01）的实体；资产名是自由文本，形似条目 ID 也按原名显示。
 const EPISODE_ITEM_ENTITY_TYPES = new Set(["segment", "drama_scene", "shot", "reference_unit", "grid"]);
 
+// The stable label_key + label_params carried by the event are the source of truth for text; label is the backend's fallback rendered in the default language,
+// used only when the event comes from an old publisher that doesn't know the key, not in regular rendering.
+// Episode IDs and episode-prefixed entry IDs aren't shown to creators directly: episodes become titles (or order positions), entries become "title · 5" (current position in the episode).
 // 事件携带的稳定 label_key + label_params 是文案真相源；label 是后端按默认语言渲染的兜底，
 // 只在事件来自不认识该 key 的旧发布方时兜住，不参与常规渲染。
 // 集 ID 与带集前缀的条目 ID 不直接露给创作者：集换成标题（或播出位置），条目换成「标题 · 5」（本集里的当前位置）。
@@ -138,6 +146,7 @@ function summarizeGroupNames(
   return `${names.join(t("list.separator"))}${suffix}`;
 }
 
+// Sentence-pattern key of a single message: action decides the pattern, sharing the same action classification as grouped messages.
 // 单条文案的句式 key：action 决定句式，与分组文案共用同一套 action 归类。
 function singleTextKey(action: ProjectChange["action"]): string {
   if (action === "storyboard_ready" || action === "video_ready") {

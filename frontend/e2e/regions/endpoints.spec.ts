@@ -5,10 +5,13 @@ import { defineRegionScenarios } from "../support/scenarios.ts";
 import { RECORDED_DIR, type RecordedResponse } from "../support/recorded.ts";
 import { expect, type ApiOverrides } from "../support/test.ts";
 
+// "Endpoints" section: full-bleed secondary column (My endpoints | Built-in tabs, compact-tier icon rail) and endpoint details
+// (models using this endpoint, definition form, endpoint test, bottom save bar).
 // 「调用端点」分区：全出血档的二级栏（我的端点 | 内置 Tab、紧凑档图标栏）与端点详情
 // （使用这个端点的模型、定义表单、端点测试，底部保存栏）。
 
 const ENDPOINTS_PATH = "/app/settings?section=endpoints";
+// The recorded endpoint catalog has only built-in endpoints; the stress variant appends custom endpoints after it, the "Built-in" tab stays real data.
 // 录制的端点目录只有内置端点；压力变体在它后面接上自定义端点，「内置」Tab 仍是真实数据。
 const recordedCatalog = (
   JSON.parse(readFileSync(join(RECORDED_DIR, "custom-providers-endpoints.json"), "utf8")) as RecordedResponse
@@ -52,6 +55,7 @@ const VALID = {
   },
 };
 
+// Stress variant: many custom endpoints with long names, the secondary column scrolls in its own column; the first endpoint is used by many models.
 // 压力变体：自定义端点多且名称长，二级栏在自己的栏里滚动；第一个端点被很多模型使用。
 const MANY_ENDPOINTS: ApiOverrides = {
   "GET /api/v1/custom-endpoints": {
@@ -127,6 +131,7 @@ const MANY_ENDPOINTS: ApiOverrides = {
       ],
     },
   },
+  // Continuous validation while editing details: a saved endpoint excludes itself in the duplicate check (exclude_id), a new endpoint sends no parameter.
   // 详情编辑期持续校验：已保存的端点判重时排除自己（exclude_id），新建端点不带参数。
   "POST /api/v1/custom-endpoints/validate?exclude_id=1": VALID,
   "POST /api/v1/custom-endpoints/validate": VALID,
@@ -175,6 +180,7 @@ defineRegionScenarios("调用端点", [
     api: MANY_ENDPOINTS,
     ready: detailReady,
     act: async (page) => {
+      // In the compact tier the groups stack vertically; "New endpoint" is at the end of the "Mine" group, above the built-in group, so scrolling to the bottom does not pass it.
       // 紧凑档多组上下叠放，「新建端点」是「我的」组的末尾，在内置组上方，滚到底并不会经过它。
       const create = rail(page).getByRole("link", { name: /新建端点/ }).filter({ visible: true });
       await create.scrollIntoViewIfNeeded();

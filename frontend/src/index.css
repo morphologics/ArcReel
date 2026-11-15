@@ -1,10 +1,14 @@
 @import "tailwindcss";
 @import "tw-animate-css";
 @import "shadcn/tailwind.css";
-/* Streamdown 的代码块、表格工具条用 Tailwind 类排版，按它的安装说明让 Tailwind 扫描它的产物 */
+/* Streamdown's code blocks and table toolbars are laid out with Tailwind classes; per its install guide, have Tailwind scan its build output / Streamdown 的代码块、表格工具条用 Tailwind 类排版，按它的安装说明让 Tailwind 扫描它的产物 */
 @source "../node_modules/streamdown/dist/*.js";
 
 @custom-variant dark (&:where(.dark, .dark *));
+/*
+ * When the edit view is shorter than 36rem (e.g. 1024×600, 1280×600), tighten the label row and tracks to leave height for the player;
+ * the edit view root declares the size container with @container-size/edit-view.
+ */
 /* 剪辑视图矮于 36rem 时（如 1024×600、1280×600）压紧标签行与轨道，把高度留给播放器；
    剪辑视图根节点用 @container-size/edit-view 声明尺寸容器。 */
 @custom-variant edit-short {
@@ -13,6 +17,18 @@
     }
 }
 
+/*
+ * Semantic tokens, named after shadcn: light values in :root, dark values in .dark, mapped to utility classes by @theme inline below.
+ * - Brand purple has only one base color, primary; light fills, outlines and selected states use opacity modifiers (bg-primary/15).
+ * - Danger uses destructive (red), warnings and stale use warn (amber), done and available use good.
+ * - Three text tiers: foreground (body) > subtle-foreground (secondary) > muted-foreground (muted);
+ *   muted-foreground has more than 5:1 contrast on the page background in both modes, and body text does not add opacity to lower it.
+ * - input is the outline color of form controls; WCAG 1.4.11 requires at least 3:1 against the page, cards and popovers, so both modes use opaque colors;
+ *   border is only for decoration like cards and dividers, carries no control boundaries, and is not bound by this. Opacity modifiers on input (bg-input/12)
+ *   are only for fills; outlines must not use semi-transparent forms like border-input/30.
+ * - Inline styles and CSS reference these variables directly (var(--primary)); when opacity is needed use
+ *   color-mix(in oklab, var(--primary) 15%, transparent).
+ */
 /* 语义 token，命名沿用 shadcn：浅色值写在 :root，深色值写在 .dark，由下方 @theme inline 映射成工具类。
    - 品牌紫只有 primary 一个基色；浅底、描边、选中态用透明度修饰（bg-primary/15）。
    - 危险用 destructive（红），警告与过期用 warn（琥珀），完成与可用用 good。
@@ -77,9 +93,9 @@
 
     --scrim: oklch(0.25 0.02 265 / 0.45);
 
-    /* 每集身份色的明度：作文字时在卡片底色上达到 4.5:1 */
+    /* Lightness of each episode's identity color: reaches 4.5:1 on the card background when used as text / 每集身份色的明度：作文字时在卡片底色上达到 4.5:1 */
     --episode-lightness: 0.52;
-    /* 阴影墨色：阴影只写透明度，墨色按模式取，浅色下用带蓝的灰并减淡 */
+    /* Shadow ink: shadows only specify opacity, the ink is picked per mode; light mode uses a bluish gray, lightened / 阴影墨色：阴影只写透明度，墨色按模式取，浅色下用带蓝的灰并减淡 */
     --shadow-ink: oklch(0.35 0.03 265 / 0.4);
     --glow-primary: oklch(0.80 0.06 295 / 0.25);
     --glow-secondary: oklch(0.85 0.04 260 / 0.2);
@@ -87,6 +103,12 @@
     --scrollbar-thumb-hover: oklch(0.58 0.010 265 / 0.75);
     --focus-flash-edge: color-mix(in oklab, var(--primary) 70%, transparent);
 
+    /*
+     * Layers. Popovers Portal to body, siblings of #app-root which isolates its stacking context, so z-index only needs ordering among the three:
+     * popovers (Dialog, Sheet, Popover, menus, Tooltip) < Toast < onboarding (driver.js overlay and bubbles).
+     * Popovers in the same layer stack in open order: later-opened Portal nodes come later in the DOM.
+     * sticky is a layer inside #app-root: sticky toolbars cover positioned content in the same scroll area (e.g. the menu button on a card corner).
+     */
     /* 层级。弹层 Portal 到 body，与隔离了层叠上下文的 #app-root 同级，z-index 只需在三者间排序：
        弹层（Dialog、Sheet、Popover、菜单、Tooltip）< Toast < 新手引导（driver.js 遮罩与气泡）。
        同层弹层按打开顺序叠放：后打开的 Portal 节点排在 DOM 后面。
@@ -96,14 +118,14 @@
     --z-toast: 60;
     --z-onboarding: 10000;
 
-    /* 动效时长：界面动效一律短于 300ms。fast 用于悬停、淡入淡出，base 用于弹层进出与换图交叉淡入。 */
+    /* Motion durations: all UI motion is under 300ms. fast is for hover and fades, base for popover enter/exit and image-swap cross-fades. / 动效时长：界面动效一律短于 300ms。fast 用于悬停、淡入淡出，base 用于弹层进出与换图交叉淡入。 */
     --duration-fast: 150ms;
     --duration-base: 200ms;
-    /* 进场缓动：快起慢停 */
+    /* Enter easing: fast start, slow stop / 进场缓动：快起慢停 */
     --easing-emphasized: cubic-bezier(0.22, 1, 0.36, 1);
 }
 
-/* 深色：<html> 带 .dark 时生效；看成片的区域在子树上加 .dark 固定深色。 */
+/* Dark: applies when <html> has .dark; areas for viewing final cuts add .dark on their subtree to force dark. / 深色：<html> 带 .dark 时生效；看成片的区域在子树上加 .dark 固定深色。 */
 .dark {
     color-scheme: dark;
 
@@ -112,7 +134,7 @@
     --subtle-foreground: oklch(0.820 0.008 265);
     --card: oklch(0.182 0.011 270);
     --card-foreground: var(--foreground);
-    /* 弹层材质：不透明 surface，比卡片略亮；一条 border、一个 overlay 阴影，不用模糊与渐变 */
+    /* Popover material: opaque surface, slightly lighter than cards; one border, one overlay shadow, no blur or gradients / 弹层材质：不透明 surface，比卡片略亮；一条 border、一个 overlay 阴影，不用模糊与渐变 */
     --popover: oklch(0.205 0.011 265);
     --popover-foreground: var(--foreground);
     --primary: oklch(0.76 0.09 295);
@@ -121,7 +143,7 @@
     --secondary-foreground: var(--foreground);
     --muted: oklch(0.250 0.012 265);
     --muted-foreground: oklch(0.640 0.010 265);
-    /* shadcn 的 accent 是菜单项悬停底色，不是品牌色 */
+    /* shadcn's accent is the menu item hover background, not the brand color / shadcn 的 accent 是菜单项悬停底色，不是品牌色 */
     --accent: oklch(0.26 0.012 265 / 0.5);
     --accent-foreground: var(--foreground);
     --destructive: oklch(0.70 0.18 25);
@@ -138,12 +160,16 @@
     --chart-4: var(--destructive);
     --chart-5: var(--muted-foreground);
 
-    /* 媒体类型色：使用记录的媒体图标、费用趋势与构成共用，四色明度相近、色相分开 */
+    /* Media type colors: shared by usage record media icons, cost trend and breakdown; four colors with similar lightness and distinct hues / 媒体类型色：使用记录的媒体图标、费用趋势与构成共用，四色明度相近、色相分开 */
     --media-image: oklch(0.62 0.13 240);
     --media-video: oklch(0.58 0.15 305);
     --media-text: oklch(0.62 0.12 160);
     --media-audio: oklch(0.66 0.13 70);
 
+    /*
+     * Asset type colors: @ mentions in scripts, speakers and mention candidates are colored by type, light enough to reach 4.5:1 as text on the card background;
+     * unresolved mentions use destructive
+     */
     /* 资产类型色：剧本里的 @ 提及、说话人与提及候选按类型着色，明度够高，在卡片底色上作文字也达到 4.5:1；
        解析不到的提及用 destructive */
     --asset-product: oklch(0.81 0.11 294);
@@ -151,7 +177,7 @@
     --asset-scene: oklch(0.85 0.14 165);
     --asset-prop: oklch(0.88 0.15 92);
 
-    /* sidebar 取页面底色渐变的第二色 */
+    /* sidebar takes the second color of the page background gradient / sidebar 取页面底色渐变的第二色 */
     --sidebar: oklch(0.148 0.009 260);
     --sidebar-foreground: var(--foreground);
     --sidebar-primary: var(--primary);
@@ -161,7 +187,7 @@
     --sidebar-border: var(--border);
     --sidebar-ring: var(--ring);
 
-    /* 模态遮罩：Dialog、Sheet 与新手引导遮罩共用（onboarding/tour.ts 把它交给 driver.js 的遮罩） */
+    /* Modal overlay: shared by Dialog, Sheet and the onboarding overlay (onboarding/tour.ts hands it to driver.js's overlay) / 模态遮罩：Dialog、Sheet 与新手引导遮罩共用（onboarding/tour.ts 把它交给 driver.js 的遮罩） */
     --scrim: oklch(0.10 0.012 265 / 0.78);
 
     --episode-lightness: 0.72;
@@ -175,22 +201,26 @@
 
 
 @theme {
+    /*
+     * Fonts: the design uses Inter throughout; display differs only in size/weight.
+     * Latin fonts are self-hosted via @fontsource packages imported in main.tsx; no web font is loaded for Chinese, which falls back to system fonts.
+     */
     /* 字体 — 设计稿统一使用 Inter，display 仅在字号/字重上做区分。
        西文字体由 main.tsx 引入 @fontsource 包自托管；中文不加载网络字体，回退系统字体。 */
     --font-sans: "Inter Variable", system-ui, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
     --font-display: "Inter Variable", system-ui, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
     --font-mono: "JetBrains Mono Variable", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
-    /* 衬线 — 仅项目大厅 (Darkroom) 用于编辑式电影感大标题 */
+    /* Serif: only for editorial cinematic headlines in the project lobby (Darkroom) / 衬线 — 仅项目大厅 (Darkroom) 用于编辑式电影感大标题 */
     --font-editorial: "Instrument Serif", "Songti SC", "Noto Serif SC", Georgia, serif;
 
-    /* 运行中状态点的透明度呼吸，只用于小状态点；减少动态效果时由下方全局规则停住 */
+    /* Opacity breathing of the running status dot, only for small status dots; stopped by the global rule below under reduced motion / 运行中状态点的透明度呼吸，只用于小状态点；减少动态效果时由下方全局规则停住 */
     --animate-breath: breath 1.6s ease-in-out infinite;
     @keyframes breath {
         0%, 100% { opacity: 1; }
         50% { opacity: 0.3; }
     }
 
-    /* 打字机光标：吐字时持续闪烁，吐完再闪 3 次后停在熄灭态 */
+    /* Typewriter caret: keeps blinking while typing, blinks 3 more times after finishing, then stays off / 打字机光标：吐字时持续闪烁，吐完再闪 3 次后停在熄灭态 */
     --animate-caret-blink: caret-blink 1.4s steps(2, end) infinite;
     --animate-caret-linger: caret-blink 1.4s steps(2, end) 3 forwards;
     @keyframes caret-blink {
@@ -200,7 +230,7 @@
 }
 
 @theme inline {
-    /* Nova 派生圆角刻度：sm 6px、md 8px、lg 10px、xl 14px、2xl 18px */
+    /* Nova-derived radius scale: sm 6px, md 8px, lg 10px, xl 14px, 2xl 18px / Nova 派生圆角刻度：sm 6px、md 8px、lg 10px、xl 14px、2xl 18px */
     --radius-sm: calc(var(--radius) * 0.6);
     --radius-md: calc(var(--radius) * 0.8);
     --radius-lg: var(--radius);
@@ -252,12 +282,12 @@
     --color-sidebar-border: var(--sidebar-border);
     --color-sidebar-ring: var(--sidebar-ring);
     --color-scrim: var(--scrim);
-    /* 每集的身份色：明度与彩度固定，色相按集 ID 取，由调用处经 style 写入 --episode-hue（episodeHue）。 */
+    /* Each episode's identity color: fixed lightness and chroma, hue taken from the episode ID, written into --episode-hue via style by the caller (episodeHue). / 每集的身份色：明度与彩度固定，色相按集 ID 取，由调用处经 style 写入 --episode-hue（episodeHue）。 */
     --color-episode: oklch(var(--episode-lightness) 0.1 var(--episode-hue, 0));
-    /* 剪辑视图轨道上视频单元的片段色与旁白色：色相按视频单元取，由调用处经 style 写入 --unit-hue（unitHue）。 */
+    /* Clip color and narration color of video units on edit view tracks: hue taken from the video unit, written into --unit-hue via style by the caller (unitHue). / 剪辑视图轨道上视频单元的片段色与旁白色：色相按视频单元取，由调用处经 style 写入 --unit-hue（unitHue）。 */
     --color-unit-clip: oklch(0.42 0.07 var(--unit-hue, 0));
     --color-unit-narration: oklch(0.5 0.08 var(--unit-hue, 0) / 0.75);
-    /* 剪辑视图 BGM 轨的片段色 */
+    /* Clip color of the edit view BGM track / 剪辑视图 BGM 轨的片段色 */
     --color-bgm: oklch(0.45 0.09 300);
 
     --shadow-overlay: 0 16px 40px -12px color-mix(in oklab, var(--shadow-ink) 60%, transparent);
@@ -272,20 +302,24 @@
     --ease-emphasized: var(--easing-emphasized);
 }
 
-/* shadcn 原语的裸 border 默认取描边色，而不是 currentColor */
+/* Bare border on shadcn primitives defaults to the outline color, not currentColor / shadcn 原语的裸 border 默认取描边色，而不是 currentColor */
 @layer base {
     * {
         border-color: var(--border);
     }
 }
 
+/*
+ * Portaled popovers hang under body, siblings of #app-root; once it is isolated into its own stacking context,
+ * no z-index inside the app can cover the popovers.
+ */
 /* Portal 出去的弹层挂在 body 下、与 #app-root 同级；隔离出独立层叠上下文后，
    应用内任何 z-index 都不会盖过弹层。 */
 #app-root {
     isolation: isolate;
 }
 
-/* 全局 body 背景 — radial+linear 复合梯度 */
+/* Global body background: radial+linear composite gradient / 全局 body 背景 — radial+linear 复合梯度 */
 
 body {
     background:
@@ -299,6 +333,13 @@ body {
     text-rendering: optimizeLegibility;
 }
 
+/*
+ * Reduced motion (WCAG 2.3.3): remove translation, scaling and rotation, keeping only opacity and color changes.
+ * - tw-animate-css enter/exit (popovers' animate-in / animate-out) puts translation and scale in variables, which are zeroed here; fades work as usual.
+ * - Transitions keep only opacity and color properties; translation and scale transitions jump to the end state (Base UI's data-starting-style pattern, button press sink).
+ * - Other keyframes animations (breathing dot, loading spinner, locate highlight) jump to the end state and stop looping;
+ *   the fade masks scroll-fade-* are animations driven by scroll position, not motion, and are unaffected.
+ */
 /* 减少动态效果（WCAG 2.3.3）：去掉位移、缩放、旋转，只保留透明度与颜色变化。
    - tw-animate-css 的进出场（弹层的 animate-in / animate-out）把位移与缩放写在变量里，这里归零，淡入淡出照常。
    - 过渡只保留透明度与颜色属性，位移与缩放类过渡直接跳到终态（Base UI 的 data-starting-style 写法、按钮按下下沉）。
@@ -330,17 +371,21 @@ body {
     }
 }
 
-/* 数字字符（mono + tabular nums） */
+/* Numeric characters (mono + tabular nums) / 数字字符（mono + tabular nums） */
 .num {
     font-family: var(--font-mono);
     font-feature-settings: "tnum" 1;
 }
 
-/* 衬线 display 大标题 */
+/* Serif display headline / 衬线 display 大标题 */
 .display-serif {
     font-family: var(--font-display);
 }
 
+/*
+ * Locate highlight: when jumping to a shot or asset from notifications, workflow progress and similar entries, the target flashes three outline rings in brand purple, amber and green,
+ * with hooks/useScrollTarget adding and removing this class. Under reduced motion the global rule above stops it at the end state (no highlight).
+ */
 /* 定位高亮：从通知、制作进度等入口跳到某个分镜或资产时，落点依次闪过品牌紫、琥珀与绿三圈描边，
    由 hooks/useScrollTarget 增删这个类。减少动态效果时由上方全局规则停在终态（无高亮）。 */
 @keyframes workspace-focus-flash {
@@ -376,6 +421,12 @@ body {
     will-change: box-shadow, background-color;
 }
 
+/*
+ * Scrollbars: one single style, visible at rest, 6px visible width.
+ * Chromium (including Electron) and Safari draw it via ::-webkit-scrollbar and do not hide it per the system "show when scrolling" setting;
+ * since Chromium 121, once an element sets scrollbar-width / scrollbar-color it uses the standard properties and ignores these pseudo-elements,
+ * so the standard properties are only given to browsers without pseudo-element support (Firefox).
+ */
 /* 滚动条：唯一一套样式，静止时可见，可见宽度 6px。
    Chromium（含 Electron）与 Safari 用 ::-webkit-scrollbar 自绘，不随系统「滚动时显示」设置隐藏；
    Chromium 121 起元素一旦设置 scrollbar-width / scrollbar-color 就改用标准属性、忽略这里的伪元素，
@@ -402,12 +453,12 @@ body {
     }
 }
 
-/* 统一焦点指示（a11y） */
+/* Unified focus indicator (a11y) / 统一焦点指示（a11y） */
 @utility focus-ring {
     @apply focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring;
 }
 
-/* 剪辑视图 BGM 片段：两端按实际淡入淡出画成渐变，--fade-in / --fade-out 是渐变平台的起止位置（百分比）。 */
+/* Edit view BGM clips: both ends are drawn as gradients per the actual fade-in/out; --fade-in / --fade-out are the start and end positions of the gradient plateau (percent). / 剪辑视图 BGM 片段：两端按实际淡入淡出画成渐变，--fade-in / --fade-out 是渐变平台的起止位置（百分比）。 */
 @utility bgm-fade {
     background: linear-gradient(
         90deg,
@@ -418,7 +469,7 @@ body {
     );
 }
 
-/* 剪辑视图播放器上的字幕：近似成片字幕（思源黑体粗体、黑色描边与投影）。字号按画面短边，由调用处经 --subtitle-size 写入。 */
+/* Subtitles on the edit view player: approximate final-cut subtitles (Source Han Sans bold, black outline and shadow). Font size follows the frame's short side, written via --subtitle-size by the caller. / 剪辑视图播放器上的字幕：近似成片字幕（思源黑体粗体、黑色描边与投影）。字号按画面短边，由调用处经 --subtitle-size 写入。 */
 @utility burned-subtitle {
     font-family: "PingFang SC", "Hiragino Sans GB", "Source Han Sans SC", "Noto Sans CJK SC", "Microsoft YaHei", sans-serif;
     font-size: var(--subtitle-size);
@@ -431,12 +482,16 @@ body {
     overflow-wrap: anywhere;
 }
 
-/* 长文本跳过屏幕外部分的渲染（「分集」视图的原文）；占位高度按 600px 估计，渲染过后记住真实高度 */
+/* Skip rendering off-screen parts of long text (source text in the "Episodes" view); placeholder height is estimated at 600px and the real height is remembered after rendering / 长文本跳过屏幕外部分的渲染（「分集」视图的原文）；占位高度按 600px 估计，渲染过后记住真实高度 */
 @utility offscreen-skip {
     content-visibility: auto;
     contain-intrinsic-size: auto 600px;
 }
 
+/*
+ * Markdown body (StreamMarkdown). Colors only reference semantic tokens. Streamdown wraps code blocks and tables in an outer
+ * scroll container; pre and table do not scroll themselves, and keyboard focus and horizontal scrolling land on that layer (see StreamMarkdown).
+ */
 /* Markdown 正文（StreamMarkdown）。颜色只引用语义 token。代码块与表格由 Streamdown 外包一层
    滚动容器，pre 与 table 自身不滚动，键盘聚焦与横向滚动都落在那一层（见 StreamMarkdown）。 */
 @utility markdown-body {
@@ -517,7 +572,7 @@ body {
         line-height: 1.6;
     }
 
-    /* 代码行不折行，放不下时由外层容器横向滚动 */
+    /* Code lines do not wrap; when they do not fit, the outer container scrolls horizontally / 代码行不折行，放不下时由外层容器横向滚动 */
     & pre code {
         background-color: transparent;
         padding: 0;
@@ -551,7 +606,7 @@ body {
         text-align: left;
     }
 
-    /* 列不被挤成逐字折行：表头不折行，单元格保留最小宽度，放不下时整张表横向滚动 */
+    /* Columns are not squeezed into per-character wrapping: headers do not wrap, cells keep a minimum width, and the whole table scrolls horizontally when it does not fit / 列不被挤成逐字折行：表头不折行，单元格保留最小宽度，放不下时整张表横向滚动 */
     & th {
         background-color: var(--muted);
         font-weight: 600;

@@ -3,6 +3,17 @@ import { OptionalNumberField } from "@/components/shared/OptionalNumberField";
 import { SPEECH_RATE_MAX, SPEECH_RATE_MIN, isValidSpeechRate } from "./speech-rate";
 
 /**
+ * Optional project-level input for the spoken speech-rate estimate (reading units / second).
+ *
+ * It is a different thing from the "speech rate" of narration voiceover (TTS): that one is the provider's voiceover multiplier, this one is the estimation speed that converts dialogue length
+ * into seconds, driving the duration lower-bound guidance, speech amount hints and subtitle timing. The two are entered from different fields in the UI,
+ * and worded independently, to avoid confusion from the same name.
+ *
+ * The unit noun follows the project's source language: zh counts characters, en / vi / ru count words; same trimming convention as the backend ``count_reading_units``.
+ * When the language is undetermined (at the creation wizard stage the project has no source_language yet), use the neutral "characters or words"
+ * and note the unit is pending: a concrete noun here would be a false promise; a value entered as "characters/second", once the language is detected as en / vi,
+ * would be interpreted by the same estimator as "words/second", with the number unchanged but the meaning changed.
+ *
  * 口播语速估算（阅读单位 / 秒）的项目级可选输入。
  *
  * 与旁白配音（TTS）的「语速」是两个东西：那个是供应商配音倍率，这个是把台词字数折算成
@@ -15,7 +26,7 @@ import { SPEECH_RATE_MAX, SPEECH_RATE_MIN, isValidSpeechRate } from "./speech-ra
  * 后会被同一个估算器按「词/秒」解释，数字不变而含义变了。
  */
 
-/** 阅读单位名词的 i18n key：en / vi / ru 计「词」、zh 计「字」，语言未定时用中性的「字或词」。 */
+/** i18n key of the reading unit noun: en / vi / ru count words, zh counts characters, and when the language is undetermined use the neutral "characters or words". / 阅读单位名词的 i18n key：en / vi / ru 计「词」、zh 计「字」，语言未定时用中性的「字或词」。 */
 function readingUnitKey(sourceLanguage?: string | null): string {
   const code = (sourceLanguage ?? "").trim().toLowerCase();
   if (code === "en" || code === "vi" || code === "ru") return "reading_unit_word";
@@ -23,7 +34,7 @@ function readingUnitKey(sourceLanguage?: string | null): string {
   return "reading_unit_generic";
 }
 
-/** 语言未定时单位名词无法确定，判据与 readingUnitKey 同源。 */
+/** When the language is undetermined the unit noun can't be determined; same source of truth as readingUnitKey. / 语言未定时单位名词无法确定，判据与 readingUnitKey 同源。 */
 function isLanguagePending(sourceLanguage?: string | null): boolean {
   return readingUnitKey(sourceLanguage) === "reading_unit_generic";
 }
@@ -31,7 +42,7 @@ function isLanguagePending(sourceLanguage?: string | null): boolean {
 export interface SpeechRateFieldProps {
   value: number | null;
   onChange: (next: number | null) => void;
-  /** 项目 source_language（zh / en / vi）；创建阶段项目还没有语言事实，留空即可。 */
+  /** Project source_language (zh / en / vi); at the creation stage the project has no language fact yet, so leave it empty. / 项目 source_language（zh / en / vi）；创建阶段项目还没有语言事实，留空即可。 */
   sourceLanguage?: string | null;
 }
 

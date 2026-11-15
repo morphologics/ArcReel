@@ -24,19 +24,31 @@ interface EndFrameRowProps {
   scriptFile: string;
   contentMode: EditorContentMode;
   aspectRatio: "9:16" | "16:9";
-  /** 当前已设置的尾帧快照路径（项目内相对路径），未设置为 null。 */
+  /** Path of the currently set end frame snapshot (project-relative), null when not set. / 当前已设置的尾帧快照路径（项目内相对路径），未设置为 null。 */
   endFramePath: string | null;
-  /** 只读上下文（如剧本不可编辑时）：仅展示，不给写入入口。 */
+  /** Read-only context (e.g. when the script is not editable): display only, no write entry. / 只读上下文（如剧本不可编辑时）：仅展示，不给写入入口。 */
   readOnly?: boolean;
-  /** 提交在途状态回传：供父级同步禁用同卡片的视频生成 / 上传 / 恢复控件。 */
+  /** Passes back the in-flight submit state, for the parent to disable the same card's video generate / upload / restore controls in sync. / 提交在途状态回传：供父级同步禁用同卡片的视频生成 / 上传 / 恢复控件。 */
   onSubmittingChange?: (submitting: boolean) => void;
-  /** 视频卡的手动上传占用：同一分镜的视频文件正在上传时反向禁用本行的写入通道，避免与其共享的资产落盘并发冲突。 */
+  /** Manual upload occupancy of the video card: while this shot's video file is uploading, this row's write channels are disabled in turn, avoiding concurrent conflicts persisting the shared asset. / 视频卡的手动上传占用：同一分镜的视频文件正在上传时反向禁用本行的写入通道，避免与其共享的资产落盘并发冲突。 */
   videoUploadBusy?: boolean;
-  /** 本分镜的修改正在保存：「保存并生成」落定后紧接着入队视频，期间改尾帧会让视频用上旧尾帧。 */
+  /** This shot's changes are being saved: "Save and generate" enqueues the video right after saving, and changing the end frame meanwhile would make the video use the old end frame. / 本分镜的修改正在保存：「保存并生成」落定后紧接着入队视频，期间改尾帧会让视频用上旧尾帧。 */
   shotSaving?: boolean;
 }
 
 /**
+ * Shot end frame row: collapsed it shows a summary (not set / set), expanded it shows preview + note + replace / clear.
+ *
+ * Occupancy follows the repo convention's three checks: when this shot's video task occupies, both write controls are disabled in sync (check on open +
+ * sibling controls in sync), and at submit time the latest occupancy is read directly from the store again (state may have changed after opening the panel).
+ * The source image side has zero occupancy: the end frame is a snapshot copy, unrelated to the source image's generation tasks; shot / grid tasks also take no part in the check.
+ *
+ * Lack of capability support does not block the controls; it is carried by a persistent inline warning instead: when the model does not support end frames and this shot already has one set,
+ * a warning + a one-click "Clear" fix appear below the collapsed header, visible even when collapsed. This end frame would make video generation
+ * rejected by the backend at execution time, and hiding it in a collapsed panel means users only learn after failing one by one. The capability value comes from useModelCapabilities,
+ * taking the effective `lastFrame` value (including user overrides); the frontend builds no judgment of its own; a failed query is treated as "unknown",
+ * never falsely claiming no support. Changing the model / capability overrides auto-invalidates and refetches through that pipeline, so adding or removing the warning does not depend on expanding the panel.
+ *
  * 分镜尾帧设置行：收起显示摘要（未设置 / 已设置），展开为预览 + 说明 + 更换 / 清除。
  *
  * 占用态按仓库规范做三项检查：本分镜视频任务占用时两个写入控件同步禁用（开窗校验 +
@@ -75,21 +87,27 @@ export function EndFrameRow({
   const effectiveLastFrame = lastFrame === undefined ? standaloneCapabilities.lastFrame : lastFrame;
   const capsLoading = capabilitiesLoading ?? standaloneCapabilities.loading;
 
+  // When capability is not found (loading / failed), do not falsely claim no support: only an explicit false gates.
   // 未查到能力（加载中 / 失败）时不谎报不支持：仅明确的 false 才门控。
   const unsupported = effectiveLastFrame === false;
 
   const videoBusyIds = useActiveResourceIds("video", projectName);
+  // Occupancy does not distinguish source (task queue running / video card manual upload in flight): both write the same project.json,
+  // and concurrent writes must both be blocked. Lack of capability support is not included: it disables no control, only shows a warning.
   // 占用不区分来源（任务队列在跑 / 视频卡手动上传在途）：二者都在写同一份 project.json，
   // 并发写入都要拦。能力不支持不在此列——它不禁用任何控件，只出警告。
   const videoBusy = videoBusyIds.has(segmentId) || videoUploadBusy;
   const fp = useProjectsStore((s) => (endFramePath ? s.getAssetFingerprint(endFramePath) : null));
 
+  // Sibling controls in sync: the submit entries of replace / clear / picker all read this one value.
+  // It includes only the occupancy dimension; the capability dimension (unsupported, and "not yet found") never gates: since even unsupported does not
+  // block, waiting for a query result has even less reason to; otherwise after changing the model the capability pipeline would briefly gray out the write controls again.
   // 兄弟控件同步：更换 / 清除 / 选图器的提交入口共读这一个值。
   // 只含占用维度——能力维度（不支持、以及「尚未查到」）一律不参与门控：既然不支持都不
   // 拦，等待查询结果更没有可拦的理由，否则换模型后又会凭能力管线短暂灰掉写入控件。
   const controlsDisabled = videoBusy || shotSaving || submitting || viewOnly;
 
-  // 灰化控件的 hover 原因。
+  // Hover reason for disabled controls. / 灰化控件的 hover 原因。
   const disabledHint = viewOnly
     ? undefined
     : videoBusy
@@ -98,10 +116,14 @@ export function EndFrameRow({
         ? t("common:save_status_saving")
         : undefined;
 
+  // Warn only when an end frame is set + the model explicitly does not support it: a shot without an end frame has nothing to be rejected and should not be bothered.
   // 已设尾帧 + 模型明确不支持才告警：未设尾帧的分镜没有会被拒绝的东西，不该打扰。
   const showUnsupportedNotice = unsupported && !!endFramePath;
 
   /**
+   * Recheck the latest occupancy at submit time: after the panel / picker opens this shot may have been enqueued, and checking only at open time would leave
+   * a race window. If it hits, refuse and give visible feedback.
+   *
    * 提交时刻复核最新占用态：面板 / 选图器打开后本分镜可能已被入队，只查开窗时刻会留
    * 一个竞态窗口。命中则拒绝并给出可见反馈。
    */
@@ -124,7 +146,7 @@ export function EndFrameRow({
     onSubmittingChange?.(value);
   };
 
-  // 设置与清除尾帧是即时动作，成功不弹提示
+  // Setting and clearing the end frame are instant actions; no toast on success / 设置与清除尾帧是即时动作，成功不弹提示
   const runWrite = async (action: () => Promise<unknown>) => {
     if (rejectIfDisabled()) return;
     updateSubmitting(true);
@@ -139,6 +161,10 @@ export function EndFrameRow({
       updateSubmitting(false);
     }
     setPickerOpen(false);
+    // The snapshot path is fixed and image replacement overwrites in place, so project data must be refetched for the new asset fingerprint to cache-bust.
+    // refreshProject swallows request errors internally and expresses the result via its return value (never rejects): the write already succeeded,
+    // so a refresh failure must be reported separately and not misreported as an end frame write failure; a refresh cancelled by a project switch is not an error,
+    // skip silently, otherwise switching projects right after setting an end frame would misreport a refresh failure.
     // 快照路径固定、换图原地覆盖，须重取项目数据拿新的资产指纹才能 cache-bust。
     // refreshProject 内部吞掉请求错误、以返回值表达结果（从不 reject）：写入已经成功，
     // 刷新失败要单独提示，不能把它误报成尾帧写入失败；刷新被项目切换取消则不代表出错，
@@ -158,9 +184,11 @@ export function EndFrameRow({
   const handleClear = () =>
     void runWrite(() => API.clearEndFrame(projectName, segmentId, scriptFile));
 
-  // 摘要行与展开面板里都只是小图，取 160 宽的缩略图
+  // Both the summary row and the expanded panel only show small images, so take the 160-wide thumbnail / 摘要行与展开面板里都只是小图，取 160 宽的缩略图
   const previewUrl = endFramePath ? API.getFileUrl(projectName, endFramePath, fp, { width: 160 }) : null;
 
+  // The summary only says whether the end frame itself is set: lack of capability support is carried by the warning bar below; mixing it into the summary would cover "Set",
+  // leaving users unable to see they set an end frame that needs clearing.
   // 摘要只说尾帧本身设没设：能力不支持由下方警告条承载，混进摘要会盖掉「已设置」，
   // 让用户看不出自己设过一张待清除的尾帧。
   const summary = capsLoading
@@ -194,6 +222,7 @@ export function EndFrameRow({
           />
         )}
         <span
+          // The summary changes asynchronously with the capability query (checking -> set / not set), and screen readers need to keep up
           // 摘要随能力查询异步变化（检查中 → 已设置 / 未设置），朗读器需要跟上
           aria-live="polite"
           className={cn("text-xs", endFramePath ? "text-primary" : "text-muted-foreground")}
@@ -202,7 +231,7 @@ export function EndFrameRow({
         </span>
       </button>
 
-      {/* 常驻警告：收起状态也可见，让「已设尾帧后切到不支持的模型」在入队前就暴露。 */}
+      {/* Persistent warning: visible even when collapsed, so "switched to an unsupported model after setting an end frame" is exposed before enqueueing. / 常驻警告：收起状态也可见，让「已设尾帧后切到不支持的模型」在入队前就暴露。 */}
       {showUnsupportedNotice && (
         <InlineWarning
           className="px-3 pb-2"
@@ -211,6 +240,8 @@ export function EndFrameRow({
             viewOnly
               ? undefined
               : {
+                  // When expanded, the panel has another "Clear", so both buttons are on screen: use the full name here,
+                  // otherwise screen readers read two buttons with the same name and cannot tell them apart.
                   // 展开时面板内另有一个「清除」，两个按钮同屏：这里用全称，
                   // 否则屏幕阅读器读到两个同名按钮无从区分。
                   label: t("end_frame_clear_end_frame"),
@@ -247,6 +278,10 @@ export function EndFrameRow({
           </div>
           <div className="flex flex-1 flex-col gap-2">
             <p className="text-xs leading-relaxed text-muted-foreground">{t("end_frame_description")}</p>
+            {/*
+             * The expanded panel explains the recovery path (change model / adjust capability overrides), complementing the warning bar's "consequence + clear";
+             * it is shown even without an end frame set, so users know before setting one that it would be useless with this model.
+             */}
             {/* 展开面板讲恢复路径（改模型 / 调能力覆盖），与警告条的「后果 + 清除」互补；
                 未设尾帧时也给，让用户在动手设之前就知道这个模型设了也白设。 */}
             {unsupported && (

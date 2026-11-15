@@ -20,6 +20,15 @@ import { MessageRow } from "./MessageRow";
 import { canEditUserTurn } from "./utils";
 
 // ---------------------------------------------------------------------------
+// MessageFlow — the message area of the Agent panel.
+// When stuck to the bottom it follows new content; scrolling up stops following and "Jump to latest" appears at the bottom. On sending a message or
+// submitting an answer, the caller explicitly scrolls to the end via MessageFlowHandle.scrollToEnd and resumes following.
+// On session switch the caller remounts with the session id as key; the new session starts at the bottom.
+// Failure cards announce (role="alert") only failures that arrive while viewing; failures already present when the session opened
+// show as usual without announcement, otherwise loading a stretch of history would read out several failure cards in a row. The set of new arrivals is passed via
+// context to subagent cards, so new failures in an expanded sub-timeline are announced too. Startup failures
+// only occur on the current send and are always new.
+// ---------------------------------------------------------------------------
 // MessageFlow — Agent 面板的消息区。
 //
 // 贴底时随新内容跟随到底；用户上翻即停止跟随，底部出现「跳到最新」。发送消息与
@@ -33,15 +42,15 @@ import { canEditUserTurn } from "./utils";
 // ---------------------------------------------------------------------------
 
 export interface MessageFlowHandle {
-  /** 滚到最新一条并恢复贴底跟随。 */
+  /** Scroll to the latest item and resume stick-to-bottom following. / 滚到最新一条并恢复贴底跟随。 */
   scrollToEnd: () => void;
 }
 
 interface MessageFlowProps {
   ref?: Ref<MessageFlowHandle>;
-  /** 提交原地编辑的改写。 */
+  /** Submit the rewrite from in-place editing. / 提交原地编辑的改写。 */
   onSubmitEdit: (turnUuid: string, text: string, images: ImagePayload[]) => void;
-  /** 启动失败卡片的「重试」；不传时卡片不给重试。 */
+  /** "Retry" for startup failure cards; when omitted the card offers no retry. / 启动失败卡片的「重试」；不传时卡片不给重试。 */
   onRetryStartup?: () => void;
 }
 
@@ -75,7 +84,7 @@ function MessageFlowBody({ ref, onSubmitEdit, onRetryStartup }: MessageFlowProps
   const arrived = useMemo(() => arrivedFailures(entries, historySeq), [entries, historySeq]);
 
   if (items.length === 0 && !startupFailure) {
-    // 加载期间留白，不闪一下空状态
+    // Leave blank while loading, so the empty state doesn't flash / 加载期间留白，不闪一下空状态
     if (messagesLoading) return <div className="min-h-0 flex-1" />;
     return (
       <Empty className="min-h-0 flex-1">
@@ -123,7 +132,7 @@ function MessageFlowBody({ ref, onSubmitEdit, onRetryStartup }: MessageFlowProps
   );
 }
 
-/** 查看期间新到达的轮次失败条目的 uuid。条目按 seq 升序，从末尾往回找到历史边界为止。 */
+/** uuids of turn-failure entries that arrived while viewing. Entries are in ascending seq; search backward from the end until the history boundary. / 查看期间新到达的轮次失败条目的 uuid。条目按 seq 升序，从末尾往回找到历史边界为止。 */
 function arrivedFailures(entries: TimelineEntry[], historySeq: number | null): ReadonlySet<string> {
   const uuids = new Set<string>();
   if (historySeq === null) return uuids;

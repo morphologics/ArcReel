@@ -43,7 +43,7 @@ import { SourceStatusDot } from "./market-source-status";
 
 type SourcePatch = { display_name?: string; is_enabled?: boolean };
 
-/** 只改写一行里给定的字段；同一行的并发修改各自只动自己提交的字段，响应先后不会互相覆盖。 */
+/** Only overwrites the given fields of a row; concurrent edits to the same row each touch only the fields they submitted, so response order doesn't make them overwrite each other. / 只改写一行里给定的字段；同一行的并发修改各自只动自己提交的字段，响应先后不会互相覆盖。 */
 function patchSource(current: MarketSourceInfo[], id: number, fields: Partial<MarketSourceInfo>): MarketSourceInfo[] {
   return current.map((source) => (source.id === id ? { ...source, ...fields } : source));
 }
@@ -52,7 +52,7 @@ function pickPatchFields(source: MarketSourceInfo, patch: SourcePatch): SourcePa
   return Object.fromEntries((Object.keys(patch) as (keyof SourcePatch)[]).map((key) => [key, source[key]]));
 }
 
-/** 按 `ordered` 的顺序与 position 重排当前行，行内其他字段保留本地值；不在其中的行排在最后。 */
+/** Reorders current rows by the order and position of `ordered`, keeping local values for other fields; rows not in it go last. / 按 `ordered` 的顺序与 position 重排当前行，行内其他字段保留本地值；不在其中的行排在最后。 */
 function applyOrder(current: MarketSourceInfo[], ordered: MarketSourceInfo[]): MarketSourceInfo[] {
   const slots = new Map(ordered.map((source, index) => [source.id, { index, position: source.position }]));
   const slotIndex = (source: MarketSourceInfo) => slots.get(source.id)?.index ?? ordered.length;
@@ -65,7 +65,7 @@ function applyOrder(current: MarketSourceInfo[], ordered: MarketSourceInfo[]): M
 }
 
 interface SequencedMutation<T, V> {
-  /** 发起时本地的值，作为这一串修改开始前最近一次确认的值。 */
+  /** Local value at the time of sending, as the most recently confirmed value before this chain of edits began. / 发起时本地的值，作为这一串修改开始前最近一次确认的值。 */
   before: V;
   send: () => Promise<T>;
   confirmedValue: (result: T) => V;
@@ -80,6 +80,9 @@ interface MutationLane {
 }
 
 /**
+ * Edits to the same key are sent serially in the order issued, so the server persists them in the order of user actions; responses and failure rollbacks only write back locally when the key has no
+ * newer edit, and rollback restores the most recently confirmed value. Failures are always thrown, and the caller shows the notice.
+ *
  * 同一 key 的修改按发起顺序串行发送，服务端按用户操作顺序落库；响应与失败回滚只在该 key 没有
  * 更新的修改时写回本地，回滚恢复到最近一次确认的值。失败一律抛出，由调用方提示。
  */
@@ -119,6 +122,9 @@ interface MarketSourceListProps {
 }
 
 /**
+ * Market sources in market "Settings": ordering (drag handle, keyboard, or menu move up/down), enable/disable, rename, single-source refresh, delete and add, all take effect immediately.
+ * On failure local state is rolled back and a toast shown; success is signaled only by the list changing. Delete is irreversible and is confirmed first with an AlertDialog.
+ *
  * 市场「设置」里的市场源：排序（拖动把手、键盘或菜单的上移下移）、启停、改名、单源刷新、删除与添加，都即时生效。
  * 失败时回滚本地状态并弹出提示；成功只以列表变化为反馈。删除不可撤销，先用 AlertDialog 确认。
  */
@@ -353,6 +359,7 @@ function RenameSourceDialog({
   const { t } = useTranslation(["dashboard", "common"]);
   const formId = useId();
   const inputId = useId();
+  // source is already null during the dialog close animation; keep the previous content so it doesn't flash blank. Every open (including reopening the same source) starts from the source's current name.
   // 对话框关闭动画期间 source 已是 null，保留上一次的内容避免闪成空白。每次打开（含再次打开同一个源）都从源的当前名称开始。
   const [prevSource, setPrevSource] = useState<MarketSourceInfo | null>(null);
   const [shown, setShown] = useState<MarketSourceInfo | null>(null);
@@ -413,7 +420,7 @@ function DeleteSourceDialog({
   onDeleted: (id: number) => void;
 }) {
   const { t } = useTranslation(["dashboard", "common"]);
-  // 关闭动画期间保留上一次的源；每次打开都清掉上一次的错误。
+  // Keep the previous source during the close animation; every open clears the previous error. / 关闭动画期间保留上一次的源；每次打开都清掉上一次的错误。
   const [prevSource, setPrevSource] = useState<MarketSourceInfo | null>(null);
   const [shown, setShown] = useState<MarketSourceInfo | null>(null);
   const [submitting, setSubmitting] = useState(false);
@@ -445,7 +452,7 @@ function DeleteSourceDialog({
     <AlertDialog
       open={source !== null}
       onOpenChange={(next) => {
-        // 提交中不响应 Esc，避免请求还在途时对话框先消失
+        // Ignore Esc while submitting, so the dialog doesn't disappear while the request is still in flight / 提交中不响应 Esc，避免请求还在途时对话框先消失
         if (!next && !submitting) onClose();
       }}
     >

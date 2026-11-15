@@ -2,6 +2,7 @@ import type { MediaType } from "@/types/custom-provider";
 import type { CatalogPriceTable, PriceDimensionValue } from "@/types/provider";
 import { DIMENSIONS, METERS, PRICE_CURRENCIES, PRICE_SERVICE_TIERS } from "./priceVocabulary.generated";
 
+// Data shape of the price table (the catalog data format, see backend arcreel_catalog_core) and pure functions for editing it.
 // 价目表的数据形状（目录数据的格式，见后端 arcreel_catalog_core）与编辑它的纯函数。
 
 export type MeterKey = keyof typeof METERS;
@@ -9,7 +10,7 @@ export type DimKey = keyof typeof DIMENSIONS;
 export type DimValue = PriceDimensionValue;
 export type Currency = (typeof PRICE_CURRENCIES)[number];
 
-/** 一行「条件 → 单价」；`when` 缺省的维度表示任意取值。编辑中尚未填写的单价为 `null`。 */
+/** One "condition -> unit price" row; dimensions absent from `when` mean any value. A unit price not yet filled in while editing is `null`. / 一行「条件 → 单价」；`when` 缺省的维度表示任意取值。编辑中尚未填写的单价为 `null`。 */
 export interface PriceRow {
   when: Record<string, DimValue>;
   price: number | null;
@@ -19,15 +20,15 @@ export interface PriceMeter {
   meter: string;
   dims: string[];
   rows: PriceRow[];
-  /** 请求缺少某个维度取值时使用的取值。 */
+  /** Value used when a request lacks a value for some dimension. / 请求缺少某个维度取值时使用的取值。 */
   defaults?: Record<string, DimValue>;
-  /** 每次请求的免费额度，按计量项的计数单位计。 */
+  /** Free quota per request, counted in the meter's counting unit. / 每次请求的免费额度，按计量项的计数单位计。 */
   free_allowance?: number;
-  /** 只用于字符数：汉字计 2 个字符。 */
+  /** Only for character count: a Chinese character counts as 2 characters. / 只用于字符数：汉字计 2 个字符。 */
   cjk_double?: boolean;
 }
 
-/** 价目表。编辑过程中 `meters` 可以为空（只选了币种）；保存时用 {@link priceForSave} 转成「没有价目表」。 */
+/** Price table. While editing, `meters` can be empty (only currency chosen); on save {@link priceForSave} turns it into "no price table". / 价目表。编辑过程中 `meters` 可以为空（只选了币种）；保存时用 {@link priceForSave} 转成「没有价目表」。 */
 export interface PriceTable {
   currency: string;
   meters: PriceMeter[];
@@ -47,7 +48,7 @@ export function isKnownDimension(key: string): key is DimKey {
   return key in DIMENSIONS;
 }
 
-/** 这个媒体类型可以添加的计费项：词表里适用于它的，且价目表里还没有。 */
+/** Billing items that can be added for this media type: those in the vocabulary that apply to it and aren't in the price table yet. / 这个媒体类型可以添加的计费项：词表里适用于它的，且价目表里还没有。 */
 export function addableMeters(table: PriceTable, mediaType: MediaType): MeterKey[] {
   const used = new Set(table.meters.map((m) => m.meter));
   return (Object.keys(METERS) as MeterKey[]).filter(
@@ -55,7 +56,7 @@ export function addableMeters(table: PriceTable, mediaType: MediaType): MeterKey
   );
 }
 
-/** 这个计费项还能「按条件分价」的选择维度：适用于该媒体类型，且没有加过。 */
+/** Selection dimensions this billing item can still "price by condition" with: applicable to the media type and not added yet. / 这个计费项还能「按条件分价」的选择维度：适用于该媒体类型，且没有加过。 */
 export function addableDimensions(meter: PriceMeter, mediaType: MediaType): DimKey[] {
   const used = new Set(meter.dims);
   return (Object.keys(DIMENSIONS) as DimKey[]).filter(
@@ -63,7 +64,7 @@ export function addableDimensions(meter: PriceMeter, mediaType: MediaType): DimK
   );
 }
 
-/** 新加的维度先取的值：上下文档从首档（0）起，服务档先取标准；其余没有合理的起点，由用户点选。 */
+/** Initial value of a newly added dimension: context tier starts from the first tier (0), service tier starts at standard; others have no reasonable starting point and are picked by the user. / 新加的维度先取的值：上下文档从首档（0）起，服务档先取标准；其余没有合理的起点，由用户点选。 */
 function initialDimensionValue(dim: DimKey, resolutions: readonly string[]): DimValue | undefined {
   switch (DIMENSIONS[dim].kind) {
     case "tier":
@@ -79,7 +80,7 @@ function initialDimensionValue(dim: DimKey, resolutions: readonly string[]): Dim
   }
 }
 
-/** 添加一个计费项：不分条件，一行单价（待填写）。 */
+/** Adds a billing item: no conditions, one unit price row (to be filled in). / 添加一个计费项：不分条件，一行单价（待填写）。 */
 export function withMeter(table: PriceTable, key: MeterKey): PriceTable {
   const meter: PriceMeter = { meter: key, dims: [], rows: [{ when: {}, price: null }] };
   return { ...table, meters: [...table.meters, meter] };
@@ -94,6 +95,9 @@ export function withMeterChanged(table: PriceTable, key: string, change: (meter:
 }
 
 /**
+ * Price by condition: adds a selection dimension to a billing item. All existing rows take this dimension's starting value, and requests lacking this dimension are priced by it too;
+ * once added it can't be removed; to change conditions, delete the whole card and add it again.
+ *
  * 按条件分价：给计费项加一个选择维度。已有的行都取这个维度的起始值，请求缺少这个维度时也按它计价；
  * 加上之后不能再移除，要换条件就删除整张卡片重新添加。
  */
@@ -104,7 +108,7 @@ export function withDimension(meter: PriceMeter, dim: DimKey, resolutions: reado
   return { ...meter, dims: [...meter.dims, dim], rows, ...(defaults ? { defaults } : {}) };
 }
 
-/** 一个维度可点选的取值；标签和上下文档这类自由取值的维度返回 `null`。 */
+/** Clickable values of a dimension; dimensions with free values such as tags and context tiers return `null`. / 一个维度可点选的取值；标签和上下文档这类自由取值的维度返回 `null`。 */
 export function enumerableValues(dim: DimKey): DimValue[] | null {
   switch (DIMENSIONS[dim].kind) {
     case "flag":
@@ -122,6 +126,9 @@ function sameCondition(a: PriceRow["when"], b: PriceRow["when"]): boolean {
 }
 
 /**
+ * Adds a tier: reuse the last tier's conditions, then switch to a value not yet used on a clickable dimension (with audio, service tier, etc.); for context tiers take a lower bound larger than existing ones.
+ * Tag-type dimensions (resolution, etc.) have no candidates, so reuse the last tier's value and let the user pick to change it.
+ *
  * 添加一档：沿用最后一档的条件，再在可点选的维度（有声、服务档等）上换一个还没出现过的取值，上下文档取比已有更大的下界。
  * 标签类维度（分辨率等）没有候选，沿用最后一档的取值，由用户点选修改。
  */
@@ -151,7 +158,7 @@ export function withoutRow(meter: PriceMeter, index: number): PriceMeter {
   return { ...meter, rows: meter.rows.filter((_, i) => i !== index) };
 }
 
-/** 修改某一档某个维度的取值；`undefined` 表示任意。 */
+/** Changes the value of a dimension for a tier; `undefined` means any. / 修改某一档某个维度的取值；`undefined` 表示任意。 */
 export function withRowCondition(meter: PriceMeter, index: number, dim: string, value: DimValue | undefined): PriceMeter {
   const rows = meter.rows.map((row, i) => {
     if (i !== index) return row;
@@ -167,7 +174,7 @@ export function withRowPrice(meter: PriceMeter, index: number, price: number | n
   return { ...meter, rows: meter.rows.map((row, i) => (i === index ? { ...row, price } : row)) };
 }
 
-/** 修改请求缺少某个维度取值时使用的取值；`undefined` 表示不设。 */
+/** Changes the value used when a request lacks a dimension; `undefined` means unset. / 修改请求缺少某个维度取值时使用的取值；`undefined` 表示不设。 */
 export function withDefault(meter: PriceMeter, dim: string, value: DimValue | undefined): PriceMeter {
   const defaults = { ...meter.defaults };
   if (value === undefined) delete defaults[dim];
@@ -186,6 +193,7 @@ export function withCjkDouble(meter: PriceMeter, on: boolean): PriceMeter {
   return on ? { ...rest, cjk_double: true } : rest;
 }
 
+// ---- Validation: matches the backend check_entry requirements for price tables, blocking before save ----
 // ---- 校验：与后端 check_entry 对价目表的要求一致，保存前拦下 ----
 
 const CONTEXT_TIER: DimKey = "context_tier";
@@ -197,7 +205,7 @@ export type PriceIssue =
   | { kind: "context_tier_not_from_zero"; meter: string }
   | { kind: "context_tier_mismatch"; meter: string };
 
-/** 两档的条件能否同时命中一个请求：共同列出的维度取值都相同（后端同一规则）。 */
+/** Whether two tiers' conditions can both match one request: all commonly listed dimension values are equal (same rule as the backend). / 两档的条件能否同时命中一个请求：共同列出的维度取值都相同（后端同一规则）。 */
 function overlaps(a: PriceRow["when"], b: PriceRow["when"]): boolean {
   return Object.keys(a)
     .filter((dim) => dim in b)
@@ -223,7 +231,7 @@ export function priceIssues(table: PriceTable): PriceIssue[] {
   return issues;
 }
 
-/** 上下文档首档写 0，且各计费项分界相同：整个请求只落入一档，各计费项都按这一档取单价。 */
+/** The first context tier is 0, and all billing items share the same boundaries: the whole request falls into one tier, and each billing item takes its unit price from that tier. / 上下文档首档写 0，且各计费项分界相同：整个请求只落入一档，各计费项都按这一档取单价。 */
 function contextTierIssues(table: PriceTable): PriceIssue[] {
   const issues: PriceIssue[] = [];
   let grid: string | null = null;
@@ -247,6 +255,9 @@ export function isPriceTableValid(table: PriceTable): boolean {
 }
 
 /**
+ * Price table for saving: `null` when there are no billing items (no price filled in, call costs recorded as unpriced).
+ * The price table must pass {@link isPriceTableValid} first.
+ *
  * 保存用的价目表：没有任何计费项时是 `null`（不填价格，调用费用记为未定价）。
  * 价目表必须先通过 {@link isPriceTableValid}。
  */
@@ -254,12 +265,12 @@ export function priceForSave(table: PriceTable): CatalogPriceTable | null {
   return table.meters.length === 0 ? null : (table as CatalogPriceTable);
 }
 
-/** 从接口读到的价目表（可能为空）到编辑用的价目表。 */
+/** From the price table read from the API (possibly empty) to the price table for editing. / 从接口读到的价目表（可能为空）到编辑用的价目表。 */
 export function priceTableOf(saved: CatalogPriceTable | null | undefined): PriceTable {
   return saved ? structuredClone(saved) : emptyPriceTable();
 }
 
-/** 两份价目表在保存时是否等价：没有计费项的价目表与「没有价目表」等价。 */
+/** Whether two price tables are equivalent on save: a price table with no billing items is equivalent to "no price table". / 两份价目表在保存时是否等价：没有计费项的价目表与「没有价目表」等价。 */
 export function samePrice(a: PriceTable | null | undefined, b: PriceTable | null | undefined): boolean {
   const normalize = (table: PriceTable | null | undefined) => (table && table.meters.length > 0 ? table : null);
   return JSON.stringify(normalize(a)) === JSON.stringify(normalize(b));

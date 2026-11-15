@@ -15,6 +15,8 @@ describe("下一步动作的文案覆盖", () => {
   });
 
   it("登记过的动作一个都不落到「未知动作」兜底文案上", () => {
+    // action_unknown is a runtime safeguard: when the backend ships a new action before the frontend, it keeps the step from being swallowed entirely.
+    // But actions already registered in the closed set must not rely on it as a filler.
     // action_unknown 是运行时防线：后端先于前端上线新动作时，它保证这一步不被整个吞掉。
     // 但闭集里已登记的动作不得靠它充数。
     expect(zhWorkflow.action_unknown).toBeTruthy();

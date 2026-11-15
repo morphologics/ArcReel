@@ -39,6 +39,7 @@ describe("UnitList", () => {
         onAdd={vi.fn()}
       />,
     );
+    // Units are referred to by position in this episode; entry IDs do not appear in the UI
     // 单元按本集里的位置称呼，条目 ID 不出现在界面上
     expect(screen.getByTestId("unit-row-E1U4")).toContainElement(screen.getByRole("img", { name: "视频单元 1" }));
     expect(screen.getByTestId("unit-row-E1U9")).toContainElement(screen.getByRole("img", { name: "视频单元 2" }));
@@ -95,6 +96,7 @@ describe("UnitList", () => {
     afterEach(() => vi.restoreAllMocks());
 
     function layoutRows() {
+      // jsdom does no layout: give vertically stacked rects by each entry's list position so keyboard dragging has drop positions to compute.
       // jsdom 不做布局：按条目在列表里的位置给出纵向排开的矩形，键盘拖动才有落点可算。
       vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) {
         const item = this.closest("li");
@@ -111,6 +113,7 @@ describe("UnitList", () => {
 
       screen.getByRole("button", { name: "调整「视频单元 1」的顺序", description: /空格|space/i }).focus();
       await userEvent.keyboard(" ");
+      // After pickup, dnd-kit responds to arrow keys only once measuring finishes
       // dnd-kit 拿起后要等测量完成才响应方向键
       await waitFor(() => expect(screen.getByText(/已拿起|picked up/i)).toBeInTheDocument());
       await userEvent.keyboard("{ArrowDown}");

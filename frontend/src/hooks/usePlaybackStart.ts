@@ -3,7 +3,7 @@ import { useMemo } from "react";
 import { useAppStore } from "@/stores/app-store";
 import type { PresentationResourceType } from "@/types/presentation";
 
-/** 针对某个视频单元的起始播放请求（来自应用内链接），交给 `PresentationPlayer` 的 `startAt` 与 `onStartApplied`；没带时间点的请求不定位。 */
+/** A start-playback request for a video unit (from an in-app link), passed to `PresentationPlayer`'s `startAt` and `onStartApplied`; requests without a time point don't seek. / 针对某个视频单元的起始播放请求（来自应用内链接），交给 `PresentationPlayer` 的 `startAt` 与 `onStartApplied`；没带时间点的请求不定位。 */
 export function usePlaybackStart(resourceType: PresentationResourceType, resourceId: string) {
   const request = useAppStore((s) => s.playbackStart);
   const clearPlaybackStart = useAppStore((s) => s.clearPlaybackStart);

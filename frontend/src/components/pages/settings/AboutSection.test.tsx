@@ -29,16 +29,22 @@ describe("AboutSection diagnostics download", () => {
       filename: "arcreel-diagnostics.zip",
     });
 
+    // Finish rendering with real timers first, so findByRole/waitFor's internal polling and fake timers do not deadlock each other
     // 先用真实定时器渲染完成，避免 findByRole/waitFor 的内部轮询与 fake timers 相互卡死
     render(<UpstreamAboutSection />);
+    // Version info is still loading when the endpoint is called; the button renders only after loading ends
     // 接口被调用时版本信息还在加载，按钮要等加载结束才渲染
     const button = await screen.findByRole("button", { name: "下载诊断日志" });
 
+    // Click after switching to fake timers: click() schedules synchronously and async continuations run only in microtasks,
+    // precisely separating the two moments "microtasks done" and "macrotask (setTimeout) fired"
     // 切换到 fake timers 后再点击：click() 是同步调度，异步延续只在微任务
     // 中运行，可精确区分「微任务已跑完」与「宏任务（setTimeout）已触发」两个时间点
     vi.useFakeTimers();
     try {
       fireEvent.click(button);
+      // Advance only the microtask queue, not timers: let the logic after handleDownloadDiagnostics's
+      // await (createObjectURL / click / setTimeout scheduling) finish
       // 仅推进微任务队列，不推进定时器：让 handleDownloadDiagnostics 的
       // await 之后的逻辑（createObjectURL / click / setTimeout 调度）跑完
       for (let i = 0; i < 5; i++) {
@@ -46,6 +52,7 @@ describe("AboutSection diagnostics download", () => {
       }
 
       expect(URL.createObjectURL).toHaveBeenCalledTimes(1);
+      // After click() triggers the download it must not revoke synchronously, or downloads silently fail in some browsers
       // click() 触发下载后不应同步回收，否则部分浏览器下载会静默失败
       expect(URL.revokeObjectURL).not.toHaveBeenCalled();
 
@@ -76,6 +83,9 @@ describe("AboutSection diagnostics download", () => {
     const button = await screen.findByRole("button", { name: "下载诊断日志" });
     await user.click(button);
 
+    // Walk all created <a> tags to find the download anchor, not relying on the assumption that "the last write to a single mutable ref is the target";
+    // the GitHub attribution anchor the component always renders is created before the download anchor; an array avoids the single ref being overwritten
+    // if more <a> elements get created in future (e.g. a changed re-render order), which would make the test inaccurate.
     // 遍历全部被创建的 <a> 标签查找下载锚点，不依赖「单一可变引用最后一次写入即为目标」
     // 的假设——组件恒渲染的 GitHub 署名锚点先于下载锚点创建；用数组可避免未来若有更多
     // <a> 创建（例如重渲染顺序变化）时单一引用被覆盖导致测试失真。
@@ -123,6 +133,7 @@ describe("UpstreamAboutSection release notes (upstream page, hidden in this fork
 
     await user.click(toggle);
 
+    // The body may be replaced from plain text with Markdown; query synchronously and assert visibility, not relying on child component load timing.
     // 正文可能从纯文本替换为 Markdown；同步查询并断言可见，不依赖子组件加载时序。
     await waitFor(() => expect(screen.getByText(/faster exports/)).toBeVisible());
     expect(await screen.findByRole("link", { name: /打开 GitHub Release/ })).toHaveAttribute(

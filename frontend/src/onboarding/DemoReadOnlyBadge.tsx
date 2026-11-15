@@ -3,6 +3,9 @@ import { Badge } from "@/components/ui/badge";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 
 /**
+ * "Demo · Read-only" badge next to the project title in the demo workbench header; on hover or focus it explains that write actions are unavailable.
+ * The explanation is also written into the badge as sr-only text, so screen readers do not depend on the tooltip. Unavailable buttons still each explain "Unavailable in demo" in place.
+ *
  * 演示工作台顶栏项目标题旁的「演示 · 只读」徽标，悬停或聚焦时说明写操作都不可用。
  * 说明同时以 sr-only 文字写进徽标，读屏不依赖提示弹层。不可用的按钮仍各自就地说明「演示中不可用」。
  */

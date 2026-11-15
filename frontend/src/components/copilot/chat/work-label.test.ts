@@ -10,6 +10,7 @@ const EPISODES: EpisodeRefs = [
   { episode: 3, title: "雨夜", script_file: "scripts/episode_3.json" },
 ];
 
+// This episode's shot order differs from ID numbers: E3S04 was moved to the front, and the summary refers to the current position.
 // 本集分镜的排列与 ID 序号不一致：E3S04 被挪到了最前，摘要按当前位置称呼。
 const SCRIPTS = {
   "episode_3.json": {

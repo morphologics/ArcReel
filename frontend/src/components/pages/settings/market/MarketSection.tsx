@@ -23,6 +23,9 @@ import { OfficialServiceNotice } from "./OfficialServiceNotice";
 const TABS: readonly MarketTab[] = ["browse", "shared", "settings"];
 
 /**
+ * Merges refresh results by id, only overwriting fields the refresh produced and keeping the original order; display name and enabled state follow local values,
+ * so a late refresh response doesn't overwrite changes completed in the meantime.
+ *
  * 按 id 合并刷新结果，只改写刷新产出的字段、保持原顺序；显示名与启停以本地为准，
  * 迟到的刷新响应不会覆盖期间完成的修改。
  */
@@ -43,7 +46,7 @@ function mergeRefreshed(current: MarketSourceInfo[], updated: MarketSourceInfo[]
   });
 }
 
-/** 影响条目列表的源字段：顺序、启停、显示名与快照时间。任一变化即重新拉取条目。 */
+/** Source fields that affect the entry list: order, enabled state, display name and snapshot time. Any change refetches entries. / 影响条目列表的源字段：顺序、启停、显示名与快照时间。任一变化即重新拉取条目。 */
 function entriesKey(sources: MarketSourceInfo[]): string {
   return sources
     .map((source) => [source.id, source.is_enabled, source.display_name, source.fetched_at, source.updated_at].join(":"))
@@ -53,6 +56,12 @@ function entriesKey(sources: MarketSourceInfo[]): string {
 const NO_AGGREGATES: ReadonlyMap<string, MarketEntryAggregate> = new Map();
 
 /**
+ * Market section: top Tabs "Browse", "My shares", "Settings", with the current Tab recorded in the URL's `tab` parameter;
+ * when the URL has `media`, "Browse" presets the filter to that media type.
+ * On open it first renders the cached source list and entries, then refreshes in the background enabled sources whose last successful refresh was over 1 hour ago; entries are refetched when sources change.
+ * When the official service is on, it also fetches install counts and ratings for official market source entries and my shares, and shows a one-time notice on first entry;
+ * when off or the status can't be read, "Browse" shows no official service elements, and the switch itself always lives in "Settings".
+ *
  * 市场分区：顶部 Tabs 分「浏览」「我的分享」「设置」，当前 Tab 记在地址的 `tab` 参数里；
  * 地址带 `media` 时「浏览」按该媒体类型预设筛选。
  * 打开时先渲染缓存的源列表与条目，再在后台刷新距上次成功刷新超过 1 小时的启用源；源有变化时重新拉取条目。
@@ -124,6 +133,7 @@ export function MarketSection() {
     return () => controller.abort();
   }, [sourcesLoaded, sourcesKey, installationRevision, pushToast, t]);
 
+  // When the status can't be read, "Browse" treats it as off and stays unobtrusive: the market itself doesn't depend on the official service. Errors are only shown in "Settings" with a retry, since that's where the switch belongs.
   // 读不到状态时「浏览」按关闭处理、不打扰：市场本身不依赖官方服务。错误只交给「设置」展示并提供重试，那里是开关的归属。
   const officialController = useRef<AbortController | null>(null);
   const loadOfficial = useCallback(async () => {
@@ -140,7 +150,7 @@ export function MarketSection() {
   }, []);
 
   useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect -- mount 后异步拉取状态，回调内回写状态
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- async-fetch the status after mount and write it back in the callback / mount 后异步拉取状态，回调内回写状态
     void loadOfficial();
     return () => officialController.current?.abort();
   }, [loadOfficial]);
@@ -155,7 +165,7 @@ export function MarketSection() {
         setAggregates(new Map(items.map((item) => [aggregateKey(item.source_id, item.slug), item])));
       })
       .catch(() => {
-        // 聚合取不回时不显示数字，不打扰浏览。
+        // When aggregates can't be fetched, show no numbers and don't disturb browsing. / 聚合取不回时不显示数字，不打扰浏览。
         if (!controller.signal.aborted) setAggregates(new Map());
       });
     return () => controller.abort();
@@ -169,7 +179,7 @@ export function MarketSection() {
         if (!controller.signal.aborted) setSubmissions(listed);
       })
       .catch(() => {
-        // 提交状态取不回时不展示，不打扰浏览。
+        // When submission status can't be fetched, don't show it and don't disturb browsing. / 提交状态取不回时不展示，不打扰浏览。
       });
     return () => controller.abort();
   }, [officialEnabled]);
@@ -227,6 +237,7 @@ export function MarketSection() {
   );
 
   const sourcesById = useMemo(() => new Map(sources.map((source) => [source.id, source])), [sources]);
+  // After turning off, stop showing numbers fetched in the previous round; when turned on again the fetch effect overwrites them.
   // 关闭后不再展示上一轮取到的数字；重新开启时由拉取 effect 覆盖。
   const shownAggregates = officialEnabled ? aggregates : NO_AGGREGATES;
   const shownSubmissions = officialEnabled ? submissions : null;
@@ -258,6 +269,7 @@ export function MarketSection() {
         </div>
         <TabsContent value="browse" className="mt-2">
           <MarketBrowseTab
+            // The URL only carries media when jumping in from elsewhere; a different entry point restarts with the new preset; changing filters within the page doesn't write back to the URL
             // 地址只在从别处跳入时带 media，换一个入口就按新的预设重新开始；页面内改筛选不回写地址
             key={mediaParam ?? "all"}
             initialMedia={mediaParam}

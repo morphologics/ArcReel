@@ -13,9 +13,11 @@ export async function box(locator: Locator) {
   return rect;
 }
 
+/** Wait only for finite entrance animations; not for the task indicator's looping animation, nor scroll-driven, never-ending animations like scroll-fade. */
 /** 只等有限入场动画，不等任务指示器的循环动画，也不等 scroll-fade 这类随滚动推进、永不结束的动画。 */
 export async function waitForEntrance(target: Locator) {
   await target.evaluate(async (el) => {
+    // Yield one frame first so styles and animations of a newly mounted popover enter the DocumentTimeline.
     // 先交出一帧，使新挂载弹层的样式与动画进入 DocumentTimeline。
     for (;;) {
       await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
@@ -30,6 +32,7 @@ export async function waitForEntrance(target: Locator) {
   });
 }
 
+/** In the compact tier the Agent panel covers the canvas's right side; collapse it before operating in that area. */
 /** 紧凑档 Agent 面板覆盖画布右侧，操作该区域前收起它。 */
 export async function clearAgentOverlay(page: Page) {
   if (viewport(page).width >= 1280) return;

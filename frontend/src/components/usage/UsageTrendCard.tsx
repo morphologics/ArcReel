@@ -11,6 +11,7 @@ import { formatCount } from "./usage-record-format";
 import type { TrendBucket, TrendMetric } from "./usage-trend";
 import { buildTrendBuckets, seriesFor, shortDay } from "./usage-trend";
 
+// Chart plus recharts split into a separate chunk: other sections of the settings page need not pay for its download
 // 图表连同 recharts 拆进独立 chunk：设置页的其他分区不必为它付下载
 const UsageTrendChart = lazyNamed(() => import("./UsageTrendChart"), "UsageTrendChart");
 
@@ -31,9 +32,12 @@ export function UsageTrendCard({ summary }: { summary: UsageSummary | null }) {
   const daily = useMemo(() => summary?.daily ?? [], [summary]);
   const { buckets, weekly } = useMemo(() => buildTrendBuckets(daily), [daily]);
   const primary = summary?.primary_currency ?? null;
+  // The chart shows only the primary currency; other currencies are listed as is in the footnote, neither converted nor stacked.
   // 图上只有主币种，其余币种在脚注里原样列出，不折算也不叠加。
   const excluded = costEntries(summary?.kpi.cost).filter(([currency]) => currency !== primary);
 
+  // Call counts and the success rate in the same tooltip both follow the UI language: `toLocaleString()` follows the browser language,
+  // and side by side they would show two separator conventions. Costs have the site-wide pinned currency format and do not go this way.
   // 调用次数与同一 tooltip 里的成功率同走界面语言：`toLocaleString()` 跟的是浏览器语言，
   // 两者并列时会出现两种分隔习惯。费用另有全站钉死的货币口径，不走这条。
   const formatValue = (value: number) =>
@@ -81,7 +85,7 @@ export function UsageTrendCard({ summary }: { summary: UsageSummary | null }) {
       {buckets.length === 0 ? (
         <p className="py-8 text-center text-sm text-muted-foreground">{t("usage_trend_empty")}</p>
       ) : (
-        // 与图表同高（h-52），chunk 到达前后布局不跳动
+        // Same height as the chart (h-52), so the layout does not jump before and after the chunk arrives / 与图表同高（h-52），chunk 到达前后布局不跳动
         <div className="h-52">
           <LazyBoundary variant="pane">
             <UsageTrendChart

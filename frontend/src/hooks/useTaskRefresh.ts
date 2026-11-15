@@ -6,12 +6,29 @@ import {
 } from "@/stores/tasks-store";
 import { voidCall } from "@/utils/async";
 
-/** 有任务在途（或上轮拉取失败）时的轮询间隔——此间隔决定 queued→running 等中间态的可见延迟。 */
+/** Poll interval while tasks are in flight (or the last fetch failed) — this interval sets the visible delay of intermediate states like queued->running. / 有任务在途（或上轮拉取失败）时的轮询间隔——此间隔决定 queued→running 等中间态的可见延迟。 */
 const FAST_POLL_INTERVAL_MS = 3000;
-/** 无任务在途时的空闲退避间隔——没有状态会变，轮询只为捕捉外部（别的客户端/skill）新入队的任务。 */
+/** Idle backoff interval with no tasks in flight — no state will change; polling only catches tasks newly enqueued externally (other clients/skills). / 无任务在途时的空闲退避间隔——没有状态会变，轮询只为捕捉外部（别的客户端/skill）新入队的任务。 */
 const IDLE_POLL_INTERVAL_MS = 30000;
 
 /**
+ * Refresh hook for task queue state.
+ *
+ * The main channel for final states is the project events SSE: when a task reaches a final state the backend pushes `task_*` changes via `/projects/{name}/events/stream`,
+ * and `useProjectEventsSSE` calls `refreshTasks` on receipt, with no polling delay.
+ * This hook handles two other things: registering the refresh scope (whose project's tasks to fetch), and fallback polling.
+ *
+ * The poll interval switches on **whether tasks are in flight**, not on whether SSE is online:
+ * - the backend only emits events for final states; intermediate states like queued->running have no events and are only visible through polling;
+ *   backing off to low frequency while tasks are in flight would make a task's "started" and progress appear later than before the change.
+ * - SSE disconnection takes more forms than `onError` — when an intermediary keeps the connection alive but stops delivering events, no callback fires.
+ *   Judging by "tasks in flight", polling stays at high frequency during such a silent stall, so the fallback still works.
+ * With no tasks in flight state won't change anyway; backing off only serves to catch tasks newly enqueued elsewhere.
+ *
+ * Passing `null` as `projectName` only means "don't filter by project" (fetch global tasks), not "disable" —
+ * disabling must be declared explicitly with `enabled: false`, otherwise callers would think passing null turns polling off
+ * while it actually keeps fetching the global task list.
+ *
  * 任务队列状态的刷新 Hook。
  *
  * 终态的主通道是项目事件 SSE：任务进入终态时后端经 `/projects/{name}/events/stream`
@@ -30,6 +47,8 @@ const IDLE_POLL_INTERVAL_MS = 30000;
  * 实际仍会持续拉取全局任务列表。
  */
 export function useTaskRefresh(projectName?: string | null, enabled = true): void {
+  // Take actions one selector at a time: useTasksStore() without a selector subscribes to the whole store, and this hook
+  // sits on the top-level StudioLayout — then every refresh writing back tasks/stats would re-render the whole subtree.
   // 逐个 selector 取 action：无 selector 的 useTasksStore() 会订阅整个 store，而本 Hook
   // 挂在顶层 StudioLayout 上——那样每轮刷新写回 tasks/stats 都会连带重渲染整棵子树。
   const setTasks = useTasksStore((s) => s.setTasks);
@@ -38,11 +57,15 @@ export function useTaskRefresh(projectName?: string | null, enabled = true): voi
   const setRefreshScope = useTasksStore((s) => s.setRefreshScope);
   const refreshTasks = useTasksStore((s) => s.refreshTasks);
   const needsFastPolling = useTasksStore(selectNeedsFastPolling);
+  // Initial value true: reconciliation on the first mount frame belongs to the scope effect, not repeated in the interval effect.
   // 初值 true：挂载首帧的对账归作用域 effect，不在调频 effect 里重复一次。
   const prevNeedsFastPollingRef = useRef(true);
 
   useEffect(() => {
     if (!enabled) {
+      // Disabling (e.g. switching to a read-only demo project) is more than not fetching — leftover tasks/stats of the previous project in the store,
+      // if not cleared, would keep showing old project data to task store consumers.
+      // The scope is cleared too, so late responses of in-flight refreshes can't write back.
       // 停用（如切到只读演示项目）不只是不再拉取——store 里残留的上一项目 tasks/stats
       // 若不清空，任务 store 的消费方会继续展示旧项目数据。
       // 作用域一并清空，让在途刷新的迟到响应写不回来。
@@ -60,6 +83,8 @@ export function useTaskRefresh(projectName?: string | null, enabled = true): voi
     };
   }, [projectName, enabled, setTasks, setStats, setConnected, setRefreshScope]);
 
+  // After a scope switch fetch state right away instead of waiting for the next poll interval. Kept separate from the interval effect below so each has only
+  // one reason to rerun: merged, the effect would have to infer "was this a project switch or just a tier change".
   // 作用域切换后当场取一次状态，不等下一个轮询间隔。与下方调频 effect 分开，各自只有
   // 一个重跑理由：合在一起就得在 effect 内反推「这次是切项目还是只是换档」。
   useEffect(() => {
@@ -70,6 +95,9 @@ export function useTaskRefresh(projectName?: string | null, enabled = true): voi
   useEffect(() => {
     if (!enabled) return;
 
+    // Idle -> high frequency signals "new work arrived" (typically the moment an optimistic occupancy flag lands), so fetch state right away
+    // instead of waiting for the next interval. The reverse (high frequency -> idle) has nothing to fetch, no reconciliation needed. The ref starts as true
+    // so the first mount frame doesn't reconcile again here — that one is handled by the scope effect above.
     // 空闲→高频是「有新工作到来」的信号（典型是乐观占用标记落下的那一刻），当场取一次
     // 状态，不等下一个间隔。反向（高频→空闲）无事可取，不必对账。ref 初值取 true，
     // 使挂载首帧不在此重复对账——挂载那次由上方作用域 effect 负责。

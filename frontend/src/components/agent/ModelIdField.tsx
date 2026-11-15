@@ -8,7 +8,7 @@ interface ModelIdFieldProps {
   id: string;
   value: string;
   onChange: (value: string) => void;
-  /** 候选模型 ID；输入时按包含关系筛选。 */
+  /** Candidate model IDs; filtered by substring while typing. / 候选模型 ID；输入时按包含关系筛选。 */
   options: string[];
   placeholder?: string;
   disabled?: boolean;
@@ -16,6 +16,9 @@ interface ModelIdFieldProps {
 }
 
 /**
+ * Model ID input: pick from the candidates or enter any ID outside them (gateway model lists are often incomplete).
+ * Hence Base UI's Autocomplete rather than Combobox: the latter accepts only candidates.
+ *
  * 模型 ID 输入：可以从候选里挑，也可以填写候选之外的任意 ID（网关的模型列表常常不全）。
  * 因此用 Base UI 的 Autocomplete 而不是 Combobox：后者只接受候选项。
  */

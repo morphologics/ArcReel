@@ -2,6 +2,9 @@ import { useTranslation } from "react-i18next";
 import { InsertShotButton, type InsertShotHandler } from "./ShotStructureActions";
 
 /**
+ * Empty state when the final script has no shots at all: explains the situation and offers "Add the first shot".
+ * When no add entry is given (read-only cases such as demo mode), only the explanation is shown.
+ *
  * 正式脚本里一条分镜都没有时的空状态：说明现状，并给出「新增第一个分镜」。
  * 不给新增入口（演示态等只读场景）时只显示说明。
  */

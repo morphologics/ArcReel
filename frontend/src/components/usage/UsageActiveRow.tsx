@@ -12,9 +12,9 @@ import type { UsageRecordView } from "./usage-record-view";
 
 interface UsageActiveRowProps {
   view: UsageRecordView;
-  /** 有任务代表的行才可能可取消；无任务的 pending 调用为 null。 */
+  /** Only rows represented by a task can be cancellable; null for pending calls without a task. / 有任务代表的行才可能可取消；无任务的 pending 调用为 null。 */
   task: TaskItem | null;
-  /** 供应商 id → 显示名，查不到回退 id。 */
+  /** Provider id -> display name, falls back to the id when not found. / 供应商 id → 显示名，查不到回退 id。 */
   providerLabel: (provider: string | null) => string;
   onCancel?: (taskId: string) => void;
   cancelling?: boolean;
@@ -29,6 +29,10 @@ const TASK_STATUS_KEYS: Record<TaskItem["status"], string> = {
 };
 
 /**
+ * A row in the in-progress area. The left column holds two sources: in-progress tasks in the project from the task store, and pending calls
+ * without a representing task (script generation, assistant sessions and the like). Only queued tasks can be cancelled:
+ * tasks that have started run to completion, and pending calls have no task to cancel.
+ *
  * 进行中区的一行。左栏同时容纳两种来源：任务 store 里项目内进行中的任务，以及没有
  * 任务代表的 pending 调用（剧本生成、助手会话一类）。只有排队中的任务可取消：
  * 已开始执行的任务照常跑完，pending 调用没有任务可取消。

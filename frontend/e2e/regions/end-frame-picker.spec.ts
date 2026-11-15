@@ -4,6 +4,7 @@ import { recorded } from "../support/recorded.ts";
 import { defineRegionScenarios } from "../support/scenarios.ts";
 import { expect, type ApiOverrides } from "../support/test.ts";
 
+// End-frame picker in the video column of shot details: this episode's storyboard images and grid split images in two tiled groups; pick one and set it as end frame.
 // 分镜详情视频栏的尾帧选图器：本集分镜图与分镜切图两组平铺，选中一张后设为尾帧。
 const BOARD_PATH = "/app/projects/demo/episodes/1";
 
@@ -17,6 +18,7 @@ const recordedScript = project.scripts["episode_1.json"];
 
 const shotId = (n: number) => `E1S${String(n).padStart(2, "0")}`;
 
+// Storyboard images and split images use inline SVG: getFileUrl uses data: URLs as-is, no requests, stable screenshots.
 // 分镜图与切图用内联 SVG：getFileUrl 原样使用 data: 地址，不发请求，截图稳定。
 function portraitSvg(hue: number) {
   const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="360" height="640" viewBox="0 0 90 160"><rect width="90" height="160" fill="hsl(${hue} 30% 22%)"/><circle cx="45" cy="62" r="20" fill="hsl(${hue} 35% 55%)"/><rect x="18" y="96" width="54" height="48" rx="6" fill="hsl(${hue} 30% 40%)"/></svg>`;
@@ -26,6 +28,7 @@ function portraitSvg(hue: number) {
 const SHOT_COUNT = 24;
 const GRID_CELLS = 9;
 
+// All 24 shots have storyboard images, plus 9 split images of a nine-grid: the popover body must scroll itself, bottom buttons stay fixed.
 // 24 个分镜都有分镜图，另有一张九宫格的 9 张切图：弹层正文要自己滚动，底部按钮常驻。
 const scenes = Array.from({ length: SHOT_COUNT }, (_, i) => ({
   scene_id: shotId(i + 1),
@@ -51,6 +54,7 @@ const scenes = Array.from({ length: SHOT_COUNT }, (_, i) => ({
 }));
 
 const API: ApiOverrides = {
+  // The project event stream is SSE, not recorded; reject with a non-retryable status so the page stays on the replaced data.
   // 项目事件流是 SSE，没有录制；按不可重试的状态拒绝，页面停在替换后的数据上。
   "GET /api/v1/projects/demo/events/stream": { status: 404, body: { detail: "页面级套件不回放事件流" } },
   "GET /api/v1/projects/demo": {

@@ -47,40 +47,44 @@ import { entryDraftOf, providerNames, type EntryDraft } from "./providerModelEnt
 import { ProviderModelFlags } from "./ProviderModelFlags";
 import { RequestAddresses } from "./RequestAddresses";
 
-/** 自定义供应商的模型另有调用端点与请求地址，需要供应商的接口地址与模型发现协议。 */
+/** Custom provider models also have a call endpoint and request address, which need the provider's API address and model discovery protocol. / 自定义供应商的模型另有调用端点与请求地址，需要供应商的接口地址与模型发现协议。 */
 export interface CustomProviderContext {
-  /** 自定义供应商的数据库 id：「打开调用端点」据此带上返回地址。 */
+  /** Database id of the custom provider: "Open call endpoint" uses it to carry the return address. / 自定义供应商的数据库 id：「打开调用端点」据此带上返回地址。 */
   id: number;
   baseUrl: string;
   protocol: DiscoveryFormat;
 }
 
-/** 打开的模型；`key` 每次打开都不同，同一个模型关掉再打开时重新读取。 */
+/** The open model; `key` differs on every open, so closing and reopening the same model re-reads it. / 打开的模型；`key` 每次打开都不同，同一个模型关掉再打开时重新读取。 */
 export interface OpenProviderModel {
   modelId: string;
   key: number;
 }
 
 interface Props {
-  /** 内置供应商 ID，或自定义供应商的 `custom-<id>`。 */
+  /** Built-in provider ID, or `custom-<id>` for a custom provider. / 内置供应商 ID，或自定义供应商的 `custom-<id>`。 */
   providerId: string;
   providerName: string;
-  /** 为 null 时 Sheet 关闭。 */
+  /** The Sheet is closed when null. / 为 null 时 Sheet 关闭。 */
   open: OpenProviderModel | null;
   custom?: CustomProviderContext;
   onClose: () => void;
-  /** 保存之后带回保存后的列表行；改了模型 ID 时 `previousModelId` 是原来的 ID。 */
+  /** After saving, brings back the saved list row; when the model ID changed, `previousModelId` is the original ID. / 保存之后带回保存后的列表行；改了模型 ID 时 `previousModelId` 是原来的 ID。 */
   onSaved: (model: ProviderModelItem, previousModelId: string) => void;
   onRemoved: (modelId: string) => void;
 }
 
 /**
+ * Provider model Sheet: the upper section "Provider settings" belongs only to this provider (enabled, default, model ID, multiplier, parameters this provider supports,
+ * call endpoint and request address), and officially listed models only have enabled; the lower section "Model info" is the matched model entry, shared by all providers that use it.
+ * Both sections share one draft and one save bar and are saved in the same request.
+ *
  * 供应商模型 Sheet：上段「供应商设置」只属于这个供应商（启用、默认、模型 ID、倍率、这个供应商支持的参数、
  * 调用端点与请求地址），官方收录的模型只有启用；下段「模型信息」是对应到的模型条目，所有使用它的供应商共用。
  * 两段共用一份草稿与一条保存栏，在同一个请求里保存。
  */
 export function ProviderModelSheet({ providerId, providerName, open, custom, onClose, onSaved, onRemoved }: Props) {
-  // 关闭动画期间仍显示刚关掉的模型，动画结束后卸载
+  // Keep showing the just-closed model during the close animation; unmount after the animation ends / 关闭动画期间仍显示刚关掉的模型，动画结束后卸载
   const [shown, setShown] = useState(open);
   if (open !== null && open !== shown) setShown(open);
   const requestCloseRef = useRef<() => void>(onClose);
@@ -141,7 +145,7 @@ function ModelSheetLoader({ modelId, providerId, providerName, requestCloseRef, 
     return () => controller.abort();
   }, [providerId, modelId, reloadKey]);
 
-  // 读取完成前没有可丢的修改，直接关闭
+  // Before loading completes there are no changes to discard, so close directly / 读取完成前没有可丢的修改，直接关闭
   useEffect(() => {
     if (detail) return;
     requestCloseRef.current = onClose;
@@ -195,7 +199,7 @@ function ModelSheetLoader({ modelId, providerId, providerName, requestCloseRef, 
   );
 }
 
-/** Sheet 的草稿：上段的供应商设置与下段的模型信息。倍率保留输入原文，保存时才解析。`pending` 是还没保存的条目改动。 */
+/** The Sheet's draft: provider settings in the upper section and model info in the lower section. The multiplier keeps the raw input and is only parsed on save. `pending` is the unsaved entry change. / Sheet 的草稿：上段的供应商设置与下段的模型信息。倍率保留输入原文，保存时才解析。`pending` 是还没保存的条目改动。 */
 interface Draft {
   enabled: boolean;
   isDefault: boolean;
@@ -228,18 +232,18 @@ function sameJson(a: unknown, b: unknown): boolean {
   return JSON.stringify(a) === JSON.stringify(b);
 }
 
-/** 草稿是否相同：模型信息按 {@link sameEntryDraft} 比，其余字段按 JSON。 */
+/** Whether drafts are equal: model info is compared by {@link sameEntryDraft}, other fields by JSON. / 草稿是否相同：模型信息按 {@link sameEntryDraft} 比，其余字段按 JSON。 */
 function sameDraft(a: Draft, b: Draft): boolean {
   return sameJson({ ...a, entry: null }, { ...b, entry: null }) && sameEntryDraft(a.entry, b.entry);
 }
 
-/** 模型信息的草稿是否相同；没有计费项的价目表与没有价目表等价，只换了币种不算修改。 */
+/** Whether model info drafts are equal; a price table with no billing items is equivalent to no price table, and only changing the currency doesn't count as an edit. / 模型信息的草稿是否相同；没有计费项的价目表与没有价目表等价，只换了币种不算修改。 */
 function sameEntryDraft(a: EntryDraft | null, b: EntryDraft | null): boolean {
   if (a === null || b === null) return a === b;
   return a.display_name === b.display_name && sameJson(a.facts, b.facts) && samePrice(a.price, b.price);
 }
 
-/** 两级倍率相乘后的最终倍率，去掉浮点尾差。 */
+/** Final multiplier from multiplying the two levels, with floating-point residue removed. / 两级倍率相乘后的最终倍率，去掉浮点尾差。 */
 function finalMultiplier(provider: number, model: number): string {
   return String(Number((provider * model).toFixed(6)));
 }
@@ -308,6 +312,7 @@ function ModelSheetForm({
         if (!sameJson(value.pathOverrides, saved.pathOverrides)) patch.path_overrides = value.pathOverrides;
         if (value.resolution !== saved.resolution) patch.resolution = value.resolution || null;
       }
+      // Link, unlink or manual entry are mutually exclusive with editing the original entry: when there is an entry change, draft edits to the original entry are no longer written
       // 关联、解除关联或手动填写与修改原条目互斥：有条目改动时，原条目的草稿修改不再写入
       if (userOwned && value.pending) {
         const { pending } = value;
@@ -327,6 +332,7 @@ function ModelSheetForm({
         if (!samePrice(value.entry.price, saved.entry.price)) patch.entry.price = priceForSave(value.entry.price);
       }
       const updated = await API.updateProviderModel(providerId, detail.model.model_id, patch);
+      // Capability overrides don't land in any project field, so capability queries in use won't refetch because of them: invalidate explicitly
       // 能力覆盖不落任何项目字段，在用的能力查询不会因此重取：显式作废
       useCapabilitiesStore.getState().invalidate();
       onDetailChange(updated);
@@ -339,6 +345,7 @@ function ModelSheetForm({
   const draft = unit.value;
   const setDraft = (patch: Partial<Draft>) => unit.setValue((prev) => ({ ...prev, ...patch }));
 
+  // Closing the Sheet: if there are unsaved changes or a save in flight, hand off to the leave guard; otherwise close directly, without also asking about other edit units on the page
   // 关闭 Sheet：有未保存修改或保存在途时交给离开拦截；否则直接关，不连带询问页面上其他编辑单元
   const confirmLeave = useConfirmLeave();
   const busy = unit.dirty || unit.status === "saving";
@@ -358,11 +365,13 @@ function ModelSheetForm({
 
   const idPrefix = useId();
   const name = detail.model.display_name ?? detail.model.model_id;
+  // "Modified" is explained in the lower section's maintenance note; next to the title keep only flags that affect calls
   // 「已修改」在下段的维护说明里讲，标题旁只留影响调用的标记
   const titleFlags = detail.model.flags.filter((flag) => flag !== "modified");
   const entryDirty = !draft.pending && !sameEntryDraft(draft.entry, unit.savedValue.entry);
   const stopsFollowing = entryDirty && detail.entry?.source === "official";
 
+  // Restoring official data takes effect immediately, bypassing the save bar: re-read the Sheet content and replace only the lower section's draft with official values, keeping unsaved upper section changes
   // 恢复官方数据立即生效、不经保存栏：重读 Sheet 内容，只把下段的草稿换成官方值，上段未保存的修改保留
   const handleRestored = useCallback(async () => {
     const updated = await API.getProviderModel(providerId, detail.model.model_id);
@@ -452,6 +461,7 @@ function ModelSheetForm({
                 protocol={custom.protocol}
                 onChange={(endpoint) =>
                   unit.setValue((prev) => {
+                    // Switching back to the original endpoint restores the saved request address and parameter edits; switching to another endpoint discards both
                     // 换回原来的端点时取回保存的请求地址与参数修改；换到别的端点时两者都作废
                     const back = endpoint === detail.endpoint;
                     return {
@@ -555,7 +565,7 @@ function ModelSheetForm({
               providerId={providerId}
               providerName={providerName}
               model={detail.model}
-              // 保存在途时不能移除：两个写入会互相覆盖
+              // Can't remove while a save is in flight: the two writes would overwrite each other / 保存在途时不能移除：两个写入会互相覆盖
               disabled={unit.status === "saving"}
               onRemoved={() => {
                 onRemoved(detail.model.model_id);
@@ -573,6 +583,7 @@ function ModelSheetForm({
           mediaType={media}
           pending={draft.pending}
           onPendingChange={(pending) => {
+            // Mutually exclusive with editing the original entry: drop the original entry's draft edits along with the incorrectly-filled flags
             // 与修改原条目互斥：原条目的草稿修改连同没填对的标记一起放下
             setInvalidKeys((prev) => new Set([...prev].filter((key) => !key.startsWith(ENTRY_INVALID_PREFIX))));
             setDraft({ pending, entry: unit.savedValue.entry });
@@ -611,7 +622,7 @@ function Subsection({ title, hint, children }: { title: string; hint?: string; c
   );
 }
 
-/** 「从『X』移除」：先确认；有设置或项目在用这个模型时在确认框里列出。 */
+/** "Remove from 'X'": confirm first; when settings or projects use this model, list them in the confirmation dialog. / 「从『X』移除」：先确认；有设置或项目在用这个模型时在确认框里列出。 */
 function RemoveModel({
   providerId,
   providerName,
@@ -649,6 +660,7 @@ function RemoveModel({
     return () => controller.abort();
   }, [open, providerId, model.model_id]);
 
+  // The removed model disappears together with unsaved changes in the Sheet; the confirmation dialog itself is this confirmation, so it no longer goes through the leave guard
   // 被移除的模型连同 Sheet 里未保存的修改一起消失，确认框本身就是这次确认，不再经离开拦截
   const handleRemove = async () => {
     setRemoving(true);
@@ -732,7 +744,7 @@ function RemoveModel({
           </AlertDialogBody>
           <AlertDialogFooter>
             <AlertDialogCancel disabled={removing}>{t("common:cancel")}</AlertDialogCancel>
-            {/* 引用查到之前不能确认，免得没看到哪些设置与项目还在用它就移除；查询失败时已提示，仍可移除 */}
+            {/* Can't confirm before references are looked up, so it isn't removed without seeing which settings and projects still use it; when the lookup fails a notice was already shown and it can still be removed / 引用查到之前不能确认，免得没看到哪些设置与项目还在用它就移除；查询失败时已提示，仍可移除 */}
             <AlertDialogAction
               variant="destructive"
               disabled={removing || (references === null && !referencesError)}

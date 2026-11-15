@@ -27,11 +27,11 @@ interface ClipInspectorProps {
   clip: EditClip | undefined;
   trimIgnored: boolean;
   thumbnail: string | undefined;
-  /** 视频单元 ID → 它在本集里的当前位置。 */
+  /** Video unit ID → its current position in this episode. / 视频单元 ID → 它在本集里的当前位置。 */
   positions: ReadonlyMap<string, number>;
 }
 
-/** 选中片段的位置、截取、转场与说明。截取作废时旧的截取加删除线，并说明暂用完整视频。 */
+/** Selected clip's position, trim, transition and notes. When the trim is invalidated the old trim is struck through, with a note that the full video is used for now. / 选中片段的位置、截取、转场与说明。截取作废时旧的截取加删除线，并说明暂用完整视频。 */
 export function ClipInspector({ projectName, clip, trimIgnored, thumbnail, positions }: ClipInspectorProps) {
   const { t } = useTranslation("dashboard");
   const thumbnailFp = useProjectsStore((s) => (thumbnail ? s.getAssetFingerprint(thumbnail) : null));
@@ -74,7 +74,7 @@ export function ClipInspector({ projectName, clip, trimIgnored, thumbnail, posit
               <dd className="text-subtle-foreground">
                 {clip.trim ? (
                   trimIgnored ? (
-                    // 作废的截取划掉显示，读屏读作删除内容
+                    // Invalidated trims are shown struck through; screen readers read them as deleted content / 作废的截取划掉显示，读屏读作删除内容
                     <del className="text-muted-foreground">{trimText(clip.trim)}</del>
                   ) : (
                     <span>{trimText(clip.trim)}</span>
@@ -117,19 +117,19 @@ export function ClipInspector({ projectName, clip, trimIgnored, thumbnail, posit
   );
 }
 
-/** 「问题」列表标题的元素 ID，showIssues 据此把焦点带到列表。 */
+/** Element ID of the "Issues" list heading; showIssues uses it to move focus to the list. / 「问题」列表标题的元素 ID，showIssues 据此把焦点带到列表。 */
 export const ISSUE_LIST_HEADING_ID = "edit-view-issues-title";
 
 interface IssueListProps {
   issues: readonly EditTimelineIssue[];
-  /** 可选中的剪辑片段 ID；BGM 片段（如 b1）不在其中，相关 issue 不带定位按钮。 */
+  /** Selectable clip IDs; BGM clips (e.g. b1) are not included, and their issues get no locate button. / 可选中的剪辑片段 ID；BGM 片段（如 b1）不在其中，相关 issue 不带定位按钮。 */
   clipIds: ReadonlySet<string>;
-  /** 视频单元 ID → 它在本集里的当前位置。 */
+  /** Video unit ID → its current position in this episode. / 视频单元 ID → 它在本集里的当前位置。 */
   positions: ReadonlyMap<string, number>;
   onSelectClip: (clipId: string) => void;
 }
 
-/** 「问题（N）」列表：每条带片段编号或视频单元的位置，指向剪辑片段的点击选中该片段。 */
+/** "Issues (N)" list: each item carries a clip number or video unit position; items pointing at a clip select that clip on click. / 「问题（N）」列表：每条带片段编号或视频单元的位置，指向剪辑片段的点击选中该片段。 */
 export function IssueList({ issues, clipIds, positions, onSelectClip }: IssueListProps) {
   const { t, i18n } = useTranslation("dashboard");
   return (
@@ -153,6 +153,7 @@ export function IssueList({ issues, clipIds, positions, onSelectClip }: IssueLis
               unit: issue.unit_id ? (positions.get(issue.unit_id) ?? t("common:deleted")) : "",
               code: issue.code,
             };
+            // The same issue kind is phrased several ways by params.cause, e.g. narration overrun splits into "runs into the next narration" and "past the end".
             // 同一种 issue 按 params.cause 分成几种说法，如旁白越界分「压到下一段旁白」与「超出末尾」。
             const cause = typeof issue.params.cause === "string" ? `_${issue.params.cause}` : "";
             const text = t(`edit_view_issue_${issue.code}${cause}`, {
@@ -161,7 +162,7 @@ export function IssueList({ issues, clipIds, positions, onSelectClip }: IssueLis
             });
             const dot = <span aria-hidden className={cn("mt-1.5 size-1.5 shrink-0 rounded-full", ISSUE_DOT[issue.code] ?? "bg-muted-foreground")} />;
             return (
-              // react-doctor-disable-next-line react-doctor/no-array-index-as-key -- issue 由服务端按修订整表算出、没有 ID，同一 code 可重复出现；行内无状态，位置即身份
+              // react-doctor-disable-next-line react-doctor/no-array-index-as-key -- issues are computed by the server per revision as a whole table and have no ID; the same code can repeat; rows are stateless, position is identity / issue 由服务端按修订整表算出、没有 ID，同一 code 可重复出现；行内无状态，位置即身份
               <li key={`${issue.code}-${index}`}>
                 {clipId ? (
                   <button

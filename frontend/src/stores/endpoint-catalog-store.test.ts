@@ -135,6 +135,7 @@ describe("endpoint-catalog-store", () => {
     expect(map["openai-images"]).toEqual(["text_to_image", "image_to_image"]);
     expect(map["openai-images-generations"]).toEqual(["text_to_image"]);
     expect(map["openai-images-edits"]).toEqual(["image_to_image"]);
+    // Non-image kinds do not appear in the map
     // 非 image 类不出现在 map 中
     expect(map["openai-chat"]).toBeUndefined();
     expect(map["newapi-video"]).toBeUndefined();
@@ -147,6 +148,7 @@ describe("endpoint-catalog-store", () => {
 
     const map = useEndpointCatalogStore.getState().endpointToEndImageCapable;
     expect(map["newapi-video"]).toBe(true);
+    // Non-video kinds are always false, and every endpoint has an entry; a control that cannot read an entry would wrongly conclude "end frame unsupported"
     // 非 video 类恒为 false，且每个 endpoint 都有条目——控件读不到条目会误判成「不支持尾帧」
     expect(map["openai-chat"]).toBe(false);
     expect(map["openai-images"]).toBe(false);

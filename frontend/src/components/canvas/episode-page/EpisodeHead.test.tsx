@@ -83,6 +83,7 @@ describe("EpisodeHead", () => {
 
     renderHead();
 
+    // Spent includes past spending; remaining is still the full estimate: that $10 went to the old script that was replaced, none of the current script's work is done
     // 已花含历史支出；剩余仍是整笔预估——那 $10 花在已被替换掉的旧剧本上，当前剧本的工作一件也没做
     const stats = await openStats();
     expect(within(stats).getByText("预估 $10.00")).toBeInTheDocument();

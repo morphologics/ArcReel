@@ -38,6 +38,7 @@ describe("RecordRow compact layout", () => {
     expect(row).toHaveTextContent(/3\s*第 1 集 · 推门而入/);
     expect(row).not.toHaveTextContent("S10");
     expect(row).toHaveTextContent("Google · imagen-4");
+    // The project name takes no space: the whole column in the popover belongs to one project.
     // 项目名不占位置：悬浮层里整栏都属于同一个项目。
     expect(row).not.toHaveTextContent("星海列车");
 
@@ -65,6 +66,7 @@ describe("RecordRow compact layout", () => {
         providerLabel={providerLabel}
       />,
     );
+    // The position badge overlays the thumbnail and is not truncated; episode name and body excerpt are truncated only when they do not fit.
     // 位置角标叠在缩略图上、不截断；集名与正文摘录放不下时才截断。
     expect(screen.getByRole("img", { name: "分镜 5" })).toBeInTheDocument();
     expect(screen.getByText("山门 · 雨夜推门")).toBeInTheDocument();
@@ -112,6 +114,7 @@ describe("RecordRow compact layout", () => {
         providerLabel={providerLabel}
       />,
     );
+    // The entry is no longer in the script: write "Deleted", not falling back to the entry ID.
     // 条目已不在剧本里：写「已删除」，不回退成条目 ID。
     expect(screen.getByRole("img", { name: "已删除" })).toBeInTheDocument();
     expect(screen.queryByText(/U01/)).not.toBeInTheDocument();
@@ -135,6 +138,7 @@ describe("RecordRow compact layout", () => {
         providerLabel={providerLabel}
       />,
     );
+    // Grids are not referred to by position; they still start with the in-episode ID.
     // 宫格不按位置指称，仍以集内 ID 开头。
     expect(screen.getByText("G01")).toBeInTheDocument();
     expect(screen.queryByRole("img", { name: /分镜|已删除/ })).not.toBeInTheDocument();

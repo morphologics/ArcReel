@@ -85,6 +85,7 @@ describe("projectEntriesToTurns", () => {
     const toolUse = turns[0].content[0];
     expect(toolUse.result).toBe("迟到的结果");
     expect(toolUse.is_error).toBe(false);
+    // The anchor has been backfilled; no extra orphan tool_result block is opened
     // 已回填锚点，不再另开孤儿 tool_result 块
     expect(turns.flatMap((t) => t.content).filter((b) => b.type === "tool_result")).toHaveLength(0);
   });
@@ -209,6 +210,8 @@ describe("projectEntriesToTurns", () => {
   });
 
   it("updates the existing task block in place from a typed task_notification entry (no duplicate bubble)", () => {
+    // The write point has already shaped the task notification XML into a system entry; the two typed entries produced by the SDK's dual channel (typed system
+    // message + injected user message) are merged in place by task_id.
     // 写入点已把 task 通知 XML 定型为 system 条目——SDK 双通道（typed 系统
     // 消息 + 注入用户消息）产生的两条 typed 条目按 task_id 就地合并。
     const turns = projectEntriesToTurns([
@@ -267,11 +270,13 @@ describe("projectEntriesToTurns", () => {
       entry({ type: "assistant", content: [{ type: "text", text: "好的，继续" }], uuid: "a-2" }),
     ]);
     expect(turns.map((t) => t.type)).toEqual(["assistant", "user", "assistant"]);
+    // The question's tool_use block gets its result backfilled (status no longer dangling)
     // 提问的 tool_use 块获得结果回填（状态不再悬挂）
     const toolUse = turns[0].content[0];
     expect(toolUse.result).toContain("answered");
     expect(toolUse.is_error).toBe(false);
     expect(toolUse.answers).toEqual({ "继续吗?": "继续" });
+    // The answer is its own user-side entry
     // 答复自成用户侧条目
     expect(turns[1].content[0].type).toBe("question_answer");
     expect(turns[1].content[0].answers).toEqual({ "继续吗?": "继续" });
@@ -337,6 +342,7 @@ describe("projectEntriesToTurns", () => {
       }),
     ]);
     expect(turns.map((t) => t.type)).toEqual(["assistant", "system", "user"]);
+    // The anchor tool_use was flushed early into the previous turn by an interrupt; the backfill must still find it across turns
     // 锚点 tool_use 已被 interrupt 提前 flush 到前一个 turn，回填仍要跨 turn 找到它
     const toolUse = turns[0].content[0];
     expect(toolUse.result).toContain("answered");
@@ -362,12 +368,17 @@ describe("projectEntriesToTurns", () => {
       }),
     ]);
     expect(turns).toHaveLength(1);
+    // The chip's render anchor is the Skill tool_use block itself; the entry produces no second block
     // 芯片渲染锚点是 Skill tool_use 块本身，条目不产生第二个块
     expect(turns[0].content).toHaveLength(1);
     expect(turns[0].content[0].type).toBe("tool_use");
   });
 
   it("still recognizes the Skill tool_use anchor after it's flushed to an earlier turn by an interrupt", () => {
+    // If the anchored check looked only at fold.cursor, once the turn containing the Skill's tool_use block was
+    // flushed out of the current turn early by entries such as interrupt, a later skill_invocation would be
+    // misjudged as "unanchored" and render a duplicate standalone chip. toolUseSites registration happens when the tool_use
+    // block itself is appended, which is more durable than cursor, so judge by it rather than only the current turn.
     // anchored 判定若只看 fold.cursor，Skill 的 tool_use 块所在 turn 一旦被
     // interrupt 等条目提前 flush 出当前 turn，后到的 skill_invocation 就会
     // 误判为"未锚定"，重复渲染一个独立芯片。toolUseSites 登记在 tool_use
@@ -425,12 +436,14 @@ describe("projectEntriesToTurns", () => {
       entry({ type: "tool_result", tool_use_id: "tu-agent", content: "报告", is_error: false, uuid: "tr-1" }),
       entry({ type: "assistant", content: [{ type: "text", text: "主线总结" }], uuid: "a-3" }),
     ]);
+    // Main timeline: a single assistant turn (card anchor + main text), no flattened subagent messages
     // 主时间线：单一 assistant turn（卡片锚点 + 主线文本），无平铺的 subagent 消息
     expect(turns).toHaveLength(1);
     const [anchor, summary] = turns[0].content;
     expect(anchor.type).toBe("tool_use");
     expect(anchor.result).toBe("报告");
     expect(summary.text).toBe("主线总结");
+    // The sub-timeline is complete and internally ordered
     // 子时间线完整、内部按序
     expect(anchor.sub_turns?.map((t) => t.type)).toEqual(["user", "assistant"]);
     expect(anchor.sub_turns?.[1].content[0].text).toBe("subagent 回复");
@@ -514,6 +527,7 @@ describe("projectEntriesToTurns", () => {
         parent_tool_use_id: "tu-inner",
       }),
     ]);
+    // The main timeline has only the outer card; the inner anchor is inside the outer sub-timeline and does not reappear at top level
     // 主时间线只有外层卡片，内层锚点在外层的子时间线内部，不重复出现在顶层
     expect(turns).toHaveLength(1);
     const outerAnchor = turns[0].content[0];
@@ -559,6 +573,7 @@ describe("projectEntriesToTurns", () => {
     ]);
     const outerAnchor = turns[0].content[0];
     const subTimeline = outerAnchor.sub_turns?.[0];
+    // Progress inside the sub-timeline is folded into the anchor too, leaving no standalone task_progress row
     // 子时间线内部的进度同样折叠进锚点，不留下独立 task_progress 行
     expect(subTimeline?.content.filter((b) => b.type === "task_progress")).toHaveLength(0);
     const nestedAnchor = subTimeline?.content[0];
@@ -590,6 +605,7 @@ describe("projectEntriesToTurns", () => {
       }),
     ]);
     expect(turns).toHaveLength(1);
+    // Progress no longer renders standalone rows, folded into the card anchor
     // 进度不再渲染独立行，折叠进卡片锚点
     expect(turns[0].content.filter((b) => b.type === "task_progress")).toHaveLength(0);
     const anchor = turns[0].content[0];
@@ -720,6 +736,7 @@ describe("collectCommittedMessageIds", () => {
       { seq: 1, type: "assistant", message_id: "m1", content: [{ type: "text", text: "a" }] },
       { seq: 2, type: "assistant", message_id: "m2", content: [{ type: "text", text: "b" }] },
       { seq: 3, type: "tool_result", tool_use_id: "tu", content: "r" },
+      // Assistant entries missing message_id are not counted
       // assistant 条目缺 message_id 时不计入
       { seq: 4, type: "assistant", content: [{ type: "text", text: "c" }] },
     ]);
@@ -845,6 +862,8 @@ describe("createTimelineProjector", () => {
   });
 
   it("returns fresh turn objects each call so mutation folds never corrupt cached blocks", () => {
+    // Each project folding tool_result/task rewrites blocks within the turn in place; if it reused the block references produced
+    // last time, the second fold would stack on the already folded result. Assert the blocks of the two outputs share no references.
     // 每次 project 折叠 tool_result/task 会就地改写 turn 内的块——若复用了上次
     // 产出的块引用，第二次折叠会叠加在已折叠结果上。断言两次产出的块互不共享引用。
     const entries: TimelineEntry[] = [
@@ -857,6 +876,7 @@ describe("createTimelineProjector", () => {
       e({ type: "tool_result", tool_use_id: "tu-1", content: "回填", is_error: false, uuid: "tr-1" }),
     ];
     const second = projector.project(withResult);
+    // The tool_use block from the first output should not be polluted by the second fold's backfill
     // 第一次产出的 tool_use 块不应被第二次折叠回填污染
     expect(first[0].content[0].result).toBeUndefined();
     expect(second[0].content[0].result).toBe("回填");
@@ -864,6 +884,8 @@ describe("createTimelineProjector", () => {
   });
 
   it("reuses the same deep-cloned block across projections instead of re-cloning (perf contract)", () => {
+    // Large base64 image block: the projector should cache the first-frame deep copy, so re-projecting stable entries no longer triggers deep copies.
+    // Verified by stubbing structuredClone to count: the second project of the same entries reference makes 0 deep copies.
     // 大 base64 image block：投影器应缓存首帧深拷贝，稳定条目重投影不再触发深拷贝。
     // 通过桩化 structuredClone 计数验证：同一 entries 引用第二次 project 深拷贝次数为 0。
     const img = bigImageEntry();
@@ -879,14 +901,17 @@ describe("createTimelineProjector", () => {
     try {
       projector.project(entries);
       expect(cloneCalls).toBeGreaterThan(0);
+      // Stable re-projection: old entries' blocks are cached -> no more deep copies
       // 稳定重投影：老条目的块已缓存 → 不再深拷贝
       cloneCalls = 0;
       projector.project(entries);
       expect(cloneCalls).toBe(0);
+      // Re-project after appending a new entry: the old image block still reuses the cache, and deep copying applies only to the new entry, not the 2KB image
       // 追加新条目重投影：老 image 块仍复用缓存，深拷贝只作用于新条目而非 2KB 图像
       const next = [...entries, e({ type: "assistant", content: [{ type: "text", text: "hi" }], uuid: "a-1" })];
       cloneCalls = 0;
       projector.project(next);
+      // What was added is a plain text block (shallow, no base64), the old image block is recopied 0 times -> total deep copies <= 1
       // 新增的是纯文本块（浅结构，无 base64），旧 image 块 0 次重拷 → 总深拷贝 ≤ 1
       expect(cloneCalls).toBeLessThanOrEqual(1);
     } finally {
@@ -898,6 +923,7 @@ describe("createTimelineProjector", () => {
     const projector = createTimelineProjector();
     const first = [e({ type: "user", content: [{ type: "text", text: "旧会话" }], uuid: "u-1" })];
     projector.project(first);
+    // Switching session: fresh entries, old seqs no longer appear
     // 切换会话：全新 entries，旧 seq 不再出现
     const second = [e({ type: "assistant", content: [{ type: "text", text: "新会话" }], uuid: "a-9" })];
     const out = projector.project(second);
@@ -913,15 +939,20 @@ describe("createTimelineProjector", () => {
   });
 
   it("stays equivalent to fresh replay through incremental subagent anchoring", () => {
+    // Cover the most complex branches of the incremental path: anchor before child entries, child entries before anchor (synthesized card -> reclaimed),
+    // nested subagents, task folding, cross-turn question_answer backfill.
     // 覆盖增量路径最复杂的分支：锚点先于子条目、子条目先于锚点（合成卡片→回收）、
     // 嵌套 subagent、task 折叠、跨 turn question_answer 回填。
     const stream: TimelineEntry[] = [
       e({ type: "user", content: [{ type: "text", text: "开始" }], uuid: "u-1" }),
+      // Orphan sub-timeline: the anchor does not exist yet -> synthesized card
       // 孤儿子时间线：锚点尚不存在 → 合成卡片
       e({ type: "assistant", content: [{ type: "text", text: "孤儿" }], uuid: "sa-1", parent_tool_use_id: "tu-late" }),
+      // The anchor arrives -> the synthesized card should merge back into the main timeline
       // 锚点补到 → 合成卡片应并回主时间线
       e({ type: "assistant", content: [{ type: "tool_use", id: "tu-late", name: "Agent", input: {} }], uuid: "a-1" }),
       e({ type: "system", subtype: "task_started", task_id: "t1", tool_use_id: "tu-late", description: "外层", uuid: "s-1" }),
+      // Nested subagent: the inner anchor is inside the outer sub-timeline
       // 嵌套 subagent：内层锚点在外层子时间线内
       e({
         type: "assistant",
@@ -930,6 +961,7 @@ describe("createTimelineProjector", () => {
         parent_tool_use_id: "tu-late",
       }),
       e({ type: "assistant", content: [{ type: "text", text: "内层回复" }], uuid: "sa-3", parent_tool_use_id: "tu-inner" }),
+      // Question -> interrupt flushes the turn early -> answer backfilled across turns
       // 提问 → 中断把 turn 提前 flush → 答复跨 turn 回填
       e({
         type: "assistant",
@@ -970,6 +1002,8 @@ describe("createTimelineProjector", () => {
   });
 
   it("degrades to a synthetic card instead of dropping the whole timeline when parent_tool_use_id self-references", () => {
+    // An entry's parent_tool_use_id equals its own tool_use id: malformed/self-referencing data that the real
+    // server write point never produces, but the projector should not silently drop the whole timeline.
     // 条目的 parent_tool_use_id 等于自身 tool_use id：畸形/自指数据，真实
     // server 写入点不会产生，但投影器不应把整段时间线静默丢空。
     const entries: TimelineEntry[] = [
@@ -986,6 +1020,8 @@ describe("createTimelineProjector", () => {
   });
 
   it("degrades to synthetic cards instead of dropping the whole timeline when two subagent groups mutually anchor each other", () => {
+    // entry0 belongs to tu-A's sub-timeline and itself carries tool_use tu-B; entry1 belongs to tu-B's
+    // sub-timeline and itself carries tool_use tu-A; the two groups anchor each other into a cycle, and main is empty.
     // entry0 属于 tu-A 的子时间线、自身携带 tool_use tu-B；entry1 属于 tu-B
     // 的子时间线、自身携带 tool_use tu-A —— 两组互相锚定成环，main 为空。
     const entries: TimelineEntry[] = [
@@ -999,6 +1035,10 @@ describe("createTimelineProjector", () => {
   });
 
   it("keeps compose()'s pending-group scan bounded to currently-unanchored groups, not total historical subagent count", () => {
+    // After a batch of subagent groups are all anchored, besides projector.size there should be another observable
+    // signal proving compose() no longer scans the whole table of already anchored historical groups: measuring the size
+    // property directly only reflects the entries count, so instead verify that after anchoring, appending main timeline messages still
+    // gives output identical to full replay (completed anchored groups should no longer appear in top-level synthesized cards).
     // 一批 subagent 组全部锚定完成后，projector.size 之外还应有一个可观测
     // 信号证明 compose() 不再对已锚定完成的历史组做全表扫描：直接量 size
     // 属性只反映 entries 数，这里改为验证锚定后继续追加主时间线消息时输出
@@ -1014,12 +1054,15 @@ describe("createTimelineProjector", () => {
     entries.push(e({ type: "assistant", content: [{ type: "text", text: "主时间线消息" }], uuid: "a-final" }));
     const turns = projector.project(entries);
     expect(turns).toEqual(projectEntriesToTurns(entries));
+    // All 50 subagent groups are anchored on their own tool_use blocks, so no synthesized cards
+    // (system + subagent-* uuid) should appear at top level.
     // 全部 50 个 subagent 组都已锚定在各自 tool_use 块上，顶层不应再出现
     // 任何合成卡片（system + subagent-* uuid）。
     expect(turns.filter((t) => typeof t.uuid === "string" && t.uuid.startsWith("subagent-"))).toHaveLength(0);
   });
 });
 
+// Random entry stream generator: linear congruential pseudo-random (reproducible seed), covering combinations of entry types.
 // ---------------------------------------------------------------------------
 // 随机条目流生成器 — 线性同余伪随机（种子可复现），覆盖各条目类型组合。
 // ---------------------------------------------------------------------------
@@ -1085,6 +1128,7 @@ function generateEntryStream(seed: number, length: number): TimelineEntry[] {
           uuid: `sk-${seq}`,
         };
       } else if (sub < 0.4) {
+        // Unknown subtype: the projection should ignore it
         // 未知子类型：投影应忽略
         entry = { seq, type: "system", subtype: "noise", uuid: `n-${seq}` };
       } else {
@@ -1118,6 +1162,7 @@ function generateEntryStream(seed: number, length: number): TimelineEntry[] {
     } else {
       entry = { seq, type: "user", uuid: `u-${seq}`, content: [{ type: "text", text: `用户${seq}` }] };
     }
+    // 30% chance of joining an existing anchor's sub-timeline, occasional ghost groups
     // 30% 概率归入某已存在锚点的子时间线，偶发 ghost 组
     if (toolIds.length > 0 && chance(0.3)) entry.parent_tool_use_id = pick(toolIds);
     else if (chance(0.05)) entry.parent_tool_use_id = `ghost-${Math.floor(rng() * 3)}`;
@@ -1134,11 +1179,13 @@ describe("mergeEntriesBySeq", () => {
   it("unions two entry lists sorted by seq without duplicates", () => {
     const merged = mergeEntriesBySeq([e(0, "a"), e(2, "c")], [e(1, "b"), e(2, "c-dup"), e(3, "d")]);
     expect(merged.map((x) => x.seq)).toEqual([0, 1, 2, 3]);
+    // Entries with the same seq are immutable; keep the existing reference
     // 同 seq 条目不可变，保留既有引用
     expect(merged[2].uuid).toBe("c");
   });
 
   it("keeps newer local entries when a stale cold read arrives late", () => {
+    // The cold read's whole frame only reaches seq 1, and locally there is already seq 2 from the send response; the union does not lose new entries
     // 冷读整帧只到 seq 1，本地已有发送响应的 seq 2 —— 并集不丢新条目
     const merged = mergeEntriesBySeq([e(2, "sent")], [e(0, "a"), e(1, "b")]);
     expect(merged.map((x) => x.seq)).toEqual([0, 1, 2]);

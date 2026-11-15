@@ -4,6 +4,7 @@ import { ShotDetail } from "./ShotDetail";
 import type { NarrationSegment } from "@/types";
 import { makeNarrationSegment } from "@/test/factories";
 
+/** With unsaved changes the generate button saves first, then generates; it does not generate if the save did not fully take effect. */
 /** 有未保存修改时，生成按钮先保存再生成；保存没有完整生效时不生成。 */
 
 function renderDetail(props: Partial<Parameters<typeof ShotDetail>[0]> = {}, segment: NarrationSegment = makeNarrationSegment()) {
@@ -38,6 +39,7 @@ describe("ShotDetail 保存并生成", () => {
     await waitFor(() => expect(onGenerateStoryboard).toHaveBeenCalledWith("E1S01"));
     expect(onUpdatePrompt).toHaveBeenCalledWith("E1S01", { image_prompt: "雨后的街道" });
     expect(onUpdatePrompt.mock.invocationCallOrder[0]).toBeLessThan(onGenerateStoryboard.mock.invocationCallOrder[0]);
+    // After a successful save the banner folds away and the button returns to its normal text
     // 保存成功后提示条收起，按钮回到普通文案
     await waitFor(() => expect(screen.queryByRole("button", { name: /保存并生成/ })).not.toBeInTheDocument());
   });
@@ -65,11 +67,13 @@ describe("ShotDetail 保存并生成", () => {
 
     expect(await screen.findByRole("alert")).toHaveTextContent("没能载入最新剧本");
     expect(onGenerateNarration).not.toHaveBeenCalled();
+    // Clicking again must not bypass the refresh failure either, until the real script content arrives.
     // 再点也不能绕过刷新失败，直到真正的剧本内容到达。
     const generate = screen.getByRole("button", { name: /^生成旁白/ });
     expect(generate).toBeDisabled();
     fireEvent.click(generate);
     expect(onGenerateNarration).not.toHaveBeenCalled();
+    // Written content becomes saved content and is no longer marked unsaved
     // 已写入的内容成为已保存内容，不再标为未保存
     expect(screen.queryByRole("button", { name: "放弃修改" })).not.toBeInTheDocument();
   });

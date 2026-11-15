@@ -15,11 +15,16 @@ import { createScriptEditTimeline } from "./create-script-timeline";
 interface EditTimelineEmptyStateProps {
   projectName: string;
   episode: number;
-  /** 新建成功后回调，剪辑视图据此切到新的剪辑时间线。 */
+  /** Callback after successful creation; the edit view switches to the new edit timeline accordingly. / 新建成功后回调，剪辑视图据此切到新的剪辑时间线。 */
   onCreated: (created: EditTimelineReadout) => void;
 }
 
 /**
+ * Empty state of the edit view when this episode has no edit timeline yet.
+ *
+ * The two entry points are the same as the WorkflowPanel "Edit" row: "Hand to Agent to edit" only prefills the request into the chat input and opens the panel,
+ * for the user to confirm and send; "New edit timeline" mechanically creates one from the script directly, bypassing the Agent. Rendering never creates an edit timeline automatically.
+ *
  * 剪辑视图在本集还没有剪辑时间线时的空状态。
  *
  * 两个入口与 WorkflowPanel「剪辑」行同一套：「交给 Agent 剪辑」只把请求预填进对话输入框并打开面板，
@@ -33,6 +38,8 @@ export function EditTimelineEmptyState({
   const { t } = useTranslation(["dashboard", "workflow"]);
   const ledger = useEpisodeLedger();
   const [creating, setCreating] = useState(false);
+  // Admission uses the same operation in the episode page workflow status (the episode has at least one usable video), the same source as the server's rejection on creation;
+  // when workflow status is not yet fetched or belongs to another episode, do not disable; the server rechecks on submit.
   // 准入取集页制作状态里的同一操作（本集至少有一个可用视频），与服务端新建时的拒绝同源；
   // 制作状态尚未取回或属于别的集时不置灰，提交时由服务端复核。
   const operation = useWorkflowStore((s) =>
@@ -42,7 +49,7 @@ export function EditTimelineEmptyState({
   const blocked = blockedReason !== undefined;
 
   const handleHandToAgent = useCallback(() => {
-    // 只填不发送，已有会话时不切换、不新建
+    // Only fill, do not send; with an existing session, do not switch or create a new one / 只填不发送，已有会话时不切换、不新建
     const episodeRef = episodeAgentRef(ledger, episode, t);
     useAssistantStore.getState().setInput(t("workflow:agent_prefill_create_edit_timeline", { episodeRef }));
     useAppStore.getState().setAssistantPanelOpen(true);
@@ -52,7 +59,7 @@ export function EditTimelineEmptyState({
     if (creating || blocked) return;
     setCreating(true);
     try {
-      // 新建的剪辑时间线随即成为选中的标签，不再另弹提示。
+      // The new edit timeline immediately becomes the selected tab; no separate toast. / 新建的剪辑时间线随即成为选中的标签，不再另弹提示。
       onCreated((await createScriptEditTimeline(projectName, episode, t)).created);
     } catch (err) {
       useAppStore.getState().pushToast(t("edit_timeline_create_failed", { message: errMsg(err) }), "error");
@@ -74,7 +81,7 @@ export function EditTimelineEmptyState({
           <h2 className="text-base font-semibold text-foreground">{t("edit_view_empty_title")}</h2>
           <p className="text-sm text-muted-foreground">{t("edit_view_empty_description")}</p>
         </div>
-        {/* 禁用的 button 不触发悬停，准入原因挂在外层容器上。 */}
+        {/* A disabled button does not trigger hover, so the admission reason hangs on the outer container. / 禁用的 button 不触发悬停，准入原因挂在外层容器上。 */}
         <div className="flex flex-wrap items-center justify-center gap-2" title={blockedReason}>
           <Button size="sm" onClick={handleHandToAgent} disabled={blocked}>
             <Bot data-icon="inline-start" aria-hidden />

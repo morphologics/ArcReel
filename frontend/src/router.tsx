@@ -36,6 +36,8 @@ import {
   WORKSPACE_ROUTE_SETTINGS,
 } from "@/app-routes";
 
+// Whole pages beyond the first screen are split into chunks by route: the project lobby, project workspace and login page are landing pages and stay loaded with the entry;
+// global settings (including the Recharts usage charts), project settings and the asset library are fetched on entry.
 // 首屏之外的整页按路由拆 chunk：项目大厅、项目工作区与登录页是落地页，保持随入口加载；
 // 全局设置（含用量图表 Recharts）、项目设置与资产库进入时再拉取。
 const SystemConfigPage = lazyNamed(() => import("@/components/pages/SystemConfigPage"), "SystemConfigPage");
@@ -44,16 +46,20 @@ const ProjectSettingsPage = lazyNamed(
   "ProjectSettingsPage",
 );
 const AssetLibraryPage = lazyNamed(() => import("@/components/pages/AssetLibraryPage"), "AssetLibraryPage");
+// The guide (driver.js) does not take part in first-screen paint; split out, it loads in parallel with the page; it renders no DOM itself, so no placeholder is needed while loading.
 // 引导（driver.js）不参与首屏绘制，拆出后与页面并行加载；它自身不渲染 DOM，加载期间无需占位。
 const OnboardingTour = lazyNamed(() => import("@/onboarding/OnboardingTour"), "OnboardingTour");
 
-/** 记录最近停留的应用页面，全局设置与资产库的「返回」据此回到进入之前的位置。 */
+/** Record the most recent app page visited; "Back" in global settings and the asset library uses it to return to where you were before entering. / 记录最近停留的应用页面，全局设置与资产库的「返回」据此回到进入之前的位置。 */
 function ReturnToTracker() {
   useTrackReturnTo();
   return null;
 }
 
 /**
+ * Prefetch the settings page chunk once the guide is on: the guide crosses from the lobby to the settings page to highlight elements there, and anchor waiting has a cap,
+ * so starting to fetch the chunk only at the moment of crossing would eat into that wait.
+ *
  * 引导开启后预取设置页 chunk：引导会从大厅跨到设置页高亮其中的元素，锚点等待有上限，
  * chunk 在跨页那一刻才开始拉取会挤占这段等待。
  */
@@ -66,10 +72,14 @@ function OnboardingChunkPreloader() {
 }
 
 // ---------------------------------------------------------------------------
-// ConfigStatusLoader — 登录后集中拉取一次配置完整性状态
+// ConfigStatusLoader — fetch the config integrity status once, centrally, after login / ConfigStatusLoader — 登录后集中拉取一次配置完整性状态
 // ---------------------------------------------------------------------------
 
 /**
+ * Single-point loader for config integrity (red dot / required-settings reminder), always mounted at the router root and surviving page navigation.
+ * The singleton store initialized once covers all landing pages (home / settings / project), no longer depending on whether some specific page
+ * fetches on mount. On first failure (e.g. backend not ready yet) it retries with bounded-count backoff, no manual page refresh needed.
+ *
  * 配置完整性（红点 / 必需设置提醒）的单点加载器，始终挂载在路由根，跨页面导航存活。
  * 单例 store 一次初始化即覆盖所有落地页（首页 / 设置 / 项目），不再依赖某个具体页面
  * 是否在 mount 时拉取。首次失败（如后端尚未就绪）时带界次数退避重试，无需手动刷新页面。
@@ -77,7 +87,7 @@ function OnboardingChunkPreloader() {
 function ConfigStatusLoader() {
   const isAuthenticated = useAuthStore((s) => s.isAuthenticated);
 
-  // react-doctor-disable-next-line react-doctor/effect-needs-cleanup -- 退避计时器在异步 tick 里设置，id 存在 effect 局部变量，返回的 cleanup 统一 clearTimeout 并置 cancelled
+  // react-doctor-disable-next-line react-doctor/effect-needs-cleanup -- the backoff timer is set in an async tick, its id is kept in an effect-local variable, and the returned cleanup clears it with clearTimeout and sets cancelled / 退避计时器在异步 tick 里设置，id 存在 effect 局部变量，返回的 cleanup 统一 clearTimeout 并置 cancelled
   useEffect(() => {
     if (!isAuthenticated) return;
     let cancelled = false;
@@ -114,6 +124,11 @@ function AuthGuard({ children }: { children: React.ReactNode }) {
   }
 
   if (!isAuthenticated) {
+    // Use the `~` prefix to jump to the top-level /login: AuthGuard may render inside nest nested routes
+    // (/app/projects/:projectName), where a relative path would be appended after the nested base,
+    // so an absolute path is required to land on the real /login.
+    // Carry the full original URL (from window.location; useLocation inside nest is only the relative path)
+    // to redirect back after successful login.
     // 用 `~` 前缀跳到顶层 /login：AuthGuard 可能渲染在 nest 嵌套路由内
     // （/app/projects/:projectName），此时相对路径会被拼到嵌套 base 之后，
     // 必须用绝对路径才能落到真正的 /login。
@@ -135,6 +150,8 @@ function StudioWorkspace() {
   const projectName = params.projectName ?? null;
   const { setCurrentProject, setProjectDetailLoading } = useProjectsStore();
   const { t } = useTranslation("onboarding");
+  // Expose t via a ref to the first-screen load's onError callback, so switching language does not rebuild t -> rebuild the effect
+  // dependencies -> rerun the whole real project load (the effect below deliberately excludes t from its dependencies; reason below).
   // 把 t 通过 ref 暴露给首屏加载的 onError 回调，避免切语言触发 t 重建 → effect
   // 依赖跟着重建 → 真实项目整条加载重跑（下方 effect 依赖里刻意不含 t，理由见下）。
   const tRef = useRef(t);
@@ -142,6 +159,9 @@ function StudioWorkspace() {
     tRef.current = t;
   }, [t]);
 
+  // Project lifecycle: clear the previous project's Agent state, then fetch data by project type.
+  // `t` is not a dependency: a UI language change should only reload the demo constants (see the next effect), not rerun the whole
+  // real project load (which would first clear the store and flash an empty state, and also wipe the Agent session state).
   // 项目生命周期：清空上一个项目的 Agent 状态，再按项目类型取数据。
   // 依赖里不含 `t` —— 界面语言变化只该重灌演示常量（见下一个 effect），不该让真实项目
   // 整条加载重跑（会先清空 store 闪一次空态，还会连带清掉 Agent 会话状态）。
@@ -155,6 +175,8 @@ function StudioWorkspace() {
     assistantState.setSessionStatus(null);
     assistantState.setIsDraftSession(false);
 
+    // The guided demo project does not exist on disk: its data comes straight from frontend constants with no requests, and write requests are
+    // locked for this lifecycle. The data itself is loaded by the next effect.
     // 引导演示项目在磁盘上并不存在：数据直接来自前端常量，不发请求，并在这段生命周期内
     // 锁死写请求。数据本身由下一个 effect 灌入。
     if (isDemoProject(projectName)) {
@@ -166,9 +188,13 @@ function StudioWorkspace() {
       };
     }
 
-    // 进真实项目一律解锁，不让上一次演示的闸门残留下来
+    // Entering a real project always unlocks, so the previous demo's gate does not linger / 进真实项目一律解锁，不让上一次演示的闸门残留下来
     setApiReadOnly(false);
     setProjectDetailLoading(true);
+    // First set the project name (with data emptied): refreshProject's write gate requires currentProjectName to already equal
+    // the target project, otherwise the response is judged "not the current project" and dropped on landing (see the comment on
+    // isCurrentProject in projects-store.ts). This step also rotates the cancel scope, voiding the previous project's in-flight requests;
+    // the first-screen load and other refreshProject callers share the same cancel scope.
     // 先落地项目名（数据置空）：refreshProject 的写入门槛要求 currentProjectName 已等于
     // 目标项目，否则响应落地时会被判成「非当前项目」而丢弃（见 projects-store.ts
     // isCurrentProject 的注释）。这一步同时轮换取消域，上一个项目的在途请求随之作废，
@@ -181,6 +207,8 @@ function StudioWorkspace() {
           useAppStore.getState().pushToast(tRef.current("dashboard:project_load_failed", { message: errMsg(err) }), "error"),
       })
       .then((result) => {
+        // "cancelled" means this round did not sync (the project was switched away, the cancel scope rotated); the loading state is settled by
+        // the new round that takes over, and shared state is not touched here.
         // "cancelled" 代表本轮未同步（项目已被切走、取消域已轮换），loading 状态交由
         // 接管的新一轮自行结算，此处不动共享状态。
         if (result === "cancelled") return;
@@ -192,6 +220,7 @@ function StudioWorkspace() {
     };
   }, [projectName, setCurrentProject, setProjectDetailLoading]);
 
+  // Demo data follows the UI language: when `t` changes identity, reload the constants; only affects demo projects
   // 演示数据随界面语言走：`t` 换身份时重灌一遍常量，只影响演示项目
   useEffect(() => {
     if (!projectName || !isDemoProject(projectName)) return;
@@ -210,7 +239,7 @@ function StudioWorkspace() {
 // ---------------------------------------------------------------------------
 
 export function AppRoutes() {
-  // 离开拦截包住全部路由：未保存修改在任何应用内跳转前先询问
+  // The leave guard wraps all routes: unsaved changes are asked about before any in-app navigation / 离开拦截包住全部路由：未保存修改在任何应用内跳转前先询问
   return (
     <LeaveGuardProvider>
       <ConfigStatusLoader />
@@ -219,7 +248,7 @@ export function AppRoutes() {
       <LazyBoundary variant="none">
         <OnboardingTour />
       </LazyBoundary>
-      {/* 懒加载页面的 chunk 未到达时显示整页加载占位、最终失败时显示整页失败提示；工作区画布另有局部边界，不会退到这里 */}
+      {/* Show a full-page loading placeholder while a lazy page's chunk has not arrived, and a full-page failure notice if it finally fails; the workspace canvas has its own local boundary and does not fall back here / 懒加载页面的 chunk 未到达时显示整页加载占位、最终失败时显示整页失败提示；工作区画布另有局部边界，不会退到这里 */}
       <LazyBoundary variant="screen">
         <Switch>
           {/* Login page */}
@@ -254,6 +283,11 @@ export function AppRoutes() {
             </AuthGuard>
           </Route>
 
+          {/*
+           * Demo projects have no usable project-level settings (the project does not exist on the backend); direct URL entry, bookmarks or external links
+           * can all bypass the redirect already done in GlobalHeader, so block it again at the route layer and point to global settings.
+           * Must come before the generic project settings route below; wouter matches in declaration order.
+           */}
           {/* 演示项目没有可用的项目级设置（后端不存在该项目）——地址栏直达、书签或外部链接
               都可能绕开 GlobalHeader 里已做的重定向，这里在路由层再挡一次，指向全局设置。
               必须排在下面通用的项目设置路由之前，wouter 按声明顺序匹配。 */}
@@ -268,7 +302,7 @@ export function AppRoutes() {
             </AuthGuard>
           </Route>
 
-          {/* Studio workspace (three-column layout)；未注册的子路径由画布内层 Switch 的兜底路由显示空状态 */}
+          {/* Studio workspace (three-column layout); unregistered subpaths show an empty state via the fallback route of the canvas's inner Switch / Studio workspace (three-column layout)；未注册的子路径由画布内层 Switch 的兜底路由显示空状态 */}
           <Route path={`${ROUTE_APP_PROJECTS}/:projectName`} nest>
             <AuthGuard>
               <StudioWorkspace />

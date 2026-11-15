@@ -18,6 +18,11 @@ import { TodoProgress } from "./TodoProgress";
 import { MessageFlow, type MessageFlowHandle } from "./chat/MessageFlow";
 
 // ---------------------------------------------------------------------------
+// AgentCopilot — the Agent panel.
+// The top bar shows the current session title; the "History" toggle swaps the message area for the session list, with the input still usable.
+// Below the message area come todo progress, the error bar and the input (the queued-message tray sits right above the input); when the Agent
+// asks a question, the question takes the input's place.
+// ---------------------------------------------------------------------------
 // AgentCopilot — Agent 面板。
 //
 // 顶栏显示当前会话标题；「历史」开关把消息区换成会话列表，输入框仍可用。
@@ -59,7 +64,7 @@ export function AgentCopilot() {
   const [historyOpen, setHistoryOpen] = useState(false);
 
   const isRunning = sessionStatus === "running";
-  // 回复进行中输入框照常可用：此时发出的消息进排队消息托盘
+  // The input stays usable while a reply is in progress: messages sent then go to the queued-message tray / 回复进行中输入框照常可用：此时发出的消息进排队消息托盘
   const inputDisabled = Boolean(pendingQuestion) || answeringQuestion || sending;
   const title =
     isDraftSession || !currentSessionId
@@ -71,6 +76,7 @@ export function AgentCopilot() {
 
   const handleSend = useCallback(
     (text: string, images?: AttachedImage[]) => {
+      // Sending jumps back to the latest point of the message area, so this message and the reply that follows are in view
       // 发送即回到消息区的最新处，随后到达的这条消息与回复都在视野里
       setHistoryOpen(false);
       flowRef.current?.scrollToEnd();
@@ -91,6 +97,8 @@ export function AgentCopilot() {
     return sendQueuedMessageNow(id);
   }, [sendQueuedMessageNow]);
 
+  // After a successful rewrite the session switch rebuilds the timeline (edit state cleared with resetTimeline); on failure edit state is kept
+  // so the user can revise and retry; the error shows in the error bar below the message area
   // 改写成功后由会话切换重建时间线（编辑态随 resetTimeline 清空）；失败保留编辑态，
   // 用户可以改完再试，错误经消息区下方的错误条呈现
   const handleSubmitEdit = useCallback(
@@ -100,6 +108,7 @@ export function AgentCopilot() {
     [rewriteMessage],
   );
 
+  // Submitting an answer works like sending a message: return to the latest point and wait for the Agent's reply
   // 提交回答与发送消息同理：回到最新处等 Agent 接着回复
   const handleSubmitAnswers = useCallback(
     (questionId: string, answers: Record<string, string>) => {
@@ -161,6 +170,8 @@ export function AgentCopilot() {
           key={currentSessionId ?? "draft"}
           ref={flowRef}
           onSubmitEdit={handleSubmitEdit}
+          // When a rewrite fails the original input stays in the still-open editor, and retry is triggered by its "Resend":
+          // a retry here on the card would only replay unrelated content from the main input (and do nothing at all when it's empty)
           // 改写失败时原始输入留在仍开着的编辑器里，重试由它的「重新发送」发起：
           // 卡片这里给重试只会重放主输入框的无关内容（为空时更是毫无反应）
           onRetryStartup={startupFailureOrigin === "rewrite" ? undefined : () => composerRef.current?.send()}

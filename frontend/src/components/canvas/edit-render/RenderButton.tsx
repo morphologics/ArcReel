@@ -10,11 +10,11 @@ interface RenderButtonProps {
   projectName: string;
   timelineId: string;
   timelineName: string;
-  /** 当前修订的 issues；有阻断全部交付物的 issue 时按钮不可点。 */
+  /** Issues of the current revision; when an issue blocks all deliverables the button is not clickable. / 当前修订的 issues；有阻断全部交付物的 issue 时按钮不可点。 */
   issues: readonly EditTimelineIssueRef[];
-  /** 项目用 TTS 配音时可以选旁白版本。 */
+  /** When the project uses TTS voiceover, the narration version can be chosen. / 项目用 TTS 配音时可以选旁白版本。 */
   narrationAvailable: boolean;
-  /** 打开剪辑视图的「问题」列表。 */
+  /** Open the edit view's "Issues" list. / 打开剪辑视图的「问题」列表。 */
   onShowIssues: () => void;
   /** Prefix of the final cut's download name (e.g. "Project title - E1"), see RenderDialog. */
   fileStem?: string;
@@ -23,6 +23,11 @@ interface RenderButtonProps {
 }
 
 /**
+ * The "Render" button at the top of the edit view, opening the render dialog for the edit timeline of the current tab.
+ *
+ * When the current revision has an issue blocking all deliverables the button is not clickable: hover shows the reason, and a link next to it jumps to the "Issues" list.
+ * Issues that block only the with-narration version are handled by the dialog according to the selected narration version.
+ *
  * 剪辑视图顶部的「出片」按钮，打开当前标签对应剪辑时间线的出片对话框。
  *
  * 当前修订有阻断全部交付物的 issue 时按钮不可点：悬停显示原因，旁边给出跳到「问题」列表的链接。
@@ -56,7 +61,7 @@ export function RenderButton({
           </span>
         </>
       )}
-      {/* 禁用的 button 不触发悬停，原因挂在外层容器上。 */}
+      {/* A disabled button does not trigger hover, so the reason hangs on the outer container. / 禁用的 button 不触发悬停，原因挂在外层容器上。 */}
       <span title={reason ?? undefined}>
         <Button
           size="sm"

@@ -10,15 +10,15 @@ import { totalBreakdown } from "@/utils/cost-format";
 
 interface EpisodeCardProps {
   ep: EpisodeMeta;
-  /** 在播出顺序（episodes[] 排列）中的位置，从 1 起；徽标显示它而不是集 ID。 */
+  /** Position in episode order (episodes[] order), starting at 1; the badge shows this rather than the episode ID. / 在播出顺序（episodes[] 排列）中的位置，从 1 起；徽标显示它而不是集 ID。 */
   position: number;
   active: boolean;
   onClick: () => void;
-  /** ad 项目隐藏集语义：徽标不显示播出位置，改用场记板图标。 */
+  /** ad projects hide episode semantics: the badge shows a clapperboard icon instead of the order position. / ad 项目隐藏集语义：徽标不显示播出位置，改用场记板图标。 */
   showEpisodeBadge?: boolean;
-  /** ep.title 为空时的兜底显示文本（ad 项目用项目标题）。 */
+  /** Fallback display text when ep.title is empty (ad projects use the project title). / ep.title 为空时的兜底显示文本（ad 项目用项目标题）。 */
   fallbackTitle?: string;
-  /** 项目生成模式：决定条目数报「分镜数」还是「视频单元数」。必填，漏接线时类型报错而不是静默显示错名词。 */
+  /** Project generation mode: decides whether the entry count reads "shots" or "video units". Required, so a missing wire is a type error instead of silently showing the wrong noun. / 项目生成模式：决定条目数报「分镜数」还是「视频单元数」。必填，漏接线时类型报错而不是静默显示错名词。 */
   route: GenerationRoute;
 }
 
@@ -39,6 +39,8 @@ const STATUS_LABEL_KEY: Record<string, string> = {
 };
 
 /**
+ * Sidebar episode card: order position on the left, episode name, status and progress in the middle, actual cost on the right. The currently open episode has a background tint.
+ *
  * 侧栏的集卡片：左边是播出位置，中间是集名、状态与进度，右边是实际费用。当前打开的集带底色。
  */
 export function EpisodeCard({
@@ -54,6 +56,8 @@ export function EpisodeCard({
   const status = ep.status ?? "draft";
   const statusLabel = t(STATUS_LABEL_KEY[status] ?? STATUS_LABEL_KEY.draft);
 
+  // Progress counts available video artifacts: available = current ∪ stale, the same count as the workbench.
+  // When the video total is 0 (no script yet), fall back to the script entry count, only to show "how many items this episode has".
   // 进度按视频产物的可用数算——可用 = current ∪ stale，与工作台同一份计数。
   // 视频总数为 0（尚未成脚本）时退回剧本条目数，只用于显示"这集有几件内容"。
   const videoTotal = ep.videos?.total ?? 0;
@@ -63,6 +67,8 @@ export function EpisodeCard({
   const progress = videoTotal > 0 ? Math.round((availableVideos / videoTotal) * 100) : 0;
   const showProgress = videoTotal > 0 && (active || progress > 0);
 
+  // stale is an available artifact and is not counted as a gap: report a separate number for how many could be regenerated.
+  // Aggregates all artifact types of the episode, on the same basis as that row on the lobby card.
   // stale 是可用产物，不进缺口计数：单独报一个数说明有几件可以考虑重生。
   // 汇总该集全部产物类型，与大厅卡片上那一行同口径。
   const staleCount = (ep.storyboards?.stale ?? 0) + (ep.videos?.stale ?? 0);

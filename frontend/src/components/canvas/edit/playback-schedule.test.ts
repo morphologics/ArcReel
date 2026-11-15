@@ -32,6 +32,8 @@ function readout(clips: EditClip[], duration: number): EditTimelineReadout {
   };
 }
 
+// c1 trims 1.2-4.0s; c2's unit was deleted from the script; c3 uses the whole 3s and holds 1s; c4 has no usable video yet, a 2s placeholder by planned duration;
+// c5's trim was based on v1 but current is already v2, so the whole 5s is used.
 // c1 截取 1.2–4.0s；c2 的单元已从脚本删除；c3 整段 3s 并定格 1s；c4 还没有可用视频，按编排时长 2s 占位；
 // c5 的截取依据 v1，current 已是 v2，整段使用 5s。
 const SAMPLE = readout(
@@ -80,9 +82,11 @@ describe("buildPlaybackPlan", () => {
 
     expect(plan.segments.map((s) => [s.clipId, s.start, s.end, s.sourceIn, s.sourceOut, s.hasVideo])).toEqual([
       ["c1", 0, 2.8, 1.2, 4, true],
+      // A freeze-frame extension does not consume source footage: the picture plays to 3s and then holds the last frame
       // 定格延长不占源素材：画面放到 3s 后停在末帧
       ["c3", 2.8, 6.8, 0, 3, true],
       ["c4", 6.8, 8.8, 0, 0, false],
+      // The version the trim was based on is no longer current: use the whole clip
       // 截取所依据的版本已不是 current：整段使用
       ["c5", 8.8, 13.8, 0, 5, true],
     ]);
@@ -223,6 +227,7 @@ describe("advancePlayhead", () => {
     });
   });
 
+  // "Rough cut" c3 from the production read result: trimmed 0-3.2s then holds 1s, starting at 8.4s; 11.6 - 8.4 is slightly below 3.2 in floating point
   // 生产读取结果里的「初剪」c3：截取 0–3.2s 后定格 1s，起点 8.4s；11.6 - 8.4 在浮点下略小于 3.2
   const HOLD_AFTER_TRIM = buildPlaybackPlan(
     readout(
@@ -282,6 +287,7 @@ describe("advancePlayhead", () => {
 });
 
 describe("transitions", () => {
+  // c1 -> c2 cross-dissolve 1s; after c2 comes c3 of a deleted unit, so the transition lands on the c2 -> c4 cut; c4 is the last clip, its transition has no effect
   // c1 → c2 叠化 1s；c2 后面是已删除单元的 c3，转场落在 c2 → c4 的切点上；c4 是最后一个片段，它的转场没有效果
   const withTransitions = readout(
     [

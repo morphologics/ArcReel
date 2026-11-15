@@ -53,7 +53,7 @@ function CommandDialog({
         )}
         showCloseButton={showCloseButton}
       >
-        {/* 标题放在弹层里：放在外面时对话框关着也留在页面上。不套 DialogHeader，它的内边距会撑开 sr-only */}
+        {/* The title sits inside the overlay: outside, it stays on the page even when the dialog is closed. Not wrapped in DialogHeader, whose padding would stretch sr-only / 标题放在弹层里：放在外面时对话框关着也留在页面上。不套 DialogHeader，它的内边距会撑开 sr-only */}
         <DialogTitle className="sr-only">{title}</DialogTitle>
         <DialogDescription className="sr-only">{description}</DialogDescription>
         {children}
@@ -62,6 +62,7 @@ function CommandDialog({
   )
 }
 
+// Versus upstream: the search box keeps InputGroup's opaque border; lower the input fill opacity to preserve text contrast.
 // 相对上游：搜索框保留 InputGroup 的不透明描边，降低 input 填充不透明度以保留文字对比度。
 function CommandInput({
   className,
@@ -91,6 +92,7 @@ function CommandList({
   ...props
 }: React.ComponentProps<typeof CommandPrimitive.List>) {
   return (
+    // Scrollbar always visible (styled centrally in index.css), drop upstream's no-scrollbar; add relative: the scroll container must be a positioned element
     // 滚动条始终可见（index.css 统一样式），去掉上游的 no-scrollbar；补 relative：滚动容器须是定位元素
     <CommandPrimitive.List
       data-slot="command-list"

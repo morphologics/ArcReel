@@ -30,14 +30,17 @@ import { getProjectDisplayName } from "@/utils/project-display";
 import type { ProjectSummary } from "@/types";
 
 interface ProjectDialogProps {
-  /** 要操作的项目；为 null 时对话框关闭。 */
+  /** The project to act on; the dialog is closed when null. / 要操作的项目；为 null 时对话框关闭。 */
   project: ProjectSummary | null;
   onClose: () => void;
-  /** 改动已保存，列表需要重新加载。 */
+  /** Changes saved; the list needs reloading. / 改动已保存，列表需要重新加载。 */
   onDone: () => void;
 }
 
 /**
+ * During the close animation `project` is already null; keep the previous project so the content does not flash blank.
+ * Call `onOpen` to reset the form on every open (including reopening the same project).
+ *
  * 关闭动画期间 `project` 已是 null，保留上一次的项目避免内容闪成空白。
  * 每次打开（含再次打开同一个项目）时调用 `onOpen` 重置表单。
  */
@@ -54,7 +57,7 @@ function useShownProject(project: ProjectSummary | null, onOpen: (project: Proje
   return shown;
 }
 
-/** 改项目标题。项目 ID 决定项目的地址与目录，不随标题变化。 */
+/** Rename the project title. The project ID determines the project's URL and directory and does not change with the title. / 改项目标题。项目 ID 决定项目的地址与目录，不随标题变化。 */
 export function RenameProjectDialog({ project, onClose, onDone }: ProjectDialogProps) {
   const { t } = useTranslation(["dashboard", "common"]);
   const formId = useId();
@@ -92,7 +95,7 @@ export function RenameProjectDialog({ project, onClose, onDone }: ProjectDialogP
     <Dialog
       open={project !== null}
       onOpenChange={(open) => {
-        // 提交中不响应 Esc，避免请求还在途时对话框先消失
+        // Ignore Esc while submitting, so the dialog does not disappear while the request is still in flight / 提交中不响应 Esc，避免请求还在途时对话框先消失
         if (!open && !submitting) onClose();
       }}
     >
@@ -126,7 +129,7 @@ export function RenameProjectDialog({ project, onClose, onDone }: ProjectDialogP
   );
 }
 
-/** 删除项目先用 AlertDialog 确认：项目移入「已删除项目」，保留期内可以恢复。 */
+/** Deleting a project is confirmed with an AlertDialog first: the project moves to "Deleted projects" and can be restored within the retention period. / 删除项目先用 AlertDialog 确认：项目移入「已删除项目」，保留期内可以恢复。 */
 export function DeleteProjectDialog({ project, onClose, onDone }: ProjectDialogProps) {
   const { t } = useTranslation(["dashboard", "common"]);
   const [submitting, setSubmitting] = useState(false);
@@ -153,7 +156,7 @@ export function DeleteProjectDialog({ project, onClose, onDone }: ProjectDialogP
     <AlertDialog
       open={project !== null}
       onOpenChange={(open) => {
-        // 提交中不响应 Esc，避免请求还在途时对话框先消失
+        // Ignore Esc while submitting, so the dialog does not disappear while the request is still in flight / 提交中不响应 Esc，避免请求还在途时对话框先消失
         if (!open && !submitting) onClose();
       }}
     >

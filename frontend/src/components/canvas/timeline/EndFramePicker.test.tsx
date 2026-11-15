@@ -21,6 +21,7 @@ const script = {
       video_prompt: "",
       generated_assets: { storyboard_image: "storyboards/E1S01_v1.png" },
     },
+    // Shots without a storyboard image are not among the options
     // 没有分镜图的分镜不进选项
     { segment_id: "E1S02", novel_text: "", image_prompt: "", video_prompt: "" },
   ],
@@ -84,6 +85,7 @@ function renderPicker(props: Partial<Parameters<typeof EndFramePicker>[0]> = {})
 
 beforeEach(() => {
   vi.spyOn(API, "listGrids").mockResolvedValue([
+    // A scripts/ prefix should still count as this episode (task rows and episode metadata prefixes differ)
     // 带 scripts/ 前缀也应归入本集（任务行与 episode 元数据前缀不一致）
     grid(`scripts/${SCRIPT}`, "grids/g1_cell_0.png"),
     grid("episode_2.json", "grids/g2_cell_0.png"),
@@ -110,9 +112,11 @@ describe("EndFramePicker 项目内通道", () => {
     await findByText("本集分镜切图");
     expect(getByText("本集分镜图")).toBeInTheDocument();
 
+    // Shots without a storyboard image do not appear
     // 无分镜图的分镜不出现
     expect(queryByRole("button", { name: /^分镜 2$/ })).not.toBeInTheDocument();
 
+    // Character/scene groups were removed: not shown even if currentProjectData has matching material
     // 角色/场景分组已移除：即使 currentProjectData 里有对应素材也不展示
     expect(queryByText("角色")).not.toBeInTheDocument();
     expect(queryByText("场景")).not.toBeInTheDocument();
@@ -147,6 +151,7 @@ describe("EndFramePicker 项目内通道", () => {
 describe("EndFramePicker 上传通道", () => {
   it("选定文件后交回父级（与项目内通道同一落点）", async () => {
     const onPickUpload = vi.fn();
+    // The Dialog uses a portal; the file input is not in render's container subtree
     // Dialog 走 portal，file input 不在 render 的 container 子树内
     const { baseElement, findByText } = renderPicker({ onPickUpload });
     await findByText("本集分镜图");

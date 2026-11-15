@@ -4,6 +4,8 @@ import { defineRegionScenarios } from "../support/scenarios.ts";
 import { recorded } from "../support/recorded.ts";
 import { expect, test, type ApiOverrides } from "../support/test.ts";
 
+// Episode page "Shots" view: shot list on the left, shot details on the right (middle column references, prompts, dialogue, source text;
+// media column storyboard image and video).
 // 集页「分镜」视图：左侧分镜列表，右侧分镜详情（中栏引用、提示词、台词、对应原文，媒体栏分镜图与视频）。
 const BOARD_PATH = "/app/projects/demo/episodes/1";
 
@@ -18,6 +20,7 @@ const recordedScript = project.scripts["episode_1.json"];
 
 const shotId = (n: number) => `E1S${String(n).padStart(2, "0")}`;
 
+// Reference images and storyboard images use inline SVG: getFileUrl uses data: URLs as-is, no requests, stable screenshots.
 // 引用图与分镜图用内联 SVG：getFileUrl 原样使用 data: 地址，不发请求，截图稳定。
 function portraitSvg(hue: number) {
   const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="360" height="640" viewBox="0 0 90 160"><rect width="90" height="160" fill="hsl(${hue} 30% 22%)"/><circle cx="45" cy="62" r="20" fill="hsl(${hue} 35% 55%)"/><rect x="18" y="96" width="54" height="48" rx="6" fill="hsl(${hue} 30% 40%)"/></svg>`;
@@ -93,6 +96,7 @@ const scenes = Array.from({ length: SHOT_COUNT }, (_, i) => {
 });
 
 const API: ApiOverrides = {
+  // The project event stream is SSE, not recorded; reject with a non-retryable status so the page stays on the replaced data.
   // 项目事件流是 SSE，没有录制；按不可重试的状态拒绝，页面停在替换后的数据上。
   "GET /api/v1/projects/demo/events/stream": { status: 404, body: { detail: "页面级套件不回放事件流" } },
   "GET /api/v1/projects/demo": {
@@ -134,6 +138,7 @@ const API: ApiOverrides = {
   "POST /api/v1/projects/demo/script-items/E1S02/move": { status: 200, body: { success: true } },
 };
 
+// The duration popover needs selectable options: the recorded video capability fails to resolve, so the duration button is disabled.
 // 时长弹层要有可选档位：录制的视频能力是解析失败，时长按钮因此禁用。
 const API_WITH_DURATIONS: ApiOverrides = {
   ...API,
@@ -162,6 +167,7 @@ const storyboard = (page: Page) => page.getByRole("img", { name: "分镜 1 分�
 
 
 
+/** Popovers have an entry animation; wait for it to stop before measuring and running axe; looping animations like in-progress spinners are not awaited. */
 /** 弹层带入场动画，量尺寸、跑 axe 之前等它停下；进行中的转圈等循环动画不等。 */
 
 async function boardReady(page: Page) {
@@ -169,6 +175,7 @@ async function boardReady(page: Page) {
   await page.getByRole("heading", { name: "引用" }).waitFor();
 }
 
+/** The compact-tier Agent panel covers the right of the canvas: collapse it before clicking controls on the right of the details. */
 /** 紧凑档 Agent 面板盖在画布右侧：先收起再点详情右侧的控件。 */
 
 defineRegionScenarios("分镜详情", [
@@ -180,12 +187,15 @@ defineRegionScenarios("分镜详情", [
     act: async (page) => {
       await expect(shotList(page).getByRole("button", { name: /^分镜 1(?!\d)/ })).toHaveAttribute("aria-current", "true");
       const { width } = viewport(page);
+      // At 1440 wide with the Agent panel expanded, references and dialogue are visible on one screen (prompts grow with content; long dialogue
+      // may be below the first screen)
       // 1440 宽、Agent 面板展开时，引用与台词区同屏可见（提示词随内容撑高，长台词可能在首屏之下）
       if (width === 1440) {
         await expect(agentToggle(page)).toHaveAttribute("aria-pressed", "true");
         await expect(page.getByRole("heading", { name: "引用" })).toBeInViewport();
         await expect(page.getByRole("heading", { name: "发声序列" })).toBeInViewport();
       }
+      // At 1920 wide the media column is about 660px, storyboard image and video side by side
       // 1920 宽时媒体栏约 660px，分镜图与视频并排
       if (width === 1920) {
         const image = await box(storyboard(page));
@@ -193,8 +203,10 @@ defineRegionScenarios("分镜详情", [
         expect(video.x).toBeGreaterThan(image.x + image.width - 1);
         expect(Math.abs(video.y - image.y)).toBeLessThan(80);
       }
+      // Source text is collapsed by default
       // 对应原文默认收起
       await expect(page.getByRole("button", { name: "对应原文与参考" })).toHaveAttribute("aria-expanded", "false");
+      // Region screenshots exclude the compact-tier Agent panel covering the canvas
       // 区域截图不带紧凑档盖在画布上的 Agent 面板
       await clearAgentOverlay(page);
     },
@@ -287,6 +299,7 @@ defineRegionScenarios("分镜详情", [
     ready: boardReady,
     act: async (page) => {
       await page.getByRole("textbox", { name: "分镜图提示词" }).fill("雨停后的旧城街景");
+      // With focus in an input, J is a character to type; move focus away before pressing
       // 焦点在输入框里时 J 是要输入的字符；移开焦点再按
       await page.getByRole("textbox", { name: "分镜图提示词" }).blur();
       await page.keyboard.press("j");
@@ -394,6 +407,9 @@ defineRegionScenarios("分镜详情", [
         }
         return intervals;
       });
+      // Frame timing is asserted only with a single worker (CI's frontend-e2e uses one worker per shard): a 30-frame scroll must not have a
+      // half-second main-thread stall or exceed 2 seconds in total. With parallel workers, CPU contention stretches frame intervals and measures
+      // something other than the page itself, so only the sorting part afterwards runs.
       // 帧耗时只在单 worker 运行时断言（CI 的 frontend-e2e 每片单 worker）：30 帧滚动不应出现半秒主线程停顿
       // 或累计超过 2 秒。多 worker 并行时 CPU 争用会拉长帧间隔，量到的不是页面自身的耗时，只跑后面的排序部分。
       if (test.info().config.workers === 1) {
@@ -406,6 +422,7 @@ defineRegionScenarios("分镜详情", [
       await handle.scrollIntoViewIfNeeded();
       await handle.focus();
       const move = page.waitForRequest((request) => request.method() === "POST" && request.url().endsWith("/script-items/E1S500/move"));
+      // Arrow key right after pick-up: within the same event loop, without waiting for measuring or announcements.
       // 拿起后立即方向键：同一事件循环内不等测量或播报。
       await handle.evaluate((el) => {
         for (const [key, code] of [[" ", "Space"], ["ArrowUp", "ArrowUp"]]) {

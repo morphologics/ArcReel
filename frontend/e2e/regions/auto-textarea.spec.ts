@@ -2,13 +2,16 @@ import type { Locator, Page } from "@playwright/test";
 import { defineRegionScenarios } from "../support/scenarios.ts";
 import { expect, type ApiOverrides } from "../support/test.ts";
 
+// Auto-growing input: verified via the narration dialog of the episode page empty state "Add the first shot"; the input grows with content inside the popover.
 // 自动撑高输入框：借集页空状态「新增第一个分镜」的旁白对话框验证，输入框在弹层里随内容撑高。
 const EPISODE_PATH = "/app/projects/demo/episodes/1";
+// The project event stream is SSE, not recorded; reject with a non-retryable status so the page stays on the recorded project data.
 // 项目事件流是 SSE，没有录制；按不可重试的状态拒绝，页面停在录制的项目数据上。
 const API: ApiOverrides = {
   "GET /api/v1/projects/demo/events/stream": { status: 404, body: { detail: "页面级套件不回放事件流" } },
 };
 
+// 9 lines of long text: each line is long enough to wrap into more lines when narrower.
 // 9 行长文本：每行足够长，变窄时会折成更多行。
 const NINE_LINES = Array.from(
   { length: 9 },
@@ -24,6 +27,7 @@ async function openNarrationDialog(page: Page) {
   await narrationField(page).waitFor();
 }
 
+/** Every line is reachable: all content is shown, or it grows to the cap and can scroll internally to the bottom. */
 /** 每一行都够得着：内容全部显示，或者撑到上限后可以在内部滚动到底。 */
 async function expectAllLinesReachable(field: Locator) {
   const box = await field.evaluate((el) => {
@@ -39,6 +43,7 @@ async function expectAllLinesReachable(field: Locator) {
     expect(box.atMaxHeight, "内容超出时输入框应已撑到上限").toBe(true);
     expect(["auto", "scroll"], "撑到上限后超出部分应能在内部滚动").toContain(box.overflowY);
   }
+  // Multi-line content must not show only the first line.
   // 多行内容不能只显示第一行。
   expect(box.clientHeight).toBeGreaterThan(80);
 }
@@ -68,9 +73,11 @@ defineRegionScenarios("自动撑高输入框", [
     act: async (page) => {
       await openNarrationDialog(page);
       const field = narrationField(page);
+      // Two lines are below the height cap at the original width; the extra wrapping after narrowing must increase the height.
       // 两行在原宽度下尚未到高度上限，收窄后的新增折行必须使高度增加。
       await field.fill(NINE_LINES.split("\n").slice(0, 2).join("\n"));
       const before = await field.evaluate((el) => el.getBoundingClientRect().height);
+      // Simulate a narrower panel: shrink the input's column to half width so it wraps more.
       // 模拟面板变窄：把输入框所在列收到一半宽，折行变多。
       await field.evaluate((el) => {
         const column = el.parentElement;

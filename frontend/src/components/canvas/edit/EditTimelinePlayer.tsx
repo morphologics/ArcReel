@@ -27,9 +27,9 @@ interface EditTimelinePlayerProps {
   plan: PlaybackPlan;
   playback: TimelinePlayback;
   aspect: PreviewAspect;
-  /** 当前片段；定格与占位期间同样有值，没有可播放片段时为 undefined。 */
+  /** Current clip; also set during freeze frames and placeholders, undefined when there is no playable clip. / 当前片段；定格与占位期间同样有值，没有可播放片段时为 undefined。 */
   current: EditClip | undefined;
-  /** 视频单元 ID → 它在本集里的当前位置。 */
+  /** Video unit ID → its current position in this episode. / 视频单元 ID → 它在本集里的当前位置。 */
   positions: ReadonlyMap<string, number>;
   trimIgnored: boolean;
   subtitles: readonly PlacedSubtitle[];
@@ -40,8 +40,8 @@ interface EditTimelinePlayerProps {
 }
 
 /**
- * 播放画面与播放控制：两个 `<video>` 叠放，只显示当前那一个；字幕按剪映草稿的样式比例叠在画面上。
- * 画面按所在格子的宽高缩放：舞台是尺寸容器，画框取「容器宽」与「容器高 × 画幅比」中较小的一个。
+ * Playback picture and controls: two stacked `<video>`s, only the current one shown; subtitles are overlaid at the JianYing draft's style proportions. / 播放画面与播放控制：两个 `<video>` 叠放，只显示当前那一个；字幕按剪映草稿的样式比例叠在画面上。
+ * The picture scales to its grid cell: the stage is a size container, and the frame takes the smaller of "container width" and "container height × aspect ratio". / 画面按所在格子的宽高缩放：舞台是尺寸容器，画框取「容器宽」与「容器高 × 画幅比」中较小的一个。
  * The play controls sit over the bottom of the picture (shown while paused, on hover and on keyboard focus)
  * instead of in a row below it, so the picture gets that height too.
  */
@@ -99,12 +99,12 @@ export function EditTimelinePlayer({
           {playback.videoRefs.map((ref, slot) => {
             const visible = showVideo && !playback.streamActive && playback.visibleSlot === slot;
             return (
-              // react-doctor-disable-next-line react-doctor/media-has-caption -- 字幕由剪辑时间线的字幕轨叠加显示，不走 <track>
-              <video // eslint-disable-line jsx-a11y/media-has-caption -- 字幕由字幕轨叠加显示
+              // react-doctor-disable-next-line react-doctor/media-has-caption -- subtitles are overlaid from the edit timeline's subtitle track, not via <track> / 字幕由剪辑时间线的字幕轨叠加显示，不走 <track>
+              <video // eslint-disable-line jsx-a11y/media-has-caption -- subtitles are overlaid by the subtitle track / 字幕由字幕轨叠加显示
                 key={slot}
                 ref={ref}
                 playsInline
-                // 播放过之前只拉元数据与定位处的画面；开始播放后整段缓冲，切换片段才能无缝。A click on the timeline
+                // Before first play, fetch only metadata and the frame at the seek position; once playing, buffer whole clips so switching is seamless. / 播放过之前只拉元数据与定位处的画面；开始播放后整段缓冲，切换片段才能无缝。A click on the timeline
                 // (primed) also buffers the clip there, so the Play that follows doesn't wait for its data
                 preload={playback.started || playback.primed ? "auto" : "metadata"}
                 data-testid={`edit-player-video-${slot}`}
@@ -217,8 +217,8 @@ export function EditTimelinePlayer({
 /** The gapless stream's `<video>` (useTimelinePlayback attaches the stream and drives it); shown only while active. */
 function StreamVideo({ element, active }: { element: RefObject<HTMLVideoElement | null>; active: boolean }) {
   return (
-    // react-doctor-disable-next-line react-doctor/media-has-caption -- 字幕由剪辑时间线的字幕轨叠加显示，不走 <track>
-    <video // eslint-disable-line jsx-a11y/media-has-caption -- 字幕由字幕轨叠加显示
+    // react-doctor-disable-next-line react-doctor/media-has-caption -- subtitles are overlaid from the edit timeline's subtitle track, not via <track> / 字幕由剪辑时间线的字幕轨叠加显示，不走 <track>
+    <video // eslint-disable-line jsx-a11y/media-has-caption -- subtitles are overlaid by the subtitle track / 字幕由字幕轨叠加显示
       ref={element}
       playsInline
       preload="auto"

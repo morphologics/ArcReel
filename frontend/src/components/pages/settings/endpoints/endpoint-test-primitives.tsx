@@ -5,7 +5,7 @@ import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import type { PreviewedRequest } from "@/types";
 
-/** 端点测试的一张卡。`badge` 用于「产生一次调用费用」「占用 GPU」这类代价提示。 */
+/** One card of the endpoint test. `badge` is for cost hints like "incurs one call fee" or "occupies GPU". / 端点测试的一张卡。`badge` 用于「产生一次调用费用」「占用 GPU」这类代价提示。 */
 export function TestCard({
   title,
   badge,
@@ -31,7 +31,7 @@ export function TestCard({
   );
 }
 
-/** 端点测试的一个字段：标签在上，控件在下。`htmlFor` 指向控件的 id。 */
+/** One field of the endpoint test: label above, control below. `htmlFor` points to the control's id. / 端点测试的一个字段：标签在上，控件在下。`htmlFor` 指向控件的 id。 */
 export function TestField({
   label,
   htmlFor,
@@ -57,7 +57,7 @@ export interface TestSelectItem {
   disabled?: boolean;
 }
 
-/** 端点测试的下拉选择：标签与触发器以 `aria-labelledby` 关联，读屏与测试都按标签找到它。 */
+/** Dropdown of the endpoint test: the label and trigger are associated with `aria-labelledby`, so screen readers and tests find it by label. / 端点测试的下拉选择：标签与触发器以 `aria-labelledby` 关联，读屏与测试都按标签找到它。 */
 export function TestSelect({
   label,
   value,
@@ -99,7 +99,7 @@ export function TestSelect({
   );
 }
 
-/** 渲染并脱敏后的一节请求，按它真发出去的样子逐行摆开。长地址与请求体在自身框内滚动，不撑宽页面。 */
+/** One rendered and redacted request section, laid out line by line as it is actually sent. Long URLs and request bodies scroll within their own box and don't widen the page. / 渲染并脱敏后的一节请求，按它真发出去的样子逐行摆开。长地址与请求体在自身框内滚动，不撑宽页面。 */
 export function RequestPreview({ label, request }: { label: string; request: PreviewedRequest }) {
   return (
     <div className="flex min-w-0 flex-col gap-1.5">

@@ -134,6 +134,7 @@ describe("OverviewCanvas", () => {
     expect(screen.getByRole("link", { name: "角色 11/11 · 2 过期" })).toHaveAttribute("href", "/characters");
     expect(screen.getByRole("link", { name: "场景 9/16" })).toHaveAttribute("href", "/scenes");
     expect(screen.getByRole("link", { name: "道具 13/13" })).toHaveAttribute("href", "/props");
+    // Products belong only to ad projects
     // 商品只属于广告项目
     expect(screen.queryByRole("link", { name: /商品/ })).not.toBeInTheDocument();
   });
@@ -187,6 +188,7 @@ describe("OverviewCanvas", () => {
     );
     renderOverview();
 
+    // When no estimate has a price, write the dash; when some calls have no price, still show the priced amount
     // 全部预估都没有价格时写「—」；部分调用没有价格时仍显示已计价的金额
     expect(screen.getByText("预估 —")).toBeInTheDocument();
     expect(screen.getByText("已花 $1.00")).toBeInTheDocument();
@@ -219,15 +221,18 @@ describe("OverviewCanvas", () => {
 
     await user.click(screen.getByRole("button", { name: "明细" }));
     const popover = await screen.findByRole("dialog", { name: "费用明细" });
+    // Take values of the same-named row in estimate, spent column order; if a column lacks the row it does not appear
     // 按预估、已花的列序取同名行的值；某列没有这一行时不出现
     const values = (label: string) =>
       within(popover)
         .getAllByText(label, { selector: "dt" })
         .map((term) => term.nextElementSibling?.textContent);
 
+    // When part of the same type is unpriced, still show the priced amount
     // 同一类型部分没计价时仍显示已计价的金额
     expect(values("分镜")).toEqual(["$2.00", "$4.00"]);
     expect(values("视频")).toEqual(["0", "—"]);
+    // Even when only unpriced voice-over exists, list this row; it must not vanish from the breakdown
     // 只有没计价的配音时也要列出这一行，不能让它从明细里消失
     expect(values("旁白配音")).toEqual(["—"]);
   });
@@ -320,6 +325,7 @@ describe("OverviewCanvas", () => {
       projectData: makeProjectData({ ...EMPTY_PROJECT, whole_source_files: [{ source_file: "source/novel.txt" }] }),
     });
 
+    // Having source text but no story setting yet is not an empty project: show the overview directly; it can be written by hand or generated from the source
     // 有原文但还没有故事设定时不是空项目：直接显示概览，可以手写，也可以从原文生成
     expect(screen.getByRole("textbox", { name: "梗概" })).toHaveValue("");
     await user.click(screen.getByRole("button", { name: "从原文生成" }));
@@ -346,6 +352,7 @@ describe("OverviewCanvas", () => {
     expect(screen.getByRole("status")).toHaveTextContent("正在读取原文…");
     first.unmount();
 
+    // The server kept generating while away: when returning to the overview, keep showing loading
     // 离开期间服务端仍在生成：回到概览时接着显示读取中
     render(withRouter(<StoreOverview />));
     expect(screen.getByRole("status")).toHaveTextContent("正在读取原文…");
@@ -373,6 +380,7 @@ describe("OverviewCanvas", () => {
 
     const alert = await screen.findByRole("alert");
     expect(within(alert).getByRole("link", { name: "去登记最大输出长度" })).toBeInTheDocument();
+    // After failure the field comes back; it can be written by hand or retried
     // 失败后字段回来，可以手写或再试一次
     expect(screen.getByRole("textbox", { name: "梗概" })).toBeInTheDocument();
   });
@@ -387,6 +395,7 @@ describe("OverviewCanvas", () => {
 
     await user.click(screen.getByRole("button", { name: "从原文生成" }));
 
+    // The generation landed on disk but was not fetched: do not report it as a generation failure, nor silently stay on old content, inviting another generation
     // 生成已落盘、只是没取回：不能把它报成生成失败，也不能静默停在旧内容上引人再生成一次
     const alert = await screen.findByRole("alert");
     expect(alert).toHaveTextContent("故事设定已生成，但页面数据刷新失败，请刷新页面查看最新结果。");
@@ -405,6 +414,7 @@ describe("OverviewCanvas", () => {
     await user.click(screen.getByRole("button", { name: "从原文生成" }));
     expect(await screen.findByRole("alert")).toHaveTextContent("页面数据刷新失败");
 
+    // A later reload succeeds (e.g. switching away and back), the data includes the generation result, and the notice no longer hangs
     // 之后重新加载成功（如切走再回来），数据已带上生成结果，提示不再挂着
     act(() => useProjectsStore.getState().setCurrentProject("demo", makeProjectData()));
     expect(screen.queryByText(/页面数据刷新失败/)).not.toBeInTheDocument();
@@ -463,6 +473,7 @@ describe("OverviewCanvas", () => {
       expect(screen.queryByRole("heading", { name: /开始制作/ })).not.toBeInTheDocument();
       expect(screen.getByRole("heading", { level: 1, name: "Demo" })).toBeInTheDocument();
 
+      // Generation completes; the project refresh brings back the story setting
       // 生成完成，项目刷新带回故事设定
       await act(async () => finishGenerate());
 
@@ -492,7 +503,7 @@ describe("OverviewCanvas", () => {
   describe("handoff tip", () => {
     const TIP = "故事设定已提炼完成。接下来在右侧向 Agent 发送「开始制作」。";
 
-    /** 故事设定在本次会话内由空变为有内容。 */
+    /** The story setting went from empty to non-empty within this session. / 故事设定在本次会话内由空变为有内容。 */
     function fillStorySetting(projectName = "demo") {
       const view = renderOverview({
         projectName,
@@ -511,6 +522,7 @@ describe("OverviewCanvas", () => {
       const view = fillStorySetting();
       expect(screen.getByText(TIP).closest("[role=status]")).not.toBeNull();
 
+      // Switch to another view and back (the overview unmounts and remounts): the notice is still there
       // 切到别的视图再回来（概览卸载后重新挂载），提示还在
       view.unmount();
       renderOverview();
@@ -523,6 +535,7 @@ describe("OverviewCanvas", () => {
       await user.click(screen.getByRole("button", { name: "知道了" }));
       expect(screen.queryByText(TIP)).not.toBeInTheDocument();
 
+      // Refresh: the in-memory pending-display state clears; the same project's story setting going from empty to non-empty again no longer notifies
       // 刷新：内存里的待显示状态清空，同一项目的故事设定再次由空变为有内容也不再提示
       view.unmount();
       useHandoffTipStore.setState(useHandoffTipStore.getInitialState(), true);
@@ -547,6 +560,7 @@ describe("OverviewCanvas", () => {
     });
 
     it("appears when the story setting was filled while the overview was away", () => {
+      // Generation continues in the background: empty when leaving the overview, filled when returning
       // 生成在后台继续：离开概览时还是空的，回来时已有内容
       const view = renderOverview({
         projectData: makeProjectData({ overview: undefined, whole_source_files: [{ source_file: "source/a.txt" }] }),
@@ -698,6 +712,7 @@ describe("OverviewCanvas", () => {
       fireEvent.click(within(card).getByRole("radio", { name: "自定义" }));
       fireEvent.click(within(card).getByRole("button", { name: "保存" }));
 
+      // Besides the note inline with the duration option selector, the banner also states why it was not saved
       // 档位选择器行内的说明之外，提示条也写明没有保存的原因
       await waitFor(() => expect(within(card).getAllByText(/目标总时长须为正整数秒/)).toHaveLength(2));
       expect(update).not.toHaveBeenCalled();

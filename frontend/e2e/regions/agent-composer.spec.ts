@@ -4,6 +4,9 @@ import { defineRegionScenarios } from "../support/scenarios.ts";
 import { expect, type ApiOverrides } from "../support/test.ts";
 import { idleSessionApi } from "../support/assistant-session.ts";
 
+// Agent panel input area: the questionnaire when the Agent asks, the todo progress row, the queued-message tray, session history and delete
+// confirmation, the slash command menu, and image attachments in the input. Sessions, questions and queued messages are hand-written stress
+// data: long titles, long options, many sessions, many queued messages.
 // Agent 面板输入区：Agent 提问时的问卷、待办进度行、排队消息托盘、会话历史与删除确认、斜杠命令菜单、
 // 输入框里的图片附件。会话、提问与排队消息都是手写的压力数据：长标题、长选项、多条会话、多条排队消息。
 const EPISODE_PATH = "/app/projects/demo/episodes/1";
@@ -13,6 +16,7 @@ const ASK_SESSION_ID = "session-ask";
 const IDLE_SESSION_ID = "session-0";
 const QUEUE_SESSION_ID = "session-queue";
 
+// A 160x96 two-color checkered PNG, recognizable as an image in the thumbnail.
 // 160×96 的双色方格 PNG，缩略图里看得出是一张图。
 const IMAGE_DATA =
   "iVBORw0KGgoAAAANSUhEUgAAAKAAAABgCAIAAAAVRe7OAAAA+UlEQVR42u3bQQ0AIAwDwKnihQI08EAVeidjYVxSA+29G3vdkox5SvJb3wAMGDBgwIABAwYMGDBgwIABAwYMGDBgwIABAwYMGDBgwIABAwYMGDBgwIABAwYMGDBgwIABAwYMGDBgwIABAwbcCtjQvfsCBgwYMGDAgAEDBgwYMGDAgAEDBgwYMGDAgAEDBgwYMGDAgAEDBgwYMGDAgAEDBgwYMGDAgAEDBgwYMGDAgAED7gVsaA9/wIABAwYMGDBgwIABAwYMGDBgwIABAwYMGDBgwIABAwYMGDBgwIABAwYMGDBgwIABAwYMGDBgwIABAwYMGDBgwM/0TQmWp5SVOq3vAAAAAElFTkSuQmCC";
@@ -66,6 +70,7 @@ function buildEntries(): Entry[] {
   return entries;
 }
 
+// The Agent's question: one single-choice and one multi-choice, with long option descriptions.
 // Agent 的提问：一道单选、一道多选，选项带长说明。
 const QUESTION = {
   question_id: "q-opening",
@@ -93,6 +98,7 @@ const QUESTION = {
   ],
 };
 
+/** Timeline and questions of the running session are replayed from the entry stream; retry lengthens the reconnect interval to avoid repeated replays during the test. */
 /** running 会话的时间线与提问都从 entry 流回放；retry 拉长重连间隔，避免测试期间反复重放。 */
 function buildStream(): string {
   const lines = ["retry: 30000", ""];
@@ -103,6 +109,7 @@ function buildStream(): string {
   return lines.join("\n");
 }
 
+// 20 messages sent while a reply is in progress: alternating long and short, the long ones fill two lines and truncate.
 // 回复进行中连发 20 条：长短交替，长的占满两行截断。
 const QUEUED_MESSAGES = Array.from({ length: 20 }, (_, index) => ({
   id: `queued-${index + 1}`,
@@ -119,6 +126,7 @@ const QUEUED_MESSAGES = Array.from({ length: 20 }, (_, index) => ({
   state: "queued",
 }));
 
+/** Running session: timeline replayed from the entry stream, the opening queued-message snapshot holds 20 messages; with `withQuestion` the Agent is also asking. */
 /** running 会话：时间线从 entry 流回放，开场的排队消息快照里有 20 条消息；`withQuestion` 时 Agent 同时在提问。 */
 function buildQueueStream(withQuestion = false): string {
   const lines = ["retry: 30000", ""];
@@ -142,6 +150,7 @@ function session(id: string, title: string, status: string, updatedAt: string) {
   return { id, project_name: "demo", title, status, created_at: "2026-01-01T05:00:00.000Z", updated_at: updatedAt };
 }
 
+// The project event stream is SSE, not recorded; reject with a non-retryable status so the page stays on the recorded project data.
 // 项目事件流是 SSE，没有录制；按不可重试的状态拒绝，页面停在录制的项目数据上。
 const EVENTS_STREAM: ApiOverrides = {
   "GET /api/v1/projects/demo/events/stream": { status: 404, body: { detail: "页面级套件不回放事件流" } },
@@ -241,6 +250,7 @@ defineRegionScenarios("Agent 输入区", [
     act: async (page) => {
       await expect(agentInput(page)).toBeHidden();
       await expect(questionnaire(page).getByRole("radio", { name: /雨夜城墙远景/ })).toBeVisible();
+      // The Agent's built-in "Other" is replaced by a free-text input
       // Agent 自带的「其他」由自由输入框代替
       await expect(questionnaire(page).getByRole("radio", { name: "其他" })).toHaveCount(0);
     },

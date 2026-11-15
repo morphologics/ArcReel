@@ -22,7 +22,7 @@ function prettyText(text: string, name: string): string {
   }
 }
 
-/** 选中文件的预览：图片、视频、音频与文本（含 JSON）经鉴权接口取回内容，其余类型与过大的文本只提供下载。 */
+/** Preview of the selected file: images, video, audio and text (including JSON) are fetched via the authenticated endpoint; other types and oversized text offer download only. / 选中文件的预览：图片、视频、音频与文本（含 JSON）经鉴权接口取回内容，其余类型与过大的文本只提供下载。 */
 export function FilePreview({ projectName, entry }: { projectName: string; entry: FileViewEntry }) {
   const { t } = useTranslation("dashboard");
   const kind = previewKind(entry.name);
@@ -63,7 +63,7 @@ export function FilePreview({ projectName, entry }: { projectName: string; entry
   if (state.status === "text") {
     return (
       <pre
-        // eslint-disable-next-line jsx-a11y/no-noninteractive-tabindex -- 只读长文本，须能用键盘聚焦后滚动
+        // eslint-disable-next-line jsx-a11y/no-noninteractive-tabindex -- read-only long text must be keyboard-focusable to scroll / 只读长文本，须能用键盘聚焦后滚动
         tabIndex={0}
         aria-label={label}
         className="focus-ring rounded-md border border-border bg-muted/40 p-3 font-mono text-xs whitespace-pre-wrap wrap-break-word"
@@ -74,9 +74,9 @@ export function FilePreview({ projectName, entry }: { projectName: string; entry
   }
   if (kind === "image") return <img src={state.url} alt={label} className="max-h-120 max-w-full rounded-md border border-border object-contain" />;
   if (kind === "video") {
-    // eslint-disable-next-line jsx-a11y/media-has-caption -- 项目里的生成视频没有字幕轨，预览只用于确认内容
+    // eslint-disable-next-line jsx-a11y/media-has-caption -- generated videos in the project have no caption track; the preview is only for checking content / 项目里的生成视频没有字幕轨，预览只用于确认内容
     return <video src={state.url} controls aria-label={label} className="max-h-120 max-w-full rounded-md border border-border" />;
   }
-  // eslint-disable-next-line jsx-a11y/media-has-caption -- 同上：音频预览没有字幕轨
+  // eslint-disable-next-line jsx-a11y/media-has-caption -- same as above: audio previews have no caption track / 同上：音频预览没有字幕轨
   return <audio src={state.url} controls aria-label={label} className="w-full" />;
 }

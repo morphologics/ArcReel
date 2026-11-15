@@ -31,6 +31,8 @@ describe("cost-store", () => {
     await useCostStore.getState().fetchCost("real-project");
     expect(useCostStore.getState().costData).not.toBeNull();
 
+    // Switch to the demo project: debouncedFetch has an internal 500ms debounce, but demo state must clear immediately,
+    // so the UI does not keep reading the previous real project's cost cache during the debounce window.
     // 切到演示项目：debouncedFetch 内部有 500ms 防抖，但演示态必须立即清空，
     // 不能让 UI 在防抖窗口期间继续读到上一个真实项目的费用缓存。
     useCostStore.getState().debouncedFetch(DEMO_PROJECT_NAME);
@@ -41,12 +43,16 @@ describe("cost-store", () => {
   });
 
   it("discards a late successful response whose fetchCost call fires after the user already switched projects", async () => {
+    // project-b lands completely first: simulates the user having switched away, with B's own cost request already written.
     // project-b 先完整落地：模拟用户已经切走，且 B 自己的费用请求已经完成写入。
     useProjectsStore.setState({ currentProjectName: "project-b" });
     vi.spyOn(API, "getCostEstimate").mockResolvedValueOnce(buildResponse("project-b"));
     await useCostStore.getState().fetchCost("project-b");
     expect(useCostStore.getState().costData?.project_name).toBe("project-b");
 
+    // A slow PATCH's .then callback in the project-a page fires only after the user has left, only then calling
+    // fetchCost("project-a"); no later call aborts it, so only checking the current
+    // project name on landing can stop it.
     // project-a 页面里某个慢 PATCH 的 .then 回调在用户已经离开之后才触发，此时才发起
     // fetchCost("project-a")——没有任何后续调用去 abort 它，只能靠落地时校验当前
     // 项目名才能拦下。
@@ -66,6 +72,8 @@ describe("cost-store", () => {
     vi.spyOn(API, "getCostEstimate").mockRejectedValueOnce(new Error("boom"));
     await useCostStore.getState().fetchCost("project-a");
 
+    // It should not write error back into the store (the user is long gone from that project, and there is no point reporting an error for a project
+    // already left), nor interrupt a loading that has already finished.
     // 不应该把 error 写回 store（用户早已不在那个项目上，没有意义提示一个已经离开
     // 的项目的错误），也不应打断已经收尾的 loading。
     expect(useCostStore.getState().error).toBeNull();
@@ -78,9 +86,12 @@ describe("cost-store", () => {
     useProjectsStore.setState({ currentProjectName: "project-b" });
     const fetchCostSpy = vi.spyOn(useCostStore.getState(), "fetchCost").mockResolvedValue();
 
+    // project-b scheduled a debounced refresh.
     // project-b 排了一次防抖刷新。
     useCostStore.getState().debouncedFetch("project-b");
 
+    // project-a's call fires only after the user has left (e.g. a slow PATCH's .then callback),
+    // and should not clear/replace the timer project-b just scheduled.
     // project-a 的调用在用户已经离开之后才触发（比如某个慢 PATCH 的 .then 回调），
     // 不应清空/顶替 project-b 刚排的计时器。
     useCostStore.getState().debouncedFetch("project-a");
@@ -92,6 +103,7 @@ describe("cost-store", () => {
   });
 
   it("does not abort the current project's in-flight request when a stale project's fetchCost fires late", async () => {
+    // project-b's request starts first and stays pending (simulating still awaiting the response).
     // project-b 的请求先发起且保持 pending（模拟仍在等待响应）。
     useProjectsStore.setState({ currentProjectName: "project-b" });
     let releaseB: (data: CostEstimateResponse) => void = () => {};
@@ -108,6 +120,8 @@ describe("cost-store", () => {
 
     const bPromise = useCostStore.getState().fetchCost("project-b");
 
+    // project-a's call fires only after the user has left (e.g. a slow PATCH's .then callback),
+    // and should not abort project-b's legitimately ongoing request; this is a different matter from "superseding an in-flight request of the same project".
     // project-a 的调用在用户已经离开之后才触发（比如某个慢 PATCH 的 .then 回调），
     // 不应中止仍在合法进行中的 project-b 请求——这与"顶替同项目在途请求"是两回事。
     await useCostStore.getState().fetchCost("project-a");
@@ -140,6 +154,8 @@ describe("cost-store", () => {
     const second = useCostStore.getState().fetchCost("project-a");
     await second;
 
+    // Superseded by a later call within the same project: the signal must really abort (cancelling the network request),
+    // and the superseded one does not write back to the store even if its response arrives late.
     // 同一项目内被更晚的调用顶替：signal 要真的 abort（网络请求随之取消），
     // 且被顶替的那次即便响应晚到也不回写 store。
     expect(signals[0]?.aborted).toBe(true);

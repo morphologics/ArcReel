@@ -7,6 +7,11 @@ export interface GridLayout {
 }
 
 /**
+ * Option ladder, matching _GRID_LADDER in the backend lib/script/grid/layout.py item for item:
+ * all N×N square splits, so each cell's ratio always equals the whole image's ratio (i.e. the project video ratio).
+ * Which options are available is decided by the cell-count cap, taken from the backend /grid-capability max_cell_count
+ * (the 4K gate can only be decided via provider resolution; the frontend doesn't infer resolution tiers itself).
+ *
  * 档位阶梯，与后端 lib/script/grid/layout.py 的 _GRID_LADDER 逐项对应:
  * 全部为 N×N 平方切分,单格比例恒等于整图比例(即项目视频比例)。
  * 哪几档可用由格数上限决定,上限取自后端 /grid-capability 的 max_cell_count
@@ -19,7 +24,7 @@ const GRID_LADDER = [
   { cellCount: 25, gridSize: "grid_25", side: 5 },
 ] as const;
 
-/** 拿不到后端上限时按门控生效展示(封顶 3×3),宁可少算批次也不虚报 */
+/** Without the backend cap, display as if the gate is in effect (capped at 3×3); better to undercount batches than overstate / 拿不到后端上限时按门控生效展示(封顶 3×3),宁可少算批次也不虚报 */
 const FALLBACK_MAX_CELL_COUNT = 9;
 
 interface GridMatchRecord {
@@ -30,6 +35,12 @@ interface GridMatchRecord {
 }
 
 /**
+ * Find the matching grid for each block of the group under the current layout, consistent with the backend grid_submission judgment:
+ * the group is split into blocks in computeGridSize's cell-count order; a grid counts as a block's grid only if its scene_ids match that block item for item
+ * (including order); if a block was generated several times, take the one with the latest created_at.
+ * After segment breaks, shot order or additions/removals within the group change the blocks, old grids match no block, and that block shows as not generated.
+ * The return value follows block order; blocks without a grid take no slot.
+ *
  * 按当前布局为分组的每一块找到对应的宫格，与后端 grid_submission 的判定一致：
  * 分组按 computeGridSize 的格数顺序切块，一张宫格只有 scene_ids 与某一块逐项相同
  * （含顺序）才算这一块的宫格，同一块多次生成取 created_at 最新的一张。

@@ -4,6 +4,11 @@ import { PromptTemplateDetailView } from "./PromptTemplateDetailView";
 import { PromptTemplateList } from "./PromptTemplateList";
 
 /**
+ * System settings › Prompt templates: read-only browsing of templates built into the release.
+ *
+ * The current view is decided by query parameters, alongside `section`: `partial` takes priority over `template`; when both are absent the list is shown.
+ * Every open or return pushes a history entry, so browser back/forward and refresh stay on the corresponding detail.
+ *
  * 系统设置 › 提示词模版：只读浏览随版本内置的模版。
  *
  * 当前视图由查询参数决定，与 `section` 并列：`partial` 优先于 `template`，都缺省时显示列表。

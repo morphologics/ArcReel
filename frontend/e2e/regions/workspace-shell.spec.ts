@@ -5,9 +5,11 @@ import { defineRegionScenarios } from "../support/scenarios.ts";
 import { RECORDED_DIR, type RecordedResponse } from "../support/recorded.ts";
 import { expect, type ApiOverrides } from "../support/test.ts";
 
+// Project workspace shell: split between header, sidebar, canvas area and Agent panel; checks width allocation, open/close and resizing at each viewport tier.
 // 项目工作区外壳：顶栏、侧栏、画布区与 Agent 面板的分栏，验证各档视口下的宽度分配、开合与调宽。
 const EPISODE_PATH = "/app/projects/demo/episodes/1";
 const CHARACTERS_PATH = "/app/projects/demo/characters";
+// The project event stream is SSE and was not recorded; reject it with a non-retryable status so the page stays on the recorded project data.
 // 项目事件流是 SSE，没有录制；按不可重试的状态拒绝，页面停在录制的项目数据上。
 const API: ApiOverrides = {
   "GET /api/v1/projects/demo/events/stream": { status: 404, body: { detail: "页面级套件不回放事件流" } },
@@ -17,6 +19,7 @@ interface RecordedProject {
   project: { episodes: Record<string, unknown>[] };
 }
 
+// Many episodes with very long titles: both the sidebar list and the icon rail must scroll within their own area.
 // 多集且标题很长：侧栏列表与图标栏都要在自己的区域里滚动。
 const recordedProject = (
   JSON.parse(readFileSync(join(RECORDED_DIR, "project-demo.json"), "utf8")) as RecordedResponse
@@ -41,6 +44,7 @@ const MANY_EPISODES: ApiOverrides = {
   },
 };
 
+// The boundary between standard and compact tiers, matching the shell's media query.
 // 标准档与紧凑档的分界，与外壳的媒体查询一致。
 const STANDARD_TIER_MIN_WIDTH = 1280;
 const SIDEBAR_RAIL = 56;
@@ -50,6 +54,7 @@ const AGENT_MAX = 640;
 const CANVAS_MIN = 480;
 const STEP = 16;
 
+// Each line folds into several lines in the panel, reaching the cap even at the largest viewport.
 // 每行都会在面板里折成几行，最大的视口下也能撑到上限。
 const NINE_LINES = Array.from(
   { length: 9 },
@@ -65,6 +70,7 @@ const agentInput = (page: Page) => page.getByRole("combobox", { name: "Agent 输
 const sidebarHandle = (page: Page) => page.getByRole("separator", { name: "调整侧栏宽度（双击恢复默认）" });
 const agentHandle = (page: Page) => page.getByRole("separator", { name: "调整 Agent 面板宽度（双击恢复默认）" });
 
+/** Double-click on the handle's center line. The handle is only 1px wide; the panel library hit-tests by geometry, and the element itself may be covered by the adjacent panel. */
 /** 在手柄中线上双击。手柄只有 1px 宽，命中区由面板库按几何位置判断，元素本身可能被相邻面板盖住。 */
 async function doubleClickHandle(page: Page, handle: Locator) {
   const rect = await box(handle);
@@ -95,9 +101,11 @@ async function episodeReady(page: Page) {
   await page.getByRole("button", { name: "添加一集" }).waitFor();
 }
 
+/** Standard tier: the Agent panel squeezes the canvas; compact tier: the canvas fills the area right of the sidebar and the Agent panel overlays the canvas's right side. */
 /** 标准档：Agent 面板挤压画布；紧凑档：画布占满侧栏右侧，Agent 面板盖在画布右侧。 */
 async function expectAgentLayout(page: Page, agentWidth: number) {
   const { width: viewportWidth } = viewport(page);
+  // The width covered by the overlay is written back to the canvas by the panel's resize observer on the next frame; wait for layout to settle before measuring
   // 覆盖层盖住的宽度由面板的尺寸观察在下一帧写回画布，量之前等布局稳定
   await expect.poll(() => width(agentPanel(page))).toBeCloseTo(agentWidth, 0);
   const agent = await box(agentPanel(page));
@@ -111,6 +119,7 @@ async function expectAgentLayout(page: Page, agentWidth: number) {
     return [Math.round(rect.x), Math.round(rect.x + rect.width)];
   };
   if (viewportWidth >= STANDARD_TIER_MIN_WIDTH) {
+    // The canvas sits between the sidebar and the Agent panel, with a 1px divider on each side
     // 画布夹在侧栏与 Agent 面板之间，两侧各有 1px 的分隔线
     await expect.poll(canvasEdges).toEqual([Math.round((await sidebarRight()) + 1), Math.round(agent.x - 1)]);
   } else {
@@ -118,6 +127,7 @@ async function expectAgentLayout(page: Page, agentWidth: number) {
   }
 }
 
+/** Once it reaches the cap the overflow scrolls internally; the cap is 40% of the Agent panel height. */
 /** 撑到上限后超出部分在内部滚动；上限是 Agent 面板高度的 40%。 */
 async function expectInputCapped(page: Page) {
   const panelHeight = (await box(agentPanel(page))).height;
@@ -143,6 +153,7 @@ defineRegionScenarios("项目工作区外壳", [
       await expect(agentToggle(page)).toHaveAttribute("aria-pressed", "true");
       await expectAgentLayout(page, AGENT_DEFAULT);
       if (viewport(page).width === 1440) {
+        // 1440 wide: 56 + 1 + canvas + 1 + 420
         // 1440 宽：56 + 1 + 画布 + 1 + 420
         expect(await width(canvas(page))).toBeCloseTo(962, 0);
       }
@@ -155,6 +166,7 @@ defineRegionScenarios("项目工作区外壳", [
     api: MANY_EPISODES,
     ready: async (page) => {
       await shellReady(page);
+      // When the sidebar is expanded these are list items; when collapsed to the icon rail they are links with names
       // 侧栏展开时是列表项，收为图标栏时是带名称的链接
       const lastEpisode = { name: /第 40 集/ };
       await page.getByRole("button", lastEpisode).or(page.getByRole("link", lastEpisode)).first().waitFor({ state: "attached" });
@@ -190,6 +202,7 @@ defineRegionScenarios("项目工作区外壳", [
     ready: episodeReady,
     act: async (page) => {
       await page.setViewportSize({ width: 1100, height: 700 });
+      // Wait for the shell to switch to the compact tier: the canvas extends under the Agent panel
       // 等外壳切到紧凑档：画布伸到 Agent 面板底下
       await expect.poll(() => width(canvas(page))).toBeCloseTo(1100 - SIDEBAR_RAIL - 1, 0);
       await agentInput(page).focus();
@@ -213,6 +226,7 @@ defineRegionScenarios("项目工作区外壳", [
       await agentToggle(page).click();
       await expect(agentToggle(page)).toHaveAttribute("aria-pressed", "true");
       await expectAgentLayout(page, AGENT_DEFAULT);
+      // Finally probe in the collapsed state: no clipped content even when the canvas fills the space
       // 最终在收起状态下探测：画布占满时也没有被裁切的内容
       await agentToggle(page).click();
     },
@@ -223,6 +237,7 @@ defineRegionScenarios("项目工作区外壳", [
     api: API,
     ready: shellReady,
     act: async (page) => {
+      // The Agent panel is on the right: widen to the left
       // Agent 面板在右侧：向左变宽
       await agentHandle(page).focus();
       await page.keyboard.press("ArrowLeft");
@@ -233,8 +248,10 @@ defineRegionScenarios("项目工作区外壳", [
       await doubleClickHandle(page, agentHandle(page));
       await expect.poll(() => width(agentPanel(page))).toBeCloseTo(AGENT_DEFAULT, 0);
 
+      // In the compact tier the sidebar collapses to an icon rail and the handle is unavailable
       // 紧凑档侧栏收为图标栏，手柄不可用
       if (viewport(page).width < STANDARD_TIER_MIN_WIDTH) return;
+      // The sidebar is on the left: widen to the right
       // 侧栏在左侧：向右变宽
       await sidebarHandle(page).focus();
       await page.keyboard.press("ArrowRight");

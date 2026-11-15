@@ -3,6 +3,11 @@ import { createPortal } from "react-dom";
 import { cn } from "cn";
 
 /**
+ * Container tiers of the content area.
+ * - `constrained`: content column max 760px, left-aligned; the shell body scrolls and provides padding. For forms and settings.
+ * - `full`: no cap; the shell body scrolls and provides padding. For lists, grids and tables.
+ * - `bleed` (full-bleed): the shell body does not scroll and adds no padding; the section fills the height and splits into its own columns, each scrolling on its own. For master-detail layouts and editors.
+ *
  * 内容区的容器档位。
  * - `constrained`（限宽）：内容列最大 760px、靠左，外壳主体滚动并提供内边距。用于表单与设置。
  * - `full`（铺满）：不设上限，外壳主体滚动并提供内边距。用于列表、网格与表格。
@@ -18,15 +23,25 @@ interface FooterSlot {
 const FooterSlotContext = createContext<FooterSlot | null>(null);
 
 interface PageShellProps {
-  /** 顶栏，传 `PageHeader`。 */
+  /** Top bar; pass `PageHeader`. / 顶栏，传 `PageHeader`。 */
   header: ReactNode;
-  /** 侧栏，传 `PageSidebar`；项目大厅、资产库这类单视图页面不传。 */
+  /** Sidebar; pass `PageSidebar`; single-view pages such as the project lobby and asset library omit it. / 侧栏，传 `PageSidebar`；项目大厅、资产库这类单视图页面不传。 */
   sidebar?: ReactNode;
   tier: ContainerTier;
   children: ReactNode;
 }
 
 /**
+ * Page shell shared by global settings, project settings, the project lobby and the asset library: the top bar spans the full width, the sidebar hugs the left, the content column sits left against the sidebar,
+ * and extra space on wide windows stays on the right. The shell root fills the viewport height and the document itself does not scroll; scrolling only happens in the sidebar, the shell body
+ * (constrained and full tiers) or the columns of a full-bleed section.
+ *
+ * The shell is the only place that switches between standard and compact tiers by viewport (`xl`, 1280): sidebar 224 / 200px, content padding 32 / 24px.
+ * The content column is a size container named `page`; inside sections, container queries like `@md/page:` respond to its width.
+ *
+ * The constrained and full tiers have a fixed save-bar row below the body, which sections render into with `PageShellFooter`;
+ * the row is hidden when no section renders a save bar. The full-bleed tier has no such row; the save bar sits at the bottom of the section's own detail pane.
+ *
  * 全局设置、项目设置、项目大厅与资产库共用的页面外壳：顶栏横跨全宽，侧栏贴左，内容列紧贴侧栏靠左，
  * 宽窗口多出的空白留在右侧。外壳根节点占满视口高度，文档本身不滚动；滚动只发生在侧栏、外壳主体
  * （限宽与铺满档）或全出血区段的各栏里。
@@ -45,6 +60,8 @@ export function PageShell({ header, sidebar, tier, children }: PageShellProps) {
   );
 
   return (
+    // The shell root and each scroll container are positioned elements: absolutely positioned children such as sr-only use them as containing block,
+    // so they do not escape the scroll container and stretch the document.
     // 外壳根节点与各滚动容器都是定位元素：sr-only 等绝对定位的子元素以它们为包含块，
     // 不会逃出滚动容器把文档撑高。
     <div className="relative flex h-dvh flex-col overflow-hidden text-foreground">
@@ -66,7 +83,7 @@ export function PageShell({ header, sidebar, tier, children }: PageShellProps) {
             )}
           </FooterSlotContext.Provider>
           {tier !== "bleed" && (
-            // 区段经 PageShellFooter 渲染进来；没有内容时整行隐藏。
+            // Sections render in via PageShellFooter; the whole row is hidden when empty. / 区段经 PageShellFooter 渲染进来；没有内容时整行隐藏。
             <div
               ref={setFooterElement}
               className="shrink-0 border-t border-border bg-card px-6 py-3 empty:hidden xl:px-8"
@@ -79,6 +96,10 @@ export function PageShell({ header, sidebar, tier, children }: PageShellProps) {
 }
 
 /**
+ * Render the save bar into the shell's fixed bottom row: it does not scroll with the body, and the inner layer has the same width and start as the content column.
+ * If a form in the full tier caps itself at 760px, pass `constrained` so the save bar matches the form column width.
+ * When not inside a shell (e.g. a unit test rendering a section directly) or in the full-bleed tier, render in place.
+ *
  * 把保存栏渲染进外壳的固定底行：不随主体滚动，内层与内容列同宽、同起点。
  * 铺满档里的表单若自己限宽到 760px，传 `constrained`，保存栏与表单列同宽。
  * 不在外壳里（如单测直接渲染区段）或处于全出血档时，原地渲染。

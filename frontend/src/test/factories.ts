@@ -35,7 +35,7 @@ export function makeTask(overrides: Partial<TaskItem> = {}): TaskItem {
   };
 }
 
-/** 一个最小可用的计划步骤；各用例只覆盖自己关心的轴。 */
+/** A minimal usable plan step; each test overrides only the axes it cares about. / 一个最小可用的计划步骤；各用例只覆盖自己关心的轴。 */
 export function makeStep(overrides: Partial<WorkflowPlanStep> = {}): WorkflowPlanStep {
   return {
     id: "video",
@@ -52,6 +52,7 @@ export function makeStep(overrides: Partial<WorkflowPlanStep> = {}): WorkflowPla
   };
 }
 
+/** An episode's content state; defaults to having episode source text, 2 formal script items, all prompts written, no drafts or reminders. */
 /** 一集的内容现状；缺省是有集原文、正式脚本 2 条、提示词都已编写、没有草稿与提醒。 */
 export function makeContent(overrides: Partial<WorkflowContent> = {}): WorkflowContent {
   return {
@@ -115,6 +116,7 @@ export function makePlan(overrides: Partial<WorkflowPlan> = {}): WorkflowPlan {
   };
 }
 
+/** One narration shot; by default both prompts are in text form, and tests override them to structured or pending (null) as needed. */
 /** 一条旁白分镜；默认两侧提示词都是文本形态，各用例按需覆盖为结构化或待编写（null）。 */
 export function makeNarrationSegment(overrides: Partial<NarrationSegment> = {}): NarrationSegment {
   return {
@@ -132,6 +134,7 @@ export function makeNarrationSegment(overrides: Partial<NarrationSegment> = {}):
   };
 }
 
+/** Shared builder for the server's per-unit bucket verdict; defaults to a unit without references that lands in i2v, overridden per scenario. */
 /** 服务端逐单元定桶结论的共享构造器；缺省是无引用、落 i2v 的单元，各场景按需覆盖。 */
 export function makeReferenceUnitCapability(
   unitId: string,
@@ -154,7 +157,7 @@ export function makeReferenceUnitCapability(
   };
 }
 
-/** 覆盖清单条目的共享构造器；缺省是名下没有任何产物的条目。 */
+/** Shared builder for a coverage list entry; defaults to an entry with no artifacts under it. / 覆盖清单条目的共享构造器；缺省是名下没有任何产物的条目。 */
 export function makeScriptOverwriteEntry(
   id: string,
   overrides: Partial<ScriptOverwriteEntry> = {},
@@ -170,6 +173,7 @@ export function makeScriptOverwriteEntry(
   };
 }
 
+/** Shared builder for the coverage list; `text` is the server-rendered missing list, shown as-is in the confirm dialog. */
 /** 覆盖清单的共享构造器；`text` 是服务端渲染好的丢失清单，确认框原样呈现。 */
 export function makeScriptOverwrite(overrides: Partial<ScriptOverwrite> = {}): ScriptOverwrite {
   return {

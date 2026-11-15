@@ -4,6 +4,12 @@ import { useActiveResourceIds } from "@/stores/tasks-store";
 import type { CharacterDerivativeStatus } from "@/types";
 
 /**
+ * Fetch the sheets and stale flags of all derivatives under one character.
+ *
+ * Staleness is a comparison of the artifact manifest against canonical state (read files, compute fingerprints), not sent with project data; no request when there are no derivatives. Re-read when `revision` changes (the registration or base-look image
+ * changed), when the busy count of derivative generation tasks changes (a task just finished), or when `refresh` is called. The previous in-flight request is
+ * cancelled via AbortSignal, and on failure the previous value is kept: a temporarily outdated stale flag beats flashing back to "no image".
+ *
  * 拉取一个角色名下全部衍生的资产图与过期标记。
  *
  * 过期是产物清单与规范状态的一次比对（读文件、算指纹），不随项目数据下发；没有衍生时不请求。`revision` 变化（登记或本体图
@@ -29,7 +35,7 @@ export function useCharacterDerivativeSheets(
         if (!controller.signal.aborted) setStatuses(res.derivatives ?? {});
       })
       .catch(() => {
-        /* 读取失败（含被作废）保留上一次的状态，衍生的登记与写入不受影响 */
+        /* A read failure (including cancellation) keeps the previous state; derivative registration and writes are unaffected / 读取失败（含被作废）保留上一次的状态，衍生的登记与写入不受影响 */
       });
     return () => controller.abort();
   }, [enabled, projectName, characterName, revision, activeCount, reloadToken]);

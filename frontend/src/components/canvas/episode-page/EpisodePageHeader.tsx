@@ -10,6 +10,9 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { episodeViewTabId, type EpisodeView, type EpisodeViewTab } from "./episode-view";
 
 /**
+ * Disabled view tab: currently only appears when there is no final script yet (shots, multi-grid storyboard); hover and screen readers both say "Available after the script is generated".
+ * A disabled tab receives no pointer events, so the tooltip hangs on the outer element; arrow keys can still focus it, and the tooltip also shows on focus.
+ *
  * 置灰的视图 tab：目前只在还没有正式脚本时出现（分镜、多宫格分镜图），悬停与读屏都说明「脚本生成后可用」。
  * 置灰的 tab 不接收指针事件，提示挂在外层；方向键仍能聚焦到它，焦点进入时同样显示提示。
  */
@@ -32,6 +35,9 @@ function DisabledViewTab({ view, label }: { view: EpisodeView; label: string }) 
 }
 
 /**
+ * Episode page header, about 85px across two rows: the first row is the episode head with the workflow progress entry at the end, the second is the view tabs and the current view's action slot.
+ * Each view puts its actions into the slot via `EpisodeHeaderActions`; the header does not know the specific actions.
+ *
  * 集页页头，两行共约 85px：第一行是集头与行尾的制作进度入口，第二行是视图 tab 与当前视图的动作插槽。
  * 动作由各视图经 `EpisodeHeaderActions` 放进插槽，页头不认识具体动作。
  * `compact`: one 44px row (head, view tabs, action slot, progress) for views that need the height for
@@ -49,12 +55,12 @@ export function EpisodePageHeader({
   focus = null,
 }: {
   head: ReactNode;
-  /** 制作进度入口；演示项目没有。 */
+  /** Workflow progress entry; demo projects have none. / 制作进度入口；演示项目没有。 */
   progress: ReactNode;
   tabs: EpisodeViewTab[];
   view: EpisodeView;
   onViewChange: (view: EpisodeView) => void;
-  /** 「分镜」tab 的名称：参考生视频项目称「视频单元」。 */
+  /** Name of the "Shots" tab: reference-to-video projects call it "Video units". / 「分镜」tab 的名称：参考生视频项目称「视频单元」。 */
   boardLabel: string;
   onActionsSlot: (node: HTMLDivElement | null) => void;
   /** One row instead of two (see above). */
@@ -139,7 +145,7 @@ export function EpisodePageHeader({
         {progress}
       </div>
       <div className="flex h-10 items-center gap-3 px-4">
-        {/* 动作多到放不下时横向滚动；插槽靠右，溢出时从左端开始滚，不裁掉第一个动作。 */}
+        {/* When there are too many actions to fit, scroll horizontally; the slot is right-aligned, and on overflow it scrolls from the left end without clipping the first action. / 动作多到放不下时横向滚动；插槽靠右，溢出时从左端开始滚，不裁掉第一个动作。 */}
         <div className="relative flex min-w-0 flex-1 overflow-x-auto">
           <div ref={onActionsSlot} className="ml-auto flex shrink-0 items-center gap-1.5" />
         </div>

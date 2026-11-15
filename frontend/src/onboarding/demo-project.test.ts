@@ -11,6 +11,7 @@ import {
 
 const t = i18n.getFixedT("zh", "onboarding");
 
+/** Image fields are all data URIs computed on the fly; no binary placeholder images land in the repo. */
 /** 图片字段一律是现算的 data URI —— 仓库里不落任何二进制占位图。 */
 function expectInlinePlaceholder(value: string | null | undefined): void {
   expect(value).toMatch(/^data:image\/svg\+xml/);
@@ -18,6 +19,7 @@ function expectInlinePlaceholder(value: string | null | undefined): void {
 
 describe("demo project data", () => {
   it("names the demo project something the backend can never accept", () => {
+    // The backend PROJECT_NAME_PATTERN is ^[A-Za-z0-9-]+$: the underscore makes a real project with the same name impossible
     // 后端 PROJECT_NAME_PATTERN 是 ^[A-Za-z0-9-]+$：下划线让同名真实项目无法存在
     expect(DEMO_PROJECT_NAME).toContain("_");
     expect(isDemoProject(DEMO_PROJECT_NAME)).toBe(true);
@@ -44,6 +46,8 @@ describe("demo project data", () => {
     const summary = data.status?.episodes_summary;
     const count = (status: string) =>
       data.episodes.filter((e) => e.status === status).length;
+    // scripted counts episodes "with a generated script" (matching the script_status rule of lib/workflow/workflow_state.py),
+    // not episodes whose status field literally equals "scripted"; episodes without a script can only ever be draft
     // scripted 统计的是"有生成剧本"的分集数（对齐 lib/workflow/workflow_state.py 的 script_status
     // 口径），不是 status 字段字面等于 "scripted" 的分集数——没剧本的分集永远只能是 draft
     const scriptedCount = data.episodes.filter((e) => e.script_file !== "").length;
@@ -84,6 +88,7 @@ describe("demo project data", () => {
     const data = buildDemoProjectData(t);
     const text = JSON.stringify([data, buildDemoScripts(t)]);
 
+    // Missing keys are echoed back verbatim by i18next, so one sweep finds untranslated fields
     // 未命中的 key 会被 i18next 原样回显，扫一遍就能发现漏翻的字段
     expect(text).not.toMatch(/demo_(overview|episode|character|scene|prop|shot)_/);
   });

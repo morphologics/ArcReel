@@ -19,6 +19,8 @@ import { AssetThumb } from "./AssetThumb";
 export type AssetCardAction = "open" | "edit" | "apply" | "delete";
 
 /**
+ * Asset library card: the whole card is clickable and opens details; the "More" menu is always shown, not hover-dependent, offering edit, apply to project and delete.
+ *
  * 资产库卡片：整张卡片可点，打开详情；「更多」菜单常驻，不依赖悬停，提供编辑、应用到项目与删除。
  */
 export const AssetCard = memo(function AssetCard({
@@ -26,7 +28,7 @@ export const AssetCard = memo(function AssetCard({
   onAction,
 }: {
   asset: Asset;
-  /** 需传稳定引用。 */
+  /** Must be a stable reference. / 需传稳定引用。 */
   onAction: (action: AssetCardAction, asset: Asset) => void;
 }) {
   const { t } = useTranslation("assets");
@@ -47,7 +49,7 @@ export const AssetCard = memo(function AssetCard({
       <div className="flex min-w-0 flex-1 flex-col gap-1 p-3 pt-2.5">
         <div className="flex min-w-0 items-center gap-1">
           <h3 id={titleId} className="min-w-0 flex-1 text-sm font-medium">
-            {/* 名称按钮的伪元素铺满整张卡片，点卡片任意处都打开详情；「更多」在 DOM 中靠后、自身定位，盖在它上面。 */}
+            {/* The name button's pseudo-element covers the whole card, so clicking anywhere opens details; "More" comes later in the DOM, is positioned itself, and sits on top of it. / 名称按钮的伪元素铺满整张卡片，点卡片任意处都打开详情；「更多」在 DOM 中靠后、自身定位，盖在它上面。 */}
             <button
               type="button"
               onClick={() => onAction("open", asset)}

@@ -64,6 +64,7 @@ const tts: PresentationReadModel = {
   },
 };
 
+// The episode's first shot is E1S07: E1S01 is shot 2, E1S02 is shot 3; accessible names use positions, not IDs.
 // 本集第 1 个分镜是 E1S07：E1S01 是分镜 2、E1S02 是分镜 3，可访问名称写位置而不是 ID。
 const narrationScripts = {
   "episode_1.json": {
@@ -428,6 +429,8 @@ describe("PresentationPlayer", () => {
       return { ...view, onStartApplied };
     }
 
+    // findBy* returns right after the video mounts, when startAt's passive effect may not have attached the loadedmetadata listener yet;
+    // flush effects first, then fire the event, so the event is not lost before the listener.
     // findBy* 在 video 挂载后即返回，此时 startAt 的 passive effect 可能尚未挂上 loadedmetadata 监听；
     // 先冲刷 effect，再触发事件，避免事件先于监听而丢失。
     async function findVideoReady() {
@@ -477,6 +480,7 @@ describe("PresentationPlayer", () => {
       fireEvent.loadedMetadata(video);
       expect(play).toHaveBeenCalledTimes(1);
 
+      // The video already has metadata: the next request takes effect immediately
       // 视频已有元数据：下一个请求立即生效
       Object.defineProperty(video, "readyState", { configurable: true, value: HTMLMediaElement.HAVE_METADATA });
       view.rerender(

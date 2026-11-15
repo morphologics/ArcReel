@@ -42,13 +42,13 @@ import type { EndpointUsage } from "./endpoint-usages";
 import { EndpointUsageList } from "./EndpointUsageList";
 import { exportEndpointDefinition } from "./export-endpoint-definition";
 
-/** 自动包装原始 workflow 时写进 `meta.name` 的占位值，与服务端 `import_shapes.py` 同一个。 */
+/** Placeholder written into `meta.name` when auto-wrapping a raw workflow, the same one as the server's `import_shapes.py`. / 自动包装原始 workflow 时写进 `meta.name` 的占位值，与服务端 `import_shapes.py` 同一个。 */
 export const COMFYUI_PLACEHOLDER_NAME = "ComfyUI workflow";
 
 const MEDIA_TYPES: readonly ComfyuiMediaType[] = ["video", "image"];
-/** `auth` 节里的两张表，按渲染次序。 */
+/** The two tables in the `auth` section, in render order. / `auth` 节里的两张表，按渲染次序。 */
 const AUTH_SECTIONS = ["headers", "query"] as const;
-/** 「已保存」在保存栏上停留的时长，与 `useEditUnit` 一致。 */
+/** How long "Saved" stays on the save bar, consistent with `useEditUnit`. / 「已保存」在保存栏上停留的时长，与 `useEditUnit` 一致。 */
 const SAVED_DISPLAY_MS = 2000;
 
 function Section({ title, description, children }: { title: string; description?: string; children: ReactNode }) {
@@ -67,23 +67,26 @@ function Section({ title, description, children }: { title: string; description?
 }
 
 export interface ComfyuiEndpointDetailProps {
-  /** 已保存的端点；从导入进来、还没保存的端点为 null。 */
+  /** The saved endpoint; null for an endpoint imported but not yet saved. / 已保存的端点；从导入进来、还没保存的端点为 null。 */
   record: CustomEndpointInfo | null;
   definition: ComfyuiEndpointDefinition;
-  /** 导入时那份文件的名字；已保存的端点没有来源文件。 */
+  /** Name of the file at import time; saved endpoints have no source file. / 导入时那份文件的名字；已保存的端点没有来源文件。 */
   sourceFileName: string | null;
-  /** 导入时已经跑过一轮推断的话带过来，省掉进详情后的第二次请求。 */
+  /** If a round of inference already ran during import, it is passed along, saving a second request after entering details. / 导入时已经跑过一轮推断的话带过来，省掉进详情后的第二次请求。 */
   initialInference: ComfyuiInferResponse | null;
   usages: EndpointUsage[];
   back: EndpointBackTarget | null;
-  /** 测试连接的凭证来源；只列 comfyui 协议的供应商，别的协议连不上这台机器。 */
+  /** Credential source for testing the connection; only lists comfyui-protocol providers, since other protocols can't connect to this machine. / 测试连接的凭证来源；只列 comfyui 协议的供应商，别的协议连不上这台机器。 */
   providers: CustomProviderInfo[];
   onSaved: (record: CustomEndpointInfo) => void;
-  /** 把当前这份定义交出去，重新导入的新 workflow 接到它上面。 */
+  /** Hands over the current definition, so a reimported new workflow attaches to it. / 把当前这份定义交出去，重新导入的新 workflow 接到它上面。 */
   onReimport: (current: ComfyuiEndpointDefinition) => void;
-  /** 放弃未保存修改：上层丢掉导入的未保存定义，并重建本组件回到已保存内容。 */
+  /** Discard unsaved changes: the parent drops the imported unsaved definition and rebuilds this component back to the saved content. / 放弃未保存修改：上层丢掉导入的未保存定义，并重建本组件回到已保存内容。 */
   onDiscard: () => void;
   /**
+   * Opens the update state of the install confirmation dialog, the same dialog as the declarative detail and market cards; it hands over the definition in the editor at this moment
+   * (including unsaved changes), and the dialog uses it to warn about overwriting and offer exporting first. Only has an entry when the market axis is updatable.
+   *
    * 打开安装确认弹窗的更新态，与声明式详情、市场卡片走同一个弹窗；交出去的是编辑器里这一刻的定义
    * （含未保存的修改），弹窗据此提示覆盖并提供先导出。只在市场轴可更新时有入口。
    */
@@ -92,14 +95,20 @@ export interface ComfyuiEndpointDetailProps {
     currentDefinition: ComfyuiEndpointDefinition,
     hasUnsavedChanges: boolean,
   ) => void;
-  /** 更新弹窗所需的条目详情正在加载：暂停编辑，保持导出快照与当前定义一致。 */
+  /** Entry details needed by the update dialog are loading: pause editing, keeping the export snapshot consistent with the current definition. / 更新弹窗所需的条目详情正在加载：暂停编辑，保持导出快照与当前定义一致。 */
   marketUpdatePending: boolean;
-  /** 「更多操作」里由上层提供的条目（分享、删除）。 */
+  /** Items in "More actions" provided by the parent (share, delete). / 「更多操作」里由上层提供的条目（分享、删除）。 */
   menuItems: (hasUnsavedChanges: boolean, pending: boolean) => ReactNode;
   submissionBadge?: ReactNode;
 }
 
 /**
+ * ComfyUI endpoint detail: header -> node binding table -> definition -> workflow body -> endpoint test, with the save bar at the bottom of the detail pane.
+ *
+ * Inference only produces candidates; after the user confirms in the binding table they are persisted along with the definition (`docs/adr/0082`); the server keeps no state,
+ * so every entry reruns once with the current definition (along with its confirmed node bindings), and reimport rematching follows the same path.
+ * Unsaved changes are managed by this component itself (inference results and manual takeovers are intertwined), registered with the leave guard via `useLeaveGuard`.
+ *
  * ComfyUI 端点详情：页头 → 节点绑定表 → 定义 → workflow 本体 → 端点测试，保存栏在详情栏底部。
  *
  * 推断只产出候选，用户在绑定表里确认后随定义一并落盘（`docs/adr/0082`）；服务端不留状态，
@@ -144,13 +153,23 @@ export function ComfyuiEndpointDetail({
     record ? definitionFingerprint(record.definition) : null,
   );
 
+  // Inference chain rotation: switching media type and per-key re-detection both invalidate the previous round, so old results don't overwrite new ones.
   // 推断链轮换：换媒体类型与逐键重新识别都作废上一轮，避免旧结果盖掉新的。
   const inferRef = useRef<AbortController | null>(null);
+  // How many times each semantic key was set manually. When a per-key re-detection is sent, record this slot's count; if the count has changed when the result returns,
+  // the user set this key by hand while waiting: their later press is newer than the in-flight inference, so the inference result no longer overrides it.
   // 各语义键被手动定过的次数。逐键重新识别发出时记下这一格的次数，结果回来时次数已经变了，
   // 说明用户在等待期间亲手定过这个键：他后按的那一下比在途的推断新，推断结果不再压过去。
   const manualSeq = useRef(new Map<ComfyuiBindingKey, number>());
 
   /**
+   * Runs a round of inference and takes over the result. When `focusKey` is non-empty only that one semantic key is replaced (per-key re-detection), the rest kept as-is,
+   * and it is only written if this slot's manual takeover sequence is still `sinceEdit`; if the user set it by hand while waiting, only the inference result itself is kept,
+   * for the candidate list. When `focusKey` is empty the whole table restarts, and only entries in `keep` override the new result.
+   *
+   * The round on entering details is started by an effect, so state isn't touched before the first await: when restarting, the previous error that needs clearing
+   * is cleared by the initiator in the event callback.
+   *
    * 跑一轮推断并接手结果。`focusKey` 非空时只换这一个语义键（逐键重新识别），其余原样保留，
    * 且这一格的手动接管序号仍是 `sinceEdit` 才写——等待期间被用户亲手定过就只留下推断结果本身，
    * 供候选列表使用。`focusKey` 为空时整表重来，只有 `keep` 里的条目压过新结果。
@@ -203,11 +222,12 @@ export function ComfyuiEndpointDetail({
     [],
   );
 
+  // If there's no ready inference result on entering details, ask once; the payload is the current definition, whose confirmed node bindings are the rematching input.
   // 进详情时没有现成的推断结果就问一次；载荷是当前这份定义，它已确认的节点绑定即重匹配的输入。
   const [mountDefinition] = useState(initialDefinition);
   useEffect(() => {
     if (initialInference !== null) return;
-    // eslint-disable-next-line react-hooks/set-state-in-effect -- mount-only 初始化，load 在首个 await 前不写 state
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- mount-only initialization; load writes no state before the first await / mount-only 初始化，load 在首个 await 前不写 state
     voidCall(load(mountDefinition));
   }, [initialInference, mountDefinition, load]);
 
@@ -256,6 +276,8 @@ export function ComfyuiEndpointDetail({
   const changeMediaType = useCallback(
     (next: ComfyuiMediaType) => {
       if (next === definition.media_type) return;
+      // Switching media type switches to another set of inference rules and semantic key roster: out-of-range keys are removed along with their entries, and keys the user hasn't set
+      // are all redone under the new rules, keeping only the few the user set by hand.
       // 换媒体类型即换一套推断规则与语义键名录：越界的键连条目一起摘掉，没被用户定过的键
       // 一律按新规则重来，只留下用户亲手定过的那几条。
       const kept = pruneBindings(onlyTouched(bindings, touched), next);
@@ -291,6 +313,7 @@ export function ComfyuiEndpointDetail({
     if (!dirty) return true;
     setSaveState({ status: "saving", error: null });
     try {
+      // The server won't accept this definition while inference isn't ready or node bindings still have problems; the reasons are listed above the binding table.
       // 推断未就绪或节点绑定还有问题时服务端不收这份定义；原因在绑定表上方列出。
       if (inference === null || reinferring !== null) throw new Error(t("ce_cf_inferring"));
       if (blockers.length > 0) throw new Error(t("ce_cf_save_blocked"));
@@ -454,7 +477,7 @@ export function ComfyuiEndpointDetail({
               value={[definition.media_type]}
               onValueChange={(next: string[]) => {
                 const media = MEDIA_TYPES.find((item) => item === next[0]);
-                // 单选：再次点击已选项不取消选择
+                // Single-select: clicking the selected item again doesn't deselect / 单选：再次点击已选项不取消选择
                 if (media) changeMediaType(media);
               }}
             >
@@ -468,10 +491,10 @@ export function ComfyuiEndpointDetail({
           </div>
           <div className="flex flex-col gap-1.5">
             <span className="text-sm font-medium">{t("ce_cf_auth_label")}</span>
-            {/* 凭据模版不折行，长的会横向滚动；预览是只读文本，区域自身可聚焦，键盘才能滚动 */}
+            {/* Credential templates don't wrap and long ones scroll horizontally; the preview is read-only text, so the region itself is focusable so the keyboard can scroll / 凭据模版不折行，长的会横向滚动；预览是只读文本，区域自身可聚焦，键盘才能滚动 */}
             <pre
               role="region"
-              // eslint-disable-next-line jsx-a11y/no-noninteractive-tabindex -- 只读的滚动区域需要键盘聚焦才能滚动
+              // eslint-disable-next-line jsx-a11y/no-noninteractive-tabindex -- a read-only scroll area needs keyboard focus to be scrollable / 只读的滚动区域需要键盘聚焦才能滚动
               tabIndex={0}
               aria-label={t("ce_cf_auth_label")}
               className="relative overflow-x-auto rounded-md border border-border bg-muted/40 p-3 font-mono text-xs text-subtle-foreground outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
@@ -505,7 +528,7 @@ export function ComfyuiEndpointDetail({
   );
 }
 
-/** 用户本轮亲手定过的那几条节点绑定。 */
+/** The node bindings the user set by hand this round. / 用户本轮亲手定过的那几条节点绑定。 */
 function onlyTouched(bindings: ComfyuiBindings, touched: ReadonlySet<ComfyuiBindingKey>): ComfyuiBindings {
   const kept: ComfyuiBindings = {};
   for (const key of touched) {
@@ -515,6 +538,11 @@ function onlyTouched(bindings: ComfyuiBindings, touched: ReadonlySet<ComfyuiBind
 }
 
 /**
+ * Whatever the definition configures is shown as its own; only if nothing at all is configured is a template given for what this section should look like.
+ *
+ * Both tables need checking: an endpoint that configures credentials only in `query` still puts them into the URL when actually sending; if this only recognized `headers`
+ * it would display an `Authorization` it doesn't use at all.
+ *
  * 定义里配了什么就照它自己那份显示，一条也没配才给出这一节该长什么样的模板。
  *
  * 两张表都要看：只在 `query` 里配了凭据的端点实发时照样把它拼进 URL，这里却只认 `headers`

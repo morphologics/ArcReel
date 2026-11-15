@@ -4,6 +4,8 @@ import { loadRecordedResponses } from "../support/recorded.ts";
 import { defineRegionScenarios } from "../support/scenarios.ts";
 import { expect, type ApiOverrides } from "../support/test.ts";
 
+// New-project wizard: a fixed-height Dialog, the three steps share one scroll area, bottom buttons do not move between steps.
+// The wizard opens from the project lobby top bar; the lobby layout itself belongs to the lobby region, here we capture only the wizard.
 // 新建项目向导：固定高度的 Dialog，三步共用一个滚动区，底部按钮不随步骤移动。
 // 向导从项目大厅顶栏打开；大厅本身的布局由大厅区域负责，这里只截向导。
 
@@ -12,6 +14,7 @@ const LOBBY = "/app/projects";
 
 const LONG_TITLE = "重生之皇后威武：一部关于宫廷权谋、家族兴衰与命运抗争的超长篇古装剧情改编作品（第一季）";
 
+// Stress variant: many selectable models, long provider and model names, global defaults configured; all model lanes of step two expanded.
 // 压力变体：可选模型很多、供应商名与模型名都很长，并配置了全局默认，第二步的模型通道全部展开。
 function manyModels(): ApiOverrides {
   const config = RECORDED.get("GET /api/v1/system/config")!.body as {
@@ -72,6 +75,7 @@ async function goNext(page: Page) {
   await nextButton(page).click();
 }
 
+/** Scroll to the very bottom of the body, confirm the last content block is reachable and the title and bottom buttons stay fully visible. */
 /** 滚到正文最底部，确认最后一块内容可达，标题与底部按钮仍完整可见。 */
 async function expectBodyScrollsToEnd(page: Page, last: Locator) {
   await last.scrollIntoViewIfNeeded();
@@ -80,7 +84,7 @@ async function expectBodyScrollsToEnd(page: Page, last: Locator) {
   await expect(nextButton(page)).toBeInViewport({ ratio: 1 });
 }
 
-/** 截图前把正文滚回顶部，基线只记录每一步的首屏。 */
+/** Scroll the body back to the top before capturing; the baseline records only each step's first screen. / 截图前把正文滚回顶部，基线只记录每一步的首屏。 */
 async function scrollBodyToTop(page: Page) {
   await wizard(page)
     .locator('[data-slot="dialog-body"]')
@@ -133,6 +137,7 @@ defineRegionScenarios("新建项目向导", [
         await expect(dialog.getByRole("listitem").filter({ hasText: step })).toHaveAttribute("aria-current", "step");
         expect(await dialog.boundingBox()).toEqual(frame);
         expect(await dialog.getByRole("button", { name: "取消" }).boundingBox()).toEqual(cancel);
+        // "Next" and "Create project" differ in width; compare the right edge and vertical position
         // 「下一步」与「创建项目」宽度不同，比较右边缘与纵向位置
         const box = await nextButton(page).boundingBox();
         expect(box && next).toBeTruthy();

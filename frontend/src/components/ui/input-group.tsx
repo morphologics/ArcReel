@@ -6,6 +6,8 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Textarea } from "@/components/ui/textarea"
 
+// Changes from the generated code: the whole group fades only when the input control is disabled; judging by has-disabled, a disabled send button in the group would also gray out the input.
+// Versus upstream: lower the input fill opacity to preserve text contrast; the invalid state uses a stronger red glow.
 // 相对生成代码的改动：只在输入控件禁用时整组变淡；按 has-disabled 判断时，组内发送按钮禁用也会让输入框发灰。
 // 相对上游：降低 input 填充不透明度以保留文字对比度；失败态使用较强红色光晕。
 function InputGroup({ className, ...props }: React.ComponentProps<"div">) {
@@ -49,8 +51,9 @@ function InputGroupAddon({
   ...props
 }: React.ComponentProps<"div"> & VariantProps<typeof inputGroupAddonVariants>) {
   return (
+    // Clicking the addon to focus the input is only a pointer convenience; keyboard users Tab straight to the input, the addon itself needs no keyboard interaction
     // 点击附加区聚焦输入框只是指针便利；键盘用户直接 Tab 到输入框，附加区本身不需要键盘交互
-    // eslint-disable-next-line jsx-a11y/click-events-have-key-events, jsx-a11y/no-noninteractive-element-interactions -- 见上一行
+    // eslint-disable-next-line jsx-a11y/click-events-have-key-events, jsx-a11y/no-noninteractive-element-interactions -- see the previous line / 见上一行
     <div
       role="group"
       data-slot="input-group-addon"
@@ -118,7 +121,7 @@ function InputGroupText({ className, ...props }: React.ComponentProps<"span">) {
   )
 }
 
-// 相对生成代码的改动：透传 Input 的 mono（等宽字体）。
+// Changes from the generated code: pass Input's mono (monospace font) through. / 相对生成代码的改动：透传 Input 的 mono（等宽字体）。
 function InputGroupInput({
   className,
   ...props
@@ -135,7 +138,7 @@ function InputGroupInput({
   )
 }
 
-// 相对生成代码的改动：透传 Textarea 的 mono（等宽字体）。
+// Changes from the generated code: pass Textarea's mono (monospace font) through. / 相对生成代码的改动：透传 Textarea 的 mono（等宽字体）。
 function InputGroupTextarea({
   className,
   ...props

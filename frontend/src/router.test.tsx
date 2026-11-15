@@ -53,6 +53,8 @@ describe("AppRoutes", () => {
   beforeEach(() => {
     resetStores();
     useAuthStore.setState({ isAuthenticated: true, isLoading: false });
+    // ConfigStatusLoader is always mounted in AppRoutes; presetting initialized short-circuits its fetch(),
+    // so route tests need not care about config status, and unmocked provider endpoints and backoff retries are not triggered.
     // ConfigStatusLoader 在 AppRoutes 中始终挂载；预置 initialized 让其 fetch() 短路，
     // 路由测试无需关心配置状态，也避免触发未 mock 的供应商接口与退避重试。
     useConfigStatusStore.setState({ initialized: true });
@@ -60,6 +62,7 @@ describe("AppRoutes", () => {
   });
 
   afterEach(() => {
+    // Some cases switch to fake timers; restore uniformly to avoid polluting other cases.
     // 个别用例切到 fake timers,统一还原,避免污染其它用例。
     vi.useRealTimers();
   });
@@ -80,6 +83,7 @@ describe("AppRoutes", () => {
     expect(screen.getByRole("link", { name: "返回首页" })).toHaveAttribute("href", "/app/projects");
   });
 
+  // The old lorebook and clues entries were removed without redirects; unregistered sub-paths inside a project keep the workspace shell, and the canvas shows the empty state.
   // 旧的 lorebook、clues 入口已移除且不重定向；项目内未注册的子路径保留工作区外壳，空状态由画布显示。
   it.each(["/app/projects/demo/lorebook", "/app/projects/demo/clues", "/app/projects/demo/unknown/"])(
     "keeps the workspace shell for the unregistered workspace path %s",
@@ -155,6 +159,8 @@ describe("AppRoutes", () => {
   });
 
   it("切换界面语言不重跑真实项目的加载", async () => {
+    // Regression: the demo project's constants are refilled with `t`, but this dependency must not reach the real project's loading effect;
+    // otherwise switching language would first clear the store, flash an empty state once, and also clear Agent session state.
     // 回归：演示项目的常量随 `t` 重灌，但这条依赖不能落到真实项目的加载 effect 上——
     // 否则切语言会先清空 store 闪一次空态，还连带清掉 Agent 会话状态。
     vi.spyOn(API, "getProject").mockResolvedValue({
@@ -212,6 +218,9 @@ describe("AppRoutes", () => {
       (_name, options) =>
         new Promise((_resolve, reject) => {
           capturedSignal = options?.signal;
+          // Simulate real fetch + AbortSignal semantics: reject after abort rather than hang forever;
+          // otherwise refreshProject's shared "in flight" flag would be stuck forever by this request, polluting later cases in the same
+          // file (their refreshProject calls would be queued indefinitely).
           // 模拟真实 fetch + AbortSignal 语义：abort 后 reject，而不是永久悬挂——
           // 否则 refreshProject 的共享「在途」标志会被这条请求永久卡住，污染同一
           // 文件里排在后面的用例（它们的 refreshProject 调用会被无限期排队）。
@@ -228,6 +237,9 @@ describe("AppRoutes", () => {
   });
 
   it("快速切换项目：旧项目的迟到响应不覆盖新项目的首屏数据", async () => {
+    // Regression: after first-screen loading joined refreshProject's cancellation domain, on a quick A -> B switch A's response may
+    // settle after the switch completes (abort and response settling are both async; if the response arrives first the network layer does not reject).
+    // It should neither write back currentProject nor make B's own first-screen load vanish or stay loading.
     // 回归：首屏加载收编进 refreshProject 的取消域后，A → B 快速切换时 A 的响应可能
     // 在切换完成之后才落定（abort 与响应落定同为异步，响应先到时网络层不会 reject）。
     // 它既不该写回 currentProject，也不该让 B 自己的首屏加载失踪或停在加载态。
@@ -241,6 +253,8 @@ describe("AppRoutes", () => {
         : Promise.resolve({ project: { title: "B-数据" } as never, scripts: {} }),
     );
 
+    // Looking only at the final state cannot disprove "late overwrite": even if A's data were written, B finishing later would overwrite it
+    // back. Subscribe for the whole process and assert A's data never landed in the store even once.
     // 只看最终态不足以证伪「迟到覆盖」——A 的数据即便写进去了，也会被随后跑完的 B 盖回
     // 去。订阅整段过程，断言 A 的数据一次都没有落进 store。
     const seenTitles: Array<string | undefined> = [];
@@ -259,6 +273,7 @@ describe("AppRoutes", () => {
     });
 
     act(() => navigate("/app/projects/B"));
+    // A's response settles only after the switch completes
     // 切换完成后 A 的响应才落定
     await act(async () => {
       resolveA({ project: { title: "A-迟到数据" } as never, scripts: {} });
@@ -269,6 +284,7 @@ describe("AppRoutes", () => {
       const s = useProjectsStore.getState();
       expect(s.currentProjectName).toBe("B");
       expect(s.currentProjectData?.title).toBe("B-数据");
+      // B's first-screen load finishes normally, not stuck loading because A holds an in-flight/queue slot
       // B 的首屏加载正常收口，不因 A 占着在途/排队名额而停在加载态
       expect(s.projectDetailLoading).toBe(false);
     });
@@ -293,6 +309,8 @@ describe("AppRoutes", () => {
   it("redirects unauthenticated nested project URL to top-level /login", async () => {
     useAuthStore.setState({ isAuthenticated: false, isLoading: false });
     renderAt("/app/projects/demo");
+    // Regression: AuthGuard renders inside a nested route, where relative /login becomes
+    // /app/projects/demo/login (no match -> 404); only the absolute path ~/login lands on /login.
     // 回归：AuthGuard 渲染在 nest 路由内，相对的 /login 会被拼成
     // /app/projects/demo/login（无匹配 → 404）；用 ~/login 绝对路径才落到 /login。
     expect(await screen.findByTestId("login-page")).toBeInTheDocument();
@@ -318,8 +336,10 @@ describe("AppRoutes", () => {
 
   it("ConfigStatusLoader 挂载后拉取配置状态,未初始化时按退避重试", async () => {
     vi.useFakeTimers();
+    // Start from uninitialized so the root ConfigStatusLoader really runs its fetch/retry logic
     // 从未初始化起步,让根级 ConfigStatusLoader 真正执行 fetch/重试逻辑
     useConfigStatusStore.setState(useConfigStatusStore.getInitialState(), true);
+    // Make the config fetch fail -> the store stays uninitialized -> the loader retries with backoff
     // 让配置拉取失败 → store 保持未初始化 → loader 按退避重试
     vi.spyOn(API, "getProviders").mockRejectedValue(new Error("backend not ready"));
     vi.spyOn(API, "listCustomProviders").mockRejectedValue(new Error("backend not ready"));
@@ -327,14 +347,17 @@ describe("AppRoutes", () => {
 
     renderAt("/app/projects");
 
+    // First fetch on mount
     // 挂载即首次拉取
     await vi.advanceTimersByTimeAsync(0);
     expect(API.getProviders).toHaveBeenCalledTimes(1);
 
+    // First backoff retry (800ms)
     // 第一次退避重试(800ms)
     await vi.advanceTimersByTimeAsync(800);
     expect(API.getProviders).toHaveBeenCalledTimes(2);
 
+    // Second backoff retry (another 1600ms)
     // 第二次退避重试(再 1600ms)
     await vi.advanceTimersByTimeAsync(1600);
     expect(API.getProviders).toHaveBeenCalledTimes(3);

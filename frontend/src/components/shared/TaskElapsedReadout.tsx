@@ -18,6 +18,13 @@ interface Props {
 }
 
 /**
+ * Task duration readout: inline it's a bare number, and the full meaning (running for / waiting for / took) goes through title and the
+ * accessible name. Task rows and task chips are both too dense for a second word, and the three kinds of duration on the same row
+ * are distinguished by the task status itself, so restating the status inline is redundant.
+ *
+ * Color and font size are left to the caller (`className`); the component only guarantees tabular numbers, since the readout changes every second
+ * and proportional digit widths would make the whole row jitter.
+ *
  * 任务时长读数：行内是裸数字，完整语义（已运行 / 已等待 / 耗时）走 title 与
  * 无障碍名。任务行与任务胶囊都已密到没有第二个词的余地，而三种时长在同一行里
  * 由任务状态本身区分，行内再复述一遍状态是冗余。
@@ -26,6 +33,9 @@ interface Props {
  * 比例字宽会让整行随之抖动。
  */
 export function TaskElapsedReadout({ task, className, style }: Props) {
+  // Frozen durations don't subscribe to the clock: terminal tasks are often the majority in the list, and re-rendering them every second is pure waste.
+  // The branch is decided by status rather than by the computed duration: a terminal task with a missing timestamp likewise renders nothing, and shouldn't
+  // fall back to the clock-subscribing branch just because it "can't be computed".
   // 已定格的时长不订阅时钟：终态任务在列表里往往占多数，为它们每秒重渲染一次纯属浪费。
   // 分支按状态而非按算得的时长决定——终态但时间戳缺失时同样什么都不渲染，不该因为
   // 「算不出来」就退回到订阅时钟的那一支。

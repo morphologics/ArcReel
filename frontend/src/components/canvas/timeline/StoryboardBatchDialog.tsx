@@ -22,6 +22,11 @@ import { costEntries, formatCurrencyAmount } from "@/utils/cost-format";
 import type { StoryboardBatchKind, StoryboardBatchPreview, WorkflowAdmission } from "@/types";
 
 /**
+ * Confirm dialog for batch-filling an episode's storyboard images / shot videos: lists the shots to generate, skipped items with reasons, and an estimated cost when it can be computed.
+ *
+ * Whole-batch admission for shot videos: if the preview already knows requirements are not met, state the reason and do not allow submitting; if the state changed after the preview and the submit is rejected,
+ * that is stated in the dialog too, with no task created at all. Close requests are ignored while submitting.
+ *
  * 一集分镜图 / 分镜视频批量补齐的确认框：列出要生成的分镜、跳过项与原因，能算出时给出预估费用。
  *
  * 分镜视频整批准入：预览时已知不满足就陈述原因、不给提交；预览之后状态有变、提交时才被拒绝的，
@@ -145,7 +150,7 @@ export function StoryboardBatchDialog({
         <AlertDialogHeader>
           <AlertDialogTitle>{title}</AlertDialogTitle>
         </AlertDialogHeader>
-        {/* 跳过清单可能很长，正文可以用键盘滚动 */}
+        {/* The skip list can be long; the body can be scrolled with the keyboard / 跳过清单可能很长，正文可以用键盘滚动 */}
         <AlertDialogBody tabIndex={0} role="region" aria-label={title}>
           <AlertDialogDescription render={<div />}>{body}</AlertDialogDescription>
         </AlertDialogBody>

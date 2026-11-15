@@ -25,27 +25,27 @@ import { TRIAL_RUN_STAGES } from "@/types";
 import { RequestPreview, TestCard, TestField, TestSelect } from "./endpoint-test-primitives";
 import { useTrialRun } from "./use-trial-run";
 
-/** 两种媒体类型各自的分辨率档，与服务端 `packages/arcreel-market-core/src/arcreel_market_core/aspect_size.py` 的短边表同名同序。 */
+/** Resolution tiers for each of the two media types, same names and order as the short-side table in the server's `packages/arcreel-market-core/src/arcreel_market_core/aspect_size.py`. / 两种媒体类型各自的分辨率档，与服务端 `packages/arcreel-market-core/src/arcreel_market_core/aspect_size.py` 的短边表同名同序。 */
 const RESOLUTION_TIERS: Record<ComfyuiMediaType, readonly string[]> = {
   video: ["480p", "720p", "1080p", "4K"],
   image: ["512px", "1K", "2K", "4K"],
 };
 
-/** 项目的画幅比例只有竖屏与横屏两档，测试参数照它给。 */
+/** Project aspect ratios have only two options, portrait and landscape, and test parameters follow them. / 项目的画幅比例只有竖屏与横屏两档，测试参数照它给。 */
 const ASPECT_RATIOS = ["9:16", "16:9"] as const;
 
-/** 分辨率下拉里「沿用 workflow 原生尺寸」那一项的取值；发请求时换回 null。 */
+/** Value of the "keep workflow native size" item in the resolution dropdown; converted back to null when sending the request. / 分辨率下拉里「沿用 workflow 原生尺寸」那一项的取值；发请求时换回 null。 */
 const NATIVE_RESOLUTION = "native";
 
-/** 时长输入清空时按这个秒数发出，占位符把它写在空输入框里。 */
+/** When the duration input is cleared this many seconds is sent; the placeholder shows it in the empty input. / 时长输入清空时按这个秒数发出，占位符把它写在空输入框里。 */
 const DEFAULT_DURATION_SECONDS = 5;
 
-/** 能从节点绑定推出素材格子的三个语义键，按渲染次序。 */
+/** The three semantic keys from which material slots can be derived from node bindings, in render order. / 能从节点绑定推出素材格子的三个语义键，按渲染次序。 */
 const ASSET_KEYS = ["start_image", "end_image", "reference_images"] as const;
 
 type ComfyuiAssetKey = (typeof ASSET_KEYS)[number];
 
-/** 四段各自打给 ComfyUI 的那条路由，测试连接的状态点上原样标出。 */
+/** The route each of the four stages hits on ComfyUI, labeled as-is on the test connection status dots. / 四段各自打给 ComfyUI 的那条路由，测试连接的状态点上原样标出。 */
 const STAGE_ROUTES: Record<TrialRunStage, string | null> = {
   submit: "POST /prompt",
   poll: "GET /history",
@@ -54,6 +54,9 @@ const STAGE_ROUTES: Record<TrialRunStage, string | null> = {
 };
 
 /**
+ * Follow-up action of a failure code -> one sentence saying what to do. The server gives the action from the same mapping (shared with project page generation failures),
+ * and the frontend only puts it into words; for actions not in this table it doesn't make up a sentence, preferring to leave only the failure code and its own text.
+ *
  * 失败码的后续动作 → 说这一句该去做什么。服务端按同一份对照表给出动作（与项目页生成失败共用），
  * 前端只负责把它说成话；这张表没有的动作不编一句，宁可只留失败码与它自己的文案。
  */
@@ -69,11 +72,14 @@ const STAGE_DOT_CLS: Record<TrialRunStageState, string> = {
 };
 
 export interface ComfyuiEndpointTestSectionProps {
-  /** 当前这份草稿，含尚未保存的节点绑定：要预览的正是刚绑好的那一份。 */
+  /** The current draft, including unsaved node bindings: the one to preview is exactly the one just bound. / 当前这份草稿，含尚未保存的节点绑定：要预览的正是刚绑好的那一份。 */
   definition: ComfyuiEndpointDefinition;
-  /** 可选作凭证来源的 comfyui 供应商。 */
+  /** comfyui providers selectable as credential source. / 可选作凭证来源的 comfyui 供应商。 */
   providers: CustomProviderInfo[];
   /**
+   * Node bindings don't hold yet, and the server would reject these two cards as an invalid definition. Derived from the reasons in `saveBlockers` that are also server hard
+   * gates, blocked in the UI first so the user can't click out a 422.
+   *
    * 节点绑定还不成立，服务端会按定义不合法拒绝这两卡。由 `saveBlockers` 里那几条同为服务端硬
    * 闸门的原因推出，先在界面上挡住，不让用户点出一条 422。
    */
@@ -81,6 +87,14 @@ export interface ComfyuiEndpointTestSectionProps {
 }
 
 /**
+ * The two endpoint test cards for a ComfyUI endpoint: preview request and test connection.
+ *
+ * There's no "verify response" card: ComfyUI output extraction reads three fixed keys of the node bound to `output`, and there is no user-
+ * configurable value path to verify (`docs/adr/0081`); the server's mode matrix already blocks it too.
+ *
+ * Call parameters, credentials and materials are shared by both cards: first look at the request body rendered from this set of parameters, then send it for real as-is once confirmed;
+ * changing any item in between would make the two cards talk about different things.
+ *
  * ComfyUI 端点的端点测试两卡：预览请求与测试连接。
  *
  * 没有「验证响应」那一卡——ComfyUI 的产物提取读的是 `output` 绑定那个节点的固定三个键，没有用户
@@ -98,6 +112,7 @@ export function ComfyuiEndpointTestSection({ definition, providers, blocked }: C
   const [aspectRatio, setAspectRatio] = useState<string>(ASPECT_RATIOS[0]);
   const [resolution, setResolution] = useState(NATIVE_RESOLUTION);
   const [durationSeconds, setDurationSeconds] = useState<number | null>(DEFAULT_DURATION_SECONDS);
+  // The file input shows the selected file itself; this record is only read when sending the request and needs no re-render
   // 文件输入框自己显示选中的文件，这份记录只在发请求时读，不需要重渲
   const assetFiles = useRef<Partial<Record<ComfyuiAssetKey, File[]>>>({});
 
@@ -115,6 +130,8 @@ export function ComfyuiEndpointTestSection({ definition, providers, blocked }: C
   const trial = useTrialRun();
   const { start: startTrial } = trial;
 
+  // Material slots are decided only by node bindings: ComfyUI endpoints have no declarative `inputs` section, so whether a load-image node is bound is whether this
+  // workflow accepts that kind of material. Reference images get several slots; passing fewer demonstrates image editing.
   // 素材格子只由节点绑定决定：ComfyUI 端点没有声明式那份 `inputs` 节，绑没绑读图节点就是这份
   // workflow 收不收这种素材。参考图给几个格子，少传就是在演示改图。
   const assetSlots = useMemo(
@@ -142,6 +159,8 @@ export function ComfyuiEndpointTestSection({ definition, providers, blocked }: C
 
   const parameters = useMemo(
     () => ({
+      // ComfyUI endpoints have no model name to fill in: the model is this workflow. The name goes into the call record, so the "Usage" page can recognize
+      // which endpoint sent this one.
       // ComfyUI 端点没有模型名可填：模型就是这份 workflow。名字进调用记录，好让「用量」页上认得出
       // 这一笔是哪个端点发的。
       model: definition.meta.name,
@@ -222,6 +241,8 @@ export function ComfyuiEndpointTestSection({ definition, providers, blocked }: C
               placeholder={String(DEFAULT_DURATION_SECONDS)}
               value={durationSeconds ?? ""}
               onChange={(e) => {
+                // Non-positive integers (including the empty string after backspacing) become the empty state, so the input shows the placeholder instead of being refilled with a
+                // number; the first step of changing seconds is clearing it. The empty state sends the placeholder's number of seconds.
                 // 非正整数（含退格清空后的空串）落成空态，输入框据此显示占位符而不是被填回一个
                 // 数字——改秒数的第一步就是清空它。空态按占位符那个秒数发出。
                 const seconds = Number(e.target.value);
@@ -373,6 +394,11 @@ export function ComfyuiEndpointTestSection({ definition, providers, blocked }: C
 }
 
 /**
+ * Conversion note: the left side is what the request side gives, the right side is what actually gets written into the workflow.
+ *
+ * Dimensions that don't drive this workflow are written out explicitly: "the resolution I chose on the project page has no effect on this endpoint" can only
+ * be said here; looking at a JSON of dozens of nodes won't tell you.
+ *
  * 换算说明：左边是请求侧给的，右边是真正写进 workflow 的。
  *
  * 没驱动这份 workflow 的那几维显式写出来——「我在项目页选的分辨率对这个端点根本不起作用」只有
@@ -385,7 +411,7 @@ function ConversionsTable({
 }: {
   conversions: NonNullable<EndpointPreviewResponse["conversions"]>;
   mediaType: ComfyuiMediaType;
-  /** 种子这一维的取值策略，来自节点绑定；没绑就没有策略。 */
+  /** Value strategy for the seed dimension, from node bindings; no binding means no strategy. / 种子这一维的取值策略，来自节点绑定；没绑就没有策略。 */
   seedPolicy: "random" | "keep" | null;
 }) {
   const { t } = useTranslation("dashboard");
@@ -465,7 +491,7 @@ function ConversionsTable({
   );
 }
 
-/** 一次测试连接走到哪儿了：四段状态点 + `prompt_id`，随后是产物卡或失败码卡。 */
+/** How far a test connection got: four stage status dots + `prompt_id`, followed by an output card or failure code card. / 一次测试连接走到哪儿了：四段状态点 + `prompt_id`，随后是产物卡或失败码卡。 */
 function TrialRunReport({
   run,
   artifactUrl,
@@ -527,7 +553,7 @@ function TrialRunReport({
             className="w-full rounded-lg border border-border bg-black object-contain"
           />
         ) : (
-          // eslint-disable-next-line jsx-a11y/media-has-caption -- 测试连接产物没有可用的字幕源
+          // eslint-disable-next-line jsx-a11y/media-has-caption -- test connection output has no usable caption source / 测试连接产物没有可用的字幕源
           <video
             controls
             preload="metadata"

@@ -26,6 +26,7 @@ function SheetOverlay({ className, ...props }: SheetPrimitive.Backdrop.Props) {
   return (
     <SheetPrimitive.Backdrop
       data-slot="sheet-overlay"
+      // Backdrop is opaque and unblurred, same spec as the onboarding backdrop; layering uses the z-index token
       // 遮罩不透明、不模糊，与新手引导遮罩同一规范；层级取 z-index token
       className={cn(
         "fixed inset-0 z-overlay bg-scrim transition-opacity duration-150 data-ending-style:opacity-0 data-starting-style:opacity-0",
@@ -50,6 +51,10 @@ function SheetContent({
   return (
     <SheetPortal>
       <SheetOverlay />
+      {/*
+       * Header / Body / Footer stack vertically, only SheetBody scrolls. Left and right sides default to 28rem wide;
+       * callers override the width with data-[side=right]:w-*; no viewport-breakpoint max-w, so overrides don't get truncated.
+       */}
       {/* Header / Body / Footer 纵向排布，只有 SheetBody 滚动。左右两侧默认宽 28rem，
           调用处用 data-[side=right]:w-* 覆盖宽度；不设按视口断点的 max-w，免得覆盖值被截断。 */}
       <SheetPrimitive.Popup
@@ -87,14 +92,14 @@ function SheetHeader({ className, ...props }: React.ComponentProps<"div">) {
   return (
     <div
       data-slot="sheet-header"
-      // 不随 Body 滚动；右侧给关闭按钮留位
+      // Doesn't scroll with Body; leaves room on the right for the close button / 不随 Body 滚动；右侧给关闭按钮留位
       className={cn("flex shrink-0 flex-col gap-0.5 border-b px-5 py-4 pr-12", className)}
       {...props}
     />
   )
 }
 
-// 本地新增：Sheet 里唯一的滚动区
+// Local addition: the only scroll area in a Sheet / 本地新增：Sheet 里唯一的滚动区
 function SheetBody({ className, ...props }: React.ComponentProps<"div">) {
   return (
     <div
@@ -112,7 +117,7 @@ function SheetFooter({ className, ...props }: React.ComponentProps<"div">) {
   return (
     <div
       data-slot="sheet-footer"
-      // 固定在底部、不随 Body 滚动，保存栏等主操作放这里
+      // Fixed at the bottom, doesn't scroll with Body; primary actions such as the save bar go here / 固定在底部、不随 Body 滚动，保存栏等主操作放这里
       className={cn("mt-auto flex shrink-0 items-center justify-end gap-2 border-t bg-muted/50 px-5 py-3", className)}
       {...props}
     />

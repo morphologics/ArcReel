@@ -7,6 +7,9 @@ import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/component
 import type { TodoItem, Turn } from "@/types";
 
 // ---------------------------------------------------------------------------
+// extractLatestTodos — search backward for the most recent successful TodoWrite and take its todos.
+// Failed writes don't count; an empty list is a valid latest state (the Agent cleared its todos).
+// ---------------------------------------------------------------------------
 // extractLatestTodos — 从后往前找最近一次成功的 TodoWrite，取它的 todos。
 // 失败的写入不算数；空清单是有效的最新状态（Agent 清空了待办）。
 // ---------------------------------------------------------------------------
@@ -34,6 +37,9 @@ function extractLatestTodos(turns: Turn[], draftTurn: Turn | null): TodoItem[] |
   return null;
 }
 
+// ---------------------------------------------------------------------------
+// TodoProgress — a one-line progress above the input: the current in-progress item and completed count; click to expand the list.
+// Hidden when there are no todos or all are done.
 // ---------------------------------------------------------------------------
 // TodoProgress — 输入框上方的一行进度：当前进行项与完成数，点开展开清单。
 // 没有待办或全部完成时不显示。
@@ -77,17 +83,17 @@ export function TodoProgress({ turns, draftTurn }: TodoProgressProps) {
           )}
         </CollapsibleTrigger>
         <CollapsibleContent>
-          {/* 清单很长时只在这里滚动，不把消息区挤没；里面没有可聚焦的元素，区域自身可聚焦，键盘才能滚动 */}
+          {/* When the list is long only this area scrolls, without squeezing out the message area; it has no focusable children, so the area itself is focusable for keyboard scrolling / 清单很长时只在这里滚动，不把消息区挤没；里面没有可聚焦的元素，区域自身可聚焦，键盘才能滚动 */}
           <div
             role="region"
-            // eslint-disable-next-line jsx-a11y/no-noninteractive-tabindex -- 只读的滚动区域需要键盘聚焦才能滚动
+            // eslint-disable-next-line jsx-a11y/no-noninteractive-tabindex -- a read-only scroll area needs keyboard focus to scroll / 只读的滚动区域需要键盘聚焦才能滚动
             tabIndex={0}
             aria-label={t("todo_list_label")}
             className="relative max-h-[30cqh] overflow-y-auto rounded-md px-2 py-1.5 outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
           >
             <ul className="flex flex-col gap-1">
               {todos.map((todo, index) => (
-                // react-doctor-disable-next-line react-doctor/no-array-index-as-key -- TodoWrite 的待办没有 id、内容可能重复，每次写入整份替换；TodoRow 无本地状态，序号加内容即足够
+                // react-doctor-disable-next-line react-doctor/no-array-index-as-key -- TodoWrite todos have no id and content may repeat; each write replaces the whole list; TodoRow has no local state, so index plus content suffices / TodoWrite 的待办没有 id、内容可能重复，每次写入整份替换；TodoRow 无本地状态，序号加内容即足够
                 <TodoRow key={`${index}-${todo.content}`} todo={todo} />
               ))}
             </ul>

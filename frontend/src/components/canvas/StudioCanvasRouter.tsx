@@ -48,12 +48,14 @@ import {
 import { gridStoryboardEnabled, normalizeRoute } from "@/utils/generation-mode";
 import type { EpisodeScript } from "@/types/script";
 
+// Reference-to-video and multi-grid canvases serve only projects of the matching generation mode and are fetched on demand; the most common per-shot storyboard canvas
+// (TimelineCanvas), assets and episode pages stay loaded with the workspace.
 // 参考生视频与多宫格画布只服务对应生成模式的项目，按需拉取；最常见的逐镜分镜画布
 // （TimelineCanvas）与资产、分集页面保持随工作区加载。
 const ReferenceVideoCanvas = lazyNamed(() => import("./reference/ReferenceVideoCanvas"), "ReferenceVideoCanvas");
 const GridImageToVideoCanvas = lazyNamed(() => import("./grid/GridImageToVideoCanvas"), "GridImageToVideoCanvas");
 
-/** 集级路由 path，与渲染该集的 `<Route>` 共用一份。 */
+/** Episode-level route path, shared with the `<Route>` that renders the episode. / 集级路由 path，与渲染该集的 `<Route>` 共用一份。 */
 const EPISODE_ROUTE_PATH = `/${WORKSPACE_ROUTE_EPISODES}/:episodeId`;
 
 // ---------------------------------------------------------------------------
@@ -95,14 +97,23 @@ export function StudioCanvasRouter() {
   const { t } = useTranslation("dashboard");
   const { currentProjectData, currentProjectName, currentScripts, projectDetailLoading } =
     useProjectsStore();
+  // Demo state: the asset canvas still passes readOnly through; the workbench timeline reads the same decision itself for read-only.
+  // useDemoWorkbench() already funnels route params and the store's lagging decision into a single source; consume it directly here.
   // 演示态：资产画布仍走 readOnly 透传，工作台时间线的只读则由组件自己直读同一判定。
   // useDemoWorkbench() 已把路由参数与 store 的判定滞后收口在单一来源，此处直接消费。
   const demoMode = useDemoWorkbench();
 
+  // Demo state sends no real capability requests. On demo->real switch demoMode turns false before the store does;
+  // currentProjectName is checked separately to cover the frame that still reads the old demo project name.
   // 演示态不发真实能力请求。demoMode 演示→真实切换时先于 store 变为 false，
   // currentProjectName 单独判一次兜住这一帧仍读到旧演示项目名的窗口。
   const capabilitiesEnabled = !demoMode && !isDemoProject(currentProjectName);
 
+  // The per-shot duration editor candidates take the set narrowed by linked constraints, so users cannot pick a combination that would surely be rejected after queueing;
+  // saved out-of-range values are not rewritten; ShotDetail warns by cause and guides re-selection.
+  // Candidate model, resolution and reference image path are not passed: the server resolves the actually executed
+  // i2v/r2v bucket model and its saved options by the project's generation mode. Passing the project default `video_backend` would override the sub-buckets and diverge from execution.
+  // Capabilities are keyed by the project's generation mode, uniform across the project, so no episode number is passed.
   // 逐个分镜的时长编辑器候选取经联动约束收窄后的集合，用户就选不到入队后必然被拒的组合；
   // 已保存的越界值不改写，由 ShotDetail 按成因给警告并引导重选。
   // 不传候选模型、分辨率与参考图路径：服务端按项目生成模式解析实际执行的
@@ -113,12 +124,18 @@ export function StudioCanvasRouter() {
     enabled: capabilitiesEnabled,
   });
 
+  // Derive loading state from the task queue (replaces local state): the active + latest-row-wins invariants are pushed down to the store selector
   // 从任务队列派生 loading 状态（替代本地 state）：活跃 + 最新行胜出两条不变量下沉到 store selector
   const generatingCharacterNames = useActiveResourceIds("character", currentProjectName);
   const generatingSceneNames = useActiveResourceIds("scene", currentProjectName);
   const generatingPropNames = useActiveResourceIds("prop", currentProjectName);
   const generatingProductNames = useActiveResourceIds("product", currentProjectName);
 
+  // Refresh project data; return whether the local store synced, so callers decide whether to advance UI state depending on the new order.
+  // In-flight merging + keep-old-on-failure live in projects-store's refreshProject; here we only express intent.
+  // "cancelled" (project switch cancel-domain rotation etc.) and "failed" both count as not synced here, treated uniformly as false.
+  // No notice here: left to callers with their own dedicated notice (shot save via PartialSaveError, structural edits);
+  // other post-write refreshes go through refreshAfterAction below.
   // 刷新项目数据；返回本地 store 是否已同步成功，供调用方决定是否推进依赖新顺序的 UI 状态。
   // 在途合并 + 失败留旧收敛于 projects-store 的 refreshProject，此处仅表达意图。
   // "cancelled"（项目切换取消域轮换等）与 "failed" 在这里都不算已同步，统一按 false
@@ -135,6 +152,8 @@ export function StudioCanvasRouter() {
     [currentProjectName],
   );
 
+  // Refresh after a successful write: notifies on failure (see refreshAfterWrite), resolves to whether the local store synced;
+  // callers use it to decide whether to advance follow-up actions that depend on new data (selection follow, reporting success).
   // 写入成功后的刷新：失败时提示（见 refreshAfterWrite），resolve 为本地 store 是否已同步，
   // 调用方据此决定是否推进依赖新数据的后续动作（选中态跟随、报告成功）。
   const refreshAfterAction = useCallback(
@@ -145,9 +164,9 @@ export function StudioCanvasRouter() {
 
   // ---- Timeline action callbacks ----
   // These receive scriptFile from TimelineCanvas so they always use the active episode's script.
-  // 分镜详情编辑单元的保存：PATCH 失败时如实抛错，由编辑单元显示在未保存提示条上。
-  // resolve 为本地 store 是否已同步到新剧本；PATCH 已落库但刷新失败或被取消时为 false，
-  // 此时 store 仍是旧剧本，接着生成会拿旧提示词入队，调用方据此不再继续生成。
+  // Save of the shot detail edit unit: on PATCH failure throw faithfully; the edit unit shows it on the unsaved notice bar. / 分镜详情编辑单元的保存：PATCH 失败时如实抛错，由编辑单元显示在未保存提示条上。
+  // Resolves to whether the local store synced to the new script; false when the PATCH landed but the refresh failed or was cancelled, / resolve 为本地 store 是否已同步到新剧本；PATCH 已落库但刷新失败或被取消时为 false，
+  // in which case the store still holds the old script and generating would queue old prompts, so the caller stops generating. / 此时 store 仍是旧剧本，接着生成会拿旧提示词入队，调用方据此不再继续生成。
   const handleUpdatePrompt = useCallback(async (
     segmentId: string,
     patch: Record<string, unknown>,
@@ -165,6 +184,8 @@ export function StudioCanvasRouter() {
     return refreshProject();
   }, [currentProjectName, currentProjectData, refreshProject, t]);
 
+  // Shot reorder (common to all forms): move the shot after afterId; null moves it to the front.
+  // Returns whether the move succeeded, so the editor can make the selection follow the shot to its new position.
   // 分镜改序（各形态通用）：把分镜移到 afterId 之后，null 移到最前。
   // 返回是否移动成功，供编辑器把选中态跟随到分镜的新位置。
   const handleMoveShot = useCallback(async (
@@ -177,6 +198,8 @@ export function StudioCanvasRouter() {
     if (!resolvedFile) return false;
     try {
       await API.moveScriptItem(currentProjectName, resolvedFile, shotId, afterId);
+      // Report success only when the local store has the new order written back: if the refresh failed segments still has the old order,
+      // and letting the selection follow the new position would silently switch to another shot.
       // 仅在本地 store 已写回新顺序时报告成功：刷新失败时 segments 仍是旧序，
       // 此时让选中态跟随新位置会静默切到别的分镜。
       return await refreshAfterAction();
@@ -186,6 +209,9 @@ export function StudioCanvasRouter() {
     }
   }, [currentProjectName, currentScripts, refreshAfterAction, t]);
 
+  // Timeline add / remove shot: the server executes against the current script revision; no snapshot taken here.
+  // Report success once the write is committed: if the following local refresh fails only prompt to reload, don't keep the caller retryable,
+  // otherwise a retry would add another shot or send another remove for an already removed shot.
   // 时间线新增 / 移除分镜：服务端按当前剧本 revision 执行，这里不取快照。
   // 写入一经提交即报告成功：随后的本地刷新失败时只提示重新加载，不让调用方保持可重试，
   // 否则重试会再新增一条分镜或对已移除的分镜再发一次移除。
@@ -195,7 +221,7 @@ export function StudioCanvasRouter() {
     }
   }, [refreshProject, t]);
 
-  // afterId 为 null 时追加到末尾（空脚本里即第一条）。
+  // afterId null appends at the end (the first entry in an empty script). / afterId 为 null 时追加到末尾（空脚本里即第一条）。
   const handleInsertShot = useCallback(async (
     afterId: string | null,
     novelText: string | undefined,
@@ -234,12 +260,15 @@ export function StudioCanvasRouter() {
       await API.updateEpisode(currentProjectName, episode, { title });
     } catch (err) {
       useAppStore.getState().pushToast(t("episode_title_update_failed", { message: errMsg(err) }), "error");
-      throw err; // 让 EditableEpisodeTitle 保持编辑态，不误清空
+      throw err; // keep EditableEpisodeTitle in edit mode, don't clear it by mistake / 让 EditableEpisodeTitle 保持编辑态，不误清空
     }
+    // Title saved: a refresh failure only notifies; don't leave the title in edit mode inviting a duplicate submit
     // 标题已保存：刷新失败只提示，不让标题停在编辑态引人重复提交
     await refreshAfterAction();
   }, [currentProjectName, refreshAfterAction, t]);
 
+  // Generate callbacks read the latest script from the store at call time, not the render-time closure: "Save and generate" saves first in the same click,
+  // refreshes the script and then generates; the callback called then is still from the pre-click render, whose closure holds the pre-save prompts.
   // 生成回调在调用时读 store 里的最新剧本，不用渲染时的闭包：「保存并生成」在同一次点击里先保存、
   // 刷新剧本再生成，此刻调用的仍是点击前那次渲染的回调，闭包里是保存前的提示词。
   const handleGenerateStoryboard = useCallback(async (segmentId: string, scriptFile?: string, imageModel?: string) => {
@@ -279,6 +308,7 @@ export function StudioCanvasRouter() {
     }
   }, [currentProjectName, t]);
 
+  // When no audio provider is configured, give a clear notice in the frontend (the backend also has a 400 fallback with the same meaning before queueing)
   // 未配置 audio 供应商时在前端就给出清晰提示（后端入队前还有同语义的 400 兜底）
   const ensureAudioProviderConfigured = useCallback((): boolean => {
     const cfg = useConfigStatusStore.getState();
@@ -313,12 +343,13 @@ export function StudioCanvasRouter() {
     }
   }, [currentProjectName, currentScripts, ensureAudioProviderConfigured, t]);
 
+  // Post-dubbed projects don't generate narration audio: hide the canvas generate entry; existing audio still plays as usual.
   // 后期配音项目不生成旁白配音：收起画布上的生成入口，已有配音照常试听。
   const narrationGenerationEnabled = currentProjectData?.narration_delivery === "use_tts";
 
   // ---- Workflow panel callbacks ----
-  // 面板只陈述状态，动作交回既有入口执行：跳转复用 Agent 定位用的同一条 scrollTarget 缝，
-  // 重生复用本组件已有的入队回调。面板不自建播放器，也不自建入队路径。
+  // The panel only states status; actions go back to existing entries: navigation reuses the same scrollTarget seam the Agent uses for locating, / 面板只陈述状态，动作交回既有入口执行：跳转复用 Agent 定位用的同一条 scrollTarget 缝，
+  // regeneration reuses this component's existing queue callbacks. The panel builds no player and no queue path of its own. / 重生复用本组件已有的入队回调。面板不自建播放器，也不自建入队路径。
   const handleViewWorkflowUnit = useCallback((unitId: string) => {
     useAppStore.getState().triggerScrollTo({
       type: normalizeRoute(currentProjectData?.generation_mode) === "reference_video"
@@ -328,6 +359,8 @@ export function StudioCanvasRouter() {
     });
   }, [currentProjectData?.generation_mode]);
 
+  // The script file is given by the caller for the current episode: in multi-episode projects currentScripts holds all episodes,
+  // taking the first key would send regeneration to another episode's script, and the user would see a different episode redone.
   // 剧本文件由调用方按当前剧集给出：多集项目里 currentScripts 装着全部剧集，
   // 取第一个键会把重生打到别集的剧本上，用户看到的是另一集被重做。
   const handleWorkflowRegenerate = useCallback(async (
@@ -339,7 +372,7 @@ export function StudioCanvasRouter() {
     for (const unitId of unitIds) {
       try {
         if (stepId === "storyboard") {
-          // react-doctor-disable-next-line react-doctor/async-await-in-loop -- 逐个入队保持任务队列与画布单元同序，并发提交会打乱入队顺序
+          // react-doctor-disable-next-line react-doctor/async-await-in-loop -- queue one by one to keep the task queue in the same order as canvas units; concurrent submits would scramble queue order / 逐个入队保持任务队列与画布单元同序，并发提交会打乱入队顺序
           await handleGenerateStoryboard(unitId, scriptFile);
         } else if (stepId === "video") {
           await handleGenerateVideo(unitId, scriptFile);
@@ -402,6 +435,7 @@ export function StudioCanvasRouter() {
     }
   }, [currentProjectName, t]);
 
+  // Refresh after version restore and media upload; resolves to whether synced, callers use it to decide whether to report success.
   // 版本恢复与媒体上传之后的刷新；resolve 为是否已同步，调用方据此决定是否报告成功。
   const handleRestoreAsset = refreshAfterAction;
 
@@ -418,6 +452,9 @@ export function StudioCanvasRouter() {
     void handleGenerateProduct(...args).catch(console.error);
   }, [handleGenerateProduct]);
 
+  // `currentProjectName` lands before the detail arrives (see the first-load comment in router.tsx);
+  // checking only it would, when a deep link (/characters etc.) opens directly or the detail is slow, render empty collections as an interactive
+  // "empty project" page; `projectDetailLoading` is the signal for whether the detail has arrived.
   // `currentProjectName` 在详情到达前就已落地（见 router.tsx 首屏加载的注释），
   // 仅查它会在深链（/characters 等）直接打开或详情较慢时把空集合渲染成可交互的
   // 「空项目」页面；`projectDetailLoading` 才是详情是否已到达的信号。
@@ -440,7 +477,7 @@ export function StudioCanvasRouter() {
       </Route>
 
       <Route path={`/${WORKSPACE_ROUTE_EPISODES}`}>
-        {/* 演示项目后端不存在，广告/短片恒单集、不经分集；侧栏已隐藏入口，这里兜底直接输入 URL 的情形 */}
+        {/* The demo project has no backend, ad/short is always single-episode without episode planning; the sidebar hides the entry, this covers a directly typed URL / 演示项目后端不存在，广告/短片恒单集、不经分集；侧栏已隐藏入口，这里兜底直接输入 URL 的情形 */}
         {demoMode || currentProjectData?.content_mode === "ad" ? (
           <Redirect to="/" />
         ) : (
@@ -501,7 +538,7 @@ export function StudioCanvasRouter() {
       </Route>
 
       <Route path={`/${WORKSPACE_ROUTE_FILES}`}>
-        {/* 演示项目后端不存在，侧栏已隐藏入口，这里兜底直接输入 URL 的情形 */}
+        {/* The demo project has no backend; the sidebar hides the entry, this covers a directly typed URL / 演示项目后端不存在，侧栏已隐藏入口，这里兜底直接输入 URL 的情形 */}
         {demoMode ? <Redirect to="/" /> : <FileView key={currentProjectName} projectName={currentProjectName} />}
       </Route>
 
@@ -512,14 +549,19 @@ export function StudioCanvasRouter() {
           const scriptFile = episode?.script_file?.replace(/^scripts\//, "");
           const script = scriptFile ? (currentScripts[scriptFile] ?? null) : null;
           const route = normalizeRoute(currentProjectData?.generation_mode);
+          // The server has already narrowed by the project generation mode (whether it uses the reference image path) and the saved resolution.
+          // reference_video reference image constraints apply per unit, not per episode: which bucket each unit lands in and which options are available
+          // are decided per unit by the server from available reference images, arriving with the unit list (reference-video-store), not passed down from here.
           // 服务端已按项目生成模式（是否走参考图路径）与已保存分辨率收窄。
           // reference_video 的参考图约束按 unit 而非按集生效：每个 unit 落哪个桶、可选哪些档位
           // 由服务端按可用参考图逐单元判定，随单元列表到达（reference-video-store），不从这里下发。
           const durationOptions = capabilities.supportedDurations ?? undefined;
+          // The content review page picks durations by the script plan options: with a fixed endpoint supportedDurations is empty but planning still has borrowed options.
           // 内容确认页按剧本规划档位选时长：端点固定时 supportedDurations 为空，规划仍有借用档位。
           const planDurationOptions = capabilities.planningDurations ?? undefined;
           const durationWarningReason = (seconds: number) =>
             durationOutOfRangeReason(seconds, capabilities);
+          // The two causes of an empty option set get different messages for the user: the model has no registered durations vs this workflow sets its own clip length.
           // 档位空集的两种成因说给用户听的不是同一句：型号没登记时长 vs 这份 workflow 自己定片长。
           const durationEndpointFixed = capabilities.durationEndpointFixed;
           const hasDraft =
@@ -534,6 +576,9 @@ export function StudioCanvasRouter() {
               demo={demoMode}
               onSaveTitle={(title) => handleUpdateEpisodeTitle(epNum, title)}
               onViewUnit={handleViewWorkflowUnit}
+              // Reference-to-video queueing is handled by ReferenceVideoCanvas's own whole-batch admission path;
+              // this component's per-unit callbacks cannot resolve prompts from a video_units script, so pressing would do nothing.
+              // This generation mode only offers a "View" jump; the regenerate entry is on the unit card it jumps to.
               // 参考生视频的视频入队由 ReferenceVideoCanvas 自己的整批准入判定路径承担，
               // 本组件的逐单元回调对 video_units 剧本解不出提示词、按下去毫无反应。
               // 该生成模式只给「查看」跳转，重生入口在跳过去的那张单元卡上。
@@ -543,10 +588,15 @@ export function StudioCanvasRouter() {
                   : (stepId, unitIds) => void handleWorkflowRegenerate(stepId, unitIds, scriptFile)
               }
               renderCanvas={({ view, onViewChange }) => (
+                // When a lazy canvas chunk has not arrived or failed to load, show a placeholder only in the canvas area; header and view switcher stay visible
                 // 懒加载画布的 chunk 未到达或加载失败时只在画布区域显示占位，页头与视图切换保持可见
                 <LazyBoundary variant="pane">
                   {route === "reference_video" ? (
                     <ReferenceVideoCanvas
+                      // Not remounting the same epNum across projects leaves optimisticUnitIds / prevTaskStatusRef
+                      // with the previous project's state (e.g. "E1U1" lingering in the set); switching to a new project with a same-named unit
+                      // then misjudges busy via "optimistic && !hasQueueRow". Changing the key to project::episode
+                      // isolates instances per project naturally, avoiding explicit pruning logic.
                       // 同一 epNum 跨项目不 remount 会让 optimisticUnitIds / prevTaskStatusRef
                       // 残留上个项目的状态（例如 "E1U1" 长驻 set 里），切到同名 unit 的新项目
                       // 时 "optimistic && !hasQueueRow" 会误判 busy。改 key 到 project::episode
@@ -594,6 +644,9 @@ export function StudioCanvasRouter() {
                     />
                   ) : (
                     <TimelineCanvas
+                      // Same as ReferenceVideoCanvas (above): not remounting the same epNum across projects
+                      // leaves TimelineCanvas's internal useState / useRef (selected scene, draft buffer,
+                      // scroll position etc.) with the previous project's values. Including projectName in the key isolates per project naturally.
                       // 和 ReferenceVideoCanvas (上方) 同理：同 epNum 跨项目不 remount
                       // 会让 TimelineCanvas 内部的 useState / useRef（选中 scene、草稿缓冲、
                       // 滚动位置等）残留上一个项目的值。key 带上 projectName 天然按项目隔离。
@@ -632,7 +685,7 @@ export function StudioCanvasRouter() {
         }}
       </Route>
 
-      {/* 没有路由承接的子路径（含已移除的 lorebook、clues）：画布内显示空状态，外壳保留 */}
+      {/* Subpaths with no route (including the removed lorebook, clues): show an empty state in the canvas, keep the shell / 没有路由承接的子路径（含已移除的 lorebook、clues）：画布内显示空状态，外壳保留 */}
       <Route>
         <WorkspaceNotFound />
       </Route>

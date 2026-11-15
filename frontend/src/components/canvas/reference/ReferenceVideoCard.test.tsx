@@ -8,6 +8,7 @@ import { useProjectsStore } from "@/stores/projects-store";
 import type { ProjectData } from "@/types";
 import type { ReferenceVideoUnit } from "@/types/reference-video";
 
+// Same shape as the backend: a unit has only one body `text`; duration sits separately on the unit.
 // 形状同后端：单元只有一段正文 `text`，时长单独落在单元上。
 function mkUnit(overrides: Partial<ReferenceVideoUnit> = {}): ReferenceVideoUnit {
   return {
@@ -29,6 +30,9 @@ function mkUnit(overrides: Partial<ReferenceVideoUnit> = {}): ReferenceVideoUnit
   };
 }
 
+// The parent passes prompt in as a controlled value; a lightweight wrapper simulates lifted state in the test,
+// so consecutive keystrokes from userEvent.type accumulate in the textarea. Otherwise the `value` prop is fixed,
+// every keystroke is reverted by React to the initial value, and `user.type` assertions fail.
 // 父组件把 prompt 当作受控值传入；用一个轻量 wrapper 在测试中模拟 lifted 状态，
 // 这样 userEvent.type 产生的连续击键能在 textarea 上累计。否则 `value` prop 固定，
 // 每次 keystroke 都会被 React 回退到初值，`user.type` 的断言就不成立。
@@ -75,6 +79,7 @@ afterEach(() => {
 });
 
 describe("ReferenceVideoCard", () => {
+  // The body is the single source of truth: the editor shows `text` verbatim and synthesizes no prefix.
   // 正文是唯一真相：编辑器逐字展示 `text`，不合成任何前缀。
   it("renders the unit body verbatim, multi-line included", () => {
     const unit = mkUnit({ text: "line1\nline2", duration_seconds: 8 });
@@ -98,6 +103,7 @@ describe("ReferenceVideoCard", () => {
   });
 
   it("highlights inline speech marks in the editor overlay", () => {
+    // The highlight layer follows the same rules as the preview (ScriptHighlight): token source text is kept verbatim, only background color and speaker title are added.
     // 高亮层与预览（ScriptHighlight）同口径：记号原文逐字保留，只加底色与说话人 title。
     const unit = mkUnit({ text: "门开了。@[张三]：{我来了}", duration_seconds: 3 });
     const { container } = render(<ControlledCard unit={unit} />);
@@ -131,10 +137,13 @@ describe("ReferenceVideoCard", () => {
     await user.type(ta, "推门而入。@主角");
     const lastCall = onChange.mock.calls.at(-1)!;
     expect(lastCall[0]).toBe("推门而入。@主角");
+    // The Card reports only the body upward: reference images are resolved from `@[name]` at execution time, not carried along while editing.
     // Card 只向上报正文：参考图在执行期从 `@[名称]` 解析，不在编辑时随行。
     expect(lastCall).toHaveLength(1);
   });
 
+  // Regression: when scanning for @, Chinese punctuation (full-width period, comma, etc.) should break, so the caret in "eye@<period>|" is not mistaken for
+  // a mention being typed, or a picker with query=<period> that is always empty would pop up.
   // 回归：扫 @ 时遇到中文标点（"。"/"，"等）应 break，不能把"眼@。|"的光标误识为
   // 正在输入的 mention，否则会弹出 query="。" 的永远空 picker。
   it("does not open the picker when cursor sits after a punctuation following an orphan '@'", async () => {
@@ -146,11 +155,13 @@ describe("ReferenceVideoCard", () => {
     await user.clear(ta);
     await user.type(ta, "眼@");
     expect(await screen.findByRole("listbox")).toBeInTheDocument();
+    // Abandon this mention and type a Chinese full stop
     // 放弃这次 mention，输入中文句号
     await user.type(ta, "。");
     await waitFor(() =>
       expect(screen.queryByRole("listbox")).not.toBeInTheDocument(),
     );
+    // Moving the caret with left/right arrow keys should not "revive" that dangling @ either
     // 方向键左右移动光标，也不应"复活"那个悬挂的 @
     await user.keyboard("{ArrowLeft}{ArrowRight}");
     expect(screen.queryByRole("listbox")).not.toBeInTheDocument();
@@ -202,6 +213,7 @@ describe("ReferenceVideoCard", () => {
   });
 
   it("offers each character form and inserts the derivative reference verbatim", async () => {
+    // A derivative is a separate reference name: candidates show it as "base / derivative", and what is inserted into the body is still `@[base/derivative]`.
     // 衍生是独立的引用名：候选里显示为「本体 / 衍生」，插进正文的仍是 `@[本体/衍生]`。
     useProjectsStore.setState({
       currentProjectName: "proj",
@@ -258,6 +270,7 @@ describe("ReferenceVideoCard", () => {
     );
   });
 
+  // Two Backspaces delete: the first highlights the whole @mention, the second deletes via the default delete-selection.
   // Backspace 两次删除：第一次高亮整个 @mention，第二次由默认 delete-selection 完成删除。
   it("first Backspace next to a mention selects it; second deletes the whole chip", async () => {
     const user = userEvent.setup();
@@ -268,6 +281,7 @@ describe("ReferenceVideoCard", () => {
     ta.focus();
     ta.setSelectionRange(ta.value.length, ta.value.length);
 
+    // First Backspace: select the whole @protagonist, text unchanged
     // 第一次 Backspace：选中整个 @主角，不变更文本
     await user.keyboard("{Backspace}");
     expect(ta.value.endsWith("@主角")).toBe(true);
@@ -275,6 +289,7 @@ describe("ReferenceVideoCard", () => {
     const selected = ta.value.slice(ta.selectionStart, ta.selectionEnd);
     expect(selected).toBe("@主角");
 
+    // Second Backspace: the browser's default delete-selection behavior deletes the whole selection
     // 第二次 Backspace：浏览器默认 delete-selection 行为删除整个选区
     await user.keyboard("{Backspace}");
     expect(ta.value.endsWith("@主角")).toBe(false);
@@ -305,6 +320,7 @@ describe("ReferenceVideoCard combobox ARIA", () => {
     expect(ta).toHaveAttribute("aria-expanded", "false");
     expect(ta).toHaveAttribute("aria-controls", "reference-editor-picker");
     expect(ta).toHaveAttribute("aria-autocomplete", "list");
+    // aria-label is the short name, not the long placeholder
     // aria-label 是短名，不是长 placeholder
     expect(ta).toHaveAttribute("aria-label", "视频单元提示词");
 
@@ -313,6 +329,7 @@ describe("ReferenceVideoCard combobox ARIA", () => {
     await waitFor(() => {
       expect(ta).toHaveAttribute("aria-expanded", "true");
     });
+    // activedescendant points to the first option's id (initial activeIndex=0)
     // activedescendant 指向第一个 option 的 id（初始 activeIndex=0）
     const firstOption = screen.getAllByRole("option")[0];
     expect(firstOption.id).toBeTruthy();
@@ -333,7 +350,7 @@ describe("ReferenceVideoCard combobox ARIA", () => {
   });
 
   it("omits aria-describedby when there are no unknown mentions", () => {
-    renderCard(mkUnit()); // default: "hi"，无 mention
+    renderCard(mkUnit()); // default: "hi", no mention / default: "hi"，无 mention
     const ta = screen.getByRole("combobox");
     expect(ta).not.toHaveAttribute("aria-describedby");
   });
@@ -386,6 +403,7 @@ describe("ReferenceVideoCard final prompt preview", () => {
     expect(within(dialog).getByText("本次请求不携带参考图")).toBeInTheDocument();
   });
 
+  // The prompt is body text and uses a proportional font together with the coloring mirror layer; the caret lines up with the coloring only if both layers use the same font.
   // 提示词是正文，与着色镜像层一起用比例字体；两层字体一致，光标才对得上着色。
   it("keeps the prompt editor and its overlay in the proportional font", () => {
     const { container } = render(<ControlledCard unit={mkUnit({ text: "张三推开了门。" })} />);

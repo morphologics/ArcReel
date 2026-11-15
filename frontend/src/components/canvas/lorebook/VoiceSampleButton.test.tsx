@@ -31,6 +31,7 @@ describe("VoiceSampleButton", () => {
     expect(button).toBeDisabled();
     expect(screen.getByText("请先在设置中配置音频供应商")).toBeInTheDocument();
 
+    // When the entry is disabled the dialog does not open, and the voice list is not prefetched for each character
     // 入口禁用即不打开弹窗，也不为每个角色预取音色列表
     fireEvent.click(button);
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
@@ -54,6 +55,7 @@ describe("VoiceSampleButton", () => {
     await waitFor(() => {
       expect(screen.getByRole("combobox", { name: "音色" })).toHaveTextContent("芊悦 · 阳光正向的自然年轻女声");
     });
+    // The default text is prefilled by UI language and is editable
     // 默认文案按界面语言预填，且可编辑
     expect(screen.getByDisplayValue(/这是一段声音示例/)).toBeInTheDocument();
   });
@@ -85,12 +87,14 @@ describe("VoiceSampleButton", () => {
       expect(screen.getByRole("combobox", { name: "音色" })).toHaveTextContent("芊悦 · 阳光正向的自然年轻女声");
     });
 
+    // Click "Generate" to submit sample A; taskId settles to task-1.
     // 点击「生成」提交样本 A，taskId 落定为 task-1。
     fireEvent.click(screen.getByRole("button", { name: "生成" }));
     await waitFor(() => {
       expect(generationActions.enqueueCharacterVoiceSample).toHaveBeenCalled();
     });
 
+    // Sample A succeeds; play it, setting isPreviewPlaying to true.
     // 样本 A 成功，播放它——isPreviewPlaying 置 true。
     useTasksStore.setState({
       tasks: [
@@ -113,6 +117,8 @@ describe("VoiceSampleButton", () => {
       expect(screen.getByRole("button", { name: "暂停" })).toBeInTheDocument();
     });
 
+    // Click "Regenerate": taskId clears and the old <audio> unmounts; isPreviewPlaying must reset in sync,
+    // or after the new sample mounts it still shows "Pause" and the user cannot play it.
     // 点击「重新生成」：taskId 清空、旧 <audio> 卸载，isPreviewPlaying 须同步复位，
     // 否则新样本挂载后仍显示「暂停」，用户无法播放它。
     fireEvent.click(screen.getByRole("button", { name: /重新生成/ }));
@@ -166,6 +172,8 @@ describe("VoiceSampleButton", () => {
       expect(screen.getByRole("button", { name: "暂停" })).toBeInTheDocument();
     });
 
+    // Close the dialog (not via "Regenerate") and reopen it: isPreviewPlaying must reset likewise, or after reopening
+    // the new, not yet played session renders as "Pause" because of the stale true value.
     // 关闭弹窗(不经「重新生成」)再重新打开:isPreviewPlaying 须同样复位,否则重开后
     // 尚未播放的新会话会因这个陈旧的 true 值渲染成「暂停」。
     fireEvent.click(screen.getByRole("button", { name: "取消" }));
@@ -183,6 +191,8 @@ describe("VoiceSampleButton", () => {
       model: "qwen3-tts-flash",
       voices: [{ id: "Cherry", label: "芊悦 · 阳光正向的自然年轻女声" }],
     });
+    // Control resolve timing manually: simulate the gap after the enqueue request has returned successfully but before the next poll
+    // writes the real task row into tasks-store.
     // 手动控制 resolve 时机：模拟 enqueue 请求已成功返回、但下一次轮询把真实任务行
     // 写进 tasks-store 之前的那段空窗。
     let resolveEnqueue: (value: { taskIds: string[]; deduped: boolean }) => void;
@@ -202,6 +212,9 @@ describe("VoiceSampleButton", () => {
       expect(screen.getByRole("button", { name: "取消" })).toBeDisabled();
     });
 
+    // The enqueue request resolves: taskId settles to task-1, but tasks-store has no row yet;
+    // during the gap "Cancel" must stay disabled, or the user could close the dialog and lose the tracking entry
+    // for a task that is still synthesizing and already billed.
     // enqueue 请求 resolve：taskId 落定为 task-1，但 tasks-store 里还没有这一行——
     // 空窗期间「取消」仍须保持禁用，否则用户可以关闭弹窗、丢失一个仍在合成且已计费
     // 任务的追踪入口。
@@ -272,6 +285,8 @@ describe("VoiceSampleButton", () => {
       expect(screen.getByRole("button", { name: "确认并保存" })).toBeInTheDocument();
     });
 
+    // After generating successfully with Cherry, switch to Serena: Confirm still points at the old bytes synthesized by Cherry; keeping it shown
+    // would mislead the user into thinking they confirm the currently selected Serena, so hide it along with the selection change and force regeneration.
     // 用 Cherry 生成成功后改选 Serena：Confirm 此时仍指向 Cherry 合成的旧字节，继续显示
     // 会诱导用户以为确认的是当前选中的 Serena——须随选择变化一并隐藏，逼用户重新生成。
     await userEvent.click(screen.getByRole("combobox", { name: "音色" }));
@@ -300,6 +315,8 @@ describe("VoiceSampleButton", () => {
     });
 
     fireEvent.click(screen.getByRole("button", { name: "生成" }));
+    // While a Cherry/default-text synthesis is still running, voice and text must be locked, so that when Confirm appears after the user switches midway
+    // there is no mismatch of "UI shows the new choice, but the old synthesis result is what gets saved".
     // 提交 Cherry/默认文案的合成尚未完成时，音色与文案须锁定，避免用户中途改选后 Confirm
     // 出现时挂着「界面显示新选择、实际保存的却是旧合成结果」的错配。
     await waitFor(() => {
@@ -350,6 +367,7 @@ describe("VoiceSampleButton", () => {
       expect(generationActions.enqueueCharacterVoiceSample).toHaveBeenCalled();
     });
 
+    // The task row first lands as running.
     // 任务行先落地为 running。
     useTasksStore.setState({
       tasks: [
@@ -368,6 +386,9 @@ describe("VoiceSampleButton", () => {
       expect(screen.getByRole("button", { name: "取消" })).toBeDisabled();
     });
 
+    // Many new tasks push this row out of tasks-store's latest-200 snapshot; the last observed status is still
+    // running, and the server is likely still running it, so keep treating it as occupied; releasing would lose tracking of a still-billing task,
+    // or let a later new submission be wrongly merged by dedupe into a task this client can no longer see.
     // 大量新任务把这一行挤出 tasks-store 的最新 200 条快照——最后一次观察到的状态仍是
     // running，很可能服务端仍在跑，须继续按占用处理；放行会丢失一个仍在计费任务的追踪，
     // 或让随后的新提交被 dedupe 误合并进这个客户端已经看不到的任务。
@@ -417,6 +438,8 @@ describe("VoiceSampleButton", () => {
       expect(screen.getByRole("button", { name: "确认并保存" })).toBeInTheDocument();
     });
 
+    // Pushed out of the snapshot after success: it reached a terminal state, the cached last observation stays valid and must not revert to locked;
+    // Confirm stays clickable (reuses the already validated artifact, not lost because of snapshot trimming).
     // 成功后被挤出快照：已到终态，缓存的最后一次观察结果仍然有效，不应变回锁死态，
     // Confirm 依旧可点（复用已校验过的产物，不因快照裁剪而丢失）。
     useTasksStore.setState({ tasks: [] });

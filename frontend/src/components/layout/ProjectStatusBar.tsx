@@ -35,27 +35,27 @@ import {
 } from "./project-guide";
 import { MigrationReportNotice } from "./MigrationReportNotice";
 
-/** 任务状态连续跳变时合并成一次重新求解的窗口（毫秒），与集页面板同一取值。 */
+/** Window (ms) for merging rapid task-status changes into one re-solve; same value as the episode page panel. / 任务状态连续跳变时合并成一次重新求解的窗口（毫秒），与集页面板同一取值。 */
 const STATUS_REFRESH_DEBOUNCE_MS = 250;
 
-/** 平的状态面：不内凹、不含凸起亮片，避免读成分段开关。 */
+/** Flat status surface: not inset, no raised highlight chip, so it does not read as a segmented toggle. / 平的状态面：不内凹、不含凸起亮片，避免读成分段开关。 */
 const SHELL = "inline-flex h-7 items-center overflow-hidden rounded-full border";
 const SHELL_FLAT = cn(SHELL, "border-border bg-card");
 const SHELL_WARM = cn(SHELL, "border-warn/30 bg-warn/10");
-/** 状态条上的一段：原生按钮，交给 PopoverTrigger 的 render 渲染。 */
+/** One segment of the status bar: a native button rendered via PopoverTrigger's render. / 状态条上的一段：原生按钮，交给 PopoverTrigger 的 render 渲染。 */
 const SEGMENT =
   "focus-ring inline-flex h-full items-center gap-1.5 whitespace-nowrap px-3 text-xs transition-colors duration-fast enabled:hover:bg-foreground/5 disabled:cursor-default";
 
 type Open = "episodes" | "next" | null;
 
-/** 当前所在集页的集 ID；不在集页时为 null。 */
+/** Episode ID of the current episode page; null when not on an episode page. / 当前所在集页的集 ID；不在集页时为 null。 */
 function useCurrentEpisodeId(): number | null {
   const [location] = useLocation();
   const match = /^\/episodes\/(\d+)/.exec(location);
   return match ? Number(match[1]) : null;
 }
 
-/** 项目层的制作状态：随项目快照与本项目任务的变化重新求解。 */
+/** Project-level workflow status: re-solved as the project snapshot and this project's tasks change. / 项目层的制作状态：随项目快照与本项目任务的变化重新求解。 */
 function useProjectWorkflowStatus(projectName: string, enabled: boolean): WorkflowStatus | null {
   const [status, setStatus] = useState<WorkflowStatus | null>(null);
   const snapshotRevision = useProjectsStore((s) => s.projectSnapshotRevisions[projectName] ?? 0);
@@ -73,6 +73,7 @@ function useProjectWorkflowStatus(projectName: string, enabled: boolean): Workfl
     API.getWorkflowStatus(projectName, { signal: controller.signal })
       .then(setStatus)
       .catch(() => {
+        // A failed status solve only hides the right segment for now and does not interrupt the workbench; the next snapshot change retries.
         // 状态求解失败只让右段暂不显示，不打断工作台；下一次快照变化会重试。
         if (!controller.signal.aborted) setStatus(null);
       });
@@ -86,7 +87,7 @@ function Divider({ warm }: { warm?: boolean }) {
   return <span aria-hidden className={cn("h-3.5 w-px", warm ? "bg-warn/30" : "bg-border")} />;
 }
 
-/** 15px 进度环，与数字徽标同尺寸。 */
+/** 15px progress ring, same size as the number badge. / 15px 进度环，与数字徽标同尺寸。 */
 function Ring({ done, total }: { done: number; total: number }) {
   const r = 6;
   const c = 2 * Math.PI * r;
@@ -279,7 +280,7 @@ function EpisodeList({
   );
 }
 
-/** 迁移失败：整条变暖色，「重试」直接重跑数据升级链；失败后标题带次数，弹层自动展开原因。 */
+/** Migration failed: the whole bar turns warm-colored, "Retry" re-runs the data upgrade chain directly; after a failure the title shows the attempt count and the popover opens with the reason. / 迁移失败：整条变暖色，「重试」直接重跑数据升级链；失败后标题带次数，弹层自动展开原因。 */
 function MigrationBar({ projectName, reason }: { projectName: string; reason: string | null }) {
   const { t } = useTranslation("dashboard");
   const [open, setOpen] = useState(false);
@@ -293,7 +294,7 @@ function MigrationBar({ projectName, reason }: { projectName: string; reason: st
     setRunning(true);
     try {
       await API.retryProjectMigration(projectName);
-      // 升级已完成；刷新失败时只给刷新失败的提示，不同时报告成功
+      // Upgrade done; if the refresh fails, only show the refresh-failure hint, not success at the same time / 升级已完成；刷新失败时只给刷新失败的提示，不同时报告成功
       if ((await refreshAfterWrite(projectName, t)) === "success") {
         useAppStore.getState().pushToast(t("migration_retry_succeeded"), "success");
       }
@@ -318,7 +319,7 @@ function MigrationBar({ projectName, reason }: { projectName: string; reason: st
   return (
     <div ref={anchorRef} className={SHELL_WARM}>
       <Popover open={open} onOpenChange={setOpen}>
-        {/* 顶栏窄时只留图标与「重试」，标题收进无障碍名称与弹层。 */}
+        {/* When the top bar is narrow keep only the icon and "Retry"; the title moves into the accessible name and the popover. / 顶栏窄时只留图标与「重试」，标题收进无障碍名称与弹层。 */}
         <PopoverTrigger render={<button type="button" className={SEGMENT} aria-label={title} />}>
           <AlertTriangle aria-hidden className="size-3.5 text-warn" />
           <span aria-hidden className="hidden text-foreground @3xl/header:inline">
@@ -358,6 +359,10 @@ function MigrationBar({ projectName, reason }: { projectName: string; reason: st
 }
 
 /**
+ * Status bar in the middle of the top bar: left segment is episode progress (opens a per-episode list), right segment is the project-level next step (opens an explanation and button).
+ * When the data upgrade fails, the whole bar switches to the migration form; when the upgrade has a report not yet acknowledged, a dismissible upgrade notice sits beside it.
+ * It only projects the project summary and workflow status from the backend and does not infer the next step itself.
+ *
  * 顶栏中间的状态条：左段是集进度（点开是逐集清单），右段是项目层的下一步（点开是说明与按钮）。
  * 数据升级失败时整条换成迁移形态；升级有报告且尚未确认过时，旁边多一枚可关闭的升级提示。
  * 只投影后端给出的项目摘要与制作状态，不自行推断下一步。
@@ -402,8 +407,10 @@ export function ProjectStatusBar({ projectName }: { projectName: string }) {
           ? t("guide_ad_completed")
           : t("guide_ad_incomplete")
         : t("guide_progress", { done, total });
+  // On an episode page: when the project-level next step points to this episode, yield to this episode's panel so no duplicate button appears.
   // 集页上：项目层下一步指向本集时让位给本集面板，不出现两个重复的按钮。
   const yieldToPanel = guide !== null && currentEpisode !== null && guide.episodeId === currentEpisode;
+  // Every episode done and no source remaining: the right segment only states "All done", with no action. For ads, the left segment already says "Short done".
   // 每集都完成且源文没有剩余：右段只陈述「全部完成」，不带动作。广告的左段已写「短片已完成」。
   const allComplete = guide === null && !isAd && workflowStatus?.content?.project_complete === true;
 

@@ -14,6 +14,8 @@ function toolUse(name: string, id: string): ContentBlock {
   return { type: "tool_use", name, id, input: {} };
 }
 
+// The frontend projection layer (entry-projection) backfills paired tool_result entries into the result/is_error fields of the initiating tool_use block,
+// so completed calls have no separate tool_result block. This is the shape the UI actually renders.
 // 前端投影层（entry-projection）把配对的 tool_result 条目回填进发起调用的 tool_use 块的
 // result/is_error 字段，完成的调用没有独立 tool_result 块。这是 UI 真实渲染的形状。
 function completedToolUse(name: string, id: string): ContentBlock {
@@ -122,6 +124,9 @@ describe("useScriptGenerationNotice", () => {
   });
 
   it("does not fire when a running session reloads a completed script call (result merged onto tool_use)", () => {
+    // When the session is paused at AskUserQuestion the backend status is still "running". Re-entering the project reloads the snapshot,
+    // where completed script tool calls replay as "tool_use with result" (no separate tool_result block).
+    // This replay should not show the "taking a while" notice again.
     // 会话停在 AskUserQuestion 时后端 status 仍为 "running"。重新进入项目会重载快照，
     // 其中已完成的剧本工具调用以「tool_use 带 result」形式回放（无独立 tool_result 块）。
     // 该回放不应再弹「耗时」提示。
@@ -144,6 +149,8 @@ describe("useScriptGenerationNotice", () => {
   });
 
   it("treats a failed-but-completed call (only is_error, no result) as completed", () => {
+    // The comments and the ContentBlock contract list both result and is_error as completion signals. Even replaying a failed completion block with only
+    // is_error and no result should not be misjudged as in progress and show the "taking a while" notice.
     // 注释与 ContentBlock 契约把 result/is_error 都列为完成信号。即便回放一个仅带
     // is_error 而无 result 的失败完成块，也不应被误判为进行中而弹「耗时」提示。
     useAssistantStore.setState({ sessionStatus: "running" });

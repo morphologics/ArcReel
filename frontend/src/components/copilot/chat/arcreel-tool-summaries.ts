@@ -1,6 +1,14 @@
 import type { SummaryFormat, ToolInput } from "./work-label";
 
 // ---------------------------------------------------------------------------
+// One-line summaries for ArcReel MCP tools: keys are tool ids (`mcp__arcreel__<id>` without the prefix); every
+// tool must be registered, tools without readable arguments are registered with an empty summary. tests/unit/test_frontend_mcp_tool_i18n.py
+// checks these keys against ARCREEL_MCP_TOOL_IDS in server/agent_toolset/toolset.py for missing or extra entries,
+// so keys keep the "two-space indent + tool id + colon" form, one per line.
+// Episode IDs, script file names and entry IDs are always replaced with episode names and in-episode numbers the creator recognizes (see SummaryFormat);
+// when an entry number already carries the episode name, the script's episode isn't repeated.
+// Opaque IDs such as edit timelines and generation batches stay out of summaries.
+// ---------------------------------------------------------------------------
 // ArcReel MCP 工具的一句摘要：键是工具 id（`mcp__arcreel__<id>` 去掉前缀），每个
 // 工具都要登记，没有可读参数的工具登记为空摘要。tests/unit/test_frontend_mcp_tool_i18n.py
 // 按 server/agent_toolset/toolset.py 的 ARCREEL_MCP_TOOL_IDS 校验这里的键没有缺漏与多余，

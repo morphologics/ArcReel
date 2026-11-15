@@ -24,15 +24,15 @@ import type { Asset, AssetType } from "@/types/asset";
 import { ASSET_TYPE_ICON } from "./asset-type-icons";
 import { AssetThumb } from "./AssetThumb";
 
-/** 入库预览展示的项目资产内容，取项目里已保存的数据：入库时后端照这份数据复制。 */
+/** Project asset content shown in the add-to-library preview, taken from the data saved in the project: the backend copies exactly this data on add. / 入库预览展示的项目资产内容，取项目里已保存的数据：入库时后端照这份数据复制。 */
 export interface LibraryImportPreview {
   description: string;
-  /** 角色的声音风格。 */
+  /** The character's voice style. / 角色的声音风格。 */
   voiceStyle?: string;
-  /** 角色是否有参考音频。 */
+  /** Whether the character has reference audio. / 角色是否有参考音频。 */
   hasReferenceAudio?: boolean;
   sheetPath?: string | null;
-  /** 角色的衍生数量。 */
+  /** The character's derivative count. / 角色的衍生数量。 */
   derivativeCount?: number;
 }
 
@@ -41,11 +41,14 @@ interface Props {
   resourceId: string;
   projectName: string;
   preview: LibraryImportPreview;
-  /** 资源被生成或编辑任务占用：禁用入库，避免把编辑前的旧图复制进全局资产库。 */
+  /** Resource is occupied by a generation or edit task: disable adding to library, to avoid copying the pre-edit old image into the global asset library. / 资源被生成或编辑任务占用：禁用入库，避免把编辑前的旧图复制进全局资产库。 */
   busy?: boolean;
 }
 
 /**
+ * Copy an asset from the project into the global asset library. The dialog shows a read-only preview of what will be copied; only the name can be changed.
+ * Controlled open: the entry point is "Add to asset library" in the gallery card's "More" menu.
+ *
  * 把项目里的资产复制到全局资产库。对话框只读预览将要复制的内容，只有名称可以修改。
  * 受控打开：入口是画廊卡片「更多」菜单里的「加入资产库」。
  */
@@ -61,6 +64,7 @@ export function AddToLibraryDialog({
     <Dialog
       open={open}
       onOpenChange={(next) => {
+        // While the request is in flight, ignore Esc and overlay clicks, so the dialog does not vanish before the add result comes back
         // 请求在途时不响应 Esc 与遮罩点击，避免入库结果还没回来对话框先消失
         if (!next && submitting) return;
         onOpenChange(next);
@@ -68,6 +72,7 @@ export function AddToLibraryDialog({
     >
       <DialogContent showCloseButton={!submitting}>
         <AddToLibraryForm
+          // The name input starts from the resource name: when the resource changes, rebuild the whole form instead of keeping the previous resource's input
           // 名称输入框以资源名为初值：换了资源就整表重建，不沿用上一个资源的输入
           key={`${props.resourceType}:${props.resourceId}`}
           {...props}
@@ -98,7 +103,7 @@ function AddToLibraryForm({
 }) {
   const { t } = useTranslation("assets");
   const nameId = useId();
-  // react-doctor-disable-next-line react-doctor/no-derived-useState -- 资源名只作可编辑名称的初值，之后由用户修改；资源变化时调用处按 key 重建表单
+  // react-doctor-disable-next-line react-doctor/no-derived-useState -- The resource name is only the initial value of the editable name, then the user edits it; when the resource changes the caller rebuilds the form via key / 资源名只作可编辑名称的初值，之后由用户修改；资源变化时调用处按 key 重建表单
   const [name, setName] = useState(resourceId);
   const [conflict, setConflict] = useState<{ name: string; asset: Asset | null } | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -110,7 +115,7 @@ function AddToLibraryForm({
   const typeLabel = t(`type.${resourceType}`);
   const isCharacter = resourceType === "character";
 
-  // 资产库里同类型下名称唯一：名称变化后重新查一次是否重名。
+  // Names are unique per type in the asset library: re-check for duplicates after the name changes. / 资产库里同类型下名称唯一：名称变化后重新查一次是否重名。
   useEffect(() => {
     if (!checkedName) return;
     const controller = new AbortController();
@@ -120,6 +125,7 @@ function AddToLibraryForm({
         setConflict({ name: checkedName, asset: page.items.find((item) => item.name === checkedName) ?? null });
       },
       () => {
+        // If no duplicate is found, submit as usual; a real duplicate is rejected by the backend and the error is shown.
         // 查不到重名时照常提交，真有重名由后端拒绝并显示错误。
       },
     );
@@ -130,6 +136,8 @@ function AddToLibraryForm({
 
   const submit = async (overwrite: boolean) => {
     if (!trimmedName || submitting) return;
+    // After the dialog opens, the resource may become occupied by generation or editing via SSE, another tab or the Agent: re-check the latest occupied state on submit,
+    // to avoid copying the old image from the occupied period into the global asset library.
     // 弹窗打开后资源可能经 SSE、其他标签页或 Agent 进入生成或编辑占用态：提交时复核最新占用态，
     // 避免把占用期间的旧图复制进全局资产库。
     if (busy || isAssetBusy(resourceType, projectName, resourceId)) {

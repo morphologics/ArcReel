@@ -133,6 +133,7 @@ describe("config-status-store", () => {
 
     await useConfigStatusStore.getState().refresh();
 
+    // After a failed refresh it returns to uninitialized and clears the capability set: no consumer reads stale data anymore
     // 刷新失败后回到未初始化且清空能力集：任何消费方都不再读到过期数据
     expect(useConfigStatusStore.getState().initialized).toBe(false);
     expect(useConfigStatusStore.getState().availableMediaTypes).toEqual([]);
@@ -186,6 +187,7 @@ describe("config-status-store", () => {
         },
       ],
     });
+    // When the catalog is initialized the fetch() inside getConfigStatus short-circuits, and the endpoint->mediaType map comes from state
     // catalog 已初始化时 getConfigStatus 内的 fetch() 直接短路，endpoint→mediaType 映射取自 state
     useEndpointCatalogStore.setState({
       initialized: true,
@@ -240,6 +242,7 @@ describe("config-status-store", () => {
     await useConfigStatusStore.getState().fetch();
 
     expect(useConfigStatusStore.getState().hasMediaType("audio")).toBe(false);
+    // audio is an optional capability; its absence does not add to the issues dot
     // audio 是可选能力,缺失不进 issues 红点
     expect(useConfigStatusStore.getState().issues).toHaveLength(0);
   });
@@ -253,8 +256,9 @@ describe("config-status-store", () => {
     vi.spyOn(API, "getProviders").mockImplementation(async () => {
       providersCall += 1;
       if (providersCall === 1) {
+        // keep the first refresh in-flight, simulating "refresh after save" colliding with an ongoing load
         await gate; // 让首次刷新停在 in-flight,模拟"保存后刷新"撞上进行中的加载
-        return makeProviders(); // 旧数据:未就绪 → 有 issues
+        return makeProviders(); // old data: not ready -> has issues / 旧数据:未就绪 → 有 issues
       }
       return makeProviders([
         {
@@ -266,19 +270,20 @@ describe("config-status-store", () => {
           credential_count: 1,
           models: {},
         },
-      ]); // 新数据:全就绪 → 无 issues
+      ]); // new data: all ready -> no issues / 新数据:全就绪 → 无 issues
     });
     vi.spyOn(API, "listCustomProviders").mockResolvedValue({ providers: [] });
 
     const store = useConfigStatusStore.getState();
     const first = store.refresh();
-    const second = store.refresh(); // 命中 loading 守卫 → 应被合并而非丢弃
+    const second = store.refresh(); // hits the loading guard -> should be merged, not dropped / 命中 loading 守卫 → 应被合并而非丢弃
     expect(useConfigStatusStore.getState().pendingRefresh).toBe(true);
 
     release();
-    await first; // 首次刷新 + 合并补跑的尾部刷新都在此完成
+    await first; // the first refresh and the merged trailing refresh both complete here / 首次刷新 + 合并补跑的尾部刷新都在此完成
     await second;
 
+    // The trailing run really executed (getProviders called twice), and what finally landed is the latest data
     // 补跑确实执行(getProviders 被调两次),且最终落地的是最新数据
     expect(API.getProviders).toHaveBeenCalledTimes(2);
     expect(useConfigStatusStore.getState().issues).toHaveLength(0);

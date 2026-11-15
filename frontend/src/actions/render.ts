@@ -1,4 +1,10 @@
 /**
+ * Render enqueue actions: final cut rendering and JianYing draft export. The JianYing draft takes only the narration version from the options.
+ *
+ * Render-lane tasks occupy no resource slot and do not appear in the usage overlay, so no optimistic occupancy mark is set here;
+ * progress is polled by the render dialog using the returned task_id. When deduped=true (the same artifact already has a task in progress),
+ * a unified info toast is shown and the caller tracks the returned task_id as usual. Failures are always thrown upward for the caller to report.
+ *
  * 出片入队动作：成片渲染与剪映草稿导出。剪映草稿只取选项里的旁白版本。
  *
  * render 车道任务不占用任何资源槽，也不进用量悬浮层，因此这里不打乐观占用标记；

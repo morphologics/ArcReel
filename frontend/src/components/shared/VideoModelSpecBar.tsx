@@ -5,9 +5,9 @@ import { formatDurationsLabel } from "@/utils/duration_format";
 import type { VoiceConsistencyTier } from "@/types";
 
 // ---------------------------------------------------------------------------
-// 声音一致性档位元数据。
+// Audio consistency tier metadata. / 声音一致性档位元数据。
 //
-// 档位含义只在此处声明一次：颜色/图标/文案随档位联动，避免各调用点各拼一份判断。
+// Tier meaning is declared only here: color/icon/text follow the tier, so each call site doesn't assemble its own check. / 档位含义只在此处声明一次：颜色/图标/文案随档位联动，避免各调用点各拼一份判断。
 // ---------------------------------------------------------------------------
 
 const TIER_ICON: Record<VoiceConsistencyTier, typeof Mic> = {
@@ -22,13 +22,14 @@ const TIER_CLASS: Record<VoiceConsistencyTier, string> = {
   none: "border-border bg-foreground/5 text-muted-foreground",
 };
 
-/** 声音一致性档位徽章：图标 + 文案 + 悬停说明。 */
+/** Audio consistency tier badge: icon + text + hover description. / 声音一致性档位徽章：图标 + 文案 + 悬停说明。 */
 export function VoiceConsistencyBadge({ tier }: { tier: VoiceConsistencyTier }) {
   const { t } = useTranslation("dashboard");
   const Icon = TIER_ICON[tier];
   const label = t(`voice_consistency_${tier}_label`);
   const desc = t(`voice_consistency_${tier}_desc`);
   return (
+    // If the degradation note were only on title, screen reader users couldn't read it; add role="note" + aria-label to put it in the accessibility tree.
     // 降级口径只挂 title 的话读屏用户读不到；补 role="note" + aria-label 让它进无障碍树。
     <span
       role="note"
@@ -43,19 +44,20 @@ export function VoiceConsistencyBadge({ tier }: { tier: VoiceConsistencyTier }) 
 }
 
 export interface VideoModelSpecBarProps {
-  /** 未收窄的模型原生时长全集；未知为 null。 */
+  /** Full set of the model's native durations, not narrowed; null when unknown. / 未收窄的模型原生时长全集；未知为 null。 */
   durations: number[] | null;
   resolutions: string[];
-  /** 声音一致性档位；未知（能力未查到）为 null。音轨格同源于此——tier !== "none" 即有声。 */
+  /** Audio consistency tier; null when unknown (capabilities not found). The audio track cell comes from the same source: tier !== "none" means with audio. / 声音一致性档位；未知（能力未查到）为 null。音轨格同源于此——tier !== "none" 即有声。 */
   tier: VoiceConsistencyTier | null;
 }
 
-/** 选择器下方的规格条：时长 / 分辨率 / 音轨 / 声音一致性，四格集中展示当前选中模型的能力。 */
+/** Spec bar below the selector: duration / resolution / audio track / audio consistency, four cells showing the selected model's capabilities together. / 选择器下方的规格条：时长 / 分辨率 / 音轨 / 声音一致性，四格集中展示当前选中模型的能力。 */
 export function VideoModelSpecBar({ durations, resolutions, tier }: VideoModelSpecBarProps) {
   const { t } = useTranslation("dashboard");
 
   const cells: { label: string; content: React.ReactNode }[] = [
     {
+      // The spec bar shows the full set of durations the model supports, not templates:duration_label ("Default duration", a user preference).
       // 规格条展示的是模型支持的时长全集，不是 templates:duration_label（「默认时长」，用户偏好）。
       label: t("video_spec_duration_label"),
       content:
@@ -93,6 +95,7 @@ export function VideoModelSpecBar({ durations, resolutions, tier }: VideoModelSp
     },
   ];
 
+  // Two or four columns depend on the spec bar's own width: it appears in global settings, project settings and the new project wizard.
   // 两列还是四列取决于规格条自身的宽度：它会出现在全局设置、项目设置与新建项目向导里。
   return (
     <div className="@container">

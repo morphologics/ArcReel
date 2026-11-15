@@ -57,16 +57,16 @@ interface ScriptReviewGateProps {
   episode: number;
   contentMode: "narration" | "drama";
   videoModelUnresolved?: boolean;
-  /** 切到本集时间线；确认后的只读态据此给出去时间线修改的入口，未提供时不渲染入口。 */
+  /** Switch to this episode's timeline; the read-only state after confirmation uses it to offer an entry for editing on the timeline; when not provided, no entry is rendered. / 切到本集时间线；确认后的只读态据此给出去时间线修改的入口，未提供时不渲染入口。 */
   onOpenTimeline?: () => void;
-  /** 当前视频模型与分辨率下的剧本规划时长档位（与确认转换同一口径）；未知时时长只读。 */
+  /** Script planning duration options under the current video model and resolution (same basis as the confirm conversion); when unknown, duration is read-only. / 当前视频模型与分辨率下的剧本规划时长档位（与确认转换同一口径）；未知时时长只读。 */
   durationOptions?: number[];
   durationEndpointFixed?: boolean;
-  /** 时长不在档位内的成因，决定说明文案；缺省时按「模型不支持」说明。 */
+  /** Why the duration is outside the options, which decides the explanation text; when omitted, explained as "model does not support". / 时长不在档位内的成因，决定说明文案；缺省时按「模型不支持」说明。 */
   durationWarningReason?: (seconds: number) => DurationOutOfRangeReason | null;
 }
 
-/** 条目卡编辑字段所需的上下文：时长档位、本集新增资产与说话人候选。 */
+/** Context needed by the entry card's edit fields: duration options, this episode's new assets and speaker candidates. / 条目卡编辑字段所需的上下文：时长档位、本集新增资产与说话人候选。 */
 interface PlanItemContext {
   projectName: string;
   durationOptions: number[] | null;
@@ -76,25 +76,25 @@ interface PlanItemContext {
   speakerNames: string[];
 }
 
-/** 时长不在当前档位内：确认会被拒绝，卡片就地标红说明。档位未知时不判。 */
+/** Duration not within the current options: confirmation would be rejected, so the card is marked red in place with an explanation. Not judged when options are unknown. / 时长不在当前档位内：确认会被拒绝，卡片就地标红说明。档位未知时不判。 */
 function durationOutOfTier(seconds: number, options: number[] | null): boolean {
   return options != null && options.length > 0 && !options.includes(seconds);
 }
 
-/** 条目卡里正文区块的小标题。 */
+/** Subheading of a body block in the entry card. / 条目卡里正文区块的小标题。 */
 function SectionLabel({ children, className }: { children: React.ReactNode; className?: string }) {
   return <h4 className={cn("mb-1.5 text-xs font-medium text-muted-foreground", className)}>{children}</h4>;
 }
 
-/** 两条 script_plan 变体（drama / narration）的可编辑草稿联合。 */
+/** Union of the editable drafts of the two script_plan variants (drama / narration). / 两条 script_plan 变体（drama / narration）的可编辑草稿联合。 */
 type ReviewDraft = DramaNormalizedScript | NarrationScriptPlanDraft;
 
-/** 本面板承接 drama / narration 两个变体的内容，reference_video 变体不会路由到这里。 */
+/** This panel handles the content of the drama / narration variants; the reference_video variant is not routed here. / 本面板承接 drama / narration 两个变体的内容，reference_video 变体不会路由到这里。 */
 function selectReviewContent(state: ScriptReviewState): ReviewDraft | null {
   return (state.content ?? null) as ReviewDraft | null;
 }
 
-/** 只读的资产引用 pills（出场角色 / 场景 / 道具）。 */
+/** Read-only asset reference pills (characters on screen / scenes / props). / 只读的资产引用 pills（出场角色 / 场景 / 道具）。 */
 function MetaChips({ items }: { items: string[] }) {
   if (!items.length) return null;
   return (
@@ -108,7 +108,7 @@ function MetaChips({ items }: { items: string[] }) {
   );
 }
 
-/** 条目头部：位置、时长与章节切分点；可编辑时时长用档位下拉、切分点用开关，越档就地标红说明。 */
+/** Entry header: position, duration and segment break; when editable, duration uses an options dropdown and the segment break a toggle, and out-of-range values are marked red in place. / 条目头部：位置、时长与章节切分点；可编辑时时长用档位下拉、切分点用开关，越档就地标红说明。 */
 function ItemHeader({
   position,
   durationSeconds,
@@ -118,7 +118,7 @@ function ItemHeader({
   context,
   onChange,
 }: {
-  /** 条目在规划里的位置，从 1 起。 */
+  /** Position of the entry in the plan, starting from 1. / 条目在规划里的位置，从 1 起。 */
   position: number;
   durationSeconds: number;
   segmentBreak: boolean;
@@ -174,7 +174,7 @@ function ItemHeader({
   );
 }
 
-/** 条目的角色 / 场景 / 道具引用：可编辑时复用时间线的引用编辑，候选含本集新增资产。 */
+/** Character / scene / prop references of the entry: when editable, reuses the timeline's reference editing, with candidates including this episode's new assets. / 条目的角色 / 场景 / 道具引用：可编辑时复用时间线的引用编辑，候选含本集新增资产。 */
 function ItemReferences({
   contentMode,
   characters,
@@ -208,7 +208,7 @@ function ItemReferences({
   );
 }
 
-/** 只读正文：保留换行，空值不渲染。 */
+/** Read-only body: keeps line breaks; empty values are not rendered. / 只读正文：保留换行，空值不渲染。 */
 function ReadOnlyText({ text, className = "" }: { text: string; className?: string }) {
   if (!text) return null;
   return <p className={cn("text-sm leading-relaxed whitespace-pre-wrap", className)}>{text}</p>;
@@ -219,7 +219,7 @@ function ReadOnlyUtterances({ utterances }: { utterances: Utterance[] }) {
   return (
     <ul className="flex flex-col gap-1.5">
       {utterances.map((u, i) => (
-        // react-doctor-disable-next-line react-doctor/no-array-index-as-key -- 只读的台词列表，随剧本整体替换、不在此重排增删，行内无状态，台词没有 ID
+        // react-doctor-disable-next-line react-doctor/no-array-index-as-key -- a read-only dialogue list, replaced wholesale with the script, not reordered or added/removed here, no row state, and dialogue lines have no ID / 只读的台词列表，随剧本整体替换、不在此重排增删，行内无状态，台词没有 ID
         <li key={String(i)} className="flex items-start gap-2 text-sm leading-relaxed">
           <Badge variant="outline" className="mt-0.5">
             {u.kind === "dialogue" ? u.speaker : t("utterance_kind_voiceover")}
@@ -231,7 +231,7 @@ function ReadOnlyUtterances({ utterances }: { utterances: Utterance[] }) {
   );
 }
 
-/** 条目卡在草稿上呈现时的违约挂载：违约（红）与降级提示（琥珀）随条目呈现，卡片是跳转落点。 */
+/** Violation mounting when the entry card renders a draft: violations (red) and degradation notes (amber) render with the entry, and the card is the jump target. / 条目卡在草稿上呈现时的违约挂载：违约（红）与降级提示（琥珀）随条目呈现，卡片是跳转落点。 */
 interface ItemDraftNotes {
   violations: ScriptReviewViolation[];
   softViolations: DraftSoftViolation[];
@@ -266,7 +266,7 @@ function DramaSceneCard({
   onChange,
 }: {
   scene: DramaSceneContent;
-  /** 条目在规划里的位置，从 1 起。 */
+  /** Position of the entry in the plan, starting from 1. / 条目在规划里的位置，从 1 起。 */
   position: number;
   disabled: boolean;
   readOnly: boolean;
@@ -339,7 +339,7 @@ function NarrationSegmentCard({
   onChange,
 }: {
   segment: NarrationScriptPlanSegment;
-  /** 条目在规划里的位置，从 1 起。 */
+  /** Position of the entry in the plan, starting from 1. / 条目在规划里的位置，从 1 起。 */
   position: number;
   disabled: boolean;
   readOnly: boolean;
@@ -428,6 +428,9 @@ function isNarrationSegment(value: unknown): value is NarrationScriptPlanSegment
 }
 
 /**
+ * Draft body -> shape of the editable card. Narrow item by item without trusting type declarations: the draft may have been broken by the Agent, and hard-rendering by the card's field contract
+ * would either crash or fill missing fields with values the user never wrote. When it cannot be narrowed, return null and the panel shows only the violations and handling entries.
+ *
  * 草稿正文 → 可编辑卡片的形状。逐项收窄、不信任类型声明：草稿可能被 Agent 改坏，按卡片的字段契约
  * 硬渲染要么崩、要么把缺失字段补成用户没写过的值。收不成时返回 null，面板只呈现违约与处置入口。
  */
@@ -450,7 +453,7 @@ function reviewItems(content: ReviewDraft | null): { id: string }[] {
     : content.segments.map((segment) => ({ id: segment.segment_id }));
 }
 
-/** 各条目引用到的名字与原文片段，供「本集新增资产」区展开出场位置。 */
+/** Names and source text snippets referenced by each entry, for the "New assets in this episode" area to expand where they appear. / 各条目引用到的名字与原文片段，供「本集新增资产」区展开出场位置。 */
 function newAssetEntries(content: ReviewDraft | null): NewAssetEntryRefs[] {
   if (content == null) return [];
   return "scenes" in content
@@ -476,6 +479,14 @@ function newAssetEntries(content: ReviewDraft | null): NewAssetEntryRefs[] {
 }
 
 /**
+ * script_plan->prompt_authoring web content review panel: renders the script_plan structured intermediate state on the web, editable manually / by the Agent,
+ * and unlocks prompt_authoring visual generation only after explicit user confirmation. drama (utterances + source_text) and narration
+ * (novel_text) share this panel; the dedicated panel for the reference_video variant is `ReferenceScriptPlanPreviewPanel`.
+ *
+ * When an invalid draft is present the panel renders the draft instead: violations attach to their entries, episode-level violations are pinned at the top, and the draft can be edited in place then saved and
+ * validated, adopted once violations reach zero. When an Agent editable draft is present, it only notes that an unfinished change exists, and the final content is read-only. After confirmation
+ * the script plan is read-only, cards render no edit controls, and users are directed to edit on the timeline.
+ *
  * script_plan→prompt_authoring web 内容确认面板：把 script_plan 结构化中间态在网页结构化呈现、可手动 / Agent 编辑，
  * 用户显式确认后才放行 prompt_authoring 视觉生成。drama（utterances + source_text）与 narration
  * （novel_text）共用本面板；reference_video 变体的专属面板见 `ReferenceScriptPlanPreviewPanel`。
@@ -497,6 +508,7 @@ export function ScriptReviewGate({
   const { t } = useTranslation("dashboard");
   const episodeLedger = useEpisodeLedger();
   const episodeRef = episodeAgentRef(episodeLedger, episode, t);
+  // When the parent already provides model capabilities (whether resolvable, duration options), do not query again.
   // 父组件已给出模型能力（是否可解析、时长档位）时不再自查。
   const standaloneCapabilities = useModelCapabilities({
     projectName,
@@ -598,6 +610,7 @@ export function ScriptReviewGate({
     return <div className="flex h-64 items-center justify-center text-muted-foreground">{t("dashboard:loading_script_plan")}</div>;
   }
 
+  // Load error state: distinct from the "no script_plan artifact" empty state, shows the error message + a retry entry.
   // 加载错误态：区别于「无 script_plan 产物」空态，展示错误信息 + 重试入口。
   if (loadError) {
     return (
@@ -617,6 +630,7 @@ export function ScriptReviewGate({
 
   const status = state?.status ?? "no_script_plan";
   if (status === "no_script_plan" || (draft == null && quarantine == null)) {
+    // No plan and no final script: first planning, show the starting area. When a final script exists (e.g. started from blank), a new plan replaces it only after overwrite confirmation.
     // 没有规划也没有正式脚本：首次规划，给出起步区。已有正式脚本（如从空白开始）时，新规划经覆盖确认才替换它。
     const formalScript = state?.script_overwrite != null || onOpenTimeline !== undefined;
     if (status === "no_script_plan" && !formalScript) {
@@ -651,12 +665,14 @@ export function ScriptReviewGate({
     />
   );
 
+  // When this episode has no final script yet and the plan is unconfirmed, the user can skip this plan and write from blank; the plan and invalid drafts are discarded with it, so confirm first.
   // 本集还没有正式脚本、规划也未确认时，可以不用这份规划、从空白开始手写；规划与待修复草稿随之弃置，先确认。
   const blankStartAction =
     state?.script_overwrite == null && status !== "confirmed" ? (
       <StartBlankScriptButton projectName={projectName} episode={episode} discardsPlan variant="ghost" />
     ) : null;
 
+  // An invalid draft is present: the panel renders the draft itself, and the final content cannot be confirmed now (the confirm endpoint rejects by the same criterion).
   // 待修复草稿在场：面板呈现草稿本身，正式内容此刻不可确认（确认端点按同一判据拒绝）。
   if (quarantine != null && quarantine.editable_by === "user") {
     const content = draftEditor.content;
@@ -726,7 +742,7 @@ export function ScriptReviewGate({
             {"scenes" in content
               ? content.scenes.map((scene, i) => (
                   <DramaSceneCard
-                    // react-doctor-disable-next-line react-doctor/no-array-index-as-key -- 待修复草稿的 scene_id 可能缺失或重复（正是违约所在），批注、锚点与修改都按位置寻址且不重排；带上 ID 让换内容时重新挂载
+                    // react-doctor-disable-next-line react-doctor/no-array-index-as-key -- an invalid draft's scene_id may be missing or duplicated (exactly where the violation is); annotations, anchors and edits are all addressed by position and never reordered; including the ID remounts when content changes / 待修复草稿的 scene_id 可能缺失或重复（正是违约所在），批注、锚点与修改都按位置寻址且不重排；带上 ID 让换内容时重新挂载
                     key={`${String(i)}-${scene.scene_id}`}
                     scene={scene}
                     position={i + 1}
@@ -739,7 +755,7 @@ export function ScriptReviewGate({
                 ))
               : content.segments.map((segment, i) => (
                   <NarrationSegmentCard
-                    // react-doctor-disable-next-line react-doctor/no-array-index-as-key -- 待修复草稿的 segment_id 可能缺失或重复（正是违约所在），批注、锚点与修改都按位置寻址且不重排；带上 ID 让换内容时重新挂载
+                    // react-doctor-disable-next-line react-doctor/no-array-index-as-key -- an invalid draft's segment_id may be missing or duplicated (exactly where the violation is); annotations, anchors and edits are all addressed by position and never reordered; including the ID remounts when content changes / 待修复草稿的 segment_id 可能缺失或重复（正是违约所在），批注、锚点与修改都按位置寻址且不重排；带上 ID 让换内容时重新挂载
                     key={`${String(i)}-${segment.segment_id}`}
                     segment={segment}
                     position={i + 1}
@@ -756,17 +772,22 @@ export function ScriptReviewGate({
     );
   }
 
+  // An Agent editable draft is present: final content is read-only, confirm and edit are both locked until the Agent finishes or discards this change.
   // Agent 的可编辑草稿在场：正式内容只读，确认与编辑一并锁住，待 Agent 完成或丢弃这份修改。
   const agentEditing = quarantine != null;
+  // A confirmed script plan is read-only: the save endpoint rejects by the same criterion, and content edits are made on the timeline instead.
   // 已确认的脚本规划只读：保存端点按同一判据拒绝，内容修改改在时间线上做。
   const confirmed = status === "confirmed" && !agentEditing;
   const readOnly = confirmed || agentEditing;
+  // The episode already has a final script: confirming overwrites it wholesale, so the confirm button turns danger, and clicking first lists the consequences before confirming.
   // 该集已有正式脚本：确认会整份覆盖它，确认按钮改呈 danger，点击先列出后果再确认。
   const overwrite = confirmed ? null : (state?.script_overwrite ?? null);
+  // Confirmed but the episode has no final script (migration conversion failed or the file was deleted): confirm is still available, and reconfirming converts out a final script.
   // 已确认但该集没有正式脚本（迁移转换失败或文件被删）：确认仍可用，重新确认即转出正式脚本。
   const scriptMissing = confirmed && state?.script_overwrite == null;
   const confirmLocked = confirmed && !scriptMissing;
   const videoModelBlocked = modelUnresolved && !confirmLocked;
+  // Some entry's duration is not within the current options: confirmation would be rejected, so change the selection in place first.
   // 有条目的时长不在当前档位内：确认会被拒绝，先就地改选。
   const durationBlocked =
     !confirmLocked &&
@@ -863,10 +884,13 @@ export function ScriptReviewGate({
           open={overwriteOpen}
           overwrite={overwrite}
           loading={confirming}
+          // The dialog may be opened before the capability request returns, and the reply may then say the model cannot be resolved: the dialog's confirm button uses the same criterion as
+          // the button that triggered it, otherwise one confirmation doomed to be rejected by the server could still be submitted here.
           // 框在能力请求返回之前就可能被打开，之后答复模型无法解析：框内的确认按钮与触发它的
           // 那颗按钮同一判据，否则这里还能提交一次注定被服务端拒绝的确认。
           confirmDisabled={confirmBlocked}
           onConfirm={async () => {
+            // On failure (e.g. the episode was concurrently written during confirmation) the dialog stays open and shows the refreshed overwrite list.
             // 失败（如确认期间该集被并发写入）时框保持打开，呈现刷新后的覆盖清单。
             if (await handleConfirm({ overwriteRevision: overwrite.revision })) setOverwriteOpen(false);
           }}
@@ -874,7 +898,7 @@ export function ScriptReviewGate({
         />
       )}
 
-      {/* 本集合计与项目目标的对比；未设目标时不渲染，超出只提示不阻断确认 */}
+      {/* This episode's total compared with the project target; not rendered when no target is set, and exceeding it only warns without blocking confirmation / 本集合计与项目目标的对比；未设目标时不渲染，超出只提示不阻断确认 */}
       <EpisodeDurationSummary
         totalSeconds={sumItemDuration(draft == null ? [] : "scenes" in draft ? draft.scenes : draft.segments)}
         targetSeconds={state?.episode_target_duration ?? null}
@@ -896,7 +920,7 @@ export function ScriptReviewGate({
         {contentMode === "drama" && draft != null && "scenes" in draft
           ? draft.scenes.map((scene, i) => (
               <DramaSceneCard
-                // react-doctor-disable-next-line react-doctor/no-array-index-as-key -- 以 scene_id 为 key，只在 Agent 草稿缺 ID 时以位置兜底；卡片只就地修改、不重排增删
+                // react-doctor-disable-next-line react-doctor/no-array-index-as-key -- keyed by scene_id, falling back to position only when the Agent draft lacks an ID; cards are only edited in place, never reordered, added or removed / 以 scene_id 为 key，只在 Agent 草稿缺 ID 时以位置兜底；卡片只就地修改、不重排增删
                 key={scene.scene_id || i}
                 scene={scene}
                 position={i + 1}
@@ -910,7 +934,7 @@ export function ScriptReviewGate({
         {contentMode === "narration" && draft != null && "segments" in draft
           ? draft.segments.map((segment, i) => (
               <NarrationSegmentCard
-                // react-doctor-disable-next-line react-doctor/no-array-index-as-key -- 以 segment_id 为 key，只在 Agent 草稿缺 ID 时以位置兜底；卡片只就地修改、不重排增删
+                // react-doctor-disable-next-line react-doctor/no-array-index-as-key -- keyed by segment_id, falling back to position only when the Agent draft lacks an ID; cards are only edited in place, never reordered, added or removed / 以 segment_id 为 key，只在 Agent 草稿缺 ID 时以位置兜底；卡片只就地修改、不重排增删
                 key={segment.segment_id || i}
                 segment={segment}
                 position={i + 1}
@@ -926,7 +950,7 @@ export function ScriptReviewGate({
   );
 }
 
-/** 内容确认状态条：待确认 / 已确认 / 已确认但缺正式脚本，右侧放保存与确认动作。 */
+/** Content review status bar: pending / confirmed / confirmed but missing final script, with save and confirm actions on the right. / 内容确认状态条：待确认 / 已确认 / 已确认但缺正式脚本，右侧放保存与确认动作。 */
 function ReviewStatusBar({
   confirmed,
   scriptMissing,

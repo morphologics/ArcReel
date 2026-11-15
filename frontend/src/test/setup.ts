@@ -2,6 +2,10 @@ import "@testing-library/jest-dom/vitest";
 import { afterEach, vi } from "vitest";
 import { cleanup } from "@testing-library/react";
 
+// i18n uses a lazy backend, so tests must await resource loading before running; otherwise the first t() returns the
+// key string instead of Chinese and assertions fail. LanguageDetector reads localStorage on init: writing zh first makes
+// it load only the Chinese set of namespaces; otherwise it would first load en-US and en per jsdom's navigator.language
+// and then switch back to zh. This setup runs for every test file, so the two extra sets are pure overhead.
 // i18n 走 lazy backend，测试运行前必须 await 资源加载完，否则首次 t() 返回 key 字符串而不是
 // 中文，断言会失败。LanguageDetector 在 init 时读 localStorage：先写入 zh，它就只加载中文
 // 这一套 namespace；不写的话会按 jsdom 的 navigator.language 先加载 en-US 与 en，再切回 zh。
@@ -10,6 +14,9 @@ window.localStorage.setItem("i18nextLng", "zh");
 const { i18nReady } = await import("@/i18n");
 await i18nReady;
 
+// jsdom does not implement ResizeObserver by default; Base UI popup positioning (via floating-ui's autoUpdate), the Tabs
+// indicator and TruncatedText's truncation detection all call it to track size changes. An empty stub is enough: tests
+// only assert visibility, interaction and structure, not pixel positions.
 // jsdom 默认不实现 ResizeObserver；Base UI 弹层定位（经 floating-ui 的 autoUpdate）、
 // Tabs 指示条与 TruncatedText 的截断检测都会调它跟踪尺寸变化。用空 stub 即可，
 // 测试只断言可见性、交互与结构，不验位置像素。
@@ -22,6 +29,8 @@ if (typeof globalThis.ResizeObserver === "undefined") {
   };
 }
 
+// jsdom does not implement scrollIntoView; cmdk (Command) calls it to scroll the selected item into view when the
+// selection changes.
 // jsdom 不实现 scrollIntoView；cmdk（Command）在选中项变化时调用它把选中项滚进视野。
 if (typeof Element !== "undefined" && typeof Element.prototype.scrollIntoView !== "function") {
   Element.prototype.scrollIntoView = () => {};

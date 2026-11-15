@@ -45,7 +45,7 @@ vi.mock("../timeline/ShotSplitView", () => ({
   ),
 }));
 
-/** 集页路由给画布的视图：缺省停在分镜视图。 */
+/** The view the episode page route gives the canvas: defaults to the shot view. / 集页路由给画布的视图：缺省停在分镜视图。 */
 const BOARD = { view: "board", onViewChange: () => {} } as const;
 
 function makeProjectData(): ProjectData {

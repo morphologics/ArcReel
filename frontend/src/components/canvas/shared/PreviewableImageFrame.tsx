@@ -13,6 +13,9 @@ interface PreviewableImageFrameProps {
 }
 
 /**
+ * Adds "View full image" to a thumbnail: the zoom button at the top right appears on hover or focus (always shown on touch), and opens a
+ * full-viewport viewer showing the original image.
+ *
  * 给缩略图加「查看大图」：右上角的放大按钮在悬停或聚焦时出现（触屏上常显），点开后用占满视口的
  * 查看器显示原图。
  */
@@ -50,7 +53,7 @@ export function PreviewableImageFrame({ src, alt, children, corner }: Previewabl
 
       {src && (
         <Dialog open={open} onOpenChange={setOpen}>
-          {/* 看图区域固定深色：浅底会干扰对画面明暗的判断 */}
+          {/* Viewing area is fixed dark: a light background would distort judging the image's brightness / 看图区域固定深色：浅底会干扰对画面明暗的判断 */}
           <DialogContent size="viewer" className="dark">
             <DialogHeader>
               <DialogTitle>{alt}</DialogTitle>

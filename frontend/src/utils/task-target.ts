@@ -9,6 +9,18 @@ import type { ProjectData, TaskItem, WorkspaceNotificationTarget } from "@/types
 import { episodeDisplayName, episodeItemLabel, itemIdsInEpisodeText, type ProjectScripts } from "@/utils/episode-display";
 
 /**
+ * Build a clickable jump-back notification target from a failed task, plus human-readable failure text.
+ *
+ * Jump-back routes differ by task_type:
+ * - character/scene/prop/product -> assets page (no episode needed), resource_id is the asset name
+ * - storyboard/video -> the matching episode's shot (ShotSplitView selects by segment id)
+ * - grid -> the matching episode's grid canvas (navigation is the jump-back, no DOM anchor)
+ * - reference_video -> the matching episode's reference unit (ReferenceVideoCanvas selects the unit)
+ * - image_edit -> forwarded by resource_type to the matching route above
+ *
+ * The episode route is found by looking up task.script_file in projectData.episodes; when not found return
+ * null, so the notification still pushes, just not clickable (graceful degradation).
+ *
  * 由失败任务构建可点击回跳的通知 target，以及人类可读的失败文案。
  *
  * 回跳路由按 task_type 区分：
@@ -29,7 +41,7 @@ const ASSET_ROUTES: Record<"character" | "scene" | "prop" | "product", string> =
   product: `/${WORKSPACE_ROUTE_PRODUCTS}`,
 };
 
-/** 资产页上某张资产的回跳 target（衍生定位到其本体卡片）。 */
+/** Jump-back target for one asset on the assets page (derivatives locate their base-look card). / 资产页上某张资产的回跳 target（衍生定位到其本体卡片）。 */
 export function assetNotificationTarget(
   assetType: keyof typeof ASSET_ROUTES,
   name: string,
@@ -54,7 +66,7 @@ const FAILURE_TEXT_KEYS: Partial<
   text_reference_script_plan: { key: "script_plan_task_failed", idParam: "episode" },
 };
 
-/** 集级任务的 resource_id 形如 `episode-3`，失败文案按集名指称。 */
+/** Episode-level tasks have resource_id like `episode-3`; failure text refers to it by episode name. / 集级任务的 resource_id 形如 `episode-3`，失败文案按集名指称。 */
 const EPISODE_RESOURCE_ID = /^episode-(\d+)$/;
 
 function failureTarget(
@@ -71,6 +83,9 @@ function failureTarget(
 }
 
 /**
+ * Normalize script_file: episode metadata always carries the `scripts/` prefix, while task rows and grid records
+ * are passed in by each enqueueing caller without guaranteed consistent format, so strip the prefix before comparing.
+ *
  * 归一化 script_file：episode 元数据固定带 `scripts/` 前缀，任务行与 grid 记录
  * 由各入队调用方自行传入、格式不保证一致，比较前统一剥前缀。
  */
@@ -121,6 +136,8 @@ export function buildTaskFailureTarget(
       return route ? { type: "reference_unit", id: task.resource_id, route } : null;
     }
     case "image_edit": {
+      // image_edit shares one task_type across character/scene/prop/product/storyboard; the real
+      // resource kind is in resource_type.
       // image_edit 跨 character/scene/prop/product/storyboard 共用 task_type，真正
       // 的资源种类在 resource_type。
       switch (task.resource_type) {
@@ -150,12 +167,19 @@ export function buildTaskFailureTarget(
 }
 
 /**
+ * Max characters of the rejection-reason summary in notification text. Notifications are one-line toasts; overflow is truncated and ends with an ellipsis,
+ * and the full summary isn't expanded within a one-line notification toast.
+ *
  * 通知文案里拒因摘要的最大字符数。通知是一行 toast，超出部分截断并省略号收尾，
  * 完整摘要不在单行通知 toast 内展开。
  */
 const PROVIDER_REASON_MAX_LENGTH = 120;
 
 /**
+ * Upstream rejection-reason summary: the upstream raw text the backend returns separately in `provider_rejected`'s error_params,
+ * not translated, shown with entry episode ID prefixes stripped, rendered separately from the i18n template's error_message. Other failure codes lack
+ * this field and return null.
+ *
  * 上游拒因摘要：后端在 `provider_rejected` 的 error_params 里单独回传的上游原文，
  * 不参与翻译，显示时剥去条目的集 ID 前缀，与 i18n 模板的 error_message 分开渲染。其它失败码没有
  * 这个字段，返回 null。
@@ -169,6 +193,7 @@ export function providerReasonOf(task: TaskItem): string | null {
 }
 
 function truncateProviderReason(reason: string): string {
+  // Split by code point: slicing UTF-16 code units directly could break in the middle of a surrogate pair, producing lone surrogates.
   // 按码点切分：直接对 UTF-16 code unit 切片会从代理对中间断开，产出孤立代理。
   const codePoints = [...reason];
   return codePoints.length > PROVIDER_REASON_MAX_LENGTH
@@ -177,6 +202,9 @@ function truncateProviderReason(reason: string): string {
 }
 
 /**
+ * Notification text of a failed task. Unknown task_type returns null (the caller skips pushing on this).
+ * Entries are referred to as "title · 5" (current position in the episode); an upstream rejection summary, if any, is appended after the text chosen by task_type.
+ *
  * 失败任务的通知文案。未知 task_type 返回 null（调用方据此跳过推送）。
  * 条目按「标题 · 5」（本集里的当前位置）指称；有上游拒因摘要时追加在按 task_type 选出的文案之后。
  */
@@ -193,6 +221,10 @@ export function describeTaskFailure(
   const message = t(config.key, { [config.idParam]: target, reason });
   const providerReason = providerReasonOf(task);
   if (!providerReason) return message;
+  // The rejection suffix takes its own template and is concatenated, rather than passing the rendered message back to i18next as an interpolation variable: interpolation
+  // runs String.replace per match and only hits the first same-name placeholder, so if message contains
+  // a literal placeholder like `{{reason}}` (error_message is upstream raw text and may contain it), the reason would land
+  // in the wrong position.
   // 拒因后缀单独取模板再拼接，不把已渲染的 message 当插值变量传回 i18next：插值
   // 对每个 match 走 String.replace，只命中首个同名占位符，message 里若含
   // `{{reason}}` 这类字面占位符（error_message 是上游原文，可能包含），拒因会落到

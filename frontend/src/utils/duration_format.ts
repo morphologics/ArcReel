@@ -1,4 +1,9 @@
 /**
+ * Pure-function utilities for supported_durations input / display / detection.
+ *
+ * Design: every persisted form is list[int]. This utility handles UI <-> list conversion,
+ * detecting contiguous integer sets (for slider/button group rendering choice), and formatting display labels.
+ *
  * supported_durations 输入 / 显示 / 检测的纯函数工具。
  *
  * 设计：所有持久化形态都是 list[int]。本工具负责 UI ↔ list 互转、
@@ -27,6 +32,16 @@ export class DurationParseError extends Error {
 }
 
 /**
+ * Parse user-entered comma-separated duration text, supporting range shorthand.
+ *
+ * Rules:
+ *   - comma-separated fragments; each trimmed, empty fragments filtered
+ *   - single value: ^\d+$ (must be a positive integer, ≤ MAX_SINGLE_VALUE)
+ *   - range: ^(\d+)-(\d+)$; min ≤ max and span ≤ MAX_RANGE_SPAN
+ *   - output deduplicated, ascending
+ * @returns the parsed list; null when the input is all whitespace
+ * @throws DurationParseError when there is an invalid fragment or only separators
+ *
  * 解析用户输入的逗号分隔时长文本，支持区间简写。
  *
  * 规则：
@@ -78,7 +93,7 @@ export function parseDurationInput(text: string): number[] | null {
   return [...result].sort((a, b) => a - b);
 }
 
-/** 判断列表是否为连续整数集（如 [3,4,5,6,7]），需 ≥2 个元素。 */
+/** Whether the list is a contiguous integer set (e.g. [3,4,5,6,7]); needs ≥2 elements. / 判断列表是否为连续整数集（如 [3,4,5,6,7]），需 ≥2 个元素。 */
 export function isContinuousIntegerRange(durations: readonly number[]): boolean {
   if (durations.length < 2) return false;
   const sorted = [...durations].sort((a, b) => a - b);
@@ -89,6 +104,10 @@ export function isContinuousIntegerRange(durations: readonly number[]): boolean 
 }
 
 /**
+ * Show list[int] compactly, folding contiguous runs into "min-max".
+ *
+ * e.g. [3,4,5,7,8,9,10,12] -> "3-5, 7-10, 12"
+ *
  * 把 list[int] 紧凑展示，连续段折叠为 "min-max"。
  *
  * 例：[3,4,5,7,8,9,10,12] → "3-5, 7-10, 12"
@@ -113,7 +132,7 @@ export function compactRangeFormat(durations: readonly number[]): string {
   return parts.join(", ");
 }
 
-/** UI 标签格式：连续区间 → "3-7s"，否则 → "4, 6, 8s"。 */
+/** UI label format: contiguous range -> "3-7s", otherwise -> "4, 6, 8s". / UI 标签格式：连续区间 → "3-7s"，否则 → "4, 6, 8s"。 */
 export function formatDurationsLabel(durations: readonly number[]): string {
   if (durations.length === 0) return "";
   if (isContinuousIntegerRange(durations)) {

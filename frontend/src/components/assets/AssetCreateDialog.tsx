@@ -20,13 +20,13 @@ import type { Asset, AssetType } from "@/types/asset";
 import { ASSET_TYPE_ICON } from "./asset-type-icons";
 import { AssetThumb } from "./AssetThumb";
 
-/** 在资产库里新建一个资产：名称必填，描述、声音风格（角色）与图片可选。 */
+/** Create a new asset in the asset library: name required; description, voice style (characters) and image optional. / 在资产库里新建一个资产：名称必填，描述、声音风格（角色）与图片可选。 */
 export function AssetCreateDialog({
   type,
   onClose,
   onCreated,
 }: {
-  /** 为 null 时关闭。 */
+  /** Closed when null. / 为 null 时关闭。 */
   type: AssetType | null;
   onClose: () => void;
   onCreated: (asset: Asset) => void;
@@ -39,6 +39,7 @@ export function AssetCreateDialog({
     <Dialog
       open={type !== null}
       onOpenChange={(next) => {
+        // While the request is in flight, ignore Esc and overlay clicks, to avoid the asset being created without returning to the list
         // 请求在途时不响应 Esc 与遮罩点击，避免资产已建好却没回到列表
         if (!next && !creating) onClose();
       }}
@@ -89,7 +90,7 @@ function AssetCreateForm({
   useEffect(() => {
     if (!image) return;
     const url = URL.createObjectURL(image);
-    // eslint-disable-next-line react-hooks/set-state-in-effect -- object URL 随所选文件创建并在替换或卸载时回收
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- The object URL is created with the selected file and revoked on replacement or unmount / object URL 随所选文件创建并在替换或卸载时回收
     setPreviewUrl(url);
     return () => URL.revokeObjectURL(url);
   }, [image]);

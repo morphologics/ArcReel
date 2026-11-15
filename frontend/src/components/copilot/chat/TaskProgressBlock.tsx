@@ -4,6 +4,9 @@ import { WorkDetail, WorkRow, useSessionDone } from "./WorkRow";
 import { BACKGROUND_TASK_ICON, type WorkStatus } from "./work-label";
 
 // ---------------------------------------------------------------------------
+// TaskProgressBlock – a background task with no anchor tool_use, shown as one work row with status updated in place.
+// Task blocks with an anchor are folded by the projection into SubagentCard (task_info) and don't go through this component.
+// ---------------------------------------------------------------------------
 // TaskProgressBlock – 没有锚点 tool_use 的后台任务，显示为一行工序，就地更新状态。
 //
 // 有锚点的 task 块由投影折叠进 SubagentCard（task_info），不经过本组件。

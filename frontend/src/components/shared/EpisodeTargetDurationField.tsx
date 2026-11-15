@@ -7,6 +7,15 @@ import {
 } from "./episode-target-duration";
 
 /**
+ * Optional project-level input for the per-episode target duration (seconds).
+ *
+ * It's a different scale from "Default duration": that one is the default seconds of a single shot / video unit (constrained by the video model's duration options,
+ * living in the model config bar); this one is the expected size of the whole episode's final cut, driving how many units the script plan splits the episode into.
+ * Both are soft preferences that content needs can override; exceeding the target only hints and doesn't block confirmation or later generation.
+ *
+ * Ad/short projects don't show this input: the episode size is already expressed by the target total duration (target_duration) budget,
+ * and two coexisting total-size conventions would compete with each other.
+ *
  * 单集目标时长（秒）的项目级可选输入。
  *
  * 与「默认时长」是两个尺度：那个是单个分镜 / 视频单元的默认秒数（受视频模型档位约束，

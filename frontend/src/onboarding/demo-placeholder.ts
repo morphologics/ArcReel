@@ -1,4 +1,14 @@
 /**
+ * Artwork for demo data: an SVG computed from the name, handed to the existing <img> as a data URI.
+ *
+ * The tour shows a "halfway done" project, so every character, scene, prop and shot needs a picture. These pictures
+ * cannot be real images -- large binaries in the repo would bloat it with resolution and count, and could not follow the theme color. So hue is
+ * derived from the resource name and a set of geometric motifs is drawn per category; all four share the same framing mark (corner L shapes), so people can tell at a glance
+ * that these cells hold "shots not yet taken" rather than failed loads.
+ *
+ * Motifs all stay within the central 60% of the canvas: consumers' frame ratios range from 1:1 to 9:16, all cropped with
+ * object-cover, and only a centered composition stays whole at every ratio.
+ *
  * 演示数据的配图：按名字现算一张 SVG，以 data URI 形式交给现有的 <img>。
  *
  * 引导要展示一个「推进到一半」的项目，每个角色、场景、道具和分镜都得有画面。这些画面
@@ -12,7 +22,7 @@
 
 export type DemoPlaceholderMotif = "character" | "scene" | "prop" | "storyboard";
 
-/** 取景标记：四角 L 形，四类母题共用的签名元素。 */
+/** Framing mark: corner L shapes, the signature element shared by all four motifs. / 取景标记：四角 L 形，四类母题共用的签名元素。 */
 const FRAMING_BRACKETS = [
   "M26 33 L26 26 L33 26",
   "M67 26 L74 26 L74 33",
@@ -22,29 +32,29 @@ const FRAMING_BRACKETS = [
   .map((d) => `<path d="${d}" fill="none" stroke="var(--pl-line)" stroke-width="1.1"/>`)
   .join("");
 
-/** 各类别的几何母题。坐标系为 100×100，构图收在中央。 */
+/** Geometric motif per category. Coordinate system is 100×100, composition kept central. / 各类别的几何母题。坐标系为 100×100，构图收在中央。 */
 const MOTIFS: Record<DemoPlaceholderMotif, string> = {
-  // 半身像：头 + 肩线
+  // Bust: head + shoulder line / 半身像：头 + 肩线
   character:
     '<circle cx="50" cy="40" r="10" fill="none" stroke="var(--pl-line)" stroke-width="1.6"/>' +
     '<path d="M32 72 Q50 52 68 72" fill="none" stroke="var(--pl-line)" stroke-width="1.6"/>',
-  // 外景：地平线 + 远山 + 天体
+  // Exterior: horizon + distant mountains + celestial body / 外景：地平线 + 远山 + 天体
   scene:
     '<path d="M28 62 H72" fill="none" stroke="var(--pl-line)" stroke-width="1.6"/>' +
     '<path d="M32 62 L44 44 L56 62 Z M52 62 L62 48 L72 62 Z" fill="none" stroke="var(--pl-line)" stroke-width="1.4"/>' +
     '<circle cx="64" cy="38" r="5" fill="var(--pl-line)" opacity="0.5"/>',
-  // 器物：菱形嵌套
+  // Object: nested diamonds / 器物：菱形嵌套
   prop:
     '<path d="M50 30 L70 50 L50 70 L30 50 Z" fill="none" stroke="var(--pl-line)" stroke-width="1.6"/>' +
     '<path d="M50 41 L59 50 L50 59 L41 50 Z" fill="var(--pl-line)" opacity="0.35"/>',
-  // 镜头：三分线 + 对角构图线 + 视觉焦点
+  // Shot: rule-of-thirds lines + diagonal composition line + focal point / 镜头：三分线 + 对角构图线 + 视觉焦点
   storyboard:
     '<path d="M43 30 V70 M57 30 V70 M30 43 H70 M30 57 H70" fill="none" stroke="var(--pl-line)" stroke-width="0.8" opacity="0.55"/>' +
     '<path d="M30 70 L70 30" fill="none" stroke="var(--pl-line)" stroke-width="1.2"/>' +
     '<circle cx="57" cy="43" r="4.5" fill="none" stroke="var(--pl-line)" stroke-width="1.6"/>',
 };
 
-/** 由资源名派生稳定色相（0–359）：同名同 salt 恒得同色，换名字才换色。 */
+/** Stable hue (0–359) derived from the resource name: the same name and salt always give the same color; only a new name changes it. / 由资源名派生稳定色相（0–359）：同名同 salt 恒得同色，换名字才换色。 */
 function hashHue(name: string, salt: number): number {
   let hash = salt;
   for (let i = 0; i < name.length; i += 1) {
@@ -54,6 +64,11 @@ function hashHue(name: string, salt: number): number {
 }
 
 /**
+ * Compute a placeholder image from the seed, returning a data URI usable directly in `<img src>`.
+ *
+ * @param seed Resource name. The same name always gives the same image, so UI re-renders do not change color.
+ * @param motif Category motif.
+ *
  * 按 seed 现算一张占位图，返回可直接放进 `<img src>` 的 data URI。
  *
  * @param seed 资源名。同名恒得同图，界面重渲染不会换色。

@@ -29,6 +29,9 @@ type DirectoryState =
   | { status: "ready"; entries: FileViewEntry[] };
 
 /**
+ * Loaded directories (keyed by project-relative path, root is the empty string); a directory's children are requested only when it expands; on `refreshKey` change loaded directories are refetched.
+ * Directories without a result yet show as loading; on refresh the old list is kept until the new result arrives; on retry the caller marks it loading first.
+ *
  * 已加载的目录（键为项目内相对路径，根目录为空串），目录展开时才请求它的子项；`refreshKey` 变化时重拉加载过的目录。
  * 还没有结果的目录按加载中显示；刷新时保留旧列表直到新结果到达，重试时由调用方先标成加载中。
  */
@@ -66,6 +69,7 @@ function useDirectories(projectName: string, refreshKey: number) {
     [projectName],
   );
 
+  // On manual refresh, or when the project trash gains or loses items (including Agent-initiated delete and restore), files may leave or return to the tree: refetch loaded directories.
   // 手动刷新，或项目回收站有增删（含 Agent 发起的删除与恢复）时，文件可能离开或回到目录树：重拉加载过的目录。
   const trashRevision = useAppStore((s) => s.trashRevision);
   useEffect(() => {
@@ -81,6 +85,8 @@ function useDirectories(projectName: string, refreshKey: number) {
     [load],
   );
 
+  // Files moved to the trash are removed from their directory immediately without waiting for a refetch: otherwise once released they would still be in the tree and could be deleted again.
+  // An in-flight request for that directory may predate this delete, so cancel it first; the following refetch defers to the server.
   // 已移入回收站的文件立即从所在目录拿掉，不等重拉：否则解除占用后它还在树里，可以被再删一次。
   // 所在目录的在途请求可能早于这次删除，先取消；随后的重拉以服务端为准。
   const dropEntry = useCallback((path: string) => {
@@ -108,6 +114,10 @@ function findEntry(directories: Record<string, DirectoryState>, path: string): F
 type FileViewSection = "files" | "trash";
 
 /**
+ * Project-level "Files" view with two sections, "Files" and "Trash".
+ * Files section: the left lists project files as the on-disk directory tree, expanding directories on demand; the right shows the selected file's role, preview, download and a link to its owning screen.
+ * Only unreferenced files can be moved to the trash here; referenced files link to their owning screen for changes, and source files not included in the whole source are handed to "Episodes".
+ *
  * 项目级「文件」视图，分「文件」与「回收站」两个分区。
  * 文件分区：左侧按磁盘目录树列出项目文件，目录按需展开；右侧是选中文件的角色、预览、下载与所属界面入口。
  * 只有未引用文件能在这里移入回收站；被引用的文件跳到所属界面修改，未纳入整本源文的源文件交给「分集」。
@@ -115,12 +125,14 @@ type FileViewSection = "files" | "trash";
 export function FileView({ projectName }: { projectName: string }) {
   const { t } = useTranslation("dashboard");
   const [section, setSection] = useState<FileViewSection>("files");
+  // The trash section mounts only when first opened; after that both sections stay mounted and switching only hides, so in-flight write locks are not lost on unmount.
   // 回收站分区首次打开时才挂载；之后两个分区常驻，切换只隐藏，在途写操作的占用不随卸载丢失。
   const [trashMounted, setTrashMounted] = useState(false);
+  // "Refresh" refetches mounted sections: both use it together with the trash invalidation signal as a refetch trigger.
   // 「刷新」重拉已挂载的分区：两个分区都把它和回收站失效信号一起作为重拉条件。
   const [refreshKey, setRefreshKey] = useState(0);
 
-  // 分区面板放在 Tabs 之外，选项卡与面板的关联手动连上
+  // The section panels sit outside Tabs, so tab-to-panel association is wired up manually / 分区面板放在 Tabs 之外，选项卡与面板的关联手动连上
   const id = useId();
   const tabId = (value: FileViewSection) => `${id}-${value}-tab`;
   const panelId = (value: FileViewSection) => `${id}-${value}-panel`;
@@ -134,7 +146,7 @@ export function FileView({ projectName }: { projectName: string }) {
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
-      {/* 分区与刷新靠左：窄屏下 Agent 面板浮在画布右侧，靠右的控件会被盖住 */}
+      {/* Sections and refresh align left: on narrow screens the Agent panel floats over the right of the canvas and would cover right-aligned controls / 分区与刷新靠左：窄屏下 Agent 面板浮在画布右侧，靠右的控件会被盖住 */}
       <header className="flex shrink-0 flex-col gap-2 border-b border-border px-6 py-3">
         <div className="min-w-0">
           <h1 className="text-base font-semibold">{t("file_view_title")}</h1>
@@ -179,6 +191,7 @@ function FilesSection({ projectName, refreshKey }: { projectName: string; refres
   const { t } = useTranslation("dashboard");
   const { directories, load, retry, dropEntry } = useDirectories(projectName, refreshKey);
   const [expanded, setExpanded] = useState<ReadonlySet<string>>(new Set());
+  // Record only the path and take the entry from the latest directory list: after refresh the details update, and disappear if the file is gone.
   // 只记路径，条目取自最新的目录列表：刷新后详情跟着更新，文件不在了详情也随之消失。
   const [selectedPath, setSelectedPath] = useState<string | null>(null);
   const selected = selectedPath === null ? null : findEntry(directories, selectedPath);
@@ -205,7 +218,7 @@ function FilesSection({ projectName, refreshKey }: { projectName: string; refres
     });
   };
 
-  // 每个文件单独提交、单独恢复；失败项保留勾选，方便重试。
+  // Each file is submitted and restored separately; failed items stay checked for easy retry. / 每个文件单独提交、单独恢复；失败项保留勾选，方便重试。
   const moveToTrash = async (entries: FileViewEntry[]) => {
     if (deleting) return;
     setDeleting(true);
@@ -374,7 +387,7 @@ function DirectoryList(props: DirectoryListProps) {
               )}
             >
               <File aria-hidden className="size-4 shrink-0 self-start mt-0.5 text-muted-foreground" />
-              {/* 名称单独占一行，角色与大小放在第二行，窄栏里文件名不被挤没 */}
+              {/* The name takes its own row, role and size go on the second row, so the file name is not squeezed out in a narrow column / 名称单独占一行，角色与大小放在第二行，窄栏里文件名不被挤没 */}
               <span className="flex min-w-0 flex-1 flex-col">
                 <TruncatedText text={entry.name} focusable={false} />
                 <span className="text-xs text-muted-foreground">
@@ -405,6 +418,7 @@ function FileDetail({
   const [downloading, setDownloading] = useState(false);
   const target = ownerTarget(entry.owner, projectName);
   const unreferencedSource = entry.role === "unreferenced" && entry.owner?.kind === "source";
+  // Only unreferenced files can be deleted here; the server checks too, this only decides whether to show the button.
   // 只有未引用文件能在这里删除；服务端同样校验，这里只决定是否给出按钮。
   const deletable = canDeleteFile(entry);
   const description = entry.role
@@ -476,7 +490,7 @@ function FileDetail({
     <DetailPane header={header}>
       <div className="flex flex-col gap-4 px-6 py-4">
         {description ? <p className="text-sm text-subtle-foreground">{description}</p> : null}
-        {/* 同一路径的文件被改写后（修改时间或大小变化）重新挂载：等待新内容时显示加载中，不沿用旧预览 */}
+        {/* Remount when a file at the same path is rewritten (modified time or size changes): show loading while waiting for new content instead of reusing the old preview / 同一路径的文件被改写后（修改时间或大小变化）重新挂载：等待新内容时显示加载中，不沿用旧预览 */}
         <FilePreview key={`${entry.modified_at}:${entry.size}`} projectName={projectName} entry={entry} />
       </div>
     </DetailPane>

@@ -3,6 +3,10 @@ import { isTerminalStatus } from "@/types";
 import type { TaskStatus } from "@/types";
 
 /**
+ * Duration computation needs only the status and three timestamps on a task row, so it takes them structurally rather than the whole `TaskItem` —
+ * the workflow panel's task observation (`WorkflowTaskObservation`) carries no timestamps and must first fetch the same task_id's timestamps
+ * from the task queue before feeding them in; the wide parameter lets both sides share one implementation.
+ *
  * 时长计算只需要任务行上的状态与三个时间戳，故按结构取而不取整个 `TaskItem`——
  * 工作流面板的任务观测（`WorkflowTaskObservation`）不携带时间戳，须先从任务队列
  * 取回同一 task_id 的时间戳再喂进来，宽入参让两侧共用同一实现。
@@ -15,6 +19,10 @@ export interface TaskTiming {
 }
 
 /**
+ * Semantics of the duration. The three describe different intervals: `queued` is waiting before starting, `running` is
+ * a run still in progress, `total` is the frozen elapsed time of the whole execution. The text must differ, otherwise a final-state task's
+ * number would be read as "still running".
+ *
  * 时长的语义。三者陈述的不是同一段区间：`queued` 是尚未开跑的等待，`running` 是
  * 仍在推进的运行，`total` 是已定格的整次执行耗时。文案必须分开，否则终态任务的
  * 数字会被读成「还在跑」。
@@ -33,6 +41,11 @@ function timestampMs(value: string | null): number | null {
 }
 
 /**
+ * Elapsed time of a final-state task's whole execution; returns null when start/end timestamps are missing or unparsable.
+ *
+ * It's a separate entry that doesn't take `now` because this interval is already frozen: callers use it to know the readout needn't subscribe to the
+ * clock, without first computing a duration and then checking which kind it is. Non-final tasks shouldn't come here.
+ *
  * 终态任务的整次执行耗时；起止时间戳缺失或不可解析时返回 null。
  *
  * 单独成一个不收 `now` 的入口，是因为这段区间已经定格：调用方据此判断该读数无需订阅
@@ -46,6 +59,12 @@ export function totalTaskElapsed(task: TaskTiming): TaskElapsed | null {
 }
 
 /**
+ * The duration a task should currently show; returns null when it can't be computed, and the caller doesn't render the block at all.
+ *
+ * null rather than 0, to distinguish "really just started" from "can't compute" — rendering the latter as `0s`
+ * would disguise an abnormal task missing timestamps as a normal start. Final-state durations don't depend on `now`, so they don't increase with the timer.
+ * Clock skew (frontend/backend clocks out of sync, started_at in the future) is clamped to 0; no negative numbers are shown.
+ *
  * 任务当前该呈现的时长；无法计算时返回 null，由调用方整块不渲染。
  *
  * 返回 null 而非 0 是为了区分「真的刚开始」与「算不出来」——后者若渲染成 `0s`，
@@ -65,6 +84,9 @@ export function taskElapsed(task: TaskTiming, now: number): TaskElapsed | null {
 }
 
 /**
+ * Display breakdown with precision chosen by magnitude: seconds under a minute, minutes and seconds under an hour, hours and minutes otherwise.
+ * Milliseconds are never shown — they carry no information for judging "how long the task ran" and only make the number flicker annoyingly.
+ *
  * 按量级选精度的展示分解：不足一分钟给秒、不足一小时给分秒、其余给时分。
  * 毫秒一律不呈现——它对「任务跑了多久」这个判断没有信息量，只会让数字跳动刺眼。
  */
@@ -84,12 +106,18 @@ export function elapsedDisplay(ms: number): ElapsedDisplay {
 }
 
 /**
+ * Word picker for duration text. It only needs "take one interpolated `common` message by key", so it's narrowed to the minimal shape;
+ * `t` from any namespace can be passed straight in — keys here always carry the `common:` prefix.
+ *
  * 时长文案的取词器。只需要「按 key 取一条带插值的 `common` 文案」，故按最小形状收窄，
  * 任意命名空间的 `t` 都能直接传进来——键名在这里一律带 `common:` 前缀。
  */
 export type ElapsedTranslate = (key: string, params: Record<string, number>) => string;
 
 /**
+ * Display text of a duration. Unit words and word order come from the `common:elapsed_*` templates; all durations site-wide share this one place:
+ * the same duration must be written the same way in task readouts and usage tables.
+ *
  * 时长的呈现文案。单位词与语序由 `common:elapsed_*` 模板给，全站时长共用这一处：
  * 同一段时长在任务读数与用量表里必须是同一种写法。
  */

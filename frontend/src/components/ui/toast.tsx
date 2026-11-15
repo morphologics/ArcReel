@@ -20,6 +20,7 @@ function ToastViewport({ className, ...props }: ToastPrimitive.Viewport.Props) {
     <ToastPrimitive.Viewport
       data-slot="toast-viewport"
       aria-label={t("toast_region")}
+      // Top-centered, stacked vertically just below the top bar, not covering the Agent input on the right; layering uses the z-index token
       // 顶部居中、紧贴顶栏下方纵向排列，不遮挡右侧 Agent 输入区；层级取 z-index token
       className={cn(
         "pointer-events-none fixed top-16 left-1/2 z-toast flex w-sm max-w-[calc(100%-2rem)] -translate-x-1/2 flex-col gap-2 outline-none",
@@ -34,6 +35,8 @@ function Toast({ className, ...props }: ToastPrimitive.Root.Props) {
   return (
     <ToastPrimitive.Root
       data-slot="toast"
+      // No upstream stacked card deck or 500ms translate-scale: a vertical list, 200ms enter/exit;
+      // with reduced motion, index.css's global rule doesn't transition translation, leaving only the fade. Long text scrolls inside the toast.
       // 不用上游的叠放卡组与 500ms 位移缩放：纵向列表，进出场 200ms；
       // 减少动态效果时 index.css 的全局规则不过渡位移，只剩淡入淡出。长文本在提示内部滚动。
       className={cn(
@@ -50,6 +53,8 @@ function ToastContent({ className, ...props }: ToastPrimitive.Content.Props) {
   return (
     <ToastPrimitive.Content
       data-slot="toast-content"
+      // In the vertical list every toast is fully shown; drop the deck's behind / expanded opacity switching
+      // Add relative: the scroll container must be a positioned element so absolutely positioned children don't stretch the document scroll
       // 纵向列表里每条提示都完整显示，去掉卡组的 behind / expanded 透明度切换
       // 补 relative：滚动容器须是定位元素，绝对定位的子元素才不会撑出文档滚动
       className={cn(
@@ -102,7 +107,7 @@ function ToastAction({
 function ToastClose({
   className,
   children,
-  // react-doctor-disable-next-line react-doctor/shadcn-icon-button-requires-label -- aria-label 写在 ToastPrimitive.Close 上，经 base-ui 的 render 合并到这个 Button
+  // react-doctor-disable-next-line react-doctor/shadcn-icon-button-requires-label -- aria-label is set on ToastPrimitive.Close and merged into this Button via base-ui's render / aria-label 写在 ToastPrimitive.Close 上，经 base-ui 的 render 合并到这个 Button
   render = <Button variant="ghost" size="icon-sm" />,
   ...props
 }: ToastPrimitive.Close.Props) {
@@ -128,7 +133,7 @@ function ToastClose({
 function ToastIcon({ type }: { type: string | undefined }) {
   let icon: React.ReactNode = null
 
-  // 图标按语义着色：成功 good、警告 warn、错误 destructive
+  // Icons colored by meaning: success good, warning warn, error destructive / 图标按语义着色：成功 good、警告 warn、错误 destructive
   if (type === "success") {
     icon = (
       <CircleCheckIcon className="text-good" aria-hidden="true" />
@@ -176,7 +181,7 @@ function ToastIcon({ type }: { type: string | undefined }) {
 function ToastList() {
   const { toasts } = ToastPrimitive.useToastManager()
 
-  // 只支持桌面端（鼠标、触控板），不启用滑动关闭
+  // Desktop only (mouse, trackpad); swipe-to-dismiss is not enabled / 只支持桌面端（鼠标、触控板），不启用滑动关闭
   return toasts.map((toastItem) => (
     <Toast key={toastItem.id} toast={toastItem} swipeDirection={[]}>
       <ToastContent>
@@ -211,6 +216,7 @@ function Toaster({
 
 const useToastManager = ToastPrimitive.useToastManager
 
+// The module-level toast queue and createToastManager are not exported: the queue is owned by ToastOverlay and passed to Toaster; the primitive file only exports components and hooks
 // 不导出模块级 toast 队列与 createToastManager：队列由 ToastOverlay 持有并传给 Toaster，原语文件只导出组件与 hook
 export {
   Toaster,

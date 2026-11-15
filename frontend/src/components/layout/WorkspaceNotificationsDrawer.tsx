@@ -10,7 +10,7 @@ import { useAppStore } from "@/stores/app-store";
 import type { WorkspaceNotification } from "@/types";
 
 interface WorkspaceNotificationsProps {
-  /** 点「查看定位」：调用方负责跳转与滚动定位；面板随之关闭。 */
+  /** Click "Show location": the caller handles navigation and scroll positioning; the panel closes with it. / 点「查看定位」：调用方负责跳转与滚动定位；面板随之关闭。 */
   onNavigate: (notification: WorkspaceNotification) => void;
 }
 
@@ -29,6 +29,9 @@ function unreadIds(): string[] {
 }
 
 /**
+ * The top bar's notification bell and the notification panel anchored below it. Opening the panel marks all notifications as read and clears the badge at once;
+ * entries unread on open (and new ones arriving while open) stay highlighted until the panel closes.
+ *
  * 顶栏的通知铃铛与锚定在它下方的通知面板。打开面板即把全部通知标为已读，角标立即清零；
  * 打开时未读（以及打开期间新到）的条目保持高亮，直到关闭面板。
  */
@@ -50,6 +53,7 @@ export function WorkspaceNotifications({ onNavigate }: WorkspaceNotificationsPro
     }
   };
 
+  // Notifications arriving while the panel is open also count as read directly, with the highlight kept until close
   // 面板开着时新到的通知同样直接算已读，高亮保留到关闭
   useEffect(() => {
     if (!open) return;
@@ -175,6 +179,8 @@ function NotificationRow({
 }
 
 /**
+ * Age of a notification. Extracted into a component so the shared clock only ticks while the panel is open and entries are mounted.
+ *
  * 通知的年龄。抽成组件，让共享时钟只在面板打开、条目挂载时走动。
  */
 function NotificationAge({ timestamp }: { timestamp: number }) {

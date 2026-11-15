@@ -49,6 +49,7 @@ const NARRATION_MISSING: EditTimelineIssueRef = {
   unit_id: "E1S04",
 };
 
+/** This episode's final script: E1S04 is 3rd and E1S03 is 4th; blocking reasons refer to shots by position. */
 /** 本集正式脚本：E1S04 排第 3 个、E1S03 排第 4 个，阻断原因按位置称呼分镜。 */
 function seedEpisodeScript() {
   useProjectsStore.setState({

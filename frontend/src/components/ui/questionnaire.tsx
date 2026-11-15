@@ -95,6 +95,7 @@ function QuestionnaireChoices({
   )
 }
 
+// Versus upstream: lower the input fill opacity to preserve text contrast; options and indicators keep the light-layer hierarchy.
 // 相对上游：降低 input 填充不透明度以保留文字对比度，选项与指示器保留浅底层级。
 function QuestionnaireChoice({
   children,
@@ -153,6 +154,7 @@ function QuestionnaireChoiceDescription({
   )
 }
 
+// Versus upstream: lower the input fill opacity to preserve text contrast; the invalid state uses a full red border and a stronger glow.
 // 相对上游：降低 input 填充不透明度以保留文字对比度；失败态用完整红色描边与较强光晕。
 function QuestionnaireInput({
   className,

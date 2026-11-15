@@ -1,3 +1,4 @@
+// The `test` for page-level suites: every case automatically replays the recorded API stand-ins, fixes the time and blocks external requests.
 // 页面级套件的 test：每条用例自动回放录制的接口替身、固定时间并拦住外网请求。
 import { AxeBuilder } from "@axe-core/playwright";
 import { expect, test as base, type Page } from "@playwright/test";
@@ -7,6 +8,10 @@ import { FIXED_NOW, loadRecordedResponses, recordedKey, type RecordedResponse } 
 const RECORDED = loadRecordedResponses();
 
 /**
+ * A scenario's replacement response for an endpoint, for stress variants such as long text or many entries; keys look like `GET /api/v1/projects`,
+ * and requests with a query string write the full query string.
+ * When `body` is a string it is returned as text/plain verbatim; otherwise as JSON.
+ *
  * 场景对某个接口的替换响应，用于长文本、多条目等压力变体；键形如 `GET /api/v1/projects`，带查询串的请求写全查询串。
  * `body` 是字符串时按 text/plain 原样返回，其余按 JSON 返回。
  */
@@ -27,6 +32,7 @@ export const test = base.extend<{ api: ApiStub }>({
       const unrecorded: string[] = [];
 
       await page.clock.setFixedTime(new Date(FIXED_NOW));
+      // External resources (e.g. web fonts) are not part of assertions; block them so network jitter does not affect results.
       // 外网资源（如在线字体）不进入断言，拦掉以免网络波动影响结果。
       await page.route(
         (url) => !isLoopback(url),
@@ -41,6 +47,7 @@ export const test = base.extend<{ api: ApiStub }>({
           await route.fulfill({ status: 501, json: { detail: `没有录制 ${key}` } });
           return;
         }
+        // Endpoints such as memory file bodies return raw text as text/plain: write the replacement response's body as a string
         // 记忆文件正文等接口按 text/plain 返回原文：替换响应的 body 写成字符串
         if (typeof response.body === "string") {
           await route.fulfill({ status: response.status, body: response.body, contentType: "text/plain; charset=utf-8" });
@@ -68,6 +75,7 @@ export const test = base.extend<{ api: ApiStub }>({
 
 export { expect };
 
+/** The document itself does not scroll, has no content clipped by overflow that the user cannot reach, and no undeclared horizontal scrolling. */
 /** 文档本身不滚动，没有被 overflow 裁切、用户够不到的内容，也没有未声明的横向滚动。 */
 export async function expectReachableLayout(page: Page) {
   const report = await page.evaluate(inspectLayout);
@@ -84,6 +92,7 @@ export async function expectReachableLayout(page: Page) {
   expect(report.clipped, "有内容被 overflow 裁切且无法滚动到达").toEqual([]);
 }
 
+// axe's WCAG 2.2 rules (including target-size) are off by default; wcag22aa must be enabled explicitly.
 // axe 的 WCAG 2.2 规则（含 target-size）默认关闭，需要显式开启 wcag22aa。
 const AXE_TAGS = ["wcag2a", "wcag2aa", "wcag21a", "wcag21aa", "wcag22aa"];
 

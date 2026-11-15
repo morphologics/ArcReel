@@ -26,6 +26,7 @@ const VIDEO_CAPS = {
   max_duration: 8,
 } as VideoCapabilities;
 
+// Assert "no notice" only after the capability request's callback lands: if we only wait until the spy is called, the callback has not run yet and "no notice" always holds.
 // 等能力请求的回调落地后再断言「无提示」：只等到 spy 被调用时回调尚未执行，「无提示」恒成立。
 async function settleCapabilityRequests(spy: MockInstance<typeof API.getVideoCapabilities>) {
   await act(async () => {
@@ -33,6 +34,7 @@ async function settleCapabilityRequests(spy: MockInstance<typeof API.getVideoCap
   });
 }
 
+// A confirmed episode has a final script as usual (confirming converts it).
 // 已确认的集照常已有正式脚本（确认即转出）。
 const CONFIRMED: Partial<ScriptReviewState> = {
   status: "confirmed",
@@ -40,6 +42,7 @@ const CONFIRMED: Partial<ScriptReviewState> = {
   script_overwrite: makeScriptOverwrite(),
 };
 
+/** This episode's final script: the missing list for override confirmation lists shots here, referred to by their position in the final script. */
 /** 本集正式脚本：覆盖确认的丢失清单列的是这里的分镜，按它们在正式脚本里的位置称呼。 */
 function seedFormalScenes(sceneIds: string[]) {
   useProjectsStore.setState({
@@ -293,6 +296,7 @@ describe("ScriptReviewGate", () => {
     fireEvent.click(button);
 
     const dialog = await screen.findByRole("alertdialog");
+    // The confirmation box presents the server-generated missing list, not assembled separately on the frontend; entry IDs are replaced by their position in the final script.
     // 确认框呈现服务端生成的丢失清单，不在前端另拼；条目 ID 换成它在正式脚本里的位置。
     expect(
       within(dialog).getByText(
@@ -437,6 +441,7 @@ describe("ScriptReviewGate", () => {
     await waitFor(() => expect(screen.getByDisplayValue("你终于回来了。")).toBeInTheDocument());
 
     fireEvent.change(screen.getByDisplayValue("你终于回来了。"), { target: { value: "你怎么才回来。" } });
+    // A save button appears after editing
     // 编辑后出现保存按钮
     const saveBtn = await screen.findByText("修复后保存");
     fireEvent.click(saveBtn);
@@ -446,11 +451,13 @@ describe("ScriptReviewGate", () => {
     expect(savedContent).toMatchObject({
       scenes: [{ utterances: [{ text: "三年后。" }, { text: "你怎么才回来。" }] }],
     });
+    // Saving carries the content fingerprint obtained at GET, for the server's concurrent-edit conflict check
     // 保存携带 GET 时拿到的内容指纹，供服务端做并发编辑冲突比对
     expect(baseFingerprint).toBe("fp1");
   });
 
   it("compares the episode total against the project target", async () => {
+    // dramaState has only one 8-second scene, target 30 seconds -> not exceeded, use neutral comparison text
     // dramaState 只有一个 8 秒场景，目标 30 秒 → 未超出，用中性对比文案
     vi.spyOn(API, "getScriptReview").mockResolvedValue(dramaState({ episode_target_duration: 30 }));
     render(<ScriptReviewGate projectName="p" episode={1} contentMode="drama" />);
@@ -502,6 +509,7 @@ describe("ScriptReviewGate", () => {
       .mockResolvedValue({ episode: 1, doc_type: "narration_script_plan", adopted: true, draft: null });
     render(<ScriptReviewGate projectName="p" episode={1} contentMode="narration" />);
 
+    // Violations hang on their shot card, episode-level violations are pinned to the top; the panel presents the draft, not final content, and offers no confirmation.
     // 违约挂在所在分镜卡上，整集层面的违约置顶；面板呈现的是草稿而非正式内容，也不提供确认。
     await waitFor(() => expect(screen.getByText("分镜 1 的原文为空")).toBeInTheDocument());
     expect(screen.getByText("源文末尾有一段未被任何分镜覆盖")).toBeInTheDocument();
@@ -520,6 +528,7 @@ describe("ScriptReviewGate", () => {
         "rev-1",
       ),
     );
+    // Refetch the review state after adopting: the final content has changed and the draft is gone.
     // 采用后重新拉取审核态：正式内容已变、草稿已不在。
     await waitFor(() => expect(get).toHaveBeenCalledTimes(2));
   });
@@ -597,6 +606,7 @@ describe("ScriptReviewGate", () => {
       });
     render(<ScriptReviewGate projectName="p" episode={1} contentMode="narration" />);
 
+    // Unavailable with unsaved changes: draft repair reads the saved draft.
     // 有未保存的修改时不可用：AI 修复读取的是已保存的草稿。
     await waitFor(() => expect(screen.getByDisplayValue("裴与出征后的第二年。")).toBeInTheDocument());
     fireEvent.change(screen.getByRole("textbox", { name: "小说原文" }), { target: { value: "改了一半。" } });
@@ -610,6 +620,7 @@ describe("ScriptReviewGate", () => {
 
     await waitFor(() => expect(repair).toHaveBeenCalledWith("p", 1, "narration_script_plan", "rev-1", "只调整时长"));
     await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    // While the task is queued or running the status bar shows repairing and other entries are locked; no refetch before the task settles.
     // 任务排队或执行期间状态条显示修复中，其余入口锁住；任务落定前不重拉。
     act(() => useTasksStore.setState({ tasks: [repairTask({ status: "running" })] }));
     expect(screen.getByRole("button", { name: /修复中/ })).toBeDisabled();
@@ -643,6 +654,7 @@ describe("ScriptReviewGate", () => {
       resource_id: "episode-1-narration_script_plan",
       status: "running",
     });
+    // A repair submitted elsewhere and already running when the page opens is likewise tracked to its terminal state.
     // 别处提交、页面打开时已在跑的修复同样跟踪到终态。
     useTasksStore.setState({ tasks: [running] });
     render(<ScriptReviewGate projectName="p" episode={1} contentMode="narration" />);
@@ -671,6 +683,7 @@ describe("ScriptReviewGate", () => {
     );
     const { unmount } = render(<ScriptReviewGate projectName="p" episode={1} contentMode="narration" />);
 
+    // The panel is open by default; close it first so we can tell this click really opened it.
     // 面板默认就是开着的，先关掉才断得出这次点击真的打开了它。
     act(() => useAppStore.getState().setAssistantPanelOpen(false));
     fireEvent.click(await screen.findByRole("button", { name: /交给 Agent 修复/ }));
@@ -704,6 +717,7 @@ describe("ScriptReviewGate", () => {
     expect(screen.queryByText("确认并继续")).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "丢弃这份修改" }));
+    // The confirmation box states which content it returns to after discarding.
     // 确认框写明丢弃后回到哪份内容。
     const dialog = await screen.findByRole("alertdialog");
     expect(dialog).toHaveTextContent("正式脚本规划");
@@ -755,6 +769,7 @@ describe("ScriptReviewGate", () => {
     render(<ScriptReviewGate projectName="p" episode={1} contentMode="drama" />);
     await waitFor(() => expect(screen.getByDisplayValue("你终于回来了。")).toBeInTheDocument());
 
+    // Simulate the agent changing script_plan externally -> revision changes -> triggers a refetch
     // 模拟 agent 在外部改了 script_plan → revision 变 → 触发重新拉取
     act(() => {
       useAppStore.getState().invalidateEntities(["draft:episode_1_script_plan"]);
@@ -776,10 +791,12 @@ describe("ScriptReviewGate", () => {
     render(<ScriptReviewGate projectName="p" episode={1} contentMode="drama" />);
     await waitFor(() => expect(screen.getByDisplayValue("你终于回来了。")).toBeInTheDocument());
 
+    // User's local edit, not yet saved
     // 用户本地编辑，尚未保存
     fireEvent.change(screen.getByDisplayValue("你终于回来了。"), { target: { value: "我的本地编辑" } });
     await screen.findByText("修复后保存");
 
+    // An external refresh arrives (agent changes script_plan -> revision changes) -> keep the user's draft, not overwritten by server content
     // 外部刷新到来（agent 改 script_plan → revision 变）→ 应保留用户草稿、不被服务端内容覆盖
     act(() => {
       useAppStore.getState().invalidateEntities(["draft:episode_1_script_plan"]);
@@ -823,6 +840,7 @@ describe("ScriptReviewGate", () => {
     render(<ScriptReviewGate projectName="p" episode={1} contentMode="drama" />);
 
     await waitFor(() => expect(screen.getByText("无法加载脚本规划结果")).toBeInTheDocument());
+    // The error state shows the server error message and a retry entry, not confused with the empty-state text.
     // 错误态展示服务端错误信息与重试入口，且不与空态文案混淆。
     expect(screen.getByText("网络异常")).toBeInTheDocument();
     expect(screen.getByText("重试")).toBeInTheDocument();
@@ -837,6 +855,7 @@ describe("ScriptReviewGate", () => {
     render(<ScriptReviewGate projectName="p" episode={1} contentMode="drama" />);
     expect(await screen.findByRole("heading", { name: "这一集还没有脚本" })).toBeInTheDocument();
 
+    // The empty state has no real content to keep: a failed silent revision refresh should enter the error state (distinct from empty) with retry, not linger in a stale empty state.
     // 空态无真实内容可保留：revision 静默刷新失败应进错误态（区别于空态）并给重试，不滞留在过时空态。
     act(() => {
       useAppStore.getState().invalidateEntities(["draft:episode_1_script_plan"]);
@@ -856,6 +875,7 @@ describe("ScriptReviewGate", () => {
     render(<ScriptReviewGate projectName="p" episode={1} contentMode="drama" />);
     await waitFor(() => expect(screen.getByDisplayValue("你终于回来了。")).toBeInTheDocument());
 
+    // A silent refresh triggered by revision fails: keep the loaded content, no flash of error / empty state.
     // revision 触发静默刷新失败：应保留已加载内容，不闪错误态 / 空态。
     act(() => {
       useAppStore.getState().invalidateEntities(["draft:episode_1_script_plan"]);
@@ -1026,7 +1046,7 @@ describe("ScriptReviewGate item fields", () => {
     return save.mock.calls[0][2];
   }
 
-  /** 展开第 1 个分镜的时长下拉，读出选项后收起。 */
+  /** Expand the duration dropdown of shot 1, read the options, then collapse it. / 展开第 1 个分镜的时长下拉，读出选项后收起。 */
   async function durationOptions() {
     const user = userEvent.setup();
     await user.click(await screen.findByRole("combobox", { name: "分镜 1 时长" }));
@@ -1127,6 +1147,7 @@ describe("ScriptReviewGate item fields", () => {
     const xiaotao = within(dialog).getByRole("button", { name: /小桃/ });
     expect(within(xiaotao).getByText("本集新增")).toBeInTheDocument();
     expect(within(dialog).getByRole("button", { name: /旧宅/ })).toBeInTheDocument();
+    // "Do not register" items are not candidates; for the selected one, explain it will be removed on confirmation rather than becoming a broken reference.
     // 「不登记」的项不作候选；已选的那一项说明确认时会被移出，而不是失效引用。
     const passerby = within(dialog).getByRole("button", { name: /路人/ });
     expect(within(passerby).getByText("已选「不登记」，确认时从引用中移除")).toBeInTheDocument();

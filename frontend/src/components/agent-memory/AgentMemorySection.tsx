@@ -13,7 +13,7 @@ function userMemoryHref(file: string): string {
   return settingsSectionPath("agent-memory", { [MEMORY_FILE_PARAM]: file });
 }
 
-/** 全局设置「Agent 记忆」（用户记忆）：全出血分区，二级栏列出记忆文件，详情栏是编辑器。 */
+/** Global setting "Agent memory" (user memory): full-bleed section; the secondary column lists memory files, the detail column is the editor. / 全局设置「Agent 记忆」（用户记忆）：全出血分区，二级栏列出记忆文件，详情栏是编辑器。 */
 export function AgentMemorySection() {
   const { t } = useTranslation("dashboard");
   const workspace = useMemoryWorkspace(USER_SCOPE, userMemoryHref);
@@ -21,7 +21,7 @@ export function AgentMemorySection() {
   if (workspace.error !== null || workspace.overview === null) return loadState;
 
   return (
-    // 全出血档：二级栏与详情栏各自滚动
+    // Full-bleed tier: secondary column and detail column scroll independently / 全出血档：二级栏与详情栏各自滚动
     <div className="flex min-h-0 min-w-0 flex-1">
       <SecondaryRail
         label={t("agent_memory_files")}

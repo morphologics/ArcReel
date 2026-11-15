@@ -3,6 +3,9 @@ import { defineRegionScenarios } from "../support/scenarios.ts";
 import { waitForEntrance } from "../support/region-helpers.ts";
 import { expect, type ApiOverrides } from "../support/test.ts";
 
+// Memory editor: global settings "Agent memory" (full-bleed tier, the secondary column lists files, the detail column is the editor, each
+// column scrolls on its own) and the project settings "Project memory" tab (a file list plus the same editor in a width-limited page,
+// scrolling with the page body). Each file is an edit unit; unsaved changes show in an inline notice bar below the edit box.
 // 记忆编辑器：全局设置「Agent 记忆」（全出血档，二级栏列文件、详情栏是编辑器，两栏各自滚动）
 // 与项目设置「项目记忆」分页（限宽页里的文件列表加同一个编辑器，随页面主体滚动）。
 // 每个文件是一个编辑单元，未保存修改显示在编辑框下方的内联提示条里。
@@ -10,6 +13,7 @@ import { expect, type ApiOverrides } from "../support/test.ts";
 const USER_MEMORY = "/api/v1/agent/memory";
 const PROJECT_MEMORY = "/api/v1/projects/demo/agent-memory";
 
+// Stress variant: index over the line limit, thirty memory files with long names and descriptions; index body of 300 lines including very long lines.
 // 压力变体：索引超出行数上限，三十个记忆文件，名称与说明都很长；索引正文三百行，含很长的行。
 const TOPICS = Array.from({ length: 30 }, (_, i) => ({
   name: `feedback-${String(i + 1).padStart(2, "0")}-keep-the-original-plot-and-character-voices-when-revising.md`,
@@ -47,7 +51,7 @@ const PROJECT_FILES = manyFiles(PROJECT_MEMORY, "/home/creator/.arcreel/data/pro
 
 const editor = (page: Page) => page.getByRole("textbox", { name: "MEMORY.md" });
 
-/** 二级栏（标准档或紧凑档，只有一份可见）。 */
+/** Secondary column (standard or compact tier; only one is visible). / 二级栏（标准档或紧凑档，只有一份可见）。 */
 const rail = (page: Page) => page.getByRole("navigation", { name: "记忆文件" });
 
 async function scrollToBottom(locator: Locator) {
@@ -87,6 +91,7 @@ defineRegionScenarios("Agent 记忆", [
       await expect(nav.getByRole("link", { name: /新建记忆文件/ }).filter({ visible: true })).toBeInViewport({
         ratio: 1,
       });
+      // Scrolling the list to the bottom does not move the edit box, and scrolling the edit box to the bottom does not move the list
       // 列表滚到底不带动编辑框，编辑框滚到底也不带动列表
       expect(await box.evaluate((el) => el.scrollTop)).toBe(0);
       await scrollToBottom(box);
@@ -168,6 +173,7 @@ defineRegionScenarios("项目记忆", [
     act: async (page) => {
       await editIndex(page);
       await expect(page.getByRole("button", { name: "保存" })).toBeVisible();
+      // Memory files save themselves; the project settings save bar does not appear in the shell's bottom row
       // 记忆文件自己保存，外壳底行不出现项目设置的保存栏
       await expect(page.getByRole("button", { name: "保存" })).toHaveCount(1);
       await waitForEntrance(page.locator("body"));

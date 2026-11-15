@@ -36,10 +36,12 @@ const projectData = {
   ],
 } as unknown as ProjectData;
 
+// Echo back key and params, to make asserting the text selection logic easy.
 // 回显 key 与参数，便于断言文案选择逻辑。
 const t = ((key: string, params?: Record<string, unknown>) =>
   key === "common:episode_unlisted_name" ? "未命名集" : `${key}|${params?.id ?? params?.unitId ?? params?.episode ?? ""}|${params?.reason ?? ""}`) as unknown as TFunction;
 
+// Failure notifications refer to entries by their current position in this episode: E1S01 and E1U1 are both in position 2, unlike their ID numbers.
 // 失败通知按条目在本集里的当前位置称呼：E1S01 与 E1U1 都排在第 2 位，与 ID 序号不同。
 const SCRIPTS = {
   "ep1.json": { episode: 1, segments: [{ segment_id: "E1S02" }, { segment_id: "E1S01" }] },
@@ -70,6 +72,7 @@ describe("buildTaskFailureTarget", () => {
   });
 
   it("normalizes scripts/ prefix on either side when matching episode", () => {
+    // task.script_file with a prefix also matches prefixed records in episodes
     // task.script_file 带前缀也能匹配 episodes 中带前缀的记录
     const target = buildTaskFailureTarget(
       makeTask({ task_type: "storyboard", script_file: "scripts/ep1.json" }),
@@ -143,6 +146,7 @@ describe("buildTaskFailureTarget", () => {
   });
 
   it("keeps the segment target for a task rejected upstream", () => {
+    // The rejection reason goes only into notification text and does not take part in target resolution.
     // 拒因只进通知文案，不参与 target 解析。
     const task = makeTask({
       task_type: "storyboard",
@@ -222,6 +226,8 @@ describe("describeTaskFailure", () => {
   it("renders the provider reason after the per-type text with the real i18n bundle", async () => {
     await i18n.loadNamespaces("dashboard");
     const realT = i18n.getFixedT("zh", "dashboard");
+    // error_message is the upstream original text and may contain literal i18next placeholders; it does not take part in interpolation,
+    // and the rejection reason must still land in the suffix.
     // error_message 是上游原文，可能带 i18next 占位符字面量；它不参与插值，
     // 拒因必须仍落在后缀里。
     const text = describeFailure(
@@ -246,6 +252,7 @@ describe("describeTaskFailure", () => {
   });
 
   it("keeps the plain text when there is no provider reason", () => {
+    // Failures other than provider_rejected, such as cascade failures, have no rejection reason field, so the text is unchanged.
     // 级联失败等非 provider_rejected 失败没有拒因字段，文案不变。
     expect(
       describeFailure(

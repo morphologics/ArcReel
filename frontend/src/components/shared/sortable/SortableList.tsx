@@ -25,7 +25,7 @@ import { useTranslation } from "react-i18next";
 import { Button } from "@/components/ui/button";
 import { BufferedKeyboardSensor } from "./BufferedKeyboardSensor";
 
-/** 一次移动：把 `id` 从第 `from` 项移到第 `to` 项（从 0 计），`ids` 是移动后的完整顺序。 */
+/** One move: move `id` from item `from` to item `to` (0-based); `ids` is the complete order after the move. / 一次移动：把 `id` 从第 `from` 项移到第 `to` 项（从 0 计），`ids` 是移动后的完整顺序。 */
 export interface SortableMove<Id extends UniqueIdentifier> {
   id: Id;
   from: number;
@@ -55,26 +55,32 @@ function movedIds<Id extends UniqueIdentifier>(ids: readonly Id[], from: number,
   return next;
 }
 
+// Move only along the list direction, so a dragged item doesn't drift out of the list horizontally (or vertically).
 // 只沿列表方向移动，拖动时条目不会横向（或纵向）漂出列表。
 const lockToVertical: Modifier = ({ transform }) => ({ ...transform, x: 0 });
 const lockToHorizontal: Modifier = ({ transform }) => ({ ...transform, y: 0 });
 
 interface SortableListProps<Id extends UniqueIdentifier> {
-  /** 当前顺序。条目在列表里用 `SortableItem` 渲染，`id` 取自这里。 */
+  /** Current order. Items are rendered in the list with `SortableItem`, their `id` taken from here. / 当前顺序。条目在列表里用 `SortableItem` 渲染，`id` 取自这里。 */
   ids: readonly Id[];
-  /** 松手或经 `useSortableMove` 移动后调用；调用方据此改本地顺序并提交，失败时自行回滚。 */
+  /** Called after a drop or a move via `useSortableMove`; the caller updates its local order and submits accordingly, rolling back itself on failure. / 松手或经 `useSortableMove` 移动后调用；调用方据此改本地顺序并提交，失败时自行回滚。 */
   onMove: (move: SortableMove<Id>) => void;
-  /** 返回 false 的落点不接受：拖放后条目回到原处，`useSortableMove` 对应的方向不可用。 */
+  /** Drop targets returning false aren't accepted: after the drop the item returns to its place, and the matching direction of `useSortableMove` is unavailable. / 返回 false 的落点不接受：拖放后条目回到原处，`useSortableMove` 对应的方向不可用。 */
   canMove?: (move: SortableMove<Id>) => boolean;
-  /** 读屏播报里的条目名称。 */
+  /** Item name in screen reader announcements. / 读屏播报里的条目名称。 */
   getName: (id: Id) => string;
   orientation?: "vertical" | "horizontal";
-  /** 暂时不允许排序（如列表正在按搜索词筛选）：把手禁用，移动动作不可用。 */
+  /** Sorting temporarily not allowed (e.g. the list is being filtered by a search term): handles disabled, move actions unavailable. / 暂时不允许排序（如列表正在按搜索词筛选）：把手禁用，移动动作不可用。 */
   disabled?: boolean;
   children: ReactNode;
 }
 
 /**
+ * Sortable list: drag the handle by mouse or touch, or focus the handle and press Space to pick up, arrow keys to move, Space again to drop, Esc to cancel;
+ * pickup, move, drop and cancel are all announced to screen readers. Provides only sorting behavior and renders no container: the caller writes its own list element,
+ * uses `SortableItem` for each item and `SortableHandle` for the handle; moves that don't rely on dragging ("Move up" / "Move down" menus)
+ * use `useSortableMove`.
+ *
  * 可排序列表：鼠标、触控拖动把手，或聚焦把手后按空格键拿起、方向键移动、再按空格键放下，Esc 取消；
  * 拿起、移动、放下与取消都经读屏播报。只提供排序行为，不渲染容器：调用方自己写列表元素，
  * 每一项用 `SortableItem`，把手用 `SortableHandle`；不依赖拖动的移动方式（「上移」「下移」菜单）
@@ -114,6 +120,7 @@ export function SortableList<Id extends UniqueIdentifier>({
     };
   }, [ids, disabled, canMove, onMove]);
 
+  // On pickup dnd-kit reports onDragOver once more with the item itself as target; don't announce if the target is unchanged, so "picked up" isn't overwritten.
   // 拿起时 dnd-kit 会以条目自身为落点再报一次 onDragOver；落点没变就不播报，免得盖掉「已拿起」。
   const lastOverId = useRef<UniqueIdentifier | null>(null);
   const name = (id: UniqueIdentifier) => getName(id as Id);
@@ -173,6 +180,9 @@ const SortableItemContext = createContext<SortableState | null>(null);
 type SortableItemProps = Omit<useRender.ComponentProps<"li">, "id"> & { id: UniqueIdentifier };
 
 /**
+ * One item in the list, rendered as `li` by default; use `render` to swap in another element. Carries `data-dragging` while dragging;
+ * callers express the drag state with the `data-dragging:` variant.
+ *
  * 列表中的一项，默认渲染为 `li`，用 `render` 换成别的元素。拖动中带 `data-dragging`，
  * 调用方用 `data-dragging:` 变体表达拖动态。
  */
@@ -185,6 +195,8 @@ export function SortableItem({ id, render, ...props }: SortableItemProps) {
     ref: sortable.setNodeRef,
     props: mergeProps<"li">(
       {
+        // Drag offset can only be written into inline styles frame by frame by dnd-kit; the dragged item is raised above other items in the same list,
+        // otherwise it gets covered by later items when moving backward.
         // 拖动位移只能由 dnd-kit 逐帧写入内联样式；拖动中的条目抬到同列表的其他条目之上，
         // 否则向后移动时会被后面的条目盖住。
         style: {
@@ -201,7 +213,7 @@ export function SortableItem({ id, render, ...props }: SortableItemProps) {
   return <SortableItemContext.Provider value={sortable}>{element}</SortableItemContext.Provider>;
 }
 
-/** 拖动把手：图标按钮，`label` 写明调整的是哪一项的顺序，如「调整『官方市场』的顺序」。 */
+/** Drag handle: an icon button; `label` states which item's order is being changed, e.g. "Reorder 'Official marketplace'". / 拖动把手：图标按钮，`label` 写明调整的是哪一项的顺序，如「调整『官方市场』的顺序」。 */
 export function SortableHandle({ label }: { label: string }) {
   const sortable = useContext(SortableItemContext);
   if (!sortable) throw new Error("SortableHandle 必须放在 SortableItem 内");
@@ -226,6 +238,9 @@ export function SortableHandle({ label }: { label: string }) {
 }
 
 /**
+ * Moving without dragging: `moveBy(-1)` moves one position earlier, `moveBy(1)` one later, for menu items such as "Move up" / "Move down"
+ * (WCAG 2.5.7 requires a single-pointer alternative besides dragging). When `canMoveBy` is false the matching menu item should be disabled.
+ *
  * 不靠拖动的移动：`moveBy(-1)` 前移一位、`moveBy(1)` 后移一位，供「上移」「下移」这类菜单项使用
  * （WCAG 2.5.7 要求拖动之外另有单指操作的方式）。`canMoveBy` 为 false 时对应的菜单项应禁用。
  */

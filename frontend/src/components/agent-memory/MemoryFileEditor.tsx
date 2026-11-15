@@ -24,6 +24,9 @@ import { formatShortDateTime } from "@/utils/date-format";
 import { INDEX_LINE_LIMIT, memoryFilePath, type MemoryEntry } from "./memory-files";
 
 /**
+ * `pane`: detail column of the full-bleed section; the edit box fills the body height and scrolls inside.
+ * `flow`: scrolls with the page body on width-limited pages; the edit box grows with content up to a cap (half the viewport height, so the whole editor fits even in the shortest viewport).
+ *
  * `pane`：全出血区段的详情栏，编辑框占满正文高度、在框内滚动。
  * `flow`：限宽页里随页面主体滚动，编辑框随内容撑高到上限（半个视口高，整块编辑器在最矮的视口里也放得下）。
  */
@@ -32,16 +35,22 @@ export type MemoryEditorLayout = "pane" | "flow";
 interface MemoryFileEditorProps {
   scope: AgentMemoryScope;
   entry: MemoryEntry;
-  /** 记忆目录的服务端路径，与文件名拼成完整路径展示。 */
+  /** Server path of the memory directory, joined with the file name to show the full path. / 记忆目录的服务端路径，与文件名拼成完整路径展示。 */
   dir: string;
   layout: MemoryEditorLayout;
-  /** 保存成功后重取文件列表（说明、修改时间与索引行数随之更新）。 */
+  /** Refetch the file list after a successful save (description, modification time and index line count update with it). / 保存成功后重取文件列表（说明、修改时间与索引行数随之更新）。 */
   onSaved: () => void;
   onDelete: () => void;
   onClear: () => void;
 }
 
 /**
+ * Raw-text editor for a single memory file: Markdown plain text with frontmatter, not rendered. One file is one editing unit;
+ * unsaved changes are saved or discarded via the inline banner; switching files or tabs, or leaving, asks through the leave guard.
+ *
+ * Remounted by the caller per file name (`key`); unsaved changes and loading state belong to the previous file.
+ * Save is a plain overwriting PUT with no server-side conflict detection; the last writer wins.
+ *
  * 单个记忆文件的原文编辑器：含 frontmatter 的 Markdown 纯文本，不渲染。一个文件是一个编辑单元，
  * 未保存修改由内联提示条保存或放弃，切换文件、切换分页或离开时经离开拦截询问。
  *
@@ -55,7 +64,7 @@ export function MemoryFileEditor({ scope, entry, dir, layout, onSaved, onDelete,
   const [attempt, setAttempt] = useState(0);
   const filename = entry.name;
 
-  // react-doctor-disable-next-line react-doctor/no-set-state-after-await-in-effect -- 每轮加载持有自己的 AbortController，await 之后两处写 state 前都先复核 signal.aborted，过期结果不会回写
+  // react-doctor-disable-next-line react-doctor/no-set-state-after-await-in-effect -- each load round holds its own AbortController and re-checks signal.aborted before both state writes after await, so stale results are never written back / 每轮加载持有自己的 AbortController，await 之后两处写 state 前都先复核 signal.aborted，过期结果不会回写
   useEffect(() => {
     const controller = new AbortController();
     const load = async () => {
@@ -65,6 +74,7 @@ export function MemoryFileEditor({ scope, entry, dir, layout, onSaved, onDelete,
         setContent(raw);
       } catch (err) {
         if (controller.signal.aborted) return;
+        // A file in the list may have been deleted by the Agent or be unreadable; without an error state it would stay loading forever.
         // 列表里的文件可能已被 Agent 删除或读不出来；不落错误态就会永远停在加载态。
         setLoadError(errMsg(err));
       }
@@ -83,6 +93,7 @@ export function MemoryFileEditor({ scope, entry, dir, layout, onSaved, onDelete,
     />
   );
 
+  // The detail column body has no padding, the editor provides it; on width-limited pages the body is flush with the file header
   // 详情栏的正文没有内边距，由编辑器自己给；限宽页里正文贴齐文件头
   const inset = layout === "pane" ? "px-6 py-4" : "";
   let body: ReactNode;
@@ -229,7 +240,7 @@ function LoadedMemoryEditor({
 
   const editor = (
     <Textarea
-      // 记忆是 Markdown 原文，按代码类输入用等宽字体
+      // Memory is raw Markdown, so use a monospace font as for code inputs / 记忆是 Markdown 原文，按代码类输入用等宽字体
       mono
       value={unit.value}
       aria-label={filename}
@@ -240,7 +251,7 @@ function LoadedMemoryEditor({
   );
 
   const body = (
-    // 宽窗口下编辑框限宽，Markdown 原文的行不会横跨整栏
+    // Cap the edit box width on wide windows so raw Markdown lines do not span the whole column / 宽窗口下编辑框限宽，Markdown 原文的行不会横跨整栏
     <div className={cn("flex flex-col gap-3", layout === "pane" && "h-full min-h-72 max-w-252 px-6 py-4")}>
       <div className="flex min-h-0 flex-1 flex-col">{editor}</div>
       <UnsavedChangesBar unit={unit} className="shrink-0" />

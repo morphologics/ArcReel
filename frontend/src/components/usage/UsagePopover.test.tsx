@@ -25,6 +25,7 @@ const EMPTY_KPI = {
   unpriced_calls: 0,
 };
 
+/** Entry reference attached by the backend: the shot at position `position` in episode 1 (untitled). */
 /** 后端附上的条目指称：第 1 集（无标题）里排第 `position` 位的分镜。 */
 function itemRef(itemId: string, position: number): EpisodeItemRef {
   return {
@@ -46,7 +47,7 @@ function stubUsageApi() {
   });
 }
 
-/** 打开悬浮层并把当前项目的数据灌进 store。 */
+/** Open the popover and fill the store with the current project's data. / 打开悬浮层并把当前项目的数据灌进 store。 */
 function openPopover(state: {
   summary?: UsageSummary;
   recent?: UsageRecord[];
@@ -148,11 +149,13 @@ describe("UsagePopover", () => {
 
     openPopover({});
 
+    // The popover and the settings page KPIs both go through formatRatio; under vi both use a comma decimal separator.
     // 悬浮层与设置页 KPI 同走 formatRatio，vi 下都是逗号小数点。
     expect(screen.getByText("90,3%")).toBeInTheDocument();
   });
 
   it("renders the counts with the language's thousands separator", async () => {
+    // The popover KPI row has the same constraint as the settings page: call count and failures follow the UI language, not the browser language.
     // 悬浮层 KPI 行与设置页同一条约束：调用次数、失败数跟界面语言，不跟浏览器语言。
     for (const [language, calls, failed] of [
       ["zh", "12,340", "1,205"],
@@ -164,6 +167,7 @@ describe("UsagePopover", () => {
       const summary = makeUsageSummary({
         kpi: { ...base.kpi, calls: 12_340, failed: 1_205 },
       });
+      // The top bar entry refetches summary once on mount, landing back on the same counts.
       // 顶栏入口挂载时会重取一轮 summary，让它落回同一份计数。
       vi.mocked(API.getUsageSummary).mockResolvedValue(summary);
 

@@ -4,6 +4,8 @@ import { clearAgentOverlay, viewport, waitForEntrance } from "../support/region-
 import { defineRegionScenarios } from "../support/scenarios.ts";
 import { expect, type ApiOverrides } from "../support/test.ts";
 
+// Asset gallery: toolbar (filter, batch generate, add) + a grid of browse cards that adds columns with canvas width; clicking a card
+// opens the right detail Sheet, secondary actions sit in the card's "More".
 // 资产画廊：工具栏（筛选、批量生成、新增）+ 按画布宽度加列的浏览卡网格；点卡片打开右侧详情 Sheet，
 // 次要操作收在卡片的「更多」里。
 
@@ -13,6 +15,7 @@ const LONG_NAME = "旧城茶馆二楼临窗座位上总在午后出现的说书�
 const LONG_DESCRIPTION =
   "四十岁上下，瘦高，穿洗得发白的灰布长衫，袖口磨出了毛边；左眼角有一颗痣，说话时习惯用折扇轻敲桌面。每天午后准时出现在茶馆二楼临窗的位置，讲到紧要处会突然停下喝茶，让听众干着急。";
 
+// Inline SVG sheets: getFileUrl uses data: URLs as-is, without requests.
 // 内联 SVG 资产图：getFileUrl 原样使用 data: 地址，不发请求。
 function sheetSvg(hue: number) {
   return `data:image/svg+xml,${encodeURIComponent(
@@ -35,6 +38,7 @@ const CHARACTERS: Record<string, Character> = {
   小满: { description: "隔壁绸缎庄的学徒，常来茶馆听书。" },
 };
 
+// Artifact manifest: Shen Yan's sheet is stale, A Lan and Xiao Man are pending.
 // 产物清单：沈砚的资产图已过期，阿岚与小满待生成。
 function statusRows(names: string[], stale: Set<string>, missing: Set<string>) {
   return {
@@ -59,6 +63,7 @@ function projectWith(characters: Record<string, Character>, episodeTitles?: stri
   const body = structuredClone(recorded.body) as { project: Record<string, unknown> };
   body.project.characters = characters;
   if (episodeTitles) {
+    // Use the recorded episode 1 as template and lay out many episodes by title.
     // 以录制的第 1 集为模板，按标题铺出多集。
     const [template] = body.project.episodes as Record<string, unknown>[];
     body.project.episodes = episodeTitles.map((title, i) => ({
@@ -71,6 +76,7 @@ function projectWith(characters: Record<string, Character>, episodeTitles?: stri
   return { status: recorded.status, body };
 }
 
+// Xiao Man has an in-progress sheet task; the card shows "Generating".
 // 小满有一个进行中的资产图任务，卡片显示「生成中」。
 const RUNNING_TASKS = {
   status: 200,
@@ -104,6 +110,7 @@ const RUNNING_TASKS = {
   },
 };
 
+// The project event stream is SSE, not recorded; reject with a non-retryable status so the gallery stays on the replaced project data.
 // 项目事件流是 SSE，没有录制；按不可重试的状态拒绝，画廊停在替换的项目数据上。
 const BASE: ApiOverrides = {
   "GET /api/v1/projects/demo/events/stream": { status: 404, body: { detail: "页面级套件不回放事件流" } },
@@ -134,6 +141,7 @@ const BASE: ApiOverrides = {
   },
 };
 
+// Stress variant: 40 characters with long names and descriptions, aliases and derivatives.
 // 压力变体：40 个名字与描述都很长、带别名与衍生的角色。
 const MANY: Record<string, Character> = Object.fromEntries(
   Array.from({ length: 40 }, (_, i) => [
@@ -153,6 +161,7 @@ const MANY_API: ApiOverrides = {
   "GET /api/v1/tasks?page_size=200&project_name=demo": { status: 200, body: { items: [], total: 0, page: 1, page_size: 200 } },
 };
 
+// Reference preview before deletion (dry_run): Lin Xi is referenced by the first three episodes.
 // 删除前的引用预览（dry_run）：林夕被前三集引用。
 const DELETE_PREVIEW_KEY = "DELETE /api/v1/projects/demo/characters/林夕?dry_run=true";
 const DELETE_API: ApiOverrides = {
@@ -173,6 +182,7 @@ const DELETE_API: ApiOverrides = {
     },
   },
 };
+// Stress variant: referenced by 30 episodes, with very long episode titles.
 // 压力变体：被 30 集引用，集标题很长。
 const MANY_EPISODES = Array.from({ length: 30 }, (_, i) => `${LONG_NAME}的第 ${i + 1} 段故事`);
 const DELETE_MANY_API: ApiOverrides = {
@@ -219,12 +229,14 @@ function versionsOf(name: string, count: number) {
   };
 }
 
+// Image viewer: Lin Xi, Shen Yan and Zhou Zhanggui have sheets, A Lan and Xiao Man do not.
 // 图片查看器：林夕、沈砚、周掌柜有资产图，阿岚与小满没有。
 const VIEWER_API: ApiOverrides = {
   ...BASE,
   "GET /api/v1/projects/demo/versions/characters/沈砚": versionsOf("沈砚", 2),
   "GET /api/v1/projects/demo/versions/characters/周掌柜": versionsOf("周掌柜", 1),
 };
+// Stress variant: very long name, 60 versions.
 // 压力变体：名字很长、有 60 个版本。
 const VIEWER_MANY_API: ApiOverrides = {
   ...BASE,
@@ -252,6 +264,7 @@ function cards(page: Page) {
 
 async function galleryReady(page: Page) {
   await expect(cards(page).first()).toBeVisible();
+  // Wait for the artifact manifest: Shen Yan's "Stale" mark comes from it.
   // 等产物清单回来：沈砚的「已过期」标记来自它。
   await expect(page.getByRole("button", { name: /^已过期/ })).toContainText("1");
 }
@@ -281,6 +294,7 @@ defineRegionScenarios("资产画廊", [
       await expect(xiaoman.getByText("生成中")).toBeVisible();
       await expect(page.getByRole("article", { name: "周掌柜" }).getByText("缺描述")).toBeVisible();
       await expect(page.getByRole("article", { name: "阿岚" }).getByText("待生成")).toBeVisible();
+      // At 1440 wide with the Agent panel expanded, the character grid has two columns.
       // 1440 宽、Agent 面板展开时，角色网格是两列。
       if (viewport(page).width === 1440) {
         await expect(page.getByRole("button", { name: "Agent", exact: true })).toHaveAttribute("aria-pressed", "true");
@@ -375,6 +389,7 @@ defineRegionScenarios("资产画廊", [
     path: PATH,
     api: {
       ...BASE,
+      // The detail's derivatives block reads the derivative image status
       // 详情的衍生区块读取衍生图状态
       "GET /api/v1/projects/demo/characters/林夕/derivatives": { status: 200, body: { success: true, derivatives: {} } },
     },
@@ -427,6 +442,7 @@ defineRegionScenarios("资产画廊", [
       await page.keyboard.press("ArrowRight");
       viewer = page.getByRole("dialog", { name: "沈砚", exact: true });
       await expect(viewer.getByText("2 / 3")).toBeVisible();
+      // A Lan has no sheet, skip
       // 阿岚没有资产图，跳过
       await page.keyboard.press("ArrowRight");
       viewer = page.getByRole("dialog", { name: "周掌柜", exact: true });

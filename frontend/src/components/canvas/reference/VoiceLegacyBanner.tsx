@@ -1,7 +1,7 @@
 import { History, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 
-/** 存量过渡横幅：角色参考音频更新后，提示本画布有片段生成于设置之前；计数与关闭态写回的口径见 `voice-legacy-notice.ts`。 */
+/** Legacy transition banner: after a character's reference audio is updated, notes that this canvas has clips generated before that setting; for the count and how the dismissed state is written back see `voice-legacy-notice.ts`. / 存量过渡横幅：角色参考音频更新后，提示本画布有片段生成于设置之前；计数与关闭态写回的口径见 `voice-legacy-notice.ts`。 */
 export function VoiceLegacyBanner({
   onDismiss,
   dismissLabel,

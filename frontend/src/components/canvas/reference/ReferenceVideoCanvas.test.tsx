@@ -24,6 +24,9 @@ import type {
 } from "@/types";
 import type { EpisodeScript, ProjectData } from "@/types";
 
+// useActiveResourceIds / useLatestTasksByResource wrap the real implementations by default; only individual cases
+// freeze return values to simulate "the reactive signal has not caught up with the real store", verifying the submit handler does not depend on them
+// and reads the store fresh via getState().
 // useActiveResourceIds / useLatestTasksByResource 默认包裹真实实现，仅在个别用例里
 // 冻结返回值模拟「响应式信号尚未追上真实 store」的场景，验证提交 handler 不依赖它们、
 // 独立用 getState() 新鲜读 store。
@@ -62,9 +65,10 @@ function mkUnit(id: string, text = "x"): ReferenceVideoUnit & { generated_assets
   };
 }
 
+/** The server's per-unit bucket verdict: default "no reference images -> i2v, options 3/8", cases override as needed. */
 /** 服务端逐单元定桶结论：默认「无参考图 → i2v，档位 3/8」，用例按需覆盖。 */
 
-/** 批量端点的准入结论骨架；恒 200，decision 携带结局。 */
+/** Skeleton of the batch endpoint's admission verdict; always 200, decision carries the outcome. / 批量端点的准入结论骨架；恒 200，decision 携带结局。 */
 function mkAdmission(patch: Record<string, unknown> = {}) {
   return {
     decision: "admitted",
@@ -81,7 +85,7 @@ function mkAdmission(patch: Record<string, unknown> = {}) {
   } as never;
 }
 
-/** 批量预览的结论骨架：默认请求的单元全部通过、没有报价。 */
+/** Skeleton of the batch preview verdict: by default all requested units pass and there is no quote. / 批量预览的结论骨架：默认请求的单元全部通过、没有报价。 */
 function mkPreview(patch: Record<string, unknown> = {}) {
   return {
     decision: "admitted",
@@ -96,32 +100,35 @@ function mkPreview(patch: Record<string, unknown> = {}) {
   } as never;
 }
 
+/** Primary button of the batch confirmation box: "Start generating" when no duration option decision is needed. */
 /** 批量确认框的主按钮：无需拍板档位时是「开始生成」。 */
 const BATCH_START_CTA = /^(Start generating|开始生成)$/;
 
-/** 在批量确认框里点主按钮提交。 */
+/** Click the primary button in the batch confirmation box to submit. / 在批量确认框里点主按钮提交。 */
 async function confirmBatchPreview(name: RegExp = BATCH_START_CTA) {
   const confirm = await screen.findByRole("button", { name });
   await waitFor(() => expect(confirm).toBeEnabled());
   fireEvent.click(confirm);
 }
 
+// Generate CTA of the unit preview panel. Anchoring at line start excludes the batch entry "Fill in videos"; both contain
+// "Generate video", and without anchoring the batch button matches first by DOM order, so the tested path would not be this submit path.
 // 单元预览面板的生成 CTA。锚定行首把批量入口「补齐视频」排除在外——两者都含
 // 「生成视频」，不锚定会按 DOM 顺序先匹配到批量按钮，测到的就不是这条提交路径。
 const UNIT_GENERATE_CTA = /^(Generate video|生成视频)/i;
 
-/** 与应用根部一致：画布挂在离开拦截之下，未保存的修改由它拦截。 */
+/** Same as the app root: the canvas sits under the leave guard, which intercepts unsaved changes. / 与应用根部一致：画布挂在离开拦截之下，未保存的修改由它拦截。 */
 function render(ui: ReactElement) {
   return rtlRender(ui, { wrapper: LeaveGuardProvider });
 }
 
-/** 打开时长下拉，返回各选项的秒数。 */
+/** Open the duration dropdown and return each option's seconds. / 打开时长下拉，返回各选项的秒数。 */
 async function openDurationOptions(): Promise<number[]> {
   await userEvent.click(await screen.findByRole("combobox", { name: /Duration|时长/ }));
   return (await screen.findAllByRole("option")).map((option) => Number.parseInt(option.textContent ?? "", 10));
 }
 
-/** 集页路由给画布的视图：缺省停在视频单元视图。 */
+/** The view the episode page route gives the canvas: defaults to the video unit view. / 集页路由给画布的视图：缺省停在视频单元视图。 */
 const BOARD = { view: "board", onViewChange: () => {} } as const;
 
 function runningTask(unitId: string) {
@@ -135,6 +142,7 @@ function runningTask(unitId: string) {
   };
 }
 
+/** Final video units in the project script: identification outside the episode page (admission verdicts, draft panel) counts positions by these. */
 /** 项目剧本里的正式视频单元：集页面之外的指认（准入结论、草稿面板）按它算位置。 */
 function seedFormalUnits(unitIds: string[]) {
   const script = { episode: 1, video_units: unitIds.map((unit_id) => ({ unit_id, text: "x" })) };
@@ -157,6 +165,7 @@ describe("ReferenceVideoCanvas", () => {
     vi.mocked(useLatestTasksByResource).mockImplementation(mockHolder.realLatestTasksByResource);
     useReferenceVideoStore.setState({ unitsByEpisode: {}, selectedUnitId: null, loading: false, error: null });
     useProjectsStore.setState({ currentProjectName: "proj", currentProjectData: STUB_PROJECT, currentScripts: {} });
+    // Optimistic marks are written by the enqueue action layer and share one store instance across tests, so reset them too
     // 乐观标记由入队动作层写入且跨测试共享同一 store 实例，须一并重置
     useTasksStore.setState({
       tasks: [],
@@ -165,6 +174,7 @@ describe("ReferenceVideoCanvas", () => {
       optimisticActiveScriptFile: new Set(),
     });
     useAppStore.setState({ toast: null });
+    // The duration option preflight defaults to "matches the requested duration baseline": the generate entry needs no confirmation.
     // 时长取档预检默认「与请求时长基准一致」：生成入口无需确认。
     vi.spyOn(API, "precheckReferenceVideoDuration").mockResolvedValue({
       needs_confirmation: false,
@@ -179,6 +189,7 @@ describe("ReferenceVideoCanvas", () => {
       problems: [],
     });
     vi.spyOn(API, "listEpisodeDrafts").mockResolvedValue({ episode: 1, drafts: [] });
+    // Batch preview admits all requested units by default: cases that care about the submit outcome just click confirm.
     // 批量预览默认放行请求的全部单元：用例关心提交结局时只需点确认。
     vi.spyOn(API, "previewReferenceVideoBatch").mockImplementation(async (_project, _episode, payload) =>
       mkPreview({
@@ -232,11 +243,13 @@ describe("ReferenceVideoCanvas", () => {
     render(<ReferenceVideoCanvas {...BOARD} projectName="proj" episode={1} />);
     await waitFor(() => expect(screen.getByTestId("unit-row-E1U1")).toBeInTheDocument());
     expect(screen.getByTestId("unit-row-E1U2")).toBeInTheDocument();
+    // The unit header shows "position / total", not the entry ID
     // 单元头部写「位置 / 总数」，不写条目 ID
     expect(await screen.findByRole("button", { name: "视频单元 1 / 2" })).toHaveTextContent("1 / 2");
   });
 
   it("renders units that carry no generated_assets section at all", async () => {
+    // The backend writes this section only at generation: units that never generated any artifact lack it, so the read side always treats it as possibly absent.
     // 后端只在生成时写入这一节：尚未生成过任何产物的单元没有它，读侧一律按可能缺席处理。
     const bare: ReferenceVideoUnit = mkUnit("E1U1");
     delete bare.generated_assets;
@@ -330,6 +343,7 @@ describe("ReferenceVideoCanvas", () => {
 
       await waitFor(() => expect(useAppStore.getState().toast?.text).toContain("网络中断"));
       expect(deleteSpy).toHaveBeenCalledTimes(1);
+      // The remove dialog stays in place and the editor behind it is not in the accessibility tree; query by value
       // 移除对话框留在原处，背后的编辑器不在可访问树里，按值查询
       expect(screen.getByDisplayValue("unsaved edit")).toBeInTheDocument();
     });
@@ -411,6 +425,7 @@ describe("ReferenceVideoCanvas", () => {
     });
   });
 
+  // Parse preview and manuscript share the editor column: when switching to the parse view the textarea gives way to the read-only derived view
   // 解析预览与文稿共用编辑器列：切到解析视图时 textarea 让位给只读派生视图
   it("switches the editor column between the script and its parse preview", async () => {
     vi.spyOn(API, "listReferenceVideoUnits").mockResolvedValue({
@@ -432,6 +447,7 @@ describe("ReferenceVideoCanvas", () => {
     expect(await screen.findByRole("combobox")).toBeInTheDocument();
   });
 
+  // The parse preview is read-only with no focusable descendants: the panel itself must take focus so keyboard users can reach content below the fold
   // 解析预览只读、没有可聚焦的后代：面板自身须能接焦点，键盘用户才翻得到折线以下的内容
   it("lets the keyboard reach the read-only parse preview", async () => {
     vi.spyOn(API, "listReferenceVideoUnits").mockResolvedValue({
@@ -447,6 +463,8 @@ describe("ReferenceVideoCanvas", () => {
     expect(parsePanel).toHaveAttribute("tabindex", "0");
   });
 
+  // `out["__proto__"] = kind` on a plain object goes through the inherited setter and creates no own property,
+  // so a registered `__proto__` character would show as unregistered in highlighting (the backend parses it as usual)
   // `out["__proto__"] = kind` 在普通对象上走继承的 setter、不落自有属性，
   // 登记过的 `__proto__` 角色会在高亮里显示成未登记（后端照常解析）
   it("resolves an asset named __proto__ in the highlight lookup", async () => {
@@ -454,6 +472,7 @@ describe("ReferenceVideoCanvas", () => {
       currentProjectName: "proj",
       currentProjectData: {
         ...STUB_PROJECT,
+        // Computed key: `__proto__:` in a literal is the special case that sets the prototype and creates no own property
         // 计算键：字面量里的 `__proto__:` 是设原型的特例，不会建自有属性
         characters: { ["__proto__"]: { description: "" } },
       } as ProjectData,
@@ -469,6 +488,7 @@ describe("ReferenceVideoCanvas", () => {
     await screen.findByRole("combobox");
     fireEvent.click(await screen.findByRole("tab", { name: /Parse preview|解析预览/ }));
 
+    // Look only at highlighting inside the parse preview panel, avoiding same-named text in unit list cards
     // 只看解析预览面板内的高亮，避开单元列表卡片里的同名文本
     const panel = await screen.findByRole("tabpanel");
     const mention = (await within(panel).findAllByText(/__proto__/)).find((el) =>
@@ -536,6 +556,8 @@ describe("ReferenceVideoCanvas", () => {
     expect(screen.queryByRole("button", { name: /生成旁白配音|Generate narration audio/ })).not.toBeInTheDocument();
   });
 
+  // The body is the single source of truth: saving sends the editor's text verbatim in PATCH's prompt slot,
+  // and the request carries no separate reference image field.
   // 正文是单一真相：保存把编辑器里那段文本原样送到 PATCH 的 prompt 位，
   // 请求里不带任何独立参考图字段。
   it("saves an edited body as the unit's text, with nothing else in the request", async () => {
@@ -556,6 +578,7 @@ describe("ReferenceVideoCanvas", () => {
   });
 
   it("图标栏展开的完整列表里也能用键盘排序", async () => {
+    // jsdom does no layout: give vertically stacked rects by each entry's list position so keyboard dragging has drop positions to compute.
     // jsdom 不做布局：按条目在列表里的位置给出纵向排开的矩形，键盘拖动才有落点可算。
     vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) {
       const item = this.closest("li");
@@ -574,6 +597,7 @@ describe("ReferenceVideoCanvas", () => {
     sheet.getByRole("button", { name: "调整「视频单元 2」的顺序", description: /空格|space/i }).focus();
     await userEvent.keyboard(" ");
     await waitFor(() => expect(screen.getByText(/已拿起「视频单元 2」/)).toBeInTheDocument());
+    // The popover stops arrow key bubbling; when focus is on the handle it must let them through to sorting
     // 弹层会拦下方向键的冒泡；焦点在把手上时须放行给排序
     await userEvent.keyboard("{ArrowUp}");
     await waitFor(() => expect(screen.getByText(/「视频单元 2」移到第 1 项/)).toBeInTheDocument());
@@ -583,12 +607,13 @@ describe("ReferenceVideoCanvas", () => {
   });
 
   describe("正文编辑单元", () => {
-    /** 在离开拦截之下导航：`base` 模拟项目路由的嵌套前缀。 */
+    /** Navigate under the leave guard: `base` simulates the project route's nested prefix. / 在离开拦截之下导航：`base` 模拟项目路由的嵌套前缀。 */
     let navigate: (to: string) => void = () => {};
     function Navigator() {
       [, navigate] = useLocation();
       return null;
     }
+    /** A reference-to-video episode with a script: the default view is video units, plus script plan and edit. */
     /** 有剧本的参考生视频集：缺省视图是视频单元，另有脚本规划与剪辑。 */
     const FACTS: EpisodeViewFacts = {
       isAd: false,
@@ -725,6 +750,7 @@ describe("ReferenceVideoCanvas", () => {
       renderAt(`${path}?view=board`, base);
       fireEvent.change(await screen.findByRole("combobox"), { target: { value: "推门而入。" } });
 
+      // With a script the default view is video units: dropping view stays on the same view
       // 有剧本时缺省视图就是视频单元：去掉 view 仍停在原视图
       act(() => navigate(path));
       expect(window.location.pathname + window.location.search).toBe(`${base}${path}`);
@@ -736,6 +762,7 @@ describe("ReferenceVideoCanvas", () => {
     });
   });
 
+  // An unregistered `@[name]` is only a hint: saving and generate entries are unaffected.
   // 未登记的 `@[名称]` 只是提示：保存与生成入口都不受影响。
   it("keeps saving and generating available when the body mentions an unregistered name", async () => {
     const unit = mkUnit("E1U1", "推门。");
@@ -748,6 +775,7 @@ describe("ReferenceVideoCanvas", () => {
     expect(screen.getByRole("button", { name: /^(Save and generate|保存并生成)$/i })).toBeEnabled();
   });
 
+  // Duration is the unit-level single source of truth: dropdown options come from the server's per-unit verdict, selecting one PATCHes it alone (not touching the body draft)
   // 时长是 unit 级单一真相：下拉档位来自服务端逐单元结论，选中即单独 PATCH（不牵连正文草稿）
   it("renders the unit duration dropdown from the server's per-unit tiers and patches on change", async () => {
     vi.spyOn(API, "listReferenceVideoUnits").mockResolvedValue({
@@ -799,6 +827,7 @@ describe("ReferenceVideoCanvas", () => {
     fireEvent.focus(input);
     fireEvent.change(input, { target: { value: "12" } });
 
+    // The leave guard requests the browser's native prompt when the tab is closed
     // 离开拦截在关闭标签页时请求浏览器原生提示
     await waitFor(() => {
       const event = new Event("beforeunload", { cancelable: true });
@@ -867,6 +896,8 @@ describe("ReferenceVideoCanvas", () => {
     );
   });
 
+  // Reference-to-video is priced by requested seconds: changing the option changes the estimate. SSE makes the group cache eventually consistent, but the cost panel
+  // is still refreshed proactively on a successful local write, so this browser does not wait for the event round trip to show the new estimate.
   // 参考生视频按申请秒数计价：改档位即改估价。SSE 会让分组缓存最终一致，费用面板仍由
   // 本地写成功主动刷新，避免当前浏览器等待事件回环才显示新估价。
   it("refreshes cost estimates after a duration patch succeeds", async () => {
@@ -885,6 +916,7 @@ describe("ReferenceVideoCanvas", () => {
     await waitFor(() => expect(fetchSpy).toHaveBeenCalledWith("proj"));
   });
 
+  // After a model change the options narrow, but the saved out-of-range seconds must stay among the options, or the dropdown would silently rewrite it
   // 换模型后档位收窄，已保存的越界秒数仍要留在选项里，否则下拉会把它静默改写
   it("keeps an out-of-slot saved duration as an option", async () => {
     vi.spyOn(API, "listReferenceVideoUnits").mockResolvedValue({
@@ -896,6 +928,8 @@ describe("ReferenceVideoCanvas", () => {
     expect(await openDurationOptions()).toEqual([3, 4, 8]);
   });
 
+  // The bucket is decided by the server from reference images available now: the body mentions a registered character that has no reference image yet, the server lands on i2v,
+  // and the canvas uses i2v options, not re-deciding r2v itself because "the name is registered".
   // 桶由服务端按此刻可用的参考图判定：正文提及了已登记的角色但角色还没有参考图，服务端落 i2v，
   // 画布照用 i2v 档位，不按「名字已登记」自行改判成 r2v。
   it("follows the server bucket for a registered-but-imageless mention instead of judging the body", async () => {
@@ -927,6 +961,7 @@ describe("ReferenceVideoCanvas", () => {
     });
     render(<ReferenceVideoCanvas {...BOARD} projectName="proj" episode={1} />);
     expect(await openDurationOptions()).toEqual([3, 4, 8]);
+    // The split is named in a structured block: references lacking images and the bucket change, no silent bucket swap.
     // 分裂以结构化块点名：缺图的引用与桶的改变，不静默换桶。
     const alert = screen.getByTestId("reference-split-alert");
     expect(alert).toHaveTextContent("引用的资产缺图：王");
@@ -950,6 +985,7 @@ describe("ReferenceVideoCanvas", () => {
     expect(screen.queryByTestId("reference-split-alert")).not.toBeInTheDocument();
   });
 
+  // The server cannot give options for the unit's bucket (the field is null): the control degrades to read-only, not falling back to the other bucket's options.
   // 服务端给不出该单元所落桶的档位（该字段为 null）：控件降级为只读，不回落到另一桶的档位。
   it("shows a read-only duration when the unit's tiers are unknown", async () => {
     vi.spyOn(API, "listReferenceVideoUnits").mockResolvedValue({
@@ -1010,9 +1046,12 @@ describe("ReferenceVideoCanvas", () => {
     });
   });
 
+  // A unit with an empty body is not executable and the server refuses to create it with needs_replan: the add entry fills the body before submitting.
+  // The request body is compared verbatim with the shared contract; backend route tests use the same file to verify it passes validation.
   // 空正文的单元不可执行，服务端以 needs_replan 拒绝创建：新增入口先填正文再提交。
   // 请求体逐字比对共享契约，后端路由测试用同一份文件验证它能通过校验。
   describe("新增视频单元", () => {
+    // Querying by accessible name is slow on a large DOM: first get the only dialog by role, then check the title inside it.
     // 全屏按可访问名查询在大 DOM 上很慢：先按角色取唯一的对话框，再在框内核对标题。
     const addDialog = async () => {
       const dialog = await screen.findByRole("dialog");
@@ -1173,6 +1212,7 @@ describe("ReferenceVideoCanvas", () => {
     });
   });
 
+  // The view comes from the episode page route: the script plan view does not render UnitList; switching back to the video unit view, the unit list is still there.
   // 视图由集页路由给出：脚本规划视图下不渲染 UnitList，切回视频单元视图时单元列表仍在。
   it("renders the script plan preview instead of the unit list on the plan view", async () => {
     vi.spyOn(API, "listReferenceVideoUnits").mockResolvedValue({
@@ -1191,6 +1231,7 @@ describe("ReferenceVideoCanvas", () => {
       content: { units: [{ unit_id: "E1U1", text: "shot text", duration_seconds: 5, source_text: "" }] },
     });
     const { rerender } = render(<ReferenceVideoCanvas {...BOARD} view="plan" projectName="proj" episode={1} />);
+    // UnitList is hidden; the preview panel renders the script_plan structured intermediate state instead (read-only highlighted manuscript)
     // UnitList 被隐藏，改由预览面板渲染 script_plan 结构化中间态（只读高亮文稿）
     await waitFor(() => expect(screen.getByText("shot text")).toBeInTheDocument());
     expect(screen.queryByTestId("unit-row-E1U1")).not.toBeInTheDocument();
@@ -1198,8 +1239,10 @@ describe("ReferenceVideoCanvas", () => {
     await waitFor(() => expect(screen.getByTestId("unit-row-E1U1")).toBeInTheDocument());
   });
 
+  // Select the first unit by default, avoiding the inconsistent state "units exist but the editor area shows a placeholder".
   // 默认选中第一个 unit，避免出现 "有 units 但 editor 区域显示占位" 的不一致状态。
   it("resets a stale selectedUnitId (e.g. from a previous episode) to the first unit of current units", async () => {
+    // Simulate a stale selectedUnitId left over after switching episode
     // 模拟切换 episode 后残留的旧 selectedUnitId
     useReferenceVideoStore.setState({ selectedUnitId: "E99U42" });
     vi.spyOn(API, "listReferenceVideoUnits").mockResolvedValue({
@@ -1212,6 +1255,8 @@ describe("ReferenceVideoCanvas", () => {
     expect(ta.value).toContain("first");
   });
 
+  // When the prompt_authoring script is not generated yet (segmented only), the units endpoint has no script to split and 404s: do not request units,
+  // so the user does not first see an erroring Unit panel; the first fetch happens after the script is generated.
   // prompt_authoring 剧本未生成时（仅 segmented）units 端点无脚本可拆、会 404：不发起 units 请求，
   // 避免用户先看到一个报错的 Unit 面板；剧本生成后补上首次拉取。
   it("skips loadUnits until hasScript flips true", async () => {
@@ -1240,10 +1285,13 @@ describe("ReferenceVideoCanvas", () => {
     await waitFor(() => expect(screen.getByTestId("unit-row-E1U1")).toBeInTheDocument());
   });
 
+  // Optimistic: within the task queue's 3s polling gap the button must show busy immediately, or the user
+  // thinks "clicking did nothing" and keeps clicking, causing duplicate enqueues.
   // optimistic：任务队列 3s 轮询间隙内按钮也要立刻反馈 busy，否则用户
   // 会误以为"点了没反应"继续点击造成重复入队。
   it("flips the generate button to busy optimistically before the task poll picks it up", async () => {
     vi.spyOn(API, "listReferenceVideoUnits").mockResolvedValue({ units: [mkUnit("E1U1")], unit_capabilities: {} });
+    // Use a deferred promise to simulate the intermediate state before the 202 response comes back
     // 用 deferred promise 模拟 202 响应尚未回来的中间态
     let resolveGen: (v: { task_id: string; deduped: boolean }) => void = () => {};
     const genSpy = vi.spyOn(API, "generateReferenceVideoUnit").mockReturnValue(
@@ -1253,10 +1301,13 @@ describe("ReferenceVideoCanvas", () => {
     );
     render(<ReferenceVideoCanvas {...BOARD} projectName="proj" episode={1} />);
     const btn = await screen.findByRole("button", { name: UNIT_GENERATE_CTA });
+    // Before the click the tasks store is empty and the button is enabled
     // 点击前 tasks store 为空，按钮启用
     expect(btn).toBeEnabled();
     fireEvent.click(btn);
     await waitFor(() => expect(genSpy).toHaveBeenCalled());
+    // After a successful enqueue (202 returned) and before task polling writes back: the action layer sets an optimistic mark, the button immediately
+    // is busy and shows "Generating..."; double clicks while the request is in flight are caught by the backend dedupe index
     // 入队成功（202 返回）后、任务轮询写回前：动作层打乐观标记，按钮立即
     // busy 并显示 "Generating…/生成中"；请求飞行中的双击由后端去重索引兜底
     resolveGen({ task_id: "t1", deduped: false });
@@ -1266,6 +1317,8 @@ describe("ReferenceVideoCanvas", () => {
     });
   });
 
+  // Retry path: the old failed row is always there, so statusMap's optimistic branch (!queueRow) does not apply; disabling must
+  // read the occupied set directly, or the button can be clicked repeatedly in the window between enqueue and the task row landing.
   // 重试路径：旧失败行始终在，statusMap 的乐观分支（!queueRow）不生效，禁用须
   // 直接取占用集，否则入队到任务行落库之间的窗口内按钮可重复点击。
   it("重试失败 unit 后在真实任务行落库前即禁用按钮", async () => {
@@ -1295,11 +1348,15 @@ describe("ReferenceVideoCanvas", () => {
     fireEvent.click(retry);
     await waitFor(() => expect(genSpy).toHaveBeenCalled());
 
+    // While the request is in flight (response not back, action layer's optimistic mark not yet set) the button must already be disabled; the AC requires
+    // the window to start at "request sent", not "response returned".
     // 请求在途（响应未回、动作层乐观打标尚未落）时按钮就必须已禁用——AC 要求的
     // 窗口起点是「请求发出」，不是「响应返回」。
     await waitFor(() => {
       expect(screen.getByRole("button", { name: /Generating|生成中/ })).toBeDisabled();
     });
+    // The failed task row is still there and statusMap is unchanged; the preview area must not stack both a "Generating" placeholder and
+    // a failure overlay; the inFlight display should override the failed state.
     // 失败任务行仍在，statusMap 未变；预览区不能同时叠出「生成中」占位与
     // 失败覆盖层——inFlight 展示应覆盖 failed 状态。
     expect(screen.queryByText(/Generation failed|生成失败/)).not.toBeInTheDocument();
@@ -1311,6 +1368,8 @@ describe("ReferenceVideoCanvas", () => {
     expect(screen.queryByText(/Generation failed|生成失败/)).not.toBeInTheDocument();
   });
 
+  // Regenerate path: the old success row is always there and statusMap's optimistic branch does not apply; it likewise needs independent
+  // disabling by the occupied set, not just the status derived from statusMap.
   // 重新生成路径：旧成功行始终在，statusMap 的乐观分支不生效，同样需要按占用集
   // 独立禁用，不能仅靠 statusMap 派生的 status。
   it("重新生成已完成 unit 后在真实任务行落库前即禁用按钮", async () => {
@@ -1341,6 +1400,7 @@ describe("ReferenceVideoCanvas", () => {
     fireEvent.click(regenerate);
     await waitFor(() => expect(genSpy).toHaveBeenCalled());
 
+    // Same as above: disable during the request round trip, not only once the response is back.
     // 同上：请求往返期间即须禁用，而非等响应回来才禁用。
     await waitFor(() => {
       expect(screen.getByRole("button", { name: /Generating|生成中/ })).toBeDisabled();
@@ -1352,6 +1412,8 @@ describe("ReferenceVideoCanvas", () => {
     });
   });
 
+  // Submit-time check: the occupancy signal captured at render time is stale (in the real store the unit is already occupied by another entry);
+  // the click must be blocked by a fresh getState() read with a notice, never silently sending another enqueue request.
   // 提交时刻复核：渲染期捕获的占用信号已过期（真实 store 里该 unit 已被别的入口占用），
   // 点击须被 getState() 新鲜读拦下并提示，不得静默再发一次入队请求。
   it("响应式占用信号尚未追上真实 store 时，生成提交仍被 getState() 新鲜读拦截", async () => {
@@ -1360,16 +1422,19 @@ describe("ReferenceVideoCanvas", () => {
       .spyOn(API, "generateReferenceVideoUnit")
       .mockResolvedValue({ task_id: "t1", deduped: false } as never);
     const pushToast = vi.spyOn(useAppStore.getState(), "pushToast");
+    // Freeze both reactive hooks, simulating busy/status captured at panel render time not reflecting task rows that land later
     // 冻结两个响应式 hook——模拟面板渲染期捕获的 busy/status 未能反映随后落库的任务行
     vi.mocked(useActiveResourceIds).mockReturnValue(new Set());
     vi.mocked(useLatestTasksByResource).mockReturnValue(new Map());
 
     render(<ReferenceVideoCanvas {...BOARD} projectName="proj" episode={1} />);
 
+    // Anchor at line start to avoid matching the batch entry "Fill in videos", which is a different submit path (see the next case)
     // 锚定行首，避免匹配到批量入口「补齐视频」——它是另一条提交路径（见下一个用例）
     const generate = await screen.findByRole("button", { name: UNIT_GENERATE_CTA });
     expect(generate).toBeEnabled();
 
+    // After render and before the click, another entry (Agent enqueue / SSE landing) has occupied the same unit
     // 渲染之后、点击之前，另一入口（Agent 入队 / SSE 落库）已占用同一 unit
     act(() => {
       useTasksStore.setState({ tasks: [runningTask("E1U1")] as never });
@@ -1380,6 +1445,8 @@ describe("ReferenceVideoCanvas", () => {
     expect(genSpy).not.toHaveBeenCalled();
   });
 
+  // The batch entry targets "all units without a final cut yet". In-flight tasks and needs_replan are gaps the server's admission must report
+  // one by one and use to enqueue zero tasks for the whole batch: if the browser stripped them first, the server would see only a healthy subset and create tasks as usual.
   // 批量入口的作用对象是「全部尚无成片的 unit」。在途任务与 needs_replan 是服务端准入要逐条
   // 报告、并据此让整批零任务入队的缺口：在浏览器里先摘掉，服务端只会看到健康子集并照常建任务。
   it("批量生成把在途与 needs_replan 的 unit 一并提交给服务端准入", async () => {
@@ -1395,6 +1462,7 @@ describe("ReferenceVideoCanvas", () => {
     const batch = await screen.findByRole("button", { name: /Fill in videos|补齐视频/ });
     await waitFor(() => expect(batch).toBeEnabled());
 
+    // After render and before the click, E1U1 has been occupied by another entry
     // 渲染之后、点击之前，E1U1 已被别的入口占用
     act(() => {
       useTasksStore.setState({ tasks: [runningTask("E1U1")] as never });
@@ -1430,6 +1498,7 @@ describe("ReferenceVideoCanvas", () => {
         unit_ids: ["E1U1", "E1U2"],
       }),
     );
+    // No longer enqueue one by one serially
     // 不再逐个串行入队
     expect(unitSpy).not.toHaveBeenCalled();
     await waitFor(() => {
@@ -1455,6 +1524,8 @@ describe("ReferenceVideoCanvas", () => {
     expect(batchSpy).toHaveBeenCalledWith("proj", 1, { unit_ids: ["E1U1"] });
   });
 
+  // Upload and generation write back the same final cut file: while the file picker dialog is open the same unit may get occupied;
+  // the button's render-time disabled state cannot cover this window, so re-check with a fresh getState() read at submit time.
   // 上传与生成回写同一个成片文件：文件选择对话框打开期间同一 unit 可能已被占用，
   // 按钮渲染期的禁用态挡不住这段窗口，提交时刻须再用 getState() 新鲜读复核一次。
   it("上传确认时刻复核占用态，命中即拒绝并提示", async () => {
@@ -1469,6 +1540,7 @@ describe("ReferenceVideoCanvas", () => {
     const input = container.querySelector<HTMLInputElement>('input[type="file"]');
     expect(input).not.toBeNull();
 
+    // After choosing the file and before confirming, the unit has been occupied by another entry
     // 选择文件之后、确认之前，该 unit 已被别的入口占用
     act(() => {
       useTasksStore.setState({ tasks: [runningTask("E1U1")] as never });
@@ -1480,11 +1552,14 @@ describe("ReferenceVideoCanvas", () => {
     expect(uploadSpy).not.toHaveBeenCalled();
   });
 
+  // Uploads create no task row and do not enter tasks-store's occupied set, so the canvas tracks them itself. They must be part of the submit-time
+  // check: otherwise batch generation would still enqueue the same unit during an in-flight upload, and two paths would write the same final cut file concurrently.
   // 上传不产生任务行，进不了 tasks-store 占用集，故由画布自记。它必须进入提交时刻的
   // 复核口径：否则上传在途期间批量生成仍会入队同一 unit，两条路径并发写同一个成片文件。
   it("批量生成跳过上传在途的 unit", async () => {
     vi.spyOn(API, "listReferenceVideoUnits").mockResolvedValue({
       units: [mkUnit("E1U1"), mkUnit("E1U2")], unit_capabilities: {} });
+    // The upload hangs without resolving, simulating the window "request sent, not yet on disk"
     // 上传挂起不 resolve，模拟「请求已发出、尚未落盘」的窗口
     vi.spyOn(API, "uploadReferenceUnitVideo").mockReturnValue(new Promise(() => {}) as never);
     const batchSpy = vi
@@ -1497,14 +1572,17 @@ describe("ReferenceVideoCanvas", () => {
     const batch = await screen.findByRole("button", { name: /Fill in videos|补齐视频/ });
     await waitFor(() => expect(batch).toBeEnabled());
 
+    // The selection defaults to E1U1, and its preview panel's upload entry targets that unit
     // 选中项默认是 E1U1，其预览面板的上传入口即针对该 unit
     const input = container.querySelector<HTMLInputElement>('input[type="file"]');
     expect(input).not.toBeNull();
     fireEvent.change(input!, { target: { files: [new File(["x"], "clip.mp4", { type: "video/mp4" })] } });
 
     fireEvent.click(batch);
+    // Units with an in-flight upload are listed as skipped with the reason, and excluded from the preview request
     // 上传在途的单元列为跳过项并写明原因，不进预览请求
     const dialog = within(await screen.findByRole("alertdialog"));
+    // The skip list renders with the preview result; wait for it to appear, not just for the dialog to mount
     // 跳过清单随预览结果渲染，等它出现而不是只等弹窗挂载
     expect(await dialog.findByText(/跳过 1 个视频单元|Skipped 1 video unit/)).toBeInTheDocument();
     expect(dialog.getByText(/正在上传视频|Uploading a video/)).toBeInTheDocument();
@@ -1516,6 +1594,8 @@ describe("ReferenceVideoCanvas", () => {
     });
   });
 
+  // When the check empties the targets the UI must say something: if both submit paths ended with a bare return, the user would see
+  // "clicking did nothing" and assume the task was submitted.
   // 复核把目标清空时界面必须说一句：两条提交路径都以裸 return 结束的话，用户看到的是
   // 「点了没反应」，会以为任务已经提交。
   it("复核后没有可提交的目标时给出提示", async () => {
@@ -1538,6 +1618,8 @@ describe("ReferenceVideoCanvas", () => {
     expect(batchSpy).not.toHaveBeenCalled();
   });
 
+  // Duration option confirmation: the model only accepts discrete options; when the requested duration baseline falls between options, it generates at the smallest option that fits it,
+  // and the final cut is not trimmed; the seconds mismatch must be explained before enqueue, letting the user decide whether to continue.
   // 时长取档确认：模型只接受离散档位，请求时长基准落在档位之间时按能装下它的最小档位生成，
   // 成片不裁剪——秒数不一致这件事必须在入队前讲清楚，由用户决定是否继续。
   describe("时长取档确认", () => {
@@ -1575,9 +1657,11 @@ describe("ReferenceVideoCanvas", () => {
       render(<ReferenceVideoCanvas {...BOARD} projectName="proj" episode={1} />);
       fireEvent.click(await screen.findByRole("button", { name: UNIT_GENERATE_CTA }));
 
+      // Must not enqueue before confirmation
       // 确认前不得入队
       const confirm = await screen.findByRole("button", { name: CONFIRM_CTA });
       expect(genSpy).not.toHaveBeenCalled();
+      // The dialog content contains the requested duration baseline, the requested seconds and the "final cut is longer" explanation.
       // 弹窗内容含请求时长基准、申请秒数与「成片更长」的说明。
       expect(screen.getByText(/5 秒|5s/)).toBeInTheDocument();
       expect(screen.getByText(/^(?:8 秒|8s)$/)).toBeInTheDocument();
@@ -1639,6 +1723,7 @@ describe("ReferenceVideoCanvas", () => {
 
 
 
+    // Conversely: the unit entry's "Regenerate" is meant to overwrite the existing final cut and must not be blocked by the same check.
     // 反向：单元入口的「重新生成」本就要覆盖已有成片，不能被同一条复核挡掉。
     it("单元入口对已有成片的单元仍可重新生成", async () => {
       const ready = mkUnit("E1U1");
@@ -1684,6 +1769,9 @@ describe("ReferenceVideoCanvas", () => {
     });
   });
 
+  // All three batch outcomes are successful evaluations: admitted has created tasks, confirmation_required and blocked
+  // created none, and the UI must fully explain "why it did not start" rather than collapse into a generic error. admitted
+  // itself has two paths, and the enqueue-interrupted one must likewise explain "which ones were not queued and why".
   // 批量的三种结局都是评估成功：admitted 已建任务，confirmation_required 与 blocked
   // 一个任务也没建，界面必须把「为什么没开始」讲全，而不是塌成一句通用错误。admitted
   // 自身还分两路，入队中断那一路同样要讲全「哪几个没排上、为什么」。
@@ -1699,14 +1787,17 @@ describe("ReferenceVideoCanvas", () => {
       return batch;
     }
 
+    /** Click the batch entry and submit in the confirmation box: the case cares about the outcome after submitting. */
     /** 点批量入口并在确认框里提交：用例关心的是提交之后的结局。 */
     async function submitBatch() {
       await clickBatch();
       await confirmBatchPreview();
+      // The confirmation box closes only after the submit outcome arrives; a dialog appearing after that is the verdict dialog
       // 确认框在提交结局到达后才关闭，之后出现的弹窗才是结论弹窗
       await waitFor(() => expect(screen.queryByTestId("reference-batch-preview")).not.toBeInTheDocument());
     }
 
+    // Confirm before submitting paid videos: the list, skipped items and estimated cost are all in the box; cancel creates no task.
     // 付费视频提交前先确认：名单、跳过项与预估费用都在框里，取消不建任何任务。
     it("点补齐视频先列出名单、跳过项与预估费用，取消后不提交", async () => {
       const done = mkUnit("E1U3");
@@ -1732,6 +1823,7 @@ describe("ReferenceVideoCanvas", () => {
       expect(await dialog.findByText(/将生成 2 个视频单元|Will generate 2 video units/)).toBeInTheDocument();
       expect(dialog.getByRole("img", { name: "视频单元 1" })).toBeInTheDocument();
       expect(dialog.getByRole("img", { name: "视频单元 2" })).toBeInTheDocument();
+      // Units the server skipped because they already have a final cut are listed with reasons
       // 服务端跳过的已有成片单元带原因列出
       expect(dialog.getByText(/跳过 1 个视频单元|Skipped 1 video unit/)).toBeInTheDocument();
       expect(dialog.getByRole("img", { name: "视频单元 3" })).toBeInTheDocument();
@@ -1759,6 +1851,8 @@ describe("ReferenceVideoCanvas", () => {
       expect(batchSpy).not.toHaveBeenCalled();
     });
 
+    // Duration option confirmation merges into the same confirmation box: option groups are laid out with the list and cost; confirming once submits by options,
+    // with no second-level option confirmation.
     // 时长档位的确认并进同一个确认框：档位分组与名单、费用一起摊开，确认一次就按档位提交，
     // 不再弹第二层档位确认。
     it("需确认档位时在同一个确认框里拍板，确认一次就带 confirmed_request_durations 提交", async () => {
@@ -1805,12 +1899,14 @@ describe("ReferenceVideoCanvas", () => {
       const dialog = within(screen.getByRole("alertdialog"));
       expect(dialog.getByText(/将生成 3 个视频单元|Will generate 3 video units/)).toBeInTheDocument();
       expect(dialog.getByText(/预估费用：\$1\.60|Estimated cost: \$1\.60/)).toBeInTheDocument();
+      // Option groups: seconds x unit count + total cost; options with incomplete quotes show no fake total
       // 档位分组：秒数 × 单元数 + 合计费用；报价不全的档位不展示假合计
       expect(dialog.getByText(/^(?:8 秒|8s)$/)).toBeInTheDocument();
       expect(dialog.getByText(/2 个单元|2 units/)).toBeInTheDocument();
       expect(dialog.getByText(/约 \$1\.60|about \$1\.60/)).toBeInTheDocument();
       expect(dialog.getByText(/报价不可用|price unavailable/)).toBeInTheDocument();
       for (const label of ["视频单元 1", "视频单元 2", "视频单元 3"]) {
+        // The list and the option groups each listed once
         // 名单与档位分组各列一次
         expect(dialog.getAllByRole("img", { name: label })).toHaveLength(2);
       }
@@ -1824,6 +1920,8 @@ describe("ReferenceVideoCanvas", () => {
       await waitFor(() => expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument());
     });
 
+    // Options changed after the preview (script or model config changed elsewhere), so on submit the server still asks for confirmation: that is a
+    // new verdict; the verdict dialog asks for confirmation again on it and resends with the new options after confirming.
     // 预览之后档位有变（剧本或模型配置被别处改了），提交时服务端仍会要求确认：那是一份
     // 新结论，结论弹窗按它再请一次确认，确认后按新档位重发。
     it("提交时档位与预览不同，按新结论再确认一次后重发", async () => {
@@ -1852,6 +1950,7 @@ describe("ReferenceVideoCanvas", () => {
       await submitBatch();
 
       const confirm = await screen.findByRole("button", { name: BATCH_CONFIRM_CTA });
+      // The confirmation box has handed over to the verdict dialog; only one layer at a time
       // 确认框已交接给结论弹窗，同一时刻只有一层
       expect(screen.getAllByRole("alertdialog")).toHaveLength(1);
       fireEvent.click(confirm);
@@ -1862,6 +1961,8 @@ describe("ReferenceVideoCanvas", () => {
       });
     });
 
+    // How long the dialog stays is up to the user and can be long: if units completed elsewhere meanwhile were resent from the frozen list, queue
+    // dedupe (which only looks at queued/running) would not stop it, rerunning generation, double-billing and overwriting the final cut.
     // 弹窗停留时长由用户决定，可以很长：其间别处完成的单元若按冻结清单原样重发，队列
     // 去重（只看 queued/running）拦不住，会重跑一次生成、重复计费并覆盖成片。
     it("确认停留期间已完成的单元不再重发", async () => {
@@ -1893,6 +1994,7 @@ describe("ReferenceVideoCanvas", () => {
       await clickBatch();
       const confirm = await screen.findByRole("button", { name: BATCH_CONFIRM_CTA });
 
+      // While the dialog stays open, E1U1 finishes generating elsewhere (Agent / another tab) and lands
       // 弹窗停留期间 E1U1 由别处（Agent / 另一标签页）生成完成并落库
       act(() => {
         useReferenceVideoStore.setState({
@@ -1922,6 +2024,8 @@ describe("ReferenceVideoCanvas", () => {
           decision: "blocked",
           estimated_cost: { USD: 0.8 },
           units: [
+            // action uses GenerationAction values: the server has normalized each upstream module's action words into this set,
+            // and the UI's next-step text is keyed by this vocabulary.
             // action 用 GenerationAction 的取值：服务端已把各上游模块的动作词归一到该集合，
             // 界面的下一步文案按这套词汇取键。
             {
@@ -1950,6 +2054,8 @@ describe("ReferenceVideoCanvas", () => {
               ],
             },
             {
+              // This is the shape the server sends for units that passed themselves but were held back along with other units in the same batch:
+              // admitted keeps its own verdict, and withheld explains why it was not submitted.
               // 服务端对自身通过、被同批别的 unit 连带扣下的单元发的就是这个形状：
               // admitted 保持它自己的判定，withheld 说明它为什么没被提交。
               unit_id: "E1U3",
@@ -1972,19 +2078,23 @@ describe("ReferenceVideoCanvas", () => {
       await clickBatch();
 
       const dialog = within(await screen.findByRole("alertdialog"));
+      // All gaps are present, not collapsed into the first
       // 全部缺口都在，不塌成第一条
       expect(dialog.getByText("引用的角色图缺失")).toBeInTheDocument();
       expect(dialog.getByText("该单元需要重新规划")).toBeInTheDocument();
       expect(dialog.getByText(/补上或更换缺失的参考素材|add or replace the missing reference/)).toBeInTheDocument();
       expect(dialog.getByText(/改写这个单元|rewrite this unit/)).toBeInTheDocument();
+      // The requested option is listed alongside the gap so the user can see how far off it is
       // 申请档位与缺口同列，用户才看得出差多少
       expect(dialog.getByText(/^(?:申请 12 秒|requesting 12s)$/)).toBeInTheDocument();
+      // Units held back along with others are listed separately, stating they have no problem of their own
       // 被连带扣下的单元单列，说明它自身没问题
       expect(dialog.getByText(/本身没问题|w(as|ere) fine but w(as|ere) held back/)).toBeInTheDocument();
       for (const label of ["视频单元 1", "视频单元 2", "视频单元 3"]) {
         expect(dialog.getByRole("img", { name: label })).toBeInTheDocument();
       }
 
+      // A blocked batch reports no cost and offers no submit
       // 受阻的一批不报费用，也不给提交
       expect(dialog.queryByText(/预估费用|Estimated cost/)).not.toBeInTheDocument();
       expect(dialog.getByRole("button", { name: BATCH_START_CTA })).toBeDisabled();
@@ -1997,6 +2107,8 @@ describe("ReferenceVideoCanvas", () => {
       vi.spyOn(API, "listReferenceVideoUnits").mockResolvedValue({
         units: [mkUnit("E1U1"), mkUnit("E1U2"), mkUnit("E1U3")], unit_capabilities: {} });
       const batchSpy = vi.spyOn(API, "generateReferenceVideoBatch").mockResolvedValue(
+        // An interrupted enqueue does not undo created tasks: decision is still admitted, and each unit not reached goes into
+        // enqueue_failures with its own localized reason.
         // 入队中断不撤销已建的任务：decision 仍是 admitted，没轮到的单元逐个进
         // enqueue_failures，各带一条已本地化的原因。
         mkAdmission({
@@ -2020,26 +2132,32 @@ describe("ReferenceVideoCanvas", () => {
       await submitBatch();
 
       const dialog = within(await screen.findByRole("alertdialog"));
+      // Each unit and its own reason are present, not collapsed into one count
       // 逐个 unit 与各自原因都在，不塌成一句计数
       expect(dialog.getByRole("img", { name: "视频单元 2" })).toBeInTheDocument();
       expect(dialog.getByRole("img", { name: "视频单元 3" })).toBeInTheDocument();
       expect(dialog.getByText("队列暂时不可用")).toBeInTheDocument();
       expect(dialog.getByText("任务创建失败")).toBeInTheDocument();
+      // Queued units are not mixed into the list of unqueued ones
       // 已排上的单元不混进未排上的清单
       expect(dialog.queryByRole("img", { name: "视频单元 1" })).not.toBeInTheDocument();
+      // State that created tasks run as usual, or the user cannot tell this batch is a "partial success"
       // 已建任务照常执行这一点要说明，否则用户读不出这批是「部分成功」
       expect(
         dialog.getByText(/再次批量生成就会补上|generate the batch again/),
       ).toBeInTheDocument();
+      // Units skipped because they already have artifacts are not the same as unqueued ones; this path must explain that too
       // 已有产物而跳过的单元与没排上的不是一回事，这一路同样要交代
       expect(
         dialog.getByText(/已有视频，本次跳过|already had a video and is skipped/),
       ).toBeInTheDocument();
+      // The action layer's count toast is still there; both say the same thing
       // 动作层那条计数提示仍在，两处说的是同一件事
       await waitFor(() => {
         expect(useAppStore.getState().toast?.text).toMatch(/入队中断|Enqueue was interrupted/);
       });
 
+      // Declarative outcome: closing does not resend
       // 陈述型结局：关闭不重发
       fireEvent.click(dialog.getByRole("button", { name: /Got it|知道了/ }));
       await waitFor(() => expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument());
@@ -2050,6 +2168,7 @@ describe("ReferenceVideoCanvas", () => {
       vi.spyOn(API, "listReferenceVideoUnits").mockResolvedValue({
         units: [mkUnit("E1U1"), mkUnit("E1U2")], unit_capabilities: {} });
       vi.spyOn(API, "generateReferenceVideoBatch").mockResolvedValue(
+        // The interruption hit the first target: decision is still admitted, but no task was created.
         // 中断落在第一个目标上：decision 仍是 admitted，但一个任务也没建成。
         mkAdmission({
           task_ids: [],
@@ -2076,9 +2195,11 @@ describe("ReferenceVideoCanvas", () => {
       await submitBatch();
 
       const dialog = within(await screen.findByRole("alertdialog"));
+      // Gap details are still listed one by one
       // 缺口明细照旧逐个列出
       expect(dialog.getByRole("img", { name: "视频单元 1" })).toBeInTheDocument();
       expect(dialog.getByRole("img", { name: "视频单元 2" })).toBeInTheDocument();
+      // When no task was created, do not say "partial", nor that submitted tasks run as usual
       // 一个任务都没建时不能说「部分」，也不能说已提交的任务照常执行
       expect(
         dialog.getByText(/没有任务排上队列|No task from this batch was queued/),
@@ -2102,6 +2223,7 @@ describe("ReferenceVideoCanvas", () => {
   });
 
   it("没有待生成 unit 时批量生成按钮禁用", async () => {
+    // The only unit already has a final cut: statusMap is ready and the batch entry has no target
     // 唯一的 unit 已有成片：statusMap 为 ready，批量入口无作用对象
     const ready = mkUnit("E1U1");
     ready.generated_assets.video_clip = "videos/E1U1.mp4";
@@ -2113,10 +2235,14 @@ describe("ReferenceVideoCanvas", () => {
     await waitFor(() => expect(batch).toBeDisabled());
   });
 
+  // Background task failure notifications have moved to the global useTaskFailureNotifications hook (transition-driven /
+  // no re-reporting of past failures / each failure reported once regressions are all covered there), see
+  // hooks/useTaskFailureNotifications.test.tsx. Here we only verify consuming the jump-back.
   // 后台任务失败通知已统一迁移到全局 useTaskFailureNotifications hook（转变驱动 /
   // 历史失败不重报 / 同一失败只报一次回归均在那里覆盖），见
   // hooks/useTaskFailureNotifications.test.tsx。此处只验证回跳消费。
 
+  // Notification jump-back: on a reference_unit scroll target, switch to the video unit view and select the unit, without adding a history entry.
   // 通知回跳：收到 reference_unit scroll target 时切到视频单元视图并选中对应 unit，不多留一条历史。
   it("selects the unit and asks for the units view on a reference_unit scroll target", async () => {
     vi.spyOn(API, "listReferenceVideoUnits").mockResolvedValue({
@@ -2138,7 +2264,7 @@ describe("ReferenceVideoCanvas", () => {
       units: [mkUnit("E1U1"), mkUnit("E1U2")], unit_capabilities: {} });
     vi.spyOn(API, "getScriptReview").mockRejectedValue(new Error("not needed"));
     const saveNothing = async () => true;
-    /** 画布之外另一个带着未保存修改的编辑单元。 */
+    /** Another editing unit with unsaved changes outside the canvas. / 画布之外另一个带着未保存修改的编辑单元。 */
     function OtherDirtyUnit() {
       useLeaveGuard({ dirty: true, save: saveNothing });
       return null;
@@ -2176,6 +2302,8 @@ describe("ReferenceVideoCanvas", () => {
     act(() => useAppStore.getState().clearPlaybackStart());
   });
 
+  // Slow network / cold start regression: while units are still loading (loadUnits not returned), even an expired target should not be
+  // cleared early; otherwise the target unit cannot be selected after units arrive, and "click notification to jump back" breaks.
   // 慢网/冷启动回归：units 仍在加载（loadUnits 未返回）时，即便 target 已过期也不该
   // 提前清除——否则 units 到达后无法再选中目标 unit，"点击通知回跳"失效。
   it("keeps a reference_unit target while units are still loading, even past expiry", async () => {
@@ -2186,6 +2314,9 @@ describe("ReferenceVideoCanvas", () => {
       }),
     );
     render(<ReferenceVideoCanvas {...BOARD} projectName="proj" episode={1} />);
+    // Deliver an expired target while loading (fetch pending, loading=true); act flushes the jump-back effect
+    // deterministically (avoids a fixed delay: this is a negative assertion, waitFor being true on the first check cannot prove the target
+    // persists, and setTimeout may assert before the effect finishes, missing the bug).
     // 加载中（fetch 挂起，loading=true）下发一个已过期的 target；act 确定性 flush
     // 回跳 effect（避免固定延时——这是否定性断言，waitFor 首检即真无法证明 target
     // 持续存在，setTimeout 又可能在 effect 跑完前就断言导致漏判 bug）。
@@ -2197,8 +2328,10 @@ describe("ReferenceVideoCanvas", () => {
         expires_at: Date.now() - 1,
       });
     });
+    // Key assertion: the effect has run, but it does not clear for expiry while loading is unfinished; the target is still there
     // 关键断言：effect 已运行，但加载未完成时不按过期清除，target 仍在
     expect(useAppStore.getState().scrollTarget?.id).toBe("E1U2");
+    // After units arrive it should hit and select the target unit, then clear the target
     // units 到达后应命中并选中目标 unit，随后清除 target
     await act(async () => {
       resolveList({ units: [mkUnit("E1U1"), mkUnit("E1U2")], unit_capabilities: {} });
@@ -2207,12 +2340,15 @@ describe("ReferenceVideoCanvas", () => {
     expect(useAppStore.getState().scrollTarget).toBeNull();
   });
 
+  // Fallback regression: when units finish loading but the target unit does not exist, even with no further dependency changes,
+  // the expired target should be cleared by a one-shot timer and not linger in the store forever.
   // 兜底回归：units 加载完成但目标 unit 不存在时，即便此后没有任何依赖变化，
   // 过期 target 也应被一次性定时器清除，不会永久残留 store。
   it("clears an unresolvable reference_unit target after expiry without further updates", async () => {
     vi.spyOn(API, "listReferenceVideoUnits").mockResolvedValue({ units: [mkUnit("E1U1")], unit_capabilities: {} });
     render(<ReferenceVideoCanvas {...BOARD} projectName="proj" episode={1} />);
     await waitFor(() => expect(useReferenceVideoStore.getState().selectedUnitId).toBe("E1U1"));
+    // The target unit is not in the list; give a slightly longer expiry window to reduce flakiness
     // 目标 unit 不在列表中，给一个略长的过期窗口降低脆弱性
     act(() => {
       useAppStore.getState().triggerScrollTo({
@@ -2222,13 +2358,17 @@ describe("ReferenceVideoCanvas", () => {
         expires_at: Date.now() + 200,
       });
     });
+    // First assert the target was written and not cleared immediately, proving the timer path rather than immediate clear
     // 先断言 target 已写入且未被即时清除——证明走的是定时器路径而非 immediate clear
     expect(useAppStore.getState().scrollTarget?.id).toBe("E9U9");
+    // No further dependency changes happen; cleanup relies only on the one-shot timer expiring
     // 此后不再产生任何依赖变化，仅靠一次性定时器到期清理
     await waitFor(() => expect(useAppStore.getState().scrollTarget).toBeNull());
   });
 
   it("参考生视频分组失效信号自增时重拉分组，展示新落地的成片", async () => {
+    // The terminal state of a completed generation task is pushed via the project event SSE -> invalidateReferenceVideoUnits ->
+    // this canvas refetches groups, so the user sees the final cut without refreshing manually.
     // 生成完成的任务终态经项目事件 SSE 推来 → invalidateReferenceVideoUnits →
     // 本画布重拉分组，用户无需手动刷新即可看到成片。
     const listSpy = vi
@@ -2247,6 +2387,7 @@ describe("ReferenceVideoCanvas", () => {
   describe("存量声音过渡横幅", () => {
     const VOICE_UPDATED_AT = "2026-06-01T00:00:00+00:00";
 
+    /** A completed clip generated before the current voice settings; the character must speak for the voice to apply to it */
     /** 一个已完成、且生成于当前声音设置之前的片段；角色须开口说话，音色才作用于它 */
     function staleUnit(): ReferenceVideoUnit {
       const u = mkUnit("E1U1", "@[王] 推门。@[王]{我来了。}");
@@ -2259,6 +2400,7 @@ describe("ReferenceVideoCanvas", () => {
         currentProjectName: "proj",
         currentProjectData: {
           ...STUB_PROJECT,
+          // The banner appears only in the reference-audio binding tier: the prompt soft-constraint tier attaches no reference audio, so changing it does not change the voice of generated videos
           // 横幅只在参考音频绑定档下出现：提示词软约束档不挂参考音频，换了也不改变已生成视频的声音
           character_voice_binding: "reference_audio",
           characters: { 王: { description: "", voice_updated_at: VOICE_UPDATED_AT } },
@@ -2270,6 +2412,7 @@ describe("ReferenceVideoCanvas", () => {
     }
 
     it("关闭时写回角色自己的 voice_updated_at，而不是本机当前时间", async () => {
+      // The client clock may lag behind the server; writing local time would permanently break "do not show again after closing" under skew.
       // 客户端时钟可能落后于服务端；写本机时间会让「关闭后不再出现」在偏差下永久失效。
       const patch = vi.spyOn(API, "updateCharacter").mockResolvedValue({} as never);
       mountWithStaleClip();
@@ -2293,6 +2436,8 @@ describe("ReferenceVideoCanvas", () => {
     });
 
     it("PATCH 成功但 refreshProject 失败时仍提示用户，不静默吞掉", async () => {
+      // When refreshProject fails it resolves "failed" rather than rejecting; just awaiting without checking the result / passing
+      // onError would make this failure completely invisible in the UI.
       // refreshProject 失败时 resolve "failed" 而非 reject——只 await 不检查结果/传
       // onError 会让这次失败在 UI 上完全无感知。
       vi.spyOn(API, "updateCharacter").mockResolvedValue({} as never);

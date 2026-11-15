@@ -49,7 +49,7 @@ vi.mock("./ShotSplitView", () => ({
   ),
 }));
 
-/** 集页路由给画布的视图：缺省停在分镜视图。 */
+/** The view the episode page route gives the canvas: defaults to the shot view. / 集页路由给画布的视图：缺省停在分镜视图。 */
 const BOARD = { view: "board", onViewChange: () => {} } as const;
 
 function makeProjectData(): ProjectData {
@@ -205,6 +205,7 @@ describe("TimelineCanvas", () => {
       }),
       planKey: workflowPlanKey("demo", 1),
     });
+    // Those being generated do not count as gaps
     // 正在生成的不算缺口
     useTasksStore.setState({
       tasks: [makeTask({ project_name: "demo", task_type: "storyboard", resource_id: "SEG-2", status: "running" })],
@@ -225,6 +226,7 @@ describe("TimelineCanvas", () => {
     expect(screen.getByRole("button", { name: "补齐分镜图 · 2" })).toBeEnabled();
     // complete: no button here, the header's progress shows a green indicator instead
     expect(screen.queryByRole("button", { name: "视频已齐" })).not.toBeInTheDocument();
+    // When this project involves no voice-over artifacts no gaps can be counted: no count written, confirmation is left to enqueue
     // 本项目不涉及配音产物时数不出缺口：不写数量，确认与否交给入队
     expect(screen.getByRole("button", { name: "补齐旁白配音" })).toBeEnabled();
   });
@@ -287,6 +289,7 @@ describe("TimelineCanvas", () => {
       useProjectsStore.setState(useProjectsStore.getInitialState(), true);
     });
 
+    // All write callbacks are provided: only the demo-state check itself can void them
     // 写回调一律给足：只有演示态判定本身能把它们作废
     function renderWithAllWriteHandlers() {
       return render(

@@ -82,6 +82,7 @@ describe("MediaCard in the demo workbench", () => {
     useProjectsStore.setState(useProjectsStore.getInitialState(), true);
   });
 
+  // All callbacks/toggles of the four entries are provided: only the demo-state check itself can turn them off
   // 四个入口的回调/开关全部给足：只有演示态判定本身能把它们关掉
   function renderCardWithAllEntries() {
     return renderCard({

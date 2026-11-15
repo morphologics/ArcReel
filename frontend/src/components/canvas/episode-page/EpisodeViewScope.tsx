@@ -3,7 +3,7 @@ import { useLocation, useRouter, useSearch } from "wouter";
 
 import { staysInEpisodeView, type EpisodeViewFacts } from "./episode-view";
 
-/** 集页的视图事实，由 `EpisodePage` 提供给画布里的编辑单元。不在集页里时为 null。 */
+/** View facts of the episode page, provided by `EpisodePage` to edit units in the canvas. null when not in an episode page. / 集页的视图事实，由 `EpisodePage` 提供给画布里的编辑单元。不在集页里时为 null。 */
 const EpisodeViewFactsContext = createContext<EpisodeViewFacts | null>(null);
 
 export const EpisodeViewFactsProvider = EpisodeViewFactsContext.Provider;
@@ -11,6 +11,10 @@ export const EpisodeViewFactsProvider = EpisodeViewFactsContext.Provider;
 const NEVER = () => false;
 
 /**
+ * `allowNavigation` for edit units in the canvas: only allow in-app navigations that still stay in the current view afterwards (see `staysInEpisodeView`).
+ * The target URL wouter hands to the leave guard includes the nested route's base, so the current URL is built in the same form here before comparing.
+ * Always block when not in an episode page.
+ *
  * 画布里编辑单元的 `allowNavigation`：只放行跳转后仍停留在当前视图的应用内跳转（见 `staysInEpisodeView`）。
  * wouter 交给离开拦截的目标地址带嵌套路由的 base，这里拼出同样形式的当前地址再比较。
  * 不在集页里时一律拦截。

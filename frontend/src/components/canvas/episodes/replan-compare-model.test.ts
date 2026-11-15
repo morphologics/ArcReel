@@ -19,6 +19,7 @@ function segment(overrides: Partial<EpisodesViewSegment>): EpisodesViewSegment {
   };
 }
 
+// One file of 40 characters: episode 1 [0, 10), episode 2 [10, 20), episode 3 [20, 30), episode 4 [30, 40); episode 3 starts with a newline
 // 一个文件 40 字：第 1 集 [0, 10)、第 2 集 [10, 20)、第 3 集 [20, 30)、第 4 集 [30, 40)；第 3 集开头是换行
 const view: EpisodesView = {
   unit: "chars",
@@ -53,6 +54,7 @@ function sourceFile(name: string, segments: EpisodesViewSegment[]) {
   return { ...view.files[0], source_file: `source/${name}`, name, length: 20, segments };
 }
 
+// a.txt: episode 1 [0, 10), episode 2 [10, 20) continuing into b.txt; b.txt: episode 2 [0, 10), episode 3 [10, 20)
 // a.txt：第 1 集 [0, 10)、第 2 集 [10, 20) 接到 b.txt；b.txt：第 2 集 [0, 10)、第 3 集 [10, 20)
 const crossing: EpisodesView = {
   ...view,
@@ -120,6 +122,7 @@ describe("新旧分法的对照", () => {
   });
 
   it("只标出分界不同处，落在空白里的分界与紧随其后的分界视为同一处", () => {
+    // The new plan cuts at 21 (after the newline), the same place as episode 3's start 20; 25 is a boundary only in the new plan, 30 only in the existing episodes
     // 新方案在 21（换行之后）切开，与第 3 集的开头 20 是同一处；25 是新方案独有的分界，30 是现有分集独有的
     const compare = replanCompare(view, summary([draft(10, 21), draft(21, 25), draft(25, 40)], { complete: true }))!;
 
@@ -130,6 +133,7 @@ describe("新旧分法的对照", () => {
   it("生成中只比到方案的结尾，起点本身不算分界不同", () => {
     const compare = replanCompare(view, summary([draft(10, 25)]))!;
 
+    // Episode 3 starts with a newline; mark it on the first character after the newline
     // 第 3 集的开头是换行，标在换行之后的第一个字上
     expect(compare.diffs(0)).toEqual([21]);
   });
@@ -143,6 +147,7 @@ describe("新旧分法的对照", () => {
   });
 
   it("跨文件的一集在文件交界处不算分界，方案在文件结尾的分界就是下一个文件的开头", () => {
+    // New plan: a.txt's [10, 20) is one episode, all of b.txt is one episode
     // 新方案：a.txt 的 [10, 20) 一集，b.txt 整个一集
     const drafts = [draft(10, 20), { ...draft(0, 20), source_file: "source/b.txt" }];
     const compare = replanCompare(

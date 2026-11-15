@@ -45,6 +45,8 @@ describe("ImageEditButton", () => {
     const editSpy = vi.spyOn(API, "editImage");
     const pushToast = vi.spyOn(useAppStore.getState(), "pushToast");
 
+    // busy stays false (the reactive signal at open time); while the dialog stays open the shot becomes occupied,
+    // written only into the tasks store and not reflected in this prop; submit must rely on a fresh store read as the fallback.
     // busy 一直是 false（打开时刻的响应式信号），弹窗停留期间该分镜进入占用态
     // 只写进了 tasks store，未反映到这个 prop 上——提交必须靠 store 新鲜读兜底。
     render(
@@ -111,6 +113,9 @@ describe("ImageEditButton", () => {
     const editSpy = vi.spyOn(API, "editImage");
     const pushToast = vi.spyOn(useAppStore.getState(), "pushToast");
 
+    // busy is false throughout (the parent's reactive signal has not caught up); the grid task is written only into the tasks store,
+    // its resource_id is the grid_id and does not land in the storyboard occupied set, so only a fresh read by scriptFile
+    // can block it; this verifies the extra check added in handleSubmit.
     // busy 全程为 false（父组件的响应式信号未追上）；grid 任务只写进了 tasks store，
     // 其 resource_id 是 grid_id，不落进 storyboard 占用集，只能靠 scriptFile 维度的
     // 新鲜读拦住——验证 handleSubmit 里补的这层复核。
@@ -164,10 +169,13 @@ describe("ImageEditButton", () => {
     const instructionField = await screen.findByLabelText("编辑指令");
     fireEvent.change(instructionField, { target: { value: "把背景改成夜晚" } });
 
+    // The tasks store has no task row for this storyboard image; the grid task's resource_id is the grid_id,
+    // which cannot go into the storyboard occupied set, so only the busy check can block it.
     // tasks store 里没有这张分镜的任务行——grid 任务的 resource_id 是 grid_id，
     // 归不进 storyboard 占用集，只能靠 busy 这层判定拦住。
     rerender(<ImageEditButton {...props} busy />);
 
+    // Submitting via the keyboard shortcut bypasses the button's disabled attribute and goes straight into handleSubmit
     // 键盘快捷键提交绕过按钮的 disabled 属性，直接进 handleSubmit
     fireEvent.keyDown(instructionField, { key: "Enter", metaKey: true });
 

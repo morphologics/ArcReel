@@ -67,10 +67,12 @@ describe("MediaModelSection", () => {
     for (const name of ["默认视频模型", "默认图片模型", "默认模型"]) {
       expect(await screen.findByRole("combobox", { name })).toBeInTheDocument();
     }
+    // Three collapsible sections, video / image / text, initially collapsed
     // video / image / text 三处折叠区，初始收起
     const sections = screen.getAllByRole("button", { name: /按用途指定模型/ });
     expect(sections).toHaveLength(3);
     expect(sections.every((d) => d.getAttribute("aria-expanded") === "false")).toBe(true);
+    // UI text shows no internal terms
     // 界面文案不出现内部术语
     expect(container).not.toHaveTextContent(/能力桶|任务类型桶|capability bucket/i);
   });
@@ -96,6 +98,7 @@ describe("MediaModelSection", () => {
     const timeout = await screen.findByRole("textbox", { name: "视频轮询超时（秒）" });
     await user.clear(timeout);
     await user.type(timeout, "60.5");
+    // Keep the raw string during editing so intermediate states like a decimal point are not swallowed
     // 编辑期间保留原始字符串，小数点等中间态不被吞掉
     expect(timeout).toHaveValue("60.5");
     await user.tab();
@@ -110,6 +113,7 @@ describe("MediaModelSection", () => {
     render(<MediaModelSection />);
 
     const timeout = await screen.findByRole("textbox", { name: "视频轮询超时（秒）" });
+    // Type a valid value first (typing writes intermediate values into unsaved changes), then clear and leave
     // 先键入有效值（键入过程会把中间值写进未保存修改），再清空离开
     await user.clear(timeout);
     await user.type(timeout, "7200");
@@ -117,29 +121,33 @@ describe("MediaModelSection", () => {
     expect(timeout).toHaveValue("");
     await user.tab();
 
+    // Empty input undoes the field's unsaved edit: echo back the saved value, and the typed 7200 does not linger in unsaved changes
     // 空输入撤销该字段的未保存编辑：回显已保存值，键入过的 7200 不残留在未保存修改里
     expect(timeout).toHaveValue("3600");
     expect(screen.getByRole("button", { name: "保存" })).toBeDisabled();
   });
 
   it("keeps configured global sub-fields visible when the candidate fetch fails", async () => {
+    // A failed candidates request should not make the active global override vanish from the UI; it still takes part in resolution on the backend, and hidden the user could not notice
     // 候选接口失败不应让已生效的全局覆盖从界面消失——它在后端仍参与解析，藏起来用户无从察觉
     mockConfig({ default_video_backend_i2v: "ark/seedance" });
     vi.spyOn(API, "getModelCandidates").mockRejectedValue(new Error("boom"));
     render(<MediaModelSection />);
     const i2v = await screen.findByRole("combobox", { name: "图生视频" });
     expect(i2v).toHaveTextContent("seedance");
+    // Unconfigured sub-items have no candidates to choose from and still do not render
     // 未配置的细分项没有候选可选，仍不渲染
     expect(screen.queryByRole("combobox", { name: "参考生视频" })).not.toBeInTheDocument();
   });
 
   it("shows an explicit error notice with a retry entry when the candidate fetch fails, even with no saved overrides", async () => {
+    // When the global layer never configured any sub-item the collapsible section would vanish entirely; the failure state must keep it so the user gets the failure signal
     // 全局层未配置过任何细分项时折叠区本会整块消失，失败态须把它留下，用户才拿得到失败信号
     vi.spyOn(API, "getModelCandidates").mockRejectedValue(new Error("boom"));
     render(<MediaModelSection />);
     await screen.findByRole("combobox", { name: "默认视频模型" });
     const alerts = await screen.findAllByRole("alert");
-    expect(alerts.length).toBeGreaterThanOrEqual(2); // video + image 两处折叠区
+    expect(alerts.length).toBeGreaterThanOrEqual(2); // video + image collapsible sections / video + image 两处折叠区
     for (const alert of alerts) {
       expect(alert).toHaveTextContent(/模型列表加载失败/);
     }
@@ -159,6 +167,7 @@ describe("MediaModelSection", () => {
 
     await waitFor(() => expect(getCandidates).toHaveBeenCalledTimes(2));
     await waitFor(() => expect(screen.queryAllByRole("alert")).toHaveLength(0));
+    // The failure state force-expanded the section; after a successful retry it stays expanded without clicking again
     // 失败态强制展开过折叠区，重试成功后仍展开，无需再次点开
     await user.click(screen.getByRole("combobox", { name: "参考生视频" }));
     expect(await screen.findByRole("option", { name: /seedance/ })).toBeInTheDocument();
@@ -201,6 +210,7 @@ describe("MediaModelSection", () => {
     expect(screen.getByRole("combobox", { name: "默认图片模型" })).toHaveTextContent(
       "自动选择（当前：gemini · nano-banana）",
     );
+    // Auto inference filters by purpose: when no model can be chosen for image-to-image, say plainly there is no available provider
     // 自动推断按用途过滤：图生图选不出模型时如实说没有可用供应商
     await user.click(screen.getAllByText("按用途指定模型")[1]);
     expect(screen.getByRole("combobox", { name: "图生图" })).toHaveTextContent("自动选择（没有可用的供应商）");
@@ -242,6 +252,8 @@ describe("MediaModelSection", () => {
     await waitFor(() =>
       expect(patch).toHaveBeenCalledWith({ default_video_backend: "ark/seedance" }),
     );
+    // Observable evidence that saving ended: the save bar shows "Saved"; if PATCH returned but the flow is stuck on the candidates request,
+    // the save bar stays on "Saving" forever.
     // 保存结束的可观测证据：保存栏显示「已保存」——PATCH 已返回但流程仍卡在候选请求上时，
     // 保存栏会一直停在「正在保存」。
     expect(await screen.findByText("已保存")).toBeInTheDocument();
@@ -307,6 +319,8 @@ describe("MediaModelSection", () => {
       await waitFor(() => expect(patch).toHaveBeenCalledWith({ video_generate_audio: true }));
     });
 
+    // Greying out requires both effective buckets to be uncontrollable, while the hint is given as soon as one bucket always has sound: if the two buckets disagree, greying out would also
+    // disable the legitimate off of the controllable bucket. If the criterion missed sub-buckets, this config would get all the way to enqueue before being rejected.
     // 置灰要求两个生效桶同为不可控，提示只要一个桶恒有声就给：两桶判定不一致时置灰会连带
     // 禁掉可控桶的合法关闭。判据漏掉细分桶则会让这份配置一路带到入队才被拒。
     it("warns about a stored off setting when only a capability-bucket override is always audible", async () => {
@@ -348,6 +362,8 @@ describe("MediaModelSection", () => {
       expect(screen.queryByRole("alert")).not.toBeInTheDocument();
     });
 
+    // With all layers empty, execution uses the auto-selected model, so the checkbox criterion and spec bar must take it, or an always-sound auto model
+    // paired with "Off" would get all the way to the enqueue preflight before being rejected.
     // 各层全空时执行期用自动选中的模型，勾选框判据与规格条要按它取，否则恒有声的自动模型
     // 配上「关闭」时一路到入队预检才被拒。
     it("judges the checkbox and shows the spec bar by the auto-selected model when every layer is unset", async () => {
@@ -373,6 +389,8 @@ describe("MediaModelSection", () => {
       expect(screen.getByText(/没有声音/)).toBeInTheDocument();
     });
 
+    // The global page has no project context and the default model is used by both paths, so its capability line can only use the catalog slot; but the two sub-item dropdowns
+    // are each a single path, sharing the source of the per-bucket checkbox criterion above, and cannot share the default layer's answer.
     // 全局页无项目上下文，默认模型两条路径都会用到，能力线只能给目录位；但两个细分项下拉
     // 各自就是一条路径，与上方按桶取值的勾选框判据同源，不能共用默认层那一个答案。
     describe("候选下拉的音轨能力线", () => {
@@ -396,6 +414,7 @@ describe("MediaModelSection", () => {
         ]);
       }
 
+      /** Open the given dropdown, read the v3-omni row's capability line, then close it; only one dropdown open at a time. */
       /** 打开指定下拉，读出 v3-omni 那一行的能力线，再关掉——同时只开一个下拉。 */
       async function omniRowIn(user: ReturnType<typeof userEvent.setup>, comboboxName: string) {
         await user.click(screen.getByRole("combobox", { name: comboboxName }));
@@ -413,6 +432,7 @@ describe("MediaModelSection", () => {
 
         await user.click(screen.getAllByText("按用途指定模型")[0]);
         expect(await omniRowIn(user, "图生视频")).toContain("有声");
+        // Consistent with the checkbox decided by r2vAudioControl (always_off) on the same screen: two statements on one screen must not contradict each other
         // 与同屏 r2vAudioControl（always_off）判定的勾选框一致：一屏之内两句话不能互相矛盾
         expect(await omniRowIn(user, "参考生视频")).toContain("无声");
       });
@@ -430,6 +450,7 @@ describe("MediaModelSection", () => {
 });
 
 describe("MediaModelSection – 语言切换", () => {
+  // Translated names are written by the backend per Accept-Language; the stand-in returns the matching translation for the current language.
   // 译名由后端按 Accept-Language 成文，替身按当前语言返回对应译名。
   function candidatesFor(language: string) {
     const en = language.startsWith("en");
@@ -471,10 +492,12 @@ describe("MediaModelSection – 语言切换", () => {
     });
 
     await waitFor(() => expect(trigger).toHaveTextContent("Gemini · Veo 3"));
+    // A language switch refetches only candidates, not the whole page config; the latter would setDraft({}) and lose unsaved input here
     // 语言切换只重取候选，不重取整页配置——后者会 setDraft({}) 丢掉这里未保存的输入
     expect(timeout).toHaveValue("7200");
 
     await user.click(trigger);
+    // The option row's main line is the translated name; the model id remains identifiable in the row
     // 选项行主行为译名，model id 仍在行内可辨识
     expect(await screen.findByRole("option", { name: /Veo 3/ })).toHaveTextContent("veo-3");
   });

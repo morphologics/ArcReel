@@ -188,6 +188,7 @@ describe("角色详情的衍生区块", () => {
       "换上黑色重甲，披红斗篷",
     );
 
+    // The old name is then reused by a new derivative: the two rows display separately and do not collide over a carried-over row key
     // 旧名随后被新衍生复用：两行各自显示，不因沿用的行标识撞在一起
     derivativesOf("林夕").战斗装 = { description: "换回便装" };
     await act(() => useProjectsStore.getState().refreshProject("demo"));
@@ -200,6 +201,7 @@ describe("角色详情的衍生区块", () => {
   it("follows the stored NFC name when the new derivative name was typed decomposed", async () => {
     const user = userEvent.setup();
     vi.spyOn(API, "renameCharacterDerivative").mockImplementation((_p, _c, from, to) => {
+      // The backend normalizes with strip + NFC before writing to disk
       // 后端按 strip + NFC 规范化后落盘
       const table = derivativesOf("林夕");
       table[to.trim().normalize("NFC")] = table[from];
@@ -313,6 +315,7 @@ describe("角色详情的衍生区块", () => {
     await user.click(within(rowOf(sheet, "战斗装")).getByRole("button", { name: "「战斗装」的更多操作" }));
     await user.click(await screen.findByRole("menuitem", { name: "删除" }));
     const confirm = await screen.findByRole("alertdialog", { name: "删除衍生「战斗装」？" });
+    // After the confirmation box opens, the character is occupied by an Agent enqueue
     // 打开确认框之后，角色被 Agent 入队占用
     act(() =>
       useTasksStore.setState({

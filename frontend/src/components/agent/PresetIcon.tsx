@@ -7,6 +7,12 @@ interface IconProps {
 type IconLoader = () => Promise<{ default: ComponentType<IconProps> }>;
 
 /**
+ * iconKey → @lobehub/icons subcomponent path.
+ *
+ * Maps one-to-one to PresetProvider.icon_key in lib/agent/agent_provider_catalog.py.
+ * Prefer the Color variant; fall back to Mono when the upstream package has no Color.
+ * When a new provider lacks a mapping, the component falls back to a monogram.
+ *
  * iconKey → @lobehub/icons 子组件路径。
  *
  * 与 lib/agent/agent_provider_catalog.py 的 PresetProvider.icon_key 一一对应。
@@ -43,7 +49,7 @@ const ICON_LOADERS: Record<string, IconLoader> = {
   Zhipu: () => import("@lobehub/icons/es/Zhipu/components/Color"),
 };
 
-/** iconKey → 本地静态资源(用于 lobehub 未收录的品牌). */
+/** iconKey → local static asset (for brands lobehub does not include). / iconKey → 本地静态资源(用于 lobehub 未收录的品牌). */
 const STATIC_ICON_SRC: Record<string, string> = {
   ArcReel: "/apple-touch-icon.png",
 };
@@ -79,7 +85,7 @@ export function PresetIcon({ iconKey, size = 20, className }: Props) {
     };
   }, [iconKey]);
 
-  // 本地静态图标(品牌 logo 未上 lobehub 时使用)
+  // Local static icon (used when the brand logo is not on lobehub) / 本地静态图标(品牌 logo 未上 lobehub 时使用)
   const staticSrc = iconKey ? STATIC_ICON_SRC[iconKey] : undefined;
   if (staticSrc)
     return (

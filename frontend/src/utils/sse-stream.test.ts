@@ -13,6 +13,7 @@ describe("openSseStream", () => {
     Reflect.deleteProperty(document, "visibilityState");
   });
 
+  /** Override jsdom's read-only `document.visibilityState`; afterEach deleting the own property restores it. */
   /** 覆盖 jsdom 的只读 `document.visibilityState`；afterEach 删除自有属性即还原。 */
   const setVisibility = (state: DocumentVisibilityState) => {
     Object.defineProperty(document, "visibilityState", { configurable: true, get: () => state });
@@ -133,6 +134,8 @@ describe("openSseStream", () => {
     await flushStream();
     expect(fake.connections).toHaveLength(4);
 
+    // Connected successfully but the stream drops before delivering any event: this connection has not proven itself usable, so backoff keeps growing to 8s
+    // rather than falling back to the first delay; otherwise a bad proxy that "accepts connections and drops immediately" would be reconnected every second.
     // 建连成功但一个事件都没送到就断流：这条连接没证明自己可用，退避继续增长到 8s，
     // 不回落到首个延迟——否则「接受连接后立刻断流」的坏代理会被按秒重连。
     fake.latest.end();
@@ -144,6 +147,7 @@ describe("openSseStream", () => {
     await flushStream();
     expect(fake.connections).toHaveLength(5);
 
+    // Only receiving an event makes the connection count as usable, resetting backoff: another drop waits only the first delay.
     // 收到事件才算连接可用，退避归零：再断线只等首个延迟。
     fake.latest.emit("entry", { seq: 1 }, "1");
     await flushStream();
@@ -173,6 +177,8 @@ describe("openSseStream", () => {
   it("stops permanently when the server rejects the request, releasing the visibility listener", async () => {
     const fake = stubSseFetch(401);
     const onError = vi.fn();
+    // When the handle enters a terminal state by itself, callers usually no longer call close(), and close() returns immediately for a closed handle:
+    // only removing the listener in place on this path keeps it, along with the whole closure (onMessage callback etc.), from staying resident on document.
     // 句柄自行进入终态时调用方通常不再 close()，而 close() 对已关闭的句柄直接返回：
     // 监听只有在这条路径上就地摘掉，才不会连同整个闭包（onMessage 回调等）常驻 document。
     const addListener = vi.spyOn(document, "addEventListener");
@@ -248,6 +254,7 @@ describe("openSseStream", () => {
     await flushStream();
     expect(onError).not.toHaveBeenCalled();
 
+    // After closing, it does not reconnect even if the stream later ends.
     // 关闭后即便流随后结束也不再重连。
     fake.latest.end();
     await flushStream();
@@ -262,6 +269,7 @@ describe("openSseStream", () => {
     await flushStream();
     expect(fake.connections).toHaveLength(1);
 
+    // Consecutive failures push backoff to the 30s cap: 1s -> 2s -> 4s -> 8s -> 16s -> 30s.
     // 连续失败把退避推到 30s 上限：1s → 2s → 4s → 8s → 16s → 30s。
     for (const delay of [1000, 2000, 4000, 8000, 16_000]) {
       await vi.advanceTimersByTimeAsync(delay);
@@ -278,9 +286,11 @@ describe("openSseStream", () => {
     await flushStream();
     expect(fake.connections).toHaveLength(7);
 
+    // The preempted 30s timer does not fire an extra connection.
     // 被抢占的 30s 定时器不再补发一次连接。
     await vi.advanceTimersByTimeAsync(1000);
     await flushStream();
+    // Backoff reset: this failure waits only the first delay of 1s.
     // 退避归零：这次失败只等首个延迟 1s。
     expect(fake.connections).toHaveLength(8);
     handle.close();
@@ -292,6 +302,7 @@ describe("openSseStream", () => {
     await flushStream();
     expect(fake.connections).toHaveLength(1);
 
+    // Connected: there is no pending reconnect, and the event does nothing.
     // 已连接：没有待执行的重连，事件不做任何事。
     setVisibility("visible");
     document.dispatchEvent(new Event("visibilitychange"));
@@ -301,12 +312,14 @@ describe("openSseStream", () => {
     fake.latest.end();
     await flushStream();
 
+    // Waiting in backoff but the page is still hidden: do not preempt the timer.
     // 退避等待中但页面仍不可见：不抢占定时器。
     setVisibility("hidden");
     document.dispatchEvent(new Event("visibilitychange"));
     await flushStream();
     expect(fake.connections).toHaveLength(1);
 
+    // The original timer reconnects on schedule as usual.
     // 原定时器照常到点重连。
     await vi.advanceTimersByTimeAsync(1000);
     await flushStream();

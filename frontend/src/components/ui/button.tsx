@@ -2,6 +2,7 @@ import { Button as ButtonPrimitive } from "@base-ui/react/button"
 import { cva, type VariantProps } from "class-variance-authority"
 import { cn } from "cn"
 
+// Versus upstream: lower the input fill opacity to preserve text contrast; the invalid state uses a full red border and a stronger glow.
 // 相对上游：降低 input 填充不透明度以保留文字对比度；失败态用完整红色描边与较强光晕。
 const buttonVariants = cva(
   "group/button inline-flex shrink-0 items-center justify-center rounded-lg border border-transparent bg-clip-padding text-sm font-medium whitespace-nowrap transition-all outline-none select-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 active:not-aria-[haspopup]:translate-y-px disabled:pointer-events-none disabled:opacity-50 aria-invalid:border-destructive aria-invalid:ring-3 aria-invalid:ring-destructive/40 [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4",
@@ -15,6 +16,7 @@ const buttonVariants = cva(
           "bg-secondary text-secondary-foreground hover:bg-[color-mix(in_oklch,var(--secondary),var(--foreground)_5%)] aria-expanded:bg-secondary aria-expanded:text-secondary-foreground",
         ghost:
           "hover:bg-muted hover:text-foreground aria-expanded:bg-muted aria-expanded:text-foreground dark:hover:bg-muted/50",
+        // In dark mode upstream's /20 and /30 backgrounds leave red text at only 4.4:1 on overlay footers; pushing the background to /10 and hover to /15 reaches 4.5:1
         // 暗色下上游的 /20、/30 底色让红字在弹层页脚上只有 4.4:1，底色压到 /10、悬停 /15 才达到 4.5:1
         destructive:
           "bg-destructive/10 text-destructive hover:bg-destructive/15 focus-visible:border-destructive/40 focus-visible:ring-destructive/20 dark:focus-visible:ring-destructive/40",
@@ -60,5 +62,5 @@ function Button({
   )
 }
 
-// react-doctor-disable-next-line react-doctor/only-export-components -- shadcn 原语的 cva 定义与组件同文件：@shadcn/lint 从组件所在文件读取 variant 与 size 名写进修正提示，拆到别的模块后提示里不再列出可用变体
+// react-doctor-disable-next-line react-doctor/only-export-components -- shadcn primitive cva definitions live in the component file: @shadcn/lint reads variant and size names from the component's file into its fix hints; moved to another module, the hints no longer list the available variants / shadcn 原语的 cva 定义与组件同文件：@shadcn/lint 从组件所在文件读取 variant 与 size 名写进修正提示，拆到别的模块后提示里不再列出可用变体
 export { Button, buttonVariants }

@@ -22,13 +22,16 @@ interface EpisodesHeaderProps {
   projectName: string;
   view: EpisodesView;
   episodeCount: number;
-  /** 本项目有分集规划在排队或执行。 */
+  /** This project has episode planning queued or running. / 本项目有分集规划在排队或执行。 */
   planning: boolean;
   onUpload: (mode: SourceUploadMode) => void;
   onCreate: () => void;
 }
 
 /**
+ * Header toolbar of the "Episodes" view: left is title, episode count and whole-source planning progress; right is the "AI plan episodes" popover, new episode and upload source.
+ * With a new episode plan pending, the plan button is unavailable; adopt or discard it in the plan pane first.
+ *
  * 「分集」视图的页头工具行：左侧是标题、集数与整本源文的分集进度，右侧是「AI 规划分集」弹层、新建一集与上传原文。
  * 有新的分集方案时规划按钮不可用，先在方案栏里采纳或放弃。
  */
@@ -44,6 +47,7 @@ export function EpisodesHeader({ projectName, view, episodeCount, planning, onUp
   let planLabel: string;
   if (planning) planLabel = t("episodes_header_plan_running", { percent });
   else if (replanPending) planLabel = t("episodes_header_plan_pending");
+  // Planning reached the end, but unsliced source still lies between sliced episodes (gaps left by deletion); plan each gap in the outline
   // 规划到了结尾，但切出集之间还夹着未切分的原文（删集留下的空当），要在集目录里逐段规划
   else if (started && remaining === 0)
     planLabel = t(view.cut_units < view.units ? "episodes_header_plan_gaps" : "episodes_header_plan_done");

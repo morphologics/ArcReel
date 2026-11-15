@@ -31,7 +31,7 @@ function isExpired(expiresAt: string | null, now: Date): boolean {
   return expiresAt !== null && new Date(expiresAt) < now;
 }
 
-/** 全局设置「访问令牌」：列出 ArcReel 签发的访问令牌，创建与吊销。吊销不可逆，用 AlertDialog 确认。 */
+/** Global settings "Access tokens": lists access tokens issued by ArcReel, with create and revoke. Revoking is irreversible and is confirmed with an AlertDialog. / 全局设置「访问令牌」：列出 ArcReel 签发的访问令牌，创建与吊销。吊销不可逆，用 AlertDialog 确认。 */
 export function AccessTokensSection() {
   const { t } = useTranslation(["dashboard", "common"]);
   const [tokens, setTokens] = useState<ApiKeyInfo[]>([]);
@@ -57,7 +57,7 @@ export function AccessTokensSection() {
   }, []);
 
   useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect -- 挂载时拉取令牌列表后回写，属于受控的初始化加载
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- fetch the token list on mount and write it back; this is a controlled initial load / 挂载时拉取令牌列表后回写，属于受控的初始化加载
     void fetchTokens();
     return () => loadController.current?.abort();
   }, [fetchTokens]);
@@ -108,6 +108,7 @@ export function AccessTokensSection() {
         onOpenChange={setCreateOpen}
         onCreated={(token) => {
           if (loadController.current && load.status === "loading") {
+            // Creation happened during the first list load; re-read to keep both the existing tokens and the just-created one.
             // 创建发生在首次列表加载期间，重新读取以保留既有令牌和刚创建的令牌。
             void fetchTokens();
           } else {
@@ -223,6 +224,7 @@ function RevokeTokenDialog({
   const { t } = useTranslation(["dashboard", "common"]);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // token is already cleared during the close animation; keep the last name so the title doesn't flash blank
   // 关闭动画期间 token 已清空，保留最后一次的名称避免标题闪成空白
   const [shown, setShown] = useState<ApiKeyInfo | null>(token);
   if (token && token !== shown) {
@@ -249,7 +251,7 @@ function RevokeTokenDialog({
     <AlertDialog
       open={token !== null}
       onOpenChange={(next) => {
-        // 提交中不响应 Esc，避免请求还在途时对话框先消失
+        // Ignore Esc while submitting, so the dialog doesn't disappear while the request is still in flight / 提交中不响应 Esc，避免请求还在途时对话框先消失
         if (!next && !submitting) onClose();
       }}
     >

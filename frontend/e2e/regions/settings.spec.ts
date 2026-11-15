@@ -3,6 +3,9 @@ import { loadRecordedResponses } from "../support/recorded.ts";
 import { defineRegionScenarios } from "../support/scenarios.ts";
 import { expect, type ApiOverrides } from "../support/test.ts";
 
+// Page shell and global settings navigation: three container tiers (full-bleed, width-limited, full-width), shell save bar and sidebar;
+// the "Default model", "About", "Prompt templates" sections and in-place notices for config problems.
+// Other sections' content is redone by their own regions; their full content is not captured here. Provider section scenarios are in providers.spec.ts.
 // 页面外壳与全局设置导航：三档容器（全出血、限宽、铺满）、外壳保存栏与侧栏；
 // 「默认模型」「关于」「提示词模版」分区与配置问题的就地提示。
 // 其他分区的内容由各自的区域重做，这里不截它们的整块内容。供应商分区的场景在 providers.spec.ts。
@@ -13,6 +16,8 @@ function settings(section: string) {
   return `/app/settings?section=${section}`;
 }
 
+// Stress variant: three providers with ten models each, long provider and model names; both video and image have sub-items configured,
+// so the sub-section auto-expands.
 // 压力变体：三家供应商各十个模型，供应商名与模型名都很长；视频与图片都有细分项已配置，
 // 细分区自动展开。
 const LONG_PROVIDERS: [string, string][] = [
@@ -71,6 +76,8 @@ function manyModelsOverrides(): ApiOverrides {
   };
 }
 
+// "About": a new version exists with very long release notes (many paragraphs, long links). Horizontal scrolling of code blocks belongs to
+// the shared Markdown rendering style and is not covered here. Version info hits the internet in the recording env, so a scenario supplies it.
 // 「关于」：有新版本，发布说明很长（多段、长链接）。代码块的横向滚动属于 Markdown 渲染的共用样式，不在这里覆盖。版本信息在录制环境里访问外网，固定由场景提供。
 const LONG_RELEASE: ApiOverrides = {
   "GET /api/v1/system/version": {
@@ -166,6 +173,7 @@ defineRegionScenarios("全局设置", [
     },
     act: async (page) => {
       const nav = page.getByRole("navigation", { name: "设置" });
+      // The recording env has neither usable providers nor Agent providers.
       // 录制环境既没有可用的供应商，也没有 Agent 供应商。
       const flagged = nav.getByRole("link").filter({ has: page.getByRole("img", { name: "配置不完整" }) });
       await expect(flagged).toHaveText(["供应商", "ArcReel Agent"]);
@@ -263,6 +271,7 @@ defineRegionScenarios("全局设置", [
     act: async (page) => {
       await page.getByRole("button", { name: /发布说明/ }).click();
       const release = page.getByRole("link", { name: "打开 GitHub Release" });
+      // Wait for the lazy-loaded Markdown to finish layout, then scroll to the Release link after the body.
       // 等懒加载 Markdown 完成排版，再滚到位于正文之后的 Release 链接。
       await expect(page.locator(".markdown-body")).toBeVisible();
       await release.scrollIntoViewIfNeeded();

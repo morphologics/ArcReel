@@ -9,6 +9,14 @@ import { EpisodeItemRef } from "@/components/shared/episode-item/EpisodeItemRef"
 import { taskToneClass } from "./state-language";
 
 /**
+ * Attempts running on this step: queued and running tasks. They are progress, not problems.
+ *
+ * Chips are **outlined** and artifact meters are **filled**: the shape alone says "an attempt" and "a thing"
+ * are not the same kind of thing. Recovering tasks stay on this axis: they haven't produced any usable file yet, and drawing them as current
+ * artifacts would make the user think generation is done.
+ *
+ * Provider acceptance is stated once separately after the list by {@link CheckpointNote}; see that component for why.
+ *
  * 这一步上正在跑的尝试：排队中与运行中的任务。它们是进度，不是问题。
  *
  * 芯片是**描边**的，产物计量条是**填充**的——形状上就说清楚「一次尝试」和「一件东西」
@@ -21,7 +29,7 @@ export function TaskChips({ tasks }: { tasks: WorkflowTaskObservation[] }) {
   const { t } = useTranslation("workflow");
   const headingId = useId();
   const taskIds = useMemo(() => tasks.map((task) => task.task_id), [tasks]);
-  // 工作流观测不带时间戳，时长按 task_id 回查任务队列。
+  // Workflow observations carry no timestamps, so durations are looked up in the task queue by task_id. / 工作流观测不带时间戳，时长按 task_id 回查任务队列。
   const taskRows = useTaskRowsByIds(taskIds);
   if (tasks.length === 0) return null;
   const submitted = tasks.filter((task) => task.provider_checkpoint?.submitted).map((task) => task.unit_id);

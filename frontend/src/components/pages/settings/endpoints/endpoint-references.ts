@@ -1,7 +1,7 @@
 import { ApiRequestError } from "@/api";
 import type { EndpointReference } from "@/types";
 
-/** 删除端点被拒（409）时，响应里列出的仍在使用它的模型；不是这类错误时为 null。 */
+/** When deleting an endpoint is rejected (409), the models still using it as listed in the response; null for other kinds of errors. / 删除端点被拒（409）时，响应里列出的仍在使用它的模型；不是这类错误时为 null。 */
 export function endpointReferences(error: unknown): EndpointReference[] | null {
   if (!(error instanceof ApiRequestError) || error.status !== 409) return null;
   const references =

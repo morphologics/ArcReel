@@ -15,6 +15,10 @@ import { createDeferred } from "@/test/deferred";
 import { FakeSseStream } from "@/test/fakeSseStream";
 
 /**
+ * Stub `API.openProjectEventStream` as a spy returning a {@link FakeSseStream} handle:
+ * tests drive the callbacks on `options` directly (onSnapshot/onChanges/onProjectDeleted),
+ * without a real fetch stream. `options` reflects the set of callbacks most recently registered by the hook under test.
+ *
  * 把 `API.openProjectEventStream` 打桩为返回 {@link FakeSseStream} 句柄的 spy：
  * 测试直接驱动 `options` 上的回调（onSnapshot/onChanges/onProjectDeleted），
  * 不经真实 fetch 流。`options` 反映被测 hook 最近一次注册的那组回调。
@@ -30,7 +34,7 @@ function mockProjectEventStream() {
     get options() {
       return capturedOptions;
     },
-    /** 最近一次建立的连接；断言 close 次数时用它的 `close`。 */
+    /** The most recently established connection; use its `close` when asserting close counts. / 最近一次建立的连接；断言 close 次数时用它的 `close`。 */
     get source() {
       return FakeSseStream.instances[FakeSseStream.instances.length - 1];
     },
@@ -121,6 +125,7 @@ describe("useProjectEventsSSE", () => {
               entity_type: "character",
               action: "created",
               entity_id: "hero",
+              // label is the backend default-language fallback; notification text should be rendered from label_key in the UI language.
               // label 是后端默认语言兜底；通知文案应由 label_key 按界面语言渲染而来。
               label: "backend fallback",
               label_key: "named_entity_character",
@@ -297,6 +302,7 @@ describe("useProjectEventsSSE", () => {
   });
 
   it("invalidates episode draft views when a reconnect snapshot shows missed changes", () => {
+    // Draft panels fetch separately and refetch only on draft events; draft changes missed during a disconnect must be voided on the reconnect snapshot.
     // 草稿面板各自取数、只随 draft 事件重拉；断线期间错过的草稿变化要在重连快照时作废。
     useProjectsStore.setState({
       currentProjectData: { ...makeGetProjectResult("Demo").project, episodes: [{ episode: 4, title: "雨夜" }] },
@@ -328,6 +334,7 @@ describe("useProjectEventsSSE", () => {
   });
 
   it("asks the assistant to re-check its session on every snapshot, the first one included", () => {
+    // The recovery notice is pushed only once: those sent before the subscription was established (including failed retries before the first connection, and disconnect gaps) rely on snapshot reconciliation
     // 恢复通知只推一次：订阅建立之前发出的（含首次建连前的失败重试、断线空窗）要靠快照核对
     useAssistantStore.setState(useAssistantStore.getInitialState(), true);
     const stream = mockProjectEventStream();
@@ -343,6 +350,7 @@ describe("useProjectEventsSSE", () => {
   });
 
   it("names an episode the Agent just created from the refreshed ledger", async () => {
+    // When the event arrives the local ledger does not have this episode yet; the notification should wait for the refresh and be written with the title, not show an unnamed episode.
     // 事件到达时本地账本还没有这一集；通知应等刷新后按标题成文，而不是显示未命名集。
     const stream = mockProjectEventStream();
 
@@ -377,6 +385,7 @@ describe("useProjectEventsSSE", () => {
   });
 
   it("does not announce changes from a stale script when the refresh fails", async () => {
+    // The newly created shot is not in the old script yet; on refresh failure, writing from the old script would call it "deleted", so keep only the sync failure warning.
     // 新建的分镜还不在旧剧本里；刷新失败时按旧剧本成文会把它写成「已删除」，此时只留同步失败告警。
     vi.spyOn(API, "getProject").mockRejectedValue(new Error("network down"));
     const stream = mockProjectEventStream();
@@ -521,6 +530,8 @@ describe("useProjectEventsSSE", () => {
   );
 
   it("ranks reference_video_ready/tts_ready alongside existing completion events, above entity changes", async () => {
+    // In CHANGE_PRIORITY reference_video_ready/tts_ready come after storyboard_ready/video_ready/grid_ready:
+    // with several change groups in one batch, the toast state is overwritten group by group, and the one shown last should be the group with the highest priority value (processed last).
     // CHANGE_PRIORITY 中 reference_video_ready/tts_ready 排在 storyboard_ready/video_ready/grid_ready
     // 之后：同批次多组变更时，toast 状态被逐组覆写，最终展示的应是优先级数值最大（最后处理）的一组。
     const stream = mockProjectEventStream();
@@ -698,6 +709,7 @@ describe("useProjectEventsSSE", () => {
     expect(useAppStore.getState().workspaceNotifications).toHaveLength(0);
   });
 
+  // Draft creation is the only change that navigates automatically: a new draft written by the Agent jumps to its episode, while a draft the user saved in the web UI stays on the page.
   // 草稿新建是唯一会自动导航的变更：Agent 写出的新草稿跳到对应集，用户自己在 Web 端保存的草稿留在原页。
   function emitDraftCreated(stream: ReturnType<typeof mockProjectEventStream>, source: "webui" | "worker") {
     act(() => {
@@ -842,6 +854,11 @@ describe("useProjectEventsSSE", () => {
   });
 
   it("一次不带聚焦目标的刷新（如 onSnapshot）落定时，不应抢先消费更晚一批 onChanges 排队的目标", async () => {
+    // The refreshProject() triggered by onSnapshot sets no new focus target, and on settling the old logic would
+    // unconditionally flushQueuedFocus(). If during its flight a batch of onChanges with real targets has already
+    // arrived and queued (rewriting queuedFocusRef, but the data lands only when its own getProject round finishes),
+    // unconditionally consuming the ref when onSnapshot settles would navigate early to a target not yet landed,
+    // and after clearing the ref no navigation would fire after the onChanges batch.
     // onSnapshot 触发的 refreshProject() 不设置新的聚焦目标，落定后按旧逻辑会
     // 无条件 flushQueuedFocus()。若它在途期间，一批带真实目标的 onChanges 已经
     // 到达并排队（改写了 queuedFocusRef，但数据要等它自己那一轮 getProject 完成
@@ -858,6 +875,7 @@ describe("useProjectEventsSSE", () => {
 
     renderHarness("/");
 
+    // Establish the initial fingerprint baseline (the first onSnapshot does not trigger a refresh).
     // 建立初始 fingerprint 基线（首次 onSnapshot 不触发刷新）。
     act(() => {
       stream.options?.onSnapshot?.(
@@ -866,6 +884,7 @@ describe("useProjectEventsSSE", () => {
     });
     expect(getProjectSpy).not.toHaveBeenCalled();
 
+    // The fingerprint change triggers one refresh without a focus target; getProject is stuck in flight (d1 not resolved).
     // fingerprint 变化触发一次不带聚焦目标的刷新，getProject 卡在在途（d1 未 resolve）。
     act(() => {
       stream.options?.onSnapshot?.(
@@ -874,6 +893,7 @@ describe("useProjectEventsSSE", () => {
     });
     expect(getProjectSpy).toHaveBeenCalledTimes(1);
 
+    // While in flight, a batch of onChanges with a real focus target arrives and queues.
     // 在途期间，一批带真实聚焦目标的 onChanges 到达并排队。
     act(() => {
       stream.options?.onChanges?.(
@@ -896,9 +916,11 @@ describe("useProjectEventsSSE", () => {
         },
       );
     });
+    // In-flight merging: this batch only queues and does not immediately send an extra request.
     // 在途合并：这批只是排队，不会立即多发一次请求。
     expect(getProjectSpy).toHaveBeenCalledTimes(1);
 
+    // The onSnapshot round settles: it should not navigate early to the target queued by onChanges (/characters).
     // onSnapshot 那一轮落定：不应提前导航到 onChanges 排队的目标（/characters）。
     await act(async () => {
       d1.resolve(makeGetProjectResult("R1"));
@@ -907,6 +929,7 @@ describe("useProjectEventsSSE", () => {
     });
     expect(screen.getByTestId("location")).toHaveTextContent("/");
 
+    // The round queued by onChanges settles: navigate to its real target, with only this one extra request sent.
     // onChanges 排队的那一轮落定：导航到它真正的目标，且只补发了这一次请求。
     await act(async () => {
       d2.resolve(makeGetProjectResult("R2"));
@@ -920,6 +943,9 @@ describe("useProjectEventsSSE", () => {
   });
 
   it("does not navigate to a stale focus target once a later SSE batch has queued a newer one", async () => {
+    // Repro: two batches of onChanges arrive overlapping; while the first batch's refreshProject is still in flight (getProject not settled)
+    // the second batch arrives and rewrites queuedFocusRef to its own target. After the first batch settles it should not consume the superseded
+    // ref value and navigate early; navigation to the second batch's target waits until the second batch's own round settles.
     // 复现:两批 onChanges 重叠到达,第一批的 refreshProject 仍在途(getProject 未落定)时
     // 第二批已到达并把 queuedFocusRef 改写为自己的目标。第一批落定后不应消费已被取代的
     // ref 值提前导航;要等第二批自己那一轮落定才导航到第二批的目标。
@@ -934,6 +960,7 @@ describe("useProjectEventsSSE", () => {
 
     renderHarness("/");
 
+    // First batch: focus character hero -> /characters. After it starts, getProject is stuck in flight (d1 not resolved).
     // 第一批:聚焦角色 hero → /characters。发起后 getProject 卡在在途(d1 未 resolve)。
     act(() => {
       stream.options?.onChanges?.(
@@ -958,6 +985,7 @@ describe("useProjectEventsSSE", () => {
     });
     expect(getProjectSpy).toHaveBeenCalledTimes(1);
 
+    // The second batch arrives while the first is still in flight: focus scene Tavern -> /scenes, overwriting queuedFocusRef.
     // 第二批在第一批仍在途时到达:聚焦场景 酒馆 → /scenes，覆盖 queuedFocusRef。
     act(() => {
       stream.options?.onChanges?.(
@@ -980,9 +1008,11 @@ describe("useProjectEventsSSE", () => {
         },
       );
     });
+    // In-flight merging: the second batch only queues and does not immediately send an extra request.
     // 在途合并:第二批只是排队，不会立即多发一次请求。
     expect(getProjectSpy).toHaveBeenCalledTimes(1);
 
+    // First round settles: it should not navigate early to the superseded first batch target (/characters).
     // 第一轮落定：不应提前导航到已被取代的第一批目标（/characters）。
     await act(async () => {
       d1.resolve(makeGetProjectResult("R1"));
@@ -991,6 +1021,7 @@ describe("useProjectEventsSSE", () => {
     });
     expect(screen.getByTestId("location")).toHaveTextContent("/");
 
+    // The queued round (second batch) settles: navigate to the second batch's real target (/scenes), with only this one extra request sent.
     // 排队轮（第二批）落定：导航到第二批真正的目标（/scenes），且只发了这一次补充请求。
     await act(async () => {
       d2.resolve(makeGetProjectResult("R2"));
@@ -1031,6 +1062,7 @@ describe("useProjectEventsSSE", () => {
       );
     });
 
+    // fingerprints should be written to the store immediately (synchronously), without waiting for getProject
     // fingerprints 应立即（同步）写入 store，无需等待 getProject
     expect(useProjectsStore.getState().getAssetFingerprint("storyboards/scene_E1S01.png")).toBe(1710288000);
   });
@@ -1041,6 +1073,7 @@ describe("useProjectEventsSSE", () => {
     renderHarness("/");
     expect(stream.openSpy).toHaveBeenCalledTimes(1);
 
+    // The backend closes the stream normally after the project is deleted; reconnection is the streaming client's job, and the hook closing the handle stops reconnecting to the deleted project.
     // 后端在项目删除后正常关流；断线重建由流式客户端承担，hook 关闭句柄即停止对已删项目的重连。
     act(() => {
       stream.options?.onProjectDeleted?.({ project_name: "demo" });
@@ -1288,6 +1321,8 @@ describe("useProjectEventsSSE", () => {
     });
 
     it("任务终态不写入实体版本表（entity_id 是一次性 task_id，无人消费）", async () => {
+      // Each terminal task's entity_id is a new task_id; if mixed into entity invalidation it would leave keys in entityRevisions
+      // that are never consumed and not cleared on project switch, growing without bound in long sessions.
       // 每个终态任务的 entity_id 都是新的 task_id，若混进实体失效会在 entityRevisions
       // 里留下永不消费、也不随切项目清空的键，长会话下无界增长。
       const stream = mockProjectEventStream();
@@ -1303,6 +1338,8 @@ describe("useProjectEventsSSE", () => {
     });
 
     it("任务终态到达不清掉前一批实体变更排队中的聚焦目标", async () => {
+      // A task terminal batch arrives while the entity batch's refreshProject is still in flight. Task changes have no navigation target;
+      // letting them go through the generic focus logic would rewrite the queued target to null, and the user would lose the auto-navigation that should happen.
       // 实体批次的 refreshProject 尚在途时，任务终态批次到达。任务变更没有可导航目标，
       // 若让它走通用聚焦逻辑会把排队的目标改写成 null，用户丢失本该发生的自动导航。
       const stream = mockProjectEventStream();

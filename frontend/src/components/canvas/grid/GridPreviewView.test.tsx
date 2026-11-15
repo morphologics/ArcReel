@@ -7,6 +7,7 @@ import type { TaskItem } from "@/types";
 import type { NarrationSegment } from "@/types";
 import { GridPreviewView } from "./GridPreviewView";
 
+// The panel has its own tests; here we only care about the batch preview's tier and sheet count, to avoid pulling in its data loading.
 // 面板本身有独立测试，这里只关心批次预览的档位与张数，避免拉进它的数据加载。
 vi.mock("./GridPreviewPanel", () => ({
   GridPreviewPanel: () => <div data-testid="grid-panel" />,
@@ -98,6 +99,7 @@ describe("GridPreviewView 的档位与批次预览", () => {
 
     renderView(makeSegments(30));
 
+    // 30 cells at 25 per sheet split into 2 sheets; the summary's batch count must follow the sheet count, not the group count (there is only 1 group)
     // 30 格按 25 一张切成 2 张，摘要的批次数须跟随张数而非分组数（分组只有 1 个）
     await waitFor(() => expect(screen.getByText(/^1 组 · 2 张联合图 · 30 格/)).toBeInTheDocument());
     expect(screen.getByText(/5×5/)).toBeInTheDocument();

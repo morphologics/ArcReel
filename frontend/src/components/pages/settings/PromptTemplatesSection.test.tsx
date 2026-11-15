@@ -105,6 +105,7 @@ describe("PromptTemplatesSection", () => {
     expect(screen.getByText("外观描述")).toBeInTheDocument();
     expect(screen.getByTitle("外观描述")).toHaveTextContent("description");
     expect(screen.getByRole("heading", { name: "模版正文" })).toBeInTheDocument();
+    // The body scrolls horizontally: the code block itself is focusable so the keyboard can scroll
     // 正文会横向滚动：代码块自身可聚焦，键盘才能滚动
     const source = screen.getByRole("region", { name: "模版正文" });
     source.focus();

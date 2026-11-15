@@ -15,6 +15,15 @@ import { turnImageAttachments, turnPlainText } from "./utils";
 import { segmentWorkBlocks } from "./work-label";
 
 // ---------------------------------------------------------------------------
+// MessageRow — one item in the message flow, dispatched by turn type:
+//   user      -> right-aligned light bubble; in edit mode swapped in place for MessageEditor
+//   assistant -> bubble-less body text limited to 40em; work, thinking and other blocks go to ContentBlockRenderer,
+//               consecutive work merged into a column of one-line rows
+//   system    -> each block goes to ContentBlockRenderer (interrupt divider, failure cards, background tasks, etc.)
+// The action row keeps a permanent line height and shows only on hover or focus, so the list doesn't jump on hover. User messages right-align
+// "time, copy, edit"; Agent messages left-align "copy, time". When not editable the edit button isn't rendered
+// (not grayed out, no hint); whether the entry exists is itself the signal.
+// ---------------------------------------------------------------------------
 // MessageRow — 消息流里的一项，按 turn 类型分发：
 //   user      → 靠右的浅色气泡，编辑态原地换成 MessageEditor
 //   assistant → 无气泡的正文，正文限宽 40em；工序、思考等块交给 ContentBlockRenderer，
@@ -28,19 +37,19 @@ import { segmentWorkBlocks } from "./work-label";
 
 interface MessageRowProps {
   turn: Turn;
-  /** 该 turn 含流式草稿：末尾块仍在生成，不给操作行。 */
+  /** This turn contains the streaming draft: its last block is still generating, so no action row. / 该 turn 含流式草稿：末尾块仍在生成，不给操作行。 */
   streaming?: boolean;
-  /** 该 turn 是查看期间新到达的系统事件，其中的失败卡片播报给读屏。 */
+  /** This turn is a system event that arrived while viewing; its failure cards are announced to screen readers. / 该 turn 是查看期间新到达的系统事件，其中的失败卡片播报给读屏。 */
   announce?: boolean;
-  /** 此刻是否给出改写入口（判据见 utils.canEditUserTurn）。 */
+  /** Whether to offer the rewrite entry right now (criteria in utils.canEditUserTurn). / 此刻是否给出改写入口（判据见 utils.canEditUserTurn）。 */
   editable?: boolean;
-  /** 该条消息是否处于原地编辑态。 */
+  /** Whether this message is in in-place edit mode. / 该条消息是否处于原地编辑态。 */
   editing?: boolean;
-  /** 改写请求在途，编辑器锁定。 */
+  /** A rewrite request is in flight; the editor is locked. / 改写请求在途，编辑器锁定。 */
   submitting?: boolean;
   onStartEdit?: (turnUuid: string, text: string) => void;
   onCancelEdit?: () => void;
-  /** 提交改写。`images` 是编辑器里保留下来的图片附件，随改写后的文本一同提交。 */
+  /** Submit the rewrite. `images` are the image attachments kept in the editor, submitted together with the rewritten text. / 提交改写。`images` 是编辑器里保留下来的图片附件，随改写后的文本一同提交。 */
   onSubmitEdit?: (turnUuid: string, text: string, images: ImagePayload[]) => void;
 }
 
@@ -58,6 +67,9 @@ export function MessageRow({
   const turnUuid = turn.uuid;
 
   if (turn.type === "user" && editing && turnUuid) {
+    // The session may start running or pop a question card while editing. The editor isn't closed then (the user's half-written content must not
+    // be taken away), but resending must close together with editable: otherwise one rewrite would discard the round that just started
+    // together with the file changes it has already made.
     // 编辑期间会话可能开跑或弹出问答卡片。此时不关编辑器（用户写到一半的内容不能
     // 被夺走），但重新发送要跟着 editable 一起关：否则一次改写会把刚开的那一轮
     // 连同它已经做出的文件修改一起作废。
@@ -100,6 +112,7 @@ function UserMessage({ turn, onStartEdit }: { turn: Turn; onStartEdit?: (text: s
       ? [`data:${block.source.media_type};base64,${block.source.data}`]
       : [],
   );
+  // A question receipt is the answer to an Agent questionnaire, not a message the user wrote; no copy or rewrite
   // 问答回执是 Agent 问卷的答复，不是用户写的消息，没有复制与改写
   const isAnswer = blocks.some((block) => block.type === "question_answer");
   const showActions = !isAnswer && (Boolean(text.trim()) || images.length > 0);
@@ -113,13 +126,13 @@ function UserMessage({ turn, onStartEdit }: { turn: Turn; onStartEdit?: (text: s
               {images.length > 0 && (
                 <div className="flex flex-wrap gap-1.5">
                   {images.map((src, index) => (
-                    // react-doctor-disable-next-line react-doctor/no-array-index-as-key -- 图片块没有 id，顺序即身份，消息落库后不再重排或过滤
+                    // react-doctor-disable-next-line react-doctor/no-array-index-as-key -- image blocks have no id; order is identity, and messages are not reordered or filtered after being persisted / 图片块没有 id，顺序即身份，消息落库后不再重排或过滤
                     <ChatImage key={index} src={src} index={index + 1} />
                   ))}
                 </div>
               )}
               {blocks.map((block, index) => (
-                // react-doctor-disable-next-line react-doctor/no-array-index-as-key -- 优先用块 id；无 id 的块只会在末尾追加，不重排不过滤，序号即身份
+                // react-doctor-disable-next-line react-doctor/no-array-index-as-key -- prefer the block id; blocks without an id are only appended at the end, never reordered or filtered, so the index is identity / 优先用块 id；无 id 的块只会在末尾追加，不重排不过滤，序号即身份
                 <UserBlock key={block.id ?? index} block={block} index={index} />
               ))}
             </div>
@@ -153,7 +166,7 @@ function UserMessage({ turn, onStartEdit }: { turn: Turn; onStartEdit?: (text: s
   );
 }
 
-/** 用户消息里的文字原样显示（不按 Markdown 解析），图片在气泡顶部单独成排。 */
+/** Text in user messages is shown verbatim (not parsed as Markdown); images form their own row at the top of the bubble. / 用户消息里的文字原样显示（不按 Markdown 解析），图片在气泡顶部单独成排。 */
 function UserBlock({ block, index }: { block: ContentBlock; index: number }) {
   switch (block.type) {
     case "text":
@@ -187,7 +200,7 @@ function AgentMessage({ turn, streaming }: { turn: Turn; streaming: boolean }) {
                 streaming={streaming && index === blocks.length - 1}
               />
             );
-          // 连续的工序排成没有段距的一列，正文与工序之间才留段距
+          // Consecutive work rows form a column without segment gaps; gaps only between body text and work / 连续的工序排成没有段距的一列，正文与工序之间才留段距
           return work ? (
             <div key={items[0].block.id ?? items[0].index} className="flex min-w-0 flex-col">
               {items.map(renderBlock)}
@@ -212,14 +225,14 @@ function SystemEvent({ turn, announce }: { turn: Turn; announce: boolean }) {
   return (
     <div className="flex min-w-0 flex-col gap-1">
       {blocks.map((block, index) => (
-        // react-doctor-disable-next-line react-doctor/no-array-index-as-key -- 优先用块 id；无 id 的块只会在末尾追加，不重排不过滤，序号即身份
+        // react-doctor-disable-next-line react-doctor/no-array-index-as-key -- prefer the block id; blocks without an id are only appended at the end, never reordered or filtered, so the index is identity / 优先用块 id；无 id 的块只会在末尾追加，不重排不过滤，序号即身份
         <ContentBlockRenderer key={block.id ?? index} block={block} index={index} announce={announce} />
       ))}
     </div>
   );
 }
 
-/** 消息下方的操作行：占住行高，悬停所在消息或焦点进入时才显示。 */
+/** Action row under a message: holds its line height and shows only when its message is hovered or focus enters. / 消息下方的操作行：占住行高，悬停所在消息或焦点进入时才显示。 */
 function ActionRow({ align, children }: { align: "start" | "end"; children: React.ReactNode }) {
   return (
     <div

@@ -20,7 +20,7 @@ import {
 } from "./capabilityValues";
 import { DURATION_ERROR_KEY } from "./durationErrors";
 
-/** 数值维度：`nullable` 的留空表示不加约束，`min` 是允许的最小值。 */
+/** Numeric dimension: for `nullable`, empty means no constraint; `min` is the minimum allowed value. / 数值维度：`nullable` 的留空表示不加约束，`min` 是允许的最小值。 */
 const NUMBER_KEYS: Partial<Record<CapabilityKey, { min: number; nullable: boolean; float?: boolean }>> = {
   max_output_tokens: { min: 1, nullable: false },
   max_reference_images: { min: 0, nullable: false },
@@ -37,11 +37,14 @@ interface Props {
   capabilities: ProviderModelCapabilities;
   value: CapabilityOverrides;
   onChange: (next: CapabilityOverrides) => void;
-  /** 某个维度的输入是否可以保存；输入不合法时保存栏拦下保存。 */
+  /** Whether a dimension's input can be saved; when input is invalid the save bar blocks saving. / 某个维度的输入是否可以保存；输入不合法时保存栏拦下保存。 */
   onValidityChange: (key: string, valid: boolean) => void;
 }
 
 /**
+ * "Parameters this provider supports": one row per dimension with the original value and "Edit"; after editing, the whole dimension is replaced and editable, and "Restore" removes this dimension's override.
+ * The original value is what the runtime uses without edits (the matched entry's value, or the fallback result when no entry matches). Duration linkage constraints follow right below available durations.
+ *
  * 「这个供应商支持的参数」：每个维度一行原值与「修改」，修改后整维替换并可编辑，「恢复」即去掉这一维的覆盖。
  * 原值是没有修改时运行时采用的值（对应条目的值，对应不上条目时为回落的结果）。可选时长下方紧跟时长联动约束。
  */
@@ -50,19 +53,21 @@ export function ProviderCapabilityOverrides({ capabilities, value, onChange, onV
 
   const set = (key: CapabilityKey, next: unknown) => {
     const draft: Record<string, unknown> = { ...value };
+    // "Restore" unmounts this dimension's editor; inputs in the editor that weren't fixed withdraw their "invalid" state themselves on unmount
     // 「恢复」卸载这一维的编辑器，编辑器里没改对的输入在卸载时自己收回「不合法」
     if (next === undefined) {
       delete draft[key];
     } else {
       draft[key] = next;
     }
-    // 去掉的分辨率不再出现在时长联动约束里
+    // Removed resolutions no longer appear in duration linkage constraints / 去掉的分辨率不再出现在时长联动约束里
     if (key === "resolutions" && Array.isArray(next) && draft.duration_constraints) {
       draft.duration_constraints = withoutDroppedResolutions(draft.duration_constraints, next as string[]);
     }
     onChange(draft);
   };
 
+  // Duration linkage constraints are filled in per resolution: resolutions take the edited value; when there's no edit, take the resolutions already in the constraints
   // 时长联动约束按分辨率填写：分辨率取修改后的值，没有约束时取约束里已有的分辨率
   const effectiveResolutions = (() => {
     const resolutions = "resolutions" in value ? value.resolutions : capabilities.base.resolutions;
@@ -124,7 +129,7 @@ export function ProviderCapabilityOverrides({ capabilities, value, onChange, onV
   );
 }
 
-/** 点「修改」时的起始值：原值；不加约束的维度给一个可直接编辑的起点。 */
+/** Starting value when clicking "Edit": the original value; unconstrained dimensions get a starting point that can be edited directly. / 点「修改」时的起始值：原值；不加约束的维度给一个可直接编辑的起点。 */
 function initialOverride(key: CapabilityKey, base: unknown): unknown {
   if (base !== null && base !== undefined) return structuredClone(base);
   if (BOOL_KEYS.has(key)) return true;
@@ -145,6 +150,9 @@ interface EditorProps {
 }
 
 /**
+ * Value editor for one capability dimension, shared by "Parameters this provider supports" and "Model info". Text inputs only take `value` as the initial value on mount;
+ * when the value is changed externally (discard edits, adopt official value) the caller swaps `key` to remount; unmounted text inputs no longer block saving.
+ *
  * 一个能力维度的取值编辑器，「这个供应商支持的参数」与「模型信息」共用。文本输入只在挂载时取 `value` 作初值，
  * 外部改了取值（放弃修改、采用官方值）时由调用方换 `key` 重新挂载；卸载的文本输入不再拦着保存。
  */
@@ -272,6 +280,9 @@ interface ParsedInputProps {
 }
 
 /**
+ * Text input: parses on every input; when valid writes back the edit, when invalid shows a hint in place and lets the save bar block saving.
+ * On unmount it withdraws its own "invalid" report: after a remount with a new generation, or after constraint rows are removed along with a resolution, unfixed old inputs no longer block saving.
+ *
  * 文本输入：每次输入都解析，合法时写回修改，不合法时就地提示并让保存栏拦下保存。
  * 卸载时收回自己报的「不合法」：换一代重新挂载、约束行随分辨率删除后，没改对的旧输入不再拦着保存。
  */
@@ -319,10 +330,10 @@ interface ConstraintsEditorProps {
   onValidityChange: (valid: boolean) => void;
 }
 
-/** 时长联动约束：每个分辨率一行可选时长，另有「使用参考图时」一行；留空表示这一行不加约束。 */
+/** Duration linkage constraints: one row of available durations per resolution, plus a "When using reference images" row; empty means this row adds no constraint. / 时长联动约束：每个分辨率一行可选时长，另有「使用参考图时」一行；留空表示这一行不加约束。 */
 function ConstraintsEditor({ value, resolutions, onChange, onValidityChange }: ConstraintsEditorProps) {
   const { t } = useTranslation("dashboard");
-  // 各行输入是否合法只用来汇总成整维的合法性，不参与渲染
+  // Each row's input validity is only used to aggregate the whole dimension's validity; not used for rendering / 各行输入是否合法只用来汇总成整维的合法性，不参与渲染
   const invalid = useRef(new Set<string>());
   const markValid = (row: string, valid: boolean) => {
     if (valid) invalid.current.delete(row);

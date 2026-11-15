@@ -16,7 +16,7 @@ interface Props {
   iconOnly?: boolean;
 }
 
-/** 打开「编写提示词」弹窗的入口；本集的提示词编写在跑时禁用。 */
+/** Entry that opens the "Author prompts" dialog; disabled while the episode's prompt authoring is running. / 打开「编写提示词」弹窗的入口；本集的提示词编写在跑时禁用。 */
 export function PromptAuthoringButton({
   projectName,
   episode,

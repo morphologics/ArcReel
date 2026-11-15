@@ -60,6 +60,7 @@ describe("useProviderCatalog", () => {
   });
 
   it("does not write back a read that a later one took over", async () => {
+    // The first fetch and the post-save refetch share one cancellation domain: whichever slow one comes back writes a stale catalog and must be discarded.
     // 首拉与保存后的重取共用一个取消域：慢的那次回来时写下的是过期目录，必须被丢弃。
     const stale = createDeferred<{ providers: ProviderInfo[] }>();
     let call = 0;

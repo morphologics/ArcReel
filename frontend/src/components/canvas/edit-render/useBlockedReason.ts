@@ -6,6 +6,9 @@ import { formatNameList } from "@/utils/list-format";
 import { blockingIssues, issueUnitIds } from "./edit-render-model";
 
 /**
+ * Reason rendering is blocked: the number of blocking issues and the video units involved (named by their current position in this episode); reason is null when nothing blocks.
+ * ``narration`` has the same meaning as in {@link blockingIssues}.
+ *
  * 出片被阻断的原因：阻断 issue 的条数与涉及的视频单元（按本集里的当前位置称呼）；没有阻断时 reason 为 null。
  * ``narration`` 的含义同 {@link blockingIssues}。
  */

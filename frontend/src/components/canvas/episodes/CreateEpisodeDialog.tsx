@@ -28,14 +28,17 @@ import { SourceKindSelect } from "./SourceKindSelect";
 
 interface CreateEpisodeDialogProps {
   projectName: string;
-  /** 默认插在哪一集之后（集 ID）；缺省放在播出顺序末尾。 */
+  /** Which episode to insert after by default (episode ID); defaults to the end of the episode order. / 默认插在哪一集之后（集 ID）；缺省放在播出顺序末尾。 */
   initialAfter?: number | null;
   onClose: () => void;
-  /** 新建成功。收到新集 ID；随后的项目刷新没成功时为 null，新集不在项目数据里，不定位。 */
+  /** Created. Receives the new episode ID; null when the following project refresh failed, so the new episode is not in project data and is not located. / 新建成功。收到新集 ID；随后的项目刷新没成功时为 null，新集不在项目数据里，不定位。 */
   onCreated: (episode: number | null) => void;
 }
 
 /**
+ * Create an episode: pick a position (after any episode, end by default); title, hook and source are all optional.
+ * With an empty title the UI shows "Episode N" by episode order, which changes after inserts or reorders. Opens on mount; the caller unmounts to close.
+ *
  * 新建一集：选位置（插在任意一集之后，默认放在末尾），标题、钩子和原文都可选。
  * 标题留空时界面按播出位置显示「第 N 集」，插入或调序后随之变化。挂载即打开，关闭由调用方卸载。
  */
@@ -45,6 +48,7 @@ export function CreateEpisodeDialog({ projectName, initialAfter = null, onClose,
     <Dialog
       open
       onOpenChange={(next) => {
+        // Ignore Esc and backdrop clicks while the create request is in flight, so the episode isn't created without returning to the list
         // 新建请求在途时不响应 Esc 与遮罩点击，避免集已建好却没有回到列表
         if (!next && !busy) onClose();
       }}
@@ -82,7 +86,7 @@ function CreateEpisodeForm({
   const episodes = project?.episodes ?? [];
   const withSourceKind = project?.content_mode === "drama";
 
-  // 位置：null 放在末尾，数字为插在这一集之后
+  // Position: null for the end, a number to insert after that episode / 位置：null 放在末尾，数字为插在这一集之后
   const [after, setAfter] = useState<number | null>(
     initialAfter !== null && episodes.some((ep) => ep.episode === initialAfter) ? initialAfter : null,
   );
@@ -114,7 +118,7 @@ function CreateEpisodeForm({
         source_text: hasSource ? sourceText : null,
         source_kind: hasSource && withSourceKind ? sourceKind : null,
       });
-      // 刷新没成功时新集不在项目数据里，不定位过去
+      // If the refresh failed the new episode isn't in project data; don't locate it / 刷新没成功时新集不在项目数据里，不定位过去
       onCreated((await refreshAfterWrite(projectName, t)) === "success" ? episode : null);
     } catch (err) {
       setError(t("dashboard:episode_create_failed", { message: errMsg(err) }));

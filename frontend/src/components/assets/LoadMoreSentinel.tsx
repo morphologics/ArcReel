@@ -3,10 +3,14 @@ import { useTranslation } from "react-i18next";
 import { Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 
-/** 距离可视区底部还有这么远时就开始加载下一页，滚到底时内容多半已经到了。 */
+/** Start loading the next page when this far from the bottom of the viewport, so content has most likely arrived by the time you scroll to the end. / 距离可视区底部还有这么远时就开始加载下一页，滚到底时内容多半已经到了。 */
 const PREFETCH_MARGIN = "0px 0px 480px 0px";
 
 /**
+ * Sentinel at the end of a list: calls `onReach` to load the next page when it nears the scroll container's viewport.
+ * Re-observes every time the entry count changes, so if the first screen is not filled it keeps loading until filled or no next page.
+ * On load failure it shows the error and "Retry" and no longer triggers automatically.
+ *
  * 列表末尾的哨兵：进入滚动容器的可视区附近时调用 `onReach` 加载下一页。
  * 每次条目数变化都重新观察一次，首屏没有填满时会接着加载，直到填满或没有下一页。
  * 加载失败时显示错误与「重试」，不再自动触发。
@@ -23,7 +27,7 @@ export function LoadMoreSentinel({
   loading: boolean;
   error: string | null;
   itemCount: number;
-  /** 需传稳定引用。 */
+  /** Must be a stable reference. / 需传稳定引用。 */
   onReach: () => void;
   onRetry: () => void;
 }) {

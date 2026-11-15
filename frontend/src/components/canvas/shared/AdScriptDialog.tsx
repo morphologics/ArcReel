@@ -36,7 +36,7 @@ function readScriptOverwrite(err: unknown): ScriptOverwrite | null {
   return diagnostic?.script_overwrite ?? null;
 }
 
-/** 集页上唯一的广告/短片「AI 生成脚本」弹窗宿主：按 {@link useAdScriptStore} 的请求打开。 */
+/** The single ad/short "AI generate script" dialog host on the episode page: opens on requests from {@link useAdScriptStore}. / 集页上唯一的广告/短片「AI 生成脚本」弹窗宿主：按 {@link useAdScriptStore} 的请求打开。 */
 export function AdScriptHost({ projectName, episode }: { projectName: string; episode: number }) {
   const request = useAdScriptStore((s) => s.request);
   const close = useAdScriptStore((s) => s.close);
@@ -44,7 +44,7 @@ export function AdScriptHost({ projectName, episode }: { projectName: string; ep
   if (!request || request.projectName !== projectName || request.episode !== episode) return null;
   return (
     <AdScriptDialog
-      // 每次打开都重新初始化，不沿用上一次弹窗里未提交的输入。
+      // Re-initialize on every open; do not carry over uncommitted input from the previous dialog. / 每次打开都重新初始化，不沿用上一次弹窗里未提交的输入。
       key={`${projectName}:${episode}:${request.regenerate}`}
       request={request}
       onClose={close}
@@ -58,6 +58,9 @@ interface DialogProps {
 }
 
 /**
+ * Dialog for whole-script generation of ad/short: "AI generate script" submits directly and the result is written as the final script; "Hand to Agent" prefills the same request into the assistant.
+ * On a full redo the server first rejects and returns the loss list; after confirmation it resubmits with the list version. Instructions go only with this submission and are not saved.
+ *
  * 广告/短片整份生成的弹窗：「AI 生成脚本」直接提交，结果写成正式脚本；「交给 Agent」把同一请求预填给助手。
  * 整份重做时服务端先拒绝并交回丢失清单，确认后带上清单版本重新提交。附加指令只随本次提交，不保存。
  */
@@ -169,11 +172,14 @@ interface ButtonProps {
   projectName: string;
   episode: number;
   regenerate: boolean;
-  /** 页头动作用描边小按钮；空状态里的主操作用实心按钮。 */
+  /** Outlined small button for header actions; solid button for the primary action in the empty state. / 页头动作用描边小按钮；空状态里的主操作用实心按钮。 */
   prominent?: boolean;
 }
 
 /**
+ * Entry that opens the ad/short "AI generate script" dialog; with `regenerate` it reads "Regenerate script".
+ * While a task is running or the brief and products are missing it still shows but is disabled, and hovering explains why.
+ *
  * 打开广告/短片「AI 生成脚本」弹窗的入口；`regenerate` 时为「重新生成脚本」。
  * 任务在跑或缺创作灵感与商品时照常显示、置灰，悬停说明原因。
  */
@@ -197,6 +203,7 @@ export function AdScriptButton({ projectName, episode, regenerate, prominent = f
     </Button>
   );
   if (reason === null) return button;
+  // Disabled buttons receive no hover: the tooltip hangs on the outer span, and the reason is given separately as sr-only text describing the button
   // 置灰的按钮收不到悬停：提示挂在外层 span 上，原因另以 sr-only 文本作按钮的描述
   return (
     <Tooltip>
@@ -215,6 +222,9 @@ interface ProgressProps {
   projectName: string;
   episode: number;
   /**
+   * The episode has no final script yet: then the episode's script text task can only be whole-script generation; both queued and generating are shown.
+   * With a final script, only whole-script generation tasks are shown (sharing the occupancy slot with prompt authoring), and newly registered assets are listed after completion.
+   *
    * 本集还没有正式脚本：这时本集的脚本文本任务只可能是整份生成，排队与生成中都呈现。
    * 有正式脚本时只呈现整份生成任务（与提示词编写共用占用槽），并在完成后列出新登记的资产。
    */
@@ -225,6 +235,9 @@ interface ProgressProps {
 const STATUS_CLS = "flex gap-2.5 rounded-xl border border-primary/20 bg-primary/10 px-4 py-3 text-sm text-subtle-foreground";
 
 /**
+ * Task progress of ad/short whole-script generation: queued / generating, or the to-be-generated assets registered this run.
+ * Failure reasons and remedies are shown uniformly by `TextTaskFailureNote` at the top of the episode page, not repeated here.
+ *
  * 广告/短片整份生成的任务进度：排队 / 生成中，或本次登记的待生成资产。
  * 失败的原因与出路由集页顶部的 `TextTaskFailureNote` 统一呈现，这里不重复。
  */
@@ -284,7 +297,7 @@ export function AdScriptProgress({ projectName, episode, noScript, className = "
   );
 }
 
-/** 广告/短片在没有正式脚本时的置灰说明附带的去处：创作灵感在项目概览，商品在商品页，都从概览进入。 */
+/** Destinations attached to the disabled note for ad/short without a final script: the brief is in the project overview, products on the products page, both reached from the overview. / 广告/短片在没有正式脚本时的置灰说明附带的去处：创作灵感在项目概览，商品在商品页，都从概览进入。 */
 export function AdScriptInputsLink({ className = "" }: { className?: string }) {
   const { t } = useTranslation("dashboard");
   return (

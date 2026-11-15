@@ -5,6 +5,10 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 /**
+ * Strict guard: a complete ImagePrompt must contain scene + composition.{shot_type, lighting, ambiance}.
+ * Partial shapes (only scene, or composition missing fields) fall to the string fallback, so the structured editor doesn't crash
+ * accessing undefined fields while rendering.
+ *
  * 严格守卫：完整 ImagePrompt 必须含 scene + composition.{shot_type, lighting, ambiance}。
  * 部分形态（仅 scene 或 composition 缺字段）会落到 string fallback，避免结构化编辑器渲染时
  * 访问 undefined 字段崩溃。
@@ -21,6 +25,9 @@ export function isStructuredImagePrompt(value: unknown): value is ImagePrompt {
 }
 
 /**
+ * Strict guard: VideoPrompt must contain action + camera_motion + ambiance_audio; dialogue may be omitted,
+ * but if provided must be an array of {speaker, line}.
+ *
  * 严格守卫：VideoPrompt 必须含 action + camera_motion + ambiance_audio；dialogue 可省略，
  * 但若提供必须是 {speaker, line} 数组。
  */
@@ -44,12 +51,15 @@ export function isStructuredVideoPrompt(value: unknown): value is VideoPrompt {
   );
 }
 
-/** 文本形态切回结构化时的空结构：不解析原文本，字段留空由创作者重填。 */
+/** Empty structure when switching from text form back to structured: the original text isn't parsed; fields are left empty for the creator to refill. / 文本形态切回结构化时的空结构：不解析原文本，字段留空由创作者重填。 */
 export function emptyImagePrompt(): ImagePrompt {
   return { scene: "", composition: { shot_type: "Medium Shot", lighting: "", ambiance: "" } };
 }
 
 /**
+ * Same as above; drama's voiceover is carried by shot-level utterances, so its video_prompt has no dialogue (the backend
+ * DramaVideoPrompt strips that key on read under extra="forbid"), hence the drama branch asserts to the same type.
+ *
  * 同上；drama 的口播由分镜级 utterances 承载，其 video_prompt 不带 dialogue（后端
  * DramaVideoPrompt 在 extra="forbid" 下读时剥离该键），故 drama 分支断言到同一类型。
  */

@@ -17,7 +17,7 @@ const ASSET_KINDS = [
   { key: "product", labelKey: "overview_asset_product", route: WORKSPACE_ROUTE_PRODUCTS },
 ] as const;
 
-/** 资产图完成度一行：每类「已有 / 总数」链接到对应画廊，有过期时追加过期数。商品只在广告项目出现。 */
+/** Sheet completion line: each kind's "have / total" links to its gallery, with a stale count appended when any are stale. Products appear only in ad projects. / 资产图完成度一行：每类「已有 / 总数」链接到对应画廊，有过期时追加过期数。商品只在广告项目出现。 */
 export function AssetProgressLine({ data }: { data: ProjectData }) {
   const { t } = useTranslation("dashboard");
   const assets = data.status?.assets;

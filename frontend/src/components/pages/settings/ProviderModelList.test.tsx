@@ -83,19 +83,23 @@ describe("ProviderModelList", () => {
     render(<ProviderModelList providerId="acme" providerName="Acme" />);
 
     const lists = await screen.findAllByRole("list");
+    // The text group comes before the image group
     // 文本组在图片组之前
     expect(lists).toHaveLength(2);
     const [text, image] = lists;
     expect(within(text).getByText("Chat One")).toBeInTheDocument();
     expect(within(text).getByText("默认")).toBeInTheDocument();
     expect(within(text).getByText("$0.05/百万 token 输入，$0.15–0.3/百万 token 输出")).toBeInTheDocument();
+    // Show the model ID when there is no display name
     // 没有显示名时显示模型 ID
     expect(within(text).getAllByText("chat-legacy")).toHaveLength(2);
     expect(within(text).getByText("已下架")).toBeInTheDocument();
     expect(within(text).getByText("未定价")).toBeInTheDocument();
     expect(within(image).getByText("Image One")).toBeInTheDocument();
+    // Rows with changed model info carry "Modified"
     // 改过模型信息的行带「已修改」
     expect(within(image).getByText("已修改")).toBeInTheDocument();
+    // Providers without a model list endpoint have no "Fetch models"
     // 没有模型列表接口的供应商没有「获取模型」
     expect(screen.queryByRole("button", { name: "获取模型" })).not.toBeInTheDocument();
   });
@@ -125,11 +129,13 @@ describe("ProviderModelList", () => {
     await waitFor(() => expect(setEnabled).toHaveBeenCalledWith("acme", "chat-1", false));
     await waitFor(() => expect(toggle).not.toBeChecked());
     expect(screen.queryByText("默认")).not.toBeInTheDocument();
+    // The parent judges by enabled models (e.g. the conflict hint when a custom provider has no key), so notify it after enabling/disabling
     // 上层按已启用的模型判断（如自定义供应商不填密钥时的冲突提示），启停后要通知它
     expect(onModelsChanged).toHaveBeenCalledTimes(1);
   });
 
   it("refetches the rows when the saved provider multiplier changes", async () => {
+    // A multiplier of 0 is not marked "unpriced": the row's mark must follow when the multiplier crosses 0
     // 倍率为 0 时不标「未定价」：倍率跨过 0 后行上的标记要跟着变
     const list = vi.spyOn(API, "listProviderModels").mockResolvedValue({ models: MODELS, discoverable: false });
 
@@ -197,6 +203,7 @@ describe("ProviderModelList", () => {
     await user.click(await screen.findByRole("button", { name: "手动填写" }));
 
     const dialog = await screen.findByRole("dialog", { name: "手动填写模型信息" });
+    // The model name takes the search term; when adding a model the user chooses the type
     // 模型名称取搜索词；添加模型时类型由用户选
     expect(within(dialog).getByLabelText("模型名称")).toHaveValue("relay-flux");
     await user.type(within(dialog).getByLabelText("模型厂商"), "bfl");
@@ -238,11 +245,13 @@ describe("ProviderModelList", () => {
     expect(within(dialog).queryByRole("button", { name: "文本" })).not.toBeInTheDocument();
     expect(within(dialog).queryByRole("button", { name: "音频" })).not.toBeInTheDocument();
     expect(within(dialog).getByRole("button", { name: "视频" })).toBeInTheDocument();
+    // The first supported type is selected by default
     // 默认选中第一个受支持的类型
     expect(within(dialog).getByRole("button", { name: "图片" })).toHaveAttribute("aria-pressed", "true");
   });
 
   it("leaves the output limit of a hand-filled text model unset unless the user gives one", async () => {
+    // Prefilling a common value would be written as a model fact, capping text requests at that limit; when empty it is treated as unregistered
     // 预填一个常见值会作为模型事实写入，文本请求随之被压到这个上限；不填时按未登记处理
     const user = userEvent.setup();
     const added = item({ model_id: "relay-chat", official: false, media_type: "text" });
@@ -298,6 +307,7 @@ describe("ProviderModelList", () => {
     render(<ProviderModelList providerId="acme" providerName="Acme" />);
     await user.click(await screen.findByRole("button", { name: "获取模型" }));
 
+    // Enabled chat-1 is already added; disabled officially listed models are shown as recognized, and adding enables them
     // 已启用的 chat-1 已添加；停用的官方收录模型列为已识别，添加即启用
     expect(await screen.findByRole("checkbox", { name: /chat-2/ })).toBeChecked();
     expect(screen.getByText("另有 1 个已添加的模型未列出。")).toBeInTheDocument();

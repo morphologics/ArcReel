@@ -4,6 +4,7 @@ import { Toggle as TogglePrimitive } from "@base-ui/react/toggle"
 import { cva, type VariantProps } from "class-variance-authority"
 import { cn } from "cn"
 
+// Versus upstream: the invalid state uses a stronger red glow so it stays distinguishable from the border in both light and dark.
 // 相对上游：失败态使用较强红色光晕，在浅色和深色下都能与描边区分。
 const toggleVariants = cva(
   "group/toggle inline-flex items-center justify-center gap-1 rounded-lg text-sm font-medium whitespace-nowrap transition-all outline-none hover:bg-muted hover:text-foreground focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 disabled:pointer-events-none disabled:opacity-50 aria-invalid:border-destructive aria-invalid:ring-destructive/40 aria-pressed:bg-muted data-[state=on]:bg-muted [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4",
@@ -42,5 +43,5 @@ function Toggle({
   )
 }
 
-// react-doctor-disable-next-line react-doctor/only-export-components -- shadcn 原语的 cva 定义与组件同文件：@shadcn/lint 从组件所在文件读取 variant 与 size 名写进修正提示，拆到别的模块后提示里不再列出可用变体
+// react-doctor-disable-next-line react-doctor/only-export-components -- shadcn primitive cva definitions live in the component file: @shadcn/lint reads variant and size names from the component's file into its fix hints; moved to another module, the hints no longer list the available variants / shadcn 原语的 cva 定义与组件同文件：@shadcn/lint 从组件所在文件读取 variant 与 size 名写进修正提示，拆到别的模块后提示里不再列出可用变体
 export { Toggle, toggleVariants }

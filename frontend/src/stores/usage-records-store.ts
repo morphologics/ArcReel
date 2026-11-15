@@ -11,10 +11,10 @@ import type {
   UsageView,
 } from "@/types";
 
-/** 时间范围分段；`all` 不传 since，由服务端取最早记录日。 */
+/** Time range segment; `all` passes no since, and the server takes the earliest record date. / 时间范围分段；`all` 不传 since，由服务端取最早记录日。 */
 export type UsageTimeRange = "7d" | "30d" | "90d" | "all";
 
-/** 记录表与进行中区的状态筛选；不作用于 summary。 */
+/** Status filter for the records table and in-progress area; does not apply to summary. / 记录表与进行中区的状态筛选；不作用于 summary。 */
 export type UsageStatusFilter =
   | "all"
   | "pending"
@@ -22,17 +22,17 @@ export type UsageStatusFilter =
   | "failed"
   | "cancelled";
 
-/** 一屏筛选；`status` 之外的维度同时作用于 summary 与记录请求。 */
+/** One screen's filters; dimensions other than `status` apply to both summary and record requests. / 一屏筛选；`status` 之外的维度同时作用于 summary 与记录请求。 */
 export interface UsageRecordsFilters {
-  /** 「生成调用」不含 Agent 记录，「Agent 会话」按会话聚合 Agent 记录。 */
+  /** "Generation calls" excludes Agent records; "Agent sessions" aggregates Agent records by session. / 「生成调用」不含 Agent 记录，「Agent 会话」按会话聚合 Agent 记录。 */
   view: UsageView;
   range: UsageTimeRange;
-  /** 空串筛选端点试跑记录，null 表示不按项目筛。 */
+  /** Empty string filters endpoint trial-run records; null means no project filter. / 空串筛选端点试跑记录，null 表示不按项目筛。 */
   project: string | null;
   provider: string | null;
   model: string | null;
   mediaType: CallType | null;
-  /** 分镜 id；只有「需要关注」的连续失败条目会写入它，汇总接口不收这一维。 */
+  /** Shot id; only written by "needs attention" consecutive-failure entries; the summary API does not take this dimension. / 分镜 id；只有「需要关注」的连续失败条目会写入它，汇总接口不收这一维。 */
   segment: string | null;
   status: UsageStatusFilter;
 }
@@ -51,6 +51,9 @@ export const DEFAULT_USAGE_FILTERS: UsageRecordsFilters = {
 };
 
 /**
+ * Filter patch when switching views: the two views have different provider and model candidates, and media type, shot and status only belong to "Generation calls";
+ * carrying them over would only filter to empty results, so they are cleared too.
+ *
  * 切换视图的筛选补丁：两个视图的供应商、模型候选不同，媒体类型、分镜与状态只属于「生成调用」，
  * 带过去只会筛出空结果，一并清掉。
  */
@@ -74,14 +77,14 @@ const STATUS_FILTERS: readonly UsageStatusFilter[] = [
   "cancelled",
 ];
 
-/** URL query 的键前缀，与设置页其他 section 的参数区分开。 */
+/** Key prefix of URL query params, to distinguish them from other settings sections' params. / URL query 的键前缀，与设置页其他 section 的参数区分开。 */
 const QUERY_PREFIX = "u_";
 
 function isRange(value: string | null): value is UsageTimeRange {
   return value === "7d" || value === "30d" || value === "90d" || value === "all";
 }
 
-/** 从 URL query 读筛选；缺失或不认识的取值回落到默认。 */
+/** Read filters from the URL query; missing or unrecognized values fall back to defaults. / 从 URL query 读筛选；缺失或不认识的取值回落到默认。 */
 export function parseUsageFilters(search: string): UsageRecordsFilters {
   const params = new URLSearchParams(search);
   const get = (key: string) => params.get(`${QUERY_PREFIX}${key}`);
@@ -92,6 +95,7 @@ export function parseUsageFilters(search: string): UsageRecordsFilters {
   return {
     view: get("view") === "agent" ? "agent" : DEFAULT_USAGE_FILTERS.view,
     range: isRange(range) ? range : DEFAULT_USAGE_FILTERS.range,
+    // Endpoint trial-run records have an empty project name, which is different from "no project filter", so distinguish by whether the key is present.
     // 端点试跑记录的项目名是空串，它与「不筛项目」是两回事，故按是否有该键区分。
     project: project === null ? null : project,
     provider: get("provider"),
@@ -105,6 +109,9 @@ export function parseUsageFilters(search: string): UsageRecordsFilters {
 }
 
 /**
+ * Write the filters back into a URL query; dimensions equal to the default delete their key, so a clean view has a clean link.
+ * Mutates the passed params in place, keeping other sections' params as is.
+ *
  * 把筛选写回一份 URL query；等于默认值的维度删键，让干净的视图有干净的链接。
  * 就地改写传入的 params，其他 section 的参数原样保留。
  */
@@ -130,7 +137,7 @@ export function writeUsageFilters(
   return params;
 }
 
-/** 详情弹窗的记录 id 与筛选同住一份 query，但不带 `u_` 前缀。 */
+/** The detail dialog's record id lives in the same query as the filters, but without the `u_` prefix. / 详情弹窗的记录 id 与筛选同住一份 query，但不带 `u_` 前缀。 */
 export function parseUsageRecordId(search: string): number | null {
   const raw = new URLSearchParams(search).get("record");
   if (raw === null) return null;
@@ -139,6 +146,9 @@ export function parseUsageRecordId(search: string): number | null {
 }
 
 /**
+ * Start of a preset range: computed at local midnight before sending the timestamp, so early-morning calls are not counted in the previous day.
+ * `all` gives no start, and the server takes the earliest record date.
+ *
  * 预设范围的起点：按本地日零点算好再发时刻，凌晨的调用才不会被算进前一天。
  * `all` 不给起点，由服务端取最早记录日。
  */
@@ -150,12 +160,12 @@ export function rangeSince(range: UsageTimeRange, now: Date): string | undefined
   return start.toISOString();
 }
 
-/** 浏览器时区；服务端按它切天。 */
+/** Browser time zone; the server splits days by it. / 浏览器时区；服务端按它切天。 */
 export function browserTimeZone(): string {
   return Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
 }
 
-/** 「生成调用」是服务端的默认视图，不带参数：请求串保持与既有的一致。 */
+/** "Generation calls" is the server's default view and carries no param: the request string stays consistent with the existing one. / 「生成调用」是服务端的默认视图，不带参数：请求串保持与既有的一致。 */
 function viewParam(filters: UsageRecordsFilters): "agent" | undefined {
   return filters.view === "agent" ? "agent" : undefined;
 }
@@ -166,17 +176,19 @@ function statusesFor(status: UsageStatusFilter): readonly string[] {
   return [status];
 }
 
-/** summary 与记录共用的维度；比较它是否变化，决定要不要重取 summary。 */
+/** Dimensions shared by summary and records; whether they changed decides whether to refetch summary. / summary 与记录共用的维度；比较它是否变化，决定要不要重取 summary。 */
 function sharedDimensions(filters: UsageRecordsFilters): string {
   return [
-    // 视图决定筛选候选值列哪些项目、供应商与模型。
+    // The view decides which projects, providers and models the filter candidates list. / 视图决定筛选候选值列哪些项目、供应商与模型。
     filters.view,
     filters.range,
+    // null (no project filter) and empty string (endpoint trial run) are different, and the key must tell them apart.
     // null（不筛项目）与空串（端点试跑）是两回事，键里要能分开。
     filters.project === null ? "-" : `p:${filters.project}`,
     filters.provider ?? "",
     filters.model ?? "",
     filters.mediaType ?? "",
+    // The shot does not go into this key: the summary API does not take segment_id, so filtering only by shot need not refetch summary.
     // 分镜不进这个键：汇总接口不收 segment_id，只筛分镜时 summary 不必重取。
   ].join("|");
 }
@@ -189,18 +201,18 @@ interface UsageRecordsState {
   summaryFailed: boolean;
 
   records: UsageRecord[];
-  /** 「Agent 会话」视图的当前页；与 `records` 共用加载、失败、总数与分页状态。 */
+  /** Current page of the "Agent sessions" view; shares loading, failure, total and pagination state with `records`. / 「Agent 会话」视图的当前页；与 `records` 共用加载、失败、总数与分页状态。 */
   sessions: UsageAgentSession[];
   recordsLoading: boolean;
   recordsFailed: boolean;
-  /** 筛选后的总数（记录数或会话数，随视图），与当前页无关。 */
+  /** Total after filtering (records or sessions, per view), independent of the current page. / 筛选后的总数（记录数或会话数，随视图），与当前页无关。 */
   total: number;
-  /** 已翻过的页游标，`[0]` 恒为 null（第一页）。 */
+  /** Page cursors already visited; `[0]` is always null (first page). / 已翻过的页游标，`[0]` 恒为 null（第一页）。 */
   cursors: (string | null)[];
   pageIndex: number;
   nextCursor: string | null;
 
-  /** 无任务代表的 pending 调用；有任务的那部分由任务 store 提供。 */
+  /** Pending calls not represented by a task; the part with tasks is provided by the task store. / 无任务代表的 pending 调用；有任务的那部分由任务 store 提供。 */
   pendingRecords: UsageRecord[];
 
   detailId: number | null;
@@ -209,6 +221,9 @@ interface UsageRecordsState {
   detailFailed: boolean;
 
   /**
+   * Apply a set of filters: go back to the first page and refetch records and pending; refetch summary only when shared dimensions change;
+   * the section passes `refetchSummary` every time it opens, so KPIs and charts reflect calls that finished while away.
+   *
    * 应用一组筛选：回第一页重取记录与 pending，仅共用维度变化时重取 summary；
    * 区块每次打开都带 `refetchSummary`，让 KPI 与图表反映离开期间结束的调用。
    */
@@ -216,11 +231,11 @@ interface UsageRecordsState {
     filters: UsageRecordsFilters,
     options?: { refetchSummary?: boolean },
   ) => Promise<void>;
-  /** 手动刷新：按当前筛选重取全部三项。 */
+  /** Manual refresh: refetch all three by the current filters. / 手动刷新：按当前筛选重取全部三项。 */
   refresh: () => Promise<void>;
-  /** 只重取 summary：供应商显示名由服务端按请求语言渲染，切换语言后要重取。 */
+  /** Only refetch summary: provider display names are rendered by the server per request language, so refetch after switching language. / 只重取 summary：供应商显示名由服务端按请求语言渲染，切换语言后要重取。 */
   refreshSummary: () => Promise<void>;
-  /** 只重取 pending 调用，供进行中区非空时的兜底轮询使用。 */
+  /** Only refetch pending calls, for fallback polling while the in-progress area is non-empty. / 只重取 pending 调用，供进行中区非空时的兜底轮询使用。 */
   refreshPending: () => Promise<void>;
   goToPage: (direction: "prev" | "next") => Promise<void>;
   openDetail: (recordId: number) => Promise<void>;
@@ -253,7 +268,7 @@ interface RefreshRequest<T> {
   resolvers: Array<() => void>;
 }
 
-/** 同一目标的重叠刷新合并补跑一次；目标变化则作废旧请求，只保留最新目标。 */
+/** Overlapping refreshes of the same target merge into one rerun; a target change voids the old request and keeps only the latest target. / 同一目标的重叠刷新合并补跑一次；目标变化则作废旧请求，只保留最新目标。 */
 function createRefreshCoordinator<T>(
   run: (target: T, signal: AbortSignal) => Promise<void>,
 ): (key: string, target: T) => Promise<void> {
@@ -275,6 +290,7 @@ function createRefreshCoordinator<T>(
         queued = null;
       }
     } finally {
+      // Even when run throws unexpectedly, return to idle and settle queued callers, otherwise later requests of the same kind would only queue and never run.
       // run 意外抛出时也要回到空闲并结算排队方，否则之后的同类请求都只会排队、永不执行。
       queued?.resolvers.forEach((resolve) => resolve());
       active = null;
@@ -308,6 +324,9 @@ interface PageSlot {
 }
 
 /**
+ * List page requests. Both views write the same total and pagination state, so they share one coordinator:
+ * switching views voids the other view's in-flight request, so its late result cannot overwrite the current view's pagination.
+ *
  * 列表页请求。两个视图写同一组总数与分页状态，所以共用一个协调器：
  * 换视图即作废另一视图在途的请求，它晚到的结果不会再覆盖当前视图的分页。
  */
@@ -345,8 +364,10 @@ export const useUsageRecordsStore = create<UsageRecordsState>((set, get) => {
       if (signal.aborted) return;
       set({ summary, summaryLoading: false });
     } catch {
+      // When voided by a taker, do not touch shared state: loading belongs to the new round, and resetting it would interrupt it.
       // 被接管方作废时不碰共享状态：loading 归属新一轮，复位会打断它。
       if (signal.aborted) return;
+      // Do not keep the old summary after a failure: it belongs to the previous filters and would be taken as the current filters' result.
       // 失败后不保留旧 summary：它属于上一组筛选，留着会被当成当前筛选的结果。
       set({ summary: null, summaryLoading: false, summaryFailed: true });
     }
@@ -391,7 +412,7 @@ export const useUsageRecordsStore = create<UsageRecordsState>((set, get) => {
     }
   };
   const schedulePage = createRefreshCoordinator(runPage);
-  /** 当前视图的列表页：「生成调用」取记录，「Agent 会话」取会话。 */
+  /** List page of the current view: "Generation calls" fetches records, "Agent sessions" fetches sessions. / 当前视图的列表页：「生成调用」取记录，「Agent 会话」取会话。 */
   const fetchPage = (
     filters: UsageRecordsFilters,
     cursor: string | null,
@@ -418,6 +439,7 @@ export const useUsageRecordsStore = create<UsageRecordsState>((set, get) => {
   };
   const schedulePending = createRefreshCoordinator(runPending);
   const fetchPending = (filters: UsageRecordsFilters) => {
+    // The in-progress area is not affected by the time range: running calls should be visible no matter when they were queued.
     // 进行中区不受时间范围影响：正在跑的调用无论何时排队都该看得见。
     const query: UsageRecordsQuery = {
       projectName: filters.project ?? undefined,
@@ -441,6 +463,7 @@ export const useUsageRecordsStore = create<UsageRecordsState>((set, get) => {
       const previous = get().filters;
       const summaryStale = sharedDimensions(previous) !== sharedDimensions(filters);
       const first = get().summary === null && !get().summaryLoading;
+      // A new query resets the cursor first, so a refresh before the first page returns does not reuse the old query's page position.
       // 新查询先重置游标，避免第一页返回前的刷新沿用旧查询的分页位置。
       set({
         filters, pageIndex: 0, cursors: [null], nextCursor: null,
@@ -450,9 +473,10 @@ export const useUsageRecordsStore = create<UsageRecordsState>((set, get) => {
         summaryStale || first || options.refetchSummary
           ? fetchSummary(filters)
           : Promise.resolve(),
+        // Any filter change goes back to the first page: staying on an old cursor would page to a position that no longer exists.
         // 筛选变化一律回第一页：停在旧游标上会翻到一个已经不存在的位置。
         fetchPage(filters, null, 0, [null]),
-        // Agent 记录是事后补录的终态行，没有进行中的调用。
+        // Agent records are terminal rows recorded after the fact; there are no in-progress calls. / Agent 记录是事后补录的终态行，没有进行中的调用。
         filters.view === "agent" ? Promise.resolve() : fetchPending(filters),
       ]);
     },

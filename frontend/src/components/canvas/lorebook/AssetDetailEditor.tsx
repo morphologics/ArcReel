@@ -67,7 +67,7 @@ function EditorSection({
   children,
 }: {
   title: string;
-  /** 区块只有一个输入框时，标题即它的标签。 */
+  /** When a section has only one input, the heading is its label. / 区块只有一个输入框时，标题即它的标签。 */
   htmlFor?: string;
   action?: ReactNode;
   children: ReactNode;
@@ -96,20 +96,24 @@ export interface AssetDetailEditorProps {
   assetType: AssetSheetType;
   name: string;
   asset: GalleryAssetSource;
-  /** 产物清单对这张资产图的判定；未取到时按条目上是否登记了资产图展示。 */
+  /** The artifact manifest's verdict on this asset sheet; when unavailable, display by whether the entry has a sheet registered. / 产物清单对这张资产图的判定；未取到时按条目上是否登记了资产图展示。 */
   sheetStatus: AssetSheetStatusRow | undefined;
-  /** 资产图任务占用中。 */
+  /** An asset sheet task holds the lock. / 资产图任务占用中。 */
   generating: boolean;
   writing?: boolean;
   readOnly: boolean;
   onGenerate: (name: string) => unknown;
-  /** 改名已提交时调用。 */
+  /** Called when a rename has been submitted. / 改名已提交时调用。 */
   onRenamed: (from: string, to: string) => void;
-  /** 头部右侧的上一个与下一个。 */
+  /** Previous and next on the right of the header. / 头部右侧的上一个与下一个。 */
   navigation?: ReactNode;
 }
 
 /**
+ * Details editor for one asset, inside the details Sheet. An asset is one editing unit: description, voice style, brand and selling points
+ * go into unsaved changes and are saved together from the bar at the bottom of the Sheet; rename, upload, and adding/removing aliases run immediately.
+ * The four asset types share this editor; type differences only toggle field sections on or off.
+ *
  * 一个资产的详情编辑器，放在详情 Sheet 里。一个资产是一个编辑单元：描述、声音风格、品牌与卖点
  * 进入未保存修改，由 Sheet 底部的提示条统一保存；改名、上传、增删别名立即执行。
  * 四类资产共用这一个编辑器，类型差异只体现在字段区块的开关上。
@@ -157,10 +161,11 @@ export function AssetDetailEditor({
     leaveTitle: t("assets:edit_leave_title", { name }),
   });
   const { value, setValue } = unit;
-  // 区块里的上传、删除在途时，离开先等它们落定
+  // While uploads or deletes in a section are in flight, leaving waits for them to settle first / 区块里的上传、删除在途时，离开先等它们落定
   useLeaveGuard({ dirty: false, saving: writes.writing || writing, save: unit.save });
 
   const saving = unit.status === "saving";
+  // Renaming moves stored files, and interleaving with any in-flight write leaves orphan files under the old name, so all of them count as locked
   // 改名会搬动落盘文件，与任何在途写请求交错都会留下旧名孤儿文件，所以把它们都算进占用态
   const busy = generating || occupied || saving || writes.writing || writing;
 
@@ -205,6 +210,7 @@ export function AssetDetailEditor({
   /** `imageModel`: a model chosen for this request; none = the configured one. */
   const generate = (imageModel: string | null = null) => {
     if (busy || rejectIfAssetBusy(assetType, projectName, name, t, "assets:gallery_busy_hint")) return;
+    // The asset sheet is generated only from the description and original images: after the description changes, saving makes this sheet stale, which the server's current verdict cannot yet see
     // 资产图只由描述与原图生成：改了描述，保存后这张图就会过期，服务端此刻的判定还看不到
     const willBeStale = value.description !== unit.savedValue.description;
     void unit.saveAndGenerate(() => {
@@ -518,6 +524,7 @@ export function AssetDetailEditor({
                   title={t("assets:prompt_preview_title", { name })}
                   beforeOpen={unit.save}
                   saveFirst={unit.dirty}
+                  // "Save and preview" while a save is in flight would run a second concurrent save, and their settling order could let the old draft overwrite the new one
                   // 保存在途时再「保存并预览」会并发第二次保存，先后落定可能让旧草稿盖住新草稿
                   disabled={saving}
                   load={(signal) => API.previewAssetPrompt(projectName, assetType, name, value.description, { signal })}

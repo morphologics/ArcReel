@@ -4,6 +4,7 @@ import { Checkbox as CheckboxPrimitive } from "@base-ui/react/checkbox"
 import { cn } from "cn"
 import { CheckIcon } from "lucide-react"
 
+// Versus upstream: lower the input fill opacity to keep the light-layer hierarchy; the invalid state uses a full red border and a stronger glow.
 // 相对上游：降低 input 填充不透明度以保持浅底层级；失败态用完整红色描边与较强光晕。
 function Checkbox({ className, ...props }: CheckboxPrimitive.Root.Props) {
   return (

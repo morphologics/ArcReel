@@ -32,6 +32,7 @@ function customProvider(id: number, displayName: string, modelName: string): Cus
     discovery_format: "openai",
     base_url: "https://example.invalid",
     api_key_masked: "sk-***",
+    // Disabled models remain in /custom-providers, while candidates and the whole-page config list only enabled ones.
     // 停用的模型仍留在 /custom-providers 里，而候选与整页配置只列启用的。
     models: [
       {
@@ -61,6 +62,7 @@ describe("useDisplayNames", () => {
   });
 
   it("语言切换后重取目录译名，让已失去凭证的供应商也跟随语言", async () => {
+    // Candidates list only ready providers; only the catalog layer can give this one's name.
     // 候选只列 ready 供应商，这一条只有目录层给得出名字。
     const getProviders = vi
       .spyOn(API, "getProviders")
@@ -72,6 +74,7 @@ describe("useDisplayNames", () => {
 
     expect(result.current.providerNames.p).toBe("P 中文名");
     expect(result.current.modelNames["p/m-1"]).toBe("M 中文名");
+    // No duplicate request on mount: that copy is the one the caller just fetched.
     // 挂载时不重复请求：那一份就是调用方刚拉来的。
     expect(getProviders).not.toHaveBeenCalled();
 

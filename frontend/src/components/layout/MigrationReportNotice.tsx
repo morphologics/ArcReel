@@ -22,6 +22,9 @@ import { errMsg } from "@/utils/async";
 import type { EpisodeLedger } from "@/utils/episode-display";
 
 /**
+ * One-time notice after an upgrade: "This upgrade adjusted N items"; opening it shows a read-only report, and closing it records that on the server so it never appears again.
+ * The report comes from the workflow status and only appears when it is non-empty and not yet acknowledged.
+ *
  * 升级后的一次性提示：「本次升级调整了 N 项内容」，点开是只读报告，关闭后记到服务端、不再出现。
  * 报告由制作状态给出，只在非空且尚未确认过时出现。
  */
@@ -37,7 +40,7 @@ export function MigrationReportNotice({
   const { t } = useTranslation(["dashboard", "common"]);
   const [open, setOpen] = useState(false);
   const [dismissing, setDismissing] = useState(false);
-  // 只隐藏确认过的那一份：之后再有一次升级，新报告照常出现。
+  // Only hide the acknowledged one: if another upgrade happens later, the new report appears as usual. / 只隐藏确认过的那一份：之后再有一次升级，新报告照常出现。
   const [dismissedAt, setDismissedAt] = useState<string | null>(null);
 
   if (dismissedAt === report.migrated_at) return null;
@@ -49,6 +52,8 @@ export function MigrationReportNotice({
     if (dismissing) return;
     setDismissing(true);
     try {
+      // Acknowledge only the one shown. If the disk already has a new report or it was acknowledged elsewhere, the server does not acknowledge: refresh the workflow status,
+      // the new report appears as usual and the acknowledged one no longer does.
       // 只确认展示的这一份。盘上已换成新报告或已在别处确认时服务端不确认：刷新制作状态，
       // 新报告照常出现，已确认的不再出现。
       const { acknowledged } = await API.acknowledgeMigrationReport(projectName, report.migrated_at);

@@ -174,6 +174,7 @@ describe("EndpointImportDialog", () => {
     await userEvent.paste(workflow);
     await userEvent.click(screen.getByRole("button", { name: "识别" }));
 
+    // Pasted content has no file name, so the details header's "Source file" is not shown.
     // 粘进来的没有文件名——详情头部的「来源文件」因此不显示。
     expect(onSource).toHaveBeenCalledWith(workflow, "");
   });
@@ -210,6 +211,7 @@ describe("EndpointImportDialog", () => {
   });
 
   it("keeps the file the user picked last, whichever one finishes reading first", async () => {
+    // file.text() has no cancellable handle: choose A then B, and A finishing late should not replace B.
     // file.text() 没有可取消的句柄：先选 A 再选 B，A 读完得晚也不该把 B 顶掉。
     const onSource = vi.fn();
     renderDialog(validation(), { onSource });
@@ -235,6 +237,7 @@ describe("EndpointImportDialog", () => {
   });
 
   it("keeps what the user typed while a file was still being read", async () => {
+    // Editing the text box while a file is being read, the copy on screen is the one the user holds: the in-flight read coming back should not replace it, nor be used for detection.
     // 读文件期间改文本框，屏幕上这份才是用户手上那份：在途的读回来不该顶掉它，也不该拿它去识别。
     const onSource = vi.fn();
     renderDialog(validation(), { onSource });
@@ -267,6 +270,7 @@ describe("EndpointImportDialog", () => {
       { definition: COMFYUI_DEFINITION, onBindNodes, onCreateCopy },
     );
 
+    // The same-author same-name check waits until the name is changed in the editor, so no overwrite/copy choice is offered here.
     // 同作者同名的判定留到编辑器里改完名字再说，所以这里不给覆盖/副本的选择。
     expect(screen.queryByRole("button", { name: "覆盖" })).not.toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: "去绑定节点" }));
@@ -276,6 +280,7 @@ describe("EndpointImportDialog", () => {
   });
 
   it("drops a recognition result once the pasted text no longer matches it", async () => {
+    // Editing the text box after detection, the result in hand no longer describes the payload on screen: continuing would save the old one.
     // 识别完再改文本框，手上那份结果说的就不是屏幕上这份载荷了：继续下去存的是旧的那一份。
     const onBindNodes = vi.fn();
     renderDialog(validation({ import_shape: "comfyui_api_workflow" }), {
@@ -290,6 +295,7 @@ describe("EndpointImportDialog", () => {
 
     await userEvent.type(box, "-edited");
 
+    // The detection result is voided together with the shape it recognized; the action button reverts to its undetected look and is disabled.
     // 识别结果连同它认出的形状一起作废，动作按钮退回未识别时的样子并禁用。
     expect(screen.queryByRole("button", { name: "去绑定节点" })).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "导入" })).toBeDisabled();

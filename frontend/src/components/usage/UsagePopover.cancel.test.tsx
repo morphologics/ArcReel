@@ -17,6 +17,7 @@ import {
 
 const STARTED_AT = "2026-04-20T00:00:00Z";
 
+/** Entry reference attached by the backend: the shot at position `position` in the episode "Rainy Night". */
 /** 后端附上的条目指称：「雨夜」这一集里排第 `position` 位的分镜。 */
 function itemRef(itemId: string, position: number): EpisodeItemRef {
   return {

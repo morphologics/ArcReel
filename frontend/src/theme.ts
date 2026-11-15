@@ -1,6 +1,9 @@
 import { useSyncExternalStore } from "react";
 
 /**
+ * Theme preference: a local preference, not saved via the backend. Dark mode is decided by the .dark class on <html>.
+ * The inline script in index.html adds .dark before first render using the same storage key and the same rules, to avoid flashing the wrong theme; change both together.
+ *
  * 主题偏好：本机偏好，不经后端保存。深色由 <html> 上的 .dark 类决定。
  * index.html 的内联脚本在首屏渲染前按同一个存储键和同一套规则加上 .dark，避免先闪一下错误的主题；改这里时一起改。
  */
@@ -21,7 +24,7 @@ export function getThemePreference(): ThemePreference {
 }
 
 function systemPrefersDark(): boolean {
-  // 取不到系统偏好时按深色处理
+  // Treat as dark when the system preference is unavailable / 取不到系统偏好时按深色处理
   return typeof window.matchMedia !== "function" || window.matchMedia(SYSTEM_DARK_QUERY).matches;
 }
 
@@ -49,7 +52,7 @@ export function useThemePreference(): ThemePreference {
   return useSyncExternalStore(subscribe, getThemePreference);
 }
 
-/** 启动时调用一次：应用当前偏好，在跟随系统时随系统明暗实时切换，并跟随其他标签页改的偏好。 */
+/** Call once at startup: apply the current preference, switch live with the system light/dark when following the system, and follow preference changes made in other tabs. / 启动时调用一次：应用当前偏好，在跟随系统时随系统明暗实时切换，并跟随其他标签页改的偏好。 */
 export function initTheme() {
   applyTheme();
   window.addEventListener("storage", (event) => {

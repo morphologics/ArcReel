@@ -14,6 +14,7 @@ describe("ManualEntryDialog", () => {
 
     const dialog = await screen.findByRole("dialog", { name: "手动填写模型信息" });
     await user.type(within(dialog).getByLabelText("模型厂商"), "acme");
+    // The default type is text: a max output length of 0 is invalid and blocks OK
     // 默认类型是文本：最大输出长度填 0 不合法，拦下确定
     await user.type(within(dialog).getByLabelText("「最大输出长度」的值"), "0");
     expect(within(dialog).getByRole("button", { name: "确定" })).toBeDisabled();

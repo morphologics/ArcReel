@@ -37,11 +37,14 @@ type ListingState = { status: "loading" } | { status: "error"; message: string }
 interface DeletedProjectsDialogProps {
   open: boolean;
   onClose: () => void;
-  /** 有项目恢复回来，重新加载项目列表并返回结算值；刷新失败时不报告恢复成功。 */
+  /** Some project was restored: reload the project list and return the settlement value; if the refresh fails, do not report the restore as successful. / 有项目恢复回来，重新加载项目列表并返回结算值；刷新失败时不报告恢复成功。 */
   onRestored: () => Promise<RefreshProjectResult>;
 }
 
 /**
+ * "Deleted projects" on the project list page: each can be restored whole or permanently deleted. Restore runs directly (it can be deleted again), permanent delete asks for confirmation first.
+ * The component stays mounted on the page and only toggles the dialog, so holds of in-flight operations are not lost when the dialog closes.
+ *
  * 项目列表页的「已删除项目」：可以整体恢复或彻底删除。恢复直接执行（可以再删回去），彻底删除先二次确认。
  * 组件常驻在页面上、只切换对话框开合，关闭对话框时在途操作的占用不会丢。
  */
@@ -76,6 +79,9 @@ export function DeletedProjectsDialog({ open, onClose, onRestored }: DeletedProj
   const titleOf = (project: DeletedProject) => getProjectDisplayName(project.title, project.name);
 
   /**
+   * Projects the server confirmed as moved are removed from the list immediately without waiting for a refetch, so they cannot be acted on once more after the hold is released.
+   * Then refetch once more: the voided in-flight list may include projects deleted in the meantime.
+   *
    * 服务端已确认移走的项目立即从列表里拿掉，不等重拉，免得解除占用后又能被操作一次。
    * 再重拉一次：作废的在途列表可能带着这期间新删除的项目。
    */
@@ -101,6 +107,7 @@ export function DeletedProjectsDialog({ open, onClose, onRestored }: DeletedProj
     try {
       const { name } = await API.restoreDeletedProject(project.id);
       dropProject(project.id);
+      // The success toast is only shown after the project list refresh succeeds: on failure there is already a refresh-failure toast, and it stays silent when voided by a new refresh or leaving the page.
       // 成功提示只在项目列表刷新成功后给：失败时已有刷新失败的提示，被新一轮刷新或离开页面作废时静默。
       if ((await onRestored()) !== "success") return;
       const title = titleOf(project);
@@ -208,7 +215,7 @@ export function DeletedProjectsDialog({ open, onClose, onRestored }: DeletedProj
   );
 }
 
-/** 彻底删除已删除项目的二次确认：不可恢复。`project` 为 null 时关闭。 */
+/** Confirmation for permanently deleting a deleted project: not recoverable. Closed when `project` is null. / 彻底删除已删除项目的二次确认：不可恢复。`project` 为 null 时关闭。 */
 function PurgeDeletedProjectDialog({
   project,
   title,
@@ -225,7 +232,7 @@ function PurgeDeletedProjectDialog({
   const { t } = useTranslation(["dashboard", "common"]);
   const [running, setRunning] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  // 关闭动画期间沿用上一次的内容；换了项目时清掉上一次的错误
+  // Keep the previous content during the close animation; clear the previous error when the project changes / 关闭动画期间沿用上一次的内容；换了项目时清掉上一次的错误
   const [shown, setShown] = useState({ project, title });
   if (project !== null && project !== shown.project) {
     setShown({ project, title });
@@ -251,7 +258,7 @@ function PurgeDeletedProjectDialog({
     <AlertDialog
       open={project !== null}
       onOpenChange={(next) => {
-        // 提交中不响应 Esc，避免请求还在途时对话框先消失
+        // Ignore Esc while submitting, so the dialog does not disappear while the request is still in flight / 提交中不响应 Esc，避免请求还在途时对话框先消失
         if (!next && !running) onClose();
       }}
     >

@@ -18,10 +18,10 @@ import { errMsg, voidCall } from "@/utils/async";
 
 import { ConfigIssueNotice } from "./settings/ConfigIssueNotice";
 
-/** Agent 会话启动时拼进系统提示的语言规范模版，正文在「提示词模版」中查看。 */
+/** Language rules template spliced into the system prompt at Agent session start; view its body under "Prompt templates". / Agent 会话启动时拼进系统提示的语言规范模版，正文在「提示词模版」中查看。 */
 const AGENT_LANGUAGE_RULE_ID = "text/agent_language_rule";
 
-/** 运行参数编辑单元：输入框里的原始字符串，保存时再转成数字。 */
+/** Runtime parameter edit unit: raw strings from the inputs, converted to numbers on save. / 运行参数编辑单元：输入框里的原始字符串，保存时再转成数字。 */
 interface AgentRuntimeFields {
   cleanupDelaySeconds: string;
   maxConcurrentSessions: string;
@@ -50,6 +50,9 @@ function buildPatch(fields: AgentRuntimeFields, saved: AgentRuntimeFields): Syst
 }
 
 /**
+ * Global setting "ArcReel Agent": header note -> Agent provider list -> runtime parameters under a collapsed "Advanced" -> language rules note.
+ * Adding/editing/deleting Agent providers and switching the active one are immediate actions; only runtime parameters go into the edit unit, submitted by the shell's bottom save bar.
+ *
  * 全局设置「ArcReel Agent」：页头说明 → Agent 供应商列表 → 默认折叠的「高级」运行参数 → 语言规范说明。
  * Agent 供应商的增改删与切换生效是即时动作；只有运行参数进入编辑单元，由外壳底行的保存栏提交。
  */
@@ -110,7 +113,7 @@ function RuntimeSettings() {
   }, []);
 
   useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect -- mount 时异步拉取配置后回写，属于受控的初始化加载
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- write back after the async config fetch on mount; a controlled initial load / mount 时异步拉取配置后回写，属于受控的初始化加载
     void load();
   }, [load]);
 

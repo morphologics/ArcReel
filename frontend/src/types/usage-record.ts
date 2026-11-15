@@ -1,15 +1,15 @@
 import type { EpisodeItemRef } from "./project";
 import type { CallType } from "./provider";
 
-/** 调用状态词汇，与后端 `CallStatus` 一致。 */
+/** Call status vocabulary, consistent with backend `CallStatus`. / 调用状态词汇，与后端 `CallStatus` 一致。 */
 export type UsageRecordStatus = "pending" | "success" | "failed" | "cancelled";
 
-/** 一次供应商调用在列表里的投影；`user_id` 不出现在响应中。 */
+/** Projection of one provider call in the list; `user_id` does not appear in responses. / 一次供应商调用在列表里的投影；`user_id` 不出现在响应中。 */
 export interface UsageRecord {
   id: number;
-  /** 端点试跑记录为空串。 */
+  /** Empty string for endpoint trial-run records. / 端点试跑记录为空串。 */
   project_name: string;
-  /** 项目标题；项目已删除、读不到或未设标题时为 null，界面回退到项目名。 */
+  /** Project title; null when the project is deleted, unreadable or untitled, and the UI falls back to the project name. / 项目标题；项目已删除、读不到或未设标题时为 null，界面回退到项目名。 */
   project_title?: string | null;
   purpose: string | null;
   task_id: string | null;
@@ -20,21 +20,21 @@ export interface UsageRecord {
   status: UsageRecordStatus;
   error_code: string | null;
   error_params: Record<string, unknown> | null;
-  /** 供应商返回的失败原文，无错误码时按它渲染。 */
+  /** Raw failure text returned by the provider, rendered when there is no error code. / 供应商返回的失败原文，无错误码时按它渲染。 */
   error_message: string | null;
   segment_id: string | null;
-  /** segment_id 所属集的标题与播出位置；ID 不带集前缀或集已不在账本里时为 null。 */
+  /** Title and episode order of the episode segment_id belongs to; null when the ID has no episode prefix or the episode is no longer in the ledger. / segment_id 所属集的标题与播出位置；ID 不带集前缀或集已不在账本里时为 null。 */
   segment_ref?: EpisodeItemRef | null;
   output_path: string | null;
   started_at: string;
   finished_at: string | null;
   duration_ms: number | null;
-  /** null 表示未定价，原因见 `unpriced_reason`；0 是定价为零。 */
+  /** Null means unpriced, reason in `unpriced_reason`; 0 means priced at zero. / null 表示未定价，原因见 `unpriced_reason`；0 是定价为零。 */
   cost_amount: number | null;
-  /** 未定价的原因码（后端 `UnpricedReason`）；已定价的记录为 null。 */
+  /** Unpriced reason code (backend `UnpricedReason`); null for priced records. / 未定价的原因码（后端 `UnpricedReason`）；已定价的记录为 null。 */
   unpriced_reason: string | null;
   currency: string;
-  /** 总输入，含缓存读写；未缓存输入 = input_tokens − 缓存读 − 两档缓存写。 */
+  /** Total input including cache reads/writes; uncached input = input_tokens − cache reads − both tiers of cache writes. / 总输入，含缓存读写；未缓存输入 = input_tokens − 缓存读 − 两档缓存写。 */
   input_tokens: number | null;
   output_tokens: number | null;
   cache_read_tokens: number | null;
@@ -51,14 +51,14 @@ export interface UsageRecord {
   session_id: string | null;
 }
 
-/** 参考图 / 首帧等输入素材，路径为项目内相对路径。 */
+/** Input materials such as reference images / first frame; paths are project-relative. / 参考图 / 首帧等输入素材，路径为项目内相对路径。 */
 export interface UsageRecordInputImage {
   path: string;
   label?: string | null;
   role?: string | null;
 }
 
-/** 详情比列表多三项重载荷，以及供应商是否还在供应商设置里。 */
+/** Details have three heavy payload items more than the list, plus whether the provider is still in provider settings. / 详情比列表多三项重载荷，以及供应商是否还在供应商设置里。 */
 export interface UsageRecordDetail extends UsageRecord {
   prompt: string | null;
   inputs: {
@@ -70,33 +70,33 @@ export interface UsageRecordDetail extends UsageRecord {
     parameters?: Record<string, unknown>;
   } | null;
   last_provider_response: unknown;
-  /** 调用的供应商还在供应商设置里（内置供应商，或没有删除的自定义供应商）；为真时模型名链接到供应商模型的设置。 */
+  /** The called provider is still in provider settings (a built-in provider, or a custom provider not deleted); when true the model name links to the provider model's settings. / 调用的供应商还在供应商设置里（内置供应商，或没有删除的自定义供应商）；为真时模型名链接到供应商模型的设置。 */
   provider_in_settings: boolean;
 }
 
-/** keyset 分页的一页；`next_cursor` 为空表示已到末页。 */
+/** One page of keyset pagination; an empty `next_cursor` means the last page. / keyset 分页的一页；`next_cursor` 为空表示已到末页。 */
 export interface UsageRecordPage {
   items: UsageRecord[];
   next_cursor: string | null;
-  /** 筛选后的总数，与当前页无关。 */
+  /** Total after filtering, independent of the current page. / 筛选后的总数，与当前页无关。 */
   total: number;
 }
 
-/** 一组调用的计数与分币种参考费用。 */
+/** Counts and per-currency reference cost of a group of calls. / 一组调用的计数与分币种参考费用。 */
 export interface UsageStatsBlock {
   calls: number;
   success: number;
   failed: number;
   cancelled: number;
-  /** 分母为 0 时为 null。 */
+  /** Null when the denominator is 0. / 分母为 0 时为 null。 */
   success_rate: number | null;
-  /** 只合计已定价的调用。 */
+  /** Totals only priced calls. / 只合计已定价的调用。 */
   cost: Record<string, number>;
-  /** 未定价（费用为 null）的调用数，不计入 `cost`。 */
+  /** Number of unpriced calls (cost null), not included in `cost`. / 未定价（费用为 null）的调用数，不计入 `cost`。 */
   unpriced_calls: number;
 }
 
-/** 趋势覆盖的本地日区间，两端均含。 */
+/** Local day range covered by the trend, both ends inclusive. / 趋势覆盖的本地日区间，两端均含。 */
 export interface UsageSummaryRange {
   since: string;
   until: string;
@@ -116,18 +116,18 @@ export interface UsageProjectRow extends UsageStatsBlock {
 
 export interface UsageProviderRow extends UsageStatsBlock {
   provider: string;
-  /** Agent 记录合并成的一项：`provider` 为空。 */
+  /** An item merged from Agent records: `provider` is empty. / Agent 记录合并成的一项：`provider` 为空。 */
   agent?: boolean;
 }
 
 export interface UsageModelRow extends UsageStatsBlock {
   provider: string;
   model: string;
-  /** Agent 记录按模型合并成的一项：`provider` 为空。 */
+  /** An item merged from Agent records by model: `provider` is empty. / Agent 记录按模型合并成的一项：`provider` 为空。 */
   agent?: boolean;
 }
 
-/** 构成表列表外的余量：被合并的分组数与它们的合计。 */
+/** Remainder outside the breakdown table list: the number of merged groups and their total. / 构成表列表外的余量：被合并的分组数与它们的合计。 */
 export interface UsageBreakdownOther extends UsageStatsBlock {
   groups: number;
 }
@@ -164,19 +164,19 @@ export type UsageAttention =
   | UsageFailureRateAttention
   | UsageConsecutiveFailuresAttention;
 
-/** 筛选候选值取全表 distinct，不随筛选变化。 */
+/** Filter candidates take distinct values over the whole table and do not change with filtering. / 筛选候选值取全表 distinct，不随筛选变化。 */
 export interface UsageFilterOptions {
   projects: string[];
-  /** 候选项目里读得到标题的那部分：项目名 → 标题。 */
+  /** The part of candidate projects whose titles can be read: project name -> title. / 候选项目里读得到标题的那部分：项目名 → 标题。 */
   project_titles?: Record<string, string>;
   providers: { provider: string; label: string }[];
   models: { provider: string; model: string }[];
 }
 
 export interface UsageSummary {
-  /** 无记录时为 null。 */
+  /** Null when there are no records. / 无记录时为 null。 */
   range: UsageSummaryRange | null;
-  /** 期间内汇总金额最大的币种；无记录时为 null。 */
+  /** Currency with the largest summed amount in the period; null when there are no records. / 期间内汇总金额最大的币种；无记录时为 null。 */
   primary_currency: string | null;
   kpi: UsageStatsBlock;
   daily: UsageDailyBucket[];
@@ -185,27 +185,27 @@ export interface UsageSummary {
   filter_options: UsageFilterOptions;
 }
 
-/** 使用记录的两个视图：「生成调用」不含 Agent 记录，「Agent 会话」只含 Agent 记录。 */
+/** Two views of usage records: "Generation calls" excludes Agent records, "Agent sessions" includes only Agent records. / 使用记录的两个视图：「生成调用」不含 Agent 记录，「Agent 会话」只含 Agent 记录。 */
 export type UsageView = "generation" | "agent";
 
-/** Agent 会话列表里的一行；合计只含落在筛选内的记录。 */
+/** One row in the Agent session list; totals include only records within the filter. / Agent 会话列表里的一行；合计只含落在筛选内的记录。 */
 export interface UsageAgentSession {
-  /** SDK 会话 id。 */
+  /** SDK session id. / SDK 会话 id。 */
   session_id: string;
-  /** 会话标题；会话元数据已删除时为 null，空串表示尚未命名。 */
+  /** Session title; null when the session metadata was deleted, empty string means not yet named. / 会话标题；会话元数据已删除时为 null，空串表示尚未命名。 */
   title: string | null;
   session_deleted: boolean;
   project_name: string;
   project_title?: string | null;
-  /** 会话用到的模型，按首次出现的先后。 */
+  /** Models used by the session, in order of first appearance. / 会话用到的模型，按首次出现的先后。 */
   models: string[];
   calls: number;
-  /** 总输入，含缓存读写。 */
+  /** Total input including cache reads/writes. / 总输入，含缓存读写。 */
   input_tokens: number;
   output_tokens: number;
-  /** 已定价记录的费用，按币种分别合计。 */
+  /** Costs of priced records, totaled per currency. / 已定价记录的费用，按币种分别合计。 */
   cost: Record<string, number>;
-  /** 未定价（费用为 null）的记录数，不计入 `cost`。 */
+  /** Number of unpriced records (cost null), not included in `cost`. / 未定价（费用为 null）的记录数，不计入 `cost`。 */
   unpriced_calls: number;
   first_started_at: string;
   last_started_at: string;
@@ -217,22 +217,22 @@ export interface UsageAgentSessionPage {
   total: number;
 }
 
-/** 会话明细里的一条记录：一轮里某个模型的用量与费用。 */
+/** One record in session details: usage and cost of one model in one round. / 会话明细里的一条记录：一轮里某个模型的用量与费用。 */
 export interface UsageAgentSessionRecord {
   id: number;
   started_at: string;
   status: UsageRecordStatus;
-  /** 这一轮的用户消息，超长时已截断。 */
+  /** User message of this round, truncated when too long. / 这一轮的用户消息，超长时已截断。 */
   prompt: string | null;
   provider: string;
   model: string;
-  /** 总输入，含缓存读写。 */
+  /** Total input including cache reads/writes. / 总输入，含缓存读写。 */
   input_tokens: number | null;
   output_tokens: number | null;
   cache_read_tokens: number | null;
   cache_write_5m_tokens: number | null;
   cache_write_1h_tokens: number | null;
-  /** null 表示未定价，原因见 `unpriced_reason`。 */
+  /** Null means unpriced, reason in `unpriced_reason`. / null 表示未定价，原因见 `unpriced_reason`。 */
   cost_amount: number | null;
   unpriced_reason: string | null;
   currency: string;

@@ -24,7 +24,7 @@ interface ReferencesSectionProps {
   onSave: (patch: Record<string, string[]>) => void | Promise<void>;
   disabled?: boolean;
   disabledHint?: string;
-  /** 内容确认页：本集新增项，非「不登记」的项与已登记资产一起作候选。 */
+  /** Content review page: this episode's new items; items not marked "Do not register" are candidates together with registered assets. / 内容确认页：本集新增项，非「不登记」的项与已登记资产一起作候选。 */
   newAssets?: readonly PlanNewAsset[];
 }
 
@@ -36,7 +36,7 @@ function countMissing(names: string[], dict: Record<string, unknown>): number {
   return n;
 }
 
-/** 角色引用可以是 `本体/衍生`：这种名字不在角色表顶层，未登记须按形态判定。 */
+/** A character reference can be `base/derivative`: such names are not at the top level of the character table, so unregistered status must be judged by form. / 角色引用可以是 `本体/衍生`：这种名字不在角色表顶层，未登记须按形态判定。 */
 function countMissingCharacters(names: string[], characters: Record<string, Character>): number {
   let n = 0;
   for (const name of names) if (resolveCharacterForm(characters, name) === undefined) n += 1;
@@ -56,6 +56,7 @@ export function ReferencesSection({
 }: ReferencesSectionProps) {
   const { t } = useTranslation("dashboard");
   const project = useProjectsStore((s) => s.currentProjectData);
+  // Use useMemo to materialize the `?? {}` fallback into a stable reference, avoiding hook deps recomputing every time
   // 用 useMemo 把 `?? {}` fallback 物化成稳定引用，避免 hook deps 每次重算
   const candidates = useMemo(
     () =>
@@ -78,8 +79,10 @@ export function ReferencesSection({
   const isEmpty = totalCount === 0;
 
   const totalStale = useMemo(() => {
+    // While the project is not fully loaded the dictionary is empty and would misjudge every referenced name as stale; skip the computation then
     // project 未加载完时字典为空，会把所有已引用名都误判为 stale；此时跳过计算
     if (!project) return 0;
+    // New items marked "Do not register" are removed from references on confirm, so they do not count as stale references.
     // 「不登记」的新增项确认时从引用中移出，不算失效引用。
     const listed = (names: string[], skipped: ReadonlySet<string>) => names.filter((name) => !skipped.has(name));
     return (

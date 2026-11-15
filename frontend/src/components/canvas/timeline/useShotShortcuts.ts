@@ -1,6 +1,6 @@
 import { useEffect, type RefObject } from "react";
 
-/** 焦点在可输入的控件里：J / K 是要输入的字符，不当作快捷键。 */
+/** Focus is in an input control: J / K are characters to type, not shortcuts. / 焦点在可输入的控件里：J / K 是要输入的字符，不当作快捷键。 */
 function isTypingTarget(target: Element): boolean {
   if (target instanceof HTMLTextAreaElement || target instanceof HTMLSelectElement) return true;
   if (target instanceof HTMLInputElement) {
@@ -16,18 +16,22 @@ export function isApplePlatform(): boolean {
 }
 
 interface ShotShortcutsOptions {
-  /** 快捷键只在焦点位于这个容器内（或页面没有焦点元素）时生效，不抢 Agent 面板、页头与弹层的按键。 */
+  /** Shortcuts only work when focus is inside this container (or the page has no focused element); they do not steal keys from the Agent panel, header or popovers. / 快捷键只在焦点位于这个容器内（或页面没有焦点元素）时生效，不抢 Agent 面板、页头与弹层的按键。 */
   rootRef: RefObject<HTMLElement | null>;
-  /** 回调需传稳定引用（useCallback）。 */
+  /** Callbacks must be stable references (useCallback). / 回调需传稳定引用（useCallback）。 */
   onPrev: () => void;
   onNext: () => void;
-  /** ⌘S / Ctrl+S；传入时整页拦下浏览器的保存快捷键，不传时不拦截。 */
+  /** ⌘S / Ctrl+S; when passed, the browser's save shortcut is intercepted page-wide; when not passed, nothing is intercepted. / ⌘S / Ctrl+S；传入时整页拦下浏览器的保存快捷键，不传时不拦截。 */
   onSave?: () => void;
-  /** 切换分镜暂不可用（改序、增删在途）。 */
+  /** Shot switching is temporarily unavailable (reorder, add/remove in flight). / 切换分镜暂不可用（改序、增删在途）。 */
   navDisabled: boolean;
 }
 
 /**
+ * Shot view shortcuts: J / K switch to the next and previous shot, ignored while focus is in an input; ⌘S (Ctrl+S on Windows) saves the current shot,
+ * also inside inputs. Popovers render outside the container; while one is open nothing responds, only the browser default of ⌘S is blocked; keys during IME composition and
+ * combinations with other modifiers pass through.
+ *
  * 分镜视图的快捷键：J / K 切到下一个与上一个分镜，焦点在输入框里时不响应；⌘S（Windows 为 Ctrl+S）保存当前分镜，
  * 在输入框里也可用。弹层渲染在容器之外，打开时不响应，只拦下 ⌘S 的浏览器默认行为；输入法组合输入中的按键与
  * 带其他修饰键的组合都放行。
@@ -43,6 +47,7 @@ export function useShotShortcuts({ rootRef, onPrev, onNext, onSave, navDisabled 
 
       if ((event.metaKey || event.ctrlKey) && !event.altKey && !event.shiftKey && key === "s") {
         if (!onSave) return;
+        // With focus in a popover or the Agent panel the shot is not saved, but the browser's "Save page" is still blocked
         // 焦点在弹层或 Agent 面板里时不保存分镜，但浏览器的「保存网页」同样拦下
         event.preventDefault();
         if (inScope) onSave();

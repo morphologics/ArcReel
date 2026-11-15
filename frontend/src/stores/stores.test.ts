@@ -65,6 +65,7 @@ describe("stores", () => {
     app.setAssistantToolActivitySuppressed(true);
     expect(useAppStore.getState().assistantToolActivitySuppressed).toBe(true);
 
+    // pushToast only writes the toast, with no side-effect write into workspaceNotifications
     // pushToast 只写 toast，不副作用写入 workspaceNotifications
     app.pushToast("hello");
     expect(useAppStore.getState().toast?.text).toBe("hello");
@@ -72,6 +73,7 @@ describe("stores", () => {
     expect(useAppStore.getState().workspaceNotifications).toHaveLength(0);
     useAppStore.setState({ toast: null });
 
+    // pushNotification writes both, passing tone and target correctly
     // pushNotification 同时写两者，tone 与 target 正确传递
     app.pushNotification("task failed", "error", {
       target: { type: "segment", id: "S1", route: "/episodes/1" },
@@ -226,6 +228,7 @@ describe("stores", () => {
     ]);
     assistant.setEditingTurnUuid("old-anchor");
 
+    // Switching sessions (including switching to a new branch after a rewrite) goes through exactly this rebuild path
     // 切换会话（含改写后切到新分支）走的就是这条重建路径
     assistant.resetTimeline();
 
@@ -239,6 +242,7 @@ describe("stores", () => {
   it("setEntries merges by seq instead of overwriting newer local entries", () => {
     const assistant = useAssistantStore.getState();
     assistant.resetTimeline();
+    // The send response lands seq 2 first; the late cold read's whole frame has only seq 0-1
     // 发送响应先落 seq 2；迟到的冷读整帧只有 seq 0-1
     assistant.appendEntry({ seq: 2, type: "user", uuid: "sent", content: [{ type: "text", text: "新" }] });
     assistant.setEntries([
@@ -272,6 +276,8 @@ describe("stores", () => {
   });
 
   it("does not throw when a draft payload from the network omits content (SSE boundary is cast, not validated)", () => {
+    // useAssistantSession uses an `as DraftState` type assertion on SSE draft events,
+    // with no runtime validation; if a backend payload lacks the content field, fall back to an empty array here rather than crash.
     // useAssistantSession 对 SSE draft 事件做的是 `as DraftState` 类型断言，
     // 无运行时校验；后端载荷若缺 content 字段，这里应兜底为空数组而非崩溃。
     const assistant = useAssistantStore.getState();
@@ -284,6 +290,7 @@ describe("stores", () => {
 
   it("does not treat a fresh draft as replaced by a stale committed message_id after a full setState reset", () => {
     const assistant = useAssistantStore.getState();
+    // First commit an authoritative assistant entry (message_id enters the replacement index)
     // 先提交一条权威 assistant 条目（message_id 进入替换索引）
     assistant.resetTimeline();
     assistant.appendEntry({
@@ -293,8 +300,11 @@ describe("stores", () => {
       uuid: "a-1",
       content: [{ type: "text", text: "上一会话" }],
     });
+    // Whole-frame setState reset (bypassing store actions, equivalent to the test harness's reset)
     // 整帧 setState 重置（绕过 store action，等价于测试 harness 的 reset）
     useAssistantStore.setState(useAssistantStore.getInitialState(), true);
+    // A new session reuses a draft with the same message_id: the replacement index should self-heal from the new (empty) entries,
+    // so draftTurn is not misjudged as replaced by the previous session's stale message_id
     // 新会话复用同一 message_id 的 draft：替换索引应按新（空）entries 自愈，
     // draftTurn 不被上一会话的陈旧 message_id 误判为已替换
     useAssistantStore.getState().setDraftSnapshot(
@@ -305,6 +315,11 @@ describe("stores", () => {
   });
 
   it("self-heals the incremental projector after a full setState reset even when the next cohort reuses stale head/tail entry object references", () => {
+    // The incremental projector's own prefix-continuation check compares only references of the first and last entries (an O(1) design,
+    // not comparing middle elements one by one). If the store layer did not additionally self-heal by the whole entries container reference,
+    // after a whole-frame reset bypassing resetTimeline, as long as the "new" cohort reuses the previous session's
+    // first/last entry object references (e.g. fixture constants shared between tests), the projector would misjudge it as
+    // "prefix continuation" and never fold the new content of middle entries, leaving turns at the previous session's stale values.
     // 增量投影器自身的前缀延续判定只比对 entries 首尾元素引用（O(1) 设计，
     // 不逐一比对中间元素）。若 store 层没有额外按整个 entries 容器引用自愈，
     // 绕过 resetTimeline 的整帧重置后，只要"新"cohort 复用了上一会话的
@@ -320,9 +335,11 @@ describe("stores", () => {
     assistant.setEntries([entryX, entryMid1, entryA]);
     expect(useAssistantStore.getState().turns).toHaveLength(3);
 
+    // Whole-frame setState reset (bypassing the resetTimeline action)
     // 整帧 setState 重置（绕过 resetTimeline action）
     useAssistantStore.setState(useAssistantStore.getInitialState(), true);
 
+    // The "new session" reuses the same pair of first/last entry object references; only the middle entries are new objects
     // "新会话"首尾复用同一对条目对象引用，仅中段条目是新对象
     useAssistantStore.getState().setEntries([entryX, entryMid2, entryA]);
     const turns = useAssistantStore.getState().turns;
@@ -331,6 +348,10 @@ describe("stores", () => {
   });
 
   it("keeps the incremental projector instance alive across appendEntry calls instead of rebuilding it every time", () => {
+    // If the store layer's projectorSource self-heal check compared "the new array about to be written" with "the last
+    // recorded value", their references would never be equal (every append constructs a new array), which would
+    // rebuild the projector on every append and deep-copy all history entries again, degrading to
+    // O(n^2) full replay.
     // store 层的 projectorSource 自愈检查若拿"即将写入的新数组"和"上一次
     // 记录值"比对，二者引用恒不相等（每次 append 都会重新构造数组），会
     // 导致每次追加都重建 projector、对全部历史条目重新深拷贝——退化为
@@ -359,6 +380,7 @@ describe("stores", () => {
         uuid: "a-5",
         content: [{ type: "text", text: "消息5" }],
       });
+      // Only the newly appended entry is deep-copied; if the projector were rebuilt, the first 5 would be cloned again too.
       // 只深拷贝新追加的这一条；若 projector 被重建，前 5 条也会被重新克隆。
       expect(cloneCalls).toBe(1);
     } finally {

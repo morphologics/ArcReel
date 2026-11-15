@@ -7,6 +7,7 @@ import type { PresetProvider } from "@/types/agent-credential";
 import { AddCredentialModal } from "./AddCredentialModal";
 
 beforeEach(() => {
+  // Default mock: no custom providers, the import button is hidden, existing assertions are unaffected
   // 默认 mock：没有自定义供应商，import 按钮不显示，不污染既有断言
   vi.spyOn(API, "listCustomProviders").mockResolvedValue({ providers: [] });
 });
@@ -262,9 +263,11 @@ describe("AddCredentialModal", () => {
       /display[_ ]name|显示名/i,
     ) as HTMLInputElement;
     expect(nameInput.value).toBe("DeepSeek");
+    // User renames
     // 用户改名
     fireEvent.change(nameInput, { target: { value: "My Custom Name" } });
     expect(nameInput.value).toBe("My Custom Name");
+    // Switch to another preset -> displayName follows the preset
     // 切换到另一个 preset → displayName 跟随预设切换
     fireEvent.click(screen.getByRole("button", { name: /Moonshot/i }));
     expect(nameInput.value).toBe("Moonshot");
@@ -310,6 +313,7 @@ describe("AddCredentialModal", () => {
         onClose={vi.fn()}
       />,
     );
+    // Change a non-api_key field to make it dirty, submit with api_key empty
     // 改一个非 api_key 字段触发 dirty,api_key 留空提交
     fireEvent.change(
       screen.getByLabelText(/display[_ ]name|显示名/i),
@@ -406,6 +410,7 @@ describe("AddCredentialModal", () => {
           onClose={vi.fn()}
         />,
       );
+      // Still no button after the effect runs (the default mock returns an empty array)
       // effect 跑完后仍无按钮（默认 mock 返回空数组）
       await waitFor(() => {
         expect(API.listCustomProviders).toHaveBeenCalled();
@@ -481,6 +486,7 @@ describe("AddCredentialModal", () => {
       const payload = onSubmit.mock.calls[0][0];
       expect(payload.from_custom_provider_id).toBe(42);
       expect(payload.preset_id).toBe("__custom__");
+      // When the prefilled address is unchanged, leave it to the server to take the provider's current address
       // 预填地址未改动时交给服务端取供应商的当前地址
       expect(payload.base_url).toBeUndefined();
       expect(payload.api_key).toBeUndefined();
@@ -542,6 +548,8 @@ describe("AddCredentialModal", () => {
         />,
       );
 
+      // Edit mode hides the button even with importable providers (avoids accidentally overwriting the existing credential)
+      // Wait a few event loops to make sure the effect does not fire (in edit mode the effect should not call the API)
       // edit 模式即使有可导入供应商也不显示按钮（避免误操作覆盖现有凭证）
       // 等几个事件循环确保 effect 不会触发（edit 模式 effect 不该调 API）
       await new Promise((r) => setTimeout(r, 0));
@@ -569,6 +577,7 @@ describe("AddCredentialModal", () => {
           onClose={vi.fn()}
         />,
       );
+      // Initial custom mode: baseUrl empty -> test button disabled
       // 初始 custom 模式：baseUrl 空 → 测试按钮禁用
       const btn = screen.getByTestId("test-connection");
       expect(btn).toBeDisabled();
@@ -600,8 +609,10 @@ describe("AddCredentialModal", () => {
           }),
         );
       });
+      // TestResultPanel headline renders (test_ok text OR-matched in three languages)
       // TestResultPanel headline 渲染（test_ok 文案三语 OR-match）
       await screen.findByText(/test[_ ]ok|连通正常|Kết nối/i);
+      // The result panel shows only the call address, no discovered-endpoint row
       // 结果面板只剩调用地址，没有发现端点行
       const panel = within(screen.getByRole("status"));
       expect(panel.getByText("https://api.deepseek.com/anthropic/v1/messages")).toBeInTheDocument();
@@ -617,6 +628,7 @@ describe("AddCredentialModal", () => {
       fireEvent.click(screen.getByTestId("test-connection"));
       await screen.findByText(/test[_ ]ok|连通正常|Kết nối/i);
 
+      // In edit state the parent passes a new `initial` literal on every render; that does not count as reopening
       // 编辑态的父组件每次渲染都传新的 initial 字面量，不算重开
       rerender(<AddCredentialModal open {...props} initial={{}} />);
       expect(screen.getByText(/test[_ ]ok|连通正常|Kết nối/i)).toBeInTheDocument();

@@ -10,7 +10,7 @@ import type { UsageRecordsFilters } from "@/stores/usage-records-store";
 import { costEntries, formatCurrencyAmount } from "@/utils/cost-format";
 import { formatRatio, projectTitleResolver, providerLabelResolver, usageProjectLabel } from "./usage-record-format";
 
-/** 构成表的三个维度；模型行按 (provider, model) 分组。 */
+/** The three dimensions of the breakdown table; model rows are grouped by (provider, model). / 构成表的三个维度；模型行按 (provider, model) 分组。 */
 type BreakdownDim = "project" | "provider" | "model";
 
 const DIMS: { value: BreakdownDim; labelKey: string }[] = [
@@ -25,20 +25,20 @@ const NAME_COL_KEYS: Record<BreakdownDim, string> = {
   model: "usage_col_model",
 };
 
-/** 成功率低于这条线的行用警示色，扫一眼就能挑出问题行。 */
+/** Rows with a success rate below this line use the warning color, so problem rows stand out at a glance. / 成功率低于这条线的行用警示色，扫一眼就能挑出问题行。 */
 const LOW_SUCCESS_RATE = 0.85;
 
-/** 名称列吃掉剩余宽度，三列数字固定宽度。 */
+/** The name column takes the remaining width; the three number columns have fixed width. / 名称列吃掉剩余宽度，三列数字固定宽度。 */
 const GRID_CLS = "grid grid-cols-[minmax(0,1fr)_3.5rem_4rem_6rem] items-center gap-x-2";
 
-/** 一行的展示数据；三个维度投影到同一形状后共用渲染。 */
+/** Display data for one row; the three dimensions are projected to the same shape and share rendering. / 一行的展示数据；三个维度投影到同一形状后共用渲染。 */
 interface BreakdownRowView {
   key: string;
   name: string;
-  /** 模型行的副标题是它的供应商。 */
+  /** A model row's subtitle is its provider. / 模型行的副标题是它的供应商。 */
   sub: string | null;
   stats: UsageStatsBlock;
-  /** `other` 行不可点击，它没有对应的筛选值。 */
+  /** The `other` row is not clickable; it has no corresponding filter value. / `other` 行不可点击，它没有对应的筛选值。 */
   filters: Partial<UsageRecordsFilters> | null;
   active: boolean;
 }
@@ -129,7 +129,7 @@ function BreakdownRow({
   const { i18n } = useTranslation("dashboard");
   const content = (
     <>
-      {/* 占比条：宽度是该行调用数占总调用数的比例，经 CSS 变量传入 */}
+      {/* Share bar: width is the row's call count as a share of total calls, passed via a CSS variable / 占比条：宽度是该行调用数占总调用数的比例，经 CSS 变量传入 */}
       <span
         aria-hidden="true"
         className="pointer-events-none absolute inset-y-1 left-0 w-(--share) rounded-r-xs bg-primary/10"
@@ -217,11 +217,14 @@ interface RowLabels {
   providerLabel: (provider: string | null) => string;
   projectLabel: (name: string) => string;
   other: (count: number) => string;
-  /** Agent 记录合并成的那一项的名称。 */
+  /** Name of the item into which Agent records are merged. / Agent 记录合并成的那一项的名称。 */
   agentSessions: string;
 }
 
 /**
+ * The three dimensions projected to the same row shape. The filter written on click differs by dimension: a model row also writes the provider,
+ * because a same-name model across providers is unique only together with its provider.
+ *
  * 三个维度投影成同一行形状。点击写入的筛选按维度不同：模型行同时写供应商，
  * 因为跨供应商的同名模型只有配上供应商才唯一。
  */
@@ -252,6 +255,7 @@ function buildRows(
   } else if (dim === "provider") {
     for (const row of summary.breakdown.provider.rows) {
       if (row.agent) {
+        // Clicking switches between the two views: Agent records filter by provider only in the "Agent sessions" view.
         // 点击在两个视图间切换：Agent 记录只在「Agent 会话」视图里按供应商筛选。
         const active = filters.view === "agent";
         rows.push({
@@ -297,6 +301,7 @@ function buildRows(
         sub: labels.providerLabel(row.provider),
         stats: row,
         active,
+        // Cancel withdraws only the model: the provider is a filter that can stand alone, left for the user to clear with its own chip.
         // 取消只撤回模型：供应商是可以单独成立的筛选，留着它由用户自己的 chip 清除。
         filters: active ? { model: null } : { provider: row.provider, model: row.model },
       });

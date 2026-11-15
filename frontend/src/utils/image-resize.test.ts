@@ -3,10 +3,13 @@ import { resizedSize } from "./image-resize";
 
 describe("resizedSize", () => {
   it.each([
+    // The A4 scan sample from the official docs: both sides within 1568 px, but the visual tokens exceed the budget.
     // 官方文档的 A4 扫描件样例：两边都在 1568 px 内，但视觉 token 超预算。
     { label: "A4 scan", input: [1075, 1520], expected: [924, 1307] },
+    // The long-side limit seems to allow 1568x882, but the token budget actually decides.
     // 长边限制看似给到 1568×882，实际由 token 预算决定。
     { label: "1080p screenshot", input: [1920, 1080], expected: [1456, 819] },
+    // A tall, narrow phone screenshot: only here does the side-length limit take over.
     // 细长的手机截屏：这里才轮到边长限制收口。
     { label: "phone screenshot", input: [1179, 2556], expected: [723, 1568] },
   ])("matches the documented sample for a $label", ({ input, expected }) => {

@@ -43,6 +43,9 @@ export const useAuthStore = create<AuthState>((set) => ({
       set({ token, isAuthenticated: true, isLoading: false });
       return;
     }
+    // With no token, first ask the backend whether auth is enabled. With `AUTH_ENABLED=false` the backend bypasses
+    // the whole chain, and the frontend should also skip the login page and go straight to the main UI. On timeout / network error / abnormal response shape
+    // fail closed back to the login page, so a broken response is not mistakenly let through as "no auth needed".
     // 无 token 时先问后端是否启用了鉴权。`AUTH_ENABLED=false` 时后端全链路
     // bypass，前端也应该跳过登录页直接进主界面。超时 / 网络异常 / 响应 shape
     // 异常时 fail-closed 退回到登录页，避免误把损坏响应当成"无需鉴权"放行。

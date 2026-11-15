@@ -15,6 +15,7 @@ function renderWithTrigger(props: { cancelling?: boolean; onDismiss?: () => void
     </>,
   );
   const trigger = screen.getByRole("button", { name: "trigger" });
+  // Focus stays on the trigger button until the preview returns
   // 预览返回前焦点停在触发按钮上
   trigger.focus();
   const dialog = (cancelling: boolean) => (

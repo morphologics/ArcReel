@@ -23,7 +23,7 @@ type ImportError = Error & {
   diagnostics?: ImportFailureDiagnostics;
 };
 
-/** 一次导入请求的参数：用户确认过升级报告后，之后的请求（含编号冲突的处理）都带上确认。 */
+/** Parameters of one import request: once the user has confirmed the upgrade report, later requests (including ID conflict handling) all carry the confirmation. / 一次导入请求的参数：用户确认过升级报告后，之后的请求（含编号冲突的处理）都带上确认。 */
 interface ImportAttempt {
   file: File;
   policy: ImportConflictPolicy;
@@ -35,6 +35,9 @@ function hasDiagnostics(diagnostics: ImportFailureDiagnostics | undefined): diag
 }
 
 /**
+ * Import a project ZIP: pick the file, ask the user to confirm when the package upgrade has a report, handle project ID conflicts, show import diagnostics, and enter the project on success.
+ * `element` contains the hidden file input and the dialogs; render it once in the page.
+ *
  * 导入项目 ZIP：选择文件、导入包升级有报告时请用户确认、处理项目编号冲突、展示导入诊断，导入成功后进入项目。
  * `element` 包含隐藏的文件输入与各个对话框，渲染在页面里一次即可。
  */
@@ -46,6 +49,8 @@ export function useProjectImport({ onImported }: { onImported: () => void }): {
   const { t } = useTranslation("dashboard");
   const [, navigate] = useLocation();
   const inputRef = useRef<HTMLInputElement>(null);
+  // Abort when the lobby unmounts; the import request itself does not take this signal (it is a write request, abort would only disconnect the client),
+  // it is only used after await to tell whether the user has left the lobby.
   // 大厅卸载时 abort；导入请求本身不接这个 signal（它是写入请求，abort 只会断开客户端），
   // 仅在 await 之后据此判断用户是否已离开大厅。
   const unmountAbortRef = useRef<AbortController | null>(null);
@@ -88,6 +93,7 @@ export function useProjectImport({ onImported }: { onImported: () => void }): {
           ? t("import_auto_fixed", { title, count: autoFixed.length })
           : t("lobby_import_succeeded", { title });
       if (left) {
+        // The user is no longer in the lobby: do not pull them into the new project, and there is no dialog to show diagnostics, so report the result with a toast that has an "Open project" button.
         // 用户已不在大厅：不把人拉回新项目，也没有对话框可展示诊断，结果改以带「打开项目」按钮的提示告知。
         pushToast(text, "success", {
           action: { label: t("lobby_import_open_project"), onClick: () => navigate(navigateTo) },
@@ -128,6 +134,7 @@ export function useProjectImport({ onImported }: { onImported: () => void }): {
         return;
       }
       setConflict(null);
+      // The API always returns a diagnostics report; when it has no entries the dialog shows nothing, so use a toast to explain the failure reason instead.
       // 接口总会带回一份诊断，没有任何条目时对话框不显示内容，改用提示说明失败原因。
       if (hasDiagnostics(error.diagnostics)) {
         setDiagnostics({ source: "failure", diagnostics: error.diagnostics });

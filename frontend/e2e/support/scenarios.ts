@@ -1,3 +1,6 @@
+// Region scenario registry: each page region registers its own scenarios under e2e/regions/ with defineRegionScenarios,
+// and each scenario runs the overflow probe and axe on all acceptance viewports. Scenarios focus on states that change available height:
+// opening the page, expanding panels that grow taller, opening popovers (open the popover first, then probe).
 // 区域场景注册：每个页面区域在 e2e/regions/ 下用 defineRegionScenarios 登记自己的场景，
 // 每个场景在全部验收视口上跑溢出探针与 axe。场景以会改变可用高度的状态为主：
 // 打开页面、展开会撑高的面板、打开弹层（弹层先打开再探测）。
@@ -7,30 +10,38 @@ import { waitForEntrance } from "./region-helpers.ts";
 import { RECORDED_ACCESS_TOKEN } from "./recorded.ts";
 import { expect, expectAccessible, expectReachableLayout, test, type ApiOverrides } from "./test.ts";
 
+// Screenshots are taken only at these viewports, maintained separately from the overflow probe's viewport list. Light theme is only sampled, at one viewport.
 // 截图只在这些视口拍，和溢出探针的视口清单分开维护。浅色只抽样，拍一个视口。
 const SCREENSHOT_PROJECTS = new Set(["1024x600", "1440x900", "2560x1440"]);
 const LIGHT_SCREENSHOT_PROJECTS = new Set(["1440x900"]);
 
 export interface RegionScenario {
   name: string;
-  /** 打开的路由。 */
+  /** Route to open. / 打开的路由。 */
   path: string;
-  /** 默认已登录。 */
+  /** Logged in by default. / 默认已登录。 */
   auth?: "signed-in" | "signed-out";
-  /** 系统明暗，默认深色；主题偏好保持默认的「跟随系统」。 */
+  /** System color scheme, dark by default; the theme preference stays at its default "follow system". / 系统明暗，默认深色；主题偏好保持默认的「跟随系统」。 */
   colorScheme?: "light" | "dark";
-  /** 替换录制的接口响应，用于长文本、多条目等压力变体。 */
+  /** Replace recorded API responses, for stress variants such as long text or many entries. / 替换录制的接口响应，用于长文本、多条目等压力变体。 */
   api?: ApiOverrides;
-  /** 等到区域渲染完成，例如等待标志性元素可见。 */
+  /** Wait until the region has rendered, e.g. wait for a landmark element to be visible. / 等到区域渲染完成，例如等待标志性元素可见。 */
   ready: (page: Page) => Promise<void>;
-  /** 把页面带到要探测的状态，例如展开面板、打开弹层。 */
+  /** Bring the page to the state to probe, e.g. expand a panel or open a popover. / 把页面带到要探测的状态，例如展开面板、打开弹层。 */
   act?: (page: Page) => Promise<void>;
   /**
+   * Set to true when the scenario itself is heavy (e.g. rendering a 500-item list and running axe on the whole page); the timeout is tripled:
+   * with many local workers in parallel such scenarios exceed the default 30 seconds.
+   *
    * 场景本身很重（如渲染 500 条列表再整页跑 axe）时设为 true，超时放宽为三倍：
    * 本机多 worker 并行时这类场景会超过默认的 30 秒。
    */
   slow?: boolean;
   /**
+   * Region screenshot, a regression gate: CI's frontend-e2e sets E2E_SCREENSHOTS=1, and a diff or missing baseline fails.
+   * Baselines are rendered in the official Playwright image (pnpm e2e:remote); host font rendering differs from it,
+   * so set the variable only when running against the container. Prefer screenshotting a region over the whole page.
+   *
    * 区域截图，是回归闸门：CI 的 frontend-e2e 设置 E2E_SCREENSHOTS=1，比对出差异或缺少基线即失败。
    * 基线在官方 Playwright 镜像里渲染（pnpm e2e:remote），宿主机的字体渲染与之不同，
    * 所以只在连容器运行时设置该变量。优先截区域而非整页。
@@ -38,6 +49,7 @@ export interface RegionScenario {
   screenshot?: {
     name: string;
     target?: (page: Page) => Locator;
+    /** The screenshot contains an address built from `window.location.origin`: the baseline is generated on the default port, so this one is not compared when running on another port. */
     /** 截图里有 `window.location.origin` 拼出的地址：基线按默认端口生成，换端口运行时这张不比对。 */
     showsOrigin?: boolean;
   };
@@ -58,6 +70,7 @@ export function defineRegionScenarios(region: string, scenarios: RegionScenario[
         await scenario.ready(page);
         await scenario.act?.(page);
 
+        // Both layout and axe check the final visible state, including popover backdrops and finite entrance animations in the background.
         // 布局与 axe 都检查最终可见状态，包含弹层遮罩与背景中的有限入场动画。
         await waitForEntrance(page.locator("body"));
         await expectReachableLayout(page);
@@ -70,6 +83,7 @@ export function defineRegionScenarios(region: string, scenarios: RegionScenario[
             testInfo.annotations.push({ type: "screenshot", description: `${screenshot.name}：非默认端口，不比对` });
             return;
           }
+          // toHaveScreenshot itself waits for document.fonts.ready and two consecutive identical frames.
           // toHaveScreenshot 自带等待 document.fonts.ready 与连续两帧一致。
           await expect(screenshot.target?.(page) ?? page).toHaveScreenshot(`${screenshot.name}.png`);
         }

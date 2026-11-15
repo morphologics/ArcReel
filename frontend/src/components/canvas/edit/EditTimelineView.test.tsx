@@ -84,7 +84,7 @@ const SCRIPT = { episode: 1, video_units: [{ unit_id: "E1U1" }, { unit_id: "E1U3
 
 const NO_TIMELINE = () => <p>no timeline</p>;
 
-/** 播放器显示的当前时间（秒），即播放头的位置。 */
+/** The current time shown by the player (seconds), i.e. the playhead position. / 播放器显示的当前时间（秒），即播放头的位置。 */
 function playheadSeconds(): number {
   const [minutes, seconds] = (screen.getByTestId("edit-playback-clock").textContent ?? "").split(":");
   return Number(minutes) * 60 + Number(seconds);
@@ -146,11 +146,13 @@ describe("EditTimelineView", () => {
     const [current, idle] = [screen.getByTestId("edit-player-video-0"), screen.getByTestId("edit-player-video-1")];
     expect(current).toHaveAttribute("src", "/api/v1/files/demo/reference_videos/E1U1.mp4?v=1");
     expect(current).toHaveAttribute("preload", "metadata");
+    // Do not preload the next clip before playback
     // 播放之前不预载下一段
     expect(idle).not.toHaveAttribute("src");
 
     fireEvent.click(screen.getByRole("button", { name: "播放" }));
 
+    // Clips of deleted units are skipped; the idle element preloads the next playable clip and is unlocked in this same click
     // 已删除单元的片段被跳过，空闲的元素预载下一个可播放片段，并在这次点击里一并解锁
     expect(idle).toHaveAttribute("src", "/api/v1/files/demo/reference_videos/E1U3.mp4?v=2");
     expect(vi.mocked(HTMLMediaElement.prototype.play).mock.contexts).toContain(idle);
@@ -209,6 +211,7 @@ describe("EditTimelineView", () => {
     await waitFor(() => {
       expect((screen.getByTestId("edit-player-video-0") as HTMLVideoElement).volume).toBe(0);
     });
+    // The next clip is loaded into the idle element only after playback starts
     // 下一段在开始播放后才装进空闲元素
     fireEvent.click(screen.getByRole("button", { name: "播放" }));
     expect((screen.getByTestId("edit-player-video-1") as HTMLVideoElement).volume).toBe(0.5);
@@ -226,6 +229,7 @@ describe("EditTimelineView", () => {
     expect(stale).toHaveAttribute("data-trim-ignored", "true");
     expect(screen.queryByTestId("edit-clip-c2")).not.toBeInTheDocument();
     expect(screen.getByTestId("edit-clip-deleted-c2")).toBeInTheDocument();
+    // E1U4 is 3rd in the script: refer to it by position, without exposing the unit ID
     // 剧本里 E1U4 排第 3 个：以位置称呼，不露出单元 ID
     const unused = screen.getByText("未使用").parentElement as HTMLElement;
     expect(within(unused).getByRole("img", { name: "视频单元 3" })).toBeInTheDocument();
@@ -570,6 +574,7 @@ describe("EditTimelineView", () => {
   });
 
   it("shows narration over the clips it runs across, subtitles that can be hidden, and BGM once there is any", async () => {
+    // c1's narration is 4.5s, extending past c1's out point onto c3; c1 -> c3 cross-dissolve
     // c1 的旁白 4.5s，越过 c1 的出点延伸到 c3 上；c1 → c3 叠化
     const narrated: EditTimelineReadout = {
       ...INITIAL_CUT,
@@ -693,6 +698,7 @@ describe("EditTimelineView", () => {
   });
 
   it("unlocks every narration on play but only loads the ones about to be heard", async () => {
+    // c2's narration starts at 20s, beyond the preload window from the playback start
     // c2 的旁白从 20s 开始，离播放起点超过预载窗口
     const long: EditTimelineReadout = {
       ...INITIAL_CUT,
@@ -751,6 +757,7 @@ describe("EditTimelineView", () => {
     expect(playheadSeconds()).toBe(0);
 
     fireEvent.pointerUp(tracks, { button: 0, clientX: 390 });
+    // Click at the middle of the track: half of 7.8s
     // 点在轨道正中：7.8s 的一半
     await waitFor(() => expect(playheadSeconds()).toBeCloseTo(3.9, 1));
   });
@@ -791,6 +798,7 @@ describe("EditTimelineView", () => {
 
       renderView();
 
+      // By default the most recently modified "rough cut" opens; the link asks for another one
       // 默认会打开最近修改的「初剪」，链接要求的是另一条
       expect(await screen.findByRole("tab", { name: "按脚本顺序" })).toHaveAttribute("aria-selected", "true");
       await waitFor(() => expect(screen.getByTestId("edit-clip-d2")).toHaveAttribute("aria-pressed", "true"));

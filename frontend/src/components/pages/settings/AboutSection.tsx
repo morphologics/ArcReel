@@ -96,7 +96,7 @@ export function UpstreamAboutSection() {
   }, [t]);
 
   useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect -- mount 后异步拉取版本，回调内回写状态
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- fetch the version asynchronously after mount and write state back in the callback / mount 后异步拉取版本，回调内回写状态
     void fetchVersion();
   }, [fetchVersion]);
 
@@ -159,7 +159,7 @@ export function UpstreamAboutSection() {
           </p>
         )}
 
-        {/* 发布说明默认收起，只展示最新一条；版本卡本身保持一屏内能看完。 */}
+        {/* Release notes are collapsed by default, showing only the latest; the version card itself stays readable within one screen. / 发布说明默认收起，只展示最新一条；版本卡本身保持一屏内能看完。 */}
         <div className="border-t border-border px-4 py-3">
           <Collapsible>
             <CollapsibleTrigger render={<Button variant="ghost" size="sm" className="-ml-2.5" />}>
@@ -216,6 +216,7 @@ export function UpstreamAboutSection() {
 /** Copyright & attribution: what the AGPL and ArcReel's NOTICE require us to show (source offer, credit, link). */
 function AboutLegal() {
   const { t } = useTranslation("dashboard");
+  // Copyright & attribution — the attribution sentence and repo link required by NOTICE §7(b), kept verbatim, not via brand placeholders
   // Copyright & attribution — NOTICE §7(b) 要求的署名句与仓库链接，逐字保留，不走品牌占位
   return (
     <section className="flex flex-col gap-2 rounded-lg border border-border bg-card p-4">

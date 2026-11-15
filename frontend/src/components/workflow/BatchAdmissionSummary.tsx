@@ -8,12 +8,25 @@ import { admissionUnitViews, isWithheld } from "./problem-views";
 
 interface Props {
   admission: WorkflowAdmission;
-  /** 已有产物、本次跳过的单元数；批量端点才有这份信息。 */
+  /** Number of units that already have artifacts and are skipped this time; only batch endpoints have this info. / 已有产物、本次跳过的单元数；批量端点才有这份信息。 */
   skippedUnitIds?: string[];
   className?: string;
 }
 
 /**
+ * Conclusion body of the whole-batch admission verdict. Both unsubmitted outcomes share it, because they say the same thing:
+ * "not a single task was created for this batch, for the following reasons":
+ *
+ * - `confirmation_required`: grouped by requested duration option, states seconds x unit count and total cost; the user decides for the whole batch.
+ *   Grouped rather than one row each: units with the same option say the same thing, and repeating row by row would drown the option itself; each option still lists
+ *   all unit_ids, so the user knows whom they are deciding for.
+ * - `blocked`: lists every gap one by one, without collapsing into one generic error. The ones that really have problems come first, and those held back along with them
+ *   are listed after with the reason noted, so the user can tell at a glance which to fix.
+ *
+ * Body and shell are separate: reference-to-video puts it in a dialog to decide on the spot, the workflow panel lays it out in place under the video step;
+ * both state the same conclusion and share the same verdict, without each deriving it again. The body doesn't scroll itself: the shell (dialog Body,
+ * workflow status popover) is the only scroll area.
+ *
  * 整批准入判定的结论正文。两种未提交的结局共用它，因为它们说的是同一件事——
  * 「这一批一个任务也没有创建，原因如下」：
  *

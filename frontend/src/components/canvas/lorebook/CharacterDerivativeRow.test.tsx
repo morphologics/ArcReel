@@ -136,6 +136,7 @@ describe("CharacterDerivativeRow", () => {
     fireEvent.click(screen.getByRole("button", { name: "重新生成" }));
 
     const confirm = await screen.findByRole("alertdialog");
+    // The dialog opens as "loading" first; the impact summary arrives afterwards
     // 弹窗先以「加载中」打开，影响摘要随后才到
     await waitFor(() => expect(confirm).toHaveTextContent("2 张分镜图、1 段视频"));
     expect(spy).not.toHaveBeenCalled();
@@ -172,6 +173,7 @@ describe("CharacterDerivativeRow", () => {
     const spy = vi.spyOn(API, "generateCharacterDerivative");
     vi.spyOn(API, "getAssetRegenerationImpact").mockResolvedValue({ stale: false, storyboards: 0, videos: 0, derivatives: 0 });
     renderRow({ description: "换上黑色重甲", character_sheet: SHEET_PATH, stale: false });
+    // After rendering, the base look is occupied by another generation: the fresh-read check at submit time should block it
     // 渲染之后本体被另一次生成占用：提交时刻新鲜读复核应当拦下
     useTasksStore.setState({
       tasks: [makeTask({ project_name: "demo", task_type: "character", resource_id: "阿岚" })],

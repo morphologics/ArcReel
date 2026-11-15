@@ -33,7 +33,7 @@ function SettingsBlock({
 }: {
   title: string;
   description?: string;
-  /** 区块内的控件需要 aria-describedby 指向说明时传入。 */
+  /** Passed when controls in the block need aria-describedby pointing to the description. / 区块内的控件需要 aria-describedby 指向说明时传入。 */
   descriptionId?: string;
   children: ReactNode;
 }) {
@@ -56,6 +56,9 @@ function SettingsBlock({
 }
 
 /**
+ * "Settings" tab: market sources, GitHub access proxy and official service. The proxy prefix is a form field, saved via the save bar in the shell's bottom row;
+ * adding, removing, enabling and ordering market sources and the official service switch take effect immediately. This block is always present, still shown after the official service is turned off, as the entry to turn it back on.
+ *
  * 「设置」Tab：市场源、GitHub 访问代理与官方服务。代理前缀是表单字段，经外壳底行的保存栏保存；
  * 市场源的增删、启停、排序与官方服务开关即时生效。这一区常驻，官方服务关闭后照常显示，是重新开启的入口。
  */
@@ -113,7 +116,7 @@ export function MarketSettingsTab({
   );
 }
 
-/** 官方服务状态读取失败：保留区块与重试，否则「设置」里没有重新开启的入口。 */
+/** Official service status failed to load: keep the block and a retry, otherwise "Settings" has no entry to turn it back on. / 官方服务状态读取失败：保留区块与重试，否则「设置」里没有重新开启的入口。 */
 function OfficialServiceLoadError({ message, onRetry }: { message: string; onRetry: () => void }) {
   const { t } = useTranslation(["dashboard", "common"]);
   return (
@@ -163,7 +166,7 @@ function GithubProxySettings({ active }: { active: boolean }) {
   }, []);
 
   useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect -- mount 后异步拉取配置，回调内回写状态
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- async-fetch the config after mount and write it back in the callback / mount 后异步拉取配置，回调内回写状态
     void load();
     return () => loadController.current?.abort();
   }, [load]);

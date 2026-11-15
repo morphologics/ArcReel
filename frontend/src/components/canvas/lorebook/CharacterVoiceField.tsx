@@ -30,7 +30,7 @@ import { VoiceSampleButton } from "./VoiceSampleButton";
 
 const AUDIO_ACCEPT = ".wav,.mp3";
 
-/** mm:ss；无法确定时长（尚未加载完 metadata）时占位 --:--。 */
+/** mm:ss; placeholder --:-- when the duration is unknown (metadata not loaded yet). / mm:ss；无法确定时长（尚未加载完 metadata）时占位 --:--。 */
 function formatAudioDuration(seconds: number | null): string {
   if (seconds == null || !Number.isFinite(seconds)) return "--:--";
   const total = Math.round(seconds);
@@ -39,7 +39,7 @@ function formatAudioDuration(seconds: number | null): string {
   return `${m}:${s.toString().padStart(2, "0")}`;
 }
 
-/** 参考音频的试听条。换音源时由调用方以 key 重建，播放进度不残留。 */
+/** Preview bar for reference audio. The caller rebuilds it via key when the source changes, so no playback progress lingers. / 参考音频的试听条。换音源时由调用方以 key 重建，播放进度不残留。 */
 function AudioPlayer({ src }: { src: string }) {
   const { t } = useTranslation(["dashboard", "assets"]);
   const audioRef = useRef<HTMLAudioElement>(null);
@@ -64,7 +64,7 @@ function AudioPlayer({ src }: { src: string }) {
       </Button>
       <Progress value={Math.round(progress * 100)} aria-label={t("assets:reference_audio")} className="min-w-0 flex-1" />
       <span className="shrink-0 text-xs text-muted-foreground tabular-nums">{formatAudioDuration(duration)}</span>
-      {/* eslint-disable-next-line jsx-a11y/media-has-caption -- 角色参考音频样本，无对白内容，无字幕源 */}
+      {/* eslint-disable-next-line jsx-a11y/media-has-caption -- character reference audio sample with no dialogue content and no caption source / 角色参考音频样本，无对白内容，无字幕源 */}
       <audio
         ref={audioRef}
         src={src}
@@ -90,17 +90,20 @@ function AudioPlayer({ src }: { src: string }) {
 interface CharacterVoiceFieldProps {
   projectName: string;
   name: string;
-  /** 声音风格属于编辑单元的字段，由调用方持有。 */
+  /** Voice style is an edit unit field, held by the caller. / 声音风格属于编辑单元的字段，由调用方持有。 */
   voiceStyle: string;
   onVoiceStyleChange: (value: string) => void;
   referenceAudio: string | undefined;
   voiceBinding: CharacterVoiceBinding;
   readOnly?: boolean;
-  /** 详情里其它写入或生成占用中：上传、删除与生成样本一起禁用。 */
+  /** Another write or generation in the details holds a lock: upload, delete and sample generation are disabled together. / 详情里其它写入或生成占用中：上传、删除与生成样本一起禁用。 */
   busy?: boolean;
 }
 
 /**
+ * Character "Voice": voice style goes into unsaved changes; reference audio upload, delete and TTS sample generation run immediately.
+ * When the project constrains character voices via prompts, reference audio has no effect, so it is collapsed with an explanation of how to make it take effect.
+ *
  * 角色的「声音」：声音风格进入未保存修改；参考音频的上传、删除与 TTS 生成样本立即执行。
  * 项目用提示词约束角色声音时参考音频不生效，折叠起来并说明怎样才生效。
  */
@@ -122,6 +125,7 @@ export function CharacterVoiceField({
   const [deleting, setDeleting] = useState(false);
   const track = useTrackWrite();
   const audioFp = useProjectsStore((s) => (referenceAudio ? s.getAssetFingerprint(referenceAudio) : null));
+  // Replacing with the same extension (e.g. wav for wav) keeps the path, so only the fingerprint reveals the content was updated
   // 同扩展名替换（如 wav 换 wav）路径不变，靠指纹才能感知内容已更新
   const audioUrl = referenceAudio ? API.getFileUrl(projectName, referenceAudio, audioFp) : null;
   const disabled = busy || uploading || deleting;
@@ -145,7 +149,7 @@ export function CharacterVoiceField({
     }
   };
 
-  // 打开确认框与确认删除时都复核占用态
+  // Re-check lock state both when opening the confirmation and when confirming delete / 打开确认框与确认删除时都复核占用态
   const requestDelete = () => {
     if (disabled || rejectIfAssetBusy("character", projectName, name, t, "assets:delete_audio_busy_hint")) return;
     setConfirmingDelete(true);

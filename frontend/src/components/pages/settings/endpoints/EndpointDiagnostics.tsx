@@ -15,6 +15,9 @@ const SECTION_TITLE_KEY: Record<EndpointFormSection, string> = {
 };
 
 /**
+ * Diagnostics card: shares the same server validator as save and import, always shown below the header.
+ * Each item is labeled with its section; clicking scrolls to that section.
+ *
  * 诊断卡：与保存、导入共用同一个服务端校验器，常驻头部下方。
  * 每条标注所属分节，点击滚动到该节。
  */

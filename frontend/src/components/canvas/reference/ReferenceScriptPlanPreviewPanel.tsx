@@ -52,15 +52,15 @@ interface ReferenceScriptPlanPreviewPanelProps {
   projectName: string;
   episode: number;
   videoModelUnresolved?: boolean;
-  /** 剧本规划档位；端点固定的单元按它选时长、判越档，与提示词编写的拒绝判据同源。未给时自查。 */
+  /** Script plan duration options; units with an endpoint-fixed duration pick their duration and check out-of-range against it, the same criterion as prompt authoring's rejection. Self-checked when not given. / 剧本规划档位；端点固定的单元按它选时长、判越档，与提示词编写的拒绝判据同源。未给时自查。 */
   planningDurations?: number[];
   /** Asset name → kind, for mention coloring — same lookup the editor/parse preview share. */
   lookup: MentionLookup;
-  /** 切到本集视频单元时间线；确认后的只读态据此给出去时间线修改的入口，未提供时不渲染入口。 */
+  /** Switch to this episode's video unit timeline; the confirmed read-only state uses it to offer a way to edit on the timeline; no entry point rendered when not provided. / 切到本集视频单元时间线；确认后的只读态据此给出去时间线修改的入口，未提供时不渲染入口。 */
   onOpenTimeline?: () => void;
 }
 
-/** 原文锚失配类违约：呈现为「原文」小节的红标，不进逐行锚定或聚合区。 */
+/** Source-anchor mismatch violations: shown as a red mark on the "Source text" subsection, not in per-line anchoring or the aggregate area. / 原文锚失配类违约：呈现为「原文」小节的红标，不进逐行锚定或聚合区。 */
 const SOURCE_ANCHOR_CODES = new Set(["source_text_not_verbatim", "source_text_empty"]);
 const SPEECH_VIOLATION_KEYS: Record<string, string> = {
   mixed_speech: "speech_admission_mixed_speech",
@@ -69,19 +69,19 @@ const SPEECH_VIOLATION_KEYS: Record<string, string> = {
   empty_speaker: "speech_admission_empty_speaker",
 };
 
-/** unit 卡的统一显示形状：结构化（已晋升）与扁平（草稿）两种来源在这里收敛。 */
+/** Unified display shape of a unit card: structured (promoted) and flat (draft) sources converge here. / unit 卡的统一显示形状：结构化（已晋升）与扁平（草稿）两种来源在这里收敛。 */
 interface DisplayUnit {
   key: string;
-  /** 在规划里的位置，从 1 起；界面以它称呼单元。 */
+  /** Position in the plan, from 1; the UI refers to the unit by it. / 在规划里的位置，从 1 起；界面以它称呼单元。 */
   position: number;
   duration_seconds: number;
   sourceText: string;
   scriptText: string;
-  /** 正文、原文与时长可就地修改（未确认的正式内容，或结构完好的待修复草稿）。 */
+  /** Body, source text and duration can be edited in place (unconfirmed final content, or a structurally intact invalid draft). / 正文、原文与时长可就地修改（未确认的正式内容，或结构完好的待修复草稿）。 */
   editable: boolean;
 }
 
-/** 头部统计：被解析器认作台词的行数，与正文高亮同一套切分口径。 */
+/** Header stat: number of lines recognized as dialogue lines by the parser, same splitting basis as the body highlighting. / 头部统计：被解析器认作台词的行数，与正文高亮同一套切分口径。 */
 function unitStats(scriptText: string, lookup: MentionLookup): { utterances: number } {
   const lines = toScriptLines(scriptText, lookup);
   return {
@@ -100,7 +100,7 @@ function structuredDisplayUnits(draft: ReferenceScriptPlanDraft): DisplayUnit[] 
   }));
 }
 
-/** 待修复草稿的正文：扁平 unit 数组，unit ID 由集号与序号派生。 */
+/** Body of an invalid draft: a flat unit array; unit IDs are derived from the episode number and index. / 待修复草稿的正文：扁平 unit 数组，unit ID 由集号与序号派生。 */
 interface FlatUnitsDraft {
   units: ReferenceScriptPlanFlatUnit[];
   new_assets?: PlanNewAsset[];
@@ -113,6 +113,9 @@ function isFlatUnit(value: unknown): value is ReferenceScriptPlanFlatUnit {
 }
 
 /**
+ * Draft body -> editable flat unit array. The draft may have been corrupted by the Agent (`units` not an array, per-unit fields missing or
+ * of the wrong type), so narrow item by item rather than trusting the type declaration; return null when it can't be narrowed, and the panel falls back to read-only.
+ *
  * 草稿正文 → 可编辑的扁平 unit 数组。草稿可能被 Agent 改坏（`units` 不是数组、逐 unit 字段缺失或
  * 类型不对），逐项收窄而非信任类型声明；收不成时返回 null，面板退回只读呈现。
  */
@@ -122,7 +125,7 @@ function narrowFlatUnitsDraft(content: Record<string, unknown> | null): FlatUnit
   return content as unknown as FlatUnitsDraft;
 }
 
-/** 各 unit 正文引用到的名字（画面位与说话人位）与原文片段，供「本集新增资产」区展开出场位置。 */
+/** Names referenced in each unit body (image slot and speaker slot) and source text snippets, for the "New assets in this episode" area to expand where they appear. / 各 unit 正文引用到的名字（画面位与说话人位）与原文片段，供「本集新增资产」区展开出场位置。 */
 function newAssetEntries(units: DisplayUnit[]): NewAssetEntryRefs[] {
   return units.map((unit) => ({
     id: unit.key,
@@ -134,6 +137,9 @@ function newAssetEntries(units: DisplayUnit[]): NewAssetEntryRefs[] {
 }
 
 /**
+ * New items in this episode can be written into the body by their names just like registered names, and are colored by their type when highlighted. Items marked "don't register" fall back
+ * to plain text on confirmation and don't count as assets.
+ *
  * 本集新增项的称呼与已登记名一样可以写进正文，高亮时按它的类型着色。「不登记」的项确认时退为
  * 纯文本，不算资产。
  */
@@ -164,6 +170,9 @@ function flatDisplayUnits(draft: FlatUnitsDraft, episode: number): DisplayUnit[]
 }
 
 /**
+ * A draft whose structure is broken and can't be narrowed into an editable shape: lay out whatever units are still readable for comparison, read-only. When content is null
+ * (the draft file itself is corrupt) there is nothing to lay out, and episode-level violations already explain the situation.
+ *
  * 结构已损坏、收不成可编辑形状的草稿：尽量摊出还能读的 unit 供对照，只读。content 为 null
  * （草稿文件本身损坏）时没有可摊的内容，整集层面的违约已说明情况。
  */
@@ -187,11 +196,11 @@ function brokenDraftDisplayUnits(content: Record<string, unknown> | null, episod
 }
 
 interface UnitViolations {
-  /** 原文锚失配：呈现为「原文」小节的红标，不重复出现在逐行锚定或聚合区。 */
+  /** Source-anchor mismatch: shown as a red mark on the "Source text" subsection, not repeated in per-line anchoring or the aggregate area. / 原文锚失配：呈现为「原文」小节的红标，不重复出现在逐行锚定或聚合区。 */
   anchorSource: ScriptReviewViolation[];
-  /** 有行号的违约，按 sourceLine 分组，交给 ScriptHighlight 的 renderAfterLine 逐行渲染。 */
+  /** Violations with line numbers, grouped by sourceLine and rendered per line by ScriptHighlight's renderAfterLine. / 有行号的违约，按 sourceLine 分组，交给 ScriptHighlight 的 renderAfterLine 逐行渲染。 */
   byLine: Map<number, ScriptReviewViolation[]>;
-  /** unit 级、无自然行归属的违约：落卡内聚合区。 */
+  /** Unit-level violations with no natural line: placed in the card's aggregate area. / unit 级、无自然行归属的违约：落卡内聚合区。 */
   aggregate: ScriptReviewViolation[];
 }
 
@@ -214,6 +223,10 @@ function partitionViolations(forUnit: ScriptReviewViolation[]): UnitViolations {
 }
 
 /**
+ * The server's bucketing verdict for the unit (bucket, options, endpoint-fixed, reference split): judged by the reference images available right now, same
+ * criterion as execution. The panel does not judge by itself from "name is registered" in the body; the verdict updates as post-save state flows back. When the model can't be resolved (tiers is
+ * null) or the unit has no verdict yet it is null, and the controls stay read-only.
+ *
  * unit 的服务端定桶结论（桶、档位、端点固定、引用分裂）：按此刻可用的参考图判定，与执行侧同一
  * 判据。面板不按正文里「名字已登记」自判；结论随保存后的状态回流更新。型号解析不到（tiers 为
  * null）或该 unit 尚无结论时为 null，控件保持只读。
@@ -223,6 +236,12 @@ function unitCapability(unit: DisplayUnit, tiers: ScriptReviewState["duration_ti
 }
 
 /**
+ * The unit references no registered scene asset at all: the location is left to the model, and adjacent units alternating indoor/outdoor will
+ * each improvise and not match. Mirrors backend `lib/script/reference_video/script_preview.py::unit_lacks_scene_reference`.
+ *
+ * Like option narrowing, judged live from the current body, not from a server snapshot: this panel can edit the body in place, and adding `@[scene]` must
+ * remove the hint immediately; waiting for the server to reply after saving would make the hint not match the body in front of you.
+ *
  * 该 unit 一个已登记场景资产都没引用——画面地点由模型自由决定，室内外交替的相邻 unit 会
  * 各自发挥、对不上。镜像后端 `lib/script/reference_video/script_preview.py::unit_lacks_scene_reference`。
  *
@@ -248,7 +267,7 @@ function InlineViolations({ violations, position }: { violations: ScriptReviewVi
           ? t(speechKey, { position, location })
           : draftViolationMessage(v, t, position);
         return (
-          // react-doctor-disable-next-line react-doctor/no-array-index-as-key -- 违约由服务端整表算出、没有 ID，同一 code 可重复出现；只读文本、行内无状态
+          // react-doctor-disable-next-line react-doctor/no-array-index-as-key -- Violations are computed by the server as a whole table with no ID, and the same code may repeat; read-only text, rows have no state / 违约由服务端整表算出、没有 ID，同一 code 可重复出现；只读文本、行内无状态
           <p key={`${v.code}-${i}`} className="mt-1 flex items-start gap-1.5 pl-1 text-xs leading-snug text-destructive">
             <OctagonAlert className="mt-px size-3 shrink-0" aria-hidden="true" />
             <span>{message}</span>
@@ -280,27 +299,27 @@ function UnitCard({
 }: {
   unit: DisplayUnit;
   violations: UnitViolations;
-  /** 服务端下发的降级提示（「未引用场景」除外，那条按当前正文实时判）。 */
+  /** Degradation notes from the server (except "no scene referenced", which is judged live from the current body). / 服务端下发的降级提示（「未引用场景」除外，那条按当前正文实时判）。 */
   softViolations: DraftSoftViolation[];
   lookup: MentionLookup;
-  /** 项目登记了场景资产——没有可引用的场景时不发「未引用场景」提示（纯商品的广告项目即属此列）。 */
+  /** The project has registered scene assets: when there are no scenes to reference, the "no scene referenced" hint is not shown (pure-product ad projects fall into this case). / 项目登记了场景资产——没有可引用的场景时不发「未引用场景」提示（纯商品的广告项目即属此列）。 */
   projectHasScene: boolean;
   onScrollRef: (key: string, el: HTMLElement | null) => void;
   editing: boolean;
   onToggleEdit: () => void;
   onTextChange: ((text: string) => void) | null;
-  /** 原文与正文同进编辑态；是否逐字摘录由服务端在保存后校验，结论回流为「原文」小节的红标。 */
+  /** Source text and body enter edit mode together; whether it is a verbatim excerpt is validated by the server after saving, and the verdict flows back as a red mark on the "Source text" subsection. / 原文与正文同进编辑态；是否逐字摘录由服务端在保存后校验，结论回流为「原文」小节的红标。 */
   onSourceTextChange: ((sourceText: string) => void) | null;
   supportedDurations: number[] | null;
   durationEndpointFixed: boolean;
-  /** 所落桶的视频请求事实失败：标签与带修复指引的提示，由 `tierProblemText` 按桶生成。 */
+  /** Video request facts for the unit's bucket failed: label and hint with fix guidance, generated per bucket by `tierProblemText`. / 所落桶的视频请求事实失败：标签与带修复指引的提示，由 `tierProblemText` 按桶生成。 */
   durationProblem: { label: string; hint: string } | null;
-  /** 声明引用与可用参考图分裂时的服务端结论（缺图 / 未登记引用、桶的改变）；无分裂为 null。 */
+  /** Server verdict when declared references and available reference images split (missing image / unregistered reference, bucket change); null when there is no split. / 声明引用与可用参考图分裂时的服务端结论（缺图 / 未登记引用、桶的改变）；无分裂为 null。 */
   split: ReferenceUnitCapability | null;
-  /** unit 当前存盘时长已不在收窄后的档位表内——展示照旧，但阻断确认（父组件按此禁用确认按钮）。 */
+  /** The unit's currently saved duration is no longer in the narrowed option table: shown as before, but blocks confirmation (the parent disables the confirm button based on this). / unit 当前存盘时长已不在收窄后的档位表内——展示照旧，但阻断确认（父组件按此禁用确认按钮）。 */
   outOfTier: boolean;
   onDurationChange: ((seconds: number) => void) | null;
-  /** 保存 / 确认请求在途：锁住时长下拉与正文，避免 adopt() 用服务端回显覆盖请求发出后的新编辑。 */
+  /** Save / confirm request in flight: lock the duration dropdown and body, so adopt() does not overwrite edits made after the request was sent with the server echo. / 保存 / 确认请求在途：锁住时长下拉与正文，避免 adopt() 用服务端回显覆盖请求发出后的新编辑。 */
   busy: boolean;
 }) {
   const { t } = useTranslation("dashboard");
@@ -312,6 +331,8 @@ function UnitCard({
     () => unitLacksSceneReference(unit.scriptText, lookup, projectHasScene),
     [unit.scriptText, lookup, projectHasScene],
   );
+  // When the option table can't be resolved, or content isn't editable, fall back to read-only seconds: selectable options must be ones that
+  // the backend won't change again when normalizing after save; without an authoritative option table, don't offer choices that would be silently changed.
   // 档位表解析不到、或内容不可编辑时退回只读秒数：能选的档位必须是保存后
   // 后端收编不会再改的那一档，拿不到权威档位表就不提供会被静默改掉的选择。
   const durationOptions = onDurationChange && supportedDurations?.length ? supportedDurations : null;
@@ -359,7 +380,7 @@ function UnitCard({
           </Button>
         )}
       </div>
-      {/* 面板不因分裂拦确认（规划期资产图常尚未生成），但按 i2v 取档时要说明桶已改变，不静默换桶。 */}
+      {/* The panel doesn't block confirmation because of a split (sheets are often not generated yet during planning), but when picking options by i2v it must explain that the bucket changed, never silently changing buckets. / 面板不因分裂拦确认（规划期资产图常尚未生成），但按 i2v 取档时要说明桶已改变，不静默换桶。 */}
       {split && (
         <ReferenceSplitAlert
           capability={split}
@@ -420,7 +441,7 @@ function UnitCard({
 
       <InlineViolations violations={violations.aggregate} position={unit.position} />
 
-      {/* 降级提示（不阻断确认），与违约的红标区分开：正文合法，只是画面地点没被钉住。 */}
+      {/* Degradation notes (don't block confirmation), kept apart from the violation red marks: the body is valid, the location just isn't pinned down. / 降级提示（不阻断确认），与违约的红标区分开：正文合法，只是画面地点没被钉住。 */}
       {lacksScene && (
         <p className="mt-2 flex items-start gap-1.5 pl-1 text-xs leading-snug text-subtle-foreground">
           <AlertTriangle className="mt-px size-3 shrink-0 text-warn" aria-hidden="true" />
@@ -432,15 +453,23 @@ function UnitCard({
   );
 }
 
-/** 本面板只编辑 reference_video 变体的 units 内容；其余变体的内容不属于这里。 */
+/** This panel only edits the units content of the reference_video variant; other variants' content doesn't belong here. / 本面板只编辑 reference_video 变体的 units 内容；其余变体的内容不属于这里。 */
 function selectUnitsContent(state: ScriptReviewState): ReferenceScriptPlanDraft | null {
   return state.content != null && "units" in state.content ? state.content : null;
 }
 
-/** 「未引用场景」按当前正文实时判（见 `unitLacksSceneReference`），不取服务端快照。 */
+/** "No scene referenced" is judged live from the current body (see `unitLacksSceneReference`), not from a server snapshot. / 「未引用场景」按当前正文实时判（见 `unitLacksSceneReference`），不取服务端快照。 */
 const LIVE_SOFT_VIOLATION_CODES: ReadonlySet<string> = new Set(["ref_warn_unit_without_scene"]);
 
 /**
+ * Per-episode preview of the reference_video script_plan split result: on the same level as drama/narration's `ScriptReviewGate`,
+ * the content review panel dedicated to the reference_video variant: document-flow layout (unit card: header + source text + highlighted body);
+ * the clean state only needs confirmation to release prompt_authoring.
+ *
+ * When an invalid draft is present the panel shows the draft itself: violations attach to their unit (syntax ones anchored inline to the offending line), episode-level
+ * violations pinned to the top; body, source text and duration can be edited in place, then saved and validated, and it is adopted once violations reach zero. When the Agent's editable draft is present it only notes
+ * an unfinished change, and the final content is read-only. After confirmation the script plan is read-only and points to the timeline for edits.
+ *
  * reference_video script_plan 拆分结果的按集预览：与 drama/narration 的 `ScriptReviewGate` 同级、
  * 专属 reference_video 变体的内容确认面板——文稿流布局（unit 卡：头部 + 原文 + 高亮正文），
  * 干净态仅需确认放行 prompt_authoring。
@@ -466,6 +495,7 @@ export function ReferenceScriptPlanPreviewPanel({
   });
   const modelUnresolved = videoModelUnresolved ?? standaloneCapabilities.videoModelUnresolved;
   const fixedPlanningDurations = planningDurations ?? standaloneCapabilities.planningDurations;
+  // Duration options a unit can pick: the options after narrowing by its bucket; when the endpoint fixes the duration the bucket options are empty, so use the script plan options.
   // 单元可选的时长档位：所落桶收窄后的档位；端点固定时桶档位是空集，改取剧本规划档位。
   const unitTiers = (capability: ReferenceUnitCapability | null | undefined): number[] | null =>
     capability?.duration_endpoint_fixed ? fixedPlanningDurations : (capability?.allowed_durations ?? null);
@@ -480,6 +510,9 @@ export function ReferenceScriptPlanPreviewPanel({
   const [discardOpen, setDiscardOpen] = useState(false);
 
   const handleConfirmed = useCallback(() => {
+    // During the two awaits of save / confirm, the user may have switched projects (the tab hosting this component may be unmounted): only suppress the confirm toast
+    // when the project itself changed; switching tabs within the same project still shows it. After confirming, the Agent panel is not opened; the page's next step
+    // takes over, consistent with ScriptReviewGate.
     // 保存 / 确认两次 await 期间用户可能已切走项目（本组件所在的 tab 可能因此被卸载）：只在项目
     // 本身变了才抑制确认提示，同项目内切 tab 照常提示。确认后不打开 Agent 面板，由页面的下一步
     // 接续，与 ScriptReviewGate 一致。
@@ -579,6 +612,7 @@ export function ReferenceScriptPlanPreviewPanel({
 
   const status = state?.status ?? "no_script_plan";
   if (status === "no_script_plan" || (draft == null && quarantine == null)) {
+    // When this episode has no final script yet, this is the starting area for the first plan; when one exists (e.g. started from blank), a new plan replaces it only after overwrite confirmation.
     // 本集还没有正式脚本时这里就是首次规划的起步区；已有正式脚本（如从空白开始）时，新规划经覆盖确认才替换它。
     if (status === "no_script_plan" && state?.script_overwrite == null) {
       return <ScriptPlanStart projectName={projectName} episode={episode} savedInstructions={savedInstructions} />;
@@ -607,6 +641,9 @@ export function ReferenceScriptPlanPreviewPanel({
     />
   );
 
+  // Invalid draft present: the panel shows the draft itself, and the final content can't be confirmed right now (the confirm endpoint rejects by the same criterion).
+  // When this episode has no final script and the plan is unconfirmed, you can skip this plan and start writing from blank; the plan and invalid draft are discarded with it, after confirmation.
+  // No entry point while the Agent is editing the draft; the server rejects it too.
   // 待修复草稿在场：面板呈现草稿本身，正式内容此刻不可确认（确认端点按同一判据拒绝）。
   // 本集还没有正式脚本、规划也未确认时，可以不用这份规划、从空白开始手写；规划与待修复草稿随之弃置，先确认。
   // Agent 正在编辑草稿时不给入口，服务端同样拒绝。
@@ -690,6 +727,7 @@ export function ReferenceScriptPlanPreviewPanel({
               onToggleEdit={() => setEditingUnitKey((prev) => (prev === unit.key ? null : unit.key))}
               onTextChange={unit.editable ? (text) => updateUnit(i, { text }) : null}
               onSourceTextChange={unit.editable ? (sourceText) => updateUnit(i, { source_text: sourceText }) : null}
+              // The draft's units aren't bucketed yet, so selectable duration options are the full structural range; on adoption the server rejudges by the same criterion.
               // 草稿的 unit 尚未定桶，时长可选档位取结构区间全集；采用时由服务端按同一判据重判。
               supportedDurations={supportedDurations}
               durationEndpointFixed={false}
@@ -705,13 +743,17 @@ export function ReferenceScriptPlanPreviewPanel({
     );
   }
 
+  // Agent's editable draft present: final content is read-only, confirm and edit are both locked until the Agent finishes or discards this change.
   // Agent 的可编辑草稿在场：正式内容只读，确认与编辑一并锁住，待 Agent 完成或丢弃这份修改。
   const agentEditing = quarantine != null;
+  // A confirmed script plan is read-only: the save endpoint rejects by the same criterion, and content edits are made on the timeline instead.
   // 已确认的脚本规划只读：保存端点按同一判据拒绝，内容修改改在时间线上做。
   const confirmed = status === "confirmed" && !agentEditing;
   const readOnly = agentEditing || confirmed;
+  // The episode already has a final script: confirming overwrites it entirely, so the confirm button turns danger, and clicking lists the consequences first before confirming.
   // 该集已有正式脚本：确认会整份覆盖它，确认按钮改呈 danger，点击先列出后果再确认。
   const overwrite = confirmed ? null : (state?.script_overwrite ?? null);
+  // Confirmed but the episode has no final script (migration conversion failed or the file was deleted): confirm is still available, and reconfirming produces the final script.
   // 已确认但该集没有正式脚本（迁移转换失败或文件被删）：确认仍可用，重新确认即转出正式脚本。
   const scriptMissing = confirmed && state?.script_overwrite == null;
   const confirmLocked = confirmed && !scriptMissing;
@@ -720,6 +762,9 @@ export function ReferenceScriptPlanPreviewPanel({
   const newAssets = draft?.new_assets ?? [];
   const reviewLookup = lookupWithNewAssets(lookup, newAssets);
   const softByUnit = groupSoftViolations(state?.soft_violations ?? [], LIVE_SOFT_VIOLATION_CODES);
+  // If the narrowed option table no longer contains a unit's saved duration (due to model / resolution / reference image config changes),
+  // the value is still displayed (to avoid select silently jumping to the first option), but confirmation is not allowed: _assert_reference_script_plan_ready
+  // hard-rejects the same out-of-range value before prompt_authoring is persisted, so block it here first instead of letting it fail elsewhere after the user confirms.
   // 收窄后的档位表若已不再包含某 unit 存量存盘的时长（模型 / 分辨率 / 参考图配置变化所致），
   // 该值仍保留展示（避免 select 静默跳首档），但不能放行确认——_assert_reference_script_plan_ready
   // 会在 prompt_authoring 落盘前硬拒同一个越档值，此处先一步拦下，而不是让用户确认后才在别处失败。
@@ -733,6 +778,7 @@ export function ReferenceScriptPlanPreviewPanel({
       })
       .map((u) => u.key),
   );
+  // Units whose bucket's video request facts can't be resolved: options unknown, so a plan that can't be executed can't be confirmed.
   // 所落桶的视频请求事实解析不出的 unit：档位未知，不能确认一份执行不了的方案。
   const unknownUnits = displayUnits.flatMap((u) => {
     const capability = unitCapability(u, durationTiers);
@@ -743,6 +789,8 @@ export function ReferenceScriptPlanPreviewPanel({
     unknownUnits.length > 0
       ? tierProblemText(t, unknownUnits[0].capability.problem!, unknownUnits[0].capability.hydrated_capability)
       : null;
+  // The overwrite confirmation's blocking condition is shared by the trigger button and the in-dialog confirm button: the capability request may answer
+  // that the model can't be resolved only after the dialog opens, which would leave a confirm button inside that can submit but the server will reject.
   // 覆盖确认的拦截条件，触发按钮与框内确认按钮共用一位：能力请求可能在框打开之后才答复
   // 模型无法解析，此时框内还留着一颗能提交、但服务端必拒的确认按钮。
   const overwriteBlocked = videoModelBlocked || outOfTierUnitKeys.size > 0 || unknownUnitKeys.size > 0;
@@ -860,6 +908,7 @@ export function ReferenceScriptPlanPreviewPanel({
           loading={confirming}
           confirmDisabled={overwriteBlocked}
           onConfirm={async () => {
+            // On failure (e.g. the episode was written concurrently during confirmation) the dialog stays open and shows the refreshed overwrite list.
             // 失败（如确认期间该集被并发写入）时框保持打开，呈现刷新后的覆盖清单。
             if (await handleConfirm({ overwriteRevision: overwrite.revision })) setOverwriteOpen(false);
           }}
@@ -867,7 +916,7 @@ export function ReferenceScriptPlanPreviewPanel({
         />
       )}
 
-      {/* 本集合计与项目目标的对比；未设目标时不渲染，超出只提示不阻断确认 */}
+      {/* Comparison of this episode's total against the project target; not rendered when no target is set; exceeding only warns and doesn't block confirmation / 本集合计与项目目标的对比；未设目标时不渲染，超出只提示不阻断确认 */}
       <EpisodeDurationSummary
         totalSeconds={sumItemDuration(displayUnits)}
         targetSeconds={state?.episode_target_duration ?? null}

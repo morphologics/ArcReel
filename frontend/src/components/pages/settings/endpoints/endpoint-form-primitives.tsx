@@ -13,10 +13,10 @@ export const LABEL_CLS = "mb-1.5 block text-sm font-medium";
 export const HINT_CLS = "mt-1.5 block text-xs text-muted-foreground";
 
 // ---------------------------------------------------------------------------
-// 变量插入
+// Variable insertion / 变量插入
 // ---------------------------------------------------------------------------
-// 「可用变量 · 点击插入」把 token 写进最近获得焦点的输入框。目标登记在 focus 时发生，
-// 携带该框自己的 onChange，插入因此不必绕过 React 的受控值。
+// "Available variables · click to insert" writes the token into the most recently focused input. Target registration happens on focus, / 「可用变量 · 点击插入」把 token 写进最近获得焦点的输入框。目标登记在 focus 时发生，
+// carrying that input's own onChange, so insertion doesn't need to bypass React's controlled value. / 携带该框自己的 onChange，插入因此不必绕过 React 的受控值。
 
 interface InsertionTarget {
   el: HTMLInputElement | HTMLTextAreaElement;
@@ -47,6 +47,7 @@ export function VariableInsertionProvider({ children }: { children: React.ReactN
   const insert = useCallback((token: string) => {
     const target = targetRef.current;
     if (!target) return;
+    // Withdraw the target when the target input has been unmounted along with its deleted row: a leftover old onChange would write the value back to the deleted field.
     // 目标输入框已随行删除卸载时撤销目标：残留的旧 onChange 会把值写回已删除的字段。
     if (!target.el.isConnected) {
       targetRef.current = null;
@@ -71,7 +72,7 @@ function useInsertion(): InsertionApi | null {
   return useContext(InsertionContext);
 }
 
-/** 可用变量提示条。没有登记过焦点目标时点击无害地什么都不做。 */
+/** Available variables hint bar. With no registered focus target, clicking harmlessly does nothing. / 可用变量提示条。没有登记过焦点目标时点击无害地什么都不做。 */
 export function VariableChips({
   variables,
   note,
@@ -90,7 +91,7 @@ export function VariableChips({
             key={v.token}
             variant="outline"
             size="xs"
-            // 按下时不夺走焦点，插入点仍是最近聚焦的输入框
+            // Don't steal focus on press, so the insertion point stays in the most recently focused input / 按下时不夺走焦点，插入点仍是最近聚焦的输入框
             onMouseDown={(e) => e.preventDefault()}
             onClick={() => insertion?.insert(v.token)}
           >
@@ -107,10 +108,10 @@ export function VariableChips({
 }
 
 // ---------------------------------------------------------------------------
-// 分节容器
+// Section container / 分节容器
 // ---------------------------------------------------------------------------
 
-/** 生命周期分节：左侧竖轨 + 步骤圆点，编号即任务从提交到取件的真实次序。 */
+/** Lifecycle section: left vertical rail + step dots, numbered in the real order of a task from submit to fetch. / 生命周期分节：左侧竖轨 + 步骤圆点，编号即任务从提交到取件的真实次序。 */
 export function FormSection({
   id,
   step,
@@ -143,19 +144,19 @@ export function FormSection({
 }
 
 // ---------------------------------------------------------------------------
-// 字段
+// Fields / 字段
 // ---------------------------------------------------------------------------
 
 interface TextFieldProps {
-  /** 省略时字段不带可见标签，由 ariaLabel 承担无障碍名（用于表格式的行内字段）。 */
+  /** When omitted the field has no visible label, and ariaLabel provides the accessible name (for table-style inline fields). / 省略时字段不带可见标签，由 ariaLabel 承担无障碍名（用于表格式的行内字段）。 */
   label?: string;
   ariaLabel?: string;
   value: string;
   onChange?: (next: string) => void;
   readOnly?: boolean;
-  /** 等宽字体，用于请求路径、请求头与变量名；同时关掉拼写检查。 */
+  /** Monospace font, for request paths, headers and variable names; also turns off spell check. / 等宽字体，用于请求路径、请求头与变量名；同时关掉拼写检查。 */
   mono?: boolean;
-  /** 不换等宽字体但也不该拼写检查的值（如接口地址）。 */
+  /** Values that keep the regular font but shouldn't be spell-checked (e.g. API addresses). / 不换等宽字体但也不该拼写检查的值（如接口地址）。 */
   spellCheck?: boolean;
   hint?: string;
   placeholder?: string;
@@ -231,7 +232,7 @@ export function RowDeleteButton({ label, onClick }: { label: string; onClick: ()
   );
 }
 
-/** 表单内的下拉：选项文案由调用方本地化；只读时整体禁用。 */
+/** Dropdown within the form: option text is localized by the caller; disabled entirely when read-only. / 表单内的下拉：选项文案由调用方本地化；只读时整体禁用。 */
 export function SelectField<V extends string>({
   value,
   options,
@@ -271,6 +272,9 @@ export function SelectField<V extends string>({
 }
 
 /**
+ * Add a row. Rows are keyed by name and only one unnamed row can exist, so the button is disabled while the previous row is unnamed,
+ * and the reason is written as visible text; with only a title, keyboard and screen reader users can't read it.
+ *
  * 添加一行。行以名字为键，未命名的行只能存在一个，因此上一行未命名时按钮停用，
  * 并把原因写成可见文本——只挂 title 的话键盘与读屏用户读不到。
  */
@@ -297,10 +301,13 @@ export function AddRowButton({
 }
 
 // ---------------------------------------------------------------------------
-// 取值路径编辑器
+// Value path editor / 取值路径编辑器
 // ---------------------------------------------------------------------------
 
 /**
+ * Numbered path list: takes the first hit in order. Path items with json_decode are shown read-only,
+ * and changing them requires switching to the JSON view; the form can't fit the nested decode form, and forcing it would silently drop fields.
+ *
  * 编号路径列表：按顺序取第一个命中值。带 json_decode 的路径项只读展示，
  * 改动它们要切到 JSON 视图——表单里放不下嵌套解码的形态，硬塞会静默丢字段。
  */
@@ -318,6 +325,7 @@ export function PathsEditor({
   hint?: string;
 }) {
   const { t } = useTranslation("dashboard");
+  // Path text can repeat and is being edited, so it can't be the key; deleting a middle item must not shift the other rows
   // 路径文本可重复且正在编辑，不能作 key；删掉中间一项时其余行不能错位
   const rowIds = useRowIds(paths.length);
   return (

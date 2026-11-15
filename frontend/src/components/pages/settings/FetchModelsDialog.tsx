@@ -26,10 +26,10 @@ import { errMsg, voidCall } from "@/utils/async";
 import { EndpointSelect } from "./EndpointSelect";
 import { MEDIA_LABEL_KEY } from "./providerModelDisplay";
 
-/** 勾选要添加的一个模型：自定义供应商带调用端点，未识别的模型可以带用户选的对应模型。 */
+/** One checked model to add: custom providers carry a call endpoint; unrecognized models can carry a user-chosen matched model. / 勾选要添加的一个模型：自定义供应商带调用端点，未识别的模型可以带用户选的对应模型。 */
 export interface FetchSelection {
   model: FetchedProviderModel;
-  /** 添加后的媒体类型：选了对应模型时取对应模型的，否则取获取结果的。 */
+  /** Media type after adding: taken from the matched model if one was chosen, otherwise from the fetch result. / 添加后的媒体类型：选了对应模型时取对应模型的，否则取获取结果的。 */
   mediaType: MediaType;
   endpoint: string | null;
   binding: CatalogEntryHit | null;
@@ -39,17 +39,21 @@ interface Props {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   providerName: string;
-  /** 调用供应商的模型列表接口。 */
+  /** Calls the provider's model list API. / 调用供应商的模型列表接口。 */
   load: (signal: AbortSignal) => Promise<FetchProviderModelsResponse>;
-  /** 已添加的模型不列出，只计数。 */
+  /** Already-added models are not listed, only counted. / 已添加的模型不列出，只计数。 */
   isAdded: (model: FetchedProviderModel) => boolean;
-  /** 自定义供应商的模型发现协议：给出时每行有调用端点下拉。 */
+  /** Model discovery protocol of the custom provider: when given, each row has a call endpoint dropdown. / 自定义供应商的模型发现协议：给出时每行有调用端点下拉。 */
   protocol?: DiscoveryFormat;
-  /** 添加勾选的模型，按顺序返回每个模型的失败原因（成功为 null）。全部成功时对话框关闭。 */
+  /** Adds the checked models and returns each model's failure reason in order (null on success). The dialog closes when all succeed. / 添加勾选的模型，按顺序返回每个模型的失败原因（成功为 null）。全部成功时对话框关闭。 */
   onAdd: (selections: FetchSelection[]) => Promise<(string | null)[]>;
 }
 
 /**
+ * "Fetch models" dialog: calls the provider's model list API, lists only models not yet added, in two groups, "Recognized" (checked by default) and "Unrecognized".
+ * Unrecognized rows are unchecked by default and can pick a "matched model", saved as an entry binding on add; rows whose name already matches an entry show the entry name,
+ * and only rows with no matching entry, or whose entry has no price, warn that costs will be recorded as unpriced.
+ *
  * 「获取模型」对话框：调用供应商的模型列表接口，只列尚未添加的模型，分「已识别」（默认勾选）与「未识别」
  * 两组。未识别的行默认不勾，可以选一个「对应模型」，添加时存为条目绑定；名字已对应到条目的行显示条目名，
  * 只有对应不上条目、或条目没有价格的行提示费用会记为未定价。
@@ -129,6 +133,7 @@ function FetchModelsBody({
 
   const mediaOf = (model: FetchedProviderModel, row: RowState): MediaType => row.binding?.media_type ?? model.media_type;
 
+  // When the matched model's media type doesn't match the call endpoint, switch to the default endpoint for that media type
   // 对应模型的媒体类型与调用端点不一致时，换成该媒体类型下的默认端点
   const bind = (model: FetchedProviderModel, binding: CatalogEntryHit | null) => {
     const row = rows[rowKey(model)];
@@ -140,6 +145,7 @@ function FetchModelsBody({
     updateRow(model, { binding, endpoint, checked: binding ? true : row.checked });
   };
 
+  // Already-added models are computed from the current list: rows that were added successfully naturally disappear after the parent refreshes the list
   // 已添加的模型按当前列表现算：添加成功的行在上层刷新列表后自然移走
   const fetched = state.status === "ready" ? state.models : [];
   const models = fetched.filter((m) => !isAdded(m));
@@ -158,6 +164,7 @@ function FetchModelsBody({
         onClose();
         return;
       }
+      // Successfully added rows get unchecked (they disappear after the parent refreshes the list); failed rows stay and show the reason
       // 添加成功的行取消勾选（上层刷新列表后移走），失败的行留下并写明原因
       setRows((prev) => {
         const next = { ...prev };
@@ -186,6 +193,7 @@ function FetchModelsBody({
     if (!row) return null;
     const media = mediaOf(model, row);
     const entryName = row.binding?.display_name ?? model.matched_entry?.display_name;
+    // Rows where the user picked a matched model get no warning: search results carry no price, and the choice is treated as the user's decision
     // 用户选了对应模型的行不提示：搜索结果不带价格，选择即视为用户的决定
     const unpriced = !model.recognized && !row.binding && !model.matched_entry?.priced;
     return (

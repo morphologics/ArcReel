@@ -11,7 +11,7 @@ import { MarketInstallBadges } from "./MarketInstallBadges";
 
 const ICON_SIZE = 40;
 
-/** 经后端代理取 icon 转成 object URL；取不到时返回 null，由调用方显示首字占位。 */
+/** Fetches the icon through the backend proxy and turns it into an object URL; returns null when unavailable, and the caller shows a first-letter placeholder. / 经后端代理取 icon 转成 object URL；取不到时返回 null，由调用方显示首字占位。 */
 function useEntryIconUrl(entry: MarketEntry): string | null {
   const [url, setUrl] = useState<string | null>(null);
   const { source_id: sourceId, slug, version, icon } = entry;
@@ -27,7 +27,7 @@ function useEntryIconUrl(entry: MarketEntry): string | null {
         setUrl(objectUrl);
       })
       .catch(() => {
-        // icon 不可用不影响浏览：保持首字占位。
+        // An unavailable icon doesn't affect browsing: keep the first-letter placeholder. / icon 不可用不影响浏览：保持首字占位。
       });
     return () => {
       controller.abort();
@@ -54,7 +54,7 @@ export function EntryIcon({ entry }: { entry: MarketEntry }) {
   );
 }
 
-/** 条目来自哪个市场源；官方源前带标记，读屏读出「官方」。 */
+/** Which market source the entry comes from; the official source has a marker before it, read by screen readers as "Official". / 条目来自哪个市场源；官方源前带标记，读屏读出「官方」。 */
 export function SourceChip({ name, kind }: { name: string; kind: MarketSourceKind | null }) {
   const { t } = useTranslation("dashboard");
   return (
@@ -68,6 +68,11 @@ export function SourceChip({ name, kind }: { name: string; kind: MarketSourceKin
 }
 
 /**
+ * Market entry card: name (opens the install dialog; the click area covers the whole card), author and version, two-line description, media type and install status,
+ * source (plus install count and rating from the official service) and the primary button.
+ * Primary button: not installed "Install", updatable "Update" open the install dialog; when already latest, "Open endpoint" jumps straight to the call endpoint.
+ * When the current app version doesn't satisfy `min_app_version`, the primary button is disabled and the version requirement shown; details can still be opened.
+ *
  * 市场条目卡片：名称（点开安装弹窗，点击区域覆盖整张卡片）、作者与版本、两行说明、媒体类型与安装状态、
  * 来源（及官方服务的安装量与评分）和主按钮。
  * 主按钮：未安装「安装」、可更新「更新」打开安装弹窗；已是最新时「打开端点」直接跳到调用端点。
@@ -82,10 +87,10 @@ export function MarketEntryCard({
   onInstalledOpen,
 }: {
   entry: MarketEntry;
-  /** 源的当前显示名；源列表里找不到时退回条目自带的显示名。 */
+  /** Current display name of the source; falls back to the entry's own display name when not found in the source list. / 源的当前显示名；源列表里找不到时退回条目自带的显示名。 */
   sourceName: string;
   sourceKind: MarketSourceKind | null;
-  /** 官方服务开启且取到聚合时才有；缺失即不显示数字。 */
+  /** Only present when the official service is on and aggregates were fetched; when missing, no numbers are shown. / 官方服务开启且取到聚合时才有；缺失即不显示数字。 */
   aggregate?: MarketEntryAggregate | null;
   onOpen: () => void;
   onInstalledOpen: () => void;
@@ -106,7 +111,7 @@ export function MarketEntryCard({
         <EntryIcon entry={entry} />
         <div className="flex min-w-0 flex-1 flex-col gap-0.5">
           <h3 id={titleId} className="text-sm font-medium">
-            {/* 名称按钮的伪元素铺满整张卡片，点卡片任意空白处都打开详情；主按钮在 DOM 中靠后、自身定位，盖在它上面。 */}
+            {/* The name button's pseudo-element covers the whole card, so clicking any blank area opens the detail; the primary button is later in the DOM and positioned itself, sitting on top of it. / 名称按钮的伪元素铺满整张卡片，点卡片任意空白处都打开详情；主按钮在 DOM 中靠后、自身定位，盖在它上面。 */}
             <button
               type="button"
               onClick={onOpen}

@@ -9,6 +9,9 @@ import { errMsg } from "@/utils/async";
 import { episodeMoveCheck } from "@/utils/episode-order";
 
 /**
+ * Change episode order: move an episode after `after` (null for first). Moves among sliced episodes that violate source order are not submitted and the reason is shown;
+ * the server rechecks against the placed source ranges and a rejection is shown the same way.
+ *
  * 调整播出顺序：把一集移到 `after` 之后（null 为最前）。切出集之间违背源文顺序的移动不提交，提示原因；
  * 服务端按落位后的原文范围复核，拒绝时同样提示。
  */

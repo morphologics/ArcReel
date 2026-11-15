@@ -10,6 +10,9 @@ import { isResourceBusy, useActiveResourceIds } from "@/stores/tasks-store";
 import { errMsg } from "@/utils/async";
 
 /**
+ * "Plan this unsliced source": submit AI episode planning directly with this source's end as the stop point, replacing no episode; new episodes are inserted by source position.
+ * Unavailable while episode planning runs or a new episode plan awaits handling (`blocked` is the reason).
+ *
  * 「规划这段未切分的原文」：以这段原文的结尾为终点直接提交 AI 分集规划，不替换任何集，新集按源文位置插入。
  * 分集规划进行中、或有等待处理的新的分集方案（`blocked` 是原因）时不可用。
  */

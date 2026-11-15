@@ -6,8 +6,10 @@ import { waitForEntrance } from "../support/region-helpers.ts";
 import { RECORDED_DIR, type RecordedResponse } from "../support/recorded.ts";
 import { expect, type ApiOverrides } from "../support/test.ts";
 
+// The scope dialog of the top bar "Export project": two scope options, an edit view hint and the "Export" button at the bottom.
 // 顶栏「导出项目」的范围对话框：两个范围选项、剪辑视图提示与底部的「导出」。
 const EPISODE_PATH = "/app/projects/demo/episodes/1";
+// The project event stream is SSE, not recorded; reject with a non-retryable status so the page stays on the recorded project data.
 // 项目事件流是 SSE，没有录制；按不可重试的状态拒绝，页面停在录制的项目数据上。
 const EVENT_STREAM: ApiOverrides = {
   "GET /api/v1/projects/demo/events/stream": { status: 404, body: { detail: "页面级套件不回放事件流" } },
@@ -17,6 +19,7 @@ interface RecordedProject {
   project: { episodes: { episode: number; title?: string }[] };
 }
 
+// With a very long episode name, the hint link "Open the edit view of <episode>" must wrap and not push the dialog out of the viewport.
 // 集名很长时，提示里「打开『集名』的剪辑视图」链接要换行，不能把对话框撑出视口。
 const recordedProject = (
   JSON.parse(readFileSync(join(RECORDED_DIR, "project-demo.json"), "utf8")) as RecordedResponse

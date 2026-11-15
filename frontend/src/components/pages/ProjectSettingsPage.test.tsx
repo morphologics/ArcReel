@@ -62,7 +62,7 @@ function mockConfig(config: object = FAKE_CONFIG) {
   vi.spyOn(API, "getSystemConfig").mockResolvedValue(config as Awaited<ReturnType<typeof API.getSystemConfig>>);
 }
 
-/** 加载项目，保存时按服务端行为回显合并后的项目。 */
+/** Load the project; on save echo back the merged project as the server does. / 加载项目，保存时按服务端行为回显合并后的项目。 */
 function mockProject(project: Record<string, unknown>) {
   const base = { title: "Demo", episodes: [], characters: {}, clues: {}, ...project };
   vi.spyOn(API, "getProject").mockResolvedValue({ project: base, scripts: {} } as unknown as ProjectResponse);
@@ -204,6 +204,7 @@ describe("ProjectSettingsPage – 分页与一次保存", () => {
     await waitFor(() => expect(location.history.at(-1)).toBe("/app/projects/demo/settings?tab=memory"));
     expect(await screen.findByRole("heading", { name: "新建记忆文件" })).toBeInTheDocument();
     expect(API.getAgentMemory).toHaveBeenCalledWith({ level: "project", projectName: "demo" }, expect.anything());
+    // Memory and Agent config each handle their own save; the shell save bar is not shown
     // 记忆与 Agent 配置各管各的保存，不显示外壳保存栏
     expect(screen.queryByRole("button", { name: "保存" })).not.toBeInTheDocument();
     expect(updateSpy).not.toHaveBeenCalled();
@@ -335,6 +336,7 @@ describe("ProjectSettingsPage – 分页与一次保存", () => {
 
     const group = await screen.findByRole("radiogroup", { name: "目标总时长" });
     await waitFor(() => expect(within(group).getByRole("radio", { name: "30 秒" })).toBeChecked());
+    // Custom input left empty: the target total duration is invalid
     // 自定义输入留空：目标总时长无效
     fireEvent.click(within(group).getByRole("radio", { name: "自定义" }));
     fireEvent.click(within(sidebar()).getByRole("link", { name: /^模型/ }));
@@ -362,6 +364,7 @@ describe("ProjectSettingsPage – 模型分页的覆盖来源", () => {
 
     expect(await screen.findByText("本项目覆盖了 3 项全局默认，其余跟随全局。")).toBeInTheDocument();
     expect(within(sidebar()).getByRole("link", { name: /^模型3 项覆盖$/ })).toBeInTheDocument();
+    // The image channel has no override: show follow-global and the global default model
     // 图片通道没有覆盖：显示跟随全局与全局默认模型
     expect(screen.getByText("跟随全局 · nano-banana")).toBeInTheDocument();
 
@@ -502,11 +505,13 @@ describe("ProjectSettingsPage – model_settings resolution", () => {
     await pick(r2v, "720p");
     expect(i2v).toHaveTextContent(sharedModel ? "720p" : "1080p");
     expect(r2v).toHaveTextContent("720p");
+    // With a shared model the two changes cancel out; change another place to make save available
     // 共用模型时两次修改互相抵消，另改一处让保存可用
     fireEvent.click(within(sidebar()).getByRole("link", { name: /^基础/ }));
     fireEvent.click(await screen.findByRole("radio", { name: /横屏 16:9/ }));
     fireEvent.click(saveButton());
     await waitFor(() => expect(updateSpy).toHaveBeenCalledTimes(1));
+    // With a shared model the two changes cancel out; the resolution table matches the saved one and is not written back
     // 共用模型时两次修改抵消，分辨率表与已保存的一致，不回写
     expect(updateSpy.mock.calls[0][1].model_settings).toEqual(
       sharedModel
@@ -541,6 +546,8 @@ describe("ProjectSettingsPage – model_settings resolution", () => {
   });
 
   it("reads and writes the image resolution under the executing text-to-image model", async () => {
+    // The project default layer and the text-to-image slot point to different models: the backend looks up model_settings by execution model, so reads and writes hang on
+    // the text-to-image slot's model; with the wrong key the user's chosen resolution is silently ignored and a reload reads back the old value.
     // 项目默认层与文生图槽指向不同模型：后端按执行模型查 model_settings，故读写都挂在
     // 文生图槽那个模型上——挂错 key 时用户选的分辨率会被静默忽略，且重载读回旧值。
     const updateSpy = mockProject({
@@ -567,6 +574,7 @@ describe("ProjectSettingsPage – model_settings resolution", () => {
     const user = userEvent.setup();
     renderAt("/app/projects/demo/settings?tab=models");
 
+    // Image resolution comes after video resolution; what is read is the text-to-image execution model's 720p
     // 图片分辨率在视频分辨率之后；读到的是文生图执行模型的 720p
     await waitFor(() => expect(screen.getAllByRole("combobox", { name: "分辨率" })).toHaveLength(2));
     const imageResolution = screen.getAllByRole("combobox", { name: "分辨率" })[1];
@@ -578,6 +586,7 @@ describe("ProjectSettingsPage – model_settings resolution", () => {
     await waitFor(() => expect(updateSpy).toHaveBeenCalledTimes(1));
     expect(updateSpy.mock.calls[0][1]).toEqual({
       model_settings: expect.objectContaining({
+        // What is written back is also the text-to-image execution model's key; the project default layer model's settings are kept as is
         // 写回的也是文生图执行模型的 key，项目默认层模型的设置原样保留
         "openai/gpt-image": { resolution: "1080p" },
         "gemini/nano-banana": { resolution: "1080p" },
@@ -602,6 +611,7 @@ describe("ProjectSettingsPage – 基础", () => {
     expect(await screen.findByText(/跳过分镜图，直接用角色、场景、道具图作为参考生成视频/)).toBeInTheDocument();
     expect(screen.getByText(/生成方式创建后不可更改/)).toBeInTheDocument();
     expect(screen.queryByRole("radio", { name: /参考生视频|分镜图生视频/ })).not.toBeInTheDocument();
+    // The grid toggle is not shown under reference-to-video
     // 参考生视频下不呈现宫格开关
     expect(screen.queryByRole("switch", { name: /多宫格分镜/ })).not.toBeInTheDocument();
   });
@@ -619,6 +629,7 @@ describe("ProjectSettingsPage – 基础", () => {
     await waitFor(() => {
       expect(updateSpy).toHaveBeenCalledWith("demo", expect.objectContaining({ grid_storyboard: true }));
     });
+    // Generation mode is not part of the PATCH surface
     // 生成模式不在 PATCH 面上
     expect(updateSpy.mock.calls[0][1]).not.toHaveProperty("generation_mode");
   });
@@ -636,6 +647,7 @@ describe("ProjectSettingsPage – 基础", () => {
       expect(updateSpy).toHaveBeenCalledWith("demo", expect.objectContaining({ episode_target_duration: 120 }));
     });
 
+    // Clearing writes back null (the backend deletes the preference accordingly)
     // 清空即写回 null（后端据此删除该偏好）
     fireEvent.change(screen.getByLabelText(/单集目标时长/), { target: { value: "" } });
     fireEvent.click(saveButton());
@@ -683,6 +695,7 @@ describe("ProjectSettingsPage – 基础", () => {
 
     const input = await screen.findByLabelText(/^语速（可选）$/);
     expect(input).toHaveValue(3);
+    // en projects count by words
     // en 项目按词计
     expect(screen.getByText("词/秒")).toBeInTheDocument();
 
@@ -699,6 +712,7 @@ describe("ProjectSettingsPage – 配音", () => {
     const updateSpy = mockProject({ generation_mode: "reference_video" });
     renderAt("/app/projects/demo/settings?tab=voice");
 
+    // A missing field means the default tier: prompt constraint selected
     // 字段缺省即默认档：提示词约束选中
     expect(await screen.findByRole("radio", { name: /^提示词约束/ })).toBeChecked();
     fireEvent.click(screen.getByRole("radio", { name: /^参考音频/ }));
@@ -715,6 +729,7 @@ describe("ProjectSettingsPage – 配音", () => {
     fireEvent.click(await screen.findByRole("radio", { name: "TTS 配音" }));
     expect(screen.queryByRole("radio", { name: /^提示词约束/ })).not.toBeInTheDocument();
     fireEvent.click(saveButton());
+    // The reference audio channel belongs only to the reference-to-video route: under storyboard mode this key is irrelevant to the project and not written
     // 参考音频通道只属于参考生视频路线：分镜图生视频下该键与项目无关，不写
     await waitFor(() => expect(updateSpy).toHaveBeenCalled());
     expect(updateSpy.mock.calls[0][1]).not.toHaveProperty("character_voice_binding");

@@ -27,13 +27,16 @@ import {
 export interface MemoryWorkspace extends AgentMemoryState {
   entries: MemoryEntry[];
   selection: MemorySelection;
-  /** 二级栏（或限宽页里的文件列表）的条目：索引置顶、记忆文件按修改时间倒序，末尾是「新建记忆文件」。 */
+  /** Entries of the secondary column (or the file list on a width-limited page): index on top, memory files newest first, "New memory file" at the end. / 二级栏（或限宽页里的文件列表）的条目：索引置顶、记忆文件按修改时间倒序，末尾是「新建记忆文件」。 */
   group: SecondaryRailGroup;
   activeId: string;
   hrefFor: (file: string) => string;
 }
 
 /**
+ * Data and selection for the memory file area: the list comes from `useAgentMemory`, the selected file is kept in the URL's `file=` param,
+ * so switching files goes through the router and the leave guard covers switching. `hrefFor` gives the URL that selects a file (or the create form); pass a stable reference.
+ *
  * 记忆文件区的数据与选中项：列表来自 `useAgentMemory`，选中文件记在地址的 `file=` 参数里，
  * 切换文件经路由，离开拦截因此覆盖切换。`hrefFor` 给出选中某个文件（或新建表单）的地址，需传稳定引用。
  */
@@ -81,7 +84,7 @@ export function useMemoryWorkspace(scope: AgentMemoryScope, hrefFor: (file: stri
   };
 }
 
-/** 文件列表加载失败或首次加载中；加载成功时返回 null，由调用方渲染文件区。 */
+/** File list failed to load or is loading for the first time; returns null on success, and the caller renders the file area. / 文件列表加载失败或首次加载中；加载成功时返回 null，由调用方渲染文件区。 */
 export function MemoryLoadState({ workspace, className }: { workspace: MemoryWorkspace; className?: string }) {
   const { t } = useTranslation("dashboard");
   if (workspace.error !== null) {
@@ -110,6 +113,9 @@ export function MemoryLoadState({ workspace, className }: { workspace: MemoryWor
 }
 
 /**
+ * Details of the selection: the file editor or the create form, plus the delete and clear confirmations.
+ * Delete and clear do not change the URL; once the deleted file leaves the list, the selection falls to the first item during render.
+ *
  * 选中项的详情：文件编辑器或新建表单，以及删除、清空的确认。
  * 删除与清空之后不改地址，被删的文件从列表消失后选中项在渲染期落到第一项。
  */
@@ -125,7 +131,7 @@ export function MemoryDetail({ workspace, layout }: { workspace: MemoryWorkspace
   const requestDelete = (name: string) =>
     setConfirm({
       title: t("agent_memory_delete_confirm_title", { name }),
-      // 项目记忆进项目回收站，用户记忆直接删除
+      // Project memory goes to the project trash; user memory is deleted directly / 项目记忆进项目回收站，用户记忆直接删除
       description: t(
         name === INDEX_FILENAME
           ? scope.level === "user"
@@ -164,6 +170,7 @@ export function MemoryDetail({ workspace, layout }: { workspace: MemoryWorkspace
   if (selection.kind === "file") {
     detail = (
       <MemoryFileEditor
+        // Rebuild the whole block when the file changes: unsaved changes and loading state belong to the previous file
         // 换文件时整块重建：未保存的修改与加载状态都属于上一个文件
         key={selection.entry.name}
         scope={scope}
@@ -181,10 +188,11 @@ export function MemoryDetail({ workspace, layout }: { workspace: MemoryWorkspace
         scope={scope}
         entries={entries}
         empty={selection.empty}
-        // 限宽页的分页页头已有说明，全出血分区没有页头
+        // The width-limited page's tab header already has a description; the full-bleed section has no header / 限宽页的分页页头已有说明，全出血分区没有页头
         intro={layout === "pane" ? t("agent_memory_user_desc") : undefined}
         heading={heading}
         onCreated={async (name, signal) => {
+          // Let the list include the new file before selecting it, otherwise the URL would first fall to the first item
           // 列表先包含新文件再选中它，否则地址会先落到第一项
           await reload();
           if (!signal.aborted) navigate(hrefFor(name), { replace: true });

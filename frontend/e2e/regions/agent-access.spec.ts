@@ -2,12 +2,15 @@ import type { Page } from "@playwright/test";
 import { defineRegionScenarios } from "../support/scenarios.ts";
 import { expect, type ApiOverrides } from "../support/test.ts";
 
+// Global settings "External Agent access" and "Access tokens": the steps page, the create-token dialog (incl. the full token shown once),
+// the list of many long-named tokens and the revoke confirmation.
 // 全局设置的「外部 Agent 接入」与「访问令牌」：步骤页、创建令牌对话框（含一次性展示的完整令牌）、
 // 多条长名称令牌的列表与吊销确认。
 
 const EXTERNAL_AGENT = "/app/settings?section=external-agent";
 const ACCESS_TOKENS = "/app/settings?section=access-tokens";
 
+// Stress variant: many tokens, long names, mixing permanent, expired, unexpired and never used (fixed time is 2026-01-01).
 // 压力变体：令牌多、名称长，永久、已过期、未过期与从未使用混在一起（固定时间是 2026-01-01）。
 const MANY_TOKENS: ApiOverrides = {
   "GET /api/v1/api-keys": {
@@ -48,6 +51,7 @@ const CREATED_TOKEN: ApiOverrides = {
   },
 };
 
+// A very long revoke-failure reason: the text wraps in the read-only dialog body and scrolls in the body once it exceeds the available height.
 // 吊销失败的原因很长：说明在只读的对话框正文里折行，超出可用高度后由正文滚动。
 const REVOKE_FAILED: ApiOverrides = {
   ...MANY_TOKENS,
@@ -91,6 +95,7 @@ defineRegionScenarios("外部 Agent 接入与访问令牌", [
       await openCreateDialog(page);
       const dialog = page.getByRole("dialog", { name: "创建访问令牌" });
       await expect(dialog).toBeInViewport({ ratio: 1 });
+      // On open, focus lands in the name input; Enter submits
       // 打开时焦点落在名称输入框，回车即可提交
       await expect(dialog.getByRole("textbox", { name: "名称" })).toBeFocused();
     },
@@ -134,6 +139,7 @@ defineRegionScenarios("外部 Agent 接入与访问令牌", [
       await settingsReady(page);
       await page.getByRole("table", { name: "访问令牌列表" }).waitFor();
     },
+    // Capture only the token table: the config-problem banner at the top of the section is not part of this region and stays out of its baseline
     // 只截令牌表：分区顶部的配置问题横幅不属于本区域，不进本区域的基线
     screenshot: { name: "access-tokens", target: (page) => page.getByRole("table", { name: "访问令牌列表" }) },
   },

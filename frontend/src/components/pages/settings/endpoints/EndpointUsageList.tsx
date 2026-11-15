@@ -6,7 +6,7 @@ import { TruncatedText } from "@/components/shared/TruncatedText";
 import { buttonVariants } from "@/components/ui/button";
 import type { EndpointUsage } from "./endpoint-usages";
 
-/** 端点详情的「使用这个端点的模型」：每行可跳回对应供应商并定位到模型。 */
+/** "Models using this endpoint" in endpoint detail: each row can jump back to its provider and locate the model. / 端点详情的「使用这个端点的模型」：每行可跳回对应供应商并定位到模型。 */
 export function EndpointUsageList({ usages }: { usages: EndpointUsage[] }) {
   const { t } = useTranslation("dashboard");
   const headingId = useId();

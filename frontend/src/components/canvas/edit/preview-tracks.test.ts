@@ -28,6 +28,8 @@ function clip(overrides: Partial<EditClip> & Pick<EditClip, "id" | "unit_id" | "
   };
 }
 
+// c1 trims 1-4s, narration 5s extending onto c2; c2 uses the whole 4s, its narration is attached to c3 (c3 reuses E1U2, starting at 7s), narration 2s;
+// c4's unit was deleted; c5's narration has no voice-over yet. Total length 13s.
 // c1 截取 1–4s，旁白 5s，延伸到 c2 上；c2 整段 4s，它的旁白挂在 c3 上（c3 复用 E1U2，从 7s 开始），旁白 2s；
 // c4 的单元已删除；c5 的旁白还没有配音。总长 13s。
 const READOUT: EditTimelineReadout = {
@@ -180,11 +182,14 @@ describe("placeSubtitles", () => {
     const plan = buildPlaybackPlan(READOUT, null);
 
     expect(placeSubtitles(READOUT, plan, MEDIA)).toEqual([
+      // Narration subtitles count from c1's start and extend onto c2
       // 旁白字幕从 c1 起点算起，延伸到 c2 上
       { start: 0, end: 2.5, text: "第一句。" },
       { start: 2.5, end: 5, text: "第二句。" },
+      // c2 reuses E1U2 but does not carry the narration, so no subtitles; c3 carries the narration
       // c2 复用 E1U2 但不承载旁白，没有字幕；c3 承载旁白
       { start: 7, end: 9, text: "第三句。" },
+      // c5's subtitles follow source footage time, whole clip used
       // c5 的字幕按源素材时间，整段使用
       { start: 10, end: 11, text: "台词一" },
       { start: 11, end: 13, text: "台词二" },
@@ -216,6 +221,7 @@ describe("placeSubtitles", () => {
       bgm: [],
     };
 
+    // Narration subtitles 0-2.5, 2.5-5 interleave with c2's dialogue lines 2-3, 3-4: sorted by start, each ends when the next starts
     // 旁白字幕 0–2.5、2.5–5 与 c2 的台词 2–3、3–4 交错：按起点排列，每条在下一条开始时截止
     expect(placeSubtitles(readout, buildPlaybackPlan(readout, null), MEDIA)).toEqual([
       { start: 0, end: 2, text: "第一句。" },

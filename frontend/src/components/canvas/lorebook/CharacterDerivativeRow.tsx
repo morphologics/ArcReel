@@ -50,7 +50,7 @@ import { useStaleRegenerateConfirm } from "./useStaleRegenerateConfirm";
 import { DerivativeGenerateItems, useImageLaneModel } from "@/components/canvas/timeline/VideoRegenerateItems";
 import { generateDetail } from "@/components/canvas/shared/GenerateLabel";
 
-/** 脚本正文里引用衍生的记号。 */
+/** Token that references the derivative in script text. / 脚本正文里引用衍生的记号。 */
 function derivativeToken(characterName: string, derivativeName: string): string {
   return `@[${characterName}/${derivativeName}]`;
 }
@@ -62,21 +62,26 @@ export interface CharacterDerivativeRowProps {
   characterName: string;
   name: string;
   derivative: CharacterDerivative;
-  /** 衍生图与过期标记；还没取到时为 undefined。 */
+  /** Derivative image and stale flag; undefined until fetched. / 衍生图与过期标记；还没取到时为 undefined。 */
   status: CharacterDerivativeStatus | undefined;
-  /** 本体是否已有资产图。生成的衍生图是对它的一次编辑，没有本体图就不能生成，但可以上传。 */
+  /** Whether the base look already has an asset sheet. A generated derivative image is an edit of it, so without a base sheet it cannot be generated, but can be uploaded. / 本体是否已有资产图。生成的衍生图是对它的一次编辑，没有本体图就不能生成，但可以上传。 */
   ownerHasSheet: boolean;
   readOnly: boolean;
-  /** 详情里其他写入或本体生成占用中：本条的写入入口一起禁用。 */
+  /** Another write or base look generation in the details holds a lock: this entry's write entries are disabled too. / 详情里其他写入或本体生成占用中：本条的写入入口一起禁用。 */
   busy: boolean;
   onView: (image: { src: string; alt: string; title: string }) => void;
-  /** 改名已提交、项目数据刷新之前调用，让这一行沿用原来的编辑单元。 */
+  /** Called after a rename is submitted and before project data refreshes, so this row keeps its original edit unit. / 改名已提交、项目数据刷新之前调用，让这一行沿用原来的编辑单元。 */
   onRenamed: (from: string, to: string) => void;
-  /** 衍生图或登记变化后重新读取衍生图状态。 */
+  /** Re-read derivative image status after the derivative image or registration changes. / 衍生图或登记变化后重新读取衍生图状态。 */
   onSheetsChanged: () => void;
 }
 
 /**
+ * One derivative in the "Derivatives" section of character details: thumbnail, name, copyable reference token, script reference status, appearance change and generate entry.
+ *
+ * The appearance change is this entry's own edit unit, saved inline, coexisting with the asset base look's edit unit; the leave guard covers both.
+ * Rename, delete, partial edit, upload and version restore are immediate actions. Uploaded derivative images are finished pieces and do not need a base asset sheet.
+ *
  * 角色详情「衍生」区块里的一条衍生：缩略图、名称、可复制的引用记号、脚本引用状态、外观变化与生成入口。
  *
  * 外观变化是这一条自己的编辑单元，在行内保存，与资产本体的编辑单元并存，离开拦截覆盖两者。
@@ -132,9 +137,11 @@ export function CharacterDerivativeRow({
     leaveTitle: t("assets:edit_leave_title", { name: qualified }),
   });
   const saving = unit.status === "saving";
+  // This entry's generation, version restore, rename or delete is in flight, or something else in the details is writing: sibling entries are disabled too
   // 本条的生成、版本恢复、改名或删除在途，或详情里别处在写：兄弟入口一起禁用
   const rowBusy = busy || generating || restoring || pending;
 
+  // Before status is read back, judge by the registered derivative image, same rule as the gallery card's sheetStateOf, to avoid first flashing as pending
   // 状态读回前按登记的衍生图判定，与画廊卡片的 sheetStateOf 同口径，避免先闪成待生成
   const artifactStatus = status
     ? (status.artifact_status ?? (status.stale ? "stale" : status.character_sheet ? "current" : "missing"))
@@ -143,7 +150,7 @@ export function CharacterDerivativeRow({
       : "missing";
   const sheetPath = artifactStatus === "missing" ? "" : (status?.character_sheet ?? derivative.character_sheet ?? "");
   const sheetFp = useProjectsStore((s) => (sheetPath ? s.getAssetFingerprint(sheetPath) : null));
-  // 行内缩略图取 640 宽的缩略图，查看大图仍用原图
+  // The inline thumbnail uses the 640-wide thumbnail; the full image view still uses the original / 行内缩略图取 640 宽的缩略图，查看大图仍用原图
   const sheetUrl = sheetPath ? API.getFileUrl(projectName, sheetPath, sheetFp) : null;
   const thumbUrl = sheetPath ? API.getFileUrl(projectName, sheetPath, sheetFp, { width: 640 }) : null;
   const imageUrl = sheetUrl && thumbUrl !== failedUrl ? sheetUrl : null;
@@ -159,7 +166,7 @@ export function CharacterDerivativeRow({
           ? "current"
           : "missing";
 
-  /** 提交时刻复核：队列里本体与这条衍生的占用，加上详情里的本地在途写入。 */
+  /** Re-check at submit time: queue locks on the base look and this derivative, plus local in-flight writes in the details. / 提交时刻复核：队列里本体与这条衍生的占用，加上详情里的本地在途写入。 */
   const rejectIfBusy = () => {
     if (rowBusy) {
       useAppStore.getState().pushToast(t("assets:derivative_busy_hint"), "info");
@@ -207,8 +214,10 @@ export function CharacterDerivativeRow({
   });
 
   const generate = (imageModel: string | null = null) => {
+    // Re-check before submitting: between render and click, the base look or this derivative may have just been locked elsewhere
     // 提交前复核：从渲染到点击之间，本体或这条衍生可能刚被别处占用
     if (rejectIfBusy()) return;
+    // The derivative image is generated from the appearance change: once changed, saving makes this image stale, which the server's current verdict cannot yet see
     // 衍生图由外观变化生成：改了它，保存后这张图就会过期，服务端此刻的判定还看不到
     const willBeStale = unit.value !== unit.savedValue;
     void unit.saveAndGenerate(() => handleGenerate(imageModel ?? undefined), {
@@ -219,7 +228,7 @@ export function CharacterDerivativeRow({
     });
   };
 
-  /** 跑一次立即执行的写入；失败时弹出原因并返回 false。 */
+  /** Run one immediate write; on failure show the reason and return false. / 跑一次立即执行的写入；失败时弹出原因并返回 false。 */
   const run = async (work: () => Promise<unknown>): Promise<boolean> => {
     if (rejectIfBusy()) return false;
     setPending(true);
@@ -239,12 +248,12 @@ export function CharacterDerivativeRow({
     if (rejectIfBusy()) return;
     setRenameDraft(name);
     setRenaming(true);
-    // 菜单关闭后焦点会回到「更多」，等它落定再移到输入框
+    // After the menu closes focus returns to "More"; wait for that to settle before moving to the input / 菜单关闭后焦点会回到「更多」，等它落定再移到输入框
     requestAnimationFrame(() => renameInputRef.current?.select());
   };
 
   const submitRename = async () => {
-    // 与后端同口径（strip + NFC），行映射登记的是落盘后的真名
+    // Same rule as the backend (strip + NFC); the row map registers the real name as stored / 与后端同口径（strip + NFC），行映射登记的是落盘后的真名
     const next = normalizeAssetName(renameDraft);
     if (!next || next === name) {
       setRenaming(false);
@@ -262,6 +271,7 @@ export function CharacterDerivativeRow({
   const handleDelete = async () => {
     const ok = await run(() =>
       API.deleteCharacterDerivative(projectName, characterName, name).then(() => {
+        // The delete confirmation already states the appearance change is deleted too: this row's draft is discarded with it, not retained as an "external delete"
         // 删除确认已写明外观变化会一起删除：这一行的草稿随之放弃，不作为「外部删除」保留
         unit.discard();
         return refreshAfterWrite(projectName, t);
@@ -282,7 +292,7 @@ export function CharacterDerivativeRow({
     );
   };
 
-  // 打开会写这条衍生的对话框前复核占用态
+  // Re-check lock state before opening a dialog that writes this derivative / 打开会写这条衍生的对话框前复核占用态
   const openGuarded = (key: RowDialog) => {
     if (!rejectIfBusy()) setDialog(key);
   };
@@ -338,7 +348,7 @@ export function CharacterDerivativeRow({
                 onChange={(e) => setRenameDraft(e.target.value)}
                 onKeyDown={(e) => {
                   if (e.key === "Escape") {
-                    // Esc 只退出改名，不连带关闭外层 Sheet
+                    // Esc only exits rename, without also closing the outer Sheet / Esc 只退出改名，不连带关闭外层 Sheet
                     e.preventDefault();
                     e.stopPropagation();
                     if (!pending) setRenaming(false);
@@ -383,6 +393,7 @@ export function CharacterDerivativeRow({
                       <DropdownMenuItem
                         disabled={rowBusy}
                         onClick={() => {
+                          // Re-check lock state before opening the file picker; run re-checks again when the chosen file is submitted
                           // 打开文件选择前复核占用态，选好文件提交时由 run 再复核一次
                           if (!rejectIfBusy()) uploadRef.current?.click();
                         }}
@@ -467,7 +478,7 @@ export function CharacterDerivativeRow({
               title={t("assets:prompt_preview_title", { name: qualified })}
               beforeOpen={unit.save}
               saveFirst={unit.dirty}
-              // 保存在途时不再并发第二次保存
+              // No second concurrent save while a save is in flight / 保存在途时不再并发第二次保存
               disabled={saving}
               load={(signal) =>
                 API.previewAssetPrompt(projectName, "character", characterName, unit.value, {
@@ -521,7 +532,7 @@ export function CharacterDerivativeRow({
           <AlertDialog
             open={dialog === "delete"}
             onOpenChange={(open) => {
-              // 删除在途时忽略关闭
+              // Ignore close while delete is in flight / 删除在途时忽略关闭
               if (!open && !pending) setDialog(null);
             }}
           >

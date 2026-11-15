@@ -17,6 +17,12 @@ import type { EpisodeSurface } from "@/stores/episode-surface-store";
 import { formatNameList } from "@/utils/list-format";
 
 /**
+ * "Step list" projection of the workflow status panel: arranges the backend's workflow status (content state, per-operation admission, suggested next step)
+ * into one row per kind of content, with the next step attached to the row it belongs to.
+ *
+ * Each row only states what its kind of content looks like right now, without looking at earlier steps: if the previous step isn't done, the later row still says "none yet",
+ * not "waiting for the previous step". Reminders such as stale or missing description attach to the corresponding row and don't go into the next step.
+ *
  * 制作进度面板的「步骤清单」投影：把后端的制作状态（内容现状、各操作准入、建议的下一步）
  * 排成一行一类内容，下一步挂在它所属的那一行上。
  *
@@ -36,10 +42,10 @@ export type StepRowKey =
   | "videos"
   | "edit";
 
-/** 行的现状色调：已齐 / 还没有 / 部分 / 进行中 / 需要留意 / 读不出。 */
+/** Status tone of a row: complete / none yet / partial / in progress / needs attention / unreadable. / 行的现状色调：已齐 / 还没有 / 部分 / 进行中 / 需要留意 / 读不出。 */
 export type StepRowTone = "done" | "todo" | "partial" | "running" | "warn" | "danger";
 
-/** 按下一个入口之后要做的事；面板按类型分派到具体的处理函数。 */
+/** What to do after pressing an entry; the panel dispatches to the specific handler by type. / 按下一个入口之后要做的事；面板按类型分派到具体的处理函数。 */
 export type StepIntent =
   | { type: "agent"; text: string }
   | { type: "draft_to_agent"; docType: DraftDocType }
@@ -61,6 +67,9 @@ export type StepIntent =
   | { type: "route"; path: string };
 
 /**
+ * One entry. `agent` is "Hand to Agent" (solid), `ai` is a direct AI call (outlined), `nav` is navigating or doing it manually (text link),
+ * `danger` is a destructive action needing confirmation (red text link). When `disabledReason` is non-empty the entry still shows but isn't clickable, with the reason on hover.
+ *
  * 一个入口。`agent` 是「交给 Agent」（实心），`ai` 是直接 AI 调用（描边），`nav` 是跳转或手动去做（文字链），
  * `danger` 是需确认的破坏性操作（红字链）。`disabledReason` 非空时入口照常显示但不可点，悬停说明原因。
  */
@@ -85,13 +94,13 @@ export interface StepRowView {
   tone: StepRowTone;
   status: string;
   notes: StepNote[];
-  /** 本行常驻的入口（不是建议的下一步）。 */
+  /** Always-present entries of this row (not the suggested next step). / 本行常驻的入口（不是建议的下一步）。 */
   acts: StepAct[];
-  /** 归到这一行的后端步骤：任务、结构问题、过期产物与整批准入从这里取。 */
+  /** Backend steps assigned to this row: tasks, structural problems, stale artifacts and whole-batch admission are taken from here. / 归到这一行的后端步骤：任务、结构问题、过期产物与整批准入从这里取。 */
   steps: WorkflowPlanStep[];
 }
 
-/** 附加指令：`persist` 非空时按集保存到对应字段，为 null 时只随本次调用带上。 */
+/** Instructions: when `persist` is non-empty they are saved per episode to the corresponding field; when null they are only carried with this call. / 附加指令：`persist` 非空时按集保存到对应字段，为 null 时只随本次调用带上。 */
 export interface StepInstruction {
   initial: string;
   persist: "prompt_authoring" | null;
@@ -99,7 +108,7 @@ export interface StepInstruction {
 
 export interface NextStepView {
   rowKey: StepRowKey;
-  /** 下一步的动作类型，面板用它区分附加指令的归属。 */
+  /** Action type of the next step; the panel uses it to tell where instructions belong. / 下一步的动作类型，面板用它区分附加指令的归属。 */
   actionType: WorkflowNextAction["type"];
   title: string;
   detail: string | null;
@@ -120,41 +129,41 @@ export interface ProgressHeadline {
 export interface StepListView {
   rows: StepRowView[];
   next: NextStepView | null;
-  /** 收起时的一句话现状。 */
+  /** One-sentence status when collapsed. / 收起时的一句话现状。 */
   summary: string;
   headline: ProgressHeadline;
-  /** 广告/短片标题行的「总时长 / 目标时长」；`over` 为超出目标 10% 以上。 */
+  /** "Total duration / target duration" of the ad/short title row; `over` means more than 10% over the target. / 广告/短片标题行的「总时长 / 目标时长」；`over` 为超出目标 10% 以上。 */
   adDuration: { total: number | null; target: number; over: boolean } | null;
 }
 
 export interface StepListContext {
   t: TFunction;
-  /** 界面语言，名单按它连接。 */
+  /** UI language, by which name lists are joined. / 界面语言，名单按它连接。 */
   lang: string;
   episodeId: number;
-  /** 集名连同集 ID 的指称，预填给 Agent 用（`episodeAgentRef`）。 */
+  /** Reference to the episode name along with episode ID, prefilled for the Agent (`episodeAgentRef`). / 集名连同集 ID 的指称，预填给 Agent 用（`episodeAgentRef`）。 */
   episodeRef: string;
-  /** 界面上称呼条目：「视频单元 5」，按本集里的当前位置。 */
+  /** How the UI refers to an entry: "Video unit 5", by its current position in this episode. / 界面上称呼条目：「视频单元 5」，按本集里的当前位置。 */
   itemLabel: (itemId: string) => string;
-  /** 预填给 Agent 的条目指称：位置连同条目 ID（`episodeItemAgentRef`）。 */
+  /** Entry reference prefilled for the Agent: position along with entry ID (`episodeItemAgentRef`). / 预填给 Agent 的条目指称：位置连同条目 ID（`episodeItemAgentRef`）。 */
   itemAgentRef: (itemId: string) => string;
-  /** 本集正式脚本的总时长（秒），项目摘要给出；未知时为 null。 */
+  /** Total duration (seconds) of this episode's final script, given by the project summary; null when unknown. / 本集正式脚本的总时长（秒），项目摘要给出；未知时为 null。 */
   episodeDurationSeconds: number | null;
-  /** 广告/短片的目标时长（秒）；未设或非广告为 null。 */
+  /** Target duration (seconds) of the ad/short; null when unset or not an ad. / 广告/短片的目标时长（秒）；未设或非广告为 null。 */
   adTargetSeconds: number | null;
-  /** 资产名对应的画廊路由；名字不在任何资产表里时为 null。 */
+  /** Gallery route for an asset name; null when the name isn't in any asset table. / 资产名对应的画廊路由；名字不在任何资产表里时为 null。 */
   assetRoute: (name: string) => string | null;
-  /** 本集保存的提示词编写附加指令。 */
+  /** Prompt authoring instructions saved for this episode. / 本集保存的提示词编写附加指令。 */
   savedPromptInstructions: string;
-  /** 集页上是否挂着「编写提示词」的宿主（有正式脚本时才有）。 */
+  /** Whether the episode page hosts "Write prompts" (only when there's a final script). / 集页上是否挂着「编写提示词」的宿主（有正式脚本时才有）。 */
   canAuthorPrompts: boolean;
-  /** 能否跳到画布上的某个单元。 */
+  /** Whether it can jump to a unit on the canvas. / 能否跳到画布上的某个单元。 */
   canViewUnit: boolean;
-  /** 本集的剪辑概况；还没取到或本集没有剪辑时间线时为 null。 */
+  /** This episode's edit overview; null when not fetched yet or the episode has no edit timeline. / 本集的剪辑概况；还没取到或本集没有剪辑时间线时为 null。 */
   editOverview: EpisodeEditOverview | null;
 }
 
-/** 状态里的草稿种类 → 草稿端点的 `doc_type`。 */
+/** Draft kind in the status -> `doc_type` of the draft endpoint. / 状态里的草稿种类 → 草稿端点的 `doc_type`。 */
 const DOC_TYPE_BY_DRAFT_KIND: Record<string, DraftDocType> = {
   drama_script_plan: "drama_script_plan",
   narration_script_plan: "narration_script_plan",
@@ -164,10 +173,10 @@ const DOC_TYPE_BY_DRAFT_KIND: Record<string, DraftDocType> = {
 
 const PROMPT_AUTHORING_DRAFT_KIND = "reference_video_prompt_authoring";
 
-/** 超出目标时长多少算「明显超出」，按比例。 */
+/** How far over the target duration counts as "clearly over", as a ratio. / 超出目标时长多少算「明显超出」，按比例。 */
 const AD_DURATION_OVER_RATIO = 1.1;
 
-/** 整批准入与任务失败交回的动作：它们的入口在视频行的准入陈述里，不在下一步里另起按钮。 */
+/** Actions handed back by whole-batch admission and task failures: their entries are in the video row's admission statement, not as separate buttons in the next step. / 整批准入与任务失败交回的动作：它们的入口在视频行的准入陈述里，不在下一步里另起按钮。 */
 const ADMISSION_ACTIONS = new Set<WorkflowNextAction["type"]>([
   "retry",
   "fix_input",
@@ -188,7 +197,7 @@ function ids(collection: WorkflowArtifactCollection | undefined, key: "current_i
   return Array.isArray(value) ? value : [];
 }
 
-/** 准入被拒时悬停显示的原因，准入成立时为 null。「此类项目不适用」的操作由调用方用 `operationApplies` 过滤掉入口。 */
+/** Reason shown on hover when admission is rejected; null when admission holds. Operations "not applicable to this kind of project" have their entries filtered out by the caller with `operationApplies`. / 准入被拒时悬停显示的原因，准入成立时为 null。「此类项目不适用」的操作由调用方用 `operationApplies` 过滤掉入口。 */
 export function refusalReason(t: TFunction, operation: WorkflowOperation | undefined): string | null {
   if (!operation || operation.state === "admitted") return null;
   const reason = operation.reason ?? "unknown";
@@ -207,7 +216,7 @@ interface Facts {
   steps: Map<string, WorkflowPlanStep>;
 }
 
-/** 媒体类内容的一句话现状：「N 个中 M 个已生成」，都齐时「全部 N 个已生成」。 */
+/** One-sentence status of media content: "M of N generated", and "All N generated" when complete. / 媒体类内容的一句话现状：「N 个中 M 个已生成」，都齐时「全部 N 个已生成」。 */
 function mediaStatus(t: TFunction, collection: WorkflowArtifactCollection | undefined): { status: string; tone: StepRowTone } {
   if (collection?.state === "blocked") return { status: t("workflow:status_unreadable"), tone: "danger" };
   const available = ids(collection, "current_ids").length + ids(collection, "stale_ids").length;
@@ -218,7 +227,7 @@ function mediaStatus(t: TFunction, collection: WorkflowArtifactCollection | unde
   return { status: t("workflow:status_media_some", { count: total, available }), tone: "partial" };
 }
 
-/** 补充集原文：集页上无原文的集直接显示填写框，按下后聚焦到它。 */
+/** Fill in the episode source: episodes with no source show the input box directly on the episode page, and pressing focuses it. / 补充集原文：集页上无原文的集直接显示填写框，按下后聚焦到它。 */
 function provideSourceAct(t: TFunction): StepAct {
   return {
     key: "provide-source",
@@ -228,7 +237,7 @@ function provideSourceAct(t: TFunction): StepAct {
   };
 }
 
-/** 去「脚本规划」tab 的起步区规划脚本，附加指令在那里填写。 */
+/** Go to the starting area of the "Script plan" tab to plan the script; instructions are entered there. / 去「脚本规划」tab 的起步区规划脚本，附加指令在那里填写。 */
 function goPlanScriptAct(t: TFunction): StepAct {
   return {
     key: "go-plan",
@@ -318,6 +327,7 @@ function buildRows(facts: Facts, ctx: StepListContext): StepRowView[] {
     }
     const planDraft = draftOf(content, false);
     const planState = status.artifacts.script_plan?.state;
+    // The episode source input only shows when this episode has neither a plan nor a draft; otherwise this entry would lead nowhere.
     // 填写集原文的界面只在本集既没有规划也没有草稿时显示，其余时候这个入口点了没有去处。
     const sourceSurfaceShown = (planState === undefined || planState === "missing") && content.drafts.length === 0;
     const acts: StepAct[] =
@@ -361,9 +371,11 @@ function buildRows(facts: Facts, ctx: StepListContext): StepRowView[] {
     const planOffered = !planDraft && planState === "missing" && nextType !== "prepare_script_plan" && operationApplies(planOp);
     let planActs: StepAct[] = [];
     if (planOffered && formal !== "present") {
+      // First-time planning is only done in the starting area of the "Script plan" tab; this only jumps there.
       // 首次规划只在「脚本规划」tab 的起步区里做，这里只跳过去。
       planActs = [{ ...goPlanScriptAct(t), disabledReason: refusalReason(t, planOp) }];
     } else if (planOffered && formal === "present") {
+      // With an existing final script (e.g. started from blank) the whole episode can still be handed to AI planning; the new plan is pending confirmation and only replaces the final script after overwrite confirmation.
       // 已有正式脚本（如从空白开始）时也能整集交给 AI 规划；新规划待确认，经覆盖确认才替换正式脚本。
       planActs = [
         {
@@ -403,6 +415,7 @@ function buildRows(facts: Facts, ctx: StepListContext): StepRowView[] {
     scriptStatus = t("workflow:status_none");
     scriptTone = "todo";
   }
+  // Full redo for ad/short: the server reports missing inputs first; `formal_script_exists` only blocks first-time generation, not redos.
   // 广告/短片的整份重做：服务端先报输入缺失，`formal_script_exists` 只拦首次生成，不拦重做。
   const generateOp = status.operations.generate_script;
   const scriptActs: StepAct[] =
@@ -530,7 +543,7 @@ function buildRows(facts: Facts, ctx: StepListContext): StepRowView[] {
   return rows.map(withRunning);
 }
 
-/** 剪辑的两个入口：交给 Agent 剪辑为主，按脚本机械新建一条剪辑时间线为次；准入是本集至少有一个可用视频。 */
+/** Two edit entries: hand editing to the Agent first, mechanically create an edit timeline from the script second; admission is that this episode has at least one usable video. / 剪辑的两个入口：交给 Agent 剪辑为主，按脚本机械新建一条剪辑时间线为次；准入是本集至少有一个可用视频。 */
 function editActs(facts: Facts, ctx: StepListContext): StepAct[] {
   const { t } = ctx;
   const refusal = refusalReason(t, facts.plan.status.operations.create_edit_timeline);
@@ -546,13 +559,13 @@ function editActs(facts: Facts, ctx: StepListContext): StepAct[] {
   ];
 }
 
-/** 本集剪辑时间线条数：优先取剪辑概况，取不到时按计划里的剪辑时间线 ID 计。 */
+/** Number of this episode's edit timelines: prefer the edit overview, and when unavailable count by edit timeline IDs in the plan. / 本集剪辑时间线条数：优先取剪辑概况，取不到时按计划里的剪辑时间线 ID 计。 */
 function editTimelineCount(facts: Facts, ctx: StepListContext): number {
   const ids = facts.plan.status.artifacts.edit_timelines?.timeline_ids;
   return ctx.editOverview?.timeline_count ?? (Array.isArray(ids) ? ids.length : 0);
 }
 
-/** 已有剪辑时间线时去剪辑视图的文字链；给出 `timelineId` 时切到那条剪辑时间线。 */
+/** Text link to the edit view when there are edit timelines; when `timelineId` is given, switches to that edit timeline. / 已有剪辑时间线时去剪辑视图的文字链；给出 `timelineId` 时切到那条剪辑时间线。 */
 function openEditViewAct(ctx: StepListContext, key: string, label: string, timelineId?: string): StepAct {
   return { key, label, kind: "nav", intent: { type: "route", path: episodeEditViewPath(ctx.episodeId, timelineId) } };
 }
@@ -580,6 +593,7 @@ function editRow(facts: Facts, ctx: StepListContext): StepRowView {
       act: openEditViewAct(ctx, "final-cut-stale-render", t("workflow:act_go_render"), stale[0].id),
     });
   }
+  // When editing is the next step the entry expands in place in the next step; otherwise when there are final script entries it is always present in this row, greyed out when admission isn't met.
   // 剪辑是下一步时入口就地展开在下一步里；其余时候有正式脚本条目就常驻在本行，准入不满足时置灰。
   const hasItems = content.formal_script === "present" && (content.script_item_count ?? 0) > 0;
   const acts = hasItems && plan.next_action.type !== "create_edit_timeline" ? editActs(facts, ctx) : [];
@@ -641,6 +655,7 @@ function assetsRow(facts: Facts, ctx: StepListContext): StepRowView {
     status = t("workflow:status_assets_missing", { count: toGenerate.length });
     tone = "partial";
   } else if (content.referenced_assets_without_sheet.length > 0) {
+    // The rest without asset sheets can't be generated now (missing description, or a derivative's base look lacks an image); see this row's reminder for why.
     // 余下没有资产图的是现在生成不了的（缺描述，或衍生的本体缺图），原因见本行的提醒。
     status = t("workflow:status_assets_unsheeted", { count: content.referenced_assets_without_sheet.length });
     tone = "warn";
@@ -659,7 +674,7 @@ function assetsRow(facts: Facts, ctx: StepListContext): StepRowView {
   };
 }
 
-/** 下一步挂在哪一行。 */
+/** Which row the next step attaches to. / 下一步挂在哪一行。 */
 function ownerRow(facts: Facts, rows: StepRowView[], action: WorkflowNextAction): StepRowKey | null {
   switch (action.type) {
     case "resolve_draft":
@@ -705,7 +720,7 @@ function agentAct(t: TFunction, text: string, label?: string, disabledReason?: s
   };
 }
 
-/** 广告/短片「AI 生成脚本」：带上下一步的附加指令直接提交，结果写成正式脚本。 */
+/** Ad/short "AI generate script": submit directly with the next step's instructions, writing the result as the final script. / 广告/短片「AI 生成脚本」：带上下一步的附加指令直接提交，结果写成正式脚本。 */
 function adScriptAct(t: TFunction, disabledReason?: string | null): StepAct {
   return {
     key: "ai-generate-script",
@@ -920,6 +935,7 @@ function buildNext(facts: Facts, rows: StepRowView[], ctx: StepListContext): Nex
     case "generate_grid":
     case "generate_videos": {
       const primary = [agentAct(t, t(`workflow:agent_prefill_${action.type}`, { episodeRef }))];
+      // The batch entry for storyboard mode uses the same confirmation dialog as the timeline toolbar; grid images and reference-to-video each have their own entry.
       // 分镜图生视频的批量入口与时间线工具栏同一个确认框；宫格图与参考生视频各有自己的入口。
       const batchKind: StoryboardBatchKind | null =
         facts.plan.status.project.generation_mode === "reference_video"
@@ -980,7 +996,7 @@ function buildNext(facts: Facts, rows: StepRowView[], ctx: StepListContext): Nex
         ],
       };
     case "confirm_request_duration":
-      // 确认入口在视频行的整批准入陈述里。
+      // The confirmation entry is in the video row's whole-batch admission statement. / 确认入口在视频行的整批准入陈述里。
       return base;
     default:
       return ADMISSION_ACTIONS.has(action.type)
@@ -990,6 +1006,9 @@ function buildNext(facts: Facts, rows: StepRowView[], ctx: StepListContext): Nex
 }
 
 /**
+ * When assets without asset sheets are referenced, the generation entry rejects shots that reference them: the next step is still given, with an extra jump hint.
+ * The hint only states the count; which assets and why they have no sheet is stated by the asset sheet row's reminder. Video only references assets directly in reference-to-video mode.
+ *
  * 引用了还没有资产图的资产时，生成入口会拒绝引用它们的分镜：下一步照常给出，另附一条跳转提示。
  * 提示只说数量，具体是哪些资产、为什么没有资产图由资产图行的提醒陈述。视频只在参考生视频模式直接引用资产。
  */

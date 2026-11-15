@@ -1,6 +1,6 @@
 import { useMemo } from "react";
 import { useTranslation } from "react-i18next";
-// react-doctor-disable-next-line react-doctor/prefer-dynamic-import -- 本模块由 UsageTrendCard 经 lazyNamed 按需加载，recharts 随它进独立 chunk
+// react-doctor-disable-next-line react-doctor/prefer-dynamic-import -- This module is loaded on demand by UsageTrendCard via lazyNamed; recharts goes into a separate chunk with it / 本模块由 UsageTrendCard 经 lazyNamed 按需加载，recharts 随它进独立 chunk
 import { Bar, BarChart, CartesianGrid, XAxis, YAxis } from "recharts";
 
 import { ChartContainer, ChartTooltip, type ChartConfig } from "@/components/ui/chart";
@@ -9,21 +9,21 @@ import { formatRatio } from "./usage-record-format";
 import type { TrendBucket, TrendMetric, TrendSeries } from "./usage-trend";
 import { bucketSuccessRate, bucketTotal, seriesFor, shortDay, trendTicks } from "./usage-trend";
 
-/** 柱宽上限与顶端圆角。 */
+/** Maximum bar width and top corner radius. / 柱宽上限与顶端圆角。 */
 const MAX_BAR_WIDTH = 24;
 const BAR_RADIUS = 4;
 
 export interface UsageTrendChartProps {
   buckets: TrendBucket[];
   metric: TrendMetric;
-  /** 图表的可读名称，同时作为表格替代的标题。 */
+  /** Readable name of the chart, also used as the caption of the table alternative. / 图表的可读名称，同时作为表格替代的标题。 */
   name: string;
   formatValue: (value: number) => string;
-  /** 桶的区间文案；按天时是单个日期，按周时是「M/D – M/D」。 */
+  /** Bucket range label; a single date when by day, "M/D – M/D" when by week. / 桶的区间文案；按天时是单个日期，按周时是「M/D – M/D」。 */
   bucketLabel: (bucket: TrendBucket) => string;
 }
 
-/** 一根柱的数据行：各序列的值按序列 key 展开，另带原桶供提示使用。 */
+/** Data row for one bar: each series' value spread by series key, plus the original bucket for the tooltip. / 一根柱的数据行：各序列的值按序列 key 展开，另带原桶供提示使用。 */
 type TrendRow = Record<string, number | string | TrendBucket> & { from: string; bucket: TrendBucket };
 
 function TrendTooltip({
@@ -67,6 +67,9 @@ function TrendTooltip({
 }
 
 /**
+ * Stacked bar chart by day (or week). For assistive technology the chart itself is a named image; the equivalent data is carried by the table
+ * alternative that follows -- screen readers read tables far more reliably than bar coordinates.
+ *
  * 按天（或按周）堆叠的柱图。图本身对辅助技术是一张带名字的图片，等价数据由紧随其后的
  * 表格替代承担——屏幕阅读器读表比读柱子的坐标可靠得多。
  */
@@ -136,6 +139,7 @@ export function UsageTrendChart({ buckets, metric, name, formatValue, bucketLabe
                 stackId="trend"
                 fill={entry.color}
                 maxBarSize={MAX_BAR_WIDTH}
+                // Only the topmost segment is rounded; middle segments are square so there are no gaps between segments.
                 // 只有最上面一段带圆角；中间段方角，段与段之间不出现缺口。
                 radius={index === series.length - 1 ? [BAR_RADIUS, BAR_RADIUS, 0, 0] : 0}
                 isAnimationActive={false}

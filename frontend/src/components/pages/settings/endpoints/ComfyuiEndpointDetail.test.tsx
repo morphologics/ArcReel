@@ -132,6 +132,7 @@ function installedRecord(defn: ComfyuiEndpointDefinition, overrides?: Partial<En
   return { ...savedRecord(defn), installation: { ...INSTALLATION, ...overrides } };
 }
 
+/** A row's header cell: the semantic key's mono id shares one cell with its status, target and expand button; the expanded panel is outside the cell. */
 /** 一行的表头格：语义键的 mono id 与它的状态、目标、展开按钮同处一格，展开面板在格子外。 */
 function row(key: string): HTMLElement {
   const cell = screen.getByText(key, { selector: "span.font-mono" }).closest("div.grid");
@@ -246,6 +247,7 @@ describe("ComfyuiEndpointDetail", () => {
     expect(within(row("start_image")).getByText("未找到")).toBeInTheDocument();
     expect(within(row("end_image")).getByText("不支持")).toBeInTheDocument();
     expect(within(row("output")).getByText("必填未绑定")).toBeInTheDocument();
+    // Semantic keys not mentioned by inference also count as not found: reference_images, width, height, frames, frame rate and output, 7 in total.
     // 没被推断提到的语义键一并算未找到：reference_images、宽、高、帧数、帧率与 output 共 7 项。
     expect(screen.getByText("已绑定 2 · 需选择 1 · 未找到 7 · 不支持 1")).toBeInTheDocument();
   });
@@ -267,6 +269,7 @@ describe("ComfyuiEndpointDetail", () => {
   });
 
   it("leaves a row the user is working in open, so an ordered multi-pick can be finished in one go", async () => {
+    // Reference images are an ordered multi-select: if the panel closed after choosing the first, the second could never be clicked.
     // 参考图是有序多选：选中第一张之后面板合上的话，第二张根本点不到。
     const first: ComfyuiBindingTarget = { node: "10", input: "image", class_type: "LoadImage" };
     const second: ComfyuiBindingTarget = { node: "11", input: "image", class_type: "LoadImage" };
@@ -304,6 +307,7 @@ describe("ComfyuiEndpointDetail", () => {
       }),
     });
 
+    // Width and height can have several targets, so the candidate list is a multi-select group rather than a single-select group.
     // 宽高可以有多个落点，候选列表因此是多选组而不是单选组。
     await userEvent.click(within(screen.getByRole("group", { name: "候选落点" })).getAllByRole("checkbox")[0]);
 
@@ -311,6 +315,7 @@ describe("ComfyuiEndpointDetail", () => {
   });
 
   it("refuses a step that is not a whole positive number", async () => {
+    // `min={1}` only stops the up/down arrows; negatives and `Infinity` can be typed in, and saving does not run form validation again.
     // `min={1}` 只拦得住上下箭头；负数与 `Infinity` 手打得进来，保存时又不再过一次表单校验。
     const width: ComfyuiBindingTarget = { node: "50", input: "width", class_type: "WanImageToVideo" };
     renderDetail({
@@ -332,6 +337,7 @@ describe("ComfyuiEndpointDetail", () => {
     await userEvent.type(step, "-4");
     expect(step).toHaveValue(null);
 
+    // The schema declares step as an integer: a stored decimal would be rejected by definition validation.
     // schema 把 step 声明为整数：小数存下去会被定义校验打回。
     await userEvent.clear(step);
     await userEvent.type(step, "1.5");
@@ -398,6 +404,8 @@ describe("ComfyuiEndpointDetail", () => {
   });
 
   it("keeps the other targets of a dimension when one candidate is toggled", async () => {
+    // Width, height, frames and frame rate all write/read every target: clicking a candidate adds or removes only that one; replacing the same key's other targets would leave those
+    // branches never receiving size and frame count again.
     // 宽高帧数帧率都写/读全部落点：点中一个候选只增删这一条，把同键其余落点顶掉会让那几路
     // 分支再也收不到尺寸与帧数。
     const widthA: ComfyuiBindingTarget = { node: "50", input: "width", class_type: "WanImageToVideo" };
@@ -419,6 +427,7 @@ describe("ComfyuiEndpointDetail", () => {
     expect(within(group).getAllByRole("checkbox")[0]).toBeChecked();
     expect(within(group).getAllByRole("checkbox")[1]).toBeChecked();
 
+    // Clicking again cancels, removing only that one.
     // 再点一次即取消，只去掉这一条。
     await userEvent.click(within(group).getAllByRole("checkbox")[0]);
     expect(within(group).getAllByRole("checkbox")[0]).not.toBeChecked();
@@ -468,6 +477,7 @@ describe("ComfyuiEndpointDetail", () => {
     await userEvent.click(screen.getAllByRole("button", { name: "重新识别" })[0]);
 
     await waitFor(() => expect(infer).toHaveBeenCalledOnce());
+    // Confirmed bindings are exactly the rematch input, so the item to redo must first be removed from the payload.
     // 已确认的绑定正是重匹配的输入，要重来的那一项因此必须先从载荷里摘掉。
     const payload = infer.mock.calls[0][0] as ComfyuiEndpointDefinition;
     expect(payload.bindings.prompt).toBeUndefined();
@@ -476,6 +486,7 @@ describe("ComfyuiEndpointDetail", () => {
   });
 
   it("leaves a pick made while recognition was still running in place", async () => {
+    // While re-detection is in flight the user sets the same item: that later press is newer than the in-flight round, and the returning result should not change it.
     // 重新识别在途时用户自己定了同一项：他后按的那一下比在途那轮新，结果回来不该把它改掉。
     let release: (value: ComfyuiInferResponse) => void = () => {};
     const pending = new Promise<ComfyuiInferResponse>((resolve) => {
@@ -540,6 +551,7 @@ describe("ComfyuiEndpointDetail", () => {
   });
 
   it("opens an already saved endpoint with nothing to save", async () => {
+    // The server's rematch always backfills title: "" for untitled nodes, while the stored copy omits the key: the same binding, two spellings.
     // 服务端重匹配对无标题节点一律回填 title: ""，落盘的那一份省略这个键：同一份绑定，两种写法。
     const defn = definition({ bindings: { prompt: [PROMPT], output: [OUTPUT] } });
     renderDetail({
@@ -630,6 +642,8 @@ describe("ComfyuiEndpointDetail", () => {
   });
 
   it("shows the credentials this endpoint actually sends, query ones included", async () => {
+    // An endpoint with credentials configured only in the query still has them spliced into the URL when actually sent; recognizing only headers would display
+    // an Authorization it does not use at all.
     // 只在 query 里配了凭据的端点实发时照样把它拼进 URL；只认 headers 的话，展示的是一句
     // 它根本不用的 Authorization。
     renderDetail({ definition: definition({ auth: { query: { token: "{{ api_key }}" } } }) });
@@ -637,6 +651,7 @@ describe("ComfyuiEndpointDetail", () => {
     expect(await screen.findByText(/query:/)).toBeInTheDocument();
     expect(screen.getByText(/token: \{\{ api_key \}\}/)).toBeInTheDocument();
     expect(screen.queryByText(/Authorization/)).not.toBeInTheDocument();
+    // Credential templates do not wrap and the preview scrolls horizontally: the area itself is focusable so the keyboard can scroll
     // 凭据模版不折行，预览会横向滚动：区域自身可聚焦，键盘才能滚动
     const preview = screen.getByRole("region", { name: "凭据注入（auth 节）" });
     expect(preview).toHaveTextContent("token: {{ api_key }}");
@@ -659,6 +674,7 @@ describe("ComfyuiEndpointDetail", () => {
   });
 
   it("holds the endpoint test shut while a required binding has nowhere to land", async () => {
+    // The server validator rejects this definition with comfyui_binding_required; both cards block it in the UI first.
     // 服务端校验器会按 comfyui_binding_required 拒收这份定义，两卡先在界面上挡住。
     renderDetail({ inference: inference({ bindings: { prompt: picked(PROMPT) } }) });
 

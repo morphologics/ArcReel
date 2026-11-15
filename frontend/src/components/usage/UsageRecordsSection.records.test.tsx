@@ -14,6 +14,7 @@ import { renderUsageRecordsSection } from "./usage-test-utils";
 
 const EMPTY_PAGE: UsageRecordPage = { items: [], next_cursor: null, total: 0 };
 
+/** Entry reference attached by the backend: the shot at position `position` in episode 1 (untitled). */
 /** 后端附上的条目指称：第 1 集（无标题）里排第 `position` 位的分镜。 */
 function itemRef(itemId: string, position: number): EpisodeItemRef {
   return {
@@ -26,11 +27,12 @@ function itemRef(itemId: string, position: number): EpisodeItemRef {
   };
 }
 
-/** 目标列以位置角标指认分镜，按角标的可访问名称找到所在行。 */
+/** The target column identifies shots by position badge; find the row by the badge's accessible name. / 目标列以位置角标指认分镜，按角标的可访问名称找到所在行。 */
 async function rowOfItem(label: string): Promise<HTMLTableRowElement> {
   return (await screen.findByRole("img", { name: label })).closest("tr") as HTMLTableRowElement;
 }
 
+/** The in-progress section fetches without a time range, the records table with one; both use the same client method. */
 /** 进行中区的取数不带时间范围，记录表的取数带；两者走同一个客户端方法。 */
 function isPendingQuery(query: UsageRecordsQuery | undefined): boolean {
   return query?.since === undefined;
@@ -63,6 +65,7 @@ describe("UsageRecordsSection records", () => {
     expect(screen.getByText("90.3%")).toBeInTheDocument();
     expect(screen.getByText("65 成功")).toBeInTheDocument();
     expect(screen.getByText("另 1 次取消")).toBeInTheDocument();
+    // The main currency goes into the kicker and big figure; other currencies are only listed on the sub line, not converted.
     // 主币种进 kicker 与大字，其他币种只在副行列出，不折算。
     expect(screen.getByText("参考费用 · CNY")).toBeInTheDocument();
     expect(screen.getByText("+ $4.59")).toBeInTheDocument();
@@ -97,6 +100,7 @@ describe("UsageRecordsSection records", () => {
     expect(row).not.toBeNull();
     expect(row).not.toHaveTextContent("S07");
     const cells = within(row);
+    // The project column shows the title, not the directory name.
     // 项目列显示标题，不显示目录名。
     expect(cells.getByText("雨夜侦探")).toBeInTheDocument();
     expect(cells.queryByText("rain-detective")).not.toBeInTheDocument();
@@ -150,6 +154,7 @@ describe("UsageRecordsSection records", () => {
     };
     renderUsageRecordsSection();
 
+    // The status column holds only status and a short failure phrase; the raw error shows only in details.
     // 状态列只放状态与失败短语；原始报错只在详情里显示。
     const row = await rowOfItem("分镜 3");
     expect(row).toHaveTextContent("失败");
@@ -165,6 +170,7 @@ describe("UsageRecordsSection records", () => {
     renderUsageRecordsSection();
 
     await waitFor(() => expect(screen.getAllByRole("row").length).toBeGreaterThan(1));
+    // Column order: type . project . target; the target column is a dash when there is neither shot nor source.
     // 列序：类型 · 项目 · 目标，目标列在没有分镜也没有来源时是破折号。
     const cells = within(screen.getAllByRole("row")[1]).getAllByRole("cell");
     expect(cells[2]).toHaveTextContent("—");
@@ -240,10 +246,12 @@ describe("UsageRecordsSection records", () => {
     const indexOfItem = (label: string) =>
       rows.findIndex((row) => within(row).queryByRole("img", { name: label }) !== null);
     const scriptIndex = rows.findIndex((row) => row.textContent?.includes("剧本生成"));
+    // The two in-progress rows come first; task rows are ordered by start time before pending calls without a task.
     // 进行中的两行排在最前，任务行按开始时刻在无任务的 pending 调用之前。
     expect(indexOfItem("分镜 6")).toBeGreaterThanOrEqual(0);
     expect(indexOfItem("分镜 6")).toBeLessThan(scriptIndex);
     expect(scriptIndex).toBeLessThan(indexOfItem("分镜 1"));
+    // A queued task has not resolved its model yet.
     // 排队中的任务还没有解析出模型。
     expect(screen.getByText("待解析")).toBeInTheDocument();
   });
@@ -263,6 +271,7 @@ describe("UsageRecordsSection records", () => {
     });
     renderUsageRecordsSection("section=usage&u_range=7d");
 
+    // The task was queued outside the seven-day window, but the in-progress section still lists it.
     // 任务排队于七天窗口之外，但进行中区照样列出它。
     expect(await screen.findByRole("img", { name: "分镜 2" })).toBeInTheDocument();
   });
@@ -279,6 +288,7 @@ describe("UsageRecordsSection records", () => {
 
     expect(await screen.findByRole("img", { name: "分镜 1" })).toBeInTheDocument();
     expect(screen.queryByRole("img", { name: "分镜 2" })).not.toBeInTheDocument();
+    // A queued task has not resolved its model yet, so it is not listed when filtering by model.
     // 排队中的任务还没解析出模型，按模型筛选时不列出。
     expect(screen.queryByRole("img", { name: "分镜 3" })).not.toBeInTheDocument();
   });
@@ -352,6 +362,7 @@ describe("UsageRecordsSection records", () => {
     await waitFor(() => expect(API.getUsageRecords).toHaveBeenCalled());
     const busy = vi.mocked(API.getUsageRecords).mock.calls.length;
 
+    // Another task is enqueued 2 seconds later: the row count change must not reset the timer to zero.
     // 2 秒后又入队一个任务：行数变化不能把计时器重置回零。
     await act(async () => {
       await vi.advanceTimersByTimeAsync(2000);
@@ -383,6 +394,7 @@ describe("UsageRecordsSection records", () => {
       .mocked(API.getUsageRecords)
       .mock.calls.filter(([query]) => !isPendingQuery(query)).length;
 
+    // The next fallback poll finds this call has been booked: the records table and KPIs must refetch too, so it appears in the table.
     // 下一次兜底轮询发现这条调用已经落账：记录表与 KPI 也要重取，它才会出现在表里。
     pendingPage = EMPTY_PAGE;
     const settled = makeUsageRecord({ id: 9, status: "success", task_id: null });

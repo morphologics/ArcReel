@@ -10,6 +10,10 @@ import { TERMINAL_SESSION_STATUSES } from "./utils";
 import { toolLabel, type EpisodeRefs, type WorkLabel, type WorkStatus } from "./work-label";
 
 // ---------------------------------------------------------------------------
+// WorkRow – the shared one-line work row for tool calls, subagents, Skills and background tasks: icon, name, one-line summary,
+// status. Running shows a breathing dot; on failure the icon and name turn red with a failure mark; success adds no mark. With details,
+// the whole row is a collapse trigger, collapsed by default, with the same line height and indent as thinking blocks.
+// ---------------------------------------------------------------------------
 // WorkRow – 工具调用、子智能体、Skill、后台任务共用的单行工序：图标、名称、一句摘要、
 // 状态。运行中是呼吸点，失败时图标与名称变红并带失败标记，成功不加标记。有详情时
 // 整行是折叠触发器，默认收起，与思考块同一行高与缩进。
@@ -22,7 +26,7 @@ export function useSessionDone(): boolean {
   return sessionStatus != null && TERMINAL_SESSION_STATUSES.has(sessionStatus);
 }
 
-/** 工具调用的显示名与摘要；集名取自当前项目的集清单，条目位置取自当前项目剧本。 */
+/** Display name and summary of a tool call; episode names come from the current project's episode list, entry positions from the current project's scripts. / 工具调用的显示名与摘要；集名取自当前项目的集清单，条目位置取自当前项目剧本。 */
 export function useToolLabel(name: string, input: Record<string, unknown> | undefined): WorkLabel {
   const { t } = useTranslation("dashboard");
   const episodes = useProjectsStore((s) => s.currentProjectData?.episodes) ?? NO_EPISODES;
@@ -35,12 +39,13 @@ interface WorkRowProps {
   name: string;
   summary?: string;
   status: WorkStatus;
-  /** 展开后的详情；没有时整行不可展开。 */
+  /** Details shown when expanded; without them the row can't expand. / 展开后的详情；没有时整行不可展开。 */
   children?: ReactNode;
 }
 
 export function WorkRow({ icon: Icon, name, summary, status, children }: WorkRowProps) {
   const failed = status === "error";
+  // Icon size inside the button is set by Button; non-expandable rows have no Button, so the icon sizes itself
   // 按钮里的图标尺寸由 Button 统一；不可展开的行没有 Button，图标自己定尺寸
   const iconSize = children ? undefined : "size-3 shrink-0";
   const head = (
@@ -104,7 +109,7 @@ function WorkStatusMark({ status, iconSize }: { status: WorkStatus; iconSize?: s
 const MAX_COLLAPSED_LINES = 10;
 const MAX_COLLAPSED_CHARS = 800;
 
-/** 超过 10 行（或篇幅相当）时先显示开头，不做内层滚动。 */
+/** Beyond 10 lines (or equivalent length) show only the beginning first; no inner scroll. / 超过 10 行（或篇幅相当）时先显示开头，不做内层滚动。 */
 function collapsedText(text: string): string | null {
   const lines = text.split("\n");
   let head = lines.length > MAX_COLLAPSED_LINES ? lines.slice(0, MAX_COLLAPSED_LINES).join("\n") : text;
@@ -112,7 +117,7 @@ function collapsedText(text: string): string | null {
   return head === text ? null : `${head.trimEnd()}…`;
 }
 
-/** 展开后的一段：「参数」「结果」这类小标题加原文。 */
+/** One expanded section: a small heading such as "Arguments" or "Result" plus the raw text. / 展开后的一段：「参数」「结果」这类小标题加原文。 */
 export function WorkDetail({ label, text, error = false }: { label: string; text: string; error?: boolean }) {
   const { t } = useTranslation("dashboard");
   const [showAll, setShowAll] = useState(false);

@@ -3,7 +3,7 @@ import i18n from "@/i18n";
 import { useAppStore } from "@/stores/app-store";
 import type { WorkspaceFocusTarget } from "@/types";
 
-/** 定位后跟随布局变化重新对齐的时长：跨页跳转后，新页面的布局在定位之后的几帧里才稳定。 */
+/** How long to keep realigning with layout changes after positioning: after a cross-page jump, the new page's layout only settles a few frames after positioning. / 定位后跟随布局变化重新对齐的时长：跨页跳转后，新页面的布局在定位之后的几帧里才稳定。 */
 const SETTLE_MS = 1000;
 const USER_SCROLL_EVENTS = ["wheel", "touchstart", "pointerdown", "keydown"] as const;
 
@@ -16,6 +16,11 @@ function scrollParentOf(el: HTMLElement): HTMLElement | null {
 }
 
 /**
+ * Scroll the element to the center of the view, and for the following {@link SETTLE_MS} realign as it, its scroll container or the blocks inside the container change size:
+ * on a cross-page jump the new page has just mounted and the scroll container may not have its final height yet, so scrolling once would stop at a position computed from the old layout; content above the target
+ * (e.g. a sticky toolbar that grows as state loads) growing taller also pushes the target away, while neither the target nor the fixed-height scroll container changes size. The first
+ * callback when observation starts also realigns, since it may already carry the changed size. Following stops when the user starts scrolling or interacting. Returns a function that stops following.
+ *
  * 把元素滚到视野中央，并在随后的 {@link SETTLE_MS} 内随它、所在滚动容器或容器内各块内容的尺寸变化重新对齐：
  * 跨页跳转时新页面刚挂载，滚动容器可能还没收到最终高度，只滚一次会停在按旧布局算出的位置；目标上方的内容
  * （如随状态加载变高的吸顶工具栏）变高也会把目标挤开，而目标与定高的滚动容器都不变尺寸。观察开始时的首次
@@ -84,7 +89,7 @@ export function useScrollTarget(
     };
   }, []);
 
-  // react-doctor-disable-next-line react-doctor/effect-needs-cleanup -- 重试计时器由返回的 cleanup 清理；高亮计时器与定位跟随须活过定位后 clearScrollTarget 引起的重跑，归 hook 生命周期，下次定位时替换、卸载时由上面的 effect 释放
+  // react-doctor-disable-next-line react-doctor/effect-needs-cleanup -- the retry timer is cleared by the returned cleanup; the highlight timer and position following must outlive the rerun caused by clearScrollTarget after positioning, so they belong to the hook lifetime, replaced on the next positioning and released on unmount by the effect above / 重试计时器由返回的 cleanup 清理；高亮计时器与定位跟随须活过定位后 clearScrollTarget 引起的重跑，归 hook 生命周期，下次定位时替换、卸载时由上面的 effect 释放
   useEffect(() => {
     if (!scrollTarget || scrollTarget.type !== type) return;
     const requestId = scrollTarget.request_id;

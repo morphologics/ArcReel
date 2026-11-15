@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+/** Simulate a page refresh: reload the module, and the store rereads the open/close memory from localStorage. */
 /** 模拟刷新页面：重新加载模块，store 从 localStorage 重新读取开合记忆。 */
 async function reloadStore() {
   vi.resetModules();

@@ -15,6 +15,9 @@ function isSupportedLanguage(value: unknown): value is SupportedLanguage {
 }
 
 /**
+ * Global settings "General": interface language, theme, and replaying the onboarding guide.
+ * Everything takes effect immediately: interface language and theme are local preferences not saved through the backend, and the whole page switches on selection, so this view has no save bar.
+ *
  * 全局设置「通用」：界面语言、主题与重看新手引导。
  * 各项都立即生效：界面语言与主题是本机偏好，不经后端保存，选中后整页随即切换，因此这个视图没有保存栏。
  */

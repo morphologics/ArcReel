@@ -5,6 +5,9 @@ import { previewAspect } from "@/utils/preview-aspect";
 export type GridImageAspect = "16:9" | "9:16" | "4:3" | "3:4";
 
 /**
+ * Overall aspect ratio of the grid composite, same basis as backend grid_aspect_ratio_for: square layouts take the canonical orientation of the video ratio,
+ * legacy 3×2 / 2×3 records take 4:3 / 3:4. When the record has no frozen video ratio, fall back to the project frame format.
+ *
  * 联合图的整图比例，与后端 grid_aspect_ratio_for 同口径：方形档取视频比例的规范朝向，
  * 存量 3×2 / 2×3 记录取 4:3 / 3:4。记录未冻结视频比例时按项目画幅回退。
  */

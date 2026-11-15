@@ -65,6 +65,7 @@ describe("AddToLibraryDialog", () => {
     expect(within(dialog).getByText("清亮少年音")).toBeInTheDocument();
     expect(within(dialog).getByText("附带参考音频")).toBeInTheDocument();
     expect(within(dialog).getByText("2 个衍生")).toBeInTheDocument();
+    // The name is the only editable field
     // 名称是唯一可编辑的字段
     expect(within(dialog).getAllByRole("textbox")).toEqual([within(dialog).getByLabelText("名称")]);
 

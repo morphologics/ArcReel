@@ -30,11 +30,12 @@ function sessionPage(nextCursor: string | null, total = 1): Page<UsageAgentSessi
   return { items: [makeUsageAgentSession()], next_cursor: nextCursor, total };
 }
 
-/** 进行中区的请求只筛 pending，与列表请求区分开。 */
+/** The in-progress section's request filters only pending, distinguishing it from the list request. / 进行中区的请求只筛 pending，与列表请求区分开。 */
 function isPending(query: UsageRecordsQuery = {}): boolean {
   return query.statuses?.length === 1 && query.statuses[0] === "pending";
 }
 
+/** Like a real fetch, fails immediately with AbortError when aborted; otherwise waits for `promise` to settle. */
 /** 像真实 fetch 一样，请求被中止时立即以 AbortError 失败；未中止则等 `promise` 落定。 */
 function abortable<T>(promise: Promise<T>, signal: AbortSignal | undefined): Promise<T> {
   return new Promise<T>((resolve, reject) => {
@@ -43,7 +44,7 @@ function abortable<T>(promise: Promise<T>, signal: AbortSignal | undefined): Pro
   });
 }
 
-/** 列表请求的游标，按发出顺序。 */
+/** Cursors of list requests, in send order. / 列表请求的游标，按发出顺序。 */
 function listCursors(spy: typeof API.getUsageRecords | typeof API.getUsageSessions) {
   return vi
     .mocked(spy)
@@ -92,6 +93,7 @@ describe("usage-records-store", () => {
     const store = useUsageRecordsStore.getState();
     await store.applyFilters(GENERATION);
 
+    // Switching to the session view while a generation-call page fetch is in flight, its late result must not take the session view to page 2.
     // 生成调用的翻页还在途时切到会话视图，它晚到的结果不能把会话视图带到第二页。
     const turn = store.goToPage("next");
     await store.applyFilters(AGENT);

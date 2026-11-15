@@ -28,14 +28,14 @@ interface VoiceTabProps {
   value: ProjectSettingsForm;
   onChange: (update: (prev: ProjectSettingsForm) => ProjectSettingsForm) => void;
   generationRoute: GenerationRoute;
-  /** 全局默认的 TTS 设置：没有快照的项目切到 TTS 配音时用它预填。 */
+  /** Global default TTS settings: used to prefill when a project without a snapshot switches to TTS voiceover. / 全局默认的 TTS 设置：没有快照的项目切到 TTS 配音时用它预填。 */
   narrationDefaults: NarrationDefaultsResponse | null;
   audioBackends: string[];
   providerNames: Record<string, string>;
   modelNames: Record<string, string>;
 }
 
-/** 「配音」：旁白交付方式；角色声音绑定只在参考生视频项目出现。 */
+/** "Voice": narration delivery method; character voice binding appears only in reference-to-video projects. / 「配音」：旁白交付方式；角色声音绑定只在参考生视频项目出现。 */
 export function VoiceTab({
   value,
   onChange,
@@ -51,6 +51,7 @@ export function VoiceTab({
   const handleNarrationChange = (next: NarrationDeliveryValue) => {
     onChange((prev) => {
       let narration = next;
+      // A project without a complete snapshot switching to TTS: prefill missing model and voice, and unset speech rate, from global defaults
       // 没有完整快照的项目切到 TTS 配音：缺的模型与音色、以及未设的语速按全局默认预填
       const hasSnapshot = next.audioBackend.includes("/") && next.narrationVoice.trim() !== "";
       if (next.delivery === "use_tts" && prev.narration.delivery !== "use_tts" && !hasSnapshot && narrationDefaults) {
@@ -69,7 +70,7 @@ export function VoiceTab({
     <div className="flex flex-col gap-6">
       <TabHeader title={t("project_settings_tab_voice")} />
 
-      {/* 旁白交付方式是每个项目的必填配置：任何内容模式的旁白单元都按它交付 */}
+      {/* Narration delivery is required config for every project: narration units of any content mode are delivered by it / 旁白交付方式是每个项目的必填配置：任何内容模式的旁白单元都按它交付 */}
       <SettingsBlock title={t("project_narration_delivery_title")}>
         <NarrationDeliveryFields
           value={value.narration}
@@ -80,7 +81,7 @@ export function VoiceTab({
         />
       </SettingsBlock>
 
-      {/* 参考音频通道属于参考生视频路线；分镜图生视频路线上这项设置不改变任何交付内容，不展示也不写入 */}
+      {/* The reference audio channel belongs to the reference-to-video route; on the storyboard-to-video route this setting changes no delivered content, so it's neither shown nor written / 参考音频通道属于参考生视频路线；分镜图生视频路线上这项设置不改变任何交付内容，不展示也不写入 */}
       {generationRoute === "reference_video" && (
         <SettingsBlock title={t("character_voice_binding_title")} titleId={bindingId}>
           <RadioGroup

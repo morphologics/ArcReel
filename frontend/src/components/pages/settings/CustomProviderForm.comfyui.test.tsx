@@ -7,6 +7,11 @@ import { useEndpointCatalogStore } from "@/stores/endpoint-catalog-store";
 import type { EndpointDescriptor } from "@/types";
 import { CustomProviderForm } from "./CustomProviderForm";
 
+// CustomProviderForm: form behavior with discovery_format = comfyui
+// Under this protocol the form differs from other protocols in five places: the key may be empty, "Discover models" is replaced by an explanation, the endpoint selector lists only
+// ComfyUI endpoints, model rows give no end-frame override entry, and video rows keep "supported seconds" written into the duration override. One case each, each paired with
+// a control case showing other protocols are unaffected.
+// One more wiring case: when jumping from an endpoint to create a provider, the protocol is decided by that endpoint.
 // ---------------------------------------------------------------------------
 // CustomProviderForm —— discovery_format = comfyui 下的表单行为
 // ---------------------------------------------------------------------------
@@ -100,7 +105,7 @@ function protocolPicker() {
   return screen.getByRole("combobox", { name: "模型发现协议" });
 }
 
-/** 在协议下拉里选中某个模型发现协议。 */
+/** Select a model discovery protocol in the protocol dropdown. / 在协议下拉里选中某个模型发现协议。 */
 async function selectProtocol(format: string) {
   const user = userEvent.setup();
   await user.click(protocolPicker());
@@ -111,13 +116,13 @@ function endpointPicker() {
   return screen.getByRole("combobox", { name: "调用端点" });
 }
 
-/** 打开端点选择器弹层并返回它的 listbox。 */
+/** Open the endpoint selector popover and return its listbox. / 打开端点选择器弹层并返回它的 listbox。 */
 async function openEndpointPicker() {
   await userEvent.setup().click(endpointPicker());
   return await screen.findByRole("listbox");
 }
 
-/** 保存后保存栏上显示的失败原因。 */
+/** The failure reason shown on the save bar after saving. / 保存后保存栏上显示的失败原因。 */
 async function saveError() {
   fireEvent.click(screen.getByRole("button", { name: "保存" }));
   return await screen.findByRole("alert");
@@ -140,6 +145,7 @@ describe("CustomProviderForm（comfyui 协议）", () => {
   });
 
   it("switches to the ComfyUI protocol when wired from a ComfyUI endpoint", async () => {
+    // With the protocol left at openai, that row is hidden in the endpoint selector, and saving would be rejected by two-way pairing.
     // 协议留在 openai 上时那一行在端点选择器里是隐着的，保存又会被双向配对拒掉。
     renderForm("ce-2");
 
@@ -163,6 +169,7 @@ describe("CustomProviderForm（comfyui 协议）", () => {
   });
 
   it("re-points model rows that cannot hang on the new protocol", async () => {
+    // Keeping the old value, that row is hidden in the endpoint selector (the selector filters by protocol), and only saving hits the 422.
     // 留着旧值，那一行在端点选择器里是隐着的（选择器按协议过滤），保存时才吃 422。
     renderForm();
     await waitFor(() => expect(useEndpointCatalogStore.getState().initialized).toBe(true));
@@ -185,6 +192,8 @@ describe("CustomProviderForm（comfyui 协议）", () => {
   });
 
   it("parks rows with nowhere to hang and holds back the save", async () => {
+    // No ComfyUI endpoint exists yet: there is nowhere to reattach, and keeping the old endpoint the row stays hidden in the selector,
+    // while saving still submits and still hits 422. Stop at unselected: the user can see it and saving cannot proceed.
     // 一个 ComfyUI 端点都还没有：没有可改挂的去处，留着旧端点那一行在选择器里是隐着的，
     // 保存照样提交、照样吃 422。停在未选择上，用户看得见，保存也走不了。
     vi.spyOn(API, "listEndpointCatalog").mockResolvedValue({
@@ -212,6 +221,7 @@ describe("CustomProviderForm（comfyui 协议）", () => {
 
     await selectProtocol("comfyui");
 
+    // When a ComfyUI endpoint is available it never stops at unselected, nor prompts to choose an endpoint.
     // 有 ComfyUI 端点可挂时根本不会停在未选择上，也不提示去选端点。
     expect(endpointPicker()).toHaveTextContent("我的 Wan workflow");
     expect(screen.queryByText(/有模型行还没选 ComfyUI 端点/)).not.toBeInTheDocument();
@@ -237,6 +247,8 @@ describe("CustomProviderForm（comfyui 协议）", () => {
   });
 
   it("drops the capability override when the row is re-pointed onto ComfyUI", async () => {
+    // ComfyUI endpoint capabilities are derived from node bindings, and this protocol disables overrides entirely (server _check_protocol_constraints).
+    // The override control is hidden under this protocol; an old value kept there can be neither seen nor changed by the user, and only saving hits 422.
     // ComfyUI 端点的能力由节点绑定推导，该协议整个关闭覆盖（服务端 _check_protocol_constraints）。
     // 覆盖控件在这个协议下是藏起来的，留着旧值用户既看不见也改不掉，保存时才吃 422。
     vi.mocked(API.createCustomProvider).mockResolvedValue(CREATED);
@@ -247,6 +259,7 @@ describe("CustomProviderForm（comfyui 协议）", () => {
     await userEvent.setup().click(within(listbox).getByRole("option", { name: /我的声明式端点/ }));
     fireEvent.change(screen.getByLabelText("名称"), { target: { value: "我的 ComfyUI" } });
     fireEvent.change(screen.getByLabelText("接口地址"), { target: { value: "http://comfy.invalid:8188" } });
+    // Changing model_id and endpoint already voids the override; an override must be set after them to stick.
     // model_id 与 endpoint 一改，覆盖本就随之作废；覆盖要设在它们之后才留得住。
     fireEvent.change(screen.getByRole("textbox", { name: "模型 ID" }), { target: { value: "wan-t2v" } });
     fireEvent.click(await screen.findByRole("radio", { name: "强制关" }));
@@ -264,6 +277,8 @@ describe("CustomProviderForm（comfyui 协议）", () => {
   });
 
   it("lets an automatically re-pointed row be made the default", async () => {
+    // Derivation only rewrites as a fallback while the row still hangs on an endpoint it cannot attach to; once the user touches the row, the derived result should become fixed, or the default mark
+    // would be cleared again by the next derivation as "switched path, so void", making the click useless.
     // 派生只在行还挂着挂不住的端点时兜底改写；用户一动这一行，派生结果就该坐实，否则默认标记
     // 会被下一次派生按「换了一路即作废」再清一遍，点了等于没点。
     vi.mocked(API.createCustomProvider).mockResolvedValue(CREATED);
@@ -288,6 +303,8 @@ describe("CustomProviderForm（comfyui 协议）", () => {
   });
 
   it("re-points the rows once a late endpoint catalog arrives", async () => {
+    // The endpoint catalog is fetched asynchronously: at the moment the protocol switches it may not be back, and no row can be judged then. If the judgement ran only once at the switch,
+    // nobody would recompute after the catalog arrives, and that row would keep hanging on an endpoint it cannot attach to.
     // 端点目录是异步取的：切协议那一刻它可能还没回来，那一刻一行都判不了。判定若只在切换时算一次，
     // 目录到齐后没人再算，那一行就一直挂着挂不住的端点。
     let deliver: (value: { endpoints: EndpointDescriptor[] }) => void = () => undefined;
@@ -306,6 +323,8 @@ describe("CustomProviderForm（comfyui 协议）", () => {
   });
 
   it("holds back the save while the wired endpoint is still unresolved", async () => {
+    // The wired-in endpoint decides the protocol; before it resolves in the catalog the protocol falls back to openai: submitting that would surely be rejected.
+    // The key is filled in too: when the protocol falls back to openai it is required, and that validation comes first, so without it this step is never reached.
     // 接线过来的端点定协议，它还没在目录里解析出来时协议回退成 openai：照这份提交必被拒。
     // 密钥也一并填上——协议回退成 openai 时它是必填的，那条校验排在前面，不填就走不到这一步。
     vi.spyOn(API, "listEndpointCatalog").mockReturnValue(new Promise(() => undefined));
@@ -432,6 +451,7 @@ describe("CustomProviderForm（comfyui 协议）", () => {
     const durations = screen.getByLabelText("支持秒数");
     expect(durations).toBeDisabled();
     expect(durations).toHaveAttribute("placeholder", "此 workflow 时长固定");
+    // The disabled reason needs a visible line of explanation, not just title.
     // 禁用原因要有一行可见说明，不能只靠 title。
     expect(screen.getByText(/此 workflow 时长固定：帧数没有绑定到节点/)).toBeInTheDocument();
   });
@@ -439,6 +459,7 @@ describe("CustomProviderForm（comfyui 协议）", () => {
   it("shows the duration tier read-only when the workflow has no frame rate to convert with", async () => {
     useEndpointCatalogStore.setState(useEndpointCatalogStore.getInitialState(), true);
     vi.spyOn(API, "listEndpointCatalog").mockResolvedValue({
+      // frames is bound but no frame rate source can be read: the options are also an empty set, but this is a fixable definition and must not be called "duration inherently fixed".
       // frames 绑了、读不到帧率来源：档位同样是空集，但这是一份可修的定义，不能说成「时长天生固定」。
       endpoints: [
         CHAT_ENDPOINT,
@@ -465,6 +486,8 @@ describe("CustomProviderForm（comfyui 协议）", () => {
   it("shows the duration tier read-only when frames and frame rate convert to no whole second", async () => {
     useEndpointCatalogStore.setState(useEndpointCatalogStore.getInitialState(), true);
     vi.spyOn(API, "listEndpointCatalog").mockResolvedValue({
+      // Frame count is bound and frame rate readable, but no option converts to a whole-second duration that writes back exactly: the options are also an empty set,
+      // but it is neither "inherently fixed" nor missing a frame rate to fill in.
       // 帧数已绑定、帧率也读得到，只是换算不出一档能原样写回的整秒时长：档位同样是空集，
       // 但既不是「天生固定」，也没有一处帧率可补。
       endpoints: [
@@ -537,6 +560,7 @@ describe("CustomProviderForm（comfyui 协议）", () => {
   });
 
   it("offers no duration input on a declarative video row", async () => {
+    // Other endpoints' selectable durations come from the model entry; existing duration overrides are passed back as is, and the form does not edit them
     // 其余端点的可选时长由模型条目给出；存量的时长覆盖原样回传，表单不编辑它
     renderForm();
     await waitFor(() => expect(useEndpointCatalogStore.getState().initialized).toBe(true));
@@ -569,6 +593,7 @@ describe("CustomProviderForm（comfyui 协议）", () => {
   });
 
   it("says the workflow decides the size when there is no literal to name", async () => {
+    // Neither width nor height is bound: the selector is disabled, and the generic "Default (not sent)" would suggest there is still a "not sent" to pick.
     // 宽高两侧都没绑定：选择器已禁用，通用的「默认（不传）」会让人以为还有个「不传」可挑。
     useEndpointCatalogStore.setState(useEndpointCatalogStore.getInitialState(), true);
     vi.spyOn(API, "listEndpointCatalog").mockResolvedValue({

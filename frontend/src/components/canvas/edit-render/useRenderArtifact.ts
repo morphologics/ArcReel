@@ -6,7 +6,7 @@ import { isTerminalStatus } from "@/types";
 import type { FinalCutStatus, JianyingDraftStatus, RenderKind, RenderOptions, SubtitleMode, TaskItem } from "@/types";
 import type { TimelineNarration } from "@/types/edit-timeline";
 
-/** 出片任务的轮询间隔：对话框打开期间按 task_id 拉取进度，比任务列表的兜底轮询更及时。 */
+/** Polling interval for render tasks: progress is fetched by task_id while the dialog is open, more timely than the task list's fallback polling. / 出片任务的轮询间隔：对话框打开期间按 task_id 拉取进度，比任务列表的兜底轮询更及时。 */
 export const RENDER_TASK_POLL_MS = 2000;
 
 const RENDER_TASK_TYPE: Record<RenderKind, string> = {
@@ -17,20 +17,20 @@ const RENDER_TASK_TYPE: Record<RenderKind, string> = {
 export type RenderArtifactView = FinalCutStatus | JianyingDraftStatus;
 
 export interface RenderArtifactState {
-  /** 当前交付物的产物现状；首次加载完成前为 null。 */
+  /** Artifact state of the current deliverable; null before the first load completes. / 当前交付物的产物现状；首次加载完成前为 null。 */
   artifact: RenderArtifactView | null;
   loading: boolean;
-  /** 读取现状失败的原因。 */
+  /** Reason reading the state failed. / 读取现状失败的原因。 */
   loadError: string | null;
-  /** 本次提交的任务；未提交时为 null，终态后保留以展示结果（失败原因在任务上）。 */
+  /** The task submitted this time; null when not submitted, kept after the terminal state to show the result (the failure reason is on the task). / 本次提交的任务；未提交时为 null，终态后保留以展示结果（失败原因在任务上）。 */
   task: TaskItem | null;
-  /** 从提交到任务终态都为 true。 */
+  /** true from submit until the task's terminal state. / 从提交到任务终态都为 true。 */
   submitting: boolean;
-  /** 提交请求在途（还没拿到 task_id）时为 true；接回已有任务时不经过这一段。 */
+  /** true while the submit request is in flight (no task_id yet); picking up an existing task skips this phase. / 提交请求在途（还没拿到 task_id）时为 true；接回已有任务时不经过这一段。 */
   requesting: boolean;
-  /** 提交请求本身失败的原因（如入队前检查不通过）。 */
+  /** Reason the submit request itself failed (e.g. the pre-enqueue check did not pass). / 提交请求本身失败的原因（如入队前检查不通过）。 */
   submitError: string | null;
-  /** 提交一次出片任务并开始轮询。 */
+  /** Submit one render task and start polling. / 提交一次出片任务并开始轮询。 */
   submit: () => Promise<void>;
 }
 
@@ -46,7 +46,7 @@ function fetchArtifact(
     : API.getJianyingDraftStatus(projectName, timelineId, { narration: options.narration, signal });
 }
 
-/** 查找与产物同一剪辑时间线、同一交付物与版本的在途出片任务；查询失败时按没有处理。 */
+/** Find an in-flight render task for the same edit timeline, deliverable and version as the artifact; a failed lookup is treated as none. / 查找与产物同一剪辑时间线、同一交付物与版本的在途出片任务；查询失败时按没有处理。 */
 async function findActiveRenderTask(
   projectName: string,
   kind: RenderKind,
@@ -88,6 +88,14 @@ function sleep(ms: number, signal: AbortSignal): Promise<void> {
 }
 
 /**
+ * Render state of one deliverable and version of an edit timeline: artifact state, submit and task progress.
+ * The version is determined by the narration version and whether subtitles are burned in; JianYing drafts ignore ``subtitles``.
+ *
+ * The cancellation scope is "project x edit timeline x deliverable x version": any change or unmount invalidates in-flight reads and polling.
+ * Callers mount the consuming component keyed by these, so switching remounts it as a whole and local state does not carry over across versions.
+ * After reading the artifact state, if the same artifact already has an in-flight task (e.g. submitted before the dialog closed, or by the Agent), keep tracking it.
+ * After the task succeeds, fetch the artifact state once more; on failure show the task's failure reason.
+ *
  * 一个剪辑时间线某种交付物、某个版本的出片状态：产物现状、提交与任务进度。
  * 版本由旁白版本与是否烧入字幕决定；剪映草稿不看 ``subtitles``。
  *
@@ -126,7 +134,7 @@ export function useRenderArtifact(
         setLoadError(errMsg(err));
         return null;
       } finally {
-        // react-doctor-disable-next-line react-doctor/no-loading-flag-reset-outside-finally -- 已在 finally 中复位；被 abort 时由接管的新一轮加载负责复位
+        // react-doctor-disable-next-line react-doctor/no-loading-flag-reset-outside-finally -- already reset in finally; when aborted, the new load round that takes over is responsible for resetting / 已在 finally 中复位；被 abort 时由接管的新一轮加载负责复位
         if (!signal.aborted) setLoading(false);
       }
     },
@@ -149,7 +157,7 @@ export function useRenderArtifact(
     [load],
   );
 
-  /** 从取得 task_id 到任务终态都处于 submitting；取 task_id 或轮询失败时记为提交失败。 */
+  /** submitting holds from getting the task_id until the task's terminal state; failures getting the task_id or polling are recorded as submit failures. / 从取得 task_id 到任务终态都处于 submitting；取 task_id 或轮询失败时记为提交失败。 */
   const follow = useCallback(
     async (start: () => Promise<string>, signal: AbortSignal) => {
       setSubmitting(true);
@@ -163,7 +171,7 @@ export function useRenderArtifact(
         if (signal.aborted) return;
         setSubmitError(errMsg(err));
       } finally {
-        // react-doctor-disable-next-line react-doctor/no-loading-flag-reset-outside-finally -- 已在 finally 中复位；被 abort 时取消域已作废，由接管方负责复位
+        // react-doctor-disable-next-line react-doctor/no-loading-flag-reset-outside-finally -- already reset in finally; when aborted, the cancellation scope is invalidated and the takeover is responsible for resetting / 已在 finally 中复位；被 abort 时取消域已作废，由接管方负责复位
         if (!signal.aborted) setSubmitting(false);
       }
     },

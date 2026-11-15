@@ -50,6 +50,7 @@ describe("ScriptPreviewPanel", () => {
     expect(screen.getByText("角色「张三」未设置参考音频")).toBeInTheDocument();
   });
 
+  // An unregistered `@[name]` is only a hint: the body can still be saved and generated, and the panel gives no blocking signal.
   // 未登记的 `@[名称]` 只是提示：正文照旧可保存、可生成，面板不给任何阻断信号。
   it("shows an unresolved-mention warning without blocking anything", async () => {
     vi.spyOn(API, "previewReferenceScript").mockResolvedValue(
@@ -95,10 +96,11 @@ describe("ScriptPreviewPanel", () => {
     renderPanel("中景。\n@[张三]：{我来了}\n{那年冬天格外冷}");
     await vi.advanceTimersByTimeAsync(500);
 
+    // One row per utterance: number + speaker (voiceover has no name) + body
     // 每条 utterance 一行：序号 + 说话人（画外音无名） + 正文
     expect(await screen.findByText("第 1 句")).toBeInTheDocument();
     expect(screen.getByText("第 2 句")).toBeInTheDocument();
-    expect(screen.getAllByText("我来了")).toHaveLength(2); // 本地高亮 + 服务端派生行
+    expect(screen.getAllByText("我来了")).toHaveLength(2); // local highlight + server-derived row / 本地高亮 + 服务端派生行
     expect(screen.getAllByText("那年冬天格外冷")).toHaveLength(2);
   });
 
@@ -114,6 +116,7 @@ describe("ScriptPreviewPanel", () => {
     expect(signals).toHaveLength(1);
     expect(signals[0]?.aborted).toBe(false);
 
+    // The edit happens before the next debounce fires: the in-flight request must be voided immediately, not after 400ms
     // 编辑发生在下一次 debounce 到点之前：在途请求须立刻作废，不能等 400ms
     rerender(<ScriptPreviewPanel projectName="demo" episode={1} text="中景，改了" lookup={LOOKUP} />);
     expect(signals[0]?.aborted).toBe(true);
@@ -128,6 +131,7 @@ describe("ScriptPreviewPanel", () => {
     const warnList = await screen.findByRole("list", { name: /解析提示|Parse notices/ });
     expect(warnList).not.toHaveAttribute("aria-busy");
 
+    // After editing the old derivation is still on screen but must be marked stale, or it would be taken as the parse result of the current body
     // 编辑后旧派生还在屏上，但必须标成过期——否则会被当成当前正文的解析结果
     rerender(<ScriptPreviewPanel projectName="demo" episode={1} text="中景，改了" lookup={LOOKUP} />);
     expect(warnList).toHaveAttribute("aria-busy", "true");
@@ -143,6 +147,8 @@ describe("ScriptPreviewPanel", () => {
     await vi.advanceTimersByTimeAsync(500);
     await waitFor(() => expect(spy).toHaveBeenCalledTimes(1));
 
+    // After asset registration the lookup is refreshed: warnings such as unregistered mention / no reference audio read the project asset table,
+    // and without refetching, notices that no longer hold would keep hanging.
     // 资产登记后 lookup 换新：未登记 mention / 未设参考音频等 warning 读的是项目资产表，
     // 不重拉就会一直挂着已经不成立的提示。
     rerender(
@@ -172,6 +178,7 @@ describe("ScriptPreviewPanel", () => {
 
     const alert = await screen.findByRole("alert");
     expect(alert).toHaveTextContent(/boom/);
+    // The old derivation is cleared with it; no dialogue lines that do not match the body remain under the error banner
     // 旧派生随之清空，报错横幅下不再留着对不上正文的台词
     await waitFor(() => expect(screen.queryByText("第 1 句")).not.toBeInTheDocument());
   });

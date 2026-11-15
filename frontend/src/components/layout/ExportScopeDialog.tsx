@@ -20,14 +20,14 @@ export type ExportScope = "current" | "full";
 interface ExportScopeDialogProps {
   open: boolean;
   onClose: () => void;
-  /** 点击「导出」时以选中的范围调用；对话框随即关闭，导出进度由调用方展示。 */
+  /** Called with the selected scope when "Export" is clicked; the dialog closes right away and the caller shows export progress. / 点击「导出」时以选中的范围调用；对话框随即关闭，导出进度由调用方展示。 */
   onSelect: (scope: ExportScope) => void;
-  /** 提示里「打开剪辑视图」链接指向的集（集 ID 与集名）；不传或为 null 时只显示提示。 */
+  /** Episode (episode ID and name) the "Open edit view" link in the hint points to; when omitted or null, only the hint is shown. / 提示里「打开剪辑视图」链接指向的集（集 ID 与集名）；不传或为 null 时只显示提示。 */
   editViewEpisode?: { episode: number; name: string } | null;
   onOpenEditView?: (episode: number) => void;
 }
 
-/** 「导出项目」的范围选择：只有项目归档；成片与剪映草稿在各集的剪辑视图中导出。 */
+/** Scope picker for "Export project": only the project archive; final cut and JianYing draft are exported from each episode's edit view. / 「导出项目」的范围选择：只有项目归档；成片与剪映草稿在各集的剪辑视图中导出。 */
 export function ExportScopeDialog({
   open,
   onClose,
@@ -54,7 +54,7 @@ export function ExportScopeDialog({
       onOpenChange={(next) => {
         if (!next) onClose();
       }}
-      // 每次打开都回到推荐的范围
+      // Return to the recommended scope every time it opens / 每次打开都回到推荐的范围
       onOpenChangeComplete={(next) => {
         if (!next) setScope("current");
       }}
@@ -72,7 +72,7 @@ export function ExportScopeDialog({
               onValueChange={(next) => setScope(next as ExportScope)}
             >
               {options.map((option) => (
-                // eslint-disable-next-line jsx-a11y/label-has-associated-control -- 控件是嵌套的 RadioGroupItem（Base UI 单选），规则识别不到
+                // eslint-disable-next-line jsx-a11y/label-has-associated-control -- the control is a nested RadioGroupItem (Base UI radio) that the rule cannot detect / 控件是嵌套的 RadioGroupItem（Base UI 单选），规则识别不到
                 <label
                   key={option.value}
                   className="flex cursor-pointer items-start gap-3 rounded-lg border px-3 py-2.5 transition-colors duration-fast hover:bg-muted/50 has-data-checked:border-primary"
@@ -93,6 +93,7 @@ export function ExportScopeDialog({
               <div className="flex min-w-0 flex-col items-start gap-1">
                 <p>{t("dashboard:export_renders_moved_hint")}</p>
                 {editViewEpisode && onOpenEditView && (
+                  // Episode names can be long, so the link must be able to wrap; do not use the non-wrapping Button
                   // 集名可能很长，链接要能换行，不用不换行的 Button
                   <button
                     type="button"

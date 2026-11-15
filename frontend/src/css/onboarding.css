@@ -1,3 +1,13 @@
+/*
+ * === First-use onboarding: driver.js skin ===
+ *
+ * driver.js popovers start with `all: unset`, so every visual must be given explicitly here. The skin follows the same spec as the app's popovers:
+ * an opaque popover surface with shadow-overlay, corner radius --radius (10px), no backdrop blur; buttons look the same as Button's
+ * default, outline and ghost variants. Only color and opacity transitions, no movement animation.
+ *
+ * All scoping hangs on `.arc-tour` (driver's popoverClass), leaving driver's default skin alone,
+ * so other driver forms such as hints introduced later won't clash with it.
+ */
 /* === 首次使用引导 — driver.js 皮肤 ===
  *
  * driver.js 的 popover 用 `all: unset` 起手，所有观感都要在这里显式给出。皮肤与应用里的弹层同一规范：
@@ -8,8 +18,12 @@
  * 避免将来引入 hints 等其他 driver 形态时互相打架。
  */
 
-/* 遮罩色不在这里：driver 把它写进 SVG 的 fill，取值见 tour.ts（引用 --scrim）。 */
+/* The overlay color isn't here: driver writes it into the SVG fill; see tour.ts for the value (references --scrim). / 遮罩色不在这里：driver 把它写进 SVG 的 fill，取值见 tour.ts（引用 --scrim）。 */
 
+/*
+ * Layer from index.css's --z-onboarding, so both overlay and bubble are above popovers and Toast.
+ * driver writes the overlay z-index inline (10000) and the bubble's in its default skin, so only !important can override them.
+ */
 /* 层级取 index.css 的 --z-onboarding，遮罩与气泡都高于弹层与 Toast。
    driver 把遮罩层级写在内联样式里（10000），气泡写在默认皮肤里，只能用 !important 覆盖。 */
 .driver-overlay {
@@ -20,6 +34,7 @@
     z-index: calc(var(--z-onboarding) + 1) !important;
 }
 
+/* ── Bubble body ── */
 /* ── 气泡本体 ─────────────────────────────────────────────── */
 
 .driver-popover.arc-tour {
@@ -34,7 +49,7 @@
     padding: 20px 20px 16px;
 }
 
-/* 箭头与气泡同色：driver 按方位把其中一条边染成背景色，其余透明 */
+/* Arrow matches the bubble color: driver colors one side with the background color by placement, the rest transparent / 箭头与气泡同色：driver 按方位把其中一条边染成背景色，其余透明 */
 .driver-popover.arc-tour .driver-popover-arrow {
     border-color: var(--popover);
 }
@@ -63,16 +78,17 @@
     border-right-color: transparent;
 }
 
+/* ── Text ── */
 /* ── 文字 ─────────────────────────────────────────────────── */
 
 .driver-popover.arc-tour .driver-popover-title {
-    /* 编辑体标题，与大厅海报卡同一张脸 */
+    /* Editorial title, the same face as the lobby poster cards / 编辑体标题，与大厅海报卡同一张脸 */
     font-family: var(--font-editorial);
     font-size: 24px;
     font-weight: 400;
     line-height: 1.2;
     color: var(--foreground);
-    padding-right: 28px; /* 让开右上角的关闭按钮 */
+    padding-right: 28px; /* make room for the close button in the top-right corner / 让开右上角的关闭按钮 */
 }
 
 .driver-popover.arc-tour .driver-popover-description {
@@ -82,6 +98,7 @@
     color: var(--subtle-foreground);
 }
 
+/* ── Close button: Button ghost icon-sm ── */
 /* ── 关闭按钮：Button ghost icon-sm ───────────────────────── */
 
 .driver-popover.arc-tour .driver-popover-close-btn {
@@ -103,6 +120,7 @@
     background: color-mix(in oklab, var(--muted) 50%, transparent);
 }
 
+/* ── Footer ── */
 /* ── 页脚 ─────────────────────────────────────────────────── */
 
 .driver-popover.arc-tour .driver-popover-footer {
@@ -119,7 +137,7 @@
     margin-left: 0;
 }
 
-/* 进度：胶片齿孔。轨道宽度恒定，格数随步数变化；语义由页脚的 sr-only 文本承载，齿孔本身是装饰。 */
+/* Progress: film sprocket holes. Track width is constant and the number of cells changes with the step count; meaning is carried by the footer's sr-only text, and the holes are decoration. / 进度：胶片齿孔。轨道宽度恒定，格数随步数变化；语义由页脚的 sr-only 文本承载，齿孔本身是装饰。 */
 .arc-tour-filmstrip {
     display: flex;
     gap: 3px;
@@ -151,6 +169,7 @@
     border: 0;
 }
 
+/* ── Buttons: Button sm size ── */
 /* ── 按钮：Button 的 sm 尺寸 ──────────────────────────────── */
 
 .driver-popover.arc-tour .driver-popover-footer-btn {
@@ -178,7 +197,7 @@
     box-shadow: 0 0 0 3px color-mix(in oklab, var(--ring) 50%, transparent);
 }
 
-/* 上一步：outline */
+/* Previous: outline / 上一步：outline */
 .driver-popover.arc-tour .driver-popover-prev-btn {
     color: var(--foreground);
     border-color: var(--input);
@@ -189,7 +208,7 @@
     background: color-mix(in oklab, var(--input) 20%, transparent);
 }
 
-/* 跳过：ghost，排在最左。它是退出路径，不是导航 */
+/* Skip: ghost, placed leftmost. It's an exit path, not navigation / 跳过：ghost，排在最左。它是退出路径，不是导航 */
 .driver-popover.arc-tour .arc-tour-skip-btn {
     margin-right: auto;
     color: var(--muted-foreground);
@@ -201,7 +220,7 @@
     background: color-mix(in oklab, var(--muted) 50%, transparent);
 }
 
-/* 下一步 / 完成：default */
+/* Next / Done: default / 下一步 / 完成：default */
 .driver-popover.arc-tour .driver-popover-next-btn,
 .driver-popover.arc-tour .driver-popover-done-btn {
     color: var(--primary-foreground);
@@ -217,6 +236,7 @@
     opacity: 0.5;
 }
 
+/* ── Narrow screens ── */
 /* ── 窄屏 ─────────────────────────────────────────────────── */
 
 @media (max-width: 480px) {
@@ -232,6 +252,10 @@
         width: 56px;
     }
 
+    /*
+     * Progress bar + skip + the previous/continue button groups: English and Vietnamese text is much longer than Chinese, and all three squeezed into one row
+     * overflow on narrow screens (~320px). Here the progress bar takes its own row and the button groups wrap to the next row.
+     */
     /* 进度条 + 跳过 + 上一步/继续两组按钮，英、越文案比中文长得多，三者挤在一行
      * 在窄屏（~320px）会溢出。这里让进度条独占一行，按钮组换到下一行。 */
     .driver-popover.arc-tour .driver-popover-footer {

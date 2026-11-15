@@ -14,10 +14,10 @@ const RETURN_TO_KEY = "arcreel:returnTo";
 /** The last project page visited (path + query): the app's root address reopens it. */
 const LAST_PROJECT_KEY = "arcreel:lastProject";
 
-/** 「返回」回到进入之前位置的页面。在这些页面之间往来不改变返回目标。 */
+/** Pages whose "Back" returns to where you were before entering. Moving between these pages does not change the return target. / 「返回」回到进入之前位置的页面。在这些页面之间往来不改变返回目标。 */
 const RETURN_TO_PAGES = [ROUTE_APP_SETTINGS, ROUTE_APP_ASSETS];
 
-/** 只做重定向、不会停留的入口。记成返回目标的话，返回后又被重定向回来。 */
+/** Entries that only redirect and never stay. If recorded as the return target, going back would just be redirected again. / 只做重定向、不会停留的入口。记成返回目标的话，返回后又被重定向回来。 */
 const REDIRECT_ONLY_PATHS = [`${ROUTE_APP_PROJECTS}/${DEMO_PROJECT_NAME}/${WORKSPACE_ROUTE_SETTINGS}`];
 
 function isAppPath(path: string) {
@@ -31,6 +31,10 @@ function isReturnTarget(path: string) {
 }
 
 /**
+ * Record the most recent app page visited (including the query string), used by "Back" in global settings and the asset library. Mounted at the router root,
+ * so entry buttons, deep links and onboarding jumps do not each have to record their source. The record lives in sessionStorage, survives a page refresh,
+ * and does not cross tabs.
+ *
  * 记录最近停留的应用页面（含查询串），供全局设置与资产库的「返回」使用。挂在路由根部，
  * 入口按钮、深链与新手引导的跳转都不需要各自记录来源。记录放在 sessionStorage，刷新页面后仍然有效，
  * 不跨标签页。
@@ -69,6 +73,9 @@ export function appHomeRoute(): string {
 }
 
 /**
+ * Go back to the app page visited before entering the current page; with no record (e.g. the URL opened directly), go to the project lobby.
+ * Only for pages on top-level routes: `navigate` in nested routes is relative to the nested path.
+ *
  * 返回进入当前页面之前停留的应用页面；没有记录时（如直接打开地址）回到项目大厅。
  * 只用于顶层路由上的页面：嵌套路由里的 `navigate` 以嵌套路径为基准。
  */

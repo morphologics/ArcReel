@@ -9,6 +9,11 @@ import { useEpisodeItem } from "./useEpisodeItem";
 import { ItemPositionBadge } from "./ItemPositionBadge";
 
 /**
+ * Identifies a shot or video unit outside lists: position badge, thumbnail and the first dozen or so characters of the body.
+ *
+ * Position is computed from the current project's script; when the entry is no longer in the script it just says "Deleted". Without a thumbnail the badge stands alone as an inline label.
+ * Entries not referred to by position, such as grids, still show the in-episode ID.
+ *
  * 列表之外指认一个分镜或视频单元：位置角标、缩略图与正文前十几个字。
  *
  * 位置按当前项目剧本现算，条目已不在剧本里时只写「已删除」。没有缩略图时角标单独成行内标签。
@@ -30,6 +35,9 @@ export function EpisodeItemRef({ itemId, className }: { itemId: string; classNam
 }
 
 /**
+ * Rendering once the entry facts are resolved, reused by callers that cannot get the project script and get the position from the backend (usage records span projects,
+ * passing the record's `projectName` to fetch thumbnails). `item` null or position null means the entry is no longer in the script.
+ *
  * 已解析出条目事实时的呈现，供拿不到项目剧本、由后端给出位置的调用方复用（用量记录跨项目，
  * 传入记录所属的 `projectName` 取缩略图）。`item` 为 null 或位置为 null 表示条目已不在剧本里。
  */
@@ -69,6 +77,7 @@ export function EpisodeItemRefView({
 function ItemThumbnail({ path, projectName }: { path: string; projectName?: string }) {
   const currentProjectName = useProjectsStore((s) => s.currentProjectName);
   const project = projectName ?? currentProjectName;
+  // Asset fingerprints are valid only for the current project; thumbnails from other projects carry no fingerprint.
   // 资产指纹只对当前项目有效；其他项目的缩略图不带指纹。
   const fingerprint = useProjectsStore((s) => (project === s.currentProjectName ? s.getAssetFingerprint(path) : null));
   if (!project) return null;

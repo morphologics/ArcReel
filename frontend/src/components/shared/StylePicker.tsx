@@ -16,9 +16,9 @@ export interface StylePickerValue {
   mode: "template" | "custom";
   templateId: string | null;
   activeCategory: "live" | "anim";
-  /** 待上传的参考图；有文件时选择器按文件自建预览，不读 `uploadedPreview`。 */
+  /** Reference image to upload; when there is a file the picker builds its own preview from the file and doesn't read `uploadedPreview`. / 待上传的参考图；有文件时选择器按文件自建预览，不读 `uploadedPreview`。 */
   uploadedFile: File | null;
-  /** 已保存的参考图地址（/api/v1/files/...）；选择器不往这里写 blob: 地址。 */
+  /** URL of the saved reference image (/api/v1/files/...); the picker never writes blob: URLs here. / 已保存的参考图地址（/api/v1/files/...）；选择器不往这里写 blob: 地址。 */
   uploadedPreview: string | null;
 }
 
@@ -83,6 +83,9 @@ function TemplateCard({ thumbnail, label, tagline, isSelected, isDefault, defaul
 }
 
 /**
+ * Preview URL of the file to upload, held only by the picker: created with the file, revoked on file change or unmount; rebuilt from the file on remount,
+ * so revoked URLs aren't left in the caller's value. The layout effect swaps in the URL before paint, so the preview doesn't flash an empty frame.
+ *
  * 待上传文件的预览地址，只由选择器持有：随文件创建，换文件或卸载时收回；重新挂载时按文件重建，
  * 不会把已收回的地址留在调用方的取值里。layout effect 在绘制前换上地址，预览不闪一帧空态。
  */
@@ -91,7 +94,7 @@ function useFilePreview(file: File | null): string | null {
   useLayoutEffect(() => {
     if (!file) return;
     const url = URL.createObjectURL(file);
-    // eslint-disable-next-line react-hooks/set-state-in-effect -- object URL 随文件创建并在换文件或卸载时回收（同 AssetCreateDialog）
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- the object URL is created with the file and revoked on file change or unmount (same as AssetCreateDialog) / object URL 随文件创建并在换文件或卸载时回收（同 AssetCreateDialog）
     setPreview({ file, url });
     return () => URL.revokeObjectURL(url);
   }, [file]);
@@ -99,6 +102,9 @@ function useFilePreview(file: File | null): string | null {
 }
 
 /**
+ * Style selection: a style template (live-action or animation) or upload a style reference image.
+ * The template grid doesn't scroll itself; the containing popover or page handles scrolling, to avoid nested scroll areas.
+ *
  * 风格选择：风格模版（真人、动画两类）或上传一张风格参考图。
  * 模版网格不自带滚动，由所在的弹层或页面负责滚动，避免嵌套滚动区。
  */

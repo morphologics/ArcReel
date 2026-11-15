@@ -1,4 +1,26 @@
 /**
+ * Step outline of the first-use tour.
+ *
+ * Structure (order, anchors, routes) is written here, while all copy goes through i18n keys in the `onboarding` namespace -- the two are
+ * separate, so adding a language does not touch structure and reordering does not touch translations. Anchors always reference the `anchors.ts` registry, never
+ * literals. `route` is the page the step needs to land on (`OnboardingTour` navigates ahead of step changes from it);
+ * omitting it means no particular route is required.
+ *
+ * 12 steps in all, across three pages: lobby segment (welcome -> new project entry -> settings entry) -> settings segment (providers
+ * -> ArcReel Agent) -> back to the lobby (demo card, the bridge into the workbench) -> demo workbench segment (Agent -> project overview ->
+ * characters/scenes/props -> shots -> export) -> closing. The Agent panel is expanded by default and most prominent, so the workbench segment covers it first. Every page change is motivated by the entry the previous step highlighted:
+ * after the settings icon comes the settings page, after the demo card comes the workbench; there are no jumps without a path.
+ *
+ * Names used for directions in step copy ("Providers", "ArcReel Agent", etc.) always take the highlighted element's actual UI label,
+ * without inventing concepts -- directions count as right only if users can find them in the UI by following the copy.
+ *
+ * The workbench segment lands on the demo project's read-only workbench (`demo-project.ts`). Step 6's demo card is
+ * `interactive`: clicking the card itself or "Next" both enter the demo workbench, and the tour advances to the workbench
+ * first step (logic in `OnboardingTour.tsx`); route changes inside the workbench segment are still driven by `route` forced navigation.
+ *
+ * The closing step lands back in the lobby: the copy tells users to create a project and start producing, so it should land on the page with the new-project entry, not stay
+ * on the read-only demo workbench.
+ *
  * 首次使用引导的步骤大纲。
  *
  * 结构（顺序、锚点、路由）写在这里，文案全部走 `onboarding` 命名空间的 i18n key —— 两者
@@ -35,7 +57,7 @@ import { ONBOARDING_ANCHORS } from "./anchors";
 import { DEMO_PROJECT_NAME, DEMO_SCRIPTED_EPISODE } from "./demo-project";
 import type { TourStep } from "./tour";
 
-/** 演示工作台的三条落地路由。全小写——`OnboardingTour` 归一化后按字面比对当前路由。 */
+/** The three landing routes of the demo workbench. All lowercase -- `OnboardingTour` compares the current route literally after normalization. / 演示工作台的三条落地路由。全小写——`OnboardingTour` 归一化后按字面比对当前路由。 */
 const DEMO_WORKBENCH = `${ROUTE_APP_PROJECTS}/${DEMO_PROJECT_NAME}`;
 const DEMO_LOREBOOK = `${DEMO_WORKBENCH}/${WORKSPACE_ROUTE_CHARACTERS}`;
 const DEMO_EPISODE = `${DEMO_WORKBENCH}/${WORKSPACE_ROUTE_EPISODES}/${DEMO_SCRIPTED_EPISODE}`;
@@ -60,6 +82,9 @@ export function buildTourSteps(t: TFunction<"onboarding">): TourStep[] {
       title: t("settings_providers_title"),
       body: t("settings_providers_body"),
       route: ROUTE_APP_SETTINGS,
+      // The settings page content area is driven by the `section` query param (`SystemConfigPage`) and the anchor is only on the sidebar
+      // entry -- without declaring the query param the content area would not switch between the two steps, leaving providers on the right
+      // while explaining Agent.
       // 设置页的内容区由 `section` 查询参数驱动（`SystemConfigPage`），锚点只在侧栏
       // 入口上——不声明查询参数的话，两步之间内容区不会跟着切，讲 Agent 时右边还摆着
       // 供应商。
@@ -77,10 +102,15 @@ export function buildTourSteps(t: TFunction<"onboarding">): TourStep[] {
       title: t("lobby_demo_title"),
       body: t("lobby_demo_body"),
       route: ROUTE_APP_PROJECTS,
+      // The exception to read-only throughout: this step's landing action is navigating into the demo workbench, not a write, so it allows
+      // interaction (see the `interactive` semantics in tour.ts); the demo card itself is only mounted while the tour runs,
+      // and unmounts right after exit, leaving no writable entry.
       // 全程只读的例外：这一步的落点动作是导航进演示工作台，不是写操作，因此开放
       // 交互（见 tour.ts 的 `interactive` 语义）；演示卡本身仅在引导运行期间挂载，
       // 退出后随即卸载，不留可写入口。
       interactive: true,
+      // Clicking the card lands in the demo workbench (including its subroutes). Landing here counts as "following the tour", and the tour advances
+      // to the next step (the workbench first step); landing elsewhere is still dragged back to the lobby by forced navigation.
       // 点卡片落到演示工作台（含其子路由）。落到这里算「顺着引导走」，引导顺势推进
       // 到下一步（工作台首步）；落到别处仍按强制导航拽回大厅。
       interactiveTarget: DEMO_WORKBENCH,
@@ -89,6 +119,7 @@ export function buildTourSteps(t: TFunction<"onboarding">): TourStep[] {
       anchor: ONBOARDING_ANCHORS.workbenchAgent,
       title: t("workbench_agent_title"),
       body: t("workbench_agent_body"),
+      // The Agent panel lives on the workbench shell and renders on every workbench route; explain it on the overview page so the next step needs no navigation.
       // Agent 面板挂在工作台外壳上，所有工作台路由都渲染；落在概览页讲，下一步不必导航。
       route: DEMO_WORKBENCH,
     },
@@ -109,6 +140,7 @@ export function buildTourSteps(t: TFunction<"onboarding">): TourStep[] {
       title: t("workbench_timeline_title"),
       body: t("workbench_timeline_body"),
       route: DEMO_EPISODE,
+      // The episode page view is stored in the `view` query param; land explicitly on the shot view, where the anchor is on the shot view body.
       // 集页的视图记在 `view` 查询参数上，显式落到分镜视图，锚点挂在分镜视图主体上。
       query: { [EPISODE_VIEW_PARAM]: "board" },
     },
@@ -116,6 +148,7 @@ export function buildTourSteps(t: TFunction<"onboarding">): TourStep[] {
       anchor: ONBOARDING_ANCHORS.workbenchExport,
       title: t("workbench_export_title"),
       body: t("workbench_export_body"),
+      // The header is on every workbench route; explain it on the previous step's shot canvas, saving a needless navigation.
       // 顶栏在所有工作台路由上都挂着，留在上一步的分镜画布讲，省掉一次无谓导航。
       route: DEMO_EPISODE,
     },

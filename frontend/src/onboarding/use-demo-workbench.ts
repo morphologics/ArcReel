@@ -1,4 +1,15 @@
 /**
+ * Single source of the judgment "the currently open project is the demo project".
+ *
+ * Most workbench controls are turned off by existing idioms (no write callback passed => the entry does not render); the few places that need to know across layers
+ * that they are in demo state (whether the layout connects SSE, whether the sidebar fetches the file list, whether the toolbar offers "New") derive it from the store with this
+ * hook. The judgment looks only at the current project name and lapses automatically on leaving the demo project, with no extra toggle state.
+ *
+ * The store's currentProjectName is written asynchronously by StudioWorkspace in an effect; after route param switches
+ * (including entering the workbench from the lobby, switching between demo and real projects; :projectName changes do not remount the component) the store is not yet synced on the first
+ * render; route params are available during render, so when present they win, sparing every consumer reading this hook
+ * from tripping over this judgment lag on its own.
+ *
  * 「当前打开的是演示项目」这一判定的单一来源。
  *
  * 工作台里绝大多数控件靠既有惯用法关掉（不传写回调 ⇒ 入口不渲染），少数需要跨层知道自己
@@ -15,7 +26,7 @@ import { useParams } from "wouter";
 import { useProjectsStore } from "@/stores/projects-store";
 import { isDemoProject } from "./demo-project";
 
-/** 当前工作台是否处在只读的演示态。 */
+/** Whether the current workbench is in the read-only demo state. / 当前工作台是否处在只读的演示态。 */
 export function useDemoWorkbench(): boolean {
   const routeProjectName = useParams<{ projectName?: string }>().projectName;
   const storeDemoMode = useProjectsStore((s) => isDemoProject(s.currentProjectName));

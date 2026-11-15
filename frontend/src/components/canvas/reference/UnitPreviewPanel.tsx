@@ -23,6 +23,10 @@ export interface UnitPreviewPanelProps {
   /** Latest task error message (if any) for the failed state. */
   errorMessage?: string | null;
   /**
+   * Whether the occupied set is hit (including the optimistic marker after enqueue, before the real task row is persisted), independent of status:
+   * status's optimistic branch only applies when there is no task row, and on the retry and regenerate paths the old task row is always present,
+   * so looking only at status would miss disabling within the optimistic window.
+   *
    * 占用集（含入队后真实任务行落库前的乐观标记）命中与否，独立于 status：
    * status 的乐观分支只在无任务行时生效，重试与重新生成这两条路径上旧任务行始终在，
    * 仅看 status 会在乐观窗口内漏禁用。
@@ -37,13 +41,18 @@ export interface UnitPreviewPanelProps {
   narrationGenerating?: boolean;
   narrationEstimatedCost?: CostBreakdown;
   onGenerateNarration?: (unitId: string) => void;
-  /** 剧本单元需重新规划，在修复前不可生成。 */
+  /** The script unit needs replanning and cannot be generated until fixed. / 剧本单元需重新规划，在修复前不可生成。 */
   generationBlocked?: boolean;
-  /** 上传成片视频（替换该单元的 AI 生成视频）；未提供时不显示上传入口 */
+  /** Upload a final cut video (replaces the unit's AI-generated video); no upload entry point when not provided / 上传成片视频（替换该单元的 AI 生成视频）；未提供时不显示上传入口 */
   onUploadVideo?: (unitId: string, file: File) => void | Promise<void>;
-  /** 上传进行中 */
+  /** Upload in progress / 上传进行中 */
   uploadingVideo?: boolean;
   /**
+   * This unit's version restore request is in flight. Restore creates no task row and does not enter the tasks-store occupied set; the state is
+   * reported by {@link VersionTimeMachine} via `onRestoringChange`, but must live **outside this panel**:
+   * this panel is mounted in two places (narrow-screen sub-tab and wide-screen right column), and switching sub-pages or crossing the breakpoint unmounts it while the in-flight
+   * restore request is not cancelled; also the same panel is reused as the selection changes, so state stored here would leak into another unit.
+   *
    * 该 unit 的版本恢复请求在途。恢复不产生任务行、进不了 tasks-store 占用集，状态由
    * {@link VersionTimeMachine} 经 `onRestoringChange` 上报，但必须存在**本面板之外**：
    * 本面板在窄屏 sub-tab 与宽屏右栏是两处挂载点，切换子页或跨越断点都会卸载它，而在途
@@ -52,15 +61,18 @@ export interface UnitPreviewPanelProps {
   restoring?: boolean;
   onRestoringChange?: (unitId: string, restoring: boolean) => void;
   /**
+   * Occupied re-check at restore submit time (fresh read): when the panel is open and the Agent, a batch entry point or polling then occupies this unit,
+   * render snapshots like `restoring`/`busy` only take effect after render flushes, and clicks in between would still send the restore request.
+   *
    * 恢复提交时刻的占用复核（新鲜读）：面板打开着而 Agent、批量入口或轮询随后占用该 unit
    * 时，`restoring`/`busy` 这类渲染快照要等 render 冲刷才生效，其间的点击仍会发出恢复请求。
    */
   checkBusy?: (unitId: string) => boolean;
-  /** 版本恢复后的刷新回调（重新拉取 units） */
+  /** Refresh callback after version restore (refetch units) / 版本恢复后的刷新回调（重新拉取 units） */
   onRestored?: () => void | Promise<void>;
-  /** 正文有未保存修改：生成按钮写「保存并生成」，`onGenerate` 负责先保存。 */
+  /** Body has unsaved changes: the generate button reads "Save and generate", and `onGenerate` is responsible for saving first. / 正文有未保存修改：生成按钮写「保存并生成」，`onGenerate` 负责先保存。 */
   saveFirst?: boolean;
-  /** 正文保存请求在途：生成按钮置灰，避免按保存前的内容生成。 */
+  /** Body save request in flight: the generate button is greyed out to avoid generating from pre-save content. / 正文保存请求在途：生成按钮置灰，避免按保存前的内容生成。 */
   saving?: boolean;
 }
 
@@ -95,6 +107,7 @@ export function UnitPreviewPanel({
 }: UnitPreviewPanelProps) {
   const { t } = useTranslation("dashboard");
   const clip = unit?.generated_assets?.video_clip ?? null;
+  // The path doesn't change after upload/restore; rely on fingerprint cache-bust to make <video> refetch
   // 上传/还原后路径不变，靠 fingerprint cache-bust 让 <video> 重新拉取
   const clipFp = useProjectsStore((s) => (clip ? s.getAssetFingerprint(clip) : null));
   const playbackStart = usePlaybackStart("reference_videos", unit?.unit_id ?? "");
@@ -113,11 +126,13 @@ export function UnitPreviewPanel({
   const hasNarrationText = Boolean(narrationText?.trim());
   const narrationAudio = unit.generated_assets?.narration_audio ?? null;
 
+  // In the window where status is persisted before video_clip, effectiveStatus==="ready" but videoUrl
+  // is still null; in that case use the inFlight placeholder to avoid a blank panel.
   // 状态先于 video_clip 落库的窗口里，effectiveStatus==="ready" 但 videoUrl
   // 还为 null —— 这种情况下走 inFlight 占位避免空白面板。
   const ready = effectiveStatus === "ready" && Boolean(videoUrl);
   const failed = effectiveStatus === "failed";
-  // busy 一并计入，使重试/重新生成在乐观窗口内也占位。
+  // busy is also counted, so retry/regenerate also show the placeholder within the optimistic window. / busy 一并计入，使重试/重新生成在乐观窗口内也占位。
   const inFlight =
     busy ||
     effectiveStatus === "running" ||
@@ -133,12 +148,17 @@ export function UnitPreviewPanel({
         : t("reference_preview_generate");
 
   return (
+    // The preview column is a width container: portrait frame height is computed from the column width (100cqw).
     // 预览栏是宽度容器：竖屏画框的高度按栏宽换算（100cqw）。
     <div className="@container/preview relative flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto p-3.5">
       <div className="flex items-center gap-1.5">
         <Film className="size-4 text-muted-foreground" aria-hidden="true" />
         <h3 className="text-xs font-semibold text-subtle-foreground">{t("reference_preview_label")}</h3>
         <span className="flex-1" />
+        {/*
+         * Upload is a sibling control on the same unit, wired to disable together with the main CTA: uploading while occupied would
+         * write the same final cut file as the running generation's write-back
+         */}
         {/* 上传是同一 unit 上的兄弟控件，与主 CTA 同步接线禁用：占用期间上传会与
             在跑的生成回写同一个成片文件 */}
         {onUploadVideo && (
@@ -150,6 +170,10 @@ export function UnitPreviewPanel({
             onSelect={(f) => void onUploadVideo(unit.unit_id, f)}
           />
         )}
+        {/*
+         * Version restore also writes this unit's final cut file, wired to disable together with upload and the main CTA:
+         * restoring an old version while occupied would show success and then be overwritten by the running generation task
+         */}
         {/* 版本恢复同样写这个 unit 的成片文件，与上传、主 CTA 同步接线禁用：
             占用期间恢复旧版本会显示成功、随后被在跑的生成任务覆盖 */}
         {projectName && (
@@ -167,6 +191,10 @@ export function UnitPreviewPanel({
         <UnitStatusBadge status={effectiveStatus} />
       </div>
 
+      {/*
+       * The frame follows the project frame format: portrait 9:16 with height the smaller of 55dvh and the value derived from column width; landscape 16:9 with height also at most 55dvh.
+       * The frame does not shrink with column height; when the column cannot fit it, the whole column scrolls.
+       */}
       {/* 画框按项目画幅：竖屏 9:16、高度取 55dvh 与栏宽换算值中较小的一个；横屏 16:9、高度同样不超过 55dvh。
           画框不随栏高收缩，栏放不下时整栏滚动。 */}
       <div
@@ -210,6 +238,7 @@ export function UnitPreviewPanel({
         )}
 
         {failed && !inFlight && (
+          // The failure reason may be long: only the title and first few lines stay in the frame; the full text goes below the frame.
           // 失败原因可能很长：画框里只留标题与前几行，全文放在画框下方。
           <div className="absolute inset-0 grid place-items-center p-4 text-center">
             <div>
@@ -260,7 +289,7 @@ export function UnitPreviewPanel({
         </Button>
       )}
 
-      {/* 单元头部已用 alert 播报这一状态；这里只在生成按钮旁说明它为何不可用 */}
+      {/* The unit header already announces this state via alert; here we only explain next to the generate button why it is unavailable / 单元头部已用 alert 播报这一状态；这里只在生成按钮旁说明它为何不可用 */}
       {generationBlocked && (
         <p className="text-xs text-warn">
           {t("reference_needs_replan")}

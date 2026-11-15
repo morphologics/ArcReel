@@ -24,29 +24,29 @@ import { ProviderModelFlags } from "./ProviderModelFlags";
 import { MEDIA_LABEL_KEY, priceSummaryText } from "./providerModelDisplay";
 import { ProviderModelSheet, type CustomProviderContext, type OpenProviderModel } from "./ProviderModelSheet";
 
-// 分组顺序：文本、图片、视频、音频。
+// Group order: text, image, video, audio. / 分组顺序：文本、图片、视频、音频。
 const MEDIA_ORDER = ["text", "image", "video", "audio"] as const;
 
 type Filter = "all" | "enabled";
 
 interface Props {
-  /** 内置供应商 ID，或自定义供应商的 `custom-<id>`。 */
+  /** Built-in provider ID, or `custom-<id>` for a custom provider. / 内置供应商 ID，或自定义供应商的 `custom-<id>`。 */
   providerId: string;
-  /** 供应商名称，显示在模型 Sheet 的标题下与「从『X』移除」里。 */
+  /** Provider name, shown under the model Sheet's title and in "Remove from 'X'". / 供应商名称，显示在模型 Sheet 的标题下与「从『X』移除」里。 */
   providerName: string;
-  /** 自定义供应商的接口地址与模型发现协议：模型 Sheet 据此编辑调用端点与请求地址。 */
+  /** API address and model discovery protocol of a custom provider: the model Sheet uses them to edit the call endpoint and request address. / 自定义供应商的接口地址与模型发现协议：模型 Sheet 据此编辑调用端点与请求地址。 */
   custom?: CustomProviderContext;
-  /** 深链里的模型 ID：打开时直接打开它的 Sheet。 */
+  /** Model ID from a deep link: open its Sheet directly on open. / 深链里的模型 ID：打开时直接打开它的 Sheet。 */
   initialModelId?: string;
-  /** 添加模型、模型 Sheet 保存或移除之后调用，供上层刷新依赖模型的内容。 */
+  /** Called after adding a model, or saving or removing in the model Sheet, so the parent can refresh content that depends on models. / 添加模型、模型 Sheet 保存或移除之后调用，供上层刷新依赖模型的内容。 */
   onModelsChanged?: () => void;
-  /** 已保存的供应商倍率。行上的「未定价」标记随倍率是否为 0 变化，倍率保存后整表重取。 */
+  /** Saved provider multiplier. The "unpriced" flag on rows changes with whether the multiplier is 0; the whole table is refetched after the multiplier is saved. / 已保存的供应商倍率。行上的「未定价」标记随倍率是否为 0 变化，倍率保存后整表重取。 */
   providerMultiplier?: number;
-  /** 供应商支持的媒体类型：手动填写模型时只提供这些类型；不给则不限。 */
+  /** Media types the provider supports: manual model entry only offers these types; if not given, unrestricted. / 供应商支持的媒体类型：手动填写模型时只提供这些类型；不给则不限。 */
   mediaTypes?: readonly string[];
 }
 
-/** 获取到的模型添加时的请求：内置供应商对上官方收录的模型即启用它，自定义供应商带调用端点。 */
+/** Request when adding a fetched model: built-in providers enable the officially listed model it matches; custom providers carry a call endpoint. / 获取到的模型添加时的请求：内置供应商对上官方收录的模型即启用它，自定义供应商带调用端点。 */
 function addRequestFor({ model, mediaType, endpoint, binding }: FetchSelection, custom: boolean): AddProviderModelRequest {
   return {
     model_id: model.model_id,
@@ -57,6 +57,10 @@ function addRequestFor({ model, mediaType, endpoint, binding }: FetchSelection, 
 }
 
 /**
+ * Model list in provider details: grouped by text, image, video, audio, filtered "All / Enabled". The enable switch on a row takes effect on click,
+ * and disabling also clears default. At the top are "Fetch models" (for providers with a model list API) and "Add model"; after adding, the new model's Sheet opens.
+ * Shared by built-in and custom providers; custom provider rows also show the call endpoint.
+ *
  * 供应商详情的模型列表：按文本、图片、视频、音频分组，筛选「全部 / 已启用」。行上的启用开关点击即生效，
  * 停用时同时取消默认。上方是「获取模型」（有模型列表接口的供应商）与「添加模型」，添加后打开新模型的 Sheet。
  * 内置与自定义供应商共用；自定义供应商的行另显示调用端点。
@@ -77,6 +81,7 @@ export function ProviderModelList({
   const [discoverable, setDiscoverable] = useState(false);
   const [addOpen, setAddOpen] = useState(false);
   const [fetchOpen, setFetchOpen] = useState(false);
+  // "Fill in manually" in "Add model": carries the current search term as the initial value of the new model's ID and model name
   // 「添加模型」里的「手动填写」：带当时的搜索词，作为新模型的 ID 与模型名称的初值
   const [manual, setManual] = useState<{ query: string } | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -84,6 +89,7 @@ export function ProviderModelList({
   const [filter, setFilter] = useState<Filter>("all");
   const [pending, setPending] = useState<ReadonlySet<string>>(new Set());
   const headingId = useId();
+  // The open model Sheet; each open gets a new key, so closing and reopening the same model re-reads it
   // 打开的模型 Sheet；每次打开换一个 key，关掉再打开同一个模型时重新读取
   const sheetKeyRef = useRef(0);
   const [openModel, setOpenModel] = useState<OpenProviderModel | null>(() =>
@@ -94,6 +100,7 @@ export function ProviderModelList({
     setOpenModel({ modelId, key: sheetKeyRef.current });
   };
 
+  // A switch was toggled while a whole-table refetch was in flight: the refetch result may predate this toggle, so fetch again after the toggle completes so stale rows don't overwrite the switch
   // 整表重取在途时切换了开关：重取的结果可能早于这次切换，切换完成后再取一次，不让旧行盖回开关
   const listLoadingRef = useRef(false);
   useEffect(() => {
@@ -146,11 +153,12 @@ export function ProviderModelList({
     [providerId, pushToast, t, onModelsChanged],
   );
 
+  // Refetch the whole table after a Sheet save: setting a default clears the default of other models in the same group, and renaming changes the row's key
   // Sheet 保存后整表重取：设为默认会取消同组其他模型的默认，改名会换掉行的键
   const handleSheetSaved = useCallback(
     (model: ProviderModelItem, previousModelId: string) => {
       setModels((prev) => prev?.map((m) => (m.model_id === previousModelId ? model : m)) ?? prev);
-      // 改了模型 ID：Sheet 继续显示同一个模型，不重新打开
+      // Model ID changed: the Sheet keeps showing the same model without reopening / 改了模型 ID：Sheet 继续显示同一个模型，不重新打开
       setOpenModel((prev) => (prev && prev.modelId === previousModelId ? { ...prev, modelId: model.model_id } : prev));
       setReloadKey((k) => k + 1);
       onModelsChanged?.();
@@ -166,6 +174,7 @@ export function ProviderModelList({
   );
   const closeSheet = useCallback(() => setOpenModel(null), []);
 
+  // After adding or enabling: refetch the whole table (the new model may become default) and open the new model's Sheet
   // 添加或启用之后：整表重取（新模型可能成为默认），并打开新模型的 Sheet
   const handleAdded = useCallback(
     (model: ProviderModelItem) => {
@@ -187,6 +196,7 @@ export function ProviderModelList({
     (signal: AbortSignal) => API.discoverProviderModels(providerId, { signal }),
     [providerId],
   );
+  // Already added: custom providers by model ID; built-in providers by API model name, not counting disabled officially listed models (adding enables it)
   // 已添加：自定义供应商按模型 ID；内置供应商按 API 模型名，停用的官方收录模型不算（添加即启用它）
   const isFetchedAdded = useCallback(
     (fetched: FetchedProviderModel) =>
@@ -204,7 +214,7 @@ export function ProviderModelList({
       const errors: (string | null)[] = [];
       for (const selection of selections) {
         try {
-          // react-doctor-disable-next-line react-doctor/async-await-in-loop -- 逐个添加：服务端让某媒体类型的第一个新模型成为默认，并发添加会争抢默认并交错写同一供应商
+          // react-doctor-disable-next-line react-doctor/async-await-in-loop -- add one at a time: the server makes the first new model of a media type the default, and concurrent adds would race for default and interleave writes to the same provider / 逐个添加：服务端让某媒体类型的第一个新模型成为默认，并发添加会争抢默认并交错写同一供应商
           await API.addProviderModel(providerId, addRequestFor(selection, !!custom));
           errors.push(null);
         } catch (err) {
@@ -222,6 +232,7 @@ export function ProviderModelList({
     [providerId, custom, onModelsChanged, pushToast, t],
   );
 
+  // Manual entry (or a same-name entry found while filling in and selected): write the entry first, then add the model from it; model ID is the search term, or the model name when there is none
   // 手动填写（或选中填写时发现的同名条目）：先写入条目，再按它添加模型；模型 ID 取搜索词，没有时取模型名称
   const addWithEntry = useCallback(
     async (query: string, entry: Pick<NewCatalogEntry, "maker" | "name" | "media_type">, create?: NewCatalogEntry) => {
@@ -312,6 +323,7 @@ export function ProviderModelList({
     </div>
   );
 
+  // The Sheet sits in the same position across all three states: it is not remounted when the list finishes loading
   // Sheet 在三种状态里处于同一位置：列表加载完成时不会被重新挂载
   const withSheet = (content: ReactNode) => (
     <>

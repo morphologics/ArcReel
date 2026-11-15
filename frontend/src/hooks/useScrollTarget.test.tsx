@@ -106,15 +106,19 @@ describe("useScrollTarget", () => {
         useAppStore.getState().triggerScrollTo({ type: "character", id: "Hero", route: "/characters" });
       });
       expect(scrollSpy).toHaveBeenCalledTimes(1);
+      // In a fixed-height scroll container, content above the target growing taller (e.g. a sticky toolbar that grows as state loads) pushes the target away,
+      // while neither the target nor the scroll container changes size: the scroll container's content blocks must be observed too
       // 定高的滚动容器里，目标上方的内容（如随状态加载变高的吸顶工具栏）变高会把目标挤开，
       // 而目标与滚动容器自身都不变尺寸：滚动容器的各块内容也要观察
       expect(observed).toEqual([el, scroller, toolbar, list]);
 
+      // The scroll container gets its final height only after positioning: realign
       // 滚动容器在定位之后才收到最终高度：重新对齐
       const notify = () => callbacks[0]([], {} as ResizeObserver);
       notify();
       expect(scrollSpy).toHaveBeenCalledTimes(2);
 
+      // Stop following once the user starts scrolling
       // 用户自己开始滚动后不再跟随
       window.dispatchEvent(new Event("wheel"));
       expect(disconnect).toHaveBeenCalled();

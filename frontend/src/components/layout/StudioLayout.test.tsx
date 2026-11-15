@@ -9,6 +9,7 @@ import { useCostStore } from "@/stores/cost-store";
 import { useProjectsStore } from "@/stores/projects-store";
 import { useTasksStore } from "@/stores/tasks-store";
 
+// Session, task and project event streams all go over the network; the shell's open/close and collapse do not depend on them
 // 会话、任务与项目事件流都走网络，外壳的开合与折叠不依赖它们
 vi.mock("@/components/copilot/AgentCopilot", () => ({
   AgentCopilot: () => <textarea aria-label="Agent 输入" />,
@@ -17,7 +18,7 @@ vi.mock("@/hooks/useTaskRefresh", () => ({ useTaskRefresh: () => {} }));
 vi.mock("@/hooks/useProjectEventsSSE", () => ({ useProjectEventsSSE: () => {} }));
 vi.mock("@/components/usage/UsageHeaderEntry", () => ({ UsageHeaderEntry: () => null }));
 
-/** 紧凑档：视口窄于 1280，`(min-width: 80rem)` 不匹配。 */
+/** Compact tier: viewport narrower than 1280, `(min-width: 80rem)` does not match. / 紧凑档：视口窄于 1280，`(min-width: 80rem)` 不匹配。 */
 function useCompactViewport() {
   vi.stubGlobal("matchMedia", (query: string) => ({
     matches: false,
@@ -95,6 +96,7 @@ describe("StudioLayout", () => {
     fireEvent.click(screen.getByRole("button", { name: "展开侧栏" }));
     expect(screen.getByRole("button", { name: "折叠侧栏" })).toHaveAttribute("aria-expanded", "true");
 
+    // Temporary expansion is valid only on the current page
     // 临时展开只在当前页面有效
     act(() => navigate("/episodes/2"));
     expect(screen.getByRole("button", { name: "展开侧栏" })).toHaveAttribute("aria-expanded", "false");
@@ -123,6 +125,7 @@ describe("StudioLayout", () => {
     const { navigate } = renderShell("/characters");
     fireEvent.change(screen.getByRole("searchbox", { name: "搜索集名或编号…" }), { target: { value: "转折" } });
 
+    // Entering a single-episode page collapses to the icon rail automatically: the search box hides with it, and the icon rail must not filter by an invisible search term
     // 进入单集页自动收为图标栏：搜索框随之隐藏，图标栏不能按看不见的搜索词过滤
     act(() => navigate("/episodes/2"));
 

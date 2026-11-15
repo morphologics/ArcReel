@@ -21,6 +21,9 @@ interface PendingReplan {
 }
 
 /**
+ * "Replan from this episode": first fetch the replan range from the server; the confirm box states current episodes stay unchanged until adopted and which of the episodes to be replaced
+ * are already in production, with optional extra requirements; after confirming start generation, then call `onStarted` with the starting episode ID (must be a stable reference).
+ *
  * 「从这一集开始重新规划」：先向服务端取重新规划的范围，确认框写明采纳前现有分集不变、会被替换的集里
  * 哪些已开始制作，可附加要求；确认后发起生成，再以发起的集 ID 调用 `onStarted`（须传稳定引用）。
  */

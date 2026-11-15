@@ -40,6 +40,7 @@ describe("ExternalAgentSection", () => {
       "配置远程 MCP",
       "准备访问令牌",
     ]);
+    // The setup skill stores the token in plain text; step 3 reminds to exclude the config file from version control
     // setup skill 明文保存令牌，第三步提醒把配置文件排除在版本控制之外
     expect(within(steps[2]).getByText(/加入 \.gitignore/)).toBeInTheDocument();
 
@@ -48,6 +49,7 @@ describe("ExternalAgentSection", () => {
     await user.click(screen.getByRole("button", { name: "复制 MCP 端点" }));
     expect(writeText).toHaveBeenLastCalledWith(`${window.location.origin}/mcp`);
     await user.click(screen.getByRole("button", { name: "复制提示词" }));
+    // The prompt gives only the install guide address and carries no token
     // 提示词只给安装指引地址，不夹带任何令牌
     expect(writeText).toHaveBeenLastCalledWith(
       `帮我接入 YouReel Studio。请阅读并执行 ${window.location.origin}/agent-installation-guide.md`,
@@ -66,6 +68,7 @@ describe("ExternalAgentSection", () => {
   });
 
   it("在第三步创建的令牌出现在「访问令牌」分区的列表里", async () => {
+    // Stateful API stand-in: create writes, list reads, simulating one backend
     // 有状态的接口替身：创建写入、列表读出，模拟同一个后端
     const issued: ApiKeyInfo[] = [];
     vi.spyOn(API, "listApiKeys").mockImplementation(() => Promise.resolve([...issued]));
@@ -82,6 +85,7 @@ describe("ExternalAgentSection", () => {
       return Promise.resolve({ ...token, key: "arc-ext-full-secret" });
     });
     useConfigStatusStore.setState(useConfigStatusStore.getInitialState(), true);
+    // The settings page fetches config status on mount; here it gets an empty result
     // 设置页挂载时会拉取配置状态，这里让它拿到空结果
     vi.spyOn(API, "getProviders").mockResolvedValue({ providers: [] });
     vi.spyOn(API, "listCustomProviders").mockResolvedValue({ providers: [] });

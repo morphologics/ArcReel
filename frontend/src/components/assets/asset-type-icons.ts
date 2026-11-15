@@ -10,7 +10,7 @@ export const ASSET_TYPE_ICON: Record<AssetType, LucideIcon> = {
   prop: Package,
 };
 
-/** 资产图的四类：资产库三类加商品。 */
+/** The four sheet types: the three asset library types plus product. / 资产图的四类：资产库三类加商品。 */
 export const ASSET_SHEET_TYPE_ICON: Record<AssetSheetType, LucideIcon> = {
   ...ASSET_TYPE_ICON,
   product: ShoppingBag,

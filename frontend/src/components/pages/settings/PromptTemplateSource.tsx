@@ -8,22 +8,24 @@ type SourceProps = {
   text: string;
   template: PromptTemplateMeta;
   partials: PromptTemplatePartial[];
-  /** 点展开处的片段名进入片段详情。 */
+  /** Clicking a partial name at an expansion opens the partial's detail. / 点展开处的片段名进入片段详情。 */
   onOpenPartial: (name: string) => void;
 };
 
 const MARKER_PATTERN = /(\{#[\s\S]*?#\}|\{\{[\s\S]*?\}\}|\{%[\s\S]*?%\})/;
 const SLOT_PATTERN = /^[a-zA-Z_]\w*(?:\.[a-zA-Z_]\w*)*$/;
+// ponytail: only expand direct partial calls; expressions with filters keep the raw text. Hook up a parser once the syntax grows.
 // ponytail: 只展开直接片段调用，带过滤器的表达式保留原文；语法扩展后再接解析器。
 const PARTIAL_PATTERN =
   /^\{\{-?\s*(?<kind>partial|variant)\s*\(\s*(["'])(?<name>[^"']+)\2\s*(?:,\s*(?<axis>[a-zA-Z_]\w*))?[^()]*\)\s*-?\}\}$/;
 
-/** 展示模版语法与片段原文，不执行 Jinja 或填充项目数据。 */
+/** Shows the template syntax and partial source; doesn't execute Jinja or fill in project data. / 展示模版语法与片段原文，不执行 Jinja 或填充项目数据。 */
 export function PromptTemplateSource(props: SourceProps) {
   const { t } = useTranslation("dashboard");
   return (
+    // The body doesn't necessarily contain partial buttons: the code block itself is focusable so the keyboard can scroll long unbreakable strings horizontally
     // 正文里不一定有片段按钮：代码块自身可聚焦，键盘才能横向滚动折不开的长串
-    // eslint-disable-next-line jsx-a11y/no-noninteractive-tabindex -- 只读的滚动区域需要键盘聚焦才能滚动
+    // eslint-disable-next-line jsx-a11y/no-noninteractive-tabindex -- a read-only scroll area needs keyboard focus to be scrollable / 只读的滚动区域需要键盘聚焦才能滚动
     <div tabIndex={0} role="region" aria-label={t("prompt_templates_source")} className={SOURCE_BLOCK_CLS}>
       <SourceContent {...props} />
     </div>
@@ -36,7 +38,7 @@ type SourceNode =
       opening: string;
       condition: string;
       children: SourceNode[];
-      /** `else` / `elif` 标记及其后到 `endif` 前的原文，不属于「仅当」标签覆盖的范围。 */
+      /** `else` / `elif` markers and the raw text after them up to `endif`, which is outside the range covered by the "only when" tag. / `else` / `elif` 标记及其后到 `endif` 前的原文，不属于「仅当」标签覆盖的范围。 */
       alternate: SourceNode[];
       closing: string;
     };
@@ -75,7 +77,7 @@ function SourceNodes({ nodes, ...props }: Omit<SourceProps, "text"> & { nodes: S
         ? t("prompt_templates_optional_slot", { slot: part.condition })
         : t("prompt_templates_optional_condition", { condition: part.condition });
       return (
-        // react-doctor-disable-next-line react-doctor/no-array-index-as-key -- 节点由只读原文一次性解析而来，原文随模版换而整体重挂载，不重排不增删，位置即身份
+        // react-doctor-disable-next-line react-doctor/no-array-index-as-key -- nodes are parsed once from read-only source text, which remounts wholesale when the template changes; no reordering, inserting or deleting, so position is identity / 节点由只读原文一次性解析而来，原文随模版换而整体重挂载，不重排不增删，位置即身份
         <span key={index} className="my-2 block border-l-2 border-border pl-3">
           <span role="group" aria-label={label}>
             <span className="mb-1 block font-sans text-xs text-muted-foreground">{label}</span>
@@ -90,7 +92,7 @@ function SourceNodes({ nodes, ...props }: Omit<SourceProps, "text"> & { nodes: S
     const reference = PARTIAL_PATTERN.exec(part)?.groups;
     if (reference) {
       return (
-        // react-doctor-disable-next-line react-doctor/no-array-index-as-key -- 节点由只读原文一次性解析而来，原文随模版换而整体重挂载，不重排不增删，位置即身份
+        // react-doctor-disable-next-line react-doctor/no-array-index-as-key -- nodes are parsed once from read-only source text, which remounts wholesale when the template changes; no reordering, inserting or deleting, so position is identity / 节点由只读原文一次性解析而来，原文随模版换而整体重挂载，不重排不增删，位置即身份
         <PartialReference
           key={index}
           marker={part}
@@ -118,7 +120,7 @@ function SourceNodes({ nodes, ...props }: Omit<SourceProps, "text"> & { nodes: S
       }
     }
     return /^\{[{%#]/.test(part) ? (
-      // react-doctor-disable-next-line react-doctor/no-array-index-as-key -- 节点由只读原文一次性解析而来，原文随模版换而整体重挂载，不重排不增删，位置即身份
+      // react-doctor-disable-next-line react-doctor/no-array-index-as-key -- nodes are parsed once from read-only source text, which remounts wholesale when the template changes; no reordering, inserting or deleting, so position is identity / 节点由只读原文一次性解析而来，原文随模版换而整体重挂载，不重排不增删，位置即身份
       <mark key={index} className="rounded-sm bg-muted px-0.5 text-muted-foreground">
         {part}
       </mark>

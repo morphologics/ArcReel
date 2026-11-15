@@ -2,6 +2,7 @@ import { render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { Textarea } from "./textarea";
 
+// jsdom does no layout: content height is simulated as "lines x pixels per line", with pixels per line varying by width to simulate wrapping.
 // jsdom 不排版：内容高度按「行数 × 每行像素」模拟，每行像素随宽度变化模拟换行。
 let lineHeight = 20;
 let observed: ResizeObserverCallback[] = [];

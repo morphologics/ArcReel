@@ -224,6 +224,7 @@ describe("SystemConfigPage", () => {
 
     renderPage("/app/settings", "section=agent-memory");
 
+    // With no memory file yet, the details column is a create form
     // 还没有记忆文件时详情栏是新建表单
     expect(await screen.findByRole("heading", { name: "新建记忆文件" })).toBeInTheDocument();
     expect(API.getAgentMemory).toHaveBeenCalledWith({ level: "user" }, expect.anything());

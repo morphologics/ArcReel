@@ -1,4 +1,8 @@
 /**
+ * Validate the post-login redirect target to prevent open redirect.
+ * Only same-origin in-site addresses under /app/ are allowed; external sites, protocol-relative (//host),
+ * and non-app pages such as /login are all rejected, returning null (the caller falls back to the default page).
+ *
  * 校验登录后的回跳目标，杜绝 open redirect。
  * 仅放行同源、且路径落在 /app/ 下的站内地址；外站、协议相对（//host）、
  * 以及 /login 等非应用页面一律拒绝，返回 null（由调用方回退到默认页）。

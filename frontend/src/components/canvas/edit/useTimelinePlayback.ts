@@ -1,4 +1,9 @@
 /**
+ * Live stitched playback of the edit timeline: two `<video>`s alternate, one playing while the other preloads the next clip's in-point, switching at the out-point;
+ * before the first play only the current clip is loaded (elements use `preload="metadata"`, fetching only metadata and the frame at the seek position), with no preloading of the next.
+ * Narration and BGM each use one `<audio>`, aligned to the global clock every frame, buffering only audio due near the current position.
+ * All scheduling and sync conclusions come from the pure functions in playback-schedule and audio-sync; this only applies them to media elements.
+ *
  * 按剪辑时间线实时拼接播放：两个 `<video>` 交替，一个在播，另一个预载下一个片段的入点，到出点时切换；
  * 第一次播放之前只装载当前片段（元素按 `preload="metadata"` 只拉元数据与定位处的画面），不预载下一段。
  * 旁白与 BGM 各用一个 `<audio>`，每一帧按全局时钟对齐，只缓冲当前位置附近要放的音频。
@@ -34,21 +39,21 @@ function streamCovers(video: HTMLVideoElement, t: number, duration: number, lead
 export interface TimelinePlayback {
   t: number;
   playing: boolean;
-  /** 是否已经开始播放过。此前 `<video>` 只需拉元数据与首帧，之后才需要整段缓冲与预载下一段。 */
+  /** Whether playback has started at least once. Before that `<video>` only needs metadata and the first frame; after it whole clips are buffered and the next is preloaded. / 是否已经开始播放过。此前 `<video>` 只需拉元数据与首帧，之后才需要整段缓冲与预载下一段。 */
   started: boolean;
   /**
    * The user has moved the playhead (a click or drag on the timeline): from then on the clip there is buffered in
    * full (`preload="auto"`), so a Play that follows starts at once instead of only then fetching the video data.
    */
   primed: boolean;
-  /** 当前片段在播放计划里的下标；没有可播放片段时为 -1。 */
+  /** Index of the current clip in the playback plan; -1 when there is no playable clip. / 当前片段在播放计划里的下标；没有可播放片段时为 -1。 */
   index: number;
-  /** 正在显示的 `<video>`。切到下一个片段时，新片段有了画面才换过去，之前停在上一个片段的末帧上。 */
+  /** The `<video>` being shown. When switching to the next clip, it swaps over only once the new clip has a picture, holding on the previous clip's last frame until then. / 正在显示的 `<video>`。切到下一个片段时，新片段有了画面才换过去，之前停在上一个片段的末帧上。 */
   visibleSlot: Slot;
   videoRefs: readonly [RefObject<HTMLVideoElement | null>, RefObject<HTMLVideoElement | null>];
-  /** 某段媒体缓冲卡住：全局时钟停住，画面与音频一起暂停，数据到了自动继续。 */
+  /** Some media is stalled buffering: the global clock stops, picture and audio pause together, and resume automatically when data arrives. / 某段媒体缓冲卡住：全局时钟停住，画面与音频一起暂停，数据到了自动继续。 */
   buffering: boolean;
-  /** 浏览器拦截了播放，等用户再点一次播放。 */
+  /** The browser blocked playback; wait for the user to press play again. / 浏览器拦截了播放，等用户再点一次播放。 */
   blocked: boolean;
   play: () => void;
   pause: () => void;
@@ -81,13 +86,13 @@ function storedSpeed(): number {
   }
 }
 
-/** 动画帧停摆时推进播放头的兜底间隔。 */
+/** Fallback interval for advancing the playhead when animation frames stall. / 动画帧停摆时推进播放头的兜底间隔。 */
 const FALLBACK_TICK_MS = 200;
 
-/** 距上一动画帧超过这个时长才算停摆，由兜底定时器推进。 */
+/** Only a gap longer than this since the last animation frame counts as stalled, then the fallback timer advances. / 距上一动画帧超过这个时长才算停摆，由兜底定时器推进。 */
 const FRAME_STALL_MS = 100;
 
-/** 与出点、入点的差距超过这个值才重新定位，避免对已预载好的元素重复 seek。 */
+/** Reposition only when the gap to the out/in-point exceeds this, avoiding repeated seeks on already-preloaded elements. / 与出点、入点的差距超过这个值才重新定位，避免对已预载好的元素重复 seek。 */
 const RESEEK_TOLERANCE = 0.05;
 
 interface Runtime {
@@ -96,16 +101,16 @@ interface Runtime {
   slot: Slot;
   visible: Slot;
   playing: boolean;
-  /** 播放过一次后为 true；此前不为下一段预载。 */
+  /** True after playing once; before that the next clip is not preloaded. / 播放过一次后为 true；此前不为下一段预载。 */
   started: boolean;
   lastFrame: number;
   /** Playback speed: the video's playbackRate, the wall clock's pace (holds, gaps) and the audio's base rate. */
   speed: number;
-  /** 每个元素当前装载的片段 ID。 */
+  /** Clip ID currently loaded in each element. / 每个元素当前装载的片段 ID。 */
   loaded: [string | null, string | null];
-  /** 每个元素等待元数据到达后要定位到的时间；换装载时作废。 */
+  /** Time each element should seek to once metadata arrives; voided when the load changes. / 每个元素等待元数据到达后要定位到的时间；换装载时作废。 */
   pendingSeek: [(() => void) | null, (() => void) | null];
-  /** 已为哪个片段预载过下一段；切换后等新片段有了画面再预载，空闲元素此前还在显示上一段的末帧。 */
+  /** Which clip the next one was preloaded for; after a switch, preload only once the new clip has a picture, since the idle element still shows the previous clip's last frame. / 已为哪个片段预载过下一段；切换后等新片段有了画面再预载，空闲元素此前还在显示上一段的末帧。 */
   preloadedAfter: number;
   stallSince: number | null;
   stalled: boolean;
@@ -122,6 +127,9 @@ interface AudioEntry {
 }
 
 /**
+ * Set buffering of a piece of audio for global time `at`: the URL is attached only on entering the preload window.
+ * `preload="none"` cannot stop fetches triggered by `play()`, so it alone cannot throttle the unlock on pressing play.
+ *
  * 按全局时间 `at` 设置一段音频的缓冲：进入预载窗口才挂上地址。
  * `preload="none"` 拦不住 `play()` 触发的拉取，只靠它节制不了点播放时的解锁。
  */
@@ -130,6 +138,7 @@ function bufferAudio({ element: media, url }: AudioEntry, placement: AudioPlacem
   if (media.preload !== preload) media.preload = preload;
   const src = media.getAttribute("src");
   if (preload === "auto" && src !== url) media.src = url;
+  // When the URL changes outside the window (e.g. narration regenerated), detach the old URL so unlocking does not fetch stale audio.
   // 窗口外换了地址（如旁白重新生成）时卸下旧地址，免得解锁时拉取过期的音频。
   else if (preload === "none" && src !== null && src !== url) media.removeAttribute("src");
 }
@@ -183,6 +192,11 @@ function blockedByPolicy(error: unknown): boolean {
 }
 
 /**
+ * On plan updates (a new revision of the same edit timeline) keep the current position and play state; switching edit timelines is remounted by the caller.
+ * @param sourceUrl Source video URL for a clip; returns null when there is no usable video. Must be a stable reference; on change it reloads at the current position.
+ * @param audio Placement of narration and BGM; must keep the same reference when content is unchanged.
+ * @param audioUrl Source URL for audio; returns null when unavailable, and that audio is silent. Must be a stable reference.
+ *
  * 计划更新（同一条剪辑时间线出了新修订）时保留当前位置与播放状态；切换剪辑时间线由调用方重新挂载。
  * @param sourceUrl 片段的源视频地址；没有可用视频时返回 null。须传稳定引用，变化时按当前位置重新装载。
  * @param audio 旁白与 BGM 的摆放；内容不变时须保持同一引用。
@@ -233,7 +247,7 @@ export function useTimelinePlayback(
   const planRef = useRef(plan);
   const audioRef = useRef(audio);
   const audioPool = useRef(new Map<string, AudioEntry>());
-  /** 在用户手势里播放过一次的媒体元素；Safari 只允许这样的元素之后自动出声。 */
+  /** Media elements that have played once inside a user gesture; Safari only lets such elements play audio automatically later. / 在用户手势里播放过一次的媒体元素；Safari 只允许这样的元素之后自动出声。 */
   const unlocked = useRef(new WeakSet<HTMLMediaElement>());
 
   const element = useCallback((slot: Slot) => (slot === 0 ? refA.current : refB.current), []);
@@ -269,6 +283,7 @@ export function useTimelinePlayback(
 
   const onPlayRejected = useCallback(
     (error: unknown) => {
+      // When autoplay is blocked, pause everything so picture and sound do not drift apart; other failures (asset fails to load) continue as if the media were absent.
       // 自动播放被拦截时整体暂停，避免画面和声音各走各的；其他失败（素材加载不了）按没有这段媒体继续。
       if (!blockedByPolicy(error) || !runtime.current.playing) return;
       halt();
@@ -356,6 +371,7 @@ export function useTimelinePlayback(
   const preloadAfter = useCallback(
     (current: number) => {
       const state = runtime.current;
+      // Opening the edit view does not mean playing: before the first play load only the current clip; the next is filled in by the seek in play().
       // 打开剪辑视图不等于要播放：第一次播放前只装载当前片段，下一段由 play() 里的 seek 补上。
       if (!state.started) return;
       state.preloadedAfter = current;
@@ -371,7 +387,7 @@ export function useTimelinePlayback(
     [element, load, warmUp],
   );
 
-  /** 当前片段有了画面才把它显示出来，并在此之后为下一段预载。 */
+  /** Show the current clip only once it has a picture, and preload the next after that. / 当前片段有了画面才把它显示出来，并在此之后为下一段预载。 */
   const refreshVisible = useCallback(() => {
     const state = runtime.current;
     const segment = planRef.current.segments[state.index];
@@ -391,7 +407,7 @@ export function useTimelinePlayback(
     if (state.preloadedAfter !== state.index) preloadAfter(state.index);
   }, [element, preloadAfter]);
 
-  /** 只缓冲 `at` 附近要放的音频。 */
+  /** Buffer only audio due near `at`. / 只缓冲 `at` 附近要放的音频。 */
   const preloadAudioAround = useCallback((at: number) => {
     for (const placement of audioRef.current) {
       const entry = audioPool.current.get(placement.id);
@@ -470,6 +486,7 @@ export function useTimelinePlayback(
       state.index = location.index;
       state.t = Math.min(Math.max(to, 0), currentPlan.duration);
       const active = element(state.slot);
+      // An explicit seek shows the current element directly: the idle element is about to preload another clip and can no longer hold the picture.
       // 主动跳转直接显示当前元素：空闲元素接下来要预载别的片段，不能再拿它撑画面。
       state.visible = state.slot;
       setVisibleSlot(state.slot);
@@ -564,12 +581,15 @@ export function useTimelinePlayback(
     if (currentPlan.segments.length === 0) return;
     state.playing = true;
     setPlaying(true);
+    // Set before seek: seek then preloads the next clip, giving the idle element a URL so it can be unlocked in this same click below.
     // 先于 seek 置位：seek 随即为下一段预载，空闲元素有了地址，才能在下面这次点击里一并解锁。
     state.started = true;
     setStarted(true);
     setBlocked(false);
     state.lastFrame = performance.now();
     seek(state.t >= currentPlan.duration ? 0 : state.t);
+    // Use this click to briefly play and stop every other media element: only then does Safari let them play audio automatically on clip switches and narration start.
+    // Audio not yet in the preload window has no URL and is unlocked here too; the unlock follows the element, so attaching a URL later can still autoplay.
     // 趁这次点击把其余媒体元素各播一下再停住：Safari 之后才允许它们在切换片段、旁白开始时自动出声。
     // 还没进预载窗口的音频没有地址，同样在这里解锁；解锁跟着元素走，之后挂上地址仍可自动出声。
     const idle = element(state.slot === 0 ? 1 : 0);
@@ -641,7 +661,7 @@ export function useTimelinePlayback(
     const pool = audioPool.current;
     const wanted = new Set<string>();
     for (const placement of audio) {
-      // react-doctor-disable-next-line react-doctor/no-pass-data-to-parent -- audioUrl 是调用方给的纯取址函数，不是上报回调；本 effect 同步的是 Audio 元素池这一外部资源
+      // react-doctor-disable-next-line react-doctor/no-pass-data-to-parent -- audioUrl is a pure URL-lookup function from the caller, not a reporting callback; this effect syncs the external Audio element pool / audioUrl 是调用方给的纯取址函数，不是上报回调；本 effect 同步的是 Audio 元素池这一外部资源
       const url = audioUrl(placement);
       if (!url) continue;
       wanted.add(placement.id);
@@ -660,6 +680,7 @@ export function useTimelinePlayback(
   }, [audio, audioUrl]);
 
   useEffect(() => {
+    // A seek while paused must also switch over once the new clip has a picture; during playback per-frame advancing handles it.
     // 暂停时跳转也要在新片段有画面后切过去；播放中由每一帧的推进负责。
     const videos = [refA.current, refB.current];
     videos.forEach((video) => {
@@ -793,6 +814,7 @@ export function useTimelinePlayback(
         }
       } else {
         if (result.holding && video && !video.paused) {
+          // Once the picture reaches the out-point it holds on the last frame; the freeze-frame extension advances by wall clock.
           // 画面到出点后停在末帧，定格延长期间按墙钟推进。
           video.pause();
         }
@@ -808,6 +830,7 @@ export function useTimelinePlayback(
       step(now);
     };
     frame = requestAnimationFrame(onFrame);
+    // In background tabs animation frames stall while video keeps playing; a low-frequency timer advances as a fallback so clips do not overrun the out-point; no double advance when animation frames are normal.
     // 后台标签页里动画帧停摆而视频照常播放，低频定时器兜底推进，片段不会越过出点；动画帧正常时不重复推进。
     const fallback = window.setInterval(() => {
       const now = performance.now();
@@ -822,6 +845,7 @@ export function useTimelinePlayback(
   useEffect(() => {
     const videos = [refA.current, refB.current];
     const pool = audioPool.current;
+    // After detaching the URL, load() makes the browser discard buffered media data instead of waiting for the element to be reclaimed.
     // 卸下地址后 load() 让浏览器丢弃已缓冲的媒体数据，不等元素被回收才释放。
     const release = (media: HTMLMediaElement) => {
       media.pause();

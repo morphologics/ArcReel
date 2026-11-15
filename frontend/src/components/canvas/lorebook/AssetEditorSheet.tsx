@@ -11,28 +11,34 @@ import { AssetCreateForm } from "./AssetCreateForm";
 import { AssetDetailEditor } from "./AssetDetailEditor";
 import type { GalleryAssetSource } from "./gallery-model";
 
-/** 详情 Sheet 显示的内容：某个资产的详情，或新建一个资产的空白表单。 */
+/** What the details Sheet shows: an asset's details, or a blank form for creating an asset. / 详情 Sheet 显示的内容：某个资产的详情，或新建一个资产的空白表单。 */
 export type AssetEditorTarget = { mode: "edit"; name: string } | { mode: "create" };
 
 export interface AssetEditorSheetProps {
   projectName: string;
   assetType: AssetSheetType;
   assets: Record<string, GalleryAssetSource>;
-  /** 为 null 时关闭。 */
+  /** Closed when null. / 为 null 时关闭。 */
   target: AssetEditorTarget | null;
-  /** 切换、关闭、改名与创建完成都经这里改选中项；有未保存修改时已先经离开拦截放行。 */
+  /** Switching, closing, renaming and creation completing all change the selection through here; with unsaved changes the leave guard has already allowed it. / 切换、关闭、改名与创建完成都经这里改选中项；有未保存修改时已先经离开拦截放行。 */
   onTargetChange: (target: AssetEditorTarget | null) => void;
-  /** 上一个与下一个的顺序，如画廊筛选后的资产名；当前资产不在其中时按全部资产的顺序。 */
+  /** Order for previous and next, such as the gallery's filtered asset names; when the current asset is not in it, use the order of all assets. / 上一个与下一个的顺序，如画廊筛选后的资产名；当前资产不在其中时按全部资产的顺序。 */
   order?: readonly string[];
   statusByName: ReadonlyMap<string, AssetSheetStatusRow>;
   generatingNames?: ReadonlySet<string>;
-  /** 卡片上本地上传等写入，与详情里的入口互斥。 */
+  /** Local writes such as uploads on the card, mutually exclusive with the entries in the details. / 卡片上本地上传等写入，与详情里的入口互斥。 */
   writingNames?: ReadonlySet<string>;
   readOnly: boolean;
   onGenerate: (name: string) => unknown;
 }
 
 /**
+ * Asset details Sheet: a modal about 560px wide on the right, covering the whole viewport, able to cover the Agent panel. The header has previous and next;
+ * switching assets or closing the Sheet with unsaved changes goes through the leave guard first.
+ *
+ * When the asset being edited is deleted or renamed externally (e.g. by the Agent's changes), with unsaved changes the original content keeps showing,
+ * explained in the bottom bar; it closes only after saving or discarding.
+ *
  * 资产详情 Sheet：右侧约 560px、覆盖全视口的模态弹层，可以盖住 Agent 面板。头部有上一个与下一个，
  * 切换资产与关闭 Sheet 时有未保存修改先经离开拦截询问。
  *
@@ -54,36 +60,40 @@ export function AssetEditorSheet({
 }: AssetEditorSheetProps) {
   const { t } = useTranslation(["assets", "common"]);
   const confirmLeave = useConfirmLeave();
+  // A name we just changed ourselves: until project data refreshes the new name is not in assets yet, so keep using the content under the old name
   // 自己刚改的名：项目数据刷新之前新名称还不在 assets 里，先沿用旧名下的内容
   const [renamed, setRenamed] = useState<{ from: string; to: string } | null>(null);
+  // Editor session: a new editor on open, asset switch or creation completing; our own rename keeps it so unsaved changes are not lost
   // 编辑器的会话：打开、切换资产或创建完成时换一个新编辑器；自己改名不换，未保存修改不丢
   const targetKey = target === null ? null : target.mode === "create" ? "create" : `edit:${target.name}`;
   const [session, setSession] = useState({ key: targetKey, id: 0 });
   if (session.key !== targetKey) {
     const selfRename =
       renamed !== null && targetKey === `edit:${renamed.to}` && session.key === `edit:${renamed.from}`;
-    // 关闭时不换：关闭动画期间仍是原来的编辑器
+    // No change on close: the original editor stays during the close animation / 关闭时不换：关闭动画期间仍是原来的编辑器
     setSession({ key: targetKey, id: selfRename || targetKey === null ? session.id : session.id + 1 });
     if (!selfRename && renamed !== null) setRenamed(null);
   }
+  // The new name is in project data: the bridge ends, and anything appearing under the old name afterwards is a different asset
   // 新名称已进项目数据：桥接结束，之后旧名下出现的是别的资产
   if (renamed !== null && session.key === `edit:${renamed.to}` && assets[renamed.to]) setRenamed(null);
 
   const name = target?.mode === "edit" ? target.name : null;
   const live =
     name === null ? undefined : (assets[name] ?? (renamed?.to === name ? assets[renamed.from] : undefined));
+  // After external delete or rename live is empty; keep the last content during retention and the close animation
   // 外部删除或改名后 live 为空，保留期间与关闭动画期间沿用最后一次的内容
   const [last, setLast] = useState<{ name: string; asset: GalleryAssetSource } | null>(null);
   if (name !== null && live && (last?.name !== name || last.asset !== live)) setLast({ name, asset: live });
   const [held, setHeld] = useState(false);
-  // 只有 RetainedEditUnit 一个登记方
+  // RetainedEditUnit is the only registrant / 只有 RetainedEditUnit 一个登记方
   const retention = useMemo(() => ({ protect: (_key: string, value: boolean) => setHeld(value) }), []);
   const [submitting, setSubmitting] = useState(false);
 
   const present = target?.mode === "create" || live !== undefined;
   const open = target !== null && (present || held);
   useEffect(() => {
-    // react-doctor-disable-next-line react-doctor/no-prop-callback-in-effect -- 资产被外部删除（项目数据刷新）且编辑单元不再保留时才关闭，两个条件分别来自数据推送与子编辑单元，没有单一事件可承载；这里清掉父级的目标，避免同名资产再出现时自动重开
+    // react-doctor-disable-next-line react-doctor/no-prop-callback-in-effect -- close only when the asset was deleted externally (project data refresh) and the edit unit no longer retains it; the two conditions come from the data push and the child edit unit, with no single event to carry them; clear the parent's target here so a same-name asset reappearing does not reopen automatically / 资产被外部删除（项目数据刷新）且编辑单元不再保留时才关闭，两个条件分别来自数据推送与子编辑单元，没有单一事件可承载；这里清掉父级的目标，避免同名资产再出现时自动重开
     if (target !== null && !present && !held) onTargetChange(null);
   }, [target, present, held, onTargetChange]);
 

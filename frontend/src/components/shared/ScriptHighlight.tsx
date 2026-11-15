@@ -35,8 +35,11 @@ export interface ScriptHighlightProps {
 
 function SpeechToken({ token }: { token: Extract<Token, { kind: "speech" }> }) {
   const { t } = useTranslation("dashboard");
+  // Voiceover has no speaker and `speakerKind` is always unknown, so its color is in the same tier as unregistered speakers.
   // 画外音没有说话人，`speakerKind` 恒为 unknown，配色因此与未登记说话人同档。
   const palette = assetColor(token.speakerKind);
+  // Marker source text is kept verbatim (including `@[name]` and the colon), only adding a background and speaker label: the preview must line up with the line
+  // the author wrote, and rewriting it would make "was this recognized as a dialogue line?" hard to check.
   // 记号原文逐字保留（含 `@[名称]` 与冒号），只加底色与说话人标签：预览要和作者写的
   // 那一行对得上，改写会让「这段被认成台词了吗」难以核对。
   return (
@@ -52,7 +55,7 @@ function SpeechToken({ token }: { token: Extract<Token, { kind: "speech" }> }) {
 function renderTokens(tokens: Token[], keyPrefix: string) {
   return tokens.map((tk, i) => {
     if (tk.kind === "speech") {
-      // react-doctor-disable-next-line react-doctor/no-array-index-as-key -- 记号是一行文本按顺序切出的只读片段，位置就是它的身份，片段不带状态
+      // react-doctor-disable-next-line react-doctor/no-array-index-as-key -- markers are read-only fragments cut from one line of text in order; position is their identity, and fragments have no state / 记号是一行文本按顺序切出的只读片段，位置就是它的身份，片段不带状态
       return <SpeechToken key={`${keyPrefix}-${i}`} token={tk} />;
     }
     if (tk.kind === "mention") {

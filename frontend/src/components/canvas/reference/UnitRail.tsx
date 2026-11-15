@@ -8,13 +8,13 @@ export interface UnitRailProps {
   units: ReferenceVideoUnit[];
   selectedId: string | null;
   onSelect: (unitId: string) => void;
-  /** 展开完整列表（搜索、新增与排序都在完整列表里）。 */
+  /** Expand the full list (search, add and reorder are all in the full list). / 展开完整列表（搜索、新增与排序都在完整列表里）。 */
   onExpand: () => void;
   statusMap?: Record<string, UnitStatus>;
   className?: string;
 }
 
-/** 工作台较窄时的单元图标栏：每项只有集内编号与状态点，顶部按钮展开完整列表。 */
+/** Unit icon rail when the workbench is narrow: each item has only its in-episode number and a status dot; the top button expands the full list. / 工作台较窄时的单元图标栏：每项只有集内编号与状态点，顶部按钮展开完整列表。 */
 export function UnitRail({ units, selectedId, onSelect, onExpand, statusMap, className = "" }: UnitRailProps) {
   const { t } = useTranslation("dashboard");
 

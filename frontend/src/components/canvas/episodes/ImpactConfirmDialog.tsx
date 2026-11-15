@@ -16,18 +16,21 @@ import {
 
 export interface ImpactConfirmRequest {
   title: string;
-  /** 正文，通常是服务端成文的受影响集清单。 */
+  /** Body, usually the server-written list of affected episodes. / 正文，通常是服务端成文的受影响集清单。 */
   body: ReactNode;
   confirmLabel: string;
-  /** 提交中的按钮文案；缺省沿用 `confirmLabel`。 */
+  /** Button label while submitting; defaults to `confirmLabel`. / 提交中的按钮文案；缺省沿用 `confirmLabel`。 */
   runningLabel?: string;
-  /** 会丢失产物或无法恢复：确认按钮按危险操作显示。 */
+  /** Artifacts would be lost or unrecoverable: the confirm button shows as a dangerous action. / 会丢失产物或无法恢复：确认按钮按危险操作显示。 */
   destructive: boolean;
-  /** 正文里有输入框等可聚焦元素：正文不再单独进入 Tab 顺序。 */
+  /** The body has focusable elements such as inputs: the body no longer enters the Tab order itself. / 正文里有输入框等可聚焦元素：正文不再单独进入 Tab 顺序。 */
   interactiveBody?: boolean;
 }
 
 /**
+ * Confirmation before changing episodes and source in the "Episodes" view: delete an episode, manual split, whole-source file change, replan, adopt a new plan, etc.
+ * Closed when `request` is null; while submitting both buttons are disabled and close requests ignored. The affected episode list can be long; the body is keyboard-scrollable.
+ *
  * 「分集」视图里改动分集与源文前的确认：删除一集、手工切分、整本源文文件改动、重新规划与采纳新方案等。
  * `request` 为 null 时关闭；提交中禁用两个按钮并忽略关闭请求。受影响集清单可能很长，正文可以用键盘滚动。
  */
@@ -43,7 +46,7 @@ export function ImpactConfirmDialog({
   onCancel: () => void;
 }) {
   const { t } = useTranslation("common");
-  // 关闭动画期间沿用上一次的内容
+  // Keep the previous content during the close animation / 关闭动画期间沿用上一次的内容
   const [shown, setShown] = useState(request);
   if (request !== null && request !== shown) setShown(request);
 
@@ -79,7 +82,7 @@ export function ImpactConfirmDialog({
   );
 }
 
-/** 确认正文里服务端成文的清单：保留换行；清单在确认期间变了时先说明。 */
+/** Server-written list in the confirm body: keep line breaks; explain first if the list changed during confirmation. / 确认正文里服务端成文的清单：保留换行；清单在确认期间变了时先说明。 */
 export function ImpactText({ text, changedNotice }: { text: string; changedNotice?: string | null }) {
   return (
     <div className="flex flex-col gap-2">

@@ -14,7 +14,7 @@ const FLAG_TONE: Record<ProviderModelFlag, string> = {
   modified: "border-border text-muted-foreground",
 };
 
-/** 模型的状态标记（已下架、未定价、已修改），列表行与 Sheet 标题共用。 */
+/** Status flags of a model (delisted, unpriced, modified), shared by list rows and the Sheet title. / 模型的状态标记（已下架、未定价、已修改），列表行与 Sheet 标题共用。 */
 export function ProviderModelFlags({ flags }: { flags: ProviderModelFlag[] }) {
   const { t } = useTranslation("dashboard");
   return flags.map((flag) => (

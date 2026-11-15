@@ -29,7 +29,7 @@ interface UsageSessionsCardProps {
   summary: UsageSummary | null;
   sessions: UsageAgentSession[];
   loading: boolean;
-  /** 会话请求失败：不渲染空态，失败提示由区块统一给出。 */
+  /** Session request failed: do not render the empty state; the section gives the failure notice. / 会话请求失败：不渲染空态，失败提示由区块统一给出。 */
   failed?: boolean;
   total: number;
   pageIndex: number;
@@ -37,10 +37,10 @@ interface UsageSessionsCardProps {
   onPage: (direction: "prev" | "next") => void;
 }
 
-/** 无值时的占位。 */
+/** Placeholder when there is no value. / 无值时的占位。 */
 const DASH = "—";
 
-/** 带说明的文字：悬停、点按或按 Enter/Space 时显示说明。 */
+/** Text with an explanation: shown on hover, tap, or Enter/Space. / 带说明的文字：悬停、点按或按 Enter/Space 时显示说明。 */
 function HintedText({ hint, children }: { hint: string; children: ReactNode }) {
   return (
     <InfoTip>
@@ -50,7 +50,7 @@ function HintedText({ hint, children }: { hint: string; children: ReactNode }) {
   );
 }
 
-/** 已定价部分的合计：按币种分别写出；全是 0 元时写 0，没有任何已定价记录时写破折号。 */
+/** Total of the priced part: written per currency; 0 when all are zero, a dash when there are no priced records at all. / 已定价部分的合计：按币种分别写出；全是 0 元时写 0，没有任何已定价记录时写破折号。 */
 function costText(cost: Record<string, number>): string {
   const entries = costEntries(cost);
   if (entries.length > 0) {
@@ -75,7 +75,7 @@ export function UsageSessionsCard({
   const headingId = useId();
   const titleOf = projectTitleResolver(summary);
   const [expanded, setExpanded] = useState<ReadonlySet<string>>(new Set());
-  // 筛选已固定某个项目时隐藏项目列，避免整列重复同一个值。
+  // Hide the project column when the filter fixes a project, avoiding a whole column repeating one value. / 筛选已固定某个项目时隐藏项目列，避免整列重复同一个值。
   const showProject = filters.project === null;
   const columns = showProject ? 6 : 5;
   const from = total === 0 ? 0 : pageIndex * USAGE_PAGE_SIZE + 1;
@@ -202,7 +202,7 @@ export function UsageSessionsCard({
                     {open && (
                       <tr id={detailId} className="bg-muted/20">
                         <td colSpan={columns} className="px-3 pb-3">
-                          {/* 列表刷新后最近一轮的时间变了，明细随之重取 */}
+                          {/* After the list refreshes the latest round's time changes, and the details are refetched accordingly / 列表刷新后最近一轮的时间变了，明细随之重取 */}
                           <SessionDetail
                             key={session.last_started_at}
                             sessionId={session.session_id}
@@ -231,7 +231,7 @@ type DetailState =
   | { status: "failed" }
   | { status: "ready"; items: UsageAgentSessionRecord[] };
 
-/** 展开的会话明细：按时间每条记录一行，同一轮的几条记录自然排在一起。 */
+/** Expanded session details: one row per record by time, so records from the same round naturally sit together. / 展开的会话明细：按时间每条记录一行，同一轮的几条记录自然排在一起。 */
 function SessionDetail({ sessionId, title }: { sessionId: string; title: string }) {
   const { t, i18n } = useTranslation("dashboard");
   const [state, setState] = useState<DetailState>({ status: "loading" });
@@ -325,6 +325,7 @@ function SessionDetail({ sessionId, title }: { sessionId: string; title: string 
             cache_write_1h_tokens: write1h,
           } = record;
           const hasWrite = write5m !== null || write1h !== null;
+          // The record's total input includes cache reads/writes; the public "Input" means only the part that neither hit nor wrote the cache.
           // 记录里的总输入含缓存读写；对外的「输入」只指没有命中也没有写入缓存的那部分。
           const uncachedInput =
             input === null ? null : Math.max(0, input - (cacheRead ?? 0) - (write5m ?? 0) - (write1h ?? 0));

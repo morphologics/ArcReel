@@ -14,9 +14,12 @@ export interface UnitListProps {
   selectedId: string | null;
   onSelect: (unitId: string) => void;
   onAdd: () => void;
-  /** 画布推导的单元状态；未提供时按有无成片退化为 ready / pending。 */
+  /** Unit status derived by the canvas; when not provided, degrades to ready / pending by whether a final cut exists. / 画布推导的单元状态；未提供时按有无成片退化为 ready / pending。 */
   statusMap?: Record<string, UnitStatus>;
   /**
+   * Move the unit after `afterId`, null moves to the front; resolves when submission completes. When absent, the list is not sortable.
+   * During submission the new order is shown and new moves are not accepted: anchors are still mapped by the old order in the store, so stacked moves would land wrong.
+   *
    * 把单元移到 `afterId` 之后，null 移到最前；提交完成后 resolve。缺省时列表不可排序。
    * 提交期间按新顺序显示，不接受新的移动：锚点仍按 store 里的旧顺序换算，叠加的移动会算错落点。
    */
@@ -25,6 +28,9 @@ export interface UnitListProps {
 }
 
 /**
+ * Video unit list: search, add and reorder. Drag the handle, or focus the handle and use Space and arrow keys to reorder;
+ * reordering is unavailable while filtering by a search term.
+ *
  * 视频单元列表：搜索、新增与排序。拖动把手，或聚焦把手后用空格与方向键调整顺序；
  * 按搜索词筛选时不能排序。
  */
@@ -38,6 +44,7 @@ export function UnitList({ units, selectedId, onSelect, onAdd, statusMap, onMove
   const filtering = query.trim().length > 0;
   const reorderable = Boolean(onMove) && !filtering && pendingOrder === null;
 
+  // Displayed positions follow display order: numbered by the new order while a reorder is in flight, matching the script once it settles.
   // 显示的位置跟着显示顺序走：改序在途时按新顺序编号，落定后与剧本一致。
   const positionById = useMemo(() => new Map(ids.map((id, i) => [id, i + 1])), [ids]);
   const positionLabel = (id: string) => t("common:item_position_unit", { position: positionById.get(id) });

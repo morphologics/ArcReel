@@ -1,4 +1,7 @@
 /**
+ * API transport layer: request wrapper, auth headers, unauthorized handling, SSE glue, and the read-only gate.
+ * The read-only gate state is a module singleton shared by every request on the site.
+ *
  * API 传输层：请求封装、鉴权头、未授权处理、SSE 胶水与只读闸门。
  * 只读闸门的状态是本模块的单例，全站所有请求共用这一份。
  */
@@ -25,6 +28,9 @@ import {
 export const API_BASE = "/api/v1";
 
 /**
+ * Check the fetch response status and throw an Error carrying the backend error info.
+ * Used for custom fetch calls that do not go through API.request().
+ *
  * 检查 fetch 响应状态，抛出包含后端错误信息的 Error。
  * 用于不经过 API.request() 的自定义 fetch 调用。
  */
@@ -53,6 +59,8 @@ export function handleUnauthorized(response: Response): void {
 
 function redirectToLogin(): void {
   clearToken();
+  // Carry the current in-site URL so login can redirect back afterwards; only attach `from` for pages under /app/,
+  // to avoid writing non-app paths such as the login page itself into the redirect parameter.
   // 携带当前所在的站内地址，登录成功后回跳；仅对 /app/ 下的页面附加 from，
   // 避免把登录页自身等非应用路径写进回跳参数。
   const current = `${globalThis.location.pathname}${globalThis.location.search}${globalThis.location.hash}`;
@@ -64,6 +72,11 @@ function redirectToLogin(): void {
 let apiReadOnly = false;
 
 /**
+ * Enter / leave read-only mode (onboarding demo workbench). While read-only, any non-GET / HEAD request is rejected before it is sent.
+ *
+ * The demo workbench renders fake data with real components and no longer renders any write entry points; this gate is a structural backstop:
+ * if an entry point is missed you get an explicit exception instead of a request that really writes into the user's project.
+ *
  * 进入 / 离开只读态（引导演示工作台）。只读期间任何非 GET / HEAD 请求会在发出前被拒绝。
  *
  * 演示工作台是用真组件渲染假数据，写操作的入口都已经不渲染；这道闸门是结构性兜底 ——
@@ -73,19 +86,27 @@ export function setApiReadOnly(readOnly: boolean): void {
   apiReadOnly = readOnly;
 }
 
+// Static archive-import endpoint, not "a project that happens to be named import": project names allow letters, digits and hyphens,
+// and `import` itself is a valid project name (ProjectManager.normalize_project_name does not exclude it).
+// Match on the exact path rather than a name blocklist, so that `/projects/import/...` (write requests for a real project
+// named import) is not also misjudged as having no project ownership
 // 静态归档导入端点，不是「项目名恰好叫 import」——项目名允许字母数字中划线，
 // `import` 本身是合法项目名（ProjectManager.normalize_project_name 不排除它），
 // 按精确路径匹配而非按名称黑名单，避免把 `/projects/import/...`（真实项目名为
 // import 的写请求）一并误判成不带项目归属
 const RESERVED_PROJECT_ENDPOINTS = new Set(["/projects/import"]);
 
+// System-level endpoints with no project ownership that do not write any project data themselves: by default the gate blocks all
+// write requests without project ownership (global asset library, provider credentials, etc.); this is the only narrow exemption.
+// When the onboarding tour exits, it writes this "seen" flag while still on the demo route (apiReadOnly not yet reset); it only affects
+// the current user's onboarding state and is outside what the gate guards against ("accidentally writing demo state / other project data").
 // 不带项目归属、但本身不写入任何项目数据的系统级端点：闸门默认拦截所有无项目归属的
 // 写请求（全局资产库、供应商凭证等），这里是唯一的窄豁免。引导 tour 退出时会在仍处于
 // 演示路由（apiReadOnly 尚未复位）期间写这一条「已看过」标记，它只影响当前用户的引导
 // 状态，不属于闸门要防的「误写演示态/其他项目数据」范畴。
 const READ_ONLY_GATE_EXEMPT_ENDPOINTS = new Set(["/onboarding/seen"]);
 
-/** 从形如 `/projects/{name}` 或 `/projects/{name}/...` 的 endpoint 中取出项目名；非项目路径或静态保留端点返回 null */
+/** Extract the project name from an endpoint like `/projects/{name}` or `/projects/{name}/...`; return null for non-project paths or static reserved endpoints / 从形如 `/projects/{name}` 或 `/projects/{name}/...` 的 endpoint 中取出项目名；非项目路径或静态保留端点返回 null */
 function extractProjectName(endpoint: string): string | null {
   if (RESERVED_PROJECT_ENDPOINTS.has(endpoint)) return null;
   const match = /^\/projects\/([^/?]+)/.exec(endpoint);
@@ -94,6 +115,11 @@ function extractProjectName(endpoint: string): string | null {
 }
 
 /**
+ * Whether the read-only gate should block this request. Write requests targeting a specific real project are allowed:
+ * demo mode may switch on just before the request is sent, but it cannot block an operation already started from a real project;
+ * requests targeting the demo project itself or without project ownership (global asset library, etc.) are still blocked as intended,
+ * except for the system endpoints on the narrow exemption list.
+ *
  * 只读闸门是否应拦截这次请求。指向某个具体真实项目的写请求放行 ——
  * 演示态可能在该请求发出前才切入，但它拦不住已经从真实项目发起的操作；
  * 指向演示项目本身或不带项目归属的请求（全局资产库等）仍按闸门原意拦截，
@@ -106,7 +132,7 @@ function isReadOnlyGateBlocking(endpoint: string): boolean {
   return projectName === null || isDemoProject(projectName);
 }
 
-/** 为 fetch options 注入 Authorization header */
+/** Inject the Authorization header into fetch options / 为 fetch options 注入 Authorization header */
 export function withAuth(endpoint: string, options: RequestInit = {}): RequestInit {
   const method = (options.method ?? "GET").toUpperCase();
   if (method !== "GET" && method !== "HEAD" && isReadOnlyGateBlocking(endpoint)) {
@@ -122,7 +148,7 @@ export function withAuth(endpoint: string, options: RequestInit = {}): RequestIn
   return { ...options, headers };
 }
 
-/** SSE 建连请求头：与 {@link withAuth} 同一套凭证与语言，每次重建前重新取。 */
+/** SSE connection headers: same credentials and language as {@link withAuth}, re-read before every reconnect. / SSE 建连请求头：与 {@link withAuth} 同一套凭证与语言，每次重建前重新取。 */
 export function sseHeaders(): HeadersInit {
   const headers: Record<string, string> = { "Accept-Language": i18n.language || "zh" };
   const token = getToken();
@@ -144,7 +170,7 @@ export function parseSseJson(data: string, label: string): Record<string, unknow
   }
 }
 
-/** 事件流被服务端以 401 拒绝时与普通请求同样处理：清凭证并回登录页。 */
+/** When the event stream is rejected by the server with 401, handle it like a normal request: clear credentials and go back to login. / 事件流被服务端以 401 拒绝时与普通请求同样处理：清凭证并回登录页。 */
 export function sseErrorHandler(onError?: (error: SseStreamError) => void) {
   return (error: SseStreamError) => {
     if (error.status === 401) {
@@ -155,6 +181,8 @@ export function sseErrorHandler(onError?: (error: SseStreamError) => void) {
 }
 
 /**
+ * Generic request: prepend the API prefix, inject credentials and pass through the read-only gate; on non-2xx, throw the matching error per the error contract.
+ *
  * 通用请求：拼接 API 前缀、注入凭证并过只读闸门，非 2xx 时按错误契约抛出对应错误。
  */
 export async function requestJson<T = unknown>(

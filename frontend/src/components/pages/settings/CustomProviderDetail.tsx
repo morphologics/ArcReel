@@ -10,13 +10,16 @@ import { CustomProviderForm } from "./CustomProviderForm";
 
 interface CustomProviderDetailProps {
   providerId: number;
-  /** 深链里的模型 ID：打开时展开并定位到这一行。 */
+  /** Model ID from a deep link: expand and scroll to that row on open. / 深链里的模型 ID：打开时展开并定位到这一行。 */
   initialModelId?: string;
   onDeleted: () => void;
   onSaved: () => void;
 }
 
 /**
+ * Custom provider detail pane: fetch the provider and its multiplier, then hand them to the form. On provider change the parent rebuilds the pane by `providerId`.
+ * Render the form only after both provider and multiplier arrive: a late multiplier would be treated as an external update to edits already started, and saving would write back the old value.
+ *
  * 自定义供应商的详情栏：取回供应商与它的供应商倍率后交给表单。换供应商时由上层按 `providerId` 重建整栏。
  * 倍率与供应商一起取齐再渲染表单：倍率后到时，用户已开始的编辑会把它当成外部更新，保存时把旧值写回。
  */

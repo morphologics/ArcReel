@@ -1,6 +1,7 @@
 import { expect, test, type Page } from "@playwright/test";
 import { inspectLayout } from "../support/layout-probe.ts";
 
+// Synthetic page fixed at 1280x720: the shell fills the viewport, content height far exceeds the viewport.
 // 合成页面固定 1280×720：外壳按视口铺满，内容高度远超视口。
 const SHELL_STYLE = "html,body{margin:0;height:100%}*{box-sizing:border-box}";
 
@@ -154,6 +155,7 @@ test.describe("横向滚动", () => {
         </div>`,
       );
 
+      // Only overflow-y:auto is written, and overflow-x also computes as auto: content is not clipped, so the clip check cannot catch it
       // 只写了 overflow-y:auto，overflow-x 也被算成 auto：内容没有被裁切，裁切检查报不出来
       expect(report.clipped).toEqual([]);
       expect(report.strayScrollX).toEqual([

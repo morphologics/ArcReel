@@ -8,7 +8,7 @@ import type {
   WorkspaceNotificationTarget,
 } from "@/types";
 
-/** 提示上的操作按钮，用于可逆操作的「撤销」，或在用户已离开时打开刚完成的结果（如「打开项目」）；点击后执行回调并关闭这条提示。 */
+/** Action button on a toast, for "Undo" on reversible actions, or to open a just-finished result when the user has left (e.g. "Open project"); clicking runs the callback and closes the toast. / 提示上的操作按钮，用于可逆操作的「撤销」，或在用户已离开时打开刚完成的结果（如「打开项目」）；点击后执行回调并关闭这条提示。 */
 interface ToastAction {
   label: string;
   onClick: () => void;
@@ -66,7 +66,7 @@ function persistAssistantPanelOpen(open: boolean): void {
   try {
     window.localStorage.setItem(ASSISTANT_PANEL_OPEN_STORAGE_KEY, String(open));
   } catch {
-    // localStorage 不可用时仅保留内存值
+    // When localStorage is unavailable, keep only the in-memory value / localStorage 不可用时仅保留内存值
   }
 }
 
@@ -81,6 +81,7 @@ interface AppState {
   assistantToolActivitySuppressed: boolean;
   setAssistantToolActivitySuppressed: (suppressed: boolean) => void;
 
+  // Toast: the most recently sent toast; ToastOverlay subscribes to every write, so several sent in the same batch are all shown
   // Toast：最近一次发出的提示；ToastOverlay 订阅每次写入，同一批次连发的几条都会显示
   toast: Toast | null;
   pushToast: (text: string, tone?: Toast["tone"], options?: { action?: ToastAction }) => void;
@@ -96,16 +97,18 @@ interface AppState {
   removeWorkspaceNotification: (id: string) => void;
   clearWorkspaceNotifications: () => void;
 
+  // Agent panel: expanded by default; after the user opens/closes it manually (toggleAssistantPanel) the choice is remembered;
+  // programmatic opening (setAssistantPanelOpen, e.g. prefilling an instruction into the input) only affects this time and does not override the user's choice.
   // Agent 面板：默认展开，用户手动开合（toggleAssistantPanel）后记住选择；
   // 程序打开（setAssistantPanelOpen，如把指令预填进输入框）只影响本次，不覆盖用户的选择。
   assistantPanelOpen: boolean;
   toggleAssistantPanel: () => void;
   setAssistantPanelOpen: (open: boolean) => void;
-  /** 展开时的宽度；挤压画布时实际宽度还受画布最小宽度约束。 */
+  /** Width when expanded; when squeezing the canvas, the actual width is also bounded by the canvas minimum width. / 展开时的宽度；挤压画布时实际宽度还受画布最小宽度约束。 */
   assistantPanelWidth: number;
   setAssistantPanelWidth: (width: number) => void;
   persistAssistantPanelWidth: () => void;
-  /** 顶栏用量悬浮层的开合；画布侧也从这里打开面板。 */
+  /** Open state of the top bar's usage popover; the canvas side also opens the panel from here. / 顶栏用量悬浮层的开合；画布侧也从这里打开面板。 */
   usagePanelOpen: boolean;
   setUsagePanelOpen: (open: boolean) => void;
 
@@ -113,11 +116,15 @@ interface AppState {
   gridsRevision: number;
   invalidateGrids: () => void;
 
+  // Project trash invalidation signal: incremented when delete, restore or purge (including Agent-initiated ones) arrive via the project event SSE;
+  // the files view refetches the directory tree and the trash section from it.
   // 项目回收站失效信号：删除、恢复、清除（含 Agent 发起的）经项目事件 SSE 推来时自增，
   // 文件视图据此重拉目录树与回收站分区。
   trashRevision: number;
   invalidateTrash: () => void;
 
+  // Video unit invalidation signal: incremented when a reference-to-video task's terminal state arrives via the project event SSE; the reference-to-video
+  // canvas refetches units from it, so the final result is visible after generation without a manual refresh.
   // 视频单元失效信号：参考生视频任务终态经项目事件 SSE 推来时自增，参考生
   // 视频画布据此重拉单元，生成完成后无需手动刷新即可看到成片。
   referenceVideoUnitsRevision: number;
@@ -131,6 +138,32 @@ interface AppState {
 }
 
 /**
+ * Notification system division of labor:
+ *
+ * - pushToast(text, tone, { action? })
+ *     For: immediate feedback on user-initiated actions. Reversible actions attach an "Undo" action; irreversible ones confirm with AlertDialog first.
+ *     Typical: form save/validation, import/delete/switch/upload success, scroll target not found,
+ *          background task submitted receipt (task_submitted), synchronous enqueue request failure
+ *          (the user is present and can retry right away, not put in the drawer), lightweight error hints.
+ *
+ * - pushWorkspaceNotification({ text, tone, target })
+ *     For: events produced asynchronously in the background, when the user may not be on the current page.
+ *     Typical: a trace of a single SSE event (e.g. agent_update_scene).
+ *
+ * - pushNotification(text, tone, options?)
+ *     For: important results the user needs to review later.
+ *     Typical: background task (worker) failures: storyboard/video/character/scene/prop/grid/
+ *          reference-to-video turning failed, watched centrally by useTaskFailureNotifications with
+ *          a clickable jump-back target; JianYing/ZIP export failure, project regenerate failure;
+ *          SSE grouped_notification. Note: a synchronous enqueue request failure is immediate feedback, use a toast.
+ *
+ * Rule of thumb:
+ *   1. User not present now -> needs to persist
+ *   2. A background task "failure" needs a trace for troubleshooting -> needs to persist
+ *   3. Everything else -> toast only
+ *
+ * pushToast accepts no escape hatch like { persist: true }; call sites must pick one of the three, making intent explicit.
+ *
  * 通知系统分工规则：
  *
  * - pushToast(text, tone, { action? })
@@ -197,6 +230,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   requestPlaybackStart: (input) => {
     const requestId = `${Date.now()}-${Math.random()}`;
     set({ playbackStart: { ...input, request_id: requestId } });
+    // When the unit has no playable video the player does not appear; void it once expired so opening the unit later does not suddenly start playback.
     // 单元没有可播放的视频时播放器不会出现，到期后作废，免得日后打开该单元时突然开播。
     setTimeout(() => get().clearPlaybackStart(requestId), PLAYBACK_START_TTL_MS);
   },
@@ -270,6 +304,7 @@ export const useAppStore = create<AppState>((set, get) => ({
         String(width),
       );
     } catch {
+      // localStorage unavailable (private mode / quota exceeded) fails silently; the in-memory value still applies
       // localStorage 不可用（隐私模式 / quota exceeded）静默失败，内存值仍生效
     }
   },

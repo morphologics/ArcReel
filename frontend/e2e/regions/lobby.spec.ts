@@ -4,6 +4,8 @@ import { FIXED_NOW, recorded } from "../support/recorded.ts";
 import { defineRegionScenarios } from "../support/scenarios.ts";
 import { expect, type ApiOverrides } from "../support/test.ts";
 
+// Project lobby: full-width tier, no sidebar. The top bar has brand, search, asset library, external Agent access, deleted projects,
+// the "New project" split button and settings; the body is the greeting area, a sticky filter toolbar and a poster card grid.
 // 项目大厅：铺满档，没有侧栏。顶栏是品牌、搜索、资产库、外部 Agent 接入、已删除项目、「新建项目」分体按钮与设置；
 // 主体是问候区、吸顶的筛选工具栏与海报卡网格。
 
@@ -46,6 +48,7 @@ function project(index: number, title: string, options: ProjectOptions = {}) {
   };
 }
 
+// Stress variant: 24 projects with long titles, long repair reasons, many episodes, covering three progress states.
 // 压力变体：24 个项目，标题长、待修复原因长、集数多，覆盖三种进度。
 const PROJECTS = Array.from({ length: 24 }, (_, index) => {
   const variant = index % 4;
@@ -58,6 +61,7 @@ const PROJECTS = Array.from({ length: 24 }, (_, index) => {
 const MANY: ApiOverrides = { "GET /api/v1/projects": { status: 200, body: { projects: PROJECTS } } };
 const EMPTY: ApiOverrides = { "GET /api/v1/projects": { status: 200, body: { projects: [] } } };
 
+// Stress variant: twelve deleted projects with very long titles.
 // 压力变体：十二个已删除项目，标题很长。
 const deletedProjects = recorded<DeletedProjectListing>("deleted-projects.json");
 const DELETED: ApiOverrides = {
@@ -112,6 +116,7 @@ defineRegionScenarios("项目大厅", [
       await expect(first.getByRole("heading", { level: 3 })).toBeInViewport({ ratio: 1 });
       await expect(first.getByText("制作中", { exact: true })).toBeInViewport({ ratio: 1 });
 
+      // Cards are at least 280px wide; a 2560-wide window lays out 8 columns
       // 卡片最小宽 280px，2560 宽的窗口排 8 列
       if (page.viewportSize()?.width === 2560) {
         const lefts = await projectList(page)

@@ -20,7 +20,7 @@ type Selection =
   | { kind: "new-custom" }
   | null;
 
-/** 二级栏条目的 id：预置与自定义供应商的 id 可能撞值，加上分组前缀。 */
+/** Secondary column entry id: preset and custom provider ids may collide, so prefix with the group. / 二级栏条目的 id：预置与自定义供应商的 id 可能撞值，加上分组前缀。 */
 function railId(selection: Selection): string | null {
   if (!selection) return null;
   if (selection.kind === "preset") return `preset:${selection.id}`;
@@ -28,7 +28,7 @@ function railId(selection: Selection): string | null {
   return "custom:new";
 }
 
-/** 自定义供应商不按名称猜品牌图标：中转站与协议无关，统一用名称首字。 */
+/** Custom providers don't guess brand icons by name: relays are protocol-agnostic, so all use the name's first character. / 自定义供应商不按名称猜品牌图标：中转站与协议无关，统一用名称首字。 */
 function CustomProviderGlyph({ name }: { name: string }) {
   return (
     <span className="inline-flex size-4 items-center justify-center rounded-sm border border-border bg-muted text-xs leading-none text-subtle-foreground">
@@ -57,6 +57,8 @@ export function ProviderSection() {
   }, [search]);
   const modelId = new URLSearchParams(search).get("model") ?? undefined;
 
+  // The save itself succeeded, only the catalog refetch failed: distinguish from "save failed", otherwise the user sees no form error and no new list item
+  // and can't tell which step failed. Being voided by a later request (aborted) is a normal concurrent path; the taker writes the updated catalog.
   // 保存本身已成功，只是目录重取失败：与「保存失败」区分开，否则用户看到表单无错、列表无新项，
   // 分不清是哪一步没成。被后续请求作废（aborted）是正常并发路径，接管方会写下更新的目录。
   const pushToast = useAppStore((s) => s.pushToast);
@@ -74,7 +76,7 @@ export function ProviderSection() {
     if (providers.length > 0) navigate(providerSettingsPath({ preset: providers[0].id }), { replace: true });
   }, [providers, navigate]);
 
-  // 从「调用端点」小节的「新建供应商并使用此端点」接线过来的预填。
+  // Prefill wired from "Create provider using this endpoint" in the "Call endpoints" subsection. / 从「调用端点」小节的「新建供应商并使用此端点」接线过来的预填。
   const prefill = useMemo(() => {
     const params = new URLSearchParams(search);
     return {
@@ -83,7 +85,7 @@ export function ProviderSection() {
     };
   }, [search]);
 
-  // 首个 preset 兜底选中：拉取完成后 URL 仍未指定选中项时补一次。
+  // Fallback-select the first preset: once more after fetching if the URL still names no selection. / 首个 preset 兜底选中：拉取完成后 URL 仍未指定选中项时补一次。
   useEffect(() => {
     if (loading || selection) return;
     selectFirstPreset();
@@ -149,11 +151,13 @@ export function ProviderSection() {
   }
 
   return (
-    // 全出血档：二级栏与详情栏各自滚动
+    // Full-bleed tier: the secondary column and detail pane scroll independently / 全出血档：二级栏与详情栏各自滚动
     <div className="flex min-h-0 min-w-0 flex-1">
       <SecondaryRail label={t("provider_list")} groups={railGroups} activeId={railId(selection)} replace />
 
       {selection?.kind === "preset" && (
+        // On provider change rebuild the whole pane: unsaved advanced config, in-flight saves and loading state belong to the previous provider
+        // Also rebuild when the deep link changes the model to open
         // 换供应商时整栏重建：未保存的高级配置、在途保存与加载状态都属于上一个供应商
         // 深链换了要打开的模型时同样重建
         <ProviderDetail
@@ -164,7 +168,7 @@ export function ProviderSection() {
         />
       )}
       {selection?.kind === "custom" && (
-        // 深链换了要打开的模型时同样重建
+        // Also rebuild when the deep link changes the model to open / 深链换了要打开的模型时同样重建
         <CustomProviderDetail
           key={`${selection.id}:${modelId ?? ""}`}
           providerId={selection.id}
@@ -178,11 +182,13 @@ export function ProviderSection() {
       )}
       {selection?.kind === "new-custom" && (
         <CustomProviderForm
-          // 预填参数变了（从另一个端点接线过来）就是另一张新建表单
+          // Changed prefill params (wired from another endpoint) mean a different new form / 预填参数变了（从另一个端点接线过来）就是另一张新建表单
           key={`new:${prefill.endpoint ?? ""}:${prefill.baseUrl ?? ""}`}
           initialBaseUrl={prefill.baseUrl}
           initialEndpoint={prefill.endpoint}
           onSaved={(created) => {
+            // Select using the id returned by the create response, not waiting on the catalog refetch's outcome: if a later request takes over the refetch,
+            // the user stays on the filled create form, and saving again would add a duplicate provider.
             // 选中用新建响应带回的 id，不等目录重取的结局：重取被后续请求接管时，
             // 用户会留在填满的新建表单上，再保存一次就多出一个重复供应商。
             if (created) navigate(providerSettingsPath({ custom: created.id }), { replace: true });

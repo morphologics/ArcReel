@@ -1,28 +1,33 @@
 /**
+ * How shots and video units are identified to creators: the current position in this episode's array (from 1), not the entry ID.
+ *
+ * Entry IDs are only allocated, never reused, and become non-contiguous after deletions or insertions; they're only for troubleshooting and Agent tool calls.
+ * Positions are computed from the script each time, so they follow naturally after insertions, deletions and reordering.
+ *
  * 分镜与视频单元在创作者面前的身份：本集数组里的当前位置（从 1 起），不是条目 ID。
  *
  * 条目 ID 只分配不复用，删除或插入后会不连续，只给排障与 Agent 调工具用。
  * 位置每次按剧本现算，插入、删除、改序之后自然跟着变。
  */
 
-/** 分镜（segment / scene / shot）或参考生视频的视频单元。 */
+/** A shot (segment / scene / shot) or a reference-to-video video unit. / 分镜（segment / scene / shot）或参考生视频的视频单元。 */
 export type EpisodeItemKind = "shot" | "unit";
 
 export interface EpisodeItemFacts {
   itemId: string;
   episodeId: number;
   kind: EpisodeItemKind;
-  /** 本集数组里的当前位置，从 1 起。 */
+  /** Current position in this episode's array, from 1. / 本集数组里的当前位置，从 1 起。 */
   position: number;
-  /** 本集条目总数。 */
+  /** Total entries in this episode. / 本集条目总数。 */
   total: number;
-  /** 正文前十几个字，供列表之外指认条目。 */
+  /** The first dozen or so characters of the body, for identifying the entry outside the list. / 正文前十几个字，供列表之外指认条目。 */
   excerpt: string;
-  /** 缩略图的项目内相对路径：视频缩略图优先，其次分镜图。 */
+  /** Project-relative path of the thumbnail: video thumbnail first, then storyboard image. / 缩略图的项目内相对路径：视频缩略图优先，其次分镜图。 */
   thumbnail: string | null;
 }
 
-/** 剧本条目数组与它的 ID 字段，四种骨架各一。 */
+/** Script entry array and its ID field, one for each of the four skeletons. / 剧本条目数组与它的 ID 字段，四种骨架各一。 */
 const ITEM_ARRAYS = [
   ["segments", "segment_id"],
   ["scenes", "scene_id"],
@@ -46,6 +51,9 @@ function imagePromptScene(item: Item): string {
 }
 
 /**
+ * Entry body: narration takes the source text, drama the scene description, ad/short the voiceover (scene description if none), video units their body.
+ * Same rule as `_body` in the backend `lib/script/item_excerpt.py`.
+ *
  * 条目正文：旁白取原文，剧情演绎取画面描述，广告/短片取口播（没有口播取画面描述），视频单元取正文。
  * 与后端 `lib/script/item_excerpt.py` 的 `_body` 同口径。
  */
@@ -56,7 +64,7 @@ function itemBody(item: Item): string {
   return str(item.scene_description) || imagePromptScene(item) || str(item.source_text);
 }
 
-/** 正文前十几个字，按码点截断，截断时以「…」收尾。 */
+/** The first dozen or so characters of the body, truncated by code point, ending with "…" when truncated. / 正文前十几个字，按码点截断，截断时以「…」收尾。 */
 export function itemExcerpt(item: Item): string {
   const chars = [...itemBody(item).replace(/\s+/g, " ")];
   return chars.length > EXCERPT_LENGTH ? `${chars.slice(0, EXCERPT_LENGTH).join("")}…` : chars.join("");
@@ -69,17 +77,21 @@ function itemThumbnail(item: Item): string | null {
   return str(video) || str(storyboard) || null;
 }
 
-/** 分镜与视频单元的条目 ID（E3S05、E3U2、拆分出的 E3S05_1）；宫格（E3G01）等其他条目不按位置指称。 */
+/** Entry IDs of shots and video units (E3S05, E3U2, split-off E3S05_1); other entries such as grids (E3G01) aren't referred to by position. / 分镜与视频单元的条目 ID（E3S05、E3U2、拆分出的 E3S05_1）；宫格（E3G01）等其他条目不按位置指称。 */
 export function isPositionedItemId(itemId: string): boolean {
   return /^E\d+[SU]\d/.test(itemId);
 }
 
-/** 条目 ID 的种类：`E3U2` 是视频单元，`E3S05` 是分镜。 */
+/** Kind of entry ID: `E3U2` is a video unit, `E3S05` a shot. / 条目 ID 的种类：`E3U2` 是视频单元，`E3S05` 是分镜。 */
 export function episodeItemKind(itemId: string): EpisodeItemKind {
   return /^E\d+U\d/.test(itemId) ? "unit" : "shot";
 }
 
 /**
+ * Find an entry in the project scripts, giving its current position, total, body excerpt and thumbnail; null when the entry is no longer in the script.
+ *
+ * `scripts` is all of the project's scripts (`projects-store`'s `currentScripts`); the four skeletons are recognized by structure.
+ *
  * 在项目剧本里找条目，给出它的当前位置、总数、正文摘录与缩略图；条目已不在剧本里时为 null。
  *
  * `scripts` 是项目的全部剧本（`projects-store` 的 `currentScripts`），四种骨架按结构识别。

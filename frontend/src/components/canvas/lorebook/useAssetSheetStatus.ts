@@ -5,6 +5,12 @@ import { useActiveResourceIds } from "@/stores/tasks-store";
 import type { AssetSheetStatusRow, AssetSheetType } from "@/types";
 
 /**
+ * Status of every asset sheet in the project (including derivatives), judged by the artifact manifest.
+ *
+ * Status comes from comparing the manifest with the canonical state (reading files, computing fingerprints) and is not shipped with project data, so it is fetched separately: refetch when the project snapshot
+ * revision changes (sheet written, description edited) or the lock set of asset sheet tasks changes (a task starts or ends).
+ * Within the same project, keep the previous value when a fetch fails; after switching projects return only the new project's status.
+ *
  * 项目里每张资产图（含衍生）按产物清单判定的状态。
  *
  * 状态是清单与规范状态的比对（读文件、算指纹），不随项目数据下发，故单独取：项目快照
@@ -29,7 +35,7 @@ export function useAssetSheetStatus(projectName: string, enabled = true): AssetS
         if (!controller.signal.aborted) setLoaded({ projectName, rows: res.assets ?? [] });
       })
       .catch(() => {
-        /* 读取失败（含被作废）保留上一次的状态 */
+        /* On read failure (including being voided) keep the previous status / 读取失败（含被作废）保留上一次的状态 */
       });
     return () => controller.abort();
   }, [enabled, projectName, snapshotRevision, activeCount]);
@@ -39,7 +45,7 @@ export function useAssetSheetStatus(projectName: string, enabled = true): AssetS
 
 const NO_ROWS: AssetSheetStatusRow[] = [];
 
-/** 某一类资产本体的状态行，按资产名索引。 */
+/** Status rows of one asset type's base looks, indexed by asset name. / 某一类资产本体的状态行，按资产名索引。 */
 export function useSheetStatusByName(
   rows: AssetSheetStatusRow[],
   assetType: AssetSheetType,
@@ -56,6 +62,11 @@ export function useSheetStatusByName(
 }
 
 /**
+ * How many sheets one batch generation in an asset type would submit, and how many others lack a description.
+ *
+ * Same rule as the server's planning: pending base looks with a description; derivatives additionally need the base look sheet to be usable, or the base look itself to be in
+ * this batch; ones currently generating are not counted (the preview lists them as skipped). The exact list comes from the preview; this only gives the count on the button.
+ *
  * 一类资产里一次批量生成会提交几张、另有几张缺描述。
  *
  * 与服务端规划同一口径：待生成且有描述的本体；衍生还要求本体资产图可用，或本体本身也在

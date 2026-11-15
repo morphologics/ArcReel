@@ -42,7 +42,7 @@ function scrollIntoViewTop(el: HTMLElement | undefined) {
   el?.scrollIntoView({ behavior: prefersReducedMotion() ? "auto" : "smooth", block: "start" });
 }
 
-/** 解析地址上的打开请求；没有可识别的参数时返回 null。 */
+/** Parse the open request in the address; returns null when no recognized parameter exists. / 解析地址上的打开请求；没有可识别的参数时返回 null。 */
 function parseViewRequest(
   search: string,
 ): { upload: SourceUploadMode | null; episode: number | null; create: boolean } | null {
@@ -60,6 +60,9 @@ function parseViewRequest(
 }
 
 /**
+ * Fetch "Episodes" view data: refetch after every project data refresh (uploads, file handling, ledger changes pushed via SSE);
+ * keep the previous data during the refetch, no flash to empty.
+ *
  * 拉取「分集」视图数据：项目数据每次刷新（上传、处置文件、账本改动经 SSE 推送）后重拉一次；
  * 重拉期间保留上一份数据，不闪空。
  */
@@ -89,6 +92,9 @@ function useEpisodesViewData(projectName: string) {
 }
 
 /**
+ * The episode at the top of the source viewport: observe each episode section in the source and take the topmost one intersecting the band near the viewport top.
+ * Keep the previous episode when the viewport top falls in unsliced source. Re-attach observers after the source re-renders (data refresh).
+ *
  * 原文视口顶部所在的集：观察原文里每个集段落，取与视口上沿一带相交的最靠上的一段。
  * 视口上沿落在未切分的原文里时保持上一集。原文重新渲染（数据刷新）后重新挂观察。
  */
@@ -112,6 +118,7 @@ function useCurrentEpisode(scrollRoot: RefObject<HTMLElement | null>, view: Epis
         }
         if (top !== null) setCurrent(top.episode);
       },
+      // Look only at the band from the viewport top down a quarter: whichever episode occupies it is the one being read
       // 只看视口上沿往下四分之一的一带：哪一集占着这里，读者就在读哪一集
       { root, rootMargin: "0px 0px -75% 0px" },
     );
@@ -122,6 +129,12 @@ function useCurrentEpisode(scrollRoot: RefObject<HTMLElement | null>, view: Epis
 }
 
 /**
+ * Project-level "Episodes" view: header toolbar, episode outline on the left, the whole source in full on the right, sectioned by episode.
+ * With a new episode plan pending, the outline gives way and a plan pane appears right of the source, comparing current episodes with the new plan.
+ *
+ * Query param `upload=whole_source|episode` opens the upload dialog, `episode=<episode ID>` scrolls the source to that episode,
+ * `create` opens the new episode dialog.
+ *
  * 项目层「分集」视图：页头工具行，左侧是集目录，右侧是整本源文全文、按集分段。
  * 有新的分集方案时集目录让位，原文右侧出现方案栏，对照现有分集与新方案。
  *
@@ -134,7 +147,7 @@ export function EpisodesView({ projectName }: { projectName: string }) {
   const search = useSearch();
   const [, setLocation] = useLocation();
   const [upload, setUpload] = useState<SourceUploadMode | null>(null);
-  /** 新建一集对话框：undefined 为关闭，null 放在末尾，数字为插在这一集之后。 */
+  /** New episode dialog: undefined is closed, null appends at the end, a number inserts after that episode. / 新建一集对话框：undefined 为关闭，null 放在末尾，数字为插在这一集之后。 */
   const [createAfter, setCreateAfter] = useState<number | null | undefined>(undefined);
   const deletion = useDeleteEpisode(projectName);
   const manuscriptRef = useRef<HTMLElement>(null);
@@ -152,7 +165,7 @@ export function EpisodesView({ projectName }: { projectName: string }) {
     [setCurrent],
   );
   const locateFile = useCallback((sourceFile: string) => scrollIntoViewTop(fileBars.current.get(sourceFile)), []);
-  // 开始重新规划时原文滚到重新规划的起点：发起的那一集
+  // When replanning starts, scroll the source to the replan start: the episode it was started from / 开始重新规划时原文滚到重新规划的起点：发起的那一集
   const replan = useReplanEpisode(projectName, locate);
   const compare = useMemo(() => (view === null ? null : replanCompare(view, view.replan)), [view]);
 
@@ -165,6 +178,7 @@ export function EpisodesView({ projectName }: { projectName: string }) {
     else fileBars.current.delete(sourceFile);
   }, []);
 
+  // Episode to scroll to: set by address params, creation and split completion; scroll once when the source renders that episode
   // 待滚动到的集：地址参数、新建与切分完成后指定，原文渲染出这一集时滚过去一次
   const [scrollTarget, setScrollTarget] = useState<{ episode: number } | null>(null);
   const scrolledTarget = useRef<{ episode: number } | null>(null);
@@ -173,11 +187,12 @@ export function EpisodesView({ projectName }: { projectName: string }) {
     const header = episodeHeaders.current.get(scrollTarget.episode);
     if (header === undefined) return;
     scrolledTarget.current = scrollTarget;
-    // react-doctor-disable-next-line react-doctor/no-adjust-state-on-prop-change -- 要等原文渲染出这一集的标题节点才能滚动，当前集随这次滚动一起更新，与 locate 同一做法
+    // react-doctor-disable-next-line react-doctor/no-adjust-state-on-prop-change -- scrolling must wait until the source renders this episode's heading node; the current episode updates with this scroll, same approach as locate / 要等原文渲染出这一集的标题节点才能滚动，当前集随这次滚动一起更新，与 locate 同一做法
     setCurrent(scrollTarget.episode);
     scrollIntoViewTop(header);
   }, [view, scrollTarget, setCurrent]);
 
+  // Query params are consumed once: read on render and record the consumed address, the effect then removes the params from the address, so back or refresh won't reopen the dialog
   // 查询参数只消费一次：渲染时读出并记下已消费的地址，effect 再把参数从地址里去掉，返回或刷新不会再次打开对话框
   const [consumedSearch, setConsumedSearch] = useState<string | null>(null);
   const request = parseViewRequest(search);
@@ -187,6 +202,7 @@ export function EpisodesView({ projectName }: { projectName: string }) {
     if (request.create) setCreateAfter(null);
     if (request.episode !== null) setScrollTarget({ episode: request.episode });
   } else if (request === null && consumedSearch !== null) {
+    // Params removed from the address: clear the record so the same address takes effect again when it arrives
     // 参数已从地址去掉：清掉记录，同一地址再次到达时照常生效
     setConsumedSearch(null);
   }
@@ -275,7 +291,7 @@ export function EpisodesView({ projectName }: { projectName: string }) {
         ) : null}
         <section
           ref={manuscriptRef}
-          // eslint-disable-next-line jsx-a11y/no-noninteractive-tabindex -- 原文是长文本只读区，须能用键盘聚焦后以方向键与翻页键滚动
+          // eslint-disable-next-line jsx-a11y/no-noninteractive-tabindex -- the source is a long read-only text area and must be keyboard-focusable to scroll with arrow and page keys / 原文是长文本只读区，须能用键盘聚焦后以方向键与翻页键滚动
           tabIndex={0}
           aria-label={t("episodes_view_source_label")}
           className="focus-ring relative min-h-0 min-w-0 flex-1 overflow-y-auto px-6 [scrollbar-gutter:stable]"

@@ -50,18 +50,22 @@ import { CJK_DOUBLE_METER, METERS, PRICE_CURRENCIES } from "./priceVocabulary.ge
 import { useRowIds } from "../useRowIds";
 
 export interface PriceEditorProps {
-  /** 正在编辑的价目表；没有计费项时就是「不填价格」。 */
+  /** The price table being edited; no billing items means "no price filled in". / 正在编辑的价目表；没有计费项时就是「不填价格」。 */
   value: PriceTable;
   onChange: (next: PriceTable) => void;
-  /** 条目的媒体类型：「添加计费项」与「按条件分价」只列出这个媒体类型可用的选项。 */
+  /** Media type of the entry: "Add billing item" and "Price by condition" only list options available for this media type. / 条目的媒体类型：「添加计费项」与「按条件分价」只列出这个媒体类型可用的选项。 */
   mediaType: MediaType;
-  /** 条目声明的分辨率，作为分辨率条件的候选。 */
+  /** Resolutions declared by the entry, as candidates for resolution conditions. / 条目声明的分辨率，作为分辨率条件的候选。 */
   resolutions?: readonly string[];
-  /** 官方价目表，条目被改过时用来对比；币种与官方不同时不显示对比。 */
+  /** Official price table, used for comparison when the entry has been modified; no comparison shown when the currency differs from the official one. / 官方价目表，条目被改过时用来对比；币种与官方不同时不显示对比。 */
   official?: PriceTable | null;
 }
 
 /**
+ * Price editor: one card per billing item; without conditions a single unit price row, with conditions one "condition -> unit price" row per tier.
+ * Controlled component; `value` and `onChange` are the price table itself; on save convert to the API shape with `priceForSave`,
+ * and use `isPriceTableValid` to decide whether it can be saved (the editor shows the reason on problematic tiers).
+ *
  * 价格编辑器：每个计费项一张卡片，不分条件时一行单价，分条件时每档一行「条件 → 单价」。
  * 受控组件，`value` 与 `onChange` 是价目表本身；保存时用 `priceForSave` 转成接口形状，
  * 用 `isPriceTableValid` 判断能否保存（编辑器会在出问题的档上提示原因）。
@@ -160,6 +164,7 @@ function MeterCard({ meter, currency, mediaType, resolutions, issues, onChange, 
   const conditional = meter.dims.length > 0;
   const addableDims = addableDimensions(meter, mediaType);
   const canAddAllowance = isKnownMeter(meter.meter) && METERS[meter.meter].kind === "count" && meter.meter !== "requests";
+  // Tiers have no identity in the data (conditions are editable and may be temporarily duplicated): row keys use client ids, so deleting a middle tier doesn't shift other tiers' inputs
   // 档在数据里没有身份（条件可编辑、可暂时重复）：行 key 用客户端 id，删掉中间一档时其余档的输入不错位
   const rowIds = useRowIds(meter.rows.length);
 
@@ -339,6 +344,7 @@ function SwitchRow({ label, checked, onChange }: { label: string; checked: boole
   );
 }
 
+// ---- Condition tags ----
 // ---- 条件标签 ----
 
 interface ConditionTagProps {
@@ -347,11 +353,11 @@ interface ConditionTagProps {
   value: DimValue | undefined;
   resolutions: readonly string[];
   onChange: (next: DimValue | undefined) => void;
-  /** 值为 `undefined` 时标签上写什么，缺省是「不限」。 */
+  /** What the tag says when the value is `undefined`; defaults to "Any". / 值为 `undefined` 时标签上写什么，缺省是「不限」。 */
   anyKey?: string;
 }
 
-/** 一个可点选的条件标签：点开选取值；布尔、服务档点选，分辨率可点选已有取值或另填，上下文档与时长填数字。 */
+/** A clickable condition tag: click to choose a value; boolean and service tier are picked by click, resolution can pick an existing value or enter another, context tier and duration take numbers. / 一个可点选的条件标签：点开选取值；布尔、服务档点选，分辨率可点选已有取值或另填，上下文档与时长填数字。 */
 function ConditionTag({ meter, dim, value, resolutions, onChange, anyKey }: ConditionTagProps) {
   const { t } = useTranslation("dashboard");
   const [open, setOpen] = useState(false);
@@ -408,7 +414,7 @@ function ConditionTag({ meter, dim, value, resolutions, onChange, anyKey }: Cond
         </div>
         {(kind === "label" || kind === "tier" || kind === "seconds") && (
           <ValueForm
-            // 条件换了值重新挂载，输入框回到当前值
+            // Remount when the condition changes value, so the input returns to the current value / 条件换了值重新挂载，输入框回到当前值
             key={String(value)}
             kind={kind}
             initial={value}
@@ -435,7 +441,7 @@ function OptionButton({ selected, onClick, children }: { selected: boolean; onCl
   );
 }
 
-/** 自由取值：分辨率等标签、上下文档的下界、时长秒数；点「确定」或回车应用。 */
+/** Free value: tags such as resolution, lower bound of a context tier, duration seconds; apply with "OK" or Enter. / 自由取值：分辨率等标签、上下文档的下界、时长秒数；点「确定」或回车应用。 */
 function ValueForm({
   kind,
   initial,
@@ -488,6 +494,7 @@ function parseDimensionText(kind: "label" | "tier" | "seconds", text: string): D
   return kind === "tier" ? (parsed >= 0 ? parsed : null) : parsed > 0 ? parsed : null;
 }
 
+// ---- Number input ----
 // ---- 数字输入 ----
 
 interface NumberFieldProps {
@@ -512,6 +519,9 @@ function amountText(value: number | null): string {
 }
 
 /**
+ * Number input not less than 0. The text only changes on input; when the value is replaced externally (adopt official value, discard edits) it follows,
+ * and half-typed text (such as "0.") isn't overwritten. `onChange(null)` when the value is empty or invalid.
+ *
  * 不小于 0 的数字输入。文本只在输入时改变；外部把取值换掉（采用官方值、放弃修改）时跟着换，
  * 输入到一半的文字（如「0.」）不会被覆盖。取值为空或不合法时 `onChange(null)`。
  */

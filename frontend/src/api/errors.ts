@@ -1,4 +1,7 @@
 /**
+ * API error contract: the shape of backend error responses, type guards, error classes, and formatting of error explanations.
+ * Re-exported via `@/api`; callers keep importing from `@/api`.
+ *
  * API 错误契约：后端错误响应的结构、类型守卫、错误类与错误说明的格式化。
  * 对外经 `@/api` 再导出，调用方继续从 `@/api` 导入。
  */
@@ -13,7 +16,7 @@ import { findEpisodeItem } from "@/utils/episode-item";
 
 /** Standard error response body from backend (mirrors FastAPI HTTPException detail). */
 export interface ErrorResponse {
-  /** 后端附加的诊断或修复信息；调用方可按请求语境解析，永不并进 detail 摘要。 */
+  /** Diagnostic or repair info attached by the backend; callers may parse it per request context, never merged into the detail summary. / 后端附加的诊断或修复信息；调用方可按请求语境解析，永不并进 detail 摘要。 */
   diagnostic?: unknown;
   detail:
     | string
@@ -83,6 +86,9 @@ export class SpeechAdmissionError extends Error {
 }
 
 /**
+ * Generic error for a failed request: `message` is the product-language summary from the backend and can be shown to the user directly;
+ * `diagnostic` is optional diagnostic or repair info, parsed by the caller per request context, not concatenated into `message`.
+ *
  * 请求失败的通用错误：`message` 是后端给出的产品语言摘要，可直接展示给使用者；
  * `diagnostic` 是可选的诊断或修复信息，由调用方按请求语境解析，不拼进 `message`。
  */
@@ -90,7 +96,7 @@ export class ApiRequestError extends Error {
   constructor(
     message: string,
     public readonly diagnostic?: unknown,
-    /** HTTP 状态码；调用方据此区分「资源已不存在」与瞬时网络/服务错误。 */
+    /** HTTP status code; callers use it to tell "resource no longer exists" apart from transient network/service errors. / HTTP 状态码；调用方据此区分「资源已不存在」与瞬时网络/服务错误。 */
     public readonly status?: number,
   ) {
     super(message);
@@ -151,15 +157,20 @@ export interface ImportErrorPayload {
   errors?: string[];
   warnings?: string[];
   conflict_project_name?: string;
-  /** 导入包升级时有调整或没能带入的内容：带上 `migration_report`，确认后重新提交。 */
+  /** Content adjusted or not carried over when upgrading the import package: resubmit with `migration_report` after confirmation. / 导入包升级时有调整或没能带入的内容：带上 `migration_report`，确认后重新提交。 */
   confirmation_required?: boolean;
   migration_report?: unknown;
-  /** 导入包的集列表（集 ID 与标题），供确认窗显示集名。 */
+  /** Episode list of the import package (episode ID and title), so the confirmation dialog can show episode names. / 导入包的集列表（集 ID 与标题），供确认窗显示集名。 */
   episodes?: unknown;
   diagnostics?: unknown;
 }
 
 /**
+ * Extract one readable explanation from a backend detail.
+ *
+ * When the backend raises an envelope like `{ code, message, ... }` as detail (e.g. the rollback result after a batch enqueue fails midway),
+ * picking text only from strings and arrays would drop the whole translated explanation, and the user would only get "Request failed".
+ *
  * 从后端 detail 中取一句可读的说明。
  *
  * 后端把 `{ code, message, ... }` 这样的信封当 detail 抛出的场合（如批量入队中途失败后的
@@ -285,6 +296,7 @@ function formatSpeechAdmission(admission: SpeechAdmission): string {
     parse_failed: "speech_admission_parse_failed",
     empty_speaker: "speech_admission_empty_speaker",
   }[problem.code];
+  // Copy refers to a unit by its current position in this episode; when the unit is no longer in the script, write "Deleted".
   // 文案里称呼单元用它在本集里的当前位置；单元已不在剧本里时写「已删除」。
   const position = findEpisodeItem(useProjectsStore.getState().currentScripts, problem.unit_id)?.position;
   return i18n.t(`dashboard:${key}`, { position: position ?? i18n.t("common:deleted"), location });

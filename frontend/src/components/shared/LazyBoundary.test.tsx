@@ -23,6 +23,7 @@ describe("LazyBoundary", () => {
     );
 
     expect(screen.getByRole("alert")).toHaveTextContent("页面加载失败");
+    // jsdom does not support a real reload; only confirm the entry exists
     // jsdom 不支持真正的刷新，这里只确认入口存在
     expect(screen.getByRole("button", { name: "重新加载" })).toBeInTheDocument();
   });

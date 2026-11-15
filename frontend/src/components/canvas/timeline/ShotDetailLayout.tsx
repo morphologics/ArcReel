@@ -8,6 +8,11 @@ import { MEDIA_SIDE_BY_SIDE_QUERY, useMediaQuery } from "@/hooks/useMediaQuery";
 import { useShotMediaStore } from "@/stores/shot-media-store";
 
 /**
+ * Columns of the shot detail: header on top, the "editor column + media column" pair in the middle, each scrolling on its own, and the unsaved-changes bar at the bottom.
+ * No drag-to-resize; the layout switches on the shot detail's own width: below 480px (e.g. the demo workspace in the compact tier, where the Agent panel
+ * does not cover the canvas) everything stacks into one column that scrolls as a whole; at 480–860px the editor column fills and the media column is 300px;
+ * wider than that the editor column is 360–560px and all extra width goes to the media column.
+ *
  * 分镜详情的栏位：页头在上，中间是「编辑栏 + 媒体栏」两栏，各自滚动，未保存提示条在最下方。
  * 不做拖拽调宽，按分镜详情自身的宽度切换：窄于 480px 时（如演示工作台在紧凑档里，Agent 面板
  * 不覆盖画布）上下排成一栏、整体滚动；480–860px 编辑栏占满、媒体栏 300px；
@@ -20,7 +25,7 @@ export function ShotDetailLayout({
   media,
 }: {
   header: ReactNode;
-  /** 两栏下方横跨整宽的未保存提示条：出现时不推动正在编辑的字段。 */
+  /** Full-width unsaved-changes bar below both columns: appearing does not push the field being edited. / 两栏下方横跨整宽的未保存提示条：出现时不推动正在编辑的字段。 */
   footer?: ReactNode;
   main: ReactNode;
   media: ReactNode;
@@ -45,7 +50,7 @@ export function ShotDetailLayout({
   );
 }
 
-/** 编辑栏里的一组内容；组与组之间用分隔线隔开。 */
+/** A group of content in the editor column; groups are separated by dividers. / 编辑栏里的一组内容；组与组之间用分隔线隔开。 */
 export function ShotGroup({ children }: { children: ReactNode }) {
   return (
     <div className="flex flex-col gap-4 border-t border-border/50 pt-4 first:border-t-0 first:pt-0">{children}</div>
@@ -53,6 +58,9 @@ export function ShotGroup({ children }: { children: ReactNode }) {
 }
 
 /**
+ * A section in the editor column: a small heading plus content. With `htmlFor` the heading is the label of the matching input,
+ * otherwise it is an h3 heading; `actions` sit on the right side of the heading row.
+ *
  * 编辑栏里的一段：小标题加内容。给了 `htmlFor` 时标题是对应输入框的 label，
  * 否则是一个三级标题；`actions` 放在标题行右侧。
  */
@@ -95,7 +103,7 @@ export function ShotSection({
   );
 }
 
-/** 默认折叠的「对应原文与参考」。 */
+/** The "Source text and references" section, collapsed by default. / 默认折叠的「对应原文与参考」。 */
 export function ShotSourceCollapsible({ children }: { children: ReactNode }) {
   const { t } = useTranslation("dashboard");
   return (
@@ -112,6 +120,9 @@ export function ShotSourceCollapsible({ children }: { children: ReactNode }) {
 }
 
 /**
+ * Media column: on screens 1600px and wider the storyboard image and video sit side by side, otherwise only one is shown at a time,
+ * switched from the card header row (the title itself and the two view icons); the voice card spans the full column below.
+ *
  * 媒体栏：屏幕 1600px 及以上时分镜图与视频并排，否则一次只显示一个，
  * 由卡片标题行切换（标题本身与两个视图图标）；配音卡在下方横跨整栏。
  */

@@ -29,6 +29,7 @@ function DialogOverlay({
   return (
     <DialogPrimitive.Backdrop
       data-slot="dialog-overlay"
+      // Backdrop is opaque and unblurred, same spec as the onboarding backdrop; layering uses the z-index token
       // 遮罩不透明、不模糊，与新手引导遮罩同一规范；层级取 z-index token
       className={cn(
         "fixed inset-0 isolate z-overlay bg-scrim duration-100 data-open:animate-in data-open:fade-in-0 data-closed:animate-out data-closed:fade-out-0",
@@ -53,6 +54,11 @@ function DialogContent({
   return (
     <DialogPortal>
       <DialogOverlay />
+      {/*
+       * The primitive handles max height: Header / Body / Footer stack vertically, only DialogBody scrolls, title and footer actions always visible.
+       * Width comes in size tiers; callers may not override it with viewport breakpoints. Multi-step wizards (wizard) have fixed height so the frame and footer buttons don't move between steps.
+       * The image viewer (viewer) fills the viewport minus 1rem on each side; large images scale to the available space.
+       */}
       {/* 原语负责限高：Header / Body / Footer 纵向排布，只有 DialogBody 滚动，标题与底部操作始终可见。
           宽度按 size 分档，不让调用处用视口断点覆盖。多步向导（wizard）固定高度，切换步骤时外框与底部按钮不移动。
           图片查看器（viewer）占满视口四周各留 1rem 的区域，大图按可用空间缩放。 */}
@@ -91,14 +97,14 @@ function DialogHeader({ className, ...props }: React.ComponentProps<"div">) {
   return (
     <div
       data-slot="dialog-header"
-      // 不随 Body 滚动；右侧给关闭按钮留位
+      // Doesn't scroll with Body; leaves room on the right for the close button / 不随 Body 滚动；右侧给关闭按钮留位
       className={cn("flex shrink-0 flex-col gap-1.5 border-b px-5 py-4 pr-12", className)}
       {...props}
     />
   )
 }
 
-// 本地新增：弹层里唯一的滚动区，内容超高时只有它滚动
+// Local addition: the only scroll area in the overlay; only it scrolls when content overflows / 本地新增：弹层里唯一的滚动区，内容超高时只有它滚动
 function DialogBody({ className, ...props }: React.ComponentProps<"div">) {
   return (
     <div
@@ -124,6 +130,7 @@ function DialogFooter({
   return (
     <div
       data-slot="dialog-footer"
+      // Fixed at the bottom, doesn't scroll with Body; desktop only, buttons always one row, right-aligned
       // 固定在底部、不随 Body 滚动；只支持桌面端，按钮恒为一行靠右
       className={cn(
         "flex shrink-0 items-center justify-end gap-2 border-t bg-muted/50 px-5 py-3",
@@ -146,7 +153,7 @@ function DialogTitle({ className, ...props }: DialogPrimitive.Title.Props) {
     <DialogPrimitive.Title
       data-slot="dialog-title"
       className={cn(
-        // 中文标题可能折行，行高不能为 1
+        // Chinese titles may wrap, so line-height can't be 1 / 中文标题可能折行，行高不能为 1
         "text-base leading-snug font-medium",
         className
       )}

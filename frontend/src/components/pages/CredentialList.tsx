@@ -39,6 +39,7 @@ import {
 import { Input } from "@/components/ui/input";
 import type { CredentialSecretField, ProviderCredential, ConnectivityCheckResult } from "@/types";
 
+// Known secret credential fields -> frontend i18n label key; unknown keys fall back to the backend-provided label.
 // 已知 secret 凭证字段 → 前端 i18n label key；未知 key 回退后端提供的 label。
 const SECRET_FIELD_LABEL_KEY: Record<string, string> = {
   api_key: "api_key_label",
@@ -51,12 +52,12 @@ function secretFieldLabel(t: TFunction, field: CredentialSecretField): string {
   return lk ? t(lk) : field.label;
 }
 
-/** 对话框里的密钥输入框标签：只有一个 secret 字段时就叫「密钥」，多个时（可灵）沿用各字段的厂商名称。 */
+/** Label of the key input in the dialog: with a single secret field it's just "Key"; with several (Kling) use each field's vendor name. / 对话框里的密钥输入框标签：只有一个 secret 字段时就叫「密钥」，多个时（可灵）沿用各字段的厂商名称。 */
 function secretInputLabel(t: TFunction, field: CredentialSecretField, fieldCount: number): string {
   return fieldCount === 1 ? t("credential_secret_label") : secretFieldLabel(t, field);
 }
 
-// 逐字段读取脱敏值（与后端 *_masked 列一一对应）。
+// Read masked values per field (one-to-one with backend *_masked columns). / 逐字段读取脱敏值（与后端 *_masked 列一一对应）。
 function maskedForKey(cred: ProviderCredential, key: string): string | null | undefined {
   if (key === "api_key") return cred.api_key_masked;
   if (key === "access_key") return cred.access_key_masked;
@@ -70,15 +71,18 @@ interface Props {
   providerId: string;
   supportsBaseUrl: boolean;
   secretFields: CredentialSecretField[];
-  /** 凭证「二选一」分组：满足任一组（组内字段全填）即视为凭证完整。单组等价于「全部必填」。 */
+  /** Credential "either-or" groups: satisfying any group (all its fields filled) makes the credential complete. A single group equals "all required". / 凭证「二选一」分组：满足任一组（组内字段全填）即视为凭证完整。单组等价于「全部必填」。 */
   secretFieldGroups: string[][];
-  /** 密钥增删改或切换生效密钥之后调用，供上层刷新状态与目录。 */
+  /** Called after adding/editing/deleting keys or switching the active key, so the parent refreshes status and catalog. / 密钥增删改或切换生效密钥之后调用，供上层刷新状态与目录。 */
   onChanged?: () => void;
 }
 
 type DialogState = { mode: "add" } | { mode: "edit"; cred: ProviderCredential } | null;
 
 /**
+ * "Keys" section of a preset provider. Adding/editing keys submits in a dialog, deleting confirms via AlertDialog, switching the active key;
+ * all take effect immediately, bypassing the detail pane's bottom save bar (which only handles advanced config).
+ *
  * 预置供应商的「密钥」区。密钥的增改在对话框里提交、删除经 AlertDialog 确认、切换生效密钥，
  * 都立即生效，不经过详情栏底部的保存栏（保存栏只管高级配置）。
  */
@@ -122,7 +126,7 @@ export function CredentialList({ providerId, supportsBaseUrl, secretFields, secr
   }, [load]);
 
   useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect -- 挂载或换供应商后异步加载，取消域覆盖后续即时动作的刷新
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- async load on mount or provider change; the cancel domain covers refreshes of later immediate actions / 挂载或换供应商后异步加载，取消域覆盖后续即时动作的刷新
     void load();
     return () => loadController.current?.abort();
   }, [load]);
@@ -186,7 +190,7 @@ export function CredentialList({ providerId, supportsBaseUrl, secretFields, secr
 
       {dialog && (
         <CredentialDialog
-          // 每次打开都是一份新表单，关闭后再打开不残留上一次的输入与错误
+          // Each open is a fresh form; reopening after close leaves no previous input or errors / 每次打开都是一份新表单，关闭后再打开不残留上一次的输入与错误
           key={dialog.mode === "edit" ? dialog.cred.id : "add"}
           cred={dialog.mode === "edit" ? dialog.cred : null}
           providerId={providerId}
@@ -216,14 +220,14 @@ export function CredentialList({ providerId, supportsBaseUrl, secretFields, secr
 }
 
 // ---------------------------------------------------------------------------
-// 列表行
+// List rows / 列表行
 // ---------------------------------------------------------------------------
 
 interface RowProps {
   cred: ProviderCredential;
   providerId: string;
   secretFields: CredentialSecretField[];
-  /** Vertex 的凭证是上传的 JSON 文件，只能删除重传。 */
+  /** Vertex credentials are an uploaded JSON file; they can only be deleted and re-uploaded. / Vertex 的凭证是上传的 JSON 文件，只能删除重传。 */
   canEdit: boolean;
   onActivate: (cred: ProviderCredential) => Promise<void>;
   onEdit: () => void;
@@ -354,11 +358,11 @@ function CredentialRow({ cred, providerId, secretFields, canEdit, onActivate, on
 }
 
 // ---------------------------------------------------------------------------
-// 添加与编辑对话框
+// Add and edit dialog / 添加与编辑对话框
 // ---------------------------------------------------------------------------
 
 interface CredentialDialogProps {
-  /** 编辑的密钥；添加时为 null。 */
+  /** The key being edited; null when adding. / 编辑的密钥；添加时为 null。 */
   cred: ProviderCredential | null;
   providerId: string;
   isVertex: boolean;
@@ -383,7 +387,7 @@ function CredentialDialog({
   const idPrefix = useId();
   const editing = cred !== null;
   const [name, setName] = useState(cred?.name ?? "");
-  // 编辑时 secrets 留空表示保留现有值，逐字段独立。
+  // When editing, empty secrets mean keep the existing value, independently per field. / 编辑时 secrets 留空表示保留现有值，逐字段独立。
   const [secrets, setSecrets] = useState<Record<string, string>>({});
   const [baseUrl, setBaseUrl] = useState(cred?.base_url ?? "");
   const [file, setFile] = useState<File | null>(null);
@@ -395,6 +399,7 @@ function CredentialDialog({
   const fieldByKey = new Map(secretFields.map((f) => [f.key, f]));
   const labelForKey = (key: string) => secretFieldLabel(t, fieldByKey.get(key) ?? { key, label: key });
   const groups = secretFieldGroups.length > 0 ? secretFieldGroups : [secretFields.map((f) => f.key)];
+  // Fields are unconditionally required only with a single required group; with either-or groups they're not marked required, the combination hint explains.
   // 只有单一必填组时组内字段才是无条件必填；多组二选一时不标必填，由组合提示说明。
   const fieldsRequired = !editing && groups.length <= 1;
   const orHint =
@@ -429,7 +434,7 @@ function CredentialDialog({
     const data: Record<string, string> = {};
     if (name.trim() !== current.name) data.name = name.trim();
     for (const field of secretFields) {
-      // 只含空白的输入不算新值，不覆盖已保存的密钥
+      // Whitespace-only input isn't a new value and doesn't overwrite the saved key / 只含空白的输入不算新值，不覆盖已保存的密钥
       const value = secrets[field.key]?.trim();
       if (value) data[field.key] = value;
     }
@@ -456,7 +461,7 @@ function CredentialDialog({
     <Dialog
       open
       onOpenChange={(open) => {
-        // 提交在途时不响应 Esc 与遮罩点击，避免对话框先于结果消失
+        // Ignore Esc and backdrop clicks while submitting, so the dialog doesn't vanish before the result / 提交在途时不响应 Esc 与遮罩点击，避免对话框先于结果消失
         if (!open && !submitting) onCancel();
       }}
     >
@@ -572,7 +577,7 @@ function CredentialDialog({
 }
 
 // ---------------------------------------------------------------------------
-// 删除确认
+// Delete confirmation / 删除确认
 // ---------------------------------------------------------------------------
 
 function DeleteCredentialDialog({
@@ -589,6 +594,7 @@ function DeleteCredentialDialog({
   const { t } = useTranslation(["dashboard", "common"]);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // During the close animation cred is already cleared; keep the last content so the title doesn't flash blank
   // 关闭动画期间 cred 已清空，沿用最后一次的内容，标题不闪成空白
   const [shown, setShown] = useState(cred);
   if (cred && cred !== shown) {
@@ -614,7 +620,7 @@ function DeleteCredentialDialog({
     <AlertDialog
       open={cred !== null}
       onOpenChange={(open) => {
-        // 删除请求在途时不响应 Esc
+        // Ignore Esc while the delete request is in flight / 删除请求在途时不响应 Esc
         if (!open && !submitting) onClose();
       }}
     >

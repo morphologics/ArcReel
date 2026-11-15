@@ -26,11 +26,14 @@ function refLabel(ref: AssetSheetRef): string {
 }
 
 function ownerOf(unitId: string): string {
-  // `<类型>/<本体>`：去掉类型段即本体名。
+  // `<type>/<base look>`: dropping the type segment gives the base look name. / `<类型>/<本体>`：去掉类型段即本体名。
   return unitId.slice(unitId.indexOf("/") + 1);
 }
 
 /**
+ * Confirmation dialog for batch asset sheet generation: lists the sheets to generate by type, skipped items and reasons, with an estimated cost when computable.
+ * On confirm it submits one batch and hands it to batch tracking; when the whole batch ends it is summarized into one notification.
+ *
  * 资产图批量生成的确认框：按类型列出要生成的资产图、跳过项与原因，能算出时给出预估费用。
  * 确认后提交一批并交给批次跟踪，整批结束时汇总成一条通知。
  */
@@ -157,7 +160,7 @@ export function AssetSheetBatchDialog({
     <Dialog
       open
       onOpenChange={(next) => {
-        // 提交在途时忽略 Esc 与遮罩点击
+        // Ignore Esc and overlay clicks while submission is in flight / 提交在途时忽略 Esc 与遮罩点击
         if (!next && !submitting) onClose();
       }}
     >

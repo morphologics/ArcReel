@@ -10,11 +10,14 @@ import { refreshAfterWrite } from "@/components/canvas/shared/refreshAfterWrite"
 
 interface BriefFields {
   brief: string;
-  /** 目标总时长（秒）；「自定义」里填的不是正整数时为 null，不能保存。 */
+  /** Target total duration (seconds); null when the "Custom" value isn't a positive integer, and it can't be saved. / 目标总时长（秒）；「自定义」里填的不是正整数时为 null，不能保存。 */
   targetDuration: number | null;
 }
 
 /**
+ * The always-present "Brief" section on the ad project overview: brief text and target total duration form one edit unit; AI script generation plans from them.
+ * New ad projects do their first entry here, without a separate setup page.
+ *
  * 广告项目概览常驻的「创作灵感」区：灵感正文与目标总时长是一个编辑单元，AI 生成脚本按它们规划。
  * 新建的广告项目在这里完成首次录入，不经单独的初始化页。
  */
@@ -40,6 +43,7 @@ export function AdBrief({
   const save = useCallback(
     async (value: BriefFields, saved: BriefFields) => {
       if (value.targetDuration === null) throw new Error(t("ad_target_duration_invalid"));
+      // Submit only changed fields: if another place (e.g. project settings) changes the target total duration meanwhile, editing only the brief won't write it back to the old value
       // 只提交改动过的字段：另一处（如项目设置）同时改了目标总时长时，只改灵感不会把它写回旧值
       const patch: { brief?: string; target_duration?: number } = {};
       const nextBrief = value.brief.trim();
