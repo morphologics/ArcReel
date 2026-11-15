@@ -1,4 +1,7 @@
-"""市场源工具库：索引 schema、生成器与校验器；命令行入口是 ``python -m arcreel_market_core``。"""
+"""Market source toolkit: index schema, generator, and validator; the command-line entry is ``python -m arcreel_market_core``.
+
+市场源工具库：索引 schema、生成器与校验器；命令行入口是 ``python -m arcreel_market_core``。
+"""
 
 from .entry import PROJECTED_META_FIELDS, check_entry_definition, project_meta
 from .generate import GenerateError, build_index, render_index, write_index

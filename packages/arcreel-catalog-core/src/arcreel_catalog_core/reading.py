@@ -1,4 +1,14 @@
-"""目录数据的读入与校验，实例侧与构建侧共用同一次遍历。
+"""Reading and validation of catalog data; the instance side and the build side share the same traversal.
+
+- The instance side is lenient (``parse_*``): unknown fields are ignored; when a price table references
+  an unknown meter, selection dimension or currency it is still read in and is flagged by
+  ``PriceTable.is_priceable``; entries with an unknown media type are skipped; the whole dataset is
+  rejected only when the structure cannot be parsed. There is no schema version number.
+- The build side is strict (``check_*``): besides the problems the instance side rejects, it also reports
+  unknown fields and values, duplicate entry identities, names that conflict between entries, a manifest
+  referencing a nonexistent entry, etc.; any one of them blocks publishing.
+
+目录数据的读入与校验，实例侧与构建侧共用同一次遍历。
 
 - 实例侧从宽（``parse_*``）：不认识的字段忽略；价目表引用了不认识的计量项、选择维度或币种时照常
   读入，由 ``PriceTable.is_priceable`` 标出；不认识媒体类型的条目跳过；只有结构无法解析时才拒收
@@ -44,7 +54,7 @@ from .vocabulary import (
     is_valid_dimension_value,
 )
 
-#: 数据集版本是 UTC 时间戳，定长，字符串顺序即时间顺序。
+#: Dataset version is a UTC timestamp of fixed length, so string order is time order. / 数据集版本是 UTC 时间戳，定长，字符串顺序即时间顺序。
 DATASET_VERSION_FORMAT = "%Y-%m-%dT%H:%M:%SZ"
 _APP_VERSION = re.compile(r"\d+(\.\d+){0,2}")
 _CONTEXT_TIER = "context_tier"
@@ -52,7 +62,10 @@ _CONTEXT_TIER = "context_tier"
 
 @dataclass(frozen=True)
 class CatalogIssue:
-    """一条校验问题。``path`` 是 JSON 内的位置，如 ``entries[3].price.meters[0]``；``code`` 稳定可比较。"""
+    """One validation issue. ``path`` is the location within the JSON, such as ``entries[3].price.meters[0]``; ``code`` is stable and comparable.
+
+    一条校验问题。``path`` 是 JSON 内的位置，如 ``entries[3].price.meters[0]``；``code`` 稳定可比较。
+    """
 
     path: str
     code: str
@@ -63,7 +76,10 @@ class CatalogIssue:
 
 
 class CatalogFormatError(ValueError):
-    """目录数据无法解析，整份拒收。"""
+    """Catalog data cannot be parsed; the whole dataset is rejected.
+
+    目录数据无法解析，整份拒收。
+    """
 
     def __init__(self, issues: Iterable[CatalogIssue]) -> None:
         self.issues = tuple(issues)
@@ -71,7 +87,10 @@ class CatalogFormatError(ValueError):
 
 
 def parse_dataset_version(value: str) -> datetime:
-    """解析数据集版本；格式不对时抛 ``ValueError``。比较两份数据哪份较新时用它的返回值。"""
+    """Parse the dataset version; raises ``ValueError`` if the format is wrong. Use its return value to compare which of two datasets is newer.
+
+    解析数据集版本；格式不对时抛 ``ValueError``。比较两份数据哪份较新时用它的返回值。
+    """
     return datetime.strptime(value, DATASET_VERSION_FORMAT).replace(tzinfo=UTC)
 
 
@@ -94,7 +113,14 @@ _PROVIDER_MODEL_FIELDS = frozenset({"api_model_name", "entry", "media_type", "mu
 
 
 class CatalogReader:
-    """遍历原始 JSON，边读边记问题。
+    """Traverse the raw JSON, recording issues while reading.
+
+    ``fatal`` is a structural problem that the instance side must also reject; ``strict`` is a problem
+    reported only on the build side. When a read function meets a structural problem it records one fatal
+    and returns a placeholder value of the same type so that traversal continues, which lets the build side
+    report all problems in one pass; when there is any fatal, the results read are discarded as a whole.
+
+    遍历原始 JSON，边读边记问题。
 
     ``fatal`` 是实例侧也要拒收的结构问题，``strict`` 是只在构建侧报告的问题。读取函数遇到结构问题时
     记一条 fatal 并返回同类型的占位值，让遍历继续，构建侧因此能一次报出全部问题；有 fatal 时读出的
@@ -115,7 +141,7 @@ class CatalogReader:
     def flag(self, path: str, code: str, detail: str) -> None:
         self.strict.append(CatalogIssue(path, code, detail))
 
-    # ---- 基础取值 ----
+    # ---- Basic values ---- / ---- 基础取值 ----
 
     def obj(self, value: object, path: str) -> dict[str, object]:
         if isinstance(value, dict):
@@ -157,7 +183,10 @@ class CatalogReader:
         return None
 
     def number(self, value: object, path: str) -> float:
-        """非负有限数。不是数字时拒收；负数或非有限值只在构建侧报告。"""
+        """Non-negative finite number. Rejected if not a number; negative or non-finite values are reported only on the build side.
+
+        非负有限数。不是数字时拒收；负数或非有限值只在构建侧报告。
+        """
         if isinstance(value, bool) or not isinstance(value, int | float):
             self.reject(path, "invalid_number", "应为数字")
             return 0.0
@@ -195,7 +224,7 @@ class CatalogReader:
                 self.reject(f"{path}[{index}]", "invalid_positive_int", "应为正整数秒")
         return tuple(result)
 
-    # ---- 目录数据 ----
+    # ---- Catalog data ---- / ---- 目录数据 ----
 
     def catalog(self, raw: object) -> CatalogData:
         data = self.obj(raw, "")
@@ -315,7 +344,7 @@ class CatalogReader:
         if any(value not in durations for value in values):
             self.flag(path, "constraint_outside_facts", "约束中的时长不在可选时长内")
 
-    # ---- 价目表 ----
+    # ---- Price table ---- / ---- 价目表 ----
 
     def price_table(self, raw: object, media_type: MediaType, path: str) -> PriceTable:
         data = self.obj(raw, path)
@@ -335,7 +364,10 @@ class CatalogReader:
         return PriceTable(currency=currency, meters=tuple(meters))
 
     def check_context_tiers(self, meters: list[Meter], path: str) -> None:
-        """上下文档首档写 0，且各计量项分界相同：整个请求只落入一档，各计量项都按这一档取单价。"""
+        """The first tier of context tiers is 0 and all meters have the same boundaries: the whole request falls into a single tier, and every meter takes its unit price from that tier.
+
+        上下文档首档写 0，且各计量项分界相同：整个请求只落入一档，各计量项都按这一档取单价。
+        """
         grid: frozenset[int] | None = None
         for index, meter in enumerate(meters):
             tiers = frozenset(
@@ -398,7 +430,13 @@ class CatalogReader:
         return PriceRow(when=when, price=self.number(data.get("price"), _at(path, "price")))
 
     def check_price_resolutions(self, price: PriceTable, facts: ModelFacts, path: str) -> None:
-        """价目表的分辨率取值与条目声明的某个分辨率只差大小写时报错：那是错写，按原样永远命中不了请求。
+        """Error when a resolution value in the price table differs from a resolution declared by the entry only by case: that is a typo and as written it can never match a request.
+
+        Tiers other than those declared by the entry pass: the submission step does not uniformly block
+        resolutions by entry declaration, so existing settings or Agent inputs may still carry these tiers into
+        billing, and the price table must be able to price them. Not checked when the entry declares no resolution.
+
+        价目表的分辨率取值与条目声明的某个分辨率只差大小写时报错：那是错写，按原样永远命中不了请求。
 
         条目声明之外的其他档位放行：提交环节没有统一按条目声明拦截分辨率，存量设置或 Agent 入参仍可能
         带着这些档位进入计费，价目表要能给它们定价。条目没有声明分辨率时不查。
@@ -407,7 +445,7 @@ class CatalogReader:
         by_casefold = {resolution.casefold(): resolution for resolution in resolutions}
         for meter_index, meter in enumerate(price.meters):
             if "resolution" not in meter.dims:
-                continue  # 未声明的维度已报 dimension_not_declared
+                continue  # Undeclared dimensions were already reported as dimension_not_declared. / 未声明的维度已报 dimension_not_declared
             meter_path = _at(path, f"meters[{meter_index}]")
             selections = [(_at(meter_path, f"rows[{i}].when"), row.when) for i, row in enumerate(meter.rows)]
             selections.append((_at(meter_path, "defaults"), meter.defaults))
@@ -430,7 +468,7 @@ class CatalogReader:
             elif dim in DIMENSIONS and not is_valid_dimension_value(dim, value):
                 self.flag(_at(path, dim), "invalid_dimension_value", "选择维度的取值不合法")
 
-    # ---- 内置供应商清单 ----
+    # ---- Built-in provider manifest ---- / ---- 内置供应商清单 ----
 
     def listing(self, raw: object, path: str) -> BuiltinProviderListing:
         data = self.obj(raw, path)
@@ -465,10 +503,13 @@ class CatalogReader:
             min_app_version=min_app_version,
         )
 
-    # ---- 跨条目的构建侧检查 ----
+    # ---- Cross-entry build-side checks ---- / ---- 跨条目的构建侧检查 ----
 
     def check_entry_identities(self, entries: tuple[CatalogEntry, ...]) -> None:
-        """条目身份唯一；同一媒体类型内，官方模型名与模型别名归一化后只能属于一个条目。"""
+        """Entry identity is unique; within the same media type, an official model name and model aliases, once normalized, may belong to only one entry.
+
+        条目身份唯一；同一媒体类型内，官方模型名与模型别名归一化后只能属于一个条目。
+        """
         seen: set[EntryKey] = set()
         owners: dict[tuple[str, str], EntryKey] = {}
         for index, entry in enumerate(entries):
@@ -508,7 +549,7 @@ class CatalogReader:
                 default_entry = listed.get((api_model_name, media_type))
                 if default_entry is None:
                     if api_model_name in unresolved:
-                        continue  # 引用问题已在清单条目上报告
+                        continue  # Reference problems were already reported on the manifest entry. / 引用问题已在清单条目上报告
                     self.flag(default_path, "unknown_default_model", "默认模型不在这个供应商这一媒体类型的清单中")
                 elif default_entry.discontinued:
                     self.flag(default_path, "default_model_discontinued", "默认模型已下架")
@@ -532,7 +573,10 @@ def _at(path: str, key: str) -> str:
 
 
 def _overlaps(a: Mapping[str, object], b: Mapping[str, object]) -> bool:
-    """两行条件能否同时命中一个请求：共同列出的维度取值都相同。"""
+    """Whether two row conditions can hit one request at the same time: the dimensions listed in common all have the same values.
+
+    两行条件能否同时命中一个请求：共同列出的维度取值都相同。
+    """
     return all(_same_value(a[dim], b[dim]) for dim in a.keys() & b.keys())
 
 
@@ -540,11 +584,14 @@ def _same_value(a: object, b: object) -> bool:
     return type(a) is type(b) and a == b
 
 
-# ---- 公开入口 ----
+# ---- Public entry points ---- / ---- 公开入口 ----
 
 
 def parse_catalog(raw: object) -> CatalogData:
-    """实例侧读入一份目录数据（已解码的 JSON）。结构无法解析时抛 ``CatalogFormatError``。"""
+    """Instance side reads one catalog dataset (already-decoded JSON). Raises ``CatalogFormatError`` if the structure cannot be parsed.
+
+    实例侧读入一份目录数据（已解码的 JSON）。结构无法解析时抛 ``CatalogFormatError``。
+    """
     reader = CatalogReader()
     data = reader.catalog(raw)
     if reader.fatal:
@@ -553,14 +600,20 @@ def parse_catalog(raw: object) -> CatalogData:
 
 
 def check_catalog(raw: object) -> list[CatalogIssue]:
-    """构建侧校验一份目录数据（已解码的 JSON），返回全部问题；空列表才可以发布。"""
+    """Build side validates one catalog dataset (already-decoded JSON) and returns all issues; only an empty list may be published.
+
+    构建侧校验一份目录数据（已解码的 JSON），返回全部问题；空列表才可以发布。
+    """
     reader = CatalogReader()
     reader.catalog(raw)
     return reader.issues
 
 
 def parse_entry(raw: object) -> CatalogEntry:
-    """实例侧读入单个模型条目，例如用户修改存下的条目副本。"""
+    """Instance side reads a single model entry, for example an entry copy saved from a user modification.
+
+    实例侧读入单个模型条目，例如用户修改存下的条目副本。
+    """
     reader = CatalogReader()
     entry = reader.entry(raw, "")
     if entry is None and not reader.fatal:
@@ -571,7 +624,10 @@ def parse_entry(raw: object) -> CatalogEntry:
 
 
 def check_entry(raw: object) -> list[CatalogIssue]:
-    """构建侧校验单个模型条目。只查条目自身；名字是否与其他条目冲突要放进整份目录数据里查。"""
+    """Build side validates a single model entry. Checks only the entry itself; whether a name conflicts with other entries has to be checked within the whole catalog dataset.
+
+    构建侧校验单个模型条目。只查条目自身；名字是否与其他条目冲突要放进整份目录数据里查。
+    """
     reader = CatalogReader()
     reader.entry(raw, "")
     return reader.issues

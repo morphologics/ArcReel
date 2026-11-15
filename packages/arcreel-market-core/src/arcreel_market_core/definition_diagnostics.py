@@ -1,4 +1,16 @@
-"""端点定义的诊断载体：稳定错误码 + 定位路径 + locale-neutral 消息。
+"""Carrier for endpoint definition diagnostics: stable error code + location path + locale-neutral message.
+
+Save, the `validate` API, endpoint tests and import all share the same diagnostics, and each consuming boundary renders its own language, so the producing
+point carries only a `ValidationMessage` (key + params), not finished text. `code` is a stable contract across boundaries: the frontend
+uses it to decide which section to highlight, tests assert on it, and translation looks up text by it (every code has a `val_ce_<code>` message key).
+
+`path` is a location string within the definition JSON, rooted at `$`, with the rest built from dot + index notation like `submit.extract.video_url[0]`,
+mapping directly to a field in the UI.
+
+This module sits at the package top level rather than inside one `kind` subpackage: every kind's validator produces this set of
+diagnostics, and putting it inside one kind's package would make the other kind depend on it in reverse.
+
+端点定义的诊断载体：稳定错误码 + 定位路径 + locale-neutral 消息。
 
 保存、``validate`` 接口、端点测试与 import 期共用同一份诊断，消费边界各自渲染语言，因此产出
 点只带 ``ValidationMessage``（key + params），不带成品文案。``code`` 是跨边界的稳定契约：前端
@@ -20,22 +32,29 @@ from typing import Any
 
 from arcreel_market_core.validation_messages import Translator, ValidationMessage
 
+# Common prefix of diagnostic message keys: `code` and message key correspond one to one, and a new code must add messages in all three languages.
 #: 诊断消息键的统一前缀：``code`` 与消息键一一对应，新增码必须同步三种语言的消息。
 MESSAGE_KEY_PREFIX = "val_ce_"
 
-#: 定义内的根路径。
+#: Root path within a definition. / 定义内的根路径。
 ROOT_PATH = "$"
 
 
 class DefinitionErrorCode(StrEnum):
-    """定义校验能产出的全部诊断码。
+    """All diagnostic codes definition validation can produce.
+
+        The first part is the structure layer (translated from JSON Schema), the middle is the semantic layer of declarative definitions (placeholder scope, the single
+        credential write entry, two-way capability consistency, the JSONPath subset), and after that is the semantic layer of ComfyUI definitions (cross-checks between node
+        bindings and the workflow). The structure layer and placeholder scope sections are shared by both kinds. Warning codes are listed separately at the end.
+
+    定义校验能产出的全部诊断码。
 
     前半段是结构层（JSON Schema 转译而来），中段是声明式定义的语义层（占位符作用域、凭证唯一
     写入口、能力两向一致、JSONPath 子集），再往后是 ComfyUI 定义的语义层（节点绑定与 workflow
     的交叉判定）。结构层与占位符作用域两段由两种 kind 共用。warning 码单列在末尾。
     """
 
-    # ---- 结构层 ----
+    # ---- Structure layer ---- / ---- 结构层 ----
     MISSING_FIELD = "missing_field"
     UNKNOWN_FIELD = "unknown_field"
     REMOVED_FIELD = "removed_field"
@@ -44,7 +63,7 @@ class DefinitionErrorCode(StrEnum):
     INVALID_VALUE = "invalid_value"
     SCHEMA_VIOLATION = "schema_violation"
 
-    # ---- 占位符作用域 ----
+    # ---- Placeholder scope ---- / ---- 占位符作用域 ----
     MALFORMED_PLACEHOLDER = "malformed_placeholder"
     UNDECLARED_VARIABLE = "undeclared_variable"
     API_KEY_OUTSIDE_AUTH = "api_key_outside_auth"
@@ -57,7 +76,7 @@ class DefinitionErrorCode(StrEnum):
     RESULT_ID_OUT_OF_SCOPE = "result_id_out_of_scope"
     RESULT_ID_WITHOUT_EXTRACT = "result_id_without_extract"
 
-    # ---- 素材与展开构造 ----
+    # ---- Assets and expansion constructs ---- / ---- 素材与展开构造 ----
     INPUT_OUT_OF_SCOPE = "input_out_of_scope"
     LIST_INPUT_REQUIRES_EACH = "list_input_requires_each"
     EACH_IN_NOT_LIST_INPUT = "each_in_not_list_input"
@@ -67,7 +86,7 @@ class DefinitionErrorCode(StrEnum):
     WHEN_UNKNOWN_INPUT = "when_unknown_input"
     INPUT_NOT_REFERENCED = "input_not_referenced"
 
-    # ---- 字典与能力 ----
+    # ---- Dictionaries and capabilities ---- / ---- 字典与能力 ----
     ENUM_MAP_VARIABLE_NOT_ALLOWED = "enum_map_variable_not_allowed"
     DEFAULT_VARIABLE_NOT_ALLOWED = "default_variable_not_allowed"
     DEFAULT_VALUE_TYPE_INVALID = "default_value_type_invalid"
@@ -78,11 +97,11 @@ class DefinitionErrorCode(StrEnum):
     CAPABILITY_INCOHERENT = "capability_incoherent"
     CAPABILITY_NOT_DECLARED = "capability_not_declared"
 
-    # ---- 媒体类型 ----
+    # ---- Media type ---- / ---- 媒体类型 ----
     MEDIA_TYPE_FIELD_NOT_ALLOWED = "media_type_field_not_allowed"
     ARTIFACT_EXTRACT_MISSING = "artifact_extract_missing"
 
-    # ---- JSONPath 子集 ----
+    # ---- JSONPath subset ---- / ---- JSONPath 子集 ----
     JSONPATH_NOT_A_STRING = "jsonpath_not_a_string"
     JSONPATH_SURROUNDING_WHITESPACE = "jsonpath_surrounding_whitespace"
     JSONPATH_MISSING_ROOT = "jsonpath_missing_root"
@@ -96,7 +115,7 @@ class DefinitionErrorCode(StrEnum):
     JSONPATH_SYNTAX = "jsonpath_syntax"
     JSONPATH_EVALUATION_FAILED = "jsonpath_evaluation_failed"
 
-    # ---- 渲染期（端点测试按同一份诊断结构下发）----
+    # ---- Render time (endpoint tests deliver the same diagnostic structure) ---- / ---- 渲染期（端点测试按同一份诊断结构下发）----
     TEMPLATE_RENDER_FAILED = "template_render_failed"
     TEMPLATE_URL_NOT_STRING = "template_url_not_string"
     UNKNOWN_ASSET_ENCODING = "unknown_asset_encoding"
@@ -104,7 +123,7 @@ class DefinitionErrorCode(StrEnum):
     TEMPLATE_TEXT_VARIABLE_NULL = "template_text_variable_null"
     EACH_VALUE_NOT_LIST = "each_value_not_list"
 
-    # ---- ComfyUI 节点绑定 ----
+    # ---- ComfyUI node binding ---- / ---- ComfyUI 节点绑定 ----
     COMFYUI_BINDING_REQUIRED = "comfyui_binding_required"
     COMFYUI_BINDING_KEY_NOT_ALLOWED = "comfyui_binding_key_not_allowed"
     COMFYUI_NODE_NOT_FOUND = "comfyui_node_not_found"
@@ -115,7 +134,7 @@ class DefinitionErrorCode(StrEnum):
     COMFYUI_CONSUMER_NOT_FED = "comfyui_consumer_not_fed"
     COMFYUI_FPS_CONFLICT = "comfyui_fps_conflict"
 
-    # ---- ComfyUI 导入分流 ----
+    # ---- ComfyUI import triage ---- / ---- ComfyUI 导入分流 ----
     COMFYUI_UI_FORMAT_WORKFLOW = "comfyui_ui_format_workflow"
 
     # ---- warning ----
@@ -125,13 +144,19 @@ class DefinitionErrorCode(StrEnum):
 
 
 def message_key(code: DefinitionErrorCode) -> str:
-    """诊断码对应的 i18n 消息键。"""
+    """The i18n message key for each diagnostic code.
+
+    诊断码对应的 i18n 消息键。
+    """
     return f"{MESSAGE_KEY_PREFIX}{code.value}"
 
 
 @dataclass(frozen=True)
 class DefinitionIssue:
-    """一条诊断：定位路径 + 稳定码 + 待渲染的消息。"""
+    """One diagnostic: location path + stable code + message to render.
+
+    一条诊断：定位路径 + 稳定码 + 待渲染的消息。
+    """
 
     path: str
     code: DefinitionErrorCode
@@ -142,13 +167,20 @@ class DefinitionIssue:
         return ValidationMessage(message_key(self.code), self.params)
 
     def to_payload(self, translate: Translator) -> dict[str, str]:
-        """渲染成接口契约里的 ``{path, code, message}``。"""
+        """Render into the `{path, code, message}` of the API contract.
+
+        渲染成接口契约里的 ``{path, code, message}``。
+        """
         return {"path": self.path, "code": self.code.value, "message": self.message.render(translate)}
 
 
 @dataclass(frozen=True)
 class DefinitionDiagnostics:
-    """一次校验的完整结果。
+    """The complete result of one validation.
+
+        A non-empty `errors` means the write is rejected; `warnings` are hints only (e.g. polling does not reference task_id) and do not block saving.
+
+    一次校验的完整结果。
 
     ``errors`` 非空即拒绝写入；``warnings`` 只提示（如轮询没引用 task_id），不拦保存。
     """
@@ -168,7 +200,10 @@ class DefinitionDiagnostics:
 
 
 def join_path(base: str, key: str | int) -> str:
-    """把一段键名或下标接到定位路径末尾。"""
+    """Append a key name or index to the end of a location path.
+
+    把一段键名或下标接到定位路径末尾。
+    """
     if isinstance(key, int):
         return f"{base}[{key}]"
     return key if base == ROOT_PATH else f"{base}.{key}"

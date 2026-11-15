@@ -1,4 +1,19 @@
-"""统一「比例优先、清晰度其次」的尺寸计算。
+"""Unified size calculation: "aspect ratio first, clarity second".
+
+The output aspect ratio of media generation has a single source, the project's `aspect_ratio`, which always takes priority. Resolution
+(a preset tier or a custom value) only decides the clarity scale and **does not decide the ratio**. This module consolidates that principle into
+two pure functions plus a table of tier short edges, for reuse by every backend that works in pixel sizes:
+
+- :func:`aspect_size`: given a ratio and a short-edge target, compute an exact `(width, height)` that follows the ratio and is
+  divisible by `round_to`. Valid sizes are integer multiples of `(aw·round_to, ah·round_to)`, so the ratio
+  has zero deviation and width and height are naturally divisible (gpt-image-2 requires both to be divisible by 16, which this satisfies).
+- :func:`resolution_to_short_edge`: normalize a resolution (`None` / tier word / custom `width*height`
+  value / plain number) to a "short-edge pixel count"; a custom value has its own ratio stripped (take `min`).
+
+The tier short-edge table is shared across backends (see `IMAGE_TIER_SHORT_EDGE` / `VIDEO_TIER_SHORT_EDGE`),
+and each backend then clamps with `max_long_edge` / `max_total_pixels` per its own pixel constraints.
+
+统一「比例优先、清晰度其次」的尺寸计算。
 
 媒体生成的输出比例只有一个来源——项目的 ``aspect_ratio``，永远优先；分辨率
 （预设档位或自定义值）只决定清晰度规模，**不决定比例**。本模块把这条原则收口成
@@ -23,26 +38,33 @@ from collections.abc import Sequence
 
 logger = logging.getLogger(__name__)
 
-# 缺分辨率但必需尺寸来控制比例时的兜底短边（720P）。
+# Fallback short edge (720P) when resolution is missing but a size is required to control the ratio. / 缺分辨率但必需尺寸来控制比例时的兜底短边（720P）。
 DEFAULT_SHORT_EDGE = 720
 
+# Tier → short-edge pixels, shared across backends. Each backend clamps by its own constraints
+# (max_long_edge / max_total_pixels). Image: 512px / 1K / 2K / 4K; DashScope wan's 1K/2K/4K reuse
+# this table.
 # 跨后端统一的档位 → 短边像素。各后端按自身约束（max_long_edge / max_total_pixels）夹取。
 # 图片：512px / 1K / 2K / 4K；DashScope wan 的 1K/2K/4K 复用本表。
 IMAGE_TIER_SHORT_EDGE: dict[str, int] = {"512px": 512, "1K": 1024, "2K": 1440, "4K": 2160}
-# 视频：480p / 720p / 1080p / 4K。
+# Video: 480p / 720p / 1080p / 4K. / 视频：480p / 720p / 1080p / 4K。
 VIDEO_TIER_SHORT_EDGE: dict[str, int] = {"480p": 480, "720p": 720, "1080p": 1080, "4K": 2160}
 
+# Default ratio: sources are controlled (projects are mostly fixed portrait short dramas); fall back to portrait 9:16 when unparseable, least surprise.
 # 默认比例：来源受控（项目固定竖屏短剧居多），无法解析时回退竖屏 9:16，最小惊讶。
 _DEFAULT_ASPECT: tuple[int, int] = (9, 16)
 
-# 自定义 "宽*高" 值的分隔符：英文 x、星号、全角叉号。
+# Separators for a custom "width*height" value: ASCII x, asterisk, full-width multiplication sign. / 自定义 "宽*高" 值的分隔符：英文 x、星号、全角叉号。
 _WH_RE = re.compile(r"^\s*(\d+)\s*[xX×*]\s*(\d+)\s*$")
-# 比例分隔符：英文/全角冒号。
+# Ratio separators: ASCII / full-width colon. / 比例分隔符：英文/全角冒号。
 _RATIO_SEP_RE = re.compile(r"[:：]")
 
 
 def parse_aspect_ratio(aspect_ratio: str) -> tuple[int, int]:
-    """把 ``"9:16"`` 解析成约简互质的 ``(9, 16)``；非法值回退 ``(9, 16)`` 并 warn。"""
+    """Parse `"9:16"` into the reduced coprime `(9, 16)`; an invalid value falls back to `(9, 16)` with a warning.
+
+    把 ``"9:16"`` 解析成约简互质的 ``(9, 16)``；非法值回退 ``(9, 16)`` 并 warn。
+    """
     try:
         parts = _RATIO_SEP_RE.split(aspect_ratio.strip())
         if len(parts) != 2:
@@ -66,7 +88,19 @@ def aspect_size(
     max_total_pixels: int | None = None,
     max_ratio: float | None = None,
 ) -> tuple[int, int]:
-    """按比例 + 短边目标算出精确遵循比例、且被 ``round_to`` 整除的 ``(宽, 高)``。
+    """Compute the exact `(width, height)` that follows the ratio and is divisible by `round_to`, from a ratio and a short-edge target.
+
+        Valid size = `(aw·round_to·t, ah·round_to·t)` (`aw:ah` is the reduced ratio, `t` a positive integer)
+        → zero ratio deviation, and both sides divisible by `round_to`. `t` is chosen so the short edge is closest to `short_edge`,
+        then clamped by `max_long_edge` / `max_total_pixels` (the stricter wins), with a floor of `t≥1`. Even if the
+        smallest valid size exceeds the constraints, it is not reduced to 0; the smallest valid size is left for upstream/the API to judge.
+
+        - `max_long_edge`: upper bound on long-edge pixels (e.g. 4K=3840 for gpt-image-2; 2048 per side for qwen-edit).
+        - `max_total_pixels`: upper bound on the total pixel budget (e.g. DashScope standard 2048², 4K 4096²).
+        - `max_ratio`: the most extreme ratio the backend supports (gpt-image-2=3 means 1:3~3:1, DashScope=8 means
+          1:8~8:1); exceeding it only warns and does not raise, leaving the judgment to the API.
+
+    按比例 + 短边目标算出精确遵循比例、且被 ``round_to`` 整除的 ``(宽, 高)``。
 
     合法尺寸 = ``(aw·round_to·t, ah·round_to·t)``（``aw:ah`` 为约简比例，``t`` 正整数）
     → 比例零偏差、长宽均被 ``round_to`` 整除。``t`` 取使短边最接近 ``short_edge`` 的值，
@@ -92,17 +126,21 @@ def aspect_size(
 
     short_comp = min(aw, ah)
     long_comp = max(aw, ah)
-    short_unit = round_to * short_comp  # 短边每单位 t 的像素增量
+    short_unit = round_to * short_comp  # Pixel increment of the short edge per unit of t / 短边每单位 t 的像素增量
 
-    # 短边最接近 short_edge 的 t
+    # The t whose short edge is closest to short_edge / 短边最接近 short_edge 的 t
     t = max(1, round(short_edge / short_unit))
 
+    # Clamp by the long-edge pixel limit. If the limit cannot even fit the smallest valid size (t=1),
+    # still take t=1 (the smallest valid size), not 0: better to slightly exceed the limit and let the
+    # API judge than to produce an invalid size of 0.
     # 长边像素上限夹取。上限连最小合法尺寸（t=1）都容不下时，仍取 t=1（最小合法尺寸），
     # 不取 0——宁可略超上限交 API 判定，也不产出非法的 0 尺寸。
     if max_long_edge is not None:
         max_t_long = max_long_edge // (round_to * long_comp)
         t = min(t, max(1, max_t_long))
 
+    # Clamp by the total pixel budget: total pixels = aw·ah·round_to²·t² ≤ max_total_pixels (again with a t≥1 floor)
     # 总像素预算夹取：总像素 = aw·ah·round_to²·t² ≤ max_total_pixels（同样 t≥1 floor）
     if max_total_pixels is not None:
         denom = aw * ah * round_to * round_to
@@ -119,7 +157,15 @@ def resolution_to_short_edge(
     tier_map: dict[str, int],
     default_short: int = DEFAULT_SHORT_EDGE,
 ) -> int:
-    """把分辨率规范化成「短边像素」。
+    """Normalize a resolution to "short-edge pixels".
+
+        - `None` / empty string → `default_short`
+        - tier word (case-insensitive, e.g. `"2K"` / `"720p"`) → look up `tier_map`
+        - custom `"width*height"` → take `min(width, height)`, **stripping its own ratio** (the ratio is decided only by aspect_ratio)
+        - plain number → use directly as the short edge
+        - cannot be parsed → `default_short` + warning
+
+    把分辨率规范化成「短边像素」。
 
     - ``None`` / 空串 → ``default_short``
     - 档位词（大小写不敏感，如 ``"2K"`` / ``"720p"``）→ 查 ``tier_map``
@@ -149,7 +195,14 @@ def resolution_to_short_edge(
 
 
 def short_edge_to_resolution(short_edge: int, *, tier_map: dict[str, int]) -> str:
-    """把短边像素说成一句展示文字：恰好命中某一档就报档位词，否则报像素本身。
+    """Express a short-edge pixel count as display text: if it exactly matches a tier, report the tier word, otherwise report the pixels themselves.
+
+        The display-side inverse of :func:`resolution_to_short_edge`. Tiers are discrete, so an arbitrary short edge need not land on a tier
+        (the 848 a workflow author tuned is neither 720p nor 1080p), and this text appears where the question is "what do I get if I pick no tier".
+        Describing 848 as the nearest 720p would make users think picking that tier gives the same picture, when the short edge would actually
+        change from 848 to 720. So the tier word is used only on exact equality; otherwise the actual short edge is reported, so the user at least sees the real number.
+
+    把短边像素说成一句展示文字：恰好命中某一档就报档位词，否则报像素本身。
 
     :func:`resolution_to_short_edge` 的展示侧逆向。档位是离散的，任意短边未必落在某一档上
     （workflow 作者调的 848 不是 720p 也不是 1080p），而这句话出现的地方是「不选档位会得到

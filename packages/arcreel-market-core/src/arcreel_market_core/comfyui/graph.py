@@ -1,4 +1,13 @@
-"""API 格式 workflow 的图原语：连线解析、上下游遍历、依赖深度与常量上溯。
+"""Graph primitives for API-format workflows: link parsing, upstream/downstream traversal, dependency depth, and constant tracing.
+
+Node binding inference reads the shape of the graph, not the literal value of some field: whether `LoadImage.image` in a graph is the first frame or a
+reference image depends on which input of which node its output connects to; which of two `SaveVideo` nodes is the final artifact depends on whose upstream is
+deeper. These judgments all walk edges. :mod:`.workflow` only understands the shape of a single field, so the edge part is split out here.
+
+In API format the node id is the key of an object, and edges are written on the consuming side: `"positive": ["6", 0]` means "this node's positive
+input connects to output 0 of node 6". Reverse edges (who connects to me) do not exist in the export, so this module builds them with one scan of the whole graph.
+
+API 格式 workflow 的图原语：连线解析、上下游遍历、依赖深度与常量上溯。
 
 节点绑定的推断读的是图的形状而不是某个字段的字面值：一张图里 ``LoadImage.image`` 是首帧还是
 参考图，取决于它的输出接到了谁的哪个入口；两个 ``SaveVideo`` 哪个是最终产物，取决于谁的上游
@@ -16,24 +25,31 @@ from typing import Any
 
 from .workflow import VALUE_WRAPPER_KEY, is_link, node_inputs
 
-#: 一条连线：``(上游节点 id, 上游输出序号)``。
+#: A link: `(upstream node id, upstream output index)`. / 一条连线：``(上游节点 id, 上游输出序号)``。
 type LinkRef = tuple[str, int]
 
 
 @dataclass(frozen=True)
 class Consumer:
-    """接在某个节点输出上的下游入口。"""
+    """A downstream input connected to a node's output.
+
+    接在某个节点输出上的下游入口。
+    """
 
     node: str
     input: str
     class_type: str
     title: str
+    # Which output of the upstream node is connected. For model conditioning nodes, output 0 is positive and output 1 is negative.
     #: 被接的是上游节点的第几号输出。模型条件节点的 0 号是 positive、1 号是 negative。
     slot: int
 
 
 def node_title(node: Mapping[str, Any]) -> str:
-    """节点的 ``_meta.title``。缺省为空串——导出物里它可能整节缺失。"""
+    """The node's `_meta.title`. Defaults to an empty string, because the whole section may be missing in an export.
+
+    节点的 ``_meta.title``。缺省为空串——导出物里它可能整节缺失。
+    """
     meta = node.get("_meta")
     if not isinstance(meta, Mapping):
         return ""
@@ -47,14 +63,20 @@ def class_type_of(node: Mapping[str, Any]) -> str:
 
 
 def unwrap_value(raw: object) -> object:
-    """去掉数组字面值的 ``{"__value__": [...]}`` 包装，其余值原样返回。"""
+    """Strip the `{"__value__": [...]}` wrapper from array literals; return other values unchanged.
+
+    去掉数组字面值的 ``{"__value__": [...]}`` 包装，其余值原样返回。
+    """
     if isinstance(raw, Mapping) and set(raw) == {VALUE_WRAPPER_KEY}:
         return raw[VALUE_WRAPPER_KEY]
     return raw
 
 
 def link_of(raw: object) -> LinkRef | None:
-    """该字段接的上游连线；是字面值则为 ``None``。"""
+    """The upstream link this field is connected to; `None` if it is a literal.
+
+    该字段接的上游连线；是字面值则为 ``None``。
+    """
     if not is_link(raw):
         return None
     pair: Any = raw
@@ -62,7 +84,10 @@ def link_of(raw: object) -> LinkRef | None:
 
 
 def consumers_by_node(workflow: Mapping[str, Any]) -> Mapping[str, tuple[Consumer, ...]]:
-    """反向边：上游节点 id → 接在它输出上的全部下游入口。"""
+    """Reverse edges: upstream node id → all downstream inputs connected to its output.
+
+    反向边：上游节点 id → 接在它输出上的全部下游入口。
+    """
     found: dict[str, list[Consumer]] = {}
     for node_id, node in workflow.items():
         if not isinstance(node, Mapping):
@@ -78,7 +103,10 @@ def consumers_by_node(workflow: Mapping[str, Any]) -> Mapping[str, tuple[Consume
 
 
 def upstream_of(workflow: Mapping[str, Any], node_id: str) -> Iterator[tuple[str, LinkRef]]:
-    """某个节点的全部上游边：``(本节点入口名, 上游连线)``。"""
+    """All upstream edges of a node: `(this node's input name, upstream link)`.
+
+    某个节点的全部上游边：``(本节点入口名, 上游连线)``。
+    """
     node = workflow.get(node_id)
     if not isinstance(node, Mapping):
         return
@@ -89,7 +117,10 @@ def upstream_of(workflow: Mapping[str, Any], node_id: str) -> Iterator[tuple[str
 
 
 def ancestors(workflow: Mapping[str, Any], node_id: str) -> frozenset[str]:
-    """该节点的全部上游节点（不含自身）。用来圈出最终产物那条链路。"""
+    """All upstream nodes of this node (excluding itself). Used to delineate the chain of the final artifact.
+
+    该节点的全部上游节点（不含自身）。用来圈出最终产物那条链路。
+    """
     seen: set[str] = set()
     stack = [node_id]
     while stack:
@@ -102,7 +133,15 @@ def ancestors(workflow: Mapping[str, Any], node_id: str) -> frozenset[str]:
 
 
 def dependency_depth(workflow: Mapping[str, Any], node_id: str) -> int:
-    """该节点上游最长链的长度。两段式 workflow 里第二段的产物深度严格大于第一段。
+    """Length of the longest upstream chain of this node. In a two-stage workflow the second stage's artifact depth is strictly greater than the first's.
+
+        Cycles do not exist in a valid workflow (ComfyUI's executor requires a DAG), but the input is a user-imported file, so on a cycle we converge by
+        "not walking back": a node on a back edge counts as 0 and is not walked a second time.
+
+        An explicit stack rather than recursion: the inference API receives a whole user-imported workflow, with no limit on node count or chain length, and a long
+        enough valid chain would blow recursion into a `RecursionError`, giving a workflow with nothing wrong a 500.
+
+    该节点上游最长链的长度。两段式 workflow 里第二段的产物深度严格大于第一段。
 
     环在合法的 workflow 里不存在（ComfyUI 的执行器要求 DAG），但导入的是用户文件，遇到环时按
     「不再往回走」收敛：回边上的节点记 0，不再往回走第二遍。
@@ -118,6 +157,7 @@ def dependency_depth(workflow: Mapping[str, Any], node_id: str) -> int:
         if expanded:
             on_path.discard(current)
             parents = [parent for _, (parent, _slot) in upstream_of(workflow, current)]
+            # A parent node not in memo at this point can only be a back edge: it is still on the current path, so count it as 0.
             # 此刻不在 memo 里的父节点只可能是回边：它还在当前路径上，按 0 计。
             memo[current] = 1 + max(memo.get(parent, 0) for parent in parents) if parents else 0
             continue
@@ -133,7 +173,12 @@ def dependency_depth(workflow: Mapping[str, Any], node_id: str) -> int:
 
 @dataclass(frozen=True)
 class Resolution:
-    """一次「顺连线找字面值」的结果。
+    """The result of one "follow the links to find a literal".
+
+        `node` / `input` are where the literal really sits: the original field itself if it is a literal, or the constant node reached by tracing
+        upstream if it is a link. When tracing stops at a compute node, all three are empty: such a literal does not exist, and binding to it could not be written.
+
+    一次「顺连线找字面值」的结果。
 
     ``node`` / ``input`` 是字面值真正所在的落点——原字段本身是字面值时即它自己，是连线时是上溯
     到的常量节点。上溯停在计算节点上时三项全空：那种字面值不存在，绑过去也写不动。
@@ -148,14 +193,20 @@ class Resolution:
         return self.node is not None
 
 
-#: 上溯停不下来时的结果。
+#: Result when tracing upstream cannot stop. / 上溯停不下来时的结果。
 UNRESOLVED = Resolution(None, None, None)
 
 
 def resolve_literal(
     workflow: Mapping[str, Any], node_id: str, input_name: str, *, constants: Mapping[str, str]
 ) -> Resolution:
-    """取某个入口的字面值；它是连线时沿上游找常量节点。
+    """Get the literal of an input; if it is a link, follow upstream to find a constant node.
+
+        `constants` maps "constant node class_type → the input name holding its value". Official templates put duration and frame rate on
+        `PrimitiveInt` / `PrimitiveFloat` and then wire them into the conditioning node; binding to the constant node is equivalent to binding to a literal field.
+        Tracing up to a compute node such as `ComfyMathExpression` has no landing point, so that semantic is left for the user to specify manually.
+
+    取某个入口的字面值；它是连线时沿上游找常量节点。
 
     ``constants`` 是「常量节点 class_type → 它持有值的入口名」。官方模板把时长与帧率放在
     ``PrimitiveInt`` / ``PrimitiveFloat`` 上再连进条件节点，绑到常量节点上与绑到字面值字段上
@@ -165,6 +216,8 @@ def resolve_literal(
     if not isinstance(node, Mapping):
         return UNRESOLVED
     inputs = node_inputs(node)
+    # Decide presence by key, not by whether the value is None: `"text": null` is an existing literal
+    # field that can be filled in, which is not the same as "this node has no such input at all".
     # 按键判在不在，而不是按值是不是 None：``"text": null`` 是个存在的字面值字段，填得进去，
     # 与「这个节点根本没有这个入口」不是一回事。
     if input_name not in inputs:

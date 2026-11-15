@@ -49,12 +49,26 @@ def _delete(bind: sa.Connection, key: str) -> None:
 
 
 def _configured(value: str | None) -> TypeGuard[str]:
-    """有效配置值 = 形如 ``provider/model``；空串与无斜杠的残值都不构成配置。"""
+    """A valid configured value looks like `provider/model`; an empty string or a leftover value without a slash is not a configuration.
+
+    有效配置值 = 形如 ``provider/model``；空串与无斜杠的残值都不构成配置。
+    """
     return value is not None and "/" in value
 
 
 def upgrade() -> None:
-    """把图片 t2i / i2i 从强制槽位收敛为可选覆盖桶，默认层升为 default_image_backend。
+    """Collapse image t2i / i2i from forced slots into optional override buckets, and promote the default layer to default_image_backend.
+
+        Existing key combinations are handled one by one (`docs/adr/0054`):
+
+        - Invalid bucket value (empty string / no slash): delete it. Under the old semantics it meant "explicitly cleared → follow auto inference"; under the new semantics
+          a bucket with no value falls back to the default layer, so after deletion the two have the same shape, and the config surface no longer leaves an empty bucket that could be misread as "configured".
+        - Both buckets have the same value and the default layer is not configured: promote the bucket value to the default layer and delete both buckets. A user who had configured only one image model
+          before the split thereby returns to the canonical "default only" shape.
+        - Both buckets have the same value, equal to the default layer: delete both buckets. This is a redundant copy made by the split migration.
+        - Everything else (the two buckets differ, or have the same value but the default layer is configured differently): keep as is, and the buckets continue to take effect as overrides.
+
+    把图片 t2i / i2i 从强制槽位收敛为可选覆盖桶，默认层升为 default_image_backend。
 
     存量键组合逐一处置（``docs/adr/0054``）：
 
@@ -86,7 +100,16 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    """还原「桶即权威」形态：默认层有配置而两桶皆无有效值时，把默认值复制回两桶。
+    """Restore the "bucket is authoritative" shape: when the default layer is configured and both buckets have no valid value, copy the default value back to both buckets.
+
+        First normalize invalid bucket rows by the same rule as upgrade, then judge: clearing a bucket in the config surface writes an empty-string row rather than deleting the row
+        (see the backend key write in `server/routers/system_config.py`). If judged by "row exists means valid override", after downgrade the old semantics
+        would treat this empty bucket as authoritative and skip the default layer, so the capability would silently drop from the user's configured default layer to auto inference.
+
+        Invalid bucket values that were deleted cannot be restored one by one (under the old semantics "explicitly cleared" and "never configured" have the same shape after downgrade),
+        so after downgrade such configurations are treated as unconfigured.
+
+    还原「桶即权威」形态：默认层有配置而两桶皆无有效值时，把默认值复制回两桶。
 
     先按 upgrade 的同一口径规范化无效桶行再判断：配置面清空某个桶写入的是空串行而非删行
     （见 ``server/routers/system_config.py`` 的 backend 键写入），若按「行存在即有效覆盖」判定，

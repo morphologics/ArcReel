@@ -30,4 +30,4 @@ def upgrade() -> None:
 
 def downgrade() -> None:
     """Downgrade schema."""
-    # 数据迁移不可逆；旧代码同样按需懒生成，无需回填
+    # The data migration is irreversible; old code likewise generates lazily on demand, so no backfill is needed. / 数据迁移不可逆；旧代码同样按需懒生成，无需回填

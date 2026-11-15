@@ -1,4 +1,7 @@
-"""定义的媒体类型由定义自己声明：声明式缺省为视频，名录外的 kind 拒绝。"""
+"""A definition's media type is declared by the definition itself: declarative defaults to video, and a kind outside the registry is rejected.
+
+定义的媒体类型由定义自己声明：声明式缺省为视频，名录外的 kind 拒绝。
+"""
 
 from __future__ import annotations
 

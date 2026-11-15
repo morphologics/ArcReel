@@ -1,4 +1,7 @@
-"""构建侧从严：目录数据有任何问题都不发布。"""
+"""Build side is strict: any problem in catalog data blocks publishing.
+
+构建侧从严：目录数据有任何问题都不发布。
+"""
 
 from __future__ import annotations
 
@@ -23,7 +26,7 @@ def test_model_alias_conflicting_between_two_entries_is_rejected():
     data = catalog()
     other = text_entry()
     other["name"] = "gemini-3.1-pro-exp"
-    other["aliases"] = ["Gemini-3.1-Pro-Latest"]  # 归一化后与第一个条目的模型别名相同
+    other["aliases"] = ["Gemini-3.1-Pro-Latest"]  # Same as the model alias of the first entry after normalization. / 归一化后与第一个条目的模型别名相同
     data["entries"].append(other)
 
     assert _codes(data) == [("entries[4].aliases[0]", "name_conflict")]
@@ -39,7 +42,10 @@ def test_provider_listing_referencing_missing_entry_is_rejected():
 
 
 def test_context_tiers_must_start_at_zero_in_every_tiered_meter():
-    """首档不是 0 时，比它短的请求不属于任何一档；分界相同也要拦下。"""
+    """When the first tier is not 0, requests shorter than it belong to no tier; block it even when the boundaries are the same.
+
+    首档不是 0 时，比它短的请求不属于任何一档；分界相同也要拦下。
+    """
     data = catalog()
     for meter in data["entries"][0]["price"]["meters"][:2]:
         meter["rows"][0]["when"]["context_tier"] = 100000
@@ -51,7 +57,10 @@ def test_context_tiers_must_start_at_zero_in_every_tiered_meter():
 
 
 def _mutate(path: str, value: Any) -> Callable[[dict[str, Any]], None]:
-    """按 ``a.b[0].c`` 形式的路径写入一个值。"""
+    """Write a value at a path of the form ``a.b[0].c``.
+
+    按 ``a.b[0].c`` 形式的路径写入一个值。
+    """
 
     def apply(data: dict[str, Any]) -> None:
         *parents, last = path.replace("[", ".").replace("]", "").split(".")
@@ -193,7 +202,10 @@ def test_build_side_rejects(mutation: Callable[[dict[str, Any]], None], expected
 
 
 def test_price_rows_for_resolutions_beyond_entry_facts_are_allowed():
-    """条目声明之外的档位照常定价：存量设置或 Agent 入参仍可能带着它们进入计费。"""
+    """Tiers outside the entry's declaration are priced as usual: existing settings or Agent inputs may still carry them into billing.
+
+    条目声明之外的档位照常定价：存量设置或 Agent 入参仍可能带着它们进入计费。
+    """
     data = catalog()
     data["entries"][2]["price"]["meters"][0]["rows"].append({"when": {"resolution": "4K"}, "price": 0.4})
     data["entries"][1]["price"]["meters"][0]["rows"].append({"when": {"resolution": "4k"}, "price": 2.0})

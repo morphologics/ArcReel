@@ -1,4 +1,7 @@
-"""索引生成器：从 ``endpoints/<slug>/`` 目录投影出索引，产物必过整体校验。"""
+"""Index generator: project the index from the `endpoints/<slug>/` directories; the output must pass whole-file validation.
+
+索引生成器：从 ``endpoints/<slug>/`` 目录投影出索引，产物必过整体校验。
+"""
 
 from __future__ import annotations
 

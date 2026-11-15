@@ -1,2 +1,3 @@
+# The factory snapshot is verified byte-for-byte by SHA-256 (manifest.json records the hash of catalog.json); line endings must not be rewritten on checkout.
 # 出厂快照按字节校验 SHA-256（manifest.json 记录 catalog.json 的哈希），检出时不得改写换行符。
 lib/catalog/snapshot/*.json -text

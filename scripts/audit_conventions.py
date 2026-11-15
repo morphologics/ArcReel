@@ -61,6 +61,7 @@ class Violation:
         return f"{self.rule} {self.path.as_posix()}:{self.line} {self.guidance}"
 
 
+# ---------------------------------------------------------------- Convention index
 # ---------------------------------------------------------------- 规范索引
 
 
@@ -120,7 +121,10 @@ def render_coderabbit(standards: list[Standard], indent: str) -> str:
 
 
 def _replace_block(text: str, start: str, end: str, body: str) -> str | None:
-    """把 start/end 标记行之间的内容换成 body；任一标记缺失时返回 None。"""
+    """Replace the content between the start/end marker lines with body; return None if either marker is missing.
+
+    把 start/end 标记行之间的内容换成 body；任一标记缺失时返回 None。
+    """
     lines = text.split("\n")
     try:
         i = next(n for n, line in enumerate(lines) if line.strip() == start)
@@ -168,6 +172,7 @@ def check_generated_blocks(root: Path, standards: list[Standard], fix: bool, out
                 )
 
 
+# ---------------------------------------------------------------- Dependabot groups
 # ---------------------------------------------------------------- Dependabot 分组
 
 
@@ -260,6 +265,7 @@ def check_dependabot_groups(root: Path, out: list[Violation]) -> None:
             )
 
 
+# ---------------------------------------------------------------- Tool versions
 # ---------------------------------------------------------------- 工具版本
 
 
@@ -298,6 +304,7 @@ def check_tool_versions(root: Path, out: list[Violation]) -> None:
             )
 
 
+# ---------------------------------------------------------------- Exemption reasons
 # ---------------------------------------------------------------- 豁免理由
 
 SUPPRESSION_SKIP_DIRS = frozenset(
@@ -363,7 +370,12 @@ def _python_suppressions(rel: Path, source: str, out: list[Violation]) -> None:
 
 
 def _inside_literal_or_comment(line: str, start: int, end: int, *, yaml: bool) -> bool:
-    """指令文本是否只是同一行的字面量或注释正文，而非真实指令。
+    """Whether the directive text is only a literal or comment body on the same line, rather than a real directive.
+
+        A literal requires that the quote before the start is unclosed and the same quote closes after the directive; if the start is already inside a line comment or an unclosed block comment, it is comment body.
+        The judgment leans toward reporting: when it cannot be confirmed to be a literal (quotes inside regex literals, multi-line template strings, YAML block scalars), it is checked as a real directive.
+
+    指令文本是否只是同一行的字面量或注释正文，而非真实指令。
 
     字面量要求起点前的引号未闭合、且同一引号在指令之后闭合；起点前已进入行注释或未闭合的块注释时为注释正文。
     判断偏向报告：无法确认是字面量时（正则字面量里的引号、跨行模板字符串、YAML 块标量）按真实指令检查。
@@ -431,6 +443,7 @@ def check_suppression_reasons(root: Path, out: list[Violation]) -> None:
             _text_suppressions(rel, source, out)
 
 
+# ---------------------------------------------------------------- Bundled ffmpeg
 # ---------------------------------------------------------------- 随包 ffmpeg
 
 FFMPEG_SCAN_GLOBS = ("lib/**/*.py", "server/**/*.py", "packages/*/src/**/*.py", "agent_runtime_profile/**/*.py")
@@ -457,6 +470,7 @@ def check_bundled_ffmpeg(root: Path, out: list[Violation]) -> None:
                 out.append(Violation("BUNDLED-FFMPEG", rel, node.lineno, guidance))
 
 
+# ---------------------------------------------------------------- Cross-module private imports
 # ---------------------------------------------------------------- 跨模块私有导入
 
 PRIVATE_IMPORT_SCAN_GLOBS = ("lib/**/*.py", "server/**/*.py", "scripts/**/*.py", "packages/*/src/**/*.py")
@@ -489,6 +503,7 @@ def check_private_imports(root: Path, out: list[Violation]) -> None:
             if not module or not is_local_module(module):
                 continue
             for alias in node.names:
+                # A private submodule (e.g. `from server.routers import _validators`) is a module, not a symbol, so it does not count
                 # 私有子模块（如 `from server.routers import _validators`）是模块不是符号，不算
                 if _is_private_name(alias.name) and not is_local_module(f"{module}.{alias.name}"):
                     guidance = (
@@ -498,9 +513,11 @@ def check_private_imports(root: Path, out: list[Violation]) -> None:
                     out.append(Violation("PRIVATE-IMPORT", rel, node.lineno, guidance))
 
 
+# ---------------------------------------------------------------- Hard-delete categories
 # ---------------------------------------------------------------- 硬删除类别
 
 HARD_DELETE_SCAN_GLOBS = ("lib/**/*.py", "server/**/*.py", "packages/*/src/**/*.py")
+# The project trash and deleted-project modules themselves do the real deletion (permanent delete, empty, expiry cleanup)
 # 项目回收站与已删除项目模块本身负责真正删除（彻底删除、清空、过期清理）
 HARD_DELETE_EXEMPT: frozenset[Path] = frozenset(
     {Path("lib/project/project_trash.py"), Path("lib/project/deleted_projects.py")}
@@ -514,6 +531,7 @@ HARD_DELETE_CATEGORIES = {
 }
 _HARD_DELETE_TAG = re.compile(r"#\s*hard-delete:\s*(?P<category>[\w-]*)(?P<rest>.*)")
 _ANY_DELETE_ATTRS = frozenset({"unlink", "rmdir", "rmtree"})
+# list.remove, set.remove and similar methods are too common, so remove only recognizes os.remove / aiofiles.os.remove
 # list.remove、set.remove 等同名方法太多，remove 只认 os.remove / aiofiles.os.remove
 _OS_DELETE_ATTRS = frozenset({"remove", "removedirs"})
 
@@ -524,7 +542,10 @@ _DELETE_MODULES = _OS_MODULES | {"shutil"}
 
 @dataclass(frozen=True)
 class _DeleteBindings:
-    """模块的导入绑定：能裸调的删除函数名，以及指向 ``os`` / ``aiofiles.os`` 的模块名。"""
+    """Import bindings of a module: delete-function names that can be called bare, and module names pointing to `os` / `aiofiles.os`.
+
+    模块的导入绑定：能裸调的删除函数名，以及指向 ``os`` / ``aiofiles.os`` 的模块名。
+    """
 
     functions: frozenset[str]
     os_modules: frozenset[str]
@@ -544,7 +565,7 @@ def _delete_bindings(tree: ast.AST) -> _DeleteBindings:
 
 
 def _is_delete_ref(node: ast.AST, bindings: _DeleteBindings) -> bool:
-    # 只认读取：给同名变量赋值不是删除
+    # Only reads count: assigning to a variable with the same name is not a deletion / 只认读取：给同名变量赋值不是删除
     if not isinstance(node, ast.Name | ast.Attribute) or not isinstance(node.ctx, ast.Load):
         return False
     if isinstance(node, ast.Name):
@@ -559,7 +580,11 @@ def _is_delete_ref(node: ast.AST, bindings: _DeleteBindings) -> bool:
 
 
 def _delete_spans(tree: ast.AST) -> list[tuple[int, int, int]]:
-    """每处删除调用或作为回调传出的删除方法：(报告行, 区间首行, 区间末行)。
+    """Every delete call, or delete method passed out as a callback: (report line, range start line, range end line).
+
+        The range is the enclosing simple statement; after a formatter splits a long statement across lines, a trailing annotation on any of those lines counts.
+
+    每处删除调用或作为回调传出的删除方法：(报告行, 区间首行, 区间末行)。
 
     区间取所在的简单语句，格式化器把长语句拆成多行后，行尾标注落在其中任一行都算数。
     """
@@ -578,7 +603,10 @@ def _delete_spans(tree: ast.AST) -> list[tuple[int, int, int]]:
 
 
 def _hard_delete_tags(source: str) -> tuple[dict[int, re.Match[str]], set[int]]:
-    """标注所在行，以及其中独占一行的标注（作用于下一行开始的语句）。"""
+    """The annotation's own line, plus annotations alone on a line (which apply to the statement starting on the next line).
+
+    标注所在行，以及其中独占一行的标注（作用于下一行开始的语句）。
+    """
     try:
         tokens = list(tokenize.generate_tokens(io.StringIO(source).readline))
     except (tokenize.TokenError, SyntaxError):
@@ -631,6 +659,7 @@ def check_hard_deletes(root: Path, out: list[Violation]) -> None:
         out.extend(Violation("HARD-DELETE", rel, line, orphan) for line in sorted(tags.keys() - covered))
 
 
+# ---------------------------------------------------------------- Entry point
 # ---------------------------------------------------------------- 入口
 
 

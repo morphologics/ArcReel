@@ -1,4 +1,13 @@
-"""端点定义的容器 kind：按 kind 分派的各处共用同一批名字。
+"""Container kinds of endpoint definitions: every place that dispatches by kind shares the same set of names.
+
+``kind`` is the top-level field of the definition JSON; it decides which call shape the definition describes, and which implementation every later step uses:
+structural and semantic validation, the ``EndpointSpec`` projection, the media type of the mirrored column, and which modes endpoint testing supports. Each dispatch
+point has its own "kind -> implementation" table, whose key set is the kinds that layer recognizes; container-level validation lets through only kinds that have a validation implementation.
+
+This module holds constants only and imports no module in the repo -- the dispatch points are scattered across the validator, projection and routing layers, and sharing the same constants
+keeps one layer from misspelling a kind name and still running.
+
+端点定义的容器 kind：按 kind 分派的各处共用同一批名字。
 
 ``kind`` 是定义 JSON 的顶层字段，决定这份定义描述的是哪种调用形态，也决定后面每一步走谁的
 实现：结构与语义校验、``EndpointSpec`` 投影、镜像列的媒体类型、端点测试支持哪几种模式。各分派
@@ -10,8 +19,10 @@
 
 from __future__ import annotations
 
+# Declarative definition: the "JSON in/out + submit/poll" school, with request templates and value paths written in the definition (``docs/adr/0067``).
 #: 声明式定义：「JSON in/out + 提交/轮询」流派，请求模板与取值路径都写在定义里（``docs/adr/0067``）。
 DECLARATIVE_KIND = "declarative"
 
+# ComfyUI definition: an API-format workflow together with its node bindings (``docs/adr/0081``).
 #: ComfyUI 定义：一份 API 格式 workflow 连同它的节点绑定（``docs/adr/0081``）。
 COMFYUI_KIND = "comfyui"

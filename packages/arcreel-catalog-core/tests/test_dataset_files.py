@@ -1,4 +1,7 @@
-"""清单文件与数据文件：哈希与数据集版本对上才读入。"""
+"""Manifest file and data files: they are read in only when the hash matches the dataset version.
+
+清单文件与数据文件：哈希与数据集版本对上才读入。
+"""
 
 from __future__ import annotations
 

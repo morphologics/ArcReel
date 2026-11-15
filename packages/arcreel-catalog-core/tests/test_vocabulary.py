@@ -1,4 +1,7 @@
-"""封闭集合的自洽：每个选择维度都登记了适用的媒体类型。"""
+"""Self-consistency of the closed sets: every selection dimension registers the media types it applies to.
+
+封闭集合的自洽：每个选择维度都登记了适用的媒体类型。
+"""
 
 from arcreel_catalog_core import DIMENSION_MEDIA_TYPES, DIMENSIONS, MEDIA_TYPES
 

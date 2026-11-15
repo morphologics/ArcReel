@@ -6,6 +6,8 @@
 
 name: React Doctor
 
+# Not a required check, so trim directly with on.paths; if it becomes a required check, switch to the domain-filter pattern of test.yml,
+# otherwise PRs that do not touch the frontend would wait forever for this check.
 # 非必需检查，直接用 on.paths 裁剪；改为必需检查时须换成 test.yml 的 domain-filter 模式，
 # 否则未改前端的 PR 会一直等待该检查
 on:
@@ -53,6 +55,7 @@ jobs:
         # Full reference: https://www.react.doctor/ci
         with:
           directory: frontend
+          # CI does not install dependencies, and without version it would run the latest from npm; change it in sync when upgrading react-doctor in frontend/package.json.
           # CI 不安装依赖，不写 version 会运行 npm 上的 latest；升级 frontend/package.json 的 react-doctor 时同步修改
           version: "0.9.18"
         #   blocking: error          # Gate level: "none" (advisory, the default) | "warning" | "error"

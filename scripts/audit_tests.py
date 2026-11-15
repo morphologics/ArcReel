@@ -1,5 +1,44 @@
 #!/usr/bin/env python3
-"""静态审计 tests/ 中两类可机械识别的负价值测试形态。
+"""Statically audit `tests/` for two mechanically detectable kinds of negative-value tests.
+
+Class 1 "tests the mock itself": every assertion in a test function targets the call records of a
+test double (`assert_called*` / `assert_awaited*` / `call_args*` / `call_count` / `await_count`,
+or a call-record container injected by monkeypatch), with no assertion on return values, state or
+side effects.
+
+Class 2 "patches a public entry point or private symbol of the code under test": the target of
+`patch(...)` / `patch.object(...)` / `monkeypatch.setattr(...)` starts with a production package
+(`lib.` / `server.` / `arcreel_market_core.`) and hits a `_`-prefixed private symbol;
+also integration-marked cases that patch the public entry point of the module under test itself.
+
+Class 3 "shared infrastructure structure": conftest is imported; a test file defines a fixture with the
+same name as an effective conftest; a same-named fixture is defined in 3 or more test files; a local
+conftest and an ancestor conftest define a same-named fixture.
+Only module-level fixtures are counted; a fixture inside a class is scoped to that class and is not
+cross-file duplication of shared infrastructure.
+The same `patch` / `patch.object` target appears in 3 or more test files; public symbols of
+`tests/fakes.py` and `tests/factories.py` are used by fewer than 2 other test files.
+
+Class 4 "file shape": split suffixes `_more` / `_full` / `_coverage` / `_extra` / `_additional`;
+the 3000-line per-file circuit breaker; frontend test files located under a `__tests__/` directory.
+Backend `tests/**/*.py` and frontend `frontend/src/**/*.test.*` are both bound by this class;
+frontend semantic rules belong to eslint and are not in this script.
+
+Class 5 "duplicate cases": within one test file, two cases whose function bodies, with the docstring
+removed, have the same `ast.unparse` normalized form; or one case whose body equals one row of the
+`@parametrize` table of another case in the same file. The check is limited to the same file and
+requires identical parameter names (with defaults), non-parametrize decorators and class-level context.
+
+`--check` is the gate form: it lists all hits above as `rule-number file:line fix-guidance` and exits
+with code 1 if there is any. Zero tolerance, no baseline, no exemption annotations: false positives are
+fixed by changing this script.
+
+The default backend test directories are `tests/` and the workspace subpackages' `packages/*/tests/`;
+repeat `--tests` to specify them.
+
+No third-party dependencies, only `ast`. See `--help` for usage.
+
+静态审计 tests/ 中两类可机械识别的负价值测试形态。
 
 类 1「测 mock 本身」：一个 test 函数内所有断言都作用于替身对象的调用记录
 （`assert_called*` / `assert_awaited*` / `call_args*` / `call_count` / `await_count`，
@@ -48,6 +87,7 @@ from pathlib import Path
 from types import MappingProxyType
 from typing import NamedTuple, TypeGuard
 
+# ---------------------------------------------------------------- Constant tables
 # ---------------------------------------------------------------- 常量表
 
 MOCK_FACTORIES = {
@@ -96,6 +136,7 @@ DOUBLE_ATTRS = {
     "call_list",
 }
 
+# Assertion helper functions: a call counts as a substantive assertion (conservative, leaning toward lowering class 1 false positives).
 # 断言辅助函数：调用即视为实质断言（保守，倾向压低类 1 误报）
 ASSERT_HELPER_PREFIXES = ("assert", "_assert", "check_", "_check", "verify_", "_verify", "expect_")
 
@@ -105,13 +146,19 @@ PYTEST_MODULE = "pytest"
 
 
 class PytestAssertNames(NamedTuple):
-    """本模块内 pytest 断言 API 的可见拼写：模块别名 + 直接导入名到规范名的映射。"""
+    """Visible spellings of the pytest assertion API in this module: module aliases + directly imported names mapped to canonical names.
+
+    本模块内 pytest 断言 API 的可见拼写：模块别名 + 直接导入名到规范名的映射。
+    """
 
     module_aliases: set[str]
     direct: dict[str, str]
 
     def canonical(self, fname: str) -> str | None:
-        """把调用点的点路径还原为 pytest 断言的规范名，非 pytest 出身的返回 None。"""
+        """Resolve the dotted path of a call site to the canonical name of a pytest assertion; return None for anything not from pytest.
+
+        把调用点的点路径还原为 pytest 断言的规范名，非 pytest 出身的返回 None。
+        """
         if "." in fname:
             root, last = fname.split(".", 1)[0], fname.split(".")[-1]
             return last if root in self.module_aliases else None
@@ -119,7 +166,13 @@ class PytestAssertNames(NamedTuple):
 
 
 def resolve_pytest_asserts(tree: ast.Module) -> PytestAssertNames:
-    """解析 `import pytest [as pt]` 与 `from pytest import fail [as ...]`。
+    """Parse `import pytest [as pt]` and `from pytest import fail [as ...]`.
+
+    Judging only by the last segment of the method name would treat a same-named method of any object
+    (`worker.fail("network")`) as an assertion, which under a must-pass gate opens a hole in
+    NO-ASSERTION that can be bypassed just by naming.
+
+    解析 `import pytest [as pt]` 与 `from pytest import fail [as ...]`。
 
     只按方法名末段判定会把任意对象的同名方法（`worker.fail("network")`）当成断言，
     在必过闸门下等于给 NO-ASSERTION 开了一个按名字即可绕过的口子。
@@ -170,6 +223,7 @@ BUILTIN_NAMES = {
     "re",
 }
 
+# Class 2 motivation tiers. Matched in order: polling/retry > external I/O > logic under test itself.
 # 类 2 动机分档。按顺序匹配：轮询/重试 > 外部 I/O > 被测逻辑本身。
 TIMING_RE = re.compile(
     r"(?i)(sleep|poll|interval|delay|timeout|backoff|retry|retries|max_attempts|attempts"
@@ -202,9 +256,14 @@ MOTIVE_TIMING = "绕轮询/重试等待常量"
 MOTIVE_IO = "绕外部 I/O"
 MOTIVE_LOGIC = "绕被测逻辑本身"
 
+# The regexes look only at symbol names, so their hit rate is limited. The table below is a manual
+# judgment made after reading the production code symbol by symbol, covering targets the regexes get wrong;
+# all other targets are filed by regex. Changing this table changes the three-tier numbers in the report;
+# please attach the basis for the judgment when adding or removing entries.
 # 正则只看符号名，命中率有限。下表是逐符号读过生产代码后的人工判定，覆盖正则判错的目标；
 # 其余目标按正则归档。改动这张表就改动了报告里的三档数字，增删条目请附判定依据。
 MOTIVE_OVERRIDES = {
+    # Name does not look like I/O, but actually goes through ConfigResolver / the filesystem / remote probing.
     # 名字不像 I/O，实际经 ConfigResolver / 文件系统 / 远端探测
     "server.media_tools.image_edits._i2i_provider_available": MOTIVE_IO,
     "lib.artifacts.artifact_manifest._O_NOFOLLOW": MOTIVE_IO,
@@ -220,7 +279,7 @@ MOTIVE_OVERRIDES = {
     "lib.artifacts.artifact_activation._ensure_activation_backup": MOTIVE_IO,
     "server.services.tasks.reference_video_tasks._stage_provider_media_for_task": MOTIVE_IO,
     "server.services.grid.grid_split._register_split_entries_atomically": MOTIVE_IO,
-    # 名字像 I/O，实际是纯判断 / 阈值常量 / 内部编排
+    # Name looks like I/O, but is actually pure judgment / a threshold constant / internal orchestration. / 名字像 I/O，实际是纯判断 / 阈值常量 / 内部编排
     "server.agent_runtime.event_log._is_client_key_violation": MOTIVE_LOGIC,
     "lib.backends.video_backends.v2_video_generations._LARGE_IMAGE_WARN_BYTES": MOTIVE_LOGIC,
     "server.services.admission.cost_estimation.quote_video_request_from_price": MOTIVE_LOGIC,
@@ -230,7 +289,12 @@ MONKEYPATCH_SETTERS = {"setattr", "delattr"}
 
 
 def monkeypatch_context_aliases(tree: ast.Module) -> dict[str, list[tuple[int, int]]]:
-    """`with monkeypatch.context() as m` / `with pytest.MonkeyPatch.context() as m` 绑定的别名及其 with 块行范围。
+    """Aliases bound by `with monkeypatch.context() as m` / `with pytest.MonkeyPatch.context() as m` and the line range of their with block.
+
+    Only calls inside the with block that owns the alias count as monkeypatch; a same-named variable's
+    setattr elsewhere is not counted.
+
+    `with monkeypatch.context() as m` / `with pytest.MonkeyPatch.context() as m` 绑定的别名及其 with 块行范围。
 
     只在别名所属 with 块内的调用才算 monkeypatch，同名变量在别处的 setattr 不计入。
     """
@@ -252,6 +316,7 @@ def monkeypatch_context_aliases(tree: ast.Module) -> dict[str, list[tuple[int, i
     return aliases
 
 
+# ---------------------------------------------------------------- Data structures
 # ---------------------------------------------------------------- 数据结构
 
 
@@ -280,6 +345,7 @@ class PatchSite:
     module_under_test: str | None
     hits_module_under_test: bool
     motive: str
+    # The target root was resolved to an import (string-literal targets are always true); when false, the root is a local object and the same name does not mean the same object.
     # 目标根部还原到了 import（字符串字面量目标恒为真）；为假时根部是局部对象，同名不代表同一对象
     import_rooted: bool
 
@@ -302,11 +368,15 @@ class FileStat:
     integration_self_patches: int = 0
 
 
+# ---------------------------------------------------------------- Utility functions
 # ---------------------------------------------------------------- 工具函数
 
 
 def dotted(node: ast.expr | None) -> str | None:
-    """把 Name / Attribute 链还原成点分字符串。"""
+    """Resolve a Name / Attribute chain into a dotted string.
+
+    把 Name / Attribute 链还原成点分字符串。
+    """
     if node is None:
         return None
     parts: list[str] = []
@@ -336,7 +406,11 @@ def is_patch_object_call(node: ast.Call) -> bool:
 
 
 def is_patch_call(node: ast.Call) -> bool:
-    """严格白名单。不能按 `.patch` 后缀判定：`client.patch(...)` 是 HTTP 方法，
+    """Strict allowlist. It cannot be decided by the `.patch` suffix: `client.patch(...)` is an HTTP method,
+    and a misjudgment would treat a real HTTP response as a test double and wrongly file many valid cases
+    under class 1.
+
+    严格白名单。不能按 `.patch` 后缀判定：`client.patch(...)` 是 HTTP 方法，
     误判会把真实 HTTP 响应当成替身，进而把大量有效用例错划进类 1。"""
     name = call_name(node)
     return name in PATCH_FUNCS or name in PATCH_OBJECT_FUNCS
@@ -368,7 +442,14 @@ COLLECTED_TEST_FILE_GLOBS = ("test_*.py", "*_test.py")
 
 
 def is_collected_test_module(path: Path, tree: ast.Module) -> bool:
-    """pytest 只从 `test_*.py` / `*_test.py` 收集用例，且模块级 `__test__ = False` 一律退出。
+    """pytest collects cases only from `test_*.py` / `*_test.py`, and a module-level `__test__ = False` always opts out.
+
+    Functions starting with `test` in conftest and support modules are utility functions; treating them as
+    cases by name would inflate the class 1 count.
+    Module collection goes through `PyCollector.collect`, which reads `__test__` in the same code as for
+    classes, so the two levels of the marker are equivalent.
+
+    pytest 只从 `test_*.py` / `*_test.py` 收集用例，且模块级 `__test__ = False` 一律退出。
 
     conftest 与支持模块里 `test` 开头的函数是工具函数，按名字当成用例会虚增类 1 计数。
     模块的收集走 `PyCollector.collect`，与类同一段代码读 `__test__`，故两级标记等效。
@@ -383,7 +464,16 @@ UNITTEST_BASES = ("TestCase", "IsolatedAsyncioTestCase")
 
 
 def resolve_unittest_cases(imports: list[ast.Import | ast.ImportFrom], classes: list[ast.ClassDef]) -> set[str]:
-    """模块内可解析的 unittest 用例类名：import 别名 + 本模块内的继承闭包。
+    """Names of unittest case classes resolvable within the module: import aliases + the inheritance closure within this module.
+
+    The judgment grammar stops there: only evidence visible in this module is accepted. Cross-module
+    inheritance (a base class in another module that inherits `TestCase`) cannot be resolved and is
+    treated as a non-match; this is a deliberately kept false-negative residue, backstopped by manual
+    review. The opposite direction (misjudging a same-named non-unittest base class as a case class)
+    would turn legitimate code red on a must-pass gate, which costs more, so it is better to miss than
+    to misreport.
+
+    模块内可解析的 unittest 用例类名：import 别名 + 本模块内的继承闭包。
 
     判定文法到此为止：只认本模块可见的证据。跨模块继承（基类在别的模块里继承
     `TestCase`）无从解析，按不匹配处理——那是有意保留的假阴性残留，兜底是人工
@@ -425,7 +515,10 @@ def _is_unittest_base(base: ast.expr, known: set[str], module_aliases: set[str])
 
 
 class CollectionScope(NamedTuple):
-    """模块级预解析的收集口径：`is_collected_test_class` 逐类判定时要用的全模块证据。"""
+    """Module-level pre-parsed collection criteria: the whole-module evidence that `is_collected_test_class` needs when judging each class.
+
+    模块级预解析的收集口径：`is_collected_test_class` 逐类判定时要用的全模块证据。
+    """
 
     unittest_cases: frozenset[str]
     opted_out_classes: frozenset[str]
@@ -434,7 +527,15 @@ class CollectionScope(NamedTuple):
 
 
 def resolve_collection_scope(tree: ast.Module) -> CollectionScope:
-    """一趟 `ast.walk` 取齐各条口径的全模块证据：逐条各走一遍在 500 个文件的规模上是可观的重复遍历。
+    """One `ast.walk` pass gathers the whole-module evidence for every criterion: walking once per criterion is considerable repeated traversal at the scale of 500 files.
+
+    Same-named classes (nested classes under different outer scopes) are merged here by bare name: base
+    class references are written as bare names, so their lexical ownership cannot be statically
+    recovered. Merging is always conservative: if any same-named class opts out of collection / is
+    abstract / has a constructor, the name as a whole is treated as not collected, in the same direction
+    as the other criteria in this section: better to miss than to misreport.
+
+    一趟 `ast.walk` 取齐各条口径的全模块证据：逐条各走一遍在 500 个文件的规模上是可观的重复遍历。
 
     同名类（不同外层作用域下的嵌套类）在这里按裸名合并——基类引用写的就是裸名，静态还原
     不出各自的词法归属。合并一律偏保守：任一同名类退出收集 / 抽象 / 带构造器，该名字就整体
@@ -459,7 +560,12 @@ def resolve_collection_scope(tree: ast.Module) -> CollectionScope:
 
 
 def base_names(node: ast.ClassDef) -> list[str]:
-    """本模块内可解析的基类名。
+    """Base class names resolvable within this module.
+
+    A generic base class `Base[int]` is an `ast.Subscript` whose real base is on `.value`; a dotted base
+    class comes from another module, cannot be resolved statically and is treated as a non-match.
+
+    本模块内可解析的基类名。
 
     泛型基类 `Base[int]` 是 `ast.Subscript`，真正的基类在 `.value` 上；点分基类来自别的
     模块，静态无从解析，按不匹配处理。
@@ -473,7 +579,10 @@ def base_names(node: ast.ClassDef) -> list[str]:
 
 
 def _inherited(by_name: dict[str, list[ast.ClassDef]], seeds: set[str]) -> frozenset[str]:
-    """种子集合沿本模块内可解析的继承链向下传播到全部子类。"""
+    """The seed set propagates down the inheritance chain resolvable within this module to all subclasses.
+
+    种子集合沿本模块内可解析的继承链向下传播到全部子类。
+    """
     known = set(seeds)
     changed = True
     while changed:
@@ -488,7 +597,18 @@ def _inherited(by_name: dict[str, list[ast.ClassDef]], seeds: set[str]) -> froze
 
 
 def resolve_opted_out_classes(tree: ast.Module, by_name: dict[str, list[ast.ClassDef]]) -> frozenset[str]:
-    """模块内 `__test__ = False` 生效的类名，含本模块可解析的继承。
+    """Names of classes in this module for which `__test__ = False` is in effect, including inheritance resolvable within the module.
+
+    pytest reads the attribute on the class object (`safe_getattr`); if a base class opts out and the
+    subclass does not override it, the subclass is likewise not collected.
+    Collection resumes when a subclass explicitly writes `__test__ = True` back, so take the first
+    explicit value along the inheritance chain rather than just checking whether one exists.
+
+    With multiple inheritance, take the first explicit value depth-first without solving C3 MRO: when two
+    branches give opposite values it may opt out one time too many; the direction is under-reporting,
+    the same direction as the other criteria in this section.
+
+    模块内 `__test__ = False` 生效的类名，含本模块可解析的继承。
 
     pytest 读的是类对象上的属性（`safe_getattr`），基类标了退出、子类没覆盖同样不收集。
     子类显式写回 `__test__ = True` 时收集恢复，故沿继承链取第一个显式取值而非只看有无。
@@ -496,6 +616,7 @@ def resolve_opted_out_classes(tree: ast.Module, by_name: dict[str, list[ast.Clas
     多重继承按深度优先取第一个显式取值，不解 C3 MRO：两条分支给出相反取值时可能多判一次
     退出，方向是漏报，与本段其它口径同向。
     """
+    # `TestFoo.__test__ = ...` outside the class body executes after the class definition and overrides the value inside the class body.
     # 类体外的 `TestFoo.__test__ = ...` 在类定义之后执行，覆盖类体内的取值
     overrides = collection_overrides(tree.body)
     own = {name: _merge_flags(collection_flag(node.body) for node in nodes) for name, nodes in by_name.items()}
@@ -517,7 +638,10 @@ def resolve_opted_out_classes(tree: ast.Module, by_name: dict[str, list[ast.Clas
 
 
 def _merge_flags(flags: Iterable[bool | None]) -> bool | None:
-    """同名类的取值合并：任一退出即退出，其余取显式写过的取值。"""
+    """Merge of values for same-named classes: opt out if any opts out, otherwise take the explicitly written value.
+
+    同名类的取值合并：任一退出即退出，其余取显式写过的取值。
+    """
     seen = [flag for flag in flags if flag is not None]
     if not seen:
         return None
@@ -525,7 +649,24 @@ def _merge_flags(flags: Iterable[bool | None]) -> bool | None:
 
 
 def is_collected_test_class(node: ast.ClassDef, scope: CollectionScope) -> bool:
-    """pytest 从 `Test*` 类与 unittest 用例类的子类收集用例。
+    """pytest collects cases from `Test*` classes and from subclasses of unittest case classes.
+
+    The same criteria as `is_collected_test_module`, one level down: methods starting with `test` on
+    support classes (fakes, client wrappers) are ordinary APIs; treating them as cases by name would
+    inflate the class 1 count and misreport the gate.
+
+    The two branches cannot be merged: unittest case classes are not bound by name or constructor, and
+    collection is done by unittest itself; whereas when a `Test*` class has an explicit `__init__` or
+    `__new__`, pytest refuses to collect it and emits only one collection-time warning.
+    The name rule is also not inherited: `class Sub(TestHelpers)` is not collected just because its base
+    class is named `Test*`.
+    Abstract classes are not collected in either branch: they cannot be instantiated, so collecting them
+    would be pointless.
+
+    Both constructors and abstractness are taken by inheritance: pytest looks up `getattr(obj, ...)`, so a
+    `__new__` inherited from a support base class also makes `hasnew` true.
+
+    pytest 从 `Test*` 类与 unittest 用例类的子类收集用例。
 
     同 `is_collected_test_module` 的口径下沉一层：支持类（fake、client 包装）上
     `test` 开头的方法是普通 API，按名字当成用例会虚增类 1 计数并误报闸门。
@@ -554,7 +695,15 @@ def is_fixture(dec: ast.expr) -> bool:
 def is_test_function(
     node: ast.stmt, overrides: Mapping[str, bool] = MappingProxyType({})
 ) -> TypeGuard[ast.FunctionDef | ast.AsyncFunctionDef]:
-    """pytest 按 `test` 前缀收集用例函数；`@pytest.fixture` 装饰的同名函数注册为 fixture，不收集。
+    """pytest collects case functions by the `test` prefix; a same-named function decorated with `@pytest.fixture` is registered as a fixture and not collected.
+
+    `overrides` holds the values given by `test_x.__test__ = ...` in the enclosing scope. Only the
+    opt-out direction is honored: writing `True` merely cancels the opt-out and does not bring names
+    without the `test` prefix into collection; that opt-in (`isnosetest`) is a direction that adds to the
+    report, and the unittest branch goes through `TestLoader`, which recognizes only the prefix, so its
+    semantics differ from here.
+
+    pytest 按 `test` 前缀收集用例函数；`@pytest.fixture` 装饰的同名函数注册为 fixture，不收集。
 
     `overrides` 是所在作用域里 `test_x.__test__ = ...` 给出的取值。只认退出方向：写成 `True`
     的作用仅是取消退出，不让不带 `test` 前缀的名字进入收集——那条 opt-in（`isnosetest`）是
@@ -576,7 +725,10 @@ def _assign_targets(stmt: ast.stmt) -> list[ast.expr]:
 
 
 def collection_flag(body: list[ast.stmt]) -> bool | None:
-    """作用域体内 `__test__` 的显式取值；没写或不是布尔字面量时 `None`。"""
+    """Explicit value of `__test__` in a scope body; `None` if not written or not a boolean literal.
+
+    作用域体内 `__test__` 的显式取值；没写或不是布尔字面量时 `None`。
+    """
     flag: bool | None = None
     for stmt in body:
         if not any(isinstance(t, ast.Name) and t.id == "__test__" for t in _assign_targets(stmt)):
@@ -588,7 +740,12 @@ def collection_flag(body: list[ast.stmt]) -> bool | None:
 
 
 def opts_out_of_collection(body: list[ast.stmt]) -> bool:
-    """`__test__ = False`：pytest 的显式退出收集标记，模块与类同一套读法。
+    """`__test__ = False`: pytest's explicit opt-out-of-collection marker, read the same way for modules and classes.
+
+    This is the standard escape hatch when a support module / support class is hit by the gate by
+    mistake and must be honored; otherwise the misreported person has no way out.
+
+    `__test__ = False`：pytest 的显式退出收集标记，模块与类同一套读法。
 
     这是支持模块 / 支持类被闸门误伤时的标准逃生口，必须认——否则被误报的人无路可走。
     """
@@ -596,7 +753,14 @@ def opts_out_of_collection(body: list[ast.stmt]) -> bool:
 
 
 def collection_overrides(body: list[ast.stmt]) -> dict[str, bool]:
-    """作用域体内 `X.__test__ = <bool>` 对名字 X 的取值，按源码顺序取最后一次。
+    """Value of `X.__test__ = <bool>` for name X in a scope body, taking the last one in source order.
+
+    This is the only way to opt out for functions and methods: a function body has no namespace like a
+    class body in which to put `__test__`. pytest reads the final value of the attribute at collection
+    time, so turning it off and then on (`test_x.__test__ = False` followed by `= True`) is collected
+    as usual.
+
+    作用域体内 `X.__test__ = <bool>` 对名字 X 的取值，按源码顺序取最后一次。
 
     这是函数与方法唯一的退出写法：函数体内没有类体那样的命名空间可放 `__test__`。pytest 读
     的是收集期的属性终值，先关后开（`test_x.__test__ = False` 后又 `= True`）照常收集。
@@ -623,7 +787,19 @@ ABSTRACT_DECORATORS = ("abstractmethod", "abstractproperty")
 
 
 def resolve_abstract_classes(by_name: dict[str, list[ast.ClassDef]]) -> frozenset[str]:
-    """`inspect.isabstract` 的静态近似：站在 ABCMeta 上，且本类体内留有未实现的抽象成员。
+    """Static approximation of `inspect.isabstract`: stands on ABCMeta and the class body itself leaves unimplemented abstract members.
+
+    The metaclass is inherited along the chain, so ABC qualification is resolved with the inheritance
+    closure: a newly written `@abstractmethod` in `class Sub(TestContract)` also makes
+    `__abstractmethods__` non-empty. Only declarations in the class body itself count; the case where
+    abstract members are declared by a base class and not implemented by this class cannot be resolved
+    statically and is treated as collectable, in the same direction as the other collection criteria.
+
+    A class that has only `@abstractmethod` but does not stand on ABCMeta does not count:
+    `__abstractmethods__` is filled by ABCMeta, an ordinary class can still be instantiated, and pytest
+    collects it as usual.
+
+    `inspect.isabstract` 的静态近似：站在 ABCMeta 上，且本类体内留有未实现的抽象成员。
 
     元类沿继承传递，故 ABC 的资格用继承闭包解——`class Sub(TestContract)` 里新写的
     `@abstractmethod` 同样让 `__abstractmethods__` 非空；只有本类体内声明才算，抽象成员由
@@ -652,6 +828,7 @@ def _declares_abstract(node: ast.ClassDef) -> bool:
 
 TIER_MARKS = ("unit", "integration", "e2e")
 
+# Top-level package of production code -> source directory relative to the repo root. Workspace subpackages use a src layout, so the source is not directly under the repo root.
 #: 生产代码的顶层包 → 相对仓库根的源码目录。workspace 子包是 src 布局，源码不在仓库根下。
 PRODUCTION_PACKAGES: Mapping[str, str] = {
     "lib": ".",
@@ -661,12 +838,18 @@ PRODUCTION_PACKAGES: Mapping[str, str] = {
 }
 PRODUCTION_PREFIXES = tuple(f"{name}." for name in PRODUCTION_PACKAGES)
 
+# Backend test directories scanned by default: besides the main repo's `tests/`, each workspace subpackage has its own test directory.
 #: 缺省扫描的后端测试目录：主仓 `tests/` 之外，workspace 子包各有独立的测试目录。
 DEFAULT_TESTS_DIRS = ("tests", "packages/arcreel-market-core/tests", "packages/arcreel-catalog-core/tests")
 
 
 def tier_from_path(path: Path, tests_dir: Path) -> str | None:
-    """档位 marker 取 `tests/unit|integration|e2e/` 的第一段目录名。
+    """The tier marker is the first directory name under `tests/unit|integration|e2e/`.
+
+    This marker is injected by `tests/conftest.py` at collection time based on the path and is never
+    written as a decorator, so it can only be recovered from the path; scanning decorators never finds it.
+
+    档位 marker 取 `tests/unit|integration|e2e/` 的第一段目录名。
 
     该 marker 由 `tests/conftest.py` 在收集期按路径注入、从不写成装饰器，因此只能
     从路径还原，扫描装饰器永远拿不到。
@@ -690,11 +873,15 @@ def _is_empty_container(node: ast.expr) -> bool:
     return False
 
 
+# ---------------------------------------------------------------- Module alias resolution
 # ---------------------------------------------------------------- 模块别名解析
 
 
 def alias_map_from(node: ast.AST) -> dict[str, str]:
-    """收集一个 AST 子树里的 import 别名 -> 点分模块映射。"""
+    """Collect the import alias -> dotted module mapping in an AST subtree.
+
+    收集一个 AST 子树里的 import 别名 -> 点分模块映射。
+    """
     out: dict[str, str] = {}
     for sub in ast.walk(node):
         if isinstance(sub, ast.Import):
@@ -704,6 +891,7 @@ def alias_map_from(node: ast.AST) -> dict[str, str]:
                 else:
                     out[alias.name.split(".")[0]] = alias.name.split(".")[0]
         elif isinstance(sub, ast.ImportFrom) and sub.module and sub.level == 0:
+            # The module of a relative import is not a top-level dotted path, so the absolute module name cannot be recovered.
             # 相对导入的 module 不是顶层点分路径，还原不出绝对模块名
             for alias in sub.names:
                 out[alias.asname or alias.name] = f"{sub.module}.{alias.name}"
@@ -711,7 +899,10 @@ def alias_map_from(node: ast.AST) -> dict[str, str]:
 
 
 class AliasIndex:
-    """把测试文件里的 import 还原成 别名 -> 点分模块 的映射（模块级视角）。"""
+    """Restore the imports of a test file as an alias -> dotted module mapping (module-level view).
+
+    把测试文件里的 import 还原成 别名 -> 点分模块 的映射（模块级视角）。
+    """
 
     def __init__(self, tree: ast.Module) -> None:
         self.alias_to_module: dict[str, str] = alias_map_from(tree)
@@ -727,6 +918,7 @@ class AliasIndex:
                 self.imported_modules.add(node.module)
                 if node.module.split(".")[0] in PRODUCTION_PACKAGES:
                     for alias in node.names:
+                        # `from lib.x import y`: y may be a submodule or a symbol, so register both.
                         # `from lib.x import y`：y 可能是子模块也可能是符号，两种都登记
                         self.import_counter[f"{node.module}.{alias.name}"] += 1
 
@@ -738,7 +930,12 @@ class AliasIndex:
         return f"{base}.{rest}" if rest else base
 
     def module_under_test(self, path: Path, is_module: Callable[[str], bool]) -> str | None:
-        """被测 module 启发式：测试文件名去掉 `test_` 前缀后与文件内 `lib.` / `server.`
+        """Heuristic for the module under test: strip the `test_` prefix from the test file name and prefix-match
+        it against the last segment of the `lib.` / `server.` modules imported in the file, taking the longest
+        match; with no match, take the `lib.` / `server.` module imported most often. Candidates are first
+        filtered by whether a same-named module file exists on disk, to drop symbol imports.
+
+        被测 module 启发式：测试文件名去掉 `test_` 前缀后与文件内 `lib.` / `server.`
         import 的模块末段做前缀匹配，取匹配最长者；无匹配时取被 import 次数最多的
         `lib.` / `server.` 模块。候选先用磁盘上是否存在同名模块文件过滤掉符号 import。"""
         stem = path.stem
@@ -746,6 +943,7 @@ class AliasIndex:
             stem = stem[5:]
         pool = {m for m in self.imported_modules if m.startswith(PRODUCTION_PREFIXES)}
         pool |= {m for m in self.import_counter if m.startswith(PRODUCTION_PREFIXES)}
+        # Must iterate in sorted order: with tied lengths, an unstable iteration order would make the "module under test" jitter between runs.
         # 必须排序后遍历：并列长度下不定的迭代顺序会让「被测 module」在多次运行间抖动。
         candidates = sorted(m for m in pool if is_module(m))
         best: str | None = None
@@ -764,11 +962,15 @@ class AliasIndex:
         return None
 
 
+# ---------------------------------------------------------------- Class 1 detection
 # ---------------------------------------------------------------- 类 1 识别
 
 
 class TestFunctionAnalyzer:
-    """在单个 test 函数体内识别替身绑定并给断言分类。"""
+    """Identify test-double bindings within a single test function body and classify assertions.
+
+    在单个 test 函数体内识别替身绑定并给断言分类。
+    """
 
     def __init__(
         self, func: ast.FunctionDef | ast.AsyncFunctionDef, pytest_asserts: PytestAssertNames | None = None
@@ -779,7 +981,7 @@ class TestFunctionAnalyzer:
         self.recorders: set[str] = set()
         self._collect_doubles()
 
-    # -- 替身绑定 ------------------------------------------------
+    # -- Test-double bindings ------------------------------------------------ / -- 替身绑定 ------------------------------------------------
 
     def _collect_doubles(self) -> None:
         injected = 0
@@ -787,7 +989,7 @@ class TestFunctionAnalyzer:
             if isinstance(dec, ast.Call) and is_patch_call(dec) and not any(kw.arg == "new" for kw in dec.keywords):
                 injected += 1
         args = [a.arg for a in self.func.args.args if a.arg not in {"self", "cls"}]
-        # patch 装饰器自下而上注入到 self 之后的位置参数
+        # Positional parameters injected by patch decorators after self, from bottom to top. / patch 装饰器自下而上注入到 self 之后的位置参数
         self.doubles.update(args[:injected])
 
         for node in ast.walk(self.func):
@@ -823,7 +1025,11 @@ class TestFunctionAnalyzer:
                 self.doubles.update(targets)
 
     def _collect_recorders(self) -> None:
-        """monkeypatch / patch 注入的调用记录容器：函数体内 `x = []`，且在嵌套
+        """Call-record containers injected by monkeypatch / patch: `x = []` in the function body that is
+        appended to / added to / subscript-assigned inside a nested lambda / def, and the function really did
+        inject a test double.
+
+        monkeypatch / patch 注入的调用记录容器：函数体内 `x = []`，且在嵌套
         lambda / def 中被 append / add / 下标赋值，同时该函数确实做过替身注入。"""
         containers = {
             t.id
@@ -857,10 +1063,14 @@ class TestFunctionAnalyzer:
                     if inner.target.id in containers:
                         self.recorders.add(inner.target.id)
 
+    # -- Assertion classification ------------------------------------------------
     # -- 断言分类 ------------------------------------------------
 
     def classify(self) -> tuple[int, int, list[str], list[str]]:
-        """返回 (替身断言数, 实质断言数, 替身断言证据, 被断言的替身主体)。"""
+        """Return (test-double assertion count, substantive assertion count, test-double assertion evidence, test-double subjects asserted on).
+
+        返回 (替身断言数, 实质断言数, 替身断言证据, 被断言的替身主体)。
+        """
         double_hits = 0
         real_hits = 0
         evidence: list[str] = []
@@ -913,7 +1123,18 @@ class TestFunctionAnalyzer:
         return "real"
 
     def _is_functional_assert(self, fname: str, call: ast.Call) -> bool:
-        """pytest 的非 with 形式断言：`pytest.raises(Exc, fn, ...)` 与 `pytest.fail(...)`。
+        """pytest's non-`with` form of assertions: `pytest.raises(Exc, fn, ...)` and `pytest.fail(...)`.
+
+        Recognizing `raises` / `warns` only as context managers would miss the functional form;
+        `pytest.fail` used as a sentinel (`except X: pytest.fail(...)`) is often the only assertion of a case.
+        Once the gate is must-pass, these two legitimate forms would be turned red by NO-ASSERTION.
+
+        The decision must be by receiver rather than only the last segment of the method name:
+        `worker.fail("network")` is not an assertion, and recognizing by name alone would give the gate a
+        hole that can be bypassed by renaming a method. `raises` / `warns` additionally require a callable
+        argument; a bare call with a single argument is invalid usage and is not counted.
+
+        pytest 的非 with 形式断言：`pytest.raises(Exc, fn, ...)` 与 `pytest.fail(...)`。
 
         `raises` / `warns` 只按上下文管理器识别会漏掉函数式写法；`pytest.fail` 作为
         哨兵（`except X: pytest.fail(...)`）常常是一条用例的唯一断言。闸门必过后，
@@ -931,7 +1152,15 @@ class TestFunctionAnalyzer:
         return canonical in CALLABLE_ASSERT_CALLS and len(call.args) >= 2
 
     def _record_attr_owners(self, test: ast.expr, double_names: set[str]) -> set[str]:
-        """替身记录属性的属主，只取属主确为替身的那些。
+        """Owners of test-double record attributes, taking only those whose owner is indeed a test double.
+
+        `called` / `call_count` are also legitimate attribute names on domain objects; classifying by
+        attribute name alone would judge a real assertion like `assert result.called` as a test-double
+        assertion; after `--check` is promoted to a must-pass gate, such misjudgments would turn legitimate
+        cases red directly. When the owner cannot be resolved (e.g. `Foo(called=True).called`), treat it as
+        not a test double and fall back to the name rule.
+
+        替身记录属性的属主，只取属主确为替身的那些。
 
         `called` / `call_count` 同样是域对象的合法属性名，只按属性名分类会把
         `assert result.called` 这类真实断言判成替身断言；`--check` 升格为必过闸门
@@ -950,6 +1179,7 @@ class TestFunctionAnalyzer:
         return owners
 
 
+# ---------------------------------------------------------------- Class 2 detection
 # ---------------------------------------------------------------- 类 2 识别
 
 
@@ -974,7 +1204,10 @@ def is_private_target(target: str) -> bool:
 
 
 def target_module_prefix(target: str, known_modules: set[str]) -> str:
-    """取点分目标里最长的、已知是模块的前缀；否则退化为「去掉最后一段」。"""
+    """Take the longest prefix of a dotted target that is known to be a module; otherwise fall back to "drop the last segment".
+
+    取点分目标里最长的、已知是模块的前缀；否则退化为「去掉最后一段」。
+    """
     parts = target.split(".")
     for cut in range(len(parts) - 1, 0, -1):
         prefix = ".".join(parts[:cut])
@@ -984,7 +1217,13 @@ def target_module_prefix(target: str, known_modules: set[str]) -> str:
 
 
 class ProductionIndex:
-    """按 `lib/` `server/` 源码判定 patch 目标落在哪个模块、符号是模块自身定义还是
+    """Using the `lib/` `server/` source, determine which module a patch target falls in and whether the
+    symbol is defined by the module itself or is a reference imported from elsewhere. Telling the two
+    apart is the key: `patch("module-under-test.own-symbol")` hollows out the implementation under test,
+    while `patch("module-under-test.collaborator")` just swaps the implementation at an existing import
+    boundary.
+
+    按 `lib/` `server/` 源码判定 patch 目标落在哪个模块、符号是模块自身定义还是
     从别处 import 进来的引用。区分二者是关键：`patch("被测module.自身符号")` 是把被测
     实现挖空，`patch("被测module.协作者")` 只是在既有 import 边界上换实现。"""
 
@@ -1008,7 +1247,10 @@ class ProductionIndex:
         return None
 
     def _load(self, module: str) -> tuple[dict[str, str], dict[str, set[str]]] | None:
-        """返回 (顶层名 -> defined/imported, 类名 -> 成员集合)。"""
+        """Return (top-level name -> defined/imported, class name -> member set).
+
+        返回 (顶层名 -> defined/imported, 类名 -> 成员集合)。
+        """
         if module in self._cache:
             return self._cache[module]
         path = self._module_file(module)
@@ -1050,7 +1292,10 @@ class ProductionIndex:
         return result
 
     def split(self, target: str) -> tuple[str | None, str]:
-        """把点分目标切成 (模块, 模块内符号路径)。取最长的、磁盘上存在的模块前缀。"""
+        """Split a dotted target into (module, symbol path within the module). Take the longest module prefix that exists on disk.
+
+        把点分目标切成 (模块, 模块内符号路径)。取最长的、磁盘上存在的模块前缀。
+        """
         parts = target.split(".")
         for cut in range(len(parts) - 1, 0, -1):
             module = ".".join(parts[:cut])
@@ -1080,6 +1325,7 @@ class ProductionIndex:
         return self.ORIGIN_DEFINED if rest.split(".")[0] in members else self.ORIGIN_UNKNOWN
 
 
+# ---------------------------------------------------------------- Main scan
 # ---------------------------------------------------------------- 主扫描
 
 
@@ -1161,10 +1407,15 @@ class FileScanner:
                 )
             )
 
-    # -- patch 站点 ----------------------------------------------
+    # -- patch sites ---------------------------------------------- / -- patch 站点 ----------------------------------------------
 
     def _enclosing_map(self) -> dict[int, tuple[str, list[str], dict[str, str]]]:
-        """行号 -> (所属函数限定名, 生效的 marks, 该函数内的 import 别名覆盖)。
+        """Line number -> (qualified name of the enclosing function, effective marks, import-alias overrides within that function).
+        A local import inside a function such as `from x import y as mod` must override a module-level alias
+        of the same name; otherwise a `mod` rebound repeatedly in the same file would be resolved to the
+        module of the last import.
+
+        行号 -> (所属函数限定名, 生效的 marks, 该函数内的 import 别名覆盖)。
         函数内 `from x import y as mod` 这类局部 import 必须覆盖模块级同名别名，
         否则同一文件里反复重绑定的 `mod` 会被解析成最后一次 import 的模块。"""
         out: dict[int, tuple[str, list[str], dict[str, str]]] = {}
@@ -1178,6 +1429,7 @@ class FileScanner:
                     qual = f"{class_name}::{node.name}" if class_name else node.name
                     local = alias_map_from(node)
                     end = node.end_lineno or node.lineno
+                    # Start at the decorator line: `@patch(...)` is written above the def and would fall outside the function range and be attributed to <module>.
                     # 起点取装饰器行：`@patch(...)` 写在 def 上方，落在函数区间外会被归到 <module>
                     start = min([node.lineno] + [d.lineno for d in node.decorator_list])
                     for line in range(start, end + 1):
@@ -1256,6 +1508,7 @@ class FileScanner:
         return None, None
 
 
+# ---------------------------------------------------------------- Class 3: shared infrastructure structure
 # ---------------------------------------------------------------- 类 3：共享设施结构
 
 DUPLICATE_FIXTURE_THRESHOLD = 3
@@ -1271,7 +1524,11 @@ class StructureFinding:
 
 
 def module_level_fixtures(tree: ast.Module) -> list[tuple[str, int]]:
-    """模块顶层的 fixture 定义 (name, lineno)。
+    """Fixture definitions at module top level (name, lineno).
+
+    `@pytest.fixture(name="x")` is judged by name=; fixtures inside classes are not counted.
+
+    模块顶层的 fixture 定义 (name, lineno)。
 
     `@pytest.fixture(name="x")` 以 name= 为准；类内 fixture 不计入。
     """
@@ -1295,7 +1552,10 @@ def module_level_fixtures(tree: ast.Module) -> list[tuple[str, int]]:
 
 
 def conftest_import_lines(tree: ast.Module) -> list[tuple[int, str]]:
-    """import 到 conftest 的语句 (lineno, 模块名)。"""
+    """Statements that import into conftest (lineno, module name).
+
+    import 到 conftest 的语句 (lineno, 模块名)。
+    """
     out: list[tuple[int, str]] = []
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
@@ -1305,7 +1565,7 @@ def conftest_import_lines(tree: ast.Module) -> list[tuple[int, str]]:
             if module.split(".")[-1] == "conftest":
                 out.append((node.lineno, module))
                 continue
-            # `from tests import conftest`：模块名在 names 里
+            # `from tests import conftest`: the module name is in names. / `from tests import conftest`：模块名在 names 里
             out.extend(
                 (node.lineno, f"{module}.conftest" if module else "conftest")
                 for alias in node.names
@@ -1315,7 +1575,17 @@ def conftest_import_lines(tree: ast.Module) -> list[tuple[int, str]]:
 
 
 def scan_shared_facilities(root: Path, parsed: list[tuple[Path, ast.Module]]) -> list[StructureFinding]:
-    """扫描共享设施三角色的结构违规。
+    """Scan for structural violations among the three roles of shared infrastructure.
+
+    The effective scope of a conftest is judged by directory ancestry: the fixtures of
+    `tests/unit/lib/conftest.py` apply to `tests/unit/lib/**`, and a test file with the same name as a
+    fixture of its ancestor conftest constitutes an override.
+
+    `parsed` is supplied by the main loop and is all successfully parsed files under `tests/` with their
+    ASTs; the rules of this class need to look at the whole directory tree, and traversing again would be a
+    second full parse.
+
+    扫描共享设施三角色的结构违规。
 
     conftest 的生效范围按目录祖先关系判定：`tests/unit/lib/conftest.py` 的 fixture 对
     `tests/unit/lib/**` 生效，测试文件与其祖先 conftest 同名即构成覆写。
@@ -1409,6 +1679,8 @@ def scan_shared_facilities(root: Path, parsed: list[tuple[Path, ast.Module]]) ->
 
 PATCH_SPREAD_THRESHOLD = 3
 PATCH_SPREAD_KINDS = {"patch", "patch.object", "monkeypatch.setattr"}
+# Targets replaced file by file at filesystem boundaries: the failure or probe shape injected differs in every case, and folding them into a shared test double would only be a pass-through layer.
+# The value states the exemption reason; before adding an entry, first confirm that a shared helper or seam really cannot be extracted.
 #: 文件系统边界上逐文件替换的目标：每个用例注入的失败或探针形状各不相同，收编成共享替身只会是一层透传。
 #: 值写明豁免理由；新增条目前先确认确实提不出共享 helper 或 seam。
 PATCH_SPREAD_ALLOWED: Mapping[str, str] = {
@@ -1420,7 +1692,13 @@ PATCH_SPREAD_ALLOWED: Mapping[str, str] = {
 
 
 def scan_patch_spread(patches: Sequence[PatchSite]) -> list[StructureFinding]:
-    """同一 `patch` / `patch.object` / `monkeypatch.setattr` 目标出现在 ≥3 个测试文件：缺一个共享替身或 seam。
+    """The same `patch` / `patch.object` / `monkeypatch.setattr` target appears in 3 or more test files: a shared test double or seam is missing.
+
+    Each file reports only the first occurrence of that target. `patch.object` / `monkeypatch.setattr`
+    targets rooted at a local object are meaningful only within the file and are not aggregated across
+    files; filesystem-boundary targets in `PATCH_SPREAD_ALLOWED` are exempt.
+
+    同一 `patch` / `patch.object` / `monkeypatch.setattr` 目标出现在 ≥3 个测试文件：缺一个共享替身或 seam。
 
     每个文件只报该目标的第一处。根部是局部对象的 `patch.object` / `monkeypatch.setattr` 目标只在文件内
     有意义，不跨文件聚合；`PATCH_SPREAD_ALLOWED` 里的文件系统边界目标豁免。
@@ -1454,7 +1732,10 @@ SHARED_SYMBOL_MIN_USERS = 2
 
 
 def shared_symbol_users(tree: ast.Module, module: str) -> set[str]:
-    """本文件从 *module* 用到的符号名：`from m import x` 与 `import m` / `from pkg import m` 后的 `m.x`。"""
+    """Symbol names this file uses from *module*: `from m import x`, and `m.x` after `import m` / `from pkg import m`.
+
+    本文件从 *module* 用到的符号名：`from m import x` 与 `import m` / `from pkg import m` 后的 `m.x`。
+    """
     package, _, leaf = module.rpartition(".")
     used: set[str] = set()
     aliases: set[str] = set()
@@ -1474,7 +1755,10 @@ def shared_symbol_users(tree: ast.Module, module: str) -> set[str]:
 
 
 def top_level_names(node: ast.stmt) -> list[str]:
-    """顶层语句定义的名字：函数、类、类型别名，以及赋值给裸名的常量。"""
+    """Names defined by top-level statements: functions, classes, type aliases, and constants assigned to bare names.
+
+    顶层语句定义的名字：函数、类、类型别名，以及赋值给裸名的常量。
+    """
     if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef):
         return [node.name]
     if isinstance(node, ast.TypeAlias):
@@ -1484,7 +1768,10 @@ def top_level_names(node: ast.stmt) -> list[str]:
 
 
 def bound_names(target: ast.expr) -> list[str]:
-    """赋值目标绑定的名字：递归解包 `A, (B, *C)`；`X[k] = …`、`x.attr = …` 是修改已有对象，不绑定新名字。"""
+    """Names bound by an assignment target: recursively unpack `A, (B, *C)`; `X[k] = ...` and `x.attr = ...` modify an existing object and do not bind a new name.
+
+    赋值目标绑定的名字：递归解包 `A, (B, *C)`；`X[k] = …`、`x.attr = …` 是修改已有对象，不绑定新名字。
+    """
     if isinstance(target, ast.Name):
         return [target.id]
     if isinstance(target, ast.Starred):
@@ -1495,7 +1782,12 @@ def bound_names(target: ast.expr) -> list[str]:
 
 
 def scan_shared_symbol_usage(root: Path, parsed: Sequence[tuple[Path, ast.Module]]) -> list[StructureFinding]:
-    """`tests/fakes.py`、`tests/factories.py`、`tests/auth_deps.py` 与 `tests/**/*_support.py`（非 `test_` 开头）的公开顶层符号须被 ≥2 个其他测试文件使用。
+    """Public top-level symbols of `tests/fakes.py`, `tests/factories.py`, `tests/auth_deps.py` and `tests/**/*_support.py` (not starting with `test_`) must be used by 2 or more other test files.
+
+    Move back into the file those used by only one file, rename with an underscore those only used
+    internally by the module, and delete those no one uses.
+
+    `tests/fakes.py`、`tests/factories.py`、`tests/auth_deps.py` 与 `tests/**/*_support.py`（非 `test_` 开头）的公开顶层符号须被 ≥2 个其他测试文件使用。
 
     只被一个文件用的移回该文件，模块内部自用的改下划线名，无人使用的删除。
     """
@@ -1534,6 +1826,7 @@ def scan_shared_symbol_usage(root: Path, parsed: Sequence[tuple[Path, ast.Module
     return findings
 
 
+# ---------------------------------------------------------------- Class 4: file shape
 # ---------------------------------------------------------------- 类 4：文件形态
 
 SPLIT_SUFFIX_RE = re.compile(r"_(more|full|coverage|extra|additional)$")
@@ -1543,7 +1836,12 @@ FRONTEND_TEST_MARKER = "test"
 
 
 def file_stem(path: Path) -> str:
-    """去掉测试扩展名后的基名：`Foo.drama.test.tsx` → `Foo.drama`、`test_x_more.py` → `test_x_more`。
+    """Base name after removing the test extension: `Foo.drama.test.tsx` -> `Foo.drama`, `test_x_more.py` -> `test_x_more`.
+
+    The frontend strips only `.test.<ext>`: stripping dot by dot would also eat a semantic topic suffix
+    like `ShotDetail.drama`, letting `ShotDetail.drama_more.test.tsx` escape the split-suffix ban.
+
+    去掉测试扩展名后的基名：`Foo.drama.test.tsx` → `Foo.drama`、`test_x_more.py` → `test_x_more`。
 
     前端只剥 `.test.<ext>`：按点逐段剥会把 `ShotDetail.drama` 这类语义化主题后缀一并吃掉，
     使 `ShotDetail.drama_more.test.tsx` 逃过分裂后缀禁令。
@@ -1556,7 +1854,12 @@ def file_stem(path: Path) -> str:
 
 
 def scan_file_shape(root: Path, paths: list[Path]) -> list[StructureFinding]:
-    """分裂命名后缀禁令与单文件 3000 行熔断。后端与前端测试文件共用同一判定。
+    """Ban on split naming suffixes and the 3000-line per-file circuit breaker. Backend and frontend test files share the same judgment.
+
+    The suffix is anchored at the end of the base name, so file names that merely contain the substring,
+    such as `test_usage_extraction.py`, do not hit.
+
+    分裂命名后缀禁令与单文件 3000 行熔断。后端与前端测试文件共用同一判定。
 
     后缀锚定基名结尾，`test_usage_extraction.py` 这类含子串的文件名不命中。
     """
@@ -1595,7 +1898,10 @@ def frontend_test_files(frontend_src: Path) -> list[Path]:
 
 
 def scan_frontend_layout(root: Path, paths: list[Path]) -> list[StructureFinding]:
-    """前端测试文件与源文件同级并放，不使用 `__tests__/` 目录。"""
+    """Frontend test files sit alongside their source files and do not use a `__tests__/` directory.
+
+    前端测试文件与源文件同级并放，不使用 `__tests__/` 目录。
+    """
     return [
         StructureFinding(
             "FE-TESTS-DIR",
@@ -1609,13 +1915,17 @@ def scan_frontend_layout(root: Path, paths: list[Path]) -> list[StructureFinding
     ]
 
 
+# ---------------------------------------------------------------- Class 5: duplicate cases
 # ---------------------------------------------------------------- 类 5：重复用例
 
 PARAMETRIZE_NAME = "parametrize"
 
 
 def strip_docstring(body: list[ast.stmt]) -> list[ast.stmt]:
-    """去掉首条 docstring——说明文字不是行为，只差 docstring 的两条用例仍是重复。"""
+    """Drop the first docstring: explanatory text is not behavior, and two cases differing only in docstring are still duplicates.
+
+    去掉首条 docstring——说明文字不是行为，只差 docstring 的两条用例仍是重复。
+    """
     head = body[0] if body else None
     if isinstance(head, ast.Expr) and isinstance(head.value, ast.Constant) and isinstance(head.value.value, str):
         return body[1:]
@@ -1623,7 +1933,10 @@ def strip_docstring(body: list[ast.stmt]) -> list[ast.stmt]:
 
 
 def unparse_block(body: list[ast.stmt]) -> str:
-    """语句序列的规范化文本：`ast.unparse` 抹平换行、括号与引号风格的差异。"""
+    """Normalized text of a statement sequence: `ast.unparse` flattens differences in line breaks, parentheses and quote style.
+
+    语句序列的规范化文本：`ast.unparse` 抹平换行、括号与引号风格的差异。
+    """
     return ast.unparse(ast.Module(body=list(body), type_ignores=[]))
 
 
@@ -1636,7 +1949,10 @@ def is_parametrize(dec: ast.expr, aliases: Container[str] = frozenset()) -> bool
 
 
 def parametrize_aliases(tree: ast.Module) -> frozenset[str]:
-    """模块级 `_TABLE = pytest.mark.parametrize(...)`：`@_TABLE` 与直接写 parametrize 等价。"""
+    """Module-level `_TABLE = pytest.mark.parametrize(...)`: `@_TABLE` is equivalent to writing parametrize directly.
+
+    模块级 `_TABLE = pytest.mark.parametrize(...)`：`@_TABLE` 与直接写 parametrize 等价。
+    """
     out: set[str] = set()
     for node in tree.body:
         if isinstance(node, ast.Assign) and is_parametrize(node.value):
@@ -1645,7 +1961,14 @@ def parametrize_aliases(tree: ast.Module) -> frozenset[str]:
 
 
 def param_names(node: ast.FunctionDef | ast.AsyncFunctionDef, *, is_method: bool) -> list[str]:
-    """形参名：pytest 按名注入 fixture，名字集合不同即上下文不同。
+    """Parameter names: pytest injects fixtures by name, so differing name sets mean different contexts.
+
+    For methods in a class, drop the bound receiver (by position rather than by name, since `self` / `cls`
+    are ordinary fixture names at module level).
+    Parameters with defaults are not treated by pytest as fixture requests and their values take part in
+    execution directly, so they are recorded together with their defaults.
+
+    形参名：pytest 按名注入 fixture，名字集合不同即上下文不同。
 
     类内方法去掉绑定的接收者（按位置而非按名字，`self` / `cls` 在模块级是普通 fixture 名）。
     带默认值的形参 pytest 不视为 fixture 请求，取值直接参与执行，故连同默认值一并记入。
@@ -1670,7 +1993,10 @@ def param_names(node: ast.FunctionDef | ast.AsyncFunctionDef, *, is_method: bool
 
 
 def parametrize_argnames(dec: ast.Call) -> list[str] | None:
-    """`@parametrize("a,b", ...)` 或 `(["a", "b"], ...)` 的形参名。非字面量返回 None。"""
+    """Parameter names of `@parametrize("a,b", ...)` or `(["a", "b"], ...)`. Returns None for non-literals.
+
+    `@parametrize("a,b", ...)` 或 `(["a", "b"], ...)` 的形参名。非字面量返回 None。
+    """
     if not dec.args:
         return None
     literal = const_str(dec.args[0])
@@ -1689,7 +2015,10 @@ def parametrize_argnames(dec: ast.Call) -> list[str] | None:
 
 
 def is_literal(node: ast.expr) -> bool:
-    """节点是否静态可求值。负数是 `UnaryOp`、容器是 `List` / `Dict`，都不是 `Constant`。"""
+    """Whether the node is statically evaluable. A negative number is a `UnaryOp` and containers are `List` / `Dict`; neither is a `Constant`.
+
+    节点是否静态可求值。负数是 `UnaryOp`、容器是 `List` / `Dict`，都不是 `Constant`。
+    """
     try:
         ast.literal_eval(node)
     except (ValueError, SyntaxError, TypeError, MemoryError, RecursionError):
@@ -1698,7 +2027,14 @@ def is_literal(node: ast.expr) -> bool:
 
 
 def parametrize_rows(dec: ast.Call, arity: int) -> list[list[ast.expr]] | None:
-    """参数表逐行的字面量。`indirect`、`pytest.param(...)`、表达式取值一律返回 None。
+    """Row-by-row literals of the parameter table. `indirect`, `pytest.param(...)` and expression values all return None.
+
+    `indirect` can also be passed positionally (the third positional argument of `parametrize`); then the
+    values of the parameter table enter the case only after fixture conversion, which is not equivalent to
+    literal substitution. Returning None gives up the judgment: the gate has zero tolerance, so when
+    static evaluation is impossible it is better to under-report than to misreport.
+
+    参数表逐行的字面量。`indirect`、`pytest.param(...)`、表达式取值一律返回 None。
 
     `indirect` 也可按位置传（`parametrize` 的第三个位置参数），此时参数表的取值经 fixture
     转换后才进入用例，与字面量代入不等价。返回 None 即放弃判定：闸门零容忍，无法静态求值
@@ -1725,7 +2061,10 @@ def parametrize_rows(dec: ast.Call, arity: int) -> list[list[ast.expr]] | None:
 
 
 class ParamSubstituter(ast.NodeTransformer):
-    """把参数化形参名在读取位置替换成该行的字面量。"""
+    """Replace the parametrized parameter names at read positions with the literals of that row.
+
+    把参数化形参名在读取位置替换成该行的字面量。
+    """
 
     def __init__(self, values: dict[str, ast.expr]) -> None:
         self.values = values
@@ -1738,14 +2077,22 @@ class ParamSubstituter(ast.NodeTransformer):
 
 
 class ParametrizedBodies(NamedTuple):
-    """参数化用例逐行代入后的形态：代入文本 -> 该行取值。"""
+    """Form of a parametrized case after row-by-row substitution: substituted text -> values of that row.
+
+    参数化用例逐行代入后的形态：代入文本 -> 该行取值。
+    """
 
     argnames: list[str]
     by_body: dict[str, tuple[str, ...]]
 
 
 def rebinds(node: ast.AST, names: set[str]) -> bool:
-    """节点是否把 `names` 里的名字重新绑定：赋值与 for / with 目标、lambda 与嵌套函数形参、
+    """Whether the node rebinds any name in `names`: assignment and for / with targets, lambda and nested
+    function parameters, nested def / class names, except and import aliases, match captures,
+    global / nonlocal declarations.
+    Once a name is shadowed, substitution would pick up the wrong value.
+
+    节点是否把 `names` 里的名字重新绑定：赋值与 for / with 目标、lambda 与嵌套函数形参、
     嵌套 def / class 名、except 与 import 别名、match 捕获、global / nonlocal 声明。
     名字被遮蔽后代入会取到错误的值。
     """
@@ -1767,7 +2114,10 @@ def rebinds(node: ast.AST, names: set[str]) -> bool:
 
 
 def expanded_bodies(node: ast.FunctionDef | ast.AsyncFunctionDef) -> ParametrizedBodies | None:
-    """把单个 `@parametrize` 逐行代入函数体。无法静态展开时返回 None。"""
+    """Substitute a single `@parametrize` row by row into the function body. Returns None when it cannot be expanded statically.
+
+    把单个 `@parametrize` 逐行代入函数体。无法静态展开时返回 None。
+    """
     decorators = [d for d in node.decorator_list if is_parametrize(d)]
     if len(decorators) != 1 or not isinstance(decorators[0], ast.Call):
         return None
@@ -1790,7 +2140,14 @@ def expanded_bodies(node: ast.FunctionDef | ast.AsyncFunctionDef) -> Parametrize
 
 
 def class_context(node: ast.ClassDef) -> str:
-    """类级上下文：装饰器、基类与类关键字（`metaclass=` 等），以及类体内一切非测试成员
+    """Class-level context: decorators, base classes and class keywords (`metaclass=` etc.), and every
+    non-test member of the class body (`setup_method`, class-level fixtures, `pytestmark`).
+
+    The criterion compares only function bodies; two classes with different setup but identical function
+    bodies would be misreported. The gate has zero tolerance and no exemptions, so the context must also
+    be equal before declaring a duplicate.
+
+    类级上下文：装饰器、基类与类关键字（`metaclass=` 等），以及类体内一切非测试成员
     （`setup_method`、类级 fixture、`pytestmark`）。
 
     判据只比函数体，两个类的 setup 不同却函数体相同时会误报；闸门零容忍、无豁免，
@@ -1820,7 +2177,10 @@ class DuplicateCandidate(NamedTuple):
 
     @property
     def scope(self) -> tuple[str, tuple[str, ...], bool]:
-        """可比较的上下文：类级 setup、非参数化装饰器、协程与否。"""
+        """Comparable context: class-level setup, non-parametrize decorators, and whether it is a coroutine.
+
+        可比较的上下文：类级 setup、非参数化装饰器、协程与否。
+        """
         return (self.context, self.decorators, self.is_async)
 
 
@@ -1861,7 +2221,12 @@ def render_row(argnames: list[str], values: tuple[str, ...]) -> str:
 
 
 def scan_module_duplicates(rel: str, tree: ast.Module, scope: CollectionScope) -> list[StructureFinding]:
-    """同一文件内函数体等同的测试用例。跨文件不判——局部辅助函数同名会造成整批假阳。
+    """Test cases with equivalent function bodies within the same file. Not judged across files: same-named local helper functions would cause a whole batch of false positives.
+
+    Backend only: this script has zero third-party dependencies and uses only `ast`, so it cannot parse
+    TS/TSX; by the division of labor, the same judgment on the frontend belongs to eslint.
+
+    同一文件内函数体等同的测试用例。跨文件不判——局部辅助函数同名会造成整批假阳。
 
     只扫后端：本脚本零第三方依赖、只用 `ast`，无法解析 TS/TSX，前端同类判断按分工归 eslint。
     """
@@ -1895,6 +2260,7 @@ def scan_module_duplicates(rel: str, tree: ast.Module, scope: CollectionScope) -
         expanded = expanded_bodies(owner.node)
         if expanded is None:
             continue
+        # Parameters are encoded in `params` together with their defaults; compare by base name when removing parametrized parameters.
         # 形参在 `params` 里连默认值一并编码，剔除参数化形参时按基础名比对
         owner_params = tuple(sorted(p for p in owner.params if p.partition("=")[0] not in expanded.argnames))
         for case in plain:
@@ -1917,6 +2283,7 @@ def scan_module_duplicates(rel: str, tree: ast.Module, scope: CollectionScope) -
     return findings
 
 
+# ---------------------------------------------------------------- Summary output
 # ---------------------------------------------------------------- 汇总输出
 
 
@@ -2062,7 +2429,10 @@ class Violation:
 
 
 def gate_violations(result: dict[str, object]) -> list[Violation]:
-    """把审计结果压平成闸门违规清单。零容忍：任一条命中即闸门红。"""
+    """Flatten the audit results into the list of gate violations. Zero tolerance: any hit turns the gate red.
+
+    把审计结果压平成闸门违规清单。零容忍：任一条命中即闸门红。
+    """
     out: list[Violation] = []
 
     def rows(key: str) -> list[dict[str, object]]:

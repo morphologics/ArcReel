@@ -1,4 +1,8 @@
-"""构造一份合法的目录数据，覆盖四种媒体类型、两栖模型与价目表的各种形状。
+"""Builds valid catalog data covering four media types, dual-purpose models, and the various shapes of price lists.
+
+Each call returns a fresh copy, and test cases modify the copy into the case to be verified.
+
+构造一份合法的目录数据，覆盖四种媒体类型、两栖模型与价目表的各种形状。
 
 每次调用返回新的副本，用例在副本上改出要验证的情形。
 """
@@ -75,7 +79,10 @@ def video_entry() -> dict[str, Any]:
 
 
 def amphibious_image_entry() -> dict[str, Any]:
-    """与 ``video_entry`` 同名的图片条目：两栖模型的另一半。"""
+    """An image entry with the same name as ``video_entry``: the other half of a dual-purpose model.
+
+    与 ``video_entry`` 同名的图片条目：两栖模型的另一半。
+    """
     return {
         "maker": "kuaishou",
         "name": "kling-v3-omni",

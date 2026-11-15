@@ -1,4 +1,7 @@
-"""``schema_version`` 档位与重复血统的新旧判定。"""
+"""The ``schema_version`` tier and the newer/older judgment of duplicate lineage.
+
+``schema_version`` 档位与重复血统的新旧判定。
+"""
 
 from __future__ import annotations
 
@@ -66,7 +69,10 @@ class TestVersionRelation:
 
     @pytest.mark.parametrize(("existing", "file"), [("bogus", "0.1.0"), ("0.1.0", None)])
     def test_unreadable_version_reports_same(self, existing: object, file: object):
-        """判不出新旧时只说重复、不谈方向——凭空猜一个方向会把用户导向错误的处置。"""
+        """When newer/older cannot be determined, say only duplicate and say nothing about direction: guessing a direction out of thin air would steer the user to the wrong handling.
+
+        判不出新旧时只说重复、不谈方向——凭空猜一个方向会把用户导向错误的处置。
+        """
         assert version_relation(existing, file) is VersionRelation.SAME
 
 
@@ -84,5 +90,8 @@ class TestMeetsMinAppVersion:
         [("0.30", "0.30.0"), (None, "0.30.0"), ("9" * 5000 + ".0.0", "0.30.0"), ("0.30.0", "not-a-version")],
     )
     def test_unreadable_versions_are_not_satisfied(self, required: object, app: str):
-        """判不出高低就不该当作满足。"""
+        """If higher/lower cannot be determined, it must not be treated as satisfied.
+
+        判不出高低就不该当作满足。
+        """
         assert meets_min_app_version(required, app) is False

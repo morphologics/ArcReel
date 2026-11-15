@@ -38,7 +38,7 @@ depends_on: str | Sequence[str] | None = None
 
 logger = logging.getLogger("alembic.runtime.migration")
 
-# 回填迁移 4c643f3ff5b9 写入存量行时用的预设表（原样抄录）。
+# The preset table used when migration 4c643f3ff5b9 backfilled existing rows (copied verbatim). / 回填迁移 4c643f3ff5b9 写入存量行时用的预设表（原样抄录）。
 _BACKFILL_PRESETS: list[tuple[re.Pattern[str], list[int]]] = [
     (re.compile(r"^sora-2(-pro)?(-\d{4}-\d{2}-\d{2})?$", re.I), [4, 8, 12]),
     (re.compile(r"sora.*pro", re.I), [6, 10, 12, 16, 20]),
@@ -85,7 +85,10 @@ def _backfill_preset(model_id: str) -> list[int]:
 
 
 def _as_json(raw: object) -> object:
-    """JSON 列在 SQLite 上可能以文本读回。"""
+    """JSON columns may be read back as text on SQLite.
+
+    JSON 列在 SQLite 上可能以文本读回。
+    """
     if isinstance(raw, str):
         try:
             return json.loads(raw)
@@ -104,7 +107,10 @@ def _stored_durations(raw: object) -> list[int] | None:
 
 
 def _endpoint_facts(endpoint: str, custom_endpoints: Mapping[int, tuple[str, str, object]]) -> tuple[str | None, Any]:
-    """端点的媒体类型，以及 ComfyUI 端点的定义（其余端点为 ``None``）。端点已不存在时媒体类型为 ``None``。"""
+    """The endpoint's media type, and the definition of a ComfyUI endpoint (`None` for other endpoints). When the endpoint no longer exists, the media type is `None`.
+
+    端点的媒体类型，以及 ComfyUI 端点的定义（其余端点为 ``None``）。端点已不存在时媒体类型为 ``None``。
+    """
     from lib.custom_provider import is_custom_endpoint, parse_endpoint_key
 
     if is_custom_endpoint(endpoint):
@@ -132,7 +138,10 @@ def _migrated_overrides(
     max_output_tokens: int | None,
     overrides: dict[str, object],
 ) -> dict[str, object]:
-    """按 docs/adr/0106 把存量可选时长与最大输出 token 并入能力覆盖；已有的同名覆盖优先。"""
+    """Per docs/adr/0106, merge existing selectable durations and max output tokens into capability overrides; an existing override with the same name takes priority.
+
+    按 docs/adr/0106 把存量可选时长与最大输出 token 并入能力覆盖；已有的同名覆盖优先。
+    """
     from arcreel_catalog_core import TextFacts, VideoFacts
     from lib.catalog.query import find_entry
     from lib.custom_provider.duration_presets import infer_supported_durations
@@ -215,6 +224,7 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    # Old prices have been discarded and are empty after rollback; capability overrides are kept, and old versions read them the same way, with "override first".
     # 旧价格已丢弃，回退后为空；能力覆盖保留，旧版本同样按「覆盖优先」读取它们。
     with op.batch_alter_table("custom_provider_model", schema=None) as batch_op:
         batch_op.drop_column("entry_binding")

@@ -1,4 +1,9 @@
-"""大项目性能基准的共享部分：环境、合成项目构建器、进程内 ASGI 应用与计数探针。
+"""Shared parts of the large-project performance benchmark: environment, synthetic project builder, in-process ASGI app and counting probes.
+
+Do not import `lib` / `server` before calling :func:`configure`: the data directory and database URL are
+read at module import time, so this module places all lib / server imports inside function bodies.
+
+大项目性能基准的共享部分：环境、合成项目构建器、进程内 ASGI 应用与计数探针。
 
 调用 :func:`configure` 之前不要 import ``lib`` / ``server``：数据目录与数据库地址在模块导入时就会被读取，
 所以本模块的 lib / server 导入一律放在函数体内。
@@ -29,10 +34,15 @@ from typing import Any
 REPO_ROOT = Path(__file__).resolve().parents[2]
 PROJECT = "demo"
 API = "/api/v1"
-# 合成项目里角色 / 场景 / 道具的比例（12:10:8）。
+# Proportion of characters / scenes / props in the synthetic project (12:10:8). / 合成项目里角色 / 场景 / 道具的比例（12:10:8）。
 ASSET_MIX = (12, 10, 8)
-# 被测聚合接口；名字同时是 --only 的取值。
+# Aggregate endpoints under test; the name is also the value for --only. / 被测聚合接口；名字同时是 --only 的取值。
 ENDPOINTS = ("project", "cost", "wf_status", "wf_plan", "units")
+# "Number of the same aggregate computation running at the same time" is counted by the function that
+# actually does the computation, regardless of whether requests are coalesced.
+# Only project detail and cost estimation coalesce; for the other endpoints one request is one computation,
+# counted by the number of in-flight requests.
+# When a function is renamed or moved, update this in sync; if it cannot be found, install reports an error directly.
 # 「同一份聚合计算同时在算的份数」按真正做计算的函数计数，与请求是否合流无关。
 # 只有项目详情与费用估算会合流；其余接口一次请求就是一份计算，按在途请求数统计。
 # 函数改名或挪动时同步改这里，找不到时 install 会直接报错。
@@ -40,15 +50,20 @@ COMPUTE_MARKERS = {
     "project": ("lib.workflow.workflow_state", "WorkflowStateService", "get_project_summary"),
     "cost": ("server.services.admission.cost_estimation", "CostEstimationService", "compute"),
 }
+# Aligned with lib.infra.content_digest.FILE_DIGEST_RACY_WINDOW_NS, with an extra half-second margin.
 # 与 lib.infra.content_digest.FILE_DIGEST_RACY_WINDOW_NS 对齐，多留半秒余量。
 FILE_DIGEST_RACY_WINDOW_S = 3.5
 MEDIA_SUFFIXES = (".mp4", ".mov", ".webm", ".mp3", ".wav", ".m4a", ".aac", ".ogg", ".flac")
 
 
 def configure(data_root: Path) -> None:
-    """把数据目录、profile、数据库与鉴权密钥指向基准自己的目录。必须先于任何 lib / server 导入。"""
+    """Point the data directory, profile, database and auth secret at the benchmark's own directory. Must precede any lib / server import.
+
+    把数据目录、profile、数据库与鉴权密钥指向基准自己的目录。必须先于任何 lib / server 导入。
+    """
 
     data_root.mkdir(parents=True, exist_ok=True)
+    # A rebuild deletes the entire projects directory: accept only an empty directory or one carrying the benchmark marker, to prevent pointing at a real data directory by mistake.
     # 重建会删掉整个 projects 目录：只接受空目录或带基准标记的目录，防止误指真实数据目录。
     sentinel = data_root / ".arcreel-perf-bench"
     if not sentinel.exists():
@@ -75,6 +90,7 @@ def project_path() -> Path:
     return data_root() / "projects" / PROJECT
 
 
+# ---------------------------------------------------------------- Synthetic project
 # ---------------------------------------------------------------- 合成项目
 def _unit_text(rnd: random.Random, chars: list[str], scenes: list[str], props: list[str]) -> str:
     c1, c2, s, p = rnd.choice(chars), rnd.choice(chars), rnd.choice(scenes), rnd.choice(props)
@@ -85,7 +101,12 @@ def _unit_text(rnd: random.Random, chars: list[str], scenes: list[str], props: l
 
 
 def commit_video(unit_id: str, video_kb: int, script_file: str, *, register: bool = True) -> None:
-    """按上传路径的形状提交一条参考生视频：版本激活与产物清单登记在同一次提交里完成。
+    """Submit one reference-to-video in the shape of the upload path: version activation and artifact manifest registration are done in the same commit.
+
+    ``register=False`` submits only the version, leaving registration to a one-shot backfill at the end of
+    the build: registering one by one rewrites the whole manifest each time, making the build quadratic.
+
+    按上传路径的形状提交一条参考生视频：版本激活与产物清单登记在同一次提交里完成。
 
     ``register=False`` 只提交版本，留给构建末尾一次性补录：逐条登记每次都重写整份清单，构建会变成平方级。
     """
@@ -118,7 +139,10 @@ def commit_video(unit_id: str, video_kb: int, script_file: str, *, register: boo
 
 
 def build(*, episodes: int, units: int, assets: int, video_kb: int, sheet_kb: int, video_ratio: float) -> None:
-    """构建参考生视频合成项目：整本源文、每集已确认的单元规划与剧本、按比例已出片的视频。"""
+    """Build a synthetic reference-to-video project: the whole source, the confirmed unit plan and script for each episode, and videos already produced in proportion.
+
+    构建参考生视频合成项目：整本源文、每集已确认的单元规划与剧本、按比例已出片的视频。
+    """
 
     from lib.artifacts.artifact_activation import activate_artifact_target_state
     from lib.artifacts.artifact_manifest import ArtifactKey
@@ -239,7 +263,13 @@ CONTENT_FACT_FIELDS = ("content_digest", "content_size", "content_mtime_ns")
 
 
 def downgrade_to_v17() -> None:
-    """把构建好的项目退回 schema 17 的形态：抹掉清单条目与版本记录上的内容指纹。
+    """Revert the built project to the schema 17 shape: erase the content fingerprints on manifest entries and version records.
+
+    When existing projects are upgraded, content fingerprints are backfilled by the v17 -> v18 startup
+    migration; the benchmark uses this to make existing videos go through the production backfill to get
+    fingerprints, and measures how long this step takes.
+
+    把构建好的项目退回 schema 17 的形态：抹掉清单条目与版本记录上的内容指纹。
 
     存量项目升级时，内容指纹由启动迁移的 v17→v18 补录写入；基准据此让存量视频走生产补录拿到指纹，
     并测出这一步的耗时。
@@ -268,7 +298,10 @@ def downgrade_to_v17() -> None:
 
 
 def video_fact_coverage() -> dict[str, int]:
-    """清单里已登记的视频条目中，带内容指纹与不带的条数。"""
+    """Among the video entries registered in the manifest, the count with and without a content fingerprint.
+
+    清单里已登记的视频条目中，带内容指纹与不带的条数。
+    """
 
     from lib.artifacts.artifact_manifest import MANIFEST_FILENAME
 
@@ -279,7 +312,10 @@ def video_fact_coverage() -> dict[str, int]:
 
 
 def run_startup_migration() -> dict[str, Any]:
-    """按服务启动的方式跑一遍项目迁移并计时。先清进程内缓存，模拟新进程；操作系统页缓存仍是热的。"""
+    """Run the project migration once the way the service starts up, and time it. Clear in-process caches first to simulate a new process; the OS page cache is still hot.
+
+    按服务启动的方式跑一遍项目迁移并计时。先清进程内缓存，模拟新进程；操作系统页缓存仍是热的。
+    """
 
     from lib.project.project_migrations import run_project_migrations
 
@@ -295,7 +331,10 @@ def run_startup_migration() -> dict[str, Any]:
 def ensure_project(
     *, episodes: int, units: int, assets: int, video_kb: int, sheet_kb: int, video_ratio: float, rebuild: bool
 ) -> None:
-    """参数与上次构建一致就复用已有项目，否则清掉重建。"""
+    """Reuse the existing project if the parameters match the last build; otherwise clear it and rebuild.
+
+    参数与上次构建一致就复用已有项目，否则清掉重建。
+    """
 
     marker = data_root() / f"built-{episodes}x{units}x{assets}-v{video_kb}-s{sheet_kb}-r{video_ratio}.ok"
     if rebuild or not marker.exists():
@@ -321,6 +360,7 @@ def ensure_project(
         )
         (data_root() / "migration.json").write_text(json.dumps(migration))
         marker.write_text("ok")
+        # A just-written file falls in the racy window of the content fingerprint cache and is not cached; wait for the window to pass before measuring, so that the hot state is truly hot.
         # 刚写完的文件落在内容指纹缓存的 racy 窗口里不入缓存，等窗口过去再测，热态才是真热态。
         time.sleep(FILE_DIGEST_RACY_WINDOW_S)
         print(f"built project in {time.perf_counter() - t:.0f}s", flush=True)
@@ -329,7 +369,10 @@ def ensure_project(
 
 
 async def ensure_db() -> None:
-    """建表，并给真实内置供应商配一份假凭证：让报价与能力求值走真实路径（不会发出请求）。"""
+    """Create tables and configure a fake credential for the real built-in providers, so quoting and capability evaluation take the real path (no request is sent).
+
+    建表，并给真实内置供应商配一份假凭证：让报价与能力求值走真实路径（不会发出请求）。
+    """
 
     from lib.agent.agent_session_store.models import register_models as register_agent_models
     from lib.db import async_session_factory
@@ -351,7 +394,10 @@ async def ensure_db() -> None:
 
 
 def clear_caches() -> None:
-    """清掉进程内的读缓存，模拟冷态（不含模块导入与首次初始化，那部分用新进程测）。"""
+    """Clear in-process read caches to simulate a cold state (excluding module import and first-time initialization, which are measured with a new process).
+
+    清掉进程内的读缓存，模拟冷态（不含模块导入与首次初始化，那部分用新进程测）。
+    """
 
     from lib.artifacts.artifact_manifest import reset_manifest_read_cache_for_tests
     from lib.infra.content_digest import reset_file_digest_cache_for_tests
@@ -360,9 +406,12 @@ def clear_caches() -> None:
     reset_manifest_read_cache_for_tests()
 
 
-# ---------------------------------------------------------------- 应用
+# ---------------------------------------------------------------- App / ---------------------------------------------------------------- 应用
 def build_app():
-    """按生产注册方式挂载被测路由（真实鉴权依赖），不跑应用的 lifespan。"""
+    """Mount the routes under test the way production registers them (real auth dependencies), without running the app's lifespan.
+
+    按生产注册方式挂载被测路由（真实鉴权依赖），不跑应用的 lifespan。
+    """
 
     from fastapi import Depends, FastAPI
 
@@ -403,19 +452,23 @@ def pct(xs: list[float], p: float) -> float:
     return xs[min(len(xs) - 1, int(p / 100 * len(xs)))]
 
 
+# ---------------------------------------------------------------- Counting probes
 # ---------------------------------------------------------------- 计数探针
 REQ: contextvars.ContextVar[dict[str, Any] | None] = contextvars.ContextVar("perf_req", default=None)
 
 
 class Probe:
-    """进程内计数：线程跳数与排队、清单锁、同时在算的计算份数、媒体文件内容读取。"""
+    """In-process counters: thread hops and queueing, manifest lock, number of computations in flight at the same time, media file content reads.
+
+    进程内计数：线程跳数与排队、清单锁、同时在算的计算份数、媒体文件内容读取。
+    """
 
     def __init__(self) -> None:
         self.lock = threading.Lock()
         self.computing: dict[str, int] = defaultdict(int)
         self.computing_max: dict[str, int] = defaultdict(int)
         self.lock_fail = 0
-        self.media_bytes: dict[str, int] = defaultdict(int)  # 每次打开一个键：<路径>#<序号>
+        self.media_bytes: dict[str, int] = defaultdict(int)  # One key per open: <path>#<sequence number>. / 每次打开一个键：<路径>#<序号>
         self._media_fds: dict[int, str] = {}
 
     def reset_media(self) -> None:
@@ -423,7 +476,10 @@ class Probe:
             self.media_bytes.clear()
 
     def media_read(self) -> dict[str, int]:
-        """读出了内容的媒体文件打开次数与字节数。只读 1 字节的打开是可读性探测，不算读取内容。"""
+        """Count and bytes of media file opens that read content. An open that reads only 1 byte is a readability probe and does not count as reading content.
+
+        读出了内容的媒体文件打开次数与字节数。只读 1 字节的打开是可读性探测，不算读取内容。
+        """
 
         with self.lock:
             reads = [b for b in self.media_bytes.values() if b > 1]
@@ -433,7 +489,7 @@ class Probe:
         with self.lock:
             self.computing_max = defaultdict(int, self.computing)
 
-    # -- 安装
+    # -- Install / -- 安装
     def install(self) -> None:
         self._install_to_thread()
         self._install_manifest_lock()
@@ -541,7 +597,10 @@ class Probe:
             setattr(cls, attr, self._wrap_compute(name, getattr(cls, attr)))
 
     def _install_media_reads(self) -> None:
-        """统计媒体文件被读出的字节：覆盖 ``os.open``/``os.read`` 与 ``open``/``io.open`` 两条读取途径。"""
+        """Count bytes of media files read: covers both read paths, ``os.open``/``os.read`` and ``open``/``io.open``.
+
+        统计媒体文件被读出的字节：覆盖 ``os.open``/``os.read`` 与 ``open``/``io.open`` 两条读取途径。
+        """
 
         probe = self
         seq = itertools.count()
@@ -623,6 +682,8 @@ def new_request(name: str, started: float) -> dict[str, Any]:
     }
 
 
+# ---------------------------------------------------------------- Stack sampling
+# Threads whose leaf frame lands in these places are considered idle: waiting on a queue, a lock, I/O multiplexing, and the aiosqlite worker thread waiting on a queue in C.
 # ---------------------------------------------------------------- 栈采样
 # 叶子帧落在这些位置的线程视为空闲：等队列、等锁、等 IO 多路复用，以及 aiosqlite 工作线程在 C 层等队列。
 _IDLE_LEAVES = {
@@ -635,7 +696,14 @@ _IDLE_LEAVES = {
 
 
 class StackSampler(threading.Thread):
-    """py-spy 的进程内替代：每隔 ``interval`` 秒记下所有忙线程的调用栈。
+    """In-process replacement for py-spy: every ``interval`` seconds, record the call stacks of all busy threads.
+
+    The sampling thread itself also needs the GIL, and the longer a GIL-holding thread runs the sparser the
+    samples, so look only at proportions, not absolute counts.
+    The number of busy threads at the same moment shows whether several computations are progressing at the
+    same time; whether they truly run in parallel is shown by process CPU usage.
+
+    py-spy 的进程内替代：每隔 ``interval`` 秒记下所有忙线程的调用栈。
 
     采样线程本身也要拿 GIL，持有 GIL 的线程跑得越久采样越稀疏，所以只看比例不看绝对次数。
     同一时刻忙线程的份数说明多份计算是否在同时推进；它们是否真在并行，看进程 CPU 占用。
@@ -651,6 +719,7 @@ class StackSampler(threading.Thread):
 
     @staticmethod
     def _frame_label(frame) -> str:
+        # Use module names rather than file names: same-named files in different packages (such as two utils.py) are not merged into one hotspot.
         # 用模块名而非文件名：不同包下的同名文件（如两个 utils.py）不会并成一个热点。
         code = frame.f_code
         module = frame.f_globals.get("__name__") or os.path.basename(code.co_filename)
@@ -680,7 +749,10 @@ class StackSampler(threading.Thread):
         self.join()
 
     def summary(self, top: int = 25) -> dict[str, Any]:
-        """自身（叶子帧）与累计（栈上出现过）占比最高的函数，以及同时忙的线程份数分布。"""
+        """Functions with the highest share by self (leaf frame) and cumulative (appearing on the stack), plus the distribution of the number of simultaneously busy threads.
+
+        自身（叶子帧）与累计（栈上出现过）占比最高的函数，以及同时忙的线程份数分布。
+        """
 
         total = sum(self.stacks.values()) or 1
         self_counts: dict[str, int] = defaultdict(int)
@@ -703,7 +775,10 @@ class StackSampler(threading.Thread):
         }
 
     def write_collapsed(self, path: Path) -> None:
-        """flamegraph.pl / speedscope 可读的折叠栈格式。"""
+        """Collapsed-stack format readable by flamegraph.pl / speedscope.
+
+        flamegraph.pl / speedscope 可读的折叠栈格式。
+        """
 
         ranked = sorted(self.stacks.items(), key=lambda kv: -kv[1])
         path.write_text("".join(f"{stack} {n}\n" for stack, n in ranked), encoding="utf-8")

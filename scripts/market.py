@@ -1,4 +1,8 @@
-"""市场仓工作流的语言边界：子包负责校验与生成，应用目录提供诊断与汇总文案。
+"""Language boundary of the market repo workflow: the subpackage handles validation and generation, and the app catalog provides diagnostic and summary text.
+
+Usage: ``python -m scripts.market [--locale zh|en|vi] check|generate <dir>``.
+
+市场仓工作流的语言边界：子包负责校验与生成，应用目录提供诊断与汇总文案。
 
 用法：``python -m scripts.market [--locale zh|en|vi] check|generate <dir>``。
 """
@@ -22,6 +26,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         "--locale", choices=sorted(path.parent.name for path in CATALOG_ROOT.glob("*/validation.py")), default="zh"
     )
     args, remaining = parser.parse_known_args(argv)
+    # lib.__init__ loads project and database dependencies; the workflow installs only the subpackage and reads the standalone message dictionary directly.
     # lib.__init__ 会加载项目与数据库依赖；工作流只安装子包，直接读独立的消息字典。
     messages = runpy.run_path(str(CATALOG_ROOT / args.locale / "validation.py"))["MESSAGES"]
 

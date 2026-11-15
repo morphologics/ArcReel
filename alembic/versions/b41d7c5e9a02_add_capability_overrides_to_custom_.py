@@ -20,7 +20,10 @@ depends_on: str | Sequence[str] | None = None
 
 
 def upgrade() -> None:
-    """加模型级能力覆盖列（稀疏 JSON，NULL = 全部跟随系统判定）。"""
+    """Add the model-level capability override column (sparse JSON, NULL = all follow the system's determination).
+
+    加模型级能力覆盖列（稀疏 JSON，NULL = 全部跟随系统判定）。
+    """
     with op.batch_alter_table("custom_provider_model", schema=None) as batch_op:
         batch_op.add_column(sa.Column("capability_overrides", sa.JSON(), nullable=True))
 

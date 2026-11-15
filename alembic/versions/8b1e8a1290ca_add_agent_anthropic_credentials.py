@@ -61,8 +61,11 @@ def upgrade() -> None:
             postgresql_where=sa.text("is_active"),
         )
 
+    # -- Data migration: old system_setting anthropic_* -> one __custom__ active record --
     # ── 数据迁移：旧 system_setting 中 anthropic_* → 一条 __custom__ active 记录 ──
     bind = op.get_bind()
+    # On PG, a ProgrammingError inside a transaction marks it as aborted and all later operations fail.
+    # Wrap the data migration block in a SAVEPOINT; on failure roll back to the savepoint so the outer alembic transaction is not polluted.
     # PG 在事务中遇到 ProgrammingError 会把事务标记为 aborted，后续操作全部失败。
     # 用 SAVEPOINT 包裹数据迁移块，失败时回滚到 savepoint，不污染外层 alembic 事务。
     savepoint = bind.begin_nested()
@@ -77,6 +80,8 @@ def upgrade() -> None:
 
         if settings.get("anthropic_api_key"):
             now = datetime.now(UTC)
+            # The old setting has no display_name, so fall back to the host of base_url (locale-neutral);
+            # if there is no host, fall back to the brand name "Anthropic". The user can rename it on first entering the UI.
             # 旧设置无 display_name，用 base_url 的 host 兜底（locale-neutral）；
             # 缺 host 时退回品牌名 "Anthropic"。用户首次进入 UI 即可重命名。
             base_url = settings.get("anthropic_base_url", "") or ""
@@ -107,6 +112,9 @@ def upgrade() -> None:
             )
         savepoint.commit()
     except Exception as exc:
+        # A failed data migration does not block the schema upgrade; the user can create it manually in the UI.
+        # Log only the exception class name: str() of a SQLAlchemy exception splices the SQL bind parameters (including api_key)
+        # into the message, and landing in logs/stderr would leak the key.
         # 数据迁移失败不阻塞 schema 升级；用户可在 UI 里手动建。
         # 只打异常类名——SQLAlchemy 异常 str() 会把 SQL 绑定参数（含 api_key）
         # 拼进消息，落进日志/stderr 就是密钥泄漏。

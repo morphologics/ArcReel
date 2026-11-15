@@ -1,4 +1,7 @@
-"""``python -m arcreel_catalog_core``：退出码即 CI 判定，问题逐行可定位。"""
+"""``python -m arcreel_catalog_core``: the exit code is the CI verdict, and problems are locatable line by line.
+
+``python -m arcreel_catalog_core``：退出码即 CI 判定，问题逐行可定位。
+"""
 
 from __future__ import annotations
 

@@ -1,4 +1,9 @@
-"""把读入后的条目写回目录数据的 JSON 形状，与 ``parse_entry`` 互逆。
+"""Writes a parsed entry back into the JSON shape of catalog data; the inverse of ``parse_entry``.
+
+Entry copies saved after user edits are stored with this: the copy has the same format as catalog data and goes through
+the same instance-side validation when read back.
+
+把读入后的条目写回目录数据的 JSON 形状，与 ``parse_entry`` 互逆。
 
 用户修改存下的条目副本用它落库：副本与目录数据同一格式，读回时过同一个实例侧校验。
 """
@@ -59,7 +64,10 @@ def _price(price: PriceTable) -> dict[str, object]:
 
 
 def dump_entry(entry: CatalogEntry) -> dict[str, object]:
-    """条目的 JSON 形状（可直接 ``json.dumps``）。缺省值的可选字段省略。"""
+    """The entry's JSON shape (can go straight into ``json.dumps``). Optional fields at their default values are omitted.
+
+    条目的 JSON 形状（可直接 ``json.dumps``）。缺省值的可选字段省略。
+    """
     raw: dict[str, object] = {
         "maker": entry.maker,
         "name": entry.name,

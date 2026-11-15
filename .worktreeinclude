@@ -1,3 +1,10 @@
+# When a native worktree (claude --worktree / EnterWorktree) creates a new checkout,
+# copy these gitignored local files into it. .gitignore syntax; only files that match and are ignored are copied.
+#
+# Copying projects/ as a whole = the new worktree comes with real project data + the config DB.
+# This is a "copy" not a "symlink": each worktree holds its own independent copy, so alembic migrations do not pollute each other.
+# Cost: about 1.6GB per worktree (versions/ history + media account for most);
+# arcreel.db is in WAL mode, so stop the dev server before creating a worktree to avoid copying an inconsistent snapshot.
 # 原生 worktree(claude --worktree / EnterWorktree)创建新 checkout 时，
 # 把这些被 gitignore 的本地文件复制进去。.gitignore 语法；仅复制匹配且被忽略的文件。
 #

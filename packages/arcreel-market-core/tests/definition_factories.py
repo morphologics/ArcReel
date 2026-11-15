@@ -1,4 +1,7 @@
-"""测试输入构造器：最小可用的端点定义，用例就地改出反例。"""
+"""Test input builders: a minimal usable endpoint definition, which test cases modify in place into counterexamples.
+
+测试输入构造器：最小可用的端点定义，用例就地改出反例。
+"""
 
 from __future__ import annotations
 
@@ -6,7 +9,12 @@ from typing import Any
 
 
 def custom_endpoint_definition(**overrides: Any) -> dict[str, Any]:
-    """最小可用的声明式调用端点定义：单张首帧、提交 + 轮询、扁平取值，校验零错误零警告。
+    """Minimal usable declarative invocation endpoint definition: a single first frame, submit + poll, flat value extraction, with zero validation errors and zero warnings.
+
+    Test cases modify it in place into counterexamples or add optional constructs; ``overrides`` overrides top-level keys
+    (for example swapping ``meta`` to make duplicate lineage).
+
+    最小可用的声明式调用端点定义：单张首帧、提交 + 轮询、扁平取值，校验零错误零警告。
 
     用例就地改出反例或补上可选构造；``overrides`` 覆盖顶层键（如换 ``meta`` 造重复血统）。
     """
@@ -41,7 +49,13 @@ def custom_endpoint_definition(**overrides: Any) -> dict[str, Any]:
 
 
 def image_endpoint_definition(**overrides: Any) -> dict[str, Any]:
-    """最小可用的声明式图片定义：文生图、提交 + 轮询、取图片 URL，校验零错误零警告。
+    """Minimal usable declarative image definition: text-to-image, submit + poll, fetch the image URL, with zero validation errors and zero warnings.
+
+    The protocol shape follows providers of the "OpenAI-style path + async task" kind: submit returns ``data[0].task_id``,
+    polling reads ``data.status``, and the image is ``data.result.images[0].url[0]``. Test cases modify it in place into
+    counterexamples.
+
+    最小可用的声明式图片定义：文生图、提交 + 轮询、取图片 URL，校验零错误零警告。
 
     协议形状取「OpenAI 风格路径 + 异步任务」一类供应商：提交返回 ``data[0].task_id``，轮询读
     ``data.status``，取图 ``data.result.images[0].url[0]``。用例就地改出反例。
@@ -86,7 +100,12 @@ def image_endpoint_definition(**overrides: Any) -> dict[str, Any]:
 
 
 def _comfyui_api_workflow() -> dict[str, Any]:
-    """最小可用的 ComfyUI「Export (API)」导出物：文生视频一条链路，节点 id 与真实导出同为数字串。
+    """Minimal usable ComfyUI "Export (API)" export: one text-to-video chain, with node ids that are numeric strings just like a real export.
+
+    There is one example of each kind of field: a literal value (``6.text``), a link (``6.clip``), a bindable number
+    (``5.width``, ``3.seed``), and an artifact node (``9``). Test cases modify it in place into counterexamples.
+
+    最小可用的 ComfyUI「Export (API)」导出物：文生视频一条链路，节点 id 与真实导出同为数字串。
 
     每类字段各有一例：字面值（``6.text``）、连线（``6.clip``）、可绑的数值（``5.width``、``3.seed``）、
     产物节点（``9``）。用例就地改出反例。
@@ -118,7 +137,13 @@ def _comfyui_api_workflow() -> dict[str, Any]:
 
 
 def comfyui_endpoint_definition(**overrides: Any) -> dict[str, Any]:
-    """最小可用的 ComfyUI 端点定义：绑定齐备、校验零错误。
+    """Minimal usable ComfyUI endpoint definition: bindings complete, with zero validation errors.
+
+    ``overrides`` overrides top-level keys; changing ``bindings`` or ``media_type`` produces the various counterexamples.
+    When ``media_type="image"`` and no ``bindings`` are supplied, it contains no ``fps`` binding: image endpoints have no
+    frame rate dimension.
+
+    最小可用的 ComfyUI 端点定义：绑定齐备、校验零错误。
 
     ``overrides`` 覆盖顶层键；改 ``bindings`` 或 ``media_type`` 即可造出各类反例。
     ``media_type="image"`` 且未自带 ``bindings`` 时不含 ``fps`` 绑定：图像端点没有帧率这一维。

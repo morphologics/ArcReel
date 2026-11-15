@@ -103,6 +103,12 @@ def upgrade() -> None:
 def downgrade() -> None:
     """Downgrade schema.
 
+    Indexes created on tasks by itself are dropped before and outside the table rebuild: ``preserve_sqlite_indexes``
+    cannot tell an intentional drop from a silent loss, and if placed inside it, the drop would be replayed as a
+    loss, while user_id is no longer on the table at that point, so the replay would certainly fail.
+
+    Downgrade schema.
+
     tasks 上自己建的索引在重建表之外先删——``preserve_sqlite_indexes`` 分不清有意删除与静默
     丢失，放在它里面会被当作丢失回放，而 user_id 此时已不在表上，回放必然报错。
     """

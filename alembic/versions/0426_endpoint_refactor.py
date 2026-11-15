@@ -24,6 +24,7 @@ _UPGRADE_ENDPOINT_MAP = {
     ("openai", "video"): "openai-video",
     ("google", "text"): "gemini-generate",
     ("google", "image"): "gemini-image",
+    # Fallback: use the OpenAI SDK path, more generally applicable than newapi-video across the relay-station ecosystem.
     ("google", "video"): "openai-video",  # 兜底：用 OpenAI SDK 路径，比 newapi-video 在中转站生态更通用
     ("newapi", "text"): "openai-chat",
     ("newapi", "image"): "openai-images",
@@ -37,7 +38,7 @@ _UPGRADE_DISCOVERY_MAP = {
     "newapi": "openai",
 }
 
-# 反向：endpoint → (api_format, media_type)。downgrade 用。
+# Reverse: endpoint -> (api_format, media_type). Used by downgrade. / 反向：endpoint → (api_format, media_type)。downgrade 用。
 _DOWNGRADE_MAP = {
     "openai-chat": ("openai", "text"),
     "gemini-generate": ("google", "text"),
@@ -51,10 +52,11 @@ _DOWNGRADE_MAP = {
 def upgrade() -> None:
     bind = op.get_bind()
 
-    # 1) provider 表：add 新列
+    # 1) provider table: add the new columns. / 1) provider 表：add 新列
     with op.batch_alter_table("custom_provider", schema=None) as batch_op:
         batch_op.add_column(sa.Column("discovery_format", sa.String(length=32), nullable=True))
 
+    # 2) provider backfill: one UPDATE per api_format, then a fail-loud check for full coverage.
     # 2) provider 回填：每个 api_format 一条 UPDATE，最后 fail-loud 校验全量覆盖
     provider_total = bind.execute(sa.text("SELECT COUNT(*) FROM custom_provider")).scalar() or 0
     provider_mapped = 0
@@ -67,10 +69,11 @@ def upgrade() -> None:
     if provider_mapped != provider_total:
         raise RuntimeError(f"custom_provider: {provider_total - provider_mapped} 条记录的 api_format 不在迁移映射中")
 
-    # 3) model 表：add endpoint
+    # 3) model table: add endpoint. / 3) model 表：add endpoint
     with op.batch_alter_table("custom_provider_model", schema=None) as batch_op:
         batch_op.add_column(sa.Column("endpoint", sa.String(length=32), nullable=True))
 
+    # 4) model backfill: at most 9 UPDATEs by (api_format, media_type) combination, with a fail-loud check.
     # 4) model 回填：按 (api_format, media_type) 组合 ≤9 条 UPDATE，fail-loud 校验
     model_total = bind.execute(sa.text("SELECT COUNT(*) FROM custom_provider_model")).scalar() or 0
     model_mapped = 0
@@ -89,7 +92,7 @@ def upgrade() -> None:
             f"custom_provider_model: {model_total - model_mapped} 条记录的 (api_format, media_type) 不在迁移映射中"
         )
 
-    # 5) drop 旧列 + alter NOT NULL
+    # 5) drop the old columns + alter to NOT NULL. / 5) drop 旧列 + alter NOT NULL
     with op.batch_alter_table("custom_provider_model", schema=None) as batch_op:
         batch_op.alter_column("endpoint", nullable=False)
         batch_op.drop_column("media_type")
@@ -102,6 +105,7 @@ def upgrade() -> None:
 def downgrade() -> None:
     bind = op.get_bind()
 
+    # 1) provider table: add api_format and backfill by discovery_format (NewAPI information is already lost, so fall back uniformly to openai).
     # 1) provider 表：add api_format，按 discovery_format 回填（NewAPI 信息已丢失，统一兜底为 openai）
     with op.batch_alter_table("custom_provider", schema=None) as batch_op:
         batch_op.add_column(sa.Column("api_format", sa.String(length=32), nullable=True))
@@ -109,6 +113,7 @@ def downgrade() -> None:
     bind.execute(sa.text("UPDATE custom_provider SET api_format = 'google' WHERE discovery_format = 'google'"))
     bind.execute(sa.text("UPDATE custom_provider SET api_format = 'openai' WHERE discovery_format != 'google'"))
 
+    # 2) model table: add media_type and look it up in reverse by endpoint -> media_type (one UPDATE per endpoint, fail-loud).
     # 2) model 表：add media_type，按 endpoint → media_type 反查（每个 endpoint 一条 UPDATE，fail-loud）
     with op.batch_alter_table("custom_provider_model", schema=None) as batch_op:
         batch_op.add_column(sa.Column("media_type", sa.String(length=16), nullable=True))
@@ -126,7 +131,7 @@ def downgrade() -> None:
             f"custom_provider_model: {model_total - model_mapped} 条记录的 endpoint 不在 downgrade 映射中"
         )
 
-    # 3) drop 新列 + alter NOT NULL
+    # 3) drop the new columns + alter to NOT NULL. / 3) drop 新列 + alter NOT NULL
     with op.batch_alter_table("custom_provider_model", schema=None) as batch_op:
         batch_op.alter_column("media_type", nullable=False)
         batch_op.drop_column("endpoint")

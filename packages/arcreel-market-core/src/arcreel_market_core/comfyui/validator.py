@@ -1,4 +1,14 @@
-"""ComfyUI 端点定义的校验实现：``kind: comfyui`` 那一格的分派目标。
+"""Validation implementation for ComfyUI endpoint definitions: the dispatch target of the ``kind: comfyui`` cell.
+
+Two layers of gates: ``schema.json`` handles structure (the field set, the shape of the target 4-tuple, and which
+semantic key an entry's optional keys land on), while this module handles semantics: the prompt and artifact must be
+bound, semantic keys follow an allowlist per media type, the node and field each target points to must really exist in
+the workflow and not be a link, and credentials are written only from the ``auth`` section. Both layers produce
+:class:`DefinitionIssue`, sharing the same diagnostic codes as declarative definitions.
+
+Pure logic: no database, no requests, no environment reads.
+
+ComfyUI 端点定义的校验实现：``kind: comfyui`` 那一格的分派目标。
 
 两层闸门：``schema.json`` 管结构（字段集、目标四元组的形状、条目可选键落在哪个语义键上），本模块
 管语义——提示词与产物必须绑定、语义键按媒体类型走白名单、每个目标指向的节点与字段在 workflow 里
@@ -33,9 +43,12 @@ from .workflow import is_link, node_inputs
 
 SCHEMA_PATH = Path(__file__).parent / "schema.json"
 
+# Version of the ComfyUI definition format itself, unrelated to the version line of declarative definitions.
 #: ComfyUI 定义格式自身的版本，与声明式定义的版本线互不相干。
 CURRENT_SCHEMA_VERSION = "1.0.0"
 
+# Fields that declarative definitions have and ComfyUI definitions do not, mapped to where they went. This one is the easiest to write when
+# writing a ComfyUI definition in the declarative style, and a generic "unknown field" does not explain why it is absent.
 #: 声明式定义有、ComfyUI 定义没有的字段 → 其去处。照声明式的样子写一份 ComfyUI 定义时最容易写出
 #: 这一个，笼统的「不认识的字段」说不清它为什么不在。
 REMOVED_FIELD_REASONS: Mapping[str, str] = {
@@ -45,7 +58,10 @@ REMOVED_FIELD_REASONS: Mapping[str, str] = {
 
 @cache
 def load_schema() -> dict[str, Any]:
-    """读入并缓存 ComfyUI 定义的 ``schema.json``。对外公开，供文档站与前端取同一份契约。"""
+    """Reads and caches the ``schema.json`` of ComfyUI definitions. It is public so the docs site and the frontend can use the same contract.
+
+    读入并缓存 ComfyUI 定义的 ``schema.json``。对外公开，供文档站与前端取同一份契约。
+    """
     return json.loads(SCHEMA_PATH.read_text(encoding="utf-8"))
 
 
@@ -57,7 +73,13 @@ def _schema_validator() -> Draft202012Validator:
 
 
 def validate_comfyui_definition(document: Mapping[str, Any]) -> DefinitionDiagnostics:
-    """ComfyUI 定义的两层闸门。
+    """The two-layer gate for ComfyUI definitions.
+
+    When the structure layer has errors the semantic layer is not run: the cross-check between bindings and workflow
+    presupposes that both sides are well-shaped, and continuing on a broken structure would only produce misleading
+    secondary errors.
+
+    ComfyUI 定义的两层闸门。
 
     结构层有错时不再跑语义层：绑定与 workflow 的交叉检查都以两边形状成立为前提，在残缺结构上
     继续跑只会产出误导性的次生错误。
@@ -72,13 +94,21 @@ def validate_comfyui_definition(document: Mapping[str, Any]) -> DefinitionDiagno
     )
 
 
+# Query parameters the artifact-fetch hop (``GET /view``) itself must carry. When a credential query has the same name as one of them, the request-building step
+# lets the artifact parameter override the credential, so submit and poll pass but the download lacks the credential, and a proxy most likely replies 401.
 #: 取产物那一跳（``GET /view``）自己要带的查询参数。凭证 query 与它们同名时，拼请求的那一步
 #: 由产物参数覆盖凭证，提交与轮询都过得去、下载却少了凭证，代理多半回 401。
 _VIEW_RESERVED_QUERY = frozenset({"filename", "subfolder", "type"})
 
 
 def _reserved_auth_query_issues(document: Mapping[str, Any]) -> Iterator[DefinitionIssue]:
-    """``auth.query`` 里占用了产物下载路由自带参数名的条目。
+    """Entries in ``auth.query`` that occupy parameter names the artifact download route itself carries.
+
+    The two cannot occupy the same key: ComfyUI only returns the file when it sees these three parameters, so replacing
+    them amounts to replacing what is being downloaded. Rejecting it at save time is better than letting the user hit a
+    401 on an execution that has already finished producing the video.
+
+    ``auth.query`` 里占用了产物下载路由自带参数名的条目。
 
     两者占不了同一个键：ComfyUI 认这三个参数才给得出文件，换掉它们等于换掉要下载的东西。
     保存期拒掉，好过让用户在一次已经出完片的执行上撞 401。
@@ -94,7 +124,14 @@ def _reserved_auth_query_issues(document: Mapping[str, Any]) -> Iterator[Definit
 
 
 def structural_diagnostics(document: object) -> DefinitionDiagnostics:
-    """只跑结构层：字段集、目标四元组的形状、条目可选键落在哪个语义键上。
+    """Runs only the structure layer: the field set, the shape of the target 4-tuple, and which semantic key an entry's optional keys land on.
+
+    Node binding inference has to run on definitions where "the structure stands but the bindings do not line up yet":
+    when re-importing a modified workflow, most nodes that existing entries point to no longer exist, which is exactly
+    the input the rematch is meant to handle, not a reason to reject it. The semantic layer on such a definition would
+    only report a string of errors that are bound to be true.
+
+    只跑结构层：字段集、目标四元组的形状、条目可选键落在哪个语义键上。
 
     节点绑定推断要在「结构立得住、绑定还对不上」的定义上跑——重导入一份改过的 workflow 时，既有
     条目指向的节点大半已不存在，那正是重匹配要处理的输入，不是拒绝它的理由。语义层在那种定义上
@@ -121,7 +158,10 @@ def _semantic_issues(document: Mapping[str, Any]) -> Iterator[DefinitionIssue]:
 
 
 def _required_binding_issues(bindings: Mapping[str, Any]) -> Iterator[DefinitionIssue]:
-    """提示词与产物必须已绑定：空列表与键缺失都不够。"""
+    """The prompt and artifact must already be bound: both an empty list and a missing key fall short.
+
+    提示词与产物必须已绑定：空列表与键缺失都不够。
+    """
     for key in REQUIRED_BINDING_KEYS:
         if not bindings.get(key):
             yield DefinitionIssue(
@@ -130,7 +170,10 @@ def _required_binding_issues(bindings: Mapping[str, Any]) -> Iterator[Definition
 
 
 def _media_type_issues(bindings: Mapping[str, Any], media_type: str) -> Iterator[DefinitionIssue]:
-    """语义键按媒体类型走白名单：图像端点没有首尾帧，也没有帧数与帧率。"""
+    """Semantic keys follow an allowlist per media type: image endpoints have no first/last frames, and no frame count or frame rate.
+
+    语义键按媒体类型走白名单：图像端点没有首尾帧，也没有帧数与帧率。
+    """
     allowed = BINDING_KEYS_BY_MEDIA_TYPE[media_type]
     for key in bindings:
         if key not in allowed:
@@ -144,7 +187,13 @@ def _media_type_issues(bindings: Mapping[str, Any], media_type: str) -> Iterator
 def _target_issues(
     bindings: Mapping[str, Any], workflow: Mapping[str, Any], media_type: str
 ) -> Iterator[DefinitionIssue]:
-    """每个目标都要落在 workflow 里真实存在、且不是连线的字段上。
+    """Every target must land on a field that really exists in the workflow and is not a link.
+
+    For an out-of-bounds semantic key, targets are no longer checked one by one: its entries will not be filled anyway,
+    and reporting another string of node-located errors would only drown out the real diagnostic "this key does not exist
+    on image endpoints".
+
+    每个目标都要落在 workflow 里真实存在、且不是连线的字段上。
 
     越界的语义键不再逐条查目标：它的条目本就不会被填值，再报一串定位到节点的错误只会淹没
     「这个键在图像端点上不存在」这条真正的诊断。
@@ -184,7 +233,20 @@ def _one_target_issues(path: str, target: Mapping[str, Any], workflow: Mapping[s
 
 
 def _consumer_issues(path: str, target: Mapping[str, Any], workflow: Mapping[str, Any]) -> Iterator[DefinitionIssue]:
-    """参考图条目嵌套的 ``consumer`` 也要对得上 workflow。
+    """The ``consumer`` nested in a reference image entry must also match the workflow.
+
+    It records "which entry of which node this slot's image is connected to", and actual-send construction uses it to
+    decide whether to change the image or repeat-fill the last one when the count decreases. All three things must match
+    the live graph: the node is present, the entry is present, and the type has not changed; in addition, this entry must
+    really be fed by this slot.
+
+    Checking only the first three is not enough. Definitions can be shared and hand-edited, and someone could casually
+    write an entry that exists and is indeed selectable but is unrelated to this slot. It would pass the first three
+    checks, and actual-send construction would conclude "the image can be changed" and then delete nodes along the
+    required branch, which could directly hit ``comfyui_image_drop_unsupported`` when the correct handling would have
+    been to repeat-fill the last image.
+
+    参考图条目嵌套的 ``consumer`` 也要对得上 workflow。
 
     它记的是「这个格子的图接进了谁的哪个入口」，实发构造照它决定张数变少时改图还是重复填充最后
     一张。三样都要对得上活图：节点在、入口在、类型没变，还要这个入口真的由这个格子喂着。
@@ -222,7 +284,15 @@ def _consumer_issues(path: str, target: Mapping[str, Any], workflow: Mapping[str
 
 
 def _class_type_issues(path: str, record: Mapping[str, Any], node: Mapping[str, Any]) -> Iterator[DefinitionIssue]:
-    """条目记下的 ``class_type`` 要与它指的那个节点现在的类型一致。
+    """The ``class_type`` recorded in an entry must match the current type of the node it points to.
+
+    This check is not decoration: rematching identifies by it. If the node is still there but the type does not match,
+    rematching does not recognize this landing spot and instead looks across the whole graph for another node unique by
+    "type plus title" to migrate to, or judges the entry lost. If a type is recorded wrong, the binding quietly moves to a
+    node the user never pointed at. The same holds for the reference image ``consumer``: actual-send construction looks
+    up the selectable entry table with it to decide whether to change the image.
+
+    条目记下的 ``class_type`` 要与它指的那个节点现在的类型一致。
 
     这一项不是装饰：重匹配拿它认身份——节点还在、类型对不上，重匹配就不认这个落点，转而在全图
     找「类型加标题唯一」的另一个节点迁过去，或者判这条丢了。记错一个类型，绑定会悄悄搬到一个用户
@@ -239,7 +309,13 @@ def _class_type_issues(path: str, record: Mapping[str, Any], node: Mapping[str, 
 
 
 def _feeds(workflow: Mapping[str, Any], node_id: str, raw: object) -> bool:
-    """某个入口上的这条连线，顺上游走得回这个节点吗。
+    """Whether the link on an entry, followed upstream, leads back to this node.
+
+    The consumer recorded by inference is not necessarily the direct consumer: the image first passes through a chain
+    of relay nodes before reaching the entry that takes the image, so this is judged by reachability rather than by
+    comparing the two ends of one edge.
+
+    某个入口上的这条连线，顺上游走得回这个节点吗。
 
     推断记下的消费者不一定是直接消费者：图会先过一段转接节点再落到收图的那个入口，因此这里按
     可达性判，而不是只比一条边的两端。
@@ -251,7 +327,20 @@ def _feeds(workflow: Mapping[str, Any], node_id: str, raw: object) -> bool:
 
 
 def _collision_issues(bindings: Mapping[str, Any], media_type: str) -> Iterator[DefinitionIssue]:
-    """一个字段只能是一个语义键的写入落点。
+    """A field can be the write landing spot of only one semantic key.
+
+    Actual-send construction fills values per semantic key, and when two keys land on the same field the one filled later
+    overwrites the earlier: when ``prompt`` and ``negative_prompt`` share one ``text`` entry, the negative prompt the user
+    gets is actually the positive one, the output is wrong, and it is not visible where the error is. Two entries on the
+    same key landing in one place is the same: the second reference image overwrites the first.
+
+    Read-only targets do not occupy a landing spot (they only read values and do not write back), and node-level artifact
+    targets have no field to occupy.
+
+    Ownership is decided by the writing order in the definition: the key written first keeps the landing spot, and the
+    one written later is reported as a duplicate, reported at a position the user can match up.
+
+    一个字段只能是一个语义键的写入落点。
 
     实发构造按语义键逐项填值，两个键落在同一个字段上时后填的那项盖掉先填的——``prompt`` 与
     ``negative_prompt`` 共用一个 ``text`` 入口时，用户拿到的负向提示词其实是正向那条，出图不对
@@ -282,7 +371,19 @@ def _collision_issues(bindings: Mapping[str, Any], media_type: str) -> Iterator[
 
 
 def _fps_issues(bindings: Mapping[str, Any], workflow: Mapping[str, Any], media_type: str) -> Iterator[DefinitionIssue]:
-    """帧率只能有一个真相源：多个 ``fps`` 只读绑定读出的字面值必须一致。
+    """There can be only one source of truth for the frame rate: the literal values read by multiple ``fps`` read-only bindings must agree.
+
+    The ``frames`` conversion (``round(duration x frame rate) + 1``) applies one frame rate to all frame-count targets.
+    When two read-only bindings read different literal values, the definition itself cannot say which frame rate this
+    workflow runs at: the construction layer takes the first, the frame count of the other branch is computed at the
+    wrong frame rate, and the final cut ends up longer or shorter than the user chose with nobody reporting an error. The
+    same applies when the same value is stated both by an ``fps`` binding and by a hand-written constant on a ``frames``
+    entry. A binding whose literal value cannot be read does not take part in the check: that means the node or field is
+    no longer in the graph, which the target validation reports separately.
+
+    Image endpoints do not have these two semantic keys (``BINDING_KEYS_BY_MEDIA_TYPE``) and do not take part in this check.
+
+    帧率只能有一个真相源：多个 ``fps`` 只读绑定读出的字面值必须一致。
 
     ``frames`` 的换算（``round(时长 × 帧率) + 1``）把一个帧率套到全部帧数目标上。两条只读绑定
     读出不同字面值时，这份定义自己就说不清这份 workflow 跑在哪个帧率上，构造层取第一个、另一条
@@ -310,7 +411,10 @@ def _format_fps(value: float) -> str:
 
 
 def _write_landing(target: Mapping[str, Any]) -> tuple[str, str] | None:
-    """这个目标会往哪个字段写值。只读目标与节点级的产物目标都没有落点。"""
+    """Which field this target writes a value to. Read-only targets and node-level artifact targets have no landing spot.
+
+    这个目标会往哪个字段写值。只读目标与节点级的产物目标都没有落点。
+    """
     if target.get("direction") == "read":
         return None
     name = target.get("input")
@@ -318,7 +422,12 @@ def _write_landing(target: Mapping[str, Any]) -> tuple[str, str] | None:
 
 
 def _auth_variable_issues(path: str, name: str) -> list[DefinitionIssue]:
-    """ComfyUI 的 ``auth`` 节只认 ``api_key``：别的变量都无处取值。
+    """The ``auth`` section of ComfyUI only recognizes ``api_key``: no other variable has anywhere to get a value from.
+
+    The auth section of a declarative definition can reference base variables such as ``base_url``, but the ComfyUI
+    client has no such template context, so template evaluation beyond the credential does not exist on this side.
+
+    ComfyUI 的 ``auth`` 节只认 ``api_key``：别的变量都无处取值。
 
     声明式定义的 auth 节可以引用 ``base_url`` 这类基础变量，ComfyUI 客户端没有那套模板上下文
     ——凭证之外的模板求值在这一侧根本不存在。
@@ -327,7 +436,12 @@ def _auth_variable_issues(path: str, name: str) -> list[DefinitionIssue]:
 
 
 def _api_key_outside_auth_issues(document: Mapping[str, Any]) -> Iterator[DefinitionIssue]:
-    """凭证只从 ``auth`` 节写入。
+    """Credentials are written only from the ``auth`` section.
+
+    The workflow is an embedded base copy taken as is and is not template-rendered at submit time, so writing
+    ``{{api_key}}`` in it neither takes effect nor distributes the real credential with the exported file.
+
+    凭证只从 ``auth`` 节写入。
 
     workflow 是原样内嵌的底稿、提交时不作模板渲染，里面写 ``{{api_key}}`` 既不会生效，又会把
     真实凭证随导出文件分发出去。

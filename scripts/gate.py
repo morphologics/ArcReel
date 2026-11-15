@@ -43,6 +43,8 @@ class Step:
 
 
 UV = ("uv", "run")
+# Domain name -> steps. For why `-n 4 --dist loadfile` takes these values see the pytest config comments in pyproject.toml;
+# for `--max-worker-restart=0` see the backend test step in .github/workflows/test.yml.
 # 域名 → 步骤。`-n 4 --dist loadfile` 的取值理由见 pyproject.toml 的 pytest 配置注释，
 # `--max-worker-restart=0` 的理由见 .github/workflows/test.yml 的后端测试步骤。
 DOMAINS: dict[str, tuple[Step, ...]] = {
@@ -72,6 +74,10 @@ DOMAINS: dict[str, tuple[Step, ...]] = {
     "website": (Step(("pnpm", "check"), ROOT / "website"),),
 }
 
+# Domain -> trigger paths, fnmatch globs (`*` also crosses directory separators). Maintained against .github/actions/domain-filter/action.yml in CI:
+# CI's backend domain corresponds to backend, market-core and catalog-core here, and the workflow domain to workflows;
+# CI's docker domain (Dockerfile, public/) has no local gate. The tests and conventions domains are seconds-long
+# structural audits whose trigger conditions include cases such as "a new exemption comment" that cannot be judged from paths, so they always run when domains are selected by change.
 # 域 → 触发路径，fnmatch 通配（`*` 也跨目录分隔符）。与 CI 的 .github/actions/domain-filter/action.yml
 # 对照维护：CI 的 backend 域对应这里的 backend、market-core 与 catalog-core，workflow 域对应 workflows；
 # CI 的 docker 域（Dockerfile、public/）没有本地闸门。tests 与 conventions 两个域是秒级的
@@ -88,8 +94,8 @@ TRIGGERS: dict[str, tuple[str, ...]] = {
         "packages/*",
         "pyproject.toml",
         "uv.lock",
-        ".gitignore",  # ruff 的文件发现尊重 gitignore
-        # 后端契约测试直接读取的前端源文件
+        ".gitignore",  # ruff's file discovery respects gitignore. / ruff 的文件发现尊重 gitignore
+        # Frontend source files read directly by backend contract tests. / 后端契约测试直接读取的前端源文件
         "frontend/src/i18n/*/dashboard.ts",
         "frontend/src/i18n/*/events.ts",
         "frontend/src/types/workflow.ts",
@@ -100,6 +106,7 @@ TRIGGERS: dict[str, tuple[str, ...]] = {
     "catalog-core": ("packages/arcreel-catalog-core/*",),
     "workflows": (".github/*", ".pre-commit-config.yaml"),
     "frontend": ("frontend/*",),
+    # website-checks also runs the translation lockfile's missing and stale translation report; CONTRIBUTING and the two READMEs are in its special-case mapping.
     # website-checks 同时跑翻译 lockfile 的缺译与滞后报告，CONTRIBUTING 与两个 README 在其特例映射内
     "website": ("website/*", "CONTRIBUTING.md", "README.md", "README.en.md", ".claude/skills/translate-docs/*"),
 }
@@ -107,7 +114,10 @@ ALWAYS_WHEN_CHANGED = ("tests", "conventions")
 
 
 def select_domains(paths: Iterable[str]) -> list[str]:
-    """按改动路径选域，顺序与 DOMAINS 一致；秒级审计域总是入选。"""
+    """Select domains by changed paths, in the same order as DOMAINS; the seconds-long audit domains are always selected.
+
+    按改动路径选域，顺序与 DOMAINS 一致；秒级审计域总是入选。
+    """
     changed = list(paths)
     hit = {
         name
@@ -119,9 +129,10 @@ def select_domains(paths: Iterable[str]) -> list[str]:
 
 
 def _vcs(root: Path, *args: str) -> str:
+    # Paths are decoded as UTF-8, independent of the platform locale encoding; non-UTF-8 bytes are preserved as-is with surrogateescape.
     # 路径按 UTF-8 解码，不随平台区域编码变；非 UTF-8 字节用 surrogateescape 保留原样。
     completed = subprocess.run(
-        ("git", *args),  # noqa: S607 -- 开发者环境的 git 本就经 PATH 查找
+        ("git", *args),  # noqa: S607 -- git in a developer environment is looked up via PATH anyway. / 开发者环境的 git 本就经 PATH 查找
         cwd=root,
         capture_output=True,
         text=True,
@@ -133,7 +144,12 @@ def _vcs(root: Path, *args: str) -> str:
 
 
 def changed_paths(base: str, root: Path = ROOT) -> list[str]:
-    """相对 base 与 HEAD 公共祖先的全部改动：已提交、未提交与未跟踪的都算。
+    """All changes relative to the merge base of base and HEAD: committed, uncommitted and untracked all count.
+
+    Rename detection is turned off, and for a moved file both the old and new paths are listed: the domain of the old path may fail because it lost a file.
+    Read NUL-separated, so paths containing non-ASCII characters come out as the original text rather than quoted escape strings.
+
+    相对 base 与 HEAD 公共祖先的全部改动：已提交、未提交与未跟踪的都算。
 
     关掉重命名识别，移动的文件新旧路径都列出来：旧路径所在域可能因此少了文件而失败。
     按 NUL 分隔读取，含非 ASCII 字符的路径才是原文而不是加引号的转义串。
@@ -153,7 +169,10 @@ def _holder_note() -> str:
 
 
 def _write_holder(handle: IO[str] | None, note: str) -> None:
-    """锁文件的内容就是持有者说明，排队方据此打印是谁在跑。"""
+    """The lock file's content is the holder's description, from which a queued party prints who is running.
+
+    锁文件的内容就是持有者说明，排队方据此打印是谁在跑。
+    """
     if handle is None:
         return
     handle.seek(0)
@@ -163,8 +182,12 @@ def _write_holder(handle: IO[str] | None, note: str) -> None:
 
 
 def _acquire_gate_lock() -> portalocker.Lock:
-    """拿到机器级锁后返回；别人持有时每秒重试，只在开始排队时打印一次。"""
+    """Return once the machine-level lock is acquired; when held by someone else, retry every second, printing only once when queueing starts.
+
+    拿到机器级锁后返回；别人持有时每秒重试，只在开始排队时打印一次。
+    """
     LOCK_PATH.parent.mkdir(parents=True, exist_ok=True)
+    # The holder description contains non-ASCII characters, so both reading and writing use UTF-8 explicitly, avoiding Windows' locale default encoding.
     # 持有者说明含非 ASCII 字符，读写两端都显式用 UTF-8，避开 Windows 的区域默认编码。
     lock = portalocker.Lock(LOCK_PATH, mode="a", encoding="utf-8")
     waited_from = time.monotonic()

@@ -27,6 +27,7 @@ branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
 
+# --- inline snapshot (synced with lib/custom_provider/duration_presets.py, but evolving decoupled) ---
 # --- inline 快照（与 lib/custom_provider/duration_presets.py 同步，但解耦演进）---
 _DEFAULT_FALLBACK: list[int] = [4, 8]
 
@@ -48,6 +49,7 @@ _PRESETS: list[tuple[re.Pattern[str], list[int]]] = [
     (re.compile(r"pika", re.I), [3, 5, 10]),
 ]
 
+# Set of video endpoint keys (a snapshot synced with ENDPOINT_REGISTRY in lib/custom_provider/endpoints.py).
 # 视频类 endpoint key 集合（与 lib/custom_provider/endpoints.py ENDPOINT_REGISTRY 同步快照）
 _VIDEO_ENDPOINTS = ("openai-video", "newapi-video")
 
@@ -77,5 +79,5 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    # 不主动清除（回填后保留即可，避免破坏数据）
+    # Not cleared proactively (keeping it after backfill is fine, to avoid breaking data). / 不主动清除（回填后保留即可，避免破坏数据）
     pass

@@ -17,6 +17,7 @@ from lib.db.base import Base
 from lib.db.engine import get_database_url
 from lib.db.models import register_models as register_db_models
 
+# Register all ORM models on Base.metadata; otherwise the comparison scope of autogenerate depends on the import chain
 # 把全部 ORM 模型登记到 Base.metadata，否则 autogenerate 的对比范围取决于 import 链
 register_agent_session_models()
 register_db_models()
@@ -24,6 +25,8 @@ register_db_models()
 # Alembic Config object
 config = context.config
 
+# Set up loggers from alembic.ini (only effective when alembic is run directly from the CLI;
+# init_db() uses an empty Config(), config_file_name is None, so this is skipped automatically)
 # Set up loggers from alembic.ini (仅 CLI 直接运行 alembic 时生效；
 # init_db() 使用 Config() 空构造，config_file_name 为 None，自动跳过)
 if config.config_file_name is not None:

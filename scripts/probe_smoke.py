@@ -1,4 +1,18 @@
-"""Smoke 测试：真实跑 probe，看每种错误 status / 错误体 / 诊断映射。
+"""Smoke test: really run the probe and look at each error status / error body / diagnostic mapping.
+
+WARNING: a manual tool for development time, not a CI test, and **should not** be added to the pytest suite.
+Depending on external service availability (anthropic.com / deepseek.com) is expected: when the upstream protocol or
+error format changes, this script is exactly what is needed to reproduce manually and distill new fixtures.
+
+Only the safe paths are tested (no real paid request is sent; a wrong key is rejected by the upstream immediately):
+1. A deliberately wrong key against the real anthropic: check whether AUTH_FAILED is caught
+2. A nonexistent host: check whether NETWORK is caught
+3. An OpenAI-compatible host with no anthropic subpath at all: check the OPENAI_COMPAT / 404 path
+4. An address with a query: check whether the entry validation catches it
+
+How to run: uv run python scripts/probe_smoke.py
+
+Smoke 测试：真实跑 probe，看每种错误 status / 错误体 / 诊断映射。
 
 ⚠️ 开发期手动工具，不是 CI 测试，**不应**加入 pytest 套件。
 依赖外部服务可用性（anthropic.com / deepseek.com）是预期：上游协议或错误
@@ -25,6 +39,8 @@ from lib.infra.httpx_shared import shutdown_http_client, startup_http_client
 async def case(label: str, **kw):
     print(f"\n{'═' * 78}")
     print(f"  {label}")
+    # Mask api_key: once a fake key is swapped for a real one locally, printing it as is would leave it in
+    # terminal history / session logs.
     # 脱敏 api_key：一旦本地把 fake key 换成真 key 跑，原样 print 会留进
     # 终端历史/会话日志。
     safe_kw = {**kw, "api_key": "***REDACTED***"} if kw.get("api_key") else kw

@@ -1,4 +1,9 @@
-"""大项目性能基准入口，用法见同目录 README.md。
+"""Large-project performance benchmark entry point; see README.md in the same directory for usage.
+
+uv run python -m scripts.perf.bench all                 # build a 90-episode project, run idle measurement and peak simulation, print the summary
+uv run python -m scripts.perf.bench idle --only cost    # measure just one endpoint
+
+大项目性能基准入口，用法见同目录 README.md。
 
 uv run python -m scripts.perf.bench all                 # 构建 90 集项目，跑空闲测量与高峰模拟，输出汇总
 uv run python -m scripts.perf.bench idle --only cost    # 只测某个接口
@@ -74,9 +79,13 @@ async def _timed(client, probe: h.Probe | None, name: str, episode: int) -> dict
     return rec
 
 
+# ---------------------------------------------------------------- idle
 # ---------------------------------------------------------------- 空闲
 async def _first_open(name: str, episode: int) -> dict[str, Any]:
-    """新进程里的第一次请求：服务重启后第一次打开。模块导入与建表不计入。"""
+    """The first request in a fresh process: the first open after a service restart. Module import and table creation are not counted.
+
+    新进程里的第一次请求：服务重启后第一次打开。模块导入与建表不计入。
+    """
 
     await h.ensure_db()
     probe = h.Probe()
@@ -154,9 +163,13 @@ def cmd_idle(a: argparse.Namespace) -> dict[str, Any]:
     return result
 
 
+# ---------------------------------------------------------------- profiling
 # ---------------------------------------------------------------- 剖析
 def cmd_profile(a: argparse.Namespace) -> None:
-    """每个接口一次清缓存后的请求与一次热请求，cProfile 输出到 out/<接口>-<cold|warm>.prof。"""
+    """For each endpoint, one request after clearing caches and one warm request, with cProfile output to out/<endpoint>-<cold|warm>.prof.
+
+    每个接口一次清缓存后的请求与一次热请求，cProfile 输出到 out/<接口>-<cold|warm>.prof。
+    """
 
     _ensure(a)
 
@@ -166,6 +179,7 @@ def cmd_profile(a: argparse.Namespace) -> None:
         async def inline(func, /, *args, **kwargs):
             return func(*args, **kwargs)
 
+        # Let cProfile see the synchronous core inside threads: while profiling, thread calls are changed to run inline in the event loop thread.
         # 让 cProfile 看见线程里的同步核心：剖析时线程调用改为在事件循环线程内联执行。
         asyncio.to_thread = inline
         async with _client(h.build_app()) as c:
@@ -192,9 +206,13 @@ def cmd_profile(a: argparse.Namespace) -> None:
     asyncio.run(run())
 
 
+# ---------------------------------------------------------------- peak
 # ---------------------------------------------------------------- 高峰
 def _complete_video(unit_id: str, episode: int, video_kb: int) -> None:
-    """一次视频任务完成：提交版本并登记产物清单，再把产物写回剧本。"""
+    """One video task finishing: commit the version and register the artifact manifest, then write the artifacts back into the script.
+
+    一次视频任务完成：提交版本并登记产物清单，再把产物写回剧本。
+    """
 
     from lib.project.project_manager import get_project_manager
     from server.services.tasks.reference_video_tasks import apply_unit_video_assets
@@ -256,7 +274,13 @@ async def _peak(a: argparse.Namespace) -> dict[str, Any]:
                 rec["server_s"] = time.perf_counter() - t0 - rec["t_start"]
 
         class Client:
-            """前端的重拉习惯（useProjectEventsSSE）：一条视频完成先到实体变更批次，再到任务终态批次。
+            """Frontend refetch habits (useProjectEventsSSE): a finished video first arrives as an entity change batch, then a task terminal-state batch.
+
+            The entity batch refetches project details and the unit list, workflow status and workflow plan are refetched with the project snapshot, and the cost estimate is debounced by 0.5 s;
+            the task terminal-state batch does not refetch project details, only invalidates the unit list, and workflow status and workflow plan are refetched with the task fingerprint.
+            A new request to the same endpoint supersedes the old one; the old request is abandoned but the server finishes computing it anyway.
+
+            前端的重拉习惯（useProjectEventsSSE）：一条视频完成先到实体变更批次，再到任务终态批次。
 
             实体批次重拉项目详情与单元列表，制作状态与工作流规划随项目快照重拉，费用估算防抖 0.5 秒；
             任务终态批次不重拉项目详情，只作废单元列表，制作状态与工作流规划随任务指纹重拉。
@@ -278,10 +302,10 @@ async def _peak(a: argparse.Namespace) -> dict[str, Any]:
                 task.add_done_callback(tasks.discard)
 
             def on_video_done(self, episode: int) -> None:
-                for name in ("project", "units", "wf_status", "wf_plan"):  # 实体变更批次
+                for name in ("project", "units", "wf_status", "wf_plan"):  # Entity change batch. / 实体变更批次
                     if name in names:
                         self.fire(name, episode)
-                for name in ("units", "wf_status", "wf_plan"):  # 任务终态批次
+                for name in ("units", "wf_status", "wf_plan"):  # Task terminal-state batch. / 任务终态批次
                     if name in names:
                         self.fire(name, episode)
                 if "cost" in names:
@@ -328,6 +352,7 @@ async def _peak(a: argparse.Namespace) -> dict[str, Any]:
                     {
                         "t": time.perf_counter() - t0,
                         "loop_lag": wall - 0.5,
+                        # CPU cores used by the process: several computations running at once while it stays pinned near 1 means they are serialized by the GIL.
                         # 进程占用的 CPU 核数：多份计算同时在算却始终贴着 1，说明它们被 GIL 串行。
                         "cpu_cores": (time.process_time() - cpu) / wall,
                         "qsize": executor._work_queue.qsize() if executor else 0,
@@ -358,8 +383,10 @@ async def _peak(a: argparse.Namespace) -> dict[str, Any]:
         if stacks is not None:
             stacks.stop()
         await asyncio.gather(*bg, return_exceptions=True)
+        # The cost estimate triggered by the last write is still being debounced; wait for it to fire before judging whether any request is in flight.
         # 最后一次写入触发的费用估算还在防抖里，等它发出后再判断是否有在途请求。
         await asyncio.gather(*(cl.cost_timer for cl in clients if cl.cost_timer), return_exceptions=True)
+        # During debouncing, in-flight requests may briefly drop to zero and set drained early, while the request the debounce then fires has not yet completed.
         # 防抖期间在途请求可能一度清零、提前置位 drained，而防抖随后发出的请求还没完成。
         drained.clear()
         if any(inflight.values()):
@@ -367,10 +394,12 @@ async def _peak(a: argparse.Namespace) -> dict[str, Any]:
                 await asyncio.wait_for(drained.wait(), a.drain)
         drain_s = time.perf_counter() - t_stop
         if stacks is not None:
+            # Written to disk after the drain timing, outside the event loop, so it does not slow requests still in flight.
             # 排空计时之后、在事件循环外写盘，不拖慢仍在途的请求。
             await asyncio.to_thread(stacks.write_collapsed, _out_dir() / f"peak-{a.tag}.stacks.txt")
         smp.cancel()
         leftover = {k: v for k, v in inflight.items() if v}
+        # Requests still unfinished at the drain deadline are timed as of the deadline (the real value can only be larger) and marked unfinished.
         # 排空截止时仍未完成的请求按截止时刻计耗时（真实值只会更大），并标记 unfinished。
         for r in reqs:
             if "server_s" not in r:
@@ -400,6 +429,7 @@ async def _peak(a: argparse.Namespace) -> dict[str, Any]:
             "mean_thread_hops": statistics.mean(r["hops"] for r in rs) if rs else 0,
             "mean_thread_qwait_s": statistics.mean(r["qwait"] for r in rs) if rs else 0,
             "mean_lock_wait_s": statistics.mean(r["lock_wait"] for r in rs) if rs else 0,
+            # Wall clock and thread CPU inside the worker thread: CPU far below wall clock means waiting on the GIL or IO.
             # 工作线程里的墙钟与线程 CPU：CPU 远小于墙钟说明在等 GIL 或 IO。
             "mean_thread_run_s": statistics.mean(r["run"] for r in rs) if rs else 0,
             "mean_thread_cpu_s": statistics.mean(r["cpu"] for r in rs) if rs else 0,
@@ -412,6 +442,7 @@ async def _peak(a: argparse.Namespace) -> dict[str, Any]:
         "drain_capped": bool(leftover),
         "leftover": leftover,
         "manifest_lock_nb_failures": probe.lock_fail,
+        # After the writer registers, every manifest entry should carry a content fingerprint, otherwise the warm-state check falls back to reading the video content.
         # 写入方登记后清单条目应都带内容指纹，否则热态判定会退回读视频内容。
         "video_facts_after": h.video_fact_coverage(),
         "thread_queue_max": max((s["qsize"] for s in samples), default=0),
@@ -429,6 +460,7 @@ async def _peak(a: argparse.Namespace) -> dict[str, Any]:
 
 def cmd_peak(a: argparse.Namespace) -> dict[str, Any]:
     _ensure(a)
+    # Do not use asyncio.run: at shutdown it waits for abandoned computations in the default thread pool (up to 300 seconds), delaying the result file write.
     # 不用 asyncio.run：它收尾时会等默认线程池里被放弃的计算（最多 300 秒），结果文件写入随之推迟。
     result = asyncio.new_event_loop().run_until_complete(_peak(a))
     print(
@@ -457,10 +489,12 @@ def cmd_peak(a: argparse.Namespace) -> dict[str, Any]:
             print(f"    self {share:6.1%} {label}")
     (_out_dir() / f"peak-{a.tag}.json").write_text(json.dumps(result, indent=1))
     sys.stdout.flush()
+    # Abandoned requests may still be running in threads (when the drain was truncated); a normal exit would wait for them, so end the process directly here.
     # 放弃的请求可能仍在线程里跑（drain 被截断时），正常退出会等它们，这里直接结束进程。
     os._exit(0)
 
 
+# ---------------------------------------------------------------- summary
 # ---------------------------------------------------------------- 汇总
 def summarize(idle: dict[str, Any], peak: dict[str, Any]) -> str:
     def s(x: float | None) -> str:
@@ -477,7 +511,7 @@ def summarize(idle: dict[str, Any], peak: dict[str, Any]) -> str:
         ip95 = i["p95"] if i else None
         pp95 = p["p95"] if p else None
         ratio = f"{pp95 / ip95:.1f}x" if ip95 and pp95 and pp95 == pp95 else "-"  # nan != nan
-        # 有未完成请求时 p95 只是下限
+        # With unfinished requests, p95 is only a lower bound. / 有未完成请求时 p95 只是下限
         at_least = "≥" if p and p["unfinished"] else ""
         lines.append(
             f"| {name} | {s(i and i['first_open_s'])} | {s(ip95)} | {at_least}{s(pp95)} | {at_least}{ratio} | "
@@ -538,6 +572,7 @@ def cmd_all(a: argparse.Namespace) -> None:
 
 # ---------------------------------------------------------------- CLI
 def _sample_hz(value: str) -> float:
+    # A negative number or inf gives a non-positive sampling interval, the sampling thread spins and takes CPU from the process under test.
     # 负数或 inf 会得到不正的采样间隔，采样线程空转、挤占被测进程的 CPU。
     hz = float(value)
     if hz != 0 and not (math.isfinite(hz) and hz > 0):

@@ -1,4 +1,8 @@
-"""测试统一尺寸机制 arcreel_market_core/aspect_size.py：
+"""Tests for the unified size mechanism arcreel_market_core/aspect_size.py:
+
+Core invariants: zero ratio deviation, width and height divisible by round_to, and clamping preserves the ratio (t>=1 floor).
+
+测试统一尺寸机制 arcreel_market_core/aspect_size.py：
 
 核心不变量——比例零偏差 + 长宽被 round_to 整除 + 夹取保持比例（t≥1 floor）。
 """
@@ -29,9 +33,9 @@ ALL_ASPECTS = ["9:16", "16:9", "1:1", "3:4", "4:3", "2:3", "3:2", "21:9"]
         ("16:9", (16, 9)),
         ("1:1", (1, 1)),
         ("3:4", (3, 4)),
-        ("21:9", (7, 3)),  # 约简
-        ("18:32", (9, 16)),  # 约简到互质
-        ("16：9", (16, 9)),  # 全角冒号
+        ("21:9", (7, 3)),  # Reduce. / 约简
+        ("18:32", (9, 16)),  # Reduce to lowest terms. / 约简到互质
+        ("16：9", (16, 9)),  # Full-width colon. / 全角冒号
     ],
 )
 def test_parse_aspect_ratio_reduces(raw, expected):
@@ -45,7 +49,7 @@ def test_parse_aspect_ratio_invalid_falls_back(bad, caplog):
     assert any("aspect_ratio" in r.message for r in caplog.records)
 
 
-# ---------------- aspect_size 精确比例 + 整除 ----------------
+# ---------------- aspect_size exact ratio + divisibility ---------------- / ---------------- aspect_size 精确比例 + 整除 ----------------
 
 
 @pytest.mark.parametrize("aspect", ALL_ASPECTS)
@@ -53,12 +57,12 @@ def test_parse_aspect_ratio_invalid_falls_back(bad, caplog):
 def test_aspect_size_exact_ratio_and_divisible(aspect, short):
     w, h = aspect_size(aspect, short, round_to=16)
     aw, ah = parse_aspect_ratio(aspect)
-    # 比例零偏差：w/h == aw/ah ⇔ w*ah == h*aw
+    # Zero ratio deviation: w/h == aw/ah <=> w*ah == h*aw. / 比例零偏差：w/h == aw/ah ⇔ w*ah == h*aw
     assert w * ah == h * aw
-    # 均被 16 整除
+    # All divisible by 16. / 均被 16 整除
     assert w % 16 == 0
     assert h % 16 == 0
-    # 宽高方向与比例一致
+    # Width/height orientation matches the ratio. / 宽高方向与比例一致
     assert (w >= h) == (aw >= ah)
 
 
@@ -79,21 +83,21 @@ def test_aspect_size_known_samples(aspect, short, expected):
 
 
 def test_aspect_size_t_floor_never_zero():
-    # 短边目标小于一个单位也至少给出最小合法尺寸（t≥1），不取 0
+    # A short-edge target below one unit still yields at least the minimum valid size (t>=1), never 0. / 短边目标小于一个单位也至少给出最小合法尺寸（t≥1），不取 0
     w, h = aspect_size("9:16", 10, round_to=16)
     assert (w, h) == (144, 256)
 
 
 def test_aspect_size_max_long_edge_clamps_keeping_ratio():
-    # gpt-image-2：长边上限 3840
+    # gpt-image-2: long-edge cap 3840. / gpt-image-2：长边上限 3840
     w, h = aspect_size("9:16", 4000, round_to=16, max_long_edge=3840)
     assert h <= 3840
-    assert w * 16 == h * 9  # 仍精确 9:16
+    assert w * 16 == h * 9  # Still exactly 9:16. / 仍精确 9:16
     assert (w, h) == (2160, 3840)
 
 
 def test_aspect_size_max_long_edge_floor_keeps_min_legal():
-    # 长边上限比一个单位还小 → 不取 0，保留最小合法尺寸
+    # A long-edge cap smaller than one unit: do not take 0, keep the minimum valid size. / 长边上限比一个单位还小 → 不取 0，保留最小合法尺寸
     w, h = aspect_size("9:16", 720, round_to=16, max_long_edge=100)
     assert (w, h) == (144, 256)
 
@@ -101,7 +105,7 @@ def test_aspect_size_max_long_edge_floor_keeps_min_legal():
 @pytest.mark.parametrize(
     ("aspect", "expected"),
     [
-        # DashScope 标准预算 2048²=4194304：各比例最大且精确
+        # DashScope standard budget 2048^2=4194304: the largest for each ratio and exact. / DashScope 标准预算 2048²=4194304：各比例最大且精确
         ("9:16", (1440, 2560)),
         ("16:9", (2560, 1440)),
         ("1:1", (2048, 2048)),
@@ -114,18 +118,18 @@ def test_aspect_size_max_total_pixels_standard_budget(aspect, expected):
     assert (w, h) == expected
     assert w * h <= 2048 * 2048
     aw, ah = parse_aspect_ratio(aspect)
-    assert w * ah == h * aw  # 精确
+    assert w * ah == h * aw  # Exact. / 精确
 
 
 def test_aspect_size_4k_total_budget():
-    # wan 4K 预算 4096²=16777216
+    # wan 4K budget 4096^2=16777216. / wan 4K 预算 4096²=16777216
     w, h = aspect_size("9:16", 2160, round_to=16, max_total_pixels=4096 * 4096)
     assert (w, h) == (2160, 3840)
     assert w * h <= 4096 * 4096
 
 
 def test_aspect_size_takes_stricter_of_two_clamps():
-    # max_long_edge 与 max_total_pixels 同时给定时取更严者
+    # When max_long_edge and max_total_pixels are both given, the stricter one wins. / max_long_edge 与 max_total_pixels 同时给定时取更严者
     w, h = aspect_size("9:16", 2160, round_to=16, max_long_edge=2000, max_total_pixels=4096 * 4096)
     assert h <= 2000
     assert w * 16 == h * 9
@@ -133,10 +137,10 @@ def test_aspect_size_takes_stricter_of_two_clamps():
 
 def test_aspect_size_extreme_ratio_warns(caplog):
     with caplog.at_level(logging.WARNING):
-        aspect_size("21:9", 720, round_to=16, max_ratio=3.0)  # 7:3≈2.33 < 3，不 warn
+        aspect_size("21:9", 720, round_to=16, max_ratio=3.0)  # 7:3≈2.33 < 3, no warn. / 7:3≈2.33 < 3，不 warn
     assert not any("超出后端支持上限" in r.message for r in caplog.records)
     with caplog.at_level(logging.WARNING):
-        aspect_size("32:9", 720, round_to=16, max_ratio=3.0)  # 32:9≈3.56 > 3，warn
+        aspect_size("32:9", 720, round_to=16, max_ratio=3.0)  # 32:9≈3.56 > 3, warn. / 32:9≈3.56 > 3，warn
     assert any("超出后端支持上限" in r.message for r in caplog.records)
 
 
@@ -170,7 +174,7 @@ def test_resolution_video_tier_word(tier, expected):
     [("1920x1080", 1080), ("1080x1920", 1080), ("2688*1536", 1536), ("1024×1024", 1024)],
 )
 def test_resolution_custom_wh_takes_min(custom, expected):
-    # 自定义值剥离其自带比例，取 min 当短边
+    # A custom value strips its own ratio and takes min as the short edge. / 自定义值剥离其自带比例，取 min 当短边
     assert resolution_to_short_edge(custom, tier_map=IMAGE_TIER_SHORT_EDGE) == expected
 
 
@@ -194,11 +198,13 @@ def test_a_short_edge_that_lands_on_a_tier_says_that_tier(short_edge, expected):
 
 @pytest.mark.parametrize("short_edge", [848, 600, 1100, 4000])
 def test_a_short_edge_between_tiers_says_the_pixels_it_really_is(short_edge):
+    # Borrowing the nearest tier word for "what you get without selecting a tier" would mislead: selecting 720p gives a short edge of 720, not 848.
     # 「不选档位会得到什么」这句话上借最近的档位词会骗人：选中 720p 得到的短边是 720，不是 848。
     assert short_edge_to_resolution(short_edge, tier_map=VIDEO_TIER_SHORT_EDGE) == f"{short_edge}px"
 
 
 def test_the_tier_table_decides_the_vocabulary():
+    # The same short edge hits a different word in the image tier table, and no tier at all in the video table.
     # 同一个短边在图像档位表里命中的是另一个词，在视频表里一档都不命中。
     assert short_edge_to_resolution(1024, tier_map=IMAGE_TIER_SHORT_EDGE) == "1K"
     assert short_edge_to_resolution(1024, tier_map=VIDEO_TIER_SHORT_EDGE) == "1024px"

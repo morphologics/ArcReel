@@ -13,6 +13,8 @@ updates:
       day: "monday"
     open-pull-requests-limit: 10
     versioning-strategy: lockfile-only
+    # Let a freshly released version settle for a few days before opening a PR, lowering the chance of hitting a "regression on release";
+    # semver-minor uses default-days, and only tiers that deviate from it are listed separately.
     # 刚发布的版本先沉淀几天再开 PR，降低撞上「发布即回归」的概率；
     # semver-minor 走 default-days，只有偏离它的档位单列
     cooldown:
@@ -24,6 +26,9 @@ updates:
       - "python:uv"
     commit-message:
       prefix: "chore(deps)"
+    # pydantic pins the pydantic-core version exactly, so pydantic-core can only be upgraded together with pydantic;
+    # upgrading pydantic-core alone would pull pydantic to the matching prerelease. Ignore version updates only:
+    # an ignore without update-types would also mask security updates.
     # pydantic 精确锁定 pydantic-core 的版本，pydantic-core 只能随 pydantic 一起升级；
     # 单独升级 pydantic-core 会把 pydantic 拉到与之配套的预发布版。只忽略版本更新：
     # 不带 update-types 的 ignore 会连安全更新一起屏蔽。
@@ -33,6 +38,8 @@ updates:
           - "version-update:semver-major"
           - "version-update:semver-minor"
           - "version-update:semver-patch"
+    # Per-domain groups take only minor/patch, aggregated into PRs that are safe to auto-merge;
+    # a major matches no group -> becomes its own PR, left for human review.
     # 各域分组只收 minor/patch，聚合成可安全自动合并的 PR；
     # major 不匹配任何分组 → 单独成 PR，留给人工审查。
     groups:
@@ -141,6 +148,7 @@ updates:
       interval: "weekly"
       day: "monday"
     open-pull-requests-limit: 10
+    # Upgrades within the ^ range only touch the lockfile; only beyond the range (major) is package.json changed and a PR opened.
     # ^ range 内的升级只动 lockfile；超出 range（major）才改 package.json 并开 PR
     versioning-strategy: increase-if-necessary
     cooldown:
@@ -152,6 +160,10 @@ updates:
       - "javascript"
     commit-message:
       prefix: "chore(deps)"
+    # jsdom is capped at 30.0.x: vitest 4's jsdom environment reads the internal field `_buffer` when converting a jsdom Blob to a Node Blob,
+    # which jsdom 30.1 renamed, so tests passing a File to URL.createObjectURL / FormData fail.
+    # Unlock condition: frontend upgrades to vitest >= 5.0.3 (which reads the new field).
+    # @types/node follows the Node major version (24) in package.json engines, adjusted by hand when Node's major version is upgraded.
     # jsdom 上限是 30.0.x：vitest 4 的 jsdom 环境把 jsdom Blob 转成 Node Blob 时读取内部字段
     # `_buffer`，jsdom 30.1 已将其改名，URL.createObjectURL / FormData 传 File 的测试随之报错。
     # 解锁条件：frontend 升级到 vitest >= 5.0.3（该版本起改读新字段）。
@@ -194,6 +206,8 @@ updates:
         update-types:
           - "minor"
           - "patch"
+      # Runtime and CLI of the shadcn primitives. A major is kept out of the groups and gets its own PR: in that PR, for installed components,
+      # run `pnpm exec shadcn add <component> --diff` and merge by hand (workflow in docs/agents/dependencies.md).
       # shadcn 原语的运行时与 CLI。major 不进分组、单独开 PR：在该 PR 中对已安装组件
       # 运行 `pnpm exec shadcn add <组件> --diff` 并手动合并（流程见 docs/agents/dependencies.md）。
       shadcn-stack:
@@ -225,6 +239,8 @@ updates:
         update-types:
           - "minor"
           - "patch"
+      # When @playwright/test is upgraded, the frontend-e2e image version in .github/workflows/test.yml must be changed to match in the same PR,
+      # otherwise CI cannot find the browser.
       # @playwright/test 升级时，.github/workflows/test.yml 中 frontend-e2e 的镜像版本要在同一 PR 里改成一致，
       # 否则 CI 找不到浏览器。
       e2e:
@@ -268,7 +284,7 @@ updates:
           - "minor"
           - "patch"
 
-  # 文档站 npm dependencies (pnpm)
+  # Docs site npm dependencies (pnpm) / 文档站 npm dependencies (pnpm)
   - package-ecosystem: "npm"
     directory: "/website"
     schedule:
@@ -285,6 +301,11 @@ updates:
       - "javascript"
     commit-message:
       prefix: "chore(deps)"
+    # website's typescript is capped at 6.x: website/tsconfig.json extends @docusaurus/tsconfig,
+    # which sets baseUrl in compilerOptions -- that option is deprecated in TypeScript 6
+    # (tsconfig.json explicitly exempts it with ignoreDeprecations: "6.0") and removed in TypeScript 7,
+    # where loading reports TS5102 with no way to exempt it. Unlock condition: @docusaurus/tsconfig drops baseUrl.
+    # This constraint covers website/ only; the TypeScript upgrade of frontend/ is judged independently and this does not apply.
     # website 的 typescript 上限是 6.x：website/tsconfig.json 继承 @docusaurus/tsconfig，
     # 后者在 compilerOptions 里设置 baseUrl —— 该选项在 TypeScript 6 被标记弃用
     # （tsconfig.json 以 ignoreDeprecations: "6.0" 显式豁免），在 TypeScript 7 已移除，
@@ -329,6 +350,7 @@ updates:
       interval: "weekly"
       day: "monday"
     open-pull-requests-limit: 10
+    # The github-actions ecosystem supports only default-days, not semver-granular cooldown fields.
     # github-actions 生态只支持 default-days，不支持 semver 粒度的冷却字段
     cooldown:
       default-days: 7

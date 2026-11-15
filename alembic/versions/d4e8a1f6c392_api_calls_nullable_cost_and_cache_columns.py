@@ -22,6 +22,8 @@ _NEW_COLUMNS = ("unpriced_reason", "cache_read_tokens", "cache_write_5m_tokens",
 
 
 def upgrade() -> None:
+    # cost_amount NULL means unpriced, distinct from 0 (priced at zero); historical rows keep their original values, no backfill.
+    # New columns are not backfilled either: historical rows have no record of the cache split or the unpriced reason. input_tokens still records total input (including cache).
     # cost_amount 为 NULL 表示未定价，与 0（定价为零）区分；历史行保持原值，不回填。
     # 新增列也不回填：历史行没有缓存拆分与未定价原因的记录。input_tokens 仍记总输入（含缓存）。
     with preserve_sqlite_indexes("api_calls"), op.batch_alter_table("api_calls") as batch_op:
@@ -38,6 +40,7 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    # Cost is not nullable in the old schema: unpriced rows fall back to 0, the only value that can keep the row on downgrade.
     # 旧结构里费用不可空：未定价的行回退为 0，这是降级时唯一能保住行的取值。
     op.execute(sa.text("UPDATE api_calls SET cost_amount = 0.0 WHERE cost_amount IS NULL"))
     with preserve_sqlite_indexes("api_calls"), op.batch_alter_table("api_calls") as batch_op:

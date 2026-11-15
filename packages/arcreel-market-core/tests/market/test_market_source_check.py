@@ -1,4 +1,7 @@
-"""市场源目录的整体校验：六条规则各自给出定位到文件与字段的诊断。"""
+"""Whole-catalog validation of a market source directory: each of the six rules gives a diagnostic located to the file and field.
+
+市场源目录的整体校验：六条规则各自给出定位到文件与字段的诊断。
+"""
 
 from __future__ import annotations
 
@@ -71,7 +74,10 @@ def _entry_for(slug: str, definition: dict[str, Any], **overrides: Any) -> dict[
 
 
 class _Source:
-    """在临时目录里搭一个市场源：逐条写入定义与旁置文件，最后写索引。"""
+    """Build a market source in a temp directory: write definitions and sidecar files one by one, and the index last.
+
+    在临时目录里搭一个市场源：逐条写入定义与旁置文件，最后写索引。
+    """
 
     def __init__(self, root: Path) -> None:
         self.root = root
@@ -160,7 +166,10 @@ class TestIndexRule:
         ]
 
     def test_schema_violations_stop_further_checks(self, source: _Source):
-        """结构不成立时逐文件的规则没有可靠前提，只报结构诊断。"""
+        """When the structure does not hold, the per-file rules have no reliable premise, so only structure diagnostics are reported.
+
+        结构不成立时逐文件的规则没有可靠前提，只报结构诊断。
+        """
         source.add("demo", {"broken": True}, min_app_version="0.31")
 
         assert _codes(source.write()) == [(INDEX_FILENAME, "entries[0].min_app_version", "min_app_version_invalid")]
@@ -204,7 +213,10 @@ class TestReferencedFilesRule:
         assert _codes(source.write()) == [(INDEX_FILENAME, "entries[0].path", "symlink_not_allowed")]
 
     def test_symlinked_definition_inside_the_source_is_rejected(self, source: _Source):
-        """GitHub raw 对符号链接返回链接目标路径文本，客户端抓不到定义内容。"""
+        """GitHub raw returns the link target path text for a symlink, so the client cannot fetch the definition content.
+
+        GitHub raw 对符号链接返回链接目标路径文本，客户端抓不到定义内容。
+        """
         source.add("demo")
         target = source.root / "endpoints" / "demo" / "definition.json"
         real = target.with_name("real.json")
@@ -330,13 +342,21 @@ class TestProjectionRule:
         assert _codes(source.write()) == [(INDEX_FILENAME, "entries[0].min_app_version", "projection_mismatch")]
 
     def test_a_declarative_definition_without_media_type_projects_video(self, source: _Source):
-        """未写 ``media_type`` 的声明式定义按视频投影，索引说别的即不符。"""
+        """A declarative definition without ``media_type`` is projected as video; the index saying otherwise is a mismatch.
+
+        未写 ``media_type`` 的声明式定义按视频投影，索引说别的即不符。
+        """
         source.add("demo", media_type="image")
 
         assert _codes(source.write()) == [(INDEX_FILENAME, "entries[0].media_type", "projection_mismatch")]
 
     def test_a_comfyui_definition_projects_the_media_type_it_declares(self, source: _Source):
-        """一份 ComfyUI workflow 产图还是产视频由它自己声明，索引照抄那一个值。
+        """Whether a ComfyUI workflow produces images or video is declared by itself, and the index copies that one value.
+
+        The reading is a single implementation shared with the endpoint projection and the mirror column: a
+        mismatch would make an image endpoint show up as video in the market.
+
+        一份 ComfyUI workflow 产图还是产视频由它自己声明，索引照抄那一个值。
 
         读法与端点投影、镜像列共用一份实现：对不上会让一个图像端点在市场里显示成视频。
         """

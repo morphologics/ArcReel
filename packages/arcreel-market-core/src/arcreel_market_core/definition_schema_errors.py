@@ -1,4 +1,14 @@
-"""把 jsonschema 的报错译成定义诊断：每种 ``kind`` 的结构层共用这一份翻译。
+"""Translates jsonschema errors into definition diagnostics; the structure layer of every ``kind`` shares this translation.
+
+Each kind's structural contract is its own ``schema.json``, but "which code to report for a missing field, how to
+build the locator string, and how deep to drill into combinator keywords" is one shared contract. Consumers decide
+which section to highlight by ``code``, and translating separately per schema would make the same structural error
+get different codes on two kinds of definitions.
+
+``removed_fields`` is passed in by the caller: whether a field has been "removed" is the history of one kind, not
+knowledge of the translation layer.
+
+把 jsonschema 的报错译成定义诊断：每种 ``kind`` 的结构层共用这一份翻译。
 
 各 kind 的结构契约是各自的 ``schema.json``，但「缺字段报哪个码、定位串怎么拼、组合关键字下钻到
 哪一层」是同一套契约——消费方按 ``code`` 决定高亮哪一节，两份 schema 各译一套只会让同一个结构
@@ -17,11 +27,13 @@ from arcreel_market_core.validation_messages import MessageRef, ValidationMessag
 
 from .definition_diagnostics import ROOT_PATH, DefinitionErrorCode, DefinitionIssue, join_path
 
+# Marker the declarative schema puts on ``$each``: its ``oneOf`` is a mutually exclusive form, not a union of branches.
 #: 声明式 schema 里给 ``$each`` 打的标记：它的 ``oneOf`` 是互斥形态而非分支联合。
 EACH_SHAPE_MARKER = "each_shape"
 
 _ENUM_KEYWORDS = frozenset({"enum", "const"})
 
+# How to choose when several branches report errors at the same depth: missing / extra fields explain the most, a generic type error is the least useful.
 #: 同一深度上多条分支报错时的取舍：缺字段 / 多字段最能说明问题，笼统的类型错最没用。
 _KEYWORD_SPECIFICITY: Mapping[str, int] = {
     "type": 0,
@@ -40,6 +52,7 @@ _MINIMUM_KEYWORDS = frozenset({"minLength", "minimum", "minItems", "minPropertie
 _MAXIMUM_KEYWORDS = frozenset({"maxLength", "maximum"})
 _FORMAT_KEYWORDS = frozenset({"pattern", "format", "propertyNames"})
 
+# Detail templates for jsonschema constraint violations: they collapse the third-party library's English prose into a small set of locale-neutral message keys.
 #: jsonschema 约束违例的细节模板：把第三方库的英文散文收成少量 locale-neutral 的消息键。
 SCHEMA_MINIMUM_KEY = "val_ce_schema_minimum_constraint"
 SCHEMA_MAXIMUM_KEY = "val_ce_schema_maximum_constraint"
@@ -56,7 +69,15 @@ SCHEMA_CONSTRAINT_KEYS = (
 
 
 def most_specific(error: ValidationError) -> ValidationError:
-    """``anyOf`` / ``oneOf`` 的报错落在组合关键字上，逐层下钻到真正不匹配的那条子规则。
+    """Errors from ``anyOf`` / ``oneOf`` land on the combinator keyword; drill down layer by layer to the sub-rule that really does not match.
+
+    Every branch of a combination reports an error; take the one that is "located deepest and phrased most specifically".
+    In a branch union of a structure template, an outermost type error such as "``body`` is not a string" is useless to
+    the person writing the definition; what they need to see is the deeper "``$each`` is missing item". For
+    mutually exclusive combinations (``$each``'s item versus key/value) stop at the combinator keyword: drilling down
+    would only pick the field missing from one branch, while the real problem is mixing the two styles.
+
+    ``anyOf`` / ``oneOf`` 的报错落在组合关键字上，逐层下钻到真正不匹配的那条子规则。
 
     组合里每条分支都会报错，取「定位最深、说法最具体」的那条：结构模板的分支union里，
     「``body`` 不是字符串」这种最外层的类型错对写定义的人毫无用处，真正要看的是深处那句
@@ -69,7 +90,10 @@ def most_specific(error: ValidationError) -> ValidationError:
 
 
 def translate_schema_error(error: ValidationError, *, removed_fields: Mapping[str, str]) -> Iterator[DefinitionIssue]:
-    """把一条 jsonschema 报错译成零条或多条诊断。"""
+    """Translates one jsonschema error into zero or more diagnostics.
+
+    把一条 jsonschema 报错译成零条或多条诊断。
+    """
     path = format_path(error.absolute_path)
     keyword = str(error.validator)
     if _is_mutually_exclusive_shape(error):
@@ -106,7 +130,10 @@ def translate_schema_error(error: ValidationError, *, removed_fields: Mapping[st
 
 
 def format_path(parts: Sequence[str | int]) -> str:
-    """把 jsonschema 的定位序列拼成定义内的定位串。"""
+    """Joins a jsonschema location sequence into a locator string within the definition.
+
+    把 jsonschema 的定位序列拼成定义内的定位串。
+    """
     path = ROOT_PATH
     for part in parts:
         path = join_path(path, part)
@@ -123,7 +150,10 @@ def _specificity(error: ValidationError) -> tuple[int, int]:
 
 
 def _schema_detail(error: ValidationError) -> ValidationMessage:
-    """把 jsonschema 的英文散文收成少量 locale-neutral 约束模板。"""
+    """Collapses jsonschema's English prose into a small set of locale-neutral constraint templates.
+
+    把 jsonschema 的英文散文收成少量 locale-neutral 约束模板。
+    """
     keyword = str(error.validator)
     if keyword in _MINIMUM_KEYWORDS:
         return ValidationMessage(SCHEMA_MINIMUM_KEY, {"limit": error.validator_value})

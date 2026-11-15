@@ -1,34 +1,43 @@
 name: project-status-sync
 
+# Sync the Status field of the org Project board: derived one-way from the triage label, assignee, linked PR and open/closed state.
+# Issue/PR events trigger a single-issue sync, with a full reconciliation on a daily schedule; the rule implementation is in scripts/project_status_sync.py.
 # 同步 org Project 看板的 Status 字段：由 triage 标签、assignee、关联 PR、开闭状态单向派生。
 # issue/PR 事件触发单 issue 同步，每日定时全量对账；规则实现在 scripts/project_status_sync.py。
+# This rule looks only at trigger names; here checkout is pinned to the default branch, no PR branch code is executed, and the script reads metadata via the API only.
 on: # zizmor: ignore[dangerous-triggers]  # 该规则只看触发器名；此处 checkout 固定默认分支、不执行 PR 分支代码、脚本只经 API 读元数据
   issues:
     types: [opened, reopened, closed, labeled, unlabeled, assigned, unassigned]
+  # Use pull_request_target rather than pull_request: both the workflow and script run from the base branch version,
+  # so PR branch code cannot touch PROJECT_STATUS_SYNC_TOKEN.
   # 用 pull_request_target 而非 pull_request：workflow 与脚本都取 base 分支版本执行，
   # PR 分支的代码接触不到 PROJECT_STATUS_SYNC_TOKEN
   pull_request_target:
     types: [opened, closed, reopened, ready_for_review, converted_to_draft, edited]
   schedule:
-    - cron: "30 21 * * *" # 北京时间 05:30 全量对账
+    - cron: "30 21 * * *" # Full reconciliation at 05:30 Beijing time. / 北京时间 05:30 全量对账
   workflow_dispatch:
 
 concurrency:
+  # Full reconciliations (schedule / dispatch / PR body edit) share one group and run serially;
+  # single-entity runs are grouped by event type + number, so an issue and a PR with the same number do not cancel each other.
   # 全量对账（schedule / dispatch / PR body 编辑）共用一个 group 串行；
   # 单实体运行按事件类型+编号分组，issue 与 PR 同号互不取消
   group: project-status-sync-${{ (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || github.event.action == 'edited') && 'all' || format('{0}-{1}', github.event_name, github.event.issue.number || github.event.pull_request.number) }}
   cancel-in-progress: true
 
-# 脚本走 PROJECT_STATUS_SYNC_TOKEN，不用 GITHUB_TOKEN
+# The script uses PROJECT_STATUS_SYNC_TOKEN, not GITHUB_TOKEN. / 脚本走 PROJECT_STATUS_SYNC_TOKEN，不用 GITHUB_TOKEN
 permissions: {}
 
 jobs:
   sync:
     runs-on: ubuntu-latest
     timeout-minutes: 10
-    # Dependabot 触发的运行拿不到仓库 Actions secrets
+    # Runs triggered by Dependabot cannot get repository Actions secrets. / Dependabot 触发的运行拿不到仓库 Actions secrets
     if: github.actor != 'dependabot[bot]'
     steps:
+      # The default checkout of pull_request_target is the PR's base branch, and base can be any branch;
+      # pin it to the default branch to avoid running scripts from other branches in an environment that holds the token.
       # pull_request_target 的默认 checkout 是 PR 的 base 分支，而 base 可以是任意分支；
       # 固定为默认分支，避免在持有 token 的环境中执行其他分支的脚本
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -46,6 +55,7 @@ jobs:
           case "$EVENT_NAME" in
             issues) python3 scripts/project_status_sync.py --issue "$ISSUE_NUMBER" ;;
             pull_request_target)
+              # A body edit may remove a closing reference, and the current reference list cannot show the removed issue, so run a full reconciliation instead.
               # body 编辑可能移除 closing reference，当前引用列表看不到被移除的 issue，改跑全量对账
               if [ "$EVENT_ACTION" = "edited" ]; then
                 python3 scripts/project_status_sync.py --all

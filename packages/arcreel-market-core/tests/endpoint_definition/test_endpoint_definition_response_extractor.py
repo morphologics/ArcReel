@@ -1,4 +1,7 @@
-"""声明式端点响应提取与状态映射。"""
+"""Declarative endpoint response extraction and status mapping.
+
+声明式端点响应提取与状态映射。
+"""
 
 from __future__ import annotations
 

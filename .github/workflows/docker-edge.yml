@@ -1,14 +1,16 @@
 name: Docker Edge
 
+# Build the dev image after merging to main: push an immutable sha-* tag plus a mutable main tag
+# (some deployment environments track the main tag). Official releases go through docker-release.yml.
 # main 合入后构建开发镜像：推送不可变 sha-* 标签 + 可变 main 标签
 # （有部署环境跟踪 main 标签）。正式发布走 docker-release.yml。
 
 on:
   push:
     branches: [main]
-    # 影响镜像内容的路径：Dockerfile COPY 清单 + 依赖文件
+    # Paths that affect the image contents: the Dockerfile COPY list plus dependency files. / 影响镜像内容的路径：Dockerfile COPY 清单 + 依赖文件
     paths:
-      # 本工作流自身变更也须在合入后立即演练发布管线
+      # Changes to this workflow itself must also rehearse the release pipeline right after merge. / 本工作流自身变更也须在合入后立即演练发布管线
       - ".github/workflows/docker-edge.yml"
       - "Dockerfile"
       - ".dockerignore"
@@ -51,6 +53,7 @@ jobs:
         env:
           REPO: ${{ github.repository }}
 
+      # Generate APT_REFRESH per ISO week, so the Dockerfile system-package layer is invalidated once a week and apt-get upgrade reruns.
       # 按 ISO 周生成 APT_REFRESH，使 Dockerfile 的系统包层每周失效一次并重新 apt-get upgrade
       - name: Compute apt refresh key
         id: apt
@@ -87,6 +90,8 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max,ignore-error=true
 
+      # Scan this build's digest per platform (branch tags are mutable; only the digest strictly matches what was pushed);
+      # without a platform, the multi-arch manifest resolves only the amd64 variant and arm64-only vulnerabilities stay invisible.
       # 逐平台扫描本次构建的 digest（分支标签可变，digest 才与推送内容严格一致）；
       # 不指定平台时多架构 manifest 只会解析 amd64 变体，arm64 独有漏洞不可见
       - name: Trivy vulnerability scan amd64 (report only)

@@ -1,4 +1,7 @@
-"""节点绑定名录上的读取原语：``fps`` 只读绑定各自读出的字面值。"""
+"""Read primitive on the node binding catalog: the literal values read by each read-only ``fps`` binding.
+
+节点绑定名录上的读取原语：``fps`` 只读绑定各自读出的字面值。
+"""
 
 from __future__ import annotations
 

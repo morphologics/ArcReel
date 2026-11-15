@@ -30,6 +30,8 @@ repos:
         files: ^frontend/.*\.(ts|tsx|js|jsx)$
         pass_filenames: true
 
+  # Local counterpart of the workflow gate; both revs must be upgraded in sync with the workflow-static job in .github/workflows/test.yml
+  # (checked by scripts/audit_conventions.py).
   # workflow 闸门的本地对应物；两个 rev 须与 .github/workflows/test.yml 的
   # workflow-static job 同步升级（scripts/audit_conventions.py 校验）
   - repo: https://github.com/rhysd/actionlint
@@ -42,11 +44,13 @@ repos:
     hooks:
       - id: zizmor
         args: [--no-progress, --offline, --min-severity, medium]
-        exclude: ^\.agents/  # vendored skill 自带的上游 CI 不在本仓库运行
+        exclude: ^\.agents/  # The upstream CI shipped with vendored skills does not run in this repo. / vendored skill 自带的上游 CI 不在本仓库运行
   - repo: local
     hooks:
       - id: react-doctor
         name: react-doctor
+        # Must run inside frontend/: run from the repo root, React is not detected and library-related rules are turned off.
+        # --staged reports pre-existing issues for the whole file; until existing warnings are cleaned up, block only on errors.
         # 须在 frontend/ 内运行：从仓库根运行时识别不到 React，库相关规则被关闭
         # --staged 会报整个文件的存量问题，存量 warning 未清理前只拦 error
         entry: sh -c 'cd frontend && node_modules/.bin/react-doctor --staged --blocking error'

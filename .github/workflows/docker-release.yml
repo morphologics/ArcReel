@@ -1,5 +1,9 @@
 name: Docker Release
 
+# Official release triggered by a v* tag: dual-architecture vulnerability gate → multi-arch build →
+# semver + latest tags, pushing to ghcr and Docker Hub from the same build, with SBOM and provenance
+# attestation attached. The GitHub Release is created by release-please and is not generated again
+# here.
 # v* tag 触发的正式发布：双架构漏洞闸门 → 多架构构建 → semver + latest 标签，
 # 同一次构建推送 ghcr 与 Docker Hub，附带 SBOM 与 provenance attestation。
 # GitHub Release 由 release-please 创建，此处不再重复生成。
@@ -8,6 +12,10 @@ on:
   push:
     tags: ["v*"]
 
+# When different v* tags run concurrently, an older version finishing later would overwrite mutable
+# tags such as latest/{{major}}, so runs are serialized. queue: max keeps every queued tag: the
+# default queue: single keeps only one pending run per group, so pushing several tags in a row would
+# drop the releases of the middle versions.
 # 不同 v* tag 并发运行时，后完成的旧版本会覆盖 latest/{{major}} 等可变标签，故串行执行。
 # queue: max 保留全部排队 tag：默认的 queue: single 每组只留一个 pending 运行，连续推多个
 # tag 会丢掉中间版本的发布。
@@ -31,6 +39,9 @@ jobs:
         with:
           persist-credentials: false
 
+      # The Docker Hub namespace has the same name as the GitHub organization, and both registries share
+      # this one lowercase repository name; forks therefore automatically point to their own namespace and
+      # do not inherit the upstream push target
       # Docker Hub 命名空间与 GitHub 组织同名，两个 registry 共用这一份小写仓库名；
       # fork 因此自动指向自己的命名空间，不会继承上游的推送目标
       - name: Compute lowercase image name
@@ -38,6 +49,7 @@ jobs:
         env:
           REPO: ${{ github.repository }}
 
+      # Generate APT_REFRESH by ISO week, so the Dockerfile's system package layer is invalidated once a week and apt-get upgrade runs again
       # 按 ISO 周生成 APT_REFRESH，使 Dockerfile 的系统包层每周失效一次并重新 apt-get upgrade
       - name: Compute apt refresh key
         id: apt
@@ -60,6 +72,10 @@ jobs:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
+      # The gate builds and scans per architecture: base image layers and binary packages may differ
+      # between architectures, and scanning only amd64 would miss fixable vulnerabilities present only in
+      # the arm64 variant. Build layers go into the gha cache, and the final push step reuses them
+      # directly
       # 闸门逐架构构建并扫描：架构间基础镜像层与二进制包可能不同，
       # 只扫 amd64 会放过仅存在于 arm64 变体的可修复漏洞。构建层进
       # gha 缓存，最终推送步骤直接复用
@@ -138,6 +154,8 @@ jobs:
           images: |
             ${{ env.REGISTRY }}/${{ env.IMAGE_NAME_LC }}
             docker.io/${{ env.IMAGE_NAME_LC }}
+          # latest is left to the metadata-action default flavor (latest=auto): it is generated only for stable
+          # semver tags, while prerelease tags (such as v1.2.3-rc.1) push only version tags
           # latest 交由 metadata-action 默认 flavor（latest=auto）：仅稳定
           # semver tag 生成，预发布 tag（如 v1.2.3-rc.1）只推版本标签
           tags: |
@@ -161,6 +179,10 @@ jobs:
             type=gha,scope=release-amd64
             type=gha,scope=release-arm64
 
+      # The dual push comes from one build, so the digests should in theory be identical; this step is the
+      # only proof that "the sync actually happened", and it checks every tag produced by the metadata-
+      # action one by one. Verifying only the version tag would miss the case where latest / {{major}} did
+      # not land in one registry, and latest is exactly the default pull entry
       # 双推是同一次构建的产物，digest 理论上必然相同；这一步是「同步确实发生了」
       # 的唯一凭证，逐一核对 metadata-action 产出的每个标签——只验版本标签会放过
       # latest / {{major}} 在某个 registry 未落地的情况，而 latest 正是默认拉取入口

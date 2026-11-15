@@ -1,4 +1,7 @@
-"""条目 icon 的格式把关（规则 ③ 的文件内容部分）：PNG / WebP / SVG、正方形、≤ 64 KB。"""
+"""Format check for an entry's icon (the file-content part of rule 3): PNG / WebP / SVG, square, ≤ 64 KB.
+
+条目 icon 的格式把关（规则 ③ 的文件内容部分）：PNG / WebP / SVG、正方形、≤ 64 KB。
+"""
 
 from __future__ import annotations
 
@@ -14,6 +17,7 @@ from .issues import ROOT_PATH, MarketIssue, MarketIssueCode
 
 ICON_MAX_BYTES = 64 * 1024
 
+# Extension → (format recognized by Pillow, HTTP media type); SVG does not go through Pillow, so its format is recorded as None.
 #: 扩展名 → (Pillow 识别出的格式, HTTP media type)；SVG 不经 Pillow，格式记 None。
 ICON_FORMATS: dict[str, tuple[str | None, str]] = {
     ".png": ("PNG", "image/png"),
@@ -23,16 +27,23 @@ ICON_FORMATS: dict[str, tuple[str | None, str]] = {
 
 _SVG_LENGTH = re.compile(r"^\s*([0-9]*\.?[0-9]+)\s*(px)?\s*$")
 
+# Valid names of the root element: no namespace, or the SVG namespace (expat joins namespace and local name with a space).
 #: 根元素的合法名字：无命名空间，或 SVG 命名空间（expat 以空格连接命名空间与本地名）。
 _SVG_ROOT_NAMES = frozenset({"svg", "http://www.w3.org/2000/svg svg"})
 
 
 class _DtdDeclared(Exception):
-    """SVG 声明了 DTD：实体展开是 XML 解析的放大面，正常图标用不到，出现即拒。"""
+    """The SVG declares a DTD: entity expansion is an amplification surface in XML parsing, and normal icons do not need it, so its presence means rejection.
+
+    SVG 声明了 DTD：实体展开是 XML 解析的放大面，正常图标用不到，出现即拒。
+    """
 
 
 def inspect_icon(file: str, data: bytes) -> list[MarketIssue]:
-    """判定一份 icon 的内容。``file`` 是它在市场源内的相对路径，扩展名决定期望格式。"""
+    """Judge the content of one icon. `file` is its relative path within the market source, and the extension determines the expected format.
+
+    判定一份 icon 的内容。``file`` 是它在市场源内的相对路径，扩展名决定期望格式。
+    """
     suffix = PurePosixPath(file).suffix.lower()
     if suffix not in ICON_FORMATS:
         return [_issue(file, MarketIssueCode.ICON_FORMAT_INVALID)]
@@ -52,10 +63,12 @@ def inspect_icon(file: str, data: bytes) -> list[MarketIssue]:
 
 def _raster_size(data: bytes, expected_format: str) -> tuple[float, float] | None:
     try:
+        # Only the decoder matching the extension may read this data; every other format is judged unrecognized.
         # 只让扩展名对应的解码器读这份数据，其余格式一律判为不识别。
         with Image.open(BytesIO(data), formats=[expected_format]) as image:
             width, height = image.size
             image.verify()
+    # The decoder reports structural damage as SyntaxError / ValueError (e.g. chunk checksum mismatch, over-long header field), and verify() raises them as is.
     # 解码器以 SyntaxError / ValueError 报告结构损坏（如 chunk 校验和不符、头部字段过长），verify() 会原样抛出。
     except (Image.DecompressionBombError, UnidentifiedImageError, OSError, SyntaxError, ValueError):
         return None
@@ -63,7 +76,10 @@ def _raster_size(data: bytes, expected_format: str) -> tuple[float, float] | Non
 
 
 def _svg_size(data: bytes) -> tuple[float, float] | None:
-    """SVG 的宽高：优先 ``width`` / ``height`` 属性（无单位或 px），否则取 ``viewBox``；须为正的有限数。"""
+    """Width and height of an SVG: prefer the `width` / `height` attributes (unitless or px), otherwise take `viewBox`; must be positive finite numbers.
+
+    SVG 的宽高：优先 ``width`` / ``height`` 属性（无单位或 px），否则取 ``viewBox``；须为正的有限数。
+    """
     attributes = _svg_root_attributes(data)
     if attributes is None:
         return None
@@ -83,7 +99,11 @@ def _svg_size(data: bytes) -> tuple[float, float] | None:
 
 
 def _svg_root_attributes(data: bytes) -> dict[str, str] | None:
-    """解析整份 SVG 并返回根 ``<svg>`` 的属性；不良构、根元素不是 svg 或声明了 DTD 时返回 None。
+    """Parse the whole SVG and return the attributes of the root `<svg>`; return None if it is malformed, the root element is not svg, or it declares a DTD.
+
+        The DTD is rejected in the parser callback, regardless of file encoding (in a UTF-16 file a byte search cannot find `<!DOCTYPE`).
+
+    解析整份 SVG 并返回根 ``<svg>`` 的属性；不良构、根元素不是 svg 或声明了 DTD 时返回 None。
 
     DTD 在解析器回调里拒绝，与文件编码无关（UTF-16 文件里按字节找不到 ``<!DOCTYPE``）。
     """

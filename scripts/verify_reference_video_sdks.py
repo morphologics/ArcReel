@@ -1,4 +1,9 @@
-"""SDK 验证脚本：跑四家供应商的参考生视频真实能力矩阵。
+"""SDK verification script: run the real capability matrix of reference-to-video across four providers.
+
+Usage:
+    python scripts/verify_reference_video_sdks.py --provider ark --refs 9 --duration 10 --multi-shot
+
+SDK 验证脚本：跑四家供应商的参考生视频真实能力矩阵。
 
 用法:
     python scripts/verify_reference_video_sdks.py --provider ark --refs 9 --duration 10 --multi-shot
@@ -35,7 +40,10 @@ class Provider(StrEnum):
 
 
 def _positive_int(value: str) -> int:
-    """argparse type：拒绝 0 / 负值，避免 --refs 0 或 --duration 0 污染报告。"""
+    """argparse type: reject 0 / negative values, so --refs 0 or --duration 0 does not pollute the report.
+
+    argparse type：拒绝 0 / 负值，避免 --refs 0 或 --duration 0 污染报告。
+    """
     try:
         ivalue = int(value)
     except ValueError as exc:
@@ -169,6 +177,7 @@ async def run_once(
     start = time.monotonic()
     try:
         await backend.generate(request)
+        # Guard against false positives: if the backend returns success but the video file was not written to disk or is empty, judge FAIL
         # 防 false-positive：backend 返回成功但视频文件未落盘 / 为空时应判 FAIL
         if not out_path.exists() or out_path.stat().st_size == 0:
             raise RuntimeError(f"output video missing or empty: {out_path}")
@@ -190,7 +199,10 @@ async def run_once(
 
 
 def clamp_refs_for_backend(*, requested: int, caps: VideoCapabilities) -> tuple[int, str]:
-    """把 requested 夹到 backend 上限；若 backend 不支持 reference_images 则直接抛 ValueError。"""
+    """Clamp requested to the backend limit; raise ValueError directly if the backend does not support reference_images.
+
+    把 requested 夹到 backend 上限；若 backend 不支持 reference_images 则直接抛 ValueError。
+    """
     if caps.max_reference_images <= 0:
         raise ValueError("Backend does not support reference_images")
     if requested <= caps.max_reference_images:
@@ -208,12 +220,20 @@ _PROVIDER_TO_BACKEND: dict[Provider, str] = {
 
 
 def resolve_backend(provider: Provider) -> VideoBackend:
-    """直接复用 lib.backends.video_backends 的注册表——import lib.backends.video_backends 已自动注册全部后端。"""
+    """Reuse the registry of lib.backends.video_backends directly: importing lib.backends.video_backends already registers all backends.
+
+    直接复用 lib.backends.video_backends 的注册表——import lib.backends.video_backends 已自动注册全部后端。
+    """
     return create_backend(_PROVIDER_TO_BACKEND[provider])
 
 
 def _extract_data_rows(report_lines: list[str]) -> list[str]:
-    """从已有 Markdown 报告中挑出表格数据行（跳过 header / 分隔符）。
+    """Pick the table data rows out of an existing Markdown report (skipping header / separator).
+
+        Identify header and separator rows precisely by row prefix, so that Result/Note fields containing keywords such as "Provider"
+        / "---" are not filtered by mistake (e.g. FAIL: "Provider timeout").
+
+    从已有 Markdown 报告中挑出表格数据行（跳过 header / 分隔符）。
 
     用行前缀精确识别表头和分隔行，避免 Result/Note 字段含 "Provider"
     / "---" 等关键字时被误过滤（如 FAIL: "Provider timeout"）。
@@ -248,9 +268,10 @@ async def run_with_backend(
         work_dir=work_dir,
         note=note,
     )
+    # One-off script creating the report directory; local metadata.
     report_dir.mkdir(parents=True, exist_ok=True)  # noqa: ASYNC240 -- 一次性脚本创建报告目录，本地元数据
     fname = report_dir / f"reference-video-sdks-{date.today():%Y-%m-%d}.md"
-    # 多次运行追加模式：读原文件剥离 header、合并行
+    # Append mode across runs: read the original file, strip the header, merge the rows / 多次运行追加模式：读原文件剥离 header、合并行
     existing_rows: list[str] = []
     if fname.exists():
         existing = fname.read_text(encoding="utf-8").splitlines()
@@ -258,7 +279,7 @@ async def run_with_backend(
     md = render_report([result])
     if existing_rows:
         lines = md.splitlines()
-        # 把已有数据行塞回表尾
+        # Put the existing data rows back at the end of the table / 把已有数据行塞回表尾
         lines.extend(existing_rows)
         md = "\n".join(lines) + "\n"
     fname.write_text(md, encoding="utf-8")

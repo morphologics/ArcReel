@@ -1,4 +1,7 @@
-"""条目写回 JSON：用户修改存下的条目副本经 ``dump_entry`` 落库，再经 ``parse_entry`` 读回，必须原样还原。"""
+"""Entry write-back JSON: an entry copy saved from a user edit is stored via `dump_entry` and read back via `parse_entry`, and must be restored exactly.
+
+条目写回 JSON：用户修改存下的条目副本经 ``dump_entry`` 落库，再经 ``parse_entry`` 读回，必须原样还原。
+"""
 
 from __future__ import annotations
 

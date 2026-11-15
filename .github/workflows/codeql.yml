@@ -26,9 +26,11 @@ jobs:
       - uses: ./.github/actions/domain-filter
         id: domains
         with:
+          # The schedule event has no diff baseline, so scan everything; release PRs use the same full scan as test.yml
           # schedule 事件无变更比对基准，直接全量扫描；发布 PR 与 test.yml 同口径全量
           full: ${{ github.event_name == 'schedule' || (github.event_name == 'pull_request' && startsWith(github.head_ref, 'release-please--')) }}
       - id: languages
+        # Trim analysis languages by domain: frontend-only changes do not run the python analysis, and vice versa
         # 按域裁剪分析语言：纯前端变更不跑 python 分析，反之亦然
         env:
           BACKEND: ${{ steps.domains.outputs.backend }}

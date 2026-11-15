@@ -22,7 +22,14 @@ _MESSAGES_PATH = "/v1/messages"
 
 
 def _normalize(raw: str) -> str:
-    """与 ``lib.config.url_utils.normalize_anthropic_base_url`` 同一规则的冻结副本。
+    """A frozen copy of the same rule as ``lib.config.url_utils.normalize_anthropic_base_url``.
+
+    Strip leading and trailing whitespace, strip a trailing slash, and when the end is exactly
+    ``/v1/messages`` remove that segment and strip the trailing slash once more.
+    Values containing query / fragment / userinfo get only these three steps; they are rejected by input
+    validation during connection testing.
+
+    与 ``lib.config.url_utils.normalize_anthropic_base_url`` 同一规则的冻结副本。
 
     去首尾空白、去尾部斜杠、末尾恰好是 ``/v1/messages`` 时去掉这一段并再去一次尾斜杠。
     含 query / fragment / userinfo 的值同样只做这三步，它们在测试连接时会被入口校验拒绝。
@@ -34,7 +41,14 @@ def _normalize(raw: str) -> str:
 
 
 def upgrade() -> None:
-    """把存量 Agent 凭证的 base_url 归一到「存储值即调用值」形态。
+    """Normalize the base_url of existing Agent credentials to the form "stored value is the called value".
+
+    At run time base_url is written as is into ``ANTHROPIC_BASE_URL`` and the Claude CLI always appends
+    ``/v1/messages``; older versions did not normalize before storing, so rows with a ``/v1/messages``
+    suffix or a trailing slash made connection testing and the runtime diverge.
+    Only rows whose value changes after normalization are updated.
+
+    把存量 Agent 凭证的 base_url 归一到「存储值即调用值」形态。
 
     运行时把 base_url 原样写进 ``ANTHROPIC_BASE_URL``、由 Claude CLI 固定追加 ``/v1/messages``；
     旧版本入库前不归一，带 ``/v1/messages`` 后缀或尾斜杠的行会让测试连接与运行时分叉。
@@ -54,4 +68,7 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    """归一是幂等的纯数据整理，旧版本同样接受归一后的值，无需回退。"""
+    """Normalization is an idempotent, pure data cleanup, and older versions also accept the normalized value, so no rollback is needed.
+
+    归一是幂等的纯数据整理，旧版本同样接受归一后的值，无需回退。
+    """

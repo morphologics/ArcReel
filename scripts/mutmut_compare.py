@@ -37,7 +37,10 @@ EXIT_INVALID = 2
 
 @dataclass
 class ComparisonReport:
-    """三层验收的结果。`invalid` 非空时其余字段不可信。"""
+    """Result of the three-layer acceptance. When `invalid` is non-empty, the other fields cannot be trusted.
+
+    三层验收的结果。`invalid` 非空时其余字段不可信。
+    """
 
     invalid: list[str] = field(default_factory=list)
     reworked_killed: list[str] = field(default_factory=list)
@@ -53,7 +56,11 @@ class ComparisonReport:
 
     @property
     def pending_recheck(self) -> bool:
-        """有 mutant 变成超时之类的非 0/1 exit code，结论要等新进程复核。
+        """A mutant has a non-0/1 exit code such as a timeout; the conclusion waits for a re-check in a fresh process.
+
+        The third layer re-checks equivalent mutants only: other unmodified mutants being killed is merely recorded, and abnormal exit codes do not affect the conclusion.
+
+        有 mutant 变成超时之类的非 0/1 exit code，结论要等新进程复核。
 
         第三层只对等价变异体复核：其余未改造 mutant 被杀只登记，异常 exit code 不影响结论。
         """
@@ -68,14 +75,23 @@ class ComparisonReport:
 
 @dataclass(frozen=True)
 class MetaSnapshot:
-    """一轮 mutmut 的结果：mutant 名 → exit code，以及被变异函数的源码哈希。"""
+    """Result of one mutmut round: mutant name -> exit code, plus the source hash of the mutated function.
+
+    一轮 mutmut 的结果：mutant 名 → exit code，以及被变异函数的源码哈希。
+    """
 
     exit_codes: Mapping[str, int | None]
     function_hashes: Mapping[str, str]
 
 
 def load_meta(root: Path) -> MetaSnapshot:
-    """合并目录下全部 `*.meta` 的 `exit_code_by_key` 与 `hash_by_function_name`。
+    """Merge `exit_code_by_key` and `hash_by_function_name` from all `*.meta` files in the directory.
+
+    Hashes are keyed by "module.function": a mutant name is `lib.a.x_f__mutmut_3`, the key of `hash_by_function_name`
+    in the same .meta is `x_f`, and the module prefix is taken from that file's mutant name. If `hash_by_function_name` is missing, or a mutant's function
+    has no hash, reject outright: the source hash check is the precondition for the comparison being valid, and a missing item would silently disable it.
+
+    合并目录下全部 `*.meta` 的 `exit_code_by_key` 与 `hash_by_function_name`。
 
     哈希以「模块.函数」为键：mutant 名是 `lib.a.x_f__mutmut_3`，同一 .meta 里的 `hash_by_function_name`
     键是 `x_f`，模块前缀取自该文件的 mutant 名。缺少 `hash_by_function_name`、或有 mutant 对应的函数
@@ -114,7 +130,10 @@ def load_meta(root: Path) -> MetaSnapshot:
 
 
 def read_names(path: Path) -> list[str]:
-    """一行一个 mutant 名，忽略空行与 `#` 开头的行。"""
+    """One mutant name per line; blank lines and lines starting with `#` are ignored.
+
+    一行一个 mutant 名，忽略空行与 `#` 开头的行。
+    """
     names: list[str] = []
     for line in path.read_text(encoding="utf-8").splitlines():
         stripped = line.strip()
@@ -213,6 +232,7 @@ def compare(
 
 
 def _code(value: int | None) -> int:
+    # None is mutmut's "not checked"; use a placeholder value that does not collide with any real exit code, so the report can be sorted and printed.
     # None 是 mutmut 的「未检查」；用一个不与任何真实 exit code 冲突的值占位，让报告可排序可打印。
     return -1 if value is None else value
 

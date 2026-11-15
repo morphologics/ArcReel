@@ -131,7 +131,10 @@ def _skill_names(profile_dir: Path) -> set[str]:
 
 
 def _validate_eval_targets(label: str, record: dict[str, object], skills: set[str], tools: set[str]) -> list[str]:
-    """eval 是验收资产：点名的 skill 或工具已退役时，按它验收就是在验一份不存在的契约。"""
+    """An eval is an acceptance asset: when the named skill or tool has been retired, accepting against it verifies a contract that does not exist.
+
+    eval 是验收资产：点名的 skill 或工具已退役时，按它验收就是在验一份不存在的契约。
+    """
     errors: list[str] = []
     target_skills = record.get("target_skills", [])
     if isinstance(target_skills, list):

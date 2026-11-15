@@ -19,6 +19,8 @@ depends_on: str | Sequence[str] | None = None
 
 
 def upgrade() -> None:
+    # generate_audio is only meaningful for video calls; the server-side default of true would fill non-video rows the caller did not declare as
+    # "with sound". With the default removed, undeclared means NULL, and non-video rows historically filled by the default are cleared.
     # generate_audio 只对视频调用有意义；服务端默认 true 会让调用方没有声明的非视频行也被填成
     # 「有声」。去掉默认后未声明即 NULL，并把历史上被默认填过的非视频行清空。
     with op.batch_alter_table("api_calls") as batch_op:

@@ -41,10 +41,16 @@ jobs:
       - uses: ./.github/actions/domain-filter
         id: domains
         with:
+          # A release PR's changed version files do not cover the docker domain, so a full run must be explicit to honor "release commits run the full CI".
           # 发布 PR 变更的版本文件不覆盖 docker 域，须显式全量以兑现「发布 commit 跑全量 CI」
           full: ${{ inputs.full == true || (github.event_name == 'pull_request' && startsWith(github.head_ref, 'release-please--')) }}
 
   workflow-static:
+    # Syntax and security gate for workflow files. actionlint uses the official container image (bundles shellcheck and
+    # pyflakes, so it can check run: scripts); zizmor uses the default persona and blocks at medium and above; --offline
+    # keeps the verdict independent of whether a GitHub token exists in the environment, consistent with local pre-commit.
+    # The versions of both tools must be upgraded in sync with the corresponding hooks in .pre-commit-config.yaml.
+    # zizmor audits only inputs that GitHub actually executes; the upstream CI shipped with vendored skills under .agents/skills/ does not run in this repo.
     # workflow 文件的语法与安全闸门。actionlint 走官方容器镜像（自带 shellcheck 与
     # pyflakes，能检查 run: 脚本）；zizmor 用默认 persona，medium 及以上阻断，--offline
     # 使判定不受环境里是否存在 GitHub token 影响，与 pre-commit 本地一致。
@@ -94,6 +100,8 @@ jobs:
         run: uv sync
 
       - name: Classification marker gate (collect-only)
+        # Must not use -n: with xdist, collection happens inside each worker, and conftest's UsageError would hit a
+        # dsession assertion and lose the violation list. -qq keeps collection errors and avoids printing tens of thousands of nodeids.
         # 必须不带 -n：xdist 的收集发生在各 worker 内，conftest 的 UsageError 会撞上
         # dsession 断言并丢失违规清单。-qq 保留收集错误且避免输出上万条 nodeid。
         run: uv run python -m pytest --collect-only -qq
@@ -122,6 +130,9 @@ jobs:
         run: uv run python scripts/lint_agent_runtime_profile.py
 
   conventions:
+    # Repo convention gate: scripts/audit_conventions.py --check (standards index and CodeRabbit mapping,
+    # Dependabot groups, tool version sync, inline rationale on exemption comments). The files involved span all domains, and
+    # docs/standards/ and others belong to no domain, so this is not trimmed by domain.
     # 仓库约定闸门：scripts/audit_conventions.py --check（规范索引与 CodeRabbit 映射、
     # Dependabot 分组、工具版本同步、豁免注释的行内理由）。涉及的文件横跨各域，其中
     # docs/standards/ 等不属于任何域，所以不按域裁剪。
@@ -147,6 +158,9 @@ jobs:
         run: uv run python scripts/audit_conventions.py --check
 
   test-lint:
+    # Test hygiene gate: scripts/audit_tests.py --check (zero third-party dependencies, pure stdlib ast).
+    # Independent of backend-static: the script scans both backend tests/ and frontend/src/**/*.test.*,
+    # and hooking it only to the backend domain would let frontend-only PRs bypass the frontend part.
     # 测试卫生闸门：scripts/audit_tests.py --check（零第三方依赖，纯 stdlib ast）。
     # 独立于 backend-static：脚本同时扫后端 tests/ 与 frontend/src/**/*.test.*，
     # 只挂 backend 域会让 frontend-only PR 绕过前端段。
@@ -176,6 +190,8 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          # Every entry of the exemption list is triggered by tests/unit: the unit job declares this so that stale entries are reported in CI;
+          # running integration alone triggers only some of them, so it does not declare it.
           # 豁免清单的每一条都由 tests/unit 触发：unit job 声明这一点，过期条目在 CI 报出；
           # integration 单独跑只触发其中一部分，不带。
           - suite: unit
@@ -183,6 +199,7 @@ jobs:
             extra_args: --blocking-guard-expect-all-exemptions
           - suite: integration
             path: tests/integration
+          # The test directory of a workspace subpackage has its own pytest config and is collected separately from the app tests.
           # workspace 子包的测试目录自带 pytest 配置，与应用测试分开收集
           - suite: market-core
             path: packages/arcreel-market-core/tests
@@ -209,6 +226,14 @@ jobs:
         run: uv sync
 
       - name: Run tests with coverage
+        # -n is fixed at 4 rather than auto: -n auto prefers psutil's physical core count, so once some transitive dependency pulls in
+        # psutil, the CI worker count would silently halve. loadfile rather than the default load: shared paths at the repo root
+        # (mkdir/rmdir under PROJECT_ROOT, module-level autouse fixtures) require cases in the same file
+        # to stay on the same worker.
+        # --max-worker-restart=0: after a worker crash no replacement is started; fail immediately and report the case that was running at the crash.
+        # When replenishing workers, the locked pytest-xdist requeues files already finished by the crashed worker, and the replenished worker
+        # gets an empty task, leaving the session stuck at 99%; see "CI hang diagnosis" in docs/agents/testing.md for when this can be dropped.
+        # The step timeout is shorter than the job timeout, leaving time for the next step to output diagnostics when it hangs.
         # -n 固定 4 而非 auto：-n auto 优先取 psutil 的物理核数，一旦某传递依赖带进
         # psutil，CI worker 数会静默减半。loadfile 而非默认 load：仓库根共享路径
         # （PROJECT_ROOT 下 mkdir/rmdir、module 级 autouse fixture）要求同文件用例
@@ -226,6 +251,12 @@ jobs:
           --cov-report=xml:coverage-${{ matrix.suite }}.xml
 
       - name: Hang and crash diagnostics
+        # The last progress of each process written by tests/hang_watchdog.py (the case being started and the sessionfinish/unconfigure phases) and the thread stacks when no progress is made;
+        # a process whose log ends with a phase record has finished its session, while one that ends on a case is stuck on that case.
+        # When a worker goes down (node down: Not properly terminated), the controller's progress records its exit code or terminating signal;
+        # a worker killed by os._exit leaves its call stack in .stacks, and a process that received SIGTERM/SIGHUP/SIGINT leaves its stack at that moment in the
+        # same-named .SIGTERM etc. file; the stack of a segfault is in the test step's stderr (Fatal Python error,
+        # absent if faulthandler could not run); for a process killed by SIGKILL, check the kernel log for OOM.
         # tests/hang_watchdog.py 写下的各进程最后的进展（开始执行的用例与 sessionfinish/unconfigure 阶段）与无进展时的线程栈；
         # 末尾是阶段记录的进程已跑完会话，末尾停在某条用例的进程就卡在那条用例上。
         # worker 宕掉（node down: Not properly terminated）时，controller 的进展记有它的退出码或终止信号；
@@ -250,6 +281,7 @@ jobs:
           sudo dmesg --ctime | grep -iE 'out of memory|oom|killed process|segfault' || echo "内核日志里没有 OOM 或段错误记录"
 
       - name: Upload backend coverage
+        # unit/integration use the same flag; Codecov merges by commit, so no local aggregation job is needed.
         # unit/integration 使用同一 flag；Codecov 按 commit 合并，无需本地聚合作业。
         uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5 # v7.1.1
         with:
@@ -259,6 +291,10 @@ jobs:
           fail_ci_if_error: false
 
   postgres-compat:
+    # SQLite/PostgreSQL dialect compatibility gate: the alembic three-step loop (upgrade/downgrade/idempotent)
+    # plus all DB-touching tests (marker-driven) run on PG16.
+    # Bound to the backend domain rather than a separate database domain: dialect differences can be introduced by any SQLAlchemy query change,
+    # not just the alembic/ directory.
     # SQLite/PostgreSQL 方言兼容性闸门：alembic 三步闭环（upgrade/downgrade/idempotent）
     # + 所有 DB-touching 测试（marker 驱动）跑在 PG16 上。
     # 绑定 backend 域而非独立的 database 域：方言差异可由任何 SQLAlchemy 查询改动引入，
@@ -302,12 +338,14 @@ jobs:
       - name: Validate alembic migrations (upgrade / idempotent / downgrade / re-upgrade)
         run: |
           set -e
-          uv run alembic upgrade head           # 1. 正向迁移
-          uv run alembic upgrade head           # 2. 幂等性：第二次应该 no-op
-          uv run alembic downgrade base         # 3. 反向回到空 schema
-          uv run alembic upgrade head           # 4. 再次正向，验证 downgrade 真清掉了
+          uv run alembic upgrade head           # 1. Forward migration. / 1. 正向迁移
+          uv run alembic upgrade head           # 2. Idempotency: the second run should be a no-op. / 2. 幂等性：第二次应该 no-op
+          uv run alembic downgrade base         # 3. Reverse back to the empty schema. / 3. 反向回到空 schema
+          uv run alembic upgrade head           # 4. Forward again, to verify the downgrade really cleaned up. / 4. 再次正向，验证 downgrade 真清掉了
 
       - name: Run dialect-sensitive tests against Postgres
+        # 4 workers + loadfile: cases with independent schemas can run in parallel, while cases sharing the public schema's async_session
+        # stay in the same file/worker, avoiding primary key and lock conflicts.
         # 4 worker + loadfile：独立 schema 用例可并行，共用 public schema 的 async_session
         # 用例留在同一文件/worker，避免主键与锁冲突。
         run: |
@@ -397,12 +435,17 @@ jobs:
           fail_ci_if_error: false
 
   frontend-e2e:
+    # Page-level acceptance suite (overflow probe + axe + region screenshot comparison). The image version must match @playwright/test in frontend/package.json,
+    # otherwise the browser cannot be found; change it here too when upgrading @playwright/test.
     # 页面级验收套件（溢出探针 + axe + 区域截图比对）。镜像版本必须与 frontend/package.json 的
     # @playwright/test 一致，否则找不到浏览器；升级 @playwright/test 时同步改这里。
     name: frontend-e2e (${{ matrix.shard }}/5)
     needs: changes
     if: needs.changes.outputs.frontend == 'true'
     runs-on: ubuntu-latest
+    # Split into five shards by case; each shard is still a single worker, so screenshot rendering conditions are unchanged.
+    # The shard count appears in the job name, matrix.shard and --shard; change all three together.
+    # The 25-minute cap exists only to contain hangs.
     # 按用例分五片；每片仍是单 worker，截图渲染条件不变。
     # 分片总数出现在 job 名、matrix.shard 与 --shard 三处，改动时一起改。
     # 25 分钟上限只用来兜住卡死。
@@ -435,6 +478,7 @@ jobs:
 
       - name: Run page-level suite
         working-directory: frontend
+        # Screenshot baselines are generated in the same image; a shard fails when the comparison differs or a baseline is missing.
         # 截图基线在同一镜像里生成，比对出差异或缺少基线时该片失败
         env:
           E2E_SCREENSHOTS: "1"
@@ -449,6 +493,12 @@ jobs:
           retention-days: 30
 
   website-checks:
+    # A single job chains the docs site gates: static checks (typecheck / eslint / prettier) first,
+    # so a seconds-long failure need not wait for the build -> CONTRIBUTING copy (otherwise the gitignored Chinese copy is absent and its committed
+    # English translation would be misjudged as an orphan) -> consistency script (page inventory / orphan translations / missing anchors / UI JSON key completeness,
+    # see website/scripts/check-consistency.mjs) fails ->
+    # dual-locale build (onBrokenLinks/onBrokenAnchors/onBrokenMarkdownLinks all throw)
+    # fails -> the missing/stale translation list goes to the step summary and does not block.
     # 单一 job 串起文档站的各道闸：静态检查（typecheck / eslint / prettier）前置，
     # 秒级失败不必等构建 → CONTRIBUTING 复制（否则 gitignore 的中文副本缺席，其已提交
     # 的英文译文会被误判为孤儿）→ 一致性脚本（页面库存 / 孤儿译文 / 缺锚点 / UI JSON key 齐全性，
@@ -466,6 +516,8 @@ jobs:
 
       - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
         with:
+          # The version comes from packageManager in website/package.json (including the integrity hash), not hard-coded again here;
+          # this input must be specified explicitly: the default is package.json at the repo root, and this repo has no such file at its root.
           # 版本取自 website/package.json 的 packageManager（含完整性哈希），不在此重复写死；
           # 该输入必须显式指定——默认值是仓库根的 package.json，本仓库根目录没有这个文件
           package_json_file: website/package.json
@@ -486,6 +538,7 @@ jobs:
         working-directory: website
         run: pnpm install --frozen-lockfile
 
+      # Right after dependency install: if a later gate fails, the always() translation staleness report must still read this synced copy.
       # 紧接依赖安装：后续闸门失败时，always() 的翻译滞后报告仍要读到这份同步副本
       - name: Sync CONTRIBUTING copy
         working-directory: website
@@ -512,6 +565,7 @@ jobs:
         run: pnpm run build
 
       - name: Translation lag report
+        # The report neither blocks nor should be swallowed by earlier gates: a PR with a red gate should still see the missing/stale translation list.
         # 报告不阻断，也不该被前面的闸门吞掉：闸门红了的 PR 同样要看到缺译/滞后清单
         if: always()
         run: |
@@ -524,6 +578,11 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
   docker-verify:
+    # Image assembly verification at PR time: build amd64 only, no login, no push.
+    # App correctness is ensured by the backend/frontend tests; this only verifies that the image builds, the container starts, and
+    # /health is reachable; Trivy only reports and does not block (release-level blocking is in docker-release.yml).
+    # Runner pinned to 24.04: the sysctl keys and semantics below assume that version, and drift with -latest would turn the job red
+    # before the health check.
     # PR 阶段的镜像装配验证：只构建 amd64、不登录、不推送。
     # 应用正确性由 backend/frontend 测试保证，这里只验证镜像能构建、容器能起、
     # /health 可达；Trivy 仅上报不阻断（发布级阻断在 docker-release.yml）。
@@ -550,6 +609,9 @@ jobs:
           cache-from: type=gha
 
       - name: Allow unprivileged user namespaces on runner host
+        # Ubuntu 24.04 defaults to kernel.apparmor_restrict_unprivileged_userns=1, which globally
+        # disables unprivileged userns; bwrap cannot start inside the container and apparmor:unconfined does not get around it,
+        # so it can only be relaxed on the host (runner VM) side.
         # Ubuntu 24.04 默认 kernel.apparmor_restrict_unprivileged_userns=1 全局
         # 禁用非特权 userns，容器内 bwrap 起不来且 apparmor:unconfined 绕不过，
         # 只能在宿主（runner VM）侧放开
@@ -557,6 +619,8 @@ jobs:
 
       - name: Smoke test container health
         run: |
+          # Sandbox run parameters match the official Compose (website/docs/ops/deployment.md): bwrap inside the container
+          # needs these privileges, and when missing the server hard-fails at startup under the sandbox red line.
           # 沙箱运行参数与官方 Compose 一致（website/docs/ops/deployment.md）：容器内 bwrap
           # 需要这些权限，缺失时 server 按沙箱红线启动硬失败
           docker run -d --name arcreel-ci \
@@ -590,6 +654,8 @@ jobs:
           exit-code: "0"
 
   release-integrity:
+    # Integrity check for release PRs (release-please--* branches); otherwise skip (the aggregate treats it as passed).
+    # A release PR also runs the full CI: it is the commit about to be tagged and released, and tests are not skipped because of the branch name prefix.
     # 发布 PR（release-please--* 分支）的完整性校验；其余情形 skip（聚合口径视为通过）。
     # 发布 PR 同时跑全量 CI：它是即将被打 tag 发布的 commit，不因分支名前缀跳过测试。
     if: github.event_name == 'pull_request' && startsWith(github.head_ref, 'release-please--')

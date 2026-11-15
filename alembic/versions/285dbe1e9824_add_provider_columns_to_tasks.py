@@ -35,6 +35,11 @@ def upgrade() -> None:
 def downgrade() -> None:
     """Downgrade schema.
 
+        Drop the indexes this migration created before the table rebuild: `preserve_sqlite_indexes` cannot tell an intentional drop from a silent loss,
+        so if the drop were inside it, it would be replayed as a loss, and provider_id is no longer on the table at that point, so the replay would certainly fail.
+
+    Downgrade schema.
+
     本迁移自己建的索引在重建表之外先删——``preserve_sqlite_indexes`` 分不清有意删除与静默丢失，
     放在它里面会被当作丢失回放，而 provider_id 此时已不在表上，回放必然报错。
     """

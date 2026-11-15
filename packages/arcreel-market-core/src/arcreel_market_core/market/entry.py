@@ -1,4 +1,7 @@
-"""条目与其定义的一致性（规则 ④⑤）：定义过共享校验器，索引条目等于定义 ``meta`` 的投影。"""
+"""Consistency between an entry and its definition (rules 4 and 5): the definition passes the shared validator, and the index entry equals the projection of the definition's `meta`.
+
+条目与其定义的一致性（规则 ④⑤）：定义过共享校验器，索引条目等于定义 ``meta`` 的投影。
+"""
 
 from __future__ import annotations
 
@@ -11,12 +14,22 @@ from arcreel_market_core.endpoint_definition import definition_media_type, valid
 from .index import ENDPOINT_ENTRY_TYPE, MarketIndexEntry
 from .issues import INDEX_FILENAME, ROOT_PATH, MarketIssue, MarketIssueCode, join_path
 
+# Fields projected from the definition `meta` into the index entry; the order is the order the generator writes.
 #: 从定义 ``meta`` 投影进索引条目的字段，顺序即生成器写出的顺序。
 PROJECTED_META_FIELDS = ("name", "author", "version", "description", "homepage", "min_app_version")
 
 
 def project_meta(definition: Mapping[str, Any]) -> dict[str, Any]:
-    """一份定义在索引条目里的投影：``meta`` 里出现的那些字段，加上定义声明的媒体类型。
+    """The projection of a definition into an index entry: the fields that appear in `meta`, plus the media type the definition declares.
+
+        The media type is not a fixed value: the definition itself declares whether it produces images or video, and a declarative definition that does not write it is video. The reading rule is shared with the endpoint projection and
+        the mirror column through the single `definition_media_type` implementation. The `media_type` on the market index is the value the mirror column will record once this definition is loaded into the library;
+        if the two disagree, an image endpoint would show up as video in the market.
+
+        When `kind` is missing or not recognized by this version, the projection has no `media_type`: the definition itself is invalid, and
+        :func:`validate_definition` has already said so in the same check, so guessing a value here would only mask it.
+
+    一份定义在索引条目里的投影：``meta`` 里出现的那些字段，加上定义声明的媒体类型。
 
     媒体类型不是固定值：定义自己声明产图还是产视频，声明式定义不写时为视频。读法与端点投影、
     镜像列共用 ``definition_media_type`` 一份实现——市场索引上的 ``media_type`` 就是这份定义装进库
@@ -39,7 +52,10 @@ def check_entry_definition(
     definition_file: str,
     entry_path: str = ROOT_PATH,
 ) -> list[MarketIssue]:
-    """规则 ④⑤。``definition_file`` 与 ``entry_path`` 只用于诊断定位。"""
+    """Rules 4 and 5. `definition_file` and `entry_path` are used only for locating diagnostics.
+
+    规则 ④⑤。``definition_file`` 与 ``entry_path`` 只用于诊断定位。
+    """
     issues = [
         MarketIssue(
             definition_file,

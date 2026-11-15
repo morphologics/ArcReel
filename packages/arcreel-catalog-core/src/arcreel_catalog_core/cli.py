@@ -1,4 +1,7 @@
-"""``python -m arcreel_catalog_core``：目录数据仓库 CI 使用的命令行。"""
+"""`python -m arcreel_catalog_core`: the command line used by the catalog data repository CI.
+
+``python -m arcreel_catalog_core``：目录数据仓库 CI 使用的命令行。
+"""
 
 from __future__ import annotations
 

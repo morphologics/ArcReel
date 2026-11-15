@@ -1,4 +1,11 @@
-"""清单文件与数据文件。
+"""Manifest file and data file.
+
+The catalog data repository publishes two files: the manifest file ``manifest.json`` gives the dataset version
+and the SHA-256 of the data file, and the data file ``catalog.json`` is the catalog data itself. The instance
+first fetches the manifest file, and fetches the data file only when the dataset version is newer than the
+local one, then reads the whole thing after verifying that the hash and version agree.
+
+清单文件与数据文件。
 
 目录数据仓库发布两个文件：清单文件 ``manifest.json`` 给出数据集版本与数据文件的 SHA-256，
 数据文件 ``catalog.json`` 是目录数据本身。实例先取清单文件，数据集版本比本地新时再取数据文件，
@@ -39,7 +46,10 @@ def _read_manifest(reader: CatalogReader, raw: object) -> CatalogManifest:
 
 
 def parse_manifest(content: bytes) -> CatalogManifest:
-    """实例侧读入清单文件。无法解析时抛 ``CatalogFormatError``。"""
+    """Instance side reads the manifest file. Raises ``CatalogFormatError`` if it cannot be parsed.
+
+    实例侧读入清单文件。无法解析时抛 ``CatalogFormatError``。
+    """
     reader = CatalogReader()
     manifest = _read_manifest(reader, _decode(reader, content, MANIFEST_FILENAME))
     if reader.fatal:
@@ -72,7 +82,12 @@ def _read_files(reader: CatalogReader, manifest_content: bytes, catalog_content:
 
 
 def load_catalog(manifest_content: bytes, catalog_content: bytes) -> CatalogData:
-    """实例侧读入一对清单文件与数据文件的原始字节。
+    """Instance side reads the raw bytes of a manifest file and data file pair.
+
+    Raises ``CatalogFormatError`` if the hash or dataset version does not match or either file cannot be
+    parsed; this dataset is rejected as a whole.
+
+    实例侧读入一对清单文件与数据文件的原始字节。
 
     哈希或数据集版本对不上、任一文件无法解析时抛 ``CatalogFormatError``，这一份数据整体拒收。
     """
@@ -84,14 +99,20 @@ def load_catalog(manifest_content: bytes, catalog_content: bytes) -> CatalogData
 
 
 def check_catalog_files(manifest_content: bytes, catalog_content: bytes) -> list[CatalogIssue]:
-    """构建侧校验一对清单文件与数据文件，返回全部问题；空列表才可以发布。"""
+    """Build side validates a manifest file and data file pair and returns all issues; only an empty list may be published.
+
+    构建侧校验一对清单文件与数据文件，返回全部问题；空列表才可以发布。
+    """
     reader = CatalogReader()
     _read_files(reader, manifest_content, catalog_content)
     return reader.issues
 
 
 def make_manifest(catalog_content: bytes) -> dict[str, str]:
-    """按数据文件生成清单文件的内容。数据文件无法解析时抛 ``CatalogFormatError``。"""
+    """Generate the content of the manifest file from the data file. Raises ``CatalogFormatError`` if the data file cannot be parsed.
+
+    按数据文件生成清单文件的内容。数据文件无法解析时抛 ``CatalogFormatError``。
+    """
     reader = CatalogReader()
     data = reader.catalog(_decode(reader, catalog_content, CATALOG_FILENAME))
     if reader.fatal:

@@ -26,7 +26,10 @@ EXEMPT_DECORATORS = frozenset({"staticmethod", "classmethod"})
 
 @dataclass
 class Tally:
-    """一个文件或目录的统计：函数数、被跳过的函数数、函数行数、被跳过的函数行数。"""
+    """Statistics for a file or directory: function count, skipped function count, function line count, skipped function line count.
+
+    一个文件或目录的统计：函数数、被跳过的函数数、函数行数、被跳过的函数行数。
+    """
 
     functions: int = 0
     skipped_functions: int = 0
@@ -49,7 +52,10 @@ class Tally:
 
 
 def is_skipped_function(node: ast.FunctionDef | ast.AsyncFunctionDef) -> bool:
-    """按 mutmut 规则判断函数自身是否因装饰器被跳过（不含从外层继承的跳过）。"""
+    """Judge by mutmut rules whether a function itself is skipped because of a decorator (excluding skips inherited from an outer scope).
+
+    按 mutmut 规则判断函数自身是否因装饰器被跳过（不含从外层继承的跳过）。
+    """
     if not node.decorator_list:
         return False
     if len(node.decorator_list) == 1:
@@ -60,7 +66,10 @@ def is_skipped_function(node: ast.FunctionDef | ast.AsyncFunctionDef) -> bool:
 
 
 def function_lines(node: ast.FunctionDef | ast.AsyncFunctionDef) -> range:
-    """函数占用的行号区间，从装饰器首行到函数末行。"""
+    """The line range a function occupies, from the first decorator line to the last line of the function.
+
+    函数占用的行号区间，从装饰器首行到函数末行。
+    """
     start = min([node.lineno, *(decorator.lineno for decorator in node.decorator_list)])
     end = node.end_lineno if node.end_lineno is not None else node.lineno
     return range(start, end + 1)
@@ -95,7 +104,10 @@ def tally_tree(tree: ast.AST) -> Tally:
 
 
 def tally_file(path: Path) -> Tally | None:
-    """解析失败（语法错误）的文件返回 None，不计入统计。"""
+    """Return None for a file that fails to parse (syntax error); it is not counted in the statistics.
+
+    解析失败（语法错误）的文件返回 None，不计入统计。
+    """
     try:
         tree = ast.parse(path.read_text(encoding="utf-8"))
     except SyntaxError:
@@ -111,7 +123,10 @@ def group_key(root: Path, path: Path) -> str:
 
 
 def census(root: Path) -> tuple[dict[str, Tally], dict[str, Tally]]:
-    """返回 (按目录汇总, 按文件)，两者都以 posix 路径字符串为键、按路径排序。"""
+    """Return (totals by directory, by file); both are keyed by posix path strings and sorted by path.
+
+    返回 (按目录汇总, 按文件)，两者都以 posix 路径字符串为键、按路径排序。
+    """
     per_dir: dict[str, Tally] = {}
     per_file: dict[str, Tally] = {}
     for path in sorted(root.rglob("*.py")):
@@ -124,12 +139,18 @@ def census(root: Path) -> tuple[dict[str, Tally], dict[str, Tally]]:
 
 
 def display_width(text: str) -> int:
-    """终端显示宽度：东亚宽字符（含中文）占 2 列，其余占 1 列。"""
+    """Terminal display width: East Asian wide characters (including Chinese) take 2 columns, others take 1.
+
+    终端显示宽度：东亚宽字符（含中文）占 2 列，其余占 1 列。
+    """
     return sum(2 if unicodedata.east_asian_width(char) in "WF" else 1 for char in text)
 
 
 def pad(text: str, width: int, *, align_right: bool = False) -> str:
-    """按显示宽度填充空格，让含中文的表头与合计行和纯 ASCII 路径的行对齐。"""
+    """Pad with spaces by display width, so headers and total rows containing Chinese align with rows of pure ASCII paths.
+
+    按显示宽度填充空格，让含中文的表头与合计行和纯 ASCII 路径的行对齐。
+    """
     fill = " " * max(width - display_width(text), 0)
     return fill + text if align_right else text + fill
 

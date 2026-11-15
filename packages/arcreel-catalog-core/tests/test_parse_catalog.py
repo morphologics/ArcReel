@@ -1,4 +1,7 @@
-"""实例侧从宽：不认识的内容不阻断读入，只有结构无法解析时整份拒收。"""
+"""Lenient on the instance side: unrecognized content does not block reading, and the whole document is rejected only when the structure cannot be parsed.
+
+实例侧从宽：不认识的内容不阻断读入，只有结构无法解析时整份拒收。
+"""
 
 from __future__ import annotations
 

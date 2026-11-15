@@ -23,7 +23,13 @@ _TASK_ID_INDEX = "idx_api_calls_task_id"
 
 
 def _backfill_task_id_from_task_payload() -> None:
-    """把历史 video 任务的 ``payload_json.api_call_id`` 反向写成 ``api_calls.task_id``。
+    """Writes the ``payload_json.api_call_id`` of historical video tasks back into ``api_calls.task_id``.
+
+    ``payload_json`` is a Text column (not a native JSON type on either dialect), so parsing is done on the Python side
+    without any dialect's JSON functions. The backfill only does what can be derived exactly: rows found by reverse lookup
+    are also marked ``purpose = generation_task``, and the other new columns are left empty.
+
+    把历史 video 任务的 ``payload_json.api_call_id`` 反向写成 ``api_calls.task_id``。
 
     ``payload_json`` 是 Text 列（两种方言上都不是原生 JSON 类型），故解析放在 Python 侧，
     不用任一方言的 JSON 函数。回填只做能精确得到的：反查得到的行同时标记
@@ -43,6 +49,7 @@ def _backfill_task_id_from_task_payload() -> None:
         if not isinstance(payload, dict):
             continue
         call_id = payload.get("api_call_id")
+        # bool is a subclass of int; exclude it separately so a boolean in the payload is not taken as a row number.
         # bool 是 int 的子类，单独排除，避免把 payload 里的布尔值当成行号。
         if isinstance(call_id, bool) or not isinstance(call_id, int):
             continue

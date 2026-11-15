@@ -1,4 +1,7 @@
-"""声明式调用端点的响应 JSONPath 提取与状态映射。"""
+"""JSONPath extraction and status mapping for responses of declarative invocation endpoints.
+
+声明式调用端点的响应 JSONPath 提取与状态映射。
+"""
 
 from __future__ import annotations
 
@@ -25,7 +28,10 @@ _DECLARATIVE_STATUSES = frozenset(
 
 
 class JsonPathEvaluationError(ValueError):
-    """运行时 JSONPath 实现无法对已通过子集闸门的路径求值。"""
+    """The runtime JSONPath implementation cannot evaluate a path that passed the subset gate.
+
+    运行时 JSONPath 实现无法对已通过子集闸门的路径求值。
+    """
 
     def __init__(self, path: str, cause: Exception) -> None:
         self.code = DefinitionErrorCode.JSONPATH_EVALUATION_FAILED
@@ -34,7 +40,10 @@ class JsonPathEvaluationError(ValueError):
 
 
 def extract_value(spec: object, response_body: object) -> object | None:
-    """按优先级返回第一项可接受的首个命中；全部无命中时返回 ``None``。"""
+    """Returns the first acceptable first hit by priority; returns ``None`` if nothing matches.
+
+    按优先级返回第一项可接受的首个命中；全部无命中时返回 ``None``。
+    """
     paths, accept = normalize_extract_spec(spec)
     for item in paths:
         if isinstance(item, str):
@@ -49,7 +58,14 @@ def extract_value(spec: object, response_body: object) -> object | None:
 
 
 def map_status(raw: object, status_map: Mapping[str, str] | None = None) -> ProviderJobStatus:
-    """供应商状态经显式字典映射到声明式支持的四档；未知值继续轮询。
+    """Maps the provider status to the four buckets supported by declarative definitions through an explicit dictionary; unknown values keep polling.
+
+    When ``status_map`` misses, it falls back to the built-in synonym table ``normalize_provider_status``, which
+    normalizes the common spellings of each vendor (``IN_PROGRESS`` / ``WAITING_GPU`` etc.) into the same set of states.
+    A completely unknown value is classed as ``RUNNING`` so polling continues instead of misjudging failure;
+    ``EXPIRED`` is not among the four declarative buckets and is folded into ``FAILED``.
+
+    供应商状态经显式字典映射到声明式支持的四档；未知值继续轮询。
 
     ``status_map`` 未命中时回落到内置同义词表 ``normalize_provider_status``，
     它把各家常见写法（``IN_PROGRESS`` / ``WAITING_GPU`` 等）归一到同一批状态，
@@ -67,7 +83,14 @@ def map_status(raw: object, status_map: Mapping[str, str] | None = None) -> Prov
 
 
 def normalize_extract_spec(spec: object) -> tuple[Sequence[object], str]:
-    """把提取规则拆成「路径项序列 + 可接受类型」。
+    """Splits an extraction rule into "sequence of path items + acceptable types".
+
+    Public rather than private: validating a response reports hit or miss per item, and that per-item evaluation must read
+    the same normalized result as :func:`extract_value`. If the two places each parsed the shorthand and object forms, any
+    drift in the shorthand's default ``accept`` would make a "hit" in the report differ from the value the runtime
+    actually gets.
+
+    把提取规则拆成「路径项序列 + 可接受类型」。
 
     公开而非私有：验证响应要逐条报告命中与否，那份逐条求值必须与 :func:`extract_value` 读同一
     份归一化结果——两处各自解析简写与对象两种形态，简写默认的 ``accept`` 一旦漂移，报告里的

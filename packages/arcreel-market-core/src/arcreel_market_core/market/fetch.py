@@ -1,4 +1,10 @@
-"""市场源的远程抓取边界。
+"""Remote fetch boundary for market sources.
+
+The backend fetches arbitrary `https://` addresses on behalf of the user, so boundaries are set for the server-side request forgery exposure: every hop must be `https`,
+redirects are followed manually with a cap, one fetch (including redirects and reading the response body) has a total deadline, and the response body is counted as it is read. Only raw file addresses are used and the
+GitHub API is not called; the proxy prefix is prepended only to `raw.githubusercontent.com` addresses, and failure does not fall back to a direct connection.
+
+市场源的远程抓取边界。
 
 后端代用户抓取任意 ``https://`` 地址，按服务端请求伪造的暴露面设边界：每一跳都须 ``https``、
 重定向手动跟随且有上限、一次抓取（含重定向与读取响应体）有总时限、响应体边读边计数。只经 raw 文件地址，不调用
@@ -22,23 +28,29 @@ from .address import GITHUB_RAW_HOST
 from .index import INDEX_SCHEMA_VERSION, InvalidIndexError, MarketIndex, UnsupportedIndexSchemaError, parse_index
 from .issues import MarketIssue
 
+# Total deadline for one fetch (including redirects and reading the response body), independent of the shared client's default timeout.
 #: 一次抓取的总时限（含重定向与读取响应体），独立于共享客户端的默认超时。
 FETCH_TIMEOUT_SECONDS = 10.0
-#: 索引与定义响应体上限。
+#: Size limit for index and definition response bodies. / 索引与定义响应体上限。
 INDEX_MAX_BYTES = 1024 * 1024
 MAX_REDIRECTS = 5
+# Maximum length of a stored ETag, matching the `market_source.etag` column width; an over-long ETag is not stored, and later automatic refreshes fetch the whole file.
 #: 保存的 ETag 长度上限，与 ``market_source.etag`` 列宽一致；超长的 ETag 不保存，之后的自动刷新整份抓取。
 MAX_ETAG_LENGTH = 512
+# Container nesting limit of the index JSON; a compliant index has only three levels (top-level object → entries → entry).
 #: 索引 JSON 的容器嵌套上限；合规索引只有三层（顶层对象 → entries → 条目）。
 MAX_JSON_DEPTH = 32
-#: 手动刷新绕过边缘缓存时追加的查询参数名。
+#: Name of the query parameter appended when a manual refresh bypasses the edge cache. / 手动刷新绕过边缘缓存时追加的查询参数名。
 CACHE_BUST_PARAM = "_ts"
 
 _REPORTED_ISSUES = 3
 
 
 class SourceStatus(StrEnum):
-    """市场源的刷新状态。"""
+    """Refresh status of a market source.
+
+    市场源的刷新状态。
+    """
 
     NEVER_FETCHED = "never_fetched"
     OK = "ok"
@@ -48,19 +60,31 @@ class SourceStatus(StrEnum):
 
 
 class MarketTransportError(Exception):
-    """请求没有拿到可用响应：网络、超时、非成功状态码、重定向越界。消息即原因。"""
+    """The request did not get a usable response: network, timeout, non-success status code, redirect out of bounds. The message is the reason.
+
+    请求没有拿到可用响应：网络、超时、非成功状态码、重定向越界。消息即原因。
+    """
 
 
 class MarketPayloadTooLargeError(Exception):
-    """响应体超过上限。"""
+    """The response body exceeds the limit.
+
+    响应体超过上限。
+    """
 
 
 class MarketPayloadNotJsonError(Exception):
-    """响应体不是可用的 JSON：解码失败或容器嵌套过深。消息即原因。"""
+    """The response body is not usable JSON: decoding failed or containers are nested too deeply. The message is the reason.
+
+    响应体不是可用的 JSON：解码失败或容器嵌套过深。消息即原因。
+    """
 
 
 class MarketFetchError(Exception):
-    """抓取索引失败；``status`` 是该失败应落的源状态，``detail`` 是记入 ``last_error`` 的原因。"""
+    """Fetching the index failed; `status` is the source status the failure should land in, and `detail` is the reason recorded in `last_error`.
+
+    抓取索引失败；``status`` 是该失败应落的源状态，``detail`` 是记入 ``last_error`` 的原因。
+    """
 
     def __init__(self, status: SourceStatus, detail: str) -> None:
         super().__init__(f"{status.value}: {detail}")
@@ -77,7 +101,10 @@ class RawResponse:
 
 @dataclass(frozen=True)
 class FetchedIndex:
-    """一次索引抓取的结果；``not_modified`` 时没有正文。"""
+    """Result of one index fetch; there is no body when `not_modified`.
+
+    一次索引抓取的结果；``not_modified`` 时没有正文。
+    """
 
     not_modified: bool
     document: Any = None
@@ -86,7 +113,10 @@ class FetchedIndex:
 
 
 def with_proxy_prefix(url: str, proxy_prefix: str) -> str:
-    """非空代理前缀只作用于 raw.githubusercontent.com 地址。"""
+    """A non-empty proxy prefix applies only to raw.githubusercontent.com addresses.
+
+    非空代理前缀只作用于 raw.githubusercontent.com 地址。
+    """
     prefix = proxy_prefix.strip()
     if not prefix or urlsplit(url).hostname != GITHUB_RAW_HOST:
         return url
@@ -102,7 +132,13 @@ async def fetch_bytes(
     headers: dict[str, str] | None = None,
     deadline_seconds: float = FETCH_TIMEOUT_SECONDS,
 ) -> RawResponse:
-    """按抓取边界 GET 一个地址，返回 2xx 或 304 响应；``deadline_seconds`` 是整次抓取的总时限。
+    """GET an address within the fetch boundary and return a 2xx or 304 response; `deadline_seconds` is the total deadline for the whole fetch.
+
+        Raises:
+            MarketTransportError: Not https, network failure, total deadline exceeded, redirect out of bounds, or non-success status code.
+            MarketPayloadTooLargeError: The response body exceeds `max_bytes`.
+
+    按抓取边界 GET 一个地址，返回 2xx 或 304 响应；``deadline_seconds`` 是整次抓取的总时限。
 
     Raises:
         MarketTransportError: 非 https、网络失败、超过总时限、重定向越界或非成功状态码。
@@ -167,7 +203,15 @@ async def fetch_index(
     cache_bust: int | None = None,
     translate: Translator = code_translator,
 ) -> FetchedIndex:
-    """抓取并整份判定一份索引（规则 ①）。
+    """Fetch and judge a whole index (rule 1).
+
+        When `etag` is non-empty, send `If-None-Match`; when `cache_bust` is non-empty, append a timestamp query parameter to bypass the edge cache.
+        `translate` renders the diagnostics written into `MarketFetchError.detail` when the index is non-compliant; by default the diagnostic code and params are output.
+
+        Raises:
+            MarketFetchError: Fetching or judging failed; `status` is the source status it should land in.
+
+    抓取并整份判定一份索引（规则 ①）。
 
     ``etag`` 非空时带 ``If-None-Match``；``cache_bust`` 非空时追加时间戳查询参数绕过边缘缓存。
     ``translate`` 渲染索引不合规时写进 ``MarketFetchError.detail`` 的诊断，缺省输出诊断码与参数。
@@ -230,7 +274,12 @@ def _with_cache_bust(url: str, token: int) -> str:
 
 
 def decode_json_payload(content: bytes) -> Any:
-    """按 UTF-8 解码并严格解析 JSON：不收 ``NaN`` / ``Infinity``，容器嵌套不超过 :data:`MAX_JSON_DEPTH`。
+    """Decode as UTF-8 and parse JSON strictly: `NaN` / `Infinity` are rejected, and container nesting must not exceed :data:`MAX_JSON_DEPTH`.
+
+        Raises:
+            MarketPayloadNotJsonError: Not JSON (including non-standard constants and numbers beyond the integer digit limit) or nested too deeply.
+
+    按 UTF-8 解码并严格解析 JSON：不收 ``NaN`` / ``Infinity``，容器嵌套不超过 :data:`MAX_JSON_DEPTH`。
 
     Raises:
         MarketPayloadNotJsonError: 不是 JSON（含非标准常量与超出整数位数上限的数字）或嵌套过深。

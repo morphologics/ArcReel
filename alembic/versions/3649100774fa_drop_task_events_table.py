@@ -20,13 +20,21 @@ depends_on: str | Sequence[str] | None = None
 
 
 def upgrade() -> None:
-    """`/tasks/stream` 端点已移除，task_events 只写不读，事件属短生命周期数据，存量直接丢弃。"""
+    """The `/tasks/stream` endpoint has been removed, task_events is write-only and never read, and events are short-lived data, so existing rows are simply discarded.
+
+    `/tasks/stream` 端点已移除，task_events 只写不读，事件属短生命周期数据，存量直接丢弃。
+    """
     op.drop_index("idx_task_events_project_id", table_name="task_events")
     op.drop_table("task_events")
 
 
 def downgrade() -> None:
-    """重建表结构（含指向 tasks 的具名 FK），历史事件数据无法恢复。
+    """Rebuild the table structure (including the named FK to tasks); historical event data cannot be recovered.
+
+        The FK must have the same name as in the create-table migration (`fk_task_events_task_id`), otherwise the downgrade of an earlier migration
+        cannot find the constraint at drop_constraint, and the whole downgrade chain breaks here.
+
+    重建表结构（含指向 tasks 的具名 FK），历史事件数据无法恢复。
 
     FK 必须与建表迁移同名（``fk_task_events_task_id``），否则更早一级迁移的 downgrade
     在 drop_constraint 时找不到约束、整条下行链断在此处。

@@ -1,4 +1,7 @@
-"""定义格式的 JSON Schema 契约：自身合法，且与运行时的数据结构对齐。"""
+"""JSON Schema contract of the definition format: valid on its own, and aligned with the runtime data structures.
+
+定义格式的 JSON Schema 契约：自身合法，且与运行时的数据结构对齐。
+"""
 
 from __future__ import annotations
 
@@ -20,7 +23,11 @@ def test_schema_id_carries_the_current_version():
 
 
 def test_capabilities_cover_every_media_type():
-    """能力节是能力的唯一来源，收各媒体类型能力字段的并集；视频的那份与 VideoCapabilities 同名。
+    """The capabilities section is the single source of capabilities and holds the union of the capability fields of all media types; the video part has the same names as VideoCapabilities.
+
+        Changing VideoCapabilities without changing this would leave the definition one capability bit short of what can be declared.
+
+    能力节是能力的唯一来源，收各媒体类型能力字段的并集；视频的那份与 VideoCapabilities 同名。
 
     改 VideoCapabilities 而不改这里，会让定义少一位可声明的能力。
     """

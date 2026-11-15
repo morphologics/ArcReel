@@ -1,5 +1,15 @@
 #!/usr/bin/env python3
-"""生成价格编辑器用的词表（前端 TS 文件）。
+"""Generate the vocabulary table for the price editor (a frontend TS file).
+
+Metering items and selection dimensions are closed sets defined in code (`arcreel_catalog_core.vocabulary`). The frontend price editor needs to know which media types each metering item
+applies to, which category it belongs to, how many counted units a unit price corresponds to, and which media types each selection dimension applies to. All of this is generated from the sets,
+so the frontend no longer hand-writes a second copy. Rerun this script after the sets change; `tests/unit/scripts/test_generate_price_vocabulary.py` checks that
+the generated file is not stale.
+
+Usage:
+    uv run python scripts/generate_price_vocabulary.py
+
+生成价格编辑器用的词表（前端 TS 文件）。
 
 计量项与选择维度是由代码定义的封闭集合（``arcreel_catalog_core.vocabulary``）。前端的价格编辑器要知道每个计量项
 适用哪些媒体类型、属于哪一类、单价对应多少计数量，以及每个选择维度适用哪些媒体类型，这些都从集合生成，

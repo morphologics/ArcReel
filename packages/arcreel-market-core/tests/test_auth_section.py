@@ -1,4 +1,7 @@
-"""``auth`` 节的共用检查与渲染：两种 kind 共读一份，凭证只从占位符来。"""
+"""Shared checks and rendering of the ``auth`` section: both kinds read from one copy, and credentials come only from placeholders.
+
+``auth`` 节的共用检查与渲染：两种 kind 共读一份，凭证只从占位符来。
+"""
 
 from __future__ import annotations
 
@@ -13,7 +16,10 @@ from arcreel_market_core.endpoint_definition import validate_definition
 
 
 def _api_key_only(path: str, name: str) -> list[DefinitionIssue]:
-    """ComfyUI 那一侧的变量作用域：``api_key`` 以外一概不认。"""
+    """Variable scope on the ComfyUI side: nothing other than ``api_key`` is recognized.
+
+    ComfyUI 那一侧的变量作用域：``api_key`` 以外一概不认。
+    """
     return [DefinitionIssue(path, DefinitionErrorCode.UNDECLARED_VARIABLE, {"name": name})]
 
 
@@ -27,7 +33,10 @@ class TestSharedChecks:
         assert _codes({}) == ([], [])
 
     def test_two_empty_tables_are_the_same_as_no_section_at_all(self):
-        """``{"headers": {}}`` 一个头都不会发出去，与整节缺席等效；两种 kind 在这里判得一样。"""
+        """``{"headers": {}}`` sends no header at all, equivalent to the whole section being absent; both kinds judge it the same here.
+
+        ``{"headers": {}}`` 一个头都不会发出去，与整节缺席等效；两种 kind 在这里判得一样。
+        """
         assert _codes({"headers": {}, "query": {}}) == ([], [])
 
     def test_a_section_that_never_references_the_api_key_is_refused(self):
@@ -52,7 +61,10 @@ class TestSharedChecks:
         assert errors == ["header_name_duplicate"]
 
     def test_a_dotted_header_name_keeps_its_whole_name(self):
-        """定位路径按点号拼，从末段反推键名会把 ``X-Trace.Id`` 截成 ``Id``。"""
+        """Location paths are joined with dots; inferring the key name from the last segment would truncate ``X-Trace.Id`` to ``Id``.
+
+        定位路径按点号拼，从末段反推键名会把 ``X-Trace.Id`` 截成 ``Id``。
+        """
         headers, _query = render_auth({"headers": {"X-Trace.Id": "{{ api_key }}"}}, api_key="k-1")
 
         assert headers == {"X-Trace.Id": "k-1"}
@@ -69,7 +81,10 @@ class TestRender:
         assert query == {"token": "k-1"}
 
     def test_an_empty_api_key_renders_nothing_at_all(self):
-        """空凭证发出去会被反代以 401 拒掉一个本该放行的请求。"""
+        """An empty credential sent out would make a reverse proxy reject with 401 a request that should have passed.
+
+        空凭证发出去会被反代以 401 拒掉一个本该放行的请求。
+        """
         assert render_auth({"headers": {"Authorization": "Bearer {{ api_key }}"}}, api_key="") == ({}, {})
 
 
@@ -82,7 +97,10 @@ class TestBothKindsShareIt:
         ],
     )
     def test_the_same_broken_auth_is_refused_on_both_kinds(self, factory: Any, auth: dict[str, Any]):
-        """同一份 auth 写法在两种 kind 上必须得到同一个判定——分成两份实现就会各自漂移。"""
+        """The same auth spelling must get the same judgment on both kinds: split into two implementations, they would each drift.
+
+        同一份 auth 写法在两种 kind 上必须得到同一个判定——分成两份实现就会各自漂移。
+        """
         diagnostics = validate_definition(factory(auth=auth))
 
         assert "header_name_duplicate" in [issue.code.value for issue in diagnostics.errors]

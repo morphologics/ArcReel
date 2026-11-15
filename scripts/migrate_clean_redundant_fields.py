@@ -1,4 +1,13 @@
 """
+Clean up redundant fields in existing projects.
+
+This script migrates existing data, removing redundant fields that have been changed to read-time computation.
+Make sure your data is backed up before running.
+
+Usage:
+    python scripts/migrate_clean_redundant_fields.py
+    python scripts/migrate_clean_redundant_fields.py --dry-run  # preview only, no changes
+
 清理现有项目中的冗余字段
 
 此脚本用于迁移现有数据，移除已改为读时计算的冗余字段。
@@ -14,7 +23,7 @@ import json
 import sys
 from pathlib import Path
 
-# 添加仓库根目录到 Python 路径
+# Add the repository root to the Python path / 添加仓库根目录到 Python 路径
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from lib.infra.data_root_layout import DataRootLayout, list_project_dirs
@@ -22,6 +31,15 @@ from lib.infra.data_root_layout import DataRootLayout, list_project_dirs
 
 def migrate_project(project_dir: Path, dry_run: bool = False) -> dict:
     """
+    Clean up redundant fields of a single project.
+
+    Args:
+        project_dir: Path of the project directory
+        dry_run: Whether to preview only without modifying
+
+    Returns:
+        Migration statistics
+
     清理单个项目的冗余字段
 
     Args:
@@ -33,7 +51,7 @@ def migrate_project(project_dir: Path, dry_run: bool = False) -> dict:
     """
     stats = {"project_cleaned": False, "scripts_cleaned": 0, "fields_removed": []}
 
-    # 清理 project.json
+    # Clean up project.json / 清理 project.json
     project_file = project_dir / "project.json"
     if project_file.exists():
         with open(project_file, encoding="utf-8") as f:
@@ -41,13 +59,13 @@ def migrate_project(project_dir: Path, dry_run: bool = False) -> dict:
 
         original = json.dumps(project)
 
-        # 移除 status 对象（改为读时计算）
+        # Remove the status object (now computed at read time) / 移除 status 对象（改为读时计算）
         if "status" in project:
             stats["fields_removed"].append("project.json: status")
             if not dry_run:
                 project.pop("status", None)
 
-        # 移除 episodes 中的计算字段
+        # Remove computed fields in episodes / 移除 episodes 中的计算字段
         for ep in project.get("episodes", []):
             if "scenes_count" in ep:
                 stats["fields_removed"].append(f"project.json: episodes[{ep.get('episode')}].scenes_count")
@@ -64,7 +82,7 @@ def migrate_project(project_dir: Path, dry_run: bool = False) -> dict:
                 with open(project_file, "w", encoding="utf-8") as f:
                     json.dump(project, f, ensure_ascii=False, indent=2)
 
-    # 清理 scripts/*.json
+    # Clean up scripts/*.json / 清理 scripts/*.json
     scripts_dir = project_dir / "scripts"
     if scripts_dir.exists():
         for script_file in scripts_dir.glob("*.json"):
@@ -74,7 +92,7 @@ def migrate_project(project_dir: Path, dry_run: bool = False) -> dict:
             original = json.dumps(script)
             script_name = script_file.name
 
-            # 移除冗余字段
+            # Remove redundant fields / 移除冗余字段
             if "characters_in_episode" in script:
                 stats["fields_removed"].append(f"{script_name}: characters_in_episode")
                 if not dry_run:

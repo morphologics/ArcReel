@@ -1,4 +1,7 @@
-"""JSONPath 受限子集解析器：哪些写法进得来、哪些被挡在门外。"""
+"""Parser for the restricted JSONPath subset: which spellings get in and which are kept out.
+
+JSONPath 受限子集解析器：哪些写法进得来、哪些被挡在门外。
+"""
 
 from __future__ import annotations
 
@@ -94,7 +97,10 @@ class TestRejectedConstructs:
         assert excinfo.value.source == source
 
     def test_non_ascii_digit_never_reads_as_a_number(self):
-        """RFC 的下标与数字字面量只认 ASCII 数字。过滤器里它落到名字位，按未知函数名拒。"""
+        """The RFC's indices and number literals accept only ASCII digits. In a filter it falls into the name position and is rejected as an unknown function name.
+
+        RFC 的下标与数字字面量只认 ASCII 数字。过滤器里它落到名字位，按未知函数名拒。
+        """
         with pytest.raises(JsonPathSubsetError) as excinfo:
             parse_json_path("$.data[?@.x == ١].url")
         assert excinfo.value.code is DefinitionErrorCode.JSONPATH_FUNCTION_EXTENSION
