@@ -19,6 +19,9 @@ from lib.script.script_models import CameraMotion, ShotType
 
 logger = logging.getLogger(__name__)
 
+# Line width limit for prompt YAML. PyYAML defaults to 80 columns and folds over-wide scalars at ASCII spaces into multiple lines --
+# English / Vietnamese prompts exceed 80 columns in almost every value, and folding would feed the text to the provider with line
+# breaks inserted. Use a value no prompt can reach, so values stay byte-identical to what the author wrote.
 # 提示词 YAML 的行宽上限。PyYAML 默认 80 列，超宽的纯量会在 ASCII 空格处折成多行——
 # 英文 / 越南语提示词几乎每个值都超 80 列，折行会把原文塞进换行再喂给供应商。取一个任何
 # 提示词都达不到的值，值内容与作者所写逐字一致。
@@ -36,18 +39,25 @@ def _dump_prompt_yaml(ordered: Mapping[str, Any]) -> str:
     )
 
 
+# Exclusion lines in the prompt body: start with ``Avoid:`` at line start, followed by the line's exclusion wording. Matching is by
+# prefix, not the whole line -- plain text pasted back may carry the full declaration of any historical version (e.g. the old line
+# without Logo), and a whole-line comparison would only recognize the hard-coded version. After the colon only spaces and tabs are
+# consumed; newlines are not part of the prefix.
 # 提示词正文里的排除项行：``Avoid:`` 顶行起，前缀后是本行的排除项措辞。识别按前缀而非整行——
 # 纯文本回贴带回来的可能是任一历史版本的完整声明（如不含 Logo 的旧行），整行比对只认得出被写死
 # 的那一版。冒号后只吃空格与制表符，换行不进前缀。
 _AVOID_LINE = re.compile(r"^Avoid:[ \t]*(.*)$")
 
-# 排除项拼接与追加到负向节点字面值时的分隔符。
+# Separator for joining exclusions and for appending to the negative node literal. / 排除项拼接与追加到负向节点字面值时的分隔符。
 _AVOID_SEPARATOR = "，"
 
+# Collapse limit for consecutive blank lines in the body: blank lines left after removing the Avoid line are merged into one, the
+# same basis as the template engine's collapse of the consecutive newlines it produces itself.
 # 正文里连续空行的塌缩上限：删掉 Avoid 行后留下的空行按此并成一个，与模版引擎对自身产生的连续
 # 换行所做的塌缩同一口径。
 _BLANK_RUN = re.compile(r"\n{3,}")
 
+# Preset options: the source of truth is the Literal vocabulary in lib.script.script_models; derived here to avoid drift from duplicate definitions
 # 预设选项：真相源是 lib.script.script_models 的 Literal 词表，此处派生避免双写漂移
 SHOT_TYPES: list[str] = list(get_args(ShotType))
 CAMERA_MOTIONS: list[str] = list(get_args(CameraMotion))
@@ -157,6 +167,8 @@ def video_prompt_to_yaml(video_prompt: dict) -> str:
     voice_profiles = video_prompt.get("voice_profiles") or []
 
     ordered: dict[str, Any] = {}
+    # Voice_Profiles is a centralized declaration section and must be at the top: the caller has already derived the list from
+    # dialogue speaker ∩ character assets with non-empty voice_style; here we only inject it in order, no second filtering.
     # Voice_Profiles 是集中声明段，须在顶部：调用方已按 dialogue speaker ∩ 非空 voice_style
     # 角色资产派生好列表，此处只负责按序注入，不做二次过滤。
     if voice_profiles:
@@ -165,7 +177,7 @@ def video_prompt_to_yaml(video_prompt: dict) -> str:
     ordered["Camera_Motion"] = video_prompt["camera_motion"]
     ordered["Ambiance_Audio"] = video_prompt.get("ambiance_audio", "")
 
-    # 仅在有对话时添加 Dialogue 字段
+    # Only add the Dialogue field when there is dialogue / 仅在有对话时添加 Dialogue 字段
     if dialogue:
         ordered["Dialogue"] = dialogue
     return builtin_templates.render("storyboard/video", body=_dump_prompt_yaml(ordered).rstrip()) + "\n"
@@ -235,6 +247,8 @@ def render_storyboard_video_prompt(
             if isinstance(item, Mapping) and "utterances" in item:
                 prompt = build_drama_video_prompt(prompt, item.get("utterances"), characters=voice_characters)
             else:
+                # Existing scripts from before the utterances migration: load_script reads the raw JSON from disk without pydantic, so they are
+                # not auto-filled by DramaScene._migrate_legacy and the dialogue lines still sit in video_prompt.dialogue.
                 # utterances 迁移前的存量剧本：load_script 按原始 JSON 读盘不过 pydantic，不会被
                 # DramaScene._migrate_legacy 自动补齐，台词仍留在 video_prompt.dialogue。
                 prompt = build_drama_video_prompt_from_legacy_dialogue(prompt, characters=voice_characters)

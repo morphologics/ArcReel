@@ -1,4 +1,17 @@
 """
+Gemini shared utility module
+
+Non-GeminiClient utilities extracted from gemini_client.py, reused by image_backends / video_backends / providers /
+media_generator and other modules to avoid circular dependencies.
+
+Contains:
+- VERTEX_SCOPES — Vertex AI OAuth scopes
+- RETRYABLE_ERRORS — Gemini-specific retryable error types (extending BASE_RETRYABLE_ERRORS)
+- RateLimiter — multi-model sliding-window rate limiter
+- _rate_limiter_limits_from_env / get_shared_rate_limiter / refresh_shared_rate_limiter
+- with_retry_async — generic retry decorator re-exported from lib.infra.retry
+- gemini_http_options — http_options for the AI Studio client (base_url and transport injection)
+
 Gemini 共享工具模块
 
 从 gemini_client.py 提取的非 GeminiClient 工具，供 image_backends / video_backends /
@@ -44,16 +57,17 @@ __all__ = [
 
 logger = logging.getLogger(__name__)
 
+# OAuth scopes required by the Vertex AI service account (shared constant, reused by gemini_client / video_backends / providers)
 # Vertex AI 服务账号所需 OAuth scopes（共享常量，供 gemini_client / video_backends / providers 复用）
 VERTEX_SCOPES = [
     "https://www.googleapis.com/auth/cloud-platform",
     "https://www.googleapis.com/auth/generative-language",
 ]
 
-# Gemini 专用可重试错误类型（扩展基础集合）
+# Gemini-specific retryable error types (extending the base set) / Gemini 专用可重试错误类型（扩展基础集合）
 RETRYABLE_ERRORS: tuple[type[Exception], ...] = BASE_RETRYABLE_ERRORS
 
-# 追加 google.genai 的错误类型；缺包时沿用基础集合
+# Append google.genai error types; keep the base set if the package is missing / 追加 google.genai 的错误类型；缺包时沿用基础集合
 try:
     from google import genai
 
@@ -68,27 +82,36 @@ except ImportError:
 
 class RateLimiter:
     """
+    Multi-model sliding-window rate limiter
+
     多模型滑动窗口限流器
     """
 
     def __init__(self, limits_dict: dict[str, int] | None = None, *, request_gap: float = 3.1):
         """
         Args:
+            limits_dict: {model_name: rpm} dict. E.g. {"gemini-3-pro-image": 20}
+            request_gap: minimum request interval (seconds), default 3.1
+
+        Args:
             limits_dict: {model_name: rpm} 字典。例如 {"gemini-3-pro-image": 20}
             request_gap: 最小请求间隔（秒），默认 3.1
         """
         self.limits = limits_dict or {}
         self.request_gap = request_gap
+        # Stores request timestamps: {model_name: deque([timestamp1, timestamp2, ...])}
         # 存储请求时间戳：{model_name: deque([timestamp1, timestamp2, ...])}
         self.request_logs: dict[str, deque] = {}
         self.lock = threading.Lock()
 
     def acquire(self, model_name: str):
         """
+        Block until a token is obtained
+
         阻塞直到获得令牌
         """
         if model_name not in self.limits:
-            return  # 该模型无限流配置
+            return  # no rate limit configured for this model / 该模型无限流配置
 
         limit = self.limits[model_name]
         if limit <= 0:
@@ -103,10 +126,13 @@ class RateLimiter:
             while True:
                 now = time.time()
 
-                # 清理超过 60 秒的旧记录
+                # Clean up records older than 60 seconds / 清理超过 60 秒的旧记录
                 while log and now - log[0] > 60:
                     log.popleft()
 
+                # Enforce a request interval (user requires > 3s)
+                # Even after getting a token, ensure at least 3s since the last request
+                # Get the latest request time (possibly just written by another thread)
                 # 强制增加请求间隔（用户要求 > 3s）
                 # 即使获得了令牌，也要确保距离上一次请求至少 3s
                 # 获取最新的请求时间（可能是其他线程刚刚写入的）
@@ -116,26 +142,30 @@ class RateLimiter:
                     gap = time.time() - last_request
                     if gap < min_gap:
                         time.sleep(min_gap - gap)
-                        # 更新时间，重新检查
+                        # Update the time and re-check / 更新时间，重新检查
                         continue
 
                 if len(log) < limit:
-                    # 获取令牌成功
+                    # Token obtained / 获取令牌成功
                     log.append(time.time())
                     return
 
+                # Limit reached, compute the wait time
+                # Wait until the earliest record expires
                 # 达到限制，计算等待时间
                 # 等待直到最早的记录过期
-                wait_time = 60 - (now - log[0]) + 0.1  # 多加 0.1s 缓冲
+                wait_time = 60 - (now - log[0]) + 0.1  # add a 0.1s buffer / 多加 0.1s 缓冲
                 if wait_time > 0:
                     time.sleep(wait_time)
 
     async def acquire_async(self, model_name: str):
         """
+        Asynchronously block until a token is obtained
+
         异步阻塞直到获得令牌
         """
         if model_name not in self.limits:
-            return  # 该模型无限流配置
+            return  # no rate limit configured for this model / 该模型无限流配置
 
         limit = self.limits[model_name]
         if limit <= 0:
@@ -150,7 +180,7 @@ class RateLimiter:
 
                 log = self.request_logs[model_name]
 
-                # 清理超过 60 秒的旧记录
+                # Clean up records older than 60 seconds / 清理超过 60 秒的旧记录
                 while log and now - log[0] > 60:
                     log.popleft()
 
@@ -160,25 +190,26 @@ class RateLimiter:
                     last_request = log[-1]
                     gap = now - last_request
                     if gap < min_gap:
-                        # 释放锁后异步等待
+                        # Wait asynchronously after releasing the lock / 释放锁后异步等待
                         wait_needed = min_gap - gap
 
                 if len(log) >= limit:
-                    # 达到限制，计算等待时间
+                    # Limit reached, compute the wait time / 达到限制，计算等待时间
                     wait_needed = max(wait_needed, 60 - (now - log[0]) + 0.1)
 
                 if wait_needed == 0 and len(log) < limit:
-                    # 获取令牌成功
+                    # Token obtained / 获取令牌成功
                     log.append(now)
                     return
 
-            # 在锁外异步等待
+            # Wait asynchronously outside the lock / 在锁外异步等待
             if wait_needed > 0:
                 await asyncio.sleep(wait_needed)
             else:
-                await asyncio.sleep(0.1)  # 短暂让出控制权
+                await asyncio.sleep(0.1)  # briefly yield control / 短暂让出控制权
 
 
+# The shared rate limiter tracks RPM by model name; when the caller gives no model name, the limits are recorded under these two model names. Video backends use it too when no model is given.
 # 共享限流器按模型名记 RPM；调用方没给模型名时，限额记在这两个模型名下。视频 backend 没给模型时也用它。
 GEMINI_DEFAULT_IMAGE_MODEL = "gemini-3.1-flash-image"
 GEMINI_DEFAULT_VIDEO_MODEL = "veo-3.1-lite-generate-preview"
@@ -193,7 +224,13 @@ def resolve_gemini_api_key(api_key: str | None = None) -> str:
 def gemini_http_options(
     base_url: str | None, transport_layer: TransportLayer | None
 ) -> HttpOptions | HttpOptionsDict | None:
-    """AI Studio 客户端的 http_options；未注入时只带非空的 ``base_url``。
+    """http_options for the AI Studio client; when nothing is injected it only carries a non-empty ``base_url``.
+
+    The injected ``transport_layer`` is layered on both the sync and async httpx channels. The async channel must be passed
+    to the SDK explicitly: without ``httpx_async_client``, in environments with aiohttp installed async requests go through
+    aiohttp and the injected layer can't see them. The SDK does not close externally passed clients.
+
+    AI Studio 客户端的 http_options；未注入时只带非空的 ``base_url``。
 
     注入的 ``transport_layer`` 叠在同步与异步两条 httpx 通道上。异步通道必须显式交给 SDK：未传
     ``httpx_async_client`` 时，装有 aiohttp 的环境里异步请求走 aiohttp，注入层看不到。SDK 不关闭外部传入的客户端。
@@ -246,6 +283,13 @@ def get_shared_rate_limiter(
     request_gap: float | None = None,
 ) -> RateLimiter:
     """
+    Get the in-process shared RateLimiter
+
+    On the first call an instance is created from the arguments or environment variables; later calls return the same instance.
+
+    - image_rpm / video_rpm: requests-per-minute limits (read from environment variables when None)
+    - request_gap: minimum request interval (read from env var GEMINI_REQUEST_GAP when None, default 3.1)
+
     获取进程内共享的 RateLimiter
 
     首次调用时根据参数或环境变量创建实例，后续调用返回同一实例。

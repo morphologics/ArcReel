@@ -37,6 +37,10 @@ from lib.i18n import DEFAULT_LOCALE
 
 logger = logging.getLogger(__name__)
 
+# Reasonable upper limit of billed duration (24 hours), with a single definition of meaning: the repo write layer is the
+# last line of defence for all backend billing; billed durations above the limit are treated as not provided and fall
+# back to the requested duration, preventing huge values from overflowing the DB Integer column; the clamp on the parsing
+# side (grok / dashscope extractor) references the same constant for consistency.
 # 计费时长合理上限（24 小时），语义单点定义：repo 写入层是全部 backend 落账的最后防线，
 # 超出上限的计费时长视同未提供、回落请求时长，防超大数值写入 DB Integer 列溢出；
 # 解析侧（grok / dashscope extractor）的 clamp 引用同一常量，保持口径一致。
@@ -45,7 +49,13 @@ MAX_PROVIDER_RESPONSE_BYTES = 64 * 1024
 
 
 def _persisted_size(value: object) -> int:
-    """该值落进 JSON 列时占的字节数。
+    """Number of bytes the value takes when written into the JSON column.
+
+    What is measured must be the exact text SQLAlchemy writes out, so each default is matched here: the engine has no
+    ``json_serializer`` configured and uses bare ``json.dumps``, where ``ensure_ascii=True`` escapes non-ASCII as
+    ``\\uXXXX`` and separators include whitespace. Measuring any of these more compactly would let the real written size break the limit.
+
+    该值落进 JSON 列时占的字节数。
 
     量的必须是 SQLAlchemy 真正写出去的那份文本，因此这里逐项对齐它的缺省：引擎没有配
     ``json_serializer``，用的就是裸 ``json.dumps``——``ensure_ascii=True`` 把非 ASCII escape 成
@@ -58,13 +68,17 @@ def _persisted_size(value: object) -> int:
 
 
 def bound_provider_response(body: object) -> object:
-    """把最后一次供应商响应限制在 64 KiB；超限保留可诊断前缀与截断标记。"""
+    """Limit the last provider response to 64 KiB; when over, keep a diagnosable prefix plus a truncation marker.
+
+    把最后一次供应商响应限制在 64 KiB；超限保留可诊断前缀与截断标记。"""
     if _persisted_size(body) <= MAX_PROVIDER_RESPONSE_BYTES:
         return body
     try:
         text = json.dumps(body, ensure_ascii=False, separators=(",", ":"), default=str)
     except (TypeError, ValueError, RecursionError):
         text = str(body)
+    # Halve repeatedly until the wrapped written size really fits the limit: the escape expansion rate varies with content
+    # (2x for CJK, 3x for emoji), so a fixed reserve ratio cannot cover the worst case.
     # 逐次减半到包装后的写出体量真正落进上限内：escape 的膨胀率随内容而变（CJK 2 倍、
     # 表情符号 3 倍），按固定比例预留兜不住最坏情形。
     prefix = text[: MAX_PROVIDER_RESPONSE_BYTES // 2]
@@ -73,19 +87,37 @@ def bound_provider_response(body: object) -> object:
     return {"truncated": True, "body": prefix}
 
 
+# Sentinel key that billing with segment_id NULL (sheets, text calls and other non-shot dimensions) is grouped under when summing by segment.
+# Consumers use this key to separate project-level from shot-level spend, so producer and consumer share the same
+# constant. The leading NUL guarantees it never collides with a real segment_id, which comes from resource_id (shot/unit
+# ID, asset name) and contains no control characters. A collision would count the spend of the same-named unit in the
+# script both in the episode total and again as project-level spend.
 # segment_id 为 NULL（资产图、文本调用等非分镜维度）的记账在按 segment 汇总时归入的哨兵键。
 # 消费方按此键把项目级支出与分镜级支出分开，故键名在生产/消费两侧共用同一常量。前导 NUL 保证
 # 它撞不上任何真实 segment_id——后者取自 resource_id（分镜/单元 ID、资产名），不含控制字符。
 # 撞键会让剧本里同名的那个单元的支出既算进集合计、又作为项目级支出再算一次。
 PROJECT_LEVEL_SEGMENT_KEY = "\x00__project__"
 
-# 产出项目媒体（资产图、分镜、视频、配音）的调用类型
+# Call types that produce project media (sheets, shots, videos, voice audio) / 产出项目媒体（资产图、分镜、视频、配音）的调用类型
 _MEDIA_CALL_TYPES = ("image", "video", "audio")
 
 
 @dataclass(frozen=True)
 class SettlementInput:
-    """仓储写侧的申报值对象：承载 caller 在快照时刻提交的原始计费维度。
+    """Declared-value object for the repository write side: carries the raw billing dimensions the caller submits at snapshot time.
+
+    These are the raw values "at declaration time": ``billed_duration_seconds`` may be invalid/over the limit, and an
+    explicit ``cost_amount`` bypasses automatic calculation; ``_settle`` normalises them into effective values.
+
+    ``usage`` is the metered-item usage and selection dimensions reported per the usage contract, one per provider
+    request (requests discarded along the degradation chain were billed too and get one each): this call for built-in
+    and custom providers is priced request by request from the matching entry's price list and summed; without it all
+    metered items are empty and it is recorded as unpriced. Providers that are neither built-in nor custom are recorded
+    as unpriced. Agent session turns do not go through here; see :meth:`UsageRepository.record_agent_turn`. The three
+    cache token counts are sums over requests, written as is to the same-named columns. New billing fields extend only
+    this object from now on, rather than scattering parameters across the repository write side.
+
+    仓储写侧的申报值对象：承载 caller 在快照时刻提交的原始计费维度。
 
     这些是"申报时刻"的原始值——``billed_duration_seconds`` 可能非法/超限、显式
     ``cost_amount`` 绕过自动计算——由 ``_settle`` 归一为生效值。
@@ -115,7 +147,12 @@ class SettlementInput:
 
 @dataclass(frozen=True)
 class AgentModelCall:
-    """Agent 会话一轮里一个模型的用量，写成一条供应商调用记录。
+    """Usage of one model in one Agent session turn, written as one provider call record.
+
+    ``requests`` are the per-request meterings of this turn, each landing in its context tier when priced; the four token
+    fields are sums over requests; ``input_tokens`` is total input (incl. cache read and both cache write tiers).
+
+    Agent 会话一轮里一个模型的用量，写成一条供应商调用记录。
 
     ``requests`` 是这一轮各次请求的计量，计价时各自落上下文档；四个 token 字段是各次请求之和，``input_tokens``
     是总输入（含缓存读与两档缓存写）。
@@ -132,28 +169,35 @@ class AgentModelCall:
 
 @dataclass(frozen=True)
 class _SettledCall:
-    """``_settle`` 输出：两条快照路径共用的生效结算值，各自 UPDATE 直接取用。"""
+    """``_settle`` output: effective settlement values shared by both snapshot paths, used directly by each UPDATE.
+
+    ``_settle`` 输出：两条快照路径共用的生效结算值，各自 UPDATE 直接取用。"""
 
     duration_ms: int
     effective_duration_seconds: int | None
     effective_generate_audio: bool | None
     input_tokens: int | None
     output_tokens: int | None
-    #: ``None`` 表示未定价，原因见 ``unpriced_reason``。
+    #: ``None`` means unpriced; for the reason see ``unpriced_reason``. / ``None`` 表示未定价，原因见 ``unpriced_reason``。
     cost_amount: float | None
     currency: str
     unpriced_reason: str | None = None
 
 
 def _classify_asset_output_path(output_path: str | None) -> str:
-    """从 api_call.output_path 推断资产类型（characters/scenes/props/products/other）。
+    """Infer the asset type (characters/scenes/props/products/other) from api_call.output_path.
+
+    Historical tasks from before the v0->v1 migration wrote ``clues/...`` paths; they are merged into props here, matching
+    the migration's default clue->prop mapping, so old bills are not silently filed under other and lost.
+
+    从 api_call.output_path 推断资产类型（characters/scenes/props/products/other）。
 
     v0→v1 迁移前的历史任务会写入 ``clues/...`` 路径，这里归并到 props，
     与迁移默认的 clue→prop 映射一致，避免旧账单被静默归入 other 而丢失。
     """
     if not output_path:
         return "other"
-    # 兼容绝对路径与相对路径
+    # Handle both absolute and relative paths / 兼容绝对路径与相对路径
     normalized = output_path.replace("\\", "/").lower()
     for asset_type in ("characters", "scenes", "props", "products"):
         if f"/{asset_type}/" in normalized or normalized.startswith(f"{asset_type}/"):
@@ -165,7 +209,9 @@ def _classify_asset_output_path(output_path: str | None) -> str:
 
 @dataclass(frozen=True, slots=True)
 class InterruptedCallSettlement:
-    """启动收口翻掉的一行：调用 id、所属项目与翻成的终态，供上层发项目事件。"""
+    """A row flipped by startup cleanup: call id, owning project and the terminal state it was flipped to, for the upper layer to emit project events.
+
+    启动收口翻掉的一行：调用 id、所属项目与翻成的终态，供上层发项目事件。"""
 
     call_id: int
     project_name: str
@@ -173,7 +219,17 @@ class InterruptedCallSettlement:
 
 
 def _interrupted_target(task_id: str | None, task_statuses: dict[str, str]) -> tuple[CallStatus, str | None] | None:
-    """判定一行 pending 调用该翻成什么终态；任务仍存活时返回 ``None``（不动这一行）。
+    """Decide which terminal state a pending call row should flip to; returns ``None`` while its task is still alive (leave the row alone).
+
+    - No ``task_id``: the call belongs to no task (endpoint test runs, text calls, etc.); after a process restart nothing
+      running can settle it, so flip to failed and write ``interrupted``, which readers render as "interrupted".
+    - ``task_id`` finds no task row: the task was cleaned up and nobody continues the call either; same as above.
+    - Task in a terminal state: flip by the task's outcome (cancelled -> cancelled, succeeded / failed -> failed).
+      Successful tasks flip to failed too: a call that did not finish settlement was never billed, and recording it as
+      success would invent a charge.
+    - Task not terminal (queued / running): still alive; its own settlement path will finish it.
+
+    判定一行 pending 调用该翻成什么终态；任务仍存活时返回 ``None``（不动这一行）。
 
     - 无 ``task_id``：这次调用不归属任何任务（端点试跑、文本调用等），进程重启后没有任何
       在跑的东西能结算它 —— 翻 failed 并写 ``interrupted``，读侧据此渲染「被中断」。
@@ -220,7 +276,12 @@ class UsageRepository(BaseRepository):
         session_id: str | None = None,
         inputs: object | None = None,
     ) -> int:
-        """落一条 pending 行并返回它的 id。
+        """Write a pending row and return its id.
+
+        ``prompt`` is stored in full (details must show the complete input); empty ``task_id`` means the call serves no
+        generation task, in which case ``purpose`` explains the origin.
+
+        落一条 pending 行并返回它的 id。
 
         ``prompt`` 全文入库（详情要显示完整输入）；``task_id`` 空表示这次调用不服务任何生成
         任务，此时来源由 ``purpose`` 说明。
@@ -260,7 +321,24 @@ class UsageRepository(BaseRepository):
         auto_calc: bool,
         base_currency: str,
     ) -> _SettledCall:
-        """两条快照路径共享的结算函数：输入 ApiCall 行与申报值，输出生效计费时长、
+        """Settlement function shared by both snapshot paths: input the ApiCall row and declared values, output effective billed
+        duration, effective audio flag, duration_ms, cost and currency (including normalising the OpenAI image token aggregate columns).
+
+        - duration_ms is written back as ``finished_at - started_at``; ``started_at`` read back across SQLite sessions is a
+          naive datetime, so UTC tzinfo is added before subtracting to align with the aware ``finished_at``; calculation
+          errors still fall back to 0 (last line of defence).
+        - Billed duration/audio flag override: the backend's reported value overrides the requested value from start_call;
+          non-positive billed durations or ones above ``MAX_BILLED_DURATION_SECONDS`` are treated as not provided and fall back to the requested duration.
+        - Cost: an explicit ``cost_amount`` is taken as billing data reported directly by the provider and wins over
+          automatic calculation; otherwise, when ``auto_calc`` is true, compute and freeze it: calls to built-in and custom
+          providers are priced from the model catalogue price list with the two-level multipliers, and when no unit price is
+          found the cost is ``None`` with an unpriced reason; other providers are recorded as unpriced (``no_entry``).
+        - ``base_currency`` is passed by the caller to carry each path's own currency fallback (finish_call falls back to
+          ``row.currency``, resume to ``settlement.currency``), keeping behaviour from diverging.
+
+        The pending guard against double billing is carried explicitly by each public method's UPDATE WHERE clause, not here.
+
+        两条快照路径共享的结算函数：输入 ApiCall 行与申报值，输出生效计费时长、
         生效有声标志、duration_ms、费用与币种（含 OpenAI 图片 token 聚合列归一）。
 
         - duration_ms 按 ``finished_at - started_at`` 回写；SQLite 跨 session 回读的
@@ -294,6 +372,9 @@ class UsageRepository(BaseRepository):
             billed if billed is not None and 0 < billed <= MAX_BILLED_DURATION_SECONDS else row.duration_seconds
         )
 
+        # OpenAI image calls: "total" semantics of the input_tokens/output_tokens columns
+        # = image_*_tokens + text_*_tokens (kept compatible for cross-call_type aggregate queries).
+        # The resume path has no image tokens, has_image_tokens is always False -> declared values kept as is.
         # OpenAI 图片调用：input_tokens/output_tokens 列的"总和"语义
         # = image_*_tokens + text_*_tokens（用于跨 call_type 聚合查询保持兼容）。
         # resume 路径无图片 token，has_image_tokens 恒 False → 保持申报值原样。
@@ -320,6 +401,7 @@ class UsageRepository(BaseRepository):
             cost_amount = settlement.cost_amount
             currency = settlement.currency or base_currency
         elif auto_calc and is_builtin_provider(provider):
+            # Calls without reported usage also go through the price list: all metered items empty, recorded as unpriced; no guessing from seconds or a default model.
             # 没有上报用量的调用同样走价目表：计量项全部落空，记为未定价，不按秒数或默认模型猜。
             cost = price_builtin_call(
                 provider=provider,
@@ -333,6 +415,9 @@ class UsageRepository(BaseRepository):
             else:
                 cost_amount, unpriced_reason = None, str(cost.reason)
         elif auto_calc and is_custom_provider(provider):
+            # Custom providers are priced from the matching entry's price list with the two-level multipliers; recorded as unpriced
+            # when no entry matches (docs/adr/0106). Without reported usage all metered items are empty and it is likewise
+            # unpriced; no hard-coded calculation by media type, no guessing of seconds.
             # 自定义供应商按所对应条目的价目表与两级倍率计价，对应不上条目时记为未定价（docs/adr/0106）。没有上报
             # 用量时计量项全部落空，同样记为未定价，不按媒体类型硬算、不猜秒数。
             pricing = await CustomProviderRepository(self.session).resolve_pricing(provider, row.model or "")
@@ -349,6 +434,7 @@ class UsageRepository(BaseRepository):
             else:
                 cost_amount, unpriced_reason = None, str(cost.reason)
         elif auto_calc:
+            # The provider is neither in the registry nor a custom provider (e.g. legacy rows of a retired provider): no matching entry, recorded as unpriced.
             # 供应商既不在注册表、也不是自定义供应商（如已下线供应商的存量行）：对应不上条目，记为未定价。
             cost_amount, unpriced_reason = None, str(UnpricedReason.NO_ENTRY)
 
@@ -364,7 +450,12 @@ class UsageRepository(BaseRepository):
         )
 
     async def find_pending_call_id_by_task_id(self, task_id: str) -> int | None:
-        """按任务反查它那条尚未结算的调用行 id；没有则 None。
+        """Look up the id of the task's still unsettled call row; None if there is none.
+
+        ``api_calls.task_id`` is the single source of truth for the task-call link. A task has at most one pending call
+        (download retry and resume both reuse the same row in place); with concurrent submissions take the latest by id.
+
+        按任务反查它那条尚未结算的调用行 id；没有则 None。
 
         任务与调用的关联只有 ``api_calls.task_id`` 一个真相源。一个任务至多一条 pending 调用
         （重试下载与 resume 都原地复用同一行），并发提交时按 id 取最新的那条。
@@ -387,7 +478,18 @@ class UsageRepository(BaseRepository):
         error_code: str | None = None,
         error_params: dict[str, object] | None = None,
     ) -> int:
-        """Resume 路径专用：按 call_id 精准翻 pending → success/failed。
+        """Resume path only: flip pending -> success/failed precisely by call_id.
+
+        The repo WHERE clause includes ``status='pending'``, so rows already success are not touched (preventing a crash after
+        generate already ran finish_call from making resume overwrite the success row in reverse); this guard protects the
+        fact that the provider already charged, never triggering a second charge. Settlement logic (billed duration/audio
+        override, automatic cost, duration_ms write-back) shares ``_settle`` with finish_call; only the currency fallback
+        follows resume semantics and takes ``settlement.currency``. Returns the affected row count (0 = idempotent no-op; 1 = one row flipped normally).
+
+        The failure triple follows ``finish_call`` (original text truncated to 500 characters) and is only written when the
+        caller gives failure info: success / cancelled exits do not carry it, and those three columns stay as they are.
+
+        Resume 路径专用：按 call_id 精准翻 pending → success/failed。
 
         Repo WHERE 子句包含 ``status='pending'`` —— 已 success 行不 touch
         （防止 generate 已 finish_call 后崩、resume 反向把 success 行覆写）；provider 端
@@ -400,6 +502,9 @@ class UsageRepository(BaseRepository):
         """
         finished_at = utc_now()
 
+        # Fetch the row unconditionally: used both for the auto-calc cost path and the duration_ms write-back
+        # (even when the caller passes cost_amount explicitly, duration_ms still needs started_at).
+        # The row.status='pending' guard is still provided for idempotency by the UPDATE WHERE clause below.
         # 无条件 fetch row：既用于 auto-calc cost 路径，也用于 duration_ms 回写
         # （即便 caller 显式传 cost_amount，duration_ms 计算仍需要 started_at）。
         # row.status='pending' 守卫继续由下面的 UPDATE WHERE 子句保证幂等性。
@@ -441,14 +546,32 @@ class UsageRepository(BaseRepository):
         return affected
 
     async def get_call_project_name(self, call_id: int) -> str:
-        """取该调用所属项目名；行不存在时返回空串（调用方据此不发事件）。"""
+        """Get the project name of the call; empty string if the row does not exist (the caller then emits no event).
+
+        取该调用所属项目名；行不存在时返回空串（调用方据此不发事件）。"""
         result = await self.session.execute(select(ApiCall.project_name).where(ApiCall.id == call_id))
         return result.scalar_one_or_none() or ""
 
     async def settle_interrupted_pending_calls(
         self, *, taskless_started_before: datetime | None
     ) -> list[InterruptedCallSettlement]:
-        """服务启动收口：把没有存活任务的 pending 调用行翻成终态（零费用），返回翻掉的行。
+        """Service startup cleanup: flip pending call rows without a live task to a terminal state (zero cost); returns the flipped rows.
+
+        A process crash/restart leaves call rows that were "written as pending but not yet settled" pending forever: in the
+        usage report they are neither success nor failure, just hanging. Clean up once at startup: routing rules in
+        ``_interrupted_target``; rows with a live task are never touched (their settlement path still exists).
+
+        Calls without a task identity (text calls, endpoint test runs) are settled by the process that started them; only
+        those "started before this process started" can be judged abandoned: ``taskless_started_before`` gives that moment,
+        and only taskless rows started before it are cleaned up; calls started after process start but before cleanup runs
+        are still running and untouched. Passing ``None`` leaves taskless rows entirely alone (rescans while the process is alive).
+
+        Zero cost is the rule here: the call did not finish settlement and has no trustworthy billing dimensions, so it is
+        billed as 0 rather than inventing a charge for the user; likewise ``duration_ms`` is written NULL (wall-clock time is
+        not call time, and long-stalled rows would exceed the integer width). Each row's UPDATE carries a ``status='pending'``
+        guard, so when racing with a normal concurrent settlement only one side wins.
+
+        服务启动收口：把没有存活任务的 pending 调用行翻成终态（零费用），返回翻掉的行。
 
         进程崩溃/重启会让「已落 pending、还没结算」的调用行永远停在 pending —— 用量报表里
         它既不是成功也不是失败，只是一直悬着。启动时一次性收口：分流规则见 ``_interrupted_target``，
@@ -474,6 +597,7 @@ class UsageRepository(BaseRepository):
         task_statuses: dict[str, str] = {}
         if task_ids:
             rows = await self.session.execute(select(Task.task_id, Task.status).where(Task.task_id.in_(task_ids)))
+            # Row tuples are not two-element sequences, dict() cannot consume them directly
             task_statuses = {task_id: status for task_id, status in rows.all()}  # noqa: C416 -- Row 元组不是二元序列，dict() 无法直接消费
 
         settled: list[InterruptedCallSettlement] = []
@@ -497,12 +621,14 @@ class UsageRepository(BaseRepository):
             values: dict[str, Any] = {
                 "status": status,
                 "finished_at": finished_at,
+                # Interrupted calls did not finish settlement; the wall-clock time "from start to this restart" is not call time, left empty like the zero cost.
                 # 中断调用没走完结算，「发起到本次重启」的墙钟时长不是调用耗时，与零费用同口径留空。
                 "duration_ms": None,
                 "cost_amount": effective.cost_amount,
                 "currency": effective.currency,
             }
             if error_code is not None:
+                # A classified failure always has a params object (reader invariant: has code => params is an object); an interruption has no params to carry.
                 # 已分类必有参数对象（读侧不变量：有码 ⇒ params 是对象），中断没有参数可带。
                 values["error_code"] = error_code
                 values["error_params"] = {}
@@ -530,7 +656,14 @@ class UsageRepository(BaseRepository):
         status: CallStatus,
         calls: list[AgentModelCall],
     ) -> list[int]:
-        """Agent 会话的一轮：每个模型写一条终态行，返回各行 id（docs/adr/0102）。
+        """One turn of an Agent session: write one terminal row per model and return the row ids (docs/adr/0102).
+
+        Rows of the same turn share ``session_id``, prompt and write time. Cost is the sum of the model's requests in this
+        turn, priced by ``pricing`` (the Agent credential injected when the session connected, with its multiplier and entry
+        bindings at that time), and is not zeroed by ``status``: completed requests in interrupted and failed turns also
+        incurred cost. When no entry matches, tokens are still written and the cost is recorded as unpriced.
+
+        Agent 会话的一轮：每个模型写一条终态行，返回各行 id（docs/adr/0102）。
 
         同一轮的几行共用 ``session_id``、prompt 与写入时间。费用是该模型本轮各请求之和，按 ``pricing``（会话连接时
         注入的 Agent 凭证及其当时的倍率与条目绑定）计价，不随 ``status`` 归零：中断与失败的轮次里已完成的
@@ -646,7 +779,13 @@ class UsageRepository(BaseRepository):
         self,
         project_name: str,
     ) -> dict[str, dict[str, dict[str, float]]]:
-        """按 segment_id + call_type + currency 汇总实际费用。
+        """Sum actual costs by segment_id + call_type + currency.
+
+        Returns:
+            {segment_id: {call_type: {currency: total_amount}}}
+            records with segment_id None go under the ``PROJECT_LEVEL_SEGMENT_KEY`` key.
+
+        按 segment_id + call_type + currency 汇总实际费用。
 
         Returns:
             {segment_id: {call_type: {currency: total_amount}}}
@@ -710,7 +849,11 @@ class UsageRepository(BaseRepository):
         ]
 
     async def get_unpriced_calls_by_model(self, project_name: str) -> list[tuple[str, str, str, int]]:
-        """成功但未定价（``cost_amount`` 为 NULL）的媒体调用，按 (call_type, provider, model) 计数。
+        """Successful but unpriced (``cost_amount`` NULL) media calls, counted by (call_type, provider, model).
+
+        0 means priced at zero and is not included; calls historically recorded as 0 are not retroactively treated as unpriced.
+
+        成功但未定价（``cost_amount`` 为 NULL）的媒体调用，按 (call_type, provider, model) 计数。
 
         0 是定价为零，不在其中；历史上记为 0 的调用不会被追认为未定价。
         """
@@ -729,7 +872,11 @@ class UsageRepository(BaseRepository):
         return [(call_type, provider, model, calls) for call_type, provider, model, calls in rows]
 
     async def has_media_calls(self, project_name: str) -> bool:
-        """本机是否有这个项目成功的媒体调用记录。
+        """Whether this machine has successful media call records for this project.
+
+        Text calls and failed or in-progress calls correspond to no existing artifact's cost and are not counted.
+
+        本机是否有这个项目成功的媒体调用记录。
 
         文本调用与失败、进行中的调用都对应不到已有产物的费用，不计入。
         """
@@ -749,7 +896,12 @@ class UsageRepository(BaseRepository):
         self,
         project_name: str,
     ) -> dict[str, dict[str, float]]:
-        """project-level（segment_id is null）的 image 成本按 output_path 前缀分拆。
+        """Split project-level (segment_id is null) image costs by output_path prefix.
+
+        Returns:
+            {asset_type: {currency: total_amount}}, asset_type ∈ {characters, scenes, props, products, other}.
+
+        project-level（segment_id is null）的 image 成本按 output_path 前缀分拆。
 
         Returns:
             {asset_type: {currency: total_amount}}，asset_type ∈ {characters, scenes, props, products, other}。
@@ -780,6 +932,10 @@ class UsageRepository(BaseRepository):
         return result
 
     # ------------------------------------------------------------------
+    # Usage record read interface
+    # Filter dimensions, projection and cursor encoding are defined in the module-level "usage record read side" section at the end of this file.
+    # ------------------------------------------------------------------
+    # ------------------------------------------------------------------
     # 使用记录读接口
     # 筛选维度、投影与游标编码定义在本文件末尾的模块级「使用记录读侧」一节。
     # ------------------------------------------------------------------
@@ -793,7 +949,13 @@ class UsageRepository(BaseRepository):
         limit: int = 20,
         cursor: UsageCursor | None = None,
     ) -> dict[str, Any]:
-        """按 ``started_at DESC, id DESC`` 取一页使用记录。
+        """Fetch a page of usage records ordered by ``started_at DESC, id DESC``.
+
+        Returns ``{"items", "next_cursor", "total"}``: ``total`` is the filtered total and does not change with the cursor;
+        ``next_cursor`` ``None`` means the last page. ``task_type`` comes from an outer join of ``tasks`` via ``task_id``,
+        empty when the task row has been cleaned up.
+
+        按 ``started_at DESC, id DESC`` 取一页使用记录。
 
         返回 ``{"items", "next_cursor", "total"}``：``total`` 是筛选后的总数、不随游标变化，
         ``next_cursor`` 为 ``None`` 表示已到末页。``task_type`` 经 ``task_id`` 外连 ``tasks``
@@ -812,6 +974,7 @@ class UsageRepository(BaseRepository):
                     and_(ApiCall.started_at == cursor.started_at, ApiCall.id < cursor.id),
                 )
             )
+        # Fetch one extra row only to tell whether there is a next page, saving a second COUNT; it is not included in items.
         # 多取一行只为判断还有没有下一页，省掉第二次 COUNT；它不进 items。
         items_stmt = (
             select(ApiCall, Task.task_type)
@@ -831,7 +994,12 @@ class UsageRepository(BaseRepository):
         }
 
     async def get_record(self, record_id: int) -> dict[str, Any] | None:
-        """单条使用记录的详情；不存在或不在 scope 内返回 ``None``。
+        """Details of a single usage record; ``None`` if it does not exist or is out of scope.
+
+        The list's "pending rows with a task are hidden" rule does not apply: that rule only avoids showing the same thing in
+        both the in-progress area and the record table; a row reached directly by id (``record=<id>`` deep link) should still be readable.
+
+        单条使用记录的详情；不存在或不在 scope 内返回 ``None``。
 
         不套列表那条「有任务的 pending 不出现」——那条只为避免进行中区与记录表重复展示，
         按 id 直达（``record=<id>`` 深链）的一行仍应可读。
@@ -844,16 +1012,23 @@ class UsageRepository(BaseRepository):
         row = (await self.session.execute(self._scope_query(stmt, ApiCall))).first()
         return _record_detail_to_dict(row[0], row[1]) if row is not None else None
 
+    # --- Summary read interface (GET /usage/summary) ------------------------------------------------
+    # Only fetch rows, no aggregation in SQL: day splitting and bucket filling are done by lib/billing/usage_summary.py,
+    # avoiding date function differences between SQLite and PostgreSQL and letting the timezone and anomaly boundaries be driven without a database.
     # --- 汇总读接口（GET /usage/summary）------------------------------------------------
     # 只取行，不在 SQL 里聚合：切天与桶填充交给 lib/billing/usage_summary.py，回避 SQLite 与
     # PostgreSQL 的日期函数差异，也让时区与异常判定的边界能脱离数据库单独驱动。
 
     async def provider_display_names(self, provider_ids: set[str], *, locale: str = DEFAULT_LOCALE) -> dict[str, str]:
-        """供应商 id → 目录里的显示名；目录查不到的回退 id 本身，查不到的 Agent 供应商给泛称。"""
+        """Provider id -> display name from the catalogue; unknown ones fall back to the id itself, unknown Agent providers get a generic name.
+
+        供应商 id → 目录里的显示名；目录查不到的回退 id 本身，查不到的 Agent 供应商给泛称。"""
         return await provider_display_names(self.session, provider_ids, locale=locale)
 
     async def fetch_summary_rows(self, *, filters: UsageFilters | None = None) -> list[UsageSummaryRow]:
-        """期间内可聚合的调用行（轻投影）；pending 行不参与任何汇总口径。"""
+        """Aggregatable call rows in the period (light projection); pending rows take part in no summary.
+
+        期间内可聚合的调用行（轻投影）；pending 行不参与任何汇总口径。"""
         stmt = select(
             ApiCall.id,
             ApiCall.project_name,
@@ -891,7 +1066,11 @@ class UsageRepository(BaseRepository):
     async def fetch_usage_filter_options(
         self, *, agent: bool | None = None, locale: str = DEFAULT_LOCALE
     ) -> UsageFilterOptions:
-        """筛选候选值：期间不限的 distinct，不受本次筛选影响，好让下拉项在筛选后不消失。
+        """Filter options: distinct values over all time, unaffected by the current filters, so dropdown options do not disappear after filtering.
+
+        ``agent`` selects the view: ``False`` lists only projects, providers and models of generation calls, ``True`` only those of Agent sessions, ``None`` does not split by view.
+
+        筛选候选值：期间不限的 distinct，不受本次筛选影响，好让下拉项在筛选后不消失。
 
         ``agent`` 选定视图：``False`` 只列生成调用的项目、供应商与模型，``True`` 只列 Agent 会话的，
         ``None`` 不分视图。
@@ -911,6 +1090,8 @@ class UsageRepository(BaseRepository):
             models=models,
         )
 
+    # --- Agent session view ------------------------------------------------------------------
+    # Billing granularity is unchanged: one provider call record per model per turn. The session view only aggregates Agent records by session_id for display.
     # --- Agent 会话视图 ------------------------------------------------------------------
     # 记账粒度不变：每轮每个模型一条供应商调用记录。会话视图只是把 Agent 记录按 session_id 聚合展示。
 
@@ -921,7 +1102,12 @@ class UsageRepository(BaseRepository):
         limit: int = 20,
         cursor: UsageSessionCursor | None = None,
     ) -> dict[str, Any]:
-        """按最近一轮的时间倒序取一页 Agent 会话；每个会话一行。
+        """Fetch a page of Agent sessions ordered by latest turn time descending; one row per session.
+
+        ``filters`` work as in the record list: filter records first, then aggregate by session (a session only contains
+        records within the filter). Records with empty ``session_id`` form no session and do not appear here. Returns ``{"items", "next_cursor", "total"}``.
+
+        按最近一轮的时间倒序取一页 Agent 会话；每个会话一行。
 
         ``filters`` 与记录列表同口径，先筛记录再按会话聚合（会话只含落在筛选内的记录）。``session_id``
         为空的记录不成会话，不出现在这里。返回 ``{"items", "next_cursor", "total"}``。
@@ -946,7 +1132,7 @@ class UsageRepository(BaseRepository):
                     and_(last_started == cursor.last_started_at, ApiCall.session_id < cursor.session_id),
                 )
             )
-        # 多取一行只为判断还有没有下一页。
+        # Fetch one extra row only to tell whether there is a next page. / 多取一行只为判断还有没有下一页。
         page_stmt = page_stmt.order_by(last_started.desc(), ApiCall.session_id.desc()).limit(limit + 1)
         heads = (await self.session.execute(page_stmt)).all()
         page = heads[:limit]
@@ -976,6 +1162,7 @@ class UsageRepository(BaseRepository):
         )
         totals = {row.session_id: row for row in (await self.session.execute(self._scope_query(totals_stmt, ApiCall)))}
 
+        # Costs are summed per currency: price lists of different models may use different currencies; unpriced (NULL) records are not counted.
         # 费用按币种分别合计：不同模型的价目表币种可以不同；未定价（NULL）的记录不计入。
         costs_stmt = (
             select(ApiCall.session_id, ApiCall.currency, func.sum(ApiCall.cost_amount))
@@ -986,7 +1173,7 @@ class UsageRepository(BaseRepository):
         for session_id, currency, amount in (await self.session.execute(self._scope_query(costs_stmt, ApiCall))).all():
             costs.setdefault(session_id, {})[currency or "USD"] = float(amount or 0.0)
 
-        # 模型按在会话里首次出现的先后列出。
+        # Models are listed in order of first appearance in the session. / 模型按在会话里首次出现的先后列出。
         models_stmt = (
             select(ApiCall.session_id, ApiCall.model, func.min(ApiCall.started_at).label("first_seen"))
             .where(*in_page)
@@ -1006,6 +1193,7 @@ class UsageRepository(BaseRepository):
             items.append(
                 {
                     "session_id": head.session_id,
+                    # When session metadata was deleted the title is None, and the UI shows "deleted session".
                     # 会话元数据已删除时标题为 None，由界面显示「已删除的会话」。
                     "title": titles.get(head.session_id),
                     "session_deleted": head.session_id not in titles,
@@ -1027,7 +1215,9 @@ class UsageRepository(BaseRepository):
         }
 
     async def _session_titles(self, session_ids: list[str]) -> dict[str, str]:
-        """``api_calls.session_id``（SDK 会话 id）→ 会话标题；会话元数据已删除的不在结果里。"""
+        """``api_calls.session_id`` (SDK session id) -> session title; sessions whose metadata was deleted are absent.
+
+        ``api_calls.session_id``（SDK 会话 id）→ 会话标题；会话元数据已删除的不在结果里。"""
         stmt = select(AgentSession.sdk_session_id, AgentSession.title).where(
             AgentSession.sdk_session_id.in_(session_ids)
         )
@@ -1035,7 +1225,9 @@ class UsageRepository(BaseRepository):
         return {sdk_session_id: title or "" for sdk_session_id, title in rows}
 
     async def list_agent_session_records(self, session_id: str) -> list[dict[str, Any]]:
-        """一个 Agent 会话的全部记录，按时间正序；同一轮的几条记录写入时间相同，自然排在一起。"""
+        """All records of one Agent session in chronological order; records of the same turn share a write time and naturally sit together.
+
+        一个 Agent 会话的全部记录，按时间正序；同一轮的几条记录写入时间相同，自然排在一起。"""
         stmt = (
             select(ApiCall)
             .where(*usage_filter_clauses(UsageFilters(agent=True)), ApiCall.session_id == session_id)
@@ -1046,6 +1238,13 @@ class UsageRepository(BaseRepository):
 
 
 # ---------------------------------------------------------------------------
+# Usage record read side
+#
+# This section is read-only and does not reference the billing write side above: the write side cares how a call is
+# settled; the read side projects api_calls into "usage records" for the settings page and the top bar. Filter
+# dimensions, UTC normalisation and cursor encoding are defined once here, shared by ``/usage/records`` and ``/usage/summary``.
+# ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
 # 使用记录读侧
 #
 # 这一段只读，与上面的记账写侧互不引用：写侧关心一次调用如何结算，读侧把 api_calls
@@ -1055,12 +1254,19 @@ class UsageRepository(BaseRepository):
 
 
 class UsageCursorError(ValueError):
-    """游标串无法解码——不是合法 base64，或载荷不是 ``(started_at, id)``。"""
+    """The cursor string cannot be decoded: not valid base64, or the payload is not ``(started_at, id)``.
+
+    游标串无法解码——不是合法 base64，或载荷不是 ``(started_at, id)``。"""
 
 
 @dataclass(frozen=True)
 class UsageFilters:
-    """使用记录的筛选维度，``/usage/records`` 与 ``/usage/summary`` 同口径。
+    """Filter dimensions of usage records, the same for ``/usage/records`` and ``/usage/summary``.
+
+    ``providers`` / ``models`` / ``media_types`` are multi-select; an empty tuple means that dimension is not filtered.
+    ``since`` / ``until`` are the half-open interval ``[since, until)`` on ``started_at``.
+
+    使用记录的筛选维度，``/usage/records`` 与 ``/usage/summary`` 同口径。
 
     ``providers`` / ``models`` / ``media_types`` 是多选，空元组表示该维度不筛。
     ``since`` / ``until`` 是作用于 ``started_at`` 的半开区间 ``[since, until)``。
@@ -1072,13 +1278,15 @@ class UsageFilters:
     media_types: tuple[str, ...] = ()
     since: datetime | None = None
     until: datetime | None = None
+    # View: ``False`` only generation calls, ``True`` only Agent session records (source assistant_session),
+    # ``None`` no split. Summaries default to no split; totals include Agent.
     # 视图：``False`` 只要生成调用，``True`` 只要 Agent 会话的记录（来源 assistant_session），
     # ``None`` 不分。汇总默认不分，计入合计的口径包含 Agent。
     agent: bool | None = None
 
 
 def _view_clauses(agent: bool | None) -> list[ColumnElement[bool]]:
-    """按视图筛记录。来源为空的记录不是 Agent 记录。"""
+    """Filter records by view. Records with an empty source are not Agent records. / 按视图筛记录。来源为空的记录不是 Agent 记录。"""
     if agent is None:
         return []
     if agent:
@@ -1087,12 +1295,17 @@ def _view_clauses(agent: bool | None) -> list[ColumnElement[bool]]:
 
 
 def as_utc(value: datetime) -> datetime:
-    """无时区的时刻按 UTC 理解，带时区的换算到 UTC。"""
+    """Moments without a timezone are taken as UTC; ones with a timezone are converted to UTC. / 无时区的时刻按 UTC 理解，带时区的换算到 UTC。"""
     return value.replace(tzinfo=UTC) if value.tzinfo is None else value.astimezone(UTC)
 
 
 def usage_filter_clauses(filters: UsageFilters) -> list[ColumnElement[bool]]:
-    """把 ``UsageFilters`` 展开成 WHERE 子句。
+    """Expand ``UsageFilters`` into WHERE clauses.
+
+    ``project_name`` uses ``is not None`` rather than truthiness: endpoint test run records are stored with ``""``, and
+    ``project_name=""`` must be able to select them; only ``None`` means this dimension is not filtered.
+
+    把 ``UsageFilters`` 展开成 WHERE 子句。
 
     ``project_name`` 用 ``is not None`` 而非真值判断：端点试跑的记录以 ``""`` 落库，
     ``project_name=""`` 要能筛出它们，只有 ``None`` 表示不筛这一维。
@@ -1120,7 +1333,12 @@ def _records_base_clauses(
     statuses: tuple[str, ...],
     segment_ids: tuple[str, ...],
 ) -> list[ColumnElement[bool]]:
-    """记录列表的完整 WHERE：共享维度 + 状态/分镜多选 + 「有任务的 pending 不出现」。
+    """Full WHERE of the record list: shared dimensions + status/shot multi-select + "pending rows with a task are hidden".
+
+    Rows with ``status=pending`` and non-empty ``task_id`` are represented by the generation task they serve (the
+    in-progress area reads the task store); showing them again in the list would duplicate. Taskless pending calls have no other representative and must stay.
+
+    记录列表的完整 WHERE：共享维度 + 状态/分镜多选 + 「有任务的 pending 不出现」。
 
     ``status=pending`` 且 ``task_id`` 非空的行由它服务的那个生成任务代表（进行中区读任务
     store），列表里再出现一次就是重复；无任务的 pending 调用没有别的代表，必须留下。
@@ -1136,7 +1354,11 @@ def _records_base_clauses(
 
 @dataclass(frozen=True)
 class UsageCursor:
-    """keyset 分页的位置：上一页最后一行的 ``(started_at, id)``。
+    """Keyset pagination position: ``(started_at, id)`` of the previous page's last row.
+
+    Opaque to the client, which may only send it back as is, hence base64-encoded.
+
+    keyset 分页的位置：上一页最后一行的 ``(started_at, id)``。
 
     对客户端不透明——只允许原样回传，故编码成 base64。
     """
@@ -1158,13 +1380,16 @@ class UsageCursor:
                 raise ValueError("游标字段类型或范围无效")
             return cls(started_at=as_utc(datetime.fromisoformat(started_at)), id=cursor_id)
         except (binascii.Error, LookupError, OverflowError, TypeError, UnicodeError, ValueError) as exc:
+            # OverflowError: the moment has an extreme offset and converting to UTC crosses the datetime bounds; treated like a parse failure.
             # OverflowError：时刻带极端偏移，换算到 UTC 越过 datetime 边界，与解析失败同等对待。
             raise UsageCursorError(f"无法解码的游标: {raw!r}") from exc
 
 
 @dataclass(frozen=True)
 class UsageSessionCursor:
-    """会话列表 keyset 分页的位置：上一页最后一个会话的 ``(最近一轮时间, session_id)``。"""
+    """Keyset pagination position of the session list: ``(latest turn time, session_id)`` of the previous page's last session.
+
+    会话列表 keyset 分页的位置：上一页最后一个会话的 ``(最近一轮时间, session_id)``。"""
 
     last_started_at: datetime
     session_id: str
@@ -1189,7 +1414,12 @@ class UsageSessionCursor:
 
 
 def _record_iso(value: datetime | None) -> str | None:
-    """记录里的时刻一律输出 UTC ISO 串。
+    """Moments in records are always output as UTC ISO strings.
+
+    Plain ``isoformat`` will not do: SQLite's ``DateTime(timezone=True)`` comes back naive, and a string without an offset
+    would be read by the frontend in the browser's local timezone; the same row would also mean different things on SQLite and PostgreSQL.
+
+    记录里的时刻一律输出 UTC ISO 串。
 
     不能直接 ``isoformat``：SQLite 的 ``DateTime(timezone=True)`` 取回来是 naive 的，
     不带偏移量的串会被前端按浏览器本地时区解读，同一行在 SQLite 与 PostgreSQL 上还会
@@ -1199,7 +1429,7 @@ def _record_iso(value: datetime | None) -> str | None:
 
 
 def _record_to_dict(row: ApiCall, task_type: str | None) -> dict[str, Any]:
-    """一次调用的列表投影。``user_id`` 不出现在响应里。"""
+    """List projection of one call. ``user_id`` does not appear in the response. / 一次调用的列表投影。``user_id`` 不出现在响应里。"""
     return {
         "id": row.id,
         "project_name": row.project_name,
@@ -1239,7 +1469,9 @@ def _record_to_dict(row: ApiCall, task_type: str | None) -> dict[str, Any]:
 
 
 def _record_detail_to_dict(row: ApiCall, task_type: str | None) -> dict[str, Any]:
-    """详情比列表多三项重载荷：提示词全文、输入与最后一次供应商响应。"""
+    """Details carry three heavy payloads more than the list: the full prompt, the inputs and the last provider response.
+
+    详情比列表多三项重载荷：提示词全文、输入与最后一次供应商响应。"""
     return {
         **_record_to_dict(row, task_type),
         "prompt": row.prompt,
@@ -1248,12 +1480,15 @@ def _record_detail_to_dict(row: ApiCall, task_type: str | None) -> dict[str, Any
     }
 
 
+# Truncation length of the "message" column in session details: records of the same turn share one prompt, so putting the full text in every row is pointless.
 # 会话明细里「消息」一栏的截断长度：同一轮的几条记录共用同一条提示词，全文放进每一行没有意义。
 SESSION_PROMPT_PREVIEW_CHARS = 300
 
 
 def _session_record_to_dict(row: ApiCall) -> dict[str, Any]:
-    """会话明细里一条记录的投影：时间、这一轮的用户消息、模型、各项 token 与费用。"""
+    """Projection of one record in session details: time, the turn's user message, model, token counts and cost.
+
+    会话明细里一条记录的投影：时间、这一轮的用户消息、模型、各项 token 与费用。"""
     prompt = row.prompt
     if prompt is not None and len(prompt) > SESSION_PROMPT_PREVIEW_CHARS:
         prompt = prompt[:SESSION_PROMPT_PREVIEW_CHARS] + "…"

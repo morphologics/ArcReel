@@ -1,4 +1,31 @@
-"""KlingImageBackend — 可灵 Kling 图像生成后端（JWT 直连 / Bearer 中转双模式，异步轮询）。
+"""KlingImageBackend — Kling image generation backend (JWT direct / Bearer relay dual mode, async polling).
+
+Uses Kling's native image endpoint: submit ``POST /v1/images/generations`` to get ``data.task_id`` → poll
+``GET /v1/images/generations/{task_id}`` until ``task_status=succeed`` to get ``task_result.images[0].url`` (valid
+24h) → download locally right away before it expires.
+
+Auth / base_url assembly / the submit-poll skeleton are shared by ``KlingBackendBase`` (same source as
+``KlingVideoBackend``); this class only fills in the image-side differences: endpoint paths, payload building, reference
+image encoding, static capabilities and the decoupled ``api_model_name``.
+
+Dual mode (following the ``auth_mode`` precedent of ``KlingVideoBackend``):
+- ``auth_mode="jwt"`` (built-in provider): takes access_key + secret_key, uses ``KlingJWTManager``, checks expiry
+  before each HTTP call and re-signs on demand when <60s from expiry -- async rendering may outlive a single token.
+- ``auth_mode="bearer"`` (custom endpoint): takes a static api_key + base_url, bypassing the JWT manager.
+
+Registered image models:
+- ``kling-image-o1`` (default): text-to-image / image-to-image / 1-10 image references (cross-image character consistency), sent as the ``image`` array.
+- ``kling-v3-omni-image``: text-to-image / image-to-image / image set generation (registry alias key, API model name ``kling-v3-omni``).
+
+The model name sent to the API is ``api_model_name`` (the registry decouples key names from API names, so amphibious
+models can share an API name), falling back to the registry key name -- the key name isn't sent blindly, otherwise an
+alias key would mistake ``kling-v3-omni-image`` for the API model name.
+
+resolution (1K/2K/4K) is declared by the registry to drive the UI dropdown and billing, and isn't sent in the request
+body: Kling's official key image parameters (model_name/prompt/image/aspect_ratio/n etc.) don't include a resolution
+field; consistent with KlingVideoBackend only verified parameters are sent, to avoid guessing the external API structure.
+
+KlingImageBackend — 可灵 Kling 图像生成后端（JWT 直连 / Bearer 中转双模式，异步轮询）。
 
 走可灵原生图像端点：submit ``POST /v1/images/generations`` 取 ``data.task_id`` →
 轮询 ``GET /v1/images/generations/{task_id}`` 至 ``task_status=succeed`` 取
@@ -59,6 +86,7 @@ _IMAGE_ENDPOINT = "images/generations"
 _POLL_INTERVAL_SECONDS = 5.0
 _POLL_MAX_WAIT_SECONDS = 600.0
 
+# Reference image limit per image model (multi-image subjects, by registry key name): o1 / v3-omni both support multi-image subjects; the official o1 limit is 10.
 # 各图像模型参考图上限（多图主体，按 registry 键名）：o1 / v3-omni 均支持多图主体，官方 o1 上限 10 张。
 _DEFAULT_REF_LIMIT = 10
 _MODEL_REF_LIMITS: dict[str, int] = {
@@ -68,9 +96,9 @@ _MODEL_REF_LIMITS: dict[str, int] = {
 
 
 class KlingImageBackend(KlingBackendBase):
-    """可灵 Kling 图像后端（异步轮询，JWT / Bearer 双模式）。"""
+    """Kling image backend (async polling, JWT / Bearer dual mode). / 可灵 Kling 图像后端（异步轮询，JWT / Bearer 双模式）。"""
 
-    # 文生图与图生图（多图主体）同一端点。
+    # Text-to-image and image-to-image (multi-image subjects) use the same endpoint. / 文生图与图生图（多图主体）同一端点。
     CHANNEL_CAPABILITIES: ClassVar[frozenset[ImageCapability]] = BOTH_IMAGE_CAPABILITIES
 
     _media_label = "图像"
@@ -98,6 +126,7 @@ class KlingImageBackend(KlingBackendBase):
             http_timeout=http_timeout,
             transport_layer=transport_layer,
         )
+        # Model name sent to the Kling API: passed by the caller after registry decoupling; falls back to the registry key name (for ordinary models the key name is the API name).
         # 发给可灵 API 的模型名：调用方按 registry 解耦后传入；缺省回退 registry 键名（普通模型键名即 API 名）。
         self._api_model_name = api_model_name or self._model
 
@@ -115,7 +144,9 @@ class KlingImageBackend(KlingBackendBase):
     # ── request building ────────────────────────────────────────────────
 
     def _build_payload(self, request: ImageGenerationRequest) -> dict:
-        """构建图像请求体。无参考图 → 文生图；有参考图 → 图生图（image 数组）。"""
+        """Build the image request body. No reference images → text-to-image; with reference images → image-to-image (image array).
+
+        构建图像请求体。无参考图 → 文生图；有参考图 → 图生图（image 数组）。"""
         payload: dict = {
             "model_name": self._api_model_name,
             "prompt": request.prompt,
@@ -128,15 +159,19 @@ class KlingImageBackend(KlingBackendBase):
         return payload
 
     def _encode_references(self, reference_images: list[ReferenceImage]) -> list[str]:
-        """参考图 → 纯 base64 列表（无 data URI 前缀）；超上限截断，缺失/不可读 fail-loud。"""
+        """Reference images → plain base64 list (no data URI prefix); truncated above the limit, fail-loud if missing/unreadable.
+
+        参考图 → 纯 base64 列表（无 data URI 前缀）；超上限截断，缺失/不可读 fail-loud。"""
         if not reference_images:
             return []
         encoded: list[str] = []
         unreadable: list[str] = []
+        # names go into multilingual error templates: when an empty path has no file name, #N identifies which image it is, avoiding a placeholder leaking into non-Chinese errors.
         # names 进多语言错误模板：空路径无文件名时用序号 #N 标识第几张，避免占位漏进非中文报错。
         for idx, ref in enumerate(reference_images, start=1):
             path = Path(ref.path) if ref.path else None
             if path is None or not path.is_file():
+                # path.name may be empty (e.g. an empty file name resolved from "." / "/"): fall back to index #N so an empty token doesn't leak into the error.
                 # path.name 可能为空（如 "." / "/" 解析出空文件名）：回退序号 #N，避免空 token 漏进报错。
                 unreadable.append(path.name if (path and path.name) else f"#{idx}")
                 continue
@@ -146,6 +181,7 @@ class KlingImageBackend(KlingBackendBase):
                 logger.warning("Kling 参考图读取失败: %s (%s)", path, exc)
                 unreadable.append(path.name)
         if unreadable:
+            # fail-loud: abort if a declared reference image is missing, rather than silently generating a wrong result from a subset and billing as usual.
             # fail-loud：声明的参考图缺失即中止，不静默用子集生成出错误结果还照常计费。
             raise ImageCapabilityError(
                 "image_reference_images_unreadable", model=self._model, names=", ".join(unreadable)
@@ -162,7 +198,11 @@ class KlingImageBackend(KlingBackendBase):
 
     @staticmethod
     def _safe_log_view(payload: dict) -> dict:
-        """预脱敏标量视图，直接喂 logger（避开 format_kwargs_for_log sink）。
+        """Pre-redacted scalar view, fed directly to the logger (bypassing the format_kwargs_for_log sink).
+
+        base64 reference images / prompt are never expanded: only whether present + count + prompt length are logged.
+
+        预脱敏标量视图，直接喂 logger（避开 format_kwargs_for_log sink）。
 
         base64 参考图 / prompt 一律不展开：仅记是否存在 + 数量 + prompt 长度。
         """
@@ -181,7 +221,9 @@ class KlingImageBackend(KlingBackendBase):
 
     @staticmethod
     def estimate_usage(facts: ImageRequestFacts) -> Usage:
-        """请求体不带分辨率（见模块说明），不报分辨率，按价目表的默认档计。"""
+        """The request body carries no resolution (see the module docstring), so no resolution is reported; priced at the price table's default tier.
+
+        请求体不带分辨率（见模块说明），不报分辨率，按价目表的默认档计。"""
         refs = facts.reference_count
         limit = _MODEL_REF_LIMITS.get(facts.model, _DEFAULT_REF_LIMIT)
         return per_image_usage(output_images=1, input_images=None if refs is None else min(refs, limit))
@@ -198,6 +240,7 @@ class KlingImageBackend(KlingBackendBase):
                 poll_interval=_POLL_INTERVAL_SECONDS,
                 max_wait=_POLL_MAX_WAIT_SECONDS,
             )
+            # The image_url valid for 24h must be persisted before it expires: take the first image and store it locally (image sets produce one per image; single output takes [0]).
             # 24h 有效的 image_url 必须在失效前落地：取首张转存本地（组图按张产出，单输出取 [0]）。
             download_url = extract_kling_image_urls(final)[0]
 
@@ -210,6 +253,6 @@ class KlingImageBackend(KlingBackendBase):
             model=self._model,
             image_uri=download_url,
             seed=request.seed,
-            # 请求体不带分辨率，不报分辨率。
+            # The request body carries no resolution, so no resolution is reported. / 请求体不带分辨率，不报分辨率。
             usage=per_image_usage(output_images=1, input_images=len(payload.get("image", []))),
         )

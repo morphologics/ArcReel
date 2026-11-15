@@ -91,7 +91,10 @@ class MigrationSkippedArtifact(BaseModel):
 
 
 def skipped_artifact_identity(key: ArtifactKey) -> SkippedArtifactIdentity:
-    """一件产物在迁移报告里的身份：产物种类、集号（项目级产物为空）与资源 id。"""
+    """An artifact's identity in the migration report: artifact kind, episode number (empty for project-level
+    artifacts) and resource id.
+
+    一件产物在迁移报告里的身份：产物种类、集号（项目级产物为空）与资源 id。"""
 
     episode = key.components[0]
     return (key.kind.value, episode if type(episode) is int else None, str(key.components[-1]))
@@ -231,6 +234,7 @@ def build_migration_report(
     )
 
 
+#: Artifact kinds whose resource id is the script entry id: when the entry needs replan, they are not in the report.
 #: 以剧本条目 id 为资源 id 的产物种类：条目需要重新规划时，它们不进报告。
 _UNIT_ARTIFACT_KINDS = frozenset(
     {ArtifactKind.EPISODE_STORYBOARD.value, ArtifactKind.EPISODE_VIDEO.value, ArtifactKind.EPISODE_AUDIO.value}
@@ -238,7 +242,10 @@ _UNIT_ARTIFACT_KINDS = frozenset(
 
 
 def _units_needing_replan(project_dir: Path) -> frozenset[tuple[int, str]]:
-    """绑定剧本里带 ``needs_replan`` 标记的条目，按（集号, 条目 id）。读不出的剧本不贡献条目。"""
+    """Entries flagged ``needs_replan`` in the bound scripts, keyed by (episode number, entry id). Unreadable scripts
+    contribute no entries.
+
+    绑定剧本里带 ``needs_replan`` 标记的条目，按（集号, 条目 id）。读不出的剧本不贡献条目。"""
 
     try:
         project = json.loads((project_dir / "project.json").read_bytes())
@@ -260,6 +267,8 @@ def _units_needing_replan(project_dir: Path) -> frozenset[tuple[int, str]]:
         except (OSError, ValueError):
             continue
         if not isinstance(script, dict):
+            # A script whose root is not an object is equally unreadable: when the migration chain fails, this is where its
+            # incomplete report is being written, and it must not mask the chain's own failure.
             # 根不是对象的剧本同样读不出：迁移链失败时这里正为它写未完成的报告，不能盖过链本身的失败。
             continue
         try:
@@ -276,6 +285,11 @@ def _units_needing_replan(project_dir: Path) -> frozenset[tuple[int, str]]:
 
 def write_migration_report(project_dir: Path, report: MigrationReport) -> None:
     """Persist the report, replacing any earlier one. Raises when it cannot be written.
+
+    "Not carried over" only collects unreadable files and legacy narration audio without a synthesis-settings record
+    (non-empty ``category``); skips whose basis can't be computed and artifacts of entries needing replan are removed
+    here in one place (ADR 0098). Reports from both the migration chain and archive import pass through here, rather
+    than relying on each skip path to remember on its own.
 
     「未能带入」只收读不出的文件与没有合成设置记录的旧版旁白音频（``category`` 非空）；依据算不出
     的跳过与需要重新规划的条目的产物在这里统一去掉（ADR 0098）。迁移链与归档导入的报告都经过
@@ -385,6 +399,8 @@ def extend_migration_report(
     earlier report does not cover them.
     """
 
+    # Skips whose basis can't be computed are not shown to the user, and merging them in would drop them at write
+    # time anyway; filter them first so they don't make an acknowledged report reappear.
     # 依据算不出的跳过不给用户看，并进来也会在写盘时去掉；先滤掉，免得它让已确认的报告重新出现。
     skipped = [item for item in skipped if item.category is not None]
     report = load_migration_report(project_dir)

@@ -1,4 +1,4 @@
-"""ArkImageBackend — 火山方舟 Seedream 图片生成后端。"""
+"""ArkImageBackend — Volcano Engine Ark Seedream image generation backend. / ArkImageBackend — 火山方舟 Seedream 图片生成后端。"""
 
 from __future__ import annotations
 
@@ -27,6 +27,13 @@ from lib.infra.retry import with_retry_async
 
 logger = logging.getLogger(__name__)
 
+# Seedream `size` parameter: when not passed, 4.x/5.x default to 2048x2048 (1:1), 3.0-t2i defaults to 1024x1024 (1:1).
+# Not passing size explicitly would make the project's aspect_ratio setting completely ineffective.
+#
+# Ark's officially recommended width/height pixel values (method 2):
+#   - 4.x/5.x series 2K tier (total pixels must be ≥ 3_686_400)
+#   - 3.0-t2i series 1K tier (each side ∈ [512, 2048])
+# Reference: https://www.volcengine.com/docs/82379/1666946
 # Seedream `size` 参数：不传时 4.x/5.x 默认 2048x2048（1:1），3.0-t2i 默认 1024x1024（1:1）。
 # 不显式传 size 会让项目设置的 aspect_ratio 完全失效。
 #
@@ -57,16 +64,25 @@ _SEEDREAM_1K_SIZE_MAP: dict[str, str] = {
 
 
 def _resolve_seedream_size(model_id: str, aspect_ratio: str) -> str:
-    """按模型族选尺寸表；未识别比例时回退到分辨率 keyword（方式 1，由模型按 prompt 自适应）。"""
+    """Pick the size table by model family; when the ratio isn't recognized, fall back to the resolution keyword (method 1, the model adapts to the prompt).
+
+    按模型族选尺寸表；未识别比例时回退到分辨率 keyword（方式 1，由模型按 prompt 自适应）。"""
     mid = (model_id or "").lower()
     if "seedream-3" in mid:
         size = _SEEDREAM_1K_SIZE_MAP.get(aspect_ratio)
         return size or "1K"
-    # 默认按 4.x/5.x 处理（含 lite 与未来兼容版本）
+    # Treat as 4.x/5.x by default (including lite and future compatible versions) / 默认按 4.x/5.x 处理（含 lite 与未来兼容版本）
     size = _SEEDREAM_2K_SIZE_MAP.get(aspect_ratio)
     return size or "2K"
 
 
+# Per-request reference image limit: Seedream 5.0 pro / 5.0 flash up to 10;
+# 5.0 lite / 4.5 / 4.0 up to 14 (input reference images + generated images ≤ 15).
+# doubao-seedream-5-0-260128 and doubao-seedream-5-0-lite-260128 are two IDs of the same model.
+# pro / flash aren't in the built-in catalog but can be added manually by ID or reuse this backend via the custom endpoint ark-seedream;
+# the version number in the name accepts both `5-0` and the `5.0` spelling common with relays.
+# References: https://www.volcengine.com/docs/82379/1541523 , https://www.volcengine.com/docs/82379/1666946 ,
+# https://www.volcengine.com/docs/82379/1330310
 # 单请求参考图上限：Seedream 5.0 pro / 5.0 flash 最多 10 张；
 # 5.0 lite / 4.5 / 4.0 最多 14 张（输入参考图 + 生成图 ≤ 15）。
 # doubao-seedream-5-0-260128 与 doubao-seedream-5-0-lite-260128 是同一模型的两个 ID。
@@ -80,14 +96,14 @@ _SEEDREAM_5_PRO_FLASH_PATTERN = re.compile(r"seedream-5[-.]0-(?:pro|flash)")
 
 
 def _max_reference_images(model_id: str) -> int:
-    """按型号给出单请求参考图上限；声明、截断与计量共用。"""
+    """Per-request reference image limit by model; shared by declaration, truncation and metering. / 按型号给出单请求参考图上限；声明、截断与计量共用。"""
     if _SEEDREAM_5_PRO_FLASH_PATTERN.search((model_id or "").lower()):
         return _SEEDREAM_5_PRO_FLASH_MAX_REFERENCE_IMAGES
     return _MAX_REFERENCE_IMAGES
 
 
 class ArkImageBackend:
-    """Ark (火山方舟) Seedream 图片生成后端。"""
+    """Ark (Volcano Engine Ark) Seedream image generation backend. / Ark (火山方舟) Seedream 图片生成后端。"""
 
     CHANNEL_CAPABILITIES: ClassVar[frozenset[ImageCapability]] = BOTH_IMAGE_CAPABILITIES
 
@@ -134,39 +150,43 @@ class ArkImageBackend:
 
     @with_retry_async()
     async def generate(self, request: ImageGenerationRequest) -> ImageGenerationResult:
-        """异步生成图片（T2I / I2I）。"""
-        # 构建 SDK 参数
+        """Generate images asynchronously (T2I / I2I). / 异步生成图片（T2I / I2I）。"""
+        # Build SDK parameters / 构建 SDK 参数
         kwargs: dict = {
             "model": self._model,
             "prompt": request.prompt,
         }
 
+        # When size isn't passed explicitly Seedream outputs 1:1 by default (4.x/5.x: 2048x2048; 3.0-t2i: 1024x1024),
+        # and the project's aspect_ratio would be silently ignored. Prefer an image_size passed explicitly by the caller
+        # (e.g. the grid path passes "2K"/"4K"), otherwise derive width and height from aspect_ratio using the official recommended table.
         # Seedream 不显式传 size 时默认输出 1:1（4.x/5.x: 2048x2048；3.0-t2i: 1024x1024），
         # 项目设置的 aspect_ratio 会被静默忽略。优先使用 caller 显式传入的 image_size
         # （如 grid 路径会传 "2K"/"4K"），否则按官方推荐表从 aspect_ratio 推导宽高。
         kwargs["size"] = self._size(self._model, request.image_size, request.aspect_ratio)
         reference_count = 0
 
-        # I2I: 读取参考图并转为 base64 data URI
+        # I2I: read reference images and convert to base64 data URIs / I2I: 读取参考图并转为 base64 data URI
         if request.reference_images:
             refs = request.reference_images
             limit = _max_reference_images(self._model)
             if len(refs) > limit:
                 logger.warning("Ark 参考图数量 %d 超过上限 %d，截断", len(refs), limit)
                 refs = refs[:limit]
+            # Reading whole images for base64 encoding is blocking I/O; offload each to a thread and await them concurrently to avoid blocking the event loop
             # 读整张图做 base64 编码是阻塞 I/O，逐张卸载到线程后并发等待，避免堵住事件循环
             data_uris = await asyncio.gather(
                 *[asyncio.to_thread(image_to_base64_data_uri, Path(ref.path)) for ref in refs]
             )
             reference_count = len(data_uris)
-            # 单张传字符串，多张传列表
+            # A single image is passed as a string, multiple as a list / 单张传字符串，多张传列表
             kwargs["image"] = data_uris[0] if len(data_uris) == 1 else data_uris
 
         if request.seed is not None:
             kwargs["seed"] = request.seed
 
         logger.info("调用 %s 图片 SDK kwargs=%s", self.name, format_kwargs_for_log(kwargs))
-        # 同步 SDK 通过 to_thread 包装
+        # Wrap the synchronous SDK via to_thread / 同步 SDK 通过 to_thread 包装
         response = await asyncio.to_thread(
             self._client.images.generate,
             **kwargs,
@@ -174,6 +194,7 @@ class ArkImageBackend:
 
         data = getattr(response, "data", None) or []
         if not data:
+            # Empty data usually means a content safety filter hit or an upstream gateway anomaly; give a clear error to aid troubleshooting
             # 空 data 通常是内容安全过滤命中或上游网关异常，给出清晰错误便于排查
             raise RuntimeError(f"Ark 图片生成响应 data 为空 (model={self._model})，可能触发内容安全过滤或上游服务异常")
         await save_image_from_response_item(data[0], request.output_path)
@@ -182,7 +203,7 @@ class ArkImageBackend:
             image_path=request.output_path,
             provider=PROVIDER_ARK,
             model=self._model,
-            # 按生成张数计费：响应里每张图一项。
+            # Billed per generated image: one item per image in the response. / 按生成张数计费：响应里每张图一项。
             usage=per_image_usage(
                 output_images=len(data), input_images=reference_count, dimensions={"resolution": kwargs["size"]}
             ),

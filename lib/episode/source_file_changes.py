@@ -1,4 +1,38 @@
-"""整本源文文件的插入、替换、编辑、删除与调序（ADR 0097）。
+"""Inserting, replacing, editing, deleting and reordering whole-source files (ADR 0097).
+
+A file change only affects cut episodes whose source range touches that file, and does not require replanning from
+episode 1. After source ranges are remapped by :mod:`lib.episode.source_remap`, episodes fall into six categories:
+
+- **Shift only**: the text is unchanged; the offsets of the source range or its position in episode order changed;
+- **Source changed** (split into with and without artifacts): text within the range changed; take the mapped range
+  and mark stale;
+- **Retired**: the whole range was deleted and it has artifacts: becomes an episode without source, marked stale,
+  moved to the end of the episode order in original relative order;
+- **Removed outright**: the whole range was deleted and it has no artifacts;
+- **Script plan stale due to kind change**: the source kind was changed on replace; cut episodes starting in this
+  file that already have a script plan.
+
+When a file was changed outside the service (the recorded source fingerprint or snapshot does not match the current
+text), :func:`accept_external_source_change` runs the same remapping with the snapshot as the old text and the
+current text as the new text; after confirmation it updates the ledger, fingerprints and snapshots, leaving the file
+itself untouched.
+
+When episodes are affected, the command writes nothing and returns the affected episode list and its ``revision``;
+after the creator confirms, the call is repeated with the ``revision``, and it only executes when the list
+recomputed under the lock matches the confirmed one. When no episodes are affected it executes directly.
+``dry_run`` only computes the list without writing, so callers can check before executing whether episodes to be
+retired or removed have tasks in flight.
+
+On reorder, cut episodes are arranged by their new source position, and episodes from other sources follow the
+nearest cut episode before them in episode order (the anchor rule of ADR 0032); those with no cut episode before
+them stay at the front.
+
+Replace, edit and reorder first check whether the file was changed outside the service and refuse if so; delete is
+not restricted.
+Writing the source, ledger, derived episode files and snapshots is done under the same project lock and undone as a
+whole on failure.
+
+整本源文文件的插入、替换、编辑、删除与调序（ADR 0097）。
 
 文件改动只影响原文范围触及这个文件的切出集，不要求从第 1 集起重新规划。原文范围按
 :mod:`lib.episode.source_remap` 重映射后，各集分六类：
@@ -90,7 +124,9 @@ MoveDirection = Literal["up", "down"]
 
 
 class SourceFileChangeError(ValueError):
-    """整本源文文件的改动被拒；``code`` 是稳定的原因码，入口据此映射状态码与文案。没有写入。"""
+    """Change to a whole-source file rejected; ``code`` is a stable reason code that entry points map to status codes and copy. Nothing was written.
+
+    整本源文文件的改动被拒；``code`` 是稳定的原因码，入口据此映射状态码与文案。没有写入。"""
 
     def __init__(self, code: str, message: str):
         super().__init__(message)
@@ -99,7 +135,7 @@ class SourceFileChangeError(ValueError):
 
 @dataclass(frozen=True)
 class SourceFileImpact:
-    """一次文件改动波及的集（集 ID，按改动前的播出顺序）。"""
+    """Episodes affected by one file change (episode IDs, in episode order before the change). / 一次文件改动波及的集（集 ID，按改动前的播出顺序）。"""
 
     shifted: list[int] = field(default_factory=list)
     changed_with_products: list[int] = field(default_factory=list)
@@ -125,31 +161,39 @@ class SourceFileImpact:
 
 @dataclass(frozen=True)
 class SourceFileChangeOutcome:
-    """命令结果。``applied`` 为 False 时没有任何写入，等待带 ``revision`` 确认。"""
+    """Command result. When ``applied`` is False nothing has been written, awaiting confirmation with ``revision``.
+
+    命令结果。``applied`` 为 False 时没有任何写入，等待带 ``revision`` 确认。"""
 
     applied: bool
     impact: SourceFileImpact
-    #: 这份受影响集清单的版本；确认时原样带回。
+    #: Version of this affected-episode list; sent back as is on confirmation. / 这份受影响集清单的版本；确认时原样带回。
     revision: str
 
 
 @dataclass
 class _Change:
-    """一次文件改动的推演结果。推演只读；``commit`` 在确认之后改写源文件与整本源文清单。"""
+    """Derivation result of one file change. The derivation is read-only; ``commit`` rewrites the source file and the whole-source manifest after confirmation.
 
+    一次文件改动的推演结果。推演只读；``commit`` 在确认之后改写源文件与整本源文清单。"""
+
+    #: Whole-source file order after the change (readable files only), used to order cut episodes by source position.
     #: 改动后的整本源文文件顺序（只含可读的文件），用来给切出集排源文位置。
     docs: list[SourceDoc]
     remaps: list[RangeRemap]
+    #: Rewrite the source file and the whole-source manifest; every change to a file on disk registers its undo in ``undo``.
     #: 改写源文件与整本源文清单；每改一处盘上文件都把撤销登记进 ``undo``。
     commit: Callable[[dict[str, Any], ExitStack], None]
-    #: 内容变了的文件：已记录的源文指纹随之更新或去掉。
+    #: Files whose content changed: recorded source fingerprints are updated or removed accordingly. / 内容变了的文件：已记录的源文指纹随之更新或去掉。
     touched: list[str] = field(default_factory=list)
-    #: 调序时为 True：切出集按新的源文位置重新排列播出顺序。
+    #: True on reorder: cut episodes are rearranged in episode order by their new source position. / 调序时为 True：切出集按新的源文位置重新排列播出顺序。
     reorder: bool = False
+    #: Kind changed on replace: the script plans of cut episodes starting in this file that already have a script plan become stale.
     #: 替换时改了类型：起点在这个文件、已有脚本规划的切出集的脚本规划判 stale。
     kind_change: tuple[str, SourceKind] | None = None
 
 
+# Reading
 # ---------------------------------------------------------------------------
 # 读取
 # ---------------------------------------------------------------------------
@@ -170,7 +214,9 @@ def _entries(project: Mapping[str, Any]) -> list[dict[str, Any]]:
 
 
 def _spans(project: Mapping[str, Any], docs: list[SourceDoc]) -> dict[int, SourceSpan]:
-    """能落进整本源文的切出集的原文范围（终点超出文件长度时已截到文件末尾）。"""
+    """Source ranges of cut episodes that can be placed in the whole source (an end beyond the file length is already clipped to the end of the file).
+
+    能落进整本源文的切出集的原文范围（终点超出文件长度时已截到文件末尾）。"""
     return {
         episode: SourceSpan(
             source_file=docs[p.file_index].rel_path,
@@ -190,7 +236,7 @@ def _require_doc(docs: list[SourceDoc], rel: str) -> SourceDoc:
 
 
 def _check_fingerprint(project_dir: Path, project: Mapping[str, Any], doc: SourceDoc) -> None:
-    """文件在服务之外被改动过、还没有更新分集账本时拒绝。"""
+    """Reject when the file was changed outside the service and the episode ledger has not been updated yet. / 文件在服务之外被改动过、还没有更新分集账本时拒绝。"""
     if changed_outside_service(project_dir, project, doc):
         raise SourceFileChangeError("source_changed", f"源文件在服务之外被改动过：{doc.rel_path}")
 
@@ -202,6 +248,7 @@ def _require_text(text: str) -> str:
     return normalized
 
 
+# Affected episodes
 # ---------------------------------------------------------------------------
 # 受影响集
 # ---------------------------------------------------------------------------
@@ -210,7 +257,9 @@ def _require_text(text: str) -> str:
 def _order_after(
     entries: Sequence[Mapping[str, Any]], change: _Change, impact_groups: Mapping[str, set[int]]
 ) -> list[int]:
-    """改动后的播出顺序（集 ID），不含退下与移除的集；退下的集另接在末尾。"""
+    """Episode order after the change (episode IDs), excluding retired and removed episodes; retired episodes are appended at the end separately.
+
+    改动后的播出顺序（集 ID），不含退下与移除的集；退下的集另接在末尾。"""
     positions = {
         remap.episode: (
             [doc.rel_path for doc in change.docs].index(remap.after.source_file),
@@ -239,7 +288,9 @@ def _order_after(
 def _impact(
     project_dir: Path, project: Mapping[str, Any], entries: list[dict[str, Any]], change: _Change
 ) -> tuple[SourceFileImpact, list[int]]:
-    """受影响集清单，以及改动后的播出顺序（不含退下与移除的集）。"""
+    """The affected episode list, plus the episode order after the change (excluding retired and removed episodes).
+
+    受影响集清单，以及改动后的播出顺序（不含退下与移除的集）。"""
     with_products = episodes_with_products(project_dir, entries)
     by_episode = {remap.episode: remap for remap in change.remaps}
     groups: dict[str, set[int]] = {key: set() for key in SourceFileImpact().to_dict()}
@@ -285,6 +336,7 @@ def _revision(operation: Mapping[str, Any], impact: SourceFileImpact) -> str:
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:16]
 
 
+# Commit
 # ---------------------------------------------------------------------------
 # 提交
 # ---------------------------------------------------------------------------
@@ -292,13 +344,14 @@ def _revision(operation: Mapping[str, Any], impact: SourceFileImpact) -> str:
 
 def _restore_file(path: Path, content: bytes | None) -> None:
     if content is None:
+        # on undo, remove a file that did not exist before the transaction
         path.unlink(missing_ok=True)  # hard-delete: rollback -- 撤销时移除事务前不存在的文件
     else:
         path.write_bytes(content)
 
 
 def _remember(path: Path, undo: ExitStack) -> None:
-    """登记 ``path`` 现在的内容，撤销时恢复。"""
+    """Record the current content of ``path`` to restore on undo. / 登记 ``path`` 现在的内容，撤销时恢复。"""
     undo.callback(_restore_file, path, path.read_bytes() if path.is_file() and not path.is_symlink() else None)
 
 
@@ -323,7 +376,9 @@ def _sync_snapshots(
 
 
 def _record_fingerprints(project: dict[str, Any], docs: list[SourceDoc], touched: Iterable[str]) -> None:
-    """改动过的文件：已记录指纹的更新为新文本的指纹；移出整本源文的去掉记录。"""
+    """Changed files: recorded fingerprints are updated to the new text's fingerprint; files removed from the whole source have their records removed.
+
+    改动过的文件：已记录指纹的更新为新文本的指纹；移出整本源文的去掉记录。"""
     raw = project.get(SOURCE_FINGERPRINTS_KEY)
     if not isinstance(raw, Mapping):
         return
@@ -378,6 +433,7 @@ def _apply(
         path = episode_source_path(project_dir, episode)
         if path.is_file() and not path.is_symlink():
             _remember(path, undo)
+            # derived episode source retired after the whole source changed; can be regenerated from the episode ledger
             path.unlink()  # hard-delete: derived -- 整本源文变化后退下的派生集原文，可由分集账本重新生成
     _sync_snapshots(project_dir, project, docs, change.touched, undo)
     _record_fingerprints(project, docs, change.touched)
@@ -392,7 +448,9 @@ def _run(
     revision: str | None,
     dry_run: bool = False,
 ) -> SourceFileChangeOutcome:
-    """在项目锁内推演改动、算受影响集；确认过（或没有受影响的集）时提交。``dry_run`` 时只算不写。"""
+    """Derive the change and compute affected episodes under the project lock; commit when confirmed (or when no episodes are affected). With ``dry_run``, only compute, no writes.
+
+    在项目锁内推演改动、算受影响集；确认过（或没有受影响的集）时提交。``dry_run`` 时只算不写。"""
     project_dir = pm.get_project_path(project_name)
     with pm.locked_source_registration(project_name) as (_source_dir, project, undo):
         entries = _entries(project)
@@ -407,6 +465,7 @@ def _run(
     return SourceFileChangeOutcome(applied=True, impact=impact, revision=current)
 
 
+# Commands
 # ---------------------------------------------------------------------------
 # 命令
 # ---------------------------------------------------------------------------
@@ -434,6 +493,7 @@ def _plan_rewrite(
 
         def commit(p: dict[str, Any], undo: ExitStack) -> None:
             if replace:
+                # Replace upload: the old file goes into the project trash together with the original upload, which no longer corresponds to the new content.
                 # 替换上传：旧文件连同原始上传件进项目回收站，原始上传件不再对应新内容。
                 trash_source_file(project_dir, rel, undo)
             _write_text(project_dir / rel, text, undo)
@@ -455,7 +515,9 @@ def edit_whole_source_file(
     revision: str | None = None,
     dry_run: bool = False,
 ) -> SourceFileChangeOutcome:
-    """编辑整本源文文件 ``source/<filename>`` 的全文：按改动前后的对齐重映射触及它的切出集。"""
+    """Edit the full text of the whole-source file ``source/<filename>``: remap the cut episodes touching it by aligning the text before and after the change.
+
+    编辑整本源文文件 ``source/<filename>`` 的全文：按改动前后的对齐重映射触及它的切出集。"""
     normalized = _require_text(text)
     operation = {"action": "edit", "file": filename, "text": _text_digest(normalized)}
     plan = _plan_rewrite(filename, normalized, replace=False)
@@ -472,7 +534,13 @@ def replace_whole_source_file(
     revision: str | None = None,
     dry_run: bool = False,
 ) -> SourceFileChangeOutcome:
-    """用新内容替换整本源文文件 ``source/<filename>``：保留它的位置与文件名，类型缺省时不变。
+    """Replace the whole-source file ``source/<filename>`` with new content: its position and file name are kept, and its kind stays unchanged when omitted.
+
+    Remapping is the same as for edit. When the kind changed, cut episodes starting in this file that already have a
+    script plan go into "script plan stale due to kind change".
+    The old file is moved into the project trash together with its original backup.
+
+    用新内容替换整本源文文件 ``source/<filename>``：保留它的位置与文件名，类型缺省时不变。
 
     重映射与编辑相同。改了类型时，起点在这个文件、已有脚本规划的切出集归入「因改类型而 stale 的脚本规划」。
     旧文件连同原件备份移入项目回收站。
@@ -486,7 +554,13 @@ def replace_whole_source_file(
 def delete_whole_source_file(
     pm: ProjectManager, project_name: str, filename: str, *, revision: str | None = None, dry_run: bool = False
 ) -> SourceFileChangeOutcome:
-    """删除整本源文文件 ``source/<filename>``：等同于删掉它的全部文字，再移出整本源文清单，文件与原件备份移入项目回收站。
+    """Delete the whole-source file ``source/<filename>``: equivalent to deleting all its text and then removing it from the whole-source manifest; the file and its original backup are moved into the project trash.
+
+    It can be deleted even if the file was changed outside the service. When the file is already missing on disk or
+    cannot be read, cut episodes whose source range start or end is recorded in it are handled as entirely deleted (its
+    length cannot be read, and parts extending into other files are not kept either).
+
+    删除整本源文文件 ``source/<filename>``：等同于删掉它的全部文字，再移出整本源文清单，文件与原件备份移入项目回收站。
 
     文件在服务之外被改动过时同样可以删除。文件在盘上已缺失或读不出时，原文范围起点或终点记在它里面的切出集
     整段按删除处理（读不到它的长度，跨进别的文件的部分也不保留）。
@@ -528,7 +602,12 @@ def move_whole_source_file(
     revision: str | None = None,
     dry_run: bool = False,
 ) -> SourceFileChangeOutcome:
-    """把整本源文文件 ``source/<filename>`` 在清单里上移或下移一位。
+    """Move the whole-source file ``source/<filename>`` up or down one place in the manifest.
+
+    The cut episodes in it move as a block in episode order and are not marked stale; episodes crossing the moved
+    file's boundary keep only the part still contiguous in the file where they start.
+
+    把整本源文文件 ``source/<filename>`` 在清单里上移或下移一位。
 
     其中的切出集在播出顺序里整块跟着走，不标 stale；跨过被移动文件边界的集只保留起点所在文件里仍相连的部分。
     """
@@ -578,7 +657,16 @@ def accept_external_source_change(
     revision: str | None = None,
     dry_run: bool = False,
 ) -> SourceFileChangeOutcome:
-    """更新在服务之外被改动过的整本源文文件 ``source/<filename>`` 的分集账本。
+    """Update the episode ledger for the whole-source file ``source/<filename>`` that was changed outside the service.
+
+    Align with the snapshot as the old text and the current text as the new text, remap the cut episodes touching it;
+    the confirmation protocol is the same as for edit; after execution the fingerprint and snapshot are replaced with the
+    current text.
+    Rejected when the file has not been changed (``source_not_changed``). When the file has cut episodes but no snapshot,
+    there is nothing to align against (``source_snapshot_missing``); the only options are deleting this file or
+    resetting episode planning.
+
+    更新在服务之外被改动过的整本源文文件 ``source/<filename>`` 的分集账本。
 
     以快照为旧文本、当前文本为新文本对齐，重映射触及它的切出集，确认协议与编辑相同；执行后指纹与快照换成当前文本。
     文件没有改动过时拒绝（``source_not_changed``）。文件里有切出集却没有快照时无从对齐（``source_snapshot_missing``），
@@ -624,7 +712,13 @@ def insert_whole_source_file(
     source_kind: SourceKind | None = None,
     revision: str | None = None,
 ) -> tuple[SourceFileChangeOutcome, str | None]:
-    """在整本源文清单第 ``index`` 位插入一个新文件（缺省接在末尾），返回结果与登记的项目相对路径。
+    """Insert a new file at position ``index`` of the whole-source manifest (appended at the end by default); returns the result and the registered project-relative path.
+
+    ``write(source_dir, undo)`` writes the new file after confirmation and returns its project-relative path, registering
+    the write's undo in ``undo``. When the insertion point falls inside an episode spanning files, the new file belongs
+    to that episode and that episode's source changed; otherwise no episode is touched and it executes directly.
+
+    在整本源文清单第 ``index`` 位插入一个新文件（缺省接在末尾），返回结果与登记的项目相对路径。
 
     ``write(source_dir, undo)`` 在确认之后写出新文件并返回它的项目相对路径，写入的撤销登记进 ``undo``。插入处落在一个
     跨文件的集内部时，新文件归这一集，这一集的原文有变化；否则不动任何集，直接执行。
@@ -651,6 +745,7 @@ def insert_whole_source_file(
     return outcome, written.get("rel")
 
 
+# Confirmation list
 # ---------------------------------------------------------------------------
 # 确认清单
 # ---------------------------------------------------------------------------
@@ -668,7 +763,9 @@ _IMPACT_LINES = (
 def render_source_file_impact_text(
     impact: Mapping[str, Iterable[int]], project: Mapping[str, Any], translate: Callable[..., str]
 ) -> str:
-    """把受影响集清单按类渲染成确认文本：集以标题或播出位置指称。Web 确认框只呈现这份文本。"""
+    """Render the affected episode list by category as confirmation text: episodes are referred to by title or episode position. The Web confirmation dialog only shows this text.
+
+    把受影响集清单按类渲染成确认文本：集以标题或播出位置指称。Web 确认框只呈现这份文本。"""
 
     def name(episode: int) -> str:
         return episode_display_name(project, episode, translate)

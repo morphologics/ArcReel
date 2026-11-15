@@ -1,4 +1,15 @@
-"""联系表：把一个视频版本抽出的若干帧拼成带标注的图片。
+"""Contact sheet: assembles a number of frames extracted from one video version into an annotated image.
+
+Each contact sheet holds at most :data:`MAX_FRAMES_PER_SHEET` frames, with the long edge at most :data:`MAX_SHEET_EDGE`
+px; frames beyond one sheet's capacity spill over to the following sheets. The top is labelled with the video unit ID
+and version number; below each frame are the video unit ID and the frame's start time (seconds, first frame = 0, the
+same time axis as the edit timeline's in/out points). When a frame falls in a black segment, a freeze segment, or is
+the first frame of a shot, BLACK / FREEZE / CUT is added below the time. The sampling plan is in ``lib.video_review.sampling``.
+
+Frames are located exactly by frame index: first demux only to read each frame's time, then decode once with
+``select`` to pull out the selected frames, so the labelled time is the start of that very frame.
+
+联系表：把一个视频版本抽出的若干帧拼成带标注的图片。
 
 每张联系表最多 :data:`MAX_FRAMES_PER_SHEET` 帧，长边不超过 :data:`MAX_SHEET_EDGE` px；
 抽出的帧超过一张的容量时依次分到后续几张。顶部标注视频单元 ID 与版本号，每帧下方标注视频单元 ID
@@ -31,6 +42,7 @@ MAX_SHOT_FRAMES = 24
 MAX_SHEET_EDGE = 2000
 
 _EXTRACT_DEADLINE_SECONDS = 120.0
+# Extracted frames are first scaled to this long edge before layout: even a single frame filling the whole contact sheet stays within the limit.
 # 抽出的帧先缩到这个长边再拼版：单帧铺满整张联系表时也不超过上限。
 _FRAME_EDGE = 1280
 _PNG_END = b"IEND\xaeB`\x82"
@@ -46,7 +58,7 @@ _TAG_COLORS = {TAG_CUT: (90, 200, 255), TAG_BLACK: (255, 150, 60), TAG_FREEZE: (
 
 
 class ContactSheetError(RuntimeError):
-    """抽帧失败或超时。"""
+    """Frame extraction failed or timed out. / 抽帧失败或超时。"""
 
 
 @dataclass(frozen=True, slots=True)
@@ -101,6 +113,7 @@ async def _extract_frames(video_path: Path, indices: list[int]) -> list[Image.Im
     chunks = [chunk + _PNG_END for chunk in result.stdout.split(_PNG_END) if chunk]
     if len(chunks) != len(indices):
         raise ContactSheetError(f"抽帧数量不符：{video_path.name} 期望 {len(indices)} 帧，得到 {len(chunks)} 帧")
+    # Decoding PNGs frame by frame is pure CPU work; run it in a worker thread so it does not block the event loop.
     # 逐帧解码 PNG 是纯 CPU 工作，放进工作线程，不占用事件循环。
     return await asyncio.to_thread(_decode_frames, chunks)
 
@@ -115,7 +128,9 @@ def _decode_frames(chunks: list[bytes]) -> list[Image.Image]:
 
 
 def _layout(count: int, aspect: float, label_height: int) -> tuple[int, int, int]:
-    """为 ``count`` 帧挑列数，使联系表长边不超上限时单帧面积最大；返回 (列数, 帧宽, 帧高)。"""
+    """Pick the column count for ``count`` frames that maximises frame area while the sheet's long edge stays within the limit; returns (columns, frame width, frame height).
+
+    为 ``count`` 帧挑列数，使联系表长边不超上限时单帧面积最大；返回 (列数, 帧宽, 帧高)。"""
     best: tuple[int, int, int] | None = None
     for cols in range(1, count + 1):
         rows = math.ceil(count / cols)
@@ -190,7 +205,18 @@ async def build_contact_sheets(
     frame_times: Sequence[float] | None = None,
     signals: VideoSignals | None = None,
 ) -> tuple[ContactSheet, ...]:
-    """为一个视频版本抽约 ``frames`` 帧，按顺序拼成一张或几张联系表。
+    """Extract about ``frames`` frames from one video version and lay them out in order into one or more contact sheets.
+
+    Sampling follows :func:`lib.video_review.sampling.plan_frame_indices`: with ``signals``, at least one frame per shot
+    and denser sampling around signals; when there are more shots than ``frames``, the total is raised to the shot count
+    (at most :data:`MAX_SHOT_FRAMES`); if the video has fewer frames, take them all. ``frame_times`` is probed on the spot when omitted.
+
+    Raises:
+        FfmpegUnavailableError: the bundled ffmpeg is unavailable.
+        MediaProbeError: the video cannot be parsed or has no video frames.
+        ContactSheetError: frame extraction failed or timed out.
+
+    为一个视频版本抽约 ``frames`` 帧，按顺序拼成一张或几张联系表。
 
     抽帧按 :func:`lib.video_review.sampling.plan_frame_indices` 计划：有 ``signals`` 时每个镜头至少一帧、
     信号两侧加密，镜头数超过 ``frames`` 时总帧数提到镜头数（不超过 :data:`MAX_SHOT_FRAMES`）；

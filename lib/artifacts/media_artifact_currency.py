@@ -66,6 +66,7 @@ from lib.speech.speech_artifact_provenance import (
 )
 from lib.speech.speech_composition import SpeechPreparation, admit_script_unit
 
+#: Gap codes for absent items in the video basis; reuse the same codes the video generation entry refuses with.
 #: 视频依据里缺席项的缺口码，沿用视频生成入口拒绝时的同一码。
 STORYBOARD_UNAVAILABLE_CODE = "generate_storyboard_first"
 END_FRAME_UNAVAILABLE_CODE = "invalid_end_frame_image_path"
@@ -155,6 +156,12 @@ def project_video_basis_components(
     build their basis here, so the two can never disagree on what a video
     depends on. Raises ``ValueError`` naming what could not be projected.
 
+    When ``record_gaps`` is on, generation gaps do not block projection (``docs/adr/0098``): units failing utterance
+    admission project an utterance basis with per-utterance attribution, and pending video prompts, unusable
+    storyboard images or end frames, reference assets lacking images and durations that do not fit a tier are all
+    recorded as absences in the corresponding component. With complete inputs the basis is byte for byte the same as
+    when it is off.
+
     ``record_gaps`` 打开时，生成缺口不阻止投影（``docs/adr/0098``）：发声准入不通过的单位投影出
     带发声归属的发声依据，待生成的视频提示词、不可用的分镜图或尾帧、缺图的参考资产与落不进档位
     的时长都在对应组件里记为缺席。输入完整时依据与关闭时逐字节相同。
@@ -208,6 +215,11 @@ def _admitted_speech_basis(
     shape: VideoExecutionShape,
 ) -> ArtifactBasis:
 
+    # How character voices are bound is part of the delivered content (the dividing line of ADR 0062: this bit changes
+    # what the user gets): after the project switches back to prompt soft constraints, final cuts that had reference audio
+    # attached no longer match the current setting, so the projection no longer replays that audio and the entry is judged
+    # stale. The reverse switch does not trigger it: those cuts never had audio attached, and the picture and declarations
+    # rendered under the reference-audio tier match them.
     # 角色声音绑定方式属于交付内容（ADR 0062 的分界线：这一位改变用户拿到的成品）：项目切回提示词
     # 软约束后，已挂过参考音频的成片不再对得上当前设置，投影里因此不再重放那批音频，条目随之判
     # stale。反向切换不触发——那批成片本就没挂过音频，参考音频档下渲染出的画面与声明与它们一致。
@@ -235,12 +247,15 @@ def _storyboard_visual_basis(
     resource_id: str,
     record_gaps: bool,
 ) -> ArtifactBasis:
-    """分镜视频的画面依据。``record_gaps`` 打开时，待生成的提示词与不可用的分镜图、尾帧记为缺席。"""
+    """Picture basis of a shot video. When ``record_gaps`` is on, a pending prompt and unusable storyboard image or end frame are recorded as absences.
+
+    分镜视频的画面依据。``record_gaps`` 打开时，待生成的提示词与不可用的分镜图、尾帧记为缺席。"""
 
     prompt = item.get("video_prompt")
     gaps: list[InputGap] = []
     if prompt is None and record_gaps:
         gaps.append(InputGap(PROMPT_PENDING_CODE, name=resource_id))
+    # The two frames are resolved separately: when the storyboard image is missing the end frame is still an input of this video; only a frame that truly cannot be read is recorded as absent.
     # 两帧分开解析：分镜图缺失时尾帧照样是这条视频的输入，只有真读不到的那一帧记为缺席。
     storyboard = _video_frame_input(
         resolve_storyboard_video_image,
@@ -280,7 +295,9 @@ def _video_frame_input(
     item: dict[str, Any],
     gaps: list[InputGap] | None,
 ) -> Path | None:
-    """解析一帧画面输入。``gaps`` 给出时，这一帧不可用（缺失或打不开）记为缺席并返回 ``None``；其余失败照常拒绝。"""
+    """Resolve one frame input. When ``gaps`` is given, an unusable frame (missing or cannot be opened) is recorded as absent and ``None`` is returned; other failures are rejected as usual.
+
+    解析一帧画面输入。``gaps`` 给出时，这一帧不可用（缺失或打不开）记为缺席并返回 ``None``；其余失败照常拒绝。"""
 
     try:
         frame = resolve(project_path=project_path, resource_id=resource_id, item=item)
@@ -386,7 +403,9 @@ def _legacy_narrated_duration(
     tiers: tuple[int, ...],
     audio_entries: Mapping[ArtifactKey, ArtifactManifestEntry] | None,
 ) -> ArtifactBasis | None:
-    """schema < 16 的迁移读法：只有已登记且时新的选中配音会抬升旧视频基准。"""
+    """Migration reading for schema < 16: only a registered, current selected voiceover raises the old video baseline.
+
+    schema < 16 的迁移读法：只有已登记且时新的选中配音会抬升旧视频基准。"""
 
     narration = record.get("execution_narration")
     if not isinstance(narration, Mapping) or narration.get("delivery") != "use_tts":
@@ -452,7 +471,9 @@ def _current_duration_tier_basis(
 
 
 def _unplaceable_duration_basis(*, project: Mapping[str, Any], item: Mapping[str, Any]) -> ArtifactBasis:
-    """编排时长落不进冻结档位时的时长依据：记下编排时长，档位记为缺席。"""
+    """Duration basis when the planned duration does not fit a frozen tier: record the planned duration, with the tier recorded as absent.
+
+    编排时长落不进冻结档位时的时长依据：记下编排时长，档位记为缺席。"""
 
     planned = item.get("duration_seconds")
     if type(planned) is not int or planned <= 0:

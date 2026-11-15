@@ -1,1 +1,3 @@
-"""项目级 BGM：上传、按字节登记为产物、实测响度并缓存静态增益。"""
+"""Project-level BGM: upload, register as an artifact by bytes, measure loudness and cache the static gain.
+
+项目级 BGM：上传、按字节登记为产物、实测响度并缓存静态增益。"""

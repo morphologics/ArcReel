@@ -1,4 +1,30 @@
-"""v18→v19 迁移：为每集写入条目编号用过的最大号，并把分镜图与宫格的依据平移到不记资产名的口径。
+"""v18->v19 migration: write each episode's largest used entry number, and move the basis of storyboard images and
+grids to a basis that doesn't record asset names.
+
+Numbering (``docs/adr/0090``: numbers are only issued, never reused): before the upgrade, new entries only avoided
+numbers currently in the script, so after deleting the last entry a new one would take its number back. This step
+computes each episode's largest used main sequence number from five sources (scripts, version history, the
+artifact manifest, deletion records in the project trash, clip references in edit timelines) and writes it into
+``item_id_high_water`` of the corresponding ledger entry in ``project.json``; from then on new entries always take
+numbers after it. Existing numbers don't change and files aren't renamed.
+
+Basis: the model inputs of storyboard images, grid composites and grid-split shots don't include asset names, and
+from v19 their bases don't record asset names either (``project_basis_records_asset_names``), so renaming an asset
+alone no longer makes them stale. This step plans the target state once under the v18 basis and once under v19, and
+rewrites manifest entries that "were current before the rewrite and whose target registration changed" to the
+rewritten registration: artifacts don't flip to stale because of this upgrade; entries already stale before the
+rewrite are kept as-is, without faking currency. The bases frozen in version records store the full input and are
+rewritten one by one with the same ``without_asset_names`` as the builder, so the player and version restore read
+the same basis as the manifest.
+
+Commit order is version records, manifest, ``project.json``; after a crash rerunning the whole step converges: the
+version record rewrite is idempotent; the pre-rewrite plan is still computed from the untouched ``project.json``,
+and already rewritten manifest entries no longer equal the pre-rewrite target and are skipped.
+
+Manifest registrations in project trash deletion records hold only digests and aren't rewritten: storyboard images
+or grids deleted before the upgrade and restored after it read as stale after restore if they referenced assets.
+
+v18→v19 迁移：为每集写入条目编号用过的最大号，并把分镜图与宫格的依据平移到不记资产名的口径。
 
 编号（``docs/adr/0090``：编号只分配、不复用）：升级前新增条目只避开剧本里现存的编号，删掉末尾条目后
 再新增会取回它的编号。本步按五个来源（剧本、版本历史、产物清单、项目回收站里的删除记录、剪辑时间线的
@@ -48,14 +74,19 @@ from lib.script.item_ids import raise_item_id_high_water
 
 TARGET_SCHEMA_VERSION = 19
 
+#: Artifact kinds whose basis changes to not recording asset names (grid-split shots and single storyboard images
+#: share the storyboard image key).
 #: 依据改为不记资产名的产物种类（切格分镜与单张分镜图共用分镜图键）。
 _NAME_FREE_KINDS = frozenset({ArtifactKind.EPISODE_STORYBOARD, ArtifactKind.EPISODE_GRID})
-#: 冻结依据可能记着资产名的版本记录桶。
+#: Version record buckets whose frozen basis may record asset names. / 冻结依据可能记着资产名的版本记录桶。
 _NAME_FREE_VERSION_BUCKETS = ("storyboards", "grids")
 
 
 def migrate_project_dict(project: Mapping[str, Any], used: Mapping[int, int]) -> dict[str, Any]:
-    """纯函数：按 ``used``（``{集 ID: 用过的最大主序号}``）抬高各集账本条目的最大号。幂等，只升不降。"""
+    """Pure function: raise each episode's ledger entry maximum per ``used`` (``{episode ID: largest used main sequence
+    number}``). Idempotent, only goes up.
+
+    纯函数：按 ``used``（``{集 ID: 用过的最大主序号}``）抬高各集账本条目的最大号。幂等，只升不降。"""
 
     migrated = dict(project)
     episodes = migrated.get("episodes")
@@ -72,7 +103,14 @@ def migrate_project_dict(project: Mapping[str, Any], used: Mapping[int, int]) ->
 
 
 def without_asset_names_in_versions(versions: dict[str, Any]) -> bool:
-    """就地把分镜图与宫格版本记录冻结的依据改写为不记资产名的形态，返回是否有改动。
+    """Rewrite the bases frozen in storyboard image and grid version records in place into the form without asset names;
+    return whether anything changed.
+
+    The rewrite is another notation for the same inputs and doesn't judge whether it is current for the present
+    project: a version already stale is still judged by its frozen inputs after the rewrite. Frozen bases that are
+    unreadable, whose digests don't match, or whose kind isn't among those rewritten are kept as-is.
+
+    就地把分镜图与宫格版本记录冻结的依据改写为不记资产名的形态，返回是否有改动。
 
     改写的是同一组输入的另一种记法，不判断它对当前项目是否时新：本就过期的版本改写后仍按它
     冻结的输入判时效。读不出、摘要对不上或种类不在改写之列的冻结依据原样保留。
@@ -123,7 +161,10 @@ def _rebase_entries(
     before: Mapping[ArtifactKey, ArtifactManifestEntry],
     after: Mapping[ArtifactKey, ArtifactManifestEntry],
 ) -> dict[ArtifactKey, ArtifactManifestEntry]:
-    """挑出改写前 current、改写后目标登记变了的分镜图与宫格条目；路径不同就不是同一件产物。"""
+    """Pick storyboard image and grid entries that were current before the rewrite and whose target registration changed
+    after it; a different path means it's not the same artifact.
+
+    挑出改写前 current、改写后目标登记变了的分镜图与宫格条目；路径不同就不是同一件产物。"""
 
     rebased: dict[ArtifactKey, ArtifactManifestEntry] = {}
     for key, current in stored.items():
@@ -138,7 +179,10 @@ def _rebase_entries(
 
 
 def _with_versions_bytes(plan: ArtifactTargetStatePlan, versions_path: Path, raw: bytes) -> ArtifactTargetStatePlan:
-    """版本记录是规划依赖：本步改写它之后，稳定性闸门要以改写后的字节为准。"""
+    """Version records are a planning dependency: after this step rewrites them, the stability gate must go by the
+    rewritten bytes.
+
+    版本记录是规划依赖：本步改写它之后，稳定性闸门要以改写后的字节为准。"""
 
     resolved = versions_path.resolve()
     return replace(
@@ -152,7 +196,10 @@ def _with_versions_bytes(plan: ArtifactTargetStatePlan, versions_path: Path, raw
 def _rebase_name_free_bases(
     project_dir: Path, project: Mapping[str, Any], migrated: Mapping[str, Any], project_bytes: bytes
 ) -> ArtifactBackfillOutcome | None:
-    """改写版本记录冻结的依据与改写前时新的清单登记。调用方持有项目元数据锁。"""
+    """Rewrite the bases frozen in version records and the manifest registrations that were current before the rewrite.
+    The caller holds the project metadata lock.
+
+    改写版本记录冻结的依据与改写前时新的清单登记。调用方持有项目元数据锁。"""
 
     versions_path = project_dir / "versions" / "versions.json"
     try:
@@ -198,6 +245,8 @@ def _rebase_name_free_bases(
     except BaseException as original_error:
         restored = adapter.replace_entries_if_matches_atomically(expected=rebased, replacements=expected)
         if not restored and any(adapter.get_entry(key) != entry for key, entry in expected.items()):
+            # When the manifest rollback is incomplete, version records stay rewritten: both stop at the new basis together, so a
+            # rerun won't split them.
             # 清单回滚不完整时版本记录保持已改写：两者一起停在新口径，重跑时不会分裂。
             raise RuntimeError("artifact manifest dependency drifted and rollback was incomplete") from original_error
         restore_versions()
@@ -206,7 +255,7 @@ def _rebase_name_free_bases(
 
 
 def migrate_v18_to_v19(project_dir: Path) -> ArtifactBackfillOutcome | None:
-    """v18→v19 文件级迁移。崩溃可重试。"""
+    """v18->v19 file-level migration. Crash-retryable. / v18→v19 文件级迁移。崩溃可重试。"""
 
     project_dir = Path(project_dir)
     project_file = project_dir / "project.json"

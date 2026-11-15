@@ -1,4 +1,25 @@
-"""分集规划的有效每集目标体量：显式 ``episode_target_units`` 优先，否则按单集目标时长折算。
+"""Effective per-episode target size for episode planning: an explicit ``episode_target_units`` takes precedence, otherwise converted from the per-episode target duration.
+
+Episode planning decides "how much source goes into each episode", the script plan decides "how many units an
+already-cut episode is split into". This module unifies the project settings used by the two stages into one
+"effective target size":
+
+- When ``episode_target_units`` is set explicitly it takes precedence: it is a size given directly by the user and
+  need not and should not be converted again;
+- Otherwise, when ``episode_target_duration`` is not ``None``, it is converted into reading units at the spoken
+  speech rate, taken from :mod:`lib.speech.speech_rate`, the same source of truth (including project-level
+  overrides) as the script plan's spoken duration estimate, so the two stages do not each use their own rate;
+- When neither is set it returns ``None``, and callers keep the status quo of "judge it yourself at short-video pace".
+
+The converted value always carries ``source`` stating where it came from, so the check material returned by prompts
+and tools can say "this was converted from duration": converted and explicit values have different reliability (the
+former adds a layer of speech-rate estimation), and the main Agent must be able to tell them apart when checking
+size deviations, otherwise it would treat the converted value as a hard target given by the user. Drama source is
+not read aloud word for word (the source contains narrative, the final cut only plays dialogue lines), so the same
+formula is only a rough conversion for it; the wording is therefore always a soft target that allows variation,
+never an exact correspondence.
+
+分集规划的有效每集目标体量：显式 ``episode_target_units`` 优先，否则按单集目标时长折算。
 
 分集规划决定「每集塞多少原文」，脚本规划决定「已切好的一集拆多少个单元」。本模块把两个阶段
 使用的项目设置收敛成一个「有效目标体量」：
@@ -25,6 +46,9 @@ from lib.episode.episode_target_duration import project_episode_target_duration
 from lib.infra.text_metrics import reading_unit_noun
 from lib.speech.speech_rate import project_speech_rate_override, speech_rate_units_per_second
 
+#: Top-level ``project.json`` field name of the per-episode target size (reading units, interpreted per ``source_language``).
+#: The field name is also hard-coded in the ``patch_project`` allowlist description of the ``manage-project`` skill (a machine contract),
+#: kept from drifting by a mirror test.
 #: 每集目标体量在 ``project.json`` 的顶层字段名（阅读单位，按 ``source_language`` 解读）。
 #: 该字段名同时写死在 ``manage-project`` skill 的 ``patch_project`` 白名单说明里（机器契约），
 #: 由镜像测试防漂移。
@@ -32,7 +56,14 @@ EPISODE_TARGET_UNITS_FIELD: str = "episode_target_units"
 
 
 def project_episode_target_units(project: Mapping[str, Any] | None) -> int | None:
-    """从 project.json 解析显式每集目标体量，未填 / 脏值 / 小于 1 一律返回 ``None``。
+    """Parse the explicit per-episode target size from project.json; unset / dirty / less than 1 all return ``None``.
+
+    Only ``int`` is accepted: reading units are a countable quantity. ``bool`` is a subclass of ``int`` and is explicitly
+    excluded, so a JSON ``true`` is not taken as "1 character per episode". The write side (the positive-integer
+    settings allowlist of ``patch_project``) already rejects invalid values by the same yardstick; this guard is a
+    read-time fallback against hand-edited project.json and historical dirty data.
+
+    从 project.json 解析显式每集目标体量，未填 / 脏值 / 小于 1 一律返回 ``None``。
 
     只接受 ``int``：阅读单位是可数量纲。``bool`` 是 ``int`` 子类，显式排除，避免 JSON 里的
     ``true`` 被当成「每集 1 个字」。写入侧（``patch_project`` 的正整数设置白名单）已按同一
@@ -48,7 +79,14 @@ def project_episode_target_units(project: Mapping[str, Any] | None) -> int | Non
 
 @dataclass(frozen=True)
 class EpisodeTargetVolume:
-    """分集规划的有效每集目标体量及其来源。
+    """Effective per-episode target size for episode planning and where it came from.
+
+    When ``source`` is ``"units"`` it comes from the user's explicit ``episode_target_units``, and ``seconds`` and
+    ``units_per_second`` are both ``None``; when it is ``"duration"``, ``units`` is the converted result and the two
+    fields record the target duration and speech rate used for the conversion, so the wording can spell out the
+    conversion.
+
+    分集规划的有效每集目标体量及其来源。
 
     ``source`` 为 ``"units"`` 时来自用户显式设置的 ``episode_target_units``，``seconds`` 与
     ``units_per_second`` 均为 ``None``；为 ``"duration"`` 时 ``units`` 是折算结果，两个字段
@@ -67,7 +105,15 @@ def resolve_episode_target_volume(
     *,
     language: str | None,
 ) -> EpisodeTargetVolume | None:
-    """解析分集规划的有效每集目标体量：显式 > 时长折算 > ``None``。
+    """Resolve the effective per-episode target size for episode planning: explicit > converted from duration > ``None``.
+
+    ``language`` is the project's ``source_language``, which determines the reading unit's measure word and the
+    conversion speech rate (unregistered / missing languages use the default fallback of
+    :mod:`lib.speech.speech_rate`). The conversion is "target seconds × speech rate", rounded; the lower bound of the
+    valid range (10 seconds × 0.001 units / second) would round to 0, so 1 is used as the floor: a target size of 0 has
+    no usable meaning for planning.
+
+    解析分集规划的有效每集目标体量：显式 > 时长折算 > ``None``。
 
     ``language`` 是项目 ``source_language``，决定阅读单位的量词与折算语速（未登记 / 缺失
     语言按 :mod:`lib.speech.speech_rate` 的默认回退）。折算口径为「目标秒数 × 语速」并四舍五入；

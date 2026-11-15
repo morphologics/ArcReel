@@ -1,4 +1,44 @@
-"""重新规划：AI 从某一集起产出候选规划，分集账本不动；创作者看过候选与变更摘要后采纳或放弃（ADR 0032）。
+"""Replan: AI produces a candidate plan from a given episode on, without touching the episode ledger; the creator adopts or discards it after viewing the candidate and the change summary (ADR 0032).
+
+The candidate is stored in ``project.json`` under :data:`REPLAN_CANDIDATE_KEY`, at most one per project at a time.
+It records:
+
+- The replan start: the start of the source of the episode it was started from. When the ledger has leftover
+  episodes from the old split flow, or the source does not match the fingerprints recorded in the ledger (the
+  source was replaced), replanning can only start from the first cut episode, and the start is the beginning of the
+  whole source.
+- The ledger's cut structure at generation time (:func:`ledger_layout_revision`) and the fingerprints of each file of
+  the whole source. On adoption both are checked under the project lock; if either differs it is rejected with a
+  prompt to regenerate.
+- Candidate episodes: title, hook, source range (drama also gets an episode outline), ordered by source position,
+  with no episode ID allocated yet. Generation is appended window by window by
+  :meth:`lib.episode.episode_planner.EpisodePlanner.plan_candidate`.
+
+Generation may stop midway (the creator stops it, AI finds no cut point, the model errors); what has been generated
+is still a candidate: it can continue generating (:func:`resume_replan_candidate`, reusing the instructions from when
+it was started), be adopted or be discarded. When no cut point is found or the model errors, the candidate records
+the interruption reason (:func:`record_replan_interruption`).
+
+Adoption replaces all cut episodes from the start on, including those the candidate does not cover:
+
+- Candidate episodes always get new episode IDs. Replaced old cut episodes (including those whose source extends
+  beyond the candidate's coverage) that have artifacts become episodes without source, are marked stale, keep their
+  artifacts, and move to the end of the episode order in their original relative order; when "delete them too" is
+  checked, these episodes are hard-deleted after adoption the same way as deleting an episode. Those without
+  artifacts are removed outright.
+- Episodes from other sources inside the range are placed by anchor: the anchor is the source end of the nearest
+  cut episode before it in episode order. When the anchor is not after the start, they go before all candidate
+  episodes; otherwise after the first candidate episode whose source end is not earlier than the anchor (after the
+  last candidate episode when the candidate does not reach the anchor).
+  When the anchor's episode has no source range or the source was replaced, the anchor is invalid and these episodes
+  go after all candidate episodes in their original relative order.
+
+Before adoption a confirmation list is returned first (:class:`ReplanConfirmationRequired`), with the confirmation
+text written by :func:`render_replan_adoption_text`; after the creator confirms, the call is repeated with the
+list's ``revision``; if the list re-checked under the lock has changed, it goes back to confirmation and nothing is
+written.
+
+重新规划：AI 从某一集起产出候选规划，分集账本不动；创作者看过候选与变更摘要后采纳或放弃（ADR 0032）。
 
 候选存放在 ``project.json`` 的 :data:`REPLAN_CANDIDATE_KEY` 下，同一项目同时最多一份。它记下：
 
@@ -84,34 +124,38 @@ from lib.script import script_review
 
 logger = logging.getLogger(__name__)
 
-#: ``project.json`` 里存放候选的键。
+#: Key in ``project.json`` holding the candidate. / ``project.json`` 里存放候选的键。
 REPLAN_CANDIDATE_KEY = "episode_replan"
 
+#: Reason generation stopped midway: AI found no cut point in the window, or a model or other error. No reason is recorded when the creator stops it.
 #: 生成中途停止的原因：AI 在窗口里找不到切分点、模型或其他错误。创作者主动停止不记原因。
 REPLAN_INTERRUPTIONS = ("no_cut_point", "failed")
 
 
 class ReplanError(ValueError):
-    """重新规划被拒；``code`` 是稳定的原因码，入口据此映射状态码与文案。账本与候选都不被改动。"""
+    """Replan rejected; ``code`` is a stable reason code that entry points map to status codes and copy. Neither the ledger nor the candidate is changed.
+
+    重新规划被拒；``code`` 是稳定的原因码，入口据此映射状态码与文案。账本与候选都不被改动。"""
 
     def __init__(self, code: str, message: str):
         super().__init__(message)
         self.code = code
 
 
+# Reading the candidate
 # ---------------------------------------------------------------------------
 # 候选的读取
 # ---------------------------------------------------------------------------
 
 
 def replan_candidate(project: Mapping[str, Any]) -> dict[str, Any] | None:
-    """项目里悬而未决的候选；没有时返回 None。"""
+    """The pending candidate in the project; returns None when there is none. / 项目里悬而未决的候选；没有时返回 None。"""
     raw = project.get(REPLAN_CANDIDATE_KEY)
     return raw if isinstance(raw, dict) and isinstance(raw.get("id"), str) else None
 
 
 def candidate_episodes(candidate: Mapping[str, Any]) -> list[dict[str, Any]]:
-    """候选集，按源文位置。"""
+    """Candidate episodes, by source position. / 候选集，按源文位置。"""
     raw = candidate.get("episodes")
     return [episode for episode in raw if isinstance(episode, dict)] if isinstance(raw, list) else []
 
@@ -127,7 +171,9 @@ def candidate_start(candidate: Mapping[str, Any]) -> tuple[str, int]:
 
 
 def candidate_cursor(candidate: Mapping[str, Any]) -> tuple[str, int]:
-    """候选接着生成的起点：最后一个候选集的原文结尾；还没有候选集时是重新规划的起点。"""
+    """Where the candidate continues generating: the source end of the last candidate episode; the replan start when there are no candidate episodes yet.
+
+    候选接着生成的起点：最后一个候选集的原文结尾；还没有候选集时是重新规划的起点。"""
     episodes = candidate_episodes(candidate)
     if episodes:
         span = parse_source_range(episodes[-1])
@@ -138,7 +184,12 @@ def candidate_cursor(candidate: Mapping[str, Any]) -> tuple[str, int]:
 
 
 def ledger_layout_revision(project: Mapping[str, Any]) -> str:
-    """账本切分结构的指纹：各集的集 ID、播出顺序、原文来源与原文范围。
+    """Fingerprint of the ledger's cut structure: each episode's episode ID, episode order, source origin and source range.
+
+    Titles, hooks and episode planning status are not included: changes to them do not affect how the candidate maps
+    to existing episodes.
+
+    账本切分结构的指纹：各集的集 ID、播出顺序、原文来源与原文范围。
 
     标题、钩子与集规划状态不计入：它们变了不影响候选与现有分集的对应关系。
     """
@@ -153,7 +204,9 @@ def ledger_layout_revision(project: Mapping[str, Any]) -> str:
 
 
 def candidate_staleness(project: Mapping[str, Any], candidate: Mapping[str, Any], docs: list[SourceDoc]) -> str | None:
-    """候选是否已过时：账本的切分结构变了为 ``ledger_changed``，整本源文变了为 ``source_changed``，否则为 None。"""
+    """Whether the candidate is outdated: ``ledger_changed`` when the ledger's cut structure changed, ``source_changed`` when the whole source changed, otherwise None.
+
+    候选是否已过时：账本的切分结构变了为 ``ledger_changed``，整本源文变了为 ``source_changed``，否则为 None。"""
     if candidate.get("ledger_revision") != ledger_layout_revision(project):
         return "ledger_changed"
     if candidate.get("source_fingerprints") != compute_source_fingerprints(docs):
@@ -161,6 +214,7 @@ def candidate_staleness(project: Mapping[str, Any], candidate: Mapping[str, Any]
     return None
 
 
+# Starting and discarding
 # ---------------------------------------------------------------------------
 # 发起与放弃
 # ---------------------------------------------------------------------------
@@ -168,19 +222,21 @@ def candidate_staleness(project: Mapping[str, Any], candidate: Mapping[str, Any]
 
 @dataclass(frozen=True)
 class ReplanScope:
-    """从某一集起重新规划的范围。"""
+    """The range of a replan from a given episode. / 从某一集起重新规划的范围。"""
 
     episode: int
-    #: 重新规划的起点：文件与文件内偏移。
+    #: Replan start: file and in-file offset. / 重新规划的起点：文件与文件内偏移。
     source_file: str
     offset: int
+    #: Replan from the start of the whole source (there are leftover episodes from the old split flow, or the source was replaced).
     #: 从整本源文开头重新规划（有旧拆分流程的存量集，或源文已替换）。
     from_beginning: bool
+    #: The source does not match the fingerprints recorded in the ledger: existing episodes' source ranges no longer match the current source.
     #: 源文与账本记录的指纹不一致：现有分集的原文范围已对不上当前源文。
     source_replaced: bool
-    #: 会被替换的切出集，按播出顺序。
+    #: Cut episodes that will be replaced, in episode order. / 会被替换的切出集，按播出顺序。
     replaced: list[int] = field(default_factory=list)
-    #: 其中已开始制作（有产物）的集。
+    #: Those among them already in production (with artifacts). / 其中已开始制作（有产物）的集。
     started: list[int] = field(default_factory=list)
 
 
@@ -199,7 +255,9 @@ def _replaced_ids(
     start: tuple[int, int],
     from_beginning: bool,
 ) -> list[int]:
-    """起点及以后的切出集：落位在起点之后的，以及播出顺序在发起集之后、落不了位的。"""
+    """Cut episodes from the start on: those placed after the start, plus those after the starting episode in episode order that cannot be placed.
+
+    起点及以后的切出集：落位在起点之后的，以及播出顺序在发起集之后、落不了位的。"""
     replaced: list[int] = []
     seen_from = False
     for entry in entries:
@@ -214,7 +272,9 @@ def _replaced_ids(
 
 
 def replan_scope(project_dir: Path, project: Mapping[str, Any], episode: int) -> ReplanScope:
-    """从 ``episode`` 起重新规划的范围；不能从这一集起重新规划时抛 :class:`ReplanError`。"""
+    """The range of a replan from ``episode``; raises :class:`ReplanError` when replanning cannot start from this episode.
+
+    从 ``episode`` 起重新规划的范围；不能从这一集起重新规划时抛 :class:`ReplanError`。"""
     if replan_candidate(project) is not None:
         raise ReplanError("candidate_pending", "已有一份新的分集方案等待采纳或放弃")
     entries = _entries(project)
@@ -254,7 +314,9 @@ def replan_scope(project_dir: Path, project: Mapping[str, Any], episode: int) ->
 
 
 def create_replan_candidate(project_path: str | Path, *, episode: int, instructions: str | None) -> str:
-    """登记一份空候选，返回候选 ID；候选集由逐窗生成追加。已有候选或不能从这一集起重新规划时拒绝。"""
+    """Register an empty candidate and return the candidate ID; candidate episodes are appended by window-by-window generation. Rejected when a candidate already exists or replanning cannot start from this episode.
+
+    登记一份空候选，返回候选 ID；候选集由逐窗生成追加。已有候选或不能从这一集起重新规划时拒绝。"""
     project_dir = Path(project_path)
     pm = ProjectManager.for_project_dir(project_dir)
     candidate_id = uuid.uuid4().hex
@@ -280,7 +342,7 @@ def create_replan_candidate(project_path: str | Path, *, episode: int, instructi
 
 
 def discard_replan_candidate(project_path: str | Path, candidate_id: str) -> None:
-    """放弃候选：分集账本什么都不变。"""
+    """Discard the candidate: nothing in the episode ledger changes. / 放弃候选：分集账本什么都不变。"""
     project_dir = Path(project_path)
     pm = ProjectManager.for_project_dir(project_dir)
 
@@ -293,7 +355,9 @@ def discard_replan_candidate(project_path: str | Path, candidate_id: str) -> Non
 
 
 def record_replan_interruption(project_path: str | Path, candidate_id: str, reason: str) -> None:
-    """记下候选生成中途停止的原因；候选已不在（已采纳或放弃）时什么都不做。"""
+    """Record why candidate generation stopped midway; does nothing when the candidate is gone (adopted or discarded).
+
+    记下候选生成中途停止的原因；候选已不在（已采纳或放弃）时什么都不做。"""
     if reason not in REPLAN_INTERRUPTIONS:
         raise ValueError(f"未知的中断原因：{reason}")
     project_dir = Path(project_path)
@@ -314,7 +378,12 @@ def record_replan_interruption(project_path: str | Path, candidate_id: str, reas
 
 
 def resume_replan_candidate(project_path: str | Path, candidate_id: str) -> str | None:
-    """接着生成中途停止的候选：清掉中断原因，返回发起时的附加指令。
+    """Continue generating a candidate that stopped midway: clear the interruption reason and return the instructions from when it was started.
+
+    Rejected when the candidate already covers the end of the whole source (``candidate_complete``) or is outdated
+    (``ledger_changed`` / ``source_changed``).
+
+    接着生成中途停止的候选：清掉中断原因，返回发起时的附加指令。
 
     候选已覆盖到整本源文结尾（``candidate_complete``）或已过时（``ledger_changed`` / ``source_changed``）时拒绝。
     """
@@ -344,6 +413,7 @@ def _require_candidate(project: Mapping[str, Any], candidate_id: str) -> dict[st
     return candidate
 
 
+# Deriving the adoption
 # ---------------------------------------------------------------------------
 # 采纳的推演
 # ---------------------------------------------------------------------------
@@ -351,24 +421,28 @@ def _require_candidate(project: Mapping[str, Any], candidate_id: str) -> dict[st
 
 @dataclass(frozen=True)
 class _Adoption:
-    """一次采纳对账本的改动，由候选与当前账本推出。"""
+    """The ledger changes of one adoption, derived from the candidate and the current ledger. / 一次采纳对账本的改动，由候选与当前账本推出。"""
 
-    #: 被替换的切出集，按播出顺序。
+    #: Replaced cut episodes, in episode order. / 被替换的切出集，按播出顺序。
     replaced: list[int]
     retired: list[int]
     removed: list[int]
-    #: 已开始制作、且原文范围在候选里找不到一模一样的一集。
+    #: Already in production, and no episode in the candidate has exactly the same source range. / 已开始制作、且原文范围在候选里找不到一模一样的一集。
     needs_review: list[int]
+    #: Replaced episodes whose source extends beyond the candidate's coverage (when the candidate was not generated to the end of the whole source).
     #: 原文超出候选覆盖范围的被替换集（候选没有生成到整本源文结尾时）。
     uncovered: list[int]
-    #: 播出位置变了的其他集：（集 ID，原位置，新位置）。
+    #: Other episodes whose episode position changed: (episode ID, old position, new position). / 播出位置变了的其他集：（集 ID，原位置，新位置）。
     moved: list[tuple[int, int, int]]
+    #: Episode order after adoption: ``("old", episode ID)`` or ``("new", candidate episode index)``; retired episodes at the end.
     #: 采纳后的播出顺序：``("old", 集 ID)`` 或 ``("new", 候选集下标)``；退下的集在末尾。
     order: list[tuple[str, int]]
 
 
 def _source_position(order: Mapping[str, int], source_range: Mapping[str, Any]) -> tuple[int, int, int] | None:
-    """候选集的原文范围（分集规划逐个文件取窗口，候选集不跨文件）落到（文件下标，起点，结尾）。"""
+    """Map a candidate episode's source range (episode planning takes windows file by file, so candidate episodes do not span files) to (file index, start, end).
+
+    候选集的原文范围（分集规划逐个文件取窗口，候选集不跨文件）落到（文件下标，起点，结尾）。"""
     rel, start, end = source_range.get("source_file"), source_range.get("start"), source_range.get("end")
     if not isinstance(rel, str) or rel not in order or not isinstance(start, int) or not isinstance(end, int):
         return None
@@ -378,7 +452,7 @@ def _source_position(order: Mapping[str, int], source_range: Mapping[str, Any]) 
 
 
 def _candidate_positions(candidate: Mapping[str, Any], docs: list[SourceDoc]) -> list[tuple[int, int, int]]:
-    """候选集的源文位置：（文件下标，起点，结尾）。"""
+    """Source positions of candidate episodes: (file index, start, end). / 候选集的源文位置：（文件下标，起点，结尾）。"""
     order = {doc.rel_path: index for index, doc in enumerate(docs)}
     positions: list[tuple[int, int, int]] = []
     for episode in candidate_episodes(candidate):
@@ -437,6 +511,7 @@ def _plan_adoption(project_dir: Path, project: Mapping[str, Any], candidate: Map
             num for num in replaced if (placement := placements.get(num)) is None or placement.end_position > cursor
         ]
 
+    # Episodes from other sources are placed by anchor; entries before the first replaced episode stay in place
     # 其他来源的集按锚点落位；第一个被替换的集之前的条目原位不动
     first = min((index for index, num in enumerate(ids) if num in replaced_set), default=len(entries))
     before: list[int] = []
@@ -492,24 +567,29 @@ def _plan_adoption(project_dir: Path, project: Mapping[str, Any], candidate: Map
 
 @dataclass(frozen=True)
 class ReplanAdoptionImpact:
-    """采纳一份候选的变更清单。``revision`` 是这份清单的指纹，确认时回传。"""
+    """The change list for adopting a candidate. ``revision`` is the fingerprint of this list, sent back on confirmation.
+
+    采纳一份候选的变更清单。``revision`` 是这份清单的指纹，确认时回传。"""
 
     candidate: str
-    #: 发起重新规划的那一集。
+    #: The episode the replan was started from. / 发起重新规划的那一集。
     episode: int
-    #: 被替换的切出集数与候选集数。
+    #: Number of replaced cut episodes and number of candidate episodes. / 被替换的切出集数与候选集数。
     old_count: int
     new_count: int
+    #: Already in production: becomes an episode without source, marked stale, moved to the end of the episode order.
     #: 已开始制作，转为无原文的集并标 stale，移到播出顺序末尾。
     retired: list[int]
-    #: 没有产物，直接移除。
+    #: No artifacts: removed outright. / 没有产物，直接移除。
     removed: list[int]
-    #: 已开始制作且原文范围有变化。
+    #: Already in production and the source range changed. / 已开始制作且原文范围有变化。
     needs_review: list[int]
+    #: Episodes whose source extends beyond the new plan's coverage, likewise handled as replaced (when the new plan was not generated to the end of the whole source).
     #: 原文超出新方案覆盖范围、同样按被替换处理的集（新方案没有生成到整本源文结尾时）。
     uncovered: list[int]
-    #: 播出位置变了的其他集：（集 ID，原位置，新位置）。
+    #: Other episodes whose episode position changed: (episode ID, old position, new position). / 播出位置变了的其他集：（集 ID，原位置，新位置）。
     moved: list[tuple[int, int, int]]
+    #: What the retired episodes lose when "delete them too" is checked: episode ID → the loss list of deleting an episode.
     #: 勾选「一并删除」时退下的集会丢失的内容：集 ID → 删除一集的丢失清单。
     losses: dict[int, dict[str, Any]]
 
@@ -548,7 +628,7 @@ def _adoption_impact(
 
 @dataclass(frozen=True)
 class ReplanConfirmationRequired:
-    """等待确认；返回本对象时没有发生任何写入。"""
+    """Awaiting confirmation; when this object is returned, nothing has been written. / 等待确认；返回本对象时没有发生任何写入。"""
 
     impact: ReplanAdoptionImpact
 
@@ -556,9 +636,9 @@ class ReplanConfirmationRequired:
 @dataclass(frozen=True)
 class ReplanAdoptionResult:
     impact: ReplanAdoptionImpact
-    #: 候选集分配到的新集 ID，按源文位置。
+    #: New episode IDs allocated to candidate episodes, by source position. / 候选集分配到的新集 ID，按源文位置。
     episodes: list[int]
-    #: 勾选「一并删除」后删掉的集。
+    #: Episodes deleted when "delete them too" was checked. / 勾选「一并删除」后删掉的集。
     deleted: list[int] = field(default_factory=list)
 
 
@@ -568,6 +648,7 @@ class _StaleConfirmation(Exception):
         self.impact = impact
 
 
+# Adoption
 # ---------------------------------------------------------------------------
 # 采纳
 # ---------------------------------------------------------------------------
@@ -576,6 +657,7 @@ class _StaleConfirmation(Exception):
 def _write_new_episode_file(project_dir: Path, episode: int, text: str) -> None:
     path = episode_source_path(project_dir, episode)
     if path.exists() or path.is_symlink():
+        # A same-named file for the new episode ID is not in the ledger and is not the source of any episode; rename it as a backup first
         # 新集 ID 的同名文件不在账本里，不是任何一集的原文，先改名留底
         path.rename(archive_episode_file_path(path))
     path.parent.mkdir(exist_ok=True)
@@ -590,7 +672,13 @@ def _apply_adoption(
     *,
     delete_retired: bool = False,
 ) -> list[int]:
-    """按推演改写 ``project`` 并落盘集文件与快照，返回候选集的新集 ID。
+    """Rewrite ``project`` according to the derivation and write episode files and snapshots to disk; returns the new episode IDs of the candidate episodes.
+
+    With ``delete_retired``, retired episodes keep their episode files and become episodes with their own source: when
+    deleted afterwards, the episode source goes into the deletion record, and after restore it is still this episode's
+    source.
+
+    按推演改写 ``project`` 并落盘集文件与快照，返回候选集的新集 ID。
 
     ``delete_retired`` 时退下的集留着集文件、转为自带原文的集：随后删除时集原文进删除记录，恢复后仍是这一集的源文。
     """
@@ -598,6 +686,7 @@ def _apply_adoption(
     texts = {doc.rel_path: doc.text for doc in docs}
     entries = _entries(project)
     by_id = {parse_positive_episode_num(entry.get("episode")): entry for entry in entries}
+    # Leftover episodes from the old split flow have no source range; the episode file is their only source record and cannot be rebuilt from the ledger
     # 旧拆分流程的存量集没有原文范围，集文件是它唯一的原文记录，无法从账本重造
     legacy = {num for num in adoption.replaced if parse_source_range(by_id[num]) is None}
     drafts = candidate_episodes(candidate)
@@ -615,6 +704,7 @@ def _apply_adoption(
         }
         if isinstance(draft.get("outline"), Mapping):
             entry["outline"] = dict(draft["outline"])
+        # When a new episode ID already has artifacts on disk (manual leftovers beyond the historical highest number), mark it stale; artifacts are not deleted
         # 新集 ID 在磁盘上已有产物（历史最高号之外的手工残留）时标 stale，产物不删除
         if has_downstream_products(project_dir, num, entry):
             script_review.mark_ledger_stale(project_dir, project, entry, num)
@@ -638,6 +728,7 @@ def _apply_adoption(
         if num in legacy and path.is_file() and not path.is_symlink():
             path.rename(archive_episode_file_path(path))
         else:
+            # derived episode source replaced on replan adoption; can be regenerated from the episode ledger
             # hard-delete: derived -- 重新规划采纳时替换掉的派生集原文，可由分集账本重新生成
             path.unlink(missing_ok=True)
     for num, entry in zip(new_ids, new_entries, strict=True):
@@ -652,7 +743,12 @@ def _apply_adoption(
 def adopt_replan_candidate(
     project_path: str | Path, candidate_id: str, *, revision: str | None = None, delete_retired: bool = False
 ) -> ReplanAdoptionResult | ReplanConfirmationRequired:
-    """采纳候选。``revision`` 与当前变更清单的指纹不符（含未传）时只返回清单，不写入。
+    """Adopt the candidate. When ``revision`` does not match the fingerprint of the current change list (including when not passed), only return the list and write nothing.
+
+    When ``delete_retired`` is True, retired episodes are moved one by one into the project trash after the adoption
+    commit, the same way as deleting an episode; episodes whose deletion fails remain as episodes with their own source.
+
+    采纳候选。``revision`` 与当前变更清单的指纹不符（含未传）时只返回清单，不写入。
 
     ``delete_retired`` 为 True 时，退下的集在采纳提交后逐个按删除一集的口径移进项目回收站；删除失败的集保留为
     自带原文的集。
@@ -714,13 +810,19 @@ def _delete_retired(pm: ProjectManager, project_name: str, episodes: Iterable[in
     return deleted
 
 
+# Summary and confirmation text
 # ---------------------------------------------------------------------------
 # 摘要与确认文本
 # ---------------------------------------------------------------------------
 
 
 def replan_candidate_summary(project_dir: Path, project: Mapping[str, Any]) -> dict[str, Any] | None:
-    """「新的分集方案」的摘要与逐集变化；没有候选时返回 None。
+    """Summary and per-episode changes of the "new episode plan"; returns None when there is no candidate.
+
+    When ``stale`` is not None the candidate is outdated: only the candidate's own content is given, and adoption is not
+    derived.
+
+    「新的分集方案」的摘要与逐集变化；没有候选时返回 None。
 
     ``stale`` 不为 None 时候选已过时，只给出候选本身的内容，不推演采纳。
     """
@@ -809,7 +911,12 @@ def replan_candidate_summary(project_dir: Path, project: Mapping[str, Any]) -> d
 def render_replan_adoption_text(
     impact: Mapping[str, Any] | ReplanAdoptionImpact, project: Mapping[str, Any], translate: Callable[..., str]
 ) -> dict[str, str]:
-    """把变更清单渲染成确认文本：``text`` 是采纳的后果，``delete_text`` 是勾选「一并删除」时会丢失的内容。
+    """Render the change list as confirmation text: ``text`` is the consequence of adoption, ``delete_text`` is what is lost when "delete them too" is checked.
+
+    Episodes are referred to by title or by their episode position before adoption. The Web confirmation dialog only
+    shows these two texts.
+
+    把变更清单渲染成确认文本：``text`` 是采纳的后果，``delete_text`` 是勾选「一并删除」时会丢失的内容。
 
     集以标题或采纳前的播出位置指称。Web 确认框只呈现这两份文本。
     """

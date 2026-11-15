@@ -1,4 +1,17 @@
-"""官方同步：从目录数据仓库取回更新的数据集，整批应用到目录查询（docs/adr/0103）。
+"""Official sync: fetch newer datasets from the catalog data repository and apply them as a whole to catalog queries (docs/adr/0103).
+
+Checked once at app startup and then once a day. Fetches only via raw addresses, reusing the market's GitHub raw proxy
+prefix and fetch utility (https only, limited size and time); requests carry no instance id. The data file is fetched
+only when the manifest file's dataset version is newer than the local official data; the hash is verified, the whole
+file is read, stored in the official sync table and loaded into catalog queries; if the whole file can't be parsed or
+the fetch fails, this round is discarded, the local catalog is unchanged, and it waits for the next round.
+
+Entries that stopped following official are skipped by catalog composition (user copies still replace official entries);
+entries deleted upstream keep their last local version; built-in providers' provider model lists take the new data as a
+whole. When official data lists a model with the same name as a user-added one, catalog queries switch to the official
+version, keeping only the enabled state.
+
+官方同步：从目录数据仓库取回更新的数据集，整批应用到目录查询（docs/adr/0103）。
 
 应用启动时检查一次，之后每天一次。只经 raw 地址抓取，复用市场的 GitHub raw 代理前缀与抓取工具（只接受 https、
 限制体积与耗时），请求不带实例标识。清单文件的数据集版本比本地官方数据新时才取数据文件，核对哈希、整份读入后
@@ -49,6 +62,7 @@ CATALOG_URL = f"{_REPO_RAW}/{CATALOG_FILENAME}"
 
 SYNC_INTERVAL_SECONDS = 24 * 60 * 60
 _MANIFEST_MAX_BYTES = 64 * 1024
+#: Far above the data file's actual size, leaving plenty of room for data growth; the release workflow uses the same limit when fetching the factory snapshot.
 #: 远高于数据文件的实际体积，给数据增长留足余量；发版工作流抓取出厂快照用同一上限。
 _CATALOG_MAX_BYTES = 8 * 1024 * 1024
 _FETCH_DEADLINE_SECONDS = 60.0
@@ -58,19 +72,20 @@ _ROW_ID = 1
 
 @dataclass(frozen=True)
 class SyncStatus:
-    """供系统诊断信息读取的同步状态。"""
+    """Sync status read by system diagnostics. / 供系统诊断信息读取的同步状态。"""
 
     last_success_at: datetime | None = None
     last_error: str | None = None
 
 
+# In-process sync status, consistent with the official sync table; diagnostics read it synchronously in a thread without querying the DB. A single-element list serves as a mailbox.
 # 进程内的同步状态，与官方同步表一致；诊断信息在线程里同步读取，不查库。单元素列表当信箱。
 _status: list[SyncStatus] = [SyncStatus()]
 
 
 def _status_of(row: CatalogOfficialSync) -> SyncStatus:
     at = row.last_success_at
-    # SQLite 读回的时间不带时区，存的都是 UTC
+    # Times read back from SQLite carry no time zone; everything stored is UTC / SQLite 读回的时间不带时区，存的都是 UTC
     return SyncStatus(at.replace(tzinfo=UTC) if at is not None and at.tzinfo is None else at, row.last_error)
 
 
@@ -88,7 +103,9 @@ def _parse_stored(content: bytes) -> CatalogData:
 
 
 async def load_synced_data(session: AsyncSession) -> None:
-    """应用启动时装入已存的同步数据与同步状态。存的数据读不进来时按没有同步数据处理，等下一轮同步。"""
+    """Load stored sync data and sync status at app startup. If the stored data can't be read, treat it as having no sync data and wait for the next sync.
+
+    应用启动时装入已存的同步数据与同步状态。存的数据读不进来时按没有同步数据处理，等下一轮同步。"""
     row = await session.get(CatalogOfficialSync, _ROW_ID)
     if row is None:
         return
@@ -104,7 +121,9 @@ async def load_synced_data(session: AsyncSession) -> None:
 
 
 def _with_retained(manifest: bytes, content: bytes, current: CatalogData) -> tuple[CatalogData, bytes]:
-    """读入新数据集（核对哈希与版本），补上本地官方数据里有、新数据集没有的条目，返回装入用的数据与存库的内容。"""
+    """Read the new dataset (verifying hash and version), add entries present in the local official data but missing in the new dataset, and return the data to load and the content to store.
+
+    读入新数据集（核对哈希与版本），补上本地官方数据里有、新数据集没有的条目，返回装入用的数据与存库的内容。"""
     data = load_catalog(manifest, content)
     merged = retain_entries(data, current)
     if merged is data:
@@ -145,7 +164,9 @@ async def sync_once(
     session_factory: async_sessionmaker[AsyncSession],
     http_client: Callable[[], httpx.AsyncClient] = get_http_client,
 ) -> None:
-    """检查一次：数据集版本比本地新时取回并整批应用。失败只记下原因，本地目录不变。"""
+    """Check once: when the dataset version is newer than local, fetch and apply as a whole. On failure only the reason is recorded; the local catalog is unchanged.
+
+    检查一次：数据集版本比本地新时取回并整批应用。失败只记下原因，本地目录不变。"""
     async with session_factory() as session:
         proxy_prefix = await SystemSettingRepository(session).get(PROXY_PREFIX_SETTING)
     try:
@@ -158,6 +179,7 @@ async def sync_once(
         content = await _fetch(http_client(), CATALOG_URL, _CATALOG_MAX_BYTES, proxy_prefix)
         data, stored = await asyncio.to_thread(_with_retained, manifest, content, current)
     except (MarketTransportError, MarketPayloadTooLargeError, ValueError) as exc:
+        # CatalogFormatError is a subclass of ValueError: when the whole data can't be parsed, this round is rejected
         # CatalogFormatError 是 ValueError 的子类：整份数据无法解析时拒收这一次
         logger.info("官方同步检查失败，等下一轮：%s", exc)
         await _record(session_factory, error=str(exc)[:_ERROR_MAX_CHARS] or type(exc).__name__)
@@ -175,8 +197,10 @@ async def _sync_loop(
             await sync_once(session_factory, http_client)
         except Exception as exc:
             logger.warning("官方同步异常，等下一轮", exc_info=True)
+            # Only update in-process status: the exception may come from the database itself. Diagnostics can still see this failure
             # 只更新进程内状态：异常可能就出在数据库上。诊断信息照样能看到这次失败
             _status[0] = replace(_status[0], last_error=(str(exc) or type(exc).__name__)[:_ERROR_MAX_CHARS])
+        # While the fetch is establishing a connection, a shutdown cancel may be swallowed by anyio and this round runs to completion; apply it here so we don't sleep a whole day carrying the cancel request
         # 抓取建立连接时，关停的取消可能被 anyio 吞掉、这一轮照常跑完；在这里生效，免得带着取消请求睡满一整天
         raise_if_cancel_absorbed()
         await asyncio.sleep(SYNC_INTERVAL_SECONDS)
@@ -186,14 +210,16 @@ def start_official_sync(
     session_factory: async_sessionmaker[AsyncSession],
     http_client: Callable[[], httpx.AsyncClient] = get_http_client,
 ) -> asyncio.Task[None]:
-    """启动后台同步循环：立即检查一次，之后每天一次。"""
+    """Start the background sync loop: check once immediately, then once a day. / 启动后台同步循环：立即检查一次，之后每天一次。"""
     return asyncio.get_running_loop().create_task(
         _sync_loop(session_factory, http_client), name="catalog-official-sync"
     )
 
 
 async def stop_official_sync(task: asyncio.Task[None]) -> None:
-    """取消同步循环，等它连同被打断的数据库会话一起收尾完再返回。"""
+    """Cancel the sync loop and return only after it, together with the interrupted database session, has finished cleaning up.
+
+    取消同步循环，等它连同被打断的数据库会话一起收尾完再返回。"""
     task.cancel()
     with contextlib.suppress(asyncio.CancelledError):
         await task

@@ -38,6 +38,8 @@ async def generation_admission_lock(
     already exited.
     """
 
+    # Creating the lock directory and opening the lock file run in a worker thread. The handle is registered as soon as it
+    # is opened: if a cancel lands during the open, the return value is lost, and this is what closes it.
     # The script locator is deliberately absent from the key. Rebinding an episode must not let
     # a new task select the same resource while compensation for the former binding is in flight.
     # 建锁目录、打开锁文件放进工作线程。句柄一打开就登记：取消落在打开那一程时返回值会丢，靠它关闭。

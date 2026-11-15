@@ -36,6 +36,7 @@ def _normalize_key(key: SessionKey) -> tuple[str, str, str]:
     return key["project_key"], key["session_id"], key.get("subpath", "") or ""
 
 
+# Entries come from the SDK or local JSONL import; field types are not validated, treat them as object when reading.
 # 条目来自 SDK 或本地 JSONL 导入，字段类型不受校验，读取时按 object 看待。
 def _entry_type(entry: Mapping[str, object]) -> str:
     t = entry.get("type")

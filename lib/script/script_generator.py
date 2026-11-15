@@ -1,4 +1,9 @@
 """
+script_generator.py - script generator
+
+Reads the structured intermediate files of the script plan and calls the text generation Backend to produce the
+final JSON script
+
 script_generator.py - 剧本生成器
 
 读取脚本规划结构化中间文件，调用文本生成 Backend 生成最终 JSON 剧本
@@ -168,19 +173,24 @@ class _UnsetExpectedFingerprint:
 
 _UNSET_EXPECTED_FINGERPRINT = _UnsetExpectedFingerprint()
 
+# Normalization of drama script_plan durations: the same as DramaSceneContent.duration_seconds (non-strict int), so the
+# validation side and the persistence side don't disagree on values like "4" / 4.0. The default also comes from the field declaration, no separate literal.
 # drama script_plan 时长的归一化口径：与 DramaSceneContent.duration_seconds（非 strict int）同一套，
 # 避免校验侧与落盘侧对 "4" / 4.0 这类取值判断不一致。默认值也取字段声明，不另写字面量。
 _DURATION_ADAPTER = TypeAdapter(int)
 _DRAMA_DEFAULT_DURATION = DramaSceneContent.model_fields["duration_seconds"].default
 
+#: Dry-run answer when there are no entries to author this time: a real run would not call the text model, so there is no prompt to preview.
 #: dry-run 在本次没有条目要编写时的回答：此时真实运行不会调用文本模型，也就没有 prompt 可预览。
 _NO_ENTRY_TO_AUTHOR_NOTE = (
     "本次没有要编写的条目：运行时不会调用文本模型；要覆盖已有视觉层，请用 entry_ids 点名条目并传 rewrite=true。"
 )
 
+#: What ad reference-to-video unit text lets through: these speaker-attribution problems are carried by the needs_replan flag and don't block persistence.
 #: ad 参考生视频单元正文的放行口径：这几类发声归属问题由 needs_replan 标记承接，不阻断落盘。
 _AD_UNIT_REPLAN_CODES = frozenset({"mixed_speech", "empty_speaker", "parse_failed"})
 
+# LLM visual layer responses for prompt authoring: skeleton kind -> validation model. Reference-to-video units use a separate structure-preserving text rewrite.
 # 提示词编写的 LLM 视觉层响应：骨架种类 → 校验模型。参考生视频单元另走保结构正文改写。
 _VISUAL_RESPONSE_SCHEMA: dict[str, type[BaseModel]] = {
     "segments": NarrationVisualEpisodeScript,
@@ -188,11 +198,14 @@ _VISUAL_RESPONSE_SCHEMA: dict[str, type[BaseModel]] = {
     "shots": AdVisualScript,
 }
 
+# Quality probe thresholds: only catch extremely short samples; normal complete descriptions should be far above these.
 # 质量探针阈值：仅捕极端短样本，正常完整描述应远超这些值。
 _QUALITY_PROBE_SCENE_MIN_LEN = 40
 _QUALITY_PROBE_ACTION_MIN_LEN = 25
 _QUALITY_PROBE_UNIT_TEXT_MIN_LEN = 15
 
+# Skeleton kind -> response validation model. Model classes are upper-layer dependencies and stay out of the narrow SKELETONS table, so the mapping lives here.
+# Keys correspond one to one with SKELETONS; adding a fifth skeleton makes the exhaustiveness assertion fail for each.
 # 骨架种类 → 响应校验模型。模型类属上层依赖、不进 SKELETONS 窄表，映射留本地。
 # 键与 SKELETONS 逐一对应；新增第五种骨架时穷尽性断言逐个报红。
 _KIND_PARSE_SCHEMA: dict[str, type[BaseModel]] = {
@@ -204,11 +217,21 @@ _KIND_PARSE_SCHEMA: dict[str, type[BaseModel]] = {
 
 
 class PromptAuthoringTargetError(ValueError):
-    """提示词编写的对象无效：该集尚无正式脚本，或 ``entry_ids`` 点名的条目不在正式脚本里。"""
+    """Invalid prompt authoring target: the episode has no final script yet, or an entry named by ``entry_ids`` is not in the final script.
+
+    提示词编写的对象无效：该集尚无正式脚本，或 ``entry_ids`` 点名的条目不在正式脚本里。"""
 
 
 class PromptAuthoringUnitRejected(ValueError):
-    """提示词编写调用文本模型前，正式脚本里待编写单元的现值没有通过预判。
+    """Before prompt authoring calls the text model, the current value of a pending authoring unit in the final script failed the pre-check.
+
+    This is an input problem: authoring keeps the unit's dialogue lines verbatim, so retrying the same input will surely
+    fail again; the way out is to edit the unit on the timeline. ``code`` and ``params`` are the problem code and params
+    of the task failure, localized by the UI per problem code; ``params["position"]`` is the unit's position among the
+    episode's video units (from 1), and the UI refers to the unit by position. The message is for the Agent and locates
+    by unit ID.
+
+    提示词编写调用文本模型前，正式脚本里待编写单元的现值没有通过预判。
 
     这是输入问题：编写会逐字保留单元台词，重试同一份输入必然再次失败，出路是在时间线上修改该单元。
     ``code`` 与 ``params`` 是任务失败的问题码与参数，界面按问题码本地化；``params["position"]`` 是该单元
@@ -221,6 +244,8 @@ class PromptAuthoringUnitRejected(ValueError):
         self.params = params
 
 
+#: Pre-promotion final-script unit pre-check problem code -> draft promotion message key. The authoring entry reports the
+#: same pre-check as a task failure; draft promotion needs to say "draft not adopted", so it has its own message set.
 #: 晋升前正式剧本单元预判的问题码 → 草稿晋升的文案 key。编写入口把同一份预判报成任务失败，
 #: 草稿晋升要说明的是「草稿未采用」，文案另起一套。
 _FORMAL_UNIT_PROMOTION_KEYS: dict[str, str] = {
@@ -231,7 +256,13 @@ _FORMAL_UNIT_PROMOTION_KEYS: dict[str, str] = {
 
 
 class UnitDurationOffTier(ValueError):
-    """待编写单元的现时长不在该单元所落参考桶的生效档位内（通常是模型、分辨率或参考图状态变化让档位收窄）。
+    """The current duration of a pending authoring unit is not among the effective duration options of its reference bucket (usually because a model, resolution or reference image state change narrowed the options).
+
+    ``unit_id`` / ``duration_seconds`` / ``tiers`` let callers turn it into a user-facing hint their own way; the message
+    is for the Agent. ``position`` is the unit's UI position in the content being checked (from 1); None when checking the
+    final script, and callers locate it in the final script themselves.
+
+    待编写单元的现时长不在该单元所落参考桶的生效档位内（通常是模型、分辨率或参考图状态变化让档位收窄）。
 
     ``unit_id`` / ``duration_seconds`` / ``tiers`` 供调用方按自己的口径转成面向用户的提示；消息面向 Agent。
     ``position`` 是单元在所判那份内容里的界面位置（从 1 起）；判的是正式剧本时为 None，调用方按正式剧本自行定位。
@@ -248,7 +279,11 @@ class UnitDurationOffTier(ValueError):
 
 
 class AdScriptRejected(ValueError):
-    """广告/短片整份生成的产出违约：不写正式脚本、不登记资产、不落待修复草稿。
+    """Output violation of an ad/short whole-script generation: no final script written, no assets registered, no invalid draft stored.
+
+    ``problems`` describes each violation, shown as the task failure reason; the user can add instructions and regenerate.
+
+    广告/短片整份生成的产出违约：不写正式脚本、不登记资产、不落待修复草稿。
 
     ``problems`` 逐条说明违约，供任务失败原因展示；用户可以补充附加指令后重新生成。
     """
@@ -259,7 +294,9 @@ class AdScriptRejected(ValueError):
 
 
 class AdScriptOverwriteRequired(ValueError):
-    """整份重做会替换已有的正式脚本，而调用方未认可覆盖；携带丢失清单。"""
+    """A full redo would replace the existing final script and the caller has not acknowledged the overwrite; carries the loss list.
+
+    整份重做会替换已有的正式脚本，而调用方未认可覆盖；携带丢失清单。"""
 
     def __init__(self, overwrite: FormalScriptOverwrite) -> None:
         self.overwrite = overwrite
@@ -268,7 +305,9 @@ class AdScriptOverwriteRequired(ValueError):
 
 @dataclass(frozen=True, slots=True)
 class PromptAuthoringTargets:
-    """一次提示词编写的对象：正式脚本快照，与本次要补视觉层的条目（按剧本顺序）。"""
+    """Target of one prompt authoring run: the final script snapshot plus the entries whose visual layer is filled this time (in script order).
+
+    一次提示词编写的对象：正式脚本快照，与本次要补视觉层的条目（按剧本顺序）。"""
 
     kind: str
     id_field: str
@@ -281,29 +320,34 @@ class PromptAuthoringTargets:
         return tuple(str(entry[self.id_field]) for entry in self.entries)
 
     def fields_of(self, entry_id: str) -> tuple[str, ...]:
-        """该条目本次写回的视觉层字段。"""
+        """The visual layer fields of this entry written back this time. / 该条目本次写回的视觉层字段。"""
         return next(entry.fields for entry in self.selection.entries if entry.entry_id == entry_id)
 
     @property
     def items(self) -> list[Any]:
-        """正式脚本里该骨架的全部条目，供 prompt 渲染前后文。"""
+        """All entries of this skeleton in the final script, for prompt rendering context. / 正式脚本里该骨架的全部条目，供 prompt 渲染前后文。"""
         return cast(list[Any], self.script[self.kind])
 
 
 @dataclass(frozen=True, slots=True)
 class ScriptPlanMaterializationReceipt:
-    """内容确认把脚本规划整份转为正式剧本的回执。"""
+    """Receipt of content review converting the whole script plan into the final script. / 内容确认把脚本规划整份转为正式剧本的回执。"""
 
     episode: int
     script_filename: str
-    #: 新正式剧本的全部条目 id（均待编写），按脚本规划顺序。
+    #: All entry ids of the new final script (all pending authoring), in script plan order. / 新正式剧本的全部条目 id（均待编写），按脚本规划顺序。
     entry_ids: tuple[str, ...]
-    #: 旧正式剧本里有、新剧本里已不存在的条目 id，按旧剧本顺序。
+    #: Entry ids present in the old final script but gone from the new one, in old script order. / 旧正式剧本里有、新剧本里已不存在的条目 id，按旧剧本顺序。
     removed: tuple[str, ...]
 
 
 class ScriptPlanNotFoundError(FileNotFoundError):
-    """该集的脚本规划文件缺失（含仅剩结构化前旧拆分表）：三条路线的规划加载器统一抛此类型。
+    """The episode's script plan file is missing (including when only the pre-structured old split table remains): the plan loaders of all three routes raise this type.
+
+    Still a subclass of ``FileNotFoundError``, so callers treating it as a missing file are unaffected; callers that need
+    to tell "missing plan" from "missing project / other file" catch this type.
+
+    该集的脚本规划文件缺失（含仅剩结构化前旧拆分表）：三条路线的规划加载器统一抛此类型。
 
     仍是 ``FileNotFoundError`` 的子类，按缺文件处理的调用方不受影响；需要把「缺规划」与
     「缺项目 / 缺其他文件」区分开的调用方按本类型捕获。
@@ -312,7 +356,15 @@ class ScriptPlanNotFoundError(FileNotFoundError):
 
 @dataclass(frozen=True)
 class PlanningVideoFacts:
-    """剧本规划读取的视频请求事实：本路线各任务类型桶的读侧求值结果。
+    """Video request facts read by script planning: read-side evaluation results for each task-type bucket of this route.
+
+    The storyboard route has only the one bucket the project's generation mode falls into; the reference-to-video route
+    evaluates the r2v (with available reference images) and i2v (no images) buckets, and units, once bucketed by available
+    reference images, each read their own bucket. Failure objects are kept as is and only raised as
+    :class:`VideoRequestFactsError` at checkpoints that need successful facts, with problem codes in the same family as
+    preflight and execution.
+
+    剧本规划读取的视频请求事实：本路线各任务类型桶的读侧求值结果。
 
     分镜路线只有项目生成模式所落的那一个桶；参考生视频路线求 r2v（带可用参考图）与 i2v（无图）
     两桶，单元按可用参考图定桶后各读自己那一桶。失败对象原样保存，到需要成功事实的检查点才抛出
@@ -325,18 +377,24 @@ class PlanningVideoFacts:
         return self.by_bucket[generation_type]
 
     def require(self, generation_type: VideoGenerationType) -> VideoRequestFacts:
-        """该桶的成功事实；解析不出即抛 :class:`VideoRequestFactsError`。"""
+        """Successful facts of this bucket; raises :class:`VideoRequestFactsError` when it can't be resolved.
+
+        该桶的成功事实；解析不出即抛 :class:`VideoRequestFactsError`。"""
         return require_video_request_facts(self.result(generation_type))
 
     def planning_durations(self, generation_type: VideoGenerationType) -> list[int]:
-        """该桶规划可选的时长档位（端点固定时借规划档位）；解析不出即抛。"""
+        """Duration options selectable for planning in this bucket (borrowing planning options when endpoint-fixed); raises when it can't be resolved.
+
+        该桶规划可选的时长档位（端点固定时借规划档位）；解析不出即抛。"""
         return planning_durations(self.require(generation_type))
 
 
 def _require_overwrite_acknowledged(
     targets: PromptAuthoringTargets, baseline: str | None, overwrite_revision: str | None
 ) -> None:
-    """显式重写会替换已有视觉层内容时，覆盖令牌须与读取目标时的正式剧本指纹一致。"""
+    """When an explicit rewrite would replace existing visual layer content, the overwrite token must match the final script fingerprint from when the target was read.
+
+    显式重写会替换已有视觉层内容时，覆盖令牌须与读取目标时的正式剧本指纹一致。"""
     overwritten = targets.selection.overwritten
     if overwritten and (overwrite_revision is None or fingerprint_of_revision(overwrite_revision) != baseline):
         raise PromptOverwriteRequired(PromptOverwrite(fingerprint=baseline, entries=overwritten))
@@ -344,11 +402,17 @@ def _require_overwrite_acknowledged(
 
 class ScriptGenerator:
     """
+    Script generator
+
+    Prompt authoring fills pending authoring entries of the final script; content review mechanically converts the
+    script plan into the final script; ad generates the whole script when there is no final script yet
+
     剧本生成器
 
     提示词编写按正式剧本补写待编写条目；内容确认时把脚本规划机械转为正式剧本；ad 尚无正式剧本时整份生成
     """
 
+    # Class attribute default, so instances built bypassing __init__ also read None; resolution falls back to the production ConfigResolver as needed.
     # 类属性缺省，绕过 __init__ 构造的实例同样读到 None；解析时按需回退到生产 ConfigResolver。
     config_resolver: ConfigResolver | None = None
 
@@ -360,6 +424,14 @@ class ScriptGenerator:
         config_resolver: ConfigResolver | None = None,
     ):
         """
+        Initialize the generator
+
+        Args:
+            project_path: project dir path, e.g. projects/test0205
+            generator: TextGenerator instance (optional). If None, only build_prompt() dry-run is supported.
+            config_resolver: capability resolver; when omitted, a ConfigResolver connected to the production database is
+                built at resolution time.
+
         初始化生成器
 
         Args:
@@ -371,27 +443,34 @@ class ScriptGenerator:
         self.generator = generator
         self.config_resolver = config_resolver
         self._script_plan_fingerprint: str | None = None
+        #: Top-level ``new_assets`` of the script plan read by the loader; used at materialization to rewrite references and register.
         #: 加载器读到的脚本规划顶层 ``new_assets``，物化时据此改写引用并登记。
         self._script_plan_new_assets: object = None
         self._artifact_basis: ArtifactBasisDescriptor | None = None
         self._script_plan_input_claim: ArtifactInputClaim | None = None
 
-        # 加载 project.json
+        # Load project.json / 加载 project.json
         self.project_json = self._load_project_json()
         self.content_mode = self.project_json.get("content_mode", "narration")
 
     @property
     def generation_mode(self) -> str | None:
-        """项目生成模式（project.json 顶层字段）：创建即定、之后不可变，不随集号变化。"""
+        """Project generation mode (top-level project.json field): fixed at creation, immutable afterwards, independent of episode number.
+
+        项目生成模式（project.json 顶层字段）：创建即定、之后不可变，不随集号变化。"""
         return self.project_json.get("generation_mode")
 
     def _episode_entry(self, episode: int) -> dict:
-        """按集号取 project.json episodes 条目；缺失返回空 dict。"""
+        """Get the project.json episodes entry by episode number; missing returns an empty dict.
+
+        按集号取 project.json episodes 条目；缺失返回空 dict。"""
         return episode_ledger_entry(self.project_json, episode)
 
     @staticmethod
     def _entry_outline(entry: dict) -> dict:
-        """账本条目的 outline 字段归一化为 dict（缺失/形状异常返回空 dict）。"""
+        """Normalize the ledger entry's outline field to a dict (missing/malformed returns an empty dict).
+
+        账本条目的 outline 字段归一化为 dict（缺失/形状异常返回空 dict）。"""
         return ledger_outline(entry)
 
     @classmethod
@@ -401,7 +480,9 @@ class ScriptGenerator:
         *,
         config_resolver: ConfigResolver | None = None,
     ) -> "ScriptGenerator":
-        """异步工厂方法，自动从 DB 加载供应商配置创建 TextGenerator。"""
+        """Async factory method; loads provider config from the DB automatically to create a TextGenerator.
+
+        异步工厂方法，自动从 DB 加载供应商配置创建 TextGenerator。"""
         project_name = Path(project_path).name
         generator = await TextGenerator.create(TextTaskType.SCRIPT, project_name, purpose=CallPurpose.SCRIPT_GENERATION)
         return await asyncio.to_thread(
@@ -412,17 +493,23 @@ class ScriptGenerator:
         )
 
     def _formal_script_baseline(self, episode: int, output_filename: str | None) -> tuple[str, str | None]:
-        """该集正式剧本的文件名与写入基线指纹（文件不存在时指纹为 None）。"""
+        """File name and write-baseline fingerprint of the episode's final script (fingerprint None when the file doesn't exist).
+
+        该集正式剧本的文件名与写入基线指纹（文件不存在时指纹为 None）。"""
         filename = output_filename or formal_script_filename(self.project_path, self.project_json, episode)
         return filename, content_fingerprint(self.project_path / "scripts" / filename)
 
     def _issue_landing_item_ids(self, script_data: dict[str, Any]) -> None:
-        """落盘前由服务端给生成产出的条目发号（见 ``item_id_history.issue_landing_item_ids``）；须在线程里调用。"""
+        """Before persisting, the server issues ids for generated entries (see ``item_id_history.issue_landing_item_ids``); must be called in a thread.
+
+        落盘前由服务端给生成产出的条目发号（见 ``item_id_history.issue_landing_item_ids``）；须在线程里调用。"""
         pm = ProjectManager.for_project_dir(self.project_path)
         issue_landing_item_ids(self.project_path, pm.load_project(self.project_path.name), script_data)
 
     def _save_script(self, script_data: dict[str, Any], filename: str, **kwargs: Any) -> Path:
-        """经写盘统一入口保存剧本；ProjectManager 构造时会建目录，须在线程里调用。"""
+        """Save the script via the unified write entry; ProjectManager creates dirs on construction, so must be called in a thread.
+
+        经写盘统一入口保存剧本；ProjectManager 构造时会建目录，须在线程里调用。"""
         pm = ProjectManager.for_project_dir(self.project_path)
         return pm.save_script(self.project_path.name, script_data, filename, **kwargs)
 
@@ -434,7 +521,13 @@ class ScriptGenerator:
         *,
         rewrite: bool = False,
     ) -> PromptAuthoringTargets | None:
-        """读正式脚本并定出本次编写的条目；正式脚本不存在时返回 None。
+        """Read the final script and determine the entries to author this time; return None when the final script doesn't exist.
+
+        When ``entry_ids`` is empty the scope is all entries with the pending authoring flag; when non-empty it is these
+        entries, and any id not in the final script raises ``PromptAuthoringTargetError``. Entries in scope are selected for
+        gap filling or explicit rewrite (see ``select_prompt_authoring``). Does not read the script plan.
+
+        读正式脚本并定出本次编写的条目；正式脚本不存在时返回 None。
 
         ``entry_ids`` 为空时范围是全部带待编写标记的条目，非空时是这些条目，其中任一 id 不在正式脚本里
         即抛 ``PromptAuthoringTargetError``。范围内的条目按补缺或显式重写选出（见
@@ -482,6 +575,42 @@ class ScriptGenerator:
         registered_assets: list[dict[str, str]] | None = None,
     ) -> Path:
         """
+        Fill the visual layer of the final script (prompt authoring); generate the whole script when an ad project has no final script yet or a full redo is explicit.
+
+        Input is the final script's own content fields; the script plan is not read. Entries authored this time only get their
+        visual layer overwritten (reference-to-video units get their text rewritten) and the pending authoring flag cleared;
+        content fields and user fields are kept as is; all other entries stay byte-identical. With no entries to author, the
+        text model is not called and nothing is written.
+
+        Args:
+            episode: episode number
+            output_filename: output file name, default episode_{episode}.json. Scripts are always written via the unified
+                write entry into the project scripts/ dir, so this only decides the file name and accepts no directory.
+            instructions: raw text of user-entered instructions; when non-empty, appended at the end of the prompt as a
+                neutral "附加指令" (instructions) section (the text expresses how strongly to follow), same for all
+                content_mode / generation modes.
+            entry_ids: scope of this authoring; empty means all pending authoring entries. Any id not in the final script
+                is an error, nothing is written. Naming only sets the scope: in gap-filling mode entries whose visual layer
+                is complete are skipped as usual.
+            rewrite: explicitly rewrite the whole visual layer of entries in scope; when False, fill gaps, writing only
+                missing visual layer fields.
+            overwrite_revision: final script fingerprint the caller acknowledged for overwrite (``revision`` from the loss
+                list). When an explicit rewrite would replace existing visual layer content and this is missing or doesn't
+                match the current final script, raises ``PromptOverwriteRequired`` without calling the model.
+            rewritten_entry_ids: optional collector; when not None, filled in place with the entry ids authored this time
+                (script order), for callers to list in the receipt. Stays empty for ad whole-script generation.
+            skipped_entry_ids: optional collector; when not None, filled in place with ids of entries in scope not authored
+                because their visual layer was complete.
+            regenerate: ad only: full redo, replacing the existing final script. When a final script exists,
+                ``overwrite_revision`` must equal the ``revision`` of its loss list, otherwise raises
+                ``AdScriptOverwriteRequired`` without calling the model.
+            registered_assets: optional collector; for ad whole-script generation, filled in place with the new assets and
+                derivatives registered this time (``{"type", "name"}``, derivative names written as ``本体/衍生``,
+                base look/derivative).
+
+        Returns:
+            path of the final script JSON file
+
         为正式剧本补写视觉层（提示词编写）；ad 项目尚无正式剧本、或显式整份重做时整份生成。
 
         输入是正式剧本自身的内容字段，不读脚本规划。本次编写的条目只覆盖视觉层（参考生视频
@@ -513,6 +642,13 @@ class ScriptGenerator:
         if self.generator is None:
             raise RuntimeError("TextGenerator 未初始化，请使用 ScriptGenerator.create() 工厂方法")
 
+        # Honor the docstring contract "only decides the file name, accepts no directory": the write choke point _safe_subpath
+        # blocks absolute paths and path traversal, but not subdirectories (the realpath of `subdir/x.json` is still inside
+        # scripts/, which would write the script to scripts/subdir/x.json, breaking the flat layout). Fail fast at the public API
+        # entry, honoring the contract and avoiding running the whole generation flow before hitting the error.
+        # Explicitly reject `\\`: POSIX Path doesn't treat it as a separator but Windows does; defensive for cross-platform.
+        # The empty string "" is also explicitly rejected: Path("").name == "" equals output_filename and passes the first two
+        # checks, and an empty filename flowing to save_script would only crash at write time; failing fast at the entry keeps timing consistent.
         # 兑现 docstring 的「只决定文件名、不接受目录」契约:写盘咽喉 _safe_subpath 能挡绝对
         # 路径与 path traversal,但不会挡子目录(`subdir/x.json` 拼出的 realpath 仍在 scripts/
         # 内,会让剧本写到 scripts/subdir/x.json,偏离扁平布局)。在公开 API 入口 fail-fast 拒,
@@ -529,6 +665,8 @@ class ScriptGenerator:
         self._artifact_basis = None
         self._script_plan_input_claim = None
         gen_mode = self.generation_mode
+        # Baseline before reading the final script: the authoring snapshot and expected_fingerprint come from before the same
+        # moment, so a concurrent save landing in between is rejected as a conflict at write time instead of being overwritten by this write-back.
         # 基线先于读入正式剧本：编写用的快照与 expected_fingerprint 出自同一时刻之前，两者之间
         # 落下的并发保存在写入时按冲突拒绝，而不是被本次写回覆盖。
         filename, formal_baseline = await asyncio.to_thread(self._formal_script_baseline, episode, output_filename)
@@ -559,6 +697,7 @@ class ScriptGenerator:
                 )
             if entry_ids:
                 raise PromptAuthoringTargetError(f"集（id={episode}）尚无正式脚本，entry_ids 无从对应")
+            # Both ad generation modes generate in one click without script_plan; reference-to-video directly produces self-contained video_units.
             # ad 两种生成模式都一键生成、不走 script_plan；参考生视频直接产出自包含 video_units。
             prompt, schema = await self._compose_ad(episode, gen_mode, instructions)
             return await self._generate_and_save(
@@ -630,7 +769,9 @@ class ScriptGenerator:
     async def _build_visual_prompt(
         self, episode: int, targets: PromptAuthoringTargets, instructions: str | None
     ) -> str:
-        """分镜类条目（segments / scenes / shots）的视觉层 prompt：输入是正式剧本里这些条目的内容字段。"""
+        """Visual layer prompt for storyboard-type entries (segments / scenes / shots): input is the content fields of these entries in the final script.
+
+        分镜类条目（segments / scenes / shots）的视觉层 prompt：输入是正式剧本里这些条目的内容字段。"""
         entries = list(targets.entries)
         if targets.kind == "scenes":
             return self._build_drama_prompt_authoring_prompt(entries, episode, instructions)
@@ -646,6 +787,7 @@ class ScriptGenerator:
             script_plan_segments=entries,
             aspect_ratio=self._resolve_aspect_ratio(),
             episode=episode,
+            # Output language follows the project source_language, the same language as the content fields passed through from the final script (same as drama)
             # 输出语言取项目 source_language，与正式剧本透传的内容字段同一语言（同 drama）
             target_language=self.project_json.get("source_language") or "中文",
             instructions=instructions,
@@ -656,7 +798,9 @@ class ScriptGenerator:
         return bucket if isinstance(bucket, dict) else {}
 
     def _parse_visual_layer(self, response_text: str, targets: PromptAuthoringTargets) -> list[dict]:
-        """按骨架种类严格校验视觉层响应，返回逐条目视觉层 dict（id + image_prompt + video_prompt）。"""
+        """Strictly validate the visual layer response per skeleton kind; return per-entry visual layer dicts (id + image_prompt + video_prompt).
+
+        按骨架种类严格校验视觉层响应，返回逐条目视觉层 dict（id + image_prompt + video_prompt）。"""
         text = strip_json_code_fences(response_text)
         try:
             data = json.loads(text)
@@ -670,7 +814,12 @@ class ScriptGenerator:
 
     @staticmethod
     def _merge_visual_layer(targets: PromptAuthoringTargets, visual_items: list[dict], episode: int) -> list[dict]:
-        """把视觉层按条目 id 写回正式剧本条目：只写本次选出的视觉层字段，其余字段原样保留。
+        """Write the visual layer back into final script entries by entry id: only the visual layer fields selected this time, other fields kept as is.
+
+        The visual layer must correspond one to one with the entries authored this time: missing, extra or duplicate all fail
+        loud, ruling out mismatches and omissions.
+
+        把视觉层按条目 id 写回正式剧本条目：只写本次选出的视觉层字段，其余字段原样保留。
 
         视觉层须与本次编写的条目一一对应：缺、多、重都 fail-loud，杜绝错配与漏写。
         """
@@ -707,7 +856,13 @@ class ScriptGenerator:
         reference_unit_durations: dict[str, int] | None = None,
         facts: PlanningVideoFacts | None = None,
     ) -> dict[str, Any]:
-        """把本次编写的条目按 id 放回正式剧本快照，返回待落盘的整份剧本。
+        """Put the entries authored this time back into the final script snapshot by id, and return the whole script to persist.
+
+        Entry-level metadata (clearing the pending authoring flag, needs_replan re-check, reference unit duration option
+        validation) only applies to the entries authored this time; script-level fields come from the snapshot, and metadata
+        only refreshes ``updated_at`` and ``generator``.
+
+        把本次编写的条目按 id 放回正式剧本快照，返回待落盘的整份剧本。
 
         条目级元数据（清除待编写标记、needs_replan 重判、参考单元取档校验）只作用于本次编写的
         条目；剧本级字段沿用快照，metadata 只刷新 ``updated_at`` 与 ``generator``。
@@ -718,6 +873,7 @@ class ScriptGenerator:
             reference_unit_durations=reference_unit_durations,
             facts=facts,
         )[targets.kind]
+        # _add_metadata rewrites the id prefix per episode number; ids in the final script are the write-back anchors and don't change with authoring.
         # _add_metadata 按集号改写 id 前缀；正式剧本里的 id 是写回的定位锚，不随编写改变。
         replacements: dict[str, dict] = {}
         for entry_id, item in zip(targets.ids, finished, strict=True):
@@ -736,7 +892,14 @@ class ScriptGenerator:
         return script
 
     async def _load_plan_entries_for_materialization(self, episode: int) -> tuple[ScriptPlanKind, list[dict]]:
-        """按项目路线读脚本规划并过物化的准入断言，返回 (变体, 条目)。
+        """Read the script plan per project route and pass the materialization admission assertions; return (variant, entries).
+
+        Each route's loader handles structure validation, the invalid draft guard and freezing the plan fingerprint / input
+        registration; duration options and speaker admission are judged against current video capabilities. Reference-to-video
+        unit text is not pre-checked by the machine rules: units are persisted pending authoring, and the text is rewritten and
+        validated by later prompt authoring.
+
+        按项目路线读脚本规划并过物化的准入断言，返回 (变体, 条目)。
 
         三条路线各自的加载器负责结构校验、待修复草稿守卫与规划指纹 / 输入登记的冻结；时长档位与
         发声准入按当前视频能力判定。参考生视频单元正文不按机器口径预判：单元以待编写落盘，正文由之后的
@@ -771,7 +934,19 @@ class ScriptGenerator:
         expected_script_fingerprint: str | None,
         project_update: Callable[[dict[str, Any]], None],
     ) -> ScriptPlanMaterializationReceipt:
-        """内容确认时把脚本规划整份转为正式剧本：旧剧本（若有）整份被替换，不沿用任何条目。
+        """At content review, convert the whole script plan into the final script: the old script (if any) is replaced entirely, no entry is carried over.
+
+        Entry ids are always newly issued at persistence; ids are only allocated, never reused (``docs/adr/0090``).
+
+        For the projection see ``lib.script.script_document.build_materialized_script``. ``expected_plan_revision`` is the
+        script plan fingerprint the review record confirmed; if the loaded plan is not that one, ``ScriptPlanWriteConflict``
+        is raised; ``expected_script_fingerprint`` is the final script fingerprint the caller saw when acknowledging the
+        overwrite (None when no script), and a mismatch at persistence raises ``ScriptWriteConflict``. Artifacts under the old
+        script's entries are unregistered with this write, and history versions and current media files move into the project
+        trash. ``project_update`` modifies project.json in the same write transaction as the script, so the review record is
+        persisted together with the final script.
+
+        内容确认时把脚本规划整份转为正式剧本：旧剧本（若有）整份被替换，不沿用任何条目。
 
         条目编号在落盘时一律另发新号，编号只分配、不复用（``docs/adr/0090``）。
 
@@ -786,10 +961,12 @@ class ScriptGenerator:
         self._artifact_basis = None
         self._script_plan_input_claim = None
         plan_kind, plan_entries = await self._load_plan_entries_for_materialization(episode)
+        # The loader froze the plan fingerprint read this time inside await; static narrowing doesn't see this rewrite.
         # 加载器在 await 内冻结了本次读到的规划指纹；静态收窄看不到这次改写。
         loaded_revision = cast(str | None, self._script_plan_fingerprint)
         if loaded_revision != expected_plan_revision:
             raise ScriptPlanWriteConflict(expected=expected_plan_revision, actual=loaded_revision, current_content=None)
+        # New assets of this episode rewrite entry references per their handling decision and are registered into the project in the same write as the final script and the review record.
         # 本集新增资产按处理决定改写条目引用，与正式剧本、确认记录同一次写入登记进项目。
         new_assets = resolve_new_assets(self.project_json, self._script_plan_new_assets)
         plan_entries = new_assets.rewrite_entries(plan_entries)
@@ -804,6 +981,7 @@ class ScriptGenerator:
             project_update(project)
 
         filename = await asyncio.to_thread(formal_script_filename, self.project_path, self.project_json, episode)
+        # Episode title comes from the episode ledger: titles the model put in the drama plan are filled but not adopted, so a derived episode name isn't frozen and the user's title isn't overwritten.
         # 集标题取分集账本：drama 规划里模型起的标题照填、不采用，免得冻结派生集名或覆盖用户的标题。
         script_data = build_materialized_script(
             self.project_json, episode, plan_kind=plan_kind, plan_entries=plan_entries, title=None
@@ -818,6 +996,8 @@ class ScriptGenerator:
         claim = self._script_plan_input_claim
 
         def _commit() -> None:
+            # Persist after rechecking the fingerprint under the script plan lock: a script plan saved, rerun or promoted after
+            # loading must not materialize with old content, nor let the review record store a fingerprint that was already replaced.
             # 持脚本规划锁复核指纹后落盘：加载之后被保存、重跑或晋升改写的脚本规划不能以旧内容物化，
             # 也不能让确认记录记下已被替换的指纹。
             with formal_script_plan_lock(self.project_path, episode, plan_path):
@@ -828,6 +1008,7 @@ class ScriptGenerator:
                     )
                 if claim is not None:
                     assert_current_artifact_input_claims_usable(self.project_path, (claim,))
+                # The plan only supplies content: the final identity is newly issued, and old entries move wholesale into the project trash.
                 # 规划只提供内容：正式身份另发新号，旧条目整份移进项目回收站。
                 self._issue_landing_item_ids(script_data)
                 self._save_script(
@@ -852,7 +1033,22 @@ class ScriptGenerator:
         )
 
     async def _assert_drama_script_plan_durations(self, content_scenes: list) -> None:
-        """校验 drama script_plan 已定分镜时长在当前能力集合内，越界 fail-loud。
+        """Check that the decided shot durations of the drama script_plan are within the current capability set; out of range fails loud.
+
+        Symmetric with narration (``_load_narration_script_plan``) and reference_video (``_load_reference_script_plan``):
+        drama durations are likewise finalized by script_plan, prompt_authoring only outputs the visual layer and passes them
+        through, and the static validation before persistence only requires positive integers. Without this check, a
+        script_plan split at one resolution and then run through prompt_authoring after the project switched to a stricter
+        resolution would carry out-of-range durations all the way into the script, rejected only when the video is enqueued.
+
+        Values follow the **normalization of the final schema** (``TypeAdapter(int)``, the one used by the non-strict ``int``
+        field of ``DramaSceneContent``) rather than ``isinstance(..., int)``: the latter skips ``"4"`` and ``4.0`` entirely,
+        yet they'd be normalized to 4 and stored in the script, opening a detour for out-of-range values. Missing keys and
+        explicit ``null`` both take the field's declared default -- not filled doesn't mean not checked, the default is exactly
+        what persistence fills in. Normalization failures (e.g. ``"abc"``) are not reported here, but left to the static
+        validation before persistence to fail loud uniformly.
+
+        校验 drama script_plan 已定分镜时长在当前能力集合内，越界 fail-loud。
 
         与 narration（``_load_narration_script_plan``）、reference_video（``_load_reference_script_plan``）
         对称：drama 的时长同样由 script_plan 定稿、prompt_authoring 只出视觉层并原样透传，而落盘前的静态校验只
@@ -886,7 +1082,9 @@ class ScriptGenerator:
     def _build_drama_prompt_authoring_prompt(
         self, content_scenes: list, episode: int, instructions: str | None = None
     ) -> str:
-        """构建 drama prompt_authoring（视觉层）prompt：把 script_plan 内容渲染为输入，仅求 image_prompt / video_prompt。"""
+        """Build the drama prompt_authoring (visual layer) prompt: render script_plan content as input, asking only for image_prompt / video_prompt.
+
+        构建 drama prompt_authoring（视觉层）prompt：把 script_plan 内容渲染为输入，仅求 image_prompt / video_prompt。"""
         characters = self.project_json.get("characters")
         characters = characters if isinstance(characters, dict) else {}
         scenes = self.project_json.get("scenes")
@@ -900,6 +1098,7 @@ class ScriptGenerator:
             scenes_content=render_drama_content_for_prompt_authoring(content_scenes),
             episode=episode,
             aspect_ratio=self._resolve_aspect_ratio(),
+            # Output language follows the project source_language, same as script_plan (normalize), so non-Chinese projects don't get script_plan content and prompt_authoring visuals in different languages
             # 输出语言与 script_plan（normalize）同取项目 source_language，避免非中文项目 script_plan 内容与 prompt_authoring 视觉割裂
             target_language=self.project_json.get("source_language") or "中文",
             characters=characters,
@@ -918,14 +1117,22 @@ class ScriptGenerator:
         previous: FormalScriptOverwrite | None = None,
         registered_assets: list[dict[str, str]] | None = None,
     ) -> Path:
-        """ad 整份生成的尾段：调用 TextBackend → 解析校验 → 落实新增资产 → 补元数据 → 经写盘统一入口保存。
+        """Tail of ad whole-script generation: call TextBackend -> parse and validate -> settle new assets -> add metadata -> save via the unified write entry.
+
+        Output violations (unparseable, wrong structure, references not resolving to assets, unparseable handling decisions
+        for new assets, empty entries) all raise ``AdScriptRejected``: no final script written, no assets registered, no draft
+        stored. ``needs_replan`` units are written as usual. ``previous`` is the old final script the user acknowledged
+        overwriting: its fingerprint is the write baseline, and artifacts under the old entries are unregistered with the
+        write. Entry ids are issued by the server at persistence (ids only allocated, never reused).
+
+        ad 整份生成的尾段：调用 TextBackend → 解析校验 → 落实新增资产 → 补元数据 → 经写盘统一入口保存。
 
         产出违约（解析不出、结构不合、引用落不到资产上、新增资产的处理决定解析不出、条目为空）一律抛
         ``AdScriptRejected``：不写正式脚本、不登记资产、不落草稿。``needs_replan`` 单元照常写入。
         ``previous`` 是用户认可覆盖的旧正式剧本：以它的指纹为写入基线，旧条目名下的产物随写入撤登记。
         条目编号在落盘时由服务端另发（编号只分配、不复用）。
         """
-        assert self.generator is not None  # generate() 入口已检查
+        assert self.generator is not None  # checked at the generate() entry / generate() 入口已检查
         if previous is None:
             filename, formal_baseline = await asyncio.to_thread(self._formal_script_baseline, episode, output_filename)
         else:
@@ -946,19 +1153,27 @@ class ScriptGenerator:
             script_data, new_assets = self._parse_ad_reference_response(response_text, episode)
         else:
             script_data, new_assets = self._parse_ad_storyboard_response(response_text, episode)
+        # An empty final script is valid for hand-written ones, but AI whole-script generation must produce entries: "non-empty" is only checked here.
         # 空的正式脚本对手写合法，但 AI 整份生成必须产出条目：「非空」只在这里验收。
         items, id_field, _kind = resolve_kind_items(script_data)
         if not isinstance(items, list) or not items:
             raise AdScriptRejected([f"第 {episode} 集的 AI 生成脚本没有任何条目"])
         registered_project = self._settle_ad_new_assets(script_data, new_assets, id_field)
+        # Units with non-compliant speaker attribution are carried by needs_replan and written as usual: the flag is judged on entries after reference rewriting.
         # 发声归属不合规的单元由 needs_replan 承接、照常写入：标记按改写引用后的条目判定。
         script_data = self._add_metadata(script_data, episode)
         structure = validate_script_structure(script_data)
         if not structure.valid:
             raise AdScriptRejected(structure.errors)
+        # The basis includes the asset table: frozen against the project after registering this run's new assets, so the written final script is current.
         # 依据含资产表：按登记本次新增资产后的项目冻结，写入后的正式剧本即为当前。
         self._freeze_ad_artifact_basis(episode, registered_project)
 
+        # Save via the unified write entry: whole-episode generation has no "before", validated by strict structure (equivalent to
+        # the old response_schema Pydantic validation), and inherits metadata recomputation, locking, filename<->episode
+        # consistency and project.json sync -- eliminating the "bare json.dump bypass", making _write_script_unlocked the single script write point.
+        # New assets of this run are registered into the project in the same write transaction as the final script.
+        # Ids given by the model are only placeholders: entries of a whole-script generation always get new ids never used in this episode, and old script entries move wholesale into the project trash.
         # 经写盘统一入口保存：整集生成无「改前」，按严格结构校验（等价原 response_schema 的
         # Pydantic 校验），并继承 metadata 重算、加锁、filename↔episode 一致性与 project.json
         # 同步——消除「裸 json.dump 旁路」，使 _write_script_unlocked 成为剧本唯一写入点。
@@ -985,7 +1200,13 @@ class ScriptGenerator:
     def _settle_ad_new_assets(
         self, script_data: dict[str, Any], new_assets: NewAssetResolution, id_field: str
     ) -> dict[str, Any]:
-        """按处理决定改写剧本条目里的引用，返回登记本次新增资产后的项目视图。
+        """Rewrite references in script entries per handling decision; return the project view after registering this run's new assets.
+
+        Rewritten references must be registered or be new assets / derivatives registered this time; products are not in the
+        new-asset scope, ``products_in_shot`` only accepts registered products. Any reference not resolving to an asset
+        raises ``AdScriptRejected``.
+
+        按处理决定改写剧本条目里的引用，返回登记本次新增资产后的项目视图。
 
         改写后的引用须已登记或是本次登记的新增资产 / 衍生；商品不在新增范围内，``products_in_shot``
         只认已登记商品。有落不到资产上的引用即抛 ``AdScriptRejected``。
@@ -1019,7 +1240,13 @@ class ScriptGenerator:
         return registered_project
 
     async def _compose_ad(self, episode: int, gen_mode: str | None, instructions: str | None) -> tuple[str, type]:
-        """ad 分支的 (prompt, response_schema) 构造，generate/build_prompt 共用。
+        """Build (prompt, response_schema) for the ad branch, shared by generate/build_prompt.
+
+        The reference path doesn't consume provider capabilities (unit planned duration isn't quantized to provider options),
+        so the capability query is skipped; the storyboard path resolves supported_durations once, so the prompt duration
+        enum and the schema enum share a source.
+
+        ad 分支的 (prompt, response_schema) 构造，generate/build_prompt 共用。
 
         reference 路径不消费供应商能力（unit 编排时长不按供应商档位量化），跳过能力查询；
         storyboard 路径解析一次 supported_durations，prompt 时长枚举与 schema enum 同源。
@@ -1035,12 +1262,19 @@ class ScriptGenerator:
     def _build_ad_prompt(
         self, episode: int, gen_mode: str | None, supported: list[int] | None, instructions: str | None
     ) -> str:
-        """构建广告/短片 prompt：brief + 商品信息 + 审定配比表，不读 script_plan 中间文件。
+        """Build the ad/short prompt: brief + product info + approved ratio table, without reading script_plan intermediate files.
+
+        The storyboard path writes supported_durations into the prompt as the per-shot duration enum; reference-to-video
+        directly outputs video units in the unified writing syntax, with the eight-part structure only as content planning,
+        not persisted.
+
+        构建广告/短片 prompt：brief + 商品信息 + 审定配比表，不读 script_plan 中间文件。
 
         storyboard 路径把 supported_durations 作为单分镜时长枚举写进 prompt；参考生视频
         直接输出统一引用语法 video unit，八段式只作为内容规划而不持久化。
         """
         direct_inputs = project_ad_episode_script_inputs(episode, project=self.project_json)
+        # Asset descriptions and aliases only help the model recognize who's who and list new assets, they don't enter the artifact basis: editing a description doesn't make generated scripts stale.
         # 资产的描述与别名只帮模型认人、列出新增资产，不进产物依据：改描述不让已生成的脚本过期。
         common = {
             **self._ad_prompt_common(episode, instructions),
@@ -1067,7 +1301,12 @@ class ScriptGenerator:
         rewrite: bool = False,
         overwrite_revision: str | None = None,
     ) -> None:
-        """提交前的覆盖预检：与 ``generate`` 同一套对象选择，未认可的覆盖抛 ``PromptOverwriteRequired``。
+        """Overwrite preflight before submit: same target selection as ``generate``; an unacknowledged overwrite raises ``PromptOverwriteRequired``.
+
+        Named entries not in the final script likewise raise ``PromptAuthoringTargetError``; no check when there's no final
+        script yet.
+
+        提交前的覆盖预检：与 ``generate`` 同一套对象选择，未认可的覆盖抛 ``PromptOverwriteRequired``。
 
         点名的条目不在正式剧本里同样抛 ``PromptAuthoringTargetError``；尚无正式剧本时不检查。
         """
@@ -1086,6 +1325,14 @@ class ScriptGenerator:
         rewrite: bool = False,
     ) -> str:
         """
+        Build the prompt (for dry-run mode)
+
+        Same target selection as `generate()`: when an ad has no final script yet, render the whole-script generation prompt;
+        otherwise render only the entries to author this time (``entry_ids`` or all pending authoring entries); with no entries
+        to author, answer with that fact instead of rendering an empty prompt that would never be sent. ``instructions`` is
+        injected the same way as in `generate()`. Dry-run always uses the final script bound to the episode: it doesn't
+        persist, so there is no ``output_filename`` to speak of.
+
         构建 Prompt（用于 dry-run 模式）
 
         与 `generate()` 同一套对象选择：ad 尚无正式剧本时渲染整份生成 prompt，否则只渲染本次
@@ -1119,11 +1366,21 @@ class ScriptGenerator:
 
     @property
     def _storyboard_bucket(self) -> VideoGenerationType:
-        """分镜路线（旁白 / 剧情 / 广告分镜）按项目生成模式所落的任务类型桶。"""
+        """Task-type bucket of the storyboard route (narration / drama / ad storyboard) per the project generation mode.
+
+        分镜路线（旁白 / 剧情 / 广告分镜）按项目生成模式所落的任务类型桶。"""
         return video_bucket_for_generation_mode(self.generation_mode)
 
     async def _fetch_video_request_facts(self) -> PlanningVideoFacts:
-        """按路线逐桶求值读侧视频请求事实，与预检、执行同一份收窄结果。
+        """Evaluate read-side video request facts bucket by bucket per route, the same narrowing result as preflight and execution.
+
+        Identity is resolved from the current config (through the bucket capability gate); buckets that can't be resolved
+        keep a failure object, without raising or falling back to the project's self-reported identity or the registry: durations
+        and reference image counts written from another source would be rejected by the same gate at execution anyway, and an
+        error carrying a problem code and fix hint is simpler than writing a script doomed to fail. The reference-to-video
+        route evaluates the r2v and i2v buckets, and units, once bucketed by available reference images, each read their own.
+
+        按路线逐桶求值读侧视频请求事实，与预检、执行同一份收窄结果。
 
         身份按当前配置解析（经桶能力闸），解析不出的桶保存失败对象而不抛出、不回退到项目自报
         身份或 registry：退到别的来源写出的时长与参考图数量，执行期照样被同一道闸拒掉，报错带
@@ -1149,7 +1406,14 @@ class ScriptGenerator:
         return PlanningVideoFacts(by_bucket=by_bucket)
 
     def _storyboard_planning_durations(self, facts: PlanningVideoFacts) -> list[int]:
-        """分镜路线规划可选的时长档位：交给 prompt / 动态 schema 之前已按分辨率收窄。
+        """Duration options selectable for storyboard route planning: already narrowed by resolution before going to the prompt / dynamic schema.
+
+        ``supported_durations`` is the model's full duration set, without "resolution<->duration" coupling constraints;
+        without narrowing, a Veo project set to 1080p would produce 4/6-second shots in the script, rejected by the backend
+        only when the video is enqueued, when the user no longer has a single place to fix it. Raises
+        :class:`VideoRequestFactsError` when it can't be resolved.
+
+        分镜路线规划可选的时长档位：交给 prompt / 动态 schema 之前已按分辨率收窄。
 
         ``supported_durations`` 是型号的时长全集，不含「分辨率↔时长」联动约束；不收窄的话设了
         1080p 的 Veo 项目的剧本会产出 4/6 秒分镜，到视频入队时才被 backend 拒，用户已无统一纠正
@@ -1160,7 +1424,14 @@ class ScriptGenerator:
     def _unit_duration_off_every_tier(
         self, duration: int, *, facts: PlanningVideoFacts, generation_type: VideoGenerationType
     ) -> list[int] | None:
-        """时长在带图与不带图两桶档位下都出局时返回该单元所落桶的档位，任一合法则返回 None。
+        """When the duration is out under both the with-image and without-image bucket options, return the options of the unit's bucket; if either is valid, return None.
+
+        prompt_authoring may add or remove `@[名称]` mentions in a unit, so a duration out in only one bucket may still land
+        valid -- rejecting early would block generations that would have succeeded. Out in both buckets is a certain failure
+        independent of reference images (caused by model or resolution config changes) and can be stopped before the paid
+        call. Buckets that can't be resolved count as out.
+
+        时长在带图与不带图两桶档位下都出局时返回该单元所落桶的档位，任一合法则返回 None。
 
         prompt_authoring 可以给 unit 增删 `@[名称]` 提及，只在其中一桶出局的时长仍可能落地合法——
         提前判死会拦掉本会成功的生成。两桶都出局才是与参考图无关的必然失败
@@ -1174,7 +1445,12 @@ class ScriptGenerator:
     def _unit_duration_off_tier(
         self, duration: int, *, facts: PlanningVideoFacts, generation_type: VideoGenerationType
     ) -> list[int] | None:
-        """时长落在该桶生效档位之外时返回该档位集，落在内则返回 None。
+        """When the duration falls outside this bucket's effective options, return that option set; if inside, return None.
+
+        Effective options are computed per unit: a unit with available reference images right now goes r2v, without goes i2v;
+        when that bucket's facts can't be resolved, return empty options.
+
+        时长落在该桶生效档位之外时返回该档位集，落在内则返回 None。
 
         生效档位逐 unit 算：单元此刻有可用参考图走 r2v，没有走 i2v；该桶事实不可解析时返回空档位。
         """
@@ -1185,7 +1461,12 @@ class ScriptGenerator:
         return None if resolve_duration_slot(duration, tiers).seconds == duration else tiers
 
     def _hydrate_reference_units(self, units: Sequence[dict]) -> tuple[ReferenceUnitHydration, ...]:
-        """按执行侧同款判据（文件存在且产物清单认领）逐单元水合声明引用，得出各单元此刻所落的桶。
+        """Hydrate declared references unit by unit with the same criterion as the execution side (file exists and claimed by the artifact manifest), yielding the bucket each unit falls into right now.
+
+        Same criterion as the content review panel and batch admission: units whose text has ``@`` but whose reference lacks an
+        image, or whose image isn't claimed by the manifest, fall into i2v.
+
+        按执行侧同款判据（文件存在且产物清单认领）逐单元水合声明引用，得出各单元此刻所落的桶。
 
         与内容确认面板、整批准入同一份判据：正文带 ``@`` 但引用缺图或图未被清单认领的单元落 i2v。
         """
@@ -1193,18 +1474,29 @@ class ScriptGenerator:
 
     @staticmethod
     def _reference_migration_durations(facts: PlanningVideoFacts) -> list[int] | None:
-        """结构收编用的时长全集：r2v 与 i2v 两桶声明全集的并集；任一桶解析不出时为 None，只做结构收编。"""
+        """Full duration set for structure absorption: union of the full sets declared by the r2v and i2v buckets; None when either bucket can't be resolved, then only structure absorption is done.
+
+        结构收编用的时长全集：r2v 与 i2v 两桶声明全集的并集；任一桶解析不出时为 None，只做结构收编。"""
         return reference_migration_durations(facts.result("r2v"), facts.result("i2v"))
 
     def _resolve_aspect_ratio(self) -> str:
-        """解析项目的 aspect_ratio，向后兼容。narration / ad 默认竖屏（ad 与创建向导默认一致）。"""
+        """Resolve the project's aspect_ratio, backward compatible. narration / ad default to portrait (ad matches the creation wizard default).
+
+        解析项目的 aspect_ratio，向后兼容。narration / ad 默认竖屏（ad 与创建向导默认一致）。"""
         if "aspect_ratio" in self.project_json and isinstance(self.project_json["aspect_ratio"], str):
             return self.project_json["aspect_ratio"]
         return "9:16" if self.content_mode in ("narration", "ad") else "16:9"
 
     @staticmethod
     def _resolve_max_refs(facts: PlanningVideoFacts) -> int | None:
-        """带可用参考图的单元（r2v 桶）每请求可携带的参考图上限，取自该桶的视频请求事实。
+        """Per-request reference image limit for units with available reference images (r2v bucket), from that bucket's video request facts.
+
+        Semantics: only None means "no declared limit" (the upper layer writes no hard count constraint in the prompt, and the
+        executor skips trimming); 0 is an explicit limit (e.g. an endpoint that accepts no reference images), passed down as
+        is to trim to 0 images. When the r2v bucket can't be resolved it is treated as undeclared -- units with images are
+        stopped at each checkpoint for missing facts anyway, no separate source is introduced here.
+
+        带可用参考图的单元（r2v 桶）每请求可携带的参考图上限，取自该桶的视频请求事实。
 
         语义约定：仅 None 视为「未声明上限」（上层不在 prompt 写硬性数量约束，且 executor 跳过裁剪）；
         0 是显式上限（如不接受参考图的 endpoint），会原样下传触发裁剪为 0 张。r2v 桶解析不出时
@@ -1214,7 +1506,7 @@ class ScriptGenerator:
         return result.max_reference_images if isinstance(result, VideoRequestFacts) else None
 
     def _load_project_json(self) -> dict:
-        """加载 project.json"""
+        """Load project.json / 加载 project.json"""
         path = self.project_path / "project.json"
         if not path.exists():
             raise FileNotFoundError(f"未找到 project.json: {path}")
@@ -1239,7 +1531,7 @@ class ScriptGenerator:
     async def _generate_text(self, request: TextGenerationRequest) -> Any:
         """Call the paid text provider after one shared formal-input recheck."""
 
-        assert self.generator is not None  # generate() 入口已检查
+        assert self.generator is not None  # checked at the generate() entry / generate() 入口已检查
         if self._script_plan_input_claim is not None:
             await asyncio.to_thread(
                 assert_current_artifact_input_claims_usable,
@@ -1254,7 +1546,14 @@ class ScriptGenerator:
         self._artifact_basis = ArtifactBasisDescriptor.from_basis(basis)
 
     def _load_script_plan(self, episode: int) -> str:
-        """加载 drama 形状两段式的脚本规划结构化中间文件原始文本。
+        """Load the raw text of the drama-shaped two-stage structured intermediate file of the script plan.
+
+        Each mode maps to exactly one expected file; when missing, raise explicitly naming the expected path -- no degrading to
+        reading another mode's intermediate file (a silent fallback would generate the script from the wrong mode's
+        intermediate artifact). This method only serves drama-shaped two-stage structured content; narration goes via
+        ``_load_narration_script_plan`` and reference_video via ``_load_reference_script_plan``.
+
+        加载 drama 形状两段式的脚本规划结构化中间文件原始文本。
 
         每种模式只对应一个期望文件，缺失时显式报错并指明期望路径——不降级改读
         其他模式的中间文件（静默 fallback 会让剧本基于错误模式的中间产物生成）。
@@ -1262,6 +1561,7 @@ class ScriptGenerator:
         reference_video 另经 ``_load_reference_script_plan``。
         """
         drafts_path = episode_drafts_dir(self.project_path, episode)
+        # Take the registered structured file name per content_mode; dirty values fall back to drama.
         # 按 content_mode 取登记的结构化文件名，脏值兜底 drama。
         script_plan_path = drafts_path / SCRIPT_PLAN_FILENAMES.get(self.content_mode, SCRIPT_PLAN_FILENAMES["drama"])
 
@@ -1280,7 +1580,16 @@ class ScriptGenerator:
         episode: int,
         supported_durations: list[int] | None,
     ) -> list[dict]:
-        """加载并校验 reference_video script_plan 结构化中间文件 ``script_plan_reference_units.json``。
+        """Load and validate the reference_video script_plan structured intermediate file ``script_plan_reference_units.json``.
+
+        Returns a list of unit dicts (unit_id / text / duration_seconds / source_text) for content review to convert wholesale
+        into the final script. Validation: valid structure (``ReferenceScriptPlanDraft``), non-empty units, unique unit_id;
+        ``supported_durations`` is only used to absorb legacy structure, duration admission is then checked against per-unit
+        facts. When only the pre-structured old ``script_plan_reference_units.md`` exists, give a clear "rerun the split"
+        error -- no md->json migrator is written (the old md predates the structured intermediate state, same decision as
+        narration).
+
+        加载并校验 reference_video script_plan 结构化中间文件 ``script_plan_reference_units.json``。
 
         返回 unit dict 列表（unit_id / text / duration_seconds / source_text），供内容确认整份转为正式剧本。
         校验：结构合法（``ReferenceScriptPlanDraft``）、units 非空、unit_id 唯一、
@@ -1291,6 +1600,9 @@ class ScriptGenerator:
         """
         drafts_path = episode_drafts_dir(self.project_path, episode)
         script_plan_json = drafts_path / REFERENCE_VIDEO_SCRIPT_PLAN_FILENAME
+        # Don't convert while an invalid draft is present: the final file is still the previous version (or absent), and converting
+        # it to the final script would silently swap a pending violating output for old content. The review service already
+        # rejects on the same criterion; direct calls bypass the service, so the guard is repeated here.
         # 待修复草稿在场时不转换：正式文件此刻仍是上一版（或不存在），拿它转为正式剧本等于把一份
         # 待处置的违约产出静默换成旧内容。确认服务已按同一判据拒绝；直连调用会绕过服务，因此在此重复守卫。
         quarantine = quarantine_path(self.project_path, episode, QUARANTINE_KIND_SCRIPT_PLAN)
@@ -1312,6 +1624,8 @@ class ScriptGenerator:
             )
 
         pm = ProjectManager.for_project_dir(self.project_path)
+        # Shares the same per-path lock with server.services.project.script_review / save_content:
+        # the migration's read-modify-write is mutually exclusive with Web saves and re-split writes.
         # 与 server.services.project.script_review / save_content 共享同一把 per-path 锁：
         # 迁移的读改写与 Web 端保存、重拆分写盘相互互斥。
         prompt_authoring_path = quarantine_path(self.project_path, episode, QUARANTINE_KIND_PROMPT_AUTHORING)
@@ -1321,6 +1635,9 @@ class ScriptGenerator:
             except json.JSONDecodeError as e:
                 raise ValueError(f"script_plan_reference_units.json 解析失败: {e}") from e
 
+            # Per-shot durations of legacy drafts are absorbed once to unit level and written back (a second load doesn't trigger it).
+            # When i2v facts are available, absorb per structural options; when i2v is unknown, don't borrow r2v to rewrite seconds of image-less units.
+            # When absorption rewrites durations the plan fingerprint drifts along, so materialization rechecks against the confirmed fingerprint and refuses, never persisting seconds the user hasn't seen.
             # 存量草稿的 per-shot 时长一次性收编到 unit 级并回写落盘（二次加载不再触发）。
             # i2v 事实可用时按结构档位收编；i2v 未知时不借 r2v 改写无图单元秒数。
             # 时长被收编改写时规划指纹随之漂移，物化按确认指纹复核而拒绝，不以用户未过目的秒数落盘。
@@ -1353,6 +1670,9 @@ class ScriptGenerator:
         if dupes:
             raise ValueError(f"script_plan_reference_units.json unit_id 重复: {dupes}")
 
+        # Before persisting, _add_metadata rewrites the E\d+ prefix to the current episode: original ids differ but may collide after
+        # rewriting (E1U01 and E2U01 both become E2U01 at episode=2). Fail loud early, so duplicate ids never persist silently.
+        # Same rule as _load_narration_script_plan / _load_drama_script_plan_content.
         # _add_metadata 落盘前会把 E\d+ 前缀改写成当前 episode：原始 id 互异但改写后可能相撞
         # （E1U01 与 E2U01 在 episode=2 都成 E2U01）。提前 fail-loud，杜绝重复 id 静默落盘。
         # 与 _load_narration_script_plan / _load_drama_script_plan_content 同口径。
@@ -1366,7 +1686,17 @@ class ScriptGenerator:
         return units
 
     def _load_narration_script_plan(self, episode: int, supported_durations: list[int]) -> list[dict]:
-        """加载并校验 narration script_plan 结构化中间文件 ``script_plan_segments.json``。
+        """Load and validate the narration script_plan structured intermediate file ``script_plan_segments.json``.
+
+        Returns the shot list (dicts) with content fields such as verbatim ``novel_text``, duration and ``segment_break``, for
+        prompt_authoring prompt rendering and visual layer merging -- novel_text passes through here and is not regenerated by
+        the prompt_authoring LLM. Validation: valid structure, unique segment_id, ``duration_seconds`` ∈
+        ``supported_durations`` (the duration constraint moved from the old prompt_authoring schema enum up to script_plan,
+        since prompt_authoring no longer outputs that field). When only the pre-structured old ``script_plan_segments.md``
+        exists, give a clear "rerun the split" error -- no md->json migrator (the old md predates the structured intermediate
+        state and contains no manual edits).
+
+        加载并校验 narration script_plan 结构化中间文件 ``script_plan_segments.json``。
 
         返回逐字 ``novel_text``、时长、``segment_break`` 等内容字段的分镜列表（dict），
         供 prompt_authoring prompt 渲染与视觉层合并复用——novel_text 由此透传、不经 prompt_authoring 的 LLM 重出。
@@ -1375,6 +1705,9 @@ class ScriptGenerator:
         仅存在结构化前的旧 ``script_plan_segments.md`` 时给明确的「重跑拆分」报错——不写
         md→json 迁移器（旧 md 产于结构化中间态引入前、不含手工编辑）。
         """
+        # Don't generate while a draft is present: the final file is still the previous version (or absent), and running
+        # prompt_authoring on it would silently swap a pending output for old content. Content review already blocks on the same
+        # criterion at the tool entry; this is the fallback for direct calls (scripts / tests / future entries), same rule as the other two routes.
         # 草稿在场时不生成：正式文件此刻仍是上一版（或不存在），拿它跑 prompt_authoring 等于把一份
         # 待处置的产出静默换成旧内容。内容确认已在工具入口按同一判据阻塞，这里是直连调用
         # （脚本 / 测试 / 未来的其它入口）的兜底，与另两条路线同口径。
@@ -1425,6 +1758,8 @@ class ScriptGenerator:
         if dupes:
             raise ValueError(f"script_plan_segments.json segment_id 重复: {dupes}")
 
+        # Before persisting, _add_metadata rewrites the E\d+ prefix to the current episode: original ids differ but may collide after
+        # rewriting (E1S02_1 and E2S02_1 both become E2S02_1 at episode=2). Fail loud early, so duplicate ids never persist silently.
         # _add_metadata 落盘前会把 E\d+ 前缀改写成当前 episode：原始 id 互异但改写后可能相撞
         # （E1S02_1 与 E2S02_1 在 episode=2 都成 E2S02_1）。提前 fail-loud，杜绝重复 id 静默落盘。
         rewritten_ids = [str(rewrite_episode_prefix(sid, episode)) for sid in ids]
@@ -1440,7 +1775,17 @@ class ScriptGenerator:
         return segments
 
     def _load_drama_script_plan_content(self, episode: int) -> dict:
-        """加载并解析 drama 的 script_plan 结构化内容（``script_plan_normalized_script.json``）。
+        """Load and parse the drama script_plan structured content (``script_plan_normalized_script.json``).
+
+        Returns a ``{title, scenes: [...]}`` dict; a missing file raises FileNotFoundError (_load_script_plan); content that is
+        not valid JSON / top level not an object / scenes not a non-empty list / non-object shot items / scene_id not a
+        non-empty string / scene_id duplicated after rewriting to the current episode number all raise ValueError. Inner fields
+        of each shot (utterances / source_text etc.) are guarded by save_script's structure validation after prompt_authoring
+        merges; only the outermost shape is guarded here -- but scenes shape and scene_id must fail fast here, otherwise a bad
+        script_plan would persist silently as an empty script, scene_id collisions would only surface in artifact file names /
+        asset keys, or render/merge would raise internal exceptions instead of a clear script_plan validation error.
+
+        加载并解析 drama 的 script_plan 结构化内容（``script_plan_normalized_script.json``）。
 
         返回 ``{title, scenes: [...]}`` dict；缺文件抛 FileNotFoundError（_load_script_plan）、
         内容非合法 JSON / 顶层非对象 / scenes 非非空列表 / 含非对象分镜项 / scene_id 非非空字符串 /
@@ -1449,6 +1794,9 @@ class ScriptGenerator:
         须在此 fail-fast，否则坏 script_plan 会被当成空剧本静默落盘、scene_id 撞键拖到产物文件名 / 资产键才暴露，
         或在 render/merge 阶段抛内部异常而非明确的 script_plan 校验错误。
         """
+        # Don't generate while an invalid draft is present: the final file is still the previous version (or absent), and running
+        # prompt_authoring on it would silently swap a pending output for old content. Content review already blocks on the same
+        # criterion at the tool entry; scripts, tests and other direct calls bypass the tool entry, so the guard is repeated here, same as reference-to-video.
         # 待修复草稿在场时不生成：正式文件此刻仍是上一版（或不存在），拿它跑 prompt_authoring 等于把一份
         # 待处置的产出静默换成旧内容。内容确认已在工具入口按同一判据阻塞；脚本、测试等
         # 直连调用会绕过工具入口，因此在此重复守卫，与参考生视频同口径。
@@ -1478,6 +1826,9 @@ class ScriptGenerator:
             if not isinstance(scene_id, str) or not scene_id:
                 raise ValueError(f"脚本规划内容文件结构异常：scenes[{idx}].scene_id 必须是非空字符串")
             scene_ids.append(scene_id)
+        # Before persisting, _add_metadata rewrites the E\d+ prefix to the current episode: original ids differ but may collide after
+        # rewriting (E1S02_1 and E2S02_1 both become E2S02_1 at episode=2). Fail loud early, so duplicate ids never persist silently
+        # and downstream artifact file names / asset keys don't collide. Same rule as _load_narration_script_plan.
         # _add_metadata 落盘前会把 E\d+ 前缀改写成当前 episode：原始 id 互异但改写后可能相撞
         # （E1S02_1 与 E2S02_1 在 episode=2 都成 E2S02_1）。提前 fail-loud，杜绝重复 id 静默落盘、
         # 下游产物文件名 / 资产键撞车。与 _load_narration_script_plan 同口径。
@@ -1490,7 +1841,14 @@ class ScriptGenerator:
     def _assert_reference_script_plan_durations(
         self, script_plan_units: list[dict], *, facts: PlanningVideoFacts
     ) -> None:
-        """转为正式剧本前判脚本规划已确认的单元时长仍在当前生效档位内；正文由之后的提示词编写改写并校验。
+        """Before converting to the final script, check that unit durations confirmed in the script plan are still within the current effective options; text is rewritten and validated by later prompt authoring.
+
+        Units are bucketed by reference images available right now (no reference, reference lacking an image, or image not
+        claimed by the manifest falls into i2v), and facts must exist for that bucket. Out of options raises
+        ``UnitDurationOffTier``, referring to the unit by its position in the script plan (same as "视频单元 N" (video unit
+        N) in the content review panel), without internal unit IDs.
+
+        转为正式剧本前判脚本规划已确认的单元时长仍在当前生效档位内；正文由之后的提示词编写改写并校验。
 
         单元按此刻可用的参考图定桶（无引用、引用缺图或图未被清单认领落 i2v），须有所落桶的事实。越档时抛
         ``UnitDurationOffTier``，按脚本规划里的单元位置称呼（与内容确认面板的「视频单元 N」同口径），不带内部单元 ID。
@@ -1514,7 +1872,13 @@ class ScriptGenerator:
                 )
 
     def _assert_reference_units_authorable(self, units: list[dict], *, facts: PlanningVideoFacts) -> None:
-        """提示词编写付费调用前对待编写单元现值的全部预判：时长档位仍生效 + 正文按机器口径合法。
+        """All pre-checks on the current values of pending authoring units before the paid prompt authoring call: duration option still effective + text valid by the machine rules.
+
+        The output path and the promotion path (before re-checking an invalid draft) share this one: while a draft is present
+        the user may have edited units on the timeline, and if the two diverged there would be dead ends like "promotion lets
+        it through, next authoring rejects it" or the reverse.
+
+        提示词编写付费调用前对待编写单元现值的全部预判：时长档位仍生效 + 正文按机器口径合法。
 
         产出路径与晋升路径（待修复草稿重判前）共用这一份：草稿在场期间用户可能在时间线上改过
         单元，两处口径若分叉，就会出现「晋升放行、下次编写被拒」或反过来的死角。
@@ -1523,6 +1887,7 @@ class ScriptGenerator:
             bucket = hydration.hydrated_generation_type
             facts.require(bucket)
             duration = int(unit["duration_seconds"])
+            # Stop durations that will surely fail before the paid call; stopping them only in _add_metadata would be after the TextBackend cost was incurred.
             # 必然失败的时长在付费调用之前拦下；放到 _add_metadata 才拦，TextBackend 的费用已经产生。
             off_tiers = self._unit_duration_off_every_tier(duration, facts=facts, generation_type=bucket)
             if off_tiers is not None:
@@ -1539,7 +1904,11 @@ class ScriptGenerator:
     def _unit_rejection(
         self, targets: PromptAuthoringTargets, exc: DraftViolation
     ) -> PromptAuthoringUnitRejected | None:
-        """把正式脚本单元的预判违约转成任务失败的问题码：台词念不完带上估算秒数，其余违约只指出单元。
+        """Turn a pre-check violation of a final script unit into the task failure problem code: dialogue that can't be spoken in time carries the estimated seconds, other violations only point to the unit.
+
+        Returns None when the violation can't be located to a unit in the final script.
+
+        把正式脚本单元的预判违约转成任务失败的问题码：台词念不完带上估算秒数，其余违约只指出单元。
 
         违约定位不到正式脚本里的单元时返回 None。
         """
@@ -1563,7 +1932,9 @@ class ScriptGenerator:
     def _duration_rejection(
         targets: PromptAuthoringTargets, exc: UnitDurationOffTier
     ) -> PromptAuthoringUnitRejected | None:
-        """单元时长越出生效档位转成修改输入：按界面位置称呼单元，带上现时长与可选档位。定位不到时返回 None。"""
+        """Turn a unit duration outside the effective options into an edit-the-input failure: refer to the unit by UI position, with current duration and selectable options. Returns None when it can't be located.
+
+        单元时长越出生效档位转成修改输入：按界面位置称呼单元，带上现时长与可选档位。定位不到时返回 None。"""
         found = find_item(targets.script, exc.unit_id)
         if found is None:
             return None
@@ -1578,7 +1949,14 @@ class ScriptGenerator:
     def _formal_unit_promotion_violation(
         self, targets: PromptAuthoringTargets, exc: DraftViolation | UnitDurationOffTier
     ) -> DraftViolation:
-        """晋升前正式剧本单元没过预判时的违约：仍是 ``DraftViolation``（晋升照常报 ``draft_invalid``），按界面位置称呼单元。
+        """Violation when a final script unit fails the pre-check before promotion: still a ``DraftViolation`` (promotion still reports ``draft_invalid``), referring to the unit by UI position.
+
+        Problem code and params reuse the same pre-check result as the authoring entry (``_unit_rejection`` /
+        ``_duration_rejection``), swapped to the draft promotion message key: the presentation layer localizes by ``code`` and
+        ``params``. The message is for the Agent, also referring to "视频单元 N" (video unit N), without internal unit IDs.
+        When the violation can't be located to a unit in the final script, the message is kept as is.
+
+        晋升前正式剧本单元没过预判时的违约：仍是 ``DraftViolation``（晋升照常报 ``draft_invalid``），按界面位置称呼单元。
 
         问题码与参数沿用编写入口的同一份预判结果（``_unit_rejection`` / ``_duration_rejection``），换成草稿
         晋升的文案 key：呈现层按 ``code`` 与 ``params`` 本地化。消息面向 Agent，同样按「视频单元 N」称呼，
@@ -1596,6 +1974,7 @@ class ScriptGenerator:
         code = _FORMAL_UNIT_PROMOTION_KEYS[rejection.code]
         message = translate(code, **params)
         if isinstance(exc, DraftViolation) and rejection.code == "prompt_authoring_unit_invalid":
+            # The specific reason of a text violation is appended after switching to the position reference, so the Agent knows what to change; entries whose internal IDs can't be replaced get nothing appended.
             # 正文违约的具体原因换成位置称呼后附上，Agent 据此知道该改什么；改不掉内部 ID 的条目不附。
             label = f"视频单元 {params['position']}"
             reasons = [
@@ -1607,7 +1986,17 @@ class ScriptGenerator:
         return DraftViolation(message, code=code, params=params, item_id=unit_id)
 
     def _assert_reference_unit_text_valid(self, units: list[dict], *, max_refs: int | None) -> None:
-        """按机器产物的严格口径预判正式脚本各 unit 正文，违约时把定位与出路指回时间线。
+        """Pre-check each unit's text in the final script by the strict machine-output rules; on violation, point the location and the way out back to the timeline.
+
+        Uses the same ``validate_unit_text`` as ``_merge_reference_visual``: one ruler for both places, avoiding the dead end
+        "script_plan lets it through, prompt_authoring surely rejects". Only judges here, without taking derived results --
+        reference images are derived from the text at execution, and only the text itself is persisted.
+
+        Dialogue speaking time is also re-checked here: the split tool checked only once at output time, and shortening a unit
+        duration or adding dialogue at content review both bypass it, while prompt_authoring keeps dialogue verbatim with no
+        later speaking-time check -- without re-checking, units whose lines can't be spoken in time would persist all the way.
+
+        按机器产物的严格口径预判正式脚本各 unit 正文，违约时把定位与出路指回时间线。
 
         与 ``_merge_reference_visual`` 用的是同一个 ``validate_unit_text``：同一把尺量两处，
         避免「script_plan 放行、prompt_authoring 必拒」的死角。此处只判、不取派生结果——参考图是执行期从正文
@@ -1673,7 +2062,9 @@ class ScriptGenerator:
 
     @staticmethod
     def _unit_durations(targets: PromptAuthoringTargets) -> dict[str, int]:
-        """待编写单元的时长：编写不改时长，取档校验按落地正文对着这份值重算。"""
+        """Durations of pending authoring units: authoring doesn't change durations; option validation recomputes against these values from the landed text.
+
+        待编写单元的时长：编写不改时长，取档校验按落地正文对着这份值重算。"""
         return {str(unit["unit_id"]): int(unit["duration_seconds"]) for unit in targets.entries}
 
     async def _author_reference_units(
@@ -1686,7 +2077,14 @@ class ScriptGenerator:
         instructions: str | None,
         before_quarantine_commit: Callable[[], None] | None,
     ) -> Path:
-        """参考生视频的提示词编写：只改写本次选中单元的正文，其余单元逐字不动。
+        """Prompt authoring for reference-to-video: only rewrite the text of the units selected this time, other units untouched verbatim.
+
+        The LLM only outputs writing-syntax text (same count and order as the pending authoring units); violations are not
+        discarded but stored as an invalid draft with a per-item report, and after repair they are re-checked via draft
+        promotion and written back to the final script. Re-rolling burns money and doesn't converge -- the same model on the
+        same text will most likely repeat the same kind of error.
+
+        参考生视频的提示词编写：只改写本次选中单元的正文，其余单元逐字不动。
 
         LLM 只出引用语法正文（与待编写单元等长、同序）；违约不丢弃，连同逐条报告落待修复草稿，
         修复后经草稿晋升重判写回正式剧本。重抽既烧钱又不收敛——同一个模型对同一份正文
@@ -1738,6 +2136,8 @@ class ScriptGenerator:
                 before_commit=before_quarantine_commit,
             )
 
+        # _add_metadata is also covered by draft protection: it recomputes effective options from the final landed text, and a unit
+        # that added / removed an `@` reference only goes out of options after the merge -- without catching it, this paid output would exist only in memory.
         # _add_metadata 一并纳入草稿保护：它按落地后的最终正文重算生效档位，一个新增 / 去掉了
         # `@` 引用的 unit 要到合并之后才判出档——不接住的话，这份已付费产出只存在于内存里。
         def author() -> dict[str, Any]:
@@ -1776,6 +2176,8 @@ class ScriptGenerator:
             data = json.loads(text)
         except json.JSONDecodeError as e:
             raise ValueError(f"JSON 解析失败: {e}") from e
+        # The missing/blank title fallback must come before validation: title is not written back, and the model omitting the whole
+        # field on a non-constrained decoding channel shouldn't fail a paid expansion (same fallback as _parse_response).
         # title 缺失/空白兜底须在校验之前：title 不参与写回，非约束解码通道下模型整字段漏写
         # 不该让一次已付费的展开失败（与 _parse_response 的兜底同口径）。
         if isinstance(data, dict):
@@ -1795,7 +2197,17 @@ class ScriptGenerator:
         *,
         max_refs: int | None,
     ) -> list[dict]:
-        """参考路径提示词编写合并：LLM 只出引用语法正文，按位写回待编写单元，其余字段原样保留。
+        """Reference-path prompt authoring merge: the LLM only outputs writing-syntax text, written back by position into pending authoring units, other fields kept as is.
+
+        The structure-preserving diff lands here -- unit count and order and dialogue lines all follow the unit's existing text
+        verbatim; prompt authoring may only make the picture description more detailed. Any change fails loud
+        (``DraftViolation``), not silently accepted: when dialogue doesn't fit the picture, the right way out is editing the
+        unit text on the timeline, not letting prompt authoring change the words itself.
+
+        Per-unit violations are collected and raised once (``DraftViolations``), so the caller can store the whole output with
+        the report as an invalid draft -- raising one at a time would make the Agent rerun the paid expansion for every unit fixed.
+
+        参考路径提示词编写合并：LLM 只出引用语法正文，按位写回待编写单元，其余字段原样保留。
 
         保结构 diff 在此落地——unit 数与顺序、台词规范行逐字都以单元现有正文为准，提示词编写
         只允许把画面描述写详细。任一项被改动即 fail-loud（``DraftViolation``），不静默接受：
@@ -1816,6 +2228,8 @@ class ScriptGenerator:
         violations: list[DraftViolation] = []
         for index, (unit, flat_unit) in enumerate(zip(units, flat.units, strict=True)):
             label = f"unit {unit['unit_id']}"
+            # Collect per unit instead of raising at the first violation: the report must cover all bad units so the Agent sees everything to fix in one round.
+            # Within one unit it still stops at the first violation -- when the text can't be parsed, all later checks rest on the same problem.
             # 逐 unit 收集而非首个违约即抛：报告要覆盖所有坏 unit，Agent 一轮就能看全要改什么。
             # 一个 unit 内部仍是首个违约即停——正文解析不出时，后续判定都建立在同一个问题上。
             try:
@@ -1847,7 +2261,13 @@ class ScriptGenerator:
         formal_baseline: str | None,
         instructions: str | None,
     ) -> Path:
-        """广告/短片参考生视频的提示词编写：按 brief、商品信息与前后单元写出待编写单元的正文。
+        """Prompt authoring for ad/short reference-to-video: write the text of pending authoring units from the brief, product info and neighboring units.
+
+        Durations keep the unit's current value (ad unit planned durations aren't quantized to provider options); existing
+        dialogue lines in the unit are kept verbatim. Like ad whole-script generation, no invalid draft is stored; violations
+        raise directly.
+
+        广告/短片参考生视频的提示词编写：按 brief、商品信息与前后单元写出待编写单元的正文。
 
         时长沿用单元现值（ad 单元编排时长不按供应商档位量化）；单元里已有的台词逐字保留。
         与 ad 整份生成同口径不落待修复草稿，违约直接报错。
@@ -1878,6 +2298,7 @@ class ScriptGenerator:
                 assert_dialogue_preserved(label, str(unit.get("text") or ""), flat_unit.text)
                 validate_unit_text(label, flat_unit.text, self.project_json, max_refs=None)
             except DraftViolation as exc:
+                # Same pass-through rule as ad whole-script generation: speaker-attribution problems are carried by the needs_replan flag and don't block persistence.
                 # 与 ad 整份生成同一放行口径：发声归属类问题由 needs_replan 标记承接，不阻断落盘。
                 blocking = [item for item in violation_items(exc) if item.code not in _AD_UNIT_REPLAN_CODES]
                 if blocking:
@@ -1899,7 +2320,9 @@ class ScriptGenerator:
         return output_path
 
     def _ad_prompt_common(self, episode: int, instructions: str | None) -> dict[str, Any]:
-        """ad 两类 prompt（整份生成与提示词编写）共用的持久输入槽位，与产物依据同源。"""
+        """Persistent input slots shared by both ad prompts (whole-script generation and prompt authoring), same source as the artifact basis.
+
+        ad 两类 prompt（整份生成与提示词编写）共用的持久输入槽位，与产物依据同源。"""
         direct_inputs = project_ad_episode_script_inputs(episode, project=self.project_json)
         return {
             "project_overview": cast(dict[str, Any], direct_inputs["overview"]),
@@ -1935,7 +2358,13 @@ class ScriptGenerator:
         )
 
     def _prompt_authoring_flat_content(self, response_text: str, episode: int) -> dict:
-        """把 prompt_authoring 响应还原成待修复草稿要装的扁平形状 ``{title, units: [{text}]}``。
+        """Restore the prompt_authoring response to the flat shape ``{title, units: [{text}]}`` the invalid draft holds.
+
+        Step by step the same as the parse preamble of ``_merge_reference_visual`` (strip code fence -> title fallback ->
+        schema validation): the invalid draft must hold the output that "passed schema, only violates on content", otherwise
+        the text the Agent edits and the text the merge reads would have different shapes.
+
+        把 prompt_authoring 响应还原成待修复草稿要装的扁平形状 ``{title, units: [{text}]}``。
 
         与 ``_merge_reference_visual`` 的解析前置（去代码围栏 → title 兜底 → schema 校验）
         逐步同口径：待修复草稿装的必须是「schema 已过、只是内容违约」的那份产物，否则 Agent
@@ -1954,7 +2383,15 @@ class ScriptGenerator:
         expected_draft_revision: str | None,
         before_commit: Callable[[], None] | None = None,
     ) -> DraftViolation:
-        """把违约的 prompt_authoring 产出与报告落待修复草稿，返回携带报告的违约异常（由调用方抛出）。
+        """Store the violating prompt_authoring output and report as an invalid draft; return the violation exception carrying the report (raised by the caller).
+
+        ``meta.unit_ids`` records the units this output corresponds to (in script order); promotion uses it to fetch the same
+        units back from the final script.
+
+        Returns rather than raises itself: the call site uses ``raise ... from exc`` to keep the original violation chain; an
+        exception constructed here but raised there would make the traceback point to this function instead of the merge logic.
+
+        把违约的 prompt_authoring 产出与报告落待修复草稿，返回携带报告的违约异常（由调用方抛出）。
 
         ``meta.unit_ids`` 记下这份产出对应的单元（按剧本顺序），晋升时按它从正式剧本取回同一批单元。
 
@@ -2074,9 +2511,12 @@ class ScriptGenerator:
         if targets is None:
             raise FileNotFoundError(f"集（id={episode}）尚无正式脚本，无法晋升 prompt_authoring 待修复草稿")
         if unit_ids is None:
+            # A draft without recorded units comes from whole-script authoring: re-check against all units of the final script and report honestly if unit counts don't match.
             # 未记录单元的草稿产自整份编写：按正式剧本的全部单元重判，单元数对不上时如实报告。
             targets = replace(targets, entries=tuple(item for item in targets.items if isinstance(item, dict)))
         units = list(targets.entries)
+        # Same pre-check as the output path: while the draft is present the user may have edited units on the timeline; without
+        # re-checking, dialogue that can't be spoken after shortening a duration, or an unregistered @[名称], would slip through via promotion.
         # 与产出路径同一份预判：草稿在场期间用户可能在时间线上改过单元，不复判就会让改短时长后
         # 念不完的台词、或未登记的 @[名称] 借晋升一路落盘。
         try:
@@ -2087,6 +2527,8 @@ class ScriptGenerator:
         try:
             authored = self._merge_reference_visual(units, json.dumps(draft.content), episode, max_refs=max_refs)
             if unit_ids is None:
+                # Units whose text is unchanged in a whole-script draft don't count as authored: only units whose text actually changed are
+                # written back; other units (including their pending authoring flags) keep the final script. All units still go through the merge re-check above, and violations land in the report as usual.
                 # 整份草稿里正文未变的单元不算已编写：只写回正文实际改变的单元，其余单元（含待编写标记）
                 # 沿用正式剧本。全部单元仍经上面的合并重判，违约照常落报告。
                 changed = [
@@ -2096,6 +2538,9 @@ class ScriptGenerator:
                 ]
                 targets = replace(targets, entries=tuple(unit for unit, _ in changed))
                 authored = [merged for _, merged in changed]
+            # _add_metadata (via _authored_script) is included too: it recomputes effective options from the final landed text, and
+            # adding / removing one `@` reference in the draft only goes out of options after the merge; leaving it outside the try would
+            # make promotion regress to "error but draft not refreshed" for this class.
             # _add_metadata（经 _authored_script）一并纳入：它按落地后的最终正文重算生效档位，草稿里
             # 新增 / 去掉一个 `@` 引用就会在合并之后才判出档，留在 try 之外会让晋升在这一类上退回
             # 「报错但草稿不刷新」。
@@ -2117,6 +2562,8 @@ class ScriptGenerator:
                 code="quarantined",
             ) from exc
         except ValueError as exc:
+            # The schema layer (DraftViolation is a ValueError subclass, so it must come first) likewise only reports back: on this path
+            # the content is hand-written by the Agent, there is no backend to retry, same as schema_invalid in script_plan promotion.
             # schema 层（DraftViolation 是 ValueError 子类，故须排在前）同样只回报告：这条路上
             # 内容是 Agent 手写的，没有 backend 可重试，与 script_plan 晋升的 schema_invalid 同口径。
             violations = (
@@ -2160,6 +2607,7 @@ class ScriptGenerator:
             validate=True,
             expected_fingerprint=resolved_expected_fingerprint,
         )
+        # Clear the draft only after persisting succeeds: if the write fails the draft is still there, retrying promotion works, and nothing is lost on both sides.
         # 落盘成功后才清草稿：写盘失败时草稿还在，重试晋升即可，不会两头皆空。
         clear_quarantine(self.project_path, episode, QUARANTINE_KIND_PROMPT_AUTHORING)
         self._quality_probe(script_data, episode)
@@ -2173,7 +2621,17 @@ class ScriptGenerator:
         expected_fingerprint: str | _UnsetExpectedFingerprint | None = _UNSET_EXPECTED_FINGERPRINT,
         _prompt_authoring_lock_held: bool = False,
     ) -> Path:
-        """按产出时那套校验器全量重判 prompt_authoring 待修复草稿，通过则晋升为正式剧本并清除草稿。
+        """Fully re-check the prompt_authoring invalid draft with the same validators as at output; if it passes, promote it to the final script and clear the draft.
+
+        The re-check uses ``_merge_reference_visual`` itself, not a simplified copy: promotion and output must share the same
+        code, otherwise divergences like "promotion lets it through, next generation rejects it" reappear. The draft's units
+        are re-read from the final script -- while the draft is present the user may have edited units on the timeline, and the
+        structure-preserving diff must be judged against current values.
+
+        When violations remain, refresh the report snapshot in the draft and raise (``DraftViolation``); the draft stays in
+        place for further editing; no limit on convergence rounds.
+
+        按产出时那套校验器全量重判 prompt_authoring 待修复草稿，通过则晋升为正式剧本并清除草稿。
 
         重判用的是 ``_merge_reference_visual`` 本身，不是它的简化副本：晋升口径与产出口径必须
         同一份代码，否则「晋升时放行、下次生成时被拒」这类分叉会重新出现。草稿对应的单元从正式剧本
@@ -2194,6 +2652,15 @@ class ScriptGenerator:
 
     def _parse_response(self, response_text: str, episode: int) -> dict:
         """
+        Parse and validate the TextBackend response
+
+        Args:
+            response_text: JSON text returned by the API
+            episode: episode number
+
+        Returns:
+            validated script data dict
+
         解析并验证 TextBackend 响应
 
         Args:
@@ -2203,10 +2670,10 @@ class ScriptGenerator:
         Returns:
             验证后的剧本数据字典
         """
-        # 清理可能的 markdown 包装
+        # Strip a possible markdown wrapper / 清理可能的 markdown 包装
         text = strip_json_code_fences(response_text)
 
-        # 解析 JSON
+        # Parse JSON / 解析 JSON
         try:
             data = json.loads(text)
         except json.JSONDecodeError as e:
@@ -2214,12 +2681,16 @@ class ScriptGenerator:
         if not isinstance(data, dict):
             raise ValueError(f"JSON 顶层须是对象，实际是 {type(data).__name__}")
 
+        # Missing/blank title fallback: on non-constrained decoding channels the model may omit the whole field. title is display only and
+        # user-editable, not worth failing a whole-episode generation for; same fallback as _merge_narration_visual.
         # title 缺失/空白兜底：非约束解码通道下模型可能整字段漏写。title 仅展示用、
         # 用户可改，不值得让整集生成失败；与 _merge_narration_visual 的兜底同口径。
         title = data.get("title")
         if not (isinstance(title, str) and title.strip()):
             data["title"] = episode_title(self.project_json, episode)
 
+        # The validation model determines the skeleton kind via canonical resolution (storyboard mode per content mode, reference-to-video uniformly video_units);
+        # the kind->model mapping lives here (models are upper-layer dependencies, not in the narrow SKELETONS table).
         # 校验模型经规范解析定骨架种类（分镜图生视频按创作类型，参考生视频统一 video_units），
         # kind→模型映射留本地（模型属上层依赖，不进 SKELETONS 窄表）。
         kind = resolve_declared_kind(self.content_mode, self.generation_mode)
@@ -2228,22 +2699,29 @@ class ScriptGenerator:
             parsed = schema.model_validate(data).model_dump()
         except ValidationError as e:
             logger.warning("数据验证警告: %s", e)
-            # 返回原始数据，允许部分不符合 schema
+            # Return the raw data, allowing partial schema non-conformance / 返回原始数据，允许部分不符合 schema
             return data
+        # The script model doesn't take this episode's new assets; they come back with the output and are taken and resolved by the caller.
         # 剧本模型不收本集新增资产；它随产出带回，由调用方取走后解析。
         if NEW_ASSETS_FIELD in data:
             parsed[NEW_ASSETS_FIELD] = data[NEW_ASSETS_FIELD]
         return parsed
 
     def _resolve_ad_new_assets(self, raw_items: object) -> NewAssetResolution:
-        """按项目现状解析整份生成带出的新增资产；处理决定解析不出即违约。"""
+        """Resolve the new assets brought out by whole-script generation against the current project; an unresolvable handling decision is a violation.
+
+        按项目现状解析整份生成带出的新增资产；处理决定解析不出即违约。"""
         try:
             return resolve_new_assets(self.project_json, raw_items)
         except NewAssetsError as exc:
             raise AdScriptRejected([problem.message for problem in exc.problems]) from exc
 
     def _parse_ad_storyboard_response(self, response_text: str, episode: int) -> tuple[dict, NewAssetResolution]:
-        """解析广告/短片分镜整份生成的输出：剧本与本次新增资产的处理决定。
+        """Parse the output of ad/short storyboard whole-script generation: the script and the handling decisions for this run's new assets.
+
+        The episode title comes from the episode ledger (may be empty); the title the model gives is not adopted.
+
+        解析广告/短片分镜整份生成的输出：剧本与本次新增资产的处理决定。
 
         集标题取分集账本（可为空），模型给出的标题不采用。
         """
@@ -2256,7 +2734,13 @@ class ScriptGenerator:
         return data, self._resolve_ad_new_assets(raw_new_assets)
 
     def _parse_ad_reference_response(self, response_text: str, episode: int) -> tuple[dict, NewAssetResolution]:
-        """把广告/短片的参考生视频的扁平 LLM 输出机械提升为自包含 ``video_units``，并解析本次新增资产。
+        """Mechanically lift the flat LLM output of ad/short reference-to-video into self-contained ``video_units`` and resolve this run's new assets.
+
+        ``@[名称]`` in the text must be registered or among this run's new items: validated against a project view overlaid
+        with the new items. Speaker-attribution problems are carried by ``needs_replan``; other violations are collected and
+        rejected together. The episode title comes from the episode ledger (may be empty); the model's title is not adopted.
+
+        把广告/短片的参考生视频的扁平 LLM 输出机械提升为自包含 ``video_units``，并解析本次新增资产。
 
         正文里的 ``@[名称]`` 须已登记或在本次新增项中：校验对着叠加了新增项的项目视图判。发声归属问题
         由 ``needs_replan`` 承接，其余违约一并收齐后拒绝。集标题取分集账本（可为空），模型给出的标题不采用。
@@ -2311,6 +2795,20 @@ class ScriptGenerator:
         facts: PlanningVideoFacts | None = None,
     ) -> dict:
         """
+        Add script metadata
+
+        Args:
+            script_data: script data
+            episode: episode number
+            reference_unit_durations: for the reference_video path, mechanically overrides the LLM-output unit durations by
+                unit_id (after rewriting) -- the raw values confirmed in script_plan, not snapped to options; options are
+                recomputed per unit below, see the comment where it's built in ``generate``
+            facts: video request facts for taking effective options per unit; required when ``reference_unit_durations``
+                is given, option validation is not skipped
+
+        Returns:
+            script data with metadata added
+
         补充剧本元数据
 
         Args:
@@ -2329,6 +2827,9 @@ class ScriptGenerator:
         rewritten_output_ids = prepare_script_entries(script_data, project=self.project_json, episode=episode)
 
         if reference_unit_durations is not None:
+            # Durations are only overridden when the unit_id set exactly matches script_plan: the LLM omitting a confirmed unit or
+            # outputting unit_ids foreign to script_plan both mean the output is detached from the script_plan base, which overriding
+            # durations can't hide -- same fail-loud rule as the shot visual layer write-back (_merge_visual_layer).
             # unit_id 集合须与 script_plan 完全一致才覆盖时长：LLM 漏写某个已确认 unit、或输出
             # script_plan 之外的陌生 unit_id，都说明输出与 script_plan 基底脱节，覆盖时长掩盖不了这个
             # 更根本的问题——与分镜视觉层写回（_merge_visual_layer）同一套 fail-loud 口径。
@@ -2352,6 +2853,9 @@ class ScriptGenerator:
             ]
             if facts is None:
                 raise ValueError("reference_video 取档校验需要视频请求事实")
+            # Options are computed from the unit's final landed text, not its state at script_plan split time: `@[名称]` in the text
+            # is decided by the LLM in the prompt_authoring output and may differ from script_plan; the bucket is judged by the
+            # reference images available for that text right now, same criterion as the content review panel and execution, each reading its bucket's video request facts.
             # 取档按这个 unit 最终落地的正文算，不是 script_plan 拆分时的状态：正文里的
             # `@[名称]` 由 LLM 在 prompt_authoring 输出时决定，可能与 script_plan 的不同；桶按该正文
             # 此刻可用的参考图判定，与内容确认面板、执行同判据，各读所落桶的视频请求事实。
@@ -2361,6 +2865,7 @@ class ScriptGenerator:
                 try:
                     facts.require(bucket)
                 except VideoRequestFactsError as exc:
+                    # A video model config problem rather than a text violation: state the reason and way out per problem code; the Web view localizes per problem code.
                     # 视频模型配置问题而非正文违约：按问题码陈述原因与出路，Web 视图按问题码本地化。
                     params: dict[str, Any] = exc.params
                     raise DraftViolation(
@@ -2372,6 +2877,10 @@ class ScriptGenerator:
                     ) from exc
                 unit_tiers = self._unit_duration_off_tier(target_duration, facts=facts, generation_type=bucket)
                 if unit_tiers is not None:
+                    # Effective options narrowed to exclude the confirmed value: don't silently snap and rewrite -- the duration/cost the user
+                    # approved must not be persisted as a value never seen. Raise a content violation (rather than a bare ValueError) so the
+                    # reference path stores this paid output as an invalid draft: the cause is usually that this generation added/removed an
+                    # `@` reference for this unit, fixable by editing the reference in the draft text, not by discarding and re-rolling.
                     # 生效档位收窄到已确认值之外：不静默取档改写——用户审阅通过的时长/费用不被
                     # 换成从未过目的值落盘。抛内容违约（而非裸 ValueError）让 reference 路径把这
                     # 份已付费产出落待修复草稿：成因通常是该次生成给这个 unit 新增/去掉了 `@` 引用，
@@ -2401,7 +2910,14 @@ class ScriptGenerator:
         )
 
     def _quality_probe(self, script_data: dict, episode: int) -> None:
-        """落盘后的轻量质量探针：仅日志，不阻断、不重试。
+        """Lightweight quality probe after persistence: log only, no blocking, no retry.
+
+        Counts extremely short samples (scene/action/shot text character count below threshold), flagging "content too short"
+        risk. Thresholds only catch "clearly abnormal"; normal complete descriptions should be far above them. Outer
+        try/except fallback: when _parse_response returns a raw dict after validation failure and nested field types don't
+        match the schema (e.g. image_prompt is a string), the probe only warns and doesn't block generate.
+
+        落盘后的轻量质量探针：仅日志，不阻断、不重试。
 
         统计极端短样本（scene/action/shot text 字符数低于阈值），定位"内容
         过短"风险。阈值仅捕"明显异常"，正常完整描述应远超这些值。
@@ -2412,11 +2928,16 @@ class ScriptGenerator:
         try:
             short_ids: list[str] = []
 
+            # The skeleton is discriminated via canonical resolution; the entry array and id field come from resolve_kind_items (same as the _add_metadata
+            # id rewrite). Too-short samples of video_units sit in the unit text, a different data shape from the image_prompt/video_prompt
+            # probes of narration/drama/ad flat entries -- structural branches distinguish explicitly by kind, not by skeleton dispatch.
             # 骨架经规范解析统一判别、条目数组与 id 字段查 resolve_kind_items（同 _add_metadata
             # id 改写处置）。video_units 的过短样本落在 unit 正文，与 narration/drama/ad 平铺条目的
             # image_prompt/video_prompt 探针数据形状不同——结构分支按 kind 显式区分、非骨架分派。
             kind = resolve_declared_kind(self.content_mode, self.generation_mode)
             raw_items, id_key, _kind = resolve_kind_items(script_data, kind=kind)
+            # In a raw dict saved in degraded mode, arrays may be non-list dirty values; `... or []` doesn't stop truthy scalars,
+            # and the isinstance guard avoids the `for` iteration crashing (the outer try/except would swallow it but wrongly skip the whole probe).
             # 降级保存的原始 dict 里数组可能为非列表脏值；`... or []` 挡不住真值标量，
             # isinstance 守卫避免 `for` 迭代崩溃（外层 try/except 会吞异常但会误跳过整段探针）。
             items = raw_items if isinstance(raw_items, list) else []
@@ -2448,9 +2969,13 @@ class ScriptGenerator:
                     sorted(set(short_ids)),
                 )
 
+            # narration novel_text is now passed through from script_plan and no longer regenerated by prompt_authoring, so expansion drift is
+            # structurally eliminated (no window for "the LLM quietly expanding"), hence no more novel_text drift probe.
             # narration 的 novel_text 现由 script_plan 透传、prompt_authoring 不再重出，扩写漂移已从结构上
             # 消除（不存在「LLM 偷偷扩写」的窗口），故不再做 novel_text 漂移探针。
 
+            # Observe ad total duration deviation: the script total should be close to target_duration, but quantization error of the
+            # provider duration enum makes an exact hit unrealistic. WARN only, no blocking/retry/frontend push.
             # ad 总时长偏差观察：剧本总时长应贴近 target_duration，但供应商时长枚举的
             # 量化误差让精确命中不现实。仅 WARN，不阻断/不重试/不推前端。
             if self.content_mode == "ad":

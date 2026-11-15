@@ -1,5 +1,14 @@
 """Profile manifest materialization system.
 
+Materialize agent_runtime_profile/.claude/ and CLAUDE.md into each project's {project}/.claude/ + CLAUDE.md.
+manifest + sha256 distinguish three states: unmodified built-in skill / user-modified / user-deleted.
+
+The manifest lives at ``{project_dir}/.arcreel_profile_manifest.json`` (project root, managing both .claude and the
+top-level CLAUDE.md). The schema is versioned; a ``profile_id`` mismatch is equivalent to a reset.
+
+The decision table has 15 rows covering ``{P present/missing} × {D present/missing} × {M none/active/tombstone}``,
+implemented exhaustively with match in ``_apply_decision``; any unlisted state raises NotImplementedError explicitly.
+
 把 agent_runtime_profile/.claude/ 和 CLAUDE.md 物化到各项目 {project}/.claude/ +
 CLAUDE.md。manifest + sha256 区分三种状态：未改的内置 skill / 用户修改 / 用户主动删除。
 
@@ -41,28 +50,33 @@ MANIFEST_SCHEMA_VERSION = 1
 EXPECTED_PROFILE_ID = "arcreel/builtin"
 LOCK_TIMEOUT_SECONDS = 10
 
+# The two roots to materialize on the profile side: the ``.claude/**`` tree + top-level ``CLAUDE.md``
 # profile 端要物化的两个根：``.claude/**`` 目录树 + 顶层 ``CLAUDE.md``
 _PROFILE_TREE_ROOT = ".claude"
 _PROFILE_TOP_FILE = "CLAUDE.md"
 
 
 class ProfileMissingError(RuntimeError):
-    """profile 目录不存在 → 部署错误。物化流程拒绝运行以防 mass prune 所有项目。"""
+    """Profile directory does not exist → deployment error. Materialization refuses to run to avoid mass-pruning all projects.
+
+    profile 目录不存在 → 部署错误。物化流程拒绝运行以防 mass prune 所有项目。"""
 
 
 class ProfileEmptyError(RuntimeError):
-    """profile 目录无可物化文件 → 部署错误。同上拒绝运行。"""
+    """Profile directory has no materializable files → deployment error. Likewise refuses to run. / profile 目录无可物化文件 → 部署错误。同上拒绝运行。"""
 
 
 class ProfileMisconfiguredError(RuntimeError):
-    """profile 端变体文件不合法（成对缺失或与通用文件并存）→ 部署错误。物化流程拒绝运行。"""
+    """Invalid variant files on the profile side (pair missing or coexisting with the generic file) → deployment error. Materialization refuses to run.
+
+    profile 端变体文件不合法（成对缺失或与通用文件并存）→ 部署错误。物化流程拒绝运行。"""
 
 
 ContentMode = Literal["narration", "drama", "ad"]
 VALID_CONTENT_MODES: frozenset[str] = frozenset({"narration", "drama", "ad"})
 
 
-# ---------- 基础工具 ----------
+# ---------- basic helpers ---------- / ---------- 基础工具 ----------
 
 
 def _is_skippable_dest(rel: str) -> bool:
@@ -80,13 +94,19 @@ def _walk_files(root: Path, rel_to: Path) -> set[str]:
 
 
 def _parse_variant_suffix(rel: str) -> tuple[str, str | None]:
-    """把 ``foo.narration.md`` 拆成 (logical_rel="foo.md", mode="narration")。
+    """Split ``foo.narration.md`` into (logical_rel="foo.md", mode="narration").
+    Non-variant files return (rel, None). Only the last segment of the stem is recognized.
+
+    把 ``foo.narration.md`` 拆成 (logical_rel="foo.md", mode="narration")。
     非变体文件返回 (rel, None)。只识别 stem 中最后一段。
     """
     path = PurePosixPath(rel)
+    # path.stem is the part without the last extension; split once more to get the "second-outermost suffix"
     # path.stem 是去掉最后一个扩展名的部分；再 split 一次拿"次外层后缀"
     stem_parts = path.stem.rsplit(".", 1)
     if len(stem_parts) == 2 and stem_parts[1] in VALID_CONTENT_MODES:
+        # Reassemble as logical_parent/<logical_stem><ext>; for top-level files parent == PurePosixPath('.'),
+        # ``PurePosixPath('.') / 'foo.md'`` still yields ``PurePosixPath('foo.md')``, so no separate branch is needed
         # 重组为 logical_parent/<logical_stem><ext>；顶层文件时 parent == PurePosixPath('.')，
         # ``PurePosixPath('.') / 'foo.md'`` 仍然产生 ``PurePosixPath('foo.md')``，无需单独分支
         logical_name = stem_parts[0] + path.suffix
@@ -95,7 +115,14 @@ def _parse_variant_suffix(rel: str) -> tuple[str, str | None]:
 
 
 def enumerate_profile_files(profile_dir: Path) -> set[str]:
-    """profile 内所有源文件的 POSIX 相对路径集合（含 CLAUDE.<mode>.md 变体）。
+    """Set of POSIX relative paths of all source files in the profile (including CLAUDE.<mode>.md variants).
+
+    At the top level only the CLAUDE family is collected: ``CLAUDE.md`` + ``CLAUDE.<mode>.md``. Other top-level files are
+    deliberately ignored to stay symmetric with ``enumerate_dest_files`` -- otherwise the source side would see them and
+    the destination side wouldn't, and the state machine would put those "destination missing" files into the tombstone
+    branch. If new top-level logical files are ever needed, update both this and ``enumerate_dest_files``.
+
+    profile 内所有源文件的 POSIX 相对路径集合（含 CLAUDE.<mode>.md 变体）。
 
     顶层只收 CLAUDE 家族：``CLAUDE.md`` + ``CLAUDE.<mode>.md``。其它顶层文件被
     刻意忽略，以与 ``enumerate_dest_files`` 口径对称——否则源端会扫到、目标端
@@ -118,7 +145,16 @@ def resolve_profile_files_for_mode(
     profile_dir: Path,
     content_mode: ContentMode,
 ) -> dict[str, str]:
-    """把 profile 端文件树投影成 ``{logical_rel: source_rel}`` 映射。
+    """Project the profile-side file tree into a ``{logical_rel: source_rel}`` mapping.
+
+    Generic files: logical_rel == source_rel.
+    Variant files: only the one matching ``content_mode`` is kept; logical_rel drops the ``.<mode>`` suffix.
+
+    Raises:
+        ValueError: content_mode not in ``VALID_CONTENT_MODES``
+        ProfileMisconfiguredError: any variant pair missing / generic + variant coexisting
+
+    把 profile 端文件树投影成 ``{logical_rel: source_rel}`` 映射。
 
     通用文件：logical_rel == source_rel。
     变体文件：仅保留匹配 ``content_mode`` 的一份，logical_rel 去掉 ``.<mode>`` 后缀。
@@ -142,7 +178,7 @@ def resolve_profile_files_for_mode(
         else:
             variants.setdefault(logical, {})[mode] = src
 
-    # 校验 1：通用 + 变体互斥
+    # Check 1: generic and variant are mutually exclusive / 校验 1：通用 + 变体互斥
     collisions = set(commons) & set(variants)
     if collisions:
         sample = sorted(collisions)[0]
@@ -150,7 +186,7 @@ def resolve_profile_files_for_mode(
             f"profile has both common and variant for {sample!r}; remove one. all collisions: {sorted(collisions)}"
         )
 
-    # 校验 2：变体配对完整
+    # Check 2: variant pairs are complete / 校验 2：变体配对完整
     for logical, by_mode in variants.items():
         missing = VALID_CONTENT_MODES - set(by_mode)
         if missing:
@@ -167,7 +203,17 @@ def resolve_profile_files_for_mode(
 
 @contextlib.contextmanager
 def _project_lock(project_dir: Path):
-    """``portalocker.Lock`` 对 path 内部 ``open()`` 会跟符号链接。攻击者预置
+    """``portalocker.Lock`` follows symlinks with its internal ``open()`` on the path. If an attacker plants a
+    ``.profile_sync.lock`` symlink → ``/etc/x``, the locking step would already truncate a file outside the project.
+    So we open the fd ourselves with ``os.open(O_CREAT|O_WRONLY|O_NOFOLLOW)``, making a symlink lock file fail with
+    ELOOP; with the real fd we lock via portalocker's lower-level ``lock()`` / ``unlink()``, polling for the timeout ourselves.
+
+    On Windows ``os`` has no ``O_NOFOLLOW`` (POSIX only), so it degrades to an lstat pre-check + ``os.open`` without the
+    flag. Creating symlinks on Windows requires SeCreateSymbolicLinkPrivilege or developer mode, so the attack model is
+    weak anyway; the TOCTOU window between pre-check and open is consistent with ArcReel's deployment model of a local user
+    with portalocker holding the lock.
+
+    ``portalocker.Lock`` 对 path 内部 ``open()`` 会跟符号链接。攻击者预置
     ``.profile_sync.lock`` symlink → ``/etc/x`` 时，加锁阶段就会先 truncate 项目外
     文件。这里改用 ``os.open(O_CREAT|O_WRONLY|O_NOFOLLOW)`` 自己开 fd，确保
     symlink 形态的锁文件直接 ELOOP 拒绝；拿到真实 fd 后用 portalocker 的 lower-level
@@ -208,7 +254,16 @@ def _project_lock(project_dir: Path):
 
 
 def _ensure_dest_within(project_dir: Path, rel: str) -> Path:
-    """解析 ``project_dir / rel`` 后必须仍在 ``project_dir`` 内，否则 ``raise``。
+    """``project_dir / rel`` must still be inside ``project_dir`` after resolution, otherwise ``raise``.
+
+    Prevents a malicious symlink from leading materialization I/O outside the project root. Attack model: an imported
+    archive / a symlink placed by the user makes ``.claude`` or one of its ancestors point to an external location such
+    as ``/etc``, and running ``_safe_copy`` / ``_safe_unlink_if_file`` during sync would read/write files outside the project.
+
+    rel itself has already gone through ``_normalize_profile_rel_path`` (force_resync) or comes from enumerating real
+    file system paths (main entry), so its shape is trusted; this layer only guards against a dest-side symlink springboard.
+
+    解析 ``project_dir / rel`` 后必须仍在 ``project_dir`` 内，否则 ``raise``。
 
     防止恶意 symlink 把物化 I/O 引到项目根之外。攻击模型：导入的归档 / 用户手放
     的 symlink 让 ``.claude`` 或其祖先目录指向 ``/etc`` 等外部位置，sync 跑
@@ -217,6 +272,7 @@ def _ensure_dest_within(project_dir: Path, rel: str) -> Path:
     rel 本身已经过 ``_normalize_profile_rel_path``（force_resync）或 enumerate
     走文件系统真实路径（主入口），形态可信；这层只防 dest 端 symlink 跳板。
     """
+    # Segments of the rel path may not exist yet → realpath stops at the first missing segment, still correctly reflecting the prefix.
     # rel 路径段可能还未存在 → realpath 走到第一个不存在段就停，仍正确反映前缀。
     try:
         return safe_join(project_dir, rel, allow_base=True)
@@ -225,7 +281,14 @@ def _ensure_dest_within(project_dir: Path, rel: str) -> Path:
 
 
 def _normalize_profile_rel_path(rel: object) -> str:
-    """force_resync 的 ``paths`` 来自 UI / 外部输入，必须拒掉绝对路径和 ``..``，
+    """force_resync's ``paths`` come from the UI / external input; absolute paths and ``..`` must be rejected,
+    otherwise ``profile_dir / rel`` and ``project_dir / rel`` would escape the profile / project root and read/write
+    any writable file.
+
+    Validation rules: POSIX relative path, no ``..``, not the manifest itself or the lock file.
+    Returns the normalized POSIX string.
+
+    force_resync 的 ``paths`` 来自 UI / 外部输入，必须拒掉绝对路径和 ``..``，
     否则 ``profile_dir / rel`` 和 ``project_dir / rel`` 会逃逸到 profile / 项目
     根目录之外，读写任意可写文件。
 
@@ -235,6 +298,8 @@ def _normalize_profile_rel_path(rel: object) -> str:
     if not isinstance(rel, str) or rel == "":
         raise ValueError(f"Invalid profile sync path: {rel!r}")
     pp = PurePosixPath(rel)
+    # PurePosixPath already collapses repeated slashes and strips ``.`` segments, so ``parts`` can't contain empty strings;
+    # ``..`` segments are kept and must be rejected explicitly to block path traversal.
     # PurePosixPath 已折叠连续斜杠并剥掉 ``.`` 段，所以 ``parts`` 不可能含空字符串；
     # ``..`` 段会保留，必须显式拒掉以堵路径穿越。
     if pp.is_absolute() or ".." in pp.parts:
@@ -246,7 +311,9 @@ def _normalize_profile_rel_path(rel: object) -> str:
 
 
 def enumerate_dest_files(project_dir: Path) -> set[str]:
-    """项目内 ``.claude/**`` + ``CLAUDE.md`` 集合，跳过 manifest 和锁文件自身。"""
+    """Set of ``.claude/**`` + ``CLAUDE.md`` within the project, skipping the manifest and lock file themselves.
+
+    项目内 ``.claude/**`` + ``CLAUDE.md`` 集合，跳过 manifest 和锁文件自身。"""
     files: set[str] = set()
     if (project_dir / _PROFILE_TOP_FILE).is_file():
         files.add(_PROFILE_TOP_FILE)
@@ -275,7 +342,7 @@ def _enumerate_dest_symlinks(project_dir: Path) -> set[str]:
     return links
 
 
-# ---------- Manifest 数据类 ----------
+# ---------- Manifest data classes ---------- / ---------- Manifest 数据类 ----------
 
 
 @dataclasses.dataclass
@@ -283,6 +350,9 @@ class Manifest:
     schema_version: int
     profile_id: str
     entries: dict[str, dict]
+    # None ≡ "not migrated": from old manifests written before the content_mode field was introduced; the first new sync
+    # backfills the actual mode via the needs_migration path without triggering a destructive reset.
+    # Non-empty ≡ the content_mode used in the last sync; a mismatch with the current request triggers a reset.
     # None ≡ "未迁移": 来自 content_mode 字段引入前写的老 manifest；首次新 sync
     # 会通过 needs_migration 路径回填实际 mode，不触发破坏性 reset。
     # 非空 ≡ 上次 sync 时使用的 content_mode；与本次请求不一致会触发 reset。
@@ -303,13 +373,16 @@ class Manifest:
             "profile_id": self.profile_id,
             "entries": dict(sorted(self.entries.items())),
         }
+        # Omit the field when None: compatible with the compact shape of old manifests + less diff noise
         # None 时省略字段：兼容老 manifest 紧凑形态 + 减少 diff 噪音
         if self.content_mode is not None:
             data["content_mode"] = self.content_mode
         return data
 
     def normalized_bytes(self) -> bytes:
-        """deterministic 序列化：sort_keys + indent + UTF-8，用于 diff 友好 + 写前比对。"""
+        """Deterministic serialization: sort_keys + indent + UTF-8, for diff-friendliness + pre-write comparison.
+
+        deterministic 序列化：sort_keys + indent + UTF-8，用于 diff 友好 + 写前比对。"""
         return json.dumps(
             self.to_jsonable(),
             sort_keys=True,
@@ -319,7 +392,15 @@ class Manifest:
 
 
 def load_manifest(project_dir: Path) -> tuple[Manifest, bytes] | None:
-    """读 manifest 并返回 ``(manifest, raw_bytes)``。
+    """Read the manifest and return ``(manifest, raw_bytes)``.
+
+    Returns None in any of these cases (triggers the first-migration branch):
+    - file does not exist
+    - JSON is corrupt
+    - schema_version mismatch (a destructive wipe is cleaner than logic for old versions)
+    - profile_id mismatch (switching profile = switching source = equivalent to reset)
+
+    读 manifest 并返回 ``(manifest, raw_bytes)``。
 
     任一情况返回 None（触发首次迁移分支）：
     - 文件不存在
@@ -328,6 +409,8 @@ def load_manifest(project_dir: Path) -> tuple[Manifest, bytes] | None:
     - profile_id 不匹配（换 profile = 换源 = 等价 reset）
     """
     path = project_dir / MANIFEST_FILENAME
+    # A manifest in symlink form is not trusted: ``read_bytes`` would follow the symlink and read an external file
+    # (information leak + sync deciding based on a wrong manifest). Treat it as corrupt → reset.
     # symlink 形态的 manifest 拒绝信任：``read_bytes`` 会跟 symlink 读外部文件
     # （信息泄露 + 让 sync 基于错误的 manifest 决策）。视同损坏 → 走 reset。
     if path.is_symlink():
@@ -337,6 +420,8 @@ def load_manifest(project_dir: Path) -> tuple[Manifest, bytes] | None:
         raw = path.read_bytes()
     except FileNotFoundError:
         return None
+    # Deliberately don't swallow PermissionError / OSError -- those are real I/O faults; a silent reset would escalate
+    # a transient problem into destructively overwriting the project's .claude/CLAUDE.md.
     # 故意不吞 PermissionError / OSError —— 那些是真实 I/O 故障，
     # 静默 reset 会把暂时性问题升级成破坏性覆盖项目内 .claude/CLAUDE.md。
     try:
@@ -355,6 +440,9 @@ def load_manifest(project_dir: Path) -> tuple[Manifest, bytes] | None:
     entries = data.get("entries")
     if not isinstance(entries, dict):
         return None
+    # Every entry must be a dict, and both active/tombstone shapes must be well-formed.
+    # If not, treat the manifest as corrupt and reset, rather than letting the downstream _apply_decision
+    # hit AttributeError and crash entirely.
     # 每条 entry 必须是 dict，且 active/tombstone 两类形状都得规整。
     # 不规整就视同损坏 manifest，走 reset 而不是让下游 _apply_decision
     # 撞 AttributeError 整体崩。
@@ -397,7 +485,12 @@ def save_manifest(
     manifest: Manifest,
     original_bytes: bytes | None = None,
 ) -> bool:
-    """原子写 + in-memory 写前比对。返回是否实际写盘。
+    """Atomic write + in-memory pre-write comparison. Returns whether it actually wrote to disk.
+
+    When ``original_bytes is None`` (first migration) it writes directly; otherwise it skips the write if the
+    normalized bytes equal the original.
+
+    原子写 + in-memory 写前比对。返回是否实际写盘。
 
     ``original_bytes is None``（首次迁移）直接落盘；否则规范化字节等于 original
     则跳过写。
@@ -406,6 +499,10 @@ def save_manifest(
     if original_bytes is not None and new_bytes == original_bytes:
         return False
     path = project_dir / MANIFEST_FILENAME
+    # Use mkstemp instead of ``path.with_suffix("...tmp")``: a predictable name could be pre-planted by an attacker as a
+    # symlink → /etc/x, and the write would follow it and truncate a file outside the project. mkstemp uses
+    # O_CREAT|O_EXCL|O_RDWR + an unpredictable name + same dir, rejecting symlinks cross-platform.
+    # os.replace uses rename(2); even if dst is a symlink it only replaces the symlink itself, not its target.
     # 用 mkstemp 替代 ``path.with_suffix("...tmp")``：predictable 名字会被攻击者
     # 预置成 symlink → /etc/x，写时跟 symlink 截断项目外文件。mkstemp 用
     # O_CREAT|O_EXCL|O_RDWR + 不可预测名字 + same dir，跨平台拒绝 symlink。
@@ -418,12 +515,12 @@ def save_manifest(
         os.replace(tmp_str, path)
     except BaseException:
         with contextlib.suppress(OSError):
-            os.unlink(tmp_str)  # hard-delete: temp -- 清单原子写的临时文件
+            os.unlink(tmp_str)  # hard-delete: temp -- temp file of the manifest atomic write / 清单原子写的临时文件
         raise
     return True
 
 
-# ---------- entry / 时间戳工具 ----------
+# ---------- entry / timestamp helpers ---------- / ---------- entry / 时间戳工具 ----------
 
 
 def _now_iso() -> str:
@@ -439,15 +536,32 @@ def _tombstone_entry() -> dict:
 
 
 def _safe_unlink_if_file(path: Path) -> None:
+    # ``is_file`` follows symlinks (stat), ``unlink`` does not (lstat). Combined semantics:
+    # symlink to file → recognized as True, unlink removes the symlink itself, not the target;
+    # real file → recognized True + unlink. This is safe; the target file is never deleted by mistake.
     # ``is_file`` 跟符号链接（走 stat），``unlink`` 不跟（lstat）。组合起来的语义：
     # symlink to file → 识别成 True，unlink 删 symlink 本体而非 target；
     # 真 file → 识别 True + unlink。这是安全的，target 文件永远不会被误删。
     if path.is_file():
+        # profile-materialized file removed upstream and not modified by the user; can be re-materialized from the profile
         path.unlink()  # hard-delete: derived -- 上游移除且用户未改过的 profile 物化文件，可由 profile 重新物化
 
 
 def _safe_copy(source: Path, dest: Path) -> None:
-    """copy src → dest，先剥掉 symlink 形态的 dest。
+    """Copy src → dest, first removing a dest in symlink form.
+
+    TOCTOU defense: between the ``_ensure_dest_within`` guard and here, dest may be raced by an external process into a
+    symlink pointing outside the project. A plain ``shutil.copy2`` would follow the symlink and write a file outside the
+    project -- even if the argument is a resolved absolute path, ``open()`` still resolves the string at write time. So
+    when dest is a symlink we ``unlink`` it first (lstat doesn't dereference; it removes the symlink itself) and then
+    write, narrowing the file-level race window to microseconds between unlink→open.
+
+    Residual risk: if a parent directory of dest (``.claude`` or higher) is raced into a symlink pointing outside the
+    project, it is still followed. ArcReel project directories are created by the server itself, ordinary users have no
+    shell + portalocker holds the lock, so this attack requires an external root process; we accept the residual risk.
+    Full defense would need openat + O_NOFOLLOW validation at every path level, an engineering cost beyond the attack model.
+
+    copy src → dest，先剥掉 symlink 形态的 dest。
 
     TOCTOU 防御：``_ensure_dest_within`` guard 之后到这里之间 dest 可能被外部进程
     race 替换成 symlink 指向项目外。若直接 ``shutil.copy2`` 会跟 symlink 写到项目外
@@ -462,7 +576,11 @@ def _safe_copy(source: Path, dest: Path) -> None:
     """
     dest.parent.mkdir(parents=True, exist_ok=True)
     if dest.is_symlink():
+        # remove a symlink at the destination before copying, to avoid writing through to the link target
         dest.unlink()  # hard-delete: infra -- 复制前移除目标处的符号链接，防止写穿到链接目标
+    # Reject the case where dest is a real directory: ``shutil.copy2(src, dest_dir)`` would copy to an unexpected path
+    # ``dest_dir/src.name`` instead of failing. In the decision table rel is always file-level, so dest being a directory
+    # = a same-named directory planted by the user/archive; fail explicitly so the caller counts errors.
     # 拒绝 dest 是真实目录的情况：``shutil.copy2(src, dest_dir)`` 会变成 copy 到
     # ``dest_dir/src.name`` 这种意外路径而不是失败。决策表里 rel 永远是文件级别，
     # 出现 dest 是目录 = 用户/归档预置的同名目录，应显式失败让上层计 errors。
@@ -473,12 +591,12 @@ def _safe_copy(source: Path, dest: Path) -> None:
 
 def _new_stats() -> dict:
     return {
-        # 向后兼容 4 个 key
+        # Backward compatible with the 4 keys / 向后兼容 4 个 key
         "created": 0,
         "repaired": 0,
         "skipped": 0,
         "errors": 0,
-        # 新增 stat
+        # New stat / 新增 stat
         "upgraded": 0,
         "user_modified": 0,
         "user_only": 0,
@@ -492,11 +610,15 @@ def _new_stats() -> dict:
     }
 
 
-# ---------- 首次迁移分支 ----------
+# ---------- first-migration branch ---------- / ---------- 首次迁移分支 ----------
 
 
 def _trash_discarded_files(profile_dir: Path, project_dir: Path, mapping: dict[str, str]) -> None:
-    """重置会丢掉的文件（项目独有的、内容与内置 profile 不同的）先成为一条删除记录。
+    """Files a reset would lose (project-only ones, and ones whose content differs from the built-in profile) first become a deletion record.
+
+    Only regular files are collected; symlinked directories are not entered, and the link itself is not content.
+
+    重置会丢掉的文件（项目独有的、内容与内置 profile 不同的）先成为一条删除记录。
 
     只收普通文件；不进入符号链接目录，链接本身不是内容。
     """
@@ -529,7 +651,16 @@ def _full_reset_from_profile(
     *,
     content_mode: ContentMode | None = None,
 ) -> dict:
-    """删除 dest，从 profile 全量物化，写 manifest baseline。
+    """Delete dest, fully materialize from the profile, write the manifest baseline.
+
+    Scenarios: manifest missing / corrupt / schema_version mismatch / profile_id mismatch /
+    content_mode mismatch (destructive mode switch).
+
+    Args:
+        mapping: ``{logical_rel: source_rel}`` mapping, produced by resolve_profile_files_for_mode.
+        content_mode: content_mode field written to the manifest; omitted when None (old force_resync path).
+
+    删除 dest，从 profile 全量物化，写 manifest baseline。
 
     场景：manifest 缺失 / 损坏 / schema_version 不匹配 / profile_id 不匹配 /
     content_mode 不匹配（destructive 切换模式）。
@@ -540,20 +671,28 @@ def _full_reset_from_profile(
     """
     stats = _new_stats()
 
+    # Clear both dest-side roots -- this must cover every file system type, otherwise the subsequent mkdir()/_safe_copy()
+    # would be blocked by a placeholder of the "wrong type" (a regular file ``.claude`` / a directory ``CLAUDE.md``), leaving
+    # the reset half-done + an incomplete manifest.
     # 清空 dest 端两个根——必须覆盖所有文件系统类型，否则后续 mkdir()/_safe_copy()
     # 会被"错误类型"的占位（普通文件 ``.claude`` / 目录 ``CLAUDE.md``）挡住，导致
     # reset 留下半完成状态 + 不完整 manifest。
     dest_tree = project_dir / _PROFILE_TREE_ROOT
     dest_top = project_dir / _PROFILE_TOP_FILE
     _trash_discarded_files(profile_dir, project_dir, mapping)
+    # What is deleted below is only files identical to the built-in profile that are immediately re-materialized, plus symlinks and directories: customizations already went to the trash.
     # 下面删的只剩与内置 profile 一致、随即重新物化的文件，以及符号链接和目录：定制已先进回收站。
     if dest_tree.is_symlink() or dest_tree.is_file():
+        # customizations already in the trash, the rest re-materialized from the profile
         dest_tree.unlink()  # hard-delete: derived -- 定制已进回收站，其余由 profile 重新物化
     elif dest_tree.is_dir():
+        # customizations already in the trash, the rest re-materialized from the profile
         shutil.rmtree(dest_tree)  # hard-delete: derived -- 定制已进回收站，其余由 profile 重新物化
     if dest_top.is_symlink() or dest_top.is_file():
+        # customizations already in the trash, the rest re-materialized from the profile
         dest_top.unlink()  # hard-delete: derived -- 定制已进回收站，其余由 profile 重新物化
     elif dest_top.is_dir():
+        # customizations already in the trash, the rest re-materialized from the profile
         shutil.rmtree(dest_top)  # hard-delete: derived -- 定制已进回收站，其余由 profile 重新物化
 
     manifest = Manifest.empty()
@@ -576,7 +715,7 @@ def _full_reset_from_profile(
     return stats
 
 
-# ---------- 决策表（15 行 exhaustive match） ----------
+# ---------- decision table (15-row exhaustive match) ---------- / ---------- 决策表（15 行 exhaustive match） ----------
 
 
 def _apply_decision(
@@ -590,7 +729,13 @@ def _apply_decision(
     manifest: Manifest,
     stats: dict,
 ) -> None:
-    """对单个文件应用决策表。OSError 由调用方捕获。
+    """Apply the decision table to a single file. OSError is caught by the caller.
+
+    Args:
+        rel: dest-side logical relative path (without .<mode> suffix), used for manifest.entries and the dest path.
+        source_rel: actual profile-side relative file path (may carry a .<mode> suffix), used to read the profile file.
+
+    对单个文件应用决策表。OSError 由调用方捕获。
 
     Args:
         rel: dest 端逻辑相对路径（无 .<mode> 后缀），用于写入 manifest.entries 和 dest 路径。
@@ -605,6 +750,8 @@ def _apply_decision(
 
     p = profile_dir / source_rel
     d = project_dir / rel
+    # p_hash/p_size are only read in match branches where p_exists=True, so when it doesn't exist an empty string/0 placeholder
+    # is enough (never on the write path), and the type system sees non-Optional, saving 4 narrowing asserts.
     # p_hash/p_size 只在 p_exists=True 的 match 分支中被读取，所以 not-exists 时给空字符串/0
     # 占位即可（永远不会出现在写入路径），同时让类型系统看到非 Optional，省掉 4 处 narrow assert。
     p_hash = sha256_file(p) if p_exists else ""
@@ -614,81 +761,90 @@ def _apply_decision(
 
     match (p_exists, d_exists, m_kind):
         case (True, False, "none"):
-            # #1 首次下发
+            # 1 first delivery / #1 首次下发
             _safe_copy(p, d)
             manifest.entries[rel] = _profile_active_entry(p_hash, p_size)
             stats["created"] += 1
         case (True, False, "active"):
-            # #2 用户删过 active 内置 skill → 转 tombstone，不补回
+            # 2 user deleted an active built-in skill → becomes tombstone, not restored / #2 用户删过 active 内置 skill → 转 tombstone，不补回
             manifest.entries[rel] = _tombstone_entry()
             stats["deleted_user"] += 1
             stats["skipped"] += 1
         case (True, True, "active"):
             if d_hash == p_hash and m_hash == p_hash:
-                # #3 三态一致
+                # 3 all three states agree / #3 三态一致
                 stats["unchanged"] += 1
                 stats["skipped"] += 1
             elif d_hash == m_hash and d_hash != p_hash:
-                # #4 用户未改，profile 升级 → 覆盖 + 刷 manifest
+                # 4 user didn't modify, profile upgraded → overwrite + refresh manifest / #4 用户未改，profile 升级 → 覆盖 + 刷 manifest
                 _safe_copy(p, d)
                 manifest.entries[rel] = _profile_active_entry(p_hash, p_size)
                 stats["upgraded"] += 1
                 stats["repaired"] += 1
             elif d_hash != m_hash and d_hash == p_hash:
-                # #5 状态机回流：用户改完恰好 = profile 当前版
+                # 5 state machine converges: user's edit happens to equal the current profile version / #5 状态机回流：用户改完恰好 = profile 当前版
                 manifest.entries[rel] = _profile_active_entry(p_hash, p_size)
                 stats["unchanged"] += 1
                 stats["skipped"] += 1
             else:
-                # #6 用户改过（d_hash != m_hash 且 != p_hash）
+                # 6 user modified (d_hash != m_hash and != p_hash) / #6 用户改过（d_hash != m_hash 且 != p_hash）
                 stats["user_modified"] += 1
                 stats["skipped"] += 1
         case (False, True, "active"):
             if d_hash == m_hash:
+                # 7 deleted upstream in profile, user didn't modify → delete D at materialization + tombstone
                 # #7 profile 上游删，用户未改 → 物化时删除 D + tombstone
                 _safe_unlink_if_file(d)
                 manifest.entries[rel] = _tombstone_entry()
                 stats["pruned"] += 1
                 stats["repaired"] += 1
             else:
+                # 8 deleted upstream in profile, user modified → keep D and the old baseline. Keep the entry
+                # so the settings page can still recognize this as a legacy customization forked from the built-in profile rather than
+                # a project-only file of no origin; later materializations keep protecting it with three-way semantics.
                 # #8 profile 上游删，用户改过 → 保留 D 及旧 baseline。保留 entry
                 # 让设置页仍能识别这是从内置 profile 分叉的 legacy 定制，而不是
                 # 无来源的 project-only 文件；后续物化继续按三方语义保护它。
                 stats["orphaned"] += 1
                 stats["skipped"] += 1
         case (False, True, "none"):
-            # #9 项目独有 skill
+            # 9 project-only skill / #9 项目独有 skill
             stats["user_only"] += 1
             stats["skipped"] += 1
         case (True, True, "tombstone"):
+            # 10 user deleted then manually restored → clear tombstone, next round treated as user_only
             # #10 用户删过又手动恢复 → 清 tombstone，下轮按 user_only
             manifest.entries.pop(rel, None)
             stats["user_only"] += 1
             stats["skipped"] += 1
         case (True, False, "tombstone"):
-            # #11 稳态：用户已删 + profile 仍在
+            # 11 steady state: user deleted + profile still present / #11 稳态：用户已删 + profile 仍在
             stats["tombstoned"] += 1
             stats["skipped"] += 1
         case (False, True, "tombstone"):
-            # #12 P 没了 tombstone 不适用，D 是孤儿 → 清 entry
+            # 12 P is gone, tombstone no longer applies, D is an orphan → clear entry / #12 P 没了 tombstone 不适用，D 是孤儿 → 清 entry
             manifest.entries.pop(rel, None)
             stats["user_only"] += 1
             stats["skipped"] += 1
         case (False, False, "tombstone"):
-            # #13 双方都没，tombstone 延续 → no-op
+            # 13 both gone, tombstone carries on → no-op / #13 双方都没，tombstone 延续 → no-op
             stats["tombstoned"] += 1
             stats["skipped"] += 1
         case (False, False, "active"):
+            # 14 both deleted in the same round → becomes tombstone (implicit assumption: D missing = user deleted it;
+            # when a volume switch / fault leaves D temporarily empty, force_resync_profile is needed to clear the tombstone)
             # #14 双方同轮删 → 转 tombstone（隐含假设：D 缺=用户主动删，
             # 卷切换 / 故障导致 D 临时空时需 force_resync_profile 清 tombstone）
             manifest.entries[rel] = _tombstone_entry()
             stats["pruned"] += 1
             stats["repaired"] += 1
         case (True, True, "none"):
+            # 15 name collision: profile adds a file + the project happens to already have one with the same name
             # #15 命名碰撞：profile 新增 + 项目恰好已有同名
             if d_hash == p_hash:
-                # 内容一致 → 视为已下发，写 active entry
+                # Same content → treat as delivered, write an active entry / 内容一致 → 视为已下发，写 active entry
                 manifest.entries[rel] = _profile_active_entry(p_hash, p_size)
+            # Different content → keep D, don't write an entry (next round falls under #9 user_only)
             # 内容不一致 → 保留 D，不写 entry（下轮归 #9 user_only）
             stats["collision"] += 1
             stats["skipped"] += 1
@@ -696,7 +852,7 @@ def _apply_decision(
             raise NotImplementedError(f"unreachable case: {p_exists=} {d_exists=} {m_kind=}")
 
 
-# ---------- 公开 API ----------
+# ---------- public API ---------- / ---------- 公开 API ----------
 
 
 def sync_profile_to_project(
@@ -704,7 +860,15 @@ def sync_profile_to_project(
     project_dir: Path,
     content_mode: ContentMode,
 ) -> dict:
-    """profile → project_dir 物化主入口。
+    """Main entry for materializing profile → project_dir.
+
+    Raises:
+        ProfileMissingError: profile directory does not exist
+        ProfileEmptyError: profile directory has no materializable files
+        ProfileMisconfiguredError: variant file configuration violation
+        ValueError: content_mode is not narration/drama
+
+    profile → project_dir 物化主入口。
 
     Raises:
         ProfileMissingError: profile 目录不存在
@@ -726,6 +890,7 @@ def sync_profile_to_project(
             return _full_reset_from_profile(profile_dir, project_dir, mapping, content_mode=content_mode)
         manifest, original_bytes = loaded
 
+        # mode_status: missing(None)=needs_migration, present but mismatched=mismatch → reset
         # mode_status 判定：missing(None)=needs_migration，存在但不匹配=mismatch → reset
         if manifest.content_mode is not None and manifest.content_mode != content_mode:
             logger.info(
@@ -750,6 +915,7 @@ def sync_profile_to_project(
                     profile_dir,
                     project_dir,
                     rel,
+                    # source_rel; when rel is not in mapping (p doesn't exist), use rel as a placeholder
                     mapping.get(rel, rel),  # source_rel；rel 不在 mapping 时（p 不存在）用 rel 占位
                     p_exists,
                     d_exists,
@@ -764,7 +930,7 @@ def sync_profile_to_project(
                 logger.warning("profile sync skip %s: %s", rel, e)
                 stats["errors"] += 1
 
-        # sync 主体完成后写入 mode（无论 needs_migration 还是 match）
+        # Write the mode after the sync body completes (whether needs_migration or match) / sync 主体完成后写入 mode（无论 needs_migration 还是 match）
         manifest.content_mode = content_mode
         save_manifest(project_dir, manifest, original_bytes)
         return stats
@@ -834,7 +1000,12 @@ def force_resync_profile(
     *,
     paths: Iterable[str] | None = None,
 ) -> dict:
-    """强制按 P 覆盖 D 并更新 manifest，清除 tombstone。
+    """Force-overwrite D from P and update the manifest, clearing tombstones.
+
+    Used by the UI "restore built-in skill" button. ``paths=None`` means everything.
+    ``paths`` are **logical paths** (e.g. ``CLAUDE.md``); the source paths are looked up internally by content_mode.
+
+    强制按 P 覆盖 D 并更新 manifest，清除 tombstone。
 
     给 UI"恢复内置 skill"按钮使用。``paths=None`` 表示全量。
     ``paths`` 是**逻辑路径**（如 ``CLAUDE.md``），内部按 content_mode 查源路径。

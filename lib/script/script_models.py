@@ -1,4 +1,10 @@
 """
+script_models.py - script data models
+
+Defines the script data structures with Pydantic, used for:
+1. Gemini API response_schema (Structured Outputs)
+2. Output validation
+
 script_models.py - 剧本数据模型
 
 使用 Pydantic 定义剧本的数据结构，用于：
@@ -14,6 +20,14 @@ from pydantic.json_schema import SkipJsonSchema
 
 from lib.script.script_skeleton import resolve_declared_kind
 
+# All script models forbid extra fields by default: the Agent's `patch_episode_script` lets `_set_nested` create leaves out of
+# thin air on the dict (so the Agent can fill optional fields the LLM left out); if Pydantic used the default
+# `extra="ignore"`, any typo / hallucinated field would be silently dropped, yet the dict has already been persisted by
+# atomic_write_json, the junk field lives on in the JSON file, and the "not worse" error-set diff never catches it (before/after Pydantic
+# both ignore -> same error sets on both sides -> new_errors=∅ -> allowed). `extra="forbid"` makes Pydantic
+# explicitly list a typo write as a new ValidationError, so "not worse" can block it.
+# The ScriptGenerator path (LLM output goes through model_validate + model_dump) is protected by this layer too: under
+# Structured Outputs the LLM rarely produces extra fields, so any it does produce are hallucinations; rejecting is safer than silently dropping.
 # 所有剧本模型默认禁止额外字段:Agent 的 `patch_episode_script` 通过 `_set_nested` 允许在
 # dict 上凭空创建叶子(为了让 Agent 补 LLM 漏写的 optional 字段);若 Pydantic 走默认
 # `extra="ignore"`,任何 typo / hallucinated 字段都会被静默丢,但 dict 已被 atomic_write_json
@@ -24,7 +38,7 @@ from lib.script.script_skeleton import resolve_declared_kind
 # Structured Outputs 下不太会产出额外字段,产出即 hallucination,拒比静默丢更安全。
 _STRICT_CONFIG = ConfigDict(extra="forbid")
 
-# ============ 枚举类型定义 ============
+# ============ Enum type definitions ============ / ============ 枚举类型定义 ============
 
 ShotType = Literal[
     "Extreme Close-up",
@@ -38,6 +52,8 @@ ShotType = Literal[
     "Point-of-view",
 ]
 
+# Values must be spellings recognized by the providers' official camera movement vocabularies (aligned with the motion entries of
+# the MiniMax Hailuo [command] table and Alibaba Wan's basic/advanced camera movement tables); downstream interpolates them verbatim into the video prompt without re-translating.
 # 取值须为供应商官方运镜词表承认的写法（对齐 MiniMax Hailuo [command] 指令表与阿里万相
 # 基础/高级运镜表的运动类条目），下游按原文插值进视频 prompt，不做二次翻译。
 CameraMotion = Literal[
@@ -63,10 +79,18 @@ logger = logging.getLogger(__name__)
 
 
 def _canon_enum_key(value: str) -> str:
-    """枚举漂移归一键：下划线/连字符折叠为空格、多空格合一、casefold。"""
+    """Normalization key for enum drift: underscores/hyphens folded to spaces, multiple spaces merged, casefold.
+
+    枚举漂移归一键：下划线/连字符折叠为空格、多空格合一、casefold。"""
     return " ".join(value.replace("_", " ").replace("-", " ").split()).casefold()
 
 
+# A schema enum is only a hard constraint when the provider runs constrained decoding; when a proxy gateway / OpenAI-compatible
+# channel drops wire-level structured parameters, the model writes enums in upper/lower snake case (MEDIUM_SHOT / medium_shot)
+# or even out-of-vocabulary values (e.g. wide_shot / dolly_in). Mechanical normalization (case /
+# separators) pulls style drift back into the vocabulary; out-of-vocabulary values get no semantic synonym mapping (semantic
+# mapping can never be exhaustive) and are always degraded to a neutral default with a warning -- downstream these two fields
+# are only text interpolation for the generation prompt, and vocabulary drift in a single shot is not worth failing the whole episode's script generation.
 # schema 的 enum 只有在供应商执行约束解码时才是硬约束；代理网关/OpenAI 兼容通道丢弃
 # wire 级结构化参数时，模型会把枚举写成大写/小写蛇形（MEDIUM_SHOT / medium_shot）
 # 甚至词表外值（如 wide_shot / dolly_in）。机械归一（大小写/
@@ -101,7 +125,9 @@ def _normalize_camera_motion(value: object) -> object:
 
 
 def _none_to_empty_list(value: object) -> object:
-    """漂移容错：非约束解码通道可能把可选列表字段写成 null 而非省略。"""
+    """Drift tolerance: non-constrained-decoding channels may write optional list fields as null instead of omitting them.
+
+    漂移容错：非约束解码通道可能把可选列表字段写成 null 而非省略。"""
     return [] if value is None else value
 
 
@@ -185,22 +211,32 @@ class DramaVideoPrompt(_VideoPromptCore):
 
 
 def _require_non_blank_prompt(value: str) -> str:
-    """文本形态提示词不得为空白：空串等价于「没有提示词」，渲染层同样以 ValueError 拒绝。"""
+    """A text-form prompt must not be blank: an empty string equals "no prompt", and the render layer likewise rejects it with ValueError.
+
+    文本形态提示词不得为空白：空串等价于「没有提示词」，渲染层同样以 ValueError 拒绝。"""
     if not value.strip():
         raise ValueError("prompt text must not be empty")
     return value
 
 
+#: Text form of a prompt: the field itself is the prompt body sent to the model; the render layer only does the necessary injection without a structural template.
+#: Excluded from response_schema via ``SkipJsonSchema`` -- structured output still only lets the LLM produce the structured form;
+#: the text form is an authoring style the creator switches to explicitly in the timeline, not an output shape the model may choose.
 #: 提示词的文本形态：该字段本身就是送给模型的提示词主体，渲染层只做必要的注入、不套结构模板。
 #: 以 ``SkipJsonSchema`` 排除在 response_schema 之外——结构化输出仍只允许 LLM 产出结构形态，
 #: 文本形态是创作者在时间线里显式切换的编写方式，不是模型可选的输出形状。
 PromptText = SkipJsonSchema[Annotated[str, AfterValidator(_require_non_blank_prompt)]]
 
+#: The "to be generated" state of a prompt: when the script plan is mechanically converted to the final script, the visual layer
+#: is not written and the entry is persisted with ``None`` awaiting prompt authoring or manual filling. ``SkipJsonSchema`` keeps
+#: ``null`` out of response_schema -- to-be-generated is written only by the conversion path, not an output shape the model may
+#: choose; empty strings are still rejected by ``PromptText``.
 #: 提示词的「待生成」态：脚本规划机械转为正式脚本时视觉层不写，条目以 ``None`` 落盘等待
 #: 提示词编写或人工补写。``SkipJsonSchema`` 把 ``null`` 排除在 response_schema 之外——待生成
 #: 只由转换路径写入，不是模型可选的输出形状；空串仍由 ``PromptText`` 拒绝。
 PendingPrompt = SkipJsonSchema[None]
 
+#: Field name of the entry-level pending-authoring marker; see ``pending_authoring`` in each entry model.
 #: 条目级待编写标记的字段名，见各条目模型的 ``pending_authoring``。
 PENDING_AUTHORING_FIELD = "pending_authoring"
 
@@ -215,25 +251,41 @@ class GeneratedAssets(BaseModel):
     grid_id: str | None = Field(default=None, description="关联的网格图生成 ID")
     grid_cell_index: int | None = Field(default=None, description="在网格图中的单元格索引")
     video_clip: str | None = Field(default=None, description="视频片段路径")
+    # video_thumbnail is extracted by reference_video_tasks / generation_tasks after video generation via
+    # lib.infra.thumbnail.extract_video_thumbnail and written to ga["video_thumbnail"];
+    # if undeclared, extra="forbid" would make "not worse" detect an extra_forbidden difference and reject the whole episode write.
     # video_thumbnail 由 reference_video_tasks / generation_tasks 在视频生成后通过
     # lib.infra.thumbnail.extract_video_thumbnail 抽帧落盘,写到 ga["video_thumbnail"];
     # 漏声明的话 extra="forbid" 会让「不更坏」检测到 extra_forbidden 差集,拒整集写盘。
     video_thumbnail: str | None = Field(default=None, description="视频缩略图路径")
     video_uri: str | None = Field(default=None, description="视频 URI")
+    # narration_audio is written back by the TTS task (generation_tasks.execute_tts_task) after synthesis;
+    # declared explicitly so it passes extra="forbid" + the "not worse" guard; only narration segments write it, drama/refvideo are always None.
     # narration_audio 由 TTS 任务（generation_tasks.execute_tts_task）在合成后写回，
     # 显式声明使其通过 extra="forbid" + 「不更坏」守卫；仅旁白/解说 segment 写入，drama/refvideo 恒 None。
     narration_audio: str | None = Field(default=None, description="旁白配音路径")
     status: Literal["pending", "storyboard_ready", "completed"] = Field(default="pending", description="生成状态")
+    # When video_clip is written back (single write point apply_unit_video_assets), the generation time is stamped mechanically; it is
+    # compared with the character's `voice_updated_at` to decide whether the clip was generated before the current reference audio settings.
+    # Missing counts as earlier than any setting, falling under "generated before the settings". Hidden from the LLM.
     # video_clip 写回时（apply_unit_video_assets 单一写点）机械戳生成时间；用于跟角色
     # `voice_updated_at` 比较，判定该片段是否生成于当前参考音频设置之前。
     # 缺省视为早于任何设置，落在「生成于设置之前」语义内。对 LLM 隐藏。
     video_generated_at: SkipJsonSchema[str | None] = Field(default=None, description="视频生成完成时间（ISO8601 UTC）")
+    # Only for losslessly accepting historical records from before the migration; at runtime this key is never read, compared or added.
     # 仅用于无损接收迁移前的历史记录；运行时不读取、比较或新增该键。
     source_signature: SkipJsonSchema[str | None] = Field(default=None, description="历史产物来源签名")
 
 
 def get_generated_assets(item: dict) -> dict:
-    """归一化访问 item 的 ``generated_assets`` 容器。
+    """Normalized access to an item's ``generated_assets`` container.
+
+    The field comes from script JSON on disk and is untrusted: external edits may corrupt it into a non-dict (e.g.
+    list/string). It is normalized to an empty dict instead of raising, so callers take their existing "asset not generated"
+    branch (skip the single item / readable refusal), and one dirty record doesn't raise an uncaught ``AttributeError`` that
+    aborts a whole batch enqueue.
+
+    归一化访问 item 的 ``generated_assets`` 容器。
 
     该字段来自磁盘上的剧本 JSON，不可信任：外部编辑可能把它损坏成非 dict（如
     list/字符串）。归一化为空 dict 而非抛错，让调用方走各自「该资产未生成」的
@@ -244,7 +296,7 @@ def get_generated_assets(item: dict) -> dict:
     return assets if isinstance(assets, dict) else {}
 
 
-# ============ 旁白/解说（Narration） ============
+# ============ Narration ============ / ============ 旁白/解说（Narration） ============
 
 
 class NarrationSegment(BaseModel):
@@ -257,6 +309,11 @@ class NarrationSegment(BaseModel):
 
     model_config = _STRICT_CONFIG
 
+    # Fields that are obsolete but may linger in existing JSON: pop them explicitly before extra="forbid" rejects them.
+    # clues_in_segment is a field removed by the v0->v1 migration (lib/project/project_migrations/
+    # v0_to_v1_clues_to_scenes_props.py); the archive flow already pops it via project_archive.py,
+    # but a direct NarrationSegment.model_validate(legacy_dict) call (outside the _guard_no_worse lenient
+    # wrapper) needs this fallback, same pattern as DramaScene.LEGACY_DROPPED_FIELDS.
     # 已废弃但存量 JSON 里可能残留的字段:在 extra="forbid" 拒绝之前显式 pop 掉。
     # clues_in_segment 是 v0→v1 migration 删除的字段(lib/project/project_migrations/
     # v0_to_v1_clues_to_scenes_props.py),archive 流程通过 project_archive.py 已 pop,
@@ -281,9 +338,14 @@ class NarrationSegment(BaseModel):
     props: list[str] = Field(default_factory=list, description="出场道具名称列表")
     image_prompt: ImagePrompt | PromptText | PendingPrompt = Field(default=None, description="分镜图生成提示词")
     video_prompt: VideoPrompt | PromptText | PendingPrompt = Field(default=None, description="视频生成提示词")
+    # The following fields are hidden from the LLM (SkipJsonSchema): note is a manual note, generated_assets is post-LLM runtime state.
+    # They stay in the Pydantic model for storage / validation but are not in response_schema, so the LLM can't fill them with polluting data.
     # 以下字段对 LLM 隐藏（SkipJsonSchema）：note 是人工备注、generated_assets 是 post-LLM 运行时状态。
     # 仍保留在 Pydantic 模型里以便存储 / 校验，但不出现在 response_schema 中，避免 LLM 填污染数据。
     note: SkipJsonSchema[str | None] = Field(default=None, description="用户备注（不参与生成）")
+    # Project-relative path of the end frame snapshot (``end_frames/scene_{id}.png``). User intent rather than runtime output,
+    # so it is not in generated_assets; written only by the end frame set/clear endpoints (the generic PATCH whitelist excludes it,
+    # to avoid bypassing the snapshot copy and writing dangling references or out-of-bounds paths); not kept on whole-episode script regeneration (same as note).
     # 尾帧快照的项目内相对路径（``end_frames/scene_{id}.png``）。用户意图而非运行时产出，
     # 故不进 generated_assets；只由尾帧设置/清除端点写入（通用 PATCH 白名单不含此字段，
     # 避免绕过快照复制写出悬空引用或越界路径），整集剧本重生成不保留（同 note 口径）。
@@ -292,6 +354,8 @@ class NarrationSegment(BaseModel):
         default_factory=GeneratedAssets, description="生成资源状态"
     )
     needs_replan: SkipJsonSchema[bool] = Field(default=False, description="该单元需要人工重新规划")
+    # Pending authoring: the visual layer is not filled in yet. Set on new entries without a visual layer, cleared when prompt authoring writes back or the visual layer is completed by hand;
+    # hidden from the LLM and not in any PATCH whitelist. Only appears on disk when set.
     # 待编写：视觉层尚未补出。不带视觉层的新增条目置位，提示词编写写回或手写齐视觉层时清除；
     # 对 LLM 隐藏，不在任何 PATCH 白名单内。落盘只在置位时出现。
     pending_authoring: SkipJsonSchema[bool] = Field(default=False, description="该条目待编写")
@@ -327,10 +391,14 @@ class NarrationEpisodeScript(BaseModel):
     """
 
     title: str = Field(description="剧集标题")
+    # content_mode is injected with the project-level true value by _add_metadata setdefault; a single-value Literal makes LLM writing it meaningless
     # content_mode 由 _add_metadata setdefault 注入项目级真值;Literal 单值让 LLM 写无意义
     content_mode: SkipJsonSchema[Literal["narration"]] = Field(default="narration", description="创作类型")
+    # novel is injected by _add_metadata as {project title, episode ledger title}; letting the LLM improvise would be unpredictable
     # novel 由 _add_metadata 注入 {项目 title, 分集账本标题};LLM 自由发挥反而不可预测
     novel: SkipJsonSchema[NovelInfo] = Field(default_factory=NovelInfo, description="小说来源信息")
+    # hook / next_episode_teaser are injected by _add_metadata from the episode ledger (the ledger is the single source of truth
+    # for hook design; the LLM does not fill them); null when the ledger has no planning data.
     # hook / next_episode_teaser 由 _add_metadata 从分集账本注入（账本是钩子设计的
     # 单一真相源，LLM 不参与填写）；账本无规划数据时为 null。
     hook: SkipJsonSchema[str | None] = Field(default=None, description="集尾钩子（来自分集账本）")
@@ -338,6 +406,11 @@ class NarrationEpisodeScript(BaseModel):
     segments: list[NarrationSegment] = Field(description="分镜列表")
 
 
+# ============ Narration script_plan structured intermediate state / prompt_authoring visual layer ============
+#
+# Two-stage split of responsibilities: script_plan (shot splitting) produces the content layer (verbatim novel_text + shot boundaries + duration),
+# prompt_authoring (generate-script) only produces the visual layer (image_prompt / video_prompt), merged back by segment_id
+# into the structure confirmed by script_plan. novel_text never goes back through the prompt_authoring LLM -> eliminates expansion drift.
 # ============ 旁白/解说 script_plan 结构化中间态 / prompt_authoring 视觉层 ============
 #
 # 两段式职责切分：script_plan（分镜拆分）产出内容层（逐字 novel_text + 分镜边界 + 时长），
@@ -346,6 +419,7 @@ class NarrationEpisodeScript(BaseModel):
 
 
 NewAssetType = Literal["character", "scene", "prop"]
+#: Field name at the top level of the script plan holding this episode's new assets list (``list[PlanNewAsset]``).
 #: 脚本规划顶层承载本集新增资产清单（``list[PlanNewAsset]``）的字段名。
 NEW_ASSETS_FIELD = "new_assets"
 NewAssetDecision = Literal["register", "merge", "derivative", "skip"]
@@ -436,7 +510,7 @@ class NarrationVisualEpisodeScript(BaseModel):
     segments: list[NarrationVisualSegment] = Field(description="各分镜的视觉层，按 segment_id 一一对齐 script_plan")
 
 
-# ============ 剧情演绎（Drama） ============
+# ============ Drama ============ / ============ 剧情演绎（Drama） ============
 
 
 UtteranceKind = Literal["dialogue", "voiceover"]
@@ -463,6 +537,8 @@ class Utterance(BaseModel):
     @model_validator(mode="before")
     @classmethod
     def _normalize_speaker(cls, data: object) -> object:
+        # Empty / whitespace-only speaker is normalized to None: a voiceover's "no speaker" can be written as null or "", and once unified
+        # to None the kind ⇄ speaker validation below decides (so an empty speaker on dialogue is judged invalid).
         # 空串 / 纯空白 speaker 归一为 None：voiceover 的「无说话人」既可写 null 也可写 ""，统一到
         # None 后由下方 kind ⇄ speaker 校验裁决（dialogue 的空 speaker 因此被判非法）。
         if isinstance(data, dict):
@@ -486,6 +562,11 @@ class DramaScene(BaseModel):
 
     model_config = _STRICT_CONFIG
 
+    # Fields that are obsolete but may linger in existing JSON: pop them explicitly before extra="forbid" rejects them,
+    # coexisting with "unknown fields (typo / hallucination) are always rejected" -- the former are known deprecated,
+    # the latter are the real problem forbid is meant to block. When deprecating a field, add its name to this set.
+    # - scene_type: the removed scene type field
+    # - clues_in_scene: the clue field removed by the v0->v1 migration (same as NarrationSegment.clues_in_segment)
     # 已废弃但存量 JSON 里可能残留的字段:在 extra="forbid" 拒绝之前显式 pop 掉,
     # 与「未知字段(typo / hallucination)一律拒」并存——前者是已知 deprecated,
     # 后者才是 forbid 想挡的真问题。新增 deprecate 字段时把名字加到这个集合。
@@ -496,7 +577,16 @@ class DramaScene(BaseModel):
     @model_validator(mode="before")
     @classmethod
     def _migrate_legacy(cls, data: object) -> object:
-        """读时迁移：剥离已废弃字段，并把旧口播双字段（``video_prompt.dialogue`` + ``voiceover``）
+        """Read-time migration: strip obsolete fields and merge the old two-field voice-over (``video_prompt.dialogue`` + ``voiceover``)
+        into ordered ``utterances``.
+
+        Criterion "no utterances key" = legacy data: when merging, the dialogue part comes first and the voiceover part after (old data
+        has no interleaving info; deterministic best-effort, without pretending to restore it), and ``voiceover`` and
+        ``video_prompt.dialogue`` are stripped so ``DramaVideoPrompt``'s ``extra="forbid"`` doesn't error. Old dialogue lines missing
+        a speaker become speakerless voiceover (keep the content, don't invent a speaker). New data (``utterances`` already present)
+        takes the fast path without rewriting. The caller's dict is not modified in place.
+
+        读时迁移：剥离已废弃字段，并把旧口播双字段（``video_prompt.dialogue`` + ``voiceover``）
         合成为有序 ``utterances``。
 
         判据「无 utterances 键」= 存量数据：合成时 dialogue 段在前、voiceover 段在后（旧数据无交错
@@ -523,7 +613,9 @@ class DramaScene(BaseModel):
 
     @staticmethod
     def _synthesize_utterances(scene: dict[str, object]) -> list[dict[str, object]]:
-        """从旧 ``video_prompt.dialogue`` + 场景 ``voiceover`` 合成有序 utterances（dialogue 段在前）。"""
+        """Merge ordered utterances from the old ``video_prompt.dialogue`` + scene ``voiceover`` (dialogue part first).
+
+        从旧 ``video_prompt.dialogue`` + 场景 ``voiceover`` 合成有序 utterances（dialogue 段在前）。"""
         utterances: list[dict[str, object]] = []
         video_prompt = scene.get("video_prompt")
         if isinstance(video_prompt, dict):
@@ -539,6 +631,7 @@ class DramaScene(BaseModel):
                     if speaker:
                         utterances.append({"kind": "dialogue", "speaker": speaker, "text": text})
                     else:
+                        # Old dialogue line missing a speaker -> becomes speakerless voiceover (best-effort, keep the content, don't invent a speaker)
                         # 旧台词缺说话人 → 归为无说话人 voiceover（best-effort，保内容、不编造 speaker）
                         utterances.append({"kind": "voiceover", "speaker": None, "text": text})
         voiceover = scene.get("voiceover")
@@ -557,26 +650,34 @@ class DramaScene(BaseModel):
     scenes: list[str] = Field(default_factory=list, description="出场场景名称列表")
     props: list[str] = Field(default_factory=list, description="出场道具名称列表")
     image_prompt: ImagePrompt | PromptText | PendingPrompt = Field(default=None, description="分镜图生成提示词")
+    # drama's video_prompt only carries on-screen action, camera movement and ambient sound; voice-over is carried by utterances below.
     # drama 的 video_prompt 只承载画面动作、运镜与环境音，口播由下方 utterances 承载。
     video_prompt: DramaVideoPrompt | PromptText | PendingPrompt = Field(default=None, description="视频生成提示词")
+    # utterances uniformly carry shot-level character dialogue and voiceover; entry order is the speaking order within the scene (see ADR 0040).
     # utterances 统一承载分镜级角色台词与画外音；条目顺序即幕内发声顺序（见 ADR 0040）。
     utterances: list[Utterance] = Field(
         default_factory=list,
         description="分镜级有序发声序列：角色台词（dialogue）与画外音（voiceover）按时序排列",
     )
+    # Verbatim source excerpt (traceability anchor, like narration novel_text, but purely for traceability: not read aloud, no audio, best-effort).
+    # Filled by script_plan, passed through unchanged by prompt_authoring (visual); defaults to an empty string when missing in legacy data (the not-worse guard allows it).
     # 逐字原文摘录（追溯锚，类比旁白/解说 novel_text，但纯作追溯、不被朗读、不出音、best-effort）。
     # 由 script_plan（脚本规划）填入，prompt_authoring（视觉）透传不改；存量数据缺失时默认空串（不更坏守卫放行）。
     source_text: str = Field(default="", description="逐字原文摘录（追溯锚，不朗读、不出音，best-effort）")
+    # Visual adaptation description: passed through from the script plan at content-review conversion, as the visual base for prompt authoring; hidden from the LLM.
+    # Empty string when legacy final scripts lack this field.
     # 视觉改编描述：内容确认转换时由脚本规划透传，作为提示词编写的视觉基底；对 LLM 隐藏。
     # 存量正式脚本无此字段时为空串。
     scene_description: SkipJsonSchema[str] = Field(default="", description="视觉改编描述")
-    # 见 NarrationSegment 同名字段说明。
+    # See the same-named field in NarrationSegment. / 见 NarrationSegment 同名字段说明。
     note: SkipJsonSchema[str | None] = Field(default=None, description="用户备注（不参与生成）")
     end_frame_image: SkipJsonSchema[str | None] = Field(default=None, description="尾帧快照路径（项目内相对路径）")
     generated_assets: SkipJsonSchema[GeneratedAssets] = Field(
         default_factory=GeneratedAssets, description="生成资源状态"
     )
     needs_replan: SkipJsonSchema[bool] = Field(default=False, description="该单元需要人工重新规划")
+    # Pending authoring: the visual layer is not filled in yet. Set on new entries without a visual layer, cleared when prompt authoring writes back or the visual layer is completed by hand;
+    # hidden from the LLM and not in any PATCH whitelist. Only appears on disk when set.
     # 待编写：视觉层尚未补出。不带视觉层的新增条目置位，提示词编写写回或手写齐视觉层时清除；
     # 对 LLM 隐藏，不在任何 PATCH 白名单内。落盘只在置位时出现。
     pending_authoring: SkipJsonSchema[bool] = Field(default=False, description="该条目待编写")
@@ -590,16 +691,23 @@ class DramaEpisodeScript(BaseModel):
     """
 
     title: str = Field(description="剧集标题")
-    # 见 NarrationEpisodeScript.content_mode 说明
+    # See NarrationEpisodeScript.content_mode / 见 NarrationEpisodeScript.content_mode 说明
     content_mode: SkipJsonSchema[Literal["drama"]] = Field(default="drama", description="创作类型")
-    # 见 NarrationEpisodeScript.novel 说明
+    # See NarrationEpisodeScript.novel / 见 NarrationEpisodeScript.novel 说明
     novel: SkipJsonSchema[NovelInfo] = Field(default_factory=NovelInfo, description="小说来源信息")
-    # 见 NarrationEpisodeScript 同名字段说明。
+    # See the same-named field in NarrationEpisodeScript. / 见 NarrationEpisodeScript 同名字段说明。
     hook: SkipJsonSchema[str | None] = Field(default=None, description="集尾钩子（来自分集账本）")
     next_episode_teaser: SkipJsonSchema[str | None] = Field(default=None, description="下集预告语（来自分集账本）")
     scenes: list[DramaScene] = Field(description="分镜列表")
 
 
+# ============ Drama two-stage: script_plan content / prompt_authoring visuals (see ADR 0041) ============
+#
+# Content extraction moves forward into script_plan: shot boundaries, characters/scenes/props, utterances (verbatim voice-over),
+# source_text (verbatim source anchor) and scene_description (free-text visual adaptation) are finalized once. prompt_authoring only
+# generates the visual layer (image_prompt / video_prompt); the LLM output schema contains only scene_id (alignment anchor) + visual fields --
+# non-visual fields are not in the LLM output, which structurally rules out their drift via Structured Outputs; the backend writes
+# them back to the final script entries by scene_id (ScriptGenerator._merge_visual_layer).
 # ============ 剧情演绎两段式：script_plan 内容 / prompt_authoring 视觉（见 ADR 0041） ============
 #
 # 内容抽取前移到 script_plan：分镜边界、characters/scenes/props、utterances（逐字口播）、source_text
@@ -680,7 +788,7 @@ class DramaVisualScript(BaseModel):
     scenes: list[DramaSceneVisual] = Field(description="各分镜视觉层（按 scene_id 对齐 script_plan 内容）")
 
 
-# ============ 广告/短片（Ad） ============
+# ============ Ad/short (Ad) ============ / ============ 广告/短片（Ad） ============
 
 
 class AdShot(BaseModel):
@@ -697,7 +805,9 @@ class AdShot(BaseModel):
     @model_validator(mode="before")
     @classmethod
     def _fill_pending_prompts(cls, data: object) -> object:
-        """待编写分镜可以不带提示词字段：补成 null，其余分镜仍须两侧齐备。"""
+        """Shots pending authoring may lack prompt fields: fill them with null; other shots must still have both.
+
+        待编写分镜可以不带提示词字段：补成 null，其余分镜仍须两侧齐备。"""
         if isinstance(data, dict) and data.get("pending_authoring") is True:
             data = {"image_prompt": None, "video_prompt": None, **data}
         return data
@@ -712,17 +822,21 @@ class AdShot(BaseModel):
     scenes: list[str] = Field(default_factory=list, description="出场场景名称列表")
     props: list[str] = Field(default_factory=list, description="出场道具名称列表")
     products_in_shot: list[str] = Field(default_factory=list, description="出场商品名称列表，非空即商品分镜")
+    # The response_schema of whole-episode generation still requires both prompts; only shots pending authoring (added manually) may default to null,
+    # to be filled by prompt authoring (see _fill_pending_prompts and structure validation).
     # 整份生成的 response_schema 仍要求两侧提示词；只有待编写分镜（手动新增）可以缺省为 null，
     # 由提示词编写补出（见 _fill_pending_prompts 与结构校验）。
     image_prompt: ImagePrompt | PromptText | PendingPrompt = Field(description="分镜图生成提示词")
     video_prompt: VideoPrompt | PromptText | PendingPrompt = Field(description="视频生成提示词")
-    # 见 NarrationSegment 同名字段说明。
+    # See the same-named field in NarrationSegment. / 见 NarrationSegment 同名字段说明。
     note: SkipJsonSchema[str | None] = Field(default=None, description="用户备注（不参与生成）")
     end_frame_image: SkipJsonSchema[str | None] = Field(default=None, description="尾帧快照路径（项目内相对路径）")
     generated_assets: SkipJsonSchema[GeneratedAssets] = Field(
         default_factory=GeneratedAssets, description="生成资源状态"
     )
     needs_replan: SkipJsonSchema[bool] = Field(default=False, description="该单元需要人工重新规划")
+    # Pending authoring: the visual layer is not filled in yet. Set on new entries without a visual layer, cleared when prompt authoring writes back or the visual layer is completed by hand;
+    # hidden from the LLM and not in any PATCH whitelist. Only appears on disk when set.
     # 待编写：视觉层尚未补出。不带视觉层的新增条目置位，提示词编写写回或手写齐视觉层时清除；
     # 对 LLM 隐藏，不在任何 PATCH 白名单内。落盘只在置位时出现。
     pending_authoring: SkipJsonSchema[bool] = Field(default=False, description="该条目待编写")
@@ -755,21 +869,30 @@ class AdEpisodeScript(BaseModel):
     """
 
     title: str = Field(description="短片标题")
-    # 见 NarrationEpisodeScript.content_mode 说明
+    # See NarrationEpisodeScript.content_mode / 见 NarrationEpisodeScript.content_mode 说明
     content_mode: SkipJsonSchema[Literal["ad"]] = Field(default="ad", description="创作类型")
-    # 见 NarrationEpisodeScript.novel 说明
+    # See NarrationEpisodeScript.novel / 见 NarrationEpisodeScript.novel 说明
     novel: SkipJsonSchema[NovelInfo] = Field(default_factory=NovelInfo, description="小说来源信息")
     shots: list[AdShot] = Field(description="分镜列表")
 
 
-# ============ 参考生视频（Reference-to-Video） ============
+# ============ Reference-to-Video ============ / ============ 参考生视频（Reference-to-Video） ============
 
+#: Structural range (seconds) of a video unit's planned duration (``ReferenceVideoUnit.duration_seconds``).
+#: The static model only blocks non-positive integers and obviously distorted magnitudes; the generation pre-check then projects onto
+#: the requested tier per the executing model's capabilities and shows the offset as a warning. The upper bound is not derived from
+#: the number of shot descriptions in the body: shot descriptions carry no duration; the unit is one generation call.
+#: The only exception is the problem shell from legacy migration, which may be saved with zero seconds under ``needs_replan``.
 #: 视频单元编排时长（``ReferenceVideoUnit.duration_seconds``）的结构范围（秒）。
 #: 静态模型只拦非正整数与量级明显失真的值；生成预检再按执行模型能力投影到申请档位并把
 #: 偏移作为 warning 呈现。上界不由正文内的镜头描述数推导：镜头描述不承载时长，unit 才是一次生成调用。
 #: 存量迁移的问题壳是唯一例外，可在 ``needs_replan`` 下保存零秒。
 REFERENCE_UNIT_DURATION_RANGE: tuple[int, int] = (1, 300)
 
+#: Observation threshold (ratio) for the deviation of an ad script's total duration from the project target_duration. The
+#: quantization error of provider duration enums (e.g. [4,6,8]) makes the sum hard to hit exactly, so the threshold is loosened to catch only clear drift; above it
+#: we only warn (generation-side logger, validation-side warnings list), without blocking saves or pushing to the frontend.
+#: ``ScriptGenerator`` and ``DataValidator`` share this source of truth.
 #: ad 剧本总时长 vs 项目 target_duration 的偏差观察阈值（比例）。供应商时长枚举
 #: （如 [4,6,8]）的量化误差让总和难精确命中目标，阈值放宽只捕明显跑偏；超阈值
 #: 仅 warn（生成端 logger、校验端 warnings 列表），不阻塞保存、不推前端。
@@ -778,7 +901,12 @@ AD_TARGET_DURATION_DRIFT_THRESHOLD = 0.20
 
 
 def ad_shot_duration_seconds(shot: object) -> int:
-    """ad 单个分镜时长（秒）的脏数据归一口径：非 dict 条目、非正整数时长
+    """Normalization rule for dirty data in an ad shot's duration (seconds): non-dict entries and non-positive-integer durations
+    (bool excluded as an int subclass) count as 0, without raising.
+
+    The storyboard-mode total duration deviation observation shares this rule via ``ad_script_total_duration``.
+
+    ad 单个分镜时长（秒）的脏数据归一口径：非 dict 条目、非正整数时长
     （bool 按 int 子类排除）一律按 0 计、不抛。
 
     分镜图生视频的总时长偏差观察经 ``ad_script_total_duration`` 共用此口径。
@@ -792,7 +920,13 @@ def ad_shot_duration_seconds(shot: object) -> int:
 
 
 def ad_script_total_duration(shots: object) -> int:
-    """ad 剧本 shots 总时长（秒）。
+    """Total duration (seconds) of an ad script's shots.
+
+    Single source of truth for the summation used in the target_duration deviation observation (shared by the ``ScriptGenerator`` probe
+    and ``DataValidator``): dirty data counts as 0, without raising (see ``ad_shot_duration_seconds``) --
+    the sum serves the lightweight "warn only" observation and metadata stats, so it must be robust even for raw dicts saved as a degraded fallback.
+
+    ad 剧本 shots 总时长（秒）。
 
     与 target_duration 偏差观察的求和口径单一真相源（``ScriptGenerator`` 探针与
     ``DataValidator`` 共用）：脏数据按 0 计、不抛（见 ``ad_shot_duration_seconds``）——
@@ -803,6 +937,10 @@ def ad_script_total_duration(shots: object) -> int:
     return sum(ad_shot_duration_seconds(shot) for shot in shots)
 
 
+#: Fallback duration (seconds) by skeleton kind when duration_seconds is missing -- the single source of truth for script entry duration.
+#: segments/scenes keep the historical default; shots (ad) and video_units (reference-to-video) have no per-shot default duration
+#: preference (planned entry by entry by target/budget), so missing counts as 0, avoiding made-up values polluting the comparison with the target total.
+#: All four skeletons are registered; adding a fifth skeleton makes the ``item_duration`` lookup raise KeyError.
 #: 缺 duration_seconds 时按骨架种类取的兜底时长（秒）——剧本条目时长的单一真相源。
 #: segments/scenes 沿用历史默认；shots（ad）与 video_units（参考生视频）无单分镜默认时长
 #: 偏好（按 target/预算逐条规划），缺失按 0 计，避免杜撰值污染与目标总时长的对照。
@@ -811,7 +949,13 @@ _ITEM_FALLBACK_DURATIONS: dict[str, int] = {"segments": 4, "scenes": 8, "shots":
 
 
 def item_duration(kind: str, item: object) -> int:
-    """单条剧本条目时长（秒）的脏数据归一口径——沿 ``ad_shot_duration_seconds`` 先例推广到四骨架。
+    """Normalization rule for dirty data in a single script entry's duration (seconds) -- the ``ad_shot_duration_seconds`` precedent generalized to the four skeletons.
+
+    Non-dict entries have no duration semantics and count as 0; within a dict, a missing ``duration_seconds`` or a dirty value
+    (None / bool / non-positive integer / float / string) always falls back to the fallback duration looked up in
+    ``_ITEM_FALLBACK_DURATIONS`` by ``kind``. Only real positive integers are accepted (bool excluded as an int subclass), consistent with the validator's "``duration <= 0`` is invalid".
+
+    单条剧本条目时长（秒）的脏数据归一口径——沿 ``ad_shot_duration_seconds`` 先例推广到四骨架。
 
     非 dict 条目无时长语义按 0 计；dict 内 ``duration_seconds`` 缺失，或为脏值
     （None / 布尔 / 非正整数 / 浮点 / 字符串）一律回退按 ``kind`` 查 ``_ITEM_FALLBACK_DURATIONS``
@@ -826,7 +970,12 @@ def item_duration(kind: str, item: object) -> int:
 
 
 def script_duration_total(kind: str, items: object) -> int:
-    """按骨架种类求剧本条目总时长（秒）——脏数据稳健、不抛（见 ``item_duration``）。
+    """Total duration (seconds) of script entries by skeleton kind -- robust to dirty data, never raises (see ``item_duration``).
+
+    ``items`` that is not a list (including dirty values like null from a degraded save) is treated as empty and returns 0. Read-time
+    computation and write-time recomputation share this single source of truth, avoiding three places each maintaining the same fallback table and guards.
+
+    按骨架种类求剧本条目总时长（秒）——脏数据稳健、不抛（见 ``item_duration``）。
 
     ``items`` 非 list（含 null 这类降级保存的脏值）按空处理返回 0。读时计算与写盘重算
     共用此单一真相源，避免三处各自维护同一兜底表与守卫。
@@ -866,22 +1015,29 @@ class ReferenceVideoUnit(BaseModel):
         le=REFERENCE_UNIT_DURATION_RANGE[1],
         description="该单元时长（秒）",
     )
+    # note / generated_assets are UI / runtime / manual fields, hidden from the LLM.
     # note / generated_assets 均为 UI / runtime / 人工字段，对 LLM 隐藏。
     note: SkipJsonSchema[str | None] = Field(default=None, description="用户备注")
     generated_assets: SkipJsonSchema[GeneratedAssets] = Field(
         default_factory=GeneratedAssets, description="生成资源状态"
     )
     needs_replan: SkipJsonSchema[bool] = Field(default=False, description="该单元需要人工重新规划")
+    # Source text: passed through from the script plan unit at content review, for the creator to compare with the source. Hidden from the LLM, not in the web PATCH
+    # whitelist; the Agent may rewrite it via batch edit, and when the project has a source it must be a verbatim substring of the episode source. Empty for manually added units.
     # 对应原文：内容确认时从脚本规划单元透传，供创作者对照来源。对 LLM 隐藏，不在 web PATCH
     # 白名单内；Agent 可经批量编辑改写，项目有源文时须是本集源文的逐字子串。手动新增的单元为空。
     source_text: SkipJsonSchema[str] = Field(default="", description="该单元所依据的逐字原文摘录")
+    # Pending authoring: the visual layer is not filled in yet. Set on new entries without a visual layer, cleared when prompt authoring writes back or the visual layer is completed by hand;
+    # hidden from the LLM and not in any PATCH whitelist. Only appears on disk when set.
     # 待编写：视觉层尚未补出。不带视觉层的新增条目置位，提示词编写写回或手写齐视觉层时清除；
     # 对 LLM 隐藏，不在任何 PATCH 白名单内。落盘只在置位时出现。
     pending_authoring: SkipJsonSchema[bool] = Field(default=False, description="该条目待编写")
 
     @model_validator(mode="after")
     def _validate_replan_shell(self) -> "ReferenceVideoUnit":
-        """全悬空迁移壳可为空且为 0 秒；其余单元仍须可执行。"""
+        """A fully dangling migration shell may be empty and 0 seconds; all other units must still be executable.
+
+        全悬空迁移壳可为空且为 0 秒；其余单元仍须可执行。"""
         if not self.text.strip():
             if not self.needs_replan or self.duration_seconds != 0:
                 raise ValueError("空 video unit 仅允许 needs_replan=true 且 duration_seconds=0")
@@ -902,26 +1058,35 @@ class ReferenceVideoScript(BaseModel):
     """
 
     title: str = Field(description="剧集标题")
-    # 对 LLM 隐藏：由 _add_metadata 注入。
+    # Hidden from the LLM: injected by _add_metadata. / 对 LLM 隐藏：由 _add_metadata 注入。
     content_mode: SkipJsonSchema[Literal["narration", "drama", "ad"]] = Field(
         default="narration", description="内容类型（narration/drama/ad）"
     )
-    # 见 NarrationEpisodeScript.novel 说明
+    # See NarrationEpisodeScript.novel / 见 NarrationEpisodeScript.novel 说明
     novel: SkipJsonSchema[NovelInfo] = Field(default_factory=NovelInfo, description="小说来源信息")
-    # 见 NarrationEpisodeScript 同名字段说明。
+    # See the same-named field in NarrationEpisodeScript. / 见 NarrationEpisodeScript 同名字段说明。
     hook: SkipJsonSchema[str | None] = Field(default=None, description="集尾钩子（来自分集账本）")
     next_episode_teaser: SkipJsonSchema[str | None] = Field(default=None, description="下集预告语（来自分集账本）")
     video_units: list[ReferenceVideoUnit] = Field(description="视频单元列表")
 
 
 def resolve_content_mode(script: dict[str, Any], project: dict[str, Any]) -> str:
-    """剧本级 ``content_mode`` 缺失（存量 episode 未打戳）时回退到项目级配置，与
+    """When the script-level ``content_mode`` is missing (legacy episode not stamped), fall back to the project-level config, consistent
+    with the established rule already validated by ``lib.project.data_validator._validate_episode_payload`` -- legacy
+    episodes may omit the field and the project value fills in; the read side (generation tasks) must not invent a stricter check of its own.
+
+    剧本级 ``content_mode`` 缺失（存量 episode 未打戳）时回退到项目级配置，与
     ``lib.project.data_validator._validate_episode_payload`` 已校验通过的既定口径一致——存量
     episode 允许省略该字段、由项目值兜底，读侧（生成任务）不能另起一份更严格的判定。
     """
     return script.get("content_mode", project.get("content_mode", "narration"))
 
 
+# ============ Reference-to-video script_plan structured intermediate state ============
+#
+# Two-stage split of responsibilities (same mechanism as narration / drama, see ADR 0041): script_plan (video_unit splitting) produces
+# the content layer (unit boundaries + body and duration), and prompt_authoring (generate-script) uses it as the only base to generate
+# the visual arrangement of ReferenceVideoScript (shot size / composition / camera movement expansion).
 # ============ 参考生视频 script_plan 结构化中间态 ============
 #
 # 两段式职责切分（与 narration / drama 同机制，见 ADR 0041）：script_plan（video_unit 拆分）产出
@@ -947,6 +1112,8 @@ class ReferenceScriptPlanUnit(BaseModel):
         le=REFERENCE_UNIT_DURATION_RANGE[1],
         description="该单元时长（秒）",
     )
+    # Verbatim source anchor: persisted as is after the split tool checks it is a substring of the source, for comparison and distortion location at content review.
+    # Defaults to an empty string: legacy drafts without this field still pass validation.
     # 逐字原文锚：拆分工具校验其为源文子串后原样落盘，供内容确认时对照与失真定位。
     # 默认空串：不带该字段的存量草稿照常通过校验。
     source_text: SkipJsonSchema[str] = Field(default="", description="该 unit 所依据的逐字原文摘录（追溯锚）")
@@ -966,6 +1133,15 @@ class ReferenceScriptPlanDraft(BaseModel):
     )
 
 
+# ---------------------------------------------------------------------------
+# Reference-to-video flat draft structure: the shape of the two-level LLM output
+# ---------------------------------------------------------------------------
+#
+# The LLM output of script_plan / prompt_authoring is the same format a person writes in the editor (see the built-in shared template
+# fragment shared/writing_syntax), so the schema degenerates to one flat level: the body is a piece of text, and unit_id / reference images /
+# utterances / audio numbering are all machine-derived, never written by the LLM. The schema only carries the "enums and
+# outer structure" layer of constraints (the backend's constrained-decoding retry can only guarantee that layer); syntax inside the text is
+# validated afterwards by the parser (lib/script/reference_video/draft_validation.py).
 # ---------------------------------------------------------------------------
 # 参考生视频扁平草稿结构：两级 LLM 产出的形状
 # ---------------------------------------------------------------------------
@@ -1050,11 +1226,18 @@ class AdReferenceFlatScript(BaseModel):
     )
 
 
+# ============ Hard duration enum constraint (script schema built dynamically from video model capabilities) ============
 # ============ duration 枚举硬约束（按视频模型能力动态构造剧本 schema） ============
 
 
 def _coerce_digit_string(value: object) -> object:
-    """机械强转：纯数字字符串 → int，其余原样透传交给 ``Literal`` 校验。
+    """Mechanical coercion: pure digit string -> int; everything else passes through to ``Literal`` validation.
+
+    The ``enum`` of Gemini's ``responseSchema`` channel only supports strings, so integer duration enums are turned into string enums
+    at the wire layer (``["4","6","8"]``, see ``lib/backends/text_backends/gemini.py``), and under constrained decoding the model
+    outputs ``"4"``; int is restored here so ``Literal[4,6,8]`` matches as usual on both the re-validation and parsing sides.
+
+    机械强转：纯数字字符串 → int，其余原样透传交给 ``Literal`` 校验。
 
     Gemini ``responseSchema`` 通道的 ``enum`` 仅支持字符串，整数时长枚举在 wire 层转为
     字符串枚举（``["4","6","8"]``，见 ``lib/backends/text_backends/gemini.py``），约束解码下模型
@@ -1066,7 +1249,12 @@ def _coerce_digit_string(value: object) -> object:
 
 
 def _duration_literal(supported_durations: list[int]) -> Any:
-    """把 supported_durations 去重排序后构造成数字字符串可强转的 ``Literal[...]``。
+    """De-duplicate and sort supported_durations and build a ``Literal[...]`` that digit strings can be coerced into.
+
+    Multiple values render as a JSON-schema ``enum`` in ``model_json_schema()``, a single value as ``const``; both are hard constraints.
+    Normalized with ``int(d)``, same as ``ConfigResolver`` (see the custom branch of ``lib/config/resolver.py``). An empty set raises ValueError.
+
+    把 supported_durations 去重排序后构造成数字字符串可强转的 ``Literal[...]``。
 
     多值在 ``model_json_schema()`` 里渲染为 JSON-schema ``enum``、单值渲染为 ``const``，两者都是硬约束。
     与 ``ConfigResolver`` 同口径用 ``int(d)`` 归一（见 ``lib/config/resolver.py`` custom 分支）。空集抛 ValueError。
@@ -1078,7 +1266,12 @@ def _duration_literal(supported_durations: list[int]) -> Any:
 
 
 def _list_of(item: type[BaseModel]) -> Any:
-    """``list[item]``，供 ``create_model`` 字段定义使用。
+    """``list[item]``, for use in ``create_model`` field definitions.
+
+    Since pydantic 2.14 the field arguments of ``create_model`` are annotated as ``TypeForm``, and type checkers evaluate the argument
+    as a type expression; writing ``list[<variable>]`` directly reports reportInvalidTypeForm; returning ``Any`` through this function avoids type expression evaluation, with unchanged runtime behaviour.
+
+    ``list[item]``，供 ``create_model`` 字段定义使用。
 
     pydantic 2.14 起 ``create_model`` 的字段参数标注为 ``TypeForm``，类型检查器会把实参当类型表达式求值，
     直接写 ``list[<变量>]`` 会报 reportInvalidTypeForm；经此函数返回 ``Any`` 绕开类型表达式求值，运行时行为不变。
@@ -1087,7 +1280,9 @@ def _list_of(item: type[BaseModel]) -> Any:
 
 
 def _constrained_duration_item(item_base: type[BaseModel], duration_type: Any, description: str) -> type[BaseModel]:
-    """在 ``item_base`` 上把 ``duration_seconds`` 收紧为 ``duration_type``（三工厂共用的字段约束骨架）。"""
+    """Narrow ``duration_seconds`` on ``item_base`` to ``duration_type`` (the field constraint skeleton shared by the three factories).
+
+    在 ``item_base`` 上把 ``duration_seconds`` 收紧为 ``duration_type``（三工厂共用的字段约束骨架）。"""
     return create_model(
         item_base.__name__,
         __base__=item_base,
@@ -1096,7 +1291,21 @@ def _constrained_duration_item(item_base: type[BaseModel], duration_type: Any, d
 
 
 def build_episode_script_model(content_mode: str, supported_durations: list[int]) -> type[BaseModel]:
-    """构造 ``duration_seconds`` 被 ``supported_durations`` 枚举硬约束的剧集脚本模型。
+    """Build an episode script model whose ``duration_seconds`` is hard-constrained by the ``supported_durations`` enum.
+
+    In the static NarrationSegment / DramaScene definitions ``duration_seconds`` is the open range ``Field(ge=1, le=60)``;
+    an LLM picking a non-member value in that range (e.g. writing 5/7 when the model supports [4,6,8]) passes Pydantic but fails late
+    at the execution layer's ``assert_duration_supported``, or even leaks through to a provider API error. Here the field is narrowed
+    to ``Literal[*supported_durations]`` per the current video model's ``supported_durations``:
+    - rendered as a JSON-schema ``enum`` (``const`` for a single value) in response_schema (structured output) -> the LLM is locked in at generation;
+    - membership is enforced at ``model_validate``.
+
+    Serves the three content modes narration / drama / ad: the skeleton kind goes through canonical resolution
+    (``resolve_declared_kind``; unknown/missing content_mode fails loud with ``ValueError``, no drama
+    fallback), and the kind -> model mapping stays local (behaviour is not in the registry). reference_video doesn't go this way: its API consumes
+    ``unit.duration_seconds`` (sum of its shots), which doesn't correspond to a per-shot enum, so it keeps the static ``ReferenceVideoScript``.
+
+    构造 ``duration_seconds`` 被 ``supported_durations`` 枚举硬约束的剧集脚本模型。
 
     NarrationSegment / DramaScene 静态定义里 ``duration_seconds`` 是 ``Field(ge=1, le=60)`` 的开区间，
     LLM 在此区间内挑个非成员值（如模型支持 [4,6,8] 却写 5/7）能过 Pydantic、却会在执行层
@@ -1111,6 +1320,8 @@ def build_episode_script_model(content_mode: str, supported_durations: list[int]
     ``unit.duration_seconds``（各 shot 之和），与单 shot 枚举不对应，沿用静态 ``ReferenceVideoScript``。
     """
     duration_type = _duration_literal(supported_durations)
+    # storyboard schema generation doesn't involve the reference path, so generation_mode is passed as None (narration->segments,
+    # drama->scenes, ad->shots); an unknown content_mode raises ValueError here.
     # storyboard schema 生成不涉 reference 路径，generation_mode 传 None（narration→segments、
     # drama→scenes、ad→shots）；未知 content_mode 在此抛 ValueError。
     kind = resolve_declared_kind(content_mode, None)
@@ -1134,7 +1345,13 @@ def build_episode_script_model(content_mode: str, supported_durations: list[int]
 
 
 def build_drama_normalized_script_model(supported_durations: list[int]) -> type[BaseModel]:
-    """构造 script_plan 规范化剧本模型，``duration_seconds`` 被 ``supported_durations`` 枚举硬约束。
+    """Build the script_plan normalized script model, with ``duration_seconds`` hard-constrained by the ``supported_durations`` enum.
+
+    After content extraction moved forward, script_plan decides shot durations, so the duration enum constraint sits on the content
+    layer ``DramaSceneContent`` (same rule as ``build_episode_script_model``, rendered as enum / const in response_schema); the
+    prompt_authoring visual layer has no duration and keeps the static ``DramaVisualScript``.
+
+    构造 script_plan 规范化剧本模型，``duration_seconds`` 被 ``supported_durations`` 枚举硬约束。
 
     内容抽取前移后由 script_plan 决定分镜时长，故 duration 枚举约束加在内容层 ``DramaSceneContent`` 上
     （与 ``build_episode_script_model`` 同口径，渲染为 response_schema 的 enum / const）；prompt_authoring 视觉层
@@ -1153,7 +1370,9 @@ def build_drama_normalized_script_model(supported_durations: list[int]) -> type[
 
 
 def _ad_episode_model(duration_type: Any, description: str) -> type[BaseModel]:
-    """ad 剧集脚本的动态包装骨架：两条生成路径共用，仅 ``duration_seconds`` 约束类型不同。"""
+    """Dynamic wrapper skeleton for ad episode scripts: shared by both generation paths, differing only in the ``duration_seconds`` constraint type.
+
+    ad 剧集脚本的动态包装骨架：两条生成路径共用，仅 ``duration_seconds`` 约束类型不同。"""
     shot = _constrained_duration_item(AdShot, duration_type, description)
     return create_model(
         "AdEpisodeScript",
@@ -1163,7 +1382,9 @@ def _ad_episode_model(duration_type: Any, description: str) -> type[BaseModel]:
 
 
 def with_new_assets_field(model: type[BaseModel]) -> type[BaseModel]:
-    """给整份生成的 ``response_schema`` 加上本次新增资产；落盘的剧本模型不带这个字段。"""
+    """Add this run's new assets to the ``response_schema`` of whole-episode generation; the persisted script model doesn't have this field.
+
+    给整份生成的 ``response_schema`` 加上本次新增资产；落盘的剧本模型不带这个字段。"""
     return create_model(
         model.__name__,
         __base__=model,
@@ -1175,7 +1396,17 @@ def with_new_assets_field(model: type[BaseModel]) -> type[BaseModel]:
 
 
 def build_reference_units_script_plan_model(supported_durations: list[int]) -> type[BaseModel]:
-    """构造 unit 时长被 ``supported_durations`` 枚举硬约束的参考生视频 script_plan 模型（扁平形状）。
+    """Build the reference-to-video script_plan model (flat shape) whose unit duration is hard-constrained by the ``supported_durations`` enum.
+
+    A unit is the unit of one generation call, and the splitting stage decides exactly the number of seconds sent to the provider, so
+    the enum constraint sits on ``ReferenceScriptPlanFlatUnit.duration_seconds`` (rendered as enum / const in response_schema, the LLM
+    is locked in at generation), connecting with prompt_authoring on the same basis: prompt_authoring keeps the script_plan unit duration and only authors prompts.
+    The reference image count limit and in-text syntax depend on runtime capability values / the project registry, are not in the schema, and are validated afterwards by the split tool.
+
+    prompt_authoring has no corresponding factory: it produces no duration, has no enum field to narrow by capability, and uses the static
+    ``ReferencePromptAuthoringFlatScript`` directly.
+
+    构造 unit 时长被 ``supported_durations`` 枚举硬约束的参考生视频 script_plan 模型（扁平形状）。
 
     unit 是一次生成调用的单元，拆分阶段决定的就是发给供应商的那个秒数，故枚举约束加在
     ``ReferenceScriptPlanFlatUnit.duration_seconds`` 上（response_schema 渲染为 enum / const，LLM

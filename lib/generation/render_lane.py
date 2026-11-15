@@ -1,4 +1,10 @@
-"""本地渲染车道 ``render``：不绑定供应商，全局并发固定为 1、不开放配置（``docs/adr/0095``）。
+"""Local render lane ``render``: not bound to a provider, global concurrency fixed at 1 and not configurable (``docs/adr/0095``).
+
+Rendering final cuts and exporting JianYing drafts both use this lane with task types starting with ``render_``. They
+only call the bundled ffmpeg locally, not a provider, so they write no usage records; peak rendering memory is
+measured in GB, so concurrency can only be 1.
+
+本地渲染车道 ``render``：不绑定供应商，全局并发固定为 1、不开放配置（``docs/adr/0095``）。
 
 渲染成片与导出剪映草稿都以 ``render_`` 开头的任务类型走这条车道。它们只在本机调用随包 ffmpeg，
 不调用供应商，因此不写用量记录；渲染的峰值内存以 GB 计，并发只能是 1。

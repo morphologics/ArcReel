@@ -43,7 +43,12 @@ logger = logging.getLogger(__name__)
 
 
 def _normalized_script_file(script_file: str | None) -> str | None:
-    """入队与在途探测共用的剧本定位：`scripts/episode_N.json` 与 `episode_N.json` 是同一剧本的别名。
+    """Script locator shared by enqueue and in-flight probing: `scripts/episode_N.json` and `episode_N.json` are aliases of the same script.
+
+    The dedup key includes the script filename; Web passes the raw ledger value, Agent passes a bare filename, and
+    without normalising the same unit would be queued as two tasks.
+
+    入队与在途探测共用的剧本定位：`scripts/episode_N.json` 与 `episode_N.json` 是同一剧本的别名。
 
     去重键含剧本文件名，Web 传账本原值、Agent 传纯文件名，不归一就会把同一单元排成两个任务。
     """
@@ -54,12 +59,15 @@ _VIDEO_EXECUTION_IDENTITY_KEYS = frozenset({"video_provider_i2v", "video_provide
 _REFERENCE_VIDEO_ENQUEUE_PAYLOAD_KEYS = frozenset({"script_file", "reference_request_options"})
 
 
+#: Text tasks enqueued by older versions carry the data root at enqueue time in their payload; execution resolves by the current config, and it is not counted when judging sameness either.
 #: 旧版本入队的文本任务在载荷里带着入队时的数据根；执行按当前配置解析，判同也不计它。
 _LEGACY_TEXT_PAYLOAD_KEYS = frozenset({"projects_root"})
 
 
 def text_task_request_facts(payload: dict[str, Any] | None) -> dict[str, Any]:
-    """文本任务载荷里描述「这次请求做什么」的部分，用于判断两次提交是否为同一请求。"""
+    """The part of a text task payload describing "what this request does", used to decide whether two submissions are the same request.
+
+    文本任务载荷里描述「这次请求做什么」的部分，用于判断两次提交是否为同一请求。"""
     return {key: value for key, value in (payload or {}).items() if key not in _LEGACY_TEXT_PAYLOAD_KEYS}
 
 
@@ -70,7 +78,9 @@ def _text_request_facts(task_type: str, payload: dict[str, Any] | None) -> dict[
 
 
 def _render_request_facts(task_type: str, payload: dict[str, Any] | None) -> dict[str, Any] | None:
-    """渲染任务的整个载荷就是请求（剪辑时间线、修订与版本）；同一产物身份不同请求不去重。"""
+    """A render task's whole payload is the request (edit timeline, revision and version); different requests for the same artifact identity are not deduplicated.
+
+    渲染任务的整个载荷就是请求（剪辑时间线、修订与版本）；同一产物身份不同请求不去重。"""
     return dict(payload or {}) if is_render_task_type(task_type) else None
 
 
@@ -121,7 +131,9 @@ def _reference_request_facts(task_type: str, payload: dict[str, Any] | None) -> 
 
 
 class DispatchProviderChanged(RuntimeError):
-    """执行投影与 worker 已占用的 provider 槽不一致，需要回队重认领。"""
+    """The execution projection disagrees with the provider slot the worker already holds; must go back to the queue to be reclaimed.
+
+    执行投影与 worker 已占用的 provider 槽不一致，需要回队重认领。"""
 
     def __init__(self, *, claimed_provider_id: str, actual_provider_id: str) -> None:
         self.claimed_provider_id = claimed_provider_id
@@ -130,7 +142,13 @@ class DispatchProviderChanged(RuntimeError):
 
 
 def ensure_dispatch_provider(claimed_provider_id: str | None, actual_provider_id: str) -> None:
-    """执行入口核对：按项目现状解析出的 provider 与认领时占用的槽不一致时抛 :class:`DispatchProviderChanged`。
+    """Execution entry check: raise :class:`DispatchProviderChanged` when the provider resolved from the project's current
+    state disagrees with the slot held at claim time.
+
+    Callers must check before any provider call. ``claimed_provider_id`` being None means the caller was not claimed via
+    a worker (direct call), no check.
+
+    执行入口核对：按项目现状解析出的 provider 与认领时占用的槽不一致时抛 :class:`DispatchProviderChanged`。
 
     调用方必须在任何供应商调用之前核对。``claimed_provider_id`` 为 None 表示调用方不经 worker
     认领（直接调用），不核对。
@@ -144,7 +162,13 @@ def reference_video_enqueue_payload(
     *,
     script_file: str | None,
 ) -> dict[str, Any]:
-    """把新入队的参考生视频载荷收窄为定位与请求选项。
+    """Narrow a newly enqueued reference-to-video payload to locator and request options.
+
+    Mutable request facts like prompt, references, style, duration are not task snapshots; the worker re-projects from
+    the current project/script/unit when it starts. The execution identity after submission is kept in a dedicated
+    checkpoint and does not pass through this enqueue boundary.
+
+    把新入队的参考生视频载荷收窄为定位与请求选项。
 
     prompt、references、style、duration 等可变请求事实不是任务快照；worker 开始时
     从当前 project/script/unit 重新投影。提交后的执行身份保存在专用 checkpoint，
@@ -164,7 +188,9 @@ def reference_video_enqueue_payload(
 
 
 def without_video_execution_identity(payload: dict[str, Any] | None) -> dict[str, Any]:
-    """移除 payload 中的 enqueue-time 视频身份，使未提交任务按当前配置投影。"""
+    """Remove the enqueue-time video identity from the payload, so unsubmitted tasks are projected by the current config.
+
+    移除 payload 中的 enqueue-time 视频身份，使未提交任务按当前配置投影。"""
 
     return {key: value for key, value in (payload or {}).items() if key not in _VIDEO_EXECUTION_IDENTITY_KEYS}
 
@@ -180,7 +206,15 @@ async def video_bucket_for_queued_task(
     payload: dict[str, Any] | None,
     resource_id: str | None,
 ) -> VideoGenerationType | None:
-    """视频任务的定桶口径，入队派生与 worker 限流投影共用、与执行侧同步（docs/adr/0054）。
+    """Bucketing rule for video tasks, shared by enqueue derivation and worker rate-limit projection, in sync with the execution side (docs/adr/0054).
+
+    Image-to-video / grid -> i2v; reference-to-video calls the public request projection to split by currently available
+    assets -- video units without reference images -> i2v, the rest -> r2v. When script / unit / capabilities cannot be
+    read, fall back to the representative bucket r2v; the fallback only affects the precision of claim pool filtering and
+    rate-limit slot routing, and the execution layer still re-projects when processing starts. Task types outside the
+    table return None (no bucket).
+
+    视频任务的定桶口径，入队派生与 worker 限流投影共用、与执行侧同步（docs/adr/0054）。
 
     图生视频 / 宫格 → i2v；参考生视频调公共 request projection 按当前实际可用资产分流——
     无参考图的视频单元 → i2v，其余 → r2v。剧本 / unit / 能力读不到时回退代表桶 r2v；
@@ -208,7 +242,9 @@ async def reference_projection_for_queued_task(
     payload: dict[str, Any] | None,
     resource_id: str | None,
 ) -> ReferenceUnitRequestProjection | None:
-    """按任务定位信息读取当前 unit，并生成 claim/限流共用的 current-state 投影。"""
+    """Read the current unit from the task's locator and produce the current-state projection shared by claim and rate limiting.
+
+    按任务定位信息读取当前 unit，并生成 claim/限流共用的 current-state 投影。"""
 
     from lib.config.resolver import get_project_manager
     from lib.script.reference_video.request_projection import (
@@ -249,7 +285,9 @@ async def resolve_video_execution_for_queued_task(
     payload: dict[str, Any] | None,
     resource_id: str | None,
 ) -> tuple[ProviderModel, VideoGenerationType | None]:
-    """解析队列视频任务的当前身份与任务类型桶，供入队 advisory 和 worker 限流共用。"""
+    """Resolve the current identity and task type bucket of a queued video task, shared by enqueue advisory and worker rate limiting.
+
+    解析队列视频任务的当前身份与任务类型桶，供入队 advisory 和 worker 限流共用。"""
 
     projection = (
         await reference_projection_for_queued_task(
@@ -290,7 +328,16 @@ async def _derive_execution_model_for_enqueue(
     media_type: str,
     resource_id: str | None,
 ) -> tuple[ProviderModel, VideoGenerationType | None] | None:
-    """入队时按 project + payload 派生任务的 advisory provider 与视频桶。
+    """At enqueue, derive the task's advisory provider and video bucket from project + payload.
+
+    ``provider_id`` is stored on the task row; at claim time the worker uses it for pool-full filtering and slot
+    ownership; both video generation modes only store an advisory provider, the execution entry checks it against the
+    project's current state, and on mismatch rewrites the record and requeues. Same resolution logic as the worker's
+    ``_extract_provider``, but returns ``None`` on failure (instead of forcing DEFAULT_PROVIDER) -- letting the task take
+    the ``provider_id IS NULL`` fallback branch to be inferred by the worker after claim, which is safer than forcing in a
+    possibly wrong provider.
+
+    入队时按 project + payload 派生任务的 advisory provider 与视频桶。
 
     ``provider_id`` 落 task 行，worker 认领时按它做池满过滤与槽位归属；两种视频生成模式都只保存
     advisory provider，执行入口按项目现状核对，不一致时改写记录并回队。与 worker ``_extract_provider``
@@ -306,6 +353,8 @@ async def _derive_execution_model_for_enqueue(
     is_audio = media_type == "audio" or task_type == "tts"
     video_generation_type: VideoGenerationType | None = None
     try:
+        # Local import: lib.config's resolution chain pulls in the backend and custom provider assembly layers, and the enqueue
+        # path should not pay a module-level import cost for that.
         # 局部导入：lib.config 的解析链会拉进 backend 与自定义供应商装配层，入队路径不为此
         # 付模块级导入代价。
         from lib.config.resolver import ConfigResolver, get_project_manager
@@ -332,6 +381,8 @@ async def _derive_execution_model_for_enqueue(
         elif is_audio:
             resolved = await resolver.resolve_audio_backend(project, payload or {})
         else:
+            # image_edit / derivative sheets are always i2i and known at enqueue (the only exception, see docs/adr/0001), resolved by
+            # the i2i slot; the task type of other image tasks is only decided at execution, so take t2i as the representative provider.
             # image_edit / 衍生资产图必然 i2i 且入队即知（唯一例外，见 docs/adr/0001），按 i2i
             # 槽解析；其余 image 任务的任务类型执行时才定，取 t2i 作代表性 provider。
             generation_type = "i2i" if task_type in I2I_ONLY_TASK_TYPES else "t2i"
@@ -344,6 +395,9 @@ async def _derive_execution_model_for_enqueue(
     return resolved, video_generation_type
 
 
+#: Image task types that always go i2i and are known at enqueue (the only exception in ``docs/adr/0001``): image editing
+#: takes the current image as its only input, derivative sheets take the base look's sheet as their only input. Enqueue
+#: derivation and worker rate-limit routing resolve these precisely by the i2i slot; other image tasks take t2i as the representative provider.
 #: 必然走 i2i 且入队即知的图片任务类型（见 ``docs/adr/0001`` 的唯一例外）：图片编辑以当前图
 #: 为唯一输入，衍生资产图以本体资产图为唯一输入。入队派生与 worker 的限流路由据此按 i2i 槽
 #: 精确解析，其余图片任务取 t2i 作代表性 provider。
@@ -372,7 +426,9 @@ class GenerationQueue:
 
     @property
     def session_factory(self):
-        """本队列落库用的 session factory；与队列协作的记账写入沿用同一处接线。"""
+        """Session factory this queue persists with; accounting writes that cooperate with the queue reuse the same wiring.
+
+        本队列落库用的 session factory；与队列协作的记账写入沿用同一处接线。"""
         return self._session_factory
 
     async def assert_project_migration_ok(self, project_name: str) -> None:
@@ -380,7 +436,17 @@ class GenerationQueue:
 
     @asynccontextmanager
     async def _task_repo(self) -> AsyncGenerator[TaskRepository]:
-        """打开一条 TaskRepository 会话，退出时把落地的任务终态发上项目事件总线。
+        """Open a TaskRepository session, and on exit publish the persisted task terminal states to the project event bus.
+
+        Publishing happens after the session exits rather than inside the repo: publishing directly inside the repo would let
+        the frontend read state not yet committed. If the body raises, the session does not commit and nothing is published
+        -- no persisted terminal state, nothing to announce.
+
+        All methods of this class get the repo through this entry, so publishing terminal events is a structural guarantee
+        rather than something each place must remember to hook: new methods that write terminal states get publishing
+        automatically and cannot miss it.
+
+        打开一条 TaskRepository 会话，退出时把落地的任务终态发上项目事件总线。
 
         发布放在会话退出之后而非 repo 内部：repo 内直接发会让前端读到尚未提交的状态。
         body 抛异常时会话不提交、发布也不发生——没有终态落库就没有终态可通告。
@@ -423,6 +489,9 @@ class GenerationQueue:
         if task_type == "reference_video":
             payload = reference_video_enqueue_payload(payload, script_file=script_file)
 
+        # caller didn't pass provider_id -> derive it once at enqueue, so claim takes the SQL pool-filter fast path;
+        # if derivation fails leave NULL, take the IS NULL fallback, and the worker infers it via _extract_provider after claim.
+        # A successful derivation only uses provider_id as a claim/rate-limit advisory; the video model is not frozen at enqueue.
         # caller 没传 provider_id → 入队时主动派生一次，让 claim 走 SQL 池过滤快路径；
         # 派生失败留 NULL，走 IS NULL 兜底，由 worker claim 后 _extract_provider 推算。
         # 派生成功只把 provider_id 作为 claim/rate-limit advisory；视频 model 不在入队时冻结。
@@ -548,6 +617,7 @@ class GenerationQueue:
             batch = await repo.get_batch(project_name=project_name, batch_id=batch_id, user_id=user_id)
         if batch is None:
             raise GenerationBatchNotFound(f"batch '{batch_id}' does not belong to project '{project_name}'")
+        # The read model decides member artifact freshness by artifact manifest and content digest; disk reads and waiting for the manifest lock are done in a worker thread.
         # 读模型按产物清单与内容摘要判定成员产物时效，读盘、等清单锁都放进工作线程。
         return await asyncio.to_thread(
             build_generation_batch_read_model, batch, batch["memberships"], batch["queue_depth"], resolver
@@ -691,7 +761,9 @@ class GenerationQueue:
             await repo.persist_execution_provider_id(task_id, provider_id)
 
     async def mark_task_succeeded(self, task_id: str, result: dict[str, Any] | None) -> int:
-        """Returns rows_affected (0 = 任务已不在 running，该写入不生效)."""
+        """Returns rows_affected (0 = the task is no longer running, the write has no effect).
+
+        Returns rows_affected (0 = 任务已不在 running，该写入不生效)."""
         async with self._task_repo() as repo:
             affected = await repo.mark_succeeded(task_id, result)
         if affected > 0:
@@ -701,7 +773,9 @@ class GenerationQueue:
         return affected
 
     async def mark_task_failed(self, task_id: str, error_message: str) -> int:
-        """Returns rows_affected (0 = 任务已不在 running，该写入不生效)."""
+        """Returns rows_affected (0 = the task is no longer running, the write has no effect).
+
+        Returns rows_affected (0 = 任务已不在 running，该写入不生效)."""
         async with self._task_repo() as repo:
             affected = await repo.mark_failed(task_id, error_message)
         if affected > 0:
@@ -711,12 +785,16 @@ class GenerationQueue:
         return affected
 
     async def mark_task_interrupted(self, task_id: str) -> int:
-        """进程级打断的兜底：把被打断的任务落 cancelled 并级联排队中的下游，返回受影响行数。"""
+        """Fallback for process-level interruption: mark interrupted tasks cancelled and cascade to queued downstream tasks; return the number of affected rows.
+
+        进程级打断的兜底：把被打断的任务落 cancelled 并级联排队中的下游，返回受影响行数。"""
         async with self._task_repo() as repo:
             return await repo.finalize_interrupted(task_id)
 
     async def cancel_task(self, task_id: str) -> dict[str, Any]:
-        """取消排队中的任务及其排队中下游；执行中的任务抛 ``TaskNotCancellableError``。"""
+        """Cancel a queued task and its queued downstream; a running task raises ``TaskNotCancellableError``.
+
+        取消排队中的任务及其排队中下游；执行中的任务抛 ``TaskNotCancellableError``。"""
         async with self._task_repo() as repo:
             result = await repo.cancel_task(task_id)
         if result["cancelled"]:
@@ -728,7 +806,9 @@ class GenerationQueue:
             return await repo.get_cancel_preview(task_id)
 
     async def cancel_all_queued(self, project_name: str) -> dict[str, Any]:
-        """取消项目里排队中的生成任务。本地渲染任务不在用量面板列出，也不随批量取消。"""
+        """Cancel the queued generation tasks in a project. Local render tasks are not listed in the usage panel and are not cancelled in bulk.
+
+        取消项目里排队中的生成任务。本地渲染任务不在用量面板列出，也不随批量取消。"""
         async with self._task_repo() as repo:
             result = await repo.cancel_all_queued(project_name, exclude_media_types=(RENDER_MEDIA_TYPE,))
         if result["cancelled_count"] > 0:
@@ -820,5 +900,6 @@ def read_queue_poll_interval() -> float:
     return max(0.1, float(TASK_POLL_INTERVAL_SEC))
 
 
+# Provider task ids after submission on the call channel are persisted via this queue. The singleton is fetched by name, so patching this module's get_generation_queue still works.
 # 调用通道提交后的供应商任务 id 经本队列落库。按名字取单例，打桩本模块的 get_generation_queue 照常生效。
 install_provider_job_id_store(lambda: get_generation_queue())

@@ -1,4 +1,25 @@
-"""v17→v18 迁移：剪辑时间线修订删去 Agent 轮次字段；补录原先因生成缺口被跳过的产物。
+"""v17->v18 migration: remove the Agent turn field from edit timeline revisions; back-register artifacts previously
+skipped because of input gaps.
+
+With message queuing, several user messages may enter one turn in sequence, so a revision's ``agent_turn`` no
+longer has a clear meaning, and nothing displays it; the revision model doesn't accept extra fields, so this field
+is removed here from revisions on disk, with all other content kept as-is. Edit timelines aren't in the artifact
+manifest, so removing the field changes no registration. Each file is backed up before rewriting; the write doesn't
+go through the edit timeline store's write exit and doesn't advance the project's recent activity time. Backing up
+``project.json`` is the runner's job.
+
+From v18 input gaps only block generation and the basis is projected as usual (``docs/adr/0098``). The same step
+plans twice, before and after, to back-register artifacts previously unregistered because of gaps; registered
+entries are untouched, see :mod:`lib.project.project_migrations.input_gap_backfill`. Afterwards content
+fingerprints are back-filled for registered videos and voiceovers, written only where the formal file and the
+selected version snapshot agree, see :mod:`lib.project.project_migrations.content_digest_backfill`.
+
+The same step rewrites renamed models in ``project.json``'s model fields to their successor models (mapping in
+``lib.config.retired_model_ids``); references to delisted models without successors are kept as-is and the user
+re-selects after a runtime error. Artifact bases don't include model fields, so the rewrite doesn't change the
+currency of any registered artifact.
+
+v17→v18 迁移：剪辑时间线修订删去 Agent 轮次字段；补录原先因生成缺口被跳过的产物。
 
 消息排队后一轮里可能先后进入多条用户消息，修订记录的 ``agent_turn`` 不再有清晰含义，也没有
 任何地方展示它；修订模型不接受多余字段，已落盘修订里的这个字段在此删去，其余内容原样保留。
@@ -42,7 +63,10 @@ def _is_real_dir(path: Path) -> bool:
 
 
 def _episode_dirs(project_dir: Path) -> Iterator[Path]:
-    """``edit_timelines/episode_*`` 目录。符号链接与 junction 不跟随，以免改写项目外的文件。"""
+    """``edit_timelines/episode_*`` directories. Symlinks and junctions aren't followed, so files outside the project
+    aren't rewritten.
+
+    ``edit_timelines/episode_*`` 目录。符号链接与 junction 不跟随，以免改写项目外的文件。"""
 
     root = Path(project_dir) / "edit_timelines"
     if not _is_real_dir(root):
@@ -55,14 +79,19 @@ def _timeline_names(directory: Path) -> set[str]:
 
 
 def timeline_files(project_dir: Path) -> Iterator[Path]:
-    """项目里所有剪辑时间线文件：``edit_timelines/episode_*/*.json``，不含符号链接。"""
+    """All edit timeline files in the project: ``edit_timelines/episode_*/*.json``, excluding symlinks.
+
+    项目里所有剪辑时间线文件：``edit_timelines/episode_*/*.json``，不含符号链接。"""
 
     for directory in _episode_dirs(project_dir):
         yield from (directory / name for name in sorted(_timeline_names(directory)))
 
 
 def timeline_backup_sources(project_dir: Path) -> Iterator[Path]:
-    """剪辑时间线备份对应的源路径：现存的时间线文件，加上源文件已删、只剩备份的时间线。"""
+    """Source paths of edit timeline backups: existing timeline files, plus timelines whose source file was deleted and
+    only the backup remains.
+
+    剪辑时间线备份对应的源路径：现存的时间线文件，加上源文件已删、只剩备份的时间线。"""
 
     for directory in _episode_dirs(project_dir):
         names = _timeline_names(directory)
@@ -73,7 +102,10 @@ def timeline_backup_sources(project_dir: Path) -> Iterator[Path]:
 
 
 def migrate_timeline_dict(document: Mapping[str, Any]) -> dict[str, Any]:
-    """纯函数：删去每个修订上的 ``agent_turn``。幂等；结构不认得的值原样保留。"""
+    """Pure function: remove ``agent_turn`` from each revision. Idempotent; values with unrecognized structure are kept
+    as-is.
+
+    纯函数：删去每个修订上的 ``agent_turn``。幂等；结构不认得的值原样保留。"""
 
     migrated = dict(document)
     revisions = migrated.get("revisions")
@@ -88,7 +120,15 @@ def migrate_timeline_dict(document: Mapping[str, Any]) -> dict[str, Any]:
 
 
 def migrate_project_model_references(project: Mapping[str, Any]) -> dict[str, Any]:
-    """纯函数：把 ``project.json`` 模型字段里精确的退役模型引用改写为后继模型。幂等；非字符串脏值原样保留。
+    """Pure function: rewrite exact retired-model references in ``project.json`` model fields to their successor models.
+    Idempotent; non-string dirty values are kept as-is.
+
+    ``model_settings`` is keyed by ``provider/model`` (e.g. resolution of image models); the retired model's item moves
+    to the successor model's key accordingly, otherwise after the rename lookups by the successor model would miss and
+    silently fall back to the default resolution. If the successor model's key already has settings, those win and the
+    old key is left as-is.
+
+    纯函数：把 ``project.json`` 模型字段里精确的退役模型引用改写为后继模型。幂等；非字符串脏值原样保留。
 
     ``model_settings`` 以 ``provider/model`` 为键（如图片模型的分辨率），退役模型的那一项随之换到后继模型的键下，
     否则改名后按后继模型查不到、静默回到缺省分辨率。后继模型的键已有设置时以它为准，旧键原样留下。
@@ -113,7 +153,9 @@ def migrate_project_model_references(project: Mapping[str, Any]) -> dict[str, An
 
 
 def migrate_v17_to_v18(project_dir: Path) -> ArtifactBackfillOutcome | None:
-    """v17→v18 文件级迁移。逐个文件原子写，最后提升 schema；中途崩溃可重试。"""
+    """v17->v18 file-level migration. Atomic write file by file, schema bumped last; crash-retryable mid-way.
+
+    v17→v18 文件级迁移。逐个文件原子写，最后提升 schema；中途崩溃可重试。"""
 
     project_dir = Path(project_dir)
     project_file = project_dir / "project.json"
@@ -125,6 +167,8 @@ def migrate_v17_to_v18(project_dir: Path) -> ArtifactBackfillOutcome | None:
             raise ValueError("project.json 必须是对象")
         if parse_project_schema_version(project) >= TARGET_SCHEMA_VERSION:
             return None
+        # Keep a backup of the manifest before rewriting (version records are backed up earlier by the gap back-registration);
+        # the internal backups of the two back-fills are de-duplicated accordingly.
         # 清单在改写前留一份备份（版本记录由缺口补录先行备份）；两次补录的内部备份随之去重。
         ensure_versioned_backup(project_dir / MANIFEST_FILENAME, _FROM_VERSION)
         outcome = backfill_input_gap_artifacts(project_dir, project)
@@ -133,6 +177,7 @@ def migrate_v17_to_v18(project_dir: Path) -> ArtifactBackfillOutcome | None:
             try:
                 document = json.loads(path.read_bytes())
             except ValueError:
+                # Files that were already unreadable are left as-is and handled as unparseable when read, as usual.
                 # 本就读不出的文件保持原样，读取时照常按无法解析处理。
                 continue
             if not isinstance(document, dict):

@@ -1,4 +1,4 @@
-"""ArkVideoBackend — 火山方舟 Ark 视频生成后端。"""
+"""ArkVideoBackend — Volcengine Ark video generation backend. / ArkVideoBackend — 火山方舟 Ark 视频生成后端。"""
 
 from __future__ import annotations
 
@@ -38,17 +38,27 @@ from lib.infra.retry import with_retry_async
 
 logger = logging.getLogger(__name__)
 
+# The Seedance 2.0 series allows at most 3 reference audio clips per request, with a total duration of at most 15
+# seconds (official "Create video generation task API", audio info section).
 # Seedance 2.0 系列每请求最多 3 段参考音频，且总时长不超过 15 秒（官方《创建视频生成任务
 # API》音频信息章节）。
 _SEEDANCE_2_MAX_REFERENCE_AUDIO = 3
+# Both reference audio dimensions stay on the backend side rather than in the model catalog: the catalog's model facts
+# are the configuration surface's capability source of truth (durations means generation duration tiers, unrelated to
+# reference audio input), and it has no reference_audio dimension; request-time hard rejections always read VideoCapabilities.
 # 两个参考音频维度都留在 backend 侧而不进模型目录：目录的模型事实是配置面的能力真相源
 # （durations 指的是生成时长档位，与参考音频输入无关），没有任何 reference_audio 维度；
 # 请求期硬拒绝的判定一律读 VideoCapabilities。
 _SEEDANCE_2_MAX_REFERENCE_AUDIO_TOTAL_SECONDS = 15.0
 
+# Reference image limit of Seedance 1.5 pro, the only place it is declared (orchestration-layer trimming and request-time validation both read VideoCapabilities).
 # Seedance 1.5 pro 的参考图上限，唯一声明处（编排层裁剪与请求期校验同读 VideoCapabilities）。
 _SEEDANCE_1_5_MAX_REFERENCE_IMAGES = 9
 
+# Multimodal material limits of Seedance 2.5: 30 reference images, 10 reference audio clips with a total duration of
+# 30 seconds (official "Video generation API", materials section). All three are wider than 2.0, so 2.0 and 2.5 each
+# keep their own set of constants instead of sharing: sharing would silently change the allowed range of one tier when
+# the other is adjusted.
 # Seedance 2.5 的多模态素材上限：参考图 30 张，参考音频 10 段、总时长 30 秒（官方《视频生成
 # API》素材章节）。三项都比 2.0 宽，故与 2.0 各存一组常量而非共享——共享会在其中一档调整时
 # 静默改动另一档的放行范围。
@@ -56,12 +66,23 @@ _SEEDANCE_2_5_MAX_REFERENCE_IMAGES = 30
 _SEEDANCE_2_5_MAX_REFERENCE_AUDIO = 10
 _SEEDANCE_2_5_MAX_REFERENCE_AUDIO_TOTAL_SECONDS = 30.0
 
+# Data URI MIME of reference audio: officially wav / mp3 are accepted, requiring `data:audio/<format>;base64,<content>`
+# with a lowercase format. Asset upload already narrows to the same set of formats; here it is filled in from the
+# extension, and unknown extensions are rejected rather than guessed.
+# Deliberately kept separate from dashscope's same-named table: here mp3 is written audio/mp3 per the official example,
+# while dashscope uses the standard audio/mpeg; each provider has its own acceptance rule, and merging them into one
+# shared table would send one of them an unverified MIME.
 # 参考音频的 data URI MIME：官方接受 wav / mp3 两种格式，要求 `data:audio/<格式>;base64,<内容>`
 # 且格式小写。资产上传期已按同一组格式收窄，此处按扩展名回填，未知扩展名不猜测直接拒绝。
 # 与 dashscope 侧的同名表刻意各存一份：mp3 在这里按官方示例写 audio/mp3，dashscope 走标准
 # 的 audio/mpeg——供应商各自的接受口径，合并成一张共享表会让其中一家收到没验证过的 MIME。
 _REFERENCE_AUDIO_MIME_TYPES = {".wav": "audio/wav", ".mp3": "audio/mp3"}
 
+# Official estimation formula for Seedance video tokens ("Model pricing", video generation section):
+#   (input video duration + output video duration) × output video width × height × frame rate / 1024
+# Frame rate and output pixels per "resolution × aspect ratio" come from "Create video generation task API": output
+# frame rate 24; the 2.5 and 2.0 series differ only in the 480p 16:9 / 9:16 cells, and 2.5 has no 4k. When resolution
+# is not sent the API defaults to 720p. Settlement uses the completion_tokens reported by the provider.
 # Seedance 视频 token 的官方估算公式（《模型价格》视频生成一节）：
 #   (输入视频时长 + 输出视频时长) × 输出视频的宽 × 高 × 帧率 / 1024
 # 帧率与各「分辨率 × 宽高比」的输出像素取自《创建视频生成任务 API》：输出帧率 24；2.5 与 2.0 系列只有 480p 的
@@ -100,12 +121,15 @@ _SEEDANCE_2_5_PIXELS: dict[tuple[str, str], tuple[int, int]] = {
     ("480p", "9:16"): (480, 854),
 }
 
+# Requested service tier value → price table service tier value: ``default`` in Ark requests is the standard tier.
 # 请求的服务档取值 → 价目表的服务档取值：方舟请求里的 ``default`` 即标准档。
 _CATALOG_SERVICE_TIERS = {"default": "standard"}
 
 
 def _retry_ark_download(exc: Exception) -> bool:
-    """产物下载共用谓词 ⊕ Ark 特有的「任务已成功但产物未就绪」形态（400 video_not_ready）。"""
+    """Shared artifact download predicate ⊕ Ark's own "task succeeded but artifact not ready" form (400 video_not_ready).
+
+    产物下载共用谓词 ⊕ Ark 特有的「任务已成功但产物未就绪」形态（400 video_not_ready）。"""
     if (
         isinstance(exc, httpx.HTTPStatusError)
         and exc.response.status_code == 400
@@ -116,7 +140,17 @@ def _retry_ark_download(exc: Exception) -> bool:
 
 
 def _safe_create_params_for_log(create_params: dict[str, Any]) -> dict[str, Any]:
-    """请求参数的安全日志视图：content 数组按条目类型折叠成计数，不展开内嵌素材。
+    """Safe log view of the request parameters: the content array is folded into counts by item type, without expanding embedded materials.
+
+    Images and audio in content are all base64 data URIs. ``format_kwargs_for_log`` only truncates long strings and does
+    not understand this structure; passing it directly would write each material's base64 prefix into the info log
+    (audio might even carry ID3 metadata from the mp3 header). dashscope / vidu / minimax each have a safe view of the
+    same name, likewise to satisfy CodeQL clear-text-logging.
+
+    The prompt is user text, not material, and is still output under ``format_kwargs_for_log``'s existing truncation
+    rules, keeping the item most often needed when troubleshooting generation results.
+
+    请求参数的安全日志视图：content 数组按条目类型折叠成计数，不展开内嵌素材。
 
     content 里的图片与音频都是 base64 data URI。``format_kwargs_for_log`` 只截断长字符串、
     不认识这层结构，直接交给它会把每个素材的 base64 前缀写进 info 日志（音频还可能带上
@@ -143,7 +177,7 @@ def _safe_create_params_for_log(create_params: dict[str, Any]) -> dict[str, Any]
 
 
 class ArkVideoBackend(ProviderJobIdPersistenceMixin):
-    """Ark (火山方舟) 视频生成后端。"""
+    """Ark (Volcengine Ark) video generation backend. / Ark (火山方舟) 视频生成后端。"""
 
     def __init__(
         self,
@@ -155,13 +189,25 @@ class ArkVideoBackend(ProviderJobIdPersistenceMixin):
     ):
         self._client = create_ark_client(api_key=api_key, base_url=base_url, transport_layer=transport_layer)
         self._transport_layer = transport_layer
+        # When a resumed run replays the submit domain, a separate client must be built with the same credentials (the SDK binds base_url at construction and has no public way to change the domain).
         # 续跑回放提交域名时要按同一份凭据另建 client（SDK 在构造时绑定 base_url，没有换域名的公开方法）。
         self._api_key = api_key
+        # Domain this instance's requests actually go to, with the same normalization as create_ark_client; stored together with job_id on submit.
         # 本实例请求实际发往的域名，与 create_ark_client 同一套归一化；提交时随 job_id 一并落库。
         self._base_url = ark_base_url(base_url)
         if not model:
             raise ValueError("ArkVideoBackend 需要指定模型")
         self._model = model
+        # The service_tier parameter is only supported by older models such as seedance-1.x; the 2.0 upstream rejects it with
+        # 400 under r2v, so it must not be sent. 2.5 drops it too by the same-generation rule; that rule is inferred from 2.0's
+        # rejection behavior, and narrowing the check only affects the 2.5 branch. See _is_seedance_2 / _is_seedance_2_5 for
+        # the check: `in` substrings handle several prefix naming schemes (doubao-/dreamina-), and version numbers are
+        # narrowed one by one to registered generations. The granularity of narrowing is the generation, not the specific
+        # model: unknown suffixes of the same generation still have service_tier dropped by family, which is exactly what is
+        # wanted, since the whole generation does not accept the parameter. Strict per-model checks use the separate
+        # _matches_known_model allowlist (for last frame and reference audio); the two are not interchangeable. This is an
+        # internal transport detail of the backend and does not go into VideoCapabilities, which only declares the input paths
+        # the caller needs to choose between.
         # service_tier 参数仅 seedance-1.x 等老模型支持；2.0 上游在 r2v 下会 400 拒绝该参数，
         # 必须不下传。2.5 按同代口径一并剔除，该口径系从 2.0 的拒绝行为推断，收窄判定
         # 只影响 2.5 一支。判定见 _is_seedance_2 / _is_seedance_2_5：用
@@ -182,12 +228,18 @@ class ArkVideoBackend(ProviderJobIdPersistenceMixin):
 
     @staticmethod
     def _accepts_service_tier(model: str) -> bool:
-        """请求体是否带 ``service_tier``：Seedance 2.0 与 2.5 两代都不带。"""
+        """Whether the request body carries ``service_tier``: neither Seedance 2.0 nor 2.5 does.
+
+        请求体是否带 ``service_tier``：Seedance 2.0 与 2.5 两代都不带。"""
         return not (ArkVideoBackend._is_seedance_2(model) or ArkVideoBackend._is_seedance_2_5(model))
 
     @staticmethod
     def estimate_video_tokens(model: str, *, resolution: str | None, ratio: str, seconds: int) -> float | None:
-        """按官方公式估算一次 Seedance 2.x 请求的视频 token；宽高比为 ``adaptive``、档位或型号不在像素表里时为 ``None``。
+        """Estimate the video tokens of one Seedance 2.x request by the official formula; ``None`` when the aspect ratio is ``adaptive`` or the tier or model is not in the pixel table.
+
+        Built-in channels send no input video, so the input video duration is always 0.
+
+        按官方公式估算一次 Seedance 2.x 请求的视频 token；宽高比为 ``adaptive``、档位或型号不在像素表里时为 ``None``。
 
         内置调用通道不发送输入视频，输入视频时长恒为 0。
         """
@@ -207,7 +259,12 @@ class ArkVideoBackend(ProviderJobIdPersistenceMixin):
     def metered_usage(
         model: str, request: VideoGenerationRequest, result: VideoGenerationResult | None = None
     ) -> Usage:
-        """这次请求的计量（见 :mod:`lib.backends.video_backends.metering`）。
+        """Metering of this request (see :mod:`lib.backends.video_backends.metering`).
+
+        Video token settlement uses the provider-reported ``completion_tokens`` (``result.usage_tokens``); the estimate is
+        converted via :meth:`estimate_video_tokens`. The service tier is only reported for models whose request body carries it.
+
+        这次请求的计量（见 :mod:`lib.backends.video_backends.metering`）。
 
         视频 token 结算取供应商回报的 ``completion_tokens``（``result.usage_tokens``），预估按
         :meth:`estimate_video_tokens` 换算。服务档只在请求体带它的型号上上报。
@@ -236,7 +293,15 @@ class ArkVideoBackend(ProviderJobIdPersistenceMixin):
 
     @staticmethod
     def _is_seedance_2(model: str) -> bool:
-        """按 model_id 子串识别已验证的 seedance-2-0 / seedance-2.0 系列（含 fast 变体）。
+        """Recognize the verified seedance-2-0 / seedance-2.0 series (including fast variants) by model_id substring.
+
+        Only the 2-0 and 2.0 spellings match; 2.5 is recognized separately by _is_seedance_2_5, since the two generations
+        differ in material limits and last-frame rules, and a combined family check would make 2.5 inherit 2.0's limits.
+        `in` substrings rather than prefix matching are used to handle several upstream prefix naming schemes (doubao-
+        Volcengine China site / dreamina- BytePlus international site). service_tier dropping and the reference image
+        capability share this check to keep the two paths from drifting.
+
+        按 model_id 子串识别已验证的 seedance-2-0 / seedance-2.0 系列（含 fast 变体）。
 
         只匹配 2-0 与 2.0 两种写法，2.5 由 _is_seedance_2_5 单独识别——两代的素材上限与
         尾帧口径都不同，合成一个族群判定会让 2.5 继承 2.0 的上限。用 `in` 子串而非前缀匹配，
@@ -248,7 +313,12 @@ class ArkVideoBackend(ProviderJobIdPersistenceMixin):
 
     @staticmethod
     def _is_seedance_2_5(model: str) -> bool:
-        """按 model_id 子串识别 seedance-2-5 / seedance-2.5 系列。
+        """Recognize the seedance-2-5 / seedance-2.5 series by model_id substring.
+
+        Like _is_seedance_2, a loose family recognition (reused for service_tier dropping and reference image capability);
+        last frame and reference audio of verified models go through the separate _SEEDANCE_2_5_ALLOW_SUBSTRINGS boundary allowlist.
+
+        按 model_id 子串识别 seedance-2-5 / seedance-2.5 系列。
 
         与 _is_seedance_2 同为宽松族群识别（供 service_tier 剔除与参考图能力复用），已验证
         型号的尾帧与参考音频另走 _SEEDANCE_2_5_ALLOW_SUBSTRINGS 边界白名单。
@@ -256,6 +326,15 @@ class ArkVideoBackend(ProviderJobIdPersistenceMixin):
         model_lower = model.lower()
         return "seedance-2-5" in model_lower or "seedance-2.5" in model_lower
 
+    # In the official capability table listed in docs/api-docs/providers/ark.md, outside the seedance-2.0 series only
+    # these three 1.x models explicitly support first/last frames (1.0 pro fast and 1.0 lite t2v are marked "-", other
+    # unlisted models are unverified). An allowlist is used instead of a denylist: custom provider configs or unknown new
+    # upstream models are conservatively judged as not supporting last frames, to avoid wrongly declaring support and
+    # bypassing this module's hard rejection; once let through, a model that really lacks support would still incur
+    # provider-side calls and charges.
+    # The substrings include both hyphen and dot version spellings (e.g. "1-0" /
+    # "1.0"): upstream naming is inconsistent, and the official pricing page listed in docs/api-docs/providers/ark.md uses
+    # dots for doubao-seedance-1.0-pro-fast.
     # docs/api-docs/providers/ark.md 所列官方能力表中，非 seedance-2.0 系列里明确支持首尾帧的仅这三个
     # 1.x 型号（1.0 pro fast 与 1.0 lite t2v 标 "-"，其余未上表的型号未经验证）。改用白名单
     # 而非黑名单：自定义供应商配置或上游新增的未知型号一律保守判定为不支持尾帧，避免错误声明
@@ -278,15 +357,24 @@ class ArkVideoBackend(ProviderJobIdPersistenceMixin):
         "seedance-1-0-lite-t2v",
         "seedance-1.0-lite-t2v",
     )
+    # After an allowlist hit, the remainder must be empty or a purely numeric date stamp (e.g. "-251215"): plain `in`
+    # substring matching would let unlisted unknown variants such as "doubao-seedance-1-5-pro-future" be wrongly judged as
+    # inheriting the verified model's last-frame capability because they contain "seedance-1-5-pro", bypassing this module's hard rejection.
     # 白名单命中后要求剩余部分为空或纯数字日期戳（如 "-251215"）——单纯 `in` 子串匹配会让
     # "doubao-seedance-1-5-pro-future" 这类未上表的未知变体因包含 "seedance-1-5-pro" 而
     # 被误判为继承已验证型号的尾帧能力，绕过本模块的硬拒绝。
     _KNOWN_MODEL_SUFFIX_RE = re.compile(r"^(-\d+)?$")
 
+    # Models outside the 2.0 series that support reference-to-video: 1.5 pro's reference image limit is declared
+    # separately in this module's VideoCapabilities, and orchestration-layer trimming and request-time validation both read that declaration.
     # 非 2.0 系列里支持参考生视频的型号：1.5 pro 的参考图上限由本模块的 VideoCapabilities
     # 单独声明，编排层裁剪与请求期校验同读该声明。
     _REFERENCE_IMAGE_ALLOW_SUBSTRINGS = ("seedance-1-5-pro", "seedance-1.5-pro")
 
+    # The three Seedance 2.0 variants verified to support first/last frames (built-in models in lib/config/registry.py:
+    # doubao-seedance-2-0-260128 / -2-0-fast-260128 / -2-0-mini-260615, plus the undated
+    # doubao-seedance-2.0 / -2.0-fast / -2.0-mini). Also boundary-matched: unknown suffixes (such as
+    # "doubao-seedance-2-0-future") must not inherit the last-frame capability just because they contain "seedance-2-0".
     # Seedance 2.0 系列已验证支持首尾帧的三个变体（lib/config/registry.py 内建型号：
     # doubao-seedance-2-0-260128 / -2-0-fast-260128 / -2-0-mini-260615，及无日期戳的
     # doubao-seedance-2.0 / -2.0-fast / -2.0-mini）。同样走边界匹配，未知后缀（如
@@ -300,6 +388,8 @@ class ArkVideoBackend(ProviderJobIdPersistenceMixin):
         "seedance-2.0",
     )
 
+    # Seedance 2.5 models verified to support first/last frames and reference audio (built-in doubao-seedance-2-5-260628
+    # and the undated doubao-seedance-2.5). Also boundary-matched; unknown suffixes must not inherit these two capabilities via substring containment.
     # Seedance 2.5 已验证支持首尾帧与参考音频的型号（内建 doubao-seedance-2-5-260628 及无日期
     # 戳的 doubao-seedance-2.5）。同走边界匹配，未知后缀不得因子串包含而继承这两项能力。
     _SEEDANCE_2_5_ALLOW_SUBSTRINGS = ("seedance-2-5", "seedance-2.5")
@@ -316,13 +406,25 @@ class ArkVideoBackend(ProviderJobIdPersistenceMixin):
 
     @staticmethod
     def _is_seedance_1(model: str) -> bool:
-        """按 model_id 子串识别 seedance-1-x / seedance-1.x 系列；系列内的逐型号能力另走各白名单。"""
+        """Recognize the seedance-1-x / seedance-1.x series by model_id substring; per-model capabilities within the series go through their own allowlists.
+
+        按 model_id 子串识别 seedance-1-x / seedance-1.x 系列；系列内的逐型号能力另走各白名单。"""
         model_lower = model.lower()
         return "seedance-1-" in model_lower or "seedance-1." in model_lower
 
     @staticmethod
     def video_capabilities_for_model(model: str) -> VideoCapabilities:
-        """按模型名纯计算参考图等 caps —— 不构造 SDK client（无需 api_key）。
+        """Compute caps such as reference images purely from the model name, without constructing an SDK client (no api_key needed).
+
+        The resolver can call this method when resolving the reference image limit without constructing the whole backend;
+        the instance property delegates here, keeping the backend as the single source of truth. Names follow
+        ``name_family``'s rules; names outside the Seedance 1.x / 2.0 / 2.5 series uniformly fall back.
+
+        The audio track form uses ``VideoCapabilities``' default for the whole range (switchable): ``_build_payload``
+        unconditionally puts ``generate_audio`` in the request body and every Seedance tier honors that switch, so no branch
+        declaration is needed.
+
+        按模型名纯计算参考图等 caps —— 不构造 SDK client（无需 api_key）。
 
         resolver 解析参考图上限时调本方法即可，不必构造整个 backend；instance property 委托至此，
         保持 backend 为单一真相源。名字按 ``name_family`` 的规则取，Seedance 1.x / 2.0 / 2.5 三个
@@ -335,8 +437,14 @@ class ArkVideoBackend(ProviderJobIdPersistenceMixin):
 
     @staticmethod
     def _match_video_capabilities(model: str) -> VideoCapabilities | None:
-        """按名字族认定的能力；不属于已知 Seedance 系列时为 ``None``。"""
+        """Capabilities identified by name family; ``None`` when not part of a known Seedance series.
+
+        按名字族认定的能力；不属于已知 Seedance 系列时为 ``None``。"""
         if ArkVideoBackend._is_seedance_2_5(model):
+            # 2.5 differs from 2.0 in more than numbers: material limits widen to 30 reference images / 10 audio clips with a total
+            # of 30 seconds, and when a first frame is present the ratio must be left to the upstream to adapt to the first frame
+            # (see first_frame_ratio_adaptive_only); sending a fixed ratio would conflict with the first frame size. Hence a
+            # separate branch that does not reuse the 2.0-oriented checks.
             # 2.5 与 2.0 的差别不止数值：素材上限放宽到参考图 30 / 音频 10 段、总时长 30 秒，
             # 且首帧在场时比例必须交给上游按首帧自适应（见 first_frame_ratio_adaptive_only），
             # 下发固定 ratio 会与首帧尺寸冲突。故独立分支，不复用面向 2.0 的判定。
@@ -354,6 +462,15 @@ class ArkVideoBackend(ProviderJobIdPersistenceMixin):
                 first_frame_ratio_adaptive_only=True,
             )
         if ArkVideoBackend._is_seedance_2(model):
+            # The API rejects requests mixing first/last frames with reference material (InvalidParameter: first/last frame content
+            # cannot be mixed with reference media content): reference images mean reference-to-video, which is mutually exclusive
+            # with first/last frames, so the first-frame stacking capability is not enabled while the official contract does not
+            # declare support for mixing.
+            # Last frame and reference audio each go through the boundary-checked allowlist of verified models: _is_seedance_2
+            # itself only does loose family recognition (reused for service_tier dropping), and unverified 2.0 series variants
+            # should not inherit these two capabilities. Both cover the same set of listed models (all three official tiers
+            # 2.0 / 2.0-fast / 2.0-mini declare audio reference support), so they share one allowlist constant rather than
+            # maintaining two lists with the same content.
             # API 拒绝首帧/尾帧与参考素材混合请求（InvalidParameter: first/last frame content
             # cannot be mixed with reference media content）——参考图是与首尾帧互斥的
             # 参考生视频，故在官方契约未声明支持混合时不开启首帧叠加能力。
@@ -368,6 +485,10 @@ class ArkVideoBackend(ProviderJobIdPersistenceMixin):
                 last_frame=on_verified_allowlist,
                 max_reference_images=9,
                 reference_audio_mode=(ReferenceAudioMode.DIRECT if on_verified_allowlist else ReferenceAudioMode.NONE),
+                # Official limits: at most 3 reference audio clips per request, each 2–15 seconds, with a total of at most 15 seconds.
+                # The per-clip limit does not imply the total: two clips of 10 seconds each are valid individually but exceed it
+                # together; clip count and total duration are declared as independent dimensions and validated separately by
+                # gate_video_request. Source: "Create video generation task API", audio info section.
                 # 官方限制：每请求最多 3 段参考音频，单段时长 2–15 秒，且总时长不超过 15 秒。
                 # 单段上限推不出总时长——两段各 10 秒都合法，合起来已经超；段数与总时长两个
                 # 维度独立声明，由 gate_video_request 分别校验。出处：《创建视频生成任务 API》
@@ -379,6 +500,9 @@ class ArkVideoBackend(ProviderJobIdPersistenceMixin):
             )
         if not ArkVideoBackend._is_seedance_1(model):
             return None
+        # 1.x series: 1.5 pro can send role="last_frame" normally (see
+        # test_first_last_frame_role_fields). The allowlist covers the three models verified in the capability table to
+        # support first/last frames; anything not on the allowlist gets last_frame=False (including unlisted variants within the series).
         # 1.x 系列：1.5 pro 可正常下发 role="last_frame"（见
         # test_first_last_frame_role_fields）。白名单覆盖能力表已验证支持首尾帧的三个型号，
         # 未命中白名单的一律 last_frame=False（含系列内未上表的变体）。
@@ -388,6 +512,10 @@ class ArkVideoBackend(ProviderJobIdPersistenceMixin):
             model_lower, ArkVideoBackend._LAST_FRAME_ALLOW_SUBSTRINGS
         )
         denied_last_frame = any(sub in model_lower for sub in ArkVideoBackend._NO_LAST_FRAME_SUBSTRINGS)
+        # _create_task serializes reference_images as role="reference_image" for every model, and reference-to-video is an
+        # existing working path on 1.5 pro; not declaring capacity here would make gate_video_request reject whole batches of
+        # requests where the orchestration layer has properly assigned reference images; the orchestration layer's assignment
+        # limit reads here too. Unlisted models are still conservatively judged as 0.
         # _create_task 对任何 model 都会把 reference_images 序列化成 role="reference_image"，
         # 参考生视频在 1.5 pro 上是既有可用路径；此处不声明容量会让 gate_video_request 把编排层
         # 正常派好参考图的请求整批拒掉——编排层的派图上限同样读这里。未上表的型号仍保守判 0。
@@ -406,14 +534,23 @@ class ArkVideoBackend(ProviderJobIdPersistenceMixin):
         return self.video_capabilities_for_model(self._model)
 
     async def generate(self, request: VideoGenerationRequest) -> VideoGenerationResult:
-        """生成视频。任务创建和轮询阶段分离重试，避免瞬态错误导致重建任务。"""
+        """Generate a video. Task creation and polling phases retry separately, so transient errors do not cause the task to be recreated.
+
+        生成视频。任务创建和轮询阶段分离重试，避免瞬态错误导致重建任务。"""
         provider_task_id = await self._create_task(request)
+        # Also write back the domain actually requested this time: resume replays it; otherwise changing base_url mid-flight would query the old task on the new domain.
         # 一并写回本次实际请求的域名：续跑据此回放，否则在途改了 base_url 会按新域名去查旧任务。
         await self._persist_provider_job_id(request, provider_task_id, provider=PROVIDER_ARK, endpoint=self._base_url)
         return await self._poll_until_done(provider_task_id, request)
 
     async def resume_video(self, job_id: str, request: VideoGenerationRequest) -> VideoGenerationResult:
-        """接续已 submit 的 Ark task：仅 poll + 下载。
+        """Resume an already submitted Ark task: only poll + download.
+
+        A nonexistent/expired task on the Ark side usually shows up as the SDK raising a 404-type exception or returning
+        status='expired'; this interface recognizes the latter inside _poll_until_done, and the former is intercepted by
+        this method and converted to ResumeExpiredError.
+
+        接续已 submit 的 Ark task：仅 poll + 下载。
 
         Ark 端 task 不存在/已过期通常表现为 SDK 抛 404 类异常或返回 status='expired'；
         本接口在 _poll_until_done 内识别后者，前者由本方法拦截转 ResumeExpiredError。
@@ -427,16 +564,25 @@ class ArkVideoBackend(ProviderJobIdPersistenceMixin):
 
     @with_retry_async()
     async def _create_task(self, request: VideoGenerationRequest) -> str:
-        """创建 Ark 视频生成任务（带重试保护）。"""
+        """Create an Ark video generation task (with retry protection). / 创建 Ark 视频生成任务（带重试保护）。"""
         # 1. Build content list
         content: list[dict[str, Any]] = [{"type": "text", "text": request.prompt}]
 
+        # The Ark video API requires each image_url item to carry a top-level `role` field
+        # (first_frame / last_frame / reference_image), otherwise 400 InvalidParameter.
+        # Existence checks and image reading/encoding are blocking I/O, offloaded to a thread as a whole.
         # Ark 视频 API 要求每个 image_url 条目在顶层带 `role` 字段
         # （first_frame / last_frame / reference_image），否则 400 InvalidParameter。
         # 存在性检查与读图编码都是阻塞 I/O，整体卸载到线程。
         content.extend(await asyncio.to_thread(self._build_image_content, request))
 
         if request.reference_audio_files:
+            # Audio items and image items share the content array, each numbered independently by type: "audio N" in the prompt
+            # means the N-th type="audio_url" item (official "Quick start" prompt rules). So the original order of
+            # reference_audio_files must be kept here without skipping any clip: skipping would shift all the reference text the
+            # orchestration layer assembled, putting character A's voice on character B. gather returns in argument order, so
+            # concurrency does not affect the numbering. Reading a whole audio clip for base64 encoding is blocking I/O, offloaded
+            # to a thread clip by clip.
             # 音频条目与图片条目同列 content 数组，各自按类型独立编号：prompt 里的「音频N」
             # 指的是第 N 个 type="audio_url" 条目（官方《快速入门》提示词规则）。故这里必须
             # 保持 reference_audio_files 的原始顺序、不跳过任何一段——跳过会让编排层拼好的
@@ -462,6 +608,9 @@ class ArkVideoBackend(ProviderJobIdPersistenceMixin):
                 for data_uri in audio_data_uris
             )
 
+        # Aspect ratio first: ratio is a separate SDK field decided directly by aspect_ratio; resolution is only the
+        # resolution tier, orthogonal to ratio (the SDK computes pixels from ratio×resolution internally); the ratio is not
+        # squeezed into a pixel size, so there is no size bug.
         # 2. Build API params
         # 比例优先：ratio 是独立 SDK 字段，由 aspect_ratio 直接决定；resolution 仅清晰度档位，
         # 与比例正交（SDK 内部按 ratio×resolution 算像素），不把比例压进像素 size，故无尺寸 bug。
@@ -475,7 +624,7 @@ class ArkVideoBackend(ProviderJobIdPersistenceMixin):
         }
         if request.resolution is not None:
             create_params["resolution"] = request.resolution
-        # seedance-2.0 等模型不接受 service_tier
+        # Models such as seedance-2.0 do not accept service_tier / seedance-2.0 等模型不接受 service_tier
         if self._supports_service_tier:
             create_params["service_tier"] = request.service_tier
         if request.seed is not None:
@@ -494,7 +643,12 @@ class ArkVideoBackend(ProviderJobIdPersistenceMixin):
 
     @staticmethod
     async def _download_video_with_retry(video_url: str, output_path) -> None:
-        """单独重试视频下载，避免下载失败导致重新生成视频而浪费额度。
+        """Retry the video download separately, so a download failure does not regenerate the video and waste quota.
+
+        Ark's video URL may still not be ready after the task succeeded; it then returns 400 video_not_ready rather than the
+        403/404 common on artifact channels, so this case is added on top of the shared predicate.
+
+        单独重试视频下载，避免下载失败导致重新生成视频而浪费额度。
 
         Ark 的视频 URL 在任务 succeeded 后可能仍未就绪，此时返回的是 400 video_not_ready
         而非产物通道常见的 403/404，故在共用谓词之上补这一条。
@@ -502,7 +656,9 @@ class ArkVideoBackend(ProviderJobIdPersistenceMixin):
         await download_video(video_url, output_path, label="Ark", retry_if=_retry_ark_download)
 
     def _build_image_content(self, request: VideoGenerationRequest) -> list[dict[str, Any]]:
-        """首帧 / 尾帧 / 参考图 → image_url 条目（同步：读本地图片，调用方放线程里跑）。"""
+        """First frame / last frame / reference images → image_url items (sync: reads local images; the caller runs it in a thread).
+
+        首帧 / 尾帧 / 参考图 → image_url 条目（同步：读本地图片，调用方放线程里跑）。"""
         from lib.backends.image_backends.base import image_to_base64_data_uri
 
         content: list[dict[str, Any]] = []
@@ -518,6 +674,8 @@ class ArkVideoBackend(ProviderJobIdPersistenceMixin):
         if request.end_image:
             end_path = Path(request.end_image)
             if not end_path.is_file():
+                # A missing last frame is not silently skipped: if skipped, the task would be submitted and billed as usual, and the
+                # user would get a video without a last frame that does not connect to the shot, with no way to know why.
                 # 尾帧缺失不静默跳过：跳过后任务照常提交并计费，用户拿到一段没有尾帧、
                 # 与分镜衔接不上的视频却无从知道原因。
                 raise VideoCapabilityError(
@@ -534,6 +692,7 @@ class ArkVideoBackend(ProviderJobIdPersistenceMixin):
         if request.reference_images:
             missing = [p for r in request.reference_images if not (p := Path(r)).is_file()]
             if missing:
+                # Same as the last frame: with one reference image missing the video is still produced and billed, but the characters/scenes in it have drifted.
                 # 与尾帧同理：少一张参考图仍会出片并计费，成片里的角色/场景却已跑偏。
                 raise VideoCapabilityError(
                     "video_reference_images_unreadable",
@@ -552,7 +711,14 @@ class ArkVideoBackend(ProviderJobIdPersistenceMixin):
 
     @contextmanager
     def _polling_client(self, request: VideoGenerationRequest) -> Generator[Any]:
-        """轮询用的 SDK client：续跑且提交域名与当下配置不同时，按同一份凭据另建一个绑定提交域名的。
+        """SDK client for polling: when resuming and the submit domain differs from the current config, build another one bound to the submit domain with the same credentials.
+
+        A task id can only be queried on the endpoint that created it; after the user changes base_url mid-flight, polling
+        the old task on the new domain would 404 and be misjudged as expired by ``resume_video``. On the submit path
+        ``submitted_base_url`` is always None and the instance client is used. The separately built client has its own
+        connection pool and is closed when polling ends.
+
+        轮询用的 SDK client：续跑且提交域名与当下配置不同时，按同一份凭据另建一个绑定提交域名的。
 
         任务 id 只在创建它的 endpoint 上可查，用户在途改 base_url 后按新域名去轮旧任务会 404，
         被 ``resume_video`` 误判成过期。提交路径的 ``submitted_base_url`` 恒 None，沿用实例 client。
@@ -569,7 +735,7 @@ class ArkVideoBackend(ProviderJobIdPersistenceMixin):
             client.close()
 
     async def _poll_until_done(self, task_id: str, request: VideoGenerationRequest) -> VideoGenerationResult:
-        """轮询任务状态直到完成，瞬态错误仅重试当次轮询请求。"""
+        """Poll the task status until done; transient errors only retry the current poll request. / 轮询任务状态直到完成，瞬态错误仅重试当次轮询请求。"""
         with self._polling_client(request) as client:
             result = await poll_with_retry(
                 poll_fn=lambda: asyncio.to_thread(client.content_generation.tasks.get, task_id=task_id),
@@ -610,7 +776,14 @@ class ArkVideoBackend(ProviderJobIdPersistenceMixin):
 
 
 def _is_ark_not_found(exc: BaseException) -> bool:
-    """识别 Ark 任务「不存在 / 已过期」响应。
+    """Recognize Ark's task "not found / expired" response.
+
+    Exact match on the official stable ``task_not_found`` error code; the broad ``"not found"`` substring fallback was
+    removed, so business-side errors (such as reference image not found) are not misjudged as provider-side task expiry.
+    The ``expired`` string is kept: Ark's own ``_poll_until_done`` turns status in (failed, expired) into
+    ``RuntimeError("Ark 任务失败 ... status=expired")``, and that string is needed to recognize it back as ResumeExpiredError.
+
+    识别 Ark 任务「不存在 / 已过期」响应。
 
     精确匹配官方稳定 ``task_not_found`` 错误码；移除宽泛的 ``"not found"`` 子串兜底，
     避免业务侧错误（如 reference image not found）被误判为 provider 端任务过期。

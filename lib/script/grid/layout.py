@@ -38,13 +38,18 @@ class GridLayout:
         return width, height
 
 
+# Tier actually sent by grid rendering when no resolution tier is configured (same source as ``execute_grid_task``)
 # 未配置分辨率档时宫格渲染实际下发的档位（与 ``execute_grid_task`` 同源）
 GRID_FALLBACK_RESOLUTION = "2K"
 
+# Image resolution tier required by large grids (4×4 / 5×5): per-cell resolution shrinks with the cell count, and
+# below this tier a single cell no longer supports downstream video quality, so the grid is capped at 3×3 by tier.
 # 大宫格（4×4 / 5×5）要求的图像分辨率档：单格分辨率随格数缩水，低于该档时单格已不足以
 # 支撑下游视频画质，故按档位封顶到 3×3。
 _LARGE_GRID_RESOLUTION = "4K"
 
+# Size ladder: all are N×N square splits, so the cell aspect ratio always equals the whole-image ratio, and the
+# center-crop after splitting is nearly a no-op. The order is the selection order, (cell_count, grid_size, side).
 # 档位阶梯：全部为 N×N 平方切分，单格比例因而恒等于整图比例，切格后 center-crop 近乎 no-op。
 # 顺序即选档顺序，(cell_count, grid_size, side)。
 _GRID_LADDER: tuple[tuple[int, str, int], ...] = (
@@ -54,9 +59,11 @@ _GRID_LADDER: tuple[tuple[int, str, int], ...] = (
     (25, "grid_25", 5),
 )
 
+# The whole-image ratio is the canonical orientation of the project's video aspect ratio; the cell ratio matches it
 # 整图比例直接取项目视频比例的规范朝向，单格比例与之一致
 _ORIENTATION_ASPECT: dict[str, str] = {"horizontal": "16:9", "vertical": "9:16"}
 
+# Whole-image ratio at write time of legacy grid_6 (once the only non-square size), indexed by (rows, cols)
 # 存量 grid_6（曾经唯一的非方形档）写入时的整图比例，按 (rows, cols) 索引
 _LEGACY_NON_SQUARE_ASPECT: dict[tuple[int, int], str] = {(3, 2): "4:3", (2, 3): "3:4"}
 
@@ -65,7 +72,12 @@ _MAX_CELL_COUNT = 25
 
 
 def large_grid_allowed(image_resolution: str | None) -> bool:
-    """4×4 / 5×5 是否可用：仅当宫格实际生效的图像分辨率档为 4K。
+    """Whether 4×4 / 5×5 are available: only when the grid's effective image resolution tier is 4K.
+
+    ``None`` means the SDK resolution parameter is not passed at call time (see ``docs/adr/0019``) and is treated
+    as the fallback tier.
+
+    4×4 / 5×5 是否可用：仅当宫格实际生效的图像分辨率档为 4K。
 
     ``None`` 表示调用时不传 SDK resolution 参数（见 ``docs/adr/0019``），按保底档处理。
     """
@@ -73,12 +85,19 @@ def large_grid_allowed(image_resolution: str | None) -> bool:
 
 
 def max_cell_count(*, allow_large_grid: bool) -> int:
-    """单张宫格的格数上限；分组超出时由调用方按此切块。"""
+    """Maximum cell count of a single grid; callers chunk groups that exceed it. / 单张宫格的格数上限；分组超出时由调用方按此切块。"""
     return _MAX_CELL_COUNT if allow_large_grid else _GATED_MAX_CELL_COUNT
 
 
 def video_aspect_ratio_of(project: dict[str, Any]) -> str:
-    """项目的视频比例，宫格画布与冻结在记录上的单格比例共用同一取值。
+    """The project's video aspect ratio; the grid canvas and the cell ratio frozen on the record share this value.
+
+    aspect_ratio in project.json may be explicitly written as null (the Pydantic model is str | None), and
+    dict.get(key, default) does not fall back to the default for an existing key whose value is None, so it must be
+    checked explicitly -- otherwise None flows all the way into canvas geometry, the prompt and the frozen value on
+    the record.
+
+    项目的视频比例，宫格画布与冻结在记录上的单格比例共用同一取值。
 
     project.json 中 aspect_ratio 允许显式写入 null（Pydantic 模型为 str | None），
     dict.get(key, default) 遇到值为 None 的既有 key 不会回退默认值，须显式判空——
@@ -96,7 +115,16 @@ def _orientation_of(aspect_ratio: str) -> str:
 
 
 def grid_aspect_ratio_for(rows: int, cols: int, aspect_ratio: str) -> str:
-    """按记录自身的 rows/cols 取整图比例，供存量记录重生成使用。
+    """Get the whole-image ratio from the record's own rows/cols, for regenerating legacy records.
+
+    For square sizes (rows == cols) the result is the video aspect ratio itself, consistent with
+    :func:`calculate_grid_layout`. Non-square can only come from legacy grid_6 records; use the ratio at their write
+    time: regeneration reuses the prompt frozen in the record, so the ratio sent must match the canvas that prompt
+    describes; a geometrically consistent ratio derived from the cell ratio (3×2 → 32:27) both contradicts the
+    prompt and is not in any image backend's size table, so it would silently fall back to a near-square image.
+    Unregistered non-square geometry falls back to the video aspect ratio -- also a ratio every backend knows.
+
+    按记录自身的 rows/cols 取整图比例，供存量记录重生成使用。
 
     方形档（rows == cols）下结果即视频比例本身，与 :func:`calculate_grid_layout` 一致。
     非方形只可能来自存量 grid_6 记录，取其写入时的比例：重生成沿用记录里冻结的 prompt，
@@ -112,6 +140,9 @@ def grid_aspect_ratio_for(rows: int, cols: int, aspect_ratio: str) -> str:
 
 def calculate_grid_layout(num_scenes: int, aspect_ratio: str, *, allow_large_grid: bool = False) -> GridLayout | None:
     """Calculate the appropriate grid layout for the given number of scenes.
+
+    allow_large_grid: whether to allow the 4×4 / 5×5 sizes (decided by the caller from the effective resolution tier
+    via :func:`large_grid_allowed`). Off by default; callers that don't pass it explicitly are capped at 3×3.
 
     Args:
         num_scenes: Number of scenes to display in the grid.
@@ -149,7 +180,17 @@ def plan_grid_chunks[T](
     *,
     allow_large_grid: bool = False,
 ) -> list[tuple[list[T], GridLayout]]:
-    """把一个场景分组按单张宫格的格数上限切块，返回各块及其布局。
+    """Split a scene group into chunks by the per-grid cell limit, returning each chunk and its layout.
+
+    The single implementation of "group → chunk by :func:`max_cell_count` → layout": enqueueing, preview and cost
+    estimation consume the same output, so grid counts and sizes don't drift apart. The first chunk picks its size
+    from the whole group; a last chunk that doesn't fill a size drops to a smaller size and is padded with
+    placeholder cells; chunks don't overlap, their union equals the whole group, and order follows the original
+    group (the first/last frame chain is self-consistent within a chunk, not chained across chunks).
+
+    Returns an empty list for an empty group.
+
+    把一个场景分组按单张宫格的格数上限切块，返回各块及其布局。
 
     「分组 → 按 :func:`max_cell_count` 切块 → 布局」的唯一实现：入队、预览、
     费用估算消费同一产出，宫格张数与档位才不会各自漂移。首块按分组整体选档，
@@ -165,7 +206,7 @@ def plan_grid_chunks[T](
     for i in range(0, len(group), layout.cell_count):
         chunk = list(group[i : i + layout.cell_count])
         chunk_layout = calculate_grid_layout(len(chunk), aspect_ratio, allow_large_grid=allow_large_grid)
-        if chunk_layout is None:  # pragma: no cover — chunk 恒非空，不可达
+        if chunk_layout is None:  # pragma: no cover — chunk is never empty, unreachable / chunk 恒非空，不可达
             continue
         plans.append((chunk, chunk_layout))
     return plans

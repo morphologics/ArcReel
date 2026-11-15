@@ -1,4 +1,14 @@
-"""路径安全工具：项目内「路径必须落在某个基准目录之内」的唯一校验入口。
+"""Path safety utilities: the single validation entry in the project for "a path must lie within some base dir".
+
+The implementation deliberately uses ``os.path.realpath`` + ``startswith`` prefix comparison rather than
+``Path.resolve()`` with ``relative_to()`` / ``is_relative_to()``: both defend equally (``realpath`` also expands
+symlinks), but prefix comparison is the sanitizer pattern CodeQL ``py/path-injection`` recognizes, while the latter is
+not recognized and keeps producing standing alerts.
+
+Return values are always built from ``realpath`` output, not the raw path the caller passed, so tainted values don't
+keep flowing out.
+
+路径安全工具：项目内「路径必须落在某个基准目录之内」的唯一校验入口。
 
 实现刻意使用 ``os.path.realpath`` + ``startswith`` 前缀比较，而不是 ``Path.resolve()``
 配合 ``relative_to()`` / ``is_relative_to()``：两者防御强度等价（``realpath`` 同样展开
@@ -23,7 +33,12 @@ __all__ = [
 
 
 class PathTraversalError(ValueError):
-    """解析后的路径逃出了基准目录。
+    """The resolved path escaped the base dir.
+
+    Subclasses ``ValueError``, so existing ``except ValueError`` call sites catch it, while call sites that need to tell
+    "out of bounds" from "other invalid input" can catch it precisely.
+
+    解析后的路径逃出了基准目录。
 
     继承 ``ValueError``，既能被 ``except ValueError`` 的既有调用点接住，也允许需要区分
     「越界」与「其它非法入参」的调用点精确捕获。
@@ -41,7 +56,25 @@ def safe_join(
     must_exist: bool = False,
     require_file: bool = False,
 ) -> Path:
-    """把不可信的 ``parts`` 拼到 ``base`` 下，校验未越界后返回规范化的绝对路径。
+    """Join untrusted ``parts`` under ``base``, check it stays within bounds and return the normalized absolute path.
+
+    An absolute path in ``parts`` drops the prefix per ``os.path.join`` semantics and must still pass the containment
+    check, so "passing an absolute path" equals "checking whether that absolute path is inside base".
+
+    Args:
+        base: base dir; the result must lie within it.
+        parts: path fragments to join, usually from user input or untrusted data on disk.
+        allow_base: whether a result exactly equal to ``base`` itself passes. Default False.
+        must_exist: when True the result must already exist (file or dir), otherwise raises ``FileNotFoundError``.
+        require_file: when True the result must be an existing **file**, otherwise raises ``FileNotFoundError``.
+
+    Raises:
+        PathTraversalError: the resolved result is not within ``base``, or ``parts`` contains file-system-illegal
+            characters that make ``os.path.realpath`` fail (e.g. an embedded NUL byte).
+        FileNotFoundError: the ``must_exist`` / ``require_file`` check failed.
+        TypeError: ``parts`` contains non-path types (e.g. dirty data in project.json).
+
+    把不可信的 ``parts`` 拼到 ``base`` 下，校验未越界后返回规范化的绝对路径。
 
     ``parts`` 中出现绝对路径时按 ``os.path.join`` 语义丢弃前缀，随后仍要通过包含校验，
     因此「传入绝对路径」等价于「校验该绝对路径是否在 base 内」。
@@ -60,10 +93,19 @@ def safe_join(
         TypeError: ``parts`` 含非路径类型（如 project.json 里的脏数据）。
     """
     base_real = _realpath(base)
+    # Pre-append the trailing separator: when base is exactly the file system root / a Windows drive root, base_real
+    # already ends with a separator (e.g. "/", "C:\\"); appending again gives "//"/"C:\\\\", so no valid subpath would
+    # match the prefix and all would be misjudged as out of bounds.
     # 预先补齐末尾分隔符：base 恰为文件系统根 / Windows 盘符根时 base_real 本身已带
     # 分隔符（如 "/"、"C:\\"），再拼一次会变成 "//"/"C:\\\\"，导致任何合法子路径都
     # 无法匹配前缀而被误判越界。
     base_prefix = base_real if base_real.endswith(os.sep) else base_real + os.sep
+    # os.path.join accepts PathLike args itself (it calls os.fspath internally), no pre-conversion needed; an extra
+    # generator expression would only insert unnecessary intermediate nodes into CodeQL's dataflow.
+    #
+    # parts come from untrusted input and may contain file-system-illegal characters (e.g. an embedded NUL byte): JSON can
+    # express such values but they make os.path.realpath raise a native ValueError/OSError. Callers generally only catch
+    # PathTraversalError, so convert here in one place, instead of patching each call site, where misses would degrade to 500.
     # os.path.join 本身接受 PathLike 参数（内部会调 os.fspath），不需要预先转换；
     # 额外包一层生成器表达式只会在 CodeQL 的 dataflow 里插入不必要的中间节点。
     #
@@ -75,6 +117,9 @@ def safe_join(
     except (OSError, ValueError) as exc:
         raise PathTraversalError(f"路径解析失败：{parts!r}") from exc
 
+    # Branch on candidate_real == base_real separately: when base is the file system root / a drive root,
+    # base_prefix == base_real, and an equal candidate path would also pass the startswith branch below;
+    # merging the allow_base check into that branch would let allow_base=False be bypassed for the root dir.
     # candidate_real == base_real 单独判支：base 为文件系统根 / 盘符根时
     # base_prefix == base_real，相等的候选路径也会通过下面的 startswith 分支，
     # 若把 allow_base 判断合并进该分支会让根目录下的 allow_base=False 被绕过。
@@ -84,6 +129,16 @@ def safe_join(
     elif not candidate_real.startswith(base_prefix):
         raise PathTraversalError(f"路径越界：{candidate_real!r} 不在 {base_real!r} 内")
 
+    # is_file/exists check candidate_real directly (the string carrying the barrier) rather than wrapping it in
+    # Path first: a Path() wrapper would also break the recognition above.
+    #
+    # CodeQL still flags the two sinks below as unvalidated; they were dismissed via the GitHub code scanning UI (false
+    # positive, reasons in the dismiss comment of each alert, with PR link): the bounds check logic is isomorphic to code
+    # CodeQL already judged safe before this repo's migration (the bounds check in server/app.py spa_deep_link), the
+    # protection strength is unchanged, and tests/unit/lib/infra/test_path_safety.py locks it with dedicated path traversal
+    # cases (including symlink escape); this function, as the repo's only bounds check implementation, necessarily operates
+    # on the unsanitized candidate path internally, and the flag is attributed to a recognition gap in CodeQL's sink
+    # attribution after the sanitizer's own branches merge.
     # is_file/exists 直接查 candidate_real（携带 barrier 的字符串），而不是先包进
     # Path 再查：Path() 包装同样会打断上面这层识别。
     #
@@ -108,7 +163,12 @@ def try_safe_join(
     must_exist: bool = False,
     require_file: bool = False,
 ) -> Path | None:
-    """``safe_join`` 的静默版本：越界 / 不存在 / 脏数据一律返回 None。
+    """Silent version of ``safe_join``: out of bounds / missing / dirty data all return None.
+
+    For call sites that "skip if unavailable" rather than "reject the request" (validation summaries, candidate path
+    traversal, etc.).
+
+    ``safe_join`` 的静默版本：越界 / 不存在 / 脏数据一律返回 None。
 
     供「拿不到就跳过」而非「拒绝请求」的调用点使用（校验汇总、候选路径遍历等）。
     """
@@ -121,17 +181,22 @@ def try_safe_join(
             require_file=require_file,
         )
     except (OSError, ValueError, TypeError):
+        # TypeError: fragments come from raw project.json fields; dirty data (dict/int) is treated as "missing"
         # TypeError：片段来自 project.json 原始字段，脏数据（dict/int）按「不存在」处理
         return None
 
 
 def safe_resolve(base: Path, rel_path: str | None) -> Path | None:
-    """解析 base 内的相对路径，返回绝对路径；越界/脏数据/不是已存在的文件时返回 None。"""
+    """Resolve a relative path within base and return the absolute path; return None when out of bounds / dirty data / not an existing file.
+
+    解析 base 内的相对路径，返回绝对路径；越界/脏数据/不是已存在的文件时返回 None。"""
     if not rel_path:
         return None
     return try_safe_join(base, rel_path, require_file=True)
 
 
 def safe_exists(base: Path, rel_path: str) -> bool:
-    """rel_path 是否为 base 内的合法相对路径且文件存在（防路径穿越）。"""
+    """Whether rel_path is a valid relative path within base and the file exists (guards against path traversal).
+
+    rel_path 是否为 base 内的合法相对路径且文件存在（防路径穿越）。"""
     return safe_resolve(base, rel_path) is not None

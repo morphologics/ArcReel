@@ -1,4 +1,13 @@
-"""v11→v12 迁移：给存量角色补一张空衍生表，行为不变。
+"""v11->v12 migration: add an empty derivative table to existing characters; behavior unchanged.
+
+``derivatives`` is a sub-table inside the character entry (derivative name -> change description relative to the
+base look + sheet path), present only for types with ``AssetSpec.supports_derivatives`` enabled. Adding an empty
+table spares the read side from distinguishing "field absent" from "field present but empty".
+
+Only changes one field in ``project.json``, not scripts, drafts or the artifact manifest: an empty derivative table
+doesn't change the identity of any artifact on disk and introduces no new references.
+
+v11→v12 迁移：给存量角色补一张空衍生表，行为不变。
 
 ``derivatives`` 是角色条目内的子表（衍生名 → 相对本体的变化描述 + 资产图路径），只有
 ``AssetSpec.supports_derivatives`` 开启的类型才有。补空表让读侧不必区分「没有该字段」与
@@ -21,7 +30,15 @@ _TARGET_VERSION = 12
 
 
 def migrate_project_dict(project: dict[str, Any]) -> dict[str, Any]:
-    """纯函数：把 v11 形态的 project dict 转为 v12 形态。幂等。
+    """Pure function: convert a v11-shaped project dict into the v12 shape. Idempotent.
+
+    Only fills entries lacking the field: those already with a derivative table are kept as-is; buckets, entries or
+    derivative tables hand-edited into non-dicts are likewise kept as-is, with their structural errors reported
+    separately by DataValidator -- overwriting dirty values in migration would wipe what the user wrote by hand and keep
+    that report from ever seeing the original shape. Doesn't change schema_version (written when the file-level migrate
+    commits).
+
+    纯函数：把 v11 形态的 project dict 转为 v12 形态。幂等。
 
     只补齐没有该字段的条目：已带衍生表的原样保留，桶、条目或衍生表被手编成非 dict 时同样
     原样保留，其结构错误由 DataValidator 另行报告——迁移覆盖脏值会把用户手写的内容抹掉，
@@ -41,13 +58,17 @@ def migrate_project_dict(project: dict[str, Any]) -> dict[str, Any]:
 
 
 def migrate_v11_to_v12(project_dir: Path) -> None:
-    """v11→v12 文件级迁移。单次原子写，崩溃可重试（要么旧值要么新值，无半态）。"""
+    """v11->v12 file-level migration. A single atomic write, crash-retryable (either old value or new value, no half
+    state).
+
+    v11→v12 文件级迁移。单次原子写，崩溃可重试（要么旧值要么新值，无半态）。"""
     pj = project_dir / "project.json"
     if not pj.exists():
         return
     data = load_json(pj)
     if not isinstance(data, dict):
         raise ValueError("project.json 必须是对象")
+    # int-normalize the same way as the runner's version read: historical project.json may store a string version number
     # 与 runner 的版本读取同口径做 int 归一化：历史 project.json 可能存字符串版本号
     if int(data.get("schema_version") or 0) >= _TARGET_VERSION:
         return

@@ -72,6 +72,7 @@ class SessionRepository(BaseRepository):
         limit: int = 50,
         offset: int = 0,
     ) -> list[dict[str, Any]]:
+        # Sessions superseded by a fork are not listed; the whole row is kept and can still be fetched by sdk_session_id.
         # 被分叉取代的会话不进列表；数据整行保留，按 sdk_session_id 仍可 get 到。
         stmt = select(AgentSession).where(AgentSession.superseded_by.is_(None))
         if project_name:
@@ -94,7 +95,9 @@ class SessionRepository(BaseRepository):
         return rowcount(result) > 0
 
     async def mark_superseded(self, session_id: str, superseded_by: str) -> bool:
-        """标记会话已被取代；已有指针时不改写，返回 False 让调用方按分叉冲突处理。"""
+        """Mark a session as superseded; if a pointer already exists it is not overwritten, and False is returned so the caller handles it as a fork conflict.
+
+        标记会话已被取代；已有指针时不改写，返回 False 让调用方按分叉冲突处理。"""
         now = utc_now()
         result = await self.session.execute(
             update(AgentSession)
@@ -105,7 +108,9 @@ class SessionRepository(BaseRepository):
         return rowcount(result) > 0
 
     async def clear_superseded(self, session_id: str, superseded_by: str) -> bool:
-        """撤回指向 ``superseded_by`` 的取代指针；指针已指向别的会话时不动。"""
+        """Withdraw the superseded pointer pointing to ``superseded_by``; leave it if it already points to another session.
+
+        撤回指向 ``superseded_by`` 的取代指针；指针已指向别的会话时不动。"""
         now = utc_now()
         result = await self.session.execute(
             update(AgentSession)
@@ -116,6 +121,9 @@ class SessionRepository(BaseRepository):
         return rowcount(result) > 0
 
     async def delete(self, session_id: str) -> bool:
+        # Supersede pointers to the deleted session are re-pointed to its own successor: if a middle link is deleted, the
+        # predecessor keeps pointing to the still-living end; if the tail is deleted, the successor is empty and the predecessor
+        # returns to the session list. Otherwise the predecessor would carry a pointer to a nonexistent session and stay out of the list forever.
         # 指向被删会话的取代指针改指它自己的后继：删的是链中间时前身继续指向仍然
         # 活着的末端，删的是链尾时后继为空、前身随之回到会话列表。不接手则前身会
         # 带着一个指向不存在会话的指针，永久留在列表之外。

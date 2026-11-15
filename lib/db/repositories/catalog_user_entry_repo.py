@@ -1,4 +1,4 @@
-"""用户条目表的读写。"""
+"""Reads and writes of the user entry table. / 用户条目表的读写。"""
 
 from __future__ import annotations
 
@@ -10,7 +10,7 @@ from lib.db.repositories.base import BaseRepository, rowcount
 
 
 class CatalogUserEntryRepository(BaseRepository):
-    """用户修改的条目副本；调用方负责提交事务。"""
+    """User-modified entry copies; the caller commits the transaction. / 用户修改的条目副本；调用方负责提交事务。"""
 
     async def list_all(self) -> list[CatalogUserEntry]:
         result = await self.session.execute(select(CatalogUserEntry).order_by(CatalogUserEntry.id))
@@ -25,7 +25,9 @@ class CatalogUserEntryRepository(BaseRepository):
         return (await self.session.execute(stmt)).scalar_one_or_none()
 
     async def put(self, key: EntryKey, entry: dict[str, object], *, user_created: bool = False) -> None:
-        """写入这个条目的副本：已有副本时整条替换，条目是否由用户新建保持不变。"""
+        """Write this entry's copy: replace an existing copy entirely; whether the entry was user-created stays unchanged.
+
+        写入这个条目的副本：已有副本时整条替换，条目是否由用户新建保持不变。"""
         row = await self.get(key)
         if row is None:
             self.session.add(
@@ -38,7 +40,7 @@ class CatalogUserEntryRepository(BaseRepository):
         await self.session.flush()
 
     async def delete(self, key: EntryKey) -> bool:
-        """删除这个条目的副本，返回是否删掉了一行。"""
+        """Delete this entry's copy; returns whether a row was deleted. / 删除这个条目的副本，返回是否删掉了一行。"""
         result = await self.session.execute(
             delete(CatalogUserEntry).where(
                 CatalogUserEntry.maker == key.maker,

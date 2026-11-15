@@ -1,4 +1,20 @@
-"""供应商模型 Sheet 上「这个供应商支持的参数」：每个维度的原值、能力覆盖与生效值（docs/adr/0104、0106）。
+""""Parameters this provider supports" on the provider model Sheet: each dimension's original value, capability override and effective value (docs/adr/0104, 0106).
+
+The original value is what the runtime uses without a capability override: model facts take the matching entry, and when no
+entry matches, the runtime fallback (selectable durations take the preset inferred from the name; other dimensions have no
+constraint, recorded as ``None``); channel facts take the declaration of the call channel or call endpoint. The effective
+value is the original value with capability overrides applied, the same as what the execution layer reads.
+
+Only provider models the user is responsible for can be modified: custom provider models, and user-added models under
+built-in providers. ComfyUI endpoints open only the video selectable durations, and not even that when the endpoint cannot
+drive duration (docs/adr/0082). For images, text-to-image and image-to-image open only the dimension the call channel
+implements: a capability override set to on cannot enable what the channel doesn't implement.
+
+This module also handles write validation and load filtering of capability overrides for user-added models under built-in
+providers; write validation of custom provider models is in ``server/routers/custom_providers.py``, and both sides share
+:func:`model_fact_value_matches` and :func:`capability_value_matches` for value shape checks.
+
+供应商模型 Sheet 上「这个供应商支持的参数」：每个维度的原值、能力覆盖与生效值（docs/adr/0104、0106）。
 
 原值是没有能力覆盖时运行时采用的值：模型事实取对应条目，对应不上条目时取运行时回落（可选时长取按名字推断的
 预设，其余维度不加约束，记为 ``None``）；通道事实取调用通道或调用端点的声明。生效值是原值叠加能力覆盖的结果，
@@ -53,6 +69,7 @@ from lib.custom_provider.model_facts import (
 
 logger = logging.getLogger(__name__)
 
+#: Dimension order in the UI: model facts first (duration-linked constraints right after selectable durations), then channel facts.
 #: 界面上的维度顺序：模型事实在前（时长联动约束紧跟可选时长），通道事实随后。
 OVERRIDE_KEY_ORDER: tuple[str, ...] = (
     "image_input",
@@ -83,7 +100,14 @@ _IMAGE_CAPABILITY_BY_KEY: Mapping[str, ImageCapability] = {
 
 @dataclass(frozen=True)
 class CapabilityView:
-    """一个供应商模型的「这个供应商支持的参数」。
+    """"Parameters this provider supports" of one provider model.
+
+    - ``editable``: dimensions that can be modified, in UI order; empty for officially catalogued models.
+    - ``base``: each dimension's original value (what the runtime uses without a capability override); ``None`` means no constraint.
+    - ``overrides``: effective capability overrides (sparse).
+    - ``effective``: effective values after applying overrides to the original values.
+
+    一个供应商模型的「这个供应商支持的参数」。
 
     - ``editable``：可以修改的维度，按界面顺序；官方收录的模型为空。
     - ``base``：每个维度的原值（没有能力覆盖时运行时采用的值），``None`` 表示不加约束。
@@ -102,7 +126,9 @@ class CapabilityView:
 
 
 def overridable_keys(media_type: str) -> frozenset[str]:
-    """该媒体类型可以覆盖的全部维度：模型事实，视频另有通道事实。"""
+    """All dimensions that can be overridden for this media type: model facts, plus channel facts for video.
+
+    该媒体类型可以覆盖的全部维度：模型事实，视频另有通道事实。"""
     keys = MODEL_FACT_OVERRIDE_KEYS.get(media_type, frozenset())
     return keys | CHANNEL_FACT_OVERRIDE_KEYS if media_type == "video" else keys
 
@@ -127,7 +153,9 @@ def _constraints_json(constraints: DurationConstraints) -> dict[str, object]:
 
 
 def _channel_json(caps: VideoCapabilities, *, audio_signal: bool) -> dict[str, object]:
-    """通道事实维度的原值。``audio_signal`` 为假时（自定义供应商没有音轨覆盖）音轨形态按「假定有声、开关可控」。"""
+    """Original value of a channel-fact dimension. When ``audio_signal`` is false (custom provider without audio track override) the audio track form is "assumed with audio, switchable".
+
+    通道事实维度的原值。``audio_signal`` 为假时（自定义供应商没有音轨覆盖）音轨形态按「假定有声、开关可控」。"""
     raw = asdict(caps)
     values: dict[str, object] = {}
     for key in CHANNEL_FACT_OVERRIDE_KEYS:
@@ -142,7 +170,9 @@ def _channel_json(caps: VideoCapabilities, *, audio_signal: bool) -> dict[str, o
 
 
 def _normalized_overrides(overrides: Mapping[str, object]) -> dict[str, object]:
-    """覆盖值按生效形状回显：可选时长去重排序，时长联动约束的分辨率键小写。"""
+    """Echo override values in effective shape: selectable durations deduplicated and sorted, resolution keys of duration-linked constraints lowercased.
+
+    覆盖值按生效形状回显：可选时长去重排序，时长联动约束的分辨率键小写。"""
     result = dict(overrides)
     durations = result.get("durations")
     if isinstance(durations, list):
@@ -162,6 +192,7 @@ def _normalized_overrides(overrides: Mapping[str, object]) -> dict[str, object]:
     return result
 
 
+# Custom provider models
 # ---------------------------------------------------------------------------
 # 自定义供应商的模型
 # ---------------------------------------------------------------------------
@@ -176,7 +207,9 @@ def custom_capability_view(
     applied_overrides: Mapping[str, object] | None,
     entry_binding: str | None,
 ) -> CapabilityView:
-    """自定义供应商模型的参数视图。``applied_overrides`` 是按写入侧同一判定过滤后的覆盖（回显用的那一份）。"""
+    """Parameter view of a custom provider model. ``applied_overrides`` are the overrides filtered with the same check as the write side (the one used for echo).
+
+    自定义供应商模型的参数视图。``applied_overrides`` 是按写入侧同一判定过滤后的覆盖（回显用的那一份）。"""
     media_type = spec.media_type
     if spec.kind == COMFYUI_KIND:
         if media_type != "video":
@@ -227,13 +260,16 @@ def custom_capability_view(
     return CapabilityView(media_type, editable=_ordered(editable), base=base, overrides=overrides)
 
 
+# Built-in provider models
 # ---------------------------------------------------------------------------
 # 内置供应商的模型
 # ---------------------------------------------------------------------------
 
 
 def _catalog_model_facts(provider_id: str, model_id: str, model: CatalogModel) -> dict[str, object]:
-    """内置供应商模型的目录信息（未叠加覆盖时即运行时采用的值）按维度展开。"""
+    """Catalog info of a built-in provider model (the values the runtime uses when no override is applied), expanded per dimension.
+
+    内置供应商模型的目录信息（未叠加覆盖时即运行时采用的值）按维度展开。"""
     caps = set(model.capabilities)
     match model.media_type:
         case "text":
@@ -280,7 +316,9 @@ def builtin_capability_view(
     official: bool,
     overrides: Mapping[str, object],
 ) -> CapabilityView:
-    """内置供应商模型的参数视图。官方收录的模型只读；用户添加的可以修改该媒体类型的全部维度。"""
+    """Parameter view of a built-in provider model. Officially catalogued models are read-only; user-added ones can modify all dimensions of that media type.
+
+    内置供应商模型的参数视图。官方收录的模型只读；用户添加的可以修改该媒体类型的全部维度。"""
     media_type = base_model.media_type
     base = _catalog_model_facts(provider_id, model_id, base_model)
     if official:
@@ -295,7 +333,9 @@ def builtin_capability_view(
 
 
 def user_added_runtime_overrides(media_type: str, raw: object | None, *, model_id: str = "") -> dict[str, object]:
-    """用户添加的模型装入目录查询时采用的能力覆盖：该媒体类型的维度里值合法的那些，其余丢弃并告警。"""
+    """Capability overrides used when a user-added model is loaded into catalog queries: those with valid values among the media type's dimensions; the rest are dropped with a warning.
+
+    用户添加的模型装入目录查询时采用的能力覆盖：该媒体类型的维度里值合法的那些，其余丢弃并告警。"""
     if not isinstance(raw, Mapping):
         return {}
     applied = model_fact_overrides(raw, media_type, model_id=model_id)
@@ -311,7 +351,9 @@ def user_added_runtime_overrides(media_type: str, raw: object | None, *, model_i
 
 
 class OverrideRejected(Exception):
-    """能力覆盖写入被拒绝。``code`` 是错误文案的 i18n key，``params`` 是文案参数。"""
+    """Capability override write rejected. ``code`` is the i18n key of the error message, ``params`` are the message parameters.
+
+    能力覆盖写入被拒绝。``code`` 是错误文案的 i18n key，``params`` 是文案参数。"""
 
     def __init__(self, code: str, **params: object) -> None:
         super().__init__(code)
@@ -322,7 +364,13 @@ class OverrideRejected(Exception):
 def check_user_added_overrides(
     provider_id: str, model_id: str, media_type: str, overrides: Mapping[str, object] | None
 ) -> dict[str, object] | None:
-    """内置供应商下用户添加的模型的能力覆盖写入校验，通过时返回要存下的覆盖（空覆盖为 ``None``）。
+    """Write validation of capability overrides for user-added models under built-in providers; on success returns the overrides to store (``None`` for empty).
+
+    Same rule set as the custom provider write validation: dimensions must belong to the media type and value shapes must match
+    the dimension; for images, a text-to-image / image-to-image override set to on requires the call channel to implement it; the
+    two audio dimensions together must make sense (a missing one takes the call channel's declaration).
+
+    内置供应商下用户添加的模型的能力覆盖写入校验，通过时返回要存下的覆盖（空覆盖为 ``None``）。
 
     与自定义供应商的写入校验同一组规则：维度须属于该媒体类型，值的形状与维度一致；图片的文生图、图生图覆盖为
     开启时调用通道须实现了它；音频两维合起来须有意义（不足的一维取调用通道的声明）。

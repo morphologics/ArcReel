@@ -1,4 +1,9 @@
-"""产物注册与遗忘。
+"""Artifact registration and forgetting.
+
+A successful formal write (or a task's frozen evidence) becomes a current entry in the manifest; a replacement that
+cannot be proven removes the claim instead, preferring missing over an unbacked entry.
+
+产物注册与遗忘。
 
 一次成功的正式写入（或任务冻结证据）在清单里落成 current 条目；
 无法证明的替换则移除 claim，宁可判 missing 也不留下无据条目。
@@ -85,6 +90,7 @@ def artifact_key_for_resource(
 ) -> ArtifactKey:
     """Map a formal write target to its typed manifest identity."""
 
+    # Derivative asset sheets share the asset_sheet artifact kind with the base look; only the id is written as ``base-name/derivative-name``.
     # 衍生资产图与本体共用 asset_sheet 这一产物种类，只是 id 写作 ``本体名/衍生名``。
     if resource_type == CHARACTER_DERIVATIVE_RESOURCE_TYPE:
         return ArtifactKey.asset_sheet(DERIVATIVE_ASSET_TYPE, resource_id)

@@ -1,4 +1,15 @@
-"""端点测试三模式：预览请求、验证响应、测试连接。
+"""Three endpoint test modes: preview request, check response, test connection.
+
+All three answer three progressively deeper questions about the same definition -- "what am I about to send", "what
+do I read when the provider replies like this", "does a real send actually work". The first two send not a single
+byte out; the third really submits and is billed.
+
+The service layer matches the HTTP shape 1:1, has no session state, and responses contain no credentials: the router
+is a thin wrapper, and external Agents use the same HTTP interface, so the two sides cannot grow separate semantics.
+Judging the definition is always delegated to the shared validator of ``endpoint_definition``, execution always to
+the runtime of ``declarative_backend`` -- this package adds no second set of rules.
+
+端点测试三模式：预览请求、验证响应、测试连接。
 
 三者对同一份定义回答三个层层递进的问题——「我要发出去的是什么」「供应商这样回我时我读成了什么」
 「真发一次到底能不能成」。前两者不外发一个字节，第三者真实提交并计费。

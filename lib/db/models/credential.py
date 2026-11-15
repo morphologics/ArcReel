@@ -10,7 +10,9 @@ from lib.infra.data_root_layout import DataRootLayout
 
 
 class ProviderCredential(TimestampMixin, Base):
-    """供应商凭证。每个供应商可有多条凭证，其中最多一条 is_active=True。"""
+    """Provider credential. Each provider can have several credentials, at most one of them is_active=True.
+
+    供应商凭证。每个供应商可有多条凭证，其中最多一条 is_active=True。"""
 
     __tablename__ = "provider_credential"
     __table_args__ = (
@@ -30,6 +32,8 @@ class ProviderCredential(TimestampMixin, Base):
     api_key: Mapped[str | None] = mapped_column(Text, nullable=True)
     credentials_path: Mapped[str | None] = mapped_column(Text, nullable=True)
     base_url: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Typed columns named by registry key, for built-in providers that need two secret strings (Kling's access_key +
+    # secret_key, JWT HS256 auth). Sparse columns that are always NULL except for Kling (see ADR 0037).
     # 按 registry key 命名的定型列，承载需要两个 secret 字符串的内置 provider（可灵 Kling 的
     # access_key + secret_key，JWT HS256 鉴权）。除可灵外恒为 NULL 的稀疏列（见 ADR 0037）。
     access_key: Mapped[str | None] = mapped_column(Text, nullable=True)
@@ -37,7 +41,9 @@ class ProviderCredential(TimestampMixin, Base):
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
 
     def credentials_file(self) -> str | None:
-        """凭证文件位置：Vertex 凭证由 id 经数据根布局推导；推导位置没有文件时回退到记录的路径。"""
+        """Credentials file location: Vertex credentials are derived from the id via the data root layout; if no file is at the derived location, fall back to the recorded path.
+
+        凭证文件位置：Vertex 凭证由 id 经数据根布局推导；推导位置没有文件时回退到记录的路径。"""
         if self.provider == "gemini-vertex":
             derived = DataRootLayout.current().vertex_credential_path(self.id)
             if derived.is_file():
@@ -45,7 +51,12 @@ class ProviderCredential(TimestampMixin, Base):
         return self.credentials_path
 
     def overlay_config(self, config: dict[str, str]) -> dict[str, str]:
-        """将凭证字段合并到配置字典中，返回修改后的 config。
+        """Merge the credential fields into the config dict and return the modified config.
+
+        Column names are the config dict keys (registry key name = form field name = backend constructor argument name =
+        config key, the same name throughout with no translation layer; see ADR 0037).
+
+        将凭证字段合并到配置字典中，返回修改后的 config。
 
         列名即 config dict key（registry key 名 = 表单字段名 = backend 构造参数名 = config key
         全程同名，不引翻译层；见 ADR 0037）。

@@ -1,4 +1,12 @@
-"""用户修改层：模型条目的用户副本的读写与装入（docs/adr/0099）。
+"""User modification layer: reading, writing and loading user copies of model entries (docs/adr/0099).
+
+When the user modifies model info, a copy of the whole entry is stored and the entry stops following official from then
+on; restoring official data discards the copy. Copies are stored in the user entry table in the same format as catalog
+data. After writing, the caller commits the transaction and then calls :func:`reload_user_entries` to load the copies
+into catalog queries; code reading the catalog is all in the app process, so loading takes effect for the facade,
+capabilities and pricing at once.
+
+用户修改层：模型条目的用户副本的读写与装入（docs/adr/0099）。
 
 用户修改模型信息时存下整个条目的副本，这个条目从此停止跟随官方；恢复官方数据即丢弃副本。副本存在用户条目表里，
 格式与目录数据相同。写入后由调用方提交事务，再调用 :func:`reload_user_entries` 把副本装入目录查询；读目录的代码
@@ -32,7 +40,9 @@ logger = logging.getLogger(__name__)
 
 
 class EntryEditRejected(Exception):
-    """对模型条目的修改被拒绝。``code`` 是错误文案的 i18n key，``not_found`` 区分「不存在」与「不允许」。"""
+    """A modification to a model entry was rejected. ``code`` is the i18n key of the error message; ``not_found`` distinguishes "doesn't exist" from "not allowed".
+
+    对模型条目的修改被拒绝。``code`` 是错误文案的 i18n key，``not_found`` 区分「不存在」与「不允许」。"""
 
     def __init__(self, code: str, *, not_found: bool = False, **params: object) -> None:
         super().__init__(code)
@@ -43,14 +53,16 @@ class EntryEditRejected(Exception):
 
 @dataclass(frozen=True)
 class UserEntries:
-    """读出的用户副本；``created`` 是其中用户新建的条目身份。"""
+    """User copies read out; ``created`` are the identities of user-created entries among them. / 读出的用户副本；``created`` 是其中用户新建的条目身份。"""
 
     entries: list[CatalogEntry]
     created: frozenset[EntryKey]
 
 
 async def load_user_entries(session: AsyncSession) -> UserEntries:
-    """读出全部用户副本；读不了的副本跳过并记日志，这个条目回到跟随官方。"""
+    """Read all user copies; unreadable copies are skipped and logged, and that entry goes back to following official.
+
+    读出全部用户副本；读不了的副本跳过并记日志，这个条目回到跟随官方。"""
     entries: list[CatalogEntry] = []
     created: set[EntryKey] = set()
     for row in await CatalogUserEntryRepository(session).list_all():
@@ -72,7 +84,9 @@ _RELOADS = LatestReadWins()
 
 
 async def reload_user_entries(session: AsyncSession) -> None:
-    """从用户条目表装入用户副本，交给目录查询。应用启动时与每次写入提交之后调用；并发时按开始读的先后生效。"""
+    """Load user copies from the user entry table and hand them to catalog queries. Called at app startup and after each write commits; when concurrent, the one that started reading later wins.
+
+    从用户条目表装入用户副本，交给目录查询。应用启动时与每次写入提交之后调用；并发时按开始读的先后生效。"""
     await _RELOADS.reload(
         lambda: load_user_entries(session),
         lambda loaded: catalog.install_user_entries(loaded.entries, loaded.created),
@@ -83,6 +97,7 @@ class _Unset(Enum):
     UNSET = "unset"
 
 
+#: Default for ``edited_entry``'s ``price``: don't change the price table. ``None`` is a meaningful value (clear the price table).
 #: ``edited_entry`` 的 ``price`` 缺省值：不改价目表。``None`` 是有意义的取值（清除价目表）。
 UNSET: Final = _Unset.UNSET
 
@@ -94,7 +109,13 @@ def edited_entry(
     facts: Mapping[str, object] | None = None,
     price: Mapping[str, object] | _Unset | None = UNSET,
 ) -> CatalogEntry:
-    """在当前条目上改显示名、模型事实与价目表，得到新的整条副本；其余字段（别名、上下文长度等）原样带上。
+    """Change the display name, model facts and price table on the current entry, producing a new whole copy; other fields (aliases, context length, etc.) are carried over as is.
+
+    ``facts`` gives only the keys to change; ``price`` is the whole price table, ``None`` means clear (call cost recorded as
+    unpriced), not passed means unchanged. Everything is validated against the catalog data format and media type; raises
+    :class:`EntryEditRejected` if invalid.
+
+    在当前条目上改显示名、模型事实与价目表，得到新的整条副本；其余字段（别名、上下文长度等）原样带上。
 
     ``facts`` 只给要改的键；``price`` 是整份价目表，``None`` 表示清除（调用费用记为未定价），不传表示不改。
     都按目录数据的格式与媒体类型校验；不合法时抛 :class:`EntryEditRejected`。
@@ -115,7 +136,7 @@ def edited_entry(
 
 
 async def save_user_entry(session: AsyncSession, entry: CatalogEntry) -> None:
-    """存下条目的用户副本；这个条目从此停止跟随官方。"""
+    """Store the user copy of the entry; the entry stops following official from then on. / 存下条目的用户副本；这个条目从此停止跟随官方。"""
     await CatalogUserEntryRepository(session).put(entry.key, dump_entry(entry))
 
 
@@ -128,7 +149,13 @@ def new_entry(
     facts: Mapping[str, object] | None = None,
     price: Mapping[str, object] | None = None,
 ) -> CatalogEntry:
-    """用户手动填写的新条目：``facts`` 缺省的字段取该媒体类型的默认值，``price`` 不填即未定价。
+    """A new entry filled in manually by the user: fields missing from ``facts`` take the media type's defaults; ``price`` not filled means unpriced.
+
+    When the display name is empty the model name is used. Validated against the catalog data format, raising
+    :class:`EntryEditRejected` if invalid; if the catalog already has a model with the same name (official model name and
+    model aliases equal after ``docs/adr/0105`` normalization) it raises ``catalog_entry_exists``, asking the user to pick it directly.
+
+    用户手动填写的新条目：``facts`` 缺省的字段取该媒体类型的默认值，``price`` 不填即未定价。
 
     显示名为空时用模型名。按目录数据的格式校验，不合法时抛 :class:`EntryEditRejected`；目录里已有同名的模型
     （官方模型名与模型别名按 ``docs/adr/0105`` 归一化后相同）时抛 ``catalog_entry_exists``，请用户直接选择。
@@ -158,12 +185,16 @@ def new_entry(
 
 
 async def create_user_entry(session: AsyncSession, entry: CatalogEntry) -> None:
-    """存下用户新建的条目；这个条目不跟随官方。调用方先用 :func:`new_entry` 校验。"""
+    """Store a user-created entry; the entry doesn't follow official. The caller validates with :func:`new_entry` first.
+
+    存下用户新建的条目；这个条目不跟随官方。调用方先用 :func:`new_entry` 校验。"""
     await CatalogUserEntryRepository(session).put(entry.key, dump_entry(entry), user_created=True)
 
 
 async def discard_user_entry(session: AsyncSession, key: EntryKey) -> None:
-    """恢复官方数据：丢弃用户副本。官方数据里没有这个条目（用户新建的）时拒绝；没有副本时什么都不做。"""
+    """Restore official data: discard the user copy. Rejected when the entry isn't in official data (user-created); does nothing when there's no copy.
+
+    恢复官方数据：丢弃用户副本。官方数据里没有这个条目（用户新建的）时拒绝；没有副本时什么都不做。"""
     if catalog.official_entry(key) is None:
         raise EntryEditRejected("catalog_entry_no_official", not_found=catalog.get_entry(key) is None)
     await CatalogUserEntryRepository(session).delete(key)

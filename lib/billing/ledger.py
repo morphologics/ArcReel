@@ -1,4 +1,40 @@
-"""记账账本（ledger）：三通道封装 API 调用记账落库。
+"""Ledger: three channels wrapping persistence of API call accounting.
+
+The three public channels correspond to three real accounting shapes:
+
+1. **Ledger bracket** (``record`` async context manager) -- used by the four generation paths image / audio / video /
+   text. On entry it writes a pending row and exposes ``call_id`` inside the block (task calls are linked via
+   ``api_calls.task_id``); success is declared explicitly with ``call.success(result)`` handing over the backend result
+   object; the ``Exception`` branch automatically flips to failed (original text truncated into ``error_message``,
+   recognizable failure categories also store ``error_code`` + ``error_params``, see :mod:`lib.billing.call_failure`)
+   and re-raises as is, and an accounting failure never swallows the original exception; ``CancelledError`` is first
+   settled as cancelled (zero cost) then re-raised as is; a normal exit without declaring success raises ``RuntimeError``.
+2. **Resume back-accounting** (``resume_success`` / ``resume_failed`` / ``resume_cancelled``) -- flips pending precisely by
+   ``call_id``; the idempotency guard (``WHERE status='pending'``) is handled by the repository; exceptions from
+   finalize itself are not swallowed and bubble up directly (left to the worker's finally). ``resume_failed`` accepts
+   the caller's exception or failure text, encoded via :mod:`lib.billing.call_failure` like the ledger bracket and
+   stored as the triple.
+3. **Agent turns** (``record_agent_turn``) -- one turn of an Agent session writes one terminal row per model; the
+   repository prices it by the Agent credential taken at session connect and the model catalog; the caller doesn't go
+   through the pending intermediate state.
+
+The union dispatch of backend result objects for the success channel is concentrated in ``_settlement_from_result``:
+text and audio usage is converted here to meter usage per the usage contract (priced by the model catalog's price
+table at settlement), and the semantic transcription of video's actual billed duration is also done at this single
+point; success branches at call sites don't extract fields one by one. Video metering depends on the request sent,
+so the call site gets it from the video call channel and hands it over with the result.
+
+After settlement is persisted a ``usage_record / recorded`` project change is published (via the batch bus of
+``project_change_hints``, the same SSE as task terminal events), so the UI refreshes usage without polling; calls
+without a project name (endpoint trial runs) don't publish, nor does the pending stage. The publish hook is injected
+via ``publish_change`` with a production default. ``settle_interrupted_calls`` is the startup cleanup entry: it flips
+pending rows left by crashes, with no live task, to a terminal state.
+
+The ``session_factory`` injection point is kept: ``Ledger(session_factory=...)`` covers the three production wirings
+(MediaGenerator / TextGenerator / SessionManager) and test in-memory DB replacement. The write side connects directly
+to ``UsageRepository``, not through the usage pass-through layer.
+
+记账账本（ledger）：三通道封装 API 调用记账落库。
 
 对外三个通道对应三种真实记账形态：
 
@@ -49,16 +85,24 @@ from lib.project.project_change_hints import emit_project_change_batch
 
 logger = logging.getLogger(__name__)
 
+#: Project change entry for ledger settlement: entity_type distinguishes it from project entities and task terminal states.
 #: 记账结算的项目变更条目：entity_type 与项目实体、任务终态都区分开。
 USAGE_RECORD_ENTITY_TYPE = "usage_record"
 USAGE_RECORD_ACTION = "recorded"
 
+#: Publish hook for settlement events. The production default is the project change batch bus (same SSE as task terminal events); tests inject a stand-in.
 #: 结算事件的发布口。生产默认是项目变更批次总线（与任务终态事件同一条 SSE），测试注入替身。
 ProjectChangePublisher = Callable[[str, Sequence[dict[str, Any]]], None]
 
 
 def build_usage_record_change(call_id: int, status: CallStatus) -> dict[str, Any]:
-    """把一次结算转成项目变更 dict。
+    """Turn one settlement into a project change dict.
+
+    Isomorphic to task terminal events, it is a **refresh signal** rather than an entity change: ``important=False`` +
+    ``focus=None``, so consumers only re-fetch usage data, without notifications or focus jumps. ``status`` lets consumers
+    tell whether this settlement succeeded or failed without querying back.
+
+    把一次结算转成项目变更 dict。
 
     与任务终态事件同构，是**刷新信号**而非实体变更：``important=False`` + ``focus=None``，
     消费方据此只重拉用量数据，不弹通知、不触发聚焦跳转。``status`` 让消费方不必回查即可
@@ -68,6 +112,7 @@ def build_usage_record_change(call_id: int, status: CallStatus) -> dict[str, Any
         "entity_type": USAGE_RECORD_ENTITY_TYPE,
         "action": USAGE_RECORD_ACTION,
         "entity_id": str(call_id),
+        # label does not go into notification copy (important=False); it's only a readable identifier for logs/debugging.
         # label 不进通知文案（important=False），仅作日志/调试可读标识。
         "label": str(call_id),
         "focus": None,
@@ -77,7 +122,23 @@ def build_usage_record_change(call_id: int, status: CallStatus) -> dict[str, Any
 
 
 def _settlement_from_result(call_type: CallType, result: Any, *, usage: Usage | None = None) -> SettlementInput:
-    """成功通道 union 分发：按 call_type 从 backend 结果对象提取计费维度。
+    """Success-channel union dispatch: extract billing dimensions from the backend result object by call_type.
+
+    The single place for semantic transcription:
+    - image's call channel already reports meters and selection dimensions per the usage contract; passed through as is;
+    - text's total input and three cache figures → non-overlapping token meters (uncached input = total input − cache read
+      − the two cache write tiers); each of multiple requests in the fallback chain gets its own, placed in its context
+      tier at billing time;
+    - audio's raw text → ``text`` for metering (the calculator counts characters per the price table), with the character
+      count also recorded in ``usage_tokens``; token-priced TTS also carries input tokens and output audio tokens;
+    - video's ``duration_seconds`` (the actual billed/generated duration reported by the backend) →
+      ``billed_duration_seconds`` (overrides the requested duration at start_call); ``usage`` is this request's metering
+      reported by the video call channel per the usage contract.
+
+    The four backend result objects are structurally independent with no common base class, so dispatch is explicit by
+    the ``call_type`` known at the call site.
+
+    成功通道 union 分发：按 call_type 从 backend 结果对象提取计费维度。
 
     语义转写的唯一落点：
     - image 的调用通道已按用量契约上报计量项与选择维度，原样转交；
@@ -98,6 +159,7 @@ def _settlement_from_result(call_type: CallType, result: Any, *, usage: Usage | 
             image_output_tokens=result.image_output_tokens,
             text_input_tokens=result.text_input_tokens,
             text_output_tokens=result.text_output_tokens,
+            # The call channel reports per the usage contract (the custom provider wrapper fills in by the generic rules when the wrapped channel doesn't report).
             # 调用通道按用量契约上报（自定义供应商的包装层在被包装的通道不报时按通用口径补上）。
             usage=(result.usage,) if result.usage is not None else (),
         )
@@ -131,7 +193,7 @@ def _settlement_from_result(call_type: CallType, result: Any, *, usage: Usage | 
             cache_read_tokens=result.cache_read_tokens,
             cache_write_5m_tokens=result.cache_write_5m_tokens,
             cache_write_1h_tokens=result.cache_write_1h_tokens,
-            # 没有任何计量（未追踪）时仍按一次零用量的请求计价。
+            # With no metering at all (untracked), still price as one zero-usage request. / 没有任何计量（未追踪）时仍按一次零用量的请求计价。
             usage=tuple(
                 Usage(
                     quantities=token_usage(
@@ -150,7 +212,9 @@ def _settlement_from_result(call_type: CallType, result: Any, *, usage: Usage | 
 
 
 class LedgerCall:
-    """记账括号句柄：块内暴露 ``call_id``，``success(result)`` 递交 backend 结果对象。"""
+    """Ledger bracket handle: exposes ``call_id`` inside the block; ``success(result)`` hands over the backend result object.
+
+    记账括号句柄：块内暴露 ``call_id``，``success(result)`` 递交 backend 结果对象。"""
 
     def __init__(self, call_id: int, *, call_type: CallType) -> None:
         self.call_id = call_id
@@ -158,7 +222,11 @@ class LedgerCall:
         self._settlement: SettlementInput | None = None
 
     def success(self, result: Any, *, usage: Usage | None = None) -> None:
-        """声明成功并递交 backend 结果对象；union 分发在此完成，结算在括号退出时执行。
+        """Declare success and hand over the backend result object; union dispatch happens here, settlement runs when the bracket exits.
+
+        ``usage`` is only for video: this request's metering reported by the call channel per the usage contract.
+
+        声明成功并递交 backend 结果对象；union 分发在此完成，结算在括号退出时执行。
 
         ``usage`` 只用于 video：调用通道按用量契约上报的这次请求的计量。
         """
@@ -171,7 +239,10 @@ class Ledger:
         self._publish_change = publish_change
 
     def _publish(self, project_name: str, changes: Sequence[dict[str, Any]]) -> None:
-        """发一批结算事件。项目名为空（端点试跑）不发；发布失败不向上抛——账已落库，
+        """Publish a batch of settlement events. Not published when the project name is empty (endpoint trial runs); publish failures
+        are not raised -- the accounting is already persisted, the event is only a real-time optimization, consumers have polling as fallback.
+
+        发一批结算事件。项目名为空（端点试跑）不发；发布失败不向上抛——账已落库，
         事件只是实时性优化，消费方有轮询兜底。"""
         if not project_name or not changes:
             return
@@ -181,7 +252,9 @@ class Ledger:
             logger.exception("发送记账结算项目事件失败 project=%s count=%d", project_name, len(changes))
 
     def _emit_recorded(self, project_name: str, call_id: int, status: CallStatus) -> None:
-        """结算落库后推一条 ``usage_record / recorded``；pending 阶段不发。"""
+        """Push one ``usage_record / recorded`` after settlement is persisted; not sent during the pending stage.
+
+        结算落库后推一条 ``usage_record / recorded``；pending 阶段不发。"""
         self._publish(project_name, [build_usage_record_change(call_id, status)])
 
     @asynccontextmanager
@@ -205,7 +278,14 @@ class Ledger:
         session_id: str | None = None,
         inputs: object | None = None,
     ) -> AsyncGenerator[LedgerCall]:
-        """记账括号：进入落 pending，块内 ``call.success(result)`` 声明成功。
+        """Ledger bracket: writes pending on entry; ``call.success(result)`` inside the block declares success.
+
+        Exit semantics: ``CancelledError`` is settled as cancelled (zero cost) then re-raised as is; ``Exception`` is flipped
+        to failed then re-raised as is; a normal exit without declaring success raises ``RuntimeError``; declared success
+        settles with the backend result object and flips to success. If cancellation lands on the open-account write at
+        entry, it likewise waits for the pending row to be persisted, settles it as cancelled, then re-raises.
+
+        记账括号：进入落 pending，块内 ``call.success(result)`` 声明成功。
 
         退出语义：``CancelledError`` 结算为 cancelled（零费用）后原样重抛；``Exception`` 翻
         failed 后原样重抛；正常退出但未声明成功抛 ``RuntimeError``；声明成功则以 backend 结果
@@ -232,6 +312,9 @@ class Ledger:
         try:
             yield call
         except asyncio.CancelledError:
+            # User cancellation: settle as cancelled at zero cost then re-raise as is, leaving no pending row and not counting toward the failure rate.
+            # (CancelledError inherits BaseException in 3.11+ and naturally doesn't enter except Exception; it is declared here explicitly
+            #  as a contract rather than relying on an implicit inheritance side effect.)
             # 用户取消：零费用结算为 cancelled 后原样重抛，不留 pending 也不计入失败率。
             # （CancelledError 在 3.11+ 继承 BaseException 天然不进 except Exception，此处显式
             #  声明为契约，而非依赖隐式继承副作用。）
@@ -239,6 +322,7 @@ class Ledger:
                 self._emit_recorded(project_name, call_id, CallStatus.CANCELLED)
             raise
         except Exception as exc:
+            # Automatically flip to failed (error message truncation is handled by the repository) then re-raise as is.
             # 自动翻 failed（错误信息截断由仓储承担）后原样重抛。
             if await self._finish_failed(call_id, exc):
                 self._emit_recorded(project_name, call_id, CallStatus.FAILED)
@@ -249,11 +333,14 @@ class Ledger:
             try:
                 await self._finish_success(call_id, call._settlement, output_path=output_path)
             except asyncio.CancelledError:
+                # Cancellation hits the success settlement write: the result was obtained and the cost incurred; the write lands inside the shield,
+                # the event is still sent, then cancellation continues propagating -- this call is real spend and must not be settled as a zero-cost cancel.
                 # 取消打在成功结算的写入上：结果已经拿到、费用已经产生，写入在护盾内落地后
                 # 事件照发，取消再继续传播——这条调用是真实花费，不能按零费用取消结算。
                 self._emit_recorded(project_name, call_id, CallStatus.SUCCESS)
                 raise
             except Exception as exc:
+                # The success settlement write itself failed: don't leave a permanent pending row; try to flip to failed then re-raise as is.
                 # 成功结算写入本身失败：不留永久 pending，尝试翻 failed 后原样重抛。
                 if await self._finish_failed(call_id, exc):
                     self._emit_recorded(project_name, call_id, CallStatus.FAILED)
@@ -261,12 +348,19 @@ class Ledger:
             self._emit_recorded(project_name, call_id, CallStatus.SUCCESS)
 
     async def pending_call_id_for_task(self, task_id: str) -> int | None:
-        """按任务反查它那条待结算的调用行 id，供续跑与派发终态补账定位。"""
+        """Look up the id of a task's pending call row, for locating it in resume and dispatch terminal back-accounting.
+
+        按任务反查它那条待结算的调用行 id，供续跑与派发终态补账定位。"""
         async with self._session_factory() as session:
             return await UsageRepository(session).find_pending_call_id_by_task_id(task_id)
 
     async def resume_success(self, *, call_id: int, result: Any, usage: Usage | None = None) -> int:
-        """resume 成功补账：按 call_id 精准翻 pending → success，返回受影响行数（幂等 0/1）。
+        """Resume success back-accounting: flip pending → success precisely by call_id, returning the number of affected rows (idempotent 0/1).
+
+        ``usage`` is the metering reported by the video call channel for the resumed request. Exceptions from finalize itself
+        are not swallowed and bubble up directly (left to the worker's finally), so an ApiCall never gets stuck in pending forever.
+
+        resume 成功补账：按 call_id 精准翻 pending → success，返回受影响行数（幂等 0/1）。
 
         ``usage`` 是视频调用通道按续跑请求上报的计量。finalize 自身异常不吞、直接冒泡（交 worker finally
         兜底），避免 ApiCall 永久卡 pending。
@@ -275,7 +369,14 @@ class Ledger:
         return await self._finalize(call_id=call_id, status=CallStatus.SUCCESS, settlement=settlement)
 
     async def resume_failed(self, *, call_id: int, failure: BaseException | str | None = None) -> int:
-        """resume 过期/失败补账：翻 pending → failed，零费用不重扣（幂等 0/1）。
+        """Resume expired/failed back-accounting: flip pending → failed, zero cost, no double charge (idempotent 0/1).
+
+        ``failure`` accepts the caller's exception or failure text, encoded via ``classify_call_failure`` and stored:
+        ``error_message`` is the original text, recognized types also store ``error_code`` / ``error_params``. When no
+        failure info is given those three columns stay empty -- the record table has only a "failed" status for these rows,
+        with neither phrase nor original text.
+
+        resume 过期/失败补账：翻 pending → failed，零费用不重扣（幂等 0/1）。
 
         ``failure`` 收调用方手上的异常或失败原文，经 ``classify_call_failure`` 编码后落库：
         ``error_message`` 是原文，认得出的类型再落 ``error_code`` / ``error_params``。不给
@@ -289,13 +390,15 @@ class Ledger:
         )
 
     async def resume_cancelled(self, *, call_id: int) -> int:
-        """resume 取消补账：翻 pending → cancelled，零费用不重扣（幂等 0/1）。"""
+        """Resume cancelled back-accounting: flip pending → cancelled, zero cost, no double charge (idempotent 0/1).
+
+        resume 取消补账：翻 pending → cancelled，零费用不重扣（幂等 0/1）。"""
         return await self._finalize(
             call_id=call_id, status=CallStatus.CANCELLED, settlement=SettlementInput(cost_amount=0.0)
         )
 
     async def record_provider_response(self, *, call_id: int, body: object) -> None:
-        """覆盖保存该供应商调用最后一次收到的响应体。"""
+        """Overwrite-save the last response body received for this provider call. / 覆盖保存该供应商调用最后一次收到的响应体。"""
         async with self._session_factory() as session:
             await UsageRepository(session).update_last_provider_response(call_id, body)
 
@@ -311,7 +414,12 @@ class Ledger:
         status: CallStatus,
         calls: Sequence[AgentModelCall],
     ) -> None:
-        """Agent 会话的一轮：每个模型写一条终态行，按会话连接时取下的 Agent 凭证倍率与条目绑定计价（docs/adr/0102）。
+        """One turn of an Agent session: write one terminal row per model, priced by the Agent credential multiplier and entry bindings taken at session connect (docs/adr/0102).
+
+        Turns with no usage are not written. The write as a whole is not interrupted by cancellation: when cancellation
+        arrives it first waits for this turn's rows to be persisted and events sent, then propagates the cancellation.
+
+        Agent 会话的一轮：每个模型写一条终态行，按会话连接时取下的 Agent 凭证倍率与条目绑定计价（docs/adr/0102）。
 
         没有用量的轮次不写。写入整体不被取消打断：取消到达时先等这一轮的行落库、事件发出，再传播取消。
         """
@@ -338,7 +446,14 @@ class Ledger:
         self._publish(project_name, [build_usage_record_change(call_id, status) for call_id in call_ids])
 
     async def settle_interrupted_calls(self, *, taskless_started_before: datetime | None) -> int:
-        """服务启动收口：把没有存活任务的 pending 调用行翻成终态，返回翻掉的行数。
+        """Service startup cleanup: flip pending call rows with no live task to a terminal state, returning the number of rows flipped.
+
+        A process crash leaves call rows "written as pending, not settled" in pending forever. The routing rules, zero-cost
+        rules and the meaning of ``taskless_started_before`` are handled by the repository (see
+        ``UsageRepository.settle_interrupted_pending_calls``); here settlement events are just sent grouped by project, so open
+        UIs immediately see those rows are no longer hanging.
+
+        服务启动收口：把没有存活任务的 pending 调用行翻成终态，返回翻掉的行数。
 
         进程崩溃会把「已落 pending、未结算」的调用行永远留在 pending。分流规则、零费用口径与
         ``taskless_started_before`` 的含义由仓储承担（见 ``UsageRepository.settle_interrupted_pending_calls``），
@@ -363,7 +478,14 @@ class Ledger:
             return await UsageRepository(session).start_call(**kwargs)
 
     async def _open_call(self, *, project_name: str, **kwargs: Any) -> int:
-        """记账括号的开账写入不被取消打断：取消到达时先等 pending 行落库拿到 id，按 cancelled
+        """The ledger bracket's open-account write is not interrupted by cancellation: when cancellation arrives it first waits for the
+        pending row to be persisted and get its id, settles it as cancelled, then continues propagating the cancellation.
+
+        The repository commits first then reads back the id; if cancellation hits between the two, the row is persisted but
+        the bracket hasn't entered ``try`` yet and the caller can't get the id, so it can only wait for startup cleanup. The
+        shield pattern is the same as ``_settle``.
+
+        记账括号的开账写入不被取消打断：取消到达时先等 pending 行落库拿到 id，按 cancelled
         结算后再把取消继续传播。
 
         仓储先提交再回读 id，取消若打在两者之间，行已落库而括号还没进 ``try``，调用方也拿不到
@@ -379,7 +501,13 @@ class Ledger:
             raise
 
     async def _settle[T](self, write: Coroutine[Any, Any, T]) -> T:
-        """结算写入不被取消打断：取消到达时先等写入落地，再把取消继续传播。
+        """Settlement writes are not interrupted by cancellation: when cancellation arrives it first waits for the write to land, then continues propagating it.
+
+        All three terminal writes within the bracket go through here. The write runs in a separate task; cancelling the
+        outer one only interrupts the wait, not the write; it re-raises only after the write completes, so the row never
+        stays in pending because of cancellation timing.
+
+        结算写入不被取消打断：取消到达时先等写入落地，再把取消继续传播。
 
         括号内的三种终态写入都经此处。写入跑在独立 task 里，外层被取消只中断等待，
         不中断写入；等到写入完成才重抛，行不会因取消时机停在 pending。
@@ -402,7 +530,13 @@ class Ledger:
             )
 
     async def _finish_failed(self, call_id: int, exc: BaseException) -> bool:
-        """翻 failed；返回是否真的写进去了（写失败时不发事件）。
+        """Flip to failed; returns whether it was actually written (no event when the write fails).
+
+        An accounting failure never swallows the original exception: a write failure is only logged and the original
+        exception keeps bubbling. Classification is also inside the try: it reads the exception's own attributes, and if it
+        really raises, it should be handled like a write failure, not replace the original exception.
+
+        翻 failed；返回是否真的写进去了（写失败时不发事件）。
 
         记账失败不吞原异常：写入失败仅记日志，原异常继续冒泡。分类也在 try 内：它读的是异常
         自身的属性，真抛出来也只该跟写入失败同样处理，不该顶替原异常冒出去。
@@ -427,7 +561,12 @@ class Ledger:
             )
 
     async def _finish_cancelled(self, call_id: int) -> bool:
-        """翻 cancelled；返回是否真的写进去了（写失败时不发事件）。
+        """Flip to cancelled; returns whether it was actually written (no event when the write fails).
+
+        The cancel branch likewise doesn't swallow CancelledError: a write failure is only logged and cancellation re-raises
+        as usual (the row stays pending, left to the canceller's fallback settlement or startup cleanup).
+
+        翻 cancelled；返回是否真的写进去了（写失败时不发事件）。
 
         取消分支同样不吞 CancelledError：写入失败仅记日志，取消照常重抛
         （行留 pending，交由取消方的兜底结算或启动收口）。
@@ -458,6 +597,7 @@ class Ledger:
                 error_code=None if failure is None else failure.error_code,
                 error_params=None if failure is None else failure.error_params,
             )
+            # Events need the project name, but the resume path only has call_id; when the idempotent update hits 0 rows, don't query or publish.
             # 事件要带项目名，而 resume 链路只有 call_id；幂等命中 0 行时不查也不发。
             project_name = await repo.get_call_project_name(call_id) if affected else ""
         self._emit_recorded(project_name, call_id, status)

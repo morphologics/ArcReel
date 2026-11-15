@@ -1,4 +1,4 @@
-"""视频后端注册与工厂。"""
+"""Video backend registration and factory. / 视频后端注册与工厂。"""
 
 from __future__ import annotations
 
@@ -17,24 +17,31 @@ _BACKEND_FACTORIES: dict[str, Callable[..., VideoBackend]] = {}
 
 
 def register_backend(name: str, factory: Callable[..., VideoBackend]) -> None:
-    """注册一个视频后端工厂函数。"""
+    """Register a video backend factory function. / 注册一个视频后端工厂函数。"""
     _BACKEND_FACTORIES[name] = factory
 
 
 def create_backend(name: str, **kwargs: Any) -> VideoBackend:
-    """根据名称创建视频后端实例。"""
+    """Create a video backend instance by name. / 根据名称创建视频后端实例。"""
     if name not in _BACKEND_FACTORIES:
         raise ValueError(f"Unknown video backend: {name}")
     return _BACKEND_FACTORIES[name](**kwargs)
 
 
 def get_registered_backends() -> list[str]:
-    """返回所有已注册的后端名称。"""
+    """Return the names of all registered backends. / 返回所有已注册的后端名称。"""
     return list(_BACKEND_FACTORIES.keys())
 
 
 def video_capabilities_for_model(name: str, model_id: str) -> VideoCapabilities:
-    """读某后端对某 model 声明的视频能力 —— 纯查表，不构造实例（无需 api_key）。
+    """Read the video capabilities a backend declares for a model — pure table lookup, no instance constructed (no api_key needed).
+
+    ``name`` is the registry name (on the built-in side given by ``ProviderSpec.registry_backend``, not necessarily the
+    same as provider_id: gemini-aistudio / gemini-vertex both map to ``gemini``). The display layer resolves the boolean
+    capability bits of built-in models through here, keeping the backend the single source of truth instead of copying a
+    second capability declaration into the registry.
+
+    读某后端对某 model 声明的视频能力 —— 纯查表，不构造实例（无需 api_key）。
 
     ``name`` 是 registry 名（内置侧由 ``ProviderSpec.registry_backend`` 给出，与 provider_id
     不必相同：gemini-aistudio / gemini-vertex 同映射到 ``gemini``）。展示层解析内置模型的
@@ -53,7 +60,13 @@ def video_capabilities_for_model(name: str, model_id: str) -> VideoCapabilities:
 
 
 def effective_generate_audio_for_model(name: str, model_id: str) -> bool:
-    """读 backend 对默认执行档声明的有效 ``generate_audio`` 计价参数。
+    """Read the effective ``generate_audio`` pricing parameter a backend declares for the default execution tier.
+
+    Backends without a dedicated rule keep the request value; backends that need narrowing by model / default tier
+    provide a pure query via a static method of the same name, so the estimation side does not copy the execution
+    implementation.
+
+    读 backend 对默认执行档声明的有效 ``generate_audio`` 计价参数。
 
     未声明专属规则的 backend 沿用请求值；需要按 model / 默认档收窄的 backend 通过同名
     静态方法提供纯查询，避免估算侧复制执行实现。
@@ -73,7 +86,12 @@ def effective_generate_audio_for_model(name: str, model_id: str) -> bool:
 def backend_metered_usage(
     backend: VideoBackend, request: VideoGenerationRequest, result: VideoGenerationResult | None = None
 ) -> Usage | None:
-    """调用通道实例按用量契约上报的这次请求的计量；通道没有声明 ``metered_usage`` 时为 ``None``。
+    """The metering of this request reported by a call channel instance under the usage contract; ``None`` when the channel does not declare ``metered_usage``.
+
+    All built-in call channels declare it (see :mod:`lib.backends.video_backends.metering`); custom provider wrappers
+    delegate to the wrapped channel or report by generic rules (see :mod:`lib.custom_provider.metering`).
+
+    调用通道实例按用量契约上报的这次请求的计量；通道没有声明 ``metered_usage`` 时为 ``None``。
 
     内置调用通道都声明了它（见 :mod:`lib.backends.video_backends.metering`），自定义供应商的包装层转交被包装
     的通道或按通用口径上报（见 :mod:`lib.custom_provider.metering`）。
@@ -90,7 +108,9 @@ def backend_metered_usage(
 def metered_usage_for_model(
     name: str, model_id: str, request: VideoGenerationRequest, result: VideoGenerationResult | None = None
 ) -> Usage:
-    """按 registry 名读某后端对一个请求上报的计量 —— 纯计算，不构造实例；``result`` 为 ``None`` 时是提交前预估。"""
+    """Read by registry name the metering a backend reports for a request — pure computation, no instance constructed; ``result`` ``None`` means a pre-submit estimate.
+
+    按 registry 名读某后端对一个请求上报的计量 —— 纯计算，不构造实例；``result`` 为 ``None`` 时是提交前预估。"""
     factory = _BACKEND_FACTORIES.get(name)
     if factory is None:
         raise ValueError(f"Unknown video backend: {name}")

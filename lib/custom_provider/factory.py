@@ -1,4 +1,4 @@
-"""自定义供应商 Backend 工厂（按 endpoint 派发）。"""
+"""Custom provider Backend factory (dispatched by endpoint). / 自定义供应商 Backend 工厂（按 endpoint 派发）。"""
 
 from __future__ import annotations
 
@@ -31,7 +31,25 @@ def create_custom_backend(
     endpoint_spec: EndpointSpec | None = None,
     entry_binding: str | None = None,
 ) -> CustomTextBackend | CustomImageBackend | CustomVideoBackend | CustomAudioBackend:
-    """按 endpoint 查 ENDPOINT_REGISTRY 并构造 Backend。
+    """Look up the endpoint in ENDPOINT_REGISTRY and build the Backend.
+
+    Video backends additionally get the effective capabilities injected (endpoint spec system judgement ⊕ model-level user
+    override); the execution layer gates on these instead of reading the wrapped backend's declaration directly. Image backends
+    get the model-fact side's text-to-image / image-to-image injected (entry ⊕ capability override; no constraint for ComfyUI
+    endpoints); the execution layer takes its intersection with the channel's declaration.
+
+    Args:
+        provider: custom provider ORM object (needs base_url / api_key / provider_id attributes)
+        model_id: the concrete model id used for this call
+        endpoint: key in ENDPOINT_REGISTRY
+        capability_overrides: the model's raw `capability_overrides` value; None = follow the system judgement throughout
+        path_overrides: the model's raw `path_overrides` value; request names the endpoint no longer declares are ignored (docs/adr/0101)
+        entry_binding: the model's entry binding ("model vendor/official model name"); None = match the entry by name
+
+    Raises:
+        ValueError: endpoint is not in ENDPOINT_REGISTRY
+
+    按 endpoint 查 ENDPOINT_REGISTRY 并构造 Backend。
 
     视频后端额外注入生效能力（endpoint spec 系统判定 ⊕ 模型级用户覆盖），执行层据此门控，
     不直接读被包装 backend 的声明。图片后端注入模型事实一侧的文生图 / 图生图（条目 ⊕ 能力覆盖，
@@ -58,6 +76,8 @@ def create_custom_backend(
             overrides=capability_overrides,
             endpoint_spec=spec,
         )
+        # Remember both the endpoint and the path overrides: both are the real input granularity of backend construction; resuming an
+        # already submitted task compares them to tell whether the protocol has been swapped out (docs/adr/0054, docs/adr/0101).
         # 一并记住 endpoint 与路径覆盖：两者都是 backend 构造的真正输入粒度，已提交任务的续跑
         # 据此比对协议是否已被换掉（docs/adr/0054、docs/adr/0101）。
         return backend.with_endpoint(endpoint, path_overrides=paths).with_video_capabilities(merged, overrides=applied)

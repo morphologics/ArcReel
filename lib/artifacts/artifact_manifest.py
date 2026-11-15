@@ -45,7 +45,12 @@ from lib.project.asset_types import ASSET_TYPES, asset_name_comparison_key
 
 
 def _binary_open_flag() -> int:
-    """文件 fd 一律按二进制打开的标志位；POSIX 无此标志，取 0。
+    """Flag that opens file fds in binary mode; POSIX has no such flag, so 0.
+
+    The Windows C runtime defaults to text mode, which folds CRLF and stops reading at 0x1A, so a content digest
+    computed through the fd would differ from a digest of the same file read as bytes.
+
+    文件 fd 一律按二进制打开的标志位；POSIX 无此标志，取 0。
 
     Windows 的 C 运行时缺省文本模式会折叠 CRLF、遇 0x1A 停读，经 fd 算出的内容摘要会与
     按字节读同一文件的摘要不一致。
@@ -140,7 +145,9 @@ CONTENT_FACT_ARTIFACT_KINDS = frozenset({ArtifactKind.EPISODE_VIDEO, ArtifactKin
 
 @dataclass(frozen=True, slots=True)
 class ArtifactContentFacts:
-    """登记那一刻正式文件自身的内容事实：裸 sha256 hexdigest、字节数与纳秒 mtime。"""
+    """Content facts of the formal file itself at registration time: bare sha256 hexdigest, byte count and nanosecond mtime.
+
+    登记那一刻正式文件自身的内容事实：裸 sha256 hexdigest、字节数与纳秒 mtime。"""
 
     digest: str
     size: int
@@ -155,7 +162,13 @@ class ArtifactContentFacts:
 
 @dataclass(frozen=True, slots=True)
 class ArtifactManifestEntry:
-    """一件正式产物的登记：身份由键给出，相等只看路径与生成依据摘要。
+    """Registration of one formal artifact: identity is given by the key; equality looks only at path and generation basis digest.
+
+    ``content`` is the file facts recorded at write time, optional (old entries and entries that cannot be proven
+    consistent have none), and does not take part in equality: currency comparison, writer CAS and rollback decisions
+    only look at path and basis.
+
+    一件正式产物的登记：身份由键给出，相等只看路径与生成依据摘要。
 
     ``content`` 是写入时记下的文件事实，可选（旧条目与无法证明一致的条目没有），
     不参与相等比较：时效比对、写入方 CAS、回滚判断都只认路径与依据。
@@ -855,7 +868,9 @@ class ProjectArtifactManifestAdapter:
 
     @property
     def _nofollow_flag(self) -> int:
-        """`O_NOFOLLOW` 的实际取值：不支持（平台缺失或注入声明不支持）时为 0，回退到身份校验路径。"""
+        """Actual value of `O_NOFOLLOW`: 0 when unsupported (missing on the platform or injected as unsupported), falling back to the identity-check path.
+
+        `O_NOFOLLOW` 的实际取值：不支持（平台缺失或注入声明不支持）时为 0，回退到身份校验路径。"""
         return _O_NOFOLLOW if self._nofollow_supported else 0
 
     def inspect_artifact(self, artifact_path: str) -> ArtifactObservation:
@@ -925,6 +940,7 @@ class ProjectArtifactManifestAdapter:
             os.read(fd, 1)
             return None, None, None
 
+        # Reads that only need the digest are reused by file stat identity; callers that need a byte snapshot or chunk-wise side channel must really read.
         # 只要摘要的读取按文件 stat 标识复用；需要字节快照或逐块旁路的调用方必须真读。
         reusable = chunk_observer is None and not include_content_bytes
         if reusable and (cached := cached_file_digest(opened_stat)) is not None:
@@ -1704,9 +1720,10 @@ class ProjectArtifactManifestAdapter:
     def _remove_manifest_unlocked(self, root_fd: int | None) -> None:
         def unlink() -> None:
             if root_fd is None:
+                # emptied artifact manifest sidecar
                 (self._project_dir / MANIFEST_FILENAME).unlink()  # hard-delete: infra -- 已清空的产物清单 sidecar
             else:
-                os.unlink(MANIFEST_FILENAME, dir_fd=root_fd)  # hard-delete: infra -- 已清空的产物清单 sidecar
+                os.unlink(MANIFEST_FILENAME, dir_fd=root_fd)  # hard-delete: infra -- emptied artifact manifest sidecar / 已清空的产物清单 sidecar
 
         try:
             _retry_while_held_open(unlink, self._sleep)
@@ -2276,7 +2293,9 @@ _CONTENT_FACT_FIELDS = frozenset({"content_digest", "content_size", "content_mti
 
 
 def _entry_record(entry: ArtifactManifestEntry) -> dict[str, object]:
-    """条目落盘的完整字段，含内容事实；判断「写入是否改变了清单」按它比，不按条目相等。"""
+    """Full on-disk fields of an entry, including content facts; "did the write change the manifest" compares these, not entry equality.
+
+    条目落盘的完整字段，含内容事实；判断「写入是否改变了清单」按它比，不按条目相等。"""
 
     record: dict[str, object] = {"artifact_path": entry.artifact_path, "basis_digest": entry.basis_digest}
     if entry.content is not None:
@@ -2532,6 +2551,6 @@ def _create_temporary_file(root_fd: int, *, nofollow_flag: int) -> tuple[int, st
 
 def _unlink_temporary_file(tmp_name: str, root_fd: int | None) -> None:
     if root_fd is None:
-        os.unlink(tmp_name)  # hard-delete: temp -- 清单原子写的临时文件
+        os.unlink(tmp_name)  # hard-delete: temp -- temp file of the manifest's atomic write / 清单原子写的临时文件
     else:
-        os.unlink(tmp_name, dir_fd=root_fd)  # hard-delete: temp -- 清单原子写的临时文件
+        os.unlink(tmp_name, dir_fd=root_fd)  # hard-delete: temp -- temp file of the manifest's atomic write / 清单原子写的临时文件

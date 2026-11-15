@@ -1,4 +1,12 @@
-"""预设 Anthropic 兼容供应商目录。
+"""Catalog of preset Anthropic-compatible providers.
+
+Each PresetProvider supplies messages_url + discovery_url + a "get API Key" link, so the user picks a chip in the UI
+and the URLs are filled in. `default_model` is only used as the input placeholder hint and is no longer auto-filled
+into the form.
+
+Add new entries in this file; the frontend ICON_LOADERS aligns with @lobehub/icons via icon_key.
+
+预设 Anthropic 兼容供应商目录。
 
 每条 PresetProvider 提供 messages_url + discovery_url + 「获取 API Key」链接，
 让用户在 UI 上选 chip 即填好 URL。`default_model` 仅作为输入框 placeholder
@@ -18,7 +26,7 @@ CUSTOM_SENTINEL_ID = "__custom__"
 class PresetProvider:
     id: str
     display_name: str
-    icon_key: str  # @lobehub/icons 子组件名 (如 "DeepSeek")
+    icon_key: str  # @lobehub/icons subcomponent name (e.g. "DeepSeek") / @lobehub/icons 子组件名 (如 "DeepSeek")
     messages_url: str
     discovery_url: str | None
     default_model: str
@@ -157,6 +165,7 @@ PRESET_PROVIDERS: dict[str, PresetProvider] = {
         api_key_pattern=r"^sk-[A-Za-z0-9]+$",
         is_recommended=False,
     ),
+    # Source of model list and Base URL: https://www.volcengine.com/docs/82379/1928262 "Model configuration"
     # 模型清单与 Base URL 来源：https://www.volcengine.com/docs/82379/1928262 「模型配置」
     "ark-coding-plan": PresetProvider(
         id="ark-coding-plan",
@@ -183,6 +192,8 @@ PRESET_PROVIDERS: dict[str, PresetProvider] = {
         api_key_pattern=None,
         is_recommended=False,
     ),
+    # Base URL source: https://www.volcengine.com/docs/82379/2373740 "Configure Claude Code"
+    # Model list source: https://www.volcengine.com/docs/82379/2366394 "Supported models and Harness"
     # Base URL 来源：https://www.volcengine.com/docs/82379/2373740 「配置 Claude Code」
     # 模型清单来源：https://www.volcengine.com/docs/82379/2366394 「支持模型及 Harness」
     "ark-agent-plan": PresetProvider(
@@ -214,6 +225,7 @@ PRESET_PROVIDERS: dict[str, PresetProvider] = {
 }
 
 
+# Display order: explicitly defined; Anthropic Official always first, ArcReel second, the rest grouped by region
 # 显示顺序：显式定义,Anthropic Official 永远第一,ArcReel 第二,其余按区域归组
 PRESET_ORDER: tuple[str, ...] = (
     "anthropic-official",

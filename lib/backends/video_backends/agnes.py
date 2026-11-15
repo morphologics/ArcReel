@@ -1,4 +1,16 @@
-"""AgnesVideoBackend — Agnes 视频生成后端（异步轮询 + resume）。
+"""AgnesVideoBackend — Agnes video generation backend (async polling + resume).
+
+v2.0 uses ``POST /v1/videos`` then polls ``GET /v1/videos/{task_id}``; the request describes the output by WxH /
+frame count, and media inputs are raw base64. 2.5 uses the same submit endpoint, but the request switches to
+``mode`` + a seconds string + a resolution tier, media inputs are Data URIs, and it polls via
+``GET /agnesapi?video_id=...&model_name=...``.
+
+Both contracts decide the terminal state by ``status`` and download the final video from the top-level ``url`` or
+the query response URL; 2.5 takes the actual billed duration from the response's ``seconds``. Keyframe / multi-image
+mapping follows the single-channel constraint: no image is text-to-video, a first frame or first+last frames use
+``keyframe``, reference images use ``reference``, and reference images are not mixed with frames.
+
+AgnesVideoBackend — Agnes 视频生成后端（异步轮询 + resume）。
 
 v2.0 走 ``POST /v1/videos`` 后轮询 ``GET /v1/videos/{task_id}``，请求以 WxH / 帧数描述输出，
 媒体输入为裸 base64。2.5 走同一提交端点，但请求改为 ``mode`` + 秒数字符串 + 分辨率档位，
@@ -60,9 +72,12 @@ logger = logging.getLogger(__name__)
 DEFAULT_MODEL = "agnes-video-2.5-flash"
 
 _VIDEOS_ENDPOINT = "/videos"
-# 成片查询端点，挂在网关根（不在 /v1 下），按 video_id 查询。
+# Final video query endpoint, mounted at the gateway root (not under /v1), queried by video_id. / 成片查询端点，挂在网关根（不在 /v1 下），按 video_id 查询。
 _VIDEO_QUERY_ENDPOINT = "/agnesapi"
 
+# fps is fixed at 24; num_frames must be of the form 8n+1. Duration in seconds × fps is rounded and aligned to the
+# nearest 8n+1 without truncation: requests above the upstream frame limit are rejected upstream rather than silently
+# producing a shorter video. 1–3s land below 81 frames (25/49/73), which are valid values per the docs.
 # fps 固定 24；num_frames 必须形如 8n+1。时长按秒 × fps 取整后对齐到最近的 8n+1，不截断：
 # 超出上游帧数上限的请求由上游拒绝，而不是静默生成更短的成片。1–3s 会落到 81 帧以下（25/49/73），
 # 文档允许的合法值。
@@ -77,17 +92,22 @@ _V25_RESOLUTIONS = {"720P": "720P", "1080P": "1080P", "2K": "2K"}
 _V25_FLASH_RESOLUTIONS = {"720P": "720P"}
 _V25_REFERENCE_LIMITS = {_V25_FLASH_MODEL: 5, _V25_MODEL: 8}
 
+# v2.0 reference image (multi-image subject) limit; for 2.5 flash / full-version limits see _V25_REFERENCE_LIMITS.
 # v2.0 参考图（多图主体）上限；2.5 的 flash / 完整版上限见 _V25_REFERENCE_LIMITS。
 _MAX_REFERENCE_IMAGES = 4
 
+# Size constraints: width and height divisible by 8, long edge capped at 1920 (a conservative value covering the
+# upstream 480p/720p/1080p standardized tiers). Without resolution, fall back to a 720p short edge. The pixel limit
+# has not been checked against the Agnes console, so it is not hardcoded as an established fact.
 # 尺寸约束：长宽被 8 整除、长边收口 1920（保守值，覆盖上游 480p/720p/1080p 三档标准化）。
 # 缺 resolution 时按 720p 短边兜底。像素上限未经 Agnes console 核对，不硬编当既成事实。
 _VIDEO_ROUND_TO = 8
 _MAX_LONG_EDGE = 1920
 
+# submit timeout ~300s: covers long blocking under upstream contention, so a retryable busy state is not wrapped by ReadTimeout into a terminal ambiguous failure.
 # submit 超时 ~300s：覆盖上游争用时的长阻塞，避免可重试的繁忙被 ReadTimeout 包成终态歧义失败。
 _SUBMIT_TIMEOUT_SECONDS = 300.0
-# 轮询 / 下载用较短超时（幂等 GET 正常秒级返回）。
+# Polling / download use a shorter timeout (idempotent GETs normally return within seconds). / 轮询 / 下载用较短超时（幂等 GET 正常秒级返回）。
 _POLL_HTTP_TIMEOUT_SECONDS = 60.0
 
 _KEYFRAMES_MODE = "keyframes"
@@ -95,10 +115,13 @@ _V25_TEXT_MODE = "text"
 _V25_KEYFRAME_MODE = "keyframe"
 _V25_REFERENCE_MODE = "reference"
 
+# Set of failed terminal states: besides the documented failed, include error / cancelled / canceled, so an upstream
+# finishing with a non-standard failure state is not treated as "still in progress" and polled until timeout.
 # 失败终态集合：除文档化的 failed 外，纳入 error / cancelled / canceled，避免上游以非标准失败态
 # 收尾时被当「仍在进行」轮询到超时。
 _FAILED_STATUSES = ("failed", "error", "cancelled", "canceled")
 
+# Allowlist of safe scalars for logging; base64 inside image / extra_body never goes into logs.
 # 进日志的安全标量白名单；image / extra_body 内的 base64 一律不入日志。
 _SAFE_LOG_KEYS = (
     "model",
@@ -113,9 +136,14 @@ _SAFE_LOG_KEYS = (
     "seed",
 )
 
+# Authoritative fields in the completed-state response that may carry the final video URL, probed by priority (top level and metadata rank equally, top level first).
 # 完成态响应中可能承载成片 URL 的权威字段，按优先级探测（顶层与 metadata 同权，顶层优先）。
 _PRIMARY_URL_FIELDS = ("url", "video_url")
 
+# remix source video ID field. Semantically not a URL (not used as a download address when not URL-shaped); listed
+# here only for compatibility with gateways that fill the final video URL directly into this field; lower priority
+# than _PRIMARY_URL_FIELDS: any hit on the authoritative fields at top level or in metadata takes precedence over this
+# field, so it does not get used as the download address ahead of the real final video URL.
 # remix 来源视频 ID 字段。语义不是 URL（非 URL 形态时不当下载地址），列在此处仅为兼容部分
 # 网关把成片 URL 直接回填在该字段的行为；优先级低于 _PRIMARY_URL_FIELDS——顶层与 metadata
 # 的权威字段任一命中都优先于本字段，避免它抢在真正的成片 URL 前面被当下载地址。
@@ -123,7 +151,10 @@ _COMPAT_URL_FIELD = "remixed_from_video_id"
 
 
 def _looks_like_url(value: str) -> bool:
-    """粗粒度 URL 形态校验：http/https scheme + 非空 netloc。用于把 remixed_from_video_id
+    """Coarse URL shape check: http/https scheme + non-empty netloc. Used to tell fields that are semantically not URLs, such as remixed_from_video_id,
+    apart from real download addresses, so a remix source ID is not downloaded as a URL by mistake.
+
+    粗粒度 URL 形态校验：http/https scheme + 非空 netloc。用于把 remixed_from_video_id
     这类语义不是 URL 的字段与真正的下载地址区分开，避免把 remix 来源 ID 误当 URL 下载。
     """
     if not value:
@@ -133,7 +164,15 @@ def _looks_like_url(value: str) -> bool:
 
 
 def _first_url_field(body: dict) -> str | None:
-    """探测响应体中形态为 URL 的成片地址，按 _PRIMARY_URL_FIELDS 优先、_COMPAT_URL_FIELD
+    """Probe the response body for a URL-shaped final video address, in the order _PRIMARY_URL_FIELDS first, _COMPAT_URL_FIELD
+    as fallback; at each level the top level and ``metadata`` (the gateway's video query puts the download address in
+    metadata.url) rank equally, top level first; returns None when nothing matches.
+
+    The _COMPAT_URL_FIELD fallback level must come entirely after _PRIMARY_URL_FIELDS: otherwise the top-level
+    compatibility field would match ahead of the authoritative URL field in metadata, wrongly using the compatibility
+    field value as the download address.
+
+    探测响应体中形态为 URL 的成片地址，按 _PRIMARY_URL_FIELDS 优先、_COMPAT_URL_FIELD
     兜底的顺序；每一级顶层与 ``metadata``（网关成片查询把下载地址放在 metadata.url）同权、
     顶层优先，无命中返回 None。
 
@@ -158,14 +197,17 @@ def _first_url_field(body: dict) -> str | None:
 
 
 def _duration_to_num_frames(duration_seconds: int) -> int:
-    """秒 → num_frames：秒 × fps 取整后对齐到最近的 ``8n+1``。"""
+    """Seconds → num_frames: seconds × fps rounded, then aligned to the nearest ``8n+1``. / 秒 → num_frames：秒 × fps 取整后对齐到最近的 ``8n+1``。"""
     target = max(1, duration_seconds) * _FPS
     n = round((target - 1) / _FRAME_STEP)
     return max(1, _FRAME_STEP * n + 1)
 
 
 def _resolve_size(resolution: str | None, aspect_ratio: str) -> tuple[int, int]:
-    """比例优先、清晰度其次：短边来自 resolution（档位 / 自定义 / None 兜底 720p），
+    """Aspect ratio first, resolution second: the short edge comes from resolution (tier / custom / None falls back to 720p),
+    the ratio exactly from aspect_ratio, width and height divisible by 8, long edge capped at 1920. Returns (width, height).
+
+    比例优先、清晰度其次：短边来自 resolution（档位 / 自定义 / None 兜底 720p），
     比例精确来自 aspect_ratio、长宽被 8 整除、长边收口 1920。返回 (宽, 高)。
     """
     short = resolution_to_short_edge(resolution, tier_map=VIDEO_TIER_SHORT_EDGE)
@@ -173,7 +215,13 @@ def _resolve_size(resolution: str | None, aspect_ratio: str) -> tuple[int, int]:
 
 
 def _image_to_bare_base64(image_path: Path) -> str:
-    """本地图片 → **裸 base64** 字符串（无 ``data:`` 前缀）。
+    """Local image → **raw base64** string (no ``data:`` prefix).
+
+    The Agnes video endpoint base64-decodes the whole string, and a ``data:`` prefix triggers a padding error at
+    generation time, so the repo's generic data-URI helper is not reused (the image endpoint accepts data URIs, the
+    video endpoint does not; the two must not be mixed).
+
+    本地图片 → **裸 base64** 字符串（无 ``data:`` 前缀）。
 
     Agnes 视频端对整串做 base64 解码，带 ``data:`` 前缀会在生成期触发 padding 错误，故不复用
     仓库通用 data-URI helper（图像端接受 data-URI，视频端不接受，二者不可混用）。
@@ -182,12 +230,14 @@ def _image_to_bare_base64(image_path: Path) -> str:
 
 
 def _image_to_data_uri(image_path: Path) -> str:
-    """本地图片 → ``data:image/...;base64,...``；2.5 契约的媒体输入统一使用该形态。"""
+    """Local image → ``data:image/...;base64,...``; all media inputs of the 2.5 contract use this form.
+
+    本地图片 → ``data:image/...;base64,...``；2.5 契约的媒体输入统一使用该形态。"""
     return image_to_base64_data_uri(image_path)
 
 
 def _match_video_capabilities(name: str) -> VideoCapabilities | None:
-    """按名字认定的能力；不是已知型号时为 ``None``。"""
+    """Capabilities identified by name; ``None`` when not a known model. / 按名字认定的能力；不是已知型号时为 ``None``。"""
     if name in _V25_REFERENCE_LIMITS:
         return VideoCapabilities(
             last_frame=True,
@@ -208,7 +258,9 @@ def _uses_v25_contract(model: str) -> bool:
 
 
 def _safe_body_for_log(body: dict) -> dict:
-    """安全日志视图：白名单标量 + prompt 仅长度 + 图像仅计数（base64 不入日志）。"""
+    """Safe log view: allowlisted scalars + prompt length only + image count only (base64 not logged).
+
+    安全日志视图：白名单标量 + prompt 仅长度 + 图像仅计数（base64 不入日志）。"""
     view: dict = {key: body[key] for key in _SAFE_LOG_KEYS if key in body}
     prompt = body.get("prompt")
     if isinstance(prompt, str):
@@ -230,18 +282,28 @@ def _safe_body_for_log(body: dict) -> dict:
 
 
 def _extract_task_id(body: dict, *, prefer_video_id: bool) -> str:
-    """从提交响应取轮询用任务 id；2.5 轮询 video_id，v2.0 路径轮询 task_id。"""
+    """Get the task id for polling from the submit response; 2.5 polls video_id, the v2.0 path polls task_id.
+
+    从提交响应取轮询用任务 id；2.5 轮询 video_id，v2.0 路径轮询 task_id。"""
     keys = ("video_id", "task_id", "id") if prefer_video_id else ("task_id", "video_id", "id")
     for key in keys:
         value = body.get(key)
         if isinstance(value, str) and value:
             return value
+    # Expose only field names, not the whole response (it may contain sensitive fields such as prompt / signed URLs, same rule as _safe_body_for_log).
     # 仅暴露字段名，不回显整串响应（可能含 prompt / 签名 URL 等敏感字段，与 _safe_body_for_log 同口径）。
     raise RuntimeError(f"Agnes 视频提交返回体缺少 task_id（字段: {sorted(body)}）")
 
 
 def _extract_duration_seconds(final: dict, queried: dict | None, fallback: int) -> int:
-    """从轮询终态取实际成片时长（顶层 ``seconds``），缺失时改读 video_id 二次查询响应的
+    """Get the actual video duration from the polling terminal state (top-level ``seconds``); if missing, read ``seconds`` from the video_id
+    follow-up query response (which exists only when the completed state carries just video_id); only when both are
+    missing or unparseable does it fall back to the requested duration.
+
+    ``usage.duration_seconds`` is not read: that field is task processing time, unrelated to the video duration, and
+    reading it would misrecord billing and metadata.
+
+    从轮询终态取实际成片时长（顶层 ``seconds``），缺失时改读 video_id 二次查询响应的
     ``seconds``（完成态只带 video_id 时才有此响应），两处均缺失或不可解析才回落请求时长。
 
     不读 ``usage.duration_seconds``——该字段是任务处理耗时，与成片时长无关，读它会错记
@@ -258,7 +320,10 @@ def _extract_duration_seconds(final: dict, queried: dict | None, fallback: int) 
 
 
 def _coerce_duration(value: object) -> int | None:
-    """把 ``"10.0"`` / ``10`` 这类时长值归一化为计费秒数：half-up 取整（4.5→5，不少计），
+    """Normalize duration values such as ``"10.0"`` / ``10`` into billed seconds: half-up rounding (4.5→5, never under-counting);
+    non-positive values / above the 24h cap (to prevent DB Integer column overflow) / unparseable all return None, and the caller falls back to the requested duration.
+
+    把 ``"10.0"`` / ``10`` 这类时长值归一化为计费秒数：half-up 取整（4.5→5，不少计），
     非正值 / 超 24h 上限（防 DB Integer 列溢出）/ 不可解析一律回 None，由 caller 回落请求时长。
     """
     if value is None:
@@ -273,7 +338,13 @@ def _coerce_duration(value: object) -> int | None:
 
 
 def _failure_reason(state: dict) -> str | None:
-    """失败终态（failed / error / cancelled / canceled）→ 错误描述；其余 → None。
+    """Failed terminal state (failed / error / cancelled / canceled) → error description; anything else → None.
+
+    Not only ``failed``: if the upstream finishes with another failure state, recognizing only completed/failed would
+    treat it as "still in progress" and poll until max_wait before raising a misleading TimeoutError, needlessly
+    occupying a worker slot; explicitly enumerating failure states makes it fail fast.
+
+    失败终态（failed / error / cancelled / canceled）→ 错误描述；其余 → None。
 
     不止认 ``failed``：上游若以其他失败态收尾，仅认 completed/failed 会把它当「仍在进行」轮询到
     max_wait 才抛误导性 TimeoutError，白占 worker 通道；显式枚举失败态让其快速失败。
@@ -286,7 +357,7 @@ def _failure_reason(state: dict) -> str | None:
 
 
 class AgnesVideoBackend(ProviderJobIdPersistenceMixin):
-    """Agnes 视频后端（异步 submit/poll，裸 base64 图像，支持 resume）。"""
+    """Agnes video backend (async submit/poll, raw base64 images, supports resume). / Agnes 视频后端（异步 submit/poll，裸 base64 图像，支持 resume）。"""
 
     def __init__(
         self,
@@ -312,7 +383,16 @@ class AgnesVideoBackend(ProviderJobIdPersistenceMixin):
 
     @staticmethod
     def video_capabilities_for_model(model: str) -> VideoCapabilities:
-        """按模型名纯计算 caps —— 不构造 SDK client（无需 api_key）。
+        """Compute caps purely from the model name, without constructing an SDK client (no api_key needed).
+
+        First frame + last frame (first/last keyframes) + multi-image subject reference; reference images are not combined
+        with the first frame (single channel + modes not combinable). The 2.5 series always produces audio, with reference
+        image limits of 5 / 8 for flash and the full version; v2.0 stays silent with a 4-image limit. Names outside these
+        three models get name_family's uniform fallback, submitted under the v2.0 contract with silent output.
+
+        The instance property delegates here, keeping the backend as the single source of truth.
+
+        按模型名纯计算 caps —— 不构造 SDK client（无需 api_key）。
 
         首帧 + 尾帧（首尾关键帧）+ 多图主体参考；参考图不与首帧叠加（单通道 + mode 不可叠加）。
         2.5 系列固定产出音频，flash 与完整版参考图上限分别为 5 / 8；v2.0 保持无声与 4 图上限。
@@ -331,9 +411,13 @@ class AgnesVideoBackend(ProviderJobIdPersistenceMixin):
         return self.video_capabilities_for_model(self._model)
 
     async def generate(self, request: VideoGenerationRequest) -> VideoGenerationResult:
+        # The request body has no reference audio field; even when the user override relaxes the capability it cannot be sent, so reject before paying instead of silently dropping it.
         # 请求体没有参考音频字段；能力被用户覆盖放宽时也发不出，付费前拒绝而不是静默丢弃。
         if request.reference_audio_files:
             raise VideoCapabilityError("video_reference_audio_unsupported", provider=self.name, model=self._model)
+        # Reading from disk + encoding (up to 2 first/last frames and up to 8 reference images, possibly several MB) is
+        # offloaded to a thread to avoid blocking the shared worker event loop (consistent with the image backends and the
+        # grok/gemini video backends).
         # 读盘 + 编码（首尾帧最多 2 张、参考图最多 8 张，可能数 MB）offload 到线程，
         # 避免阻塞共享 worker 事件循环（与 image 后端及 grok/gemini 视频后端一致）。
         payload = await asyncio.to_thread(self._build_payload, request)
@@ -350,7 +434,9 @@ class AgnesVideoBackend(ProviderJobIdPersistenceMixin):
             return await self._poll_and_build(client, task_id, request, is_resume=False)
 
     async def resume_video(self, job_id: str, request: VideoGenerationRequest) -> VideoGenerationResult:
-        """接续已 submit 的 Agnes task：仅轮询 + 下载，不重新提交（ADR 0007）。"""
+        """Resume an already submitted Agnes task: only poll + download, no resubmit (ADR 0007).
+
+        接续已 submit 的 Agnes task：仅轮询 + 下载，不重新提交（ADR 0007）。"""
         async with artifact_http_client(timeout=self._http_timeout) as client:
             return await self._poll_and_build(client, job_id, request, is_resume=True)
 
@@ -358,7 +444,13 @@ class AgnesVideoBackend(ProviderJobIdPersistenceMixin):
     def metered_usage(
         model: str, request: VideoGenerationRequest, result: VideoGenerationResult | None = None
     ) -> Usage:
-        """这次请求的计量（见 :mod:`lib.backends.video_backends.metering`）。
+        """Metering of this request (see :mod:`lib.backends.video_backends.metering`).
+
+        In both contracts the resolution is determined by the requested tier, sent as 720p when unspecified (2.5's ``size``,
+        v2.0's short edge); the settled output seconds come from the video duration Agnes reports. Videos under the 2.5
+        contract have audio, v2.0 is silent.
+
+        这次请求的计量（见 :mod:`lib.backends.video_backends.metering`）。
 
         两版契约的分辨率都由请求档位决定，未指定时按 720p 下发（2.5 的 ``size``、v2.0 的短边）；结算的输出秒数
         取 Agnes 回报的成片时长。2.5 契约的成片有声，v2.0 无声。
@@ -374,13 +466,15 @@ class AgnesVideoBackend(ProviderJobIdPersistenceMixin):
     # ── request building ────────────────────────────────────────────────
 
     def _build_payload(self, request: VideoGenerationRequest) -> dict:
-        """按 model 分派旧 v2.0 或 2.5 请求契约。"""
+        """Dispatch to the old v2.0 or the 2.5 request contract by model. / 按 model 分派旧 v2.0 或 2.5 请求契约。"""
         if _uses_v25_contract(self._model):
             return self._build_v25_payload(request)
         return self._build_v20_payload(request)
 
     def _build_v20_payload(self, request: VideoGenerationRequest) -> dict:
-        """构建 v2.0 提交体，保持既有 WxH / 帧数 / 裸 base64 契约不变。"""
+        """Build the v2.0 submit body, keeping the existing WxH / frame count / raw base64 contract unchanged.
+
+        构建 v2.0 提交体，保持既有 WxH / 帧数 / 裸 base64 契约不变。"""
         width, height = _resolve_size(request.resolution, request.aspect_ratio)
         payload: dict = {
             "model": self._model,
@@ -422,7 +516,9 @@ class AgnesVideoBackend(ProviderJobIdPersistenceMixin):
         return payload
 
     def _build_v25_payload(self, request: VideoGenerationRequest) -> dict:
-        """构建 2.5 提交体：mode + 秒数字符串 + 分辨率档位 + Data URI 媒体。"""
+        """Build the 2.5 submit body: mode + seconds string + resolution tier + Data URI media.
+
+        构建 2.5 提交体：mode + 秒数字符串 + 分辨率档位 + Data URI 媒体。"""
         self._reject_v25_aspect_ratio(request.aspect_ratio)
         size = self._normalize_v25_resolution(request.resolution)
 
@@ -489,7 +585,9 @@ class AgnesVideoBackend(ProviderJobIdPersistenceMixin):
 
     @staticmethod
     def _single_path(value: str | Path | None) -> Path | None:
-        """把请求里的图像字段归一化成 Path；空 / 空串 / 空 Path（``Path("")`` 会塌成 ``Path(".")``）→ None。"""
+        """Normalize an image field of the request into a Path; empty / empty string / empty Path (``Path("")`` collapses to ``Path(".")``) → None.
+
+        把请求里的图像字段归一化成 Path；空 / 空串 / 空 Path（``Path("")`` 会塌成 ``Path(".")``）→ None。"""
         if value is None:
             return None
         text = str(value)
@@ -499,11 +597,15 @@ class AgnesVideoBackend(ProviderJobIdPersistenceMixin):
 
     @classmethod
     def _valid_paths(cls, values: list[Path] | None) -> list[Path]:
-        """归一化参考图列表：剔除空 / 空 Path（``[Path(v) for v if v]`` 对 Path 恒真，不起过滤作用）。"""
+        """Normalize the reference image list: drop empty / empty Paths (``[Path(v) for v if v]`` is always truthy for Path and filters nothing).
+
+        归一化参考图列表：剔除空 / 空 Path（``[Path(v) for v if v]`` 对 Path 恒真，不起过滤作用）。"""
         return [p for v in (values or []) if (p := cls._single_path(v)) is not None]
 
     def _encode_start(self, path: Path, *, data_uri: bool = False) -> str:
-        """编码首帧；缺失或不可读 fail-loud（不静默退化为文生视频）。"""
+        """Encode the first frame; fail loudly when missing or unreadable (no silent degradation to text-to-video).
+
+        编码首帧；缺失或不可读 fail-loud（不静默退化为文生视频）。"""
         return self._encode_image(
             path,
             error_code="video_start_image_unreadable",
@@ -512,7 +614,9 @@ class AgnesVideoBackend(ProviderJobIdPersistenceMixin):
         )
 
     def _encode_end(self, path: Path, *, data_uri: bool = False) -> str:
-        """编码尾帧；缺失或不可读 fail-loud（错误指向尾帧而非首帧）。"""
+        """Encode the last frame; fail loudly when missing or unreadable (the error points to the last frame, not the first).
+
+        编码尾帧；缺失或不可读 fail-loud（错误指向尾帧而非首帧）。"""
         return self._encode_image(
             path,
             error_code="video_end_image_unreadable",
@@ -521,7 +625,9 @@ class AgnesVideoBackend(ProviderJobIdPersistenceMixin):
         )
 
     def _encode_reference(self, path: Path, *, data_uri: bool = False) -> str:
-        """编码参考图；缺失或不可读 fail-loud（不静默丢弃后照常计费）。"""
+        """Encode a reference image; fail loudly when missing or unreadable (rather than silently dropping it and billing as usual).
+
+        编码参考图；缺失或不可读 fail-loud（不静默丢弃后照常计费）。"""
         return self._encode_image(
             path,
             error_code="video_reference_images_unreadable",
@@ -530,7 +636,9 @@ class AgnesVideoBackend(ProviderJobIdPersistenceMixin):
         )
 
     def _encode_image(self, path: Path, *, error_code: str, data_uri: bool = False, **err_params: str) -> str:
-        """编码图像；缺失或不可读时按通道 error_code / 参数名 fail-loud。"""
+        """Encode an image; when missing or unreadable, fail loudly with the channel's error_code / parameter name.
+
+        编码图像；缺失或不可读时按通道 error_code / 参数名 fail-loud。"""
         if not path.is_file():
             raise VideoCapabilityError(error_code, model=self._model, **err_params)
         try:
@@ -548,6 +656,10 @@ class AgnesVideoBackend(ProviderJobIdPersistenceMixin):
     async def _create_task(
         self, client: httpx.AsyncClient, payload: dict, request: VideoGenerationRequest | None = None
     ) -> str:
+        # Non-idempotent "create task + bill" POST: submit_post turns ambiguous transport errors into an AmbiguousSubmitError
+        # terminal failure, so retries do not create the task twice and bill twice; >=400 raises HTTPStatusError for
+        # should_retry_submit to route by status code (5xx/408/429 retried, including upstream busy 503; deterministic 4xx
+        # fail fast). submit uses a long timeout to cover long upstream blocking.
         # 非幂等的「建任务 + 计费」POST：submit_post 把歧义传输错误转 AmbiguousSubmitError 终态失败，
         # 避免重试重复建任务 + 重复计费；>=400 抛 HTTPStatusError 交 should_retry_submit 按状态码分流
         # （5xx/408/429 重试——含上游繁忙 503；确定性 4xx 快失败）。submit 用长超时覆盖上游长阻塞。
@@ -572,7 +684,9 @@ class AgnesVideoBackend(ProviderJobIdPersistenceMixin):
         return resp.json()
 
     async def _query_video_once(self, client: httpx.AsyncClient, video_id: str) -> dict:
-        """单次按 ``video_id`` 查询；重试由调用方选择内层装饰器或外层轮询统一承担。"""
+        """A single query by ``video_id``; retries are handled by the caller choosing either the inner decorator or the outer polling loop.
+
+        单次按 ``video_id`` 查询；重试由调用方选择内层装饰器或外层轮询统一承担。"""
         params = {"video_id": video_id}
         if _uses_v25_contract(self._model):
             params["model_name"] = self._model
@@ -597,7 +711,12 @@ class AgnesVideoBackend(ProviderJobIdPersistenceMixin):
         *,
         record: bool = True,
     ) -> dict:
-        """按 ``video_id`` 查询成片任务；2.5 同时携带 ``model_name``。
+        """Query the video task by ``video_id``; 2.5 also carries ``model_name``.
+
+        This endpoint is 2.5's main polling interface; v2.0 only uses it for a follow-up query when the terminal state has no
+        direct URL but carries video_id. An idempotent GET, reusing the polling's retry decisions and logging boundaries.
+
+        按 ``video_id`` 查询成片任务；2.5 同时携带 ``model_name``。
 
         该端点是 2.5 的主轮询接口；v2.0 只在终态无直接 URL、带 video_id 时用它二次查询。
         幂等 GET，复用轮询同一套重试判定与留痕边界。
@@ -613,7 +732,16 @@ class AgnesVideoBackend(ProviderJobIdPersistenceMixin):
     async def _resolve_video_url(
         self, client: httpx.AsyncClient, final: dict, request: VideoGenerationRequest
     ) -> tuple[str, dict | None]:
-        """成片 URL 两级来源：完成态直接字段命中即用；否则用 video_id 二次查询取 URL。
+        """Two-level source of the video URL: use a direct field in the completed state if it matches; otherwise query by video_id for the URL.
+
+        When the follow-up query is used, its response body is also returned (None if not queried), so the caller can
+        additionally parse the video duration from it: the terminal response may lack ``seconds``, which only the follow-up
+        query response carries.
+
+        When neither level is available, the error message lists only field names without echoing the response body (it may
+        contain sensitive fields such as signed URLs, same rule as _safe_body_for_log).
+
+        成片 URL 两级来源：完成态直接字段命中即用；否则用 video_id 二次查询取 URL。
 
         命中二次查询时一并返回该查询响应体（未查询则 None），供调用方从中补解析成片时长——
         终态响应可能不带 ``seconds``，只有二次查询响应才带。
@@ -687,5 +815,7 @@ class AgnesVideoBackend(ProviderJobIdPersistenceMixin):
 
     @staticmethod
     async def _download_with_retry(video_url: str, output_path: Path) -> None:
-        """下载成片 URL（幂等 GET），走共用的产物下载预算，不回退到重跑生成 POST。"""
+        """Download the video URL (idempotent GET) using the shared artifact download budget, never falling back to rerunning the generation POST.
+
+        下载成片 URL（幂等 GET），走共用的产物下载预算，不回退到重跑生成 POST。"""
         await download_resumable_video(video_url, output_path, label="Agnes")

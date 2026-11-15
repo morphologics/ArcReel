@@ -1,4 +1,112 @@
-"""v15→v16 迁移：剪辑决策移出脚本条目。
+"""v15->v16 migration: edit decisions move out of script entries.
+
+This step consists of independent sub-steps called in order by ``migrate_v15_to_v16``; changes merged into this
+step within the same release add a sub-step.
+
+**Transitions move into the edit timeline (ADR 0090)**
+
+- All entries of bound scripts have ``transition_to_next`` deleted; non-hard-cut values are simply dropped, not
+  migrated anywhere.
+- The current presentation model's basis no longer records transitions. Persisted presentation model files
+  (``presentations/``) drop transitions and take the current basis; manifest registrations that are exactly the old
+  basis recorded in the file are rewritten to the current basis. The old basis itself includes the transitions in
+  the script, so registrations stale only because transitions differed from the file become current; registrations
+  stale because of other inputs differ from the file's record and are kept as-is. Subtitle bases never recorded
+  transitions and are untouched. Presentation models whose file doesn't match its own recorded old basis were already
+  unclaimed before, and this step doesn't change them.
+
+Commit order is scripts -> manifest -> presentation model files -> ``project.json``: after a mid-way crash the whole
+step reruns, and already changed scripts and files are skipped as "no transitions left"; the manifest rewrite
+precedes the files, so on rerun the old basis can still be computed from the unchanged files, and already rewritten
+registrations no longer match and are skipped. Presentation model files are derived from the selected media and can
+be re-materialized at read time, so no separate backup is made.
+
+**Narration delivery method becomes project config (ADR 0089)**
+
+- Projects whose artifact manifest registers narration voiceover and where at least one registration's selected
+  audio version record carries complete TTS settings are judged TTS voiceover; ``project.json`` gets, as the TTS
+  snapshot, the model, voice and speech rate used by the record with the latest ``created_at`` among them.
+- All other projects are judged post-production voiceover; existing audio backend, voice and speech rate fields are
+  kept as-is.
+- Only writes ``project.json``, written with this step's last write; backups are the runner's job. Old audio whose
+  selected version record has no TTS settings was never registered anyway, and the judgment doesn't change how it's
+  handled.
+
+**Video currency no longer takes narration duration as input**
+
+- Plan the target state once under the old basis and once under the new, and rewrite only video registrations that
+  were current before and whose target changed; already stale registrations are kept. The pre-change target state
+  is planned before any write in this step and doubles as the read-only pre-check; video bases don't include
+  transitions, so planning before the transition sub-step doesn't change the result.
+- The selected version additionally records the new currency duration baseline; the actual paid option and the
+  execution request digest are unchanged. Version records are written before the manifest, the manifest before the
+  project version; a rerun after interruption still recognizes old registrations and already rewritten version
+  records.
+
+**Uploaded storyboard images and videos are registered by uploaded bytes (ADR 0062 revision)**
+
+- Where the selected version is a manually uploaded storyboard image or video matching the artifact bytes, register
+  per the post-change target state with a basis determined only by the uploaded bytes: previously unregistered
+  uploaded videos and uploaded storyboard images whose registration was deleted are registered again; uploaded
+  storyboard images registered by generation inputs are rewritten.
+- Only writes the manifest, before the project version; on rerun already registered entries match the target and are
+  skipped.
+
+**Episode IDs separated from episode order (ADR 0096)**
+
+- ``project.json`` gets the project's historical highest number (``lib.episode.episode_ids``), the maximum of: the
+  ledger's largest episode ID, names in the project directory still carrying an episode ID (scripts, draft
+  directories, source archives, the ``E{N}`` prefix in media names, presentation and subtitle directories), episode
+  IDs in the artifact manifest, and the query result of task and call records injected by the runner. The ledger's
+  existing order is already ascending by episode ID, which is the episode order, so it isn't reordered.
+- The next-episode outline now takes the episode immediately following in episode order, and gives the title when
+  there's no planning data (``episode_outline_context``). It's an input to the script plan basis: same method as
+  video currency, plan once before and once after, rewriting only script plan registrations current before whose
+  target changed. Script plans have no version records, so only the manifest changes.
+
+**Episode source text and whole-source files are registered explicitly by the project (ADR 0031, 0097)**
+
+- Ledger entries get their episode source recorded: those with a source range are split-out episodes; those without
+  a source range but with ``source/episode_N.txt`` are recorded as split-out episodes per the old split flow when
+  ``source/`` has other source text, or as carrying their own source text when there's only the episode file; those
+  with neither are recorded as having no source text.
+- Episodes with only ``source/episode_N.txt`` and no ledger entry are registered as episodes with their own source
+  text, with the episode ID taken from N in the file name, appended to the end of the episode order in ascending N.
+- Whole-source files are recorded in the list by the old candidate rule (.txt / .md directly under ``source/``,
+  without dot / underscore prefix, episode files excluded) in file-name order; the planning start is now derived
+  from the ledger, and ``planning_cursor`` is deleted.
+- Files that registered split-out episodes get a normalized text snapshot recorded; when the file content doesn't
+  match the recorded source fingerprint it isn't recorded, and the fingerprint mismatch is still stopped by the
+  planning entry point. Snapshots are written before ``project.json`` and overwritten as-is on rerun.
+
+**Source file type is recorded with the source file (ADR 0036)**
+
+- Drama projects record a type for each item in the whole-source list and for episodes with their own source text,
+  from the old project-level ``source_kind`` (novel when missing or invalid); existing valid records are untouched.
+  Other content modes simply delete the project-level field.
+- The project-level type previously only fed the script plan basis of drama storyboard-to-video; the pre-change
+  target state is planned with the recorded types, so those bases don't change. Reference-to-video script plans
+  previously ignored type and drafted as novel, so such registrations of screenplay projects read as stale after
+  the change. Frozen output sources aren't rewritten.
+
+**Asset inventory retired (ADR 0092)**
+
+- Delete the ``workflow.asset_inventory`` marker from ``project.json``; when ``workflow`` becomes empty as a result,
+  delete it entirely.
+
+**"Completed" in the project list uses the same basis as workflow status**
+
+- ``project.json`` gets ``source_remaining``: from the recorded whole-source list and the ledger, whether the whole
+  source still has unplanned source text. From then on it's maintained by the commands that write the ledger and
+  source registration (``ProjectManager``), and the project list uses it to decide whether a project is complete,
+  without reading the source.
+
+Apart from registering uploaded artifacts, this step only rewrites existing registrations without adding or removing
+any; the migration result is generated from the skipped items of the full rewritten target state and the actual
+manifest counts. It doesn't resolve earlier skip reasons; the runner merges skipped items from earlier steps on the
+chain or from an existing migration report.
+
+v15→v16 迁移：剪辑决策移出脚本条目。
 
 本步由互不依赖的子步组成，``migrate_v15_to_v16`` 依次调用；同一发行版里并入本步的改动追加一个子步。
 
@@ -158,15 +266,19 @@ from lib.speech.speech_presentation import presentation_artifact_paths
 
 TARGET_SCHEMA_VERSION = 16
 
+#: Look up, by project name, the largest episode ID that appeared in task and call records (0 when none). The database
+#: is outside the project directory and is injected at application assembly.
 #: 按项目名查任务与调用记录里出现过的最大集 ID（没有记录为 0）。数据库在项目目录之外，由应用装配处注入。
 RecordedEpisodeIds = Callable[[str], int]
 
-#: 剧本条目上退役的转场字段名。历史事实，写死在这一步。
+#: Retired transition field name on script entries. Historical fact, hard-coded in this step. / 剧本条目上退役的转场字段名。历史事实，写死在这一步。
 _TRANSITION_FIELD = "transition_to_next"
 
 
 def _load_object(path: Path) -> dict[str, Any] | None:
-    """读一个 JSON 对象；缺失、损坏或非对象都返回 None（不在本步修复）。"""
+    """Read a JSON object; missing, corrupt or non-object all return None (not repaired in this step).
+
+    读一个 JSON 对象；缺失、损坏或非对象都返回 None（不在本步修复）。"""
 
     try:
         parsed = json.loads(path.read_bytes())
@@ -175,13 +287,20 @@ def _load_object(path: Path) -> dict[str, Any] | None:
     return parsed if isinstance(parsed, dict) else None
 
 
+# Sub-step: decouple video currency from the narration lower bound
 # ---------------------------------------------------------------------------
 # 子步：视频时效与旁白下限解耦
 # ---------------------------------------------------------------------------
 
 
 def _plan_before_rewrite(project_dir: Path, view: Mapping[str, Any]) -> ArtifactTargetStatePlan:
-    """改前目标态。在本步任何写入之前规划，兼作只读预检：输入损坏时项目目录不被改动。
+    """The pre-change target state. Planned before any write in this step, doubling as the read-only pre-check: on corrupt
+    input the project directory isn't changed.
+
+    ``view`` is the old project projected onto the new field positions: episode source, whole-source list and source
+    file types are read by the current code from the new positions.
+
+    改前目标态。在本步任何写入之前规划，兼作只读预检：输入损坏时项目目录不被改动。
 
     ``view`` 是旧项目在新字段位置上的投影：集原文来源、整本源文清单与源文件类型由当前代码按新位置读取。
     """
@@ -259,10 +378,13 @@ def _rebase_video_duration_entries(
         raise RuntimeError("artifact manifest changed while rebasing video duration entries")
 
 
+# Sub-step: register uploaded storyboard images and videos by uploaded bytes
 # ---------------------------------------------------------------------------
 # 子步：上传的分镜图与视频按上传字节登记
 # ---------------------------------------------------------------------------
 
+#: Artifact kinds that can be uploaded and whose basis is determined by the selected upload version, with their version
+#: resource types.
 #: 可上传、且由选中的上传版本决定依据的产物种类与它们的版本资源类型。
 _UPLOAD_RESOURCE_TYPES: Mapping[ArtifactKind, tuple[str, ...]] = {
     ArtifactKind.EPISODE_STORYBOARD: ("storyboards",),
@@ -314,6 +436,7 @@ def _history(versions: Mapping[str, Any], resource_type: str, resource_id: str) 
     return bucket.get(resource_id) if isinstance(bucket, Mapping) else None
 
 
+# Sub-step: separate episode IDs from episode order
 # ---------------------------------------------------------------------------
 # 子步：集 ID 与播出顺序分离
 # ---------------------------------------------------------------------------
@@ -355,13 +478,17 @@ def _rebase_script_plan_entries(
         raise RuntimeError("artifact manifest changed while rebasing script plan entries")
 
 
+# Sub-step: register episode source text and whole-source files explicitly
 # ---------------------------------------------------------------------------
 # 子步：集原文与整本源文文件显式登记
 # ---------------------------------------------------------------------------
 
 
 def _legacy_whole_source_paths(project_dir: Path) -> list[Path]:
-    """旧口径下的整本源文：直接位于 ``source/`` 下、非点 / 下划线前缀的普通 .txt / .md 文件，集文件不算，按文件名排序。"""
+    """Whole source under the old basis: regular .txt / .md files directly under ``source/`` without dot / underscore
+    prefix, episode files excluded, sorted by file name.
+
+    旧口径下的整本源文：直接位于 ``source/`` 下、非点 / 下划线前缀的普通 .txt / .md 文件，集文件不算，按文件名排序。"""
     source_dir = project_dir / "source"
     if source_dir.is_symlink() or source_dir.is_junction() or not source_dir.is_dir():
         return []
@@ -388,7 +515,10 @@ def _legacy_origin(entry: Mapping[str, Any], episode_files: Mapping[int, Path], 
 def _with_explicit_episode_sources(
     project_dir: Path, project: Mapping[str, Any]
 ) -> tuple[dict[str, Any], dict[str, str]]:
-    """补记集原文来源、整本源文清单，删除规划游标；返回迁移后的项目与待写快照的规范化全文。"""
+    """Record episode sources and the whole-source list, delete the planning cursor; return the migrated project and the
+    normalized full texts of the snapshots to write.
+
+    补记集原文来源、整本源文清单，删除规划游标；返回迁移后的项目与待写快照的规范化全文。"""
     migrated = dict(project)
     whole_source = _legacy_whole_source_paths(project_dir)
     episode_files = discover_episode_files(project_dir)
@@ -441,13 +571,17 @@ def _with_explicit_episode_sources(
     return migrated, snapshot_texts
 
 
+# Sub-step: record source file type with the source file
 # ---------------------------------------------------------------------------
 # 子步：源文件类型随源文件记录
 # ---------------------------------------------------------------------------
 
 
 def _with_source_kinds(project: Mapping[str, Any]) -> dict[str, Any]:
-    """剧情演绎项目按项目级类型给整本源文文件与自带原文的集补记类型；删去项目级字段。"""
+    """Drama projects record the project-level type for whole-source files and episodes with their own source text; delete
+    the project-level field.
+
+    剧情演绎项目按项目级类型给整本源文文件与自带原文的集补记类型；删去项目级字段。"""
     migrated = dict(project)
     legacy = migrated.pop(SOURCE_KIND_FIELD, None)
     if not source_kind_applies(migrated):
@@ -476,6 +610,7 @@ def _with_source_kinds(project: Mapping[str, Any]) -> dict[str, Any]:
     return migrated
 
 
+# Sub-step: move transitions out of the script
 # ---------------------------------------------------------------------------
 # 子步：转场移出脚本
 # ---------------------------------------------------------------------------
@@ -515,7 +650,7 @@ def _drop_script_transitions(project_dir: Path, project: Mapping[str, Any]) -> N
 class _PresentationRewrite:
     path: Path
     key: ArtifactKey
-    #: 文件改写前记录的旧依据登记与改写后的当前依据登记。
+    #: The old-basis registration recorded before the file rewrite and the current-basis registration after it. / 文件改写前记录的旧依据登记与改写后的当前依据登记。
     legacy: ArtifactManifestEntry
     current: ArtifactManifestEntry
     content: dict[str, Any]
@@ -544,7 +679,10 @@ def _rendition_variant(raw: object) -> RenditionVariant | None:
 
 
 def _legacy_presentation(project_dir: Path, path: Path) -> _PresentationRewrite | None:
-    """算出一份带转场的呈现模型文件的改写；已无转场或与自身记录的旧依据对不上时返回 None。"""
+    """Compute the rewrite of a presentation model file with transitions; return None when it has no transitions left or
+    doesn't match its own recorded old basis.
+
+    算出一份带转场的呈现模型文件的改写；已无转场或与自身记录的旧依据对不上时返回 None。"""
 
     presentation = _load_object(path)
     if presentation is None or _TRANSITION_FIELD not in presentation:
@@ -612,6 +750,7 @@ def _move_transitions_out_of_scripts(project_dir: Path, project: Mapping[str, An
     _rebase_presentations(project_dir)
 
 
+# Sub-step: narration delivery method becomes project config
 # ---------------------------------------------------------------------------
 # 子步：旁白交付方式成为项目配置
 # ---------------------------------------------------------------------------
@@ -633,7 +772,10 @@ def _selected_version_record(
 
 
 def _latest_registered_tts_settings(project_dir: Path) -> TtsSynthesisSettings | None:
-    """清单登记的旁白配音里，选中版本记录 ``created_at`` 最新的那条所用的 TTS 设置。"""
+    """Among narration voiceovers registered in the manifest, the TTS settings used by the selected version record with the
+    latest ``created_at``.
+
+    清单登记的旁白配音里，选中版本记录 ``created_at`` 最新的那条所用的 TTS 设置。"""
 
     audio_keys = [
         key
@@ -664,7 +806,9 @@ def _latest_registered_tts_settings(project_dir: Path) -> TtsSynthesisSettings |
 
 
 def _narration_delivery_fields(project_dir: Path, project: Mapping[str, Any]) -> dict[str, Any]:
-    """迁移后的 ``project.json``：写入旁白交付方式，TTS 配音项目换上 TTS 快照。"""
+    """The migrated ``project.json``: write the narration delivery method; TTS voiceover projects get the TTS snapshot.
+
+    迁移后的 ``project.json``：写入旁白交付方式，TTS 配音项目换上 TTS 快照。"""
 
     settings = _latest_registered_tts_settings(project_dir)
     if settings is None:
@@ -679,7 +823,10 @@ def _narration_delivery_fields(project_dir: Path, project: Mapping[str, Any]) ->
 
 
 def _without_asset_inventory_marker(project: Mapping[str, Any]) -> dict[str, Any]:
-    """删去已退役的资产清单标记；``workflow`` 随之变空时整个删去，其他形态原样保留。"""
+    """Delete the retired asset inventory marker; when ``workflow`` becomes empty, delete it entirely; other shapes are kept
+    as-is.
+
+    删去已退役的资产清单标记；``workflow`` 随之变空时整个删去，其他形态原样保留。"""
 
     migrated = dict(project)
     workflow = migrated.get("workflow")
@@ -692,13 +839,17 @@ def _without_asset_inventory_marker(project: Mapping[str, Any]) -> dict[str, Any
     return migrated
 
 
+# Sub-step: "completed" in the project list uses the same basis as workflow status
 # ---------------------------------------------------------------------------
 # 子步：项目列表的「已完成」与制作状态同一口径
 # ---------------------------------------------------------------------------
 
 
 def _with_source_remaining(project_dir: Path, project: Mapping[str, Any]) -> dict[str, Any]:
-    """按盘上的整本源文记下源文是否还有未规划的原文；须在整本源文清单与集原文来源补记之后调用。"""
+    """Record from the on-disk whole source whether source text remains unplanned; must be called after the whole-source
+    list and episode sources are recorded.
+
+    按盘上的整本源文记下源文是否还有未规划的原文；须在整本源文清单与集原文来源补记之后调用。"""
 
     migrated = dict(project)
     record_source_remaining(project_dir, migrated)
@@ -708,7 +859,7 @@ def _with_source_remaining(project_dir: Path, project: Mapping[str, Any]) -> dic
 def migrate_v15_to_v16(
     project_dir: Path, *, recorded_episode_ids: RecordedEpisodeIds | None = None
 ) -> ArtifactBackfillOutcome | None:
-    """v15→v16 文件级迁移。"""
+    """v15->v16 file-level migration. / v15→v16 文件级迁移。"""
 
     project_dir = Path(project_dir)
     project_file = project_dir / "project.json"

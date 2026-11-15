@@ -1,4 +1,19 @@
-"""剪辑时间线的批量编辑操作：按片段 ID 定位，依次作用于一份内存中的剪辑内容。
+"""Batch edit operations on the edit timeline: located by clip ID, applied in order to an in-memory copy of the edit content.
+
+Applying is a pure function: input one revision's content, a clip ID allocator and the episode's asset facts; output
+the new content. Any invalid operation raises ``operation_invalid`` with the operation index, clip ID and valid value
+range, and the caller writes nothing from the batch.
+
+Insert, delete and move change adjacency: every cut whose neighbours changed reverts to a hard cut (clearing
+``transition_to_next`` on the previous clip); set it again later in the same batch if needed. When a clip carrying
+narration is deleted, the narration moves to the first remaining clip of that video unit; a narration anchor moves
+the narration to the specified clip of the same video unit.
+
+BGM clips are placed at absolute starts and are unaffected by insert/delete/move on the main track. After the whole
+batch is applied, BGM clips changed in this batch are checked: start within the timeline, room for fades, and only
+one track at any moment. Overrunning the timeline end is not rejected here; it is truncated at render time (see :mod:`lib.edit_timeline.bgm`).
+
+剪辑时间线的批量编辑操作：按片段 ID 定位，依次作用于一份内存中的剪辑内容。
 
 应用是纯函数：输入一个修订的内容、片段编号分配器与一集的素材事实，输出新的内容；任一条操作
 非法即抛出带操作序号、片段 ID 与合法取值范围的 ``operation_invalid``，调用方整批不写。
@@ -53,7 +68,9 @@ MIN_BGM_MICROSECONDS = 1_000_000
 
 
 def default_source_volume(speech_mode: SpeechMode | None) -> float:
-    """新建剪辑片段未指定原声音量时，按视频单元的发声归属取默认值。"""
+    """Default original-audio volume for a new edit clip without one, based on the video unit's voice ownership.
+
+    新建剪辑片段未指定原声音量时，按视频单元的发声归属取默认值。"""
     return VOICEOVER_SOURCE_VOLUME if speech_mode is SpeechMode.NARRATOR_VOICEOVER else DEFAULT_SOURCE_VOLUME
 
 
@@ -191,7 +208,13 @@ TimelineOperationAdapter: TypeAdapter[TimelineOperation] = TypeAdapter(TimelineO
 
 @dataclass(frozen=True, slots=True)
 class AppliedBatch:
-    """一批操作应用后的剪辑内容。
+    """Edit content after applying a batch of operations.
+
+    ``targets`` are the operation targets; ``referenced`` also includes clips used as position anchors; ``last_operation``
+    records, for each changed clip, which operation (from 0) changed it last, including inserts, transitions cleared due
+    to adjacency, and narration moves.
+
+    一批操作应用后的剪辑内容。
 
     ``targets`` 是操作的作用对象，``referenced`` 另含用作位置锚点的片段；``last_operation`` 记录
     每个被改动片段最后一次被哪条操作（从 0 起）改动，含插入、跟随相邻关系清掉转场与旁白改挂。
@@ -226,7 +249,7 @@ class _Batch:
         self.referenced: set[str] = set()
         self.last_operation: dict[str, int] = {}
 
-    # ---- 定位 ----
+    # ---- Lookup ---- / ---- 定位 ----
 
     def _position(self, index: int, clip_id: str, *, field: str = "clip") -> int:
         self.referenced.add(clip_id)
@@ -256,7 +279,7 @@ class _Batch:
             self.clips[position] = self._touch(index, updated)
 
     def _current_video(self, index: int, clip_id: str | None, unit_id: str) -> tuple[int, int]:
-        """截取所依据的 current 视频：（版本号, 时长微秒）。"""
+        """The current video a trim is based on: (version number, duration in microseconds). / 截取所依据的 current 视频：（版本号, 时长微秒）。"""
         media = self.sources.media.get(unit_id)
         if self.sources.unit(unit_id) is None or media is None:
             raise _invalid(
@@ -276,7 +299,7 @@ class _Batch:
             )
         return media.video_version, media.video_duration_us
 
-    # ---- 字段校验 ----
+    # ---- Field validation ---- / ---- 字段校验 ----
 
     def _trim(self, index: int, clip_id: str | None, unit_id: str, spec: TrimSpec | None) -> ClipTrim | None:
         if spec is None:
@@ -286,6 +309,7 @@ class _Batch:
         in_range = 0 <= spec.source_in < spec.source_out <= whole + 0.001
         in_us = seconds_to_microseconds(spec.source_in) if in_range else 0
         out_us = seconds_to_microseconds(spec.source_out) if in_range else 0
+        # After rounding to milliseconds the out point may exceed the measured duration by up to 1 ms; round it back to the video end.
         # 出点按毫秒规整后可能比实测时长多出至多 1 毫秒，规整回视频末尾。
         if whole_us < out_us <= whole_us + 1_000:
             out_us = whole_us
@@ -365,7 +389,7 @@ class _Batch:
                 allowed="不是最后一个的片段",
             )
 
-    # ---- 相邻关系 ----
+    # ---- Adjacency ---- / ---- 相邻关系 ----
 
     def _next_ids(self) -> dict[str, str | None]:
         return {
@@ -379,7 +403,7 @@ class _Batch:
             if clip.transition_to_next is not None and before.get(clip.id, after[clip.id]) != after[clip.id]:
                 self._replace(index, position, transition_to_next=None)
 
-    # ---- 操作 ----
+    # ---- Operations ---- / ---- 操作 ----
 
     def apply(self, index: int, operation: TimelineOperation) -> None:
         match operation:
@@ -592,7 +616,7 @@ class _Batch:
         if updated != current:
             self.bgm[position] = self._touch_bgm(index, updated)
 
-    # ---- 整批检查 ----
+    # ---- Whole-batch checks ---- / ---- 整批检查 ----
 
     def _duration_us(self, clip: EditClip) -> int | None:
         unit = self.sources.unit(clip.unit_id)
@@ -602,7 +626,9 @@ class _Batch:
         return clip_source_duration_us(clip, media, unit.scripted_duration_us) + clip.hold_us
 
     def check_transition_windows(self) -> None:
-        """被本批改动过的片段须容得下两侧转场各占的一半；已删除单元与素材未知的片段不查。"""
+        """Clips changed in this batch must have room for half of each adjacent transition; clips of deleted units or with unknown sources are not checked.
+
+        被本批改动过的片段须容得下两侧转场各占的一半；已删除单元与素材未知的片段不查。"""
         for position, clip in enumerate(self.clips):
             previous = self.clips[position - 1] if position > 0 else None
             owners = [item for item in (previous, clip) if item is not None]
@@ -629,7 +655,9 @@ class _Batch:
         return sum(duration for clip in self.clips if (duration := self._duration_us(clip)) is not None)
 
     def check_bgm(self) -> None:
-        """被本批改动过的 BGM 片段：起点在时间线内，且不与其他 BGM 片段重叠。"""
+        """BGM clips changed in this batch: start within the timeline and no overlap with other BGM clips.
+
+        被本批改动过的 BGM 片段：起点在时间线内，且不与其他 BGM 片段重叠。"""
         touched = [clip for clip in self.bgm if clip.id in self.last_operation]
         if not touched:
             return
@@ -678,7 +706,11 @@ def apply_operations(
     next_bgm_number: int,
     check_windows: bool = True,
 ) -> AppliedBatch:
-    """依次应用一批操作；任一条非法即抛出 ``operation_invalid``。
+    """Apply a batch of operations in order; any invalid one raises ``operation_invalid``.
+
+    When ``check_windows`` is False, the whole-batch transition window and BGM placement checks are skipped; only used for the dry run that first detects concurrency conflicts.
+
+    依次应用一批操作；任一条非法即抛出 ``operation_invalid``。
 
     ``check_windows`` 为 False 时跳过整批的转场窗口与 BGM 摆放检查，只用于先判断并发冲突的预演。
     """
@@ -700,7 +732,9 @@ def apply_operations(
 
 @dataclass(frozen=True, slots=True)
 class ContentDiff:
-    """两份剪辑内容之间改动过的片段：新增、删除、字段变化，以及相对顺序变化（按最长公共子序列判定）。"""
+    """Clips changed between two edit contents: added, deleted, field changes, and relative order changes (determined by longest common subsequence).
+
+    两份剪辑内容之间改动过的片段：新增、删除、字段变化，以及相对顺序变化（按最长公共子序列判定）。"""
 
     added: frozenset[str]
     removed: frozenset[str]
@@ -731,7 +765,9 @@ def _longest_common_subsequence(left: list[str], right: list[str]) -> set[str]:
 
 
 def diff_content(before: EditTimelineContent, after: EditTimelineContent) -> ContentDiff:
-    """剪辑片段与 BGM 片段一起比较；BGM 片段按绝对起点摆放，没有相对顺序，不计移动。"""
+    """Compare edit clips and BGM clips together; BGM clips are placed at absolute starts, have no relative order and never count as moved.
+
+    剪辑片段与 BGM 片段一起比较；BGM 片段按绝对起点摆放，没有相对顺序，不计移动。"""
     old: dict[str, EditClip | BgmClip] = {clip.id: clip for clip in (*before.clips, *before.bgm)}
     new: dict[str, EditClip | BgmClip] = {clip.id: clip for clip in (*after.clips, *after.bgm)}
     common_before = [clip.id for clip in before.clips if clip.id in new]
@@ -746,7 +782,12 @@ def diff_content(before: EditTimelineContent, after: EditTimelineContent) -> Con
 
 
 def restore_changed_clip_ids(before: EditTimelineContent, after: EditTimelineContent) -> frozenset[str]:
-    """整段内容替换改动过的片段。
+    """Clips changed by a whole-content replacement.
+
+    When relative order changed, which clip "was moved" has no unique answer, so all clips shared by both contents are
+    counted: better to report more conflicts for edits based on the old revision than to let a reordered clip slip through.
+
+    整段内容替换改动过的片段。
 
     相对顺序变了时，哪个片段「被移动」没有唯一答案，因此两份内容共有的片段一律计入，宁可让基于旧修订的
     编辑多报冲突，也不放过被改排的片段。
@@ -758,7 +799,7 @@ def restore_changed_clip_ids(before: EditTimelineContent, after: EditTimelineCon
 
 
 def sorted_clip_ids(clip_ids: set[str] | frozenset[str]) -> tuple[str, ...]:
-    """剪辑片段在前、BGM 片段在后，各按编号排列。"""
+    """Edit clips first, BGM clips after, each sorted by number. / 剪辑片段在前、BGM 片段在后，各按编号排列。"""
     return tuple(sorted(clip_ids, key=lambda clip_id: (clip_id.startswith("b"), clip_number(clip_id))))
 
 

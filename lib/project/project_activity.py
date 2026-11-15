@@ -1,4 +1,19 @@
-"""项目活动账本：业务写入出口在写盘后记下当时的时刻。
+"""Project activity ledger: business write paths record the current time after writing to disk.
+
+The project lobby's recent-activity time reads the latest of the ledger, `metadata.updated_at` and the content
+files' modification times (`server.services.project.project_activity`). The ledger covers writes those two
+sources cannot see: rewrites of JSON such as drafts and script plans (a JSON file's mtime can't tell business
+writes from migration rewrites, so it isn't counted), and deletions (deleting the newest file makes the mtime go
+backwards).
+
+The ledger is `.last_activity` in the project root; its content is just one timezone-aware ISO 8601 timestamp.
+Dot-files are excluded from content scans and archive export; project structure migration, artifact
+back-registration and config sync do not record activity, so they don't advance the activity time.
+
+A failure to record is only logged: the business write is already on disk, and failing to write the activity
+time should not make that write fail.
+
+项目活动账本：业务写入出口在写盘后记下当时的时刻。
 
 项目大厅的最近活动时间读时取账本、`metadata.updated_at` 与内容文件修改时间中最晚的一个
 （`server.services.project.project_activity`）。账本补的是这两类来源看不见的写入：
@@ -25,7 +40,7 @@ ACTIVITY_FILENAME = ".last_activity"
 
 
 def record_project_activity(project_dir: Path) -> None:
-    """把当前时刻记为项目的最近活动时间（原子整份覆盖）。"""
+    """Record the current time as the project's most recent activity time (atomic full overwrite). / 把当前时刻记为项目的最近活动时间（原子整份覆盖）。"""
     stamp = datetime.now(UTC).isoformat()
     try:
         atomic_write_bytes(project_dir / ACTIVITY_FILENAME, stamp.encode("utf-8"))
@@ -34,7 +49,9 @@ def record_project_activity(project_dir: Path) -> None:
 
 
 def recorded_project_activity(project_dir: Path) -> datetime | None:
-    """账本里的最近活动时间（UTC）；没有账本或内容无法解析时为 None。"""
+    """Most recent activity time in the ledger (UTC); None when there is no ledger or its content can't be parsed.
+
+    账本里的最近活动时间（UTC）；没有账本或内容无法解析时为 None。"""
     try:
         raw = (project_dir / ACTIVITY_FILENAME).read_text(encoding="utf-8")
     except (OSError, UnicodeDecodeError):

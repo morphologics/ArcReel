@@ -1,4 +1,10 @@
-"""Alembic 迁移共用的 schema 辅助。
+"""Schema helpers shared by Alembic migrations.
+
+Placed under lib rather than alembic/: the import name ``alembic`` is taken by the installed alembic package, so
+migration scripts cannot import a sibling module next to the versions directory. During migrations the project root
+is already on sys.path (``prepend_sys_path = .`` in alembic.ini).
+
+Alembic 迁移共用的 schema 辅助。
 
 放在 lib 下而非 alembic/ 下：``alembic`` 这个导入名已被安装的 alembic 包占用，迁移脚本无法
 从版本目录旁边导入同级模块。迁移执行时项目根目录已在 sys.path 上（alembic.ini 的
@@ -17,7 +23,12 @@ from alembic import op
 
 
 def _index_ddl(bind: Connection, table_name: str) -> dict[str, str]:
-    """读 sqlite_master 里该表的索引原始 DDL。
+    """Read the raw DDL of the table's indexes from sqlite_master.
+
+    ``sql IS NOT NULL`` filters out ``sqlite_autoindex_*`` implicitly created by UNIQUE constraints; they come with the
+    table definition and have no separate DDL to replay.
+
+    读 sqlite_master 里该表的索引原始 DDL。
 
     ``sql IS NOT NULL`` 过滤掉 UNIQUE 约束隐式生成的 ``sqlite_autoindex_*``——它们随表定义走，
     没有独立 DDL 可回放。
@@ -31,7 +42,20 @@ def _index_ddl(bind: Connection, table_name: str) -> dict[str, str]:
 
 @contextmanager
 def preserve_sqlite_indexes(table_name: str) -> Generator[None]:
-    """在 SQLite 重建表期间保住反射不出的索引。
+    """Keep indexes that cannot be reflected while SQLite rebuilds a table.
+
+    On SQLite, adding/dropping columns with ``batch_alter_table`` goes through table rebuild, and SQLAlchemy cannot
+    reflect expression-based indexes (reflection only gives ``SAWarning: Skipped unsupported reflection of
+    expression-based index``), so such indexes silently disappear after the rebuild. That is how
+    ``idx_tasks_dedupe_active`` on ``tasks`` was lost, which disables the dedupe gate and lets the same resource start
+    two active tasks concurrently. On entry grab the raw DDL from ``sqlite_master``, on exit replay the missing ones as
+    is, avoiding a copy of the index definition in the migration that would drift with later migrations. PostgreSQL uses
+    native ALTER without rebuilding, so this is a no-op there.
+
+    Replay is decided by "existed on entry, missing on exit" and cannot tell silent loss from intentional drop, so indexes
+    the migration itself drops must be dropped outside this context (``DROP INDEX`` is native on both dialects and triggers no rebuild).
+
+    在 SQLite 重建表期间保住反射不出的索引。
 
     SQLite 上 ``batch_alter_table`` 的增删列走重建表路径，而 SQLAlchemy 反射不出表达式型索引
     （反射时仅给出 ``SAWarning: Skipped unsupported reflection of expression-based index``），

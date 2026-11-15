@@ -90,6 +90,9 @@ def backfill_legacy_media_provenance(project_dir: Path, *, record_gaps: bool = F
             resource_id = str(item.get(id_field))
             video_only = False
             if item.get("needs_replan") is True:
+                # Units that need replan already have persistent state and are not in the migration report (ADR 0098). For units
+                # only flagged for mixed utterances, existing videos get their source back-filled and registration back-filled
+                # as usual; voiceover audio is not back-filled.
                 # 需要重新规划的单位已有持久状态，不进迁移报告（ADR 0098）。只因混合发声带标记的
                 # 单位，存量视频照常补写来源、补录登记，配音不补。
                 if not (record_gaps and replan_marked_only_for_mixed_speech(kind, item)):
@@ -259,6 +262,8 @@ def _project_video_provenance(
         "execution_request_digest": canonical_json_digest(facts_dict, allow_nan=False),
         "execution_script_file": script_file,
         "execution_provider_media": [],
+        # Old records did not store the provider audio-track switch; project it from the current project setting, same
+        # basis as the other fields.
         # 旧记录没有记下供应商音轨开关，按项目当前设置投影，与其余字段同一口径。
         "execution_generate_audio": project.get("video_generate_audio") is True,
         "artifact_video_currency": facts_dict,

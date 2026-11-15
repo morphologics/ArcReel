@@ -1,4 +1,11 @@
-"""端点测试的失败信号。
+"""Failure signals of endpoint testing.
+
+An invalid definition and render-time errors are the same thing at the interface -- "this definition cannot run
+now" -- so both share :class:`DefinitionDiagnostics`: diagnostics from the validator are carried out unchanged,
+render-time errors are wrapped as one diagnostic of the same shape. Consumers (UI highlighting, Agent locating, test
+assertions) therefore only need to know one ``{path, code, message}``.
+
+端点测试的失败信号。
 
 定义不合法与渲染期错误在接口上是同一件事——「这份定义现在跑不了」——所以两者共用
 :class:`DefinitionDiagnostics`：校验器产出的诊断原样带出，渲染期错误包成同一形状的一条诊断。
@@ -17,7 +24,9 @@ from arcreel_market_core.endpoint_definition import (
 
 
 class EndpointTestDefinitionError(Exception):
-    """这份定义无法执行所请求的测试，携带与保存接口同构的诊断。"""
+    """This definition cannot run the requested test; carries diagnostics isomorphic to the save endpoint's.
+
+    这份定义无法执行所请求的测试，携带与保存接口同构的诊断。"""
 
     def __init__(self, diagnostics: DefinitionDiagnostics) -> None:
         self.diagnostics = diagnostics
@@ -27,7 +36,7 @@ class EndpointTestDefinitionError(Exception):
     def from_render_failure(
         cls, path: str, detail: str | TemplateRenderError | JsonPathEvaluationError
     ) -> EndpointTestDefinitionError:
-        """把模板渲染或 JSONPath 求值失败包成单条结构化诊断。"""
+        """Wrap a template rendering or JSONPath evaluation failure as a single structured diagnostic. / 把模板渲染或 JSONPath 求值失败包成单条结构化诊断。"""
         if isinstance(detail, TemplateRenderError | JsonPathEvaluationError):
             issue = DefinitionIssue(path=path, code=detail.code, params=detail.message.params)
         else:

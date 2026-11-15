@@ -1,4 +1,40 @@
-"""参考生视频 unit 时长的存量迁移：per-shot 时长收编到 unit 级。
+"""Legacy migration of reference-to-video unit durations: fold per-shot durations into the unit level.
+
+Duration used to live on ``shots[*].duration``, with unit duration derived as their sum. After the fold, unit
+duration is the single source of truth (``ReferenceVideoUnit.duration_seconds``) and shots no longer carry
+duration. Stored data therefore needs a one-time rewrite: write the sum into the unit field, and strip the shot
+durations and the ``duration_override`` marker retired along with them.
+
+The migrator is a pure function (mutates the passed dict in place, returns whether it changed + a warning list);
+the loading side does the read-modify-write under a lock -- migration is saved once, whoever runs first decides
+the final state, and a second load does not trigger it again. Because of this, ``supported_durations`` must have
+the same source at every entry point: the two online draft entry points (content review conversion, web content
+review) both take the union of the full declared sets of the r2v and i2v video request facts, so saved seconds
+are always a tier member. Archive import has no config DB session and can't evaluate video request facts, so it
+looks up the union of the registry's full declared sets for the two buckets' identities self-reported by the
+archive; saved seconds are only guaranteed to be a tier declared by one of the two buckets.
+
+The two cases where ``supported_durations`` is None only do a structural range clamp: the project has no
+resolvable video model configured yet, and the ``migrate_script_unit_durations`` episode script synchronous load
+chain. In that case tier deviation is still handled by tier selection at preflight / execution
+(``resolve_duration_slot``) with a warning, same semantics as before migration.
+
+**The episode script side does not do tier convergence (enforcement write-back); this is the final division of
+labor, not a gap to fill later**:
+
+- At save time it is necessarily on a tier -- ``ScriptGenerator._add_metadata`` selects a tier per unit from the
+  final references and errors on out-of-tier. Deviation can only come from later model / resolution changes.
+- After deviation no dirty value reaches the provider either -- preflight and execution share the request
+  projection (``ReferenceUnitRequestProjector``), both re-select the tier and emit a warning; only tasks actually
+  submitted to the provider write the actual requested seconds into the dedicated execution checkpoint for
+  resume to read; neither the task payload nor the script itself is rewritten.
+- Write-back would conflict with repo-wide policy: out-of-tier is always "fail-loud or warning + prompt to
+  reselect", never silently rewriting the user's arrangement; also preflight is a GET read path where writing to
+  disk is unacceptable, and writing at execution time would race with user edits.
+- Load-time write-back has a hard blocker too: ``load_script`` is a synchronous call without a DB session and
+  can't get the tier table.
+
+参考生视频 unit 时长的存量迁移：per-shot 时长收编到 unit 级。
 
 时长曾经挂在 ``shots[*].duration`` 上、unit 时长是它们的求和派生。收编后 unit 时长是唯一
 真相（``ReferenceVideoUnit.duration_seconds``），镜头不再承载时长。存量落盘因此需要一次性
@@ -34,20 +70,29 @@ from arcreel_market_core.validation_messages import ValidationMessage
 from lib.script.reference_video.duration_slots import resolve_duration_slot
 from lib.script.script_models import REFERENCE_UNIT_DURATION_RANGE
 
-#: 迁移会剥掉的镜头级字段与 unit 级退役字段。
+#: Shot-level fields and retired unit-level fields that the migration strips. / 迁移会剥掉的镜头级字段与 unit 级退役字段。
 _LEGACY_SHOT_FIELD = "duration"
 _LEGACY_UNIT_FIELD = "duration_override"
 
 
 def _positive_int(value: object) -> int | None:
-    """只认真正的正整数（bool 按 int 子类排除），其余按无值——与剧本条目时长的脏数据口径一致。"""
+    """Only accept genuine positive integers (bool excluded as an int subclass); everything else counts as no value -- same convention as dirty data in script entry durations.
+
+    只认真正的正整数（bool 按 int 子类排除），其余按无值——与剧本条目时长的脏数据口径一致。"""
     if isinstance(value, int) and not isinstance(value, bool) and value > 0:
         return value
     return None
 
 
 def _strip_legacy_shot_durations(unit: dict) -> tuple[int | None, bool]:
-    """剥掉各镜头的 ``duration``，返回 ``(时长之和, 是否剥掉过字段)``。
+    """Strip each shot's ``duration`` and return ``(sum of durations, whether any field was stripped)``.
+
+    A sum of None means "no usable duration source" -- no shot durations, or all dirty values (sum 0), both fall
+    here: 0 seconds is not a valid duration, and in both cases the caller should fall back to the unit's own field
+    rather than invent a value. The second item is returned separately: stripping fields is itself a change that
+    must be saved, regardless of whether the sum is usable.
+
+    剥掉各镜头的 ``duration``，返回 ``(时长之和, 是否剥掉过字段)``。
 
     和为 None 表示「没有可用的时长来源」——无镜头时长、或全是脏值（和为 0）都归此类：
     0 秒不是合法时长，两种情形都应让调用方回退到 unit 自身的字段而非杜撰一个值。
@@ -71,7 +116,22 @@ def migrate_unit_durations(
     *,
     supported_durations: Sequence[int] | None = None,
 ) -> tuple[bool, list[ValidationMessage]]:
-    """就地把 units 的 per-shot 时长收编到 unit 级。返回 ``(是否发生变更, warnings)``。
+    """Fold the units' per-shot durations into the unit level in place. Returns ``(changed, warnings)``.
+
+    warnings are locale-neutral ``ValidationMessage`` objects rendered at the consuming boundary (archive import
+    uses the request language, the load chain only logs).
+
+    Each unit's target duration prefers the existing ``duration_seconds`` (before the fold it was already the sum
+    or a user-entered value, and in both cases the seconds this unit actually requested); if missing or dirty it
+    falls back to the sum of the shot durations. Units where neither is available only get fields stripped and no
+    invented duration -- they already lacked a required field before the fold, and migration is not responsible for
+    turning invalid data valid.
+
+    When ``supported_durations`` is given, the tier is selected with capacity semantics (above the max tier it
+    clamps to the max tier), and deviation is recorded as a warning; otherwise it only clamps to the
+    ``REFERENCE_UNIT_DURATION_RANGE`` structural range.
+
+    就地把 units 的 per-shot 时长收编到 unit 级。返回 ``(是否发生变更, warnings)``。
 
     warnings 是 locale-neutral 的 ``ValidationMessage``，由消费边界渲染（归档导入按请求语言，
     加载链只落日志）。
@@ -134,7 +194,13 @@ def migrate_unit_durations(
 
 
 def migrate_script_unit_durations(script: object) -> tuple[bool, list[ValidationMessage]]:
-    """剧集脚本级入口：仅对参考生视频骨架（含 ``video_units``）生效。
+    """Episode script level entry point: only applies to the reference-to-video skeleton (with ``video_units``).
+
+    Decided by data shape rather than the ``generation_mode`` stamp -- dirty data and half-finished scripts may lack
+    the stamp, and the fold only cares "are there per-shot durations to strip", which is naturally a no-op for other
+    skeletons.
+
+    剧集脚本级入口：仅对参考生视频骨架（含 ``video_units``）生效。
 
     按数据形状而非 ``generation_mode`` 戳判定——脏数据与半成品剧本可能缺戳，而收编只关心
     「有没有 per-shot 时长要剥」，对其它骨架天然是空操作。

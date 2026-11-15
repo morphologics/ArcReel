@@ -1,4 +1,10 @@
-"""视频任务续跑：按已持久化的 provider job 接续，不重新提交供应商任务。
+"""Video task resume: continue from the persisted provider job without resubmitting the provider task.
+
+Resume is dispatched by restart self-healing (``lib.generation.restart_recovery``): after a process restart it
+continues interrupted video tasks, or the user starts "retry download" on a task whose artifact download failed. The
+resume executor is injected at application assembly.
+
+视频任务续跑：按已持久化的 provider job 接续，不重新提交供应商任务。
 
 续跑由重启自愈（``lib.generation.restart_recovery``）派发：进程重启后接续被打断的视频任务，
 或用户对产物下载失败的任务发起「重试下载」。续跑执行器由应用装配处注入。
@@ -36,7 +42,9 @@ logger = logging.getLogger(__name__)
 
 
 class ResumeExecutor(Protocol):
-    """续跑执行器：按 ``job_id`` 接续供应商任务并完成产物落盘，返回任务结果。"""
+    """Resume executor: continue the provider task by ``job_id``, persist the artifact and return the task result.
+
+    续跑执行器：按 ``job_id`` 接续供应商任务并完成产物落盘，返回任务结果。"""
 
     def __call__(self, task: dict[str, Any], *, job_id: str) -> Awaitable[dict[str, Any]]: ...
 
@@ -73,12 +81,15 @@ async def cleanup_video_staging(task: dict[str, Any]) -> None:
 
 
 async def fail_task_of_deleted_project(queue: GenerationQueue, task: dict[str, Any]) -> None:
-    """执行期间项目被删除的任务以 ``project_deleted_during_task`` 失败，并清掉按旧名补建出的空目录。"""
+    """A task whose project was deleted during execution fails with ``project_deleted_during_task``, and the empty directory recreated under the old name is removed.
+
+    执行期间项目被删除的任务以 ``project_deleted_during_task`` 失败，并清掉按旧名补建出的空目录。"""
 
     task_id = task["task_id"]
     logger.warning("任务 %s 执行期间项目 %s 已删除，放弃落盘", task_id, task.get("project_name"))
     await asyncio.shield(queue.mark_task_failed(task_id, encode_failure("project_deleted_during_task")))
     try:
+        # Getting the project manager itself also touches the file system (first construction creates dirs), so run it all in a worker thread; deleting the dir writes real files.
         # 取项目管理器本身也会碰文件系统（首次构造建目录），整体放进工作线程；删目录是写正式文件。
         await run_sync_transaction(lambda: get_project_manager().remove_project_directory_residue(task["project_name"]))
     except Exception:
@@ -86,7 +97,7 @@ async def fail_task_of_deleted_project(queue: GenerationQueue, task: dict[str, A
 
 
 class VideoResumeRunner:
-    """把一个续跑任务跑到终态，并结算它那条 pending 的调用行。"""
+    """Run one resume task to a terminal state and settle its pending call row. / 把一个续跑任务跑到终态，并结算它那条 pending 的调用行。"""
 
     def __init__(
         self,
@@ -100,7 +111,21 @@ class VideoResumeRunner:
         self._provider_projection = provider_projection
 
     async def run(self, task: dict[str, Any]) -> None:
-        """重启自愈入口：直接调续跑执行器，绕过常规执行流水线。
+        """Restart self-healing entry: call the resume executor directly, bypassing the regular execution pipeline.
+
+        Both video generation modes are materialized from the latest state when the worker starts, and an immutable execution
+        checkpoint is written before provider submission. After a restart the fixed resolved request is built only from the
+        checkpoint, execution identity is not recomputed from the current project config or the enqueue payload.
+
+        Non-video media fall back to injecting the persisted ``task["provider_id"]`` into the payload's ``image_provider``
+        field (locks only the provider, not the model). The orphan scan only hands video here; image / audio orphans are
+        marked ``[restart_lost]`` during the scan, so this branch is only reachable when media_type is dirty data.
+
+        Like regular execution, resume runs under the task's claim on the project; if the project is deleted during resume
+        the task fails with ``project_deleted_during_task``. If the project was already deleted before the restart, the task
+        hangs under the tombstone name and the project dir cannot be resolved, so it closes with the same failure code.
+
+        重启自愈入口：直接调续跑执行器，绕过常规执行流水线。
 
         两种视频生成模式都在 worker 开始时按最新状态物化，并在 provider 提交前写入不可变
         execution checkpoint。重启后只从 checkpoint 构造固定的解析请求，不从当前项目
@@ -151,11 +176,14 @@ class VideoResumeRunner:
 
         job_id = task.get("provider_job_id") or ""
         if not job_id:
+            # Defensive: should never be dispatched here (the orphan scan already did mark_failed [restart_lost])
             # 防御：本不该被派发到这里（孤儿扫描已 mark_failed [restart_lost]）
             await asyncio.shield(self._queue.mark_task_failed(task_id, encode_failure("restart_lost_resume_no_job_id")))
             await cleanup_video_staging(task)
             return
 
+        # Non-video media: lock the persisted provider into the payload (resolver priority: payload > project > default).
+        # Identity of submitted video tasks goes through the checkpoint and is not injected here -- injection only overrides the provider, not the model.
         # 非视频媒体：锁定持久化 provider 到 payload（resolver 优先级：payload > project > 默认）。
         # 已提交视频任务的身份走 checkpoint，不在此注入——注入只覆盖 provider、盖不住 model。
         persisted_provider_id = checkpoint.provider_id if checkpoint is not None else task.get("provider_id")
@@ -183,12 +211,17 @@ class VideoResumeRunner:
                 if checkpoint is not None:
                     await asyncio.shield(cleanup_video_staging(task))
 
+        # Resume opens no new accounting bracket (accounting happened at submit); every terminal exit must also settle that
+        # pending ApiCall, otherwise the usage report keeps a row that never terminates. After "retry download" reopens the
+        # call as pending, every exit below becomes reachable. The resume settlement has WHERE status='pending', so repeated
+        # calls have no side effect.
         # 续跑不开新的记账括号（账是提交时记的），任何终态出口都要顺手结算那条 pending 的
         # ApiCall，否则用量报表里留下永不终态的行。「重试下载」把调用重开成 pending 之后，
         # 下面每一条出口都变得可达。resume 结算带 WHERE status='pending'，重复调用无副作用。
         try:
             result = await _execute_with_video_cleanup()
         except asyncio.CancelledError:
+            # Process-level interruption: set the terminal state and settle the pending call row as cancelled.
             # 进程级打断：落终态并把 pending 调用行结算为 cancelled。
             await asyncio.shield(self._queue.mark_task_interrupted(task_id))
             await asyncio.shield(self.settle_unresumable_call(task, cancelled=True))
@@ -234,7 +267,13 @@ class VideoResumeRunner:
         logger.info("重启自愈完成 %s", task_id)
 
     def _ledger(self) -> Ledger:
-        """续跑侧的记账入口：与队列共用同一处 session factory，不另接全局引擎。
+        """Accounting entry on the resume side: shares the queue's session factory, does not attach the global engine separately.
+
+        The task row and its call row must live in the same database -- when the queue injected another session factory
+        (test DB, separate schema), accounting via the global engine would flip rows in the wrong DB and hold connections
+        across event loops.
+
+        续跑侧的记账入口：与队列共用同一处 session factory，不另接全局引擎。
 
         任务行与它的调用行必须落在同一个库里——队列注入了别的 session factory（测试库、
         独立 schema）时，记账若仍走全局引擎，会翻错库里的行，还会跨事件循环持有连接。
@@ -244,7 +283,18 @@ class VideoResumeRunner:
     async def settle_unresumable_call(
         self, task: dict[str, Any], *, cancelled: bool = False, failure: BaseException | str | None = None
     ) -> None:
-        """把无法继续的 pending ApiCall 按任务终态结算为 failed / cancelled（零费用）。
+        """Settle a pending ApiCall that cannot continue as failed / cancelled (zero cost) according to the task terminal state.
+
+        The resume path opens no new accounting bracket -- accounting happened at submit. If a dispatch-side terminal failure
+        only flips the task without settling the call, that pending row stays in the usage report forever; most visibly for
+        retry download, which just reopened the call as pending.
+
+        ``failure`` is the exception that killed this resume, passed down by the caller from its own except branch: the
+        task-side failure code belongs to the task, the call row's failure text and machine code can only be recorded here.
+        When killed before dispatch there is no exception object, so a failure text is passed instead. The cancel exit does
+        not pass it -- a cancelled row has no failure reason to write.
+
+        把无法继续的 pending ApiCall 按任务终态结算为 failed / cancelled（零费用）。
 
         续跑路径不开新的记账括号——账是提交时记的。派发侧终态失败若只翻任务不结算调用，
         那条 pending 会永久留在用量报表里；重试下载尤其明显：它刚把调用重开成 pending。

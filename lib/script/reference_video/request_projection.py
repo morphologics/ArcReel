@@ -1,4 +1,15 @@
-"""视频单元的当前请求投影。
+"""Current request projection of a video unit.
+
+The projection is an advisory/current-state read model: callers pass the current project, script and unit plus the
+already-resolved asset candidates and request options, and get one immutable set of facts shared by quoting,
+submission preflight and rate-limit routing. The result carries no token, fingerprint or executable request
+snapshot; the worker must re-project the current state when it starts processing.
+
+Capabilities are read only through video request facts (``docs/adr/0086``): the projection takes one set of facts
+for the bucket the unit falls into; the read side evaluates using the current config as identity, while the
+execution side hands over the set the lane evaluated with the actual backend identity.
+
+视频单元的当前请求投影。
 
 投影是 advisory/current-state 读模型：调用方传入当前 project、script、unit，已经解析出的
 资产候选与请求选项，得到报价、提交预检和限流路由共用的一份不可变事实。结果不携带 token、
@@ -53,7 +64,13 @@ if TYPE_CHECKING:
 
 @dataclass(frozen=True)
 class ReferenceRequestOptions:
-    """影响当前 unit 请求投影、但不属于剧本内容的调用选项。
+    """Call options that affect the current unit request projection but are not part of the script content.
+
+    The queue only stores duration tiers the user explicitly accepted; the worker re-projects with the latest script
+    and model capabilities, so an old confirmation no longer passes after the tier changes. Options enqueued by older
+    versions may still carry ``narration_delivery``, which is ignored on read.
+
+    影响当前 unit 请求投影、但不属于剧本内容的调用选项。
 
     队列只保存用户明确接受的时长档位；worker 再以最新剧本与模型能力重投影，档位变化后旧确认
     不会继续放行。旧版本入队的选项里可能还带着 ``narration_delivery``，读取时忽略。
@@ -86,7 +103,9 @@ class ReferenceRequestOptions:
         key: str = "reference_request_options",
         legacy_duration_confirmed: bool = False,
     ) -> ReferenceRequestOptions:
-        """宽容读取队列 payload；缺少选项字段时可按调用方兼容语义完成时长确认。"""
+        """Leniently read a queue payload; when option fields are missing, duration confirmation can be completed per the caller's compatibility semantics.
+
+        宽容读取队列 payload；缺少选项字段时可按调用方兼容语义完成时长确认。"""
 
         root = payload if isinstance(payload, dict) else {}
         if key not in root:
@@ -100,7 +119,9 @@ class ReferenceRequestOptions:
 
 @dataclass(frozen=True)
 class ResolvedReferenceAsset:
-    """一个逻辑引用展开出的图片候选；可用性由注入的资产适配器判断。"""
+    """Image candidates expanded from one logical reference; availability is decided by the injected asset adapter.
+
+    一个逻辑引用展开出的图片候选；可用性由注入的资产适配器判断。"""
 
     path: Path
     reference: ReferenceResource
@@ -109,7 +130,7 @@ class ResolvedReferenceAsset:
 
 @dataclass(frozen=True)
 class ProjectionProblem:
-    """跨 Web、Agent 与队列可比较的结构化问题。"""
+    """Structured problem comparable across Web, Agent and the queue. / 跨 Web、Agent 与队列可比较的结构化问题。"""
 
     code: str
     blocking: bool
@@ -129,7 +150,9 @@ class ProjectionProblem:
         capability: VideoGenerationType | None = None,
         locations: tuple[tuple[str | int, ...], ...] | None = None,
     ) -> ProjectionProblem:
-        """把视频请求事实的失败折成阻断问题：问题码、参数与修复指引原样保留，只补上所落的桶。"""
+        """Fold a video request facts failure into a blocking problem: problem code, params and fix guidance kept as-is, only the bucket it fell into is added.
+
+        把视频请求事实的失败折成阻断问题：问题码、参数与修复指引原样保留，只补上所落的桶。"""
 
         params = {**({"capability": capability} if capability is not None else {}), **failure.parameters()}
         return cls(
@@ -141,7 +164,7 @@ class ProjectionProblem:
         )
 
     def to_payload(self, *, unit_id: str) -> dict[str, object]:
-        """返回 Web、Agent 与报价共用的问题信封。"""
+        """Return the problem envelope shared by Web, Agent and quoting. / 返回 Web、Agent 与报价共用的问题信封。"""
 
         default_action, default_paths = _PROBLEM_PRESENTATION.get(
             self.code,
@@ -180,15 +203,17 @@ class ReferenceProjectionBlockedError(ValueError):
 
 @dataclass(frozen=True)
 class ReferenceUnitRequestProjection:
-    """一个 unit 在调用瞬间的规范请求投影。"""
+    """The canonical request projection of a unit at call time. / 一个 unit 在调用瞬间的规范请求投影。"""
 
     unit_id: str
     declared_references: tuple[ReferenceResource, ...]
     available_assets: tuple[ResolvedReferenceAsset, ...]
     request_assets: tuple[ResolvedReferenceAsset, ...]
+    #: The external payload keys of both are fixed as ``declared_capability`` / ``hydrated_capability`` (API contract).
     #: 两者的对外载荷键固定为 ``declared_capability`` / ``hydrated_capability``（API 契约）。
     declared_generation_type: VideoGenerationType
     hydrated_generation_type: VideoGenerationType
+    #: Video request facts of the bucket the unit falls into; None on evaluation failure, with the failure already folded into a blocking item in ``problems``.
     #: 单元所落桶的视频请求事实；求值失败时为 None，失败已折成 ``problems`` 里的阻断项。
     request_facts: VideoRequestFacts | None
     planned_duration: int
@@ -213,7 +238,7 @@ class ReferenceUnitRequestProjection:
         return [problem.to_payload(unit_id=self.unit_id) for problem in self.problems]
 
     def to_advisory_payload(self) -> dict[str, object]:
-        """序列化跨入口可比较的 current-state 投影事实。"""
+        """Serialize current-state projection facts comparable across entry points. / 序列化跨入口可比较的 current-state 投影事实。"""
 
         payload: dict[str, object] = {
             "allowed": not self.blocking_problems,
@@ -233,7 +258,9 @@ class ReferenceUnitRequestProjection:
 
 
 class ReferenceAssetAvailability(Protocol):
-    """资产可用性适配器；生产实现检查项目内文件并按产物清单认领，测试可用内存替身。"""
+    """Asset availability adapter; the production implementation checks in-project files and claims them via the artifact manifest, tests can use an in-memory double.
+
+    资产可用性适配器；生产实现检查项目内文件并按产物清单认领，测试可用内存替身。"""
 
     def is_available(self, asset: ResolvedReferenceAsset) -> bool:
         raise NotImplementedError
@@ -241,13 +268,17 @@ class ReferenceAssetAvailability(Protocol):
 
 VideoRequestFactsResult = VideoRequestFacts | VideoRequestFactsFailure
 
+#: Get video request facts by task type bucket. The read side uses :func:`configured_reference_request_facts`, the
+#: execution side hands over the set the lane already evaluated; tests return a prebuilt result or failure object directly.
 #: 按任务类型桶取视频请求事实。读侧用 :func:`configured_reference_request_facts`，执行侧交出
 #: lane 已求得的那一份；测试直接返回构造好的结果对象或失败对象。
 ReferenceRequestFactsLookup = Callable[[VideoGenerationType], Awaitable[VideoRequestFactsResult]]
 
 
 def configured_reference_request_facts(project: dict, resolver: ConfigResolver) -> ReferenceRequestFactsLookup:
-    """读侧：以当前配置为身份，对参考路线逐桶求值视频请求事实；同一查找内每个桶只求值一次。"""
+    """Read side: evaluate video request facts per bucket for the reference route using the current config as identity; each bucket is evaluated only once per lookup.
+
+    读侧：以当前配置为身份，对参考路线逐桶求值视频请求事实；同一查找内每个桶只求值一次。"""
 
     evaluated: dict[VideoGenerationType, VideoRequestFactsResult] = {}
 
@@ -278,7 +309,9 @@ def hydrate_reference_assets(
     resolved_assets: Sequence[ResolvedReferenceAsset],
     availability: ReferenceAssetAvailability,
 ) -> ReferenceAssetHydration:
-    """把候选按声明范围过滤并给出实际可用图片与缺图逻辑引用。"""
+    """Filter candidates by the declared scope and give the actually usable images and the logical references missing images.
+
+    把候选按声明范围过滤并给出实际可用图片与缺图逻辑引用。"""
 
     declared_keys = {(ref.type, asset_name_comparison_key(ref.name)) for ref in declared}
     candidates = tuple(asset for asset in resolved_assets if _asset_key(asset) in declared_keys)
@@ -290,7 +323,15 @@ def hydrate_reference_assets(
 
 @dataclass(frozen=True)
 class ReferenceUnitHydration:
-    """一个单元的声明引用经水合后的定桶结论——执行侧与读侧共用的判据。
+    """The bucket verdict of a unit's declared references after hydration -- the criterion shared by the execution and read sides.
+
+    ``declared_generation_type`` only looks at registered declared references in the text; ``hydrated_generation_type``
+    looks at the usable reference images that can actually be sent with the request right now, and the unit's actual
+    bucket follows it. When declarations and usable reference images split (reference unregistered, registered but
+    missing image, bucket changes as a result), ``problems`` carries a blocking problem naming the unusable
+    references; the bucket is not switched silently.
+
+    一个单元的声明引用经水合后的定桶结论——执行侧与读侧共用的判据。
 
     ``declared_generation_type`` 只看正文里已登记的声明引用；``hydrated_generation_type`` 看此刻
     确实能随请求发出的可用参考图，单元实际落哪个桶以它为准。声明与可用参考图分裂（引用未登记、
@@ -299,9 +340,9 @@ class ReferenceUnitHydration:
 
     declared_references: tuple[ReferenceResource, ...]
     available_assets: tuple[ResolvedReferenceAsset, ...]
-    #: 声明了、此刻却没有任何可用图片候选的引用。
+    #: References that are declared but currently have no usable image candidate. / 声明了、此刻却没有任何可用图片候选的引用。
     unavailable_references: tuple[ReferenceResource, ...]
-    #: 正文提及、但项目未登记的名字。
+    #: Names mentioned in the text but not registered in the project. / 正文提及、但项目未登记的名字。
     unregistered_references: tuple[str, ...]
     declared_generation_type: VideoGenerationType
     hydrated_generation_type: VideoGenerationType
@@ -316,7 +357,12 @@ def hydrate_unit_references(
     *,
     catalog: ReferenceCatalog | None = None,
 ) -> ReferenceUnitHydration:
-    """把单元正文的声明引用水合成可用参考图，并据此定桶。
+    """Hydrate the declared references in the unit text into usable reference images, and pick the bucket from them.
+
+    ``catalog`` is the reference catalog the caller already built from the same ``project``; passed in for batch
+    hydration to avoid rebuilding per unit.
+
+    把单元正文的声明引用水合成可用参考图，并据此定桶。
 
     ``catalog`` 是调用方已从同一份 ``project`` 构造的引用目录，批量水合时传入以免逐单元重建。
     """
@@ -330,6 +376,10 @@ def hydrate_unit_references(
     available = hydration.available
 
     problems: list[ProjectionProblem] = []
+    # Unregistered references produce no derived references and so never appear in ``hydration.missing``; they must be
+    # blocked and listed by name separately here. Characters / scenes / props without a sheet need no separate report
+    # here -- they don't fall back to the original image, produce no candidate when expanded, and all land in
+    # ``hydration.missing``.
     # 未登记引用不产生派生引用，因而不会出现在 ``hydration.missing`` 里，须在此单独阻断并
     # 列名。无资产图的角色 / 场景 / 道具不需要在此另报——它们不退回原图，展开时就不产生
     # 候选，一律落进 ``hydration.missing``。
@@ -376,7 +426,7 @@ def hydrate_unit_references(
 
 
 class FilesystemReferenceAssets:
-    """以项目目录为边界检查图片候选实际存在且为普通文件。"""
+    """Check, bounded by the project directory, that image candidates actually exist and are regular files. / 以项目目录为边界检查图片候选实际存在且为普通文件。"""
 
     def __init__(self, project_path: Path) -> None:
         self._project_path = project_path
@@ -399,13 +449,16 @@ def _candidate_path(project_path: Path, value: object) -> Path | None:
 
 
 class MemoizedReferenceAssets:
-    """一批读侧计算内按图片记住可用性：成本随设计图数量增长，而不是随被引用次数增长。"""
+    """Memoize availability per image within one batch of read-side computation: cost grows with the number of design images, not with the number of references.
+
+    一批读侧计算内按图片记住可用性：成本随设计图数量增长，而不是随被引用次数增长。"""
 
     def __init__(self, inner: ReferenceAssetAvailability) -> None:
         self._inner = inner
         self._known: dict[tuple[Path, str, str, str], bool] = {}
 
     def is_available(self, asset: ResolvedReferenceAsset) -> bool:
+        # The verdict depends on the path, candidate kind and claim key (reference type + name); the four together identify an image.
         # 判定依赖路径、候选种类与认领键（引用类型 + 名称），四者共同决定一张图。
         key = (asset.path, asset.kind, asset.reference.type, asset.reference.name)
         known = self._known.get(key)
@@ -415,7 +468,14 @@ class MemoizedReferenceAssets:
 
 
 class ReferenceExpansionCache:
-    """一次读侧批量计算内共用的引用目录与候选路径解析。
+    """Reference catalog and candidate path resolution shared within one read-side batch computation.
+
+    When a whole batch of units expands references on the same ``project``, the catalog is built only once and each
+    registered path is resolved for out-of-bounds only once; cost grows with the number of assets, not with the
+    number of references. ``project`` must not be modified meanwhile. Only path resolution is cached, not whether the
+    file exists: that is answered by the availability adapter.
+
+    一次读侧批量计算内共用的引用目录与候选路径解析。
 
     整批单元在同一份 ``project`` 上展开引用时，目录只构造一次，同一登记路径只做一次越界解析，
     成本随资产数而不是随被引用次数增长。期间 ``project`` 不得被改动。只缓存路径解析，
@@ -443,7 +503,14 @@ def _unit_text(unit: dict) -> str:
 def unit_reference_declarations(
     project: dict, unit: dict, *, catalog: ReferenceCatalog | None = None
 ) -> tuple[ReferenceResource, ...]:
-    """视频单元正文 → 该单元生成所用的逻辑参考图引用，按首次提及顺序。
+    """Video unit text → the logical reference image references used to generate the unit, in first-mention order.
+
+    The text is the single source of truth: references are not saved, the read side always derives them through this
+    function, and products follow the same rule as other assets with no type priority (see ADR 0064). Unregistered
+    names produce no reference -- they only emit a non-blocking warning on the render and preview side, without
+    blocking this generation.
+
+    视频单元正文 → 该单元生成所用的逻辑参考图引用，按首次提及顺序。
 
     正文是唯一真相：引用不落盘，读侧一律经本函数派生，商品与其它资产走同一条规则、
     没有类型优先级（见 ADR 0064）。未登记的名字不产生引用——它只在渲染与预览侧发一条
@@ -455,7 +522,13 @@ def unit_reference_declarations(
 
 
 def unit_reference_admission(project: dict, unit: dict) -> ReferenceAdmission:
-    """本单元正文的引用准入结论——与分镜路线共用 :mod:`lib.references.reference_admission` 的判定。
+    """Reference admission verdict for this unit's text -- shares the decision of :mod:`lib.references.reference_admission`
+    with the storyboard route.
+
+    Single generation and batch admission both go through this projector, so they never give opposite answers for the
+    same text.
+
+    本单元正文的引用准入结论——与分镜路线共用 :mod:`lib.references.reference_admission` 的判定。
 
     单条生成与整批准入都经本投影器，两者因此不会对同一份正文给出相反的答复。
     """
@@ -482,7 +555,19 @@ def resolve_reference_assets(
     *,
     expansion: ReferenceExpansionCache | None = None,
 ) -> tuple[ResolvedReferenceAsset, ...]:
-    """把正文派生的逻辑引用展开为图片候选，不把「路径已登记」误当成「文件存在」。
+    """Expand the text-derived logical references into image candidates, without mistaking "path registered" for "file exists".
+
+    Use the sheet if there is one. Without a sheet, only products fall back to all their original images -- the
+    original image is the product's fidelity acceptance anchor (see ADR 0034); original images of characters, scenes
+    and props are only inputs for generating sheets and don't go into video requests (see ADR 0073), so without a
+    sheet they produce no candidate and the projector reports a blocker. With a sheet, no type gets extra original
+    images injected, and there is no sorting by type (see ADR 0064). Missing fields, unregistered or out-of-bounds
+    paths produce no candidates; the projector compares against the derived references and uniformly produces
+    ``reference_asset_missing``.
+
+    Pass ``expansion`` for batch expansion so the whole batch shares one reference catalog and path resolution.
+
+    把正文派生的逻辑引用展开为图片候选，不把「路径已登记」误当成「文件存在」。
 
     有资产图就用资产图。没有资产图时只有商品退到它的全部原图——原图是商品的保真验收锚点
     （见 ADR 0034）；角色、场景、道具的原图只是生成资产图的输入，不进视频请求（见 ADR 0073），
@@ -519,7 +604,7 @@ def resolve_reference_assets(
 
 
 def _original_image_paths(entry: dict, spec: AssetSpec) -> list[object]:
-    """该资产条目登记的全部原图路径，按声明顺序。"""
+    """All original image paths registered on this asset entry, in declaration order. / 该资产条目登记的全部原图路径，按声明顺序。"""
 
     paths: list[object] = []
     for field_name in spec.original_image_fields:
@@ -534,7 +619,7 @@ def _original_image_paths(entry: dict, spec: AssetSpec) -> list[object]:
 def clamp_reference_assets(
     assets: Sequence[ResolvedReferenceAsset], max_references: int | None
 ) -> tuple[ResolvedReferenceAsset, ...]:
-    """超过上限时按正文的提及顺序保留前若干张——没有类型优先级。"""
+    """When over the limit, keep the first N in the text's mention order -- no type priority. / 超过上限时按正文的提及顺序保留前若干张——没有类型优先级。"""
 
     if max_references is None or len(assets) <= max_references:
         return tuple(assets)
@@ -583,7 +668,7 @@ def _planned_duration(unit: dict) -> int:
 
 
 class ReferenceUnitRequestProjector:
-    """把当前 unit 意图投影成所有读侧共用的规范请求事实。"""
+    """Project the current unit intent into the canonical request facts shared by every read side. / 把当前 unit 意图投影成所有读侧共用的规范请求事实。"""
 
     def __init__(
         self,
@@ -602,9 +687,12 @@ class ReferenceUnitRequestProjector:
         resolved_assets: Sequence[ResolvedReferenceAsset],
         options: ReferenceRequestOptions | None = None,
     ) -> ReferenceUnitRequestProjection:
-        """投影调用瞬间状态；``script`` 显式入参锁定公共缝的完整上下文契约。"""
+        """Project the state at call time; the explicit ``script`` parameter locks in the full context contract of the public seam.
+
+        投影调用瞬间状态；``script`` 显式入参锁定公共缝的完整上下文契约。"""
 
         del script
+        # Asset availability needs to read the artifact manifest and digest design images, so the whole hydration runs in a worker thread.
         # 资产可用性要读产物清单、对设计图算摘要，整段水合放进工作线程。
         hydration = await asyncio.to_thread(hydrate_unit_references, project, unit, resolved_assets, self._assets)
         return await self.project_hydrated(project=project, unit=unit, hydration=hydration, options=options)
@@ -617,7 +705,9 @@ class ReferenceUnitRequestProjector:
         hydration: ReferenceUnitHydration,
         options: ReferenceRequestOptions | None = None,
     ) -> ReferenceUnitRequestProjection:
-        """在调用方已完成的水合结论上投影；批量调用方可整批水合，只进一次工作线程。"""
+        """Project on hydration verdicts the caller already completed; batch callers can hydrate the whole batch and enter the worker thread only once.
+
+        在调用方已完成的水合结论上投影；批量调用方可整批水合，只进一次工作线程。"""
 
         options = options or ReferenceRequestOptions()
         canonical = hydration.declared_references
@@ -690,6 +780,7 @@ class ReferenceUnitRequestProjector:
         cost: VideoRequestCostFacts | None = None
 
         if facts is not None:
+            # Tier selection shares one implementation with the storyboard route; here its verdict is only mapped to reference-to-video problem codes.
             # 取档判定与分镜路线同一份实现；这里只把它的结论映射成参考生视频的 problem code。
             projected = project_request_duration(
                 planned_duration_seconds=planned_duration,
@@ -764,14 +855,22 @@ async def project_reference_unit_request(
     request_facts_lookup: ReferenceRequestFactsLookup | None = None,
     shared_assets: Callable[[], ReferenceAssetAvailability] | None = None,
 ) -> ReferenceUnitRequestProjection:
-    """生产入口：从当前项目文件与配置直接构造一次 advisory 投影。
+    """Production entry point: build one advisory projection directly from the current project files and config.
+
+    Asset availability uses the same criterion as the execution side (file exists and claimed by the artifact
+    manifest), so admission, single enqueue, prompt preview and rate-limit routing never judge a unit that falls into
+    i2v at execution as r2v. Batch callers pass ``shared_assets`` to get a verdict shared by the whole batch in the
+    worker thread, so a batch of units is judged on the same manifest snapshot; when not passed it is built on the spot
+    for this unit.
+
+    生产入口：从当前项目文件与配置直接构造一次 advisory 投影。
 
     资产可用性与执行侧同判据（文件存在且产物清单认领），准入、单条入队、提示词预览与限流
     路由因此不会把执行时落 i2v 的单元判成 r2v。批量调用方传入 ``shared_assets``，在工作线程里
     取整批共用的判定，一批单元在同一份清单快照上判定；不传时按本单元现场构造。
     """
 
-    # artifact_selection 依赖本模块，延迟导入避免循环。
+    # artifact_selection depends on this module; import lazily to avoid a cycle. / artifact_selection 依赖本模块，延迟导入避免循环。
     from lib.script.reference_video.artifact_selection import CurrentReferenceAssets
 
     if request_facts_lookup is None:
@@ -783,6 +882,7 @@ async def project_reference_unit_request(
         request_facts_lookup = configured_reference_request_facts(project, resolver)
 
     def current_assets() -> tuple[ReferenceAssetAvailability, tuple[ResolvedReferenceAsset, ...]]:
+        # Building the manifest-aware availability check and expanding candidate paths both touch the filesystem, so they run in a worker thread.
         # 构造清单感知的可用性判定、展开候选路径都会碰文件系统，放进工作线程。
         availability = CurrentReferenceAssets(project_path, project) if shared_assets is None else shared_assets()
         return availability, resolve_reference_assets(project, project_path, unit)

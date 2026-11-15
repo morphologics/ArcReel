@@ -1,4 +1,13 @@
-"""成片烧入的字幕：按剪映的字幕样式基线换算版式，生成交给 libass 的 ASS 文档。
+"""Subtitles burned into the final cut: convert the layout from JianYing's subtitle style baseline and generate the ASS document for libass.
+
+Subtitles use the bundled Source Han Sans CN Bold: white text, bold, black outline and shadow, with font size and
+vertical position converted from the style baseline to the final cut canvas. Chinese gets explicit line breaks by
+"usable width ÷ font size"; English and Vietnamese are left to libass to wrap at spaces; when several subtitles show
+at once, libass collision handling pushes the later one away, so events do not specify absolute positions.
+
+Wrapping and layout are pure functions; :func:`ass_document` only writes them as ASS text.
+
+成片烧入的字幕：按剪映的字幕样式基线换算版式，生成交给 libass 的 ASS 文档。
 
 字幕用随包的思源黑体 CN Bold：白字、粗体、黑色描边与阴影，字号与纵向位置按样式基线换算到成片画布。
 中文按「可用宽度 ÷ 字号」显式插入换行，英文与越南语交给 libass 在空格处换行；多条字幕同时出现时，
@@ -34,7 +43,12 @@ _NO_LINE_END = frozenset("（「『“‘《〈【〔｛［〖([{")
 
 @dataclass(frozen=True, slots=True)
 class SubtitleLayout:
-    """成片画布上的字幕版式（像素）。
+    """Subtitle layout on the final cut canvas (pixels).
+
+    ``em`` is the em size; ``line_capacity`` is how many full-width characters fit the usable line width, i.e. "usable
+    width ÷ font size"; ``margin_x`` is the left/right margin, ``margin_bottom`` the distance from the bottom edge to the bottom of a single-line subtitle's line box.
+
+    成片画布上的字幕版式（像素）。
 
     ``em`` 是字身；``line_capacity`` 是一行可用宽度能放下的全角字数，即「可用宽度 ÷ 字号」；
     ``margin_x`` 是左右边距，``margin_bottom`` 是底边到单行字幕行盒底部的距离。
@@ -49,7 +63,9 @@ class SubtitleLayout:
 
 
 def subtitle_layout(profile: OutputProfile) -> SubtitleLayout:
-    """按样式基线把剪映字号、行宽与纵向位置换算到成片画布。"""
+    """Convert JianYing font size, line width and vertical position to the final cut canvas per the style baseline.
+
+    按样式基线把剪映字号、行宽与纵向位置换算到成片画布。"""
     baseline = subtitle_style_baseline(profile.width, profile.height)
     em = round(baseline.size * JIANYING_FONT_PX_PER_SIZE * min(profile.width, profile.height) / _BASE_SHORT_SIDE)
     usable = profile.width * baseline.max_line_width
@@ -66,12 +82,16 @@ def subtitle_layout(profile: OutputProfile) -> SubtitleLayout:
 
 
 def _advance(character: str) -> float:
-    """字符占的字宽：全角与宽字符一个字身，其余按半个字身估算。"""
+    """Advance width of a character: one em for full-width and wide characters, otherwise estimated at half an em.
+
+    字符占的字宽：全角与宽字符一个字身，其余按半个字身估算。"""
     return 1.0 if unicodedata.east_asian_width(character) in {"W", "F"} else 0.5
 
 
 def _tokens(text: str) -> list[str]:
-    """断行的最小单位：一个全角字符、一段空白，或一串连续的半角字符（外文单词与数字不从中间断开）。"""
+    """Smallest unit for line breaking: one full-width character, a run of whitespace, or a run of consecutive half-width characters (foreign words and numbers are not broken in the middle).
+
+    断行的最小单位：一个全角字符、一段空白，或一串连续的半角字符（外文单词与数字不从中间断开）。"""
     tokens: list[str] = []
     for character in text:
         previous = tokens[-1] if tokens else ""
@@ -94,7 +114,7 @@ def _width(text: str) -> float:
 
 
 def _split_oversized(token: str, capacity: float) -> list[str]:
-    """比一整行还宽的半角串只能硬断。"""
+    """A half-width run wider than a whole line can only be hard-broken. / 比一整行还宽的半角串只能硬断。"""
     pieces: list[str] = []
     current = ""
     for character in token:
@@ -106,7 +126,14 @@ def _split_oversized(token: str, capacity: float) -> list[str]:
 
 
 def wrap_chinese(text: str, line_capacity: float) -> tuple[str, ...]:
-    """中文字幕按每行能放下的全角字数逐行填满。
+    """Chinese subtitles fill each line with as many full-width characters as fit.
+
+    - Foreign words and numbers are not broken in the middle; only hard-broken when wider than a whole line;
+    - No sentence or closing punctuation at line start; it hangs at the end of the previous line, which may slightly exceed the width;
+    - No opening quotes or brackets at line end; they move to the next line with the following character;
+    - Whitespace at a line break is dropped.
+
+    中文字幕按每行能放下的全角字数逐行填满。
 
     - 外文单词与数字不从中间断开，比一整行还宽时才硬断；
     - 行首不放句读与闭合标点，它们挂在上一行行尾，允许略超行宽；
@@ -139,7 +166,11 @@ def wrap_chinese(text: str, line_capacity: float) -> tuple[str, ...]:
 
 
 def subtitle_lines(text: str, layout: SubtitleLayout) -> tuple[str, ...]:
-    """一条字幕显示成哪几行：含汉字的按中文规则显式换行，其余整段交给 libass 在空格处换行。
+    """Which lines a subtitle is displayed as: text with Chinese characters is broken explicitly by Chinese rules; anything else is left whole for libass to wrap at spaces.
+
+    Line breaks in the source are folded into spaces: an ASS event can only occupy one line, so line breaks can only be given explicitly here.
+
+    一条字幕显示成哪几行：含汉字的按中文规则显式换行，其余整段交给 libass 在空格处换行。
 
     原文里的换行折成空格：ASS 的一条事件只能占一行，换行只能由这里显式给出。
     """
@@ -151,7 +182,7 @@ def subtitle_lines(text: str, layout: SubtitleLayout) -> tuple[str, ...]:
 
 @dataclass(frozen=True, slots=True)
 class BurnedSubtitle:
-    """时间线上的一条字幕：起止为成片时间（微秒）。"""
+    """One subtitle on the timeline: start and end in final-cut time (microseconds). / 时间线上的一条字幕：起止为成片时间（微秒）。"""
 
     start_us: int
     end_us: int
@@ -167,12 +198,16 @@ def _timestamp(microseconds: int) -> str:
 
 
 def _escape(line: str) -> str:
-    """ASS 文本里的花括号是覆盖标记、反斜杠是转义符，原样显示时换成全角形。"""
+    """In ASS text curly braces are override tags and backslash is the escape character; for literal display they are replaced with full-width forms.
+
+    ASS 文本里的花括号是覆盖标记、反斜杠是转义符，原样显示时换成全角形。"""
     return line.replace("\\", "＼").replace("{", "｛").replace("}", "｝")
 
 
 def ass_document(subtitles: Sequence[BurnedSubtitle], profile: OutputProfile) -> str:
-    """整集字幕的 ASS 文档；画布即成片画布，时间即成片时间。"""
+    """ASS document for the whole episode's subtitles; the canvas is the final cut canvas, times are final-cut times.
+
+    整集字幕的 ASS 文档；画布即成片画布，时间即成片时间。"""
     layout = subtitle_layout(profile)
     font_size = round(layout.em * cell_height_per_em())
     outline = round(layout.em * _OUTLINE_PER_EM, 1)

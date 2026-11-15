@@ -1,4 +1,17 @@
-"""本集引用的资产：一集正式脚本里写到的资产与衍生，按资产表的落盘真名给出。
+"""Assets referenced by an episode: the assets and derivatives mentioned in the episode's final script, given by
+their on-disk names in the asset table.
+
+"Which asset sheets this episode needs" is computed only here: episode-level batch asset sheet generation, the
+Agent listing and generating pending assets per episode, and the workflow-status item "assets referenced by this
+episode lack a sheet" all take this one result, instead of each assembling its own set.
+
+Reference locations are shared with cascading rename and reference status via
+:func:`lib.script.script_references.payload_reference_names` (reference arrays, ``speaker``, body ``@[name]``);
+name ownership is resolved by :class:`ReferenceCatalog`, and unregistered names don't count. A derivative
+reference ``本体/衍生`` (base/derivative) also counts as a reference to the base look: a derivative sheet is an
+edit of the base look's sheet, so the derivative can't be generated when the base look has no usable sheet.
+
+本集引用的资产：一集正式脚本里写到的资产与衍生，按资产表的落盘真名给出。
 
 「本集要用到哪些资产图」只在这里算一次：集层批量生成资产图、Agent 按集列出与生成待生成资产、
 制作状态里「本集引用的资产缺资产图」都取这一份，三处不各自拼集合。
@@ -23,19 +36,24 @@ from lib.script.script_references import payload_reference_names
 
 @dataclass(frozen=True, slots=True)
 class ReferencedAsset:
-    """一条被本集引用的资产或衍生。"""
+    """One asset or derivative referenced by the episode. / 一条被本集引用的资产或衍生。"""
 
     asset_type: str
+    #: On-disk name in the asset table; derivatives are written as ``本体/衍生`` (base/derivative; both segments are
+    #: on-disk names).
     #: 资产表里的落盘真名；衍生写作 ``本体/衍生``（两段都是落盘真名）。
     name: str
-    #: 衍生所属本体的落盘真名；本体条目为 ``None``。
+    #: On-disk name of the base look the derivative belongs to; ``None`` for base-look entries. / 衍生所属本体的落盘真名；本体条目为 ``None``。
     owner: str | None = None
 
 
 def episode_referenced_assets(
     project: Mapping[str, Any], script: Mapping[str, Any] | None
 ) -> frozenset[ReferencedAsset]:
-    """一集正式脚本引用的全部已登记资产与衍生；没有正式脚本时为空。"""
+    """All registered assets and derivatives referenced by an episode's final script; empty when there is no final
+    script.
+
+    一集正式脚本引用的全部已登记资产与衍生；没有正式脚本时为空。"""
 
     if script is None:
         return frozenset()

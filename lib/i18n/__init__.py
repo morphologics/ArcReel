@@ -107,6 +107,7 @@ def _(key: str, locale: str = DEFAULT_LOCALE, **kwargs: Any) -> str:
         return msg
 
 
+#: Generation input gaps of the "semantics not ready" kind: the message names only the target itself; parameter names vary.
 #: 生成输入缺口里「语义未就绪」一类：文案只点名目标自身，参数名各不相同。
 _GENERATION_INPUT_SUBJECT_PARAMS: dict[str, str] = {
     "script_prompt_pending": "segment_id",
@@ -115,14 +116,16 @@ _GENERATION_INPUT_SUBJECT_PARAMS: dict[str, str] = {
     "derivative_owner_sheet_missing": "name",
 }
 
-#: 生成输入缺口里按 ``missing_text`` 列出全部缺失项的一类。
+#: Generation input gaps of the kind that list all missing items via ``missing_text``. / 生成输入缺口里按 ``missing_text`` 列出全部缺失项的一类。
 _GENERATION_INPUT_LIST_CODES = frozenset(
     {"reference_asset_unregistered", "reference_asset_missing", "asset_original_missing"}
 )
 
 
 def render_message(key: str, params: Mapping[str, Any], translate: Callable[..., str], names: DisplayNames) -> str:
-    """按请求语言渲染一条带参数的失败文案，供应商与模型 ID 换成 ``names`` 里的显示名。"""
+    """Render a parameterised failure message in the request language, replacing provider and model IDs with display names from ``names``.
+
+    按请求语言渲染一条带参数的失败文案，供应商与模型 ID 换成 ``names`` 里的显示名。"""
     return translate(key, **names.apply(params))
 
 
@@ -169,6 +172,10 @@ def render_generation_input_error(
 
 def translate_or(key: str, fallback: str, locale: str = DEFAULT_LOCALE, **kwargs: Any) -> str:
     """Translate ``key``, falling back to ``fallback`` when no locale defines it.
+
+    Catalogue messages (provider names) are mostly proper nouns shared by all languages; only entries in non-Latin
+    script need a translation table. Unregistered keys return the original name from the data source rather than the
+    bare-key fallback of ``_()``, which would turn "OpenAI" into "provider_name_openai".
 
     目录类文案（供应商名）多数是各语言通用的专有名词，只有非拉丁写法的条目需要
     译名表。未登记的键返回数据源里的原名，而不是 ``_()`` 的裸键回退——后者会把

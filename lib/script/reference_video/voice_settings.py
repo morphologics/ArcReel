@@ -1,4 +1,16 @@
-"""参考生视频渲染层的声音能力档：模型档位、本集开关、段数上限与 backend 约束的值对象。
+"""Voice capability profile of the reference-to-video render layer: a value object for model tier, episode switch,
+clip limit and backend constraints.
+
+The render layer (parse preview / three-part rendering / execution-time assembly) takes all its voice decisions
+from the same set of inputs, which travel together layer by layer along the call chain and never change
+individually. Gathered into a value object, adding a new voice-related capability flag only changes this module's
+field definitions, without shotgun edits to every function signature and call site along the way.
+
+The silent decision (:attr:`VoiceRenderSettings.is_silent`) also lives here: the two silent paths (model produces no
+audio, audio turned off for this episode) are the same from the product's point of view, and writing the criterion
+as a property keeps it from being written separately throughout the render layer and diverging later.
+
+参考生视频渲染层的声音能力档：模型档位、本集开关、段数上限与 backend 约束的值对象。
 
 渲染层（解析预览 / 三段论渲染 / 执行期组装）对声音的判定全部取自同一组入参，这些入参在
 调用链上逐层结伴传递、无一处单独变化。收口成值对象后，新增一个声音相关的能力位只改本模块
@@ -20,7 +32,25 @@ if TYPE_CHECKING:
 
 @dataclass(frozen=True)
 class VoiceRenderSettings:
-    """一次渲染的声音输入档。
+    """The voice input profile of one render.
+
+    ``voice_consistency`` is the server-derived three-level model tier identifier (``native`` / ``soft`` / ``none``):
+    only ``native`` (class A, native audio reference) involves reference audio binding; ``none`` (class C, truly
+    silent) produces no audio.
+
+    ``requested_generate_audio`` is this episode's silent switch (user intent, not the pricing basis).
+
+    ``max_reference_audio`` is the max number of reference audio clips per request (backend capability declaration);
+    ``provider_id`` and ``model_id`` are only used to look up display names for degradation warnings.
+
+    ``audio_ready`` is the set of character names whose "audio is actually usable": the parse preview doesn't touch the
+    filesystem and leaves None, meaning decide by the character asset's ``reference_audio`` field being non-empty; the
+    execution layer passes the names of characters whose files are resolved and actually exist.
+
+    When ``requires_reference_image`` is True the target backend requires each audio clip to be attached to a specific
+    reference item (e.g. wan2.7-r2v), so off-screen-only speakers get no audio binding.
+
+    一次渲染的声音输入档。
 
     ``voice_consistency`` 是服务端派生的三级模型档标识（``native`` / ``soft`` / ``none``）：
     只有 ``native``（A 类·原生音频参考）谈得上参考音频绑定，``none``（C 类·真无声）不产音。
@@ -47,7 +77,17 @@ class VoiceRenderSettings:
 
     @classmethod
     def from_caps(cls, caps: Mapping[str, Any], *, audio_ready: Collection[str] | None = None) -> VoiceRenderSettings:
-        """从解析出的视频能力 dict 取值构造。
+        """Construct from values in the resolved video capability dict.
+
+        When capability resolution fails the caller passes an empty dict, and fields fall back to this class's defaults
+        (``soft`` tier, no reference audio) -- only a few voice-related hints are not emitted; rendering is not blocked. The
+        episode silent switch defaults to ``True``, i.e. "render as audible unless an off signal was received": a capability
+        resolution failure should not decide for the user that this episode is silent; the real off intent is resolved
+        independently by the caller and written into the capability dict (see ``server/services/tasks/video_caps.py``). The
+        mapping between capability dict keys and this class's field names exists only here,
+        so multiple call sites (parse preview route, SDK split tool) don't each miss a flag and reach different voice conclusions.
+
+        从解析出的视频能力 dict 取值构造。
 
         能力解析失败时调用方传空 dict，各字段落到本类的字段默认（``soft`` 档、无参考音频）——
         只是少发几条声音相关提示，不阻断渲染。本集无声开关的缺省是 ``True``，即「未收到关闭
@@ -70,7 +110,9 @@ class VoiceRenderSettings:
     def from_request_facts(
         cls, facts: VideoRequestFacts, *, audio_ready: Collection[str] | None = None
     ) -> VoiceRenderSettings:
-        """从一次视频请求事实取值构造：声音那几位与时长档位同源于同一次求值。"""
+        """Construct from one video request facts evaluation: the voice flags and the duration tiers come from the same evaluation.
+
+        从一次视频请求事实取值构造：声音那几位与时长档位同源于同一次求值。"""
         return cls(
             voice_consistency=facts.voice_consistency,
             requested_generate_audio=facts.requested_generate_audio,
@@ -83,7 +125,15 @@ class VoiceRenderSettings:
 
     @property
     def is_silent(self) -> bool:
-        """这一集是否听不到声音——模型不产音（C 类）或本集关闭了音频，两条路径同口径。
+        """Whether this episode has no audible sound -- the model produces no audio (class C) or audio is turned off for this
+        episode; both paths use the same convention.
+
+        Voice trait descriptions are also not injected under this criterion: although they are prompt text rather than an
+        audio payload, they describe an audible voice, and injecting them into a silent final cut only makes the model spend
+        budget on constraints it can't use. Dialogue ignores this flag -- in silent video the dialogue text is still sent,
+        and the provider can use it as a lip-sync reference.
+
+        这一集是否听不到声音——模型不产音（C 类）或本集关闭了音频，两条路径同口径。
 
         声音特征描述随该判据一并不注入：它虽是提示词文本而非音频负载，但描述的是听得到的
         音色，无声成片里注入只会让模型把配额花在用不上的约束上。台词不看这一位——无声视频

@@ -1,4 +1,45 @@
-"""script_plan / prompt_authoring 产出的草稿：落盘信封、违约报告与晋升口径。
+"""Drafts produced by script_plan / prompt_authoring: on-disk envelope, violation report and promotion basis.
+
+Each generation costs money; discarding and re-rolling on a violation both burns money and does not converge (the same model
+on the same source is likely to repeat the same kind of error). The final file stays untouched; output that fails the
+constraints lands, with a per-item violation report, in a draft in the same directory. The Agent reads it with
+``open_draft``, fixes ``content`` with ``patch_draft`` (or goes to register the missing asset / switches to the registered
+name), then calls the promotion tool, which re-judges everything with **the same validator**
+-- if it passes, it is promoted to the final file and the draft is cleared; if not, the report is refreshed and editing
+continues. There is no cap on convergence rounds: every round the Agent is fixing with concrete locations, not re-rolling
+for luck.
+
+The same draft slot serves a second purpose: an **editing workbench**. The final script_plan cannot be edited directly with
+Write/Edit (it shares a per-path lock with Web saves, migration read-modify-write and re-splitting, and the Agent's file tools
+cannot take that lock); to change a finalized script_plan, first check out a draft, edit it, and write it to disk via the same
+promotion channel. Both uses share one envelope and promotion basis: they come from different places, but they share the same
+position "the body lives in the draft, disk writes only happen on the lock-holding promotion side"; two separate schemes would
+only make the gate and the generation side each recognize half.
+
+A draft holds **the shape of that step's model output** (the LLM-facing shape), not the on-disk shape: machine-derived fields
+(reference-to-video ``unit_id`` / ``shots`` / ``references``, drama ``needs_replan``) never go into the draft; letting the
+Agent edit derived data would open the door to drift.
+
+Envelope shape::
+
+    {"kind": ..., "episode": N, "meta": {..., "schema_version": V},
+     "violations": [{"code","label","message", "item_index"?, "item_id"?, "params"?}, ...], "content": {...}}
+
+``violations`` is a snapshot of the previous round's verdict, for the Agent to read locations and for Web display -- on
+promotion everything is re-judged against the current ``content``; this record in the draft is not trusted. ``meta`` stores
+context needed for re-judging that cannot be re-derived from project state: the script_plan source path (re-resolving against
+the whole ``source/`` directory at promotion would make the source-anchor substring check looser than at production time),
+and the content fingerprint of the final file at production / checkout time (``base_fingerprint``, the optimistic
+concurrency baseline before promotion).
+
+``meta`` has one more key that is not re-judging context, ``schema_version``: the envelope's own version field. It is written
+uniformly by ``quarantine_envelope`` and parsed by ``read_quarantine`` into ``QuarantinedDraft.schema_version``, then removed
+from ``meta`` -- consumers read the parsed result rather than poking at the raw key in ``meta``, so ``meta`` holds only
+re-judging context (and the value range of ``draft_revision`` is thus unaffected by the version field). Missing means v1; see
+``resolve_schema_version`` for the rules. This module has no migration framework: the version field is only a criterion to
+rely on when the semantics of ``meta`` keys change; no branch dispatches on it.
+
+script_plan / prompt_authoring 产出的草稿：落盘信封、违约报告与晋升口径。
 
 生成一次要付费，产物违约时丢弃重抽既烧钱又不收敛（同一个模型对同一份原文大概率再犯同一
 类错）。正式文件保持不动；未满足约束的产物连同逐条违约报告落到同目录的草稿，Agent 用
@@ -53,6 +94,11 @@ from lib.project.project_activity import record_project_activity
 from lib.project.project_change_hints import emit_project_change_hint
 from lib.script.draft_violation import DraftViolation, render_violation_report
 
+#: Origin of the draft. ``content`` has the same shape as the model output schema of that step: reference-to-video script_plan is
+#: ``{units: [{duration_seconds, source_text, text}]}``, prompt_authoring is ``{title, units: [{text}]}``,
+#: drama script_plan is ``{title, scenes: [...]}`` (i.e. ``DramaNormalizedScript`` minus the machine-derived
+#: ``needs_replan``), narration script_plan is ``{segments: [...]}`` (i.e. ``NarrationScriptPlanDraft``;
+#: this variant has no machine-derived fields, so the draft layer and the on-disk layer have the same shape).
 #: 草稿的产出来源。``content`` 与该来源那一步的模型输出 schema 同形：参考生视频 script_plan 是
 #: ``{units: [{duration_seconds, source_text, text}]}``、prompt_authoring 是 ``{title, units: [{text}]}``，
 #: drama script_plan 是 ``{title, scenes: [...]}``（即 ``DramaNormalizedScript`` 去掉机器派生的
@@ -70,11 +116,18 @@ _QUARANTINE_FILENAMES: dict[str, str] = {
     QUARANTINE_KIND_NARRATION_SCRIPT_PLAN: NARRATION_SCRIPT_PLAN_QUARANTINE_FILENAME,
 }
 
+#: All draft file names, for consumers that don't care about kind and only need to locate drafts by file name (e.g. the rewrite
+#: list of cascading asset renames). Derived from the table above rather than listed separately: a new origin only adds one row
+#: there; a missed registration would let drafts silently drift outside the rewrite list -- drafts carry reference arrays and
+#: ``@[name]`` bodies, and if missed, promotion would get stuck on "reference not registered".
 #: 全部草稿文件名，供不关心 kind、只需按文件名定位草稿的消费方取用（如资产级联重命名的
 #: 改写清单）。从上表派生而非另列一份：新增一种来源只在上表加一行，漏登记会让草稿在改写清单
 #: 外静默漂移——草稿承载引用数组与 ``@[名称]`` 正文，漏改后晋升会卡在「引用未登记」上。
 QUARANTINE_FILENAMES: frozenset[str] = frozenset(_QUARANTINE_FILENAMES.values())
 
+#: The "which field to fix" guidance in the report is split by origin: draft bodies have different shapes, and guidance pointing
+#: at a non-existent field name would send the Agent somewhere it cannot edit. Registered in the same table as the file names, so
+#: a new origin only adds one row in this module.
 #: 报告里「改哪个字段」的指引按来源分流：草稿正文的形状各不相同，指引落到不存在的字段名
 #: 会把 Agent 引到它改不动的地方。与文件名同表登记，新增一种来源只在本模块加一行。
 _QUARANTINE_REPORT_HINTS: dict[str, tuple[str, str]] = {
@@ -94,24 +147,36 @@ _QUARANTINE_REPORT_HINTS: dict[str, tuple[str, str]] = {
     ),
 }
 
+#: Version of the quarantine draft envelope written by this code, stored in ``meta.schema_version``. Increment it when changing
+#: the semantics of any existing ``meta`` key, so the read side then has a basis to tell old and new drafts apart; adding keys
+#: without changing existing key semantics needs no bump.
 #: 本代码写出的隔离草稿信封版本，落在 ``meta.schema_version``。改动任一现有 ``meta`` 键的语义
 #: 时递增它，届时读侧才有据可依地分辨新旧草稿；只加键、不改既有键语义则不必动。
 QUARANTINE_SCHEMA_VERSION = 1
 
 _SCHEMA_VERSION_KEY = "schema_version"
 
+#: Name of the promotion tool. The handling guidance in the report must name it; hard-coded here instead of at every call site.
 #: 晋升工具名。报告里的处置指引要指名它，写死在这里而非各调用点各写一遍。
 PROMOTE_TOOL_NAME = "promote_draft"
 
+#: Name of the tool that checks out the final script_plan for editing. The final script_plan shares a per-path lock with Web saves,
+#: migration and re-splitting; the Agent's Write/Edit runs in the sandbox and cannot take that lock, so all its changes go through
+#: "check out draft -> edit -> promote": disk writes only happen on the promotion side, under the same lock as the other three
+#: paths. Refusal messages of the write-ban policy must name it too, so it lives here as well.
 #: 取回正式 script_plan 供编辑的工具名。正式 script_plan 与 Web 端保存、迁移、重拆分共享一把 per-path 锁，
 #: Agent 的 Write/Edit 在沙箱内跑、取不到这把锁，故对它的修改一律改走「取回草稿 → 改 → 晋升」：
 #: 写盘只发生在晋升侧，与另三条路径同一把锁。写禁策略的拒绝消息也要指名它，故同样收在这里。
 OPEN_DRAFT_TOOL_NAME = "open_draft"
 
+#: Draft meta marker: this draft is an editable draft the Agent checked out from the final content via ``open_draft``, not an
+#: invalid draft left by generation. A confirmed script plan is read-only, and edits and promotion of the editing copy are refused
+#: based on it; Web only shows the editable draft's state, not its content.
 #: 草稿 meta 标记：这份草稿是 Agent 经 ``open_draft`` 从正式内容取回的可编辑草稿，不是生成留下的待修复
 #: 草稿。已确认的脚本规划只读，编辑副本的修改与晋升按它拒绝；Web 只展示可编辑草稿的状态、不展示内容。
 FORMAL_EDIT_META_KEY = "formal_edit"
 
+#: Owner of the draft: ``user`` for an invalid draft (the creator can edit it directly), ``agent`` for the Agent's editable draft.
 #: 草稿的处置方：``user`` 为待修复草稿（创作者可直接改），``agent`` 为 Agent 的可编辑草稿。
 DRAFT_OWNER_USER = "user"
 DRAFT_OWNER_AGENT = "agent"
@@ -133,7 +198,12 @@ QUARANTINE_KIND_TO_DOC_TYPE: dict[str, str] = {kind: doc_type for doc_type, kind
 
 @dataclass(frozen=True)
 class QuarantinedDraft:
-    """一份读回内存的草稿。``content`` 是待重判的扁平产物，``violations`` 是上一轮的报告快照。
+    """A draft read back into memory. ``content`` is the flat output to re-judge; ``violations`` is the previous round's report snapshot.
+
+    ``schema_version`` is the parsed envelope version (missing means ``1``; see ``resolve_schema_version`` for the rules), and
+    ``meta`` no longer carries that key: the version belongs to this one field, re-judging context belongs to ``meta``.
+
+    一份读回内存的草稿。``content`` 是待重判的扁平产物，``violations`` 是上一轮的报告快照。
 
     ``schema_version`` 是解析后的信封版本（缺失即 ``1``，口径见 ``resolve_schema_version``），
     ``meta`` 里不再带这个键：版本位归这一个字段，重判上下文归 ``meta``。
@@ -149,12 +219,33 @@ class QuarantinedDraft:
 
 
 def draft_owner(draft: QuarantinedDraft) -> str:
-    """草稿的处置方：带可编辑草稿标记的归 Agent，其余（生成留下的待修复草稿）归创作者。"""
+    """Owner of the draft: one with the editable-draft marker belongs to the Agent, the rest (invalid drafts left by generation) to the creator.
+
+    草稿的处置方：带可编辑草稿标记的归 Agent，其余（生成留下的待修复草稿）归创作者。"""
     return DRAFT_OWNER_AGENT if draft.meta.get(FORMAL_EDIT_META_KEY) is True else DRAFT_OWNER_USER
 
 
 def resolve_schema_version(meta: dict[str, Any]) -> int:
-    """从落盘信封的 ``meta`` 原值解析出 schema 版本。版本位缺失或不可信时按 ``1`` 读。
+    """Parse the schema version from the raw ``meta`` of an on-disk envelope. A missing or untrustworthy version field reads as ``1``.
+
+    This is the only criterion for "which envelope version"; whoever reads envelopes goes through it, other consumers use
+    ``QuarantinedDraft.schema_version``; neither reads ``meta["schema_version"]`` on its own -- once the rules scatter, every
+    call site invents its own fallback rules. The input is the ``meta`` from disk, not ``QuarantinedDraft.meta``: the latter
+    already has the version field removed and would always yield ``1``.
+
+    Rules:
+
+    * **Missing** -- an envelope without the version field parses as ``1``; these drafts have v1 semantics.
+    * **Non-integer** (``bool`` / float / numeric string, etc.) and **integers below 1** -- likewise parse as ``1``.
+      When the version field is untrustworthy, the only certain fact is "it was not written by this code", and only v1
+      semantics exist; refusing to read would turn a draft that the Agent could still fix and promote into "no draft", which
+      costs far more than reading with the earliest semantics.
+    * **Future versions above ``QUARANTINE_SCHEMA_VERSION``** -- returned as is, neither clamped to the current version nor
+      refused. This module has no migration framework and no branch dispatches on this value; clamping early would only disguise
+      a newer draft as the current version, and when a downgrade read is really needed, whether to refuse or stay compatible is
+      decided by that semantic change, not anticipated here.
+
+    从落盘信封的 ``meta`` 原值解析出 schema 版本。版本位缺失或不可信时按 ``1`` 读。
 
     这是「哪一版信封」的唯一判据，读取信封的一方走它，其余消费方走
     ``QuarantinedDraft.schema_version``；两者都不各自去读 ``meta["schema_version"]``——口径散开后
@@ -185,7 +276,14 @@ def quarantine_envelope(
     violations: list[dict[str, Any]],
     meta: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """组装可落盘的整份信封，顺带盖上当前的 ``meta.schema_version``。
+    """Assemble a whole envelope ready for disk, stamping the current ``meta.schema_version`` along the way.
+
+    On-disk envelopes are built only here: which version is written and under which key is decided in one place, so writers need
+    not remember to add it each time. If the passed ``meta`` already has a ``schema_version`` (e.g. a draft read back, tweaked
+    and written again), it is always overwritten with the current version -- what is written out is this code's version, and
+    keeping the old value read in would attach new semantics to an old version.
+
+    组装可落盘的整份信封，顺带盖上当前的 ``meta.schema_version``。
 
     落盘信封只由这里构造：版本位写在哪一版、盖在哪个键上只此一处，写侧不必逐个记得补。
     传入的 ``meta`` 若自带 ``schema_version``（例如从读回的草稿改一改再写回），一律被当前
@@ -202,6 +300,10 @@ def quarantine_envelope(
 
 def draft_revision(draft: QuarantinedDraft) -> str:
     """Return the canonical optimistic-concurrency token for persisted draft state.
+
+    The digest covers the ``quarantine_envelope`` on-disk shape minus the version field: ``meta`` is taken from
+    ``QuarantinedDraft.meta`` (without ``schema_version``), so the token's value range is independent of the version field.
+    Keep this in step when changing the on-disk shape.
 
     摘要覆盖的字段是 ``quarantine_envelope`` 落盘形状去掉版本位后的那一份：``meta`` 取
     ``QuarantinedDraft.meta``（不含 ``schema_version``），令牌的取值范围因此与版本位无关。
@@ -230,17 +332,19 @@ def draft_payload(draft: QuarantinedDraft) -> dict[str, Any]:
 
 
 def quarantine_filename(kind: str) -> str:
-    """该阶段草稿在集目录下的文件名。"""
+    """File name of this stage's draft under the episode directory. / 该阶段草稿在集目录下的文件名。"""
     return _QUARANTINE_FILENAMES[kind]
 
 
 def quarantine_path(project_path: Path, episode: int, kind: str) -> Path:
-    """该集该阶段的草稿路径（与正式 script_plan 同目录）。"""
+    """Draft path for this episode and stage (same directory as the final script_plan). / 该集该阶段的草稿路径（与正式 script_plan 同目录）。"""
     return episode_drafts_dir(project_path, episode) / quarantine_filename(kind)
 
 
 def violation_entries(violations: list[DraftViolation]) -> list[dict[str, Any]]:
-    """违约异常 → 落盘 / 呈现用的结构化条目（违约类 + 定位前缀 + 消息 + 可选行号与条目定位）。"""
+    """Violation exception -> structured entries for disk / display (violation class + location prefix + message + optional line number and entry location).
+
+    违约异常 → 落盘 / 呈现用的结构化条目（违约类 + 定位前缀 + 消息 + 可选行号与条目定位）。"""
     entries: list[dict[str, Any]] = []
     for violation in violations:
         entry: dict[str, Any] = {
@@ -266,7 +370,13 @@ def violation_entries(violations: list[DraftViolation]) -> list[dict[str, Any]]:
 
 
 def announce_draft_change(project_path: Path, path: Path) -> None:
-    """草稿文件刚写入或删除：按当前来源发一次项目变更 hint。
+    """A draft file was just written or deleted: emit one project-change hint with the current origin.
+
+    Drafts are not written via ProjectManager; the event service discovers their changes by polling, and the origin is taken from
+    hints arriving in the same scan window. Emitted right after writing, so Web manual-fix saves settle as ``webui``; the Agent and
+    text tasks set no origin and are still broadcast as ``filesystem``.
+
+    草稿文件刚写入或删除：按当前来源发一次项目变更 hint。
 
     草稿不经 ProjectManager 写盘，事件服务靠轮询发现它的变化，来源取同一扫描窗口内到达的 hint。
     写盘后立即发出，Web 端的手修保存才会按 ``webui`` 结算；Agent 与文本任务不设来源，仍按
@@ -284,7 +394,13 @@ def write_quarantine(
     violations: list[DraftViolation],
     meta: dict[str, Any] | None = None,
 ) -> Path:
-    """把未满足约束的产物与报告写入草稿（原子写，整份覆盖），返回草稿路径。
+    """Write output that fails the constraints, plus the report, into the draft (atomic write, full overwrite); return the draft path.
+
+    Full overwrite rather than merge: a re-roll or re-run promotion produces a new output, and merging with leftovers from the
+    previous round would only make the Agent edit a half-new, half-old body. The directory may not exist yet (the episode has never
+    produced a script_plan), so create it first.
+
+    把未满足约束的产物与报告写入草稿（原子写，整份覆盖），返回草稿路径。
 
     整份覆盖而非合并：重抽或重跑晋升产生的是一份新产物，与上一轮的残留合并只会让 Agent 对着
     半新半旧的正文改。目录可能尚不存在（该集从未产出过 script_plan），故先建目录。
@@ -307,7 +423,18 @@ def write_quarantine(
 
 
 def read_quarantine(project_path: Path, episode: int, kind: str) -> QuarantinedDraft | None:
-    """读回草稿；文件缺失 / 非法 JSON / 信封形状坏时返回 None。
+    """Read the draft back; return None when the file is missing / invalid JSON / the envelope shape is broken.
+
+    A broken shape is treated as "no draft" rather than raising: existing files or abnormal interruptions may leave invalid JSON.
+    Callers then offer "re-split" instead of an internal error -- but ``exists`` stays true, the gate and generation side still
+    block, and a broken draft is not let through as "no draft".
+
+    ``kind`` / ``episode`` must match the requested draft; missing or mismatched values are likewise treated as broken shape:
+    without the check, these two fields would be parsed and thrown away, and an envelope copied from another episode would pass
+    the anchor check with its own ``meta.source``, then be rebuilt with this episode's unit_ids and overwrite this episode's final
+    script_plan.
+
+    读回草稿；文件缺失 / 非法 JSON / 信封形状坏时返回 None。
 
     形状坏按「无草稿」处理而非抛错：存量文件或异常中断可能留下非法 JSON。
     调用方据此给出「重新拆分」而非内部错误——但 ``exists`` 仍为真，gate 与生成侧照常
@@ -347,19 +474,27 @@ def read_quarantine(project_path: Path, episode: int, kind: str) -> QuarantinedD
 
 
 def quarantine_exists(project_path: Path, episode: int, kind: str) -> bool:
-    """该集该阶段是否有草稿在场——gate 阻塞与生成侧拒绝的判据，不解析内容。"""
+    """Whether a draft exists for this episode and stage -- the criterion for gate blocking and generation-side refusal; does not parse content.
+
+    该集该阶段是否有草稿在场——gate 阻塞与生成侧拒绝的判据，不解析内容。"""
     return quarantine_path(project_path, episode, kind).exists()
 
 
 def clear_quarantine(project_path: Path, episode: int, kind: str, *, record_activity: bool = True) -> bool:
-    """晋升成功后清除草稿，返回是否真的删掉了文件；删掉时推进项目活动。丢弃草稿走 :func:`lib.script.planning_draft_trash.discard_quarantine`。
+    """Clear the draft after a successful promotion; return whether a file was really deleted, advancing project activity when it was. Discarding a draft goes through :func:`lib.script.planning_draft_trash.discard_quarantine`.
+
+    Silent when missing -- promotion may come from a direct re-run with no draft to clear. When clearing inside an outer write
+    transaction, pass ``record_activity=False`` and let the outer side record after commit: the ledger is project-global and is
+    not rolled back with the transaction.
+
+    晋升成功后清除草稿，返回是否真的删掉了文件；删掉时推进项目活动。丢弃草稿走 :func:`lib.script.planning_draft_trash.discard_quarantine`。
 
     缺失时静默——晋升可能来自一次直接重跑，本就没有草稿要清。在外层写事务内清除时传
     ``record_activity=False``，由外层提交后记账：账本是项目全局的，不随事务回滚。
     """
     path = quarantine_path(project_path, episode, kind)
     try:
-        # hard-delete: temp -- 晋升的暂存草稿，内容已写入正式文件
+        # hard-delete: temp -- staging draft of a promotion; its content has already been written to the final file / 晋升的暂存草稿，内容已写入正式文件
         path.unlink()
     except FileNotFoundError:
         return False
@@ -370,7 +505,12 @@ def clear_quarantine(project_path: Path, episode: int, kind: str, *, record_acti
 
 
 def render_report(draft: Path, kind: str, violations: list[DraftViolation], *, episode: int) -> str:
-    """渲染回给 Agent 的违约报告：逐条定位 + 按处置路径写的修复指引。``draft`` 是项目内相对路径。
+    """Render the violation report returned to the Agent: per-item location + fix guidance written by handling path. ``draft`` is a project-relative path.
+
+    The guidance says "which field of which file to change, and what to call afterwards" instead of a generic "please fix": the
+    handling path is the whole point of this mechanism; if the Agent doesn't know the output is still on disk, it falls back to re-rolling.
+
+    渲染回给 Agent 的违约报告：逐条定位 + 按处置路径写的修复指引。``draft`` 是项目内相对路径。
 
     指引写「改哪个文件的哪个字段、改完调什么」而非泛泛的「请修正」：处置路径是本机制的全部
     要点，Agent 若不知道产物还在盘上，就会退回重抽。
@@ -399,12 +539,18 @@ def quarantine_and_report(
     violations: list[DraftViolation],
     meta: dict[str, Any] | None = None,
 ) -> str:
-    """违约处置的单一出口：落草稿 + 渲染报告，返回回给 Agent 的报告文本。
+    """Single exit for violation handling: write the draft + render the report; return the report text for the Agent.
+
+    Writing and reporting come as a pair -- the report must name the draft path, and the path is decided by the write; writing the
+    two steps separately at each call site would sooner or later diverge into "the report says go fix a file that was never written".
+
+    违约处置的单一出口：落草稿 + 渲染报告，返回回给 Agent 的报告文本。
 
     落盘与报告成对出现——报告要指名草稿路径，路径由落盘决定；两步分开写在各调用点，迟早会
     出现「报告说去改某个文件、而那个文件没被写出来」的分叉。
     """
     path = write_quarantine(project_path, episode, kind, content=content, violations=violations, meta=meta)
+    # The report goes back as is to the (possibly remote) Agent: the draft is named only by its project-relative path, without leaking the server's directory layout.
     # 报告会原样回给（可能在远程的）Agent：草稿只按项目内相对路径指名，不外泄服务端目录布局。
     return render_report(path.relative_to(project_path), kind, violations, episode=episode)
 

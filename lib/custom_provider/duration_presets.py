@@ -1,4 +1,16 @@
-"""按模型名推断可选时长的预设表。
+"""Preset table for inferring selectable durations from the model name.
+
+Data source: lmarena video model leaderboard Top 20 (2026-05 snapshot) + common aggregator naming.
+Matched in PRESETS order, returning on first hit; if no family matches → DEFAULT_FALLBACK (``[4, 8]``).
+
+Presets have only two uses (docs/adr/0104, 0105): prefilling selectable durations when creating a model entry, and the runtime
+fallback for provider models that match no entry (:mod:`lib.custom_provider.model_facts`). The fallback result is not written
+to any field: provider models are not prefilled at save time, otherwise inferred values would pose as capability overrides the user set.
+
+Ambiguity note: the same model_id (e.g. sora-2-pro) may allow different seconds on OpenAI first-party versus third-party
+aggregator sites. Presets are only heuristics; channel limits are written by the user into capability overrides.
+
+按模型名推断可选时长的预设表。
 
 数据来源：lmarena 视频模型排行榜 Top 20（2026-05 快照）+ 常见聚合命名。
 匹配按 PRESETS 顺序，命中即返回；一个族都匹配不上 → DEFAULT_FALLBACK（``[4, 8]``）。
@@ -19,47 +31,63 @@ from lib.backends.video_backends.dashscope import classify_wan_model
 
 DEFAULT_FALLBACK: list[int] = [4, 8]
 
+# Wan 3.0 (any 2-30). Source: supported_durations of wan3.0-video in lib/config/registry.py.
 # 万相 3.0（2-30 任意）。出处：lib/config/registry.py wan3.0-video 的 supported_durations。
 _WAN3_DURATIONS: list[int] = list(range(2, 31))
+# Wan 2.7 (any 2-15). Source: supported_durations of wan2.7-{t2v,i2v,r2v} in lib/config/registry.py.
 # 万相 2.7（2-15 任意）。出处：lib/config/registry.py wan2.7-{t2v,i2v,r2v} 的 supported_durations。
 _WAN27_DURATIONS: list[int] = list(range(2, 16))
-# Alibaba HappyHorse（3-15 任意）。
+# Alibaba HappyHorse (any 3-15). / Alibaba HappyHorse（3-15 任意）。
 _HAPPYHORSE_DURATIONS: list[int] = list(range(3, 16))
 
+# Family membership of wan3 / wan2.7 / happyhorse reuses classify_wan_model (the single classification entry in
+# lib.backends.video_backends.dashscope) rather than another regex in this module: shares one conclusion with the routing
+# inference in endpoints.py and the capability tier inference of DashScopeVideoBackend, so the breadth of the three can't drift.
+# The other families in PRESETS below (sora/veo/kling, etc.) are not covered by that entry and still match by their vendor
+# keywords; the same goes for the generic wan fallback at the end (see the note at that entry).
 # wan3 / wan2.7 / happyhorse 三个家族的归属判定复用 classify_wan_model（lib.backends.video_backends.dashscope
 # 的单一判定入口），不在本模块另写正则——与 endpoints.py 路由推断、DashScopeVideoBackend 能力档
 # 推断共用同一结论，避免三处宽度各自漂移。下方 PRESETS 里其余家族（sora/veo/kling 等）不受该判定
 # 入口覆盖，仍按各自厂商关键字匹配；末尾的通用 wan 兜底同理（见该条目处的说明）。
 
+# Ordered from most to least specific; returns on the first hit. Ranges are fully expanded into discrete sets.
 # 按特异性从高到低排列；命中一条即返回。range 全展开为离散集。
 PRESETS: list[tuple[re.Pattern[str], list[int]]] = [
+    # OpenAI Sora first-party (strict regex: optional -pro, optional -YYYY-MM-DD date suffix)
     # OpenAI Sora 第一方（严格 regex：可选 -pro，可选 -YYYY-MM-DD 日期后缀）
     (re.compile(r"^sora-2(-pro)?(-\d{4}-\d{2}-\d{2})?$", re.I), [4, 8, 12]),
-    # 第三方聚合 Sora-Pro 变体（常见 6/10/12/16/20）
+    # Third-party aggregator Sora-Pro variants (commonly 6/10/12/16/20) / 第三方聚合 Sora-Pro 变体（常见 6/10/12/16/20）
     (re.compile(r"sora.*pro", re.I), [6, 10, 12, 16, 20]),
-    # Google Veo（含 fast / lite / preview）
+    # Google Veo (incl. fast / lite / preview) / Google Veo（含 fast / lite / preview）
     (re.compile(r"veo-?\d", re.I), [4, 6, 8]),
-    # Kling 全系（v1/v2/v2.5/v2.6/v3.0/o1/turbo/pro/omni/standard）
+    # Kling, all series (v1/v2/v2.5/v2.6/v3.0/o1/turbo/pro/omni/standard) / Kling 全系（v1/v2/v2.5/v2.6/v3.0/o1/turbo/pro/omni/standard）
     (re.compile(r"kling[-.]?(o1|v?[123](\.\d+)?)", re.I), [5, 10]),
-    # Runway Gen 系列
+    # Runway Gen series / Runway Gen 系列
     (re.compile(r"^(runway[-.]?)?gen-?\d", re.I), [5, 8, 10]),
     # Luma Ray / Dream Machine
     (re.compile(r"\bray-?\d", re.I), [5, 10]),
-    # ByteDance Dreamina / Seedance（4-15 任意）
+    # ByteDance Dreamina / Seedance (any 4-15) / ByteDance Dreamina / Seedance（4-15 任意）
     (re.compile(r"dreamina|seedance", re.I), list(range(4, 16))),
-    # 字节即梦
+    # ByteDance Jimeng / 字节即梦
     (re.compile(r"jimeng", re.I), list(range(4, 16))),
-    # xAI Grok Imagine（1-15 任意）
+    # xAI Grok Imagine (any 1-15) / xAI Grok Imagine（1-15 任意）
     (re.compile(r"grok[-.]?imagine", re.I), list(range(1, 16))),
-    # Vidu Q 系列（1-16 任意）
+    # Vidu Q series (any 1-16) / Vidu Q 系列（1-16 任意）
     (re.compile(r"vidu", re.I), list(range(1, 17))),
-    # PixVerse V5/V5.5/V5.6/V6（1-15 任意）
+    # PixVerse V5/V5.5/V5.6/V6 (any 1-15) / PixVerse V5/V5.5/V5.6/V6（1-15 任意）
     (re.compile(r"pixverse|^v[56](\.\d+)?$", re.I), list(range(1, 16))),
+    # MiniMax H3 (any 4-15; no token overlap with the hailuo entry below, placed next to it as part of the MiniMax family).
+    # Source: supported_durations of MiniMax-H3 in lib/config/registry.py.
     # MiniMax H3（4-15 任意；与下面的 hailuo 条目无 token 重叠，按 MiniMax 家族就近排列）。
     # 出处：lib/config/registry.py MiniMax-H3 的 supported_durations。
     (re.compile(r"minimax-h3", re.I), list(range(4, 16))),
-    # MiniMax Hailuo（固定 6）
+    # MiniMax Hailuo (fixed 6) / MiniMax Hailuo（固定 6）
     (re.compile(r"hailuo", re.I), [6]),
+    # Wan (remaining series classify_wan_model does not classify as wan3/wan2.7, incl. Wan 2.x minor versions other than 2.7).
+    # Separators accept hyphen and underscore, no identifier boundaries: this entry is a fallback heuristic; third-party model names
+    # containing a wan substring like "swan3"/"wan20" landing here is closer to common values than landing on DEFAULT_FALLBACK, and
+    # presets already require the user to review them in the input box. wan3/wan2.7/happyhorse are classified and returned first
+    # by classify_wan_model in infer_supported_durations and never reach this entry.
     # Wan（classify_wan_model 未归类到 wan3/wan2.7 的其余系列，含万相 2.x 中 2.7 以外的小版本）。
     # 分隔符接受连字符与下划线，不加标识符边界：本条是兜底启发式，"swan3"/"wan20" 一类含 wan
     # 子串的第三方型号名落到这条比落 DEFAULT_FALLBACK 更接近常见值，且预设本就要求用户在输入框
@@ -72,13 +100,19 @@ PRESETS: list[tuple[re.Pattern[str], list[int]]] = [
 
 
 def infer_supported_durations(model_id: str) -> list[int]:
-    """根据 model_id 启发式推导 supported_durations。
+    """Heuristically derive supported_durations from model_id.
+
+    The return value is always a non-empty, ascending, deduplicated list of positive integers, and an independent list (the caller may safely modify it).
+
+    根据 model_id 启发式推导 supported_durations。
 
     返回值始终是非空升序去重的正整数列表，且为独立 list（caller 可安全修改）。
     """
     classification = classify_wan_model(model_id)
     if classification.family == "wan3":
         return list(_WAN3_DURATIONS)
+    # wan2.7 modalities whose request construction is not implemented (videoedit / s2v / v2v, etc., see the note at
+    # has_known_modality in classify_wan_model) have different duration limits from t2v/i2v/r2v; the family tier is not applied and they fall to the generic presets below.
     # wan2.7 未实现请求构造的模态（videoedit / s2v / v2v 等，见 classify_wan_model 的
     # has_known_modality 处的说明）时长上限与 t2v/i2v/r2v 不同，不套用家族档，落到下方通用预设。
     if classification.family == "wan2.7" and classification.has_known_modality:

@@ -1,4 +1,4 @@
-"""内置供应商的供应商模型在本实例的状态。"""
+"""State on this instance of the provider models of built-in providers. / 内置供应商的供应商模型在本实例的状态。"""
 
 from __future__ import annotations
 
@@ -10,7 +10,20 @@ from lib.db.base import Base, TimestampMixin
 
 
 class BuiltinProviderModelState(TimestampMixin, Base):
-    """内置供应商名下一个供应商模型的本地状态（docs/adr/0099）。
+    """Local state of one provider model under a built-in provider (docs/adr/0099).
+
+    A row is one of two kinds:
+
+    - Enabled state of an officially listed model. The model list and all fields follow official data; only the user's
+      enable or disable is recorded here; without a row, the entry is enabled unless delisted.
+    - A user-added model (``user_added``): API model name, media type, provider model multiplier, entry binding and
+      capability overrides are the user's responsibility. If official data later lists the same model key, only the
+      enabled state of this row still applies.
+
+    ``model_id`` is the model key by which settings and projects reference this provider model: for officially listed
+    models the key from the catalogue lookup, for user-added ones the API model name.
+
+    内置供应商名下一个供应商模型的本地状态（docs/adr/0099）。
 
     一行是两种之一：
 
@@ -34,10 +47,12 @@ class BuiltinProviderModelState(TimestampMixin, Base):
     model_id: Mapped[str] = mapped_column(String(128), nullable=False)
     enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     user_added: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
-    # 以下只对用户添加的模型有意义；官方收录的模型忽略这些列。
+    # The following only matter for user-added models; officially listed models ignore these columns. / 以下只对用户添加的模型有意义；官方收录的模型忽略这些列。
     media_type: Mapped[str | None] = mapped_column(String(16), nullable=True)
     multiplier: Mapped[float] = mapped_column(Float, nullable=False, default=1.0, server_default=sa_text("1"))
+    # Entry binding (docs/adr/0105): "model vendor/official model name", media type from ``media_type``. NULL = look up by name.
     # 条目绑定（docs/adr/0105）：「模型厂商/官方模型名」，媒体类型取 ``media_type``。NULL = 按名字现查。
     entry_binding: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    # Capability overrides (docs/adr/0104), sparse dict; key names match the capability overrides of custom provider models.
     # 能力覆盖（docs/adr/0104），稀疏字典，键名与自定义供应商模型的能力覆盖一致。
     capability_overrides: Mapped[dict[str, object] | None] = mapped_column(JSON, nullable=True)

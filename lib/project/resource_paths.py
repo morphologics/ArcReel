@@ -1,4 +1,14 @@
-"""资源路径解析器 — 「资源类型 → 项目内相对路径」的唯一真相源。
+"""Resource path resolver -- the single source of truth for "resource type -> project-relative path".
+
+Pure functions: no disk reads, no project state. Exclusively owns each resource type's subdirectory, file-name
+template, extension, and the file-name prefixes of storyboards/end_frames/videos (``scene_``) and audio
+(``segment_``).
+
+The write side (MediaGenerator), version lookup (versions router), import repair (project_archive) and version
+management (VersionManager) all take shapes from here, so copies don't drift apart. Out-of-bounds checks are not
+done here; callers are responsible when building absolute paths.
+
+资源路径解析器 — 「资源类型 → 项目内相对路径」的唯一真相源。
 
 纯函数，不读盘、不持有项目状态。独家拥有各资源类型的子目录、文件名模板、
 扩展名，以及 storyboards/end_frames/videos（``scene_``）、audio（``segment_``）的文件名前缀。
@@ -15,7 +25,13 @@ from dataclasses import dataclass
 
 @dataclass(frozen=True)
 class ResourcePattern:
-    """单一资源类型的路径形状。
+    """Path shape of a single resource type.
+
+    ``id_segments`` is the number of path segments the resource id occupies: default 1 (the id is the file-name
+    stem); 2 for derivative character sheets (the id is written ``本体名/衍生名`` (base/derivative), with the base
+    name as a first-level directory).
+
+    单一资源类型的路径形状。
 
     ``id_segments`` 是 resource id 占用的路径段数：默认 1（id 就是文件名主体）；
     角色衍生资产图为 2（id 写作 ``本体名/衍生名``，本体名是一级目录）。
@@ -23,16 +39,27 @@ class ResourcePattern:
 
     subdir: str
     extension: str
+    # file-name prefix: "scene_" for storyboards/videos, "segment_" for audio, empty otherwise
     prefix: str = ""  # 文件名前缀：storyboards/videos 用 "scene_"，audio 用 "segment_"，其余空
     id_segments: int = 1
 
 
+# Resource type name of end-frame snapshots. Exported separately into this pure-function module with no reverse
+# dependencies, shared by server/services/project/end_frame.py (write side) and generation_tasks.py (read side), so
+# neither imports the other's server.services package and creates a circular dependency; also serves as the single
+# source of the corresponding `_PATTERNS` key, preventing two separately maintained literals from making the read
+# and write sides' paths diverge.
 # 尾帧快照的资源类型名。独立导出到这个无反向依赖的纯函数模块，供
 # server/services/project/end_frame.py（写侧）与 generation_tasks.py（读侧）共用，避免二者互相
 # import 对方所在的 server.services 包造成循环依赖；同时作为 `_PATTERNS` 对应 key 的唯一
 # 来源，防止两处字面量各自维护后读写侧路径口径分叉。
 END_FRAME_RESOURCE_TYPE = "end_frames"
 
+#: Resource type name of derivative character sheets. A derivative shares the base look's identity and its resource
+#: id is written ``本体名/衍生名`` (base/derivative), so it can't live under ``characters/`` (a base look could be
+#: named ``derivatives``) and gets its own subdirectory level. Exported to this module with no reverse dependencies
+#: for the same reason as END_FRAME_RESOURCE_TYPE, so the write side, version management and artifact planning
+#: share one literal.
 #: 角色衍生资产图的资源类型名。衍生共享本体的身份，资源 id 写作 ``本体名/衍生名``，
 #: 因此它不能落在 ``characters/`` 下（本体可以叫 ``derivatives``），单列一层子目录。
 #: 与 END_FRAME_RESOURCE_TYPE 同理导出到这个无反向依赖的模块，供写侧、版本管理与
@@ -41,6 +68,7 @@ CHARACTER_DERIVATIVE_RESOURCE_TYPE = "character_derivatives"
 
 _PATTERNS: dict[str, ResourcePattern] = {
     "storyboards": ResourcePattern("storyboards", ".png", prefix="scene_"),
+    # End-frame snapshots are named by shot id like storyboard images and shot videos, so they share the scene_ prefix.
     # 尾帧快照与分镜图、分镜视频同按分镜 id 命名，故共用 scene_ 前缀。
     END_FRAME_RESOURCE_TYPE: ResourcePattern(END_FRAME_RESOURCE_TYPE, ".png", prefix="scene_"),
     "videos": ResourcePattern("videos", ".mp4", prefix="scene_"),
@@ -65,7 +93,12 @@ def _pattern(resource_type: str) -> ResourcePattern:
 
 
 def resource_relative_path(resource_type: str, resource_id: str) -> str:
-    """返回资源在项目内的相对路径（posix，正斜杠）。
+    """Return the resource's project-relative path (posix, forward slashes).
+
+    storyboards/end_frames/videos look like ``storyboards/scene_{id}.png``, audio like ``audio/segment_{id}.wav``;
+    others ``{subdir}/{id}{ext}``. Unknown types raise ``ValueError``.
+
+    返回资源在项目内的相对路径（posix，正斜杠）。
 
     storyboards/end_frames/videos 形如 ``storyboards/scene_{id}.png``、audio 形如 ``audio/segment_{id}.wav``；
     其余 ``{subdir}/{id}{ext}``。未知类型抛 ``ValueError``。
@@ -76,22 +109,35 @@ def resource_relative_path(resource_type: str, resource_id: str) -> str:
 
 
 def resource_extension(resource_type: str) -> str:
-    """返回资源类型的文件扩展名（含点，如 ``.png``）。未知类型抛 ``ValueError``。"""
+    """Return the resource type's file extension (with dot, e.g. ``.png``). Unknown types raise ``ValueError``.
+
+    返回资源类型的文件扩展名（含点，如 ``.png``）。未知类型抛 ``ValueError``。"""
     return _pattern(resource_type).extension
 
 
 def resource_id_segments(resource_type: str) -> int:
-    """返回该资源类型的 resource id 占用的路径段数。未知类型抛 ``ValueError``。"""
+    """Return the number of path segments the resource type's resource id occupies. Unknown types raise ``ValueError``.
+
+    返回该资源类型的 resource id 占用的路径段数。未知类型抛 ``ValueError``。"""
     return _pattern(resource_type).id_segments
 
 
 def version_snapshot_dir(resource_type: str) -> str:
-    """返回该资源类型版本快照桶的项目内相对目录（posix）。未知类型抛 ``ValueError``。"""
+    """Return the project-relative directory (posix) of the resource type's version snapshot bucket. Unknown types raise
+    ``ValueError``.
+
+    返回该资源类型版本快照桶的项目内相对目录（posix）。未知类型抛 ``ValueError``。"""
     return f"versions/{_pattern(resource_type).subdir}"
 
 
 def version_snapshot_relative_path(resource_type: str, resource_id: str, *, version: int, timestamp: str) -> str:
-    """返回一份版本快照在项目内的相对路径（posix）。
+    """Return the project-relative path (posix) of one version snapshot.
+
+    Shaped like ``versions/{subdir}/{leading id segments}/{last id segment}_v{n}_{timestamp}{ext}``: the leading
+    segments of a multi-segment id become directory levels as-is, matching the levels of the current image
+    ``{subdir}/{id}{ext}`` one to one. Unknown types raise ``ValueError``.
+
+    返回一份版本快照在项目内的相对路径（posix）。
 
     形如 ``versions/{subdir}/{id 的前置段}/{id 末段}_v{n}_{timestamp}{ext}``：多段 id
     的前置段原样成为目录层级，与当前图 ``{subdir}/{id}{ext}`` 的层级一一对应。
@@ -104,7 +150,13 @@ def version_snapshot_relative_path(resource_type: str, resource_id: str, *, vers
 
 
 def resource_of_path(rel: str) -> tuple[str, str] | None:
-    """:func:`resource_relative_path` 的逆运算：项目内相对路径对应的 ``(资源类型, 资源 ID)``，不是资源当前文件时返回 ``None``。
+    """Inverse of :func:`resource_relative_path`: the ``(resource type, resource ID)`` for a project-relative path;
+    returns ``None`` if it is not a resource's current file.
+
+    Types with deeper subdirectories match first: ``characters/derivatives/a/b.png`` is derivative ``a/b``, not
+    character ``derivatives/a/b``.
+
+    :func:`resource_relative_path` 的逆运算：项目内相对路径对应的 ``(资源类型, 资源 ID)``，不是资源当前文件时返回 ``None``。
 
     子目录更深的类型先匹配：``characters/derivatives/a/b.png`` 是衍生 ``a/b``，不是角色 ``derivatives/a/b``。
     """

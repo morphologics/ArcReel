@@ -1,4 +1,4 @@
-"""GrokImageBackend — xAI Grok (Aurora) 图片生成后端。"""
+"""GrokImageBackend — xAI Grok (Aurora) image generation backend. / GrokImageBackend — xAI Grok (Aurora) 图片生成后端。"""
 
 from __future__ import annotations
 
@@ -27,6 +27,8 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_MODEL = "grok-imagine-image"
 
+# Multi-image editing allows at most 5 source images per request (same limit for grok-imagine-image / grok-imagine-image-pro).
+# Reference: https://docs.x.ai/developers/model-capabilities/images/multi-image-editing
 # 多图编辑单请求最多 5 张源图（grok-imagine-image / grok-imagine-image-pro 同一上限）。
 # 参考：https://docs.x.ai/developers/model-capabilities/images/multi-image-editing
 _MAX_REFERENCE_IMAGES = 5
@@ -50,19 +52,21 @@ _SUPPORTED_ASPECT_RATIOS = {
 
 
 def _validate_aspect_ratio(aspect_ratio: str) -> str:
-    """校验 aspect_ratio 是否在 Grok 支持列表中，不支持则 warning 并透传。"""
+    """Check whether aspect_ratio is in Grok's supported list; if not, warn and pass it through.
+
+    校验 aspect_ratio 是否在 Grok 支持列表中，不支持则 warning 并透传。"""
     if aspect_ratio not in _SUPPORTED_ASPECT_RATIOS:
         logger.warning("Grok 可能不支持 aspect_ratio=%s，将透传给 API", aspect_ratio)
     return aspect_ratio
 
 
 def _encode_existing_refs(ref_paths: list[str]) -> list[str]:
-    """跳过不存在的参考图，其余编码为 base64 data URI。"""
+    """Skip nonexistent reference images and encode the rest as base64 data URIs. / 跳过不存在的参考图，其余编码为 base64 data URI。"""
     return [image_to_base64_data_uri(path) for ref in ref_paths if (path := Path(ref)).exists()]
 
 
 class GrokImageBackend:
-    """xAI Grok (Aurora) 图片生成后端，支持 T2I 和 I2I。"""
+    """xAI Grok (Aurora) image generation backend, supporting T2I and I2I. / xAI Grok (Aurora) 图片生成后端，支持 T2I 和 I2I。"""
 
     CHANNEL_CAPABILITIES: ClassVar[frozenset[ImageCapability]] = BOTH_IMAGE_CAPABILITIES
 
@@ -101,7 +105,7 @@ class GrokImageBackend:
 
     @with_retry_async(retry_if=grok_should_retry)
     async def generate(self, request: ImageGenerationRequest) -> ImageGenerationResult:
-        """生成图片（T2I 或 I2I）。"""
+        """Generate images (T2I or I2I). / 生成图片（T2I 或 I2I）。"""
         generate_kwargs: dict = {
             "prompt": request.prompt,
             "model": self._model,
@@ -112,13 +116,14 @@ class GrokImageBackend:
             # "1k"/"2k"; the catalog says "1K"/"2K" -> "Invalid image resolution 2K."
             generate_kwargs["resolution"] = request.image_size.lower()
 
-        # I2I：将所有参考图转为 base64 data URI 列表
+        # I2I: convert all reference images into a list of base64 data URIs / I2I：将所有参考图转为 base64 data URI 列表
         reference_count = 0
         if request.reference_images:
             refs = request.reference_images
             if len(refs) > _MAX_REFERENCE_IMAGES:
                 logger.warning("Grok 参考图数量 %d 超过上限 %d，截断", len(refs), _MAX_REFERENCE_IMAGES)
                 refs = refs[:_MAX_REFERENCE_IMAGES]
+            # Existence checks and image reading/encoding are blocking I/O; offload the whole thing to a thread to avoid blocking the event loop
             # 存在性检查与读图编码都是阻塞 I/O，整体卸载到线程，避免堵住事件循环
             data_uris = await asyncio.to_thread(_encode_existing_refs, [ref.path for ref in refs])
             if data_uris:
@@ -130,11 +135,11 @@ class GrokImageBackend:
         logger.info("调用 %s 图片 SDK kwargs=%s", self.name, format_kwargs_for_log(generate_kwargs))
         response = await self._client.image.sample(**generate_kwargs)
 
-        # 审核检查
+        # Moderation check / 审核检查
         if not response.respect_moderation:
             raise RuntimeError("Grok 图片生成被内容审核拒绝")
 
-        # 下载图片到本地
+        # Download the image locally / 下载图片到本地
         await download_image_to_path(response.url, request.output_path)
 
         logger.info("Grok 图片下载完成: %s", request.output_path)

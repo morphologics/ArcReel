@@ -1,4 +1,22 @@
-"""从节点绑定推导 ComfyUI 端点的能力与参数约束。
+"""Derive ComfyUI endpoint capabilities and parameter constraints from node bindings.
+
+ComfyUI endpoint definitions have no ``capabilities`` section (``docs/adr/0082``): a workflow is exactly one model, and the
+binding table is already the complete model-level fact; storing a separate capability declaration would only clash with it.
+This module translates the binding table into two kinds of conclusions read by both the execution layer and the UI:
+
+* **Capability bits**: first frame / end frame / reference image limit / pure text-to-video map directly to the three image
+  bindings; the audio track depends on whether the ``audio`` input on the artifact's chain is connected. All are pure
+  functions that ignore the model name: renaming a model row doesn't change what the workflow can do. This module only
+  answers "what does the binding table say"; packing conclusions into :class:`VideoCapabilities` /
+  :class:`ImageCapability` is the job of ``lib/custom_provider/endpoints.py``: the subpackage is bound by an import
+  contract of "not depending on the declarative runtime" (``pyproject.toml``), and those two backend-layer types reach it indirectly.
+* **Parameter constraints**: whether ArcReel can drive the width/height and frame count dimensions depends on whether the
+  matching semantic keys are bound. Selectors for dimensions that can't be driven are disabled in the UI with an
+  explanation, rather than accepting the user's choice and silently dropping it.
+
+Derivation only reads the definition; no DB reads, no requests, and no writing back to the definition.
+
+从节点绑定推导 ComfyUI 端点的能力与参数约束。
 
 ComfyUI 端点的定义里没有 ``capabilities`` 节（``docs/adr/0082``）：一份 workflow 恰是一个型号，
 绑定表已是型号级的完整事实，再存一份能力声明只会与它打架。本模块把绑定表翻译成执行层与界面
@@ -34,9 +52,12 @@ from arcreel_market_core.comfyui.workflow import is_link, node_inputs
 
 from .inference_rules import AudioTrackSource, load_inference_rules
 
+#: The three semantic keys that decide "is there image input". All three empty means this workflow takes no image assets.
 #: 决定「有没有图输入」的三项语义键。三项全空即这份 workflow 不吃任何图片素材。
 _IMAGE_BINDING_KEYS = ("start_image", "end_image", "reference_images")
 
+#: The two conclusions for the audio track; values are identical to the member values of :class:`arcreel_market_core.video_backend_contract.VideoAudioMode`.
+#: Never ``controllable``: the ComfyUI side has no audio track switch that can be sent.
 #: 音轨的两种结论，取值与 :class:`arcreel_market_core.video_backend_contract.VideoAudioMode` 的成员值逐字相同。
 #: 永远不会是 ``controllable``：ComfyUI 侧没有可下发的音轨开关。
 AudioTrack = Literal["always_on", "always_off"]
@@ -44,7 +65,15 @@ AudioTrack = Literal["always_on", "always_off"]
 
 @dataclass(frozen=True)
 class BindingCapabilities:
-    """绑定表对「这份 workflow 能做什么」的全部回答，按 ``VideoCapabilities`` 的字段命名。
+    """Everything the binding table answers about "what this workflow can do", named after ``VideoCapabilities`` fields.
+
+    ``last_frame`` means "supported", not "required": a workflow with an end frame bound still produces output when the user
+    gives no end frame; that slot is removed by the construction layer with the same graph-editing rules as reference images.
+
+    The three reference audio items and ``max_prompt_chars`` are not included: the binding table has no matching semantic keys,
+    any declared value would be made up, and the projection leaves them at ``VideoCapabilities`` defaults.
+
+    绑定表对「这份 workflow 能做什么」的全部回答，按 ``VideoCapabilities`` 的字段命名。
 
     ``last_frame`` 是「支持」而非「要求」：绑了尾帧的 workflow 在用户没给尾帧时照常出片，那一格
     由构造层按参考图同一套改图规则摘掉。
@@ -61,7 +90,9 @@ class BindingCapabilities:
 
 
 def derive_video_capabilities(definition: Mapping[str, Any]) -> BindingCapabilities:
-    """把一份视频端点定义的绑定表翻译成能力位。纯函数：不看模型名，不读库。"""
+    """Translate a video endpoint definition's binding table into capability bits. Pure function: ignores the model name, no DB reads.
+
+    把一份视频端点定义的绑定表翻译成能力位。纯函数：不看模型名，不读库。"""
     bindings: Mapping[str, Any] = definition["bindings"]
     workflow: Mapping[str, Any] = definition["workflow"]
     has_image_input = any(targets_of(bindings.get(key)) for key in _IMAGE_BINDING_KEYS)
@@ -75,7 +106,17 @@ def derive_video_capabilities(definition: Mapping[str, Any]) -> BindingCapabilit
 
 
 def derive_audio_track(workflow: Mapping[str, Any], bindings: Mapping[str, Any]) -> AudioTrack:
-    """成片音轨的形态：产物那条链上的 ``audio`` 入口有连线即 ``always_on``，否则 ``always_off``。
+    """Form of the final video's audio track: ``always_on`` if the ``audio`` input on the artifact's chain is connected, otherwise ``always_off``.
+
+    Never ``controllable``: on the ComfyUI side the audio switch is not a request parameter but whether the workflow author
+    connected that wire; ArcReel has no switch to send, and reporting it as controllable would only make the user's on / off intent silently fail.
+
+    The artifact node has its own ``audio`` input (``VHS_VideoCombine``), or the audio input is on the video node one hop
+    upstream (``SaveVideo`` ← ``CreateVideo``); both forms are written in ``audio_track_sources`` of
+    ``inference_rules.video.json``. Artifact node forms outside the registry always fall back to ``always_off``: reporting
+    "silent" when unrecognized lets the user see an empty audio switch to check, while reporting "always with audio" would vouch for a graph we can't read.
+
+    成片音轨的形态：产物那条链上的 ``audio`` 入口有连线即 ``always_on``，否则 ``always_off``。
 
     永不 ``controllable``：音轨开关在 ComfyUI 侧不是请求参数，而是 workflow 作者连不连那条线，
     ArcReel 没有可下发的开关，把它报成可控只会让用户的开 / 关意图无声落空。
@@ -104,7 +145,12 @@ def derive_audio_track(workflow: Mapping[str, Any], bindings: Mapping[str, Any])
 def _audio_carrier(
     workflow: Mapping[str, Any], node: Mapping[str, Any], source: AudioTrackSource
 ) -> Mapping[str, Any] | None:
-    """带 ``audio`` 入口的那个节点：产物节点自身，或沿 ``through`` 入口往上一跳的成片节点。
+    """The node with the ``audio`` input: the artifact node itself, or the video node one hop upstream via the ``through`` input.
+
+    The upstream hop only accepts types in ``through_class_types``: if ``SaveVideo.video`` is connected to something else, the
+    graph's output form is not the one the registry describes and the audio track can't be determined.
+
+    带 ``audio`` 入口的那个节点：产物节点自身，或沿 ``through`` 入口往上一跳的成片节点。
 
     往上一跳只认 ``through_class_types`` 里的类型：``SaveVideo.video`` 接的若是别的什么节点，这份
     图的成片形态就不是名录描述的那一种，判不出音轨。
@@ -121,7 +167,14 @@ def _audio_carrier(
 
 
 def takes_reference_images(definition: Mapping[str, Any]) -> bool:
-    """这份 workflow 有没有参考图格子——图像端点的能力就由这一位决定。
+    """Whether this workflow has reference image slots: the image endpoint's capability is decided by this one bit.
+
+    None means text-to-image only, some means image-to-image only; the two are mutually exclusive rather than a union
+    (``docs/adr/0082``): with slots but no image given, the construction layer would either delete the image-reading nodes or
+    submit an empty image, neither of which is "also supports text-to-image". Strict split by bucket with no fallback
+    (``docs/adr/0015``), so the endpoint only reports the one path it can actually run.
+
+    这份 workflow 有没有参考图格子——图像端点的能力就由这一位决定。
 
     没有即仅文生图、有即仅图生图，两者互斥而不是并集（``docs/adr/0082``）：有格子却不给图，
     构造层要么删读图节点、要么提交一张空图——都不是「也支持文生图」。按桶严格分流、不回退
@@ -130,11 +183,18 @@ def takes_reference_images(definition: Mapping[str, Any]) -> bool:
     return bool(targets_of(definition["bindings"].get("reference_images")))
 
 
-# ── 参数约束 ──────────────────────────────────────────────────────
+# ── Parameter constraints ── / ── 参数约束 ──────────────────────────────────────────────────────
 
 
 def size_is_fixed(bindings: Mapping[str, Any]) -> bool:
-    """尺寸这一维 ArcReel 驱动不动：宽高两侧不是都有绑定。
+    """ArcReel can't drive the size dimension: width and height are not both bound.
+
+    Requires both sides rather than either: with only one side bound, the derived width/height can only be written to the bound
+    side while the other stays the workflow's fixed value, and the resulting ratio is neither the workflow's native one nor the
+    user's choice; worse than binding neither, because the user would think their chosen ratio took effect. Missing one side
+    means the whole dimension is judged fixed, and the resolution selector is disabled with an explanation.
+
+    尺寸这一维 ArcReel 驱动不动：宽高两侧不是都有绑定。
 
     要求两侧齐备而不是任一侧有值：只绑一侧时派生出的宽高只写得进绑了的那一侧，另一侧仍是
     workflow 的固定值，产出的比例既不是 workflow 原生的也不是用户选的——比两侧都不绑更坏，因为
@@ -144,7 +204,23 @@ def size_is_fixed(bindings: Mapping[str, Any]) -> bool:
 
 
 def native_short_edge(definition: Mapping[str, Any]) -> int | None:
-    """workflow 字面宽高的较小者，即这份图的原生短边。说不准时 ``None``。
+    """The smaller of the workflow's literal width and height, i.e. the graph's native short edge. ``None`` when uncertain.
+
+    The UI uses it to write the empty-value placeholder of the resolution selector, text like "workflow native (480p)", so the
+    user sees "what you get without choosing a tier" instead of an unexplained "default". That statement is about the graph's
+    own tier, so every input on each of the width and height sides must give the same literal value: when one side has two
+    inputs with differing literals (two consumers at 1024×576 and 512×512), the graph has no "native" tier to speak of, and
+    reporting the smaller would accept one of them on the user's behalf; when one input's literal can't be read (connected to a
+    link) it is likewise not reported: the fill layer would still write it, and write-back consistency can't be assured.
+
+    When size is judged fixed there is no value either: ``_write_size`` returns directly in that branch and never reaches the
+    literal short edge, so a stated tier would correspond to no actual behavior. That branch's placeholder text is given by the ``size_fixed`` bit instead.
+
+    When no tier is chosen the construction layer still takes the smaller of all literals via
+    ``request_builder._literal_short_edge``: it must write a size, and the smaller of the graph's numbers fits the graph better
+    than a global fallback constant; the UI side is about "can it be called native", so its criterion is stricter.
+
+    workflow 字面宽高的较小者，即这份图的原生短边。说不准时 ``None``。
 
     界面据它给分辨率选择器的空值占位写出「workflow 原生（480p）」这类文案——用户看得见「不选
     档位会得到什么」，而不是一个不知所指的「默认」。这句话说的是这份图自己那一档，因此宽高两侧
@@ -176,12 +252,21 @@ def native_short_edge(definition: Mapping[str, Any]) -> int | None:
 
 
 def duration_is_fixed(bindings: Mapping[str, Any]) -> bool:
-    """时长这一维 ArcReel 驱动不动：``frames`` 没有绑定，帧数只能是 workflow 的字面值。"""
+    """ArcReel can't drive the duration dimension: ``frames`` is not bound, so the frame count can only be the workflow's literal.
+
+    时长这一维 ArcReel 驱动不动：``frames`` 没有绑定，帧数只能是 workflow 的字面值。"""
     return not targets_of(bindings.get("frames"))
 
 
 def frame_rate_is_missing(definition: Mapping[str, Any]) -> bool:
-    """``frames`` 绑了，却读不到帧率来源：既无 ``fps`` 只读绑定，也有帧数入口没手填帧率。
+    """``frames`` is bound but no frame rate source can be read: there is no ``fps`` read-only binding, and some frame count input has no manually entered frame rate.
+
+    Mutually exclusive with :func:`duration_is_fixed` (that branch doesn't even bind ``frames``), and with "frame rate readable,
+    but no whole-second duration that can be written back as is comes out of the conversion". All three branches make
+    :func:`default_supported_durations` produce an empty set, but what is told to the user differs: only this branch lacks the
+    frame rate source itself, and the UI points to what to add based on it, rather than saying the workflow's duration is inherently fixed.
+
+    ``frames`` 绑了，却读不到帧率来源：既无 ``fps`` 只读绑定，也有帧数入口没手填帧率。
 
     与 :func:`duration_is_fixed` 互斥（那一支连 ``frames`` 都没绑），也与「帧率读得到、只是换算不出
     一档能原样写回的整秒时长」互斥。三支都让 :func:`default_supported_durations` 出空集，但说给用户
@@ -196,7 +281,27 @@ def frame_rate_is_missing(definition: Mapping[str, Any]) -> bool:
 
 
 def native_duration(definition: Mapping[str, Any]) -> int | None:
-    """这份 workflow 自己那一档时长（秒），取整。
+    """This workflow's own duration tier (seconds), rounded.
+
+    ``round((literal frames − 1) / fps)``: ComfyUI video models count frames as "first frame + some intervals", the inverse of
+    the construction layer's ``frames = round(duration × frame rate) + 1``; the two must share a source, otherwise the default
+    tier would be changed to another frame count as soon as it is submitted.
+
+    Missing either source gives ``None``: the literal frame count can only be read from the graph by following the ``frames``
+    binding (when unbound ArcReel has no pointer to the input holding the frame count), and the frame rate takes the literal read
+    via the ``fps`` read-only binding, or without that binding the constant entered manually on the ``frames`` entry. If it
+    can't be derived, don't derive it: giving a default duration from a guessed frame rate, which the user picks only to get a
+    clip of a different length, is worse than having this dimension say clearly "not driven by ArcReel".
+
+    A tier that would change the graph once chosen is also ``None``: 81 frames @ 24fps folds to 3 seconds, but submitting 3
+    seconds would make the construction layer write 73 frames; with several frame count inputs bound and differing literals, the
+    reported tier would change the other inputs too. A tier called "native" that alters the original graph when chosen is worse
+    than no tier, so every bound input must be able to write back its current value as is, including each one's frame rate
+    source and step; the criterion is shared with the fill layer via :func:`~.bindings.align_frames`. When one input's literal
+    frame count can't be read (connected to a link, or the value itself is invalid) it is likewise not reported: the fill layer
+    would still write it, and what that slot would be written back as can't be determined.
+
+    这份 workflow 自己那一档时长（秒），取整。
 
     ``round((字面 frames − 1) / fps)``：ComfyUI 的视频模型按「首帧 + 若干段间隔」计帧，与构造层
     ``frames = round(时长 × 帧率) + 1`` 是同一个换算的逆向，两处必须同源，否则默认档位一提交就
@@ -242,7 +347,17 @@ def native_duration(definition: Mapping[str, Any]) -> int | None:
 
 
 def keeps_its_own_frame_count(definition: Mapping[str, Any]) -> bool:
-    """帧数入口都写着自己的帧数（字面值 > 1），而这些值凑不出一档原生时长。
+    """The frame count inputs all hold their own frame counts (literal > 1), and these values don't add up to a native duration tier.
+
+    Such a graph's outward declaration is exactly "duration not driven by ArcReel": ``endpoint_durations`` is empty, the UI is
+    read-only and disabled, and the planning layer passes with a borrowed default number of seconds. So the fill layer should
+    not rewrite the frame count by that borrowed duration either: 81 frames @ 24fps converted to 4 seconds would be written as
+    97 frames, saying it doesn't drive while changing the clip length. The two places must give the same answer to the same question.
+
+    Placeholder values like ``length`` still being 1 don't count as "its own frame count": such graphs have no clip length to
+    preserve, and the frame count is driven by the request as usual.
+
+    帧数入口都写着自己的帧数（字面值 > 1），而这些值凑不出一档原生时长。
 
     这种图对外的声明正是「时长不由 ArcReel 驱动」——``endpoint_durations`` 为空、界面只读禁用、
     规划层借一个默认秒数过关。填值层因此也不该按那个借来的时长改写帧数：81 帧 @ 24fps 换算成
@@ -260,7 +375,18 @@ def keeps_its_own_frame_count(definition: Mapping[str, Any]) -> bool:
 
 
 def default_supported_durations(definition: Mapping[str, Any]) -> list[int]:
-    """ComfyUI 视频模型行的 ``supported_durations`` 默认集：只含这份 workflow 的原生时长。
+    """Default ``supported_durations`` set of a ComfyUI video model row: contains only this workflow's native duration.
+
+    Does not use the model-name heuristic of ``duration_presets.infer_supported_durations``: the model row's name is typed
+    casually by the user and has nothing to do with how long the workflow can actually produce (a name like ``my-wan-workflow``
+    would hit ``[4, 8]`` in the preset table).
+
+    When the native duration can't be derived it is an empty set: unbound ``frames`` always lands in this branch (no literal
+    frame count), and bound but without a frame rate source lands here too. On this channel an empty set is a valid state, not a
+    defect (see the ``kind: comfyui`` branch in ``lib/config/resolver.py``): the duration dimension is not driven by ArcReel, the
+    UI disables duration controls, no duration is sent on submit, and the workflow produces its own tier.
+
+    ComfyUI 视频模型行的 ``supported_durations`` 默认集：只含这份 workflow 的原生时长。
 
     不走 ``duration_presets.infer_supported_durations`` 的模型名启发式：模型行的名字由用户随手填，
     与 workflow 实际能出多长毫无关系（``my-wan-workflow`` 这样的名字在预设表里会命中 ``[4, 8]``）。

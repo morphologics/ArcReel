@@ -1,4 +1,10 @@
-"""ViduImageBackend — Vidu 参考生图 / 文生图后端。
+"""ViduImageBackend — Vidu reference-to-image / text-to-image backend.
+
+The Vidu image API has only one endpoint ``/reference2image``: T2I when images is empty, I2I / image editing when 1-7
+reference images are given. The channel implements both; whether a given model accepts text-to-image (e.g.
+``viduq1`` only accepts image-to-image) is a model fact recorded on the model entry.
+
+ViduImageBackend — Vidu 参考生图 / 文生图后端。
 
 Vidu 图片 API 仅有一个端点 ``/reference2image``：images 为空时为 T2I，提供 1-7 张参考图时为 I2I /
 图片编辑。调用通道两者都实现；各型号接不接受文生图（如 ``viduq1`` 只接受图生图）是模型事实，记在模型条目上。
@@ -51,9 +57,9 @@ DEFAULT_MODEL = "viduq2"
 _MAX_REFERENCE_IMAGES = 7
 _POLL_INTERVAL_SECONDS = 3.0
 _POLL_MAX_WAIT_SECONDS = 600.0
-_PROMPT_MAX_LEN = 2000  # 文档：不超过 2000 个字符
+_PROMPT_MAX_LEN = 2000  # docs: at most 2000 characters / 文档：不超过 2000 个字符
 
-# 文档明确的 aspect_ratio 白名单
+# aspect_ratio allowlist stated in the docs / 文档明确的 aspect_ratio 白名单
 _ASPECT_RATIO_WHITELIST: dict[str, list[str]] = {
     "viduq1": ["16:9", "9:16", "1:1", "3:4", "4:3"],
     "viduq2": ["16:9", "9:16", "1:1", "3:4", "4:3", "21:9", "2:3", "3:2", "auto"],
@@ -61,7 +67,7 @@ _ASPECT_RATIO_WHITELIST: dict[str, list[str]] = {
 
 
 class ViduImageBackend:
-    """Vidu 图片生成后端。"""
+    """Vidu image generation backend. / Vidu 图片生成后端。"""
 
     CHANNEL_CAPABILITIES: ClassVar[frozenset[ImageCapability]] = BOTH_IMAGE_CAPABILITIES
 
@@ -102,7 +108,7 @@ class ViduImageBackend:
         )
 
     async def generate(self, request: ImageGenerationRequest) -> ImageGenerationResult:
-        # viduq1 必须 1-7 张；viduq2 允许 0-7 张。这里截断到上限。
+        # viduq1 requires 1-7 images; viduq2 allows 0-7. Truncate to the limit here. / viduq1 必须 1-7 张；viduq2 允许 0-7 张。这里截断到上限。
         refs = list(request.reference_images or [])
         if len(refs) > _MAX_REFERENCE_IMAGES:
             logger.warning("Vidu 参考图数量 %d 超过上限 %d，截断", len(refs), _MAX_REFERENCE_IMAGES)
@@ -116,7 +122,7 @@ class ViduImageBackend:
         if refs:
             body["images"] = await asyncio.to_thread(lambda: [image_to_data_uri(Path(ref.path)) for ref in refs])
 
-        # aspect_ratio 白名单兜底
+        # aspect_ratio allowlist fallback / aspect_ratio 白名单兜底
         if request.aspect_ratio:
             ar_allowed = _ASPECT_RATIO_WHITELIST.get(self._model)
             if ar_allowed and request.aspect_ratio in ar_allowed:
@@ -129,6 +135,7 @@ class ViduImageBackend:
                     ar_allowed,
                 )
 
+        # resolution follows the model catalog entry and is passed through as is; out-of-range tiers are rejected upstream (docs/adr/0104)
         # resolution 以模型目录条目为准，原样透传；越界档位由上游拒绝（docs/adr/0104）
         resolution = request.image_size or None
         if resolution is not None:
@@ -155,6 +162,7 @@ class ViduImageBackend:
                 ),
             )
             url = extract_vidu_url(final)
+            # credits may also be inside creations (fall back to the top level); credits=0 is valid, so check for None explicitly.
             # creations 内 credits 可能也带（兜底取顶层）；credits=0 合法，必须显式判 None。
             final_credits = final.get("credits")
             actual_credits = final_credits if final_credits is not None else credits
@@ -181,6 +189,9 @@ class ViduImageBackend:
         logger.info("调用 Vidu 图片 API kwargs=%s", format_kwargs_for_log(safe_body_for_log(body)))
         resp = await client.post("/reference2image", json=body)
         if resp.status_code >= 400:
+            # redacted_status_error surfaces httpx.HTTPStatusError, keeping .response.status_code so the choke-point layer can
+            # recognize 413 and retry with a lower tier; 4xx also carries a redacted, truncated rejection summary for the task
+            # failure envelope. The body is redacted before logging, keeping it diagnosable.
             # redacted_status_error 透出 httpx.HTTPStatusError，保留 .response.status_code，
             # 让咽喉层能识别 413 走降档重试；4xx 另带脱敏截断后的拒因摘要，供任务失败信封取用。
             # body 先经脱敏后落日志，保留可诊断性。

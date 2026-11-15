@@ -1,4 +1,23 @@
-"""启动时把助手会话的 Agent 上下文记录对齐到当前数据根派生的存储键。
+"""At startup, align the Agent context records of assistant sessions to the storage keys derived from the current data root.
+
+The storage key is derived from the project directory's absolute path (:func:`make_project_key`), and CLI resume only
+looks up the current directory's key. After the data root's absolute path changes (desktop moved to another machine,
+white-label rename, changed ``ARCREEL_DATA_DIR``), existing sessions still hang under the key derived from the old path,
+and resume can't find them. Here the key is recomputed from each assistant session's project name and the current project
+directory, and sessions hanging elsewhere are moved over with :class:`SessionRekey`.
+
+Sessions with a tombstone name (project deleted) are aligned to the key of the original-name directory: when a deleted
+project is restored they are found by "the original directory under the current data root".
+
+When keys already match it only reads and doesn't write; the cost is a few queries:
+
+- With the database mirror on, the check happens entirely in the database (one query joining session metadata with the
+  summary table); only sessions with mismatched keys have their records rewritten from the old key found and their SDK
+  local jsonl moved, without walking the SDK local directory.
+- With ``ARCREEL_SDK_SESSION_STORE=off`` there is no mirror in the database; each session is checked for a local jsonl
+  under the current key directory, and only sessions not found trigger a walk of the SDK local directory.
+
+启动时把助手会话的 Agent 上下文记录对齐到当前数据根派生的存储键。
 
 存储键由项目目录的绝对路径派生（:func:`make_project_key`），CLI 续聊只按当前目录的键查找。数据根换了绝对路径
 （桌面端换机器、白标改名、改 ``ARCREEL_DATA_DIR``）后，已有会话仍挂在旧路径派生的键下，续聊会找不到会话。
@@ -38,7 +57,9 @@ logger = logging.getLogger(__name__)
 
 @dataclass(frozen=True)
 class KeyAlignment:
-    """一次对齐的结果：数据库记录改到当前键下的会话，与本地 jsonl 移到当前键目录下的会话。"""
+    """Result of one alignment: sessions whose database records moved to the current key, and sessions whose local jsonl moved to the current key directory.
+
+    一次对齐的结果：数据库记录改到当前键下的会话，与本地 jsonl 移到当前键目录下的会话。"""
 
     rewritten: frozenset[str] = frozenset()
     moved: frozenset[str] = frozenset()
@@ -51,7 +72,9 @@ async def align_session_keys(
     sdk_config_dir: Path,
     store_enabled: bool,
 ) -> KeyAlignment:
-    """把助手会话的 Agent 上下文记录改到 ``projects_dir`` 下项目目录派生的键，返回改动的会话。重复执行是空操作。"""
+    """Move the Agent context records of assistant sessions to the key derived from the project directory under ``projects_dir``, returning the changed sessions. Re-running is a no-op.
+
+    把助手会话的 Agent 上下文记录改到 ``projects_dir`` 下项目目录派生的键，返回改动的会话。重复执行是空操作。"""
     async with session_factory() as session:
         sessions = (await session.execute(select(AgentSession.sdk_session_id, AgentSession.project_name))).all()
     if not sessions:
@@ -76,7 +99,9 @@ async def align_session_keys(
 
 
 def _home_keys(projects_dir: Path, project_names: Iterable[str]) -> dict[str, str]:
-    """会话项目名 → 它的 Agent 上下文应在的存储键；墓碑名取原名，名字不合法的不处理。"""
+    """Session project name → the storage key its Agent context should be under; tombstone names use the original name, invalid names are skipped.
+
+    会话项目名 → 它的 Agent 上下文应在的存储键；墓碑名取原名，名字不合法的不处理。"""
     keys: dict[str, str] = {}
     for name in project_names:
         parsed = parse_deleted_project_name(name)
@@ -104,6 +129,7 @@ async def _align_store_records(
         sessions_by_move: dict[tuple[str, str], list[str]] = defaultdict(list)
         for session_id, keys in keys_by_session.items():
             target = target_by_session.get(session_id)
+            # Records already under the current key are enough to resume; SessionRekey would not merge copies elsewhere either, so leave them alone
             # 当前键下已有记录即可续聊；别处的副本 SessionRekey 也不会合并，留着不动
             if target is None or target in keys:
                 continue
@@ -136,7 +162,9 @@ async def _align_store_records(
 
 
 def _align_local_only(target_by_session: dict[str, str], sdk_config_dir: Path) -> set[str]:
-    """数据库没有镜像时，当前键目录下找不到本地记录的会话才去别的键目录找来移过去。"""
+    """Without a database mirror, only sessions with no local record under the current key directory are searched for in other key directories and moved over.
+
+    数据库没有镜像时，当前键目录下找不到本地记录的会话才去别的键目录找来移过去。"""
     sdk_projects_dir = sdk_config_dir / "projects"
     if not sdk_projects_dir.is_dir():
         return set()

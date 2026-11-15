@@ -16,7 +16,7 @@ from lib.infra.json_io import atomic_write_bytes
 
 
 def versioned_backup_name(base_name: str, from_version: int, ts: int) -> str:
-    """例如 project.json → project.json.bak.v0-1712345678。"""
+    """E.g. project.json -> project.json.bak.v0-1712345678. / 例如 project.json → project.json.bak.v0-1712345678。"""
 
     return f"{base_name}.bak.v{from_version}-{ts}"
 
@@ -54,6 +54,8 @@ def ensure_versioned_backup(source: Path, from_version: int) -> Path | None:
     ts = int(time.time())
     backup = source.with_name(versioned_backup_name(source.name, from_version, ts))
     while backup.exists():
+        # A second, different copy within the same second must not overwrite the previous one: move the name forward one
+        # second at a time until it lands on a free slot.
         # 同一秒内的第二份不同内容不能覆盖上一份：名字往后挪一秒，直到落到空位。
         ts += 1
         backup = source.with_name(versioned_backup_name(source.name, from_version, ts))
@@ -62,7 +64,9 @@ def ensure_versioned_backup(source: Path, from_version: int) -> Path | None:
 
 
 def kept_copy_name(base_name: str, from_version: int, ts: int) -> str:
-    """例如 script_plan_segments.json → script_plan_segments.json.kept.v9-1712345678。"""
+    """E.g. script_plan_segments.json -> script_plan_segments.json.kept.v9-1712345678.
+
+    例如 script_plan_segments.json → script_plan_segments.json.kept.v9-1712345678。"""
 
     return f"{base_name}.kept.v{from_version}-{ts}"
 

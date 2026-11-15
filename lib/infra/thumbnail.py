@@ -1,4 +1,4 @@
-"""视频帧提取（首帧缩略图 / 尾帧）"""
+"""Video frame extraction (first-frame thumbnail / end frame) / 视频帧提取（首帧缩略图 / 尾帧）"""
 
 import asyncio
 import logging
@@ -21,7 +21,7 @@ logger = logging.getLogger(__name__)
 
 @dataclass(frozen=True)
 class FrameExtractionDeadlines:
-    """ffmpeg 子进程按操作分档的 deadline（秒）。"""
+    """Per-operation deadlines (seconds) for ffmpeg subprocesses. / ffmpeg 子进程按操作分档的 deadline（秒）。"""
 
     probe: float = 30.0
     """只解复用读包数（媒体探测）。"""
@@ -35,9 +35,9 @@ class FrameExtractionDeadlines:
 
 DEFAULT_DEADLINES = FrameExtractionDeadlines()
 
-#: 首帧缩略图长边上限（像素）
+#: Long-edge limit of the first-frame thumbnail (pixels) / 首帧缩略图长边上限（像素）
 VIDEO_THUMBNAIL_MAX_EDGE = 1280
-# 长边缩到不超过上限、不放大；短边按 -2 等比并取偶数
+# Shrink the long edge to at most the limit, never upscale; short edge proportional via -2, rounded to even / 长边缩到不超过上限、不放大；短边按 -2 等比并取偶数
 VIDEO_THUMBNAIL_SCALE_FILTER = (
     f"scale=w='if(gte(iw,ih),min({VIDEO_THUMBNAIL_MAX_EDGE},iw),-2)'"
     f":h='if(gte(iw,ih),-2,min({VIDEO_THUMBNAIL_MAX_EDGE},ih))'"
@@ -52,6 +52,21 @@ async def extract_video_thumbnail(
     spawn: Spawner | None = None,
 ) -> Path | None:
     """
+    Extract the first frame of a video with ffmpeg as a JPEG thumbnail, shrinking the long edge to at most
+    ``VIDEO_THUMBNAIL_MAX_EDGE`` (never upscaling).
+
+    Args:
+        video_path: video file path
+        thumbnail_path: output thumbnail path
+
+    Returns:
+        thumbnail path (success) or None (failure / bundled ffmpeg unavailable)
+
+    Note:
+        Returns None when the bundled ffmpeg is unavailable, so callers take the existing "don't write the
+        video_thumbnail field" branch; for a frontend ``<video poster>`` with an empty poster the browser natively
+        renders the first frame from the video stream, no server-side placeholder needed.
+
     使用 ffmpeg 提取视频第一帧作为 JPEG 缩略图，长边缩到不超过 ``VIDEO_THUMBNAIL_MAX_EDGE``（不放大）。
 
     Args:
@@ -110,6 +125,12 @@ async def _probe_frame_count(
     spawn: Spawner | None,
 ) -> int | None:
     """
+    Read the frame count of the first video stream.
+
+    count_frames=False: only demux and count video packets, fast, but for a few codecs the packet count differs from the
+    frame count.
+    count_frames=True: full decode to count frames, exact but slow.
+
     读取首个视频流的帧数。
 
     count_frames=False：只解复用数视频包，快，但少数编码的包数与帧数不一致。
@@ -169,7 +190,11 @@ async def _run_ffmpeg_to_output(
     deadlines: FrameExtractionDeadlines,
     spawn: Spawner | None,
 ) -> bool:
-    """ffmpeg 先写同目录的独立临时文件（每次调用唯一），成功且非空才原子替换 ``output_path``；失败或超时不动已有产物。
+    """ffmpeg first writes a separate temp file in the same dir (unique per call), and only atomically replaces ``output_path`` on success with non-empty output; failure or timeout leaves existing artifacts untouched.
+
+    ``args`` are the ffmpeg args without the output path.
+
+    ffmpeg 先写同目录的独立临时文件（每次调用唯一），成功且非空才原子替换 ``output_path``；失败或超时不动已有产物。
 
     ``args`` 为不含输出路径的 ffmpeg 参数。
     """
@@ -187,14 +212,16 @@ async def _run_ffmpeg_to_output(
 
 
 def _promote_temp_output(succeeded: bool, temp_path: Path, output_path: Path) -> bool:
-    """ffmpeg 成功且临时文件非空时原子替换 ``output_path``；无论结果都清掉临时文件。"""
+    """Atomically replace ``output_path`` when ffmpeg succeeded and the temp file is non-empty; clean up the temp file regardless.
+
+    ffmpeg 成功且临时文件非空时原子替换 ``output_path``；无论结果都清掉临时文件。"""
     try:
         if not succeeded or not temp_path.exists() or temp_path.stat().st_size < 1:
             return False
         temp_path.replace(output_path)
         return True
     finally:
-        temp_path.unlink(missing_ok=True)  # hard-delete: temp -- ffmpeg 临时输出
+        temp_path.unlink(missing_ok=True)  # hard-delete: temp -- ffmpeg temp output / ffmpeg 临时输出
 
 
 async def _extract_frame_at_index(
@@ -233,6 +260,21 @@ async def extract_video_last_frame(
     spawn: Spawner | None = None,
 ) -> Path | None:
     """
+    Extract the last frame of a video as a PNG image.
+
+    Get the total frame count first, then locate the last frame with the select filter, avoiding the timestamp
+    approximation of ``-sseof``.
+
+    Optimization: first only demux and count video packets (fast); if that frame number yields nothing, fall back to a
+    full decode frame count (exact but slow).
+
+    Args:
+        video_path: video file path
+        output_path: output image path (.png recommended)
+
+    Returns:
+        output path (success) or None (failure / bundled ffmpeg unavailable)
+
     提取视频最后一帧作为 PNG 图片。
 
     先取得总帧数，再用 select 滤镜定位最后一帧，避免 ``-sseof`` 的时间戳近似问题。
@@ -257,7 +299,7 @@ async def extract_video_last_frame(
 
     await asyncio.to_thread(output_path.parent.mkdir, parents=True, exist_ok=True)
 
-    # 1. 先走快路径（只解复用数包），失败再回退到全量解码
+    # 1. Try the fast path first (demux and count packets only), fall back to full decode on failure / 1. 先走快路径（只解复用数包），失败再回退到全量解码
     total_frames = await _probe_frame_count(ffmpeg, video_path, count_frames=False, deadlines=deadlines, spawn=spawn)
     try:
         if (
@@ -292,6 +334,15 @@ async def extract_video_frame_before(
     spawn: Spawner | None = None,
 ) -> Path | None:
     """
+    Extract the last frame before source time ``end_seconds`` as a PNG, i.e. the picture shown when playback stops at that out point.
+
+    Seek to 1 second before the out point and decode sequentially, dropping frames starting no earlier than the out
+    point; the rest overwrite the same output file frame by frame, so the last one written is the last frame before the
+    out point.
+
+    Returns:
+        output path (success) or None (failure / bundled ffmpeg unavailable)
+
     提取源时间 ``end_seconds`` 之前的最后一帧作为 PNG，即播放到这个出点时停留的画面。
 
     从出点前 1 秒处定位后顺序解码，丢掉起点不早于出点的帧，其余逐帧覆盖同一个输出文件，写到最后的就是出点前的最后一帧。

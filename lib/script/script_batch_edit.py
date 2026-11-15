@@ -170,6 +170,8 @@ class ScriptBatchEditResult(BaseModel):
     revision: str
     affected_ids: tuple[str, ...] = ()
     problems: tuple[ScriptBatchEditProblem, ...] = ()
+    #: Hints for affected entries after a successful commit (e.g. an ``@[name]`` in a scene description not bound to a reference image),
+    #: locale-neutral ``{"key", "params"}`` entries; they do not affect ``success``.
     #: 提交成功后对受影响条目的提示（如画面描述里没绑定参考图的 ``@[名称]``），
     #: locale-neutral 的 ``{"key", "params"}`` 条目，不影响 ``success``。
     warnings: tuple[dict[str, Any], ...] = ()
@@ -226,6 +228,10 @@ class ScriptBatchEditor:
         is not marked in ``fresh_insert_indexes`` (a re-insert of the same identity).
         """
 
+        # The migration verdict comes before any parsing or writing: the manifest is the only basis for reading generated artifacts, and
+        # a non-upgraded project has no manifest to write. It sits at the entry rather than at commit because there are several early
+        # returns before commit (e.g. no manifest commit is prepared when the script's episode number is invalid); gating each one would
+        # miss some, while one gate at the entry holds for all paths at once.
         # 迁移裁决先于任何解析与写入：清单是读取已生成产物的唯一口径，未升级的项目没有
         # 清单可写。放在入口而不是提交处，是因为提交前有几条早退（如剧本集号不成立就
         # 不预备清单提交），逐条补闸会漏，入口一道闸对所有路径同时成立。
@@ -278,12 +284,14 @@ class ScriptBatchEditor:
             resolved_script = bound_script
             return resolved_script
 
+        # Entries leaving the script (ID -> entry array key) and the structure file before rewriting; filled in after candidate validation under the lock passes.
         # 离开剧本的条目（编号 → 条目数组键）与改写前的结构文件，在锁内的候选校验通过后填好。
         departed: dict[str, str] = {}
         removed_ids: set[str] = set()
         before_files: dict[str, bytes] = {}
 
         def finalize_manifest(_script_path: Path) -> None:
+            # Still holding the script lock: no new artifact may land before the media of removed entries is moved away. The deletion record is created first, while the manifest in the snapshot still carries the registrations.
             # 仍持剧本锁：被移除条目的媒体移走之前，不能有新产物落盘。删除记录先建，快照里的清单还带着登记。
             trash_entries(
                 self._pm.get_project_path(project_name),
@@ -352,6 +360,7 @@ class ScriptBatchEditor:
                 last_touch: dict[str, int] = {}
                 speech_change: dict[str, int] = {}
                 removed_items: dict[str, dict[str, Any]] = {}
+                # IDs of entries added in this batch are issued by the server: caller-supplied ID -> issued ID; later operations in this batch are redirected by it.
                 # 本批新增条目的编号由服务端发：调用方带来的编号 → 发出的编号，本批之后的操作按它改指。
                 issued_ids: dict[str, str] = {}
                 id_floor = (
@@ -362,6 +371,7 @@ class ScriptBatchEditor:
                 operations: list[ScriptBatchOperation] = []
 
                 for index, requested in enumerate(command.operations):
+                    # When the inserted id is not the same entry deleted-then-inserted in this batch, it is a brand-new identity: issue a new ID never used in this episode.
                     # 插入的 id 不是本批先删后插的同一条目时，就是一个全新身份：发一个本集从没用过的新编号。
                     fresh_insert = isinstance(requested, InsertAfterOperation) and (
                         index in fresh_insert_indexes or _operation_id(requested) not in removed_items
@@ -523,6 +533,9 @@ class ScriptBatchEditor:
                     for rel in (f"scripts/{resolved_script}", ProjectManager.PROJECT_FILE):
                         before_files[rel] = (project_dir / rel).read_bytes()
                 except ProjectMigrationError:
+                    # The project is not upgraded to the current data version; hand it to the outer layer to answer per the migration rules. It is
+                    # both an ArtifactManifestError and a ValueError, and if not caught first it would be generalized by the clause below into
+                    # "manifest unavailable, please retry".
                     # 项目未升级到当前数据版本，交给外层按迁移口径回执；它同时是
                     # ArtifactManifestError 与 ValueError，不先接住就会被下面这条泛化成
                     # 「清单不可用、请重试」。
@@ -552,6 +565,8 @@ class ScriptBatchEditor:
                 next_action="refresh_script",
             )
         except ProjectMigrationError as exc:
+            # Projects not upgraded to the current data version are blocked when committing the manifest. This must go back with the
+            # migration's reason and action: generalizing it into commit_failed/retry would make the caller retry as is, and retrying never makes the project finish migrating.
             # 未升级到当前数据版本的项目在提交清单时被阻断。这条要带着迁移的原因与动作回去：
             # 泛化成 commit_failed/retry 会让调用方原样重试，而重试永远不会让项目完成迁移。
             return self._failure(
@@ -640,6 +655,7 @@ class ScriptBatchEditor:
         )
 
 
+#: Empty entry content fields per entry form in storyboard mode (storyboard-to-video); duration follows the anchor shot, the visual layer stays empty pending authoring.
 #: 分镜图生视频各条目形态的空条目内容字段；时长沿用锚点分镜，视觉层留空待编写。
 _BLANK_ITEM_FIELDS: dict[str, dict[str, Any]] = {
     "segments": {
@@ -668,7 +684,13 @@ _BLANK_ITEM_FIELDS: dict[str, dict[str, Any]] = {
 
 
 def blank_item_after(script: dict[str, Any], after_id: str | None) -> dict[str, Any]:
-    """构造紧随 ``after_id`` 插入的空分镜（分镜图生视频的 segments / scenes / shots）。
+    """Build an empty shot inserted right after ``after_id`` (storyboard-to-video segments / scenes / shots).
+
+    The id is only a placeholder: on batch-edit commit a new ID is issued for added entries (``ScriptBatchEditor.execute``). The
+    duration follows the anchor shot; when ``after_id`` is ``None`` (the first entry in an empty script) it is 8 seconds. The visual
+    layer stays empty and is set to pending authoring by the batch-edit insert.
+
+    构造紧随 ``after_id`` 插入的空分镜（分镜图生视频的 segments / scenes / shots）。
 
     id 只是占位：批量编辑提交时为新增条目另发编号（``ScriptBatchEditor.execute``）。时长沿用锚点分镜；``after_id`` 为
     ``None``（空脚本里的第一条）时取 8 秒。视觉层留空，由批量编辑 insert 置待编写。
@@ -678,6 +700,7 @@ def blank_item_after(script: dict[str, Any], after_id: str | None) -> dict[str, 
         raise ScriptEditError(f"{kind} does not support blank item insertion")
     duration = None if after_id is None else items[_find_index(items, id_field, after_id)].get("duration_seconds")
     if isinstance(duration, float) and duration.is_integer():
+        # 5.0 and 5 in JSON are the same integer duration; script structure validation accepts it too.
         # JSON 里的 5.0 与 5 是同一个整数时长，剧本结构校验同样接受。
         duration = int(duration)
     return {
@@ -690,7 +713,9 @@ def blank_item_after(script: dict[str, Any], after_id: str | None) -> dict[str, 
 
 
 def _with_issued_ids(operation: ScriptBatchOperation, issued_ids: Mapping[str, str]) -> ScriptBatchOperation:
-    """把操作里指向本批新增条目的编号（调用方带来的编号）改指服务端发出的编号。"""
+    """Redirect IDs in operations that point at entries added in this batch (caller-supplied IDs) to the IDs issued by the server.
+
+    把操作里指向本批新增条目的编号（调用方带来的编号）改指服务端发出的编号。"""
     if not issued_ids:
         return operation
     update: dict[str, Any] = {}
@@ -759,6 +784,7 @@ def _apply_operation(
                     location=("fields", *_parse_path(field)),
                 ) from exc
         roots = {field.split(".", 1)[0] for field in operation.fields}
+        # A hand-written visual layer counts as authored: once the visual layer is complete after writing, pending authoring is cleared and default authoring no longer overwrites it.
         # 手写视觉层等同编写完成：写入后视觉层齐备即清除待编写，默认编写不再覆盖它。
         if roots & set(VISUAL_LAYER_FIELDS[kind]) and visual_layer_complete(kind, item):
             item.pop(PENDING_AUTHORING_FIELD, None)
@@ -795,6 +821,8 @@ def _apply_operation(
         removed = removed_items.pop(item_id, None)
         if not preserve_removed_assets:
             removed = None
+        # The pending-authoring marker does not accept a caller-supplied value; it only checks whether the inserted entry has a complete
+        # visual layer. Re-inserting the same id (split anchor, delete-then-insert) is judged the same way.
         # 待编写标记不接受调用方自带的值，只看插入的条目是否带齐视觉层；同 id 重插（拆分锚点、
         # 先删后插）同样按此判定。
         item.pop(PENDING_AUTHORING_FIELD, None)
@@ -853,7 +881,13 @@ def _source_text_problems(
     candidate: dict[str, Any],
     operations: list[ScriptBatchOperation],
 ) -> tuple[ScriptBatchEditProblem, ...]:
-    """本次写入的对应原文须是本集源文的逐字子串，与参考生视频拆分工具同一判定口径。
+    """Source text written this time must be a verbatim substring of the episode's source, the same check as the reference-to-video split tool.
+
+    Only new or changed non-empty ``source_text`` is checked: untouched entries do not block unrelated edits even if the source
+    changed later, and clearing the source text is always allowed. See :func:`_anchor_sources` for the comparison sources; no check
+    when the project has no source.
+
+    本次写入的对应原文须是本集源文的逐字子串，与参考生视频拆分工具同一判定口径。
 
     只查新增或改动过的非空 ``source_text``：未动的条目即使源文后来变了也不拦无关编辑，清空
     对应原文始终允许。比对源文见 :func:`_anchor_sources`；项目没有源文时不校验。
@@ -898,7 +932,15 @@ def _source_text_problems(
 
 
 def _anchor_sources(project_dir: Path, project: Mapping[str, Any], episode: int | None) -> list[str]:
-    """对应原文的比对源文。
+    """Comparison sources for source text.
+
+    When the ledger records that this episode has episode source and the episode file ``source/episode_N.txt`` is readable and
+    non-empty, only that is used -- the same file the split tool reads when generating source text; when the episode has no source,
+    the episode file is missing or the episode number is unknown, it falls back to the whole source (a hit in any one is enough);
+    when the project has no source either, an empty list is returned. For an episode without source, a file on disk with the same
+    name is not read.
+
+    对应原文的比对源文。
 
     账本记录本集有原文、且集文件 ``source/episode_N.txt`` 可读且非空时只认它，与拆分工具生成对应原文时
     读的是同一份；本集无原文、集文件缺失或集号未知时回落到整本源文（命中任一份即可），项目也没有源文时

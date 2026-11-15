@@ -1,4 +1,15 @@
-"""视频版本的机器检查信号：黑屏段、卡帧段、镜头切换点。
+"""Machine-check signals for a video version: black segments, freeze segments, shot changes.
+
+All three are computed locally in one decode by the bundled ffmpeg (``blackdetect`` / ``freezedetect`` / ``scene``
+score), with time measured from the first frame = 0, the same time axis as contact sheet labels and the edit
+timeline's in/out points. Signals are hints only: black and freeze are suspected problems; shot changes are
+structural information, not defects.
+
+Results are cached per video version as a JSON sidecar file: a version snapshot never changes once written; the cache
+is fingerprinted by the video file's size and mtime, and :data:`SIGNALS_SCHEMA` is bumped when algorithm parameters
+change, invalidating old caches.
+
+视频版本的机器检查信号：黑屏段、卡帧段、镜头切换点。
 
 三项信号都由随包 ffmpeg 在本地一次解码算出（``blackdetect`` / ``freezedetect`` / ``scene`` 打分），
 时间以首帧为 0，与联系表标注、剪辑时间线的入出点同一时间轴。信号只作提示：黑屏与卡帧是疑似问题，
@@ -48,7 +59,7 @@ _SHOT_START_RE = re.compile(r"\bn:\s*\d+\s+pts:\s*-?\d+\s+pts_time:(-?[\d.]+)")
 
 
 class SignalDetectionError(RuntimeError):
-    """信号检测失败或超时。"""
+    """Signal detection failed or timed out. / 信号检测失败或超时。"""
 
 
 @dataclass(frozen=True, slots=True)
@@ -77,7 +88,9 @@ class VideoSignals:
         return tuple(TimeSpan(start, end) for start, end in zip(starts, ends, strict=True))
 
     def tags_at(self, time_seconds: float) -> tuple[str, ...]:
-        """起点为 ``time_seconds`` 的帧落在哪些信号上；固定按切点、黑屏、卡帧排序。"""
+        """Which signals the frame starting at ``time_seconds`` falls on; always ordered cut, black, freeze.
+
+        起点为 ``time_seconds`` 的帧落在哪些信号上；固定按切点、黑屏、卡帧排序。"""
         tags: list[str] = []
         if any(abs(time_seconds - cut) <= _TIME_EPSILON for cut in self.cuts):
             tags.append(TAG_CUT)
@@ -97,7 +110,7 @@ class VideoSignals:
 
     @classmethod
     def from_json(cls, data: Any) -> VideoSignals | None:
-        """结构不符合预期时返回 None，调用方按未命中缓存处理。"""
+        """Returns None when the structure is not as expected; the caller treats it as a cache miss. / 结构不符合预期时返回 None，调用方按未命中缓存处理。"""
         try:
             return cls(
                 duration_seconds=float(data["duration_seconds"]),
@@ -115,7 +128,9 @@ def _video_duration(frame_times: Sequence[float]) -> float:
 
 
 def _without(spans: Sequence[TimeSpan], covered: Sequence[TimeSpan]) -> list[TimeSpan]:
-    """从 ``spans`` 里挖掉 ``covered``，剩下不足 :data:`FREEZE_MIN_SECONDS` 的碎段丢弃。"""
+    """Cut ``covered`` out of ``spans``; leftover fragments shorter than :data:`FREEZE_MIN_SECONDS` are dropped.
+
+    从 ``spans`` 里挖掉 ``covered``，剩下不足 :data:`FREEZE_MIN_SECONDS` 的碎段丢弃。"""
     remaining = list(spans)
     for hole in covered:
         pieces: list[TimeSpan] = []
@@ -150,9 +165,10 @@ def _parse_signals(log: str, duration: float) -> VideoSignals:
         elif "showinfo" in line and (match := _SHOT_START_RE.search(line)) is not None:
             cuts.append(float(match.group(1)))
     if freeze_start is not None:
+        # Still frozen at the end of the video: ffmpeg does not emit a final freeze_end, so the freeze runs to the end of the video.
         # 视频结束时仍在卡帧：ffmpeg 不再补发 freeze_end，卡帧延续到视频末尾。
         freeze.append(TimeSpan(freeze_start, duration))
-    # 黑屏必然静止：黑屏段不重复计入卡帧段。
+    # Black is necessarily static: black segments are not counted again as freeze segments. / 黑屏必然静止：黑屏段不重复计入卡帧段。
     freeze = _without(freeze, black)
     return VideoSignals(
         duration_seconds=_rounded(duration),
@@ -163,7 +179,16 @@ def _parse_signals(log: str, duration: float) -> VideoSignals:
 
 
 async def detect_signals(video_path: Path, frame_times: Sequence[float]) -> VideoSignals:
-    """对整段视频解码一次，算出黑屏段、卡帧段与镜头切换点。
+    """Decode the whole video once and compute black segments, freeze segments and shot changes.
+
+    Args:
+        frame_times: start time of each frame of the video (result of ``probe_video_frame_times``), used to determine the total duration.
+
+    Raises:
+        FfmpegUnavailableError: the bundled ffmpeg is unavailable.
+        SignalDetectionError: decoding failed or timed out.
+
+    对整段视频解码一次，算出黑屏段、卡帧段与镜头切换点。
 
     Args:
         frame_times: 该视频每帧的起始时刻（``probe_video_frame_times`` 的结果），用来定视频总时长。
@@ -213,7 +238,11 @@ def _fingerprint(video_path: Path) -> list[int]:
 
 
 async def signals_for(video_path: Path, frame_times: Sequence[float], *, cache_file: Path) -> tuple[VideoSignals, bool]:
-    """取视频版本的信号：命中 ``cache_file`` 则直接返回，否则检测并写入缓存。返回 (信号, 是否命中缓存)。
+    """Get a video version's signals: return directly on a ``cache_file`` hit, otherwise detect and write the cache. Returns (signals, cache hit).
+
+    A failed cache write only means recomputing next time; it does not affect this result.
+
+    取视频版本的信号：命中 ``cache_file`` 则直接返回，否则检测并写入缓存。返回 (信号, 是否命中缓存)。
 
     缓存写入失败只影响下次重算，不影响本次结果。
     """
@@ -228,7 +257,7 @@ async def signals_for(video_path: Path, frame_times: Sequence[float], *, cache_f
 
 
 def _write_signals_cache(cache_file: Path, fingerprint: list[int], signals: VideoSignals) -> None:
-    """写入信号缓存；失败只记日志，下次重算即可。"""
+    """Write the signals cache; on failure only log, it will be recomputed next time. / 写入信号缓存；失败只记日志，下次重算即可。"""
     try:
         cache_file.parent.mkdir(parents=True, exist_ok=True)
         atomic_write_json(cache_file, {"schema": SIGNALS_SCHEMA, "video": fingerprint, "signals": signals.to_json()})
@@ -237,13 +266,17 @@ def _write_signals_cache(cache_file: Path, fingerprint: list[int], signals: Vide
 
 
 def frame_index_at(frame_times: Sequence[float], time_seconds: float) -> int:
-    """起点不早于 ``time_seconds``（容差内）的第一帧的索引；越过末帧时取末帧。"""
+    """Index of the first frame starting no earlier than ``time_seconds`` (within tolerance); past the last frame, the last frame.
+
+    起点不早于 ``time_seconds``（容差内）的第一帧的索引；越过末帧时取末帧。"""
     index = bisect.bisect_left(frame_times, time_seconds - _TIME_EPSILON)
     return min(index, len(frame_times) - 1)
 
 
 def last_frame_index_before(frame_times: Sequence[float], time_seconds: float) -> int:
-    """起点早于 ``time_seconds``（容差内）的最后一帧的索引；没有则为 -1。"""
+    """Index of the last frame starting earlier than ``time_seconds`` (within tolerance); -1 if none.
+
+    起点早于 ``time_seconds``（容差内）的最后一帧的索引；没有则为 -1。"""
     return bisect.bisect_left(frame_times, time_seconds - _TIME_EPSILON) - 1
 
 

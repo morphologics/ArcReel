@@ -1,4 +1,20 @@
-"""v17→v18 的补录重跑：登记原先因生成缺口被跳过的存量产物（``docs/adr/0098``）。
+"""v17->v18 back-registration rerun: register existing artifacts previously skipped because of input gaps
+(``docs/adr/0098``).
+
+From v18 an input gap only blocks generation, and the expected basis records the missing items as absent
+(``lib.artifacts.input_gap``). Activation and source back-fill of earlier steps ran on the basis "any gap means no
+projection", so the skipped artifacts have no registration in the manifest. This step:
+
+1. reruns the legacy media source back-fill (``docs/adr/0075``) on the basis of recording gaps as absent, only
+   back-filling selected video records that still have no typed source; manual uploads are untouched;
+2. plans the target state once before (schema 17, gap means no registration) and once after (schema 18);
+3. only adds to the manifest entries that "had no registered target before, have one after, and aren't in the
+   manifest either"; registered entries stay byte-for-byte unchanged.
+
+Back-registered artifacts are judged current; when filling the gaps later changes the basis, they are judged stale
+as usual.
+
+v17→v18 的补录重跑：登记原先因生成缺口被跳过的存量产物（``docs/adr/0098``）。
 
 v18 起生成缺口只拦生成，期望依据把缺的项记为缺席（``lib.artifacts.input_gap``）。更早各步的激活与
 来源补写按「有缺口即投影不出」的口径跑过，被跳过的产物在清单里没有登记。这一步：
@@ -39,7 +55,13 @@ _FROM_VERSION = GAP_TOLERANT_BASIS_SCHEMA_VERSION - 1
 
 
 def backfill_input_gap_artifacts(project_dir: Path, project: Mapping[str, Any]) -> ArtifactBackfillOutcome:
-    """补录因生成缺口被跳过的产物。调用方持有项目元数据锁，``project`` 是盘上的 v17 内容。
+    """Back-register artifacts skipped because of input gaps. The caller holds the project metadata lock; ``project`` is
+    the on-disk v17 content.
+
+    The manifest and version records are each backed up before rewriting; if dependencies drift after commit, both are
+    rolled back to their pre-rewrite bytes.
+
+    补录因生成缺口被跳过的产物。调用方持有项目元数据锁，``project`` 是盘上的 v17 内容。
 
     清单与版本记录改写前各自备份；提交后依赖若有漂移，按改写前的字节回滚两者。
     """

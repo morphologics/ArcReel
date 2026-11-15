@@ -1,4 +1,19 @@
-"""随版声明式内置端点：把 ``builtin_endpoints/*.json`` 读成经校验的定义并派生端点元数据。
+"""Bundled declarative built-in endpoints: read ``builtin_endpoints/*.json`` into validated definitions and derive endpoint metadata.
+
+Built-in call endpoints have two implementation forms: a Python backend, or a declarative definition shipped with the
+release. The latter's definition JSON lives under ``builtin_endpoints/``, **the file name is the built-in key**, and
+:mod:`lib.custom_provider.endpoints` reads them into the registry at import time. Definitions are not stored in the DB,
+users cannot edit or delete them, and replacing the file on upgrade takes effect.
+
+Loading is fail-fast: if any definition is invalid (JSON parse failure, fails the shared validator, key uses the ``ce-``
+prefix, author is not ArcReel) the process does not start, instead of failing only when a user picks that endpoint and
+starts a generation. Validation always goes through
+:func:`arcreel_market_core.endpoint_definition.validate_definition`: bundled and user definitions are measured by the same rule.
+
+This module only does "file → definition + metadata" and does not build
+:class:`~lib.custom_provider.endpoints.EndpointSpec`, so it does not depend on ``endpoints`` (which depends on this module).
+
+随版声明式内置端点：把 ``builtin_endpoints/*.json`` 读成经校验的定义并派生端点元数据。
 
 内置调用端点有两种实现形态——Python backend，或随版附带的一份声明式定义。后者的定义 JSON 放在
 ``builtin_endpoints/`` 下，**文件名即内置键**，由 :mod:`lib.custom_provider.endpoints` 在 import
@@ -24,19 +39,24 @@ from arcreel_market_core.endpoint_definition import DefinitionIssue, validate_de
 from arcreel_market_core.video_backend_contract import VideoCapabilities
 from lib.custom_provider import CUSTOM_ENDPOINT_KEY_PREFIX
 
-#: 随版定义所在目录。文件名（不含 ``.json``）即内置端点键。
+#: Directory of the bundled definitions. The file name (without ``.json``) is the built-in endpoint key. / 随版定义所在目录。文件名（不含 ``.json``）即内置端点键。
 BUILTIN_DEFINITIONS_DIR = Path(__file__).parent / "builtin_endpoints"
 
+#: Author credit of bundled definitions. Copies made by "copy as mine" keep it; users may change the name and version as they like.
 #: 随版定义的作者署名。「复制为我的」产出的副本沿用它，用户改名改版本自便。
 BUILTIN_DEFINITION_AUTHOR = "ArcReel"
 
 
 class BuiltinDefinitionError(RuntimeError):
-    """随版定义不合法。import 期抛出，进程随即起不来。"""
+    """A bundled definition is invalid. Raised at import time; the process then fails to start. / 随版定义不合法。import 期抛出，进程随即起不来。"""
 
 
 def load_builtin_definitions(directory: Path | None = None) -> dict[str, dict[str, Any]]:
-    """读入目录下全部 ``<key>.json``，逐份校验，返回「内置键 → 定义」。
+    """Read all ``<key>.json`` in the directory, validate each, and return "built-in key → definition".
+
+    Keys are sorted by file name, so the order shown in the registry does not drift with file system traversal order.
+
+    读入目录下全部 ``<key>.json``，逐份校验，返回「内置键 → 定义」。
 
     键按文件名排序，注册表里的呈现顺序因此不随文件系统遍历顺序漂移。
     """
@@ -47,7 +67,9 @@ def load_builtin_definitions(directory: Path | None = None) -> dict[str, dict[st
 
 
 def load_builtin_definition(path: Path) -> dict[str, Any]:
-    """读入并校验单份随版定义。不合法即抛 :class:`BuiltinDefinitionError`。"""
+    """Read and validate a single bundled definition. Raises :class:`BuiltinDefinitionError` if invalid.
+
+    读入并校验单份随版定义。不合法即抛 :class:`BuiltinDefinitionError`。"""
     key = path.stem
     if key.startswith(CUSTOM_ENDPOINT_KEY_PREFIX):
         raise BuiltinDefinitionError(
@@ -69,23 +91,32 @@ def load_builtin_definition(path: Path) -> dict[str, Any]:
 
 
 def _format_issues(issues: Sequence[DefinitionIssue]) -> str:
-    """把诊断拼成 import 期可读的一行。此处无请求上下文可取语言，故只渲染码与路径。"""
+    """Join the diagnostics into one line readable at import time. There is no request context to take a language from here, so only codes and paths are rendered.
+
+    把诊断拼成 import 期可读的一行。此处无请求上下文可取语言，故只渲染码与路径。"""
     return "; ".join(f"{issue.path}: {issue.code.value}" for issue in issues)
 
 
 def declarative_family(key: str) -> str:
-    """内置键的首段即家族（``newapi-video`` → ``newapi``）。"""
+    """The first segment of the built-in key is the family (``newapi-video`` → ``newapi``). / 内置键的首段即家族（``newapi-video`` → ``newapi``）。"""
     return key.split("-", 1)[0]
 
 
 def declarative_display_name(definition: Mapping[str, Any]) -> str:
-    """显示名取 ``meta.name``：端点名是供应商专有名词，不翻译、不在定义之外另维护映射。"""
+    """The display name is ``meta.name``: endpoint names are provider proper nouns, not translated, and no mapping is kept outside the definition.
+
+    显示名取 ``meta.name``：端点名是供应商专有名词，不翻译、不在定义之外另维护映射。"""
     name: str = definition["meta"]["name"]
     return name
 
 
 def declarative_request_path(definition: Mapping[str, Any]) -> str:
-    """提交 URL 模板去掉 ``{{ base_url }}`` 前缀后的部分，供 catalog 展示调用路径。
+    """The submit URL template with the ``{{ base_url }}`` prefix removed, for the catalog to show the call path.
+
+    The URL in the definition is a full template, while the catalog's ``request_path_template``, like Python built-ins, shows
+    only the path; when the template does not start with base_url but hard-codes a provider domain, scheme / authority are dropped too.
+
+    提交 URL 模板去掉 ``{{ base_url }}`` 前缀后的部分，供 catalog 展示调用路径。
 
     定义里的 URL 是完整模板，而 catalog 的 ``request_path_template`` 与 Python 内置一样只呈现
     路径；模板不以 base_url 起头但写死供应商域名时，也丢掉 scheme / authority。
@@ -102,7 +133,9 @@ def declarative_request_path(definition: Mapping[str, Any]) -> str:
 
 
 def declarative_video_capabilities(definition: Mapping[str, Any]) -> VideoCapabilities:
-    """声明式能力投影的公开兼容名；实现集中在能力合成模块。"""
+    """Public compatibility name for the declarative capability projection; the implementation is centralized in the capability synthesis module.
+
+    声明式能力投影的公开兼容名；实现集中在能力合成模块。"""
     from lib.custom_provider.capabilities import video_capabilities_from_definition
 
     return video_capabilities_from_definition(definition)

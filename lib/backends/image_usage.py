@@ -1,4 +1,10 @@
-"""内置供应商图片调用的预估用量（docs/adr/0100）。
+"""Estimated usage of built-in provider image calls (docs/adr/0100).
+
+Estimates and settlement use the same calculator: at settlement the backend reports the meters that actually occurred;
+for estimates the same backend derives them from the request facts (see each built-in backend's ``estimate_usage``),
+with selection dimensions taken from the request fields it would send to the provider (docs/adr/0056).
+
+内置供应商图片调用的预估用量（docs/adr/0100）。
 
 预估与结算用同一个计算器：结算时调用通道上报实际发生的计量项，预估时由同一条调用通道按请求事实推出
 （见各内置调用通道的 ``estimate_usage``），选择维度取自它会发给供应商的请求字段（docs/adr/0056）。
@@ -13,5 +19,7 @@ from lib.billing.metering import Usage
 
 
 def estimate_builtin_image_usage(provider_id: str, facts: ImageRequestFacts) -> Usage:
-    """内置供应商一次图片调用的预估用量；供应商没有图片调用通道时抛 ``ValueError``。"""
+    """Estimated usage of one built-in provider image call; raises ``ValueError`` if the provider has no image backend.
+
+    内置供应商一次图片调用的预估用量；供应商没有图片调用通道时抛 ``ValueError``。"""
     return channel_usage_estimator(get_provider_spec(provider_id, "image").registry_backend)(facts)

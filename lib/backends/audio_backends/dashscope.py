@@ -1,4 +1,12 @@
-"""DashScopeAudioBackend — 阿里百炼 Qwen3-TTS 语音合成后端（同步）。
+"""DashScopeAudioBackend — Alibaba Bailian Qwen3-TTS speech synthesis backend (synchronous).
+
+Uses the native multimodal-generation/generation synchronous endpoint: the request body's ``input`` directly carries
+``text`` / ``voice`` / ``language_type`` (unlike the messages structure for images); the response gives a wav file URL
+(24kHz, valid 24h) in ``output.audio.url``, whose bytes are then downloaded via HTTP GET and written to disk.
+Synchronous TTS calls don't carry the X-DashScope-Async header (it's only used by the two-step async image/video flow).
+The schema follows the first-hand official docs listed in docs/api-docs/providers/dashscope.md.
+
+DashScopeAudioBackend — 阿里百炼 Qwen3-TTS 语音合成后端（同步）。
 
 走原生 multimodal-generation/generation 同步端点：请求体 ``input`` 直接携带
 ``text`` / ``voice`` / ``language_type``（区别于图像的 messages 结构），响应在
@@ -52,6 +60,17 @@ DEFAULT_MODEL = "qwen3-tts-flash"
 _TTS_ENDPOINT = "/services/aigc/multimodal-generation/generation"
 
 
+# Subset of Qwen3-TTS system preset voices (values of the ``voice`` parameter); source: the "3. System preset voices" table in
+# docs/api-docs/providers/dashscope.md (from the official docs at https://help.aliyun.com/zh/model-studio/qwen-tts + the Bailian
+# console model market).
+# Other preset voices not listed are not exposed here -- that doc explicitly labels this as "the voice subset most relevant to
+# ArcReel scenarios"; the full list of 48 voices is in the official docs, and ones whose Chinese names/descriptions weren't
+# verified individually are not included, to avoid making things up.
+#
+# label stores a lib/i18n translation key (``voice_label_dashscope_*``, see lib/i18n/{zh,en,vi}/assets.py), not literal copy --
+# hard-coding Chinese at the endpoint would make en/vi users see Chinese descriptions in the dropdown, contrary to the project
+# convention that "backend user-facing text is injected via _t: Translator". The actual localized copy is rendered by the
+# get_audio_backend_voices route layer with the Translator for the request's locale.
 # Qwen3-TTS 系统预设音色（``voice`` 参数取值）子集，出处见 docs/api-docs/providers/dashscope.md
 # 「三、系统预设音色」表格（来源：
 # https://help.aliyun.com/zh/model-studio/qwen-tts 官方文档 + 百炼控制台模型市场）。
@@ -86,11 +105,13 @@ _VOICE_CATALOG: tuple[VoiceOption, ...] = (
 
 
 class _EmptyDownloadError(RuntimeError):
-    """200 但空响应体（瞬时代理/CDN 异常），视为瞬态触发下载重试。"""
+    """200 but empty response body (transient proxy/CDN anomaly), treated as transient to trigger a download retry.
+
+    200 但空响应体（瞬时代理/CDN 异常），视为瞬态触发下载重试。"""
 
 
 class DashScopeAudioBackend:
-    """阿里百炼语音合成后端（同步 multimodal 端点）。"""
+    """Alibaba Bailian speech synthesis backend (synchronous multimodal endpoint). / 阿里百炼语音合成后端（同步 multimodal 端点）。"""
 
     def __init__(
         self,
@@ -124,9 +145,12 @@ class DashScopeAudioBackend:
 
     async def synthesize(self, request: AudioSynthesisRequest) -> AudioSynthesisResult:
         if request.speed is not None:
+            # Synchronous qwen3-tts-flash doesn't support speech_rate (only the realtime WebSocket version does); ignored.
             # 同步 qwen3-tts-flash 不支持 speech_rate（仅 realtime WebSocket 版可用），忽略。
             logger.debug("DashScope 同步 TTS 不支持语速参数 speed=%s，已忽略", request.speed)
 
+        # Synthesis (billed) and download are retried independently in two stages: a transient download failure only retries the GET and never goes
+        # back to rerun the synthesis POST that would bill again (consistent with the lib.infra.retry.DOWNLOAD_* comment "download failures don't waste generation quota").
         # 合成（计费）与下载分两段独立重试：下载瞬时失败只重试 GET，绝不回头重跑会再次计费的
         # 合成 POST（与 lib.infra.retry.DOWNLOAD_* 注释「下载失败不浪费生成额度」一致）。
         url = await self._request_synthesis(request)
@@ -143,7 +167,7 @@ class DashScopeAudioBackend:
 
     @with_retry_async(retry_if=should_retry_submit)
     async def _request_synthesis(self, request: AudioSynthesisRequest) -> str:
-        """提交合成请求（计费段），返回 output.audio.url。"""
+        """Submit the synthesis request (billed stage), returning output.audio.url. / 提交合成请求（计费段），返回 output.audio.url。"""
         payload = {
             "model": self._model,
             "input": {
@@ -152,6 +176,8 @@ class DashScopeAudioBackend:
                 "language_type": request.language_type,
             },
         }
+        # safe_body_for_log only outputs the model + parameters allowlist and doesn't read input.text,
+        # so synthesis text never goes into logs (the CodeQL clear-text-logging alert here is a false positive).
         # safe_body_for_log 只输出 model + parameters 白名单，不读取 input.text，
         # 合成文本不会进日志（CodeQL clear-text-logging 告警对此为误报）。
         logger.info(
@@ -164,6 +190,9 @@ class DashScopeAudioBackend:
             format_kwargs_for_log(safe_body_for_log(payload)),
         )
         async with artifact_http_client(timeout=self._http_timeout, transport_layer=self._transport_layer) as client:
+            # Synthesis is a non-idempotent "billed" POST: submit_post turns ambiguous transport errors (request may have arrived but the response was lost
+            # in transit) into a terminal AmbiguousSubmitError to avoid double billing; >=400 logs the body + raises HTTPStatusError
+            # (keeping status_code), for should_retry_submit to route by status code -- 4xx fail-fast, 5xx/429 retried.
             # 合成是非幂等的「计费」POST：submit_post 把歧义传输错误（请求可能已送达但响应在途丢失）
             # 转 AmbiguousSubmitError 终态失败避免重复计费；>=400 落 body 日志 + 抛 HTTPStatusError
             # （保留 status_code），交 should_retry_submit 按状态码分流——4xx fail-fast、5xx/429 重试。
@@ -179,7 +208,13 @@ class DashScopeAudioBackend:
             return extract_audio_url(resp.json())
 
     async def _download_audio(self, url: str, output_path: Path) -> None:
-        """下载合成音频（非计费段），走共用的产物下载预算。
+        """Download the synthesized audio (non-billed stage), using the shared artifact download budget.
+
+        The download is an idempotent GET: HTTPStatusError is gated by status_code (``should_retry_signed_download``; 4xx on a
+        pre-signed URL are deterministic errors and always fail fast), 5xx/transport/network errors are retried, business
+        errors fail fast; 200-with-empty-body (``_EmptyDownloadError``) is transient and retried separately.
+
+        下载合成音频（非计费段），走共用的产物下载预算。
 
         下载是幂等 GET：HTTPStatusError 按 status_code 闸门（``should_retry_signed_download``，
         预签发 URL 的 4xx 是确定性错误一律 fail-fast），5xx/传输/网络错误重试，业务错误
@@ -190,6 +225,10 @@ class DashScopeAudioBackend:
             label="DashScope 音频",
             retry_if=lambda e: isinstance(e, _EmptyDownloadError) or should_retry_signed_download(e),
         )
+        # Writing to disk is outside the retry's wall-clock budget: a non-interruptible thread call inside an asyncio.timeout block would defeat the timeout.
+        # If cancellation lands while writing, the thread finishes writing and the cancellation is dropped; the finally cleanup of the staging path in the
+        # caller MediaGenerator.generate_audio_async and the subsequent artifact commit both happen after the write settles (docs/standards/backend.md
+        # "the post-provider-return accounting section is non-interruptible").
         # 落盘放在重试的墙钟预算之外：不可中断的线程调用若落在 asyncio.timeout 块内，超时就失效。
         # 取消落在写盘期间时线程照常写完，取消随之消失，调用方 MediaGenerator.generate_audio_async
         # 的 finally 清理 staging 路径与后续产物提交都在写入结算之后进行（docs/standards/backend.md
@@ -197,6 +236,7 @@ class DashScopeAudioBackend:
         await run_noninterruptible_sync(output_path.write_bytes, content)
 
     async def _fetch_audio(self, url: str) -> bytes:
+        # Logs and exceptions only carry the URL without query: pre-signed parameters are equivalent to download credentials while valid
         # 日志与异常只带去掉 query 的 URL：预签名参数在有效期内等同下载凭证
         safe_url = url.split("?", 1)[0]
         async with (
@@ -205,6 +245,8 @@ class DashScopeAudioBackend:
         ):
             if resp.status_code >= 400:
                 logger.warning("DashScope 音频下载返回 %s: %s", resp.status_code, safe_url)
+                # Don't use raise_for_status: the exception text it produces carries the full pre-signed URL;
+                # constructing it manually keeps the exception type and .response.status_code, with the message only carrying the redacted URL.
                 # 不用 raise_for_status：它生成的异常文本携带完整预签名 URL；
                 # 手动构造保留异常类型与 .response.status_code，消息只带脱敏 URL。
                 raise httpx.HTTPStatusError(
@@ -214,6 +256,6 @@ class DashScopeAudioBackend:
                 )
             content = await read_body_capped(resp, max_bytes=AUDIO_ARTIFACT_MAX_BYTES)
         if not content:
-            # 200 但空体：不写 0 字节 wav
+            # 200 but empty body: don't write a 0-byte wav / 200 但空体：不写 0 字节 wav
             raise _EmptyDownloadError(f"DashScope 音频下载返回空内容: {safe_url}")
         return content

@@ -1,4 +1,16 @@
-"""剪映草稿产物的落盘形态、验收与下载打包。
+"""On-disk form, verification and download packaging of the JianYing draft artifact.
+
+The artifact is a zip storing only the draft files, generated freeze stills and an asset index; it does not copy the
+project's videos or narration audio:
+
+- ``draft/``: draft files written by pyJianYingDraft. Asset paths are written as ``{{ARCREEL_JIANYING_ASSETS}}/<asset name>`` placeholders;
+- ``assets/``: out-point stills used for freeze extensions;
+- ``arcreel_jianying_draft.json``: index from asset name to source; the source is an immutable version snapshot path in the project, or bundled in the artifact.
+
+Only at download time are the local draft directory, draft name and JianYing version substituted (5.x uses
+``draft_content.json``, 6+ uses ``draft_info.json``), and the project's assets packed into the download.
+
+剪映草稿产物的落盘形态、验收与下载打包。
 
 产物是一个 zip，只存草稿文件、生成出来的定格静帧和一份素材索引，不复制项目里的视频与旁白配音：
 
@@ -63,11 +75,13 @@ _STORED_SUFFIXES = frozenset({".mp4", ".webm", ".mov", ".avi", ".mkv", ".png", "
 
 
 class JianyingDraftArchiveError(ValueError):
-    """剪映草稿产物不符合约定的形态，或它引用的项目素材已不在。"""
+    """The JianYing draft artifact does not match the agreed form, or project assets it references are gone.
+
+    剪映草稿产物不符合约定的形态，或它引用的项目素材已不在。"""
 
 
 def canvas_size(aspect_ratio: str) -> tuple[int, int]:
-    """项目画幅对应的草稿画布：短边 1080。"""
+    """Draft canvas for the project's aspect ratio: short edge 1080. / 项目画幅对应的草稿画布：短边 1080。"""
     try:
         width_ratio, height_ratio = (float(part) for part in aspect_ratio.split(":"))
     except ValueError:
@@ -80,7 +94,9 @@ def canvas_size(aspect_ratio: str) -> tuple[int, int]:
 
 
 def _subtitle_style(width: int, height: int) -> tuple[TextStyle, TextBorder, TextShadow, float]:
-    """字幕样式按样式基线（:mod:`lib.subtitle_style.baseline`）：白字、粗体、描边、阴影；最后一项是纵向位置。"""
+    """Subtitle style per the style baseline (:mod:`lib.subtitle_style.baseline`): white text, bold, outline, shadow; the last item is the vertical position.
+
+    字幕样式按样式基线（:mod:`lib.subtitle_style.baseline`）：白字、粗体、描边、阴影；最后一项是纵向位置。"""
     baseline = subtitle_style_baseline(width, height)
     return (
         TextStyle(
@@ -98,12 +114,16 @@ def _subtitle_style(width: int, height: int) -> tuple[TextStyle, TextBorder, Tex
 
 
 def _track_name(base: str, index: int) -> str:
-    """同类的第一条轨用基本名，之后依次编号：旁白、旁白 2、旁白 3……"""
+    """The first track of a kind uses the base name, later ones are numbered: narration, narration 2, narration 3...
+
+    同类的第一条轨用基本名，之后依次编号：旁白、旁白 2、旁白 3……"""
     return base if index == 0 else f"{base} {index + 1}"
 
 
 class _AssetStaging:
-    """把草稿引用的文件放进同一个暂存目录，素材名在草稿内唯一。"""
+    """Put the files the draft references into one staging directory; asset names are unique within the draft.
+
+    把草稿引用的文件放进同一个暂存目录，素材名在草稿内唯一。"""
 
     def __init__(self, directory: Path, project_dir: Path) -> None:
         self.directory = directory
@@ -153,7 +173,9 @@ def _map_strings(value: Any, transform: Callable[[str], str]) -> Any:
 
 
 def _attach_transition(segments: list[VideoSegment], clip: PlacedClip) -> None:
-    """转场挂在片段的最后一段画面上：有定格延长时是出点帧静帧，否则是源素材那一段。"""
+    """The transition hangs on the clip's last stretch of picture: the out-point still when there is a freeze extension, otherwise that stretch of source footage.
+
+    转场挂在片段的最后一段画面上：有定格延长时是出点帧静帧，否则是源素材那一段。"""
     transition = clip.transition_to_next
     if transition is None or not segments:
         return
@@ -173,7 +195,15 @@ def write_jianying_draft(
     output: Path,
     workspace: Path,
 ) -> None:
-    """把摆好的片段写成剪映草稿产物；``hold_frames`` 按剪辑片段 ID 给出定格用的出点帧静帧。
+    """Write the placed clips as a JianYing draft artifact; ``hold_frames`` gives the out-point freeze stills by edit clip ID.
+
+    There is always at least one subtitle track, and the narrated variant has at least one narration track; overlapping
+    narration or subtitles get extra tracks as needed, with no overlap inside a track. With BGM there is also a BGM
+    track, with volume and fades written into the clip's volume and fade fields. Additional subtitle tracks are raised
+    as a whole; track n sits ``(n - 1) × EXTRA_SUBTITLE_TRACK_RAISE`` above the first. The draft directory and asset
+    staging both live under ``workspace``; the caller is responsible for cleanup.
+
+    把摆好的片段写成剪映草稿产物；``hold_frames`` 按剪辑片段 ID 给出定格用的出点帧静帧。
 
     始终至少有一条字幕轨，带旁白版本至少有一条旁白轨；旁白或字幕互相重叠时按需增轨，每条轨内不重叠。
     有 BGM 时另有一条 BGM 轨，音量与淡入淡出写进片段的音量与淡入淡出字段。
@@ -232,6 +262,7 @@ def write_jianying_draft(
 
     for bgm in placement.bgm:
         material = AudioMaterial(staging.project_file(bgm.audio_path))
+        # Asset duration follows pyJianYingDraft's probe; when it differs from the duration ffmpeg measured at registration, clip to the asset's end.
         # 素材时长以 pyJianYingDraft 的探测为准；与登记时 ffmpeg 测得的时长有出入时，截到素材末尾。
         duration = min(bgm.duration_us, material.duration - bgm.source_in_us)
         if duration <= 0:
@@ -330,7 +361,9 @@ def _resolve_project_asset(project_dir: Path, source: Mapping[str, object]) -> P
 
 
 def verify_jianying_draft(path: Path, *, project_dir: Path, expected_duration_us: int) -> None:
-    """验收剪映草稿产物：素材路径全是占位符且都能找到来源，主视频轨总长等于剪辑时间线时长。"""
+    """Verify the JianYing draft artifact: all asset paths are placeholders with a findable source, and the main video track's total length equals the edit timeline duration.
+
+    验收剪映草稿产物：素材路径全是占位符且都能找到来源，主视频轨总长等于剪辑时间线时长。"""
     with zipfile.ZipFile(path) as archive:
         assets = _read_index(archive)
         content = _read_content(archive)
@@ -367,7 +400,9 @@ def package_jianying_draft(
     jianying_version: JianyingVersion,
     output: Path,
 ) -> None:
-    """把剪映草稿产物代入本机草稿目录与剪映版本，连同项目素材打成可直接解压进剪映草稿目录的 zip。"""
+    """Substitute the local draft directory and JianYing version into the draft artifact and zip it with the project assets so it can be unpacked straight into JianYing's draft directory.
+
+    把剪映草稿产物代入本机草稿目录与剪映版本，连同项目素材打成可直接解压进剪映草稿目录的 zip。"""
     assets_dir = f"{draft_root.rstrip('/\\')}/{draft_name}/{ASSETS_DIR}"
     content_name = "draft_info.json" if jianying_version == "6" else CONTENT_NAME
     with zipfile.ZipFile(path) as archive, zipfile.ZipFile(output, "w", zipfile.ZIP_DEFLATED) as packed:

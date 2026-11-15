@@ -1,4 +1,16 @@
-"""供应商调用按模型目录计价：结算与提交前预估共用的入口。
+"""Pricing provider calls by the model catalog: the entry point shared by settlement and pre-submit estimates.
+
+The price table is that of the entry the provider model maps to; the multiplier is the product of the provider
+multiplier (a user preference, read by the caller via :func:`lib.billing.multipliers.get_provider_multiplier`) and the
+provider model multiplier; then :func:`lib.billing.metering.price_requests` computes it (docs/adr/0100).
+
+- Built-in providers: entries from the provider model reference list; the provider model multiplier ships with the catalog data.
+- Custom providers: provider models map to entries by entry binding or by name (docs/adr/0105), the provider model
+  multiplier is filled in by the user; when no entry matches it is recorded as unpriced (docs/adr/0106).
+- Agent sessions: model names map to entries by the entry binding of the Agent credential tier or by name; the
+  multiplier has only one level, the Agent credential multiplier (docs/adr/0102).
+
+供应商调用按模型目录计价：结算与提交前预估共用的入口。
 
 价目表取供应商模型所对应条目的价目表，倍率取供应商倍率（用户偏好，由调用方经
 :func:`lib.billing.multipliers.get_provider_multiplier` 读出）与供应商模型倍率之积，再交
@@ -19,7 +31,10 @@ from lib.catalog import query as catalog
 
 
 def is_builtin_provider(provider: str) -> bool:
-    """注册表里的内置供应商；其余（自定义供应商、Agent 凭证）不经清单查条目。"""
+    """Built-in providers in the registry; the rest (custom providers, Agent credentials) don't look up entries via the list.
+
+    注册表里的内置供应商；其余（自定义供应商、Agent 凭证）不经清单查条目。"""
+    # Import the registry inside the function: the registry imports this module via dashscope_shared→usage_repo, a module-level import would be circular.
     # 注册表导入放函数内：注册表经 dashscope_shared→usage_repo 导入本模块，模块级导入会成环。
     from lib.config.registry import PROVIDER_REGISTRY
 
@@ -35,7 +50,12 @@ def price_builtin_call(
     provider_multiplier: float,
     estimate: bool = False,
 ) -> Cost:
-    """一次内置供应商调用的参考费用。
+    """Reference cost of one built-in provider call.
+
+    ``requests`` is the usage of each provider request in this call, each placed in its context tier, priced separately
+    and summed; for the meaning of ``estimate`` see :func:`lib.billing.metering.price_usage`.
+
+    一次内置供应商调用的参考费用。
 
     ``requests`` 是这次调用所含各次供应商请求的用量，各自落上下文档、单独计价后相加；``estimate`` 的含义见
     :func:`lib.billing.metering.price_usage`。
@@ -61,7 +81,13 @@ def price_custom_call(
     model_multiplier: float,
     estimate: bool = False,
 ) -> Cost:
-    """一次自定义供应商调用的参考费用。
+    """Reference cost of one custom provider call.
+
+    ``model`` is the API model name, ``entry_binding`` is the entry binding on the model row ("model vendor/official model
+    name"), ``media_type`` is this call's media type; for the entry mapping rules see :func:`lib.catalog.query.find_entry`.
+    When the product of the two multiplier levels is 0 it is recorded as 0 directly. Other parameters as in :func:`price_builtin_call`.
+
+    一次自定义供应商调用的参考费用。
 
     ``model`` 是 API 模型名，``entry_binding`` 是模型行上的条目绑定（「模型厂商/官方模型名」），``media_type``
     取这次调用的媒体类型；对应条目的规则见 :func:`lib.catalog.query.find_entry`。两级倍率之积为 0 时直接记 0。
@@ -84,7 +110,14 @@ def price_agent_call(
     requests: Sequence[Usage],
     multiplier: float,
 ) -> Cost:
-    """Agent 会话里一个模型一轮的参考费用（docs/adr/0102）。
+    """Reference cost of one model for one turn in an Agent session (docs/adr/0102).
+
+    ``model`` is the API model name, ``entry_binding`` is the entry binding of the tier this model is in on the Agent
+    credential; for entry mapping rules see :func:`lib.catalog.query.find_entry`; ``multiplier`` is the Agent credential
+    multiplier, the only level, and when it is 0 the cost is recorded as 0 directly. ``requests`` is the usage of each
+    request in this turn, each placed in its context tier, priced separately and summed.
+
+    Agent 会话里一个模型一轮的参考费用（docs/adr/0102）。
 
     ``model`` 是 API 模型名，``entry_binding`` 是 Agent 凭证上这个模型所在档位的条目绑定，对应条目的规则见
     :func:`lib.catalog.query.find_entry`；``multiplier`` 是 Agent 凭证倍率，只此一级，为 0 时直接记 0。

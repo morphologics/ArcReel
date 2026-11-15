@@ -1,4 +1,12 @@
-"""校验结果与默认语言渲染。
+"""Validation results and default-language rendering.
+
+The message carriers (``ValidationMessage`` / ``MessageRef`` / ``MessageJoin``) live in
+``arcreel_market_core.validation_messages``, which carries no translation catalog; this module connects them to the
+app's ``lib.i18n``: :func:`default_translate` is the default-language (Chinese) translator used by the Agent, CLI and
+internal comparisons without request context; the Web boundary instead renders in the request language via
+``server.i18n.get_translator``.
+
+校验结果与默认语言渲染。
 
 消息载体（``ValidationMessage`` / ``MessageRef`` / ``MessageJoin``）在
 ``arcreel_market_core.validation_messages``，那里不携带翻译目录；本模块把它接到应用的
@@ -17,13 +25,19 @@ from lib.i18n import DEFAULT_LOCALE, _
 
 
 def default_translate(key: str, **kwargs: Any) -> str:
-    """默认语言（中文）的 translator。"""
+    """Translator for the default language (Chinese). / 默认语言（中文）的 translator。"""
     return _(key, locale=DEFAULT_LOCALE, **kwargs)
 
 
 @dataclass
 class ValidationResult:
-    """验证结果。
+    """Validation result.
+
+    ``error_messages`` / ``warning_messages`` are the structured truth; ``errors`` / ``warnings`` are read-only views of
+    them rendered in the default language, for the Agent, CLI and internal comparisons without request context. The Web
+    boundary instead uses ``render_errors`` / ``render_warnings`` with a translator for the request language.
+
+    验证结果。
 
     ``error_messages`` / ``warning_messages`` 是结构化真相；``errors`` / ``warnings`` 是它们
     按默认语言渲染出的只读视图，供 Agent、CLI 与不带请求上下文的内部比对使用。Web 边界改用

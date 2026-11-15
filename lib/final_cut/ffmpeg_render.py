@@ -1,4 +1,19 @@
-"""用随包 ffmpeg 执行成片的渲染规划，并验收渲染结果。
+"""Execute the final cut render plan with the bundled ffmpeg and verify the result.
+
+Picture is rendered in segments split at hard cuts: within a segment each clip is scaled and padded to the project
+canvas and normalised to a fixed frame rate; after taking a fixed number of source frames, stills of the edge frames
+fill the gaps left by freeze extensions and frames borrowed for transitions; non-overlapping transitions fade in/out
+at the clip ends, overlapping transitions use ``xfade`` to cross-dissolve within the window around the cut. With
+burned-in subtitles each segment shifts picture time back to final-cut time and hands rendering to libass with the
+whole episode's ASS document. All segments are encoded with the same parameters and finally joined losslessly with
+``-c copy``. Audio is not segmented: the episode's original audio (by clip volume and frame boundaries), narration
+audio (narrated variant only, from the start of its carrying clip) and BGM (from the clip start, loudness gain times
+clip volume, with fades) are mixed once and encoded once, then muxed with the joined picture, avoiding gaps and
+accumulated drift that per-segment AAC priming would cause at segment boundaries. The summed tracks pass through a
+limiter first, so high-gain BGM stacked with original audio and narration never exceeds full scale. Narration overruns
+are rendered as is: overlaps play simultaneously, and anything past the end is cut off with the final cut.
+
+用随包 ffmpeg 执行成片的渲染规划，并验收渲染结果。
 
 画面按硬切边界分段渲染：段内每个片段按项目画布缩放补边、规整到固定帧率，取定帧数的源画面后用
 边缘帧的静帧补足定格延长与转场借帧的余量缺口，非重叠型转场在片段两端淡入淡出，重叠型转场用
@@ -48,7 +63,9 @@ _STDERR_TAIL = 2000
 
 @dataclass(frozen=True, slots=True)
 class RenderDeadlines:
-    """各步 ffmpeg 子进程的 deadline：固定下限加按时长放大的余量（秒）。"""
+    """Deadline for each ffmpeg subprocess step: a fixed floor plus a margin scaled by duration (seconds).
+
+    各步 ffmpeg 子进程的 deadline：固定下限加按时长放大的余量（秒）。"""
 
     floor: float = 120.0
     per_output_second: float = 20.0
@@ -74,7 +91,9 @@ def _frames_seconds(frames: int, fps: int) -> str:
 
 
 def _clip_chain(index: int, planned: PlannedClip, plan: RenderPlan) -> str:
-    """一个片段的画面滤镜链：规整画布与帧率，截出所需源画面，两端用边缘帧定格补齐，再加淡入淡出。"""
+    """Picture filter chain for one clip: normalise canvas and frame rate, cut out the needed source frames, pad both ends with edge-frame freezes, then add fades.
+
+    一个片段的画面滤镜链：规整画布与帧率，截出所需源画面，两端用边缘帧定格补齐，再加淡入淡出。"""
     profile = plan.profile
     width, height = profile.width, profile.height
     source_frames = planned.lead.source_frames + planned.source_frames + planned.trail.source_frames
@@ -86,6 +105,7 @@ def _clip_chain(index: int, planned: PlannedClip, plan: RenderPlan) -> str:
         "format=yuv420p",
         f"trim=end_frame={max(source_frames, 1)}",
         f"tpad=start_mode=clone:start={planned.lead.freeze_frames}:stop_mode=clone:stop=-1",
+        # tpad output does not declare a frame rate while xfade requires constant frame rate input; re-declare it on the endless padded stream, then cut off by frame count.
         # tpad 的输出不声明帧率，xfade 要求输入是恒定帧率；在无尽的补帧流上重新声明，再按帧数截止。
         f"fps={profile.fps}",
         f"trim=end_frame={planned.stream_frames}",
@@ -100,7 +120,9 @@ def _clip_chain(index: int, planned: PlannedClip, plan: RenderPlan) -> str:
 
 @dataclass(frozen=True, slots=True)
 class NarrationInput:
-    """混进整集音频的一段旁白配音：从成片时间 ``start_us`` 起整段播放。"""
+    """A piece of narration audio mixed into the episode audio: played in full from final-cut time ``start_us``.
+
+    混进整集音频的一段旁白配音：从成片时间 ``start_us`` 起整段播放。"""
 
     path: Path
     start_us: int
@@ -108,7 +130,11 @@ class NarrationInput:
 
 @dataclass(frozen=True, slots=True)
 class BgmInput:
-    """混进整集音频的一段 BGM：从 BGM 的 ``source_in_us`` 起取 ``duration_us``，放在成片时间 ``start_us``。
+    """A piece of BGM mixed into the episode audio: take ``duration_us`` from the BGM's ``source_in_us`` and place it at final-cut time ``start_us``.
+
+    ``volume`` is already loudness gain times clip volume; fades in microseconds, 0 means none.
+
+    混进整集音频的一段 BGM：从 BGM 的 ``source_in_us`` 起取 ``duration_us``，放在成片时间 ``start_us``。
 
     ``volume`` 已是响度增益乘以片段音量；淡入淡出以微秒计，0 表示不做。
     """
@@ -147,7 +173,11 @@ def segment_args(
     burn_subtitles: bool = False,
     extra_video_args: Sequence[str] = (),
 ) -> list[str]:
-    """一段片段的画面渲染参数：只含画面，按帧数精确截止。
+    """Picture render arguments for one segment: picture only, cut off exactly by frame count.
+
+    With ``burn_subtitles`` the ASS document and fonts in the working directory are referenced by relative path, so it must run with the working directory as cwd.
+
+    一段片段的画面渲染参数：只含画面，按帧数精确截止。
 
     ``burn_subtitles`` 时按相对路径引用工作目录里的 ASS 文档与字体，须以工作目录为当前目录运行。
     ``extra_video_args`` go after the encoder settings (the Edit view's stream pieces turn B-frames off).
@@ -172,6 +202,7 @@ def segment_args(
         )
         label = joined
     if burn_subtitles:
+        # libass picks subtitles by picture time: first shift segment time to final-cut time, then shift back to segment time after burning in.
         # libass 按画面时间取字幕：先把段内时间平移到成片时间，烧入后再移回段内时间。
         offset = _frames_seconds(segment.start_frame, fps)
         chains.append(
@@ -224,7 +255,11 @@ def audio_mix_args(
     narrations: Sequence[NarrationInput] = (),
     bgm: Sequence[BgmInput] = (),
 ) -> list[str]:
-    """整集混音参数：以静音垫底，每个有声片段按帧边界落位、按原声音量缩放；旁白配音从起点所在的帧边界起
+    """Episode mix arguments: silence as the base; each clip with audio is placed at frame boundaries and scaled by its
+    original audio volume; narration audio is added at original volume from the frame boundary of its start; BGM is
+    added from the frame boundary of its start with gain, volume and fades; the sum is limited and the whole is cut to the final cut duration.
+
+    整集混音参数：以静音垫底，每个有声片段按帧边界落位、按原声音量缩放；旁白配音从起点所在的帧边界起
     原音量叠加；BGM 从起点所在的帧边界起按增益与音量叠加并淡入淡出，相加后限幅，整体截到成片时长。"""
     fps = plan.profile.fps
     total_samples = _samples(plan.total_frames, fps)
@@ -260,6 +295,7 @@ def audio_mix_args(
     else:
         chains.append(
             f"{''.join(labels)}amix=inputs={len(labels)}:duration=first:normalize=0:dropout_transition=0,"
+            # Only squash peaks over the limit: disable auto level and compensate the lookahead delay so the whole track does not shift later.
             # 只压超限的峰：关闭自动电平，补偿前视延迟以免整条音轨后移。
             f"alimiter=limit={MIX_LIMIT}:level=false:latency=true,"
             f"atrim=end_sample={total_samples}[mix]"
@@ -284,7 +320,7 @@ def audio_mix_args(
 
 
 def mux_args(ffmpeg: str, concat_list: Path, audio: Path, output: Path) -> list[str]:
-    """把各段画面无损拼接，并与整集混音封装成成片。"""
+    """Join the segments' picture losslessly and mux it with the episode mix into the final cut. / 把各段画面无损拼接，并与整集混音封装成成片。"""
     return [
         *_base_args(ffmpeg),
         "-f",
@@ -343,7 +379,11 @@ async def render_plan_to_file(
     deadlines: RenderDeadlines = DEFAULT_RENDER_DEADLINES,
     spawn: Spawner | None = None,
 ) -> None:
-    """执行渲染规划：逐段渲染画面、整集混音，再拼接封装到 ``output``；中间文件只写在 ``workspace``。
+    """Execute the render plan: render picture segment by segment, mix the episode audio, then join and mux into ``output``; intermediate files go only to ``workspace``.
+
+    When ``subtitles`` is not None, subtitles are burned in (it may be empty); ``narrations`` and ``bgm`` are the narration audio and BGM to mix into the episode audio.
+
+    执行渲染规划：逐段渲染画面、整集混音，再拼接封装到 ``output``；中间文件只写在 ``workspace``。
 
     ``subtitles`` 不为 None 时烧入字幕（可以为空），``narrations`` 与 ``bgm`` 是要混进整集音频的旁白配音与 BGM。
     """
@@ -385,7 +425,9 @@ async def render_plan_to_file(
 
 
 def _stage_subtitles(workspace: Path, document: str) -> None:
-    """把 ASS 文档与随包字体放进工作目录；字体优先硬链接，跨卷时复制。"""
+    """Put the ASS document and bundled font into the working directory; the font is hard-linked when possible, copied across volumes.
+
+    把 ASS 文档与随包字体放进工作目录；字体优先硬链接，跨卷时复制。"""
     (workspace / SUBTITLE_DOCUMENT).write_text(document, encoding="utf-8")
     fonts = workspace / SUBTITLE_FONTS_DIR
     fonts.mkdir(exist_ok=True)
@@ -398,7 +440,9 @@ def _stage_subtitles(workspace: Path, document: str) -> None:
 
 @dataclass(frozen=True, slots=True)
 class FinalCutAcceptance:
-    """成片验收结果：剪辑时间线应有的时长与实测的音视频流时长（秒）。"""
+    """Final cut verification result: the duration the edit timeline should have and the measured audio/video stream durations (seconds).
+
+    成片验收结果：剪辑时间线应有的时长与实测的音视频流时长（秒）。"""
 
     expected_duration: float
     video_duration: float
@@ -407,7 +451,9 @@ class FinalCutAcceptance:
 
 
 async def accept_final_cut(path: Path, plan: RenderPlan, *, spawn: Spawner | None = None) -> FinalCutAcceptance:
-    """经媒体探测接口验收成片：音视频流齐全，两者时长都与剪辑时间线时长相差不超过容差。"""
+    """Verify the final cut via the media probe: audio and video streams present, both durations within tolerance of the edit timeline duration.
+
+    经媒体探测接口验收成片：音视频流齐全，两者时长都与剪辑时间线时长相差不超过容差。"""
     try:
         probe = await probe_media(path, spawn=spawn)
     except MediaProbeError as exc:

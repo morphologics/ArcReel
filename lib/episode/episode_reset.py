@@ -1,4 +1,42 @@
-"""分集规划重置：把账本中切自整本源文的集退回未规划状态的逃生口。
+"""Episode planning reset: the escape hatch that returns episodes cut from the whole source in the ledger to the unplanned state.
+
+Only cut episodes are touched: episodes with their own source and episodes without source do not occupy the whole
+source; both kinds of reset keep their entries, episode files and downstream artifacts as they are, in the same
+relative order (see ``docs/adr/0031``).
+
+Ledger coordinates bind to specific source content; once the source is replaced or the ledger is corrupted, the
+planning entry point fails permanently due to out-of-bounds coordinates / invalid ranges.
+A full reset (no episode given) is the only way out of that situation: **zero pre-checks**: no old coordinates are
+read and no ranges parsed; it must succeed whatever state of corruption the ledger is in; afterwards cut episodes
+no longer occupy the whole source, source fingerprints and snapshots are cleared, and ``plan_episodes`` can plan
+again from scratch.
+
+A partial reset (naming a cut episode other than the first cut episode in episode order) keeps the episodes before
+it in the ledger and clears it and the cut episodes after it. Unlike the full reset it runs **pre-checks**: all
+recorded source fingerprints must match the current source, and the ``source_range`` of the retained part must fall
+within the current source bounds and advance along source position; if any of these fails, "how far to keep, where
+to go back to" cannot be worked out safely, so it refuses to run (ledger unchanged) and points to a full reset
+instead. The start of continued planning is derived from the ledger and moves back accordingly to the end of the
+last cut episode of the retained part.
+
+Cleared cut episodes are handled as replaced old episodes: those with artifacts (ledger marks consumed, or a script /
+script_plan already exists on disk) become episodes without source, are marked stale, keep their artifacts and their
+registrations in the artifact manifest, and move to the end of the episode order in their original relative order;
+those without artifacts are removed from the ledger. Neither kind of reset moves back the project's historical
+highest number (``lib.episode.episode_ids``): cleared episode IDs are not allocated again, replanned episodes get
+new IDs, and artifacts of old IDs are not claimed by new episodes.
+
+This module deliberately does not depend on :class:`lib.backends.text_generator.TextGenerator`: reset does not call
+a model, and the escape hatch must not stop working because no provider is configured. Writes share the same project
+lock with ``EpisodePlanner`` (``ProjectManager.update_project``), with the same commit discipline.
+
+Episode files of cleared cut episodes are split by "can it be rebuilt from the ledger": a
+``source/episode_N.txt`` with ``source_range`` is derived and is deleted outright; an episode file without
+``source_range`` may be an original from an old project (with manual content, no coordinates to rebuild from) and is
+renamed as a backup rather than deleted. Downstream artifacts (script JSON, script_plan intermediate files, media)
+are never deleted, and the artifact manifest is untouched.
+
+分集规划重置：把账本中切自整本源文的集退回未规划状态的逃生口。
 
 只动切出集：自带原文与无原文的集不占用整本源文，两种重置都原样保留它们的条目、集文件与下游产物，
 相对顺序不变（见 ``docs/adr/0031``）。
@@ -66,46 +104,58 @@ logger = logging.getLogger(__name__)
 
 
 class EpisodeResetError(RuntimeError):
-    """分集规划重置失败。"""
+    """Episode planning reset failed. / 分集规划重置失败。"""
 
 
 class EpisodeResetConflictError(EpisodeResetError):
-    """重置期间账本被并发修改（出现确认清单之外的已消费集），提交被拒绝。"""
+    """The ledger was modified concurrently during the reset (consumed episodes outside the confirmation list appeared); the commit was rejected.
+
+    重置期间账本被并发修改（出现确认清单之外的已消费集），提交被拒绝。"""
 
 
 @dataclass
 class ResetConfirmationRequired:
-    """重置波及已消费集，需显式确认（``confirm_consumed=True``）后才执行。
+    """The reset affects consumed episodes and runs only after explicit confirmation (``confirm_consumed=True``).
+
+    When this object is returned, nothing has been written. The fields let the caller tell the user truthfully which
+    episodes and files are affected (POSIX paths relative to the project root).
+
+    重置波及已消费集，需显式确认（``confirm_consumed=True``）后才执行。
 
     返回本对象时未发生任何写入。各字段供调用方向用户如实交代受影响的集与文件（相对项目根的 POSIX 路径）。
     """
 
     consumed_episodes: list[int]
     archived_files: list[str] = field(default_factory=list)
-    #: 账本里有产物、会转为无原文的集并标 stale 的集。
+    #: Episodes in the ledger with artifacts that will become episodes without source and be marked stale. / 账本里有产物、会转为无原文的集并标 stale 的集。
     retired_episodes: list[int] = field(default_factory=list)
-    #: 账本里没有产物、会移出账本的集。
+    #: Episodes in the ledger without artifacts that will be removed from the ledger. / 账本里没有产物、会移出账本的集。
     removed_episodes: list[int] = field(default_factory=list)
-    #: 会删除的派生集文件。
+    #: Derived episode files that will be deleted. / 会删除的派生集文件。
     deleted_files: list[str] = field(default_factory=list)
 
 
 @dataclass
 class EpisodeResetResult:
-    """重置执行结果：处置的集号与文件处置去向（相对项目根的 POSIX 路径）。"""
+    """Reset result: the episode numbers handled and where the files went (POSIX paths relative to the project root).
 
-    #: 移出账本的集（没有产物）。
+    重置执行结果：处置的集号与文件处置去向（相对项目根的 POSIX 路径）。"""
+
+    #: Episodes removed from the ledger (no artifacts). / 移出账本的集（没有产物）。
     removed_episodes: list[int]
     deleted_files: list[str]
-    archived_files: list[tuple[str, str]]  # (原路径, 留底路径)
+    archived_files: list[tuple[str, str]]  # (original path, backup path) / (原路径, 留底路径)
     consumed_episodes: list[int]
+    #: Episodes that became episodes without source, marked stale and moved to the end of the episode order (with artifacts).
     #: 转为无原文的集并标 stale、移到播出顺序末尾的集（有产物）。
     retired_episodes: list[int] = field(default_factory=list)
 
 
 @dataclass
 class _ResetPlan:
-    """一次扫描得出的处置计划：受影响集号、已消费集号、文件删除/留底清单。"""
+    """Handling plan from one scan: affected episode numbers, consumed episode numbers, file delete/backup lists.
+
+    一次扫描得出的处置计划：受影响集号、已消费集号、文件删除/留底清单。"""
 
     episode_nums: list[int]
     consumed: list[int]
@@ -117,7 +167,14 @@ _FULL_RESET_HINT = "请改用不带 episode_id 的全量重置"
 
 
 def _has_recreatable_source_range(entry: Mapping[str, Any]) -> bool:
-    """entry 的 source_range 是否携带足以重造派生文件的坐标结构。
+    """Whether the entry's source_range carries a coordinate structure sufficient to rebuild the derived file.
+
+    Only checks whether the coordinate structure is complete, without reading the source to check whether values are
+    out of bounds: reset has zero pre-checks, and range validity is plan's job. Corrupt entries with an incomplete
+    coordinate structure are treated as "not rebuildable", and their episode files are backed up rather than deleted:
+    deletion is irreversible, so be conservative when evidence is insufficient.
+
+    entry 的 source_range 是否携带足以重造派生文件的坐标结构。
 
     只看坐标结构是否完整、不读源文校验数值是否越界——重置零前置校验，范围合法性判断
     是 plan 的职责。坐标结构不完整的损坏条目按「不可重造」处理，其集文件走留底
@@ -127,7 +184,17 @@ def _has_recreatable_source_range(entry: Mapping[str, Any]) -> bool:
 
 
 def _scan(project_dir: Path, project: Mapping[str, Any], *, retained: frozenset[int] = frozenset()) -> _ResetPlan:
-    """扫描账本与磁盘得出处置计划。纯读：不改入参、不动文件。
+    """Scan the ledger and disk to produce the handling plan. Read-only: does not change arguments or touch files.
+
+    The consumed decision takes the union of ledger status and disk artifacts: with a corrupt ledger ``ledger_status``
+    is not necessarily trustworthy, and script / script_plan artifacts on disk are the hard evidence that "this episode
+    has been consumed".
+
+    ``retained`` are the episode IDs of the part kept by a partial reset (empty for a full reset): the retained part's
+    ledger entries, derived files and downstream artifacts do not take part in this scan; they neither count toward the
+    consumed decision nor become delete/backup candidates.
+
+    扫描账本与磁盘得出处置计划。纯读：不改入参、不动文件。
 
     已消费判定取账本状态与磁盘产物的并集——账本损坏时 ``ledger_status`` 未必可信，
     磁盘上的剧本 / script_plan 产物才是「这一集已经被消费过」的硬证据。
@@ -137,12 +204,18 @@ def _scan(project_dir: Path, project: Mapping[str, Any], *, retained: frozenset[
     """
     raw_episodes = project.get("episodes")
     entries: dict[int, Mapping[str, Any]] = {}
+    # A corrupt ledger may contain several entries for the same episode number (e.g. the first planned and a later one consumed, or the first with
+    # source_range and a later one without): taking only the first would lose the evidence carried by later ones, so both the consumed decision and
+    # the "can the file be rebuilt from the ledger" decision aggregate all entries per episode number rather than only looking at the one kept by
+    # setdefault
     # 损坏账本可能对同一集号写出多条条目（如首条 planned、后条 consumed，或首条带
     # source_range、后条不带）：只取首条会丢失后条携带的证据，故已消费判定与
     # 「文件是否可从账本重造」判定都按集号聚合全部条目，而非只看被 setdefault 留下的
     # 那一条
     entries_by_num: dict[int, list[Mapping[str, Any]]] = {}
     consumed_by_ledger_status: set[int] = set()
+    # The episodes container itself may be corrupted into a non-list value (e.g. a truthy scalar): reset promises zero pre-checks,
+    # so this case is treated as an empty ledger rather than raising; the escape hatch itself must not crash
     # episodes 容器本身可能被写坏成非列表值（如 truthy 标量）：重置承诺零前置校验，
     # 这种情形按空账本处理而非抛错，不能让逃生口本身崩溃
     for entry in raw_episodes if isinstance(raw_episodes, list) else []:
@@ -157,6 +230,10 @@ def _scan(project_dir: Path, project: Mapping[str, Any], *, retained: frozenset[
         entries_by_num.setdefault(num, []).append(entry)
 
     episode_file_aliases = discover_episode_file_aliases(project_dir)
+    # Orphan downstream artifact candidate numbers (no ledger entry, no source/episode_N.txt, but scripts/ or drafts/
+    # still has artifacts for the episode) are themselves direct evidence that "the episode has been consumed": has_downstream_products only accepts
+    # the canonical path computed by episode_script_relpath and cannot recognize padding alias file names that discover_product_episode_nums
+    # already matched loosely by regex (e.g. episode_01.json), so they must be included in the decision separately
     # 孤儿下游产物候选集号（账本无条目、无 source/episode_N.txt，但 scripts/ 或 drafts/
     # 仍有该集产物）本身就是「该集已消费」的直接证据：has_downstream_products 只认
     # episode_script_relpath 算出的规范路径，无法识别 discover_product_episode_nums 已
@@ -167,13 +244,22 @@ def _scan(project_dir: Path, project: Mapping[str, Any], *, retained: frozenset[
     archives: list[Path] = []
 
     def _in_scope(num: int) -> bool:
-        """该集号是否落在本次处置范围内。
+        """Whether the episode number falls within the scope of this handling.
+
+        For a full reset the retained part is empty, so any parseable episode number (including 0 or negative numbers
+        written by a corrupt ledger) is in scope and is not quietly left behind in the "cleared" ledger.
+
+        该集号是否落在本次处置范围内。
 
         全量重置的保留段为空，任何可解析的集号（含损坏账本写出的 0 或负数）都在范围内，
         不会被悄悄留在「已清空」的账本里。
         """
         return num not in retained
 
+    # Take the union of ledger entries, derived files on disk and downstream artifacts on disk:
+    # - Orphan episode files (no matching ledger entry) are handled too: they cannot prove they are rebuildable from the ledger, so they are backed up,
+    #   and after the reset no episode files that do not match the ledger are left in source/
+    # - Orphan downstream artifacts are also included in the consumed decision, otherwise they would bypass confirmation and be cleared directly
     # 账本条目、磁盘派生文件、磁盘下游产物三者取并集：
     # - 孤儿集文件（账本无对应条目）同样要处置：它无法证明可从账本重造，按留底处理，
     #   重置后 source/ 里不留下与账本对不上的集文件
@@ -182,6 +268,9 @@ def _scan(project_dir: Path, project: Mapping[str, Any], *, retained: frozenset[
         if not _in_scope(num):
             continue
         dupes = entries_by_num.get(num) or [{}]
+        # The consumed decision also has to aggregate all duplicate entries: a corrupt ledger may have the first entry pointing to a missing canonical script path
+        # and a later entry's script_file pointing to an existing non-canonical path (e.g. scripts/custom_name.json);
+        # passing only the first entry kept by setdefault to has_downstream_products would miss it
         # 已消费判定同样要聚合全部重复条目：损坏账本可能首条指向缺失的规范剧本路径、
         # 后条的 script_file 指向实际存在的非规范路径（如 scripts/custom_name.json），
         # 只传被 setdefault 留下的首条给 has_downstream_products 会漏判
@@ -195,6 +284,10 @@ def _scan(project_dir: Path, project: Mapping[str, Any], *, retained: frozenset[
         paths = episode_file_aliases.get(num) or []
         if not paths:
             continue
+        # The same episode number may have several padding aliases (episode_1.txt / episode_01.txt);
+        # all are handled the same way, otherwise unhandled aliases would remain as leftovers in source/.
+        # Whether it can be deleted takes the intersection of rebuildability over all duplicate entries of that number: if any entry cannot prove the file
+        # can be rebuilt from the ledger, it is treated as not rebuildable; deletion is irreversible, so be conservative when evidence conflicts
         # 同一集号可能存在多个 padding 别名（episode_1.txt / episode_01.txt），
         # 全部按同一处置口径处理，否则未处理的别名会作为残留留在 source/ 里。
         # 判定是否可删除取该集号全部重复条目的可重造性交集：任一条目无法证明文件可
@@ -220,11 +313,22 @@ def _apply_files(
     *,
     archive_targets: Mapping[Path, Path] | None = None,
 ) -> tuple[list[str], list[tuple[str, str]]]:
-    """落盘文件处置：删派生集文件、留底非派生集文件、清理余文文件。
+    """Apply the file handling on disk: delete derived episode files, back up non-derived episode files, clean up the remainder file.
+
+    Any failure raises and aborts the commit (the ledger write is rolled back with it): leftover episode files would not
+    match the ledger, so it is better to fail as a whole and let the caller retry. Reset itself is idempotent; rerunning
+    self-heals the parts already done.
+
+    落盘文件处置：删派生集文件、留底非派生集文件、清理余文文件。
 
     失败一律抛错中止提交（账本写回随之回滚）：残留的集文件与账本对不上，宁可整体失败让调用方
     重试。重置本身幂等，重跑即可自愈已完成的部分。
     """
+    # Refuse to handle files when source/ is a symlink or (native Windows) directory junction: such a reparse point would make path resolution
+    # under source_dir pass through to directories outside the project, so unlink/rename could act on external files;
+    # is_junction() is available from 3.12 and always False on POSIX, consistent with the same check in EpisodePlanner._reconcile_derived_files.
+    # A derived episode file that is itself a symlink is not affected: unlink/rename act on the link
+    # entry itself, not following the final link component, and dangling links can be cleaned up safely too
     # source/ 是符号链接或（Windows 原生）目录联接时拒绝处置：这类 reparse point 会让
     # source_dir 之下的路径解析穿透到项目外目录，unlink/rename 因此可能作用到外部文件；
     # is_junction() 3.12+ 可用、POSIX 上恒为 False，与 EpisodePlanner._reconcile_derived_files
@@ -235,6 +339,7 @@ def _apply_files(
     archived: list[tuple[str, str]] = []
     for path in plan.deletes:
         try:
+            # derived episode source deleted by an episode planning reset; can be regenerated from the episode ledger
             path.unlink(missing_ok=True)  # hard-delete: derived -- 分集重置删除的派生集原文，可由分集账本重新生成
         except OSError as exc:
             raise EpisodeResetError(f"派生集文件删除失败，重置已中止：{path.name}: {exc}") from exc
@@ -246,11 +351,14 @@ def _apply_files(
         except OSError as exc:
             raise EpisodeResetError(f"集文件留底改名失败，重置已中止：{path.name}: {exc}") from exc
         archived.append((_rel(project_dir, path), _rel(project_dir, target)))
+    # The remainder file is not source and does not record planning progress (the start is derived from the ledger); keeping it would only let the user see
+    # a stale leftover text under source/ unrelated to the ledger, so it is cleaned up with the reset
     # 余文文件不是源文，也不记录规划进度（起点由账本推导）；留着只会让用户在 source/ 下
     # 看到一份与账本无关的陈旧剩余正文，随重置一并清理
     remaining = project_dir / "source" / "_remaining.txt"
     if remaining.is_file():
         try:
+            # derived file of unsplit source; can be regenerated from the episode ledger
             remaining.unlink()  # hard-delete: derived -- 未切分原文的派生文件，可由分集账本重新生成
         except OSError as exc:
             raise EpisodeResetError(f"余文文件清理失败，重置已中止：{remaining.name}: {exc}") from exc
@@ -263,14 +371,42 @@ def _rel(project_dir: Path, path: Path) -> str:
 
 @dataclass(frozen=True)
 class _PartialReset:
-    """部分重置的边界：保留段集 ID（按播出顺序）与保留段所引用源文的规范化全文。"""
+    """Boundary of a partial reset: the retained episode IDs (in episode order) and the normalized full text of the source referenced by the retained part.
+
+    部分重置的边界：保留段集 ID（按播出顺序）与保留段所引用源文的规范化全文。"""
 
     retained: tuple[int, ...]
     texts: Mapping[str, str]
 
 
 def _resolve_partial_reset(project_dir: Path, project: Mapping[str, Any], *, episode_id: int) -> _PartialReset:
-    """校验部分重置的前置条件，返回保留段。
+    """Check the preconditions of a partial reset and return the retained part.
+
+    Ledger order is episode order: entries before ``episode_id`` are the retained part; it and the cut episodes after it
+    are cleared. If any condition fails, "how far to keep, where to go back to" cannot be worked out safely, so
+    :class:`EpisodeResetError` is raised pointing to a full reset instead; the caller guarantees the ledger is not
+    changed when validation fails:
+
+    - The ledger shape must be clean (``episodes`` is a list, entries are all objects, episode IDs are all parseable,
+      positive integers and unique); unlike the full reset, a partial reset does not tolerate corruption with "zero
+      pre-checks"
+    - ``episode_id`` must be in the ledger and not the first episode in episode order (that would be a full reset)
+    - All recorded source fingerprints must match the current source (``mismatched_source_fingerprints``, the same
+      escape hatch as ``EpisodePlanner``'s commit gate)
+    - Cut episodes in the retained part with a trustworthy ``source_range`` must fall within the current length of their
+      source file and be non-empty (``start < end``), and advance along source position in episode order: within the
+      same source file a later ``start`` is not earlier than the previous ``end``; across source files it moves to a
+      later file in the whole-source manifest. Unsplit gaps left between two episodes are valid; overlap or going
+      backwards means the ledger is corrupt
+
+    - Cut episodes in the retained part must all have a structurally complete ``source_range``: missing ones are cut
+      episodes left by the old flow; if retained they would still block episode planning, which a partial reset cannot
+      solve
+
+    Episodes with their own source and episodes without source occupy no source position and are not part of the
+    coordinate checks.
+
+    校验部分重置的前置条件，返回保留段。
 
     账本顺序即播出顺序：``episode_id`` 之前的条目是保留段，它及其后的切出集被清除。任一条件
     不满足都会让「保留到哪、退回到哪」无法安全推算，抛 :class:`EpisodeResetError` 并指引
@@ -364,7 +500,9 @@ def _resolve_partial_reset(project_dir: Path, project: Mapping[str, Any], *, epi
 
 
 def _other_origin_episode_ids(project: Mapping[str, Any]) -> frozenset[int]:
-    """自带原文与无原文的集 ID：两种重置都不动它们。账本损坏时按可解析的条目容忍计算。"""
+    """Episode IDs of episodes with their own source and without source: neither kind of reset touches them. With a corrupt ledger, computed tolerantly from parseable entries.
+
+    自带原文与无原文的集 ID：两种重置都不动它们。账本损坏时按可解析的条目容忍计算。"""
     raw_episodes = project.get("episodes")
     return frozenset(
         num
@@ -381,7 +519,26 @@ def reset_episode_planning(
     episode_id: int | None = None,
     confirm_consumed: bool = False,
 ) -> EpisodeResetResult | ResetConfirmationRequired:
-    """重置分集规划账本。
+    """Reset the episode planning ledger.
+
+    Without ``episode_id`` (or when it is the first cut episode in episode order): full reset, zero pre-checks, must
+    succeed whatever state of corruption the ledger is in (see the module docs). With another episode: partial reset,
+    keeping the episodes before it in episode order; see the pre-checks of :func:`_resolve_partial_reset`; when they
+    fail, the specific reason is named, a full reset is suggested instead, and the ledger is not changed. Cleared
+    episode IDs are not allocated again; replanned episodes get new IDs after the historical highest number.
+
+    In both modes, when consumed episodes are affected (ledger marks consumed, or script / script_plan artifacts already
+    exist on disk) and ``confirm_consumed`` is not set, it does not run and returns
+    :class:`ResetConfirmationRequired` awaiting explicit confirmation; after confirmation it runs, consumed episodes
+    become episodes without source and are marked stale, and downstream artifacts and their registrations in the
+    artifact manifest are always kept.
+
+    Raises:
+        EpisodeResetError: ``episode_id`` is not a positive integer, partial reset pre-checks failed, or
+            file handling failed; in all cases the ledger is guaranteed unchanged.
+        EpisodeResetConflictError: consumed episodes outside the confirmation list appeared during the reset.
+
+    重置分集规划账本。
 
     不给 ``episode_id``（或它是播出顺序中的第一个切出集）：全量重置，零前置校验，账本处于任何
     损坏状态都必须执行成功（见模块文档）。给出其他集：部分重置，保留播出顺序中它之前的集，
@@ -404,6 +561,8 @@ def reset_episode_planning(
     pm = ProjectManager.for_project_dir(project_dir)
     project_name = project_dir.name
 
+    # The pre-scan/pre-checks outside the lock only serve two-step confirmation and fast failure: when validation fails or confirmation is needed, return with zero writes,
+    # without taking the lock or touching files
     # 锁外预扫描/前置校验只为二段确认与快速失败服务：校验不通过或需要确认时零写入返回，
     # 不进锁、不碰文件
     project = pm.load_project(project_name)
@@ -434,6 +593,7 @@ def reset_episode_planning(
             deleted_files=[_rel(project_dir, path) for path in plan.deletes],
         )
 
+    # The result can only be assembled inside the lock (from the actual handling of the rescan inside the lock); it is carried out of the lock via a closure variable
     # 结果只能在锁内（按锁内复扫的实际处置）拼出，用闭包变量带回锁外
     committed: list[EpisodeResetResult] = []
     commit_plan: _ResetPlan | None = None
@@ -443,6 +603,8 @@ def reset_episode_planning(
 
     def _commit(p: dict[str, Any]) -> None:
         nonlocal commit_plan, retired_nums, snapshot_texts
+        # Re-validate/re-scan inside the lock: the confirmation list and pre-checks are snapshots from the time of the read outside the lock; meanwhile source files
+        # may be changed externally, and new consumed episodes outside the list may appear
         # 锁内重新校验/重新扫描：确认清单与前置校验都是锁外读取时刻的快照，期间源文件
         # 可能被外部改动、也可能出现清单之外的新消费集
         locked_boundary = _boundary(p)
@@ -463,6 +625,7 @@ def reset_episode_planning(
             elif (
                 isinstance(entry, dict) and num is not None and num > 0 and num in consumed and num not in retired_nums
             ):
+                # Cut episodes with artifacts are handled as replaced old episodes: they become episodes without source, are marked stale, and keep their artifacts and registrations
                 # 有产物的切出集按被替换的旧集处理：转为无原文的集、标 stale，产物与登记仍归它
                 entry[SOURCE_ORIGIN_FIELD] = SourceOrigin.NONE.value
                 entry.pop("source_range", None)
@@ -499,6 +662,7 @@ def reset_episode_planning(
                 commit_plan,
                 archive_targets=archive_targets,
             )
+            # Reset does not change the source: files changed outside the service keep their snapshot, to be aligned when the episode ledger is updated
             # 重置不改源文：在服务之外改动过的文件保留快照，留待更新分集账本时对齐
             sync_source_snapshots(project_dir, committed_project, snapshot_texts, refreshed=())
         committed.append(
@@ -512,7 +676,7 @@ def reset_episode_planning(
         )
 
     pm.update_project(project_name, _commit, on_commit=_commit_side_effects)
-    if not committed:  # pragma: no cover - update_project 必然调用 mutate_fn
+    if not committed:  # pragma: no cover - update_project always calls mutate_fn / update_project 必然调用 mutate_fn
         raise EpisodeResetError("重置未执行：账本更新回调未被调用")
     result = committed[0]
     logger.info(

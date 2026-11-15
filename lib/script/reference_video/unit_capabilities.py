@@ -1,4 +1,16 @@
-"""参考生视频单元的读侧能力：按可用参考图逐单元定桶，并给出所落桶的视频请求事实。
+"""Read-side capabilities of reference-to-video units: pick the bucket per unit from usable reference images, and give
+the video request facts of that bucket.
+
+The unit list, the content review panel and the Agent capability payload all read this module's results; the
+bucket criterion has the same source as the execution side ``ReferenceUnitRequestProjector``
+(:func:`hydrate_unit_references` + artifact-manifest-aware asset availability), so the UI never selects a tier as
+r2v while execution falls into i2v. Quoting goes through the same hydration via ``ReferenceUnitRequestProjector``;
+the visual basis digest for free same-tier reuse, the planning-time duration gate and the default duration of new
+units only need the bucket verdict and read :func:`hydrate_reference_units`, so the same criterion isn't rewritten
+by each consumer. Bucket-level video request facts come from the per-bucket lookup the caller provides; each bucket
+is evaluated at most once per request, so the number of units doesn't multiply config resolutions.
+
+参考生视频单元的读侧能力：按可用参考图逐单元定桶，并给出所落桶的视频请求事实。
 
 单元列表、内容确认面板与 Agent 能力载荷都读本模块的结果；定桶判据与执行侧
 ``ReferenceUnitRequestProjector`` 同源（:func:`hydrate_unit_references` + 产物清单感知的
@@ -31,7 +43,7 @@ from lib.script.reference_video.request_projection import (
 
 @dataclass(frozen=True)
 class ReferenceUnitCapability:
-    """一个单元此刻的定桶结论与所落桶的视频请求事实。"""
+    """A unit's current bucket verdict and the video request facts of that bucket. / 一个单元此刻的定桶结论与所落桶的视频请求事实。"""
 
     unit_id: str
     hydration: ReferenceUnitHydration
@@ -42,7 +54,13 @@ class ReferenceUnitCapability:
         return self.hydration.hydrated_generation_type
 
     def to_payload(self) -> dict[str, object]:
-        """Web 与 Agent 共用的逐单元信封。
+        """Per-unit envelope shared by Web and Agent.
+
+        ``problem`` is the video request facts failure of the bucket; ``problems`` are structured blocking problems where
+        declared references and usable reference images split (unregistered / missing image / bucket changed); the two are
+        not folded into each other.
+
+        Web 与 Agent 共用的逐单元信封。
 
         ``problem`` 是所落桶的视频请求事实失败；``problems`` 是声明引用与可用参考图分裂的
         结构化阻断问题（未登记 / 缺图 / 桶改变），两者互不折叠。
@@ -79,7 +97,14 @@ def hydrate_reference_units(
     *,
     availability: ReferenceAssetAvailability | None = None,
 ) -> tuple[ReferenceUnitHydration, ...]:
-    """按执行侧同款判据逐单元水合声明引用，给出各单元此刻所落的桶与分裂问题。
+    """Hydrate declared references per unit with the same criterion as the execution side, giving each unit's current
+    bucket and split problems.
+
+    ``availability`` defaults to the artifact-manifest-aware check (file exists and claimed by the manifest), built only
+    once per batch; with no units, project assets are not touched. The whole batch shares one reference catalog, path
+    resolution and per-image memoized availability.
+
+    按执行侧同款判据逐单元水合声明引用，给出各单元此刻所落的桶与分裂问题。
 
     ``availability`` 缺省为产物清单感知判定（文件存在且清单认领），整批只构造一次；没有单元时
     不触碰项目资产。整批共用一份引用目录、路径解析与按图片记住的可用性。
@@ -112,13 +137,19 @@ async def evaluate_reference_unit_capabilities(
     request_facts: ReferenceRequestFactsLookup,
     availability: ReferenceAssetAvailability | None = None,
 ) -> tuple[ReferenceUnitCapability, ...]:
-    """逐单元定桶并取所落桶的视频请求事实。
+    """Pick the bucket per unit and get the video request facts of that bucket.
+
+    ``availability`` defaults to the same artifact-manifest-aware check as the execution side; the per-bucket
+    ``request_facts`` lookup is provided by the caller (the read side uses ``configured_reference_request_facts``).
+
+    逐单元定桶并取所落桶的视频请求事实。
 
     ``availability`` 缺省为执行侧同款的产物清单感知判定；``request_facts`` 按桶查找由调用方
     给出（读侧用 ``configured_reference_request_facts``）。
     """
 
     pending = list(units)
+    # Hydration needs to read the artifact manifest and digest design images, so the whole batch runs in a worker thread.
     # 水合要读产物清单、对设计图算摘要，整批放进工作线程。
     hydrations = await asyncio.to_thread(
         hydrate_reference_units, project, project_path, pending, availability=availability
@@ -136,6 +167,6 @@ async def evaluate_reference_unit_capabilities(
 
 
 def reference_unit_capability_payloads(capabilities: Sequence[ReferenceUnitCapability]) -> dict[str, dict[str, object]]:
-    """按 ``unit_id`` 索引的逐单元信封，供响应体直接挂载。"""
+    """Per-unit envelopes indexed by ``unit_id``, for direct attachment to the response body. / 按 ``unit_id`` 索引的逐单元信封，供响应体直接挂载。"""
 
     return {capability.unit_id: capability.to_payload() for capability in capabilities}

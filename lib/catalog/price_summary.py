@@ -1,4 +1,6 @@
-"""供应商模型列表上的价格摘要：从价目表里挑出最能代表这个模型的一两个计费项，给出单价范围。"""
+"""Price summary on the provider model list: pick the one or two billing items from the price table that best represent the model, and give the unit price range.
+
+供应商模型列表上的价格摘要：从价目表里挑出最能代表这个模型的一两个计费项，给出单价范围。"""
 
 from __future__ import annotations
 
@@ -8,6 +10,7 @@ from typing import Final
 
 from arcreel_catalog_core import METERS, MediaType, PriceTable
 
+#: Billing items picked in order per media type; take the first two present in the price table, and fall back to call count if none are.
 #: 每种媒体类型按顺序挑选的计费项；价目表里有的取前两个，都没有时退到调用次数。
 _SUMMARY_METERS: Final[Mapping[MediaType, tuple[str, ...]]] = {
     "text": ("uncached_input_tokens", "output_tokens"),
@@ -21,7 +24,12 @@ _MAX_ITEMS: Final = 2
 
 @dataclass(frozen=True)
 class PriceSummaryItem:
-    """一个计费项的单价范围。``per`` 是单价对应的计数量（如每百万 token 为 1000000）。
+    """Unit price range of one billing item. ``per`` is the quantity the unit price applies to (e.g. 1000000 for per million tokens).
+
+    Unit prices under different conditions (resolution, context tier, service tier, etc.) take the lowest and highest;
+    when both are equal the price is not tiered.
+
+    一个计费项的单价范围。``per`` 是单价对应的计数量（如每百万 token 为 1000000）。
 
     不同条件（分辨率、上下文档、服务档等）下的单价取最低与最高，两者相同时价格不分档。
     """
@@ -39,7 +47,9 @@ class PriceSummary:
 
 
 def summarize_price(price: PriceTable | None, media_type: MediaType) -> PriceSummary | None:
-    """价目表的摘要；没有价目表、价目表依赖不认识的内容或挑不出计费项时为 ``None``（列表上显示未定价）。"""
+    """Summary of the price table; ``None`` when there is no price table, the table depends on unknown content, or no billing item can be picked (the list shows unpriced).
+
+    价目表的摘要；没有价目表、价目表依赖不认识的内容或挑不出计费项时为 ``None``（列表上显示未定价）。"""
     if price is None or not price.is_priceable:
         return None
     by_meter = {meter.meter: meter for meter in price.meters if meter.rows}

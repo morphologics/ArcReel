@@ -1,4 +1,19 @@
-"""供应商产物下载的统一入口：出站目的地校验与有上限的响应体读取。
+"""Unified entry for provider artifact downloads: outbound destination validation and size-capped response body reading.
+
+Artifact URLs come from provider responses and are treated as untrusted input. Two constraints:
+
+- Destination: before each request (including every redirect hop) the target host is resolved; non-``http`` /
+  ``https`` schemes are rejected, as are targets on link-local and cloud metadata addresses (including IPv4-mapped IPv6
+  forms). Besides those in the link-local range, cloud metadata addresses also include the two single addresses
+  ``100.100.100.200`` and ``192.0.0.192``. Loopback and private addresses are allowed -- self-hosted services like
+  ComfyUI / Ollama legitimately live there.
+- Size: response bodies have a total byte cap tiered by media type and are aborted when exceeded; writes go to a
+  ``.part`` file in the same directory and are then atomically renamed, leaving no fragments on abort. For error
+  responses only the first part of the body is read, so the status error can carry diagnostics.
+
+A shared layer outside the backend subpackages: video / image / audio backends and the custom provider runtime share this module.
+
+供应商产物下载的统一入口：出站目的地校验与有上限的响应体读取。
 
 产物地址来自供应商响应，按不可信输入处理。两道约束：
 
@@ -28,9 +43,10 @@ from lib.backends.transport_layer import TransportLayer, layer_async_client
 from lib.infra.async_thread import run_noninterruptible_sync, run_sync_transaction
 from lib.infra.retry import NonRetryableError
 
-#: 解析器：``(host, port)`` → 该主机解析出的地址文本。
+#: Resolver: ``(host, port)`` → the address texts the host resolves to. / 解析器：``(host, port)`` → 该主机解析出的地址文本。
 Resolver = Callable[[str, int], Awaitable[Iterable[str]]]
 
+#: Total byte cap for artifacts per media type. Values are far above any provider's actual single-artifact size, only blocking abnormally large responses.
 #: 各媒体类型产物的总字节上限。取值远高于各供应商单个产物的实际体积，只拦异常大的响应。
 VIDEO_ARTIFACT_MAX_BYTES = 2 * 1024 * 1024 * 1024
 IMAGE_ARTIFACT_MAX_BYTES = 256 * 1024 * 1024
@@ -41,13 +57,15 @@ ARTIFACT_MAX_BYTES_BY_MEDIA_TYPE: dict[str, int] = {
     "audio": AUDIO_ARTIFACT_MAX_BYTES,
 }
 
+#: Time limit for host name resolution. Resolution doesn't use httpx's timeout config, so it is bounded separately.
 #: 主机名解析的时限。解析不走 httpx 的超时配置，单独兜住。
 DNS_RESOLVE_TIMEOUT_SECONDS = 10.0
 
-#: 错误响应体读取上限：够状态错误带出诊断摘要即可。
+#: Read cap for error response bodies: enough for the status error to carry a diagnostic summary. / 错误响应体读取上限：够状态错误带出诊断摘要即可。
 ERROR_BODY_MAX_BYTES = 64 * 1024
 
 _ALLOWED_SCHEMES = frozenset({"http", "https"})
+#: The link-local range plus the cloud metadata single addresses outside it; only the single addresses are blocked, other addresses in their ranges pass as usual.
 #: 链路本地段，加上不在链路本地段内的云元数据单地址；只拦单地址，所在网段的其余地址照常放行。
 _REJECTED_NETWORKS = (
     ipaddress.ip_network("169.254.0.0/16"),
@@ -57,24 +75,28 @@ _REJECTED_NETWORKS = (
     ipaddress.ip_network("192.0.0.192/32"),
 )
 
+#: Batching threshold for writes to disk: upper bound on memory residency, also amortizing thread pool scheduling to once per 8 MiB.
 #: 落盘攒批阈值：驻留内存的上界，同时把线程池调度摊薄到每 8 MiB 一次。
 _WRITE_BUFFER_BYTES = 8 * 1024 * 1024
 _CHUNK_BYTES = 64 * 1024
 
+#: These headers describe the original transfer form; the truncated body is already decoded, so keeping them would make the reader decode again or mismatch the length.
 #: 这些头描述的是原始传输形态；截断后的响应体已解码，保留它们会让读取端再解码一次或长度对不上。
 _TRANSFER_HEADERS = frozenset({"content-encoding", "content-length", "transfer-encoding"})
 
 
 class ArtifactDestinationRejectedError(NonRetryableError):
-    """产物请求的目标协议或地址不在允许范围内。"""
+    """The artifact request's target scheme or address is not allowed. / 产物请求的目标协议或地址不在允许范围内。"""
 
 
 class ArtifactTooLargeError(NonRetryableError):
-    """产物响应体超过该媒体类型的总字节上限。"""
+    """The artifact response body exceeds the total byte cap for the media type. / 产物响应体超过该媒体类型的总字节上限。"""
 
 
 async def resolve_host(host: str, port: int) -> list[str]:
-    """用事件循环的异步 ``getaddrinfo`` 解析主机，返回全部地址文本。"""
+    """Resolve the host with the event loop's async ``getaddrinfo``, returning all address texts.
+
+    用事件循环的异步 ``getaddrinfo`` 解析主机，返回全部地址文本。"""
     infos = await asyncio.get_running_loop().getaddrinfo(host, port, type=socket.SOCK_STREAM)
     return [str(info[4][0]) for info in infos]
 
@@ -95,7 +117,13 @@ async def check_destination(
     resolver: Resolver = resolve_host,
     resolve_timeout: float = DNS_RESOLVE_TIMEOUT_SECONDS,
 ) -> None:
-    """校验一次请求的目标；不在允许范围内抛 :class:`ArtifactDestinationRejectedError`。
+    """Validate the target of one request; raises :class:`ArtifactDestinationRejectedError` if not allowed.
+
+    When host name resolution fails or exceeds ``resolve_timeout`` seconds, no verdict is made and the transport connects
+    as usual (failing as a network error if it can't connect): in deployments that go out via a proxy the local machine may
+    not be able to resolve the target host.
+
+    校验一次请求的目标；不在允许范围内抛 :class:`ArtifactDestinationRejectedError`。
 
     主机名解析失败或超过 ``resolve_timeout`` 秒时不作判定，交给传输层照常连接
     （连不上即按网络错误失败）：经代理出网的部署里本机可能解析不了目标主机。
@@ -110,7 +138,7 @@ async def check_destination(
         try:
             async with asyncio.timeout(resolve_timeout):
                 addresses = await resolver(host, port)
-        except OSError:  # TimeoutError 亦是 OSError
+        except OSError:  # TimeoutError is also an OSError / TimeoutError 亦是 OSError
             return
     if any(_is_rejected_address(address) for address in addresses):
         raise ArtifactDestinationRejectedError(f"artifact host resolves to a disallowed address: {host}")
@@ -123,7 +151,12 @@ def artifact_http_client(
     transport_layer: TransportLayer | None = None,
     **kwargs: Any,
 ) -> httpx.AsyncClient:
-    """构造对每次请求（含每一跳重定向）先做目的地校验的 ``httpx.AsyncClient``。
+    """Build an ``httpx.AsyncClient`` that validates the destination before every request (including every redirect hop).
+
+    ``transport_layer`` is layered on top of the validation (see :func:`layer_async_client`); what is validated is the
+    request after its rewriting. Other keyword arguments are passed to ``httpx.AsyncClient`` as is.
+
+    构造对每次请求（含每一跳重定向）先做目的地校验的 ``httpx.AsyncClient``。
 
     ``transport_layer`` 叠在校验之上（见 :func:`layer_async_client`），校验的是它改写后的请求。
     其余关键字参数原样交给 ``httpx.AsyncClient``。
@@ -147,7 +180,11 @@ def _too_large(max_bytes: int) -> ArtifactTooLargeError:
 
 
 async def _capped_chunks(response: httpx.Response, max_bytes: int) -> AsyncIterator[bytes]:
-    """逐块产出响应体，累计超过 ``max_bytes`` 抛 :class:`ArtifactTooLargeError`。
+    """Yield the response body chunk by chunk, raising :class:`ArtifactTooLargeError` once the total exceeds ``max_bytes``.
+
+    When ``Content-Length`` declares an over-limit size it is rejected before reading; whether it exceeds the limit is decided by the bytes actually read.
+
+    逐块产出响应体，累计超过 ``max_bytes`` 抛 :class:`ArtifactTooLargeError`。
 
     ``Content-Length`` 声明超限时在读取前拒绝；是否超限以实际读到的字节数为准。
     """
@@ -163,12 +200,24 @@ async def _capped_chunks(response: httpx.Response, max_bytes: int) -> AsyncItera
 
 
 async def read_body_capped(response: httpx.Response, *, max_bytes: int) -> bytes:
-    """把流式响应的响应体读进内存，超过 ``max_bytes`` 抛 :class:`ArtifactTooLargeError`。"""
+    """Read a streaming response's body into memory, raising :class:`ArtifactTooLargeError` above ``max_bytes``.
+
+    把流式响应的响应体读进内存，超过 ``max_bytes`` 抛 :class:`ArtifactTooLargeError`。"""
     return b"".join([chunk async for chunk in _capped_chunks(response, max_bytes)])
 
 
 async def stream_body_to_file(response: httpx.Response, output_path: Path, *, max_bytes: int) -> None:
-    """把流式响应的响应体写入 ``output_path``，超过 ``max_bytes`` 即中止。
+    """Write a streaming response's body to ``output_path``, aborting above ``max_bytes``.
+
+    Writes go to a ``.part`` in the same directory first and are atomically renamed on success; any failure (including
+    over-limit and cancellation) deletes the ``.part``, so no truncated file is left at the artifact path. Data is
+    written to disk in a thread once 8 MiB has accumulated: neither scheduling a thread pool task per chunk nor keeping
+    the whole artifact in memory. Chunk writes go through ``run_sync_transaction``: on cancellation it waits for the thread
+    to finish writing before propagating, so the ``.part`` cleanup below and the caller's cleanup of the artifact path
+    never interleave with a still-running thread; this part is within the caller's wall-clock budget
+    (``asyncio.timeout``) and must not swallow cancellation. The rename goes through ``run_noninterruptible_sync``, see the comment below.
+
+    把流式响应的响应体写入 ``output_path``，超过 ``max_bytes`` 即中止。
 
     先写同目录 ``.part``、成功后原子改名；任何失败（含超限与取消）都删掉 ``.part``，产物路径上
     不会留下截断的文件。攒够 8 MiB 再一次放进线程落盘：既不为每个分片调度一次线程池任务，
@@ -177,11 +226,12 @@ async def stream_body_to_file(response: httpx.Response, output_path: Path, *, ma
     （``asyncio.timeout``）之内，不能吞掉取消。改名走 ``run_noninterruptible_sync``，见下方注释。
     """
     chunks = _capped_chunks(response, max_bytes)
-    # 先取首块：声明超限在此抛出，不建 .part
+    # Take the first chunk first: an over-limit declaration raises here, without creating .part / 先取首块：声明超限在此抛出，不建 .part
     first = await anext(chunks, b"")
     await asyncio.to_thread(output_path.parent.mkdir, parents=True, exist_ok=True)
     partial_path = output_path.with_name(f"{output_path.name}.part")
     try:
+        # only take the handle here; all actual writes are offloaded to the thread below
         with open(partial_path, "wb") as handle:  # noqa: ASYNC230 -- 只在此取句柄，实际写入均卸载到下方线程
             buffered: list[bytes] = [first]
             buffered_bytes = len(first)
@@ -201,17 +251,26 @@ async def stream_body_to_file(response: httpx.Response, output_path: Path, *, ma
                 if buffered_bytes >= _WRITE_BUFFER_BYTES:
                     await flush()
             await flush()
+        # The rename is the step where the artifact takes shape: one atomic rename takes negligible time and won't blow the outer wall-clock budget. If cancellation
+        # lands at this moment the rename still completes and the cancellation is dropped; the caller's subsequent transcoding and artifact commit continue
+        # (docs/standards/backend.md "the post-provider-return accounting section is non-interruptible").
         # 改名是产物成形的那一步：一次原子改名耗时可忽略，不会拖垮外层墙钟预算。取消落在这一刻时改名
         # 照常完成、取消随之消失，调用方后续的转码与产物提交继续（docs/standards/backend.md
         # 「供应商返回之后的落账段不可中断」）。
         await run_noninterruptible_sync(os.replace, partial_path, output_path)
     except BaseException:
+        # .partial file left by an interrupted download
         await asyncio.to_thread(partial_path.unlink, True)  # hard-delete: temp -- 下载中断留下的 .partial 文件
         raise
 
 
 async def buffered_error_response(response: httpx.Response, *, max_bytes: int = ERROR_BODY_MAX_BYTES) -> httpx.Response:
-    """把流式错误响应换成一个已读完的副本，响应体只保留前 ``max_bytes`` 字节。
+    """Replace a streaming error response with an already-read copy, keeping only the first ``max_bytes`` bytes of the body.
+
+    Status code, headers (minus the few related to transfer form) and request are kept as is, so retry predicates and
+    ``Retry-After`` work as usual; ``response.text`` can be read directly on the copy.
+
+    把流式错误响应换成一个已读完的副本，响应体只保留前 ``max_bytes`` 字节。
 
     状态码、响应头（去掉传输形态相关的几项）与请求原样保留，重试谓词与 ``Retry-After``
     照常可用；``response.text`` 在副本上可直接读取。

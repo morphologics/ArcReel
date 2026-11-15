@@ -1,4 +1,23 @@
-"""脚本条目离开正式脚本时，名下的媒体与版本历史移进项目回收站（``docs/adr/0107``）。
+"""When script entries leave the final script, their media and version history move into the project trash
+(``docs/adr/0107``).
+
+Two ways of leaving: structural removal (remove in batch edits and by the Agent; entries in the old script that
+are absent when the final script is overwritten), and identity replacement (re-inserting a new entry; a new
+entry reusing an old number when the final script is overwritten). On replacement, keeping the old entry's
+version history or current files would make the next generation chain the old content as the new entry's
+history, and rollback could reach images that don't belong to it, so both cases move the old entry's files out
+entirely.
+
+One deletion record with a structure snapshot per entry; the snapshot holds the pre-rewrite script; for restore
+see :mod:`lib.project.script_entry_trash`. Structurally removed entries get a record even without files (what is
+restored is the entry itself); when the final script is overwritten, entries in the old script all count as
+structural removals. Numbers in a batch edit that were only replaced and are not in the pre-edit script have no
+entry to restore, so no record is created when there are no files.
+
+It's a separate module because it needs both :mod:`lib.artifacts.version_manager` (history) and
+:mod:`lib.project.resource_paths` (current file paths).
+
+脚本条目离开正式脚本时，名下的媒体与版本历史移进项目回收站（``docs/adr/0107``）。
 
 两种离开：结构移除（批量编辑与 Agent 的 remove、覆盖正式脚本时旧脚本里不再有的条目），以及身份替换
 （重插新条目、覆盖正式脚本时新条目沿用了旧编号）。替换时留着旧条目的版本历史或当前文件，下一次生成会把旧内容
@@ -28,10 +47,15 @@ from lib.script.item_excerpt import position_snapshot
 from lib.speech.narration_config import POST_PRODUCTION, USE_TTS
 from lib.speech.speech_presentation import presentation_artifact_paths
 
+#: Object type of the deletion record; the object descriptor is ``{"kind", "id": entry number, "episode",
+#: "script_file", "item_kind": entry array key}``; when the entry is in the pre-rewrite script it also carries the
+#: naming snapshot at deletion time ``item_position`` / ``item_excerpt``, which the trash uses to name the entry.
 #: 删除记录的对象类型；对象描述 ``{"kind", "id": 条目编号, "episode", "script_file", "item_kind": 条目数组键}``，
 #: 条目在改写前的剧本里时另带删除时的称呼快照 ``item_position`` / ``item_excerpt``，回收站凭它们称呼条目。
 SCRIPT_ENTRY_KIND = "script_entry"
 
+#: Media resource types named by entry number: storyboard image, end-frame snapshot, shot video, reference-to-video
+#: unit video, narration voiceover.
 #: 按条目编号命名的媒体资源类型：分镜图、尾帧快照、分镜视频、参考生视频单元视频、旁白配音。
 ENTRY_MEDIA_RESOURCE_TYPES: tuple[str, ...] = (
     "storyboards",
@@ -43,7 +67,9 @@ ENTRY_MEDIA_RESOURCE_TYPES: tuple[str, ...] = (
 
 
 def entry_media_paths(entry_id: str) -> list[str]:
-    """按条目编号命名的媒体与视频缩略图（项目内相对 POSIX 路径），不论是否存在。"""
+    """Media and video thumbnails named by entry number (project-relative POSIX paths), whether or not they exist.
+
+    按条目编号命名的媒体与视频缩略图（项目内相对 POSIX 路径），不论是否存在。"""
     return [
         *(resource_relative_path(resource_type, entry_id) for resource_type in ENTRY_MEDIA_RESOURCE_TYPES),
         f"thumbnails/scene_{entry_id}.jpg",
@@ -52,7 +78,10 @@ def entry_media_paths(entry_id: str) -> list[str]:
 
 
 def entry_derived_paths(episode: int, entry_id: str) -> list[str]:
-    """条目的字幕草稿与呈现（两种配音方式各一份），不论是否存在；集号或编号不成立时没有。"""
+    """The entry's subtitle draft and presentations (one per voiceover method), whether or not they exist; none when the
+    episode number or entry number is invalid.
+
+    条目的字幕草稿与呈现（两种配音方式各一份），不论是否存在；集号或编号不成立时没有。"""
     try:
         return [
             rel
@@ -64,7 +93,13 @@ def entry_derived_paths(episode: int, entry_id: str) -> list[str]:
 
 
 def entry_files(project_dir: Path, episode: int, entry_id: str) -> tuple[list[str], dict[str, dict[str, Any]]]:
-    """``project_dir`` 里属于这个条目的普通文件与版本记录；删除时取当前项目，恢复时取迁移后的临时项目。
+    """Regular files and version records in ``project_dir`` belonging to this entry; on deletion use the current
+    project, on restore the migrated temporary project.
+
+    Numbers come from the on-disk script and are untrusted: a number that doesn't resolve to a path within the
+    project has no files.
+
+    ``project_dir`` 里属于这个条目的普通文件与版本记录；删除时取当前项目，恢复时取迁移后的临时项目。
 
     编号来自盘上的剧本，不可信任：解析不出项目内路径的编号没有文件。
     """
@@ -93,7 +128,18 @@ def trash_entries(
     removed: Collection[str] = (),
     then: Callable[[], None] | None = None,
 ) -> list[project_trash.TrashRecord]:
-    """把这些条目（编号 → 条目数组键）名下的文件移进项目回收站，每个条目一条删除记录，最后执行 ``then``。
+    """Move the files under these entries (number -> entry array key) into the project trash, one deletion record per
+    entry, then run ``then``.
+
+    The caller holds the script's lock and the project lock, and calls this in the same critical section as the
+    script write, before the artifact manifest is unregistered (pass the unregistration as ``then``), so the manifest
+    and version history in the snapshot still carry the entries' registrations; ``before`` is the pre-change content
+    of the structure files already rewritten in the same critical section (script, ``project.json``). ``removed`` are
+    the entries among them that were structurally removed; they get records even without files. If any step fails,
+    the records created so far are withdrawn and version history returns to its pre-call state; the exception is
+    raised as usual and the caller's write transaction rolls back the script.
+
+    把这些条目（编号 → 条目数组键）名下的文件移进项目回收站，每个条目一条删除记录，最后执行 ``then``。
 
     调用方持该剧本的锁与项目锁，在剧本写入的同一临界区里、产物清单撤登记之前调用（``then`` 传入撤登记），
     快照里的清单与版本历史才带着条目的登记；``before`` 是同一临界区里已改写的结构文件（剧本、``project.json``）
@@ -117,7 +163,7 @@ def trash_entries(
                     **position_snapshot(script_before, entry_id),
                 }
                 records.append(project_trash.record_deletion(project_dir, obj, files, snapshot=True, before=before))
-                # 快照文件已随记录移走，只摘版本记录。
+                # Snapshot files were already moved with the record; only remove the version records. / 快照文件已随记录移走，只摘版本记录。
                 versions.detach_resources(_resources(history))
             if then is not None:
                 then()
@@ -129,7 +175,7 @@ def trash_entries(
 
 
 def _script_before(before: Mapping[str, bytes], script_file: str) -> Mapping[str, Any]:
-    """改写前的剧本；读不出时为空，记录不带称呼快照。"""
+    """The pre-rewrite script; empty when unreadable, and the record carries no naming snapshot. / 改写前的剧本；读不出时为空，记录不带称呼快照。"""
     try:
         script = json.loads(before.get(f"scripts/{script_file}", b"{}"))
     except ValueError:

@@ -1,4 +1,15 @@
-"""自定义供应商视频能力的唯一合成点：endpoint spec 系统判定 ⊕ 模型级用户覆盖。
+"""The single synthesis point of custom provider video capabilities: endpoint spec system judgement ⊕ model-level user override.
+
+There is only one copy of the synthesis semantics: callers needing effective capabilities must all go through here and must
+not merge overrides themselves, otherwise "operations the UI allows get reneged on at execution time". The execution layer
+gets it injected when the factory builds the backend. The system judgement itself is not stored in the DB and changes
+automatically with registry upgrades; user overrides are a sparse dict (`CustomProviderModel.capability_overrides`), and an
+absent key means that dimension follows the system judgement.
+
+The same override dict also holds model-fact dimensions (selectable durations, text-to-image, etc., see
+:mod:`lib.custom_provider.model_facts`); their key names do not overlap with channel facts, and they are skipped here.
+
+自定义供应商视频能力的唯一合成点：endpoint spec 系统判定 ⊕ 模型级用户覆盖。
 
 合成语义只此一份：需要生效能力的调用方一律走这里，不得自行合并覆盖，否则「界面允许的
 操作在执行期反悔」。执行层由工厂构建 backend 时注入。系统判定本身不落库，随注册表升级
@@ -33,6 +44,9 @@ if TYPE_CHECKING:
     from lib.custom_provider.endpoints import EndpointSpec
 
 
+# Override key → value type, derived directly from the VideoCapabilities dataclass: new capability dimensions automatically enter
+# the override schema, with no DB migration and no chance of a hand-written copy drifting from the dataclass.
+# Uses get_type_hints rather than field.type: base.py enables PEP 563, so the latter only gives annotation strings.
 # 覆盖键 → 值类型，直接从 VideoCapabilities dataclass 派生：新增能力维度自动进入覆盖
 # schema，无需 DB 迁移，也不存在手写副本与 dataclass 漂移的可能。
 # 走 get_type_hints 而非 field.type：base.py 启用 PEP 563，后者只给注解字符串。
@@ -41,6 +55,9 @@ CAPABILITY_OVERRIDE_FIELDS: dict[str, object] = {
     f.name: _CAPABILITY_TYPE_HINTS[f.name] for f in fields(VideoCapabilities)
 }
 
+#: Channel-fact dimensions open to capability overrides (docs/adr/0104): input mode, reference image and reference audio limits,
+#: prompt length limit, audio track form. ``reference_audio_per_image`` and ``first_frame_ratio_adaptive_only`` are request
+#: construction forms; changing them would not make the call channel send a different request, so they are not open.
 #: 开放给能力覆盖的通道事实维度（docs/adr/0104）：输入模式、参考图与参考音频上限、提示词长度上限、
 #: 音轨形态。``reference_audio_per_image``、``first_frame_ratio_adaptive_only`` 是请求构造的形态，
 #: 改了也不会让调用通道换一种请求，不开放。
@@ -59,6 +76,7 @@ CHANNEL_FACT_OVERRIDE_KEYS: frozenset[str] = frozenset(
     }
 )
 
+#: The two audio track form dimensions. Custom providers derive by audio track form only when the user overrode them (see :func:`overridden_audio_track`).
 #: 音轨形态两维。自定义供应商只在用户覆盖了它们时才按音轨形态派生（见 :func:`overridden_audio_track`）。
 AUDIO_TRACK_OVERRIDE_KEYS: frozenset[str] = frozenset({"audio_track", "reference_route_audio_track"})
 
@@ -66,7 +84,13 @@ AUDIO_TRACK_OVERRIDE_KEYS: frozenset[str] = frozenset({"audio_track", "reference
 def overridden_audio_track(
     caps: VideoCapabilities, applied_overrides: Mapping[str, object], route: VideoRoute
 ) -> str | None:
-    """自定义供应商模型在该执行路径上的成片音轨形态；用户没有覆盖音轨形态时为 ``None``。
+    """The final video's audio track form for a custom provider model on this execution path; ``None`` when the user did not override the audio track form.
+
+    The audio track form the call channel declares by model name does not take part: the upstream model behind the endpoint is
+    filled in by the user and cannot be verified, and wrongly judging it always silent would block valid configs from being
+    queued. Without an override the caller treats it as "assumed with audio, switchable". The return value is a ``VideoAudioMode`` literal.
+
+    自定义供应商模型在该执行路径上的成片音轨形态；用户没有覆盖音轨形态时为 ``None``。
 
     调用通道按模型名声明的音轨形态不参与派生：endpoint 背后的上游 model 由用户填写、无从核实，误判恒无声会把
     合法配置挡在入队之外。没有覆盖时由调用方按「假定有声、开关可控」处理。返回值是 ``VideoAudioMode`` 的字面量。
@@ -83,7 +107,14 @@ if CHANNEL_FACT_OVERRIDE_KEYS - CAPABILITY_OVERRIDE_FIELDS.keys() or CHANNEL_FAC
 
 
 def _unwrap_optional(expected: object) -> tuple[object, bool]:
-    """把 ``T | None`` 拆成 ``(T, True)``，非可选注解原样返回 ``(expected, False)``。
+    """Split ``T | None`` into ``(T, True)``; non-optional annotations are returned as ``(expected, False)``.
+
+    The override schema is reflected straight from the dataclass; once a field is declared optional (e.g.
+    ``max_reference_audio_total_seconds: float | None``), the annotation obtained is a ``types.UnionType`` rather than a
+    ``type``: it has no ``__name__`` and cannot be passed to checks that dispatch on a concrete type. Every place that
+    consumes the schema goes through here first, so new optional dimensions don't require changing each check.
+
+    把 ``T | None`` 拆成 ``(T, True)``，非可选注解原样返回 ``(expected, False)``。
 
     覆盖 schema 直接从 dataclass 反射派生，字段一旦声明为可选（如
     ``max_reference_audio_total_seconds: float | None``），拿到的注解就是 ``types.UnionType``
@@ -99,7 +130,12 @@ def _unwrap_optional(expected: object) -> tuple[object, bool]:
 
 
 def capability_type_name(expected: object) -> str:
-    """能力维度类型的展示名，供校验失败的日志与 422 文案使用。
+    """Display name of a capability dimension's type, for validation failure logs and 422 messages.
+
+    ``types.UnionType`` has no ``__name__``; reading the attribute directly would make the "invalid value" message path itself
+    raise ``AttributeError``; the validation fallback branch should not be more fragile than the value being validated.
+
+    能力维度类型的展示名，供校验失败的日志与 422 文案使用。
 
     ``types.UnionType`` 没有 ``__name__``，直接取属性会让「值不合法」的提示路径本身抛
     ``AttributeError``——校验降级的分支不该比被校验的值更脆。
@@ -112,7 +148,19 @@ def capability_type_name(expected: object) -> str:
 def system_video_capabilities(
     *, endpoint: str, model_id: str, endpoint_spec: EndpointSpec | None = None
 ) -> VideoCapabilities:
-    """读 endpoint spec 得出系统对该模型视频能力的判定。
+    """Read the endpoint spec to get the system's judgement of this model's video capabilities.
+
+    Two declaration forms (the registry invariant guarantees exactly one is filled):
+    - ``video_caps_for_model``: the backend's per-model pure function, all four fields declared by the backend;
+    - ``video_max_reference_images``: endpoint-level hard limit; the other dimensions (first frame / end frame / reference audio)
+      take the ``VideoCapabilities`` defaults.
+
+    Builds no SDK client and queries no DB, so it can be called even without an api_key.
+
+    Raises:
+        ValueError: endpoint does not exist, is not video, or both declarations are missing / limit is negative.
+
+    读 endpoint spec 得出系统对该模型视频能力的判定。
 
     两条声明形式（注册表不变式保证恰填其一）：
     - ``video_caps_for_model``：backend 的 per-model 纯函数，四字段全量由 backend 声明；
@@ -153,7 +201,9 @@ def system_video_capabilities(
 
 
 def video_capabilities_from_definition(definition: Mapping[str, object]) -> VideoCapabilities:
-    """从声明式定义机械合成协议能力；必需图输入决定是否支持纯文生请求。"""
+    """Mechanically synthesize protocol capabilities from a declarative definition; required image inputs decide whether pure text-to-video requests are supported.
+
+    从声明式定义机械合成协议能力；必需图输入决定是否支持纯文生请求。"""
     raw_capabilities = definition.get("capabilities")
     capabilities = raw_capabilities if isinstance(raw_capabilities, Mapping) else {}
     applied: dict[str, object] = {}
@@ -174,7 +224,21 @@ def video_capabilities_from_definition(definition: Mapping[str, object]) -> Vide
 def filter_valid_overrides(
     *, endpoint: str, model_id: str, overrides: object | None, endpoint_spec: EndpointSpec | None = None
 ) -> dict[str, object]:
-    """按写入侧同一判定过滤 overrides，丢弃执行层不会采用的键值，返回真正生效的子集。
+    """Filter overrides with the same check as the write side, dropping key/values the execution layer would not use, and return the subset that actually takes effect.
+
+    ``overrides`` is the raw value of ``CustomProviderModel.capability_overrides`` (could be any shape in the DB). Unrecognized
+    keys and values of the wrong type are ignored with a warning: synthesis is the last step of the execution chain, and one
+    dirty config should not make the whole generation path unusable. Validity is guarded on the write side by the API layer whitelist.
+
+    :func:`synthesize_video_capabilities` and the API response boundary (``_model_to_response`` in
+    ``server/routers/custom_providers.py``) share this filter: the latter uses it to trim the ``capability_overrides`` echoed
+    to the client, so existing dirty data is not shown by the UI as in effect while silently ignored at execution. The echo side
+    narrows once more by the open whitelist on top of this, so the echo is a subset of what the execution layer uses: keys of
+    non-open dimensions can only come from manual DB edits, the UI has no way to show or delete them, and the echo hides them so
+    the key set of GET matches what writes store. Does not validate endpoint / media_type; callers handle that themselves (see
+    :func:`system_video_capabilities` and ``_system_capabilities_for``).
+
+    按写入侧同一判定过滤 overrides，丢弃执行层不会采用的键值，返回真正生效的子集。
 
     ``overrides`` 为 ``CustomProviderModel.capability_overrides`` 的原始值（DB 里可能是任何
     形状）。不被识别的键、类型不符的值一律忽略并告警：合成是执行链路的最后一道，一条脏配置
@@ -191,6 +255,10 @@ def filter_valid_overrides(
 
     if overrides is None:
         return {}
+    # ComfyUI endpoint capabilities are all derived from node bindings (``docs/adr/0082``): only the workflow itself can change the
+    # execution form, and override values have no counterpart in the execution layer. The write side already rejects new overrides;
+    # here existing values are dropped. Echo and execution both go through this function, so with the ignoring done in this one
+    # place the two sides can't have one showing "in effect" while the other still disregards it.
     # ComfyUI 端点的能力全部由节点绑定推导（``docs/adr/0082``）：能改变执行形态的只有 workflow
     # 本身，覆盖值在执行层没有对应物。写入侧已拒绝新的覆盖，这里丢掉存量值——回显与执行同走
     # 本函数，忽略落在这一处，两侧就不会一个显示「已生效」一个照旧不认。
@@ -224,6 +292,12 @@ def filter_valid_overrides(
                 capability_type_name(expected),
             )
             continue
+        # Same check as the write side (see server/routers/custom_providers.py::_check_capability_overrides):
+        # when last_frame=True but the endpoint's delegate does not pass end_image down, the override only makes the synthesis layer
+        # claim support while the execution layer still silently drops the frame. The write side already blocks new configs; this
+        # blocks existing rows / non-API write paths again.
+        # The endpoint itself may have been removed from the registry (dropped on upgrade): get_endpoint_spec then raises ValueError,
+        # treated as no end-frame support; existing dirty configs should not blow up this last line of defence in response filtering too.
         # 与写入侧同一判定（见 server/routers/custom_providers.py::_check_capability_overrides）：
         # last_frame=True 但 endpoint 的 delegate 不下传 end_image 时，覆盖只会让合成层宣称
         # 支持、执行层仍静默丢帧。写入侧已挡住新配置，这里再挡一遍存量行 / 非 API 写入路径。
@@ -241,6 +315,8 @@ def filter_valid_overrides(
                     model_id,
                 )
                 continue
+        # Same as above: when the endpoint's delegate does not assemble reference_audio_files into the request, overriding the mode
+        # to direct only makes the synthesis layer claim voice input support, while the execution layer still generates videos with random voices.
         # 同构于上：endpoint 的 delegate 不会把 reference_audio_files 组装进请求时，把模式
         # 覆盖成 direct 只会让合成层宣称支持音色输入，执行层照样生成随机音色的视频。
         if key == "reference_audio_mode" and value == ReferenceAudioMode.DIRECT.value:
@@ -267,7 +343,12 @@ def synthesize_video_capabilities(
     overrides: object | None,
     endpoint_spec: EndpointSpec | None = None,
 ) -> VideoCapabilities:
-    """系统判定 ⊕ 用户覆盖 → 生效能力。
+    """System judgement ⊕ user override → effective capabilities.
+
+    Raises:
+        ValueError: the system judgement itself is unavailable (see :func:`system_video_capabilities`).
+
+    系统判定 ⊕ 用户覆盖 → 生效能力。
 
     Raises:
         ValueError: 系统判定本身不可得（见 :func:`system_video_capabilities`）。
@@ -288,7 +369,18 @@ def synthesize_video_capabilities_with_overrides(
     overrides: object | None,
     endpoint_spec: EndpointSpec | None = None,
 ) -> tuple[VideoCapabilities, dict[str, object]]:
-    """同 :func:`synthesize_video_capabilities`，额外返回过滤后的稀疏覆盖字典。
+    """Same as :func:`synthesize_video_capabilities`, additionally returning the filtered sparse override dict.
+
+    The factory needs this sparse override passed down separately to the request-time tier query (see
+    ``CustomVideoBackend.video_capabilities_for_tier``): that query uses the wrapped backend's tier-aware result as the base and
+    should layer only the fields the user actually overrode, not replace it wholesale with the full object this function merges;
+    that object is the context-free system judgement (a conservative declaration for tier-sensitive backends like Kling) and
+    would short-circuit the tier query back to the effect of having no tier awareness.
+
+    Raises:
+        ValueError: the system judgement itself is unavailable (see :func:`system_video_capabilities`).
+
+    同 :func:`synthesize_video_capabilities`，额外返回过滤后的稀疏覆盖字典。
 
     工厂需要这份稀疏覆盖单独下传给请求期档位查询（见
     ``CustomVideoBackend.video_capabilities_for_tier``）：该查询以被包装 backend 的档位感知
@@ -308,7 +400,15 @@ def synthesize_video_capabilities_with_overrides(
 
 
 def merge_overrides(caps: VideoCapabilities, applied: dict[str, object]) -> VideoCapabilities:
-    """把稀疏覆盖并进能力对象，枚举维度还原成枚举成员、浮点维度的整数字面量还原成 float。
+    """Merge the sparse overrides into the capability object, restoring enum dimensions to enum members and integer literals of float dimensions to float.
+
+    The override dict is read from a JSON column, so enum dimensions are still literal strings here; a direct ``replace`` would
+    make fields declared as enum types actually hold a ``str``. Current enums are all ``StrEnum``, so ``==`` happens to still
+    hold, but ``is`` comparison and ``.value`` access would silently be false and raise ``AttributeError`` respectively; the
+    difference depends only on which style the caller happened to use. The restoration is purely mechanical: values were
+    already validated by exact literal in :func:`capability_value_matches`, and no second check is done here.
+
+    把稀疏覆盖并进能力对象，枚举维度还原成枚举成员、浮点维度的整数字面量还原成 float。
 
     覆盖字典从 JSON 列读出，枚举维度到这里还是字面量字符串；直接 ``replace`` 会让声明为
     枚举类型的字段实际持有 ``str``。当前枚举都是 ``StrEnum``，``==`` 侥幸仍成立，但
@@ -340,7 +440,14 @@ def resolve_audio_pair(
     model_id: str,
     endpoint_spec: EndpointSpec | None = None,
 ) -> tuple[object, int]:
-    """把稀疏的音频覆盖补齐成完整的（模式, 段数上限）二元组，未覆盖的维度取系统判定。
+    """Complete the sparse audio overrides into a full (mode, segment limit) pair, taking the system judgement for dimensions not overridden.
+
+    The invariant check needs both merged dimensions, while the override dict only has the keys the user explicitly changed;
+    both the write side and the echo side need this completion, so it is kept in one place instead of each writing an
+    ``overrides.get(..., system_caps...)`` cascade. When endpoint / model_id cannot be resolved, it is completed with the most
+    conservative "no voice input support".
+
+    把稀疏的音频覆盖补齐成完整的（模式, 段数上限）二元组，未覆盖的维度取系统判定。
 
     不变式判定要的是合并后的两维，而覆盖字典只带用户显式改过的那些键；写入侧与回显侧都需要
     这一步补齐，故收在一处而不是各写一份 ``overrides.get(..., system_caps...)`` 级联。
@@ -368,7 +475,15 @@ def strip_incoherent_audio_overrides(
     model_id: str,
     endpoint_spec: EndpointSpec | None = None,
 ) -> dict[str, object]:
-    """剔除合并后违反音频两维不变式的覆盖键。
+    """Remove override keys that violate the two-dimension audio invariant after merging.
+
+    :func:`enforce_audio_capability_invariant` only lowers the execution-time capability to ``none``; the override dict itself
+    still keeps the downgraded value. If a ``direct`` ⊕ limit 0 left by existing rows or manual DB edits were echoed as is, the
+    UI would show "direct voice input in effect" while generation actually carries no voice input; if the client sends it back
+    unchanged with an unrelated edit, it hits the same invariant on the write side and the whole save is rejected with 422.
+    Both consequences share the origin of the existing ``last_frame`` filter.
+
+    剔除合并后违反音频两维不变式的覆盖键。
 
     :func:`enforce_audio_capability_invariant` 只把执行期能力降到 ``none``，覆盖字典本身仍
     留着被降级的值。存量行或手工改库留下的 ``direct`` ⊕ 上限 0 若原样回显，界面会显示"直传
@@ -384,7 +499,12 @@ def strip_incoherent_audio_overrides(
 
 
 def enforce_audio_capability_invariant(caps: VideoCapabilities, *, endpoint: str, model_id: str) -> VideoCapabilities:
-    """把违反 :func:`audio_capability_pair_is_coherent` 的合并结果降到 ``none``。
+    """Lower a merged result that violates :func:`audio_capability_pair_is_coherent` to ``none``.
+
+    The write side already blocks new configs; this catches existing rows and non-API write paths. The downgrade goes to
+    "unsupported" rather than "fill in a limit": what the limit should be is a provider fact, and the system cannot guess it for the user.
+
+    把违反 :func:`audio_capability_pair_is_coherent` 的合并结果降到 ``none``。
 
     写入侧已挡住新配置，这里兜住存量行与非 API 写入路径。降级方向取"不支持"而非"补一个
     上限"：上限该是多少属供应商事实，系统无从替用户猜。
@@ -402,7 +522,25 @@ def enforce_audio_capability_invariant(caps: VideoCapabilities, *, endpoint: str
 
 
 def capability_value_matches(value: object, expected: object) -> bool:
-    """覆盖值是否可直接落入该能力维度。
+    """Whether an override value can go directly into this capability dimension.
+
+    bool is a subclass of int, so both directions must be excluded explicitly, otherwise ``True`` would be taken as a limit of 1
+    reference image and ``1`` as boolean true; such loose truthiness is semantic guessing and is not done. Numeric dimensions also reject negatives.
+
+    Optional dimensions (``T | None``) additionally accept ``None``, meaning "this backend declares no such constraint", the
+    same as the field default; other values are checked against the inner type. Float dimensions accept integer literals: JSON
+    ``15`` and ``15.0`` are the same number, rejecting the former only creates config pitfalls, and it is not the same thing as
+    the bool/int confusion of semantically different types.
+
+    Enum dimensions accept only literals of that enum's valid values (the override dict is read from a JSON column; members
+    themselves do not survive serialization), with no case folding or synonym mapping: values outside the vocabulary are all
+    rejected and fall back to the system judgement, rather than guessing the closest member.
+
+    Write-side validation (API layer whitelist) and the synthesis here must use the same check: once the two drift, values the
+    write side lets through get silently ignored by synthesis, exactly the "UI allows, execution reneges" this module exists to
+    eliminate. Hence this function is public for the API layer to reuse.
+
+    覆盖值是否可直接落入该能力维度。
 
     bool 是 int 的子类，两个方向都要显式排除，否则 ``True`` 会被当成 1 张参考图上限、
     ``1`` 会被当成布尔真——这类宽松真值是语义猜测，不做。数值维度另拒负数。

@@ -1,11 +1,15 @@
-"""集中维护 provider / AUTH 相关的环境变量 key 清单。
+"""Central list of provider / AUTH related environment variable keys.
+
+Single source of truth — any code dealing with os.environ name lists imports from here.
+
+集中维护 provider / AUTH 相关的环境变量 key 清单。
 
 唯一真相源 — 凡是涉及 os.environ 名单的代码都从这里 import。
 """
 
 from __future__ import annotations
 
-# —— SDK 子进程需要的 Anthropic env keys（通过 options.env 注入）——
+# —— Anthropic env keys the SDK subprocess needs (injected via options.env) —— / —— SDK 子进程需要的 Anthropic env keys（通过 options.env 注入）——
 ANTHROPIC_ENV_KEYS: tuple[str, ...] = (
     "ANTHROPIC_API_KEY",
     "ANTHROPIC_BASE_URL",
@@ -16,8 +20,11 @@ ANTHROPIC_ENV_KEYS: tuple[str, ...] = (
     "CLAUDE_CODE_SUBAGENT_MODEL",
 )
 
+# —— Other provider env keys (overridden with empty values in options.env as a safeguard) ——
 # —— 其他 provider env keys（options.env 用空值覆盖兜底）——
 OTHER_PROVIDER_ENV_KEYS: tuple[str, ...] = (
+    # The Claude CLI / SDK reads these side-channel auth variables first. They are not part of ArcReel's
+    # provider credential model, but must be explicitly blanked in Agent sessions to avoid inheriting the host environment.
     # Claude CLI / SDK 会优先读取这些旁路认证变量。它们不属于 ArcReel 的
     # provider 凭证模型，但必须在 Agent 会话中显式置空，避免继承宿主环境。
     "ANTHROPIC_AUTH_TOKEN",
@@ -31,6 +38,9 @@ OTHER_PROVIDER_ENV_KEYS: tuple[str, ...] = (
     "AGNES_API_KEY",
     "OPENAI_API_KEY",
     "GOOGLE_APPLICATION_CREDENTIALS",
+    # Env knobs the OpenAI SDK falls back to when the client is not given a value explicitly (not named like secrets, so
+    # _SECRET_ENV_NAME_PATTERNS substring matching does not catch them). The whole group is put on the override list,
+    # to keep them from leaking via fork into SDK / Bash subprocesses.
     # OpenAI SDK 在 client 未显式传值时回落读的 env 旋钮（非密钥命名，
     # _SECRET_ENV_NAME_PATTERNS 的子串匹配兜不到）。整组纳入覆盖名单，
     # 避免它们经 fork 漏进 SDK / Bash 子进程。
@@ -48,7 +58,7 @@ OTHER_PROVIDER_ENV_KEYS: tuple[str, ...] = (
     "DEFAULT_VIDEO_PROVIDER",
 )
 
-# —— 启动断言：真密钥子集，命中即 fail-fast ——
+# —— Startup assertion: the real-secret subset; fail-fast on a hit —— / —— 启动断言：真密钥子集，命中即 fail-fast ——
 PROVIDER_SECRET_KEYS: frozenset[str] = frozenset(
     {
         "ANTHROPIC_API_KEY",
@@ -67,5 +77,5 @@ PROVIDER_SECRET_KEYS: frozenset[str] = frozenset(
 
 
 def is_provider_env_key(name: str) -> bool:
-    """判断给定 env key 是否属于 provider 相关。"""
+    """Whether the given env key is provider-related. / 判断给定 env key 是否属于 provider 相关。"""
     return name in ANTHROPIC_ENV_KEYS or name in OTHER_PROVIDER_ENV_KEYS

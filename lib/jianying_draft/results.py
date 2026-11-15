@@ -1,4 +1,6 @@
-"""剪映草稿导出的结果形态：导出前检查、登记下来的草稿与产物现状；服务、HTTP 与 Agent 工具共用。"""
+"""Result shapes of JianYing draft export: pre-export check, registered draft and artifact state; shared by service, HTTP and Agent tools.
+
+剪映草稿导出的结果形态：导出前检查、登记下来的草稿与产物现状；服务、HTTP 与 Agent 工具共用。"""
 
 from __future__ import annotations
 

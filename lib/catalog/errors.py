@@ -1,10 +1,21 @@
-"""目录查询相关的错误。"""
+"""Errors related to catalog queries. / 目录查询相关的错误。"""
 
 from __future__ import annotations
 
 
 class ModelNotInCatalogError(ValueError):
-    """内置供应商的模型引用不在该供应商的模型清单中（已下架、已改名或从未收录）。
+    """A built-in provider's model reference is not in that provider's model list (delisted, renamed or never listed).
+
+    The reference is kept as is in settings and projects without silently falling back to another model; once the user
+    picks a model again things continue. ``code`` is a stable failure code and ``params`` its render parameters, mapped to
+    an errors catalog key via ``lib.generation.task_failure.FAILURE_CODE_KEYS``; the worker persists it with structured
+    encoding via ``encode_failure``. ``str(exc)`` is an English technical message.
+
+    An empty ``model_id`` means the reference only names the provider, and the provider has no model of this media type in
+    the model list; then ``provider_unsupported_media`` is reported (the provider can't do this kind of generation), rather
+    than rendering a truncated "provider/" reference.
+
+    内置供应商的模型引用不在该供应商的模型清单中（已下架、已改名或从未收录）。
 
     引用原样保留在设置与项目里，不静默回落到别的模型；用户重新选择模型后即可继续。
     ``code`` 是稳定失败码、``params`` 是其渲染参数，经 ``lib.generation.task_failure.FAILURE_CODE_KEYS``

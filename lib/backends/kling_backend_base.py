@@ -1,4 +1,15 @@
-"""KlingBackendBase — 可灵 Kling 图像/视频后端共享脚手架基类。
+"""KlingBackendBase — shared scaffolding base class for Kling image/video backends.
+
+Consolidates the assembly repeated verbatim in the two media backend classes: auth headers, ``__init__`` credential
+dispatch + base_url normalization + common field assignment, and the HTTP retry skeleton of submit/poll. Per-medium
+differences (endpoint paths, payload building, capability projection, image's decoupled ``api_model_name``, video's
+subpaths/resume/download) are left to subclasses as overridable methods / constructor parameters.
+
+The JWT crypto primitives are shared in ``lib.backends.kling_shared`` (``KlingJWTManager`` / ``kling_bearer_headers`` /
+``resolve_kling_*`` / ``KLING_BASE_URL``); this base class only assembles them into backend scaffolding; the submit/poll
+helpers reuse ``lib.backends.backend_runtime`` (``submit_post`` / ``poll_with_retry`` and retry predicates).
+
+KlingBackendBase — 可灵 Kling 图像/视频后端共享脚手架基类。
 
 收口两个媒体后端类层逐字重复的装配：鉴权头、``__init__`` 凭证分派 + base_url 归一化 + 通用字段
 赋值、submit/poll 的 HTTP retry 骨架。per-medium 差异（端点路径、payload 构建、capability 投影、
@@ -50,7 +61,17 @@ logger = logging.getLogger(__name__)
 
 
 class KlingBackendBase:
-    """可灵 Kling 后端共享基类（JWT / Bearer 双模式鉴权，异步提交-轮询骨架）。
+    """Shared base class for Kling backends (dual-mode JWT / Bearer auth, async submit-poll skeleton).
+
+    Dual mode:
+    - ``auth_mode="jwt"`` (built-in provider): takes access_key + secret_key, uses ``KlingJWTManager``, checks expiry
+      before each HTTP call and re-signs on demand when <60s from expiry -- async rendering may outlive a single token.
+    - ``auth_mode="bearer"`` (custom endpoint): takes a static api_key + base_url, bypassing the JWT manager.
+
+    Subclasses pass ``model`` (already defaulted to their own ``DEFAULT_MODEL``) via ``super().__init__``, then do the
+    per-medium tail assembly (image's ``api_model_name`` and static capability set, video's capability lookup).
+
+    可灵 Kling 后端共享基类（JWT / Bearer 双模式鉴权，异步提交-轮询骨架）。
 
     双模式：
     - ``auth_mode="jwt"``（内置 provider）：接 access_key + secret_key，走 ``KlingJWTManager``，
@@ -61,6 +82,7 @@ class KlingBackendBase:
     装配（image 的 ``api_model_name`` 与静态 capability 集、video 的能力位查表）。
     """
 
+    # Media noun for progress logs (the Chinese words for "image" / "video"), declared by subclasses; only used in operator logs, no effect on behaviour.
     # 进度日志的媒体名词（"图像" / "视频"），由子类声明；仅用于 operator 日志，不影响行为。
     _media_label: ClassVar[str] = ""
 
@@ -103,12 +125,15 @@ class KlingBackendBase:
     # ── auth ────────────────────────────────────────────────────────────
 
     def _headers(self) -> dict[str, str]:
-        """鉴权头：jwt 模式每次调用触发过期检查 + 按需重签；bearer 模式用静态 key。"""
+        """Auth headers: in jwt mode each call triggers an expiry check + on-demand re-signing; bearer mode uses the static key.
+
+        鉴权头：jwt 模式每次调用触发过期检查 + 按需重签；bearer 模式用静态 key。"""
         if self._jwt is not None:
             return self._jwt.auth_headers()
         assert self._static_api_key is not None
         return kling_bearer_headers(self._static_api_key)
 
+    # ── HTTP submit / poll skeleton ─────────────────────────────────────────
     # ── HTTP submit / poll 骨架 ─────────────────────────────────────────
 
     @with_retry_async(
@@ -123,6 +148,9 @@ class KlingBackendBase:
         payload: dict,
         request: VideoGenerationRequest | None = None,
     ) -> str:
+        # Non-idempotent "create task + bill" POST: submit_post turns ambiguous transport errors into a terminal AmbiguousSubmitError,
+        # avoiding duplicate tasks + double billing on retry; >=400 raises HTTPStatusError for should_retry_submit to route by status code.
+        # ``request`` is only passed by the video backend (the image backend doesn't record provider responses).
         # 非幂等「建任务 + 计费」POST：submit_post 把歧义传输错误转 AmbiguousSubmitError 终态失败，
         # 避免重试重复建任务 + 重复计费；>=400 抛 HTTPStatusError 交 should_retry_submit 按状态码分流。
         # ``request`` 只有视频通道传（图片通道不做供应商响应留痕）。
@@ -138,7 +166,9 @@ class KlingBackendBase:
         return extract_kling_task_id(resp.json())
 
     async def _poll_query(self, client: httpx.AsyncClient, endpoint_path: str, *, base_url: str | None = None) -> dict:
-        """查询任务状态；``base_url`` 缺省用当下配置的域名，续跑回放提交域名时由调用方传入。"""
+        """Query task status; ``base_url`` defaults to the currently configured domain, and is passed by the caller when resume replays the submit domain.
+
+        查询任务状态；``base_url`` 缺省用当下配置的域名，续跑回放提交域名时由调用方传入。"""
         resp = await client.get(
             f"{(base_url or self._base_url).rstrip('/')}/{endpoint_path}",
             headers=self._headers(),
@@ -153,7 +183,9 @@ class KlingBackendBase:
         max_wait: float,
         poll_interval: float = VIDEO_POLL_INTERVAL_SECONDS,
     ) -> dict:
-        """轮询至终态（succeed/failed）：复用 base.poll_with_retry，注入 Kling 终态/失败/重试谓词。"""
+        """Poll to a terminal state (succeed/failed): reuses base.poll_with_retry, injecting the Kling terminal/failure/retry predicates.
+
+        轮询至终态（succeed/failed）：复用 base.poll_with_retry，注入 Kling 终态/失败/重试谓词。"""
         return await poll_with_retry(
             poll_fn=poll_fn,
             is_done=is_kling_task_terminal,

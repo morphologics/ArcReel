@@ -1,4 +1,15 @@
-"""生成完成时目标已删除：结果不写回原路径、不写版本记录，直接成为项目回收站中的一条删除记录。
+"""Target deleted by the time generation completes: the result is not written back to the original path and no version
+record is written; it goes straight into the project trash as a deletion record.
+
+While a generation task runs, the creator or Agent may delete its target resource (asset, shot entry, video unit,
+grid, etc.). :class:`~lib.generation.media_generator.MediaGenerator` calls :func:`trash_result_if_target_deleted`
+to recheck after cost settlement and before the final commit; if the target is no longer in the project, the staged
+artifact is recorded into the project trash under its original path, and :class:`GenerationTargetDeletedError` is
+raised to skip the commit. The task entry point catches it and ends normally with
+:attr:`~GenerationTargetDeletedError.result` as the task result; the cost record is unaffected, and the deleted
+content does not come back to life.
+
+生成完成时目标已删除：结果不写回原路径、不写版本记录，直接成为项目回收站中的一条删除记录。
 
 生成任务执行期间，创作者或 Agent 可能删掉了它的目标资源（资产、分镜条目、视频单元、宫格等）。
 :class:`~lib.generation.media_generator.MediaGenerator` 在费用结算之后、正式提交之前调用
@@ -24,14 +35,17 @@ __all__ = [
     "trash_result_if_target_deleted",
 ]
 
-#: 删除记录的对象类型：一份生成结果。
+#: Object type of the deletion record: a generation result. / 删除记录的对象类型：一份生成结果。
 GENERATION_RESULT_KIND = "generation_result"
+#: Label on the deletion record, "target deleted when generation completed"; the frontend uses it to rewrite the initiator wording.
 #: 删除记录的标注「生成完成时目标已删除」，前端据此改写发起方文案。
 TARGET_DELETED_NOTE = "target_deleted_during_generation"
 
 
 class GenerationTargetDeletedError(Exception):
-    """生成结果已进入项目回收站。这不是失败：任务以 :attr:`result` 正常结束。"""
+    """The generation result has gone into the project trash. This is not a failure: the task ends normally with :attr:`result`.
+
+    生成结果已进入项目回收站。这不是失败：任务以 :attr:`result` 正常结束。"""
 
     def __init__(self, record: project_trash.TrashRecord, *, resource_type: str, resource_id: str) -> None:
         super().__init__(f"generation target deleted: {resource_type}/{resource_id}")
@@ -53,11 +67,18 @@ def trash_result_if_target_deleted(
     staged_file: Path,
     target: tuple[str, str] | None = None,
 ) -> None:
-    """``target``（缺省为产物自身的资源）已不在项目中时，把 ``staged_file`` 记进回收站并抛出。
+    """When ``target`` (defaulting to the artifact's own resource) is no longer in the project, record ``staged_file`` into the trash and raise.
+
+    The file path in the record is the original path where the artifact should have landed; on restore it is added back by the trash's rules.
+
+    ``target``（缺省为产物自身的资源）已不在项目中时，把 ``staged_file`` 记进回收站并抛出。
 
     记录里的文件路径是产物本该落下的原路径，恢复时按回收站的规则加回。
     """
     target_type, target_id = target or (resource_type, resource_id)
+    # shortcut: the recheck and the subsequent final commit take the lock separately (the project lock is not reentrant, and
+    # the commit path takes the script lock before the project lock); a deletion in between is still handled by each commit
+    # path's existing missing-target handling; when strict atomicity is needed, move the recheck inside each commit path's lock.
     # shortcut: 复核与随后的正式提交分属两次加锁（项目锁不可重入，提交路径先取剧本锁再取项目锁），
     # 两者之间的删除仍按各提交路径原有的目标缺失处理；需要严格原子时把复核并进各提交路径的锁内。
     with project_metadata_lock(project_dir):

@@ -28,12 +28,18 @@ logging.getLogger("sqlalchemy.pool.impl").setLevel(logging.CRITICAL)
 logger = logging.getLogger(__name__)
 
 _SQLITE_SIDECAR_SUFFIXES = ("-wal", "-shm")
-#: 旧布局的默认 SQLite 主文件名（位于数据根下）。
+#: Default SQLite main file name of the old layout (under the data root). / 旧布局的默认 SQLite 主文件名（位于数据根下）。
 _LEGACY_SQLITE_DB_NAME = ".arcreel.db"
 
 
 def _adopt_legacy_sqlite_db(db_path: Path, legacy: Path) -> None:
-    """数据根里只有旧名默认库 ``legacy`` 时，连同 ``-wal`` / ``-shm`` 改名为 ``db_path``。
+    """When the data root only has the old-name default DB ``legacy``, rename it together with ``-wal`` / ``-shm`` to ``db_path``.
+
+    ``-wal`` / ``-shm`` are renamed first and the main file last: if the old main file is still there the move is not
+    finished, and after a crash midway the next resolution continues the move, so the WAL is never left under the old
+    name. When both old and new main files exist, nothing is touched; only a warning is logged.
+
+    数据根里只有旧名默认库 ``legacy`` 时，连同 ``-wal`` / ``-shm`` 改名为 ``db_path``。
 
     ``-wal`` / ``-shm`` 先改、主文件最后改：旧主文件还在就说明没搬完，中途崩溃后下次
     解析时接着搬，WAL 不会留在旧文件名下。新旧主文件都在时不动，只记告警。
@@ -44,7 +50,7 @@ def _adopt_legacy_sqlite_db(db_path: Path, legacy: Path) -> None:
         logger.warning("默认数据库 %s 已存在，旧库 %s 保持原位未启用", db_path, legacy)
         return
     for suffix in _SQLITE_SIDECAR_SUFFIXES:
-        # 并发进程（应用与 alembic）可能已先搬走同一个文件。
+        # A concurrent process (app and alembic) may have already moved the same file. / 并发进程（应用与 alembic）可能已先搬走同一个文件。
         with contextlib.suppress(FileNotFoundError):
             legacy.with_name(legacy.name + suffix).replace(db_path.with_name(db_path.name + suffix))
     with contextlib.suppress(FileNotFoundError):
@@ -54,6 +60,9 @@ def _adopt_legacy_sqlite_db(db_path: Path, legacy: Path) -> None:
 
 def get_database_url() -> str:
     """Resolve DATABASE_URL from environment or default to SQLite.
+
+    When resolving the default SQLite path, the old-layout DB file is renamed along the way; the app, alembic and scripts
+    all go through here, so none of them creates an empty DB under the new name first. No rename when ``DATABASE_URL`` is set explicitly.
 
     默认 SQLite 路径解析时顺带把旧布局的库文件改名过来；应用、alembic 与脚本都经过这里，
     不会有一方先在新文件名下建出空库。显式设置 ``DATABASE_URL`` 时不改名。
@@ -75,7 +84,11 @@ def is_sqlite_backend() -> bool:
 
 
 def register_sqlite_functions(dbapi_conn) -> None:
-    """SQLite 内置 lower 只折叠 ASCII；搜索普通 Unicode 字母与 PostgreSQL 一致。
+    """SQLite's built-in lower only folds ASCII; search over ordinary Unicode letters matches PostgreSQL.
+
+    Special folding of PostgreSQL locales (e.g. Greek final sigma, Turkish İ) is not emulated.
+
+    SQLite 内置 lower 只折叠 ASCII；搜索普通 Unicode 字母与 PostgreSQL 一致。
 
     不模拟 PostgreSQL locale 的特殊折叠（如希腊尾 sigma、土耳其 İ）。
     """

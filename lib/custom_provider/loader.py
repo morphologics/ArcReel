@@ -1,4 +1,11 @@
-"""自定义供应商 backend 的 DB 装载。
+"""DB loading of custom provider backends.
+
+Look up the provider, validate the requested model (exists / enabled / media_type derived from endpoint matches); if invalid,
+fall back to the single default enabled model of that media_type × task type bucket, and finally delegate to the existing
+create_custom_backend (ENDPOINT_REGISTRY unchanged).
+Loading lives in lib so the media path and the text factory share one custom resolution, and lib does not depend back on server.
+
+自定义供应商 backend 的 DB 装载。
 
 查 provider、校验请求的 model（存在 / 启用 / endpoint 推算 media_type 相符），失效则回退该
 media_type × 任务类型桶上唯一的默认启用 model，最后委托现成 create_custom_backend
@@ -34,7 +41,9 @@ logger = logging.getLogger(__name__)
 
 
 async def custom_model_max_output_tokens(*, session: AsyncSession, provider_id: str, model_id: str) -> int | None:
-    """自定义供应商模型的最大输出长度：能力覆盖 > 对应条目；都没有时 None。"""
+    """Max output length of a custom provider model: capability override > matching entry; None when neither exists.
+
+    自定义供应商模型的最大输出长度：能力覆盖 > 对应条目；都没有时 None。"""
     row = await CustomProviderRepository(session).get_model_by_ids(parse_provider_id(provider_id), model_id)
     if row is None:
         return None
@@ -49,7 +58,20 @@ async def load_custom_backend(
     media_type: str,
     generation_type: str | None = None,
 ) -> CustomTextBackend | CustomImageBackend | CustomVideoBackend | CustomAudioBackend:
-    """装载并构造自定义供应商 backend。
+    """Load and build a custom provider backend.
+
+    media_type is used to check that the requested model's endpoint matches, and to group when falling back to the default; actual
+    dispatch follows model.endpoint. Requested model missing / disabled / wrong media type → treated as invalid and falls back to
+    that media_type's default enabled model.
+
+    ``generation_type`` is the task type bucket of the call site and only affects the fallback: default models are slotted per
+    bucket (image has one default each for t2i and i2i), and only with a bucket can the single row be picked; see
+    ``lib.custom_provider.default_models``. Call sites that commit to no bucket pass None, no filtering.
+
+    Raises:
+        ValueError: provider does not exist, or the default enabled model for that media_type × bucket is not unique (zero or several).
+
+    装载并构造自定义供应商 backend。
 
     media_type 用于校验请求 model 的 endpoint 是否相符、以及回退默认时分组；实际派发以 model.endpoint
     为准。请求 model 不存在 / 已禁用 / 媒体类型不符 → 视为失效并回退该 media_type 的默认启用 model。

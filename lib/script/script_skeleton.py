@@ -1,4 +1,25 @@
-"""剧本骨架知识的单一真相源（零依赖叶子模块）。
+"""Single source of truth for script skeleton knowledge (zero-dependency leaf module).
+
+Gathers the structural fact "how a script is organized by skeleton kind" in one place: a narrow table keyed by skeleton kind,
+plus two resolvers that close off the interaction of the two axes content_mode / generation_mode.
+
+- Narrow table ``SKELETONS``: the key is the entry array key in the script (``segments`` / ``scenes`` / ``shots`` /
+  ``video_units``), the row ``Skeleton(id_field, chars_field)``. ``chars_field`` may be ``None``
+  -- ``video_units`` has no per-entry character list (characters exist as ``@[name]`` mentions in the body ``text``,
+  derived on read), and the table honestly declares the gap; consumers receiving ``None`` must decide explicitly (derive it
+  themselves or declare it not applicable); no fake field name is provided that would make ``get()`` return empty.
+- Canonical resolution ``resolve_declared_kind(content_mode, generation_mode)``: serves consumers that only have the project
+  config at hand; inputs are the validated project-level content_mode and the project's declared generation_mode. **fail-loud** -- unknown/missing content_mode raises ``ValueError``, no silent fallback.
+- Evidence-based resolution ``resolve_script_kind(script)``: serves consumers holding script data (edit / view / export),
+  data shape first -- it answers "what does this script look like now", independent of the project declaration.
+- Generation mode gate ``ensure_route_skeleton(script, content_mode, generation_mode)``: used by generation entry points;
+  rejects when the script's actual skeleton and the skeleton required by the project's generation mode are not in the same family, with re-split guidance.
+
+Behaviour is not in the table: validate hooks, Pydantic model mapping and edit whitelists are not in the registry; they stay local to each consumer.
+
+Design rationale (including the explicitly rejected composite key / wide table / silent fallback) is in ``docs/adr/0045``.
+
+剧本骨架知识的单一真相源（零依赖叶子模块）。
 
 把「剧本按骨架种类如何组织」这一结构事实收归一处：一张以骨架种类（skeleton kind）为键
 的窄表，加上两个把 content_mode / generation_mode 两轴交互收口的解析器。
@@ -34,13 +55,21 @@ logger = logging.getLogger(__name__)
 
 STORYBOARD_ITEM_ID_PATTERN = re.compile(r"^E\d+S\d+(?:_\d+)?$")
 
+# Episode number prefix: only matches `E{digits}` immediately followed by S/U (S for segment/scene, U for video_unit),
+# keeping the suffix (e.g. `E1S03_2` -> `E2S03_2`). The design contract is in lib/script/script_models.py.
 # 集号前缀：仅匹配 `E{数字}` + 紧随 S/U（segment/scene 用 S，video_unit 用 U），
 # 保留后缀（如 `E1S03_2` → `E2S03_2`）。设计契约见 lib/script/script_models.py。
 _EPISODE_PREFIX_RE = re.compile(r"^E\d+(?=[SU])")
 
 
 def rewrite_episode_prefix(item_id: object, episode: int) -> object:
-    """把条目 id 中的 ``E{数字}`` 前缀强制改写为 ``E{episode}``；非字符串或无该前缀的原样返回。
+    """Force the ``E{digits}`` prefix in an entry id to ``E{episode}``; non-strings or ids without the prefix are returned as is.
+
+    A fallback for the LLM writing the wrong prefix even though the prompt injected the episode number. Rewriting before writing to
+    disk and "which id the script plan entry fingerprint is filed under" are the same thing, so it lives with the skeleton's id
+    knowledge and is shared by generation and staleness checks.
+
+    把条目 id 中的 ``E{数字}`` 前缀强制改写为 ``E{episode}``；非字符串或无该前缀的原样返回。
 
     兜底 LLM 在 prompt 已注入集号的情况下仍写错前缀的场景。落盘前的改写与「脚本规划条目
     指纹按哪个 id 归档」是同一件事，故与骨架的 id 知识同处一室，由生成与时效判定共用。
@@ -55,7 +84,13 @@ def rewrite_episode_prefix(item_id: object, episode: int) -> object:
 
 @dataclass(frozen=True)
 class Skeleton:
-    """某个骨架种类的结构事实：每项 id 字段名 / 每项角色名单字段名（可缺位）。
+    """Structural facts of a skeleton kind: per-item id field name / per-item character list field name (may be absent).
+
+    The key (skeleton kind) is itself the entry array key in the script, so there is no separate items_key. ``chars_field`` of
+    ``None`` means the skeleton has no per-entry character list field -- consumers receiving ``None`` must decide explicitly and must
+    not ``get()`` it as an empty field name.
+
+    某个骨架种类的结构事实：每项 id 字段名 / 每项角色名单字段名（可缺位）。
 
     键（骨架种类）本身即剧本里的条目数组键，故不再单列 items_key。``chars_field`` 为
     ``None`` 表示该骨架无逐条角色名单字段——消费方拿到 ``None`` 必须显式决策，不得当空字段名
@@ -73,6 +108,9 @@ SKELETONS: dict[str, Skeleton] = {
     "video_units": Skeleton("unit_id", None),
 }
 
+# The i18n key of an entry label is derived from the skeleton kind -- driving the notification copy shared by shot-level events and
+# task completion events (e.g. "分镜「E1S01」"). The copy itself is stored per language in lib/i18n as ``event_label_*``; only
+# stable identifiers are registered here. Both event paths must read the same table instead of each maintaining one.
 # 条目标签的 i18n key 按骨架种类派生——驱动分镜级事件与任务完成事件共用的通知文案
 # （如「分镜「E1S01」」）。文案本身按语言存放在 lib/i18n 的 ``event_label_*``，此处只登记
 # 稳定标识。两套事件路径必须读同一张表，不各自维护一份。
@@ -83,6 +121,9 @@ SKELETON_ITEM_LABEL_KEYS: dict[str, str] = {
     "video_units": "skeleton_video_units",
 }
 
+# An event's entity type is derived from the skeleton kind, from the same source as ``SKELETON_ITEM_LABEL_KEYS``. Drives the frontend
+# grouping label mapping (``ENTITY_LABELS``): the three shot skeletons all show "shot", the reference-to-video skeleton shows "video
+# unit". Values don't conflict with the existing ``entity_type`` enum (drama uses ``drama_scene`` to avoid grouping with the named entity ``scene``).
 # 事件的实体类型按骨架种类推导，与 ``SKELETON_ITEM_LABEL_KEYS`` 同源。驱动前端分组标签映射
 # （``ENTITY_LABELS``）：三种分镜骨架统一显示「分镜」，参考生视频骨架显示「视频单元」。取值与既有
 # ``entity_type`` 枚举不冲突（drama 用 ``drama_scene`` 避免与命名实体 ``scene`` 撞组）。
@@ -93,6 +134,9 @@ SKELETON_ENTITY_TYPES: dict[str, str] = {
     "video_units": "reference_unit",
 }
 
+# An event's anchor type is derived from the skeleton kind, with values aligned to the scroll target type guards of each frontend
+# canvas: video_units map to ``reference_unit`` (the reference-to-video canvas selects and highlights the video unit by it), the rest
+# to ``segment`` (narration/drama/ad share the timeline shot view, selecting entries by id).
 # 事件的锚点类型按骨架种类推导，取值与前端各画布的滚动目标类型守卫对齐：video_units 归
 # ``reference_unit``（参考生视频画布按此选中并高亮对应视频单元），其余归 ``segment``
 # （narration/drama/ad 共用时间线分镜视图，按 id 选中条目）。
@@ -105,13 +149,16 @@ SKELETON_ANCHOR_TYPES: dict[str, str] = {
 
 
 def _validate_registry() -> None:
-    """import 期表自洽校验：四骨架齐全、字段合法。失败即启动炸（同 ``docs/adr/0039`` 手法）。"""
+    """Import-time table self-consistency check: all four skeletons present, fields valid. Fails at startup on error (same technique as ``docs/adr/0039``).
+
+    import 期表自洽校验：四骨架齐全、字段合法。失败即启动炸（同 ``docs/adr/0039`` 手法）。"""
     expected = {"segments", "scenes", "shots", "video_units"}
     if set(SKELETONS) != expected:
         raise RuntimeError(f"SKELETONS 骨架种类不齐：期望 {expected}，实际 {set(SKELETONS)}")
     for kind, skeleton in SKELETONS.items():
         if not skeleton.id_field:
             raise RuntimeError(f"SKELETONS[{kind!r}].id_field 非法：{skeleton.id_field!r}")
+        # chars_field of None is valid (video_units explicitly absent); an empty string is invalid.
         # chars_field 为 None 合法（video_units 显式缺位）；空串非法。
         if skeleton.chars_field is not None and not skeleton.chars_field:
             raise RuntimeError(f"SKELETONS[{kind!r}].chars_field 非法：{skeleton.chars_field!r}")
@@ -128,7 +175,18 @@ _validate_registry()
 
 
 def resolve_declared_kind(content_mode: str | None, generation_mode: str | None) -> str:
-    """规范解析：由项目声明的 ``(content_mode, generation_mode)`` 定骨架种类。
+    """Canonical resolution: determine the skeleton kind from the project's declared ``(content_mode, generation_mode)``.
+
+    Inputs are the validated project-level content_mode and the project's declared generation_mode (``project.json`` field).
+
+    - any content mode + ``generation_mode == "reference_video"`` -> ``video_units``
+    - ``ad`` + ``storyboard`` -> ``shots``
+    - ``narration`` -> ``segments``, ``drama`` -> ``scenes``
+    - unknown/missing content_mode -> raises ``ValueError`` (fail-loud, no silent default to drama/narration)
+
+    Serves consumers that only have the project config at hand; consumers holding a script dict that may lack fields use ``resolve_script_kind``.
+
+    规范解析：由项目声明的 ``(content_mode, generation_mode)`` 定骨架种类。
 
     输入为项目级已过校验的 content_mode 与项目声明的 generation_mode（``project.json`` 字段）。
 
@@ -149,7 +207,28 @@ def resolve_declared_kind(content_mode: str | None, generation_mode: str | None)
 
 
 def resolve_script_kind(script: dict[str, Any]) -> str:
-    """取证解析：由剧本 dict 判别当前的分镜数组种类。
+    """Evidence-based resolution: determine the current shot array kind from a script dict.
+
+    Returns ``"video_units"`` / ``"scenes"`` / ``"segments"`` / ``"shots"``.
+
+    **Data shape only**: this resolution answers the evidence question "what does this script look like now", serving edit / view /
+    export -- these capabilities must work for any script on disk, including mismatched scripts whose skeleton doesn't fit the project
+    generation mode. If the project generation mode decided one-way instead, mismatched episodes would be completely unreachable via
+    all MCP editing tools (``resolve_items`` returns an empty list, id-based edits all report "not found"), and the Agent seeing the
+    error couldn't locate the cause either. Generation paths don't use this resolution: generation entry points dispatch by project
+    generation mode, and mismatches are explicitly rejected by ``ensure_route_skeleton``.
+
+    Decision order:
+    1. ``video_units`` present and none of ``segments`` / ``scenes`` / ``shots`` present -> reference (prevents a stray
+       ``video_units`` mistakenly stuffed into a storyboard script from hijacking the decision)
+    2. ``content_mode`` is authoritative (``drama`` -> scenes, ``narration`` -> segments, ``ad`` -> shots)
+    3. legacy compatibility for ``content_mode=narration`` with data under the ``scenes`` key (no ``segments``)
+    4. when ``content_mode`` is missing, infer from which top-level keys exist
+
+    ``script_structure_validator._select_model`` (structure validation) / ``script_editor.resolve_items``
+    (editing core) / the unified write entry's metadata recomputation share this decision: one truth in one place, no drift.
+
+    取证解析：由剧本 dict 判别当前的分镜数组种类。
 
     返回 ``"video_units"`` / ``"scenes"`` / ``"segments"`` / ``"shots"``。
 
@@ -178,6 +257,8 @@ def resolve_script_kind(script: dict[str, Any]) -> str:
     if content_mode == "drama":
         return "scenes"
     if content_mode == "narration":
+        # Malformed script compatibility: the legacy state where content_mode=narration but the data actually lives under the scenes key (no segments key)
+        # -- fall back to reading scenes, rather than literally mapping content_mode to the non-existent segments.
         # 畸形脚本兼容：content_mode=narration 但数据实际落在 scenes 键下（无 segments 键）的
         # 历史遗留状态——回退去读 scenes，而非按 content_mode 字面映射到不存在的 segments。
         if "segments" not in script and "scenes" in script:
@@ -191,7 +272,19 @@ def resolve_script_kind(script: dict[str, Any]) -> str:
 
 
 def resolve_kind_items(script: dict[str, Any], *, kind: str | None = None) -> tuple[Any, str, str]:
-    """按骨架种类取条目数组与其 id 字段的唯一入口：返回 ``(items, id_field, kind)``。
+    """The single entry point for getting the entry array and its id field by skeleton kind: returns ``(items, id_field, kind)``.
+
+    When ``kind`` is omitted it is decided from the script's data shape via ``resolve_script_kind`` (evidence-based resolution); a
+    caller already holding a kind computed from the project declaration or the generation mode gate (return value of
+    ``resolve_declared_kind`` / ``ensure_route_skeleton``) can pass it explicitly to skip repeated resolution.
+
+    The returned entry value is ``script.get(kind)`` as is -- **no type check, no fallback of non-lists to an empty array**:
+    ``None`` when the key is missing, and the illegal value as is when the key exists but isn't a list (including ``null``). This
+    function only unifies the structural fact "which key, which id field"; whether a dirty value should fail loud or degrade, and
+    whether an empty array is valid, is each consumer path's own policy, belonging to the caller, not closed off here. The character
+    reference field inside entries (``chars_field``) is not entry access and is still looked up directly in ``SKELETONS``.
+
+    按骨架种类取条目数组与其 id 字段的唯一入口：返回 ``(items, id_field, kind)``。
 
     ``kind`` 缺省时经 ``resolve_script_kind``（取证解析）由剧本数据形状判别；调用方已持有
     项目声明或生成模式闸门算出的种类（``resolve_declared_kind`` / ``ensure_route_skeleton`` 的
@@ -207,6 +300,9 @@ def resolve_kind_items(script: dict[str, Any], *, kind: str | None = None) -> tu
     return script.get(resolved_kind), SKELETONS[resolved_kind].id_field, resolved_kind
 
 
+# Skeleton family required by the generation mode: reference-to-video needs ``video_units``, other modes need a shot-family skeleton
+# (``segments`` / ``scenes`` / ``shots``). Differences within a family (e.g. the historical form of narration data under the ``scenes``
+# key) are not a mismatch; only crossing families is -- crossing families means the array the generation side needs to read isn't in the script at all.
 # 生成模式要求的骨架族：参考生视频要 ``video_units``，其余模式要分镜族骨架
 # （``segments`` / ``scenes`` / ``shots``）。族内差异（如 narration 数据落 ``scenes`` 键的历史
 # 形态）不构成失配，只有跨族才是——跨族意味着生成侧要读的数组根本不在剧本里。
@@ -215,7 +311,15 @@ _STORYBOARD_ROUTE_SKELETONS = ("segments", "scenes", "shots")
 
 
 class SkeletonRouteMismatchError(ValueError):
-    """剧本骨架与项目生成模式不属同一族——生成被拒。
+    """The script skeleton and the project generation mode are not in the same family -- generation refused.
+
+    The only way out for a mismatched script is re-split and regenerate: the generation mode is locked at creation, and a script cannot
+    switch family in place. View / edit / export don't pass through this gate, so mismatched scripts remain readable, editable and exportable.
+
+    ``actual`` of ``None`` means the script has no skeleton array at all (malformed or half-finished script), worded separately from
+    "has an array but of another family" -- the latter needs a re-split to switch family, the former needs content split out first.
+
+    剧本骨架与项目生成模式不属同一族——生成被拒。
 
     失配剧本的唯一出路是重拆重生成：生成模式创建时锁定，剧本不可就地换族。查看 / 编辑 /
     导出不经本闸门，失配剧本仍可读可改可导出。
@@ -248,12 +352,39 @@ class SkeletonRouteMismatchError(ValueError):
         return self._message.render(default_translate)
 
     def to_validation_message(self) -> ValidationMessage:
-        """结构化形态，供校验器把失配事实按请求语言报告给用户。"""
+        """Structured form, for the validator to report the mismatch to the user in the request language. / 结构化形态，供校验器把失配事实按请求语言报告给用户。"""
         return self._message
 
 
 def ensure_route_skeleton(script: dict[str, Any], content_mode: str | None, generation_mode: str | None) -> str:
-    """生成入口的生成模式闸门：确认剧本骨架属于项目生成模式要求的族，返回剧本实际骨架种类。
+    """Generation mode gate at generation entry points: confirm the script skeleton belongs to the family required by the project generation mode, and return the script's actual skeleton kind.
+
+    Generation dispatch always follows the project generation mode (``resolve_declared_kind``); the script itself carries no generation
+    mode information. For a script whose skeleton mismatches the generation mode, the array that generation needs doesn't exist, and
+    neither silently downgrading nor quietly switching paths is acceptable -- it is explicitly rejected here with re-split guidance.
+
+    The criterion is "is the array the generation mode needs to read present", not "does the evidence-based answer equal the declared
+    value"; both directions are judged symmetrically by key presence:
+
+    - Reference-to-video only asks whether the ``video_units`` key is present. When a script also has leftover shot-family arrays,
+      evidence-based resolution answers ``segments`` by shape first, but the reference-to-video generation side reads exactly
+      ``video_units``, and leftover arrays get no vote (cost estimation uses the same rule: ``is_reference_video_project`` decides
+      the path, shape doesn't vote).
+    - Storyboard mode only asks whether one of ``segments`` / ``scenes`` / ``shots`` is present. Historical form differences within
+      the family (narration data under the ``scenes`` key) are let through as is and the evidence-based answer is returned unchanged;
+      the gate only handles cross-family cases. But when all three keys are missing it cannot pass -- ``resolve_script_kind`` would
+      synthesize an in-family answer from ``content_mode``, and following it, storyboard enqueueing would land in the fake success
+      "✨ 所有分镜的分镜图都已生成".
+
+    Both branches only ask whether the key is present, not the value's type: dirty data like ``"video_units": {}`` is a type error,
+    not a generation mode mismatch; reporting it belongs to the downstream "must be an array" validation, and the gate doesn't overstep
+    (otherwise it would report self-contradictory copy like "requires video_units, currently video_units").
+
+    Raises:
+        SkeletonRouteMismatchError: the script skeleton isn't in the family required by the generation mode, or the script has no skeleton array.
+        ValueError: content_mode unknown or missing (fail-loud from ``resolve_declared_kind``).
+
+    生成入口的生成模式闸门：确认剧本骨架属于项目生成模式要求的族，返回剧本实际骨架种类。
 
     生成分派一律按项目生成模式（``resolve_declared_kind``），剧本自身不携带生成模式信息。骨架与生成模式
     失配的剧本，按生成模式生成时要读的数组不存在，静默降档与悄悄换路径都不可接受——此处显式拒绝

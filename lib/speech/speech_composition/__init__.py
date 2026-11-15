@@ -210,6 +210,9 @@ class SpeechComposition:
         return SpeechPreparation(snapshot.unit_id, mode, tuple(utterances), tuple(problems))
 
 
+#: Dialogue lines with an empty speaker slot (``@[ ]：{台词}``). The speaker slot of a speech marker must be non-empty, so this
+#: form is not a marker and the whole span stays in the description remainder; it is recognized separately here so admission
+#: reports "no speaker specified" rather than a generic parse failure.
 #: 说话人位为空的台词（``@[ ]：{台词}``）。发声记号的说话人位必须非空，这一形态因此不成记号、
 #: 整段留在描述残余里；在此单独识别，让准入报「没指定说话人」而不是笼统的解析失败。
 _EMPTY_SPEAKER_LINE = re.compile(r"^\s*@\[\s*\]\s*[:：]\s*\{([^{}]+)\}\s*$")
@@ -296,6 +299,9 @@ def _append_video_prompt_dialogue(
     video_prompt: object,
 ) -> None:
     if isinstance(video_prompt, str) or video_prompt is None:
+        # Existing narration / ad scripts may store the provider prompt string directly; mechanically converted entries are None
+        # (pending generation) before authoring. Neither shape has parseable structured character dialogue, so speech still only
+        # takes the respective novel_text / voiceover_text.
         # 存量 narration / ad 允许直接存供应商 prompt 字符串；机械转换后的条目在补写前为 None
         # （待生成）。两种形状都没有可解析的结构化角色台词，发声仍只取各自的
         # novel_text / voiceover_text。
@@ -381,6 +387,8 @@ def adapt_drama_scene(scene: Mapping[str, object]) -> SpeechUnitSnapshot:
                 speaker_location=SpeechFieldLocation(("utterances", index, "speaker")),
             )
     elif raw_entries is _MISSING:
+        # Existing drama JSON returned by load_script does not go through Pydantic read-time migration; consistent with DramaScene's
+        # compatibility semantics, it reads from the old video_prompt.dialogue + voiceover, but locations still point to the real old fields.
         # load_script 返回的存量 drama JSON 不经过 Pydantic 读时迁移；与 DramaScene 的兼容
         # 语义一致，从旧 video_prompt.dialogue + voiceover 读取，但位置仍指向真实旧字段。
         video_prompt = legacy_video_prompt
@@ -564,7 +572,13 @@ def video_unit_replan_problems(
 
 
 def replan_marked_only_for_mixed_speech(skeleton_kind: str, unit: Mapping[str, object]) -> bool:
-    """单位带 ``needs_replan``，且去掉标记后发声准入只因台词与画外音混合而不通过。
+    """The unit carries ``needs_replan``, and with the marker removed speech admission fails only because dialogue and voiceover are mixed.
+
+    Existing videos of such units are backfilled as usual and freshness is judged normally, while the unit itself still
+    needs replanning (``docs/adr/0098``); units marked for other reasons, and the storyboard images, voiceover audio and
+    presentation of such units, are still not final artifacts.
+
+    单位带 ``needs_replan``，且去掉标记后发声准入只因台词与画外音混合而不通过。
 
     这类单位的存量视频照常补录、按常规判时效，单位本身仍需重新规划（``docs/adr/0098``）；其余原因
     带标记的单位，以及这类单位的分镜图、配音与呈现，仍不是正式产物。

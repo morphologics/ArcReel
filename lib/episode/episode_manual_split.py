@@ -1,4 +1,37 @@
-"""手工切分：创作者在整本源文上直接划定集的边界，直接写入分集账本，不经候选（ADR 0032）。
+"""Manual split: the creator marks episode boundaries directly on the whole source, written straight into the episode ledger without candidates (ADR 0032).
+
+The five commands share the same placement and commit discipline:
+
+- **Cut** (:func:`cut_unsplit_source`): place a point on unsplit source; from the start of that unsplit stretch to
+  the point becomes a new episode, placed after the nearest preceding cut episode by source position (before the
+  nearest following cut episode when there is none before).
+- **Split** (:func:`split_episode`): place a point inside a cut episode; the first part keeps the episode ID, the
+  second part gets a new episode ID and comes right after the first.
+- **Move boundary** (:func:`move_episode_boundary`): move the boundary between an episode and the cut episode right
+  after it; both sides keep their episode IDs.
+- **Merge with next episode** (:func:`merge_with_next_episode`): the first episode keeps its episode ID and extends
+  to the end of the next episode; the next episode is handled as a replaced old episode, and other episodes between
+  the two stay in place and end up after the merged episode. Unsplit source between the two episodes is merged in
+  as well; when the merged-in size (reading units, same rule as the "Episodes" view) is greater than 0,
+  confirmation is returned first, the creator calls again with the confirmed size, and a changed size goes back to
+  confirmation.
+- **Clear later cuts** (:func:`clear_cuts_after`): all cut episodes after this episode by source position are
+  handled as replaced old episodes.
+
+Replaced old episodes that have artifacts become episodes without source, are marked stale, keep their artifacts,
+and move to the end of the episode order in their original relative order; those without artifacts are removed
+outright. Episodes whose source range changed and that have artifacts are marked stale. When episodes with
+artifacts are affected, :class:`ManualSplitConfirmationRequired` is returned first, and the creator calls again with
+the confirmed episode IDs; if the re-check under the lock finds episodes with artifacts outside the confirmed list,
+it likewise goes back to confirmation.
+
+A point is "file + in-file offset", with the offset in the coordinate system of ``normalize_source_text``. An
+episode's source range may span files along the whole-source file order, but must not newly cross a switch of
+source kind (ADR 0097). Before changing a source range, the source fingerprints of the files the range passes
+through are checked: if a file was changed outside the service it is rejected, and it cannot be split on until the
+ledger is updated; clearing later cuts does not change source ranges and is not restricted.
+
+手工切分：创作者在整本源文上直接划定集的边界，直接写入分集账本，不经候选（ADR 0032）。
 
 五个命令共用同一套落位与提交纪律：
 
@@ -66,7 +99,9 @@ logger = logging.getLogger(__name__)
 
 
 class ManualSplitError(ValueError):
-    """手工切分被拒；``code`` 是稳定的原因码，入口据此映射状态码与文案。账本不被改动。"""
+    """Manual split rejected; ``code`` is a stable reason code that entry points map to status codes and copy. The ledger is not changed.
+
+    手工切分被拒；``code`` 是稳定的原因码，入口据此映射状态码与文案。账本不被改动。"""
 
     def __init__(self, code: str, message: str):
         super().__init__(message)
@@ -75,14 +110,16 @@ class ManualSplitError(ValueError):
 
 @dataclass(frozen=True)
 class ManualSplitImpact:
-    """一次手工切分波及的集（集 ID，按播出顺序）。"""
+    """Episodes affected by one manual split (episode IDs, in episode order). / 一次手工切分波及的集（集 ID，按播出顺序）。"""
 
-    #: 原文范围变了且有产物，标 stale。
+    #: Source range changed and has artifacts: marked stale. / 原文范围变了且有产物，标 stale。
     restaled: list[int] = field(default_factory=list)
+    #: Replaced and has artifacts: becomes an episode without source, marked stale, moved to the end of the episode order.
     #: 被替换下来、有产物，转为无原文的集并标 stale，移到播出顺序末尾。
     retired: list[int] = field(default_factory=list)
-    #: 被替换下来、没有产物，直接移除。
+    #: Replaced and has no artifacts: removed outright. / 被替换下来、没有产物，直接移除。
     removed: list[int] = field(default_factory=list)
+    #: Size (reading units) of the unsplit source between the two episodes merged in when merging with the next episode; 0 for other commands.
     #: 与下一集合并时并入的两集之间未切分原文的体量（阅读单位）；其余命令为 0。
     merged_units: int = 0
 
@@ -101,14 +138,18 @@ class ManualSplitImpact:
 
 @dataclass(frozen=True)
 class ManualSplitConfirmationRequired:
-    """波及有产物的集，等待确认；或者是预览。返回本对象时没有发生任何写入。"""
+    """Affects episodes with artifacts, awaiting confirmation; or it is a preview. When this object is returned, nothing has been written.
+
+    波及有产物的集，等待确认；或者是预览。返回本对象时没有发生任何写入。"""
 
     impact: ManualSplitImpact
 
 
 @dataclass(frozen=True)
 class ManualSplitResult:
-    """执行结果。``episode`` 是切分或拆分分配的新集 ID，其余命令为 None。"""
+    """Execution result. ``episode`` is the new episode ID allocated by a cut or split; None for other commands.
+
+    执行结果。``episode`` 是切分或拆分分配的新集 ID，其余命令为 None。"""
 
     impact: ManualSplitImpact
     episode: int | None = None
@@ -119,19 +160,23 @@ ManualSplitOutcome = ManualSplitResult | ManualSplitConfirmationRequired
 
 @dataclass
 class _Edit:
-    """一次手工切分对账本的改动，由落位推出，提交时照此改写。偏移是整本源文的全局位置（见 :class:`_Layout`）。"""
+    """The ledger changes of one manual split, derived from the placement and applied as is on commit. Offsets are global positions in the whole source (see :class:`_Layout`).
 
+    一次手工切分对账本的改动，由落位推出，提交时照此改写。偏移是整本源文的全局位置（见 :class:`_Layout`）。"""
+
+    #: True when source ranges change (a new episode or a changed range); False when only cuts are removed.
     #: 改动原文范围（有新集或范围变了）时为 True；只移除切分时为 False。
     touches_source: bool = False
-    #: 已有切出集的新原文范围。
+    #: New source ranges of existing cut episodes. / 已有切出集的新原文范围。
     ranges: dict[int, tuple[int, int]] = field(default_factory=dict)
+    #: The new episode: source range, title, and the index of the entry it is inserted before (index into ``episodes`` before the change).
     #: 新的一集：原文范围、标题，以及插在第几个条目之前（下标指改动前的 ``episodes``）。
     new_range: tuple[int, int] | None = None
     new_title: str = ""
     insert_before: int = 0
-    #: 被替换下来的旧切出集，按播出顺序。
+    #: Replaced old cut episodes, in episode order. / 被替换下来的旧切出集，按播出顺序。
     dropped: list[int] = field(default_factory=list)
-    #: 并入的未切分原文的体量（阅读单位）。
+    #: Size (reading units) of the merged-in unsplit source. / 并入的未切分原文的体量（阅读单位）。
     merged_units: int = 0
 
 
@@ -141,6 +186,7 @@ class _NeedsConfirmation(Exception):
         self.impact = impact
 
 
+# Placement
 # ---------------------------------------------------------------------------
 # 落位
 # ---------------------------------------------------------------------------
@@ -148,13 +194,15 @@ class _NeedsConfirmation(Exception):
 
 @dataclass(frozen=True)
 class _Layout:
-    """整本源文与落位。全局位置是把整本源文的文件按顺序接起来之后的字符下标。"""
+    """The whole source and placement. A global position is a character index after joining the whole-source files in order.
+
+    整本源文与落位。全局位置是把整本源文的文件按顺序接起来之后的字符下标。"""
 
     docs: list[SourceDoc]
     entries: list[dict[str, Any]]
     placements: dict[int, CutPlacement]
     language: str | None = None
-    #: 源文件类型切换处的全局位置：一集的原文范围不跨过它。
+    #: Global positions of source kind switches: an episode's source range does not cross them. / 源文件类型切换处的全局位置：一集的原文范围不跨过它。
     kind_walls: tuple[int, ...] = ()
 
     @property
@@ -169,7 +217,9 @@ class _Layout:
         return "".join(doc.text for doc in self.docs)
 
     def units_between(self, start: int, end: int) -> int:
-        """全局范围 ``[start, end)`` 的阅读单位数，逐文件计数：词不会跨文件边界连成一个。"""
+        """Number of reading units in the global range ``[start, end)``, counted per file: words do not join across file boundaries.
+
+        全局范围 ``[start, end)`` 的阅读单位数，逐文件计数：词不会跨文件边界连成一个。"""
         bases = self.bases
         total = 0
         for index, doc in enumerate(self.docs):
@@ -191,7 +241,9 @@ class _Layout:
         return self.bases[index] + offset
 
     def start_point(self, position: int) -> tuple[str, int]:
-        """全局位置作为起点时的「文件 + 文件内偏移」：落在文件交界上时取后一个文件的开头。"""
+        """"File + in-file offset" of a global position used as a start: on a file boundary, the start of the following file.
+
+        全局位置作为起点时的「文件 + 文件内偏移」：落在文件交界上时取后一个文件的开头。"""
         bases = self.bases
         for index, doc in enumerate(self.docs):
             if bases[index] <= position < bases[index + 1]:
@@ -199,7 +251,9 @@ class _Layout:
         return self.docs[-1].rel_path, len(self.docs[-1].text)
 
     def end_point(self, position: int) -> tuple[str, int]:
-        """全局位置作为终点时的「文件 + 文件内偏移」：落在文件交界上时取前一个文件的末尾。"""
+        """"File + in-file offset" of a global position used as an end: on a file boundary, the end of the preceding file.
+
+        全局位置作为终点时的「文件 + 文件内偏移」：落在文件交界上时取前一个文件的末尾。"""
         bases = self.bases
         for index, doc in enumerate(self.docs):
             if bases[index] < position <= bases[index + 1]:
@@ -211,7 +265,7 @@ class _Layout:
         return bases[placement.file_index] + placement.start, bases[placement.end_file_index] + placement.end
 
     def files_between(self, start: int, end: int) -> list[SourceDoc]:
-        """全局范围 ``[start, end)`` 经过的文件。"""
+        """Files that the global range ``[start, end)`` passes through. / 全局范围 ``[start, end)`` 经过的文件。"""
         bases = self.bases
         return [doc for index, doc in enumerate(self.docs) if bases[index] < end and bases[index + 1] > start]
 
@@ -227,7 +281,7 @@ class _Layout:
         return placement
 
     def ordered(self) -> list[CutPlacement]:
-        """落位的切出集，按源文位置。"""
+        """Placed cut episodes, by source position. / 落位的切出集，按源文位置。"""
         return sorted(self.placements.values(), key=lambda p: p.position)
 
     def entry_index(self, episode: int) -> int:
@@ -273,7 +327,7 @@ def _require_inside(at: int, low: int, high: int) -> None:
 
 
 def _require_same_kind(layout: _Layout, new: tuple[int, int], *old: tuple[int, int]) -> None:
-    """改动后的原文范围不能新跨过源文件类型的切换处。"""
+    """A changed source range must not newly cross a source kind switch. / 改动后的原文范围不能新跨过源文件类型的切换处。"""
     allowed = set().union(*(layout.walls_inside(*span) for span in old))
     if layout.walls_inside(*new) - allowed:
         raise ManualSplitError("crosses_source_kind", "一集的原文不能跨过源文件类型不同的两个文件")
@@ -287,6 +341,7 @@ def _plan_cut(layout: _Layout, *, source_file: str, end: int, title: str) -> _Ed
     spans = [layout.span(p) for p in layout.ordered()]
     if any(low < at < high for low, high in spans):
         raise ManualSplitError("inside_episode", "这个位置在一集的原文里，应当拆分这一集")
+    # Cut from the end of the nearest preceding cut episode (from the start of the whole source when there is none), without crossing a source kind switch
     # 从前面最近的切出集结尾（没有时从整本源文开头）切起，不跨过源文件类型的切换处
     start = max([high for _low, high in spans if high <= at] + [wall for wall in layout.kind_walls if wall < at] + [0])
     _require_text(layout, start, at)
@@ -295,7 +350,9 @@ def _plan_cut(layout: _Layout, *, source_file: str, end: int, title: str) -> _Ed
 
 
 def _point(layout: _Layout, placement: CutPlacement, at: int, source_file: str | None) -> int:
-    """手工切分落点的全局位置；没给文件时按这一集起点所在的文件算。"""
+    """Global position of a manual split point; when no file is given, the file where this episode starts is used.
+
+    手工切分落点的全局位置；没给文件时按这一集起点所在的文件算。"""
     return layout.to_global(source_file or layout.docs[placement.file_index].rel_path, at)
 
 
@@ -367,6 +424,7 @@ def _plan_clear_after(layout: _Layout, *, episode: int) -> _Edit:
     )
 
 
+# Commit
 # ---------------------------------------------------------------------------
 # 提交
 # ---------------------------------------------------------------------------
@@ -391,13 +449,15 @@ def _impact(project_dir: Path, layout: _Layout, edit: _Edit) -> ManualSplitImpac
 
 
 def _touched_docs(layout: _Layout, edit: _Edit) -> list[SourceDoc]:
-    """改动的原文范围经过的文件。"""
+    """Files that the changed source ranges pass through. / 改动的原文范围经过的文件。"""
     spans = [*edit.ranges.values(), *([edit.new_range] if edit.new_range is not None else [])]
     return [doc for doc in layout.docs if any(doc in layout.files_between(*span) for span in spans)]
 
 
 def _check_fingerprints(project_dir: Path, project: dict[str, Any], docs: list[SourceDoc]) -> None:
-    """原文范围绑定这些文件的当前文本：文件在服务之外被改动过时拒绝，没记录指纹时补记。"""
+    """Source ranges bind to the current text of these files: reject when a file was changed outside the service; record the fingerprint when none is recorded.
+
+    原文范围绑定这些文件的当前文本：文件在服务之外被改动过时拒绝，没记录指纹时补记。"""
     raw = project.get(SOURCE_FINGERPRINTS_KEY)
     recorded = dict(raw) if isinstance(raw, Mapping) else {}
     for doc in docs:
@@ -413,13 +473,14 @@ def _write_derived(project_dir: Path, episode: int, text: str, *, fresh: bool) -
     if path.is_symlink() and not fresh:
         raise ManualSplitError("episode_source_symlink", f"集（id={episode}）的集文件是符号链接，拒绝写入")
     if fresh and (path.exists() or path.is_symlink()):
+        # A same-named file for the new episode ID is not in the ledger and is not the source of any episode; rename it as a backup first
         # 新集 ID 的同名文件不在账本里，不是任何一集的原文，先改名留底
         path.rename(archive_episode_file_path(path))
     path.write_text(text, encoding="utf-8", newline="\n")
 
 
 def _remove_derived(project_dir: Path, episode: int) -> None:
-    # hard-delete: derived -- 手动切分丢弃的集原文，可由分集账本重新生成
+    # hard-delete: derived -- episode source discarded by a manual split; can be regenerated from the episode ledger / 手动切分丢弃的集原文，可由分集账本重新生成
     episode_source_path(project_dir, episode).unlink(missing_ok=True)
 
 
@@ -432,7 +493,9 @@ def _range_value(layout: _Layout, start: int, end: int) -> dict[str, Any]:
 def _apply(
     project_dir: Path, project: dict[str, Any], layout: _Layout, edit: _Edit, impact: ManualSplitImpact
 ) -> int | None:
-    """按改动改写 ``project`` 并落盘集文件与快照，返回新集 ID。"""
+    """Rewrite ``project`` according to the edit and write episode files and snapshots to disk; returns the new episode ID.
+
+    按改动改写 ``project`` 并落盘集文件与快照，返回新集 ID。"""
     if edit.touches_source:
         _check_fingerprints(project_dir, project, _touched_docs(layout, edit))
     by_id = {parse_positive_episode_num(entry.get("episode")): entry for entry in layout.entries}
@@ -497,6 +560,7 @@ def _run(
             return True
         return any(episode not in confirmed for episode in impact.episodes_with_products)
 
+    # The dry run outside the lock is only for confirmation and fast failure: on rejection or when confirmation is needed, return with zero writes
     # 锁外预演只为确认与快速失败：拒绝或需要确认时零写入返回
     project = pm.load_project(project_name)
     layout = _layout(project_dir, project)
@@ -514,6 +578,7 @@ def _run(
     committed: dict[str, Any] = {}
 
     def _commit(p: dict[str, Any]) -> None:
+        # Re-derive inside the lock from the latest ledger: the confirmation list and placement are snapshots from the time of the read outside the lock
         # 锁内按最新账本重新推演：确认清单与落位都是锁外读取时刻的快照
         locked_layout = _layout(project_dir, p)
         locked_edit = plan(locked_layout)
@@ -552,7 +617,9 @@ def cut_unsplit_source(
     confirm_episodes: Collection[int] = (),
     dry_run: bool = False,
 ) -> ManualSplitOutcome:
-    """在未切分的原文上切分：``source_file`` 里从这段未切分原文的开头到 ``end`` 成为新的一集。"""
+    """Cut on unsplit source: in ``source_file``, from the start of this unsplit stretch to ``end`` becomes a new episode.
+
+    在未切分的原文上切分：``source_file`` 里从这段未切分原文的开头到 ``end`` 成为新的一集。"""
     return _run(
         project_path,
         lambda layout: _plan_cut(layout, source_file=source_file, end=end, title=title),
@@ -570,7 +637,11 @@ def split_episode(
     confirm_episodes: Collection[int] = (),
     dry_run: bool = False,
 ) -> ManualSplitOutcome:
-    """在切出集内的 ``source_file`` 第 ``at`` 处拆分：前一段保留集 ID，后一段是新的一集，紧接在前一段之后。
+    """Split at position ``at`` of ``source_file`` inside a cut episode: the first part keeps the episode ID, the second part is a new episode right after the first.
+
+    When ``source_file`` is omitted, the file where this episode starts is used.
+
+    在切出集内的 ``source_file`` 第 ``at`` 处拆分：前一段保留集 ID，后一段是新的一集，紧接在前一段之后。
 
     ``source_file`` 缺省时按这一集起点所在的文件算。
     """
@@ -591,7 +662,11 @@ def move_episode_boundary(
     confirm_episodes: Collection[int] = (),
     dry_run: bool = False,
 ) -> ManualSplitOutcome:
-    """把这一集与紧接其后的切出集之间的分界移到 ``source_file`` 第 ``at`` 处，两侧保留集 ID。
+    """Move the boundary between this episode and the cut episode right after it to position ``at`` of ``source_file``; both sides keep their episode IDs.
+
+    When ``source_file`` is omitted, the file where this episode ends is used.
+
+    把这一集与紧接其后的切出集之间的分界移到 ``source_file`` 第 ``at`` 处，两侧保留集 ID。
 
     ``source_file`` 缺省时按这一集终点所在的文件算。
     """
@@ -611,7 +686,12 @@ def merge_with_next_episode(
     confirm_merged_units: int = 0,
     dry_run: bool = False,
 ) -> ManualSplitOutcome:
-    """把这一集与按源文位置紧接其后的切出集合并：这一集保留集 ID，下一集按被替换的旧集处理。
+    """Merge this episode with the cut episode right after it by source position: this episode keeps its episode ID, the next one is handled as a replaced old episode.
+
+    Unsplit source between the two episodes is merged in as well; ``confirm_merged_units`` is the merged-in size the
+    creator saw in the confirmation list.
+
+    把这一集与按源文位置紧接其后的切出集合并：这一集保留集 ID，下一集按被替换的旧集处理。
 
     两集之间未切分的原文一并并入；``confirm_merged_units`` 是创作者在确认清单里看过的并入体量。
     """
@@ -631,7 +711,9 @@ def clear_cuts_after(
     confirm_episodes: Collection[int] = (),
     dry_run: bool = False,
 ) -> ManualSplitOutcome:
-    """清除按源文位置排在这一集之后的全部切分，这些集按被替换的旧集处理。"""
+    """Clear all cuts after this episode by source position; those episodes are handled as replaced old episodes.
+
+    清除按源文位置排在这一集之后的全部切分，这些集按被替换的旧集处理。"""
     return _run(
         project_path,
         lambda layout: _plan_clear_after(layout, episode=episode),
@@ -640,6 +722,7 @@ def clear_cuts_after(
     )
 
 
+# Confirmation list
 # ---------------------------------------------------------------------------
 # 确认清单
 # ---------------------------------------------------------------------------
@@ -654,7 +737,9 @@ _IMPACT_LINES = (
 def render_manual_split_impact_text(
     impact: Mapping[str, Any], project: Mapping[str, Any], translate: Callable[..., str]
 ) -> str:
-    """把波及清单渲染成确认文本：集以标题或播出位置指称。Web 确认框只呈现这份文本。"""
+    """Render the impact list as confirmation text: episodes are referred to by title or episode position. The Web confirmation dialog only shows this text.
+
+    把波及清单渲染成确认文本：集以标题或播出位置指称。Web 确认框只呈现这份文本。"""
 
     def name(episode: int) -> str:
         return episode_display_name(project, episode, translate)

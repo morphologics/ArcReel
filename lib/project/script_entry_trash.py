@@ -1,4 +1,20 @@
-"""恢复离开正式脚本的条目（分镜、参考视频单元）：回到原集，插在原前驱之后（``docs/adr/0107``）。
+"""Restore entries (shots, reference video units) that left the final script: back into their original episode,
+inserted after their original predecessor (``docs/adr/0107``).
+
+For deletion see :mod:`lib.project.script_entry_cleanup`. The predecessor is taken from the pre-rewrite script in
+the snapshot: if the predecessor still exists, insert after it; if the entry was originally first, insert back at
+the front; if the predecessor is gone, append to the end of the episode.
+
+Numbers are only issued, never reused (``docs/adr/0090``): a restored entry always gets a new number after the
+largest number used in the episode; the original number is not kept even if free, so edit clips that still
+reference the original number don't attach to the restored entry. Media and version history are added back under
+the new number; artifact-manifest registrations for storyboard images, videos and voiceover are taken from the
+migrated temporary project, moved to the new number, and judged by artifact currency as usual; the entry no
+longer belongs to its original grid and is planned as an ordinary shot; subtitles and presentations are derived
+artifacts and are not added back. If the owning episode is also in the project trash, it can only be restored
+together with the episode.
+
+恢复离开正式脚本的条目（分镜、参考视频单元）：回到原集，插在原前驱之后（``docs/adr/0107``）。
 
 删除见 :mod:`lib.project.script_entry_cleanup`。前驱取自快照里改写前的剧本：前驱此刻还在就插在它之后，
 原来排在最前就插回最前，前驱已不在就放到集末尾。
@@ -36,12 +52,17 @@ from lib.script.script_editor import ScriptEditError, new_item_id, resolve_items
 
 __all__ = ["SCRIPT_ENTRY_KIND", "take_script_entry"]
 
+#: The first three items of ``ArtifactKey.episode_resource_artifacts`` added back with the media: storyboard image,
+#: video, voiceover.
 #: ``ArtifactKey.episode_resource_artifacts`` 里随媒体加回的前三项：分镜图、视频、配音。
 _MEDIA_ARTIFACT_COUNT = 3
 
 
 def take_script_entry(project_dir: Path, staged: Path, obj: Mapping[str, Any]) -> Restoration:
-    """按条目编号从迁移后的临时项目取出条目、前驱、文件、版本记录与产物清单登记。"""
+    """Take the entry, predecessor, files, version records and artifact-manifest registrations by entry number from the
+    migrated temporary project.
+
+    按条目编号从迁移后的临时项目取出条目、前驱、文件、版本记录与产物清单登记。"""
     entry_id, script_file, episode = str(obj.get("id")), str(obj.get("script_file")), obj.get("episode")
     try:
         staged_script = json.loads((staged / "scripts" / script_file).read_text(encoding="utf-8"))
@@ -54,12 +75,16 @@ def take_script_entry(project_dir: Path, staged: Path, obj: Mapping[str, Any]) -
     entry: dict[str, Any] = items[index]
     previous = items[index - 1].get(id_field) if index > 0 and isinstance(items[index - 1], dict) else None
     files, _history = entry_files(staged, episode, entry_id)
+    # Registrations of artifacts added back with the media (storyboard image, video, voiceover); subtitles and
+    # presentations are not added back, nor their registrations.
     # 随媒体加回的产物（分镜图、视频、配音）的登记；字幕与呈现不加回，登记也不带。
     media_keys = ArtifactKey.episode_resource_artifacts(episode, entry_id)[:_MEDIA_ARTIFACT_COUNT]
     staged_claims = ProjectArtifactManifestAdapter(staged).snapshot_entries()
     claims = {key: staged_claims[key] for key in media_keys if key in staged_claims}
     projects = ProjectManager.for_project_dir(project_dir)
     versions = VersionManager(project_dir)
+    # Here an object that can't be taken degrades (episode fully deleted) or is refused (episode is in the trash);
+    # it is re-checked under the lock at write time.
     # 此处按取不出对象降级（集已彻底删除）或拒绝（集在回收站里）；落地时在锁内再核对一次。
     require_live_episode(project_dir, episode, entry_id)
     landed: dict[str, str] = {}
@@ -102,6 +127,9 @@ def take_script_entry(project_dir: Path, staged: Path, obj: Mapping[str, Any]) -
         with formal_write_transaction(script_path, project_dir / ProjectManager.PROJECT_FILE, versions.versions_file):
             projects.update_script_locked(project_dir.name, script_file, insert)
             if claims:
+                # Registrations are back-filled under the new number: the basis digests come from the pre-deletion (migrated)
+                # manifest and are judged by artifact currency as usual; inputs that differ under the new number from before
+                # deletion read as stale.
                 # 登记随新编号补录：依据摘要取自删除前（迁移后）的清单，照常按产物时效判定，
                 # 新编号下的输入与删除前不同的读为过期。
                 renamed_keys = dict(
@@ -128,7 +156,10 @@ def take_script_entry(project_dir: Path, staged: Path, obj: Mapping[str, Any]) -
 
 
 def _new_id(script: dict, kind: str, id_field: str, free: Callable[[str], bool], floor: int) -> str:
-    """按新增条目的取号规则发一个新编号：从本集用过的最大号之后取，跳过媒体或版本历史仍占着的编号。"""
+    """Issue a new number by the rule for new entries: take after the largest number used in the episode, skipping
+    numbers still occupied by media or version history.
+
+    按新增条目的取号规则发一个新编号：从本集用过的最大号之后取，跳过媒体或版本历史仍占着的编号。"""
     probe = {**script, kind: list(script.get(kind) or [])}
     while not free(candidate := new_item_id(probe, floor=floor)):
         probe[kind].append({id_field: candidate})
@@ -138,15 +169,25 @@ def _new_id(script: dict, kind: str, id_field: str, free: Callable[[str], bool],
 def _rename(
     staged: Path, episode: int, old_id: str, new_id: str, files: list[str]
 ) -> tuple[dict[str, str], dict[str, str]]:
-    """返回 ``(要加回的文件：临时项目内路径 → 落点, 条目字段里要改指的路径)``。
+    """Return ``(files to add back: temporary-project path -> destination, paths in entry fields to repoint)``.
+
+    Media and version snapshots switch to the new number; subtitles and presentations are not added back; paths in
+    entry fields named by the old number are all repointed to the new number, even when the file is absent, so they
+    don't point at the old number.
+
+    返回 ``(要加回的文件：临时项目内路径 → 落点, 条目字段里要改指的路径)``。
 
     媒体与版本快照改用新编号，字幕与呈现不加回；条目字段里按旧编号命名的路径一律改指新编号，
     文件不在的也改，免得指向旧编号。
     """
     staged_versions = VersionManager(staged)
+    # The snapshot is the whole project at deletion: the new number may have belonged to another entry then, and its
+    # history does not come back with this record, so remove it from the temporary project first.
     # 快照是删除时的整个项目：新编号当时可能属于另一个条目，它的历史不随这条记录回来，先从临时项目摘掉。
     staged_versions.detach_resources((resource_type, new_id) for resource_type in ENTRY_MEDIA_RESOURCE_TYPES)
     for resource_type in ENTRY_MEDIA_RESOURCE_TYPES:
+        # Rename within the temporary project: snapshot files and version records switch to the new number together, then
+        # are added back as a whole.
         # 在临时项目里改名：快照文件与版本记录一起换成新编号，随后整段加回。
         staged_versions.rename_resource(resource_type, old_id, new_id)
     renamed = dict(zip(entry_media_paths(old_id), entry_media_paths(new_id), strict=True))
@@ -156,10 +197,15 @@ def _rename(
 
 
 def _relinked(entry: Mapping[str, Any], relink: Mapping[str, str]) -> dict[str, Any]:
-    """条目里指向旧编号文件的路径字段（产物与尾帧）改指新编号；换了编号的条目不再是原宫格的成员。"""
+    """Path fields in the entry pointing at old-number files (artifacts and end frame) are repointed to the new number;
+    an entry with a changed number is no longer a member of its original grid.
+
+    条目里指向旧编号文件的路径字段（产物与尾帧）改指新编号；换了编号的条目不再是原宫格的成员。"""
     restored = json.loads(json.dumps(entry))
     assets = restored.get("generated_assets")
     if relink and isinstance(assets, dict):
+        # The grid record's members are still old numbers: keep the grid field; artifact planning will skip this storyboard
+        # image because it can't find the grid target.
         # 宫格记录的成员仍是旧编号：留着宫格字段，产物规划会因找不到宫格目标而跳过这张分镜图。
         assets.update(grid_id=None, grid_cell_index=None)
     for holder in (restored, assets if isinstance(assets, dict) else {}):

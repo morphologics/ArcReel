@@ -88,6 +88,9 @@ REFERENCE_PROJECTION_FAILURE_CODES: frozenset[str] = frozenset(
     }
 )
 
+# When a generation input is refused (``lib.artifacts.generation_input.InputRefused``), the first gap code the executor
+# raises via the server-side translation function; the same gap may also appear in the reference-to-video projection,
+# and where the two registries overlap they are merged as a set.
 # 生成输入被拒（``lib.artifacts.generation_input.InputRefused``）时，执行器经服务端翻译函数抛出的
 # 首个缺口码；同一缺口在参考生视频投影里也可能出现，两份登记表重叠处按集合合并。
 GENERATION_INPUT_FAILURE_CODES: frozenset[str] = frozenset(
@@ -102,6 +105,9 @@ GENERATION_INPUT_FAILURE_CODES: frozenset[str] = frozenset(
     }
 )
 
+# Problem codes of the storyboard-route family when evaluating video request facts (``lib.generation.video_request_facts``)
+# fails: the executor blocks via ``VideoRequestFactsError`` and persists the original code, same code as the precheck.
+# Codes of the reference-route family and the bucket capability gate are already registered above.
 # 视频请求事实（``lib.generation.video_request_facts``）求值失败时分镜路线一族的问题码：执行器经
 # ``VideoRequestFactsError`` 阻断并按原码落库，与预检同码。参考路线一族与桶能力闸的码已在上面登记。
 VIDEO_REQUEST_FACTS_FAILURE_CODES: frozenset[str] = frozenset(
@@ -122,12 +128,16 @@ FAILURE_CODE_KEYS: dict[str, str] = {
     **{code: code for code in GENERATION_INPUT_FAILURE_CODES},
     **{code: code for code in VIDEO_REQUEST_FACTS_FAILURE_CODES},
     "provider_unsupported_media": "task_fail_provider_unsupported_media",
+    # A built-in provider's model reference is not in the model list (delisted or renamed): the reference is kept as is, for the user to choose again.
     # 内置供应商的模型引用不在模型清单中（已下架或改名）：引用原样保留，由用户重新选择。
     "model_not_in_provider_catalog": "model_not_in_provider_catalog",
+    # Deterministic upstream 4xx rejection. provider_reason in params is upstream's original text, redacted and truncated,
+    # deliberately kept out of the translation template: it should not be translated, the read side shows it as is from a separate field.
     # 上游确定性 4xx 拒绝。params 里的 provider_reason 是脱敏截断后的上游原文，刻意不进
     # 译文模板：它不该被翻译，读侧按独立字段原样展示。
     "provider_rejected": "task_fail_provider_rejected",
     "dispatch_provider_requeue_failed": "task_fail_dispatch_provider_requeue_failed",
+    # The project was deleted while the task was running: the task gives up saving, see lib.project.task_project_claim.
     # 项目在任务执行期间被删除：任务放弃落盘，见 lib.project.task_project_claim。
     "project_deleted_during_task": "task_fail_project_deleted_during_task",
     "restart_lost_image": "task_fail_restart_lost_image",
@@ -144,6 +154,7 @@ FAILURE_CODE_KEYS: dict[str, str] = {
     "declarative_template_render_failed": "task_fail_declarative_template_render_failed",
     "declarative_response_extract_failed": "task_fail_declarative_response_extract_failed",
     "declarative_image_save_failed": "task_fail_declarative_image_save_failed",
+    # Graph adjustment failure when reference images or first/end frames are insufficient: the cascade reached the artifact node, and this workflow's output itself depends on that image.
     # 参考图或首尾帧不足时的改图失败：级联触到产物节点，这份 workflow 出片本身依赖那张图。
     "comfyui_image_drop_unsupported": "task_fail_comfyui_image_drop_unsupported",
     "comfyui_upload_failed": "task_fail_comfyui_upload_failed",
@@ -152,8 +163,10 @@ FAILURE_CODE_KEYS: dict[str, str] = {
     "comfyui_execution_error": "task_fail_comfyui_execution_error",
     "comfyui_interrupted": "task_fail_comfyui_interrupted",
     "comfyui_output_missing": "task_fail_comfyui_output_missing",
+    # The image provider responded successfully but returned no image (mostly content safety filtering): see ImageOutputMissingError.
     # 图片供应商成功响应却没带回图片（多为内容安全过滤）：见 ImageOutputMissingError。
     "image_output_missing": "task_fail_image_output_missing",
+    # The returned image format cannot be converted to a bitmap (e.g. vector SVG): see ImageOutputFormatError.
     # 返回的图片格式转不成位图（如矢量 SVG）：见 ImageOutputFormatError。
     "image_output_format_unsupported": "task_fail_image_output_format_unsupported",
     "comfyui_output_type_mismatch": "task_fail_comfyui_output_type_mismatch",
@@ -161,11 +174,14 @@ FAILURE_CODE_KEYS: dict[str, str] = {
     "artifact_download_failed": "task_fail_artifact_download_failed",
     "restart_lost_checkpoint_no_job_id": "task_fail_restart_lost_checkpoint_no_job_id",
     "execution_identity_unrecoverable": "task_fail_execution_identity_unrecoverable",
+    # ScriptEditError.key is itself an errors.py key (see lib/script/script_editor.py); no prefix indirection needed.
     # ScriptEditError.key 本身就是 errors.py 的 key（见 lib/script/script_editor.py），无需前缀间接层。
     "script_edit_error": "script_edit_error",
     "script_edit_items_not_list": "script_edit_items_not_list",
     "script_edit_unit_lists_invalid": "script_edit_unit_lists_invalid",
     "script_edit_generated_assets_invalid": "script_edit_generated_assets_invalid",
+    # Cascade failure (TaskRepository._cascade_failed_queued): reason stores, nested, the failure reason of the dependency
+    # task that caused the cascade (possibly another structured encoded string), expanded recursively when rendering, see render_failure.
     # 级联失败（TaskRepository._cascade_failed_queued）：reason 嵌套存储被级联依赖任务自身
     # 的失败原因（可能又是一个结构化编码串），渲染时递归展开，见 render_failure。
     "cascade_blocked_dependency": "task_fail_cascade_blocked_dependency",
@@ -179,7 +195,7 @@ _STRUCTURED_RE = re.compile(r"^\[(\w+)\](?:[ ](\{.*\}))?$", re.DOTALL)
 
 CASCADE_FAILURE_CODE = "cascade_blocked_dependency"
 
-# collapse_cascade_reason 的解包上限，纯粹的空转防线。
+# Unwrapping limit of collapse_cascade_reason, purely a guard against spinning. / collapse_cascade_reason 的解包上限，纯粹的空转防线。
 _MAX_CASCADE_UNWRAP = 100
 
 
@@ -204,7 +220,19 @@ def encode_failure(code: str, /, **params: Any) -> str:
 
 
 def _as_shrinkable(value: Any) -> Any:
-    """把容器参数值换成自身的 JSON 文本，好让裁剪逻辑能收窄它。
+    """Replace a container parameter value with its own JSON text, so the trimming logic can narrow it.
+
+    Truncating a container's string form is safer than truncating a JSON literal -- the latter would leave unclosed
+    brackets. Values nested so deep that ``json.dumps`` hits the recursion limit degrade to an ellipsis: trimming happens
+    on the persistence path, and raising would leave the task stuck in running.
+
+    Only containers are touched: ``int`` / ``float`` / ``bool`` / ``None`` are native JSON scalars, cannot blow the budget
+    and cannot be narrowed; turning them into text would instead store them back quoted on re-encoding (``42`` becomes
+    ``"42"``, ``True`` becomes ``"true"``, ``None`` becomes ``"null"``), changing the parameter types in the persisted
+    envelope. And trimming passes over the whole params at once, so as soon as any parameter triggers trimming, all scalars
+    in the same failure would be distorted with it.
+
+    把容器参数值换成自身的 JSON 文本，好让裁剪逻辑能收窄它。
 
     截断一个容器的字符串形态比截断 JSON 字面量安全——后者会留下不闭合的括号。嵌套过深到
     ``json.dumps`` 撞递归上限的值降级为省略号：裁剪发生在落库路径上，抛出去会让任务卡在
@@ -234,7 +262,18 @@ def _is_validation_message(value: Any) -> TypeGuard[dict[str, Any]]:
 
 
 def collapse_cascade_reason(reason: str) -> str:
-    """把嵌套的级联原因折叠成最内层的根本原因，供级联编码前调用。
+    """Collapse a nested cascade reason to the innermost root cause; call before cascade encoding.
+
+    Wrapping layer by layer makes the string grow almost exponentially: each layer re-encodes the whole previous envelope
+    into JSON, escaping doubles the length, and around seven layers it bursts the persistence budget; trimming can only cut
+    characters from the tail, cutting the inner envelope mid-JSON -- the outer layer still parses, but the read side embeds
+    the broken inner layer as plain text verbatim into the localised message.
+
+    Intermediate layers only carry "the id of another task that was also blocked"; what the user can act on is the direct
+    dependency and the root cause, and the former is kept by the outer layer's own ``dependency_task_id``. After collapsing,
+    the string length is independent of dependency chain depth.
+
+    把嵌套的级联原因折叠成最内层的根本原因，供级联编码前调用。
 
     逐层包裹会让串近指数增长：每一层都把上一层的整个信封重新编码进 JSON，转义使长度翻倍，
     七层左右就会撑破落库预算，裁剪只能从尾部切字符，把内层信封切在 JSON 中途——外层仍可解析，
@@ -254,13 +293,32 @@ def collapse_cascade_reason(reason: str) -> str:
         reason = nested
         seen += 1
         if seen > _MAX_CASCADE_UNWRAP:
+            # Normal chains never reach this depth (they are collapsed before bursting the budget). Actually hitting it means a
+            # malformed or artificial deep string; stop right there: return the current layer, don't spin on the persistence path.
             # 正常链路远达不到这个深度（撑破预算前就折叠掉了）。真撞上说明遇到了畸形或人造
             # 的深层串，就地收手：返回当前层，不在落库路径上空转。
             return reason
 
 
 def bound_reason(reason: str, limit: int) -> str:
-    """把 ``reason`` 裁剪到 ``limit`` 字符内，供级联失败编码前调用。
+    """Trim ``reason`` to within ``limit`` characters; call before cascade failure encoding.
+
+    Truncating a valid ``[code] {params}`` structured string by characters directly would cut off the JSON tail, so
+    :func:`render_failure` cannot parse it and the original text leaks untranslated to the UI (e.g. the ``detail``
+    parameter of ``resume_expired_detail`` comes from a remote error response and can be thousands of characters long).
+    This first trims the longest string parameter in the structured string, so it is still a valid ``[code] {params}``
+    after re-encoding; for unstructured text or when still over the limit after trimming, fall back to raw character truncation.
+
+    Overlong non-string parameters are first degraded to their own JSON text before taking part in trimming: container
+    values can blow the budget too -- ``video_duration_invalid`` echoes the raw config value the caller rejected, which an
+    imported or hand-edited ``project.json`` can make a big array -- and native JSON types don't pass through
+    ``default=str``, so with no string parameter to narrow it would fall back to a bare slice, cutting the envelope mid-JSON.
+
+    Trimming iterates to convergence on the actual re-encoded length, rather than a difference computed once: characters
+    like ``"`` and ``\\`` take two columns after JSON escaping, so the excess length is not equal to the raw character count,
+    and a one-shot estimate would misjudge a narrowable parameter as uncuttable.
+
+    把 ``reason`` 裁剪到 ``limit`` 字符内，供级联失败编码前调用。
 
     直接按字符截断合法的 ``[code] {params}`` 结构化串会切断 JSON 尾部，使
     :func:`render_failure` 无法解析、原文未翻译地泄露给界面（如 ``resume_expired_detail``
@@ -290,6 +348,8 @@ def bound_reason(reason: str, limit: int) -> str:
     try:
         parsed = json.loads(raw_params)
     except (ValueError, RecursionError):
+        # Malformed JSON, and params nested so deep that ``json.loads`` itself hits the recursion limit. Trimming happens on the
+        # persistence path, and an escaping exception would leave the task stuck in running, so treat both as unparsable and fall back to character truncation.
         # 畸形 JSON，以及嵌套过深到 ``json.loads`` 自身撞递归上限的 params。裁剪发生在落库
         # 路径上，异常逸出会让任务卡在 running，因此一并按不可解析处理，退回按字符裁剪。
         return reason[:limit]
@@ -298,6 +358,8 @@ def bound_reason(reason: str, limit: int) -> str:
     params: dict[str, Any] = {key: _as_shrinkable(value) for key, value in parsed.items()}
     detail = parsed.get("detail")
     if _is_validation_message(detail):
+        # ``detail`` must keep its machine structure so the read side can render it per request locale. Only degrade possibly
+        # oversized containers in its params to trimmable text, and add its string leaves to the same budget competition as top-level parameters.
         # ``detail`` 必须保持机器结构，读侧才能按请求 locale 渲染。只把它的 params 中可能
         # 过大的容器降级成可裁剪文本，并把字符串叶子加入与顶层参数相同的预算竞争。
         params["detail"] = {
@@ -319,6 +381,7 @@ def bound_reason(reason: str, limit: int) -> str:
             for gap in gaps
         )
     ):
+        # When over the limit, keep one gap per reason plus the omitted count; machine codes and grouping structure don't take part in string trimming.
         # 超限时每种原因保留一个缺口及省略数量；机器码和分组结构不参与字符串裁剪。
         for gap in gaps:
             kept_gaps.setdefault(gap["code"], {key: gap.get(key) for key in ("code", "asset_type", "name")})
@@ -342,8 +405,14 @@ def bound_reason(reason: str, limit: int) -> str:
         owner, longest_key = max(shrinkable, key=lambda item: len(item[0][item[1]]))
         current: str = owner[longest_key]
         if not current:
+            # All string parameters shaved empty and still over the limit means the budget can't even hold the envelope skeleton; only character truncation remains.
             # 字符串参数全被削空仍超限，说明预算连信封骨架都装不下，只能退回按字符裁剪。
             return reason[:limit]
+        # The excess length is counted in encoded characters, while raw characters may take several columns after JSON escaping,
+        # so the two are not equal: using it as the number of raw characters to cut is only a lower-bound estimate; cut,
+        # re-encode and check again until it really fits. When the estimate exceeds the parameter's own length, cut half instead
+        # of shaving it empty -- the excess length of an escaped parameter is often larger than its raw length, and shaving it
+        # empty in one go would lose diagnostic content that could have been kept. Cutting at least one character guarantees convergence.
         # 超额长度以编码后的字符计，而原始字符经 JSON 转义可能占多列，两者不等长：拿它当
         # 要砍的原始字符数只是个下界估算，砍完重编码再看，直到真正装下为止。估算超过参数
         # 自身长度时改砍一半而非削空——转义参数的超额长度常大于原始长度，一次削空会把本
@@ -355,6 +424,7 @@ def bound_reason(reason: str, limit: int) -> str:
     return encoded
 
 
+#: The two failure codes whose message includes "the extensions this endpoint should produce"; the list is computed at render time from the persisted media_type.
 #: 文案里带一段「该端点应产出的扩展名」的两条失败码；清单在渲染时按落库的 media_type 现算。
 _COMFYUI_ARTIFACT_MISMATCH_CODES = frozenset({"comfyui_output_type_mismatch", "comfyui_output_container_mismatch"})
 
@@ -400,7 +470,9 @@ def render_failure(error_message: str | None, translate: Callable[..., str], nam
 
 
 def parse_failure(error_message: str | None) -> tuple[str, dict[str, Any]] | None:
-    """把已登记的 ``[code] {params}`` 拆成机器码与参数；原始/畸形原因返回 ``None``。"""
+    """Split a registered ``[code] {params}`` into machine code and parameters; raw/malformed reasons return ``None``.
+
+    把已登记的 ``[code] {params}`` 拆成机器码与参数；原始/畸形原因返回 ``None``。"""
     if not error_message:
         return None
     match = _STRUCTURED_RE.match(error_message)
@@ -415,6 +487,8 @@ def parse_failure(error_message: str | None) -> tuple[str, dict[str, Any]] | Non
     try:
         parsed = json.loads(raw_params)
     except (ValueError, RecursionError):
+        # Malformed JSON, and payloads nested so deep that ``json.loads`` itself hits the recursion limit. Rendering happens
+        # inside an HTTP request, and an escaping exception means a 500, so treat both as unrecognised: the caller passes it through as is, and the reason is not lost.
         # 畸形 JSON，以及嵌套过深到 ``json.loads`` 自身撞递归上限的 payload。渲染发生在
         # HTTP 请求内，异常逸出就是 500，因此一并按无法识别处理：调用方原样透传，原因不丢。
         return None

@@ -1,4 +1,12 @@
-"""媒体探测：用随包 ffmpeg 读出容器格式、音视频流与时长，不依赖 ffprobe。
+"""Media probing: read container format, audio/video streams and duration with the bundled ffmpeg, without ffprobe.
+
+ffmpeg with ``-c copy -f framecrc`` only demuxes, without decoding, and outputs timestamps packet by packet; stream
+duration is the range covered by packets not marked as discarded; container format comes from the
+``Input #0, <格式>, from`` (format) line in ffmpeg's input info. Unit previews, asset packs, JianYing draft export and
+audio upload validation all get probe results via :func:`probe_media`; when per-frame times are needed (e.g. the
+contact sheet extracting frames), via :func:`probe_video_frame_times`.
+
+媒体探测：用随包 ffmpeg 读出容器格式、音视频流与时长，不依赖 ffprobe。
 
 ffmpeg 以 ``-c copy -f framecrc`` 只解复用、不解码地逐包输出时间戳，流时长取未标记丢弃的
 包所覆盖的区间；容器格式取 ffmpeg 输入信息里 ``Input #0, <格式>, from`` 一行。
@@ -31,7 +39,7 @@ _HEADER_RE = re.compile(r"^#(tb|media_type|codec_id) (\d+): (\S+)$")
 
 
 class MediaProbeError(ValueError):
-    """ffmpeg 无法解析该文件，或探测超时。"""
+    """ffmpeg can't parse the file, or probing timed out. / ffmpeg 无法解析该文件，或探测超时。"""
 
 
 @dataclass(frozen=True, slots=True)
@@ -75,6 +83,7 @@ class _StreamAccumulator:
     def span_seconds(self) -> tuple[Fraction, Fraction] | None:
         if self.time_base is None or self.start is None or self.end is None:
             return None
+        # Encoder priming padding shows up as negative timestamps (e.g. mp3 skip samples); visible content starts at 0.
         # 编码器前导填充以负时间戳出现（如 mp3 的 skip samples），可见内容从 0 开始。
         start = max(self.start, 0) * self.time_base
         end = self.end * self.time_base
@@ -152,7 +161,14 @@ async def probe_media(
     grace: float = DEFAULT_TERMINATE_GRACE_SECONDS,
     spawn: Spawner | None = None,
 ) -> MediaProbe:
-    """探测 ``path`` 的容器格式与音视频流。输入只经本地文件协议打开（见 ``local_file_input``）。
+    """Probe the container format and audio/video streams of ``path``. Input is opened only via the local file protocol (see ``local_file_input``).
+
+    Raises:
+        FfmpegUnavailableError: the bundled ffmpeg is unavailable.
+        MediaProbeError: the file can't be parsed, has no audio/video streams, or probing timed out.
+        OSError: the ffmpeg subprocess can't be started.
+
+    探测 ``path`` 的容器格式与音视频流。输入只经本地文件协议打开（见 ``local_file_input``）。
 
     Raises:
         FfmpegUnavailableError: 随包 ffmpeg 不可用。
@@ -231,7 +247,17 @@ async def probe_video_frame_times(
     grace: float = DEFAULT_TERMINATE_GRACE_SECONDS,
     spawn: Spawner | None = None,
 ) -> tuple[float, ...]:
-    """首个视频流每一帧的起始时刻（秒），按播放顺序排列，以首帧为 0。
+    """Start time (seconds) of every frame of the first video stream, in presentation order, with the first frame at 0.
+
+    Demux only, no decoding: times come from video packet pts; the n-th time corresponds to the n-th decoded frame in
+    presentation order.
+
+    Raises:
+        FfmpegUnavailableError: the bundled ffmpeg is unavailable.
+        MediaProbeError: the file can't be parsed, has no video frames, or probing timed out.
+        OSError: the ffmpeg subprocess can't be started.
+
+    首个视频流每一帧的起始时刻（秒），按播放顺序排列，以首帧为 0。
 
     只解复用、不解码：时刻取自视频包的 pts，第 n 个时刻对应解码后按播放顺序的第 n 帧。
 

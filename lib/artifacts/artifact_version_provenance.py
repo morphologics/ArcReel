@@ -39,8 +39,11 @@ _VIDEO_VISUAL_KINDS = {
 }
 
 IMAGE_ARTIFACT_BASIS_FIELD = "artifact_image_basis"
+# After migration the currency baseline is separate from the actually billed tier; execution facts and request digests stay unchanged.
 # 迁移后的时效基准与实际付费档位分离；执行事实与请求摘要保持原样。
 VIDEO_CURRENCY_DURATION_FIELD = "artifact_video_currency_duration_seconds"
+# Image artifacts in version records → asset type. Derivative asset sheets share the asset-sheet basis kind with the
+# base look; only the resource_id is written as ``base-name/derivative-name``.
 # 版本记录里的图像产物 → 资产类型。衍生资产图与本体共用 asset-sheet 依据种类，
 # 只是 resource_id 写作 ``本体名/衍生名``。
 _IMAGE_ASSET_TYPES = {

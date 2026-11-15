@@ -1,4 +1,14 @@
-"""每种定义 ``kind`` 在端点测试里的实现：预览怎么渲、测试连接怎么装配、要哪几样凭证。
+"""Implementation of each definition ``kind`` in endpoint testing: how to render the preview, how to assemble test connection, which credentials it needs.
+
+Division of labour with :mod:`.modes`: that one is a pure roster of "supported or not" (no runtime imports, the
+three HTTP entry points share one support matrix), this one is "how to do the supported ones". The two tables are
+aligned by kind, and ``test_the_support_matrix_and_the_implementations_cover_the_same_kinds`` keeps them from diverging.
+
+The router therefore knows no kind: it takes this implementation by the ``kind`` in the definition, and the rest of
+the flow is identical for both kinds -- credential normalisation, material saving, accounting, disk writes and
+cancellation should not be written once per endpoint kind.
+
+每种定义 ``kind`` 在端点测试里的实现：预览怎么渲、测试连接怎么装配、要哪几样凭证。
 
 与 :mod:`.modes` 的分工：那里是「支不支持」的纯名录（不引运行时，三个 HTTP 入口共用同一份支持
 矩阵），这里是「支持的那些怎么做」。两张表按 kind 对齐，
@@ -25,7 +35,7 @@ from .trial_run import TrialRunTarget, declarative_target
 
 
 class PreviewFn(Protocol):
-    """渲染一次预览请求。"""
+    """Render one preview request. / 渲染一次预览请求。"""
 
     def __call__(
         self,
@@ -40,7 +50,7 @@ class PreviewFn(Protocol):
 
 
 class TrialTargetFn(Protocol):
-    """按一份内联定义与凭证装配测试连接的目标。"""
+    """Assemble the test connection target from an inline definition and credentials. / 按一份内联定义与凭证装配测试连接的目标。"""
 
     def __call__(
         self,
@@ -54,12 +64,15 @@ class TrialTargetFn(Protocol):
 
 @dataclass(frozen=True)
 class KindTestSupport:
-    """一种 kind 的端点测试实现。"""
+    """Endpoint test implementation of one kind. / 一种 kind 的端点测试实现。"""
 
     preview: PreviewFn
+    #: Does this definition need ``base_url`` / ``api_key``. A definition needing neither can be called without credentials.
     #: 这份定义要 ``base_url`` / ``api_key`` 吗。两者皆否的定义不必带凭证即可调用。
     credential_needs: Callable[[Mapping[str, Any]], tuple[bool, bool]]
     trial_target: TrialTargetFn
+    #: Whether the test connection result contains a rendered submit request (which also serves as the pre-submit render gate).
+    #: ComfyUI does not: the seed and material reference names of the workflow actually sent are only fixed at the moment of submission.
     #: 测试连接的结果体里放不放一段渲染后的提交请求（它同时充当提交前的渲染闸）。
     #: ComfyUI 不放：实发 workflow 的种子与素材引用名要到提交那一刻才定下来。
     trial_run_request_preview: bool
@@ -85,12 +98,19 @@ _SUPPORT_BY_KIND: Mapping[str, KindTestSupport] = {
 }
 
 
+#: All kinds that have an endpoint test implementation. Consistent with :data:`.modes.TESTABLE_KINDS`.
 #: 有端点测试实现的全部 kind。与 :data:`.modes.TESTABLE_KINDS` 一致。
 SUPPORTED_KINDS = frozenset(_SUPPORT_BY_KIND)
 
 
 def support_for_kind(kind: str) -> KindTestSupport:
-    """这种 ``kind`` 的端点测试实现。
+    """The endpoint test implementation of this ``kind``.
+
+    Raises:
+        KeyError: a kind outside the roster. Callers first pass the structured rejection of
+            :func:`~.modes.supports_test_mode`, so any kind reaching here must have an implementation.
+
+    这种 ``kind`` 的端点测试实现。
 
     Raises:
         KeyError: 名录外的 kind。调用方先过 :func:`~.modes.supports_test_mode` 的结构化拒绝，

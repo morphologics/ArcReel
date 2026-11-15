@@ -1,4 +1,9 @@
-"""剪辑时间线的读取投影：服务端算好的时长、绝对起点、旁白起止与结构类 issues。
+"""Readout projection of the edit timeline: server-computed durations, absolute starts, narration start/end and structural issues.
+
+The projection is a pure function: input a revision and the episode's asset facts, output a readout in seconds (at
+most three decimals). Missing subtitle glyphs are judged by the bundled subtitle font's coverage table, read only once.
+
+剪辑时间线的读取投影：服务端算好的时长、绝对起点、旁白起止与结构类 issues。
 
 投影是纯函数：输入一个修订与一集的素材事实，输出以秒为单位（最多三位小数）的读取结果。
 字幕缺字按随包字幕字体的字符覆盖表判断，覆盖表只读一次。
@@ -171,12 +176,16 @@ class EditTimelineReadout(_View):
 
 
 def trim_applies(clip: EditClip, media: UnitMedia) -> bool:
-    """截取只对其依据的视频版本有效；current 已换版本或没有可用视频时整段使用。"""
+    """A trim is only valid for the video version it was based on; when current has moved to another version or there is no usable video, the whole stretch is used.
+
+    截取只对其依据的视频版本有效；current 已换版本或没有可用视频时整段使用。"""
     return clip.trim is not None and media.video_version is not None and clip.trim.basis_version == media.video_version
 
 
 def effective_source_range_us(clip: EditClip, video_version: int | None, whole_us: int) -> tuple[int, int]:
-    """片段实际取用的源素材区间；截取只对其依据的视频版本有效，入点与出点都不超过视频全长。"""
+    """The source range a clip actually uses; a trim is only valid for the video version it was based on; in and out points never exceed the full video length.
+
+    片段实际取用的源素材区间；截取只对其依据的视频版本有效，入点与出点都不超过视频全长。"""
     trim = clip.trim
     if video_version is None or trim is None or trim.basis_version != video_version:
         return 0, whole_us
@@ -185,7 +194,9 @@ def effective_source_range_us(clip: EditClip, video_version: int | None, whole_u
 
 
 def clip_source_duration_us(clip: EditClip, media: UnitMedia, scripted_us: int) -> int:
-    """片段截取后的画面时长（不含定格延长）；没有可用视频时按编排时长占位。"""
+    """Picture duration of a clip after trimming (excluding freeze extension); without a usable video, the planned duration is used as a placeholder.
+
+    片段截取后的画面时长（不含定格延长）；没有可用视频时按编排时长占位。"""
     whole = media.video_duration_us if media.video_duration_us is not None else scripted_us
     source_in, source_out = effective_source_range_us(clip, media.video_version, whole)
     return source_out - source_in
@@ -316,7 +327,13 @@ class _Narration:
 
 
 def _narration_issues(placed: list[_Placed], sources: EpisodeSources, total_us: int) -> list[TimelineIssue]:
-    """旁白配音缺失、越界与可能与原声相撞；只在 TTS 配音项目里检查。
+    """Narration audio missing, overrunning, or possibly clashing with original audio; only checked in TTS voiced projects.
+
+    Narration starts at the start of its carrying clip and extends by the measured audio duration, possibly covering
+    later clips. Overrun means overlapping the next narration or running past the timeline end; clash means narration
+    extending onto clips of dialogue units, or onto clips whose original audio volume is above the voiceover default.
+
+    旁白配音缺失、越界与可能与原声相撞；只在 TTS 配音项目里检查。
 
     旁白从承载片段的起点开始，按配音实测时长延伸，可以覆盖后续片段。越界指与下一段旁白重叠或超出时间线末尾；
     相撞指旁白延伸到台词单位的片段，或原声音量高于画外音默认值的片段上。
@@ -391,7 +408,9 @@ def _narration_issues(placed: list[_Placed], sources: EpisodeSources, total_us: 
 
 
 def bgm_missing_issues(content: EditTimelineContent, available: Collection[str]) -> list[TimelineIssue]:
-    """BGM 片段引用的 BGM 不在 ``available`` 里（已不在项目里或文件已不在）时阻断出片。"""
+    """Block rendering when a BGM clip references a BGM not in ``available`` (no longer in the project or file missing).
+
+    BGM 片段引用的 BGM 不在 ``available`` 里（已不在项目里或文件已不在）时阻断出片。"""
     return [
         timeline_issue(IssueCode.BGM_MISSING, clip_ids=(item.id,), bgm_id=item.bgm_id)
         for item in sorted(content.bgm, key=lambda item: item.start_us)

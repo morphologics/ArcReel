@@ -1,4 +1,4 @@
-"""图片后端注册与工厂。"""
+"""Image backend registration and factory. / 图片后端注册与工厂。"""
 
 from __future__ import annotations
 
@@ -25,7 +25,9 @@ def get_registered_backends() -> list[str]:
 
 
 def channel_capabilities(name: str) -> frozenset[ImageCapability]:
-    """读某个内置调用通道声明实现了的文生图 / 图生图（类属性 ``CHANNEL_CAPABILITIES``），不构造实例。"""
+    """Read the text-to-image / image-to-image a built-in channel declares as implemented (class attribute ``CHANNEL_CAPABILITIES``), without constructing an instance.
+
+    读某个内置调用通道声明实现了的文生图 / 图生图（类属性 ``CHANNEL_CAPABILITIES``），不构造实例。"""
     factory = _BACKEND_FACTORIES.get(name)
     if factory is None:
         raise ValueError(f"Unknown image backend: {name}")
@@ -36,7 +38,9 @@ def channel_capabilities(name: str) -> frozenset[ImageCapability]:
 
 
 def channel_usage_estimator(name: str) -> ImageUsageEstimator:
-    """读某个内置调用通道的预估函数（类上的 ``estimate_usage``），不构造实例。"""
+    """Read a built-in channel's estimate function (``estimate_usage`` on the class), without constructing an instance.
+
+    读某个内置调用通道的预估函数（类上的 ``estimate_usage``），不构造实例。"""
     factory = _BACKEND_FACTORIES.get(name)
     if factory is None:
         raise ValueError(f"Unknown image backend: {name}")

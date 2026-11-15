@@ -64,7 +64,9 @@ _HANDLED_KEYS = {
 
 
 async def migrate_json_to_db(session: AsyncSession, data_root: Path) -> None:
-    """把数据根下的旧版系统配置文件一次性导入数据库；文件不存在时什么都不做。"""
+    """Import the legacy system config file under the data root into the database once; do nothing if the file does not exist.
+
+    把数据根下的旧版系统配置文件一次性导入数据库；文件不存在时什么都不做。"""
     layout = DataRootLayout(data_root)
     json_path = layout.system_config_json_path
     if not json_path.exists():
@@ -103,7 +105,7 @@ async def migrate_json_to_db(session: AsyncSession, data_root: Path) -> None:
 
     video_backend = overrides.get("video_backend", "aistudio")
     video_model = overrides.get("video_model", "veo-3.1-generate-001")
-    # AI Studio 使用 preview 后缀，Vertex 使用 001 后缀
+    # AI Studio uses the preview suffix, Vertex uses the 001 suffix / AI Studio 使用 preview 后缀，Vertex 使用 001 后缀
     if video_backend == "aistudio":
         _model_fix = {
             "veo-3.1-generate-001": "veo-3.1-generate-preview",
@@ -148,12 +150,20 @@ async def migrate_json_to_db(session: AsyncSession, data_root: Path) -> None:
     logger.info("Migration complete. Renamed to %s", bak_path)
 
 
+# Old task-level text backend keys (configured key by key per purpose), superseded by task tier keys (docs/adr/0051)
 # 旧任务级文本 backend 键（按用途逐键配置），已由任务档位键取代（docs/adr/0051）
 _LEGACY_TEXT_TASK_KEYS = ("text_backend_script", "text_backend_overview", "text_backend_style")
 
 
 async def migrate_text_tier_settings(session: AsyncSession) -> None:
-    """全局 system_settings 的文本配置启动迁移。
+    """Startup migration of text settings in the global system_settings.
+
+    Step one maps old task-level keys: script → complex; overview / style → simple, and when both have values take
+    style's value (the style task needs vision; the reverse could move style analysis to a model that may not support
+    image input). Deleting the old keys after migration is the idempotency marker; tier keys that already have values are
+    not overwritten (newer values configured by the user win).
+
+    全局 system_settings 的文本配置启动迁移。
 
     第一步映射旧任务级键：script → complex；overview / style → simple，两者都有值时取
     style 的值（style 任务需要 vision，反向会让风格分析换到可能不支持图像输入的模型）。
@@ -176,7 +186,12 @@ async def migrate_text_tier_settings(session: AsyncSession) -> None:
 
 
 async def migrate_retired_model_settings(session: AsyncSession) -> None:
-    """全局 system_settings 的退役模型启动迁移：所有模型设置项里已改名的模型改写为后继模型。
+    """Startup migration of retired models in the global system_settings: renamed models in all model settings are rewritten to their successors.
+
+    Only values exactly matching the retired model mapping are rewritten, idempotently; models delisted without a
+    successor are kept as is, and the runtime error lets the user reselect.
+
+    全局 system_settings 的退役模型启动迁移：所有模型设置项里已改名的模型改写为后继模型。
 
     只改写退役模型映射里精确命中的值，幂等；已下架而没有后继的模型原样保留，运行时报错由用户重选。
     """

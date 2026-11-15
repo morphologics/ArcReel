@@ -1,4 +1,17 @@
-"""v17→v18 的内容指纹补录：给存量视频与配音记下产物自身的内容指纹（``docs/adr/0062``）。
+"""v17->v18 content-fingerprint back-fill: record each existing video's and voiceover's own content fingerprint
+(``docs/adr/0062``).
+
+From v18, when video and audio artifacts are registered, the manifest entry records the content facts of the formal
+file (fingerprint, byte count, nanosecond mtime), and the version record records the snapshot's fingerprint.
+Existing artifacts are back-filled in this step: for registered entries the formal file and the selected version
+snapshot are each fingerprinted once, and only when they agree are both the version record and the manifest entry
+written; unreadable, inconsistent, or missing selected snapshots aren't back-filled, and judgments stay as before.
+
+This step runs after the gap back-registration; the planner has just fingerprinted the same files, so the
+in-process digest cache is hit by stat identity and nothing is read a second time. Byte count and mtime come from the
+same descriptor opened for fingerprinting.
+
+v17→v18 的内容指纹补录：给存量视频与配音记下产物自身的内容指纹（``docs/adr/0062``）。
 
 v18 起视频与音频产物登记时，清单条目记下正式文件的内容事实（指纹、字节数、纳秒 mtime），版本记录
 记下快照的指纹。存量产物在这一步补录：已登记条目的正式文件与选中版本快照各取一次指纹，两者一致才
@@ -31,7 +44,13 @@ from lib.project.resource_paths import resource_relative_path
 
 
 def backfill_content_digests(project_dir: Path) -> None:
-    """补录已登记视频与配音的内容指纹。调用方持有项目元数据锁，并已在改写前备份清单与版本记录。
+    """Back-fill content fingerprints of registered videos and voiceovers. The caller holds the project metadata lock and
+    has backed up the manifest and version records before rewriting.
+
+    Version records are written first, then the manifest is committed; if the manifest commit fails, version records are
+    written back to their pre-rewrite bytes, and a rerun starts from scratch.
+
+    补录已登记视频与配音的内容指纹。调用方持有项目元数据锁，并已在改写前备份清单与版本记录。
 
     先写版本记录、再提交清单；清单提交失败时把版本记录写回改写前的字节，重跑从头再来。
     """
@@ -79,6 +98,8 @@ def backfill_content_digests(project_dir: Path) -> None:
         atomic_write_json(versions_path, versions)
     try:
         expected = {key: stored[key] for key in proven}
+        # Not writing may also mean an interrupted previous rerun already wrote the same facts; it counts as a conflict only if
+        # the manifest was really changed.
         # 没写入也可能是上一次中断的重跑已经写过同样的事实；只有清单真被改动过才算冲突。
         if not adapter.replace_entries_if_matches_atomically(
             expected=expected, replacements=proven
@@ -91,7 +112,10 @@ def backfill_content_digests(project_dir: Path) -> None:
 
 
 def _resource_type(key: ArtifactKey, artifact_path: str) -> str | None:
-    """条目所属的版本资源类型：配音固定为 audio；视频按规范路径区分分镜视频与参考视频。"""
+    """The version resource type the entry belongs to: voiceover is always audio; videos are told apart as shot video or
+    reference video by canonical path.
+
+    条目所属的版本资源类型：配音固定为 audio；视频按规范路径区分分镜视频与参考视频。"""
 
     resource_id = str(key.components[1])
     candidates = ("audio",) if key.kind is ArtifactKind.EPISODE_AUDIO else ("videos", "reference_videos")

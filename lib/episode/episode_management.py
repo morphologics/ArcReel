@@ -1,4 +1,13 @@
-"""集管理：新建、调序与删除一集（ADR 0096）。
+"""Episode management: create, reorder and delete an episode (ADR 0096).
+
+- **Create** (:func:`create_episode`): allocate a new episode ID and insert after the given episode, by default at
+  the end of the episode order. When the title is left empty, the UI shows "Episode N" by episode position; with
+  source text it is an episode with its own source, otherwise an episode without source.
+- **Reorder** (:func:`move_episode`): episodes with their own source and episodes without source can be put in any
+  position, including between two cut episodes; cut episodes placed in the whole source always stay in source
+  position order among themselves, and moves that violate this order are rejected.
+
+集管理：新建、调序与删除一集（ADR 0096）。
 
 - **新建**（:func:`create_episode`）：分配新集 ID，插在指定的一集之后，缺省放在播出顺序末尾。标题留空时界面按播出位置
   显示「第 N 集」；带原文时是自带原文的集，否则是无原文的集。
@@ -22,7 +31,9 @@ if TYPE_CHECKING:
 
 
 class EpisodeManagementError(ValueError):
-    """集管理被拒；``code`` 是稳定的原因码，入口据此映射状态码与文案。账本不被改动。"""
+    """Episode management rejected; ``code`` is a stable reason code that entry points map to status codes and copy. The ledger is not changed.
+
+    集管理被拒；``code`` 是稳定的原因码，入口据此映射状态码与文案。账本不被改动。"""
 
     def __init__(self, code: str, message: str):
         super().__init__(message)
@@ -57,7 +68,13 @@ def create_episode(
     source_text: str | None = None,
     source_kind: SourceKind | None = None,
 ) -> int:
-    """新建一集，返回新集 ID。``after`` 是插在哪一集之后，None 时放在播出顺序末尾。
+    """Create an episode and return the new episode ID. ``after`` is the episode to insert after; None puts it at the end of the episode order.
+
+    When ``source_text`` is non-empty after stripping surrounding whitespace, it is written as the episode source and
+    this is an episode with its own source; drama projects record ``source_kind`` (default novel). Otherwise it is an
+    episode without source and has no kind.
+
+    新建一集，返回新集 ID。``after`` 是插在哪一集之后，None 时放在播出顺序末尾。
 
     ``source_text`` 去掉首尾空白后非空时写成集原文，这一集是自带原文的集，剧情演绎项目记 ``source_kind``
     （缺省为小说）；否则是无原文的集，没有类型。
@@ -89,13 +106,15 @@ def create_episode(
 
 
 def move_episode(pm: ProjectManager, project_name: str, episode: int, *, after: int | None) -> None:
-    """把这一集移到 ``after`` 之后，``after`` 为 None 时移到最前。落位的切出集之间须保持源文顺序。"""
+    """Move this episode after ``after``; when ``after`` is None, move it to the front. Placed cut episodes must keep source order among themselves.
+
+    把这一集移到 ``after`` 之后，``after`` 为 None 时移到最前。落位的切出集之间须保持源文顺序。"""
     project_dir = pm.get_project_path(project_name)
 
     def _mutate(project: dict[str, Any]) -> None:
         entries = list(_ledger(project))
         if after == episode:
-            # 移到自己之后即原地不动
+            # Moving after itself means staying in place / 移到自己之后即原地不动
             _index_of(entries, episode)
             return
         moving = entries.pop(_index_of(entries, episode))

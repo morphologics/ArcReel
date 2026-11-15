@@ -55,7 +55,12 @@ class AgentSessionSummary(TimestampMixin, UserOwnedMixin, Base):
 
 
 def register_models() -> None:
-    """把 agent_session 相关 ORM 模型登记到 ``Base.metadata``。
+    """Register the agent_session ORM models in ``Base.metadata``.
+
+    Registration happens when this module is imported (defining the model classes registers them); this function does
+    no extra work. Calling it makes the "import for side effects" explicit at the call site.
+
+    把 agent_session 相关 ORM 模型登记到 ``Base.metadata``。
 
     登记发生在 import 本模块时（模型类定义即注册），本函数不做额外工作；
     调用它是为了让「因副作用而 import」在调用点显式可见。

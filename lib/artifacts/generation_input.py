@@ -1,4 +1,28 @@
-"""生成输入：一个生成环节为一个目标按项目现状备齐的内容输入。
+"""Generation input: the content inputs a generation step gathers for one target from the project's current state.
+
+The executor, the target-state planner and the final prompt preview all take reference image assembly and gap
+decisions from the same generation input (see ``GLOSSARY.md`` "generation input" and ``docs/adr/0073`` "execution
+uses the same rule"):
+
+- Entry functions always return a generation input: the input values present plus all gaps (``docs/adr/0098``).
+  Gaps only block generation: the executor and preview take :attr:`ImageGenerationInput.refusal`, which is an
+  :class:`InputRefused` when there are gaps, and the executor converts it to an error code on the server via the
+  single translation function; the planner takes the expected basis as usual, with missing items recorded as
+  absences in the basis.
+- Entry functions are split by generation step: storyboard image :func:`storyboard_image_input`, asset sheet
+  :func:`asset_sheet_input`, derivative asset sheet :func:`derivative_sheet_input`; valid generation inputs share
+  one shape, each with typed semantics.
+- The expected basis is obtained only via ``expected_basis()`` and the registered basis only via ``freeze()``; both
+  go through the same private constructor :func:`_visual_basis`, so consistency is guaranteed by construction
+  (``docs/adr/0062``). ``freeze()`` only accepts generation inputs without gaps; with complete inputs the expected
+  basis is byte for byte the same as today.
+- The reference image set is recorded completely in assembly order, not trimmed; the provider limit only affects
+  what is actually sent and the "image N" numbering, not the basis.
+
+This module reads the project's current state only through the single seam :class:`InputObservation`: it does not
+import the server and does not call the currency resolver, so the planner calling it never recurses back into itself.
+
+生成输入：一个生成环节为一个目标按项目现状备齐的内容输入。
 
 执行器、目标态规划器与最终提示词预览从同一份生成输入取参考图装配与缺口判定（见
 ``GLOSSARY.md``「生成输入」与 ``docs/adr/0073``「执行期沿用同一口径」）：
@@ -62,29 +86,41 @@ from lib.references.reference_admission import SHEET_MISSING_CODE, UNREGISTERED_
 from lib.references.reference_catalog import ReferenceCatalog, build_reference_catalog
 from lib.script.storyboard_sequence import find_storyboard_item, get_storyboard_items
 
+#: An original image is declared but the file cannot be read. Separate from ``reference_asset_missing``: the fix is
+#: to re-upload the original image or clear the original image field, not to generate the asset sheet.
 #: 声明了原图但文件读不到。与 ``reference_asset_missing`` 分开：修法是重新上传原图或清掉原图字段，
 #: 而不是去生成资产图。
 ORIGINAL_MISSING_CODE = "asset_original_missing"
 
+#: The shot's image prompt is pending generation: semantics not ready; reuses the same code as the generation entry.
 #: 分镜的图片提示词待生成：语义未就绪，沿用生成入口的同一码。
 PROMPT_PENDING_CODE = "script_prompt_pending"
 
-#: 资产还没有描述：资产图的语义未就绪。
+#: The asset has no description yet: the asset sheet's semantics are not ready. / 资产还没有描述：资产图的语义未就绪。
 ASSET_DESCRIPTION_REQUIRED_CODE = "asset_description_required"
 
+#: The derivative has no appearance change description yet: the derivative asset sheet's semantics are not ready; reuses the same code as the derivative generation entry.
 #: 衍生还没有外观变化描述：衍生资产图的语义未就绪，沿用衍生生成入口的同一码。
 DERIVATIVE_DESCRIPTION_REQUIRED_CODE = "derivative_description_required"
 
+#: The derivative's base asset sheet is unusable (not declared, file absent, or not registered in the manifest); reuses the same code as the derivative generation entry.
 #: 衍生的本体资产图不可用（未声明、文件不在或清单未登记），沿用衍生生成入口的同一码。
 DERIVATIVE_OWNER_SHEET_MISSING_CODE = "derivative_owner_sheet_missing"
 
-#: 资产图与衍生资产图的画布比例，执行器与规划器共用。
+#: Canvas aspect ratio for asset sheets and derivative asset sheets, shared by the executor and the planner. / 资产图与衍生资产图的画布比例，执行器与规划器共用。
 ASSET_SHEET_CANVAS_RATIO = "16:9"
 
 
 @dataclass(frozen=True, slots=True)
 class ObservedFile:
-    """一个在场的项目文件。
+    """A project file that is present.
+
+    ``artifact_path`` is the canonical project-relative path (used for registration and claims); ``path`` is the
+    absolute path for reading the current bytes; the two may point to different locations while a rename is pending
+    commit. ``content_digest`` is provided by observers that need stability evidence; other observers leave it empty and
+    it is computed when the basis is built.
+
+    一个在场的项目文件。
 
     ``artifact_path`` 是规范的项目相对路径（登记与 claim 用它），``path`` 是读取当前字节的
     绝对路径；两者在待提交改名时可以指向不同位置。``content_digest`` 由需要稳定性证据的观测方
@@ -97,19 +133,23 @@ class ObservedFile:
 
 
 class InputObservation(Protocol):
-    """生成输入读项目现状的唯一 seam。"""
+    """The single seam through which generation inputs read the project's current state. / 生成输入读项目现状的唯一 seam。"""
 
     def observe(self, artifact_path: str) -> ObservedFile | None:
-        """文件在场且路径安全时返回观测结果，否则返回 ``None``。"""
+        """Return the observation when the file is present and its path is safe, otherwise ``None``. / 文件在场且路径安全时返回观测结果，否则返回 ``None``。"""
         ...
 
     def registered(self, key: ArtifactKey) -> ArtifactManifestEntry | None:
-        """该键在产物清单里的登记条目；未登记返回 ``None``。"""
+        """The registered entry for this key in the artifact manifest; ``None`` when not registered. / 该键在产物清单里的登记条目；未登记返回 ``None``。"""
         ...
 
 
 class ManifestInputObservation:
-    """执行器与预览用的观测：按产物清单 adapter 读登记条目、观测文件存在，不算内容摘要。
+    """Observation used by the executor and preview: reads registered entries via the artifact manifest adapter and observes file presence, without computing content digests.
+
+    One instance serves one assembly.
+
+    执行器与预览用的观测：按产物清单 adapter 读登记条目、观测文件存在，不算内容摘要。
 
     一个实例服务一次装配。
     """
@@ -129,6 +169,7 @@ class ManifestInputObservation:
         )
 
     def registered(self, key: ArtifactKey) -> ArtifactManifestEntry | None:
+        # One assembly reads one manifest snapshot, so availability conclusions for every reference come from the same moment.
         # 一次装配读同一份清单快照，各条引用的可用性结论出自同一时刻。
         if self._entries is None:
             self._entries = self._manifest.snapshot_entries()
@@ -136,7 +177,7 @@ class ManifestInputObservation:
 
 
 def project_input_observation(project_dir: Path) -> ManifestInputObservation:
-    """基于项目目录里产物清单的观测。"""
+    """Observation based on the artifact manifest in the project directory. / 基于项目目录里产物清单的观测。"""
 
     resolved = Path(project_dir).resolve(strict=True)
     return ManifestInputObservation(resolved, ProjectArtifactManifestAdapter(resolved))
@@ -144,7 +185,9 @@ def project_input_observation(project_dir: Path) -> ManifestInputObservation:
 
 @dataclass(frozen=True, slots=True)
 class InputRefused:
-    """该目标的全部缺口：语义缺口在前，引用缺口按装配序，逐项去重。"""
+    """All gaps of this target: semantic gaps first, reference gaps in assembly order, deduplicated per item.
+
+    该目标的全部缺口：语义缺口在前，引用缺口按装配序，逐项去重。"""
 
     reasons: tuple[InputGap, ...]
 
@@ -154,14 +197,20 @@ class InputRefused:
 
     @property
     def codes(self) -> tuple[str, ...]:
-        """按首次出现去重的缺口码。"""
+        """Gap codes deduplicated by first occurrence. / 按首次出现去重的缺口码。"""
 
         return tuple(dict.fromkeys(gap.code for gap in self.reasons))
 
 
 @dataclass(frozen=True, slots=True)
 class AssembledReference:
-    """装配序里的一张参考图。
+    """One reference image in the assembly order.
+
+    ``visual`` carries the logical identity and the current read path; ``artifact_path`` is the canonical relative
+    path; ``claim`` is the candidate input claim produced when it is judged usable; original images are not registered
+    artifacts and have no claim.
+
+    装配序里的一张参考图。
 
     ``visual`` 携带逻辑身份与当前读取路径，``artifact_path`` 是规范相对路径；``claim`` 是
     判定可用时同时产出的候选 input claim，原图不是登记产物，没有 claim。
@@ -174,19 +223,22 @@ class AssembledReference:
 
 @dataclass(frozen=True, slots=True)
 class StoryboardImageSemantics:
-    """分镜图的语义输入。"""
+    """Semantic inputs of a storyboard image. / 分镜图的语义输入。"""
 
     resource_id: str
     image_prompt: object
     style: str
     style_description: str
+    #: Projects with schema < 19 keep the basis rule that records asset names (``project_basis_records_asset_names``).
     #: schema < 19 的项目沿用记资产名的依据口径（``project_basis_records_asset_names``）。
     asset_names: bool = False
 
 
 @dataclass(frozen=True, slots=True)
 class AssetSheetSemantics:
-    """资产图的语义输入：描述只取项目里存储的条目。``name`` 在比对坐标系中。"""
+    """Semantic inputs of an asset sheet: the description is taken only from the entry stored in the project. ``name`` is in the comparison coordinate system.
+
+    资产图的语义输入：描述只取项目里存储的条目。``name`` 在比对坐标系中。"""
 
     asset_type: str
     name: str
@@ -197,7 +249,9 @@ class AssetSheetSemantics:
 
 @dataclass(frozen=True, slots=True)
 class DerivativeSheetSemantics:
-    """衍生资产图的语义输入：只有相对本体的外观变化描述，画风由本体资产图承载。"""
+    """Semantic inputs of a derivative asset sheet: only the appearance change description relative to the base look; style is carried by the base asset sheet.
+
+    衍生资产图的语义输入：只有相对本体的外观变化描述，画风由本体资产图承载。"""
 
     owner: str
     derivative: str
@@ -209,19 +263,26 @@ type GenerationSemantics = StoryboardImageSemantics | AssetSheetSemantics | Deri
 
 @dataclass(frozen=True, slots=True)
 class RenderedInput:
-    """按供应商上限裁剪后渲染的提示词。``warnings`` 与任务结果的 ``{key, params}`` 同形。"""
+    """Prompt rendered after trimming to the provider limit. ``warnings`` has the same shape as the task result's ``{key, params}``.
+
+    按供应商上限裁剪后渲染的提示词。``warnings`` 与任务结果的 ``{key, params}`` 同形。"""
 
     prompt: str
     sent_count: int
     warnings: tuple[dict[str, Any], ...] = ()
 
 
+#: After freezing, rebind candidate claims by content digest: the inputs are the candidate claims and "canonical relative path → frozen byte digest".
 #: 冻结后按内容摘要重新绑定候选 claim：入参是候选 claims 与「规范相对路径 → 冻结字节摘要」。
 ClaimBinder = Callable[[Sequence[ArtifactInputClaim], Mapping[str, str]], Sequence[ArtifactInputClaim]]
 
 
 class FrozenGenerationInput:
-    """冻结后的生成输入：实发参考图、渲染好的提示词、登记依据与绑定后的 claims。
+    """Frozen generation input: reference images actually sent, the rendered prompt, the registered basis and the bound claims.
+
+    Used as a context manager; on exit it cleans up the task-private reference image snapshot.
+
+    冻结后的生成输入：实发参考图、渲染好的提示词、登记依据与绑定后的 claims。
 
     作为上下文管理器使用，退出时清理任务私有的参考图快照。
     """
@@ -238,9 +299,10 @@ class FrozenGenerationInput:
         warnings: tuple[dict[str, Any], ...],
     ) -> None:
         self.prompt = prompt
+        #: The first N reference images sent to the provider with the request (view trimmed to the provider limit).
         #: 随请求发给供应商的前 N 张参考图（按供应商上限裁剪后的视图）。
         self.references = references
-        #: 按完整冻结集构造的登记依据。
+        #: Registered basis built from the complete frozen set. / 按完整冻结集构造的登记依据。
         self.basis = basis
         self.claims = claims
         self.warnings = warnings
@@ -263,26 +325,33 @@ def _refusal(gaps: tuple[InputGap, ...]) -> InputRefused | None:
 
 @dataclass(frozen=True)
 class ImageGenerationInput[S: GenerationSemantics]:
-    """生成输入：语义、画布比例、按装配序排列的完整参考图集，以及全部缺口。
+    """Generation input: semantics, canvas aspect ratio, the complete reference image set in assembly order, and all gaps.
+
+    With gaps, missing semantic values stay empty and the reference set lacks the missing images; it can only project
+    the expected basis, not render or freeze.
+
+    生成输入：语义、画布比例、按装配序排列的完整参考图集，以及全部缺口。
 
     有缺口时语义里缺的值留空、参考图集不含缺的那几张；它只能投影期望依据，不能渲染与冻结。
     """
 
     semantics: S
     canvas_ratio: str
-    #: 完整装配序，不裁剪。
+    #: Complete assembly order, not trimmed. / 完整装配序，不裁剪。
     references: tuple[AssembledReference, ...]
-    #: 语义缺口在前，引用缺口按装配序，逐项去重。
+    #: Semantic gaps first, reference gaps in assembly order, deduplicated per item. / 语义缺口在前，引用缺口按装配序，逐项去重。
     gaps: tuple[InputGap, ...] = ()
 
     @property
     def refusal(self) -> InputRefused | None:
-        """生成被拒的全部缺口；输入成立时为 ``None``。"""
+        """All gaps that refuse generation; ``None`` when the input is valid. / 生成被拒的全部缺口；输入成立时为 ``None``。"""
 
         return _refusal(self.gaps)
 
     def expected_basis(self) -> ArtifactBasis:
-        """按项目现状投影的期望依据，供目标态规划器判定时效；缺的项记为缺席。"""
+        """Expected basis projected from the project's current state, for the target-state planner's currency checks; missing items are recorded as absences.
+
+        按项目现状投影的期望依据，供目标态规划器判定时效；缺的项记为缺席。"""
 
         return _visual_basis(
             self.semantics,
@@ -292,14 +361,21 @@ class ImageGenerationInput[S: GenerationSemantics]:
         )
 
     def render(self, *, max_reference_images: int, model: str) -> RenderedInput:
-        """按供应商上限裁剪后渲染提示词，不冻结参考图；预览用，编号与 :meth:`freeze` 一致。"""
+        """Render the prompt trimmed to the provider limit without freezing reference images; for preview, numbering consistent with :meth:`freeze`.
+
+        按供应商上限裁剪后渲染提示词，不冻结参考图；预览用，编号与 :meth:`freeze` 一致。"""
 
         self._require_complete()
         visuals = [reference.visual for reference in self.references]
         return _render_clamped(self.semantics, visuals, max_reference_images=max_reference_images, model=model)
 
     def freeze(self, *, max_reference_images: int, model: str, bind_claims: ClaimBinder) -> FrozenGenerationInput:
-        """把完整参考图集冻结到任务私有快照，再绑定 claim、裁剪、渲染并构造登记依据。
+        """Freeze the complete reference image set into a task-private snapshot, then bind claims, trim, render and build the registered basis.
+
+        Basis and claims use the complete frozen set; the provider only gets the first N; when trimming happens the result
+        carries a warning.
+
+        把完整参考图集冻结到任务私有快照，再绑定 claim、裁剪、渲染并构造登记依据。
 
         依据与 claim 按完整冻结集，供应商只收前 N 张；裁剪发生时结果带一条 warning。
         """
@@ -320,15 +396,17 @@ class ImageGenerationInput[S: GenerationSemantics]:
 
 
 class StoryboardImageInput(ImageGenerationInput[StoryboardImageSemantics]):
-    """一张普通分镜图成立的生成输入。"""
+    """Valid generation input for one regular storyboard image. / 一张普通分镜图成立的生成输入。"""
 
 
 class AssetSheetInput(ImageGenerationInput[AssetSheetSemantics]):
-    """一张资产图（角色、场景、道具、商品）成立的生成输入。"""
+    """Valid generation input for one asset sheet (character, scene, prop, product). / 一张资产图（角色、场景、道具、商品）成立的生成输入。"""
 
 
 class DerivativeSheetInput(ImageGenerationInput[DerivativeSheetSemantics]):
-    """一张衍生资产图成立的生成输入：唯一参考图是本体资产图。"""
+    """Valid generation input for one derivative asset sheet: the only reference image is the base asset sheet.
+
+    一张衍生资产图成立的生成输入：唯一参考图是本体资产图。"""
 
 
 def storyboard_image_input(
@@ -339,7 +417,21 @@ def storyboard_image_input(
     resource_id: str,
     observation: InputObservation,
 ) -> StoryboardImageInput:
-    """按项目现状为一张分镜图备齐生成输入。
+    """Gather the generation input for one storyboard image from the project's current state.
+
+    Assembly order: products (each asset sheet first, then original images; products without an asset sheet use only
+    original images) → character, scene, prop asset sheets (in field order) → previous storyboard image (when the index
+    is greater than 0 and it is not a ``segment_break``); the whole list is deduplicated by path, keeping the first
+    occurrence.
+
+    Gaps: reference not registered; character, scene or prop without an asset sheet or with an unusable one; product
+    declares an asset sheet that is unusable; original image declared but unreadable; prompt pending generation.
+    Omitted: unusable previous storyboard image. A product with neither asset sheet nor original image uses text only
+    and is not a gap.
+
+    Raises ``ValueError`` when the entry does not exist or its field structure is broken.
+
+    按项目现状为一张分镜图备齐生成输入。
 
     装配序：商品（每件先资产图、再原图；没有资产图的商品只用原图）→ 角色、场景、道具资产图
     （按字段序）→ 上一分镜图（序号大于 0 且不是 ``segment_break`` 时），整条按路径去重、保留
@@ -395,16 +487,18 @@ def storyboard_image_input(
 
 @dataclass(frozen=True, slots=True)
 class GridReferences:
-    """一张宫格的参考图集与缺口。宫格的合成依据由宫格执行器按冻结后的参考图构造。"""
+    """Reference image set and gaps of one grid. The grid's composite basis is built by the grid executor from the frozen reference images.
 
-    #: 完整装配序，不裁剪。
+    一张宫格的参考图集与缺口。宫格的合成依据由宫格执行器按冻结后的参考图构造。"""
+
+    #: Complete assembly order, not trimmed. / 完整装配序，不裁剪。
     references: tuple[AssembledReference, ...]
-    #: 引用缺口按装配序，逐项去重。
+    #: Reference gaps in assembly order, deduplicated per item. / 引用缺口按装配序，逐项去重。
     gaps: tuple[InputGap, ...] = ()
 
     @property
     def refusal(self) -> InputRefused | None:
-        """生成被拒的全部缺口；参考图集成立时为 ``None``。"""
+        """All gaps that refuse generation; ``None`` when the reference set is valid. / 生成被拒的全部缺口；参考图集成立时为 ``None``。"""
 
         return _refusal(self.gaps)
 
@@ -416,7 +510,16 @@ def grid_references(
     member_ids: Sequence[str],
     observation: InputObservation,
 ) -> GridReferences:
-    """按项目现状为一张宫格备齐参考图集。
+    """Gather the reference image set for one grid from the project's current state.
+
+    Assembly order: in ``member_ids`` order, take each member shot's character, scene and prop asset sheets (in field
+    order), union them and deduplicate by path, keeping the first occurrence; no products and no previous storyboard image.
+
+    Gaps: reference not registered; character, scene or prop without an asset sheet or with an unusable one.
+
+    Raises ``ValueError`` when a member does not exist or its field structure is broken.
+
+    按项目现状为一张宫格备齐参考图集。
 
     装配序：按 ``member_ids`` 的顺序，逐个成员分镜取角色、场景、道具资产图（按字段序），
     取并集并按路径去重、保留首次出现；不含商品与上一分镜图。
@@ -448,7 +551,17 @@ def asset_sheet_input(
     name: str,
     observation: InputObservation,
 ) -> AssetSheetInput:
-    """按项目现状为一张资产图备齐生成输入。
+    """Gather the generation input for one asset sheet from the project's current state.
+
+    The description is taken only from the entry stored in the project. Reference images are the original images
+    uploaded by the author: characters 0 to 1, props 0 to 1 (reference_image), products all, scenes none; original
+    images are not registered artifacts and have no claim.
+
+    Gaps: empty description; original image declared but unreadable.
+
+    Raises ``ValueError`` when the asset does not exist or its field structure is broken.
+
+    按项目现状为一张资产图备齐生成输入。
 
     描述只取项目里存储的条目。参考图是作者上传的原图：角色 0 到 1 张，道具 0 到 1 张（reference_image），商品全部，
     场景没有；原图不是登记产物，没有 claim。
@@ -493,7 +606,16 @@ def derivative_sheet_input(
     derivative: str,
     observation: InputObservation,
 ) -> DerivativeSheetInput:
-    """按项目现状为一张衍生资产图备齐生成输入。
+    """Gather the generation input for one derivative asset sheet from the project's current state.
+
+    The base asset sheet is the only reference image (see ``docs/adr/0072``); its usability is judged the same way as
+    asset sheets referenced by storyboard images.
+
+    Gaps: derivative lacks an appearance change description; base asset sheet not declared or unusable.
+
+    Raises ``ValueError`` when the base look or derivative does not exist or the field structure is broken.
+
+    按项目现状为一张衍生资产图备齐生成输入。
 
     本体资产图是唯一参考图（见 ``docs/adr/0072``），可用性与分镜图引用的资产图同一判定。
 
@@ -523,7 +645,13 @@ def derivative_sheet_input(
 
 
 def _asset_entry(bucket: object, name: str, *, label: str) -> tuple[str, Mapping[str, Any]]:
-    """按资产身份（去两端空白、NFC）在资产表里取条目，返回身份名与条目。
+    """Look up an entry in the asset table by asset identity (stripped of surrounding whitespace, NFC), returning the identity name and the entry.
+
+    Same coordinates as the identity the target-state planner registers asset sheets under: existing keys with
+    surrounding whitespace are also addressed by the stripped name. Among several keys of the same identity, the one
+    written later wins. Raises ``ValueError`` when it does not exist or the entry is not an object.
+
+    按资产身份（去两端空白、NFC）在资产表里取条目，返回身份名与条目。
 
     与目标态规划器登记资产图的身份同一坐标：存量里两端带空白的键也按去空白后的名字寻址。
     同一身份的多个键后写入的胜出。不存在或条目不是对象抛 ``ValueError``。
@@ -541,7 +669,9 @@ def _asset_entry(bucket: object, name: str, *, label: str) -> tuple[str, Mapping
 
 
 def _stored_description(asset: Mapping[str, Any]) -> str:
-    """条目里存储的描述，去两端空白；未填写返回空串，类型不对抛 ``ValueError``。"""
+    """Description stored in the entry, stripped of surrounding whitespace; empty string when not filled in, ``ValueError`` when the type is wrong.
+
+    条目里存储的描述，去两端空白；未填写返回空串，类型不对抛 ``ValueError``。"""
 
     description = asset.get("description")
     if description is None:
@@ -552,7 +682,9 @@ def _stored_description(asset: Mapping[str, Any]) -> str:
 
 
 def _asset_originals(asset: Mapping[str, Any], spec: AssetSpec) -> list[str]:
-    """资产登记的原图路径，按字段声明序；列表字段按 schema 取列表，其余取单值。"""
+    """Original image paths registered on the asset, in field declaration order; list fields are read as lists per the schema, others as single values.
+
+    资产登记的原图路径，按字段声明序；列表字段按 schema 取列表，其余取单值。"""
 
     paths: list[str] = []
     for field in spec.original_image_fields:
@@ -575,7 +707,9 @@ def _reference_names(item: Mapping[str, Any], field: str | None) -> list[str]:
 
 
 class _Assembly:
-    """一次装配的累加器：参考图按路径去重，缺口按内容去重，两者都保序。"""
+    """Accumulator for one assembly: reference images deduplicated by path, gaps by content, both order-preserving.
+
+    一次装配的累加器：参考图按路径去重，缺口按内容去重，两者都保序。"""
 
     def __init__(self, observation: InputObservation) -> None:
         self._observation = observation
@@ -594,7 +728,9 @@ class _Assembly:
         self.references.append(reference)
 
     def _available(self, key: ArtifactKey, declared_path: str) -> tuple[ObservedFile, ArtifactInputClaim] | None:
-        """「可用」的唯一判定：清单登记在该路径且文件在场；成立时同时产出候选 claim。"""
+        """The single definition of "usable": registered at this path in the manifest and the file present; when true, also produces a candidate claim.
+
+        「可用」的唯一判定：清单登记在该路径且文件在场；成立时同时产出候选 claim。"""
 
         entry = self._observation.registered(key)
         if entry is None:
@@ -652,7 +788,7 @@ class _Assembly:
             self.add_original("product", name, original)
 
     def add_original(self, asset_type: str, name: str, original: str) -> None:
-        """资产图的一张原图：声明了却读不到即缺口。"""
+        """One original image of an asset sheet: declared but unreadable is a gap. / 资产图的一张原图：声明了却读不到即缺口。"""
 
         observed = self._observation.observe(original)
         if observed is None:
@@ -666,7 +802,7 @@ class _Assembly:
         )
 
     def add_owner_sheet(self, spec: AssetSpec, owner: str, asset: Mapping[str, Any]) -> None:
-        """衍生资产图的来源：本体资产图未声明或不可用即缺口。"""
+        """Source of a derivative asset sheet: base asset sheet not declared or unusable is a gap. / 衍生资产图的来源：本体资产图未声明或不可用即缺口。"""
 
         sheet = _declared_path(asset, spec.sheet_field)
         available = self._available(ArtifactKey.asset_sheet(spec.asset_type, owner), sheet) if sheet else None
@@ -689,7 +825,9 @@ class _Assembly:
         )
 
     def add_previous_storyboard(self, previous_item: object, *, id_field: str, episode: int) -> None:
-        """上一分镜图是系统推导的可选输入：不可用只是略去，不产生缺口。"""
+        """The previous storyboard image is an optional input derived by the system: when unusable it is just omitted, no gap.
+
+        上一分镜图是系统推导的可选输入：不可用只是略去，不产生缺口。"""
 
         if not isinstance(previous_item, Mapping):
             return
@@ -716,7 +854,9 @@ class _Assembly:
 
 
 def _declared_path(container: object, field: str) -> str | None:
-    """条目里声明的路径；未声明（缺字段、``None``、空串）返回 ``None``，类型不对抛 ``ValueError``。"""
+    """Path declared in the entry; ``None`` when not declared (missing field, ``None``, empty string), ``ValueError`` when the type is wrong.
+
+    条目里声明的路径；未声明（缺字段、``None``、空串）返回 ``None``，类型不对抛 ``ValueError``。"""
 
     if not isinstance(container, Mapping):
         return None
@@ -764,7 +904,12 @@ def _visual_basis(
     *,
     absent: Sequence[InputGap] = (),
 ) -> ArtifactBasis:
-    """期望依据与登记依据共用的构造器，按语义类型分派到对应的视觉依据构造器。
+    """Constructor shared by the expected basis and the registered basis, dispatching by semantic type to the matching visual basis constructor.
+
+    ``absent`` comes only from the expected basis: the registered basis comes from freezing, and freezing only accepts
+    generation inputs without gaps.
+
+    期望依据与登记依据共用的构造器，按语义类型分派到对应的视觉依据构造器。
 
     ``absent`` 只来自期望依据：登记依据出自冻结，冻结只接受没有缺口的生成输入。
     """
@@ -793,7 +938,7 @@ def _visual_basis(
                 absent=absent,
             )
         case DerivativeSheetSemantics():
-            # 本体资产图不可用时没有来源，缺口记在 absent 里。
+            # When the base asset sheet is unusable there is no source; the gap is recorded in absent. / 本体资产图不可用时没有来源，缺口记在 absent 里。
             [*sources] = references
             if len(sources) > 1:
                 raise ValueError("a derivative sheet has at most one source image")
@@ -807,7 +952,7 @@ def _visual_basis(
             )
 
 
-#: 资产图提示词按资产类型的渲染出口。
+#: Render outlets of asset sheet prompts by asset type. / 资产图提示词按资产类型的渲染出口。
 _ASSET_SHEET_PROMPT_BUILDERS: dict[str, Callable[[str, str, str, str], str]] = {
     "character": build_character_prompt,
     "scene": build_scene_prompt,

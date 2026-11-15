@@ -1,4 +1,12 @@
-"""MiniMaxAudioBackend — MiniMax 同步语音合成后端（``POST {host}/v1/t2a_v2``）。
+"""MiniMaxAudioBackend — MiniMax synchronous speech synthesis backend (``POST {host}/v1/t2a_v2``).
+
+Non-streaming requests fetch audio with ``output_format=hex``: the response's ``data.audio`` is a hex string of the audio
+bytes encoded per ``audio_setting.format``, which can be decoded and written to disk without a second download step.
+Business errors are carried as HTTP 200 + non-zero ``base_resp.status_code``. The schema follows the official docs listed
+in docs/api-docs/endpoints/minimax-tts.md. The built-in ``minimax`` provider and custom providers' ``minimax-tts``
+endpoint share this backend.
+
+MiniMaxAudioBackend — MiniMax 同步语音合成后端（``POST {host}/v1/t2a_v2``）。
 
 非流式请求以 ``output_format=hex`` 取回音频：响应 ``data.audio`` 是按 ``audio_setting.format``
 编码后的音频字节的 hex 串，解码即可落盘，无需二段下载。业务错误以 HTTP 200 +
@@ -29,10 +37,14 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_MODEL = "speech-2.8-hd"
 
+# Subset of output formats usable with non-streaming t2a_v2, chosen by the on-disk extension so file content matches the extension (resource paths use .wav by convention).
 # 非流式 t2a_v2 可用的输出格式子集，按落盘扩展名选取，保证文件内容与扩展名一致（资源路径约定 .wav）。
 _SUPPORTED_FORMATS = frozenset({"mp3", "wav", "flac", "pcm"})
 _FALLBACK_FORMAT = "wav"
 
+# The most basic group of Mandarin adult voices among the system voices (``voice_setting.voice_id``); source: the "system voice list" in
+# docs/api-docs/endpoints/minimax-tts.md. The full list has hundreds of entries including many multilingual voices;
+# only the subset most used for voiceover is exposed here; label is a lib/i18n translation key rendered by the voice endpoint per request locale.
 # 系统音色（``voice_setting.voice_id``）中最基础的一组普通话成人音色，出处见
 # docs/api-docs/endpoints/minimax-tts.md 所列「系统音色列表」。完整列表数百条且含大量多语种音色，
 # 这里只暴露配音最常用的子集；label 是 lib/i18n 翻译 key，由音色接口按请求 locale 渲染。
@@ -57,7 +69,9 @@ def _format_for(output_path: Path) -> str:
 
 
 def _decode_audio(payload: object) -> bytes:
-    """取出 ``data.audio`` 并按 hex 解码；``base_resp`` 非零或音频缺失时抛 RuntimeError。"""
+    """Take ``data.audio`` and hex-decode it; raises RuntimeError when ``base_resp`` is non-zero or audio is missing.
+
+    取出 ``data.audio`` 并按 hex 解码；``base_resp`` 非零或音频缺失时抛 RuntimeError。"""
     body = payload if isinstance(payload, dict) else {}
     base = body.get("base_resp")
     base = base if isinstance(base, dict) else {}
@@ -76,7 +90,7 @@ def _decode_audio(payload: object) -> bytes:
 
 
 class MiniMaxAudioBackend:
-    """MiniMax 同步语音合成后端（``t2a_v2``）。"""
+    """MiniMax synchronous speech synthesis backend (``t2a_v2``). / MiniMax 同步语音合成后端（``t2a_v2``）。"""
 
     def __init__(
         self,
@@ -89,10 +103,11 @@ class MiniMaxAudioBackend:
         transport_layer: TransportLayer | None = None,
     ) -> None:
         self._api_key = resolve_minimax_api_key(api_key)
+        # Shares the {host}/v1 normalization with text: tolerates the user entering a host or one with a /v1 suffix
         # 与文本共用 {host}/v1 归一化：容忍用户填 host 或带 /v1 后缀
         self._base_url = minimax_text_base_url(base_url)
         self._model = model or DEFAULT_MODEL
-        # 自定义供应商挂接时用真实 provider 记账
+        # When attached as a custom provider, bill with the real provider / 自定义供应商挂接时用真实 provider 记账
         self._provider_name = provider_name
         self._http_timeout = http_timeout
         self._transport_layer = transport_layer
@@ -113,9 +128,12 @@ class MiniMaxAudioBackend:
         return list(_VOICE_CATALOG)
 
     async def synthesize(self, request: AudioSynthesisRequest) -> AudioSynthesisResult:
+        # language_type is a DashScope-specific field; t2a_v2 detects the language from the text automatically, so it isn't sent.
+        # The billed call is separate from writing to disk: retries only wrap the API call, and a disk write failure never reruns the synthesis request that would bill again.
         # language_type 是 DashScope 特有字段，t2a_v2 按文本自动识别语种，不发送。
         # 计费调用与写盘分离：重试只包 API 调用，写盘失败绝不回头重跑会再次计费的合成请求。
         audio = await self._request_speech(request)
+        # The provider has billed and returned; the disk write must not be interrupted by cancellation, and the result becomes an artifact as usual
         # 供应商已计费返回，写盘不可被取消打断，结果照常成为产物
         await run_noninterruptible_sync(request.output_path.write_bytes, audio)
         logger.info("MiniMax 语音合成完成: %s", request.output_path)
@@ -148,6 +166,7 @@ class MiniMaxAudioBackend:
             len(request.text),
         )
         async with artifact_http_client(timeout=self._http_timeout, transport_layer=self._transport_layer) as client:
+            # Synthesis is a billed POST: submit_post turns ambiguous transport errors into terminal failures to avoid double billing; >=400 is routed by status code
             # 合成是计费 POST：submit_post 把歧义传输错误转终态失败避免重复计费，>=400 交状态码分流
             resp = await submit_post(
                 lambda: client.post(
@@ -158,5 +177,6 @@ class MiniMaxAudioBackend:
                 provider=self._provider_name,
                 include_provider_reason=False,
             )
+        # The provider has billed and returned: parsing and decoding the whole hex string runs in a thread and can't be interrupted by cancellation
         # 供应商已计费返回：整段 hex 的解析与解码放进线程且不可被取消打断
         return await run_noninterruptible_sync(lambda: _decode_audio(resp.json()))

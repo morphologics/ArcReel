@@ -1,4 +1,13 @@
-"""整集剧本落盘前的收尾，与按脚本规划投影出的整集剧本。
+"""Final touches before an episode script is written to disk, and the episode script projected from a script plan.
+
+Scripts written by prompt authoring, content-review conversion and legacy project migration all get their final touches here:
+episode number and entry id prefixes, pending-authoring and replan markers, project-level fields, novel info and metadata.
+Reference-to-video's override by confirmed duration and validation against effective duration options depend on runtime video
+capability values, so they stay in ``ScriptGenerator._add_metadata``, sandwiched between the two finishing stages.
+
+This module does not touch text generation or provider config, so migration steps can import it directly.
+
+整集剧本落盘前的收尾，与按脚本规划投影出的整集剧本。
 
 提示词编写、内容确认转换与存量项目迁移写出的剧本都经这里收尾：集号与条目 id 前缀、待编写与
 重新规划标记、项目级字段、小说信息与 metadata。参考生视频按已确认时长覆盖、按生效档位校验依赖
@@ -19,15 +28,19 @@ from lib.script.script_plan_entries import ScriptPlanKind, plan_entry_content, p
 from lib.script.script_skeleton import resolve_declared_kind, resolve_kind_items, rewrite_episode_prefix
 from lib.speech.speech_composition import admit_script_unit
 
+#: Marker written to ``metadata.generator`` in scripts produced by content review: entries are projected from the script plan, not via a text model.
 #: 内容确认转出的剧本写进 ``metadata.generator`` 的标记：条目是按脚本规划投影出来的，不经文本模型。
 SCRIPT_PLAN_CONVERSION_GENERATOR = "script_plan_conversion"
 
+#: Marker written to ``metadata.generator`` in scripts created by "start from blank": entries are hand-written by the creator, not via a text model.
 #: 「从空白开始」建出的剧本写进 ``metadata.generator`` 的标记：条目由创作者手写，不经文本模型。
 BLANK_SCRIPT_GENERATOR = "blank"
 
 
 def episode_ledger_entry(project: Mapping[str, Any], episode: int) -> dict[str, Any]:
-    """按集号取 project.json episodes 条目；缺失返回空 dict。"""
+    """Get the project.json episodes entry by episode number; return an empty dict if missing.
+
+    按集号取 project.json episodes 条目；缺失返回空 dict。"""
 
     episodes = project.get("episodes")
     return next(
@@ -37,25 +50,37 @@ def episode_ledger_entry(project: Mapping[str, Any], episode: int) -> dict[str, 
 
 
 def ledger_outline(entry: Mapping[str, Any]) -> dict[str, Any]:
-    """账本条目的 outline 字段归一化为 dict（缺失/形状异常返回空 dict）。"""
+    """Normalize the ledger entry's outline field to a dict (missing / malformed returns an empty dict).
+
+    账本条目的 outline 字段归一化为 dict（缺失/形状异常返回空 dict）。"""
 
     raw_outline = entry.get("outline")
     return raw_outline if isinstance(raw_outline, dict) else {}
 
 
 def prepare_script_entries(script_data: dict[str, Any], *, project: Mapping[str, Any], episode: int) -> list[str]:
-    """写入集号、改写条目 id 前缀、重置待编写与重新规划标记；返回改写后的条目 id（按条目顺序）。"""
+    """Write the episode number, rewrite entry id prefixes, reset pending-authoring and replan markers; return the rewritten entry ids (in entry order).
 
+    写入集号、改写条目 id 前缀、重置待编写与重新规划标记；返回改写后的条目 id（按条目顺序）。"""
+
+    # The CLI argument --episode is the single source of truth for the episode number. The AI output schema has no episode field;
+    # it is filled in here before writing to disk.
     # CLI 参数 --episode 是集号唯一真相源。AI 输出的 schema 不含 episode 字段，
     # 这里负责落盘前补上。
     script_data["episode"] = int(episode)
+    # Fallback rewrite of the E\d+ prefix in segment/scene/unit IDs, so an LLM writing the wrong episode number does not cause
+    # cross-episode file name collisions (e.g. storyboards/scene_E1S01.png being overwritten by E2).
     # 兜底改写 segment/scene/unit ID 中的 E\d+ 前缀，避免 LLM 写错集号导致文件
     # 名跨集冲突（如 storyboards/scene_E1S01.png 被 E2 重新覆盖）。
     ep = int(episode)
+    # segment/scene/shot/unit ID prefixes all go through canonical resolution to fix the skeleton + resolve_kind_items to find the
+    # entry array and id field to rewrite (all three reference-to-video content_modes map to video_units, so no branching by generation mode).
     # segment/scene/shot/unit ID 前缀统一经规范解析定骨架 + resolve_kind_items 查条目数组
     # 与 id 字段改写（参考生视频三种 content_mode 均映射到 video_units，无需按生成模式分支）。
     kind = resolve_declared_kind(project.get("content_mode", "narration"), project.get("generation_mode"))
     raw_items, id_field, _kind = resolve_kind_items(script_data, kind=kind)
+    # In the raw dict saved as a degraded fallback after validation failure, this array may be a non-list dirty value (LLM wrote a scalar);
+    # `... or []` only guards falsy values, not truthy scalars, so the isinstance guard avoids a crash when iterating with `for`.
     # 校验失败降级保存的原始 dict 里该数组可能为非列表脏值（LLM 误写标量），
     # `... or []` 只挡 falsy、挡不住真值标量，isinstance 守卫避免 `for` 迭代崩溃。
     items = raw_items if isinstance(raw_items, list) else []
@@ -68,6 +93,7 @@ def prepare_script_entries(script_data: dict[str, Any], *, project: Mapping[str,
     for item in items:
         if not isinstance(item, dict):
             continue
+        # The visual layer of entries produced this round has already been written back by prompt authoring; content-review conversion re-sets the markers for all entries after this.
         # 本轮产出的条目视觉层已由提示词编写写回；内容确认转换在此之后为全部条目重新置位。
         item.pop(PENDING_AUTHORING_FIELD, None)
         admission = admit_script_unit(kind, item, ignore_marker=True)
@@ -81,9 +107,14 @@ def prepare_script_entries(script_data: dict[str, Any], *, project: Mapping[str,
 def finish_script_document(
     script_data: dict[str, Any], *, project: Mapping[str, Any], episode: int, generator: str
 ) -> dict[str, Any]:
-    """补项目级字段、账本钩子、小说信息与 metadata，剥离废弃字段。"""
+    """Fill in project-level fields, ledger hooks, novel info and metadata; strip obsolete fields. / 补项目级字段、账本钩子、小说信息与 metadata，剥离废弃字段。"""
 
     content_mode = project.get("content_mode", "narration")
+    # content_mode is strictly the "content type" (narration/drama/ad); the "video source" dimension is a project-level fact,
+    # and the script stores no generation mode marker -- generation dispatch always reads the project's generation mode.
+    # Reference-to-video scripts must be force-overridden: ReferenceVideoScript.content_mode has a Pydantic default of
+    # "narration", so setdefault cannot get the project-level true value; for non-reference episodes the LLM already produces
+    # narration/drama in the schema, and setdefault is only a fallback.
     # content_mode 严格只是"内容类型"（narration/drama/ad）；"视频来源"维度是项目级事实，
     # 剧本不落盘任何生成模式标记——生成分派一律读项目生成模式。
     # 参考生视频剧本必须强制覆盖：ReferenceVideoScript.content_mode 有 Pydantic 默认值
@@ -94,6 +125,9 @@ def finish_script_document(
     else:
         script_data.setdefault("content_mode", content_mode)
 
+    # Episode-level hook / next-episode teaser: the episode ledger is the single source of truth for hook design; always override
+    # with the ledger value (the LLM does not fill these; model_dump would only leave None defaults). None when the ledger has no planning data.
+    # ad is always a single episode with no episode ledger concept, and its script model doesn't hold these two fields, so injection is skipped.
     # 集级钩子/下集预告：分集账本是钩子设计的单一真相源，强制以账本值覆盖
     # （LLM 不参与填写，model_dump 只会留下 None 默认值）。账本无规划数据时为 None。
     # ad 恒单集、无分集账本概念，剧本模型也不持有这两个字段，跳过注入。
@@ -102,6 +136,10 @@ def finish_script_document(
         script_data["hook"] = entry.get("hook")
         script_data["next_episode_teaser"] = ledger_outline(entry).get("next_episode_teaser")
 
+    # Add novel info
+    # Note the guard semantics: the novel field is hidden via SkipJsonSchema, but default_factory=NovelInfo
+    # makes model_dump always output a {"title":"","chapter":""} placeholder. So checking "does the key exist"
+    # cannot catch the real "not injected" state; it must be judged by content: re-inject if either title or chapter is empty.
     # 添加小说信息
     # 注意守卫语义：novel 字段已 SkipJsonSchema 隐藏，但 default_factory=NovelInfo
     # 让 model_dump 输出必带 {"title":"","chapter":""} 占位。所以判 "key 是否存在"
@@ -112,23 +150,28 @@ def finish_script_document(
             "title": project.get("title", ""),
             "chapter": episode_title(project, int(episode)),
         }
-    # 剥离已废弃的 source_file（AI 可能虚构）
+    # Strip the obsolete source_file (the AI may make it up) / 剥离已废弃的 source_file（AI 可能虚构）
     novel = script_data.get("novel")
     if isinstance(novel, dict):
         novel.pop("source_file", None)
 
+    # Strip script-level generation_mode: the source of truth for generation mode is project.json; the script keeps no marker.
+    # On validation failure script_data is the dict returned by the backend as is (not filtered by the model), and regenerating an
+    # existing script also brings the old value in -- if not deleted here it would go back to disk with the write.
     # 剥离剧本级 generation_mode：生成模式的真相源是 project.json，剧本不留标记。
     # 校验失败时 script_data 是后端原样返回的 dict（未经模型过滤），存量剧本重生成也会
     # 把旧值带进来——不在此处删就会随写盘回到磁盘上。
     script_data.pop("generation_mode", None)
 
-    # 添加时间戳
+    # Add timestamp / 添加时间戳
     now = datetime.now(UTC).isoformat()
     script_data.setdefault("metadata", {})
     script_data["metadata"]["created_at"] = now
     script_data["metadata"]["updated_at"] = now
     script_data["metadata"]["generator"] = generator
 
+    # Strip obsolete episode-level aggregate fields: entry count, total duration and character/scene/prop aggregates are derived
+    # values obtainable by reading the script body; the project summary computes them on read, and storing a copy would only drift from the body.
     # 剥离废弃的 episode 级聚合字段：条目数、总时长与角色/场景/道具聚合都是从剧本正文
     # 逐读即得的派生值，由项目摘要读时计算，落盘一份只会与正文漂移。
     script_data["metadata"].pop("total_scenes", None)
@@ -148,7 +191,14 @@ def build_materialized_script(
     plan_entries: Sequence[Mapping[str, Any]],
     title: str | None,
 ) -> dict[str, Any]:
-    """把脚本规划条目投影成一份整集正式剧本，不写盘、不读脚本规划文件。
+    """Project script plan entries into an episode's final script, without writing to disk or reading the script plan file.
+
+    All entries are pending authoring with an empty visual layer; reference-to-video unit body, duration and source text come from
+    the script plan. The title is ``title`` (only legacy project migration keeps the drama plan title), otherwise the episode
+    ledger title; if the ledger title is empty it stays empty and the display layer derives the episode name from its airing
+    position. Content review always uses the ledger title. Content review and legacy project migration share this one projection.
+
+    把脚本规划条目投影成一份整集正式剧本，不写盘、不读脚本规划文件。
 
     全部条目待编写、视觉层为空；参考生视频的单元正文、时长与对应原文取自脚本规划。标题取 ``title``
     （只有存量项目迁移沿用 drama 规划标题），否则取分集账本标题；账本标题为空时留空，集名由呈现层按播出
@@ -171,7 +221,11 @@ def build_materialized_script(
 
 
 def build_blank_script(project: Mapping[str, Any], episode: int) -> dict[str, Any]:
-    """「从空白开始」的整集正式剧本：按项目两轴定骨架，条目数组为空，不写盘。
+    """The episode's final script for "start from blank": skeleton chosen by the project's two axes, entry array empty, not written to disk.
+
+    The title is the episode ledger title; empty if the ledger title is empty.
+
+    「从空白开始」的整集正式剧本：按项目两轴定骨架，条目数组为空，不写盘。
 
     标题取分集账本标题，账本标题为空时留空。
     """

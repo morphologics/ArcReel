@@ -1,4 +1,20 @@
-"""script_plan 中间态文件名与 episode 剧本路径的单一真相源。
+"""Single source of truth for script_plan intermediate file names and episode script paths.
+
+Content review, status computation, the web draft read/write layer, the script generator and SDK text tools all
+consume the path mapping of this module. When content review cannot find a script_plan file it lets
+prompt_authoring through as ``no_script_plan`` (a missing file is not a failure), so all readers and writers must
+share the same set of file names and directories. A new content_mode using the structured two-stage flow only
+needs its structured file name registered in ``SCRIPT_PLAN_FILENAMES``, and content review, status computation, web
+reading and writing stay consistent.
+
+The following semantic differences must be kept:
+
+- Content review only accepts structured ``.json`` (``SCRIPT_PLAN_FILENAMES`` / ``script_plan_filename``);
+- Status computation and the web read layer additionally accept the old ``.md`` aliases
+  (``SCRIPT_PLAN_LEGACY_FILENAMES`` / ``script_plan_read_candidates``), so existing work in progress is still
+  recognized / browsable; "has it been segmented" and "format migration" are two different things.
+
+script_plan 中间态文件名与 episode 剧本路径的单一真相源。
 
 内容确认、状态计算、web 草稿读写层、剧本生成器与 SDK 文本工具统一消费本模块的路径映射。
 内容确认找不到 script_plan 文件时按 ``no_script_plan`` 放行 prompt_authoring（文件不存在不等于故障），因此所有读写侧
@@ -17,6 +33,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+#: Structured script_plan intermediate file names (by content_mode). Content review only accepts these two.
+#: A new content_mode using the structured two-stage flow is registered here once to keep gate / status computation / web reading / writing consistent.
 #: 结构化 script_plan 中间态文件名（按 content_mode）。内容确认仅认这两类。
 #: 新增走结构化两段式的 content_mode 在此登记一处即可让 gate / 状态计算 / web 读取 / 写盘一致。
 SCRIPT_PLAN_FILENAMES: dict[str, str] = {
@@ -24,6 +42,8 @@ SCRIPT_PLAN_FILENAMES: dict[str, str] = {
     "narration": "script_plan_segments.json",
 }
 
+#: Old unstructured script_plan aliases (by content_mode). Only for status computation / the web read layer to accept existing work in progress;
+#: content review and the writing side do not accept them. New content_modes have no legacy and need no entry here.
 #: 旧版非结构化 script_plan 别名（按 content_mode）。仅供状态计算 / web 读取层兼认存量在制品，
 #: 内容确认与写盘侧不认。新增 content_mode 无历史遗留，无需登记于此。
 SCRIPT_PLAN_LEGACY_FILENAMES: dict[str, tuple[str, ...]] = {
@@ -31,15 +51,24 @@ SCRIPT_PLAN_LEGACY_FILENAMES: dict[str, tuple[str, ...]] = {
     "narration": ("script_plan_segments.md",),
 }
 
+#: Structured script_plan intermediate file name for reference_video. reference_video is a generation_mode dimension,
+#: across content_mode (both narration / drama), so it is not in ``SCRIPT_PLAN_FILENAMES`` keyed by content_mode;
+#: content review includes this file name separately per script_plan variant (see ``lib.script.script_review.script_plan_kind``).
 #: reference_video 的结构化 script_plan 中间态文件名。reference_video 是 generation_mode 维度、
 #: 跨 content_mode（narration / drama 均可），不进按 content_mode 键控的 ``SCRIPT_PLAN_FILENAMES``；
 #: 内容确认按 script_plan 变体单独纳入本文件名（见 ``lib.script.script_review.script_plan_kind``）。
 REFERENCE_VIDEO_SCRIPT_PLAN_FILENAME = "script_plan_reference_units.json"
 
+#: Old free-text script_plan alias for reference_video. Only for the read / browse layer to accept existing work in progress;
+#: the writing and generation sides do not accept it; when only the old ``.md`` exists, the generation side gives an explicit hint to rerun the split.
 #: reference_video 旧版自由文本 script_plan 别名。仅供读取 / 浏览层兼认存量在制品；
 #: 写盘与生成侧不认——仅存在旧 ``.md`` 时生成侧给出重跑拆分的明确提示。
 REFERENCE_VIDEO_SCRIPT_PLAN_LEGACY_FILENAME = "script_plan_reference_units.md"
 
+#: Draft file names. Same directory as the final files, different names: so the final file only ever holds validated content,
+#: while artifacts awaiting handling are not discarded; the Agent edits the draft in place and calls the promotion tool to
+#: re-judge. Both content review and the generation side must recognize these names (a present draft blocks review and
+#: prompt_authoring), so they are kept in one place with the final file names, to avoid either side missing them and silently bypassing the blocking state of a pending draft.
 #: 草稿文件名。与正式文件同目录、不同名：正式文件因此永远只装校验通过的内容，而待
 #: 处置的产物不被丢弃——Agent 就地改草稿再调晋升工具重判。内容确认与生成侧都要认
 #: 这些名字（草稿在场时阻塞确认与 prompt_authoring），故与正式文件名收敛在同一处，避免任一侧
@@ -49,6 +78,11 @@ REFERENCE_VIDEO_PROMPT_AUTHORING_QUARANTINE_FILENAME = "prompt_authoring_referen
 DRAMA_SCRIPT_PLAN_QUARANTINE_FILENAME = "script_plan_normalized_script.invalid.json"
 NARRATION_SCRIPT_PLAN_QUARANTINE_FILENAME = "script_plan_segments.invalid.json"
 
+#: Final script_plan file names that the Agent may not write (see ``AgentAccessPolicy._is_protected_formal_script_plan``).
+#: It holds file names rather than paths resolved by project variant: the write ban must hold before the session is assembled, while a project's content_mode /
+#: generation_mode can change at runtime, and deciding by branching on project state would let projects whose mode changed fall into an unguarded gap.
+#: The criterion is "changes to this variant already have a draft channel": the write ban and the alternative channel come in pairs; rejecting without a way out would
+#: leave the Agent stuck. The final script_plan of all three routes already has a draft channel, so all three file names are in the table.
 #: 对 Agent 写禁的正式 script_plan 文件名（见 ``AgentAccessPolicy._is_protected_formal_script_plan``）。
 #: 收的是文件名而非按项目变体解析的路径：写禁在会话装配前就要成立，而项目的 content_mode /
 #: generation_mode 是运行时可变的，按项目状态分叉判定会让改过模式的项目落进无人拦的缝里。
@@ -60,12 +94,19 @@ AGENT_PROTECTED_SCRIPT_PLAN_FILENAMES: frozenset[str] = frozenset(
 
 
 def script_plan_filename(content_mode: str) -> str | None:
-    """该 content_mode 的结构化 script_plan 文件名；不走结构化 script_plan（如 ad）时返回 None。"""
+    """The structured script_plan file name for this content_mode; returns None when it does not use a structured script_plan (e.g. ad).
+
+    该 content_mode 的结构化 script_plan 文件名；不走结构化 script_plan（如 ad）时返回 None。"""
     return SCRIPT_PLAN_FILENAMES.get(content_mode)
 
 
 def script_plan_read_candidates(content_mode: str) -> tuple[str, ...]:
-    """结构化 script_plan 文件名 + 旧版 ``.md`` 别名（读取 / 浏览侧候选，主文件缺失时回落探测）。
+    """Structured script_plan file name + old ``.md`` alias (read / browse candidates, probed as fallback when the main file is missing).
+
+    Modes that do not use a structured script_plan return an empty tuple. Content review does not use this function
+    (it only accepts structured ``.json``).
+
+    结构化 script_plan 文件名 + 旧版 ``.md`` 别名（读取 / 浏览侧候选，主文件缺失时回落探测）。
 
     不走结构化 script_plan 的模式返回空元组。内容确认不用此函数（只认结构化 ``.json``）。
     """
@@ -76,12 +117,18 @@ def script_plan_read_candidates(content_mode: str) -> tuple[str, ...]:
 
 
 def episode_drafts_dir(project_path: Path, episode: int) -> Path:
-    """该集 script_plan 草稿目录 ``{project}/drafts/episode_N``。"""
+    """The episode's script_plan draft directory ``{project}/drafts/episode_N``. / 该集 script_plan 草稿目录 ``{project}/drafts/episode_N``。"""
     return project_path / "drafts" / f"episode_{episode}"
 
 
 def episode_source_relpath(episode: int) -> str:
-    """该集派生源文相对项目根的路径 ``source/episode_N.txt``。
+    """Path of the episode's derived source relative to the project root: ``source/episode_N.txt``.
+
+    The episode planning tool derives this file from the ledger's ``source_range``; the script_plan generation side
+    reads it by default, and workflow status and artifact fingerprints take the source from the same path; all sides
+    share this function to keep the same rule.
+
+    该集派生源文相对项目根的路径 ``source/episode_N.txt``。
 
     分集规划工具按账本 ``source_range`` 派生该文件；script_plan 生成侧缺省读它、
     工作流状态与产物指纹按同一路径取源文，各侧共享本函数以保持同一口径。
@@ -90,7 +137,12 @@ def episode_source_relpath(episode: int) -> str:
 
 
 def episode_source_path(project_path: Path, episode: int) -> Path:
-    """该集派生源文的绝对路径 ``{project}/source/episode_N.txt``。
+    """Absolute path of the episode's derived source: ``{project}/source/episode_N.txt``.
+
+    The producing side (writing and reconciling derived files in episode planning) takes the path from this function,
+    sharing the same path shape of ``episode_source_relpath`` with the consuming side.
+
+    该集派生源文的绝对路径 ``{project}/source/episode_N.txt``。
 
     生产侧（分集规划的派生文件写盘与对账）按本函数取路径，与消费侧共享
     ``episode_source_relpath`` 的同一份路径形状。
@@ -99,10 +151,14 @@ def episode_source_path(project_path: Path, episode: int) -> Path:
 
 
 def episode_script_filename(episode: int) -> str:
-    """该集剧本文件名 ``episode_N.json``（不含 ``scripts/`` 目录前缀）。"""
+    """The episode's script file name ``episode_N.json`` (without the ``scripts/`` directory prefix).
+
+    该集剧本文件名 ``episode_N.json``（不含 ``scripts/`` 目录前缀）。"""
     return f"episode_{episode}.json"
 
 
 def episode_script_relpath(episode: int) -> str:
-    """该集剧本相对项目根的默认路径 ``scripts/episode_N.json``。"""
+    """Default path of the episode's script relative to the project root: ``scripts/episode_N.json``.
+
+    该集剧本相对项目根的默认路径 ``scripts/episode_N.json``。"""
     return f"scripts/{episode_script_filename(episode)}"

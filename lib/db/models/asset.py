@@ -1,4 +1,4 @@
-"""Asset ORM: 全局资产库条目。"""
+"""Asset ORM: entries of the global asset library. / Asset ORM: 全局资产库条目。"""
 
 from __future__ import annotations
 
@@ -27,7 +27,14 @@ class Asset(TimestampMixin, Base):
 
 
 class AssetDerivative(TimestampMixin, Base):
-    """全局资产库里挂在一条角色资产下的衍生（见 ``docs/adr/0072``）。
+    """Derivatives attached to a character asset in the global asset library (see ``docs/adr/0072``).
+
+    Derivatives move in and out of the asset library together with the base asset: ``from-project`` writes the
+    derivative table of the character entry together with sheets into this table, and ``apply-to-project`` writes them
+    back into the target project's character entry and to disk. Names are unique only within the owning asset, the same
+    rule as the project's derivative table.
+
+    全局资产库里挂在一条角色资产下的衍生（见 ``docs/adr/0072``）。
 
     衍生随本体资产整套进出资产库：``from-project`` 把角色条目里的衍生表连同资产图一起
     写进本表，``apply-to-project`` 再把它们写回目标项目的角色条目并落盘。名字只在所属

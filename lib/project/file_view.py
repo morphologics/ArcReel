@@ -1,4 +1,10 @@
-"""文件视图的只读访问：按目录列出项目文件并标角色，按路径打开单个文件。
+"""Read-only access for the file view: list project files by directory with their roles, open a single file by path.
+
+Paths come from the request and are always resolved as project-relative POSIX paths without following symlinks:
+symlink entries are not listed, and a path with any symlink segment is treated as nonexistent. Infrastructure
+files (see :func:`is_infrastructure_path`) are neither listed nor openable.
+
+文件视图的只读访问：按目录列出项目文件并标角色，按路径打开单个文件。
 
 路径来自请求，一律按项目内相对 POSIX 路径解析，不跟随符号链接：符号链接条目不列出，
 路径上任一段是符号链接时与文件不存在同样处理。基础设施文件（见 :func:`is_infrastructure_path`）
@@ -56,7 +62,10 @@ class FileViewEntry:
 
 
 def _parts(rel: str) -> tuple[str, ...]:
-    """校验请求里的相对路径；空串表示项目根。非法路径按不存在处理。"""
+    """Validate the relative path from the request; an empty string means the project root. Invalid paths are treated
+    as nonexistent.
+
+    校验请求里的相对路径；空串表示项目根。非法路径按不存在处理。"""
     if not rel:
         return ()
     if "\\" in rel or "\x00" in rel or rel.startswith("/"):
@@ -68,7 +77,9 @@ def _parts(rel: str) -> tuple[str, ...]:
 
 
 def _resolve(project_dir: Path, parts: tuple[str, ...]) -> Path:
-    """逐段拒绝符号链接后，再经路径安全工具确认落在项目内。"""
+    """Reject symlinks segment by segment, then confirm via the path-safety helper that it lies within the project.
+
+    逐段拒绝符号链接后，再经路径安全工具确认落在项目内。"""
     lexical = project_dir
     for part in parts:
         lexical /= part
@@ -85,7 +96,10 @@ def _iso(timestamp: float) -> str:
 
 
 def _visible_size(directory: Path, rel: str) -> int:
-    """目录下可见文件的总字节数；不进符号链接，不计基础设施文件。扫描途中被移走的条目不计。"""
+    """Total bytes of visible files under a directory; does not enter symlinks or count infrastructure files. Entries
+    moved away mid-scan are not counted.
+
+    目录下可见文件的总字节数；不进符号链接，不计基础设施文件。扫描途中被移走的条目不计。"""
     try:
         with os.scandir(directory) as scan:
             entries = list(scan)
@@ -105,7 +119,10 @@ def _visible_size(directory: Path, rel: str) -> int:
 
 
 def list_directory(project_dir: Path, rel: str = "", *, index: ReferenceIndex | None = None) -> list[FileViewEntry]:
-    """列出目录的直接子项：目录在前，各自按名称排序。文件带角色，目录带可见内容的总大小。"""
+    """List a directory's direct children: directories first, each group sorted by name. Files carry their role,
+    directories the total size of their visible content.
+
+    列出目录的直接子项：目录在前，各自按名称排序。文件带角色，目录带可见内容的总大小。"""
     parts = _parts(rel)
     directory = _resolve(project_dir, parts)
     if not directory.is_dir():
@@ -119,7 +136,7 @@ def list_directory(project_dir: Path, rel: str = "", *, index: ReferenceIndex | 
                 continue
             try:
                 info = entry.stat(follow_symlinks=False)
-            except FileNotFoundError:  # 生成任务或回收站操作在扫描途中移走了它
+            except FileNotFoundError:  # a generation task or trash operation moved it away mid-scan / 生成任务或回收站操作在扫描途中移走了它
                 continue
             if entry.is_dir(follow_symlinks=False):
                 size = _visible_size(Path(entry.path), child)
@@ -134,7 +151,10 @@ def list_directory(project_dir: Path, rel: str = "", *, index: ReferenceIndex | 
 
 
 def open_project_file(project_dir: Path, rel: str) -> tuple[BinaryIO, os.stat_result]:
-    """以不跟随符号链接的方式打开项目内的普通文件，返回句柄与它的 stat。调用方负责关闭句柄。"""
+    """Open a regular file in the project without following symlinks; return the handle and its stat. The caller closes
+    the handle.
+
+    以不跟随符号链接的方式打开项目内的普通文件，返回句柄与它的 stat。调用方负责关闭句柄。"""
     parts = _parts(rel)
     if not parts:
         raise FileNotFoundError(rel)
@@ -153,7 +173,10 @@ def open_project_file(project_dir: Path, rel: str) -> tuple[BinaryIO, os.stat_re
 
 
 def _open_nofollow_posix(project_dir: Path, parts: tuple[str, ...]) -> int:
-    """逐级用 ``O_NOFOLLOW`` 打开目录与文件，校验与打开之间不留被换成符号链接的窗口。"""
+    """Open directories and the file level by level with ``O_NOFOLLOW``, leaving no window between check and open for a
+    swap to a symlink.
+
+    逐级用 ``O_NOFOLLOW`` 打开目录与文件，校验与打开之间不留被换成符号链接的窗口。"""
     flags = os.O_RDONLY | _O_DIRECTORY | _O_NOFOLLOW
     try:
         directory_fd = os.open(project_dir, flags)
@@ -172,7 +195,10 @@ def _open_nofollow_posix(project_dir: Path, parts: tuple[str, ...]) -> int:
 
 
 def _open_checked(project_dir: Path, parts: tuple[str, ...]) -> int:
-    """没有 ``dir_fd`` / ``O_NOFOLLOW`` 的平台：先逐段预检，打开后再比对文件身份。"""
+    """Platforms without ``dir_fd`` / ``O_NOFOLLOW``: pre-check segment by segment first, then compare file identity
+    after opening.
+
+    没有 ``dir_fd`` / ``O_NOFOLLOW`` 的平台：先逐段预检，打开后再比对文件身份。"""
     path = _resolve(project_dir, parts)
     fd = os.open(path, os.O_RDONLY | getattr(os, "O_BINARY", 0))
     opened, current = os.fstat(fd), os.lstat(path)
@@ -183,7 +209,13 @@ def _open_checked(project_dir: Path, parts: tuple[str, ...]) -> int:
 
 
 def move_file_to_trash(project_dir: Path, rel: str) -> project_trash.TrashRecord:
-    """把一个未引用文件或历史版本移进项目回收站，成为一条只含它的删除记录。
+    """Move an unreferenced file or historical version into the project trash as a deletion record containing only it.
+
+    Rebuilds the reference index under the project lock before deciding: historical versions are deleted through
+    version management (the current version is refused), all other roles are refused; source files not included in
+    the whole source are left to the episode view.
+
+    把一个未引用文件或历史版本移进项目回收站，成为一条只含它的删除记录。
 
     在项目锁内重建引用索引再判定：历史版本经版本管理删除（当前版本拒绝），其余角色一律拒绝；未纳入整本源文的源文件交给分集视图处理。
     """
@@ -203,7 +235,9 @@ def move_file_to_trash(project_dir: Path, rel: str) -> project_trash.TrashRecord
 
 
 def iter_file_chunks(handle: BinaryIO, chunk_size: int = 1024 * 1024) -> Iterator[bytes]:
-    """逐块读出并在结束时关闭句柄；供流式响应在工作线程里迭代。"""
+    """Read chunk by chunk and close the handle at the end; for streaming responses to iterate in a worker thread.
+
+    逐块读出并在结束时关闭句柄；供流式响应在工作线程里迭代。"""
     with handle:
         while chunk := handle.read(chunk_size):
             yield chunk

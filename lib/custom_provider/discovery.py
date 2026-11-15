@@ -1,4 +1,6 @@
-"""自定义供应商模型发现（按 discovery_format 选 SDK；返回 endpoint）。"""
+"""Custom provider model discovery (picks the SDK by discovery_format; returns endpoint).
+
+自定义供应商模型发现（按 discovery_format 选 SDK；返回 endpoint）。"""
 
 from __future__ import annotations
 
@@ -20,12 +22,14 @@ from lib.custom_provider.model_facts import matched_entry_summary
 
 logger = logging.getLogger(__name__)
 
-#: Anthropic 协议模型列表请求的 I/O 超时。
+#: I/O timeout of the Anthropic protocol model list request. / Anthropic 协议模型列表请求的 I/O 超时。
 _DISCOVERY_TIMEOUT_SECONDS = 15.0
 
 
 class UnsupportedDiscoveryFormatError(ValueError):
-    """discovery_format 取值不在受支持集合内，与 SDK 调用期的凭证/网络类 ValueError 区分。"""
+    """discovery_format value is not in the supported set; distinct from credential/network ValueErrors during SDK calls.
+
+    discovery_format 取值不在受支持集合内，与 SDK 调用期的凭证/网络类 ValueError 区分。"""
 
 
 async def discover_models(
@@ -34,7 +38,12 @@ async def discover_models(
     base_url: str | None,
     api_key: str,
 ) -> list[dict]:
-    """查询供应商可用模型列表，每项标注 endpoint。
+    """Query the provider's available model list, each item marked with an endpoint.
+
+    Returns:
+        list of dict: model_id, display_name, endpoint, is_default, is_enabled
+
+    查询供应商可用模型列表，每项标注 endpoint。
 
     Returns:
         list of dict: model_id, display_name, endpoint, is_default, is_enabled
@@ -93,7 +102,24 @@ async def _discover_google(base_url: str | None, api_key: str) -> list[dict]:
 
 
 async def _discover_anthropic(base_url: str | None, api_key: str) -> list[dict]:
-    """Anthropic 协议 GET {base_url}/v1/models 发现可用模型。
+    """Discover available models via Anthropic protocol GET {base_url}/v1/models.
+
+    base_url is the same value as the Agent call address, sub-paths not stripped: when a gateway mounts the Claude protocol under
+    a sub-path like /anthropic, the model list is under the same sub-path.
+
+    The outbound destination is checked via ``artifact_http_client``, the same gate as artifact download: link-local and cloud
+    metadata addresses are always rejected, loopback and private networks allowed (self-hosted gateways legitimately run there).
+    Hostname resolution for this check is outside the client's I/O timeout budget; when resolution fails a request may wait up to
+    ``DNS_RESOLVE_TIMEOUT_SECONDS`` more.
+
+    Returned dicts have the same shape as the OpenAI/Google paths, but the endpoint field is an empty string
+    (anthropic does not take part in ENDPOINT_REGISTRY dispatch; the frontend only reads model_id).
+
+    Raises:
+        InvalidAnthropicBaseUrlError: base_url contains query / fragment / userinfo or is not an absolute http(s) address.
+        ArtifactDestinationRejectedError: the target scheme or resolved address is outside the allowed range.
+
+    Anthropic 协议 GET {base_url}/v1/models 发现可用模型。
 
     base_url 与 Agent 调用地址同一个值，不剥子路径：网关把 Claude 协议挂在
     /anthropic 等子路径下时，模型列表也在同一子路径下。
@@ -114,6 +140,7 @@ async def _discover_anthropic(base_url: str | None, api_key: str) -> list[dict]:
     async with artifact_http_client(timeout=_DISCOVERY_TIMEOUT_SECONDS) as client:
         resp = await client.get(url, headers=anthropic_auth_headers(api_key))
         if resp.status_code == 401:
+            # Some gateways (Volcengine Ark) only accept Authorization: Bearer and always 401 on x-api-key
             # 部分网关（火山方舟）只认 Authorization: Bearer，对 x-api-key 一律 401
             resp = await client.get(url, headers=anthropic_auth_headers(api_key, bearer=True))
     raise_for_status_redacted(resp)
@@ -137,7 +164,13 @@ async def _discover_anthropic(base_url: str | None, api_key: str) -> list[dict]:
 def match_discovered_model(
     model_id: str, discovery_format: str, media_type: str | None = None
 ) -> tuple[CatalogEntry | None, str]:
-    """获取到的模型 ID 对应的条目与默认调用端点（docs/adr/0105）。
+    """Entry and default call endpoint for a fetched model ID (docs/adr/0105).
+
+    There is no call endpoint yet, so first match the entry without restricting media type; when an amphibious model doesn't
+    match that way, match by ``media_type``, or when not given, by the media type inferred from the name. For a matched entry, pick
+    an endpoint within the entry's media type; for no match, infer both media type and endpoint from the name.
+
+    获取到的模型 ID 对应的条目与默认调用端点（docs/adr/0105）。
 
     还没有调用端点，先不限媒体类型对应条目；两栖模型这样对应不上，再按 ``media_type`` 取，没给时按名字推断的
     媒体类型取。对应上条目的，在条目的媒体类型内选端点；对应不上的，按名字同时推断媒体类型与端点。
@@ -153,7 +186,13 @@ def match_discovered_model(
 def _build_result_list(
     model_ids: list[str], discovery_format: str, *, output_limits: Mapping[str, int] | None = None
 ) -> list[dict]:
-    """每个模型带上对应的条目摘要与默认调用端点；每个媒体类型的首项为 default。
+    """Each model carries its matching entry summary and default call endpoint; the first item of each media type is the default.
+
+    ``output_limits`` are the model max output lengths given by the protocol, only for text models; None when not given.
+    ``endpoint_by_media_type`` are the default endpoints per media type when switched to an entry of another media type, so the
+    fetch-models dialog can switch endpoint after the user picks a "matching model".
+
+    每个模型带上对应的条目摘要与默认调用端点；每个媒体类型的首项为 default。
 
     ``output_limits`` 是协议给出的模型最大输出长度，只对文本模型给出；没有给出时为 None。
     ``endpoint_by_media_type`` 是改为对应其他媒体类型的条目时各媒体类型下的默认端点，供获取模型对话框在
@@ -175,7 +214,7 @@ def _build_result_list(
                 "is_default": is_default,
                 "is_enabled": True,
                 "max_output_tokens": (output_limits or {}).get(model_id) if media == "text" else None,
-                # 对应不上为 None，添加后费用记为未定价。
+                # None when nothing matches; after adding, cost is recorded as unpriced. / 对应不上为 None，添加后费用记为未定价。
                 "matched_entry": matched_entry_summary(model_id, media) if entry is not None else None,
                 "recognized": entry is not None,
                 "endpoint_by_media_type": {m: infer_endpoint(model_id, discovery_format, m) for m in MEDIA_TYPES},

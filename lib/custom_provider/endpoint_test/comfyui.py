@@ -1,4 +1,20 @@
-"""ComfyUI 端点在端点测试里的两种模式：预览请求与测试连接。
+"""Two modes of ComfyUI endpoints in endpoint testing: preview request and test connection.
+
+The preview request renders exactly the request body the runtime would POST to ``/prompt`` -- the same
+:func:`build_workflow`, the same ``auth`` rendering, the same ``client_id`` shape; there are only three differences,
+none of which change semantics: credentials enter ``auth`` rendering as masked values, materials are replaced by
+size summaries (preview does not upload, and the reference names the server knows only exist in the upload
+response), and ``prompt_id`` stays a placeholder. The three substitutions on the declarative side correspond to these
+one to one.
+
+Besides the request body, a conversion explanation is attached: size, frame count, seed and "which nodes this graph
+adjustment deleted" are all computed, and a JSON of dozens of nodes alone cannot answer "how many pixels did the
+720p I picked actually become".
+
+"Check response" is not here -- ComfyUI artifact extraction reads three fixed keys of the node bound to ``output``,
+with no user-configurable value path to check (``docs/adr/0081``); the mode matrix in :mod:`.modes` already blocks it.
+
+ComfyUI 端点在端点测试里的两种模式：预览请求与测试连接。
 
 预览请求渲染的是运行时真会 POST 给 ``/prompt`` 的那一份请求体——同一个 :func:`build_workflow`、
 同一份 ``auth`` 渲染、同一个 ``client_id`` 形状，差别只有三处且都不改语义：凭证以打码值进
@@ -39,36 +55,45 @@ from .preview import (
 )
 from .trial_run import TrialRunTarget, provider_from_base_url
 
+#: Values that only exist after submission: preview always keeps the placeholder, same shape as ``{{ task_id }}`` on the declarative side.
 #: 提交之后才有的值：预览恒保持占位符，与声明式那一侧的 ``{{ task_id }}`` 同形。
 UNRESOLVED_PROMPT_ID = "{{ prompt_id }}"
 
-#: 测试连接发出的那一笔在 ComfyUI 上的名字前缀，接一段随机后缀。
+#: Name prefix on ComfyUI of the job sent by test connection, followed by a random suffix. / 测试连接发出的那一笔在 ComfyUI 上的名字前缀，接一段随机后缀。
 _TRIAL_RUN_LABEL_PREFIX = "endpoint-test-"
 
 
 @dataclass(frozen=True)
 class ComfyuiConversions:
-    """预览请求附的换算说明：这份 workflow 里的几个值是怎么从一次生成请求算出来的。
+    """Conversion explanation attached to the preview request: how several values in this workflow are computed from one generation request.
+
+    ``width`` / ``height`` / ``frames`` / ``seed`` being ``None`` means that dimension does not drive this workflow
+    (unbound, or the size dimension is bound on only one side and therefore fixed), and the literal values in the
+    workflow are kept as is -- exactly the cell the user most needs to see: the resolution they picked on the project
+    page has no effect on this endpoint at all.
+
+    预览请求附的换算说明：这份 workflow 里的几个值是怎么从一次生成请求算出来的。
 
     ``width`` / ``height`` / ``frames`` / ``seed`` 为 ``None`` 表示这一维没有驱动这份 workflow
     （未绑定，或尺寸这一维只绑了一侧因而判为固定），workflow 里的字面值原样保留——这正是用户最
     需要看见的一格：他在项目页选的分辨率对这个端点根本不起作用。
     """
 
+    #: Fingerprint of the workflow actually sent, the same value recorded in the final video version metadata, so one can check which graph a version came from.
     #: 实发 workflow 的指纹，与成片版本元数据里记的是同一个值，可据此核对某一版是照哪份图出的。
     workflow_sha256: str
-    #: 换算的输入：请求侧的比例、分辨率档与时长。
+    #: Conversion inputs: aspect ratio, resolution tier and duration on the request side. / 换算的输入：请求侧的比例、分辨率档与时长。
     aspect_ratio: str
     resolution: str | None
     duration_seconds: float | None
-    #: 换算的产物：填进 workflow 的像素、帧数与种子。
+    #: Conversion outputs: pixels, frame count and seed filled into the workflow. / 换算的产物：填进 workflow 的像素、帧数与种子。
     width: int | None
     height: int | None
     frames: int | None
     seed: int | None
-    #: 从正文里拆出、写进负向节点的排除项文本。
+    #: Exclusion text split out of the prompt body and written into the negative node. / 从正文里拆出、写进负向节点的排除项文本。
     negative_prompt: str
-    #: 这次按参考图张数改图删掉的节点。空元组即没删。
+    #: Nodes deleted by this graph adjustment for the reference image count. Empty tuple means none deleted. / 这次按参考图张数改图删掉的节点。空元组即没删。
     dropped_nodes: tuple[str, ...]
 
     @classmethod
@@ -111,7 +136,19 @@ def preview_comfyui_request(
     path_overrides: PathOverrides = NO_PATH_OVERRIDES,
     rng: Random | None = None,
 ) -> RequestPreview:
-    """渲染 ``POST /prompt`` 的请求体与随它的换算说明。定义须已过共享校验器。
+    """Render the request body of ``POST /prompt`` with its conversion explanation. The definition must already have passed the shared validator.
+
+    The polling section is given too (``GET /history/{prompt_id}``): it carries the same credentials as submission, and
+    ComfyUI is mostly behind a reverse proxy, so what the user wants to check is "will this set of headers be sent
+    unchanged on every route". The artifact download section is not given -- the query parameters of ``/view`` are only
+    known after the artifact entry comes back, and inventing a filename is not a preview.
+
+    ComfyUI endpoints do not allow path overrides (``docs/adr/0101``), ``path_overrides`` is always empty.
+
+    ``rng`` is the injection point of the random seed, the same seam as :func:`build_workflow`; entries with
+    ``policy: random`` produce a new seed on every preview, which is exactly what will happen on a real submission.
+
+    渲染 ``POST /prompt`` 的请求体与随它的换算说明。定义须已过共享校验器。
 
     轮询那一节一并给出（``GET /history/{prompt_id}``）：它与提交带的是同一份凭据，而 ComfyUI
     多半套在反向代理后面，用户要核的正是「这组头会不会原样发到每一条路由上」。产物下载那一节
@@ -130,6 +167,7 @@ def preview_comfyui_request(
         prompt=parameters.prompt,
         aspect_ratio=parameters.aspect_ratio,
         resolution=parameters.resolution,
+        # Duration is passed through unchanged, same handling as the backend: when ``frames`` is unbound or the frame rate cannot be read, the builder skips the conversion itself.
         # 时长原样转交，与 backend 同一处置：``frames`` 未绑定或读不到帧率时构造层自己跳过换算。
         duration_seconds=parameters.duration_seconds,
         media=_preview_media(definition, assets, placeholder_missing=placeholder_missing_assets),
@@ -140,6 +178,8 @@ def preview_comfyui_request(
             method="POST",
             url=_preview_url(base_url, "/prompt", query),
             headers=dict(headers),
+            # ``client_id`` uses the same construction as a real send: the preview must show the shape of the real send, and this
+            # string is exactly the mark by which the user recognises ArcReel in the ComfyUI queue UI.
             # ``client_id`` 与真发同一个构造：预览给出的必须是真发的那个形状，而这一串正是用户
             # 在 ComfyUI 队列界面上认 ArcReel 的记号。
             body={"prompt": built.workflow, "client_id": client_id_for(UNRESOLVED_PROMPT_ID)},
@@ -156,7 +196,16 @@ def preview_comfyui_request(
 
 
 def comfyui_credential_needs(definition: Mapping[str, Any]) -> tuple[bool, bool]:
-    """这份定义要不要 ``base_url`` / ``api_key``。
+    """Whether this definition needs ``base_url`` / ``api_key``.
+
+    ``base_url`` is always needed: all ComfyUI routes are under the service root, and the definition contains no
+    absolute address. ``api_key`` is only needed when the ``auth`` section will actually send credentials -- ComfyUI has
+    no native auth, credentials only exist for deployments behind a reverse proxy. "Non-empty" is judged by whether the
+    two tables have entries (:func:`declares_credentials`), not by the ``auth`` object itself: ``{"headers": {}}`` is a
+    valid definition that renders no header at all, and demanding an api_key for it would lock an unprotected ComfyUI
+    out of preview and test connection.
+
+    这份定义要不要 ``base_url`` / ``api_key``。
 
     ``base_url`` 恒需要：ComfyUI 的路由全在服务地址根下，定义里一个绝对地址都不写。``api_key``
     只在 ``auth`` 节真会发出凭据时需要——ComfyUI 原生无鉴权，凭据只有套在反向代理后面的部署才
@@ -174,7 +223,21 @@ def comfyui_target(
     *,
     provider: str | None = None,
 ) -> TrialRunTarget:
-    """内联 ComfyUI 定义的目标：按定义声明的媒体类型构造 backend，跑的是生产那一条路。
+    """Target for an inline ComfyUI definition: build the backend by the media type the definition declares, running the production path.
+
+    Both kinds of endpoint take the same path: the image endpoint backend is fully isomorphic to the video one except
+    for request / result types (submit, poll, fetch and stop all live in the shared execution layer), so here only the
+    class is swapped by ``media_type``, without a separate test path for images.
+
+    The capability gate is not run (see :attr:`TrialRunTarget.gate_capabilities`): ComfyUI endpoints have a fixed cost
+    of 0, and capabilities are only derived from node bindings, while the inline definition entry point has no derived
+    result.
+
+    The result body does not contain the rendered submit request: the random seed and material reference names of the
+    workflow actually sent are only fixed at the moment of submission, and putting a preview into the result would make
+    the user think that is what was submitted. For the request shape, see the preview request card.
+
+    内联 ComfyUI 定义的目标：按定义声明的媒体类型构造 backend，跑的是生产那一条路。
 
     两类端点走同一条路：图像端点的 backend 与视频端点的除请求 / 结果类型外完全同构（提交、轮询、
     取件、叫停都在共用的执行层上），故这里只按 ``media_type`` 换一个类，不为图像另开一条测试路径。
@@ -187,6 +250,11 @@ def comfyui_target(
     """
     label = provider or provider_from_base_url(credentials.base_url)
     media_type = str(definition.get("media_type") or "video")
+    # The name of this job in the ComfyUI queue UI (``client_id`` is ``arcreel-<job_label>``, and uploaded materials are
+    # named after it too). Test connection does not go through a worker and has no task_id; the backend's fallback is a
+    # random hex string -- the user could not tell which job in their own manually run queue is the "test connection" they
+    # just clicked. A random part is kept in the suffix: the same endpoint can be tested several times in a row, and name
+    # clashes would make uploaded materials overwrite each other.
     # 这一笔在 ComfyUI 队列界面上的名字（``client_id`` 是 ``arcreel-<job_label>``，上传的素材
     # 也按它命名）。测试连接不走 worker，没有 task_id，backend 的回落值是一串随机 hex——用户
     # 在自己手动跑的队列里认不出哪一笔是刚点的「测试连接」。后缀保留一段随机串：同一个端点可以
@@ -215,7 +283,9 @@ def comfyui_target(
 
 
 def _preview_url(base_url: str, path: str, query: Mapping[str, str]) -> str:
-    """一条路由的预览地址。凭证缺席时主机段保持占位符，请求形状不因此塌掉。"""
+    """Preview URL of one route. When credentials are absent the host part stays a placeholder, so the request shape does not collapse.
+
+    一条路由的预览地址。凭证缺席时主机段保持占位符，请求形状不因此塌掉。"""
     url = f"{base_url or UNRESOLVED_BASE_URL}{path}"
     return restore_mask_in_url(f"{url}?{urlencode(query)}") if query else url
 
@@ -226,7 +296,16 @@ def _preview_media(
     *,
     placeholder_missing: bool,
 ) -> MediaInputs:
-    """把素材换成摘要填进读图节点。
+    """Replace materials with summaries and fill them into image-loading nodes.
+
+    When ``placeholder_missing`` is True (standalone preview), slots that are bound but not uploaded get placeholder
+    summaries per declaration: leaving them empty would make the graph adjustment step delete these image-loading nodes
+    with their downstream, and the preview would show a graph missing half its chain, while on a real send the user
+    would include the materials. Reference images are filled only by the **number actually uploaded** -- fewer images
+    than slots is exactly the input that triggers graph adjustment; which nodes were deleted is given in the conversion
+    explanation, and this is precisely what the preview should make clear.
+
+    把素材换成摘要填进读图节点。
 
     ``placeholder_missing`` 为 True 时（独立预览），绑定了却没上传的格子按声明生成占位摘要：
     留空会让改图那一步把这些读图节点连同下游删掉，预览出来的就是一份缺了半条链路的图，而真发时

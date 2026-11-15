@@ -1,4 +1,16 @@
-"""MP4 faststart：把 moov 挪到 mdat 之前，浏览器拿到文件头即可开播与拖动进度。
+"""MP4 faststart: move moov before mdat so browsers can start playback and seek as soon as they have the file head.
+
+Provider final videos and user-uploaded videos often put moov (the index) at the end of the file: the encoder
+accumulates the index while writing mdat and writes moov only at the end. For such files the browser must first make
+a Range request to the file end to get the index before playback can start.
+
+The check only reads top-level box headers (8~16 bytes each), no ffmpeg run; when needed, the bundled ffmpeg remuxes
+with ``-c copy -movflags +faststart`` (no re-encode) and the original file is replaced atomically.
+
+Always best effort: bundled ffmpeg unavailable, remux failure or timeout all keep the original file and log, without
+failing generation or upload; only cancellation propagates as usual.
+
+MP4 faststart：把 moov 挪到 mdat 之前，浏览器拿到文件头即可开播与拖动进度。
 
 供应商成片与用户上传的视频常把 moov（索引）写在文件末尾：编码器边写 mdat 边累积索引，
 写完才落 moov。这样的文件浏览器要先 Range 请求到文件尾取回索引才能开播。
@@ -27,12 +39,15 @@ from lib.infra.subprocess_deadline import DEFAULT_TERMINATE_GRACE_SECONDS, Spawn
 
 logger = logging.getLogger(__name__)
 
+#: Extensions that get faststart: mp4 / mov / m4v all belong to the ISO BMFF container family
 #: 走 faststart 的扩展名：mp4 / mov / m4v 同属 ISO BMFF 容器家族
 FASTSTART_SUFFIXES: frozenset[str] = frozenset({".mp4", ".mov", ".m4v"})
 
+#: Remux only copies streams, time depends on disk throughput; leaves ample headroom for the 2 GiB artifact limit too
 #: 重封装只拷贝码流，耗时取决于磁盘吞吐；产物上限 2 GiB 也留足余量
 DEFAULT_REMUX_DEADLINE_SECONDS = 300.0
 
+#: Top-level box traversal limit: normal files have only a few top-level boxes; exceeding it counts as unrecognizable, no processing
 #: 顶层 box 遍历上限：正常文件只有寥寥几个顶层 box，超出即视为无法识别，不做处理
 _MAX_TOP_LEVEL_BOXES = 4096
 
@@ -43,7 +58,7 @@ _QUICKTIME_BRAND = b"qt  "
 
 @dataclass(frozen=True, slots=True)
 class Mp4Layout:
-    """顶层 box 的布局结论。"""
+    """Layout verdict of the top-level boxes. / 顶层 box 的布局结论。"""
 
     major_brand: bytes | None
     """``ftyp`` 的主品牌；首个 box 不是 ``ftyp``（老式 QuickTime）时为 None。"""
@@ -52,14 +67,16 @@ class Mp4Layout:
 
     @property
     def muxer(self) -> str:
-        """重封装用的 ffmpeg 封装器：QuickTime 仍封成 mov，其余封成 mp4。"""
+        """ffmpeg muxer for the remux: QuickTime stays mov, everything else becomes mp4. / 重封装用的 ffmpeg 封装器：QuickTime 仍封成 mov，其余封成 mp4。"""
         if self.major_brand is None or self.major_brand == _QUICKTIME_BRAND:
             return "mov"
         return "mp4"
 
 
 def _read_box_header(handle: BinaryIO, offset: int, file_size: int) -> tuple[bytes, int] | None:
-    """读取 ``offset`` 处的 box 头，返回 (类型, box 总长)；头不完整或长度非法返回 None。"""
+    """Read the box header at ``offset``, return (type, total box length); return None for an incomplete header or invalid length.
+
+    读取 ``offset`` 处的 box 头，返回 (类型, box 总长)；头不完整或长度非法返回 None。"""
     handle.seek(offset)
     header = handle.read(_BOX_HEADER_BYTES)
     if len(header) < _BOX_HEADER_BYTES:
@@ -74,7 +91,7 @@ def _read_box_header(handle: BinaryIO, offset: int, file_size: int) -> tuple[byt
         if size < _BOX_HEADER_BYTES + _LARGE_SIZE_BYTES:
             return None
     elif size == 0:
-        # 0 表示一直延伸到文件尾
+        # 0 means it extends to the end of the file / 0 表示一直延伸到文件尾
         size = file_size - offset
     elif size < _BOX_HEADER_BYTES:
         return None
@@ -90,7 +107,12 @@ def _read_major_brand(handle: BinaryIO, offset: int) -> bytes | None:
 
 
 def read_mp4_layout(path: Path) -> Mp4Layout | None:
-    """解析顶层 box，判断 moov 是否在 mdat 之前。
+    """Parse top-level boxes and decide whether moov comes before mdat.
+
+    Returns None when the file is not recognizable ISO BMFF (truncated box header, length out of range) or lacks moov /
+    mdat, and the caller then does nothing. Synchronous blocking read; async callers run it in a thread.
+
+    解析顶层 box，判断 moov 是否在 mdat 之前。
 
     文件不是可识别的 ISO BMFF（box 头残缺、长度越界）或缺少 moov / mdat 时返回 None，
     调用方据此不做任何处理。同步阻塞读，异步调用方放进线程。
@@ -109,6 +131,7 @@ def read_mp4_layout(path: Path) -> Mp4Layout | None:
                 return None
             box_type, size = parsed
             if index == 0 and box_type == b"ftyp" and size >= _BOX_HEADER_BYTES + 4:
+                # major brand follows the box header directly; if it doesn't fit, treat as absent, don't read past into the next box
                 # major brand 紧跟 box 头；装不下时视为没有，不越界读后一个 box
                 major_brand = _read_major_brand(handle, offset)
             elif box_type == b"moov" and moov_index is None:
@@ -129,7 +152,16 @@ async def ensure_faststart(
     resolve_ffmpeg: Callable[[], str] = ffmpeg_executable,
     spawn: Spawner | None = None,
 ) -> bool:
-    """moov 在 mdat 之后时，就地把 ``path`` 重封装为 faststart；返回是否发生了替换。
+    """When moov is after mdat, remux ``path`` to faststart in place; return whether a replacement happened.
+
+    The remux first writes a unique temp file in the same dir and only atomically replaces ``path`` after verifying the
+    output really has moov first; any failure keeps the original file, deletes the temp file and logs. ``path`` may have
+    no extension (e.g. a downloading ``.part``); the muxer format is set explicitly from the ``ftyp`` brand.
+
+    Raises:
+        asyncio.CancelledError: the task was cancelled; subprocess and temp file are cleaned up, the original file is unchanged.
+
+    moov 在 mdat 之后时，就地把 ``path`` 重封装为 faststart；返回是否发生了替换。
 
     重封装先写同目录的唯一临时文件，校验产物确实 moov 在前后才原子替换 ``path``；
     任何失败都保留原文件、删除临时文件并记日志。``path`` 可以没有扩展名（如下载中的 ``.part``），
@@ -192,9 +224,10 @@ async def ensure_faststart(
         logger.warning("faststart 重封装出错，保留原文件: %s", path, exc_info=True)
         return False
     finally:
+        # A cleanup failure (e.g. temp file held by another process) is only logged, so the best-effort remux doesn't raise or mask cancellation
         # 清理失败（如临时文件被其他进程占用）只记日志，不让尽力而为的重封装抛错或盖过取消
         try:
-            # hard-delete: temp -- faststart 重封装的临时文件
+            # hard-delete: temp -- temp file of the faststart remux / faststart 重封装的临时文件
             await run_sync_transaction(temp_path.unlink, missing_ok=True)
         except OSError:
             logger.warning("faststart 临时文件清理失败: %s", temp_path, exc_info=True)

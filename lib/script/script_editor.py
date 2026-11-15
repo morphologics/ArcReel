@@ -1,4 +1,17 @@
-"""剧本编辑核心（纯函数）。
+"""Script editing core (pure functions).
+
+Converges "how to safely edit a script dict by id" into one place: feed a script dict + one edit operation, it modifies the
+dict in place and returns it, or raises `ScriptEditError` for illegal operations (id not found, array out of range, too few
+split parts, field path does not exist). **No disk reads, no dependency on project state, no structural well-formedness
+check** -- structural validity is guaranteed by the unified write entry `_write_script_unlocked` ("not worse" + Pydantic
+models); this module only does array surgery, id allocation and asset invalidation. MCP tools and tests both reuse it.
+
+Telling apart the entry array and id field of the four script skeletons (segments/scenes/shots/video_units) is delegated to
+`script_skeleton.resolve_kind_items` (the single entry point for skeleton entry access); `resolve_items` adds the editing core's
+own fail-loud validation policy on top; it shares the same evidence-based resolution with `script_structure_validator._select_model`
+and the metadata recomputation of the unified write entry, avoiding drift across places.
+
+剧本编辑核心（纯函数）。
 
 把「如何按 id 安全地编辑一份剧本 dict」收敛到唯一一处：喂入剧本 dict + 一个编辑操作，
 就地改 dict 并返回它，或对非法操作（id 未命中、数组越界、拆分份数不足、字段路径不存在）
@@ -26,7 +39,14 @@ logger = logging.getLogger(__name__)
 
 
 class ScriptEditError(ValueError):
-    """剧本编辑操作非法（id 未命中、数组越界、拆分份数不足、字段路径不存在等）。
+    """Illegal script edit operation (id not found, array out of range, too few split parts, field path does not exist, etc.).
+
+    ``key``/``params`` are translation coordinates for user-visible paths: raise points whose error goes back to the end user via
+    an HTTP route must pass a concrete ``key`` explicitly, and the server renders it per the request ``Accept-Language``, instead
+    of embedding the fixed-Chinese ``str(self)`` in a translated response template. Raise points consumed only by MCP tools and
+    logs are Agent-facing and exempt from i18n per CLAUDE.md; they can keep the default key (rendered as generic fallback copy).
+
+    剧本编辑操作非法（id 未命中、数组越界、拆分份数不足、字段路径不存在等）。
 
     ``key``/``params`` 是给用户可见路径准备的翻译坐标：会经 HTTP 路由回传终端用户的 raise 点
     必须显式传具体 ``key``，服务端按请求 ``Accept-Language`` 渲染，而不是把固定中文的
@@ -41,7 +61,19 @@ class ScriptEditError(ValueError):
 
 
 def resolve_items(script: dict[str, Any], *, kind: str | None = None) -> tuple[list[Any], str, str]:
-    """按剧本骨架选出当前剧本的条目数组、其 id 字段名与种类。
+    """Select the current script's entry array, its id field name and kind by script skeleton.
+
+    Returns ``(items, id_field, kind)``: ``kind`` ∈ {"segments", "scenes", "shots", "video_units"}.
+    Looking up the key and id field is delegated to `script_skeleton.resolve_kind_items` (the single entry point for skeleton
+    entry access, same evidence-based resolution); when ``kind`` is given explicitly by the caller (e.g. the generation mode fixed
+    when a task starts), evidence resolution is skipped and values are taken for that kind directly. This function adds the
+    editing core's own validation policy on top of the raw return value: a **missing key** counts as an empty array; when the
+    **key exists but the type is not list (including null)** it fails loud with `ScriptEditError` (no silent downgrade to [],
+    to avoid hiding data corruption as "id not found" -- corruption like `"segments": null` is exposed instead of being treated
+    as an empty draft).
+    When the key exists, the returned list is the actual reference inside script (in-place edits take effect).
+
+    按剧本骨架选出当前剧本的条目数组、其 id 字段名与种类。
 
     返回 ``(items, id_field, kind)``：``kind`` ∈ {"segments", "scenes", "shots", "video_units"}。
     键与 id 字段的查法委托给 `script_skeleton.resolve_kind_items`（骨架条目访问的唯一入口，
@@ -77,20 +109,27 @@ def _set_nested(obj: dict[str, Any], field_path: str, value: Any) -> None:
     if not parts or any(not p for p in parts):
         raise ScriptEditError(f"非法字段路径: {field_path!r}")
     if parts[0] == "generated_assets":
+        # patch is a pure field setter; asset lifecycle is decoupled from script editing (see ADR-0003).
         # patch 是纯字段 setter，资产生命周期与剧本编辑解耦（见 ADR-0003）。
         raise ScriptEditError("patch_episode_script 不可改 generated_assets；资产的生成/重生是独立的显式动作")
     if parts[0] == "needs_replan":
         raise ScriptEditError("patch_episode_script 不可直接改重规划标记；修改 unit 规划内容后由系统重算")
     if parts[0] == PENDING_AUTHORING_FIELD:
+        # The pending-authoring marker follows whether the visual layer is complete; allowing patch would disguise an entry missing its visual layer as authored.
         # 待编写标记随视觉层是否写齐变化；放行 patch 会让缺视觉层的条目被伪装成已编写。
         raise ScriptEditError(
             f"patch_episode_script 不可改 {PENDING_AUTHORING_FIELD}；它由新增条目置位，写齐视觉层或提示词编写写回时清除"
         )
     if parts[0] == "end_frame_image":
+        # The end frame field's value is a snapshot relative path written by this service, written only by the end frame set/clear
+        # endpoints. Allowing patch would let any string written verbatim bypass the snapshot copy, reintroducing dangling references and out-of-bounds paths.
         # 尾帧字段的值是本服务写出的快照相对路径，只由尾帧设置/清除端点写入。放行 patch
         # 会让原样写入的任意字符串绕过快照复制，重新引入悬空引用与越界路径。
         raise ScriptEditError("patch_episode_script 不可改 end_frame_image；尾帧的设置/清除是独立的显式动作")
     if value is None and parts in (["image_prompt"], ["video_prompt"]):
+        # None in a prompt is the "to be generated" state, written only by the mechanical script plan conversion; since the script
+        # model accepts None, this is the only gate stopping patch from clearing an existing prompt. To rewrite a prompt give a new
+        # value; to have the model fill it in, go through generate_episode_script(entry_ids=…).
         # 提示词的 None 是「待生成」态，只由脚本规划机械转换写入；剧本模型接受 None 后，
         # 这里是 patch 把已有提示词清空的唯一关口。要重写提示词就给新值，要让模型补写走
         # generate_episode_script(entry_ids=…)。
@@ -99,6 +138,9 @@ def _set_nested(obj: dict[str, Any], field_path: str, value: Any) -> None:
             "要重写请给出新的提示词"
         )
     if parts[0] in {"segment_id", "scene_id", "unit_id", "shot_id"}:
+        # patch may not change a shot id: ids are allocated by insert/split, structure validation does not check id uniqueness,
+        # and if the Agent changes an id, other helpers that locate by id (update_scene_asset etc.) would write back to the wrong shot
+        # or produce duplicate-id ambiguity. Adding/removing shots goes through the insert / split / remove operations of patch_episode_script.
         # patch 不可改分镜 id：id 由 insert/split 分配，结构校验不查 id 唯一性，
         # Agent 改 id 后会让其他依赖 id 定位的 helper（update_scene_asset 等）回写到错误分镜
         # 或产生重复 id 歧义。增减分镜走 patch_episode_script 的 insert / split / remove operation。
@@ -106,6 +148,7 @@ def _set_nested(obj: dict[str, Any], field_path: str, value: Any) -> None:
             f"patch_episode_script 不可改分镜 id 字段 ({parts[0]})；id 由 insert/split 分配，不允许直接修改"
         )
     cur: Any = obj
+    # The three exception kinds are reported separately so the Agent's error message is more precise (typo vs type error vs missing intermediate node).
     # 三类异常分别报告，让 Agent 错误信息更精确（拼写错误 vs 类型错误 vs 中间节点不存在）。
     for p in parts[:-1]:
         if not isinstance(cur, dict):
@@ -117,6 +160,11 @@ def _set_nested(obj: dict[str, Any], field_path: str, value: Any) -> None:
         cur = cur[p]
     if not isinstance(cur, dict):
         raise ScriptEditError(f"父节点非对象: {field_path!r}")
+    # The leaf (last segment) may be missing: optional fields the LLM left out (video_prompt.dialogue / note etc. have default or
+    # default_factory in the Pydantic model and may be omitted in JSON serialization) should be fillable by the Agent,
+    # instead of forcing remove+insert to regenerate the whole shot. A missing parent node (intermediate path segment) still fails loud -- that is
+    # a real typo (e.g. image_prompt.scen should be image_prompt.scene), and intermediate nodes should not be created out of thin
+    # air on the dict. Structural errors are ultimately caught by the "not worse" structure check of the unified write entry.
     # 叶子(最后一段)允许不存在:LLM 漏写的 optional 字段(video_prompt.dialogue / note 等
     # 在 Pydantic 模型里有 default 或 default_factory,JSON 序列化时可能被省略)Agent 应能补,
     # 而不是被迫走 remove+insert 重生整个分镜。父节点(中间路径段)不存在仍 fail-loud——那是
@@ -126,7 +174,9 @@ def _set_nested(obj: dict[str, Any], field_path: str, value: Any) -> None:
 
 
 def patch_field(script: dict[str, Any], item_id: str, field_path: str, value: Any) -> dict[str, Any]:
-    """按 id 定位一个分镜，设置其（可嵌套的）字段。纯 setter，不触碰 generated_assets。"""
+    """Locate a shot by id and set its (possibly nested) field. Pure setter; does not touch generated_assets.
+
+    按 id 定位一个分镜，设置其（可嵌套的）字段。纯 setter，不触碰 generated_assets。"""
     items, id_field, _ = resolve_items(script)
     idx = _find_index(items, id_field, item_id)
     _set_nested(items[idx], field_path, value)
@@ -144,7 +194,14 @@ def _script_episode(script: dict[str, Any], ids: list[str]) -> int:
 
 
 def new_item_ids(script: dict[str, Any], count: int, *, floor: int = 0) -> list[str]:
-    """新增条目的 id：从本集用过的最大主序号之后依次取 ``count`` 个，Web 与 Agent 的新增都经这里取号。
+    """IDs of new entries: take ``count`` numbers in sequence after the largest main number used in this episode; both Web and Agent additions take numbers here.
+
+    ``floor`` is the largest main number used in this episode (``ProjectManager.item_id_floor``: the max of the ledger's recorded
+    number and the numbers currently in the script); numbers are only allocated, never reused, and numbers of deleted entries are
+    never issued to new entries again. Numbers don't backfill gaps and aren't derived from the anchor; entry order is determined
+    only by array position. ``E{episode}S{number:02d}`` for the shot family, ``E{episode}U{number}`` for reference-to-video units.
+
+    新增条目的 id：从本集用过的最大主序号之后依次取 ``count`` 个，Web 与 Agent 的新增都经这里取号。
 
     ``floor`` 是本集用过的最大主序号（``ProjectManager.item_id_floor``：账本记录的最大号与剧本现存编号
     取大）；编号只分配、不复用，删掉的条目的序号不会再发给新条目。序号不回填中间空缺，也不从锚点派生，
@@ -163,14 +220,19 @@ def new_item_ids(script: dict[str, Any], count: int, *, floor: int = 0) -> list[
 
 
 def new_item_id(script: dict[str, Any], *, floor: int = 0) -> str:
-    """新增一个条目的 id，见 :func:`new_item_ids`。"""
+    """The id of one new entry; see :func:`new_item_ids`. / 新增一个条目的 id，见 :func:`new_item_ids`。"""
     return new_item_ids(script, 1, floor=floor)[0]
 
 
 def insert_segment(
     script: dict[str, Any], after_id: str | None, new_item: dict[str, Any], *, floor: int = 0
 ) -> dict[str, Any]:
-    """在 ``after_id`` 之后插入一个新条目；``after_id`` 为 ``None`` 时插到最前。
+    """Insert a new entry after ``after_id``; when ``after_id`` is ``None`` insert at the front.
+
+    The new entry's id field is always allocated by ``new_item_id``; ``generated_assets`` and ``end_frame_image`` are cleared.
+    Other fields are provided by the caller; structural validity is checked by the unified write entry.
+
+    在 ``after_id`` 之后插入一个新条目；``after_id`` 为 ``None`` 时插到最前。
 
     新条目的 id 字段一律由 ``new_item_id`` 分配，``generated_assets`` 与 ``end_frame_image`` 清空。
     其余字段由调用方提供，结构是否合法由写盘统一入口校验。
@@ -180,6 +242,7 @@ def insert_segment(
     item = deepcopy(new_item)
     item[id_field] = new_item_id(script, floor=floor)
     item["generated_assets"] = {}
+    # End frame snapshots are named by shot id and there is no snapshot under the new id yet; a value the Agent brings along could only point at someone else's snapshot or an empty path.
     # 尾帧快照按分镜 id 命名，新 id 名下还没有快照；Agent 自带的值只会指向别人的快照或空路径。
     item.pop("end_frame_image", None)
     items.insert(idx + 1, item)
@@ -187,7 +250,9 @@ def insert_segment(
 
 
 def remove_segment(script: dict[str, Any], item_id: str) -> dict[str, Any]:
-    """按 id 删除一个分镜。被删分镜的资产随之消失；不改动其余分镜的 id。"""
+    """Delete a shot by id. The deleted shot's assets go with it; ids of other shots are not changed.
+
+    按 id 删除一个分镜。被删分镜的资产随之消失；不改动其余分镜的 id。"""
     items, id_field, _ = resolve_items(script)
     idx = _find_index(items, id_field, item_id)
     items.pop(idx)
@@ -195,7 +260,9 @@ def remove_segment(script: dict[str, Any], item_id: str) -> dict[str, Any]:
 
 
 def move_segment(script: dict[str, Any], item_id: str, after_id: str | None) -> dict[str, Any]:
-    """把 ``item_id`` 移到 ``after_id`` 之后；``after_id`` 为 ``None`` 时移到最前。条目内容与产物不变。"""
+    """Move ``item_id`` after ``after_id``; when ``after_id`` is ``None`` move to the front. Entry content and artifacts are unchanged.
+
+    把 ``item_id`` 移到 ``after_id`` 之后；``after_id`` 为 ``None`` 时移到最前。条目内容与产物不变。"""
     if after_id == item_id:
         raise ScriptEditError(f"id={item_id!r} 不能移到自己之后")
     items, id_field, _ = resolve_items(script)
@@ -208,7 +275,21 @@ def move_segment(script: dict[str, Any], item_id: str, after_id: str | None) -> 
 def split_segment(
     script: dict[str, Any], item_id: str, parts: list[dict[str, Any]], *, floor: int = 0
 ) -> dict[str, Any]:
-    """把 ``item_id`` 分镜按 Agent 提供的各部分内容拆成多个。
+    """Split shot ``item_id`` into several using the part contents provided by the Agent.
+
+    The first part keeps the original id and **keeps** ``generated_assets`` and ``end_frame_image`` uncleared -- treated as
+    "anchor continuation", matching the anchor-assets-untouched semantics of ``insert_segment`` (same family of structural
+    operations, uniform asset invalidation granularity). The remaining parts each take a new main number per the numbering rule
+    for new entries (:func:`new_item_ids`, same meaning of ``floor``) and clear ``generated_assets`` and ``end_frame_image``
+    (identity changed, old assets have no owner, back to pending for regeneration). If the Agent wants to tweak the original shot's
+    content it should change fields with ``patch_episode_script``; anchor assets are kept on split so that one misuse of split
+    doesn't invalidate all generated images/videos.
+
+    For reference-to-video, the split is of top-level ``video_units`` (``item_id`` is the unit_id); each part is a complete new
+    unit (each with its own ``shots``), not a finer split of the ``shots`` inside the original unit. ``duration_seconds`` is an
+    independent unit field not derived from ``shots``, so each new part must give it itself; this function does not compute it.
+
+    把 ``item_id`` 分镜按 Agent 提供的各部分内容拆成多个。
 
     首个部分保留原 id 且**保留** ``generated_assets`` 与 ``end_frame_image`` 不清空——视为
     "锚点延续",与 ``insert_segment`` 的锚点资产不动语义对齐(同族结构操作,资产作废粒度统一)。
@@ -233,11 +314,17 @@ def split_segment(
         part = deepcopy(raw)
         if offset == 0:
             part[id_field] = str(item_id)
+            # Anchor continuation: keep the original shot's generated_assets (if the Agent brought its own
+            # generated_assets in parts[0], the original shot's actual value wins; the Agent may not make up asset paths).
             # 锚点延续:保留原分镜的 generated_assets(若 Agent 在 parts[0] 自带了
             # generated_assets,以原分镜实际值为准,不让 Agent 凭空写资产路径)。
             if isinstance(anchor_assets, dict):
                 part["generated_assets"] = deepcopy(anchor_assets)
             else:
+                # Anchor generated_assets malformed (not a dict, e.g. list/str dirty data) -> degrade to an empty dict.
+                # generated_assets the Agent brought in parts[0] (already copied into part by deepcopy(raw)) are also
+                # overwritten and dropped here. The warning lets ops know, per the ADR-0003 addendum principle "no zero-signal success".
+                # anchor_assets is None is treated as the normal "there was none" state; no warning.
                 # 锚点 generated_assets 形态异常(非 dict,如 list/str 等脏数据)→ 退化为空 dict。
                 # Agent 在 parts[0] 自带的 generated_assets(deepcopy(raw) 已拷入 part)也会被这里
                 # 覆盖丢弃。warning 让运维知道,符合 ADR-0003 增补「禁止零信号成功」原则。
@@ -249,6 +336,7 @@ def split_segment(
                         type(anchor_assets).__name__,
                     )
                 part["generated_assets"] = {}
+            # End frame follows anchor continuation too: the original shot's actual value wins; the Agent may not rewrite the snapshot path in parts[0].
             # 尾帧同锚点延续：以原分镜实际值为准，不让 Agent 在 parts[0] 凭空改写快照路径。
             if anchor_end_frame is None:
                 part.pop("end_frame_image", None)
@@ -257,6 +345,7 @@ def split_segment(
         else:
             part[id_field] = next(fresh_ids)
             part["generated_assets"] = {}
+            # There is no snapshot under a new id; a value the Agent brings along could only point at the anchor's snapshot.
             # 新 id 名下没有快照，Agent 自带的值只会指向锚点的快照。
             part.pop("end_frame_image", None)
         new_parts.append(part)

@@ -1,4 +1,27 @@
-"""任务类型桶（t2i / i2i / i2v / r2v）归属判定 —— 把既有能力声明翻译成桶，不新增第二份声明。
+"""Task type bucket (t2i / i2i / i2v / r2v) membership -- translates existing capability declarations into buckets without adding a second declaration.
+
+The source of the decision is fixed per bucket:
+
+- Images: effective capabilities (``lib.backends.image_capabilities``), i.e. the part satisfied by both the model entry's
+  text-to-image / image-to-image (custom provider capability overrides replace whole dimensions; ComfyUI endpoints
+  ignore the entry) and the backend declaration (built-in backends' ``CHANNEL_CAPABILITIES``, custom provider endpoint
+  spec's ``image_capabilities``); the same result as the capability check of the execution layer ``MediaGenerator``;
+- Built-in video: backend ``VideoCapabilities``, i2v takes ``first_frame``, r2v takes ``max_reference_images``;
+- Custom provider video: the existing composition point of endpoint system decision ⊕ model-level overrides, likewise
+  taking ``first_frame`` and ``max_reference_images``.
+
+For built-in video both dimensions come from the backend rather than the model catalog: the backend's capability
+declaration shares its source with request construction (e.g. ``vidu`` computes caps from an endpoint allowlist, and a
+model outside the allowlist submitting a first frame errors when building the request), and the registry doesn't declare
+these two dimensions. Buckets promise "the selected combination can execute", so the copy sharing the source with
+execution time is authoritative. The video two-dimension predicate itself is provided by
+``lib.config.resolver.video_capability_satisfied``, shared with the resolution layer's capability gate, so the two can't drift.
+
+When it can't be decided (endpoint taken offline, backend without a capability function) an empty set is returned
+rather than the full set: the candidate list prefers missing to wrong; a combination configured in would fail at
+execution anyway, so it's better not to appear in the dropdown.
+
+任务类型桶（t2i / i2i / i2v / r2v）归属判定 —— 把既有能力声明翻译成桶，不新增第二份声明。
 
 判定来源逐桶固定：
 
@@ -38,7 +61,7 @@ from lib.custom_provider.endpoints import EndpointSpec, endpoint_to_image_capabi
 
 GenerationTypeBucket = Literal["t2i", "i2i", "i2v", "r2v"]
 
-#: 每个 media_type 有哪些桶。文本 / 音频不设桶，故不在表内。
+#: Which buckets each media_type has. Text / audio have no buckets, so they're not in the table. / 每个 media_type 有哪些桶。文本 / 音频不设桶，故不在表内。
 BUCKETS_BY_MEDIA_TYPE: dict[str, tuple[GenerationTypeBucket, ...]] = {
     "image": ("t2i", "i2i"),
     "video": ("i2v", "r2v"),
@@ -66,7 +89,7 @@ def _video_buckets(has_i2v: bool, max_reference_images: int) -> frozenset[Genera
 
 
 def builtin_model_buckets(provider_id: str, model_id: str, model_info: CatalogModel) -> frozenset[GenerationTypeBucket]:
-    """内置模型具备的任务类型桶；文本 / 音频模型恒为空集。"""
+    """Task type buckets a built-in model has; always empty for text / audio models. / 内置模型具备的任务类型桶；文本 / 音频模型恒为空集。"""
     if model_info.media_type == "image":
         try:
             channel = builtin_channel_capabilities(provider_id)
@@ -91,7 +114,9 @@ def custom_model_buckets(
     endpoint_spec: EndpointSpec | None = None,
     entry_binding: str | None = None,
 ) -> frozenset[GenerationTypeBucket]:
-    """自定义供应商模型具备的任务类型桶；文本 / 音频 endpoint 与未知 endpoint 恒为空集。"""
+    """Task type buckets a custom provider model has; always empty for text / audio endpoints and unknown endpoints.
+
+    自定义供应商模型具备的任务类型桶；文本 / 音频 endpoint 与未知 endpoint 恒为空集。"""
     try:
         media_type = endpoint_spec.media_type if endpoint_spec is not None else endpoint_to_media_type(endpoint)
     except ValueError:

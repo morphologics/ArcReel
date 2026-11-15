@@ -1,4 +1,13 @@
 """
+Grok (xAI) shared utility module
+
+Reused by text_backends / image_backends / video_backends.
+
+Contains:
+- create_grok_client — xAI AsyncClient factory (created lazily, see LazyGrokClient)
+- grok_should_retry — gRPC-aware retry predicate
+- grpc_rejection — converts gRPC deterministic rejections into an HTTP status code and rejection reason summary
+
 Grok (xAI) 共享工具模块
 
 供 text_backends / image_backends / video_backends 复用。
@@ -15,8 +24,9 @@ from typing import TYPE_CHECKING
 
 from lib.infra.retry import BASE_RETRYABLE_ERRORS, should_retry
 
-# gRPC 瞬态状态码（等价于 HTTP 429/500/502/503/504）
+# gRPC transient status codes (equivalent to HTTP 429/500/502/503/504) / gRPC 瞬态状态码（等价于 HTTP 429/500/502/503/504）
 _GRPC_RETRYABLE_CODES: set | None = None
+# gRPC deterministic rejection → equivalent HTTP status code (per gRPC's official HTTP mapping). Retrying is useless until the input or credential changes.
 # gRPC 确定性拒绝 → 等价 HTTP 状态码（按 gRPC 官方 HTTP 映射）。改输入或凭证前重试无益。
 _GRPC_REJECTION_STATUS: dict | None = None
 
@@ -24,10 +34,10 @@ try:
     import grpc
 
     _GRPC_RETRYABLE_CODES = {
-        grpc.StatusCode.UNAVAILABLE,  # 503 — 连接中断 / Socket closed
-        grpc.StatusCode.DEADLINE_EXCEEDED,  # 504 — 超时
-        grpc.StatusCode.RESOURCE_EXHAUSTED,  # 429 — 限流
-        grpc.StatusCode.ABORTED,  # 冲突重试
+        grpc.StatusCode.UNAVAILABLE,  # 503 — connection dropped / Socket closed / 503 — 连接中断 / Socket closed
+        grpc.StatusCode.DEADLINE_EXCEEDED,  # 504 — timeout / 504 — 超时
+        grpc.StatusCode.RESOURCE_EXHAUSTED,  # 429 — rate limited / 429 — 限流
+        grpc.StatusCode.ABORTED,  # conflict, retry / 冲突重试
     }
     _GRPC_REJECTION_STATUS = {
         grpc.StatusCode.INVALID_ARGUMENT: 400,
@@ -46,7 +56,9 @@ if TYPE_CHECKING:
 
 
 def grok_should_retry(exc: Exception) -> bool:
-    """Grok 专用重试谓词：精确匹配 gRPC 瞬态状态码，其余回退默认模式匹配。"""
+    """Grok-specific retry predicate: exact match on gRPC transient status codes, otherwise fall back to default pattern matching.
+
+    Grok 专用重试谓词：精确匹配 gRPC 瞬态状态码，其余回退默认模式匹配。"""
     if _GRPC_RETRYABLE_CODES is not None:
         try:
             from grpc.aio import AioRpcError
@@ -59,7 +71,14 @@ def grok_should_retry(exc: Exception) -> bool:
 
 
 def grpc_rejection(exc: BaseException) -> tuple[int, str | None] | None:
-    """gRPC 确定性拒绝的等价 HTTP 状态码与脱敏拒因摘要；不是这类拒绝时为 ``None``。
+    """Equivalent HTTP status code and redacted rejection reason summary of a gRPC deterministic rejection; ``None`` if it's not such a rejection.
+
+    ``str()`` of ``AioRpcError`` is the whole debug representation (``<AioRpcError of RPC that terminated with …>``),
+    unreadable to users if put directly into the task failure reason. After conversion the persisting side encodes it in
+    structured form as ``provider_rejected``. Details of authentication failures are about the credential itself and, as
+    with HTTP 401, are not passed through.
+
+    gRPC 确定性拒绝的等价 HTTP 状态码与脱敏拒因摘要；不是这类拒绝时为 ``None``。
 
     ``AioRpcError`` 的 ``str()`` 是整段调试表示（``<AioRpcError of RPC that terminated with …>``），
     直接落进任务失败原因用户读不懂。换算后落库侧按 ``provider_rejected`` 结构化编码。
@@ -90,7 +109,15 @@ def resolve_grok_api_key(api_key: str | None = None) -> str:
 
 
 class LazyGrokClient:
-    """xAI AsyncClient 的惰性包装：首次访问 chat / image / video 时才创建 SDK 客户端。
+    """Lazy wrapper of xAI AsyncClient: the SDK client is only created on first access to chat / image / video.
+
+    ``xai_sdk.AsyncClient`` creates the grpc.aio channel at construction, requiring an event loop in the current thread;
+    but built-in backends are constructed in an ``asyncio.to_thread`` worker thread (see
+    ``lib.backends.backend_assembly.assembler``). Backends only access these three sub-clients in async generation methods,
+    which run on the event loop thread, so the channel is bound to the event loop actually using it. The API Key is
+    validated at construction, so a missing key still errors immediately.
+
+    xAI AsyncClient 的惰性包装：首次访问 chat / image / video 时才创建 SDK 客户端。
 
     ``xai_sdk.AsyncClient`` 构造时就创建 grpc.aio 通道，要求当前线程有事件循环；而内置 backend 在
     ``asyncio.to_thread`` 的工作线程里构造（见 ``lib.backends.backend_assembly.assembler``）。backend 只在
@@ -123,5 +150,7 @@ class LazyGrokClient:
 
 
 def create_grok_client(*, api_key: str | None = None) -> LazyGrokClient:
-    """创建 xAI 客户端，统一校验和构造；SDK 客户端推迟到首次使用时创建，backend 可在任意线程构造。"""
+    """Create the xAI client with unified validation and construction; the SDK client is deferred to first use, so backends can be constructed in any thread.
+
+    创建 xAI 客户端，统一校验和构造；SDK 客户端推迟到首次使用时创建，backend 可在任意线程构造。"""
     return LazyGrokClient(api_key=api_key)

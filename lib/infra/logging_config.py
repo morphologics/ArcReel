@@ -1,4 +1,4 @@
-"""统一日志配置。"""
+"""Unified logging config. / 统一日志配置。"""
 
 from __future__ import annotations
 
@@ -22,7 +22,7 @@ def _file_logging_disabled() -> bool:
 
 
 def resolve_log_dir() -> Path:
-    """文件日志目录：``<数据根>/logs``（``DataRootLayout.log_dir``）。"""
+    """File log dir: ``<数据根>/logs`` (data root; ``DataRootLayout.log_dir``). / 文件日志目录：``<数据根>/logs``（``DataRootLayout.log_dir``）。"""
     return DataRootLayout.current().log_dir
 
 
@@ -31,7 +31,9 @@ LEGACY_LOG_DIR = PROJECT_ROOT / "logs"
 
 
 def warn_if_log_dir_env_set() -> None:
-    """日志位置不读取 ``ARCREEL_LOG_DIR``；它仍被设置时提示一次日志的实际去向。"""
+    """Log location does not read ``ARCREEL_LOG_DIR``; if it is still set, say once where logs actually go.
+
+    日志位置不读取 ``ARCREEL_LOG_DIR``；它仍被设置时提示一次日志的实际去向。"""
     raw = os.environ.get("ARCREEL_LOG_DIR", "").strip()
     if not raw:
         return
@@ -49,7 +51,20 @@ def warn_if_log_dir_env_set() -> None:
 
 
 def migrate_legacy_log_dir(*, legacy_dir: Path = LEGACY_LOG_DIR) -> None:
-    """把旧位置的日志逐项迁入数据根下的日志目录；须在挂文件日志 handler 之前调用。
+    """Move logs from the old location item by item into the log dir under the data root; must be called before the file log handler is attached.
+
+    - old and new location are the same, contain each other, or the old one doesn't exist -> do nothing
+    - old location not writable (read-only code dir) -> warn, keep as is, no half migration that copies without
+      deleting the source
+    - item by item ``shutil.move``: rename on the same device, copy then delete source across devices (old Docker volume)
+    - new location already has a same-named entry -> that entry stays at the old location with a warning, no overwrite;
+      a rerun just skips it again
+    - a single entry fails to migrate -> that entry stays at the old location with an ERROR, other entries migrate as usual
+    - after the old location is emptied, try to delete it; if it can't be deleted (mount point EBUSY), leave the empty dir
+    - new location occupied by a project -> do nothing (the warning is logged by :func:`attach_file_handler`)
+    - OSError logs ERROR and does not abort startup: logs left at the old location don't affect the data root layout
+
+    把旧位置的日志逐项迁入数据根下的日志目录；须在挂文件日志 handler 之前调用。
 
     - 新旧位置相同、互相包含或旧位置不存在 → 不动
     - 旧位置不可写（只读代码目录）→ 告警，原样保留，不做只复制不删源的半截迁移
@@ -99,7 +114,7 @@ def migrate_legacy_log_dir(*, legacy_dir: Path = LEGACY_LOG_DIR) -> None:
         if moved:
             logger.info("migrated %d legacy log entries %s -> %s", moved, old_dir, new_dir)
         with contextlib.suppress(OSError):
-            old_dir.rmdir()  # hard-delete: infra -- 迁走后的空旧日志目录
+            old_dir.rmdir()  # hard-delete: infra -- empty old log dir after migrating out / 迁走后的空旧日志目录
     except OSError as exc:
         logger.error(
             "legacy log dir migration FAILED (logs remain at %s; please move them to %s manually): %s",
@@ -110,7 +125,16 @@ def migrate_legacy_log_dir(*, legacy_dir: Path = LEGACY_LOG_DIR) -> None:
 
 
 def setup_logging(level: str | None = None, *, file: bool = True) -> None:
-    """配置根 logger。
+    """Configure the root logger.
+
+    Args:
+        level: log level string (DEBUG/INFO/WARNING/ERROR).
+               If not given, read from env var LOG_LEVEL, default INFO.
+        file: whether to attach TimedRotatingFileHandler. Pass False at module import time to defer attaching until
+              after lifespan -- avoids creating logs/ under the data root at import time, and lets
+              migrate_legacy_log_dir() move old same-named log files in before the handler.
+
+    配置根 logger。
 
     Args:
         level: 日志级别字符串（DEBUG/INFO/WARNING/ERROR）。
@@ -132,7 +156,7 @@ def setup_logging(level: str | None = None, *, file: bool = True) -> None:
         datefmt="%Y-%m-%d %H:%M:%S",
     )
 
-    # 幂等：避免重复添加 stream handler
+    # Idempotent: avoid adding the stream handler twice / 幂等：避免重复添加 stream handler
     if not any(getattr(h, _HANDLER_ATTR, False) for h in root.handlers):
         handler = logging.StreamHandler()
         handler.setFormatter(formatter)
@@ -142,23 +166,29 @@ def setup_logging(level: str | None = None, *, file: bool = True) -> None:
     if file:
         attach_file_handler(formatter)
 
-    # 统一 uvicorn 的日志格式，避免两种格式并存
+    # Unify uvicorn's log format, so two formats don't coexist / 统一 uvicorn 的日志格式，避免两种格式并存
     for name in ("uvicorn", "uvicorn.error"):
         uv_logger = logging.getLogger(name)
         uv_logger.handlers.clear()
         uv_logger.propagate = True
 
-    # 禁用 uvicorn.access：请求日志由 app.py 的 middleware 统一处理
+    # Disable uvicorn.access: request logs are handled by the middleware in app.py / 禁用 uvicorn.access：请求日志由 app.py 的 middleware 统一处理
     access_logger = logging.getLogger("uvicorn.access")
     access_logger.handlers.clear()
     access_logger.disabled = True
 
-    # 抑制 aiosqlite 的 DEBUG 噪音（每次 SQL 操作都会输出两行日志）
+    # Suppress aiosqlite DEBUG noise (every SQL operation logs two lines) / 抑制 aiosqlite 的 DEBUG 噪音（每次 SQL 操作都会输出两行日志）
     logging.getLogger("aiosqlite").setLevel(max(numeric_level, logging.INFO))
 
 
 def attach_file_handler(formatter: logging.Formatter | None = None) -> None:
-    """为 root logger 挂 TimedRotatingFileHandler（默认开启，按天切，保留 7 份）。
+    """Attach a TimedRotatingFileHandler to the root logger (on by default, rotates daily, keeps 7).
+
+    Idempotent: returns directly if already attached. Called by setup_logging, and can also be triggered on its own in
+    lifespan -- the latter is used to run migrate_legacy_log_dir() first to move old logs in, then attach the file
+    handler, so the handler doesn't create arcreel.log first and leave the old same-named file behind.
+
+    为 root logger 挂 TimedRotatingFileHandler（默认开启，按天切，保留 7 份）。
 
     幂等：已挂则直接返回。被 setup_logging 调用，也可在 lifespan 内
     单独触发——后者用于先跑 migrate_legacy_log_dir() 迁入旧日志，再挂
@@ -179,7 +209,7 @@ def attach_file_handler(formatter: logging.Formatter | None = None) -> None:
 
     try:
         log_dir = resolve_log_dir()
-        # 日志目录位置上是一个项目时不往里写任何东西。
+        # When the log dir location is a project, write nothing into it. / 日志目录位置上是一个项目时不往里写任何东西。
         if is_project_dir(log_dir):
             logging.getLogger(__name__).warning(
                 "file logging disabled for this run: %s contains %s; "

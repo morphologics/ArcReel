@@ -1,4 +1,34 @@
-"""v8→v9：视频单元收敛为「一段正文 + 编排时长」。
+"""v8->v9: video units converge to "one body + planned duration".
+
+Reference-to-video units previously stored their body split into ``shots[]`` and derived a separate
+``references[]``. Both are results of machine splitting with no creator value (see ADR 0064); this migration
+removes them:
+
+- ``shots[*].text`` is joined back into ``text`` with newlines in array order. No segment prefixes are re-injected
+  -- a literal ``镜头N：`` (shot N:) originally written in the body thus becomes ordinary body text, kept verbatim,
+  neither deleted nor changed. Existing durations still attached to shots are first absorbed to unit level
+  (``lib.script.reference_video.duration_migration``); that step was previously done only lazily by the load chain,
+  and ``shots`` no longer exists after this migration.
+- Delete ``references[]``: reference images are instead resolved at execution time from ``@[name]`` in the body,
+  in order of first mention.
+- Delete ``migration_requires_content_replan``: it recorded evidence left by v6->v7 folding the shot structure;
+  with the shot structure gone this provenance has nothing to point to; the ``needs_replan`` it implies is kept
+  as-is, so problem units still block generation and still need replanning.
+
+The same rewrite applies to episode scripts and script_plan drafts: a draft is the previous form of the same body,
+and leaving it in the old shape would make the review gate unable to read its content. Drafts that can't be read
+or rewritten are kept as-is, without refusing the whole project (ADR 0098). Units in scripts that can't be
+converted or don't match the current unit model likewise don't refuse the whole project: they're marked for replan
+and handled by replanning at runtime.
+
+Write order follows this directory's convention: first a read-only pre-check of all files computing target
+payloads; only after everything passes are backups created, then files atomically replaced one by one, finally the
+``project.json`` version committed. The ``project.json`` backup is also created by this migration itself at that
+commit boundary (the runner's ``_MIGRATORS_WITH_OWNED_BACKUP``), otherwise the runner would write a backup file
+before the pre-check. If any script is corrupt, not a single byte of the project directory has been touched, and
+the runner records a "needs repair" verdict on that basis.
+
+v8→v9：视频单元收敛为「一段正文 + 编排时长」。
 
 参考生视频的单元此前把正文切成 ``shots[]`` 落盘，另派生一份 ``references[]``。两者都是机器
 切分的结果、没有创作者价值（见 ADR 0064），本迁移把它们去掉：
@@ -45,6 +75,10 @@ logger = logging.getLogger(__name__)
 
 _TARGET_VERSION = 9
 
+#: The two reference-to-video script plan draft names this step may encounter, in lookup order. Projects starting
+#: below v8 were already renamed to ``script_plan_*`` up front in v7->v8; projects starting exactly at v8 didn't go
+#: through that step, so their drafts are still v8's on-disk fact ``step1_*``. Both names are historical facts,
+#: hard-coded in this step, not following current naming.
 #: 本步可能遇到的两个参考生视频脚本规划草稿名，按查找顺序排列。起点低于 v8 的项目在 v7→v8
 #: 已被前置改名为 ``script_plan_*``；起点正好是 v8 的项目没经过那一步，草稿仍是 v8 的落盘事实
 #: ``step1_*``。两个名字都是历史事实，写死在这一步，不跟随当前命名。
@@ -52,7 +86,10 @@ _REFERENCE_UNITS_FILENAMES = ("script_plan_reference_units.json", "step1_referen
 
 
 def _reference_units_draft_path(project_dir: Path, episode: int) -> Path:
-    """取该集在盘上的脚本规划草稿路径；两个名字都不在时返回首选名（读取侧按不存在处理）。"""
+    """Get the episode's on-disk script plan draft path; when neither name exists, return the preferred name (the read
+    side treats it as nonexistent).
+
+    取该集在盘上的脚本规划草稿路径；两个名字都不在时返回首选名（读取侧按不存在处理）。"""
 
     drafts_dir = episode_drafts_dir(project_dir, episode)
     for name in _REFERENCE_UNITS_FILENAMES:
@@ -63,7 +100,9 @@ def _reference_units_draft_path(project_dir: Path, episode: int) -> Path:
 
 
 def _unit_text(unit: dict[str, Any], location: str) -> str:
-    """把 ``shots[*].text`` 按序拼回单元正文；已是正文形态的单元原样返回。"""
+    """Join ``shots[*].text`` back into the unit body in order; units already in body form are returned as-is.
+
+    把 ``shots[*].text`` 按序拼回单元正文；已是正文形态的单元原样返回。"""
 
     if "shots" not in unit:
         text = unit.get("text")
@@ -85,17 +124,24 @@ def _unit_text(unit: dict[str, Any], location: str) -> str:
 
 
 def _convert_unit(unit: object, location: str) -> dict[str, Any]:
-    """机械改写一个单元的形状：收编镜头时长、拼回正文、去掉 ``shots`` 与 ``references``。"""
+    """Mechanically rewrite one unit's shape: absorb shot durations, join the body back, remove ``shots`` and
+    ``references``.
+
+    机械改写一个单元的形状：收编镜头时长、拼回正文、去掉 ``shots`` 与 ``references``。"""
 
     if not isinstance(unit, dict):
         raise ValueError(f"{location} 必须是对象")
     migrated = copy.deepcopy(unit)
+    # Durations used to be on shots[*].duration and were previously absorbed only lazily by the load chain -- existing
+    # data on disk may still have only shot durations. shots is deleted right below, so this is the last moment those
+    # durations can be read; absorb first, then join the body.
     # 时长曾挂在 shots[*].duration 上，此前只由加载链惰性收编——存量落盘里仍可能只有镜头时长。
     # shots 在下面就被删掉，这里是最后一次能读到那份时长的时刻，故先收编再拼正文。
     migrate_unit_durations([migrated])
     text = _unit_text(migrated, location)
     migrated.pop("shots", None)
     migrated.pop("references", None)
+    # The old marker only served the shot structure; the needs_replan it implies is kept explicitly on the next line.
     # 旧标记只为镜头结构服务；它蕴含的 needs_replan 在下一行显式保留。
     if migrated.pop("migration_requires_content_replan", None) is True:
         migrated["needs_replan"] = True
@@ -104,12 +150,19 @@ def _convert_unit(unit: object, location: str) -> dict[str, Any]:
 
 
 def _without_transition(unit: dict[str, Any]) -> dict[str, Any]:
+    # Transitions are only removed from entries in v15->v16; the current model of the self-check no longer includes them.
     # 转场到 v15→v16 才从条目上删除，自检的当前模型已不含它。
     return {key: value for key, value in unit.items() if key != "transition_to_next"}
 
 
 def _migrate_unit(unit: object, location: str, model: type[BaseModel]) -> dict[str, Any]:
-    """转换一个单元并按目标模型自检。
+    """Convert one unit and self-check it against the target model.
+
+    Validation covers only the unit itself: this migration only changes unit shape, and validating the whole script
+    would let one existing dirty field unrelated to shots (missing title and the like) judge the whole project "needs
+    repair".
+
+    转换一个单元并按目标模型自检。
 
     校验只覆盖单元本身：本迁移只改单元形状，把整份剧本拿去校验会让一处与镜头无关的存量脏
     字段（缺 title 之类）把整个项目判成「需要修复」。
@@ -121,7 +174,13 @@ def _migrate_unit(unit: object, location: str, model: type[BaseModel]) -> dict[s
 
 
 def _migrate_script_unit(unit: object, location: str) -> dict[str, Any]:
-    """转换剧本里的一个单元；转换不了或不符合当前单元模型的单元标为待重新规划，不拒绝整个项目。
+    """Convert one unit in a script; units that can't be converted or don't match the current unit model are marked for
+    replan, without refusing the whole project.
+
+    Units that can't be converted are left as-is; units that fail after conversion keep the converted result. Both are
+    handled by replanning at runtime (ADR 0098).
+
+    转换剧本里的一个单元；转换不了或不符合当前单元模型的单元标为待重新规划，不拒绝整个项目。
 
     转换不了的单元原样留下；转换后不合格的单元保留转换结果。两者都交给运行期的重新规划处理
     （ADR 0098）。
@@ -143,13 +202,16 @@ def _migrate_script_unit(unit: object, location: str) -> dict[str, Any]:
         migrated["needs_replan"] = True
         text = migrated.get("text")
         if isinstance(text, str) and not text.strip():
+            # Units without body text are treated as empty shells pending replan: an empty shell's planned duration is 0.
             # 没有正文的单元按待重新规划的空壳处理：空壳的编排时长为 0。
             migrated["duration_seconds"] = 0
     return migrated
 
 
 def migrate_reference_script(payload: dict[str, Any], *, location: str) -> dict[str, Any]:
-    """纯转换一份参考生视频剧集脚本；已是 v9 形状的脚本原样校验后返回。"""
+    """Purely convert one reference-to-video episode script; scripts already in v9 shape are validated and returned as-is.
+
+    纯转换一份参考生视频剧集脚本；已是 v9 形状的脚本原样校验后返回。"""
 
     units = payload.get("video_units")
     if not isinstance(units, list):
@@ -162,7 +224,9 @@ def migrate_reference_script(payload: dict[str, Any], *, location: str) -> dict[
 
 
 def migrate_reference_script_plan_draft(payload: dict[str, Any], *, location: str) -> dict[str, Any]:
-    """纯转换一份 script_plan 草稿；已是 v9 形状的草稿原样校验后返回。"""
+    """Purely convert one script_plan draft; drafts already in v9 shape are validated and returned as-is.
+
+    纯转换一份 script_plan 草稿；已是 v9 形状的草稿原样校验后返回。"""
 
     units = payload.get("units")
     if not isinstance(units, list):
@@ -212,7 +276,12 @@ def _readable_file(path: Path, label: str) -> dict[str, Any] | None:
 
 @contextmanager
 def _located(episode: int, file: str) -> Generator[None]:
-    """把预检抛出的结构违约补成带定位事实的迁移错误。
+    """Turn a structural violation raised by the pre-check into a migration error with location facts.
+
+    The "needs repair" verdict navigates the user and the Agent by ``(episode, file)``; the message text alone can't
+    locate the episode and file.
+
+    把预检抛出的结构违约补成带定位事实的迁移错误。
 
     「需要修复」裁决按 ``(episode, file)`` 给用户与 Agent 导航，仅凭消息文本无法定位到集与文件。
     """
@@ -226,7 +295,9 @@ def _located(episode: int, file: str) -> Generator[None]:
 
 
 def migrate_v8_to_v9(project_dir: Path) -> None:
-    """启动扫描与归档导入共用的单一入口（经 ``migrate_project_dir`` 调用）。"""
+    """Single entry point shared by the startup scan and archive import (called via ``migrate_project_dir``).
+
+    启动扫描与归档导入共用的单一入口（经 ``migrate_project_dir`` 调用）。"""
 
     project_dir = Path(project_dir)
     project_file = project_dir / "project.json"
@@ -240,7 +311,7 @@ def migrate_v8_to_v9(project_dir: Path) -> None:
 
     plans: list[tuple[Path, dict[str, Any]]] = []
     if project.get("generation_mode") == "reference_video":
-        # 此循环只读：任一文件损坏时还没有备份或业务文件写入。
+        # This loop is read-only: if any file is corrupt, no backup or business file has been written yet. / 此循环只读：任一文件损坏时还没有备份或业务文件写入。
         for script_path, episode in _episode_entries(project_dir, project):
             label = script_path.name
             with _located(episode, label):
@@ -255,9 +326,13 @@ def migrate_v8_to_v9(project_dir: Path) -> None:
                 if draft is not None:
                     plans.append((draft_path, migrate_reference_script_plan_draft(draft, location=draft_label)))
             except (OSError, ValueError) as exc:
+                # Corrupt or unopenable script plan drafts are kept as-is and not rewritten, without refusing the whole project
+                # (ADR 0098 narrows ADR 0064).
                 # 损坏或打不开的脚本规划草稿原样保留、不改写，不拒绝整个项目（ADR 0098 收窄 ADR 0064）。
                 logger.warning("第 %s 集脚本规划草稿无法迁移，原样保留：%s（%s）", episode, draft_path, exc)
 
+    # Backups are created only after all pre-checks succeed; all files (including project.json) are backed up before
+    # replacing begins.
     # 预检全部成功后才创建备份；所有文件（含 project.json）先备份完，再开始替换。
     for path, _payload in [*plans, (project_file, project)]:
         ensure_versioned_backup(path, 8)

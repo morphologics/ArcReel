@@ -1,4 +1,12 @@
-"""提示词编写的对象选择：本次为哪些条目写哪些视觉层字段，显式重写会替换哪些已有内容。
+"""Target selection for prompt authoring: which visual-layer fields to write for which entries this time, and which existing
+content an explicit rewrite replaces.
+
+Gap-filling works on whole visual-layer fields: for shot-type entries ``image_prompt`` / ``video_prompt`` are judged separately,
+existing ones are kept and only the missing one is filled, without looking at empty fields inside a structured prompt; for
+reference-to-video units the body is the visual layer, expanded per the pending-authoring marker, rewritten even if non-empty;
+once the marker is cleared, only an explicit rewrite changes it. Naming entries only sets the scope; it does not authorize overwriting.
+
+提示词编写的对象选择：本次为哪些条目写哪些视觉层字段，显式重写会替换哪些已有内容。
 
 补缺以整份视觉层字段为单位：分镜类条目的 ``image_prompt`` / ``video_prompt`` 各自判断，已有的保留，
 只补缺失的那一份，不看结构化提示词内部的空字段；参考生视频单元的正文即视觉层，按待编写标记展开，
@@ -14,7 +22,7 @@ from typing import Any
 from lib.infra.content_digest import prefixed
 from lib.script.script_models import PENDING_AUTHORING_FIELD
 
-#: 各条目形态的视觉层字段。参考生视频单元的正文即其视觉层。
+#: Visual-layer fields per entry form. A reference-to-video unit's body is its visual layer. / 各条目形态的视觉层字段。参考生视频单元的正文即其视觉层。
 VISUAL_LAYER_FIELDS: dict[str, tuple[str, ...]] = {
     "segments": ("image_prompt", "video_prompt"),
     "scenes": ("image_prompt", "video_prompt"),
@@ -24,18 +32,20 @@ VISUAL_LAYER_FIELDS: dict[str, tuple[str, ...]] = {
 
 
 def visual_field_filled(value: Any) -> bool:
-    """视觉层字段已有内容：非空白字符串，或非空的结构化提示词。"""
+    """A visual-layer field has content: a non-blank string, or a non-empty structured prompt. / 视觉层字段已有内容：非空白字符串，或非空的结构化提示词。"""
     return bool(value.strip() if isinstance(value, str) else value)
 
 
 def visual_layer_complete(kind: str, item: Mapping[str, Any]) -> bool:
-    """条目的视觉层字段都已写入内容。"""
+    """All visual-layer fields of the entry have content. / 条目的视觉层字段都已写入内容。"""
     return all(visual_field_filled(item.get(field)) for field in VISUAL_LAYER_FIELDS[kind])
 
 
 @dataclass(frozen=True, slots=True)
 class AuthoringEntry:
-    """一个编写条目：本次写回的视觉层字段，及其中会替换已有内容的字段。"""
+    """One authoring entry: the visual-layer fields written back this time, and those among them that replace existing content.
+
+    一个编写条目：本次写回的视觉层字段，及其中会替换已有内容的字段。"""
 
     entry_id: str
     fields: tuple[str, ...]
@@ -44,7 +54,9 @@ class AuthoringEntry:
 
 @dataclass(frozen=True, slots=True)
 class PromptAuthoringSelection:
-    """一次提示词编写的对象（按剧本顺序），与范围内因视觉层已齐而不写的条目。"""
+    """Targets of one prompt authoring run (in script order), plus entries in scope skipped because their visual layer is complete.
+
+    一次提示词编写的对象（按剧本顺序），与范围内因视觉层已齐而不写的条目。"""
 
     entries: tuple[AuthoringEntry, ...]
     skipped: tuple[str, ...]
@@ -68,7 +80,14 @@ def select_prompt_authoring(
     entry_ids: Iterable[str] = (),
     rewrite: bool = False,
 ) -> PromptAuthoringSelection:
-    """按范围与模式选出编写对象。
+    """Select authoring targets by scope and mode.
+
+    When ``entry_ids`` is empty, the scope is all entries with the pending-authoring marker; otherwise it is those entries (the caller
+    first confirms they are all in the script). Gap-filling only writes missing visual-layer fields; ``rewrite`` writes all
+    visual-layer fields of entries in scope, and fields that gap-filling would not have written but that already have content are
+    recorded as ``overwritten`` -- the losses an explicit rewrite needs confirmed.
+
+    按范围与模式选出编写对象。
 
     ``entry_ids`` 为空时范围是全部带待编写标记的条目，否则是这些条目（调用方先确认它们都在剧本里）。
     补缺只写缺失的视觉层字段；``rewrite`` 写范围内条目的全部视觉层字段，其中补缺本不会写、
@@ -99,7 +118,12 @@ def select_prompt_authoring(
 
 @dataclass(frozen=True, slots=True)
 class PromptOverwrite:
-    """显式重写将替换的已有视觉层内容。
+    """Existing visual-layer content that an explicit rewrite will replace.
+
+    ``fingerprint`` is the content fingerprint of the final script at read time, exposed as ``revision``: the caller passes it back
+    when accepting the overwrite; if the final script changed since then, it counts as not accepted and is refused again with the new list.
+
+    显式重写将替换的已有视觉层内容。
 
     ``fingerprint`` 是读取时正式脚本的内容指纹，对外作 ``revision``：调用方认可覆盖时回传它，
     正式脚本此后又有变化即视为未认可，按新清单重新拒绝。
@@ -116,7 +140,9 @@ class PromptOverwrite:
 
 
 class PromptOverwriteRequired(ValueError):
-    """显式重写会替换已有视觉层内容，而调用方没有给出与当前正式脚本相符的覆盖令牌。"""
+    """An explicit rewrite would replace existing visual-layer content, and the caller gave no overwrite token matching the current final script.
+
+    显式重写会替换已有视觉层内容，而调用方没有给出与当前正式脚本相符的覆盖令牌。"""
 
     def __init__(self, overwrite: PromptOverwrite) -> None:
         ids = "、".join(entry.entry_id for entry in overwrite.entries)
@@ -124,7 +150,7 @@ class PromptOverwriteRequired(ValueError):
         self.overwrite = overwrite
 
 
-#: 丢失清单里视觉层字段的文案 key。
+#: Copy keys for visual-layer fields in the loss list. / 丢失清单里视觉层字段的文案 key。
 _FIELD_KEYS: dict[str, str] = {
     "image_prompt": "prompt_overwrite_field_image_prompt",
     "video_prompt": "prompt_overwrite_field_video_prompt",
@@ -133,7 +159,9 @@ _FIELD_KEYS: dict[str, str] = {
 
 
 def render_prompt_overwrite_text(overwrite: Mapping[str, Any], translate: Callable[..., str]) -> str:
-    """把 ``PromptOverwrite.to_dict()`` 渲染成丢失清单文本，Web 确认框与 Agent 回执同用这一份。"""
+    """Render ``PromptOverwrite.to_dict()`` into loss-list text, shared by the Web confirm dialog and the Agent receipt.
+
+    把 ``PromptOverwrite.to_dict()`` 渲染成丢失清单文本，Web 确认框与 Agent 回执同用这一份。"""
     entries: list[Mapping[str, Any]] = list(overwrite.get("entries") or ())
     separator = translate("script_overwrite_separator")
     rendered = [
@@ -153,7 +181,7 @@ def render_prompt_overwrite_text(overwrite: Mapping[str, Any], translate: Callab
 
 
 def prompt_overwrite_with_text(overwrite: Mapping[str, Any], translate: Callable[..., str]) -> dict[str, Any]:
-    """覆盖清单附上渲染好的丢失清单文本（``text``）。"""
+    """Attach the rendered loss-list text (``text``) to the overwrite list. / 覆盖清单附上渲染好的丢失清单文本（``text``）。"""
     return {**overwrite, "text": render_prompt_overwrite_text(overwrite, translate)}
 
 

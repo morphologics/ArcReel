@@ -1,4 +1,16 @@
-"""视频请求的时长取档规则（容量语义）与两条路线共用的时长投影。
+"""Duration tier selection rules for video requests (capacity semantics) and the duration projection shared by both routes.
+
+A model's ``supported_durations`` are discrete tiers, and the request duration baseline almost never falls
+exactly on a tier. Tier selection reads tiers as **capacity**: request the smallest valid tier that fits the
+baseline duration; the final cut is not trimmed -- the delivered duration is the tier duration. When the
+baseline exceeds the max tier, the max tier is requested (the final cut is shorter than the requested baseline).
+
+Pure functions, no I/O. Quoting, preflight and execution of both the reference-to-video and storyboard routes
+first resolve the current provider/model and tier set, then share :func:`project_request_duration`, so the two
+routes never reach different tier conclusions for the same state; each route only maps the returned
+:data:`DurationProblem` into its own problem envelope.
+
+视频请求的时长取档规则（容量语义）与两条路线共用的时长投影。
 
 模型的 ``supported_durations`` 是离散档位，请求时长基准几乎不会正好落在档位上。
 取档按**容量**解读档位：申请能装下基准时长的最小合法档位，成片不做裁剪——交付时长即
@@ -15,6 +27,9 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Literal
 
+# Direction of tier deviation relative to the request duration baseline. The literal union in the frontend
+# `types/reference-video.ts` matches this; Literal rather than bare str lets the type checker cover branch
+# comparisons in `warning()` and the preflight response.
 # 取档相对请求时长基准的偏移方向。前端 `types/reference-video.ts` 的字面量联合与此对齐，
 # 用 Literal 而非裸 str 让类型检查兜住 `warning()` 与预检响应里的分支判等。
 Adjustment = Literal["exact", "up", "down", "unconstrained"]
@@ -31,7 +46,9 @@ UNCONSTRAINED: Adjustment = "unconstrained"
 
 @dataclass(frozen=True)
 class DurationSlot:
-    """取档结果。``seconds`` 是向 backend 申请的秒数，``total_seconds`` 是请求时长基准。"""
+    """Tier selection result. ``seconds`` is the seconds requested from the backend, ``total_seconds`` is the request duration baseline.
+
+    取档结果。``seconds`` 是向 backend 申请的秒数，``total_seconds`` 是请求时长基准。"""
 
     seconds: int
     total_seconds: int | float
@@ -39,11 +56,13 @@ class DurationSlot:
 
     @property
     def needs_confirmation(self) -> bool:
-        """申请秒数与请求时长基准不一致时需用户确认。"""
+        """User confirmation is needed when the requested seconds differ from the request duration baseline. / 申请秒数与请求时长基准不一致时需用户确认。"""
         return self.adjustment in (UP, DOWN)
 
     def warning(self, *, provider: str, model: str) -> dict | None:
-        """取档偏移了请求时长基准时的任务 warning（i18n key + 参数）；未偏移返回 None。"""
+        """Task warning (i18n key + params) when tier selection deviated from the request duration baseline; None if no deviation.
+
+        取档偏移了请求时长基准时的任务 warning（i18n key + 参数）；未偏移返回 None。"""
         if not self.needs_confirmation:
             return None
         key = "ref_duration_rounded_up" if self.adjustment == UP else "ref_duration_exceeded"
@@ -54,7 +73,16 @@ class DurationSlot:
 
 
 def resolve_duration_slot(total_seconds: int | float, supported_durations: Sequence[int]) -> DurationSlot:
-    """按容量语义为请求时长基准选择申请档位。
+    """Select the requested tier for the request duration baseline with capacity semantics.
+
+    With an empty tier set the total duration is passed through as-is. Executable reference-to-video requests must
+    not rely on this branch: ``ReferenceUnitRequestProjector`` first returns a structured blocker for missing, empty
+    or invalid tiers. A non-empty tier set need not be ordered and may contain duplicates.
+
+    Non-integer total durations (e.g. 4.5) are compared by "fits" as well, taking the smallest tier ≥ it; no
+    truncating normalization, to avoid silently shortening a duration that should round up.
+
+    按容量语义为请求时长基准选择申请档位。
 
     档位集为空时原样透传总时长。可执行的参考生视频请求不得
     依赖该分支：``ReferenceUnitRequestProjector`` 对缺失、空或无效的档位先返回结构化
@@ -77,6 +105,8 @@ def resolve_duration_slot(total_seconds: int | float, supported_durations: Seque
     return DurationSlot(seconds=chosen, total_seconds=total_seconds, adjustment=adjustment)
 
 
+#: Problem categories from the shared duration projection. Callers map them to problem codes in their own envelope:
+#: the category is the verdict, while code and copy belong to each route's external contract.
 #: 共享时长投影给出的问题类别。调用方按自己的信封映射成 problem code：类别是判定，
 #: code 与文案属各路线的对外契约。
 DurationProblem = Literal[
@@ -88,7 +118,13 @@ DurationProblem = Literal[
 
 @dataclass(frozen=True)
 class RequestDurationProjection:
-    """一次请求的时长结论：申请档位、取档偏移与唯一的阻断类别。
+    """Duration conclusion of one request: requested tier, tier deviation and the single blocking category.
+
+    ``slot`` being None means the tier declaration is missing and no requestable seconds can be computed; ``problem``
+    is then always non-empty. ``endpoint_fixed`` true means this dimension is not driven by ArcReel, and
+    ``slot.seconds`` is the planned seconds passed through as-is rather than a tier member.
+
+    一次请求的时长结论：申请档位、取档偏移与唯一的阻断类别。
 
     ``slot`` 为 None 表示档位声明缺失、算不出可申请的秒数；此时 ``problem`` 必然非空。
     ``endpoint_fixed`` 为真表示这一维不由 ArcReel 驱动，``slot.seconds`` 是原样透传的规划
@@ -109,7 +145,17 @@ def project_request_duration(
     confirmed_request_duration_seconds: int | None = None,
     confirmation_waived: bool = False,
 ) -> RequestDurationProjection:
-    """把编排时长与模型档位投影成一次请求的时长结论；请求时长基准就是编排时长。
+    """Project the planned duration and the model tiers into the duration conclusion of one request; the request duration
+    baseline is the planned duration.
+
+    When ``duration_endpoint_fixed`` is true, an empty tier set is a valid state (the duration dimension is fixed by
+    the endpoint, see ``docs/adr/0082``): no narrowing, no confirmation required, the planned seconds pass through
+    as-is, and the endpoint produces at its workflow's own tier.
+
+    An empty set without ``duration_endpoint_fixed`` is a missing tier declaration (``docs/adr/0018``) and still
+    blocks as ``supported_durations_missing``.
+
+    把编排时长与模型档位投影成一次请求的时长结论；请求时长基准就是编排时长。
 
     ``duration_endpoint_fixed`` 为真时档位集是空的合法状态（时长这一维由端点固定，见
     ``docs/adr/0082``）：不收窄、不要求确认，规划秒数原样透传，端点会按 workflow 自己那档出片。

@@ -1,4 +1,15 @@
 """
+OpenAI shared utility module
+
+Reused by text_backends / image_backends / video_backends / providers.
+
+Contains:
+- OPENAI_RETRYABLE_ERRORS — retryable error types
+- create_openai_client — AsyncOpenAI client factory
+- OPENAI_IMAGE_QUALITY_MAP — image_size tier → quality mapping, consumed by image_backends.openai.
+  Size no longer uses a static (image_size, aspect_ratio) → "WxH" table; it is computed precisely from the ratio by
+  arcreel_market_core.aspect_size (ratio first, resolution second), see docs/adr/0011.
+
 OpenAI 共享工具模块
 
 供 text_backends / image_backends / video_backends / providers 复用。
@@ -46,7 +57,7 @@ try:
         RateLimitError,
     )
 except ImportError:
-    pass  # openai 是必装依赖，此分支仅作防御性保护；回退到空 tuple
+    pass  # openai is a required dependency; this branch is only defensive; fall back to an empty tuple / openai 是必装依赖，此分支仅作防御性保护；回退到空 tuple
 
 
 def create_openai_client(
@@ -56,7 +67,14 @@ def create_openai_client(
     max_retries: int | None = None,
     transport_layer: TransportLayer | None = None,
 ) -> AsyncOpenAI:
-    """创建 AsyncOpenAI 客户端，统一处理 api_key 和 base_url。
+    """Create an AsyncOpenAI client, handling api_key and base_url uniformly.
+
+    When base_url is empty (None/blank) the official endpoint is filled in explicitly: AsyncOpenAI falls back to reading
+    the OPENAI_BASE_URL env var for an empty base_url, and leftover environment would silently override the DB config.
+    The only source of base_url is the DB; pinning an explicit value here cuts off that fallback path. ``transport_layer``
+    is layered on top of the SDK's default client.
+
+    创建 AsyncOpenAI 客户端，统一处理 api_key 和 base_url。
 
     base_url 为空（None/空白）时显式回填官方端点：AsyncOpenAI 对空 base_url
     会回落读取 OPENAI_BASE_URL 环境变量，环境残留将静默覆盖 DB 配置。base_url

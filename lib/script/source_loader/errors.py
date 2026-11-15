@@ -1,4 +1,13 @@
-"""SourceLoader 异常体系。
+"""SourceLoader exception hierarchy.
+
+The routing layer maps exception types to different HTTP statuses:
+- UnsupportedFormatError → 400
+- SourceDecodeError      → 422
+- CorruptFileError       → 422
+- FileSizeExceededError  → 413
+- ConflictError          → 409
+
+SourceLoader 异常体系。
 
 路由层根据异常类型映射到不同 HTTP 状态：
 - UnsupportedFormatError → 400

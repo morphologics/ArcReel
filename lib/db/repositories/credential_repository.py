@@ -10,7 +10,9 @@ from lib.db.repositories.base import BaseRepository
 
 
 class _Unset:
-    """哨兵：区分「未传」（不修改该字段）与「显式传 None」（清空该字段）。"""
+    """Sentinel: distinguishes "not passed" (leave the field unchanged) from "explicitly None" (clear the field).
+
+    哨兵：区分「未传」（不修改该字段）与「显式传 None」（清空该字段）。"""
 
 
 _UNSET = _Unset()
@@ -27,7 +29,7 @@ class CredentialRepository(BaseRepository):
         access_key: str | None = None,
         secret_key: str | None = None,
     ) -> ProviderCredential:
-        """创建凭证。若为该供应商的第一条，自动设为生效。"""
+        """Create a credential. If it is the provider's first, it becomes active automatically. / 创建凭证。若为该供应商的第一条，自动设为生效。"""
         is_first = not await self.has_active_credential(provider)
         cred = ProviderCredential(
             provider=provider,
@@ -69,7 +71,7 @@ class CredentialRepository(BaseRepository):
         return await self.get_active(provider) is not None
 
     async def get_active_credentials_bulk(self) -> dict[str, ProviderCredential]:
-        """批量获取所有供应商的生效凭证。"""
+        """Fetch the active credentials of all providers in bulk. / 批量获取所有供应商的生效凭证。"""
         stmt = select(ProviderCredential).where(
             ProviderCredential.is_active,
         )
@@ -77,13 +79,15 @@ class CredentialRepository(BaseRepository):
         return {c.provider: c for c in result.scalars()}
 
     async def count_by_provider_bulk(self) -> dict[str, int]:
-        """批量统计每个供应商的凭证数量；没有凭证的供应商不出现在结果里。"""
+        """Count credentials per provider in bulk; providers without credentials are absent from the result.
+
+        批量统计每个供应商的凭证数量；没有凭证的供应商不出现在结果里。"""
         stmt = select(ProviderCredential.provider, func.count()).group_by(ProviderCredential.provider)
         result = await self.session.execute(stmt)
         return dict(result.tuples().all())
 
     async def activate(self, cred_id: int, provider: str) -> None:
-        """激活指定凭证，同时取消同供应商的其他生效标记。"""
+        """Activate the given credential and clear the active flag on the provider's other credentials. / 激活指定凭证，同时取消同供应商的其他生效标记。"""
         await self.session.execute(
             update(ProviderCredential).where(ProviderCredential.provider == provider).values(is_active=False)
         )
@@ -102,7 +106,11 @@ class CredentialRepository(BaseRepository):
         access_key: str | _Unset | None = _UNSET,
         secret_key: str | _Unset | None = _UNSET,
     ) -> None:
-        """更新凭证字段。省略参数（保持 _UNSET）表示不修改；api_key/base_url/access_key/
+        """Update credential fields. Omitted arguments (left as _UNSET) mean no change; passing None explicitly for
+        api_key/base_url/access_key/secret_key clears that field, used when switching credential groups to clear the other
+        group's old values (see ``ProviderMeta.credential_groups``). name/credentials_path have no clearing semantics; passing None is the same as no change.
+
+        更新凭证字段。省略参数（保持 _UNSET）表示不修改；api_key/base_url/access_key/
         secret_key 显式传 None 会清空该字段——凭证切组时用于清空另一组的旧值（见
         ``ProviderMeta.credential_groups``）。name/credentials_path 无清空语义，
         传 None 等同不修改。
@@ -124,7 +132,9 @@ class CredentialRepository(BaseRepository):
             cred.secret_key = secret_key
 
     async def delete(self, cred_id: int) -> None:
-        """删除凭证。若删除的是生效凭证，自动将最早的另一条设为生效。"""
+        """Delete a credential. If the active one is deleted, the oldest remaining one becomes active automatically.
+
+        删除凭证。若删除的是生效凭证，自动将最早的另一条设为生效。"""
         cred = await self.get_by_id(cred_id)
         if cred is None:
             return

@@ -1,4 +1,4 @@
-"""Gemini 文本生成后端。"""
+"""Gemini text generation backend. / Gemini 文本生成后端。"""
 
 from __future__ import annotations
 
@@ -31,17 +31,45 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_MODEL = "gemini-3-flash-preview"
 
+# The values of these keywords are "name → sub-schema maps": their keys are property/definition names, not schema keywords.
+# When recursing, each value is a sub-schema (a key might happen to be called ``const`` and must not be recognized as the keyword).
 # 这些关键字的值是「名字 → 子 schema 的映射」：其 key 是属性名/定义名，不是 schema 关键字。
 # 递归进入时，每个值才是子 schema（key 可能恰好叫 ``const``，不可当关键字识别）。
 _SUBSCHEMA_MAP_KEYS = frozenset({"properties", "patternProperties", "$defs", "definitions", "dependentSchemas"})
+# The values of these keywords are "instance data", not sub-schemas: do not recurse into them (content that happens to be called ``const`` is data).
 # 这些关键字的值是「实例数据」而非子 schema：不可递归进去（里面恰好叫 ``const`` 的内容是数据）。
 _INSTANCE_KEYWORDS = frozenset({"const", "enum", "default", "examples"})
+# Schema keywords not recognized by the Gemini Developer API's ``responseSchema``: stripped when they appear as keywords.
 # Gemini Developer API 的 ``responseSchema`` 不认识的 schema 关键字：作为关键字出现时剥除。
 _UNSUPPORTED_KEYWORDS = frozenset({"additionalProperties"})
 
 
 def _const_to_enum(node: object, *, in_subschema_map: bool = False) -> object:
-    """归一 schema 为 ``responseSchema`` 通道可表达的形态。
+    """Normalize the schema into a form the ``responseSchema`` channel can express.
+
+    Three normalization steps (done in the same position-aware traversal):
+    1. Scalar-valued ``const: X`` → ``enum: [X]`` (semantically equivalent). Single-value ``Literal`` renders as
+       ``const`` in ``model_json_schema()``, while ``types.Schema`` has no ``const`` field.
+    2. ``enum`` with non-string members → string enum + ``type: string``. ``types.Schema``'s ``enum`` only supports
+       strings (per the proto definition); after the integer duration enum ``[4,6,8]`` becomes ``["4","6","8"]``,
+       constrained decoding to the exact set still holds; the mechanical coercion in ``_duration_literal`` on the
+       parsing side restores int.
+    3. Strip the schema keyword ``additionalProperties``. For strict models (``extra="forbid"``),
+       ``model_json_schema()`` puts ``additionalProperties: false`` on every object level; google-genai sends falsy
+       values as ``additional_properties`` as is, and the Gemini Developer API's ``responseSchema`` does not recognize
+       that field and returns 400 INVALID_ARGUMENT directly. Constrained decoding never generates properties outside the
+       schema anyway, so stripping loses no constraint, and downstream still re-validates with the strict Pydantic model.
+
+    ``const`` can appear in three kinds of positions that must be treated differently (the irreducible minimal state
+    machine for correctness):
+    - **schema keyword**: normalize (scalars only, matching the only const form in this repo, the single-value duration
+      Literal); ``additionalProperties`` is likewise stripped only in this position;
+    - **field name** (keys of maps under ``_SUBSCHEMA_MAP_KEYS``): the current dict's keys are names and their values are
+      still sub-schemas; keep recursing as schema (real consts inside are normalized as usual; fields named
+      ``additionalProperties`` are kept);
+    - **instance data** (values of ``_INSTANCE_KEYWORDS``): kept as is, not recursed into.
+
+    归一 schema 为 ``responseSchema`` 通道可表达的形态。
 
     三步归一（同一次位置感知遍历完成）：
     1. 「值为标量」的 ``const: X`` → ``enum: [X]``（语义等价）。单值 ``Literal`` 在
@@ -67,14 +95,14 @@ def _const_to_enum(node: object, *, in_subschema_map: bool = False) -> object:
     if not isinstance(node, dict):
         return node
     if in_subschema_map:
-        # 当前 dict 的 key 是属性名/定义名；每个值才是子 schema
+        # The current dict's keys are property/definition names; each value is a sub-schema / 当前 dict 的 key 是属性名/定义名；每个值才是子 schema
         return {k: _const_to_enum(v) for k, v in node.items()}
     out: dict = {}
     for k, v in node.items():
         if k in _UNSUPPORTED_KEYWORDS:
-            continue  # Gemini responseSchema 不认识，且对约束解码无影响
+            continue  # not recognized by Gemini responseSchema, and no effect on constrained decoding / Gemini responseSchema 不认识，且对约束解码无影响
         if k in _INSTANCE_KEYWORDS:
-            out[k] = v  # 值是实例数据，原样保留
+            out[k] = v  # the value is instance data, kept as is / 值是实例数据，原样保留
         else:
             out[k] = _const_to_enum(v, in_subschema_map=k in _SUBSCHEMA_MAP_KEYS)
     if "const" in out and (out["const"] is None or isinstance(out["const"], (str, int, float, bool))):
@@ -86,7 +114,17 @@ def _const_to_enum(node: object, *, in_subschema_map: bool = False) -> object:
 
 
 def _to_response_schema(schema: dict | type) -> dict:
-    """把 response_schema 统一转成 Gemini ``response_schema``（``types.Schema``）可消费的 dict。
+    """Convert response_schema uniformly into a dict consumable by Gemini ``response_schema`` (``types.Schema``).
+
+    Gemini has two structured output channels: ``response_schema`` (wire field ``responseSchema``, an OpenAPI subset,
+    available for a long time, generally passed through by proxy gateways to the real upstream for constrained decoding)
+    and ``response_json_schema`` (wire field ``responseJsonSchema``, newer; most proxy gateways' request parsing
+    structs do not recognize it and silently drop it; after that the upstream generates freely in schema-less JSON
+    mode and all enum/required constraints are lost, reproduced widely in production). Always use the former: first
+    ``resolve_schema`` inlines ``$ref``, then ``_const_to_enum`` normalizes ``const`` and non-string ``enum`` into string
+    enums that ``types.Schema`` can express, and strips ``additionalProperties``.
+
+    把 response_schema 统一转成 Gemini ``response_schema``（``types.Schema``）可消费的 dict。
 
     Gemini 有两条结构化输出通道：``response_schema``（wire 字段 ``responseSchema``，OpenAPI 子集，
     上线已久，代理网关普遍能透传给真实上游执行约束解码）与 ``response_json_schema``（wire 字段
@@ -96,12 +134,12 @@ def _to_response_schema(schema: dict | type) -> dict:
     归一为 ``types.Schema`` 可表达的字符串枚举，并剥除 ``additionalProperties``。
     """
     normalized = _const_to_enum(resolve_schema(schema))
-    assert isinstance(normalized, dict)  # resolve_schema 必返回 dict
+    assert isinstance(normalized, dict)  # resolve_schema always returns a dict / resolve_schema 必返回 dict
     return normalized
 
 
 class GeminiTextBackend:
-    """Gemini 文本生成后端，支持 AI Studio 和 Vertex AI 两种模式。"""
+    """Gemini text generation backend, supporting both AI Studio and Vertex AI modes. / Gemini 文本生成后端，支持 AI Studio 和 Vertex AI 两种模式。"""
 
     def __init__(
         self,
@@ -181,7 +219,7 @@ class GeminiTextBackend:
         system_prompt: str | None,
         max_output_tokens: int | None = None,
     ) -> genai.types.GenerateContentConfigDict:
-        """构建 generate_content 的 config 字典。"""
+        """Build the config dict for generate_content. / 构建 generate_content 的 config 字典。"""
         config: genai.types.GenerateContentConfigDict = {}
         if response_schema:
             config["response_mime_type"] = "application/json"
@@ -193,7 +231,7 @@ class GeminiTextBackend:
         return config
 
     def _build_contents(self, request: TextGenerationRequest) -> list:
-        """构建 contents 列表（图片 parts + 文本 prompt）。"""
+        """Build the contents list (image parts + text prompt). / 构建 contents 列表（图片 parts + 文本 prompt）。"""
         contents: list = []
 
         if request.images:
@@ -202,14 +240,20 @@ class GeminiTextBackend:
                     pil_img = Image.open(img_input.path)
                     contents.append(pil_img)
                 elif img_input.url is not None:
-                    # URL 型图片直接作为字符串传递，SDK 内部会处理
+                    # URL images are passed directly as strings; the SDK handles them internally / URL 型图片直接作为字符串传递，SDK 内部会处理
                     contents.append(img_input.url)
 
         contents.append(request.prompt)
         return contents
 
     async def generate(self, request: TextGenerationRequest) -> TextGenerationResult:
-        """异步生成文本，支持结构化输出和 vision。
+        """Generate text asynchronously, supporting structured output and vision.
+
+        This method has no retry decorator: transient error retries happen at the :meth:`_generate_native` layer. If
+        re-validation/fallback were also inside the retry scope, a failed fallback attempt would also replay the already
+        successful native call (multiplied retries).
+
+        异步生成文本，支持结构化输出和 vision。
 
         本方法不带重试装饰器：瞬态错误重试在 :meth:`_generate_native` 层完成。若把复验/
         降级也包进重试范围，降级尝试的失败会连带重放已成功的原生调用（重试叠乘）。
@@ -217,6 +261,11 @@ class GeminiTextBackend:
         native = await self._generate_native(request, structured=bool(request.response_schema))
 
         if request.response_schema:
+            # Re-validation on the success path: after HTTP 200 check that the response really satisfies the schema. Proxy
+            # gateways may silently ignore response_schema and return prose or non-conforming JSON, which if let through would only
+            # raise a bare ValidationError at downstream Pydantic validation. Gemini native requests declare no strict, so
+            # re-validation uses strict=False, tolerating coercible values, to avoid unnecessary billed fallback calls for valid
+            # responses the provider already accepted.
             # 成功路径复验：HTTP 200 后校验返回是否真满足 schema。代理网关可能静默忽略
             # response_schema 返回散文或违例 JSON，直接放行会一路漏到下游 Pydantic
             # 校验才抛裸 ValidationError。Gemini 原生请求无 strict 声明，复验用 strict=False，
@@ -228,6 +277,10 @@ class GeminiTextBackend:
                     fallback_reason,
                     truncate_for_log(native.text),
                 )
+                # When a proxy gateway silently ignores responseSchema, every wire-level channel (including the JSON/TOOLS modes of
+                # instructor's genai integration) is ignored the same way, leaving only writing the schema into the prompt. Calling
+                # _generate_native directly bypasses this re-validation branch, so each fallback attempt only produces retries of its
+                # own layer, not multiplied with the outer call.
                 # 代理网关静默忽略 responseSchema 时，任何 wire 级通道（含 instructor genai 集成的
                 # JSON/TOOLS 模式）都会被同样忽略，只剩把 schema 写进 prompt。直调 _generate_native
                 # 不经本复验分支，每次降级尝试只产生自己这一层的重试，不与外层调用叠乘。
@@ -237,6 +290,7 @@ class GeminiTextBackend:
                     provider=PROVIDER_GEMINI,
                     model=self._model,
                 )
+                # This native 200 call has already been billed; merge its tokens into the fallback result, otherwise usage is systematically under-recorded.
                 # 这次原生 200 调用已被计费，把它的 token 并入降级结果，否则会系统性漏记。
                 merge_billed_usage(result, native)
                 return result
@@ -245,7 +299,14 @@ class GeminiTextBackend:
 
     @with_retry_async()
     async def _generate_native(self, request: TextGenerationRequest, *, structured: bool) -> TextGenerationResult:
-        """单次原生 SDK 调用：构造 config/contents、发请求、截断处理与瞬态错误重试。
+        """A single native SDK call: build config/contents, send the request, handle truncation and retry transient errors.
+
+        ``structured`` is passed by the caller according to the original intent of this generate() request, decoupled from
+        ``request.response_schema`` itself: :func:`.base.prompt_json_fallback` clears ``response_schema`` and still reuses
+        this method (the schema having been rewritten into the prompt), but that is still a structured output attempt, so
+        truncation must likewise be a hard error, not just a warning.
+
+        单次原生 SDK 调用：构造 config/contents、发请求、截断处理与瞬态错误重试。
 
         ``structured`` 由调用方按本次 generate() 的原始请求诉求传入，与 ``request.response_schema``
         本身解耦——:func:`.base.prompt_json_fallback` 会把 ``response_schema`` 置空后仍复用本方法
@@ -276,6 +337,8 @@ class GeminiTextBackend:
         cache_read_tokens: int | None = None
         usage = response.usage_metadata
         if usage is not None:
+            # prompt_token_count includes the cache-hit part (cached_content_token_count); thinking tokens are billed as output
+            # and are not in candidates_token_count, so they must be added back.
             # prompt_token_count 含缓存命中部分（cached_content_token_count）；思考 token 按输出计费，
             # 不在 candidates_token_count 里，须加回。
             input_tokens = usage.prompt_token_count
@@ -288,7 +351,7 @@ class GeminiTextBackend:
         truncated = False
         if candidates:
             finish_reason = getattr(candidates[0], "finish_reason", None)
-            # Gemini finish_reason 可能是枚举对象，转 str 后再比对
+            # Gemini finish_reason may be an enum object; convert to str before comparing / Gemini finish_reason 可能是枚举对象，转 str 后再比对
             truncated = check_truncation(
                 str(finish_reason).rsplit(".", 1)[-1] if finish_reason is not None else None,
                 provider=PROVIDER_GEMINI,

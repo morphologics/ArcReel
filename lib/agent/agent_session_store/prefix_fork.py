@@ -1,4 +1,14 @@
-"""前缀分叉：把会话 transcript 在锚点之前的部分复制到新 session_id 下。
+"""Prefix fork: copy the part of a session transcript before the anchor under a new session_id.
+
+"Feeding an assembled prefix to SDK resume" is an unofficial usage; its risks and knowledge are contained in this module
+(see ``docs/adr/0058``). It only depends on the SessionStore protocol's ``load`` / ``append`` / ``list_subkeys`` and
+doesn't touch SQL -- seq allocation and summary fold are maintained by the store itself.
+
+Entry uuids are kept as is: both the unique index and the SDK materialization directory are scoped by session_id, so
+the same uuid across sessions never collides; the parentUuid chain, sidechain independent graphs and cross-references
+need no remapping.
+
+前缀分叉：把会话 transcript 在锚点之前的部分复制到新 session_id 下。
 
 「以拼装出的前缀供 SDK resume」是非官方用法，风险与知识收敛在本模块（见
 ``docs/adr/0058``）。只依赖 SessionStore 协议的 ``load`` / ``append`` /
@@ -20,17 +30,19 @@ from claude_agent_sdk import SessionKey, SessionListSubkeysKey, SessionStoreEntr
 SUBAGENT_SUBPATH_ROOT = "subagents/"
 SUBAGENT_LEAF_PREFIX = "agent-"
 
+# Conversation entry types: a prefix containing none of them is treated as empty. Transcripts often start with
+# non-conversation metadata lines like file-history-snapshot, so a non-zero line count does not mean there is a conversation.
 # 会话条目类型：前缀里没有任何一条即视为空前缀。transcript 开头常有
 # file-history-snapshot 之类的非会话元数据行，行数非零不等于有对话。
 _CONVERSATION_ENTRY_TYPES = frozenset({"user", "assistant"})
 
 
 class InvalidAnchorError(ValueError):
-    """锚点不是原会话主时间线上的用户消息。"""
+    """The anchor is not a user message on the original session's main timeline. / 锚点不是原会话主时间线上的用户消息。"""
 
 
 class SessionStoreLike(Protocol):
-    """本模块用到的 SessionStore 子集。"""
+    """The subset of SessionStore used by this module. / 本模块用到的 SessionStore 子集。"""
 
     async def load(self, key: SessionKey) -> list[SessionStoreEntry] | None: ...
 
@@ -43,7 +55,9 @@ class SessionStoreLike(Protocol):
 
 @dataclass(frozen=True, slots=True)
 class PrefixCopyResult:
-    """复制结果。``entries_copied == 0`` 即空前缀，新会话无 transcript 可 resume。"""
+    """Copy result. ``entries_copied == 0`` means an empty prefix; the new session has no transcript to resume.
+
+    复制结果。``entries_copied == 0`` 即空前缀，新会话无 transcript 可 resume。"""
 
     entries_copied: int
     subagent_subpaths: tuple[str, ...]
@@ -57,7 +71,19 @@ async def copy_session_prefix(
     anchor_uuid: str,
     new_session_id: str,
 ) -> PrefixCopyResult:
-    """把 ``session_id`` 中锚点之前的条目复制到 ``new_session_id`` 下。
+    """Copy the entries of ``session_id`` before the anchor under ``new_session_id``.
+
+    ``anchor_uuid`` points to a user message on the original session's main timeline; the slice does **not** include
+    that message itself -- the semantics are "go back to before this message was sent". Since the anchor is fixed at a
+    user message boundary, the previous turn is always fully closed, which guarantees tool_use / tool_result pairing and
+    the integrity of subagent sub-timelines.
+
+    Subagent sub-timelines hit by the prefix come along whole: agent ids are collected from ``toolUseResult.agentId``
+    of tool_results in the prefix and the corresponding subpaths are copied in full. Subpaths are matched by the last
+    segment ``agent-<id>``, as the SDK itself does -- it may be ``subagents/agent-<id>`` or nested under
+    ``subagents/workflows/<runId>/``.
+
+    把 ``session_id`` 中锚点之前的条目复制到 ``new_session_id`` 下。
 
     ``anchor_uuid`` 指向原会话主时间线上的一条用户消息，切片**不含**该条本身
     ——语义是「回到这条消息发出前」。锚点固定在用户消息边界，前一轮次必然完整
@@ -76,6 +102,7 @@ async def copy_session_prefix(
 
     origin = {"sessionId": session_id, "messageUuid": anchor_uuid}
     rebound = [_rebind(entry, new_session_id=new_session_id, origin=origin) for entry in prefix]
+    # Re-stamp the timestamp of the last entry: the SDK's own fork does the same, for leaf-node detection on resume.
     # 末条重打时间戳：SDK 自身的 fork 同样如此，供 resume 时的叶子节点判定。
     rebound[-1] = {**rebound[-1], "timestamp": _now_iso()}
 
@@ -108,6 +135,9 @@ def _prefix_before_anchor(entries: list[SessionStoreEntry], anchor_uuid: str) ->
         if _entry_type(entry) != "user":
             raise InvalidAnchorError(f"anchor {anchor_uuid} is a {_entry_type(entry)!r} entry, not a user message")
         if _carries_tool_result(entry):
+            # The transcript also writes tool receipts as type:"user" entries, and those with mixed-in text can't be told apart from
+            # real user messages by entry type. Using one as the anchor would leave the paired tool_use dangling at the end of the
+            # prefix, so it is rejected as an invalid anchor.
             # transcript 把工具回执也写成 type:"user" 的条目，其中混排文本的那种
             # 从条目类型上与真用户消息无从区分。以它作锚点会把配对的 tool_use
             # 留在前缀末尾悬空，因此按非法锚点拒绝。
@@ -143,7 +173,13 @@ def _prefix_agent_ids(prefix: list[SessionStoreEntry]) -> set[str]:
 
 
 def _rebind(entry: SessionStoreEntry, *, new_session_id: str, origin: dict[str, str]) -> SessionStoreEntry:
-    """改写条目归属。
+    """Rewrite entry ownership.
+
+    ``sessionId`` is only rewritten when the original entry has it; ``forkedFrom`` is only added on transcript lines --
+    ``agent_metadata`` entries in subagent subpaths are written by the SDK verbatim as .meta.json sidecar files, and
+    extra fields would end up there too.
+
+    改写条目归属。
 
     ``sessionId`` 仅在原条目已有时改写，``forkedFrom`` 仅加在 transcript 行上
     ——subagent 子路径里的 ``agent_metadata`` 条目会被 SDK 原样写成 .meta.json
@@ -153,10 +189,12 @@ def _rebind(entry: SessionStoreEntry, *, new_session_id: str, origin: dict[str, 
     if "sessionId" in rebound:
         rebound["sessionId"] = new_session_id
     if entry.get("uuid"):
+        # SessionStoreEntry only declares type/uuid/timestamp; the transcript's other fields pass through as is per SDK convention, and a TypedDict can't declare such extension keys
         rebound["forkedFrom"] = origin  # pyright: ignore[reportGeneralTypeIssues]  # SessionStoreEntry 只声明 type/uuid/timestamp，transcript 的其余字段按 SDK 约定原样透传，TypedDict 无法声明这类扩展键
     return rebound
 
 
+# The type of historical payloads is not guaranteed to be a string; treat it as object when reading.
 # 历史 payload 的 type 不保证是字符串，读取时按 object 看待。
 def _entry_type(entry: Mapping[str, object]) -> str:
     entry_type = entry.get("type")

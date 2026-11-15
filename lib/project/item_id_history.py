@@ -1,4 +1,12 @@
-"""项目里出现过的条目编号（``docs/adr/0090``：编号只分配、不复用）。
+"""Entry numbers that have ever appeared in the project (``docs/adr/0090``: numbers are only issued, never reused).
+
+Five sources: scripts, version history (``versions/versions.json``), the artifact manifest, deletion records in
+the project trash (including the scripts and edit timelines in their snapshots), and clip references in edit
+timelines. Migration and full-script writes use it to determine the lower bound for issuing numbers; numbers
+already taken by the script plan are reserved by the ledger high-water mark, and content review issues new
+numbers, so whether a number can be kept doesn't depend on history records that may be cleaned up.
+
+项目里出现过的条目编号（``docs/adr/0090``：编号只分配、不复用）。
 
 五个来源：剧本、版本历史（``versions/versions.json``）、产物清单、项目回收站里的删除记录（含快照里的剧本
 与剪辑时间线）、剪辑时间线的片段引用。迁移与整份剧本落盘按它确定发号下界；脚本规划已占的号
@@ -17,8 +25,10 @@ from lib.project.project_trash import trash_dir
 from lib.script.item_ids import ITEM_ID_RE, ItemIdIssuer, episode_item_id_high_water, reissue_item_ids
 from lib.script.script_skeleton import resolve_kind_items
 
-#: 条目编号所在的字段：剧本条目的 id 字段与剪辑片段的 ``unit_id``。
+#: Fields that hold entry numbers: the id field of script entries and ``unit_id`` of edit clips. / 条目编号所在的字段：剧本条目的 id 字段与剪辑片段的 ``unit_id``。
 _ID_FIELDS = frozenset({"segment_id", "scene_id", "shot_id", "unit_id"})
+#: Resource types in version history keyed by entry number (matches
+#: ``script_entry_cleanup.ENTRY_MEDIA_RESOURCE_TYPES``).
 #: 版本历史里以条目编号为键的资源类型（与 ``script_entry_cleanup.ENTRY_MEDIA_RESOURCE_TYPES`` 一致）。
 _ENTRY_RESOURCE_TYPES = ("storyboards", "end_frames", "videos", "reference_videos", "audio")
 _MANIFEST_FILE = ".arcreel_artifacts.json"
@@ -55,7 +65,7 @@ def _json_files(directory: Path) -> Iterator[Path]:
 
 
 def used_item_numbers(project_dir: Path) -> dict[int, set[int]]:
-    """``{集 ID: 用过的主序号}``；读不出的文件跳过。"""
+    """``{episode ID: used main sequence numbers}``; unreadable files are skipped. / ``{集 ID: 用过的主序号}``；读不出的文件跳过。"""
 
     project_dir = Path(project_dir)
     found: dict[int, set[int]] = {}
@@ -84,7 +94,7 @@ def used_item_numbers(project_dir: Path) -> dict[int, set[int]]:
         obj = record.get("object") if isinstance(record, dict) else None
         if isinstance(obj, dict) and obj.get("kind") == _SCRIPT_ENTRY_KIND:
             _record(found, obj.get("id"))
-        # 快照里改写前的剧本、删掉的集与剪辑时间线
+        # Pre-rewrite scripts, deleted episodes and edit timelines in snapshots / 快照里改写前的剧本、删掉的集与剪辑时间线
         for path in _json_files(record_dir):
             for item_id in _id_fields(_load(path)):
                 _record(found, item_id)
@@ -93,13 +103,19 @@ def used_item_numbers(project_dir: Path) -> dict[int, set[int]]:
 
 
 def max_used_item_numbers(project_dir: Path) -> dict[int, int]:
-    """``{集 ID: 用过的最大主序号}``。"""
+    """``{episode ID: largest used main sequence number}``. / ``{集 ID: 用过的最大主序号}``。"""
 
     return {episode: max(numbers) for episode, numbers in used_item_numbers(project_dir).items() if numbers}
 
 
 def issue_landing_item_ids(project_dir: Path, project: Mapping[str, Any], script: dict[str, Any]) -> dict[str, str]:
-    """生成产出落盘前给整份剧本的条目发号，就地改写并返回 ``{原 ID: 新 ID}``。
+    """Issue entry numbers for the whole script before generation output is written to disk; rewrites in place and
+    returns ``{old ID: new ID}``.
+
+    Every full conversion or generation issues new numbers, taken after the largest number used in this episode's
+    ledger record and the five sources.
+
+    生成产出落盘前给整份剧本的条目发号，就地改写并返回 ``{原 ID: 新 ID}``。
 
     每次整份转出或生成都发新号，取在本集账本记录与五个来源里用过的最大号之后。
     """

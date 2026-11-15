@@ -1,4 +1,21 @@
-"""宫格、尾帧与角色参考音频进出项目回收站（``docs/adr/0107``）。
+"""Grids, end frames and character reference audio moving into and out of the project trash (``docs/adr/0107``).
+
+All three kinds of objects hang off a parent object: a grid belongs to an episode, an end frame to a shot in a
+script, reference audio to a character. Deletion becomes one deletion record with a structure snapshot; on
+restore, if the parent object is gone, it degrades as an object that can't be taken to adding back only the
+files; at write time it is re-checked under the lock, and if the parent was deleted meanwhile this restore fails
+and the record is kept. When the grid's episode is also in the project trash it does not degrade: restore the
+episode first, then the grid (:func:`~lib.episode.episode_trash.require_live_episode`).
+
+- Grid: the record holds the grid record, the grid composite and its version-history snapshot. When the original
+  ID is free it is added back as a whole; version history and artifact-manifest registrations come from the
+  migrated temporary project and are judged by artifact currency as usual; when the ID is taken it degrades as an
+  object that can't be taken.
+- End frame, reference audio: back to the original location if free, otherwise added back under a new name. When
+  back at the original location and the parent object currently points to no usable file, it is repointed to the
+  added-back file; otherwise the added-back file is unreferenced.
+
+宫格、尾帧与角色参考音频进出项目回收站（``docs/adr/0107``）。
 
 三类对象都挂在上级对象上：宫格属于集，尾帧属于剧本里的分镜，参考音频属于角色。删除成为一条带结构快照的删除记录；
 恢复时上级对象已不在，按取不出对象降级为只加回文件；落地时在锁内再核对一次，期间上级被删则本次恢复失败、记录保留。
@@ -52,11 +69,17 @@ REFERENCE_AUDIO_KIND = "reference_audio"
 _GRID_TYPE = "grids"
 
 
-# ---------------------------------------------------------------- 删除
+# Deletion / ---------------------------------------------------------------- 删除
 
 
 def trash_grid(project_dir: Path, grid_id: str, episode: int | None) -> project_trash.TrashRecord:
-    """把一条宫格记录连同联合图与版本历史移进项目回收站；调用方持项目锁与该宫格的记录锁。
+    """Move a grid record together with its grid composite and version history into the project trash; the caller holds
+    the project lock and that grid's record lock.
+
+    When ``episode`` is empty (record unreadable) there is no provable manifest registration; only the files are
+    moved.
+
+    把一条宫格记录连同联合图与版本历史移进项目回收站；调用方持项目锁与该宫格的记录锁。
 
     ``episode`` 为空（记录读不出）时没有可证明的清单登记，只移走文件。
     """
@@ -68,6 +91,8 @@ def trash_grid(project_dir: Path, grid_id: str, episode: int | None) -> project_
         *versions.snapshot_files(versions.resource_records(resource)),
     ]
     files = [rel for rel in dict.fromkeys(candidates) if _is_plain_file(project_dir / rel)]
+    # Take the snapshot first: version history and manifest registrations stay in the snapshot and are taken from the
+    # migrated temporary project on restore.
     # 快照先拍：版本历史与清单登记留在快照里，恢复时从迁移后的临时项目取出。
     record = project_trash.record_deletion(
         project_dir, {"kind": GRID_KIND, "id": grid_id, "episode": episode}, files, snapshot=True
@@ -86,7 +111,14 @@ def trash_grid(project_dir: Path, grid_id: str, episode: int | None) -> project_
 def trash_end_frame(
     project_dir: Path, script_file: str, shot_id: str, script: Mapping[str, Any]
 ) -> project_trash.TrashRecord:
-    """把分镜的尾帧快照移进项目回收站；调用方持该剧本的锁与项目锁，字段已在同一临界区里置空。
+    """Move a shot's end-frame snapshot into the project trash; the caller holds the script's lock and the project lock,
+    and the field has already been cleared in the same critical section.
+
+    ``script`` is the script written back in the same critical section: the record carries the shot's episode, its
+    current position and a body excerpt, which the trash uses to name the shot. When the script has no integer
+    ``episode``, the episode number is taken from the canonical ``script_file`` file name.
+
+    把分镜的尾帧快照移进项目回收站；调用方持该剧本的锁与项目锁，字段已在同一临界区里置空。
 
     ``script`` 是同一临界区里写回的剧本：记录带上分镜所在的集与它此刻的位置、正文摘录，回收站凭它们称呼分镜。
     剧本内没有整数 ``episode`` 时，集号取自规范的 ``script_file`` 文件名。
@@ -107,16 +139,22 @@ def trash_end_frame(
 
 
 def trash_reference_audio(project_dir: Path, character: str, rel: str) -> project_trash.TrashRecord:
-    """把角色不再引用的参考音频移进项目回收站；调用方持项目锁，字段已在同一临界区里改掉。"""
+    """Move reference audio no longer referenced by a character into the project trash; the caller holds the project
+    lock and the field has already been changed in the same critical section.
+
+    把角色不再引用的参考音频移进项目回收站；调用方持项目锁，字段已在同一临界区里改掉。"""
     obj = {"kind": REFERENCE_AUDIO_KIND, "character": character, "path": rel}
     return project_trash.record_deletion(project_dir, obj, [rel], snapshot=True)
 
 
-# ---------------------------------------------------------------- 恢复
+# Restore / ---------------------------------------------------------------- 恢复
 
 
 def take_grid(project_dir: Path, staged: Path, obj: Mapping[str, Any]) -> Restoration:
-    """按宫格 ID 从迁移后的临时项目取出宫格记录、联合图、版本历史与清单登记。"""
+    """Take the grid record, grid composite, version history and manifest registrations by grid ID from the migrated
+    temporary project.
+
+    按宫格 ID 从迁移后的临时项目取出宫格记录、联合图、版本历史与清单登记。"""
     grid_id = str(obj.get("id"))
     try:
         grid = GridGeneration.from_dict(json.loads((staged / f"grids/{grid_id}.json").read_text(encoding="utf-8")))
@@ -147,6 +185,8 @@ def take_grid(project_dir: Path, staged: Path, obj: Mapping[str, Any]) -> Restor
         if any(not _free(project_dir, rel) for rel in rels) or versions.resource_records(resource):
             raise _failed(grid_id)
 
+    # Here an object that can't be taken degrades (episode fully deleted, location taken) or is refused (episode is in
+    # the trash); it is re-checked under the lock at write time.
     # 此处按取不出对象降级（集已彻底删除、位置被占）或拒绝（集在回收站里）；落地时在锁内再核对一次。
     require_free()
 
@@ -157,6 +197,8 @@ def take_grid(project_dir: Path, staged: Path, obj: Mapping[str, Any]) -> Restor
         with formal_write_transaction(versions.versions_file):
             versions.attach_resources(history)
             if claim is not None:
+                # Back-fill: registrations come from the pre-deletion (migrated) manifest with unchanged basis digests; inputs that
+                # changed since read as stale as usual.
                 # 补录：登记取自删除前（迁移后）的清单，依据摘要不变，输入此后变过的照常读为过期。
                 register_artifact_entries_atomically(
                     project_dir, {key: ArtifactManifestEntry(claim.artifact_path, claim.basis_digest)}
@@ -166,7 +208,10 @@ def take_grid(project_dir: Path, staged: Path, obj: Mapping[str, Any]) -> Restor
 
 
 def take_end_frame(project_dir: Path, staged: Path, obj: Mapping[str, Any]) -> Restoration:
-    """取出分镜的尾帧快照：原位置空闲则回原位并让分镜重新指向它，被占用则换新名、不改分镜。"""
+    """Take a shot's end-frame snapshot: back to the original location if free and repoint the shot to it; if taken, use
+    a new name and leave the shot unchanged.
+
+    取出分镜的尾帧快照：原位置空闲则回原位并让分镜重新指向它，被占用则换新名、不改分镜。"""
     rel, script_file, shot_id = str(obj.get("path")), str(obj.get("script_file")), str(obj.get("shot_id"))
     if not _is_plain_file(staged / rel):
         raise _failed(rel)
@@ -176,7 +221,7 @@ def take_end_frame(project_dir: Path, staged: Path, obj: Mapping[str, Any]) -> R
         items, id_field, *_ = get_storyboard_items(script)
         matched = find_storyboard_item(items, id_field, shot_id)
         if matched is None:
-            # 分镜或所属的剧本已删除：加回的尾帧没有归属。
+            # The shot or its script has been deleted: the added-back end frame has no owner. / 分镜或所属的剧本已删除：加回的尾帧没有归属。
             raise _failed(rel)
         return matched[0]
 
@@ -208,7 +253,10 @@ def take_end_frame(project_dir: Path, staged: Path, obj: Mapping[str, Any]) -> R
 
 
 def take_reference_audio(project_dir: Path, staged: Path, obj: Mapping[str, Any]) -> Restoration:
-    """取出角色的参考音频：原位置空闲则回原位、被占用则换新名；回原位且角色没有可用参考音频时重新关联。"""
+    """Take a character's reference audio: back to the original location if free, otherwise a new name; when back at
+    the original location and the character has no usable reference audio, re-link it.
+
+    取出角色的参考音频：原位置空闲则回原位、被占用则换新名；回原位且角色没有可用参考音频时重新关联。"""
     rel, character = str(obj.get("path")), str(obj.get("character"))
     if not _is_plain_file(staged / rel):
         raise _failed(rel)
@@ -218,7 +266,7 @@ def take_reference_audio(project_dir: Path, staged: Path, obj: Mapping[str, Any]
         characters = projects.load_project(project_dir.name).get("characters")
         key = resolve_asset_key(characters, character)
         if key is None or not isinstance(characters, dict):
-            # 角色已删除：加回的参考音频没有归属。
+            # The character has been deleted: the added-back reference audio has no owner. / 角色已删除：加回的参考音频没有归属。
             raise _failed(rel)
         current = characters[key].get("reference_audio")
         return not (isinstance(current, str) and current and _is_plain_file(project_dir / current))
@@ -236,6 +284,7 @@ def take_reference_audio(project_dir: Path, staged: Path, obj: Mapping[str, Any]
 
         with formal_write_transaction(project_dir / ProjectManager.PROJECT_FILE):
             landing.place(staged / rel, target, original=rel)
+            # A renamed file is not under the character's own name, so it can't be re-linked as reference audio.
             # 换名后的文件不在角色自己名下，不能重新关联为参考音频。
             if link and target == rel:
                 projects.update_project_locked(project_dir.name, relink)
@@ -247,7 +296,7 @@ def take_reference_audio(project_dir: Path, staged: Path, obj: Mapping[str, Any]
     )
 
 
-# ---------------------------------------------------------------- 内部
+# Internals / ---------------------------------------------------------------- 内部
 
 
 def _failed(identity: str) -> ConflictError:

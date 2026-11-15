@@ -1,4 +1,17 @@
-"""参考上传副本压缩。
+"""Compression of reference upload copies.
+
+At the single convergence point of all I2I / I2V / R2V generation (the ``MediaGenerator`` choke-point layer), before reference
+images are base64-embedded into the request body, the **reference upload copy** (temporary bytes deleted after sending) gets:
+uniform JPEG q92 + 4:4:4, baseline scaling + conditional pass-through, per-role handling (multi-image arrays go through the full
+ladder; first/end frames are only re-encoded when over the byte limit and never downscaled), an aggregate pre-check against the
+ultra-conservative generic ceiling via the step-down ladder, and a passive 413 fallback that continues down the ladder.
+
+Only the upload copy is touched -- source asset files and generated output keep full quality (4K output is always 4K). The logic
+is built on ``lib.infra.image_utils.compress_image_bytes``; the pure-function core is decoupled from disk writes for unit tests.
+
+Design: ``docs/adr/0012-reference-compression-conservative-ceiling.md``.
+
+参考上传副本压缩。
 
 所有 I2I / I2V / R2V 生成的唯一汇流点（``MediaGenerator`` 咽喉层）在把参考图 base64
 内嵌进请求体前，对**参考上传副本**（发完即删的临时字节）做：统一 JPEG q92 + 4:4:4、
@@ -26,11 +39,14 @@ from PIL import Image
 
 from lib.infra.image_utils import compress_image_bytes
 
+# ── Conservative generic ceiling (ArcReel-side safety policy constant, not claiming any provider's real number; passive 413 self-correction) ──
+# Same values as _DEFAULT_REFERENCE_*_MAX_BYTES in lib/config/service.py (unit tests assert they match).
 # ── 保守通用上限（ArcReel 侧安全策略常量，不声称任何一家的真实数字；被动 413 自我纠正）──
 # 与 lib/config/service.py 的 _DEFAULT_REFERENCE_*_MAX_BYTES 数值一致（单测断言对齐）。
 DEFAULT_TOTAL_MAX_BYTES = 8 * 1024 * 1024
 DEFAULT_SINGLE_MAX_BYTES = 4 * 1024 * 1024
 
+# Step-down ladder: resolution first, quality floor q80. step 0 = baseline (2048, q92); step >= len takes the floor.
 # 降档梯子：分辨率优先、质量地板 q80。step 0 = 基线（2048,q92）；step >= len 取地板。
 _LADDER: tuple[tuple[int, int], ...] = (
     (2048, 92),
@@ -40,15 +56,19 @@ _LADDER: tuple[tuple[int, int], ...] = (
 )
 _FLOOR: tuple[int, int] = (1024, 80)
 
+# Uniform 4:4:4 chroma subsampling to keep the edges of sheets with text (avoids 4:2:0 colour bleed at text edges).
 # 统一色度抽样 4:4:4，保住带文字 sheet 的边缘（避免 4:2:0 在文字边缘色彩外溢）。
 _SUBSAMPLING_444 = 0
 _BASELINE_QUALITY = 92
+# FRAME is never downscaled: use a long-edge limit far larger than any real image so compress_image_bytes never triggers resize.
 # FRAME 永不缩尺寸：用一个远大于任何真实图片的长边上限，使 compress_image_bytes 不触发 resize。
 _FRAME_NO_RESIZE_EDGE = 1_000_000
 
+# step 0 conditional pass-through threshold: already JPEG, below this, and within size limits -> passed through as is, avoiding re-compressing reasonable small images.
 # step 0 有条件透传阈值：已是 JPEG 且小于此且尺寸合规则原样透传，避免对合理小图二压。
 _PASSTHROUGH_MAX_BYTES = 1 * 1024 * 1024
 
+# Number of steps the ladder can step down (excluding the floor). The choke-point layer's passive 413 continuation uses it to tell whether the bottom is reached.
 # 梯子可下压的档位数（不含地板）。咽喉层被动 413 续档据此判断是否已到底。
 LADDER_STEPS = len(_LADDER)
 
@@ -56,13 +76,14 @@ LADDER_STEPS = len(_LADDER)
 class RefRole(Enum):
     """参考图角色，决定压缩策略。"""
 
-    ARRAY = "array"  # 多图参考数组：完整基线 + 降档梯子 + 字节预算
+    ARRAY = "array"  # Multi-image reference array: full baseline + step-down ladder + byte budget / 多图参考数组：完整基线 + 降档梯子 + 字节预算
+    # Single first/end frame: re-encode only when over bytes, never downscale (protects Sora pixel matching)
     FRAME = "frame"  # 单张首/尾帧：仅超字节时重编码、永不缩尺寸（护 Sora 像素匹配）
 
 
 @dataclass(frozen=True)
 class PayloadLimits:
-    """请求体上限（per-provider 可覆盖；缺省取保守通用上限）。"""
+    """Request body limits (overridable per provider; default to the conservative generic ceiling). / 请求体上限（per-provider 可覆盖；缺省取保守通用上限）。"""
 
     total_max_bytes: int = DEFAULT_TOTAL_MAX_BYTES
     single_max_bytes: int = DEFAULT_SINGLE_MAX_BYTES
@@ -70,7 +91,7 @@ class PayloadLimits:
 
 @dataclass
 class ReferenceSpec:
-    """待压缩的参考图来源。"""
+    """Source of a reference image to compress. / 待压缩的参考图来源。"""
 
     source: Path
     role: RefRole
@@ -78,7 +99,11 @@ class ReferenceSpec:
 
 @dataclass
 class CompressedRef:
-    """压缩后（或透传的）参考图，供咽喉层构造请求。
+    """Compressed (or passed-through) reference image, for the choke-point layer to build the request.
+
+    path points to a temporary file deleted after sending, or (on pass-through) the original source path.
+
+    压缩后（或透传的）参考图，供咽喉层构造请求。
 
     path 指向发完即删的临时文件，或（透传时）原始源路径。
     """
@@ -88,7 +113,13 @@ class CompressedRef:
 
 
 class ReferencePayloadFloorError(RuntimeError):
-    """参考图压缩到地板仍超上限的用户可见硬错误。
+    """User-visible hard error when a reference image still exceeds the limit at the compression floor.
+
+    Structure mirrors ``lib.backends.image_backends.base.ImageCapabilityError`` (with ``.code`` + ``.params`` for the route layer's
+    ``_t(code, **params)`` rendering), but ``code`` has a default -- this exception has only one code; both the active pre-check
+    (still over at the floor) and exhausted passive 413 retries produce the same code.
+
+    参考图压缩到地板仍超上限的用户可见硬错误。
 
     结构仿 ``lib.backends.image_backends.base.ImageCapabilityError``（带 ``.code`` + ``.params``，
     供路由层 ``_t(code, **params)`` 渲染），但 ``code`` 给默认值——本异常只有一个 code，
@@ -102,14 +133,14 @@ class ReferencePayloadFloorError(RuntimeError):
 
 
 def _ladder_params(step: int) -> tuple[int, int]:
-    """返回 step 档的 (长边上限, 质量)；step 越界取地板。"""
+    """Return (long-edge limit, quality) for step; out-of-range steps take the floor. / 返回 step 档的 (长边上限, 质量)；step 越界取地板。"""
     if 0 <= step < LADDER_STEPS:
         return _LADDER[step]
     return _FLOOR
 
 
 def _image_meta(raw: bytes) -> tuple[str, int]:
-    """解码取 (格式大写, 长边像素)。调用方须保证 raw 可解码。"""
+    """Decode to get (uppercase format, long-edge pixels). The caller must ensure raw is decodable. / 解码取 (格式大写, 长边像素)。调用方须保证 raw 可解码。"""
     with Image.open(BytesIO(raw)) as img:
         fmt = (img.format or "").upper()
         w, h = img.size
@@ -123,7 +154,15 @@ def compress_single_at_step(
     *,
     single_max_bytes: int,
 ) -> bytes:
-    """按角色 + 档位压缩单张参考图，返回 JPEG（或原样透传的）字节。
+    """Compress one reference image by role + step, returning JPEG (or passed-through original) bytes.
+
+    - FRAME: never downscaled; re-encoded to JPEG q92/4:4:4 **only when over the single-image budget**, otherwise passed through
+      as is -- no forced conversion by format (PNG etc.), to preserve first/end frame pixels as much as possible (ADR: must not
+      worsen Sora pixel matching).
+    - ARRAY: re-encoded to JPEG/4:4:4 at the ladder step (edge, q) for ``step``; when step==0 and the original is already JPEG +
+      below the pass-through threshold + within size limits, passed through as is.
+
+    按角色 + 档位压缩单张参考图，返回 JPEG（或原样透传的）字节。
 
     - FRAME：永不缩尺寸；**仅当超单图预算才**重编码为 JPEG q92/4:4:4，否则原样透传——
       不因格式（PNG 等）强转，以最大限度保留首/尾帧像素（ADR：保证不使 Sora 像素匹配恶化）。
@@ -160,7 +199,20 @@ def select_ladder_step(
     *,
     start_step: int = 0,
 ) -> tuple[int, list[bytes]]:
-    """从 start_step 逐档下压，直到「合计 ≤ total 且每张 ≤ single」或到地板。
+    """Step down from start_step one step at a time until "total <= total and each <= single", or the floor is reached.
+
+    When a single image alone exceeds the total budget, the effective single-image limit = min(single, total).
+
+    Returns:
+        (landed_step, compressed_bytes). landed_step is the **actual landed step** (>= start_step) -- the active pre-check may
+        drop to a deeper step than start_step due to byte limits, and the choke-point layer's passive 413 continuation must
+        continue from it.
+        Order and count are preserved: the returned list maps one-to-one to the input raws; no image is ever dropped.
+
+    Raises:
+        ReferencePayloadFloorError: still over the limit at the floor.
+
+    从 start_step 逐档下压，直到「合计 ≤ total 且每张 ≤ single」或到地板。
 
     单图自身超总预算时有效单图上限 = min(single, total)。
 
@@ -180,6 +232,8 @@ def select_ladder_step(
             for raw, role in zip(raws, roles, strict=True)
         ]
         total = sum(len(b) for b in compressed)
+        # The single hard gate applies only to ARRAY: FRAME is never downscaled and stepping down is a no-op for it, so a frame over
+        # single must not be floored by the active pre-check before the provider is called (the conservative ceiling is a guess; leave it to the passive 413 fallback).
         # single 硬门控只管 ARRAY：FRAME 永不缩尺寸、降档对它是 no-op，单张超 single 的帧
         # 不该让主动预检在 provider 被调用前就 floor 掉（保守上限是猜的，交被动 413 兜底）。
         single_ok = all(
@@ -193,7 +247,14 @@ def select_ladder_step(
 
 
 def _try_read_image(source: Path) -> bytes | None:
-    """读取本地可解码图像字节；非本地文件 / 读不出 / 不可解码一律返回 None（交由透传）。
+    """Read local decodable image bytes; non-local file / unreadable / undecodable all return None (left to pass-through).
+
+    Uses ``load()`` for full decoding instead of ``verify()`` -- the latter lets truncated images through (valid header, incomplete
+    pixels), so the subsequent full decode in ``compress_image_bytes`` would raise ValueError out of the choke-point layer, breaking
+    the invariant "compression is an optimization and must not make a call that would otherwise work fail in the compression
+    layer". Truncated/undecodable -> pass the original path through back to the backend.
+
+    读取本地可解码图像字节；非本地文件 / 读不出 / 不可解码一律返回 None（交由透传）。
 
     用 ``load()`` 做完整解码而非 ``verify()``——后者放过截断图（header 合法但像素不全），
     会让随后的 ``compress_image_bytes`` 全解码时抛 ValueError 逃出咽喉层，破坏「压缩是优化、
@@ -217,7 +278,27 @@ def compressed_reference_payload(
     limits: PayloadLimits,
     start_step: int = 0,
 ) -> Generator[tuple[int, list[CompressedRef]]]:
-    """压缩参考图为临时文件，yield (landed_step, refs)，退出时清理临时文件。
+    """Compress reference images into temporary files, yield (landed_step, refs), and clean up the temporary files on exit.
+
+    Non-local / undecodable sources (should not happen in theory -- every backend already calls read_bytes() on references, proving
+    a reference must be a local file; but edge cases like URL/data-URI/corrupt files) skip compression and pass the original path
+    through, never raising -- compression is an optimization and must not make a call that would otherwise work fail in the
+    compression layer.
+
+    Pass-through items do not count toward select_ladder_step's byte budget (unreadable, cannot be measured); the ladder runs only
+    on the compressible subset. But this function merges pass-through items and compressed tempfiles back into the full list by
+    the original spec positions, keeping ARRAY 1:1 in count and aligned with the [图N] indexes.
+
+    Pass-through items (compress returns the same object as the input, not re-encoded) always use the **original source path**,
+    no temporary copy: saves a copy, avoids a MIME mismatch from PNG bytes landing in a .jpg suffix, and keeps maximum fidelity
+    (FRAME pixel matching). Re-encoded items are written to temporary files whose names **keep the source stem** (e.g.
+    ``张三.jpg``), only for readability of logs and the temp directory; reference image identity is indicated in the prompt by
+    position ("图N"), and the backend infers no name from the file name.
+
+    The yielded landed_step is select_ladder_step's actual landed step -- the passive 413 continuation must continue from it
+    (otherwise off-by-step).
+
+    压缩参考图为临时文件，yield (landed_step, refs)，退出时清理临时文件。
 
     非本地 / 不可解码源（理论上不会发生——各 backend 本就对 reference 调 read_bytes()，
     证明 reference 必为本地文件；但 URL/data-URI/损坏文件等边角）跳过压缩、原路径透传，
@@ -259,9 +340,10 @@ def compressed_reference_payload(
         for k, (idx, data) in enumerate(zip(compressible_indices, compressed_bytes, strict=True)):
             spec = specs[idx]
             if data is compressible_raws[k]:
-                # 透传：未重编码，直接用原始源路径（不写临时副本）。
+                # Pass-through: not re-encoded, use the original source path directly (no temporary copy). / 透传：未重编码，直接用原始源路径（不写临时副本）。
                 by_index[idx] = CompressedRef(path=Path(spec.source), role=spec.role)
                 continue
+            # Re-encoded: write a temporary file, in per-idx subdirectories to avoid name clashes; the file name keeps the source stem to preserve the reference image name.
             # 重编码：写临时文件，按 idx 分子目录避免重名，文件名沿用源 stem 保留参考图名。
             if temp_root is None:
                 temp_root = Path(tempfile.mkdtemp(prefix="refcomp-"))
@@ -275,6 +357,7 @@ def compressed_reference_payload(
         for i, spec in enumerate(specs):
             ref = by_index.get(i)
             if ref is None:
+                # Non-local / undecodable pass-through item: keep the original path, hand back to the backend for the old behaviour.
                 # 非本地 / 不可解码透传项：保留原路径，交回 backend 按旧行为处理。
                 ref = CompressedRef(path=Path(spec.source), role=spec.role)
             merged.append(ref)
@@ -282,4 +365,5 @@ def compressed_reference_payload(
         yield landed_step, merged
     finally:
         if temp_root is not None:
+            # temporary directory for reference image compression
             shutil.rmtree(temp_root, ignore_errors=True)  # hard-delete: temp -- 参考图压缩的临时目录

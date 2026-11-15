@@ -126,6 +126,7 @@ class GridGeneration:
     cols: int
     cell_count: int
     frame_chain: list[FrameCell]
+    # Grid composite lifecycle: completed only means the grid composite is ready; whether it has been grid-split is expressed by split_at
     # 联合图生命周期：completed 仅表示联合图就绪，是否已切分落格由 split_at 表达
     status: Literal["pending", "generating", "completed", "failed"]
     prompt: str | None
@@ -135,8 +136,14 @@ class GridGeneration:
     created_at: str
     error_message: str | None = None
     reference_images: list[ReferenceImage] | None = None
+    # Time of the latest grid split from the current grid composite; cleared when the composite's content changes (regenerate/upload/version restore)
     # 最近一次按当前联合图切分落格的时间；联合图内容变更（重新生成/上传/版本还原）时清空
     split_at: str | None = None
+    # Target cell aspect ratio when the current grid composite was produced. The project aspect_ratio can change at any
+    # time, and since splitting is decoupled from production and may run much later, reading the project setting at
+    # that time would center-crop a historical composite to the new ratio (splitting a landscape image as portrait loses
+    # most of its width), so it is frozen on the record with the composite. Legacy records have None; splitting falls
+    # back to the project setting.
     # 产出当前联合图时的单格目标比例。项目 aspect_ratio 可随时改，而切分与产出已解耦、
     # 可以隔很久才执行，读当时的项目设置会把历史联合图按新比例中心裁切（横版按竖版切会
     # 丢掉大半画面宽度），故随联合图一起冻结在记录上。存量记录为 None，切分时回退到项目设置。
@@ -167,10 +174,17 @@ class GridGeneration:
 
     @classmethod
     def from_dict(cls, data: dict) -> GridGeneration:
+        # Generation and splitting used to be one task, so intermediate records may still have status="splitting";
+        # in that state the grid composite is already on disk, which under the current model equals "composite ready, not split".
         # 生成与切分曾是同一任务，中间态记录可能残留 status="splitting"；
         # 该态下联合图已落盘，按当前模型等价于「联合图就绪、未落格」。
         raw_status = data["status"]
         status = "completed" if raw_status == "splitting" else raw_status
+        # Old records have no split_at field. In the old flow, status="completed" was only written after the split cells
+        # were on disk, so such records are equivalent to "split", using created_at as the split time; if they were all
+        # read as not split, the frontend would prompt to split, and a user following it would overwrite storyboard images
+        # regenerated separately afterwards with the old composite.
+        # New records with an explicit null, and status="splitting" (composite ready but not split), stay not split.
         # 旧记录没有 split_at 字段。旧流程下 status="completed" 只在切格落盘之后才写入，
         # 因此这类记录等价于「已切分」，用 created_at 充当落格时间；若一律读成未切分，
         # 前端会提示待切分，用户照做就会用旧联合图覆盖之后单独重生成过的分镜图。
@@ -201,7 +215,19 @@ class GridGeneration:
         )
 
     def mark_composite_replaced(self) -> None:
-        """联合图被用户动作换成新内容（手动上传 / 版本还原）后复位记录。
+        """Reset the record after a user action replaced the grid composite with new content (manual upload / version restore).
+
+        - ``split_at`` is cleared unconditionally: the old split result no longer matches the current composite, and
+          splitting must be explicitly run again;
+        - ``status`` / ``error_message`` are only reset when no generation is in flight -- a manual image fill counts as
+          a successful composite production, so a failed record goes back to ready; during pending/generating the
+          in-flight state is kept, otherwise the record would falsely report idle and the in-flight gate for
+          split/upload would stop working.
+
+        The generation task's own generating→completed wrap-up does not go through this method: that is a state machine
+        step, not a replacement.
+
+        联合图被用户动作换成新内容（手动上传 / 版本还原）后复位记录。
 
         - ``split_at`` 无条件清空：旧的落格结果不再对应当前联合图，落格须重新显式执行；
         - ``status`` / ``error_message`` 仅在生成不在途时复位——手动补图等价于一次成功的
@@ -265,7 +291,15 @@ def build_grid_task_payload(
     grid_aspect_ratio: str,
     video_aspect_ratio: str,
 ) -> dict:
-    """宫格生成任务入队 payload 的唯一构造点，HTTP 路由与 Agent 工具共用。
+    """The single construction point of the grid generation task enqueue payload, shared by the HTTP route and the Agent tool.
+
+    If the two enqueue paths each inlined the literal, adding or removing a field on only one side would make the
+    worker read a payload with missing fields on the other path, so it lives here.
+
+    Enqueueing carries no provider information -- the provider is resolved at execution time by ConfigResolver from
+    the current project config (see docs/adr/0001).
+
+    宫格生成任务入队 payload 的唯一构造点，HTTP 路由与 Agent 工具共用。
 
     两条入队路径各自内联字面量时，字段增删只改一侧就会让 worker 在另一条路径上
     读到缺字段的 payload，故收在此处。

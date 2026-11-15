@@ -1,4 +1,4 @@
-"""AssetRepository: 全局资产库条目与其衍生子表的异步 CRUD。"""
+"""AssetRepository: async CRUD for global asset library entries and their derivative sub-table. / AssetRepository: 全局资产库条目与其衍生子表的异步 CRUD。"""
 
 from __future__ import annotations
 
@@ -13,7 +13,12 @@ from lib.db.repositories.base import BaseRepository
 
 
 def _match_name[S: Select](stmt: S, q: str | None) -> S:
-    """列表与计数共用的搜索条件：名称按字面包含 ``q``，不区分普通 Unicode 字母大小写。
+    """Search condition shared by list and count: name literally contains ``q``, case-insensitive for ordinary Unicode letters.
+
+    ``icontains`` compiles to ILIKE on PostgreSQL and compares lower() of both sides on SQLite; SQLite connections
+    register a Unicode lower; locale-specific folding may still differ. ``autoescape`` makes ``%`` and ``_`` match literally.
+
+    列表与计数共用的搜索条件：名称按字面包含 ``q``，不区分普通 Unicode 字母大小写。
 
     ``icontains`` 在 PostgreSQL 上编译为 ILIKE、在 SQLite 上比较两侧的 lower()，
     SQLite 连接注册 Unicode lower；locale 特殊折叠仍可能不同。
@@ -72,12 +77,15 @@ class AssetRepository(BaseRepository):
         stmt = _match_name(select(Asset), q)
         if type:
             stmt = stmt.where(Asset.type == type)
+        # id as tie-breaker: entries with the same update time keep their order across queries, so offset pagination neither repeats nor skips
         # id 作次序键：更新时间相同的条目在多次查询间顺序不变，offset 分页才不会重复或漏掉
         stmt = stmt.order_by(Asset.updated_at.desc(), Asset.id.desc()).limit(limit).offset(offset)
         return list((await self.session.execute(stmt)).scalars())
 
     async def count_by_type(self, *, q: str | None) -> dict[str, int]:
-        """按类型统计名称匹配 ``q`` 的条目数；没有匹配条目的类型不出现在结果里。"""
+        """Count entries whose name matches ``q`` per type; types with no matching entries are absent from the result.
+
+        按类型统计名称匹配 ``q`` 的条目数；没有匹配条目的类型不出现在结果里。"""
         stmt = _match_name(select(Asset.type, func.count()), q).group_by(Asset.type)
         return dict((await self.session.execute(stmt)).tuples().all())
 
@@ -93,6 +101,8 @@ class AssetRepository(BaseRepository):
     async def delete(self, asset_id: str) -> None:
         asset = await self.get_by_id(asset_id)
         if asset:
+            # Delete derivative rows explicitly instead of relying on FK CASCADE: cascade only works on connections with the foreign_keys
+            # pragma on; the app engine always enables it (engine.py), but scripts or external tools connecting directly are not guaranteed to.
             # 显式删衍生行而非依赖 FK CASCADE：级联只在开启 foreign_keys pragma 的连接上
             # 生效，应用引擎虽统一开启（engine.py），脚本或外部工具直连时不保证。
             await self.session.execute(delete(AssetDerivative).where(AssetDerivative.asset_id == asset_id))
@@ -103,12 +113,16 @@ class AssetRepository(BaseRepository):
         return await self.get_by_type_name(type, name) is not None
 
     async def list_derivatives(self, asset_id: str) -> list[AssetDerivative]:
-        """按登记名排序读出一条资产的全部衍生。"""
+        """Read all derivatives of one asset, sorted by registered name. / 按登记名排序读出一条资产的全部衍生。"""
         stmt = select(AssetDerivative).where(AssetDerivative.asset_id == asset_id).order_by(AssetDerivative.name)
         return list((await self.session.execute(stmt)).scalars())
 
     async def list_derivatives_by_asset_ids(self, asset_ids: Sequence[str]) -> dict[str, list[AssetDerivative]]:
-        """一次查出多条资产的衍生，按 ``asset_id`` 归组；没有衍生的资产不出现在结果里。
+        """Query derivatives of many assets at once, grouped by ``asset_id``; assets without derivatives are absent from the result.
+
+        A list page can show over a hundred assets; querying one by one would degrade into N+1 round trips.
+
+        一次查出多条资产的衍生，按 ``asset_id`` 归组；没有衍生的资产不出现在结果里。
 
         列表页一屏可能有上百条资产，逐条查会退化成 N+1 次往返。
         """
@@ -129,7 +143,13 @@ class AssetRepository(BaseRepository):
         asset_id: str,
         derivatives: Sequence[tuple[str, str, str | None]],
     ) -> list[AssetDerivative]:
-        """把一条资产的衍生整表换成给定的 ``(名, 描述, 图片相对路径)`` 序列。
+        """Replace one asset's whole derivative table with the given sequence of ``(name, description, relative image path)``.
+
+        Derivatives move in and out of the asset library together with the base asset; there is no per-item add/delete
+        entry point; overwriting on import means replacing the whole table. Deleting old rows is committed by the caller in
+        the same transaction, and the image files the old rows point to are cleaned up by the caller after commit.
+
+        把一条资产的衍生整表换成给定的 ``(名, 描述, 图片相对路径)`` 序列。
 
         衍生随本体整套进出资产库，没有逐条增删的入口；覆盖入库即整表替换。删除旧行留给
         调用方在同一事务里提交，旧行指向的图片文件由调用方在 commit 后清理。

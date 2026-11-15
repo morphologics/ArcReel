@@ -1,4 +1,4 @@
-"""EPUB 抽取：按 spine 顺序遍历章节，注入 # 标题 标记。"""
+"""EPUB extraction: walk chapters in spine order, injecting # heading markers. / EPUB 抽取：按 spine 顺序遍历章节，注入 # 标题 标记。"""
 
 from pathlib import Path
 
@@ -13,7 +13,7 @@ from .errors import CorruptFileError
 
 
 def _resolve_titles(book: epub.EpubBook, doc_items: list) -> list[str]:
-    """三级退化：toc → nav.xhtml → "第 N 章"。"""
+    """Three-level fallback: toc → nav.xhtml → "第 N 章" (chapter N). / 三级退化：toc → nav.xhtml → "第 N 章"。"""
     by_href: dict[str, str] = {}
 
     def _walk(toc):
@@ -26,6 +26,7 @@ def _resolve_titles(book: epub.EpubBook, doc_items: list) -> list[str]:
             elif hasattr(entry, "href") and entry.href:
                 by_href[entry.href.split("#")[0]] = entry.title
 
+    # ebooklib's toc has no type declaration; at runtime it may be a single Link rather than a sequence
     # ebooklib 的 toc 未做类型声明，运行期可能是单个 Link 而非序列
     toc = book.toc
     if toc:
@@ -47,11 +48,14 @@ class EpubExtractor:
         except Exception as exc:
             raise CorruptFileError(filename=path.name, reason=f"EPUB 解析失败: {exc}") from exc
 
-        # 按 spine 顺序拿到 ITEM_DOCUMENT
+        # get ITEM_DOCUMENT items in spine order / 按 spine 顺序拿到 ITEM_DOCUMENT
         spine_ids = [s[0] for s in book.spine]
         items_by_id = {it.id: it for it in book.get_items_of_type(ebooklib.ITEM_DOCUMENT)}
         doc_items = [items_by_id[sid] for sid in spine_ids if sid in items_by_id]
 
+        # Exclude navigation documents by type (works with any nav id; ebooklib's default id="nav" is only one of them,
+        # in practice Calibre/Sigil use other ids such as "id.xhtml", "toc", etc.).
+        # On read-back, ebooklib recognizes it as an EpubNav instance from properties="nav" in the OPF manifest.
         # 按类型排除导航文档（适配任意 nav id；ebooklib 默认 id="nav" 仅是其一，
         # 现实中 Calibre/Sigil 会使用其他 id 如 "id.xhtml"、"toc" 等）。
         # 读回时 ebooklib 依据 OPF manifest 的 properties="nav" 识别为 EpubNav 实例。

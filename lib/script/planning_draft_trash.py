@@ -1,4 +1,11 @@
-"""规划草稿进出项目回收站：未确认的正式脚本规划与待修复、可编辑草稿的删除成为一条带结构快照的删除记录。
+"""Plan drafts in and out of the project trash: deleting an unconfirmed final script plan or an invalid / editable draft becomes
+a deletion record with a structural snapshot.
+
+On restore the owning episode must still exist. If the original path is free, it goes back in place, together with the script
+plan's artifact registration taken from the (migrated) manifest before deletion; if a file already sits at the original path,
+it is added back as "<original name> (n)", as an unreferenced file without registration.
+
+规划草稿进出项目回收站：未确认的正式脚本规划与待修复、可编辑草稿的删除成为一条带结构快照的删除记录。
 
 恢复时所属的集必须还在。原路径空闲就回原位，脚本规划的产物登记取自删除前（迁移后）的清单一并补录；原路径已有
 文件时换成「<原名> (n)」加回，作为未引用文件、不带登记。
@@ -27,7 +34,9 @@ PLANNING_DRAFT_KIND = "planning_draft"
 
 
 def trash_planning_draft(project_dir: Path, episode: int, path: Path) -> project_trash.TrashRecord | None:
-    """把第 ``episode`` 集的规划草稿 ``path`` 移进一条删除记录；不是普通文件时返回 None。调用方持有项目锁。"""
+    """Move episode ``episode``'s plan draft ``path`` into a deletion record; return None if it is not a regular file. The caller holds the project lock.
+
+    把第 ``episode`` 集的规划草稿 ``path`` 移进一条删除记录；不是普通文件时返回 None。调用方持有项目锁。"""
     if path.is_symlink() or not path.is_file():
         return None
     rel = path.relative_to(project_dir).as_posix()
@@ -37,7 +46,11 @@ def trash_planning_draft(project_dir: Path, episode: int, path: Path) -> project
 
 
 def discard_quarantine(project_path: Path, episode: int, kind: str) -> bool:
-    """丢弃草稿（创作者或 Agent 放弃它）：移进项目回收站，返回是否真的有草稿；有时推进项目活动。
+    """Discard the draft (the creator or the Agent gives it up): move it into the project trash; return whether there really was a draft, advancing project activity when there was.
+
+    The caller holds the draft lock, not the project lock.
+
+    丢弃草稿（创作者或 Agent 放弃它）：移进项目回收站，返回是否真的有草稿；有时推进项目活动。
 
     调用方持有草稿锁、不持项目锁。
     """
@@ -50,7 +63,9 @@ def discard_quarantine(project_path: Path, episode: int, kind: str) -> bool:
 
 
 def take_planning_draft(project_dir: Path, staged: Path, obj: Mapping[str, Any]) -> Restoration:
-    """按原路径从迁移后的临时项目取出草稿与它的脚本规划登记。"""
+    """Take the draft and its script plan registration from the migrated temporary project by original path.
+
+    按原路径从迁移后的临时项目取出草稿与它的脚本规划登记。"""
     rel, episode = str(obj.get("path")), int(obj.get("episode") or 0)
     staged_file = staged / rel
     if staged_file.is_symlink() or not staged_file.is_file():
@@ -62,9 +77,10 @@ def take_planning_draft(project_dir: Path, staged: Path, obj: Mapping[str, Any])
 
     def require_episode() -> None:
         if find_episode(projects.load_project(project_dir.name), episode) is None:
-            # 所属的集已删除：加回的草稿没有归属。
+            # The owning episode has been deleted: the restored draft would have no owner. / 所属的集已删除：加回的草稿没有归属。
             raise ConflictError("trash_restore_failed", id=rel)
 
+    # An error here degrades to "object could not be taken"; on landing it is re-checked under the lock, and an episode deleted in the meantime makes this restore fail while the record is kept.
     # 此处抛错按取不出对象降级；落地时在锁内再核对一次，期间被删的集让本次恢复失败、记录保留。
     require_episode()
 
@@ -79,7 +95,7 @@ def take_planning_draft(project_dir: Path, staged: Path, obj: Mapping[str, Any])
         landing.place(staged_file, target, original=rel)
         landed.append(target)
         if target == rel and claim is not None and claim.artifact_path == rel:
-            # 补录：依据摘要不变，输入此后变过的照常读为过期。
+            # Backfill: the basis digest is unchanged; inputs that changed since then read as stale as usual. / 补录：依据摘要不变，输入此后变过的照常读为过期。
             register_artifact_entries_atomically(
                 project_dir, {key: ArtifactManifestEntry(claim.artifact_path, claim.basis_digest)}
             )

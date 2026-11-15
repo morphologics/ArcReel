@@ -1,4 +1,19 @@
-"""目录查询：模型级信息的唯一读入口。
+"""Catalog queries: the single read entry point for model-level information.
+
+A model's display name, media type, capabilities, supported durations and resolutions, max output tokens, price, and a
+provider's default model for a media type are all read here. The registry (``lib.config.registry``) only registers
+provider-level code facts (credential shape, backend, default address, concurrency default), not models.
+
+The model list, entry facts and default models come from the composed catalog (``lib.catalog.composition``): official
+data is the newer of the factory snapshot packaged with the code (``lib/catalog/snapshot/``, passed through the
+instance-side validation of ``arcreel_catalog_core`` when loaded) and the data fetched by official sync
+(``lib.catalog.official_sync``); user-modified entry copies replace official entries wholesale.
+Price is the entry's price table, see :func:`provider_model_price`.
+Provider-model-level queries return the catalog's own value objects (:class:`CatalogModel`, :class:`CatalogSearchHit`);
+:func:`find_entry`, which maps names to entries, returns ``arcreel_catalog_core``'s ``CatalogEntry``, since the caller
+wants exactly the entry's own key, facts and price table.
+
+目录查询：模型级信息的唯一读入口。
 
 模型的显示名、媒体类型、能力、可选时长与分辨率、最大输出 token、价格，以及供应商在某媒体类型下的
 默认模型，一律经这里读取。注册表（``lib.config.registry``）只登记供应商一级的代码事实（凭证形态、调用通道、
@@ -47,18 +62,25 @@ logger = logging.getLogger(__name__)
 
 SNAPSHOT_DIR = Path(__file__).parent / "snapshot"
 
+#: Closed vocabulary of capability tokens, derived from entry facts: only tokens with a consumer are included, with the same names and
+#: meanings as the backend capability enums (TextCapability / ImageCapability / AudioCapability). Video models' input modes, reference image
+#: limits and audio track shape are not here; the source of truth is each backend's VideoCapabilities and the request-time gate.
 #: 能力 token 的封闭词汇表，由条目事实推出：仅收录有消费方的 token，词汇与各媒体 backend 能力枚举
 #: （TextCapability / ImageCapability / AudioCapability）同名同义。视频模型的输入模式、参考图上限与音轨形态不在
 #: 这里，真相源是各 backend 的 VideoCapabilities 与请求期 gate。
 ModelCapability = Literal[
     "text_generation",
-    "structured_output",  # 消费点：文本 backend 结构化输出探测
-    "vision",  # 消费点：文本解析的 vision 闸（lib/config/resolver.py）
+    "structured_output",  # consumer: structured output probing in text backends / 消费点：文本 backend 结构化输出探测
+    "vision",  # consumer: the vision gate of text parsing (lib/config/resolver.py) / 消费点：文本解析的 vision 闸（lib/config/resolver.py）
+    # consumer: image task type bucket decision (lib/backends/generation_type_buckets.py)
     "text_to_image",  # 消费点：图片任务类型桶判定（lib/backends/generation_type_buckets.py）
-    "image_to_image",  # 消费点：同上
+    "image_to_image",  # consumer: same as above / 消费点：同上
     "text_to_speech",
 ]
 
+#: Legacy model keys kept by amphibious models. In catalog data a provider model's identity is (API model name, entry media type); the two
+#: provider models with the same API model name each take a key here; provider models not in the table use the API model name as key.
+#: It keeps keys already stored in settings and projects resolvable.
 #: 两栖模型沿用的旧模型键。目录数据里供应商模型的身份是（API 模型名, 条目媒体类型），同一 API 模型名的
 #: 两个供应商模型在这里各取一个键；不在表中的供应商模型以 API 模型名为键。设置与项目里已存的键靠它保持可解析。
 _LEGACY_MODEL_KEYS: Mapping[tuple[str, str, str], str] = {
@@ -68,7 +90,16 @@ _LEGACY_MODEL_KEYS: Mapping[tuple[str, str, str], str] = {
 
 @dataclass(frozen=True)
 class CatalogModel:
-    """供应商名下一个模型键在目录中的信息：模型条目的事实，加上这个供应商模型自己的事实。
+    """Catalog info for one model key under a provider: the model entry's facts plus this provider model's own facts.
+
+    Entry facts: ``display_name``, ``media_type``, ``capabilities``, supported durations and duration constraints,
+    ``resolutions``, ``max_output_tokens``, ``hidden`` (entry delisted, not shown among candidates). Provider model facts:
+    ``default`` (this provider's default model for the media type), ``api_model_name`` (the model name sent to the
+    provider; the model key is used when ``None``). Price is not here; get it via :func:`provider_model_price`.
+
+    Field names and order are the serialization shape of model info in the settings API (``dataclasses.asdict``).
+
+    供应商名下一个模型键在目录中的信息：模型条目的事实，加上这个供应商模型自己的事实。
 
     条目事实：``display_name``、``media_type``、``capabilities``、可选时长与时长约束、
     ``resolutions``、``max_output_tokens``、``hidden``（条目已下架，不出现在候选里）。供应商模型事实：
@@ -93,22 +124,31 @@ class CatalogModel:
 
 @functools.cache
 def factory_snapshot() -> CatalogData:
-    """随代码打包的出厂快照，进程内只读一次。快照无法通过校验时抛 ``CatalogFormatError``。"""
+    """The factory snapshot packaged with the code, read only once per process. Raises ``CatalogFormatError`` if the snapshot fails validation.
+
+    随代码打包的出厂快照，进程内只读一次。快照无法通过校验时抛 ``CatalogFormatError``。"""
     return load_catalog(
         (SNAPSHOT_DIR / MANIFEST_FILENAME).read_bytes(),
         (SNAPSHOT_DIR / CATALOG_FILENAME).read_bytes(),
     )
 
 
+# Data fetched by official sync: installed by official sync, see install_synced_data. A single-element list serves as a mailbox.
 # 官方同步取回的数据：由官方同步装入，见 install_synced_data。单元素列表当信箱。
 _synced: list[CatalogData | None] = [None]
 
+# Official data cached per (factory snapshot, sync data) objects; rebuilt when a new sync data object is installed.
 # 按（出厂快照, 同步数据）对象缓存的官方数据；同步数据换上新的一份时重建。
 _official_cache: list[tuple[CatalogData, CatalogData, CatalogData]] = []
 
 
 def install_synced_data(data: CatalogData | None) -> None:
-    """换上官方同步取回的数据，之后的查询读它与出厂快照合成的官方数据（:func:`merge_official`）。
+    """Install data fetched by official sync; later queries read the official data composed from it and the factory snapshot (:func:`merge_official`).
+
+    Stored data is loaded at app startup, and loaded again after each sync applies a new dataset; replacement is
+    wholesale, so readers see either the old data or the new.
+
+    换上官方同步取回的数据，之后的查询读它与出厂快照合成的官方数据（:func:`merge_official`）。
 
     应用启动时装入已存的数据，每次同步应用新数据集之后再装入；整份替换，读点要么看到旧数据、要么看到新数据。
     """
@@ -116,7 +156,9 @@ def install_synced_data(data: CatalogData | None) -> None:
 
 
 def official_data() -> CatalogData:
-    """官方数据：出厂快照与官方同步中数据集版本较新的一份，保留另一份独有的条目；没有同步数据时即出厂快照。"""
+    """Official data: the one of the factory snapshot and official sync with the newer dataset version, retaining entries unique to the other; the factory snapshot when there's no sync data.
+
+    官方数据：出厂快照与官方同步中数据集版本较新的一份，保留另一份独有的条目；没有同步数据时即出厂快照。"""
     snapshot, synced = factory_snapshot(), _synced[0]
     if synced is None:
         return snapshot
@@ -173,7 +215,12 @@ def _to_catalog_model(entry: CatalogEntry, api_model_name: str, key: str, defaul
 
 
 def _unmatched_catalog_model(user: UserAddedModel) -> CatalogModel:
-    """对应不上条目的用户添加模型：只知道媒体类型，模型事实按运行时回落（docs/adr/0104）。
+    """A user-added model that doesn't map to an entry: only the media type is known, model facts fall back at runtime (docs/adr/0104).
+
+    Text and audio have only basic capabilities; image text-to-image and image-to-image are unconstrained; video's
+    supported durations take the fallback durations given at load time.
+
+    对应不上条目的用户添加模型：只知道媒体类型，模型事实按运行时回落（docs/adr/0104）。
 
     文本与音频只有基本能力；图片的文生图与图生图不加约束；视频的可选时长取装入时给出的回落时长。
     """
@@ -200,7 +247,16 @@ def _unmatched_catalog_model(user: UserAddedModel) -> CatalogModel:
 
 @dataclass(frozen=True)
 class UserAddedModel:
-    """内置供应商下用户添加的供应商模型，数据来自内置供应商模型表。
+    """A user-added provider model under a built-in provider; data comes from the built-in provider model table.
+
+    ``model_id`` is the API model name and also the model key that settings reference it by; ``entry_binding`` is
+    "model maker/official model name". ``fallback_durations`` are the runtime fallback supported durations for video models
+    that don't map to an entry (duration presets inferred from the name), given by the loader. ``capability_overrides`` are
+    the user's capability overrides (docs/adr/0104), with invalid keys/values already filtered by the loader per media type:
+    model-fact dimensions replace catalog info wholesale per dimension here; backend-fact dimensions are handed to the
+    backend side to merge via :func:`user_added_capability_overrides`.
+
+    内置供应商下用户添加的供应商模型，数据来自内置供应商模型表。
 
     ``model_id`` 是 API 模型名，也是设置里引用它的模型键；``entry_binding`` 是「模型厂商/官方模型名」。
     ``fallback_durations`` 是对应不上条目的视频模型在运行时回落的可选时长（按名字推断的时长预设），由装入方给出。
@@ -219,7 +275,11 @@ class UserAddedModel:
 
 @dataclass(frozen=True)
 class _IndexedModel:
-    """索引里的一个供应商模型：对外的目录信息，加上它对应的条目（对应不上时为 ``None``）与供应商模型倍率。
+    """One provider model in the index: public catalog info, plus its corresponding entry (``None`` if none) and provider model multiplier.
+
+    ``base_model`` is the catalog info without capability overrides (the entry's values or runtime fallback); only user-added models have overrides, for the rest it equals ``model``.
+
+    索引里的一个供应商模型：对外的目录信息，加上它对应的条目（对应不上时为 ``None``）与供应商模型倍率。
 
     ``base_model`` 是未叠加能力覆盖的目录信息（条目的值或运行时回落）；只有用户添加的模型带覆盖，其余与 ``model`` 相同。
     """
@@ -234,7 +294,12 @@ class _IndexedModel:
 
 
 def meets_min_app_version(required: str | None, current: str) -> bool:
-    """应用版本 ``current`` 是否达到供应商模型标注的最低应用版本；没有标注时总是满足。
+    """Whether app version ``current`` reaches the minimum app version annotated on the provider model; always satisfied when not annotated.
+
+    If either side can't be compared it is treated as not satisfied: better not to show it than let an old instance call a
+    model its backend can't encode.
+
+    应用版本 ``current`` 是否达到供应商模型标注的最低应用版本；没有标注时总是满足。
 
     任一侧判不出高低时视为不满足：宁可不展示，也不让旧实例调用它的调用通道不会编码的模型。
     """
@@ -256,6 +321,7 @@ def _official_models(data: CatalogData, provider_id: str, current_version: str) 
                 "内置供应商 %s 的模型 %s 引用不到条目 %s，已跳过", provider_id, model.api_model_name, model.entry
             )
             continue
+        # Instances below the minimum app version neither show nor enable it; when it is designated as default, treat it as no default (docs/adr/0103).
         # 低于最低应用版本的实例不展示、也不启用它；它被指定为默认时，按没有默认处理（docs/adr/0103）。
         if not meets_min_app_version(model.min_app_version, current_version):
             continue
@@ -284,7 +350,9 @@ def _toggle(capabilities: list[ModelCapability], capability: ModelCapability, va
 
 
 def _with_model_fact_overrides(model: CatalogModel, overrides: Mapping[str, object]) -> CatalogModel:
-    """把能力覆盖里的模型事实维度整维替换进目录信息（docs/adr/0104）。值已由装入方校验过形状。"""
+    """Replace model-fact dimensions from capability overrides into catalog info wholesale per dimension (docs/adr/0104). Shapes were already validated by the loader.
+
+    把能力覆盖里的模型事实维度整维替换进目录信息（docs/adr/0104）。值已由装入方校验过形状。"""
     capabilities = list(model.capabilities)
     capabilities = _toggle(capabilities, "vision", overrides.get("image_input"))
     capabilities = _toggle(capabilities, "structured_output", overrides.get("structured_output"))
@@ -346,27 +414,37 @@ def _build_index(
     }
     for user in user_models:
         models = index.setdefault(user.provider_id, {})
+        # When official data lists the same model key, switch to the official version, keeping only the enabled state (docs/adr/0099).
         # 官方数据收录了同一模型键时，换成官方版本，只保留启用状态（docs/adr/0099）。
         if user.model_id not in models:
             models[user.model_id] = _user_added_model(data, user)
     return index
 
 
+# User-added models under built-in providers: loaded from the built-in provider model table, see install_user_added_models. A single-element list serves as a mailbox.
 # 内置供应商下用户添加的模型：由内置供应商模型表装入，见 install_user_added_models。单元素列表当信箱。
 _user_added: list[tuple[UserAddedModel, ...]] = [()]
 
+# Index cached per snapshot object: the snapshot loads once per process, so the index is built once too; cleared and rebuilt when user-added models change.
 # 按快照对象缓存的索引：快照每进程只加载一次，索引随之只建一次；用户添加的模型变化时清空重建。
 _index_cache: list[tuple[CatalogData, dict[str, dict[str, _IndexedModel]]]] = []
 
+# User-modified entry copies: loaded from the user entry table, see install_user_entries. A single-element list serves as a mailbox.
 # 用户修改的条目副本：由用户条目表装入，见 install_user_entries。单元素列表当信箱。
 _user_entries: list[tuple[tuple[CatalogEntry, ...], frozenset[EntryKey]]] = [((), frozenset())]
 
-# 按官方数据对象缓存的合成结果；用户副本变化时清空重建。
+# Composition result cached per official data object; cleared and rebuilt when user copies change. / 按官方数据对象缓存的合成结果；用户副本变化时清空重建。
 _composed_cache: list[tuple[CatalogData, ComposedCatalog]] = []
 
 
 def install_user_added_models(models: Iterable[UserAddedModel]) -> None:
-    """换上内置供应商下用户添加的模型，之后的查询把它们并进各自供应商的模型清单。
+    """Install the user-added models under built-in providers; later queries merge them into each provider's model list.
+
+    Called by the writer at app startup and after each write to the built-in provider model table. Code reading the
+    catalog (generation workers, Agent session tools, APIs) all runs in the app process, so an in-process replacement
+    takes effect for all readers.
+
+    换上内置供应商下用户添加的模型，之后的查询把它们并进各自供应商的模型清单。
 
     应用启动时与每次写入内置供应商模型表之后由写入方调用。读目录的代码（生成 worker、Agent 会话的工具、
     接口）都跑在应用进程里，进程内替换即对全部读点生效。
@@ -376,7 +454,13 @@ def install_user_added_models(models: Iterable[UserAddedModel]) -> None:
 
 
 def install_user_entries(entries: Iterable[CatalogEntry], created: Iterable[EntryKey] = ()) -> None:
-    """换上用户修改的条目副本，之后的查询（门面、能力、计价、按名字对应条目、搜索）都读合成后的条目。
+    """Install the user-modified entry copies; later queries (facade, capabilities, pricing, mapping names to entries, search) all read the composed entries.
+
+    Called by the writer at app startup and after each write to the user entry table; as with
+    :func:`install_user_added_models`, all readers are in the app process, so an in-process replacement takes effect for
+    all of them. ``created`` are the identities of user-created entries among them.
+
+    换上用户修改的条目副本，之后的查询（门面、能力、计价、按名字对应条目、搜索）都读合成后的条目。
 
     应用启动时与每次写入用户条目表之后由写入方调用；与 :func:`install_user_added_models` 同理，全部读点都在
     应用进程里，进程内替换即对全部读点生效。``created`` 是其中用户新建的条目身份。
@@ -387,7 +471,7 @@ def install_user_entries(entries: Iterable[CatalogEntry], created: Iterable[Entr
 
 
 def composed_catalog() -> ComposedCatalog:
-    """合成后的目录：官方数据加上用户修改的条目副本。"""
+    """The composed catalog: official data plus user-modified entry copies. / 合成后的目录：官方数据加上用户修改的条目副本。"""
     official = official_data()
     if not _composed_cache or _composed_cache[0][0] is not official:
         _composed_cache[:] = [(official, compose_catalog(official, *_user_entries[0]))]
@@ -395,22 +479,26 @@ def composed_catalog() -> ComposedCatalog:
 
 
 def catalog_data() -> CatalogData:
-    """运行时读的目录数据（合成后）。"""
+    """Catalog data read at runtime (composed). / 运行时读的目录数据（合成后）。"""
     return composed_catalog().data
 
 
 def entry_source(key: EntryKey) -> EntrySource:
-    """条目由谁维护：跟随官方、用户改过，或官方没有、由用户填写。"""
+    """Who maintains the entry: follows official, modified by the user, or not in official data and filled in by the user.
+
+    条目由谁维护：跟随官方、用户改过，或官方没有、由用户填写。"""
     return composed_catalog().source_of(key)
 
 
 def official_entry(key: EntryKey) -> CatalogEntry | None:
-    """官方数据里这个身份的条目，用于显示官方值与恢复官方数据；用户新建的条目没有。"""
+    """The entry with this identity in official data, for showing official values and restoring official data; user-created entries have none.
+
+    官方数据里这个身份的条目，用于显示官方值与恢复官方数据；用户新建的条目没有。"""
     return composed_catalog().official_entry(key)
 
 
 def get_entry(key: EntryKey) -> CatalogEntry | None:
-    """按身份取合成后的条目；目录里没有时为 ``None``。"""
+    """Get the composed entry by identity; ``None`` if not in the catalog. / 按身份取合成后的条目；目录里没有时为 ``None``。"""
     return next((entry for entry in catalog_data().entries if entry.key == key), None)
 
 
@@ -426,7 +514,9 @@ def _provider_models(provider_id: str) -> dict[str, CatalogModel]:
 
 
 def reset_for_tests() -> None:
-    """清空出厂快照、同步数据、索引、用户添加模型与用户条目副本的进程级状态，下次查询重新读取快照。"""
+    """Clear the process-level state of the factory snapshot, sync data, index, user-added models and user entry copies; the next query re-reads the snapshot.
+
+    清空出厂快照、同步数据、索引、用户添加模型与用户条目副本的进程级状态，下次查询重新读取快照。"""
     factory_snapshot.cache_clear()
     _synced[0] = None
     _official_cache.clear()
@@ -437,7 +527,9 @@ def reset_for_tests() -> None:
 
 
 def _indexed_model(provider_id: str, model_id: str, media_type: str | None) -> _IndexedModel | None:
-    """按供应商与模型键取索引项；给了 ``media_type`` 时，模型不是这一媒体类型也视为不存在。"""
+    """Get the index item by provider and model key; when ``media_type`` is given, a model not of that media type is treated as nonexistent.
+
+    按供应商与模型键取索引项；给了 ``media_type`` 时，模型不是这一媒体类型也视为不存在。"""
     indexed = _indexed_models(provider_id).get(model_id)
     if indexed is None or media_type not in (None, indexed.model.media_type):
         return None
@@ -445,7 +537,12 @@ def _indexed_model(provider_id: str, model_id: str, media_type: str | None) -> _
 
 
 def get_model(provider_id: str, model_id: str, *, media_type: str | None = None) -> CatalogModel | None:
-    """按供应商与模型键取目录信息；供应商或模型不在目录中时返回 ``None``。
+    """Get catalog info by provider and model key; returns ``None`` if the provider or model is not in the catalog.
+
+    When ``media_type`` is given, a model not of that media type also returns ``None``: the caller wants "this kind of
+    model of this provider", and a model key referencing another media type is as unusable as one not in the list.
+
+    按供应商与模型键取目录信息；供应商或模型不在目录中时返回 ``None``。
 
     给了 ``media_type`` 时，模型不是这一媒体类型也返回 ``None``：调用方要的是「这个供应商的这类模型」，
     模型键引用到别的媒体类型与不在清单里同样不可用。
@@ -455,29 +552,41 @@ def get_model(provider_id: str, model_id: str, *, media_type: str | None = None)
 
 
 def list_models(provider_id: str) -> dict[str, CatalogModel]:
-    """列出供应商的全部模型（按清单顺序，含 ``hidden`` 的模型）；供应商不在目录中时为空。"""
+    """List all models of the provider (in list order, including ``hidden`` models); empty if the provider is not in the catalog.
+
+    列出供应商的全部模型（按清单顺序，含 ``hidden`` 的模型）；供应商不在目录中时为空。"""
     return _provider_models(provider_id)
 
 
 @dataclass(frozen=True)
 class ProviderModelView:
-    """供应商模型列表里的一个模型：目录信息、对应的条目（对应不上时为 ``None``），以及它是官方收录还是用户添加。"""
+    """One model in the provider model list: catalog info, the corresponding entry (``None`` if none), and whether it is officially listed or user-added.
+
+    供应商模型列表里的一个模型：目录信息、对应的条目（对应不上时为 ``None``），以及它是官方收录还是用户添加。"""
 
     model_id: str
     api_model_name: str
     model: CatalogModel
     entry: CatalogEntry | None
     official: bool
+    #: Provider model multiplier: shipped with official data for officially listed models, filled in by the user for user-added ones.
     #: 供应商模型倍率：官方收录的随官方数据下发，用户添加的由用户填写。
     multiplier: float
+    #: Catalog info without capability overrides: the entry's values, or the runtime fallback when no entry matches.
     #: 未叠加能力覆盖的目录信息：条目的值，对应不上条目时为运行时回落的值。
     base_model: CatalogModel | None = None
+    #: Capability overrides of user-added models (invalid keys/values filtered out); officially listed models have none.
     #: 用户添加的模型的能力覆盖（已滤掉不合法的键值）；官方收录的模型没有。
     capability_overrides: Mapping[str, object] = field(default_factory=dict)
 
 
 def provider_models(provider_id: str) -> list[ProviderModelView]:
-    """列出内置供应商的全部供应商模型：官方收录的按清单顺序在前，用户添加的随后。
+    """List all provider models of a built-in provider: officially listed ones first in list order, then user-added ones.
+
+    Officially listed models below the minimum app version are excluded. Enabled state is not in the catalog; it's decided
+    by the built-in provider model table.
+
+    列出内置供应商的全部供应商模型：官方收录的按清单顺序在前，用户添加的随后。
 
     低于最低应用版本的官方收录模型不在其中。启用状态不在目录里，由内置供应商模型表决定。
     """
@@ -497,7 +606,13 @@ def provider_models(provider_id: str) -> list[ProviderModelView]:
 
 
 def user_added_capability_overrides(provider_id: str, model_id: str) -> Mapping[str, object]:
-    """内置供应商下用户添加的模型的能力覆盖；官方收录的模型、不在目录中的模型为空。
+    """Capability overrides of user-added models under a built-in provider; empty for officially listed models and models not in the catalog.
+
+    Model-fact dimensions are already merged into :func:`get_model`'s catalog info; backend-fact dimensions (input modes,
+    reference limits, audio track shape, etc.) are merged by the backend side's capability declaration
+    (``lib.backends.backend_assembly.specs.builtin_video_capabilities_for_model``).
+
+    内置供应商下用户添加的模型的能力覆盖；官方收录的模型、不在目录中的模型为空。
 
     模型事实维度已并进 :func:`get_model` 的目录信息；通道事实维度（输入模式、参考上限、音轨形态等）由调用通道
     一侧的能力声明合并（``lib.backends.backend_assembly.specs.builtin_video_capabilities_for_model``）。
@@ -507,7 +622,7 @@ def user_added_capability_overrides(provider_id: str, model_id: str) -> Mapping[
 
 
 def default_model(provider_id: str, media_type: str) -> str | None:
-    """供应商在该媒体类型下的默认模型键；没有指定时返回 ``None``。"""
+    """The provider's default model key for the media type; returns ``None`` if none is designated. / 供应商在该媒体类型下的默认模型键；没有指定时返回 ``None``。"""
     for model_id, model in _provider_models(provider_id).items():
         if model.media_type == media_type and model.default:
             return model_id
@@ -515,19 +630,28 @@ def default_model(provider_id: str, media_type: str) -> str | None:
 
 
 def provider_media_types(provider_id: str) -> list[str]:
-    """供应商的模型覆盖到的媒体类型，升序。"""
+    """Media types covered by the provider's models, ascending. / 供应商的模型覆盖到的媒体类型，升序。"""
     return sorted({model.media_type for model in _provider_models(provider_id).values()})
 
 
 def provider_capabilities(provider_id: str) -> list[str]:
-    """供应商全部模型的能力并集，升序。"""
+    """Union of capabilities of all the provider's models, ascending. / 供应商全部模型的能力并集，升序。"""
     return sorted({cap for model in _provider_models(provider_id).values() for cap in model.capabilities})
 
 
 def find_entry(
     model_name: str, *, media_type: str | None = None, binding: EntryKey | None = None
 ) -> CatalogEntry | None:
-    """模型名对应的模型条目（docs/adr/0105）：先看条目绑定，再按名字在当前目录里现查。
+    """The model entry corresponding to a model name (docs/adr/0105): check the entry binding first, then look up by name in the current catalog.
+
+    Used for cases that only have a model name, such as custom provider models and Agent credential tiers; built-in
+    provider models reference entries directly and don't go through here. ``media_type`` is the media type of the provider
+    model's endpoint, or the name-inferred media type when there's no endpoint yet; ``binding`` is the entry the user
+    designated for this model (pass ``None`` when nothing is stored yet). Returns ``None`` when nothing matches or an
+    amphibious model has no ``media_type``. The mapping isn't cached; after the catalog changes (official sync brings new
+    entries or model aliases) the next call gets the new result. Rules: see :func:`match_entry`.
+
+    模型名对应的模型条目（docs/adr/0105）：先看条目绑定，再按名字在当前目录里现查。
 
     供自定义供应商的模型、Agent 凭证的档位这类只有模型名的场景使用；内置供应商的模型直接引用条目，不走这里。
     ``media_type`` 取供应商模型调用端点的媒体类型，还没有调用端点时取按名字推断的媒体类型；``binding`` 是用户
@@ -538,7 +662,9 @@ def find_entry(
 
 
 def binding_key(ref: str | None, media_type: str) -> EntryKey | None:
-    """条目绑定存的「模型厂商/官方模型名」加上调用端点的媒体类型，还原为条目键；没有绑定或形状不对时为 ``None``。"""
+    """Restore the "model maker/official model name" stored in the entry binding plus the endpoint's media type into an entry key; ``None`` when there's no binding or the shape is wrong.
+
+    条目绑定存的「模型厂商/官方模型名」加上调用端点的媒体类型，还原为条目键；没有绑定或形状不对时为 ``None``。"""
     if not ref or media_type not in MEDIA_TYPES:
         return None
     maker, sep, name = ref.partition("/")
@@ -548,7 +674,9 @@ def binding_key(ref: str | None, media_type: str) -> EntryKey | None:
 
 
 def find_bound_entry(ref: str, media_type: str) -> CatalogEntry | None:
-    """条目绑定指向的条目；目录里没有这个条目（或媒体类型不符）时为 ``None``。供写入侧校验绑定使用。"""
+    """The entry the entry binding points to; ``None`` if the catalog has no such entry (or the media type doesn't match). Used by the write side to validate bindings.
+
+    条目绑定指向的条目；目录里没有这个条目（或媒体类型不符）时为 ``None``。供写入侧校验绑定使用。"""
     key = binding_key(ref, media_type)
     if key is None:
         return None
@@ -556,13 +684,17 @@ def find_bound_entry(ref: str, media_type: str) -> CatalogEntry | None:
 
 
 def entry_ref(entry: CatalogEntry) -> str:
-    """条目绑定的存储形状：「模型厂商/官方模型名」。"""
+    """Storage shape of an entry binding: "model maker/official model name". / 条目绑定的存储形状：「模型厂商/官方模型名」。"""
     return entry.key.ref
 
 
 @dataclass(frozen=True)
 class ModelPrice:
-    """内置供应商模型的计价依据：所对应条目的价目表（没有时为 ``None``）与这个供应商模型的倍率。
+    """Pricing basis of a built-in provider model: the price table of the corresponding entry (``None`` if none) and this provider model's multiplier.
+
+    When ``entry_found`` is false, this is a user-added model that doesn't map to an entry.
+
+    内置供应商模型的计价依据：所对应条目的价目表（没有时为 ``None``）与这个供应商模型的倍率。
 
     ``entry_found`` 为假时，这是一个对应不上条目的用户添加模型。
     """
@@ -573,7 +705,12 @@ class ModelPrice:
 
 
 def provider_model_price(provider_id: str, model_id: str, media_type: str) -> ModelPrice | None:
-    """内置供应商模型的价目表与供应商模型倍率。
+    """Price table and provider model multiplier of a built-in provider model.
+
+    Returns ``None`` when the provider or model key is not in the catalog, or the model is not of the called
+    ``media_type`` (same rule as :func:`get_model`), counted as not mapping to an entry.
+
+    内置供应商模型的价目表与供应商模型倍率。
 
     供应商或模型键不在目录中、或模型不是调用的 ``media_type``（与 :func:`get_model` 同一口径）时返回 ``None``，
     按对应不上条目计。
@@ -589,7 +726,9 @@ def provider_model_price(provider_id: str, model_id: str, media_type: str) -> Mo
 
 @dataclass(frozen=True)
 class CatalogSearchHit:
-    """目录搜索命中的一个模型条目。``maker`` 加 ``name`` 加 ``media_type`` 唯一确定条目（两栖模型有两个条目）。"""
+    """One model entry hit by catalog search. ``maker`` plus ``name`` plus ``media_type`` uniquely determine the entry (amphibious models have two entries).
+
+    目录搜索命中的一个模型条目。``maker`` 加 ``name`` 加 ``media_type`` 唯一确定条目（两栖模型有两个条目）。"""
 
     maker: str
     name: str
@@ -599,13 +738,22 @@ class CatalogSearchHit:
 
 
 def _search_keys(entry: CatalogEntry) -> list[str]:
-    """条目可被搜索词命中的名称：官方模型名与模型别名按归一化后的写法，显示名只忽略大小写并视点号同连字符。"""
+    """Names of the entry that search terms can hit: official model name and model aliases in normalized form; the display name only ignores case and treats dots as hyphens.
+
+    条目可被搜索词命中的名称：官方模型名与模型别名按归一化后的写法，显示名只忽略大小写并视点号同连字符。"""
     names = [entry.name, *entry.aliases]
     return [normalize_model_name(name) for name in names] + [entry.display_name.lower().replace(".", "-")]
 
 
 def search_entries(query: str = "", media_type: str | None = None) -> list[CatalogSearchHit]:
-    """按名称与媒体类型搜索模型条目。
+    """Search model entries by name and media type.
+
+    The search text is split on whitespace into terms; each term must hit one of the entry's official model name, model
+    aliases or display name (case-insensitive, dots treated as hyphens, the maker ignored when written as "maker/model
+    name"). An empty search lists everything. Entries whose name equals the whole query come first, then those starting
+    with the whole query, the rest in catalog order; delisted entries always go last.
+
+    按名称与媒体类型搜索模型条目。
 
     搜索词按空白切成若干词，每个词都要命中条目的官方模型名、模型别名或显示名之一（忽略大小写，
     点号视同连字符，写成「厂商/模型名」时忽略厂商）。空搜索词列出全部。整句与名称相同的排最前，

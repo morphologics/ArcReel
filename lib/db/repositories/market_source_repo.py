@@ -1,4 +1,4 @@
-"""市场源仓储：登记、排序与刷新结果的持久化。"""
+"""Market source repository: persistence of registration, ordering and refresh results. / 市场源仓储：登记、排序与刷新结果的持久化。"""
 
 from __future__ import annotations
 
@@ -14,7 +14,7 @@ CUSTOM_KIND = "custom"
 
 
 class MarketSourceRepository(BaseRepository):
-    """``market_source`` 表的读写；只 flush，提交由调用方负责。"""
+    """Reads and writes of the ``market_source`` table; only flushes, the caller commits. / ``market_source`` 表的读写；只 flush，提交由调用方负责。"""
 
     async def list_ordered(self) -> list[MarketSource]:
         stmt = select(MarketSource).order_by(MarketSource.position, MarketSource.id)
@@ -40,13 +40,15 @@ class MarketSourceRepository(BaseRepository):
         return 0 if current is None else current + 1
 
     async def first_position(self) -> int:
-        """排在最前所需的位置：比当前最小位置小 1，空表为 0。"""
+        """Position needed to sort first: one less than the current minimum, 0 for an empty table. / 排在最前所需的位置：比当前最小位置小 1，空表为 0。"""
         result = await self.session.execute(select(func.min(MarketSource.position)))
         current = result.scalar_one_or_none()
         return 0 if current is None else current - 1
 
     async def apply_order(self, ordered_ids: Sequence[int]) -> None:
-        """按 ``ordered_ids`` 的顺序重写位置；调用方保证它是现有 id 的全排列。"""
+        """Rewrite positions in the order of ``ordered_ids``; the caller guarantees it is a permutation of the existing ids.
+
+        按 ``ordered_ids`` 的顺序重写位置；调用方保证它是现有 id 的全排列。"""
         positions = {source_id: position for position, source_id in enumerate(ordered_ids)}
         for source in await self.list_ordered():
             source.position = positions[source.id]

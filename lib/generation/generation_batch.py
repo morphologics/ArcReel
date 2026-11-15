@@ -45,6 +45,7 @@ class GenerationBatchRequestedItem(BaseModel):
     prior_artifact_path: str | None = None
     prior_artifact_status: ArtifactStatus | None = None
     admission: dict[str, Any] = Field(default_factory=dict)
+    #: Prerequisite member within the same batch: this member runs only after its task succeeds; if it fails, this member is not submitted to the provider.
     #: 同批内的前置成员：它的任务成功后本成员才执行，失败则本成员不提交给供应商。
     depends_on: str | None = None
 
@@ -132,6 +133,7 @@ class GenerationBatchCancelResult(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     cancelled: list[str] = Field(default_factory=list)
+    #: Members already executing and not cancellable: they run to completion as usual and their results become artifacts as usual.
     #: 已开始执行、不可取消的成员：照常跑完，结果照常成为产物。
     skipped_running: list[str] = Field(default_factory=list)
     skipped_terminal: list[str] = Field(default_factory=list)

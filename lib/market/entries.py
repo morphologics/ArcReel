@@ -1,4 +1,11 @@
-"""市场条目的浏览：合并启用源的条目，按需抓取定义原文与 icon。
+"""Browsing market entries: merge entries of enabled sources and fetch definition text and icons on demand.
+
+Browsing only reads each source's cached index snapshot and sends no requests; definitions and icons are fetched
+through the fetch boundary only when needed. An entry's ``path`` / ``icon`` resolve relative to the directory of
+``index_url``, and fetches also go through the proxy prefix. Icons are re-checked by extension and 64 KB before being
+returned, and valid results are kept in an in-process LRU cache. Entries with the same slug across sources are listed side by side, not merged.
+
+市场条目的浏览：合并启用源的条目，按需抓取定义原文与 icon。
 
 浏览只读各源缓存的索引快照，不发请求；定义与 icon 在用到时才经抓取边界取回。条目的 ``path`` /
 ``icon`` 相对 ``index_url`` 所在目录解析，抓取同样走代理前缀。icon 回传前按扩展名与 64 KB 二次
@@ -38,13 +45,13 @@ from .sources import PROXY_PREFIX_SETTING
 
 logger = logging.getLogger(__name__)
 
-#: 进程内缓存的 icon 份数；单份上限 64 KB，总量有界。
+#: Number of icons cached in process; 64 KB max each, so the total is bounded. / 进程内缓存的 icon 份数；单份上限 64 KB，总量有界。
 ICON_CACHE_SIZE = 256
 
 
 @dataclass(frozen=True)
 class SourcedEntry:
-    """一个条目连同它所在的市场源。"""
+    """An entry together with its market source. / 一个条目连同它所在的市场源。"""
 
     source: MarketSource
     entry: MarketIndexEntry
@@ -52,7 +59,9 @@ class SourcedEntry:
 
 @dataclass(frozen=True)
 class FetchedDefinition:
-    """抓到的定义原文，连同选定抓取地址的那份快照里的索引地址与条目。"""
+    """The fetched definition text, plus the index URL and entry from the snapshot that chose the fetch URL.
+
+    抓到的定义原文，连同选定抓取地址的那份快照里的索引地址与条目。"""
 
     definition: Any
     index_url: str
@@ -72,7 +81,7 @@ class MissingTarget(StrEnum):
 
 
 class MarketEntryNotFoundError(Exception):
-    """市场源、条目或条目的 icon 不存在。"""
+    """The market source, entry or entry icon does not exist. / 市场源、条目或条目的 icon 不存在。"""
 
     def __init__(self, target: MissingTarget) -> None:
         super().__init__(f"market {target.value} not found")
@@ -80,19 +89,29 @@ class MarketEntryNotFoundError(Exception):
 
 
 class MarketSourceDisabledError(Exception):
-    """市场源已禁用：不代它发请求。"""
+    """The market source is disabled: no requests are made on its behalf. / 市场源已禁用：不代它发请求。"""
 
 
 class MarketAssetFetchError(Exception):
-    """条目资产没有取回：网络失败、超时、非成功状态码或体积超限。消息即原因。"""
+    """The entry asset was not retrieved: network failure, timeout, non-success status or size limit exceeded. The message is the reason.
+
+    条目资产没有取回：网络失败、超时、非成功状态码或体积超限。消息即原因。"""
 
 
 class MarketAssetInvalidError(Exception):
-    """取回的条目资产不可用：定义不是 JSON，或 icon 未过格式把关。消息即原因。"""
+    """The retrieved entry asset is unusable: the definition is not JSON, or the icon failed the format check. The message is the reason.
+
+    取回的条目资产不可用：定义不是 JSON，或 icon 未过格式把关。消息即原因。"""
 
 
 def snapshot_entries(source: MarketSource) -> tuple[MarketIndexEntry, ...]:
-    """市场源缓存快照里本客户端认识的条目；从未抓取或快照已读不懂时为空。
+    """Entries this client understands in a market source's cached snapshot; empty if never fetched or the snapshot is no longer understood.
+
+    Entries are addressed by slug within a source and client refresh does not check slug uniqueness (rule 2 is enforced
+    by the market source's CI); for duplicate slugs only the first is kept, so listing and fetching details, definition
+    or icon by slug always point at the same entry.
+
+    市场源缓存快照里本客户端认识的条目；从未抓取或快照已读不懂时为空。
 
     条目在源内以 slug 寻址，客户端刷新不校验 slug 唯一（规则 ② 由市场源 CI 负责）；同 slug 只保留
     第一条，列表与按 slug 取详情、定义、icon 始终指向同一条。
@@ -111,7 +130,7 @@ def snapshot_entries(source: MarketSource) -> tuple[MarketIndexEntry, ...]:
 
 
 def merge_entries(sources: Iterable[MarketSource], *, entry_type: str = ENDPOINT_ENTRY_TYPE) -> list[SourcedEntry]:
-    """合并启用源的条目：保持传入的源顺序，源内按条目名称排序。"""
+    """Merge entries of enabled sources: keep the given source order; within a source sort by entry name. / 合并启用源的条目：保持传入的源顺序，源内按条目名称排序。"""
     merged: list[SourcedEntry] = []
     for source in sources:
         if not source.is_enabled:
@@ -127,13 +146,17 @@ def find_entry(source: MarketSource, slug: str) -> MarketIndexEntry | None:
 
 
 def entry_asset_url(index_url: str, relative_path: str) -> str:
-    """把条目内的相对路径解析为 ``index_url`` 所在目录下的地址；路径中的保留字符逐段转义。"""
+    """Resolve a relative path within an entry to a URL under the directory of ``index_url``; reserved characters in the path are escaped segment by segment.
+
+    把条目内的相对路径解析为 ``index_url`` 所在目录下的地址；路径中的保留字符逐段转义。"""
     directory = index_url[: index_url.rfind("/") + 1]
     return directory + quote(relative_path, safe="/")
 
 
 class MarketEntryService:
-    """按需抓取条目的定义原文与 icon。生产环境经 :func:`get_market_entry_service` 共享一个实例（icon 缓存随之共享）。"""
+    """Fetch an entry's definition text and icon on demand. In production one instance is shared via :func:`get_market_entry_service` (and with it the icon cache).
+
+    按需抓取条目的定义原文与 icon。生产环境经 :func:`get_market_entry_service` 共享一个实例（icon 缓存随之共享）。"""
 
     def __init__(
         self,
@@ -148,7 +171,17 @@ class MarketEntryService:
         self._icons: OrderedDict[tuple[str, str, str], MarketIcon] = OrderedDict()
 
     async def fetch_definition(self, source_id: int, slug: str) -> FetchedDefinition:
-        """抓取条目定义并按 JSON 解析后原样返回，不做定义校验。
+        """Fetch the entry definition, parse it as JSON and return it as is, without definition validation.
+
+        When the caller re-reads the snapshot after fetching, it uses the returned index URL and entry to tell whether the source was refreshed during the fetch.
+
+        Raises:
+            MarketEntryNotFoundError: the source or entry does not exist.
+            MarketSourceDisabledError: the source is disabled.
+            MarketAssetFetchError: not retrieved.
+            MarketAssetInvalidError: the retrieved content is not JSON.
+
+        抓取条目定义并按 JSON 解析后原样返回，不做定义校验。
 
         调用方在抓取后重读快照时，据返回的索引地址与条目判断抓取期间源是否已刷新。
 
@@ -167,7 +200,17 @@ class MarketEntryService:
         return FetchedDefinition(definition=definition, index_url=index_url, entry=entry)
 
     async def fetch_icon(self, source_id: int, slug: str) -> MarketIcon:
-        """取条目 icon：先查进程内缓存，未命中再抓取并二次把关扩展名、体积与格式。
+        """Get an entry's icon: check the in-process cache first; on a miss fetch it and re-check extension, size and format.
+
+        The cache key includes the entry version, so a version bump fetches again.
+
+        Raises:
+            MarketEntryNotFoundError: the source, entry or icon does not exist.
+            MarketSourceDisabledError: the source is disabled.
+            MarketAssetFetchError: not retrieved (including over 64 KB).
+            MarketAssetInvalidError: failed the format check.
+
+        取条目 icon：先查进程内缓存，未命中再抓取并二次把关扩展名、体积与格式。
 
         缓存键含条目版本，条目升版即重新抓取。
 
@@ -228,7 +271,7 @@ _service: MarketEntryService | None = None
 
 
 def get_market_entry_service() -> MarketEntryService:
-    """进程内共享的服务实例：icon 缓存依赖同一个实例。"""
+    """Service instance shared in process: the icon cache depends on a single instance. / 进程内共享的服务实例：icon 缓存依赖同一个实例。"""
     global _service
     if _service is None:
         from lib.db import async_session_factory

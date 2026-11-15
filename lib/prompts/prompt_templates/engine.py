@@ -29,10 +29,12 @@ class TemplateError(ValueError):
     """模版加载或渲染失败。"""
 
 
+#: All axes a template may declare; the settings page looks up display copy by axis name, unlisted keys fail loud at load time.
 #: 模版可声明的全部轴；设置页按轴名取显示文案，未列出的键在加载期 fail loud。
 TemplateAxis = Literal["content_mode", "generation_mode", "source_kind", "asset_type", "ad_duration_tier"]
 
 
+#: The workflow step a template belongs to; the settings page shows the step name by value, unlisted values fail loud at load time.
 #: 模版所属的制作步骤；设置页按取值显示步骤名，未列出的取值在加载期 fail loud。
 TemplateStage = Literal[
     "source_overview",
@@ -79,7 +81,7 @@ class GenerationTaskTrigger(_Trigger):
     name: Literal["asset", "storyboard", "video", "reference_video", "grid"]
 
 
-#: 模版的触发方，三类各带一个具体名，取值封闭。
+#: The template's trigger source: three kinds, each with one concrete name; the value set is closed. / 模版的触发方，三类各带一个具体名，取值封闭。
 TemplateTrigger = Annotated[
     AgentToolTrigger | UserActionTrigger | GenerationTaskTrigger,
     Field(discriminator="kind"),
@@ -187,6 +189,7 @@ class PromptTemplates:
                 text = self._partials[name].render({**context.get_all(), **kwargs}).rstrip("\n")
             finally:
                 depth -= 1
+            # Nested fragments are expanded in place; only references in the body carry the marker and take part in the block-level check.
             # 嵌套片段就地展开，只有正文里的引用带标记参与块级判定。
             if depth:
                 return _Fragment(text)
@@ -198,6 +201,7 @@ class PromptTemplates:
             return partial(context, f"{family}/{axis_value}", **kwargs)
 
         try:
+            # The first pass only projects body data; the second pass uses it to decide whether a block-level fragment is already in the body.
             # 第一遍只投影正文数据，第二遍据此判断块级片段是否已经在正文里。
             body = template.render({**slots, "partial": _blank, "variant": _blank})
             rendered = template.render({**slots, "partial": partial, "variant": variant})

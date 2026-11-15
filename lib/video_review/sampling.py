@@ -1,4 +1,8 @@
-"""联系表的抽帧计划：每个镜头至少一帧，信号两侧加密，余量补均匀取样点。
+"""Sampling plan for contact sheets: at least one frame per shot, denser around signals, the remainder filled with uniform sample points.
+
+Works on frame indices; an index is the n-th frame as given by ``probe_video_frame_times``.
+
+联系表的抽帧计划：每个镜头至少一帧，信号两侧加密，余量补均匀取样点。
 
 按帧索引工作；索引对应 ``probe_video_frame_times`` 给出的第 n 帧。
 """
@@ -13,14 +17,16 @@ from lib.video_review.signals import VideoSignals, frame_index_at, last_frame_in
 
 
 def sample_frame_indices(frame_count: int, count: int) -> list[int]:
-    """在 ``frame_count`` 帧里均匀取 ``count`` 帧（各取所在等分区间的中点）；帧数不够时全取。"""
+    """Take ``count`` frames uniformly from ``frame_count`` frames (the midpoint of each equal interval); take all if there are too few.
+
+    在 ``frame_count`` 帧里均匀取 ``count`` 帧（各取所在等分区间的中点）；帧数不够时全取。"""
     if count >= frame_count:
         return list(range(frame_count))
     return [math.floor((index + 0.5) * frame_count / count) for index in range(count)]
 
 
 def _shot_ranges(frame_times: Sequence[float], signals: VideoSignals | None) -> list[tuple[int, int]]:
-    """各镜头的帧索引区间 [首帧, 末帧]。"""
+    """Frame index range [first, last] of each shot. / 各镜头的帧索引区间 [首帧, 末帧]。"""
     frame_count = len(frame_times)
     starts = [0]
     if signals is not None:
@@ -31,7 +37,9 @@ def _shot_ranges(frame_times: Sequence[float], signals: VideoSignals | None) -> 
 
 
 def _signal_tiers(frame_times: Sequence[float], signals: VideoSignals) -> tuple[list[int], list[int]]:
-    """信号加密帧的两个梯队：第一梯队是信号起点帧，第二梯队是起点的另一侧（切点前一帧、区间末帧）。"""
+    """Two tiers of signal densification frames: tier one is the signal's start frame, tier two the other side of the start (the frame before a cut, the range's last frame).
+
+    信号加密帧的两个梯队：第一梯队是信号起点帧，第二梯队是起点的另一侧（切点前一帧、区间末帧）。"""
     events: list[tuple[float, int, int]] = []
     for cut in signals.cuts:
         index = frame_index_at(frame_times, cut)
@@ -58,7 +66,9 @@ def _add_evenly(selected: set[int], candidates: Sequence[int], room: int) -> Non
 
 
 def _fill_uniformly(selected: set[int], even: Sequence[int], frame_count: int, room: int) -> None:
-    """依次补入离已选帧最远的均匀取样点；取样点用完仍有余量时，补进最大的空隙。"""
+    """Add the uniform sample points farthest from the already chosen frames, in turn; if budget remains after the sample points run out, fill the largest gaps.
+
+    依次补入离已选帧最远的均匀取样点；取样点用完仍有余量时，补进最大的空隙。"""
     for _ in range(room):
         pool = [index for index in even if index not in selected]
         if pool:
@@ -74,7 +84,15 @@ def _fill_uniformly(selected: set[int], even: Sequence[int], frame_count: int, r
 def plan_frame_indices(
     frame_times: Sequence[float], signals: VideoSignals | None, count: int, *, max_count: int
 ) -> list[int]:
-    """从视频的 ``len(frame_times)`` 帧里挑要抽的帧，返回升序索引。
+    """Choose the frames to extract from the video's ``len(frame_times)`` frames; returns ascending indices.
+
+    ``count`` is the frame budget; when there are more shots than budget, one frame per shot takes priority and the
+    total is raised to the shot count, but no more than ``max_count``; with even more shots, pick evenly across shots.
+    Frames are taken in this order: one per shot (a uniform sample point inside that shot, else its middle frame), each
+    signal's start frame, the frame on the other side of the start, then remaining budget on uniform sample points;
+    without signals the result is just uniform sampling.
+
+    从视频的 ``len(frame_times)`` 帧里挑要抽的帧，返回升序索引。
 
     ``count`` 是帧数预算；镜头数比预算多时，每个镜头至少一帧优先，总帧数提到镜头数，但不超过 ``max_count``，
     镜头更多时在各镜头里均匀挑。取帧依次为：每个镜头一帧（该镜头里的均匀取样点，没有则取中间帧）、

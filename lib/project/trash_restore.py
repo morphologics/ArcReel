@@ -1,4 +1,34 @@
-"""恢复流水线：带结构快照的删除记录只经这一条路径恢复（``docs/adr/0107``）。
+"""Restore pipeline: deletion records with a structure snapshot are restored only through this one path
+(``docs/adr/0107``).
+
+1. In a temporary directory under the project trash directory, lay out the record's structure snapshot and the
+   deleted files as a temporary project;
+2. run the source encoding migration and the project migration chain (the same two steps as archive import; a no-op
+   when the schema is the same). Archive import's tree repair, data validation and import activation target a
+   complete project and would raise false alarms on a temporary project missing the other media, so they are not
+   run here;
+3. by the object type's landing rules, take the object from the migrated temporary project by identity (not by its
+   original path at deletion);
+4. take the domain locks declared by the rule, then the project lock, re-check that the record still exists, add the
+   object back into the current project by the landing rules, and back-fill registrations for added-back artifacts.
+   On landing failure, the files newly created this time are removed and the record is kept as-is.
+
+On migration failure, or when the object can't be taken from the migrated temporary project, it degrades (records
+without deleted files don't degrade; the record is kept). Read/write faults (``OSError``, except missing files)
+don't degrade: disk full, insufficient permissions etc. can be fixed and retried; the error is raised as-is and
+the record kept. When degrading, deleted media and other files are added back at their post-migration paths (or as
+of the moment of failure when migration failed mid-way), following the rules for file-only records (back to the
+original path if free, otherwise as a historical version or under a new name); deleted structure files are not
+added back and remain in the record, download only.
+
+Project-level state produced by migrating the temporary project (such as the episode ID high-water mark) stays in
+the temporary directory and is discarded with it: the landing rules only add the taken objects back into the
+current project.
+
+A new object type registers a take function in :func:`_rules` that returns a :class:`Restoration` describing the
+landing.
+
+恢复流水线：带结构快照的删除记录只经这一条路径恢复（``docs/adr/0107``）。
 
 1. 在项目回收站目录下的临时目录里，把记录的结构快照与被删文件铺成一个临时项目；
 2. 跑源文编码迁移与项目迁移链（与归档导入相同的两步，schema 相同时为空操作）。归档导入的目录树修复、
@@ -43,18 +73,28 @@ __all__ = ["Landing", "Restoration", "RestoreBlocked", "TakeRule", "restore_stru
 
 logger = logging.getLogger(__name__)
 
+#: Migration steps may rewrite text files in place; files with these suffixes are copied into the temporary project,
+#: the rest (media) are hard-linked to avoid copying large files.
 #: 迁移步可能就地改写文本文件；这些后缀复制进临时项目，其余（媒体）用硬链接，免得大文件复制一遍。
 _COPIED_SUFFIXES = frozenset({".json", ".md", ".txt"})
+#: Backups left by migration steps (``<name>.bak.v<N>-<ts>``) and copies set aside during normalization
+#: (``.kept.``); these are not deleted files.
 #: 迁移步留下的备份（``<名>.bak.v<N>-<ts>``）与规整时搁置的副本（``.kept.``），不是被删的文件。
 _MIGRATION_COPY_RE = re.compile(r"\.(?:bak|kept)\.v\d+-\d+")
 
 
 class RestoreBlocked(ConflictError):
-    """对象此刻不能恢复、但之后可以（如所属的集也在项目回收站里）：取出规则抛它时不降级，记录原样保留。"""
+    """The object can't be restored right now but can later (e.g. its episode is also in the project trash): when a take
+    rule raises it, there's no degradation and the record is kept as-is.
+
+    对象此刻不能恢复、但之后可以（如所属的集也在项目回收站里）：取出规则抛它时不降级，记录原样保留。"""
 
 
 class Landing:
-    """一次恢复在当前项目里新建的文件与目录；:meth:`rollback` 撤掉它们，当前项目回到恢复前。从不覆盖现有文件。"""
+    """Files and directories newly created in the current project by one restore; :meth:`rollback` removes them and the
+    current project returns to its pre-restore state. Never overwrites existing files.
+
+    一次恢复在当前项目里新建的文件与目录；:meth:`rollback` 撤掉它们，当前项目回到恢复前。从不覆盖现有文件。"""
 
     def __init__(self, project_dir: Path) -> None:
         self.project_dir = project_dir
@@ -66,7 +106,9 @@ class Landing:
         return not (target.exists() or target.is_symlink())
 
     def place(self, staged: Path, rel: str, *, original: str) -> None:
-        """把临时项目里的 ``staged`` 移到当前项目的 ``rel``；``rel`` 必须空闲。"""
+        """Move ``staged`` from the temporary project to ``rel`` in the current project; ``rel`` must be free.
+
+        把临时项目里的 ``staged`` 移到当前项目的 ``rel``；``rel`` 必须空闲。"""
         target = self._target(rel)
         os.replace(staged, target)
         self._done(target, rel, original)
@@ -79,10 +121,14 @@ class Landing:
     def rollback(self) -> None:
         for path in reversed(self._created):
             if path.is_dir() and not path.is_symlink():
+                # Remove newly created directories too: a leftover empty directory would make a retry treat it as an identity
+                # conflict. Directories that something else wrote content into meanwhile are kept.
                 # 新建的目录也撤掉：留下的空目录会让重试按身份冲突处理。期间被别处写进内容的目录留着。
                 with suppress(OSError):
+                    # only delete directories newly created this time that are still empty
                     path.rmdir()  # hard-delete: rollback -- 只删本次新建且仍为空的目录
             else:
+                # on restore landing failure remove the files newly created this time; the originals in the record are untouched
                 # hard-delete: rollback -- 恢复落地失败时撤掉本次新建的文件，记录里的原件不动
                 path.unlink(missing_ok=True)
 
@@ -103,7 +149,14 @@ class Landing:
 
 @dataclass(frozen=True, slots=True)
 class Restoration:
-    """从临时项目取出、待加回当前项目的一个对象。
+    """One object taken from the temporary project, to be added back into the current project.
+
+    ``land`` runs within ``locks`` and the project lock, writes files via :class:`Landing`, does artifact back-fill
+    last, and returns the added-back object descriptor (when the name or identity changed); if it raises, the files
+    newly created this time are removed. ``after`` runs outside the locks after a successful landing (sending domain
+    refresh signals, etc.).
+
+    从临时项目取出、待加回当前项目的一个对象。
 
     ``land`` 在 ``locks`` 与项目锁之内执行，经 :class:`Landing` 写文件，产物补录放在最后，返回加回后的对象描述
     （换了名或身份时）；它抛错时本次新建的文件被撤掉。``after`` 在锁外、落地成功后执行（发领域刷新信号等）。
@@ -114,11 +167,15 @@ class Restoration:
     after: Callable[[], None] = field(default=lambda: None)
 
 
+#: ``(current project dir, migrated temporary project dir, object descriptor) -> Restoration``; raises
+#: ``trash_restore_failed`` when the object is no longer in the temporary project.
 #: ``(当前项目目录, 迁移后的临时项目目录, 对象描述) -> Restoration``；对象已不在临时项目里时抛 ``trash_restore_failed``。
 TakeRule = Callable[[Path, Path, Mapping[str, Any]], Restoration]
 
 
 def _rules() -> Mapping[str, TakeRule]:
+    # The take and landing rules for each object depend on this module's Landing / Restoration; a top-level import would
+    # create a cycle.
     # 各对象的取出与落地规则依赖本模块的 Landing / Restoration，顶层导入会成环。
     from lib.edit_timeline.trash import EDIT_TIMELINE_KIND, take_edit_timeline
     from lib.episode.episode_trash import EPISODE_KIND, take_episode
@@ -143,16 +200,21 @@ def _rules() -> Mapping[str, TakeRule]:
 
 
 def restore_structural(project_dir: Path, record: TrashRecord) -> RestoreResult:
-    """把一条带结构快照的删除记录经流水线加回 ``project_dir``，成功后记录消失；降级时记录只剩结构文件。调用方不持锁。"""
+    """Add a deletion record with a structure snapshot back into ``project_dir`` through the pipeline; on success the
+    record disappears; on degradation the record keeps only the structure files. The caller holds no locks.
+
+    把一条带结构快照的删除记录经流水线加回 ``project_dir``，成功后记录消失；降级时记录只剩结构文件。调用方不持锁。"""
     rule = _rules().get(str(record.object.get("kind")))
     if rule is None:
         raise BadRequestError("trash_restore_unsupported")
     record_dir = project_trash.trash_dir(project_dir) / record.id
     with tempfile.TemporaryDirectory(prefix=".restore-", dir=record_dir.parent) as tmp:
+        # The temporary project is laid out in the data-root layout so landing rules can run domain flows in it with
+        # ProjectManager (e.g. the rename cascade for an asset rename).
         # 临时项目按数据根布局摆放，落地规则可以在其中用 ProjectManager 走领域流程（如资产换名的改名级联）。
         staged = DataRootLayout(Path(tmp)).projects_dir / project_dir.name
         with project_metadata_lock(project_dir):
-            # 铺设期间记录不能被彻底删除或被另一次恢复拿走。
+            # While laying out, the record must not be permanently deleted or taken by another restore. / 铺设期间记录不能被彻底删除或被另一次恢复拿走。
             _require_unchanged(project_dir, record)
             _stage(record_dir, staged)
         try:
@@ -163,17 +225,23 @@ def restore_structural(project_dir: Path, record: TrashRecord) -> RestoreResult:
             raise
         except Exception as exc:
             if isinstance(exc, OSError) and not isinstance(exc, FileNotFoundError):
+                # After a read/write fault is fixed, a retry can restore in the original structure; degrading would consume the
+                # record and lose the structure. A missing file is permanent and a retry won't succeed, so it degrades as usual.
                 # 读写故障排除后重试就能按原结构恢复，降级会消耗记录、丢掉结构。文件缺失是永久状态，重试也不会成功，照常降级。
                 raise
             if not record.files:
+                # An object that exists only in the structure has nothing to add back after degradation, and consuming the record
+                # would lose it: keep the record so it can be retried later.
                 # 只存在于结构里的对象降级后什么都加回不了，消耗记录就丢了它：记录保留，之后可以重试。
                 logger.warning("删除记录 %s 无法按原结构恢复，记录保留", record.id, exc_info=True)
                 raise ConflictError("trash_restore_unsupported") from exc
-            # 失败原因记在日志里；创作者看到的是降级结果。
+            # The failure reason goes to the log; the creator sees the degraded result. / 失败原因记在日志里；创作者看到的是降级结果。
             logger.warning("删除记录 %s 无法按原结构恢复，降级为只恢复文件", record.id, exc_info=True)
             return _restore_files_only(project_dir, record, staged)
         landing = Landing(project_dir)
         with restoration.locks(), project_metadata_lock(project_dir):
+            # The lock was released during migration: a concurrent restore or expiry cleanup may have taken the record, and
+            # landing now would leave an object without a record.
             # 迁移期间锁已释放：并发的另一次恢复或到期清理可能已拿走记录，此时落地会留下没有记录的对象。
             _require_unchanged(project_dir, record)
             try:
@@ -187,7 +255,10 @@ def restore_structural(project_dir: Path, record: TrashRecord) -> RestoreResult:
 
 
 def _restore_files_only(project_dir: Path, record: TrashRecord, staged: Path) -> RestoreResult:
-    """降级：临时项目里被删的非结构文件按它们此刻的路径加回，记录里的结构文件留着只能下载。"""
+    """Degradation: deleted non-structure files in the temporary project are added back at their current paths; the
+    structure files in the record remain, download only.
+
+    降级：临时项目里被删的非结构文件按它们此刻的路径加回，记录里的结构文件留着只能下载。"""
     files = [(staged / rel, rel) for rel in _non_structure_files(staged)]
     kept = tuple(rel for rel in record.files if project_trash.is_structure_file(rel))
 
@@ -204,14 +275,23 @@ def _restore_files_only(project_dir: Path, record: TrashRecord, staged: Path) ->
 
 
 def _require_unchanged(project_dir: Path, record: TrashRecord) -> None:
-    """记录仍在、且仍是这次恢复读到的样子；调用方持有项目锁。不在时抛 ``trash_record_not_found``。"""
+    """The record still exists and is still as this restore read it; the caller holds the project lock. Raises
+    ``trash_record_not_found`` when it's gone.
+
+    记录仍在、且仍是这次恢复读到的样子；调用方持有项目锁。不在时抛 ``trash_record_not_found``。"""
     if project_trash.require_record(project_dir, record.id) != record:
-        # 记录唯一的改写是并发的另一次降级恢复把它改成只能下载。
+        # The only rewrite of a record is a concurrent degrading restore changing it to download-only. / 记录唯一的改写是并发的另一次降级恢复把它改成只能下载。
         raise ConflictError("trash_restore_download_only", id=record.id)
 
 
 def _non_structure_files(staged: Path) -> list[str]:
-    """临时项目里的非结构文件：结构快照只收结构文件，所以它们都是记录里被删的文件（可能已被迁移步挪了位置）。
+    """Non-structure files in the temporary project: the structure snapshot only holds structure files, so these are all
+    deleted files from the record (possibly moved by migration steps).
+
+    Excludes hidden files such as the private area and migration records at the project root, migration backups and
+    symlinks.
+
+    临时项目里的非结构文件：结构快照只收结构文件，所以它们都是记录里被删的文件（可能已被迁移步挪了位置）。
 
     不收私有区、项目根下的迁移记录等隐藏文件、迁移备份与符号链接。
     """
@@ -251,5 +331,5 @@ def _link_or_copy(source: str, target: str) -> None:
             os.link(source, target)
             return
         except OSError:
-            pass  # 文件系统不支持硬链接：退回复制
+            pass  # file system doesn't support hard links: fall back to copying / 文件系统不支持硬链接：退回复制
     shutil.copy2(source, target)

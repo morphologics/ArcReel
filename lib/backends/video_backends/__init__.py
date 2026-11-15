@@ -1,4 +1,4 @@
-"""视频生成服务层公共 API。"""
+"""Public API of the video generation service layer. / 视频生成服务层公共 API。"""
 
 from arcreel_market_core.video_backend_contract import (
     ReferenceAudioMode,
@@ -53,25 +53,25 @@ from lib.backends.video_backends.openai import OpenAIVideoBackend
 
 register_backend(PROVIDER_OPENAI, OpenAIVideoBackend)
 
-# fork: Vidu — 单独 import 以避免与上游聚合 import 冲突
+# fork: Vidu, imported separately to avoid conflicting with the upstream aggregate import / fork: Vidu — 单独 import 以避免与上游聚合 import 冲突
 from lib.backends.providers import PROVIDER_VIDU
 from lib.backends.video_backends.vidu import ViduVideoBackend
 
 register_backend(PROVIDER_VIDU, ViduVideoBackend)
 
-# 阿里百炼 DashScope — HappyHorse / 万相视频
+# Alibaba Bailian DashScope: HappyHorse / Wanxiang video / 阿里百炼 DashScope — HappyHorse / 万相视频
 from lib.backends.providers import PROVIDER_DASHSCOPE
 from lib.backends.video_backends.dashscope import DashScopeVideoBackend
 
 register_backend(PROVIDER_DASHSCOPE, DashScopeVideoBackend)
 
-# 可灵 Kling — JWT 直连视频（默认模型 kling-v2-5-turbo）
+# Kling: JWT direct-connect video (default model kling-v2-5-turbo) / 可灵 Kling — JWT 直连视频（默认模型 kling-v2-5-turbo）
 from lib.backends.providers import PROVIDER_KLING
 from lib.backends.video_backends.kling import KlingVideoBackend
 
 register_backend(PROVIDER_KLING, KlingVideoBackend)
 
-# Agnes — apihub 异步视频端点（裸 base64 + 轮询 + resume）
+# Agnes: apihub async video endpoint (raw base64 + polling + resume) / Agnes — apihub 异步视频端点（裸 base64 + 轮询 + resume）
 from lib.backends.providers import PROVIDER_AGNES
 from lib.backends.video_backends.agnes import AgnesVideoBackend
 

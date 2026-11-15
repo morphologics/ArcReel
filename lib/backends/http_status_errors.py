@@ -1,4 +1,11 @@
-"""供应商 HTTP 失败的共享异常：脱敏后的状态错误、产物取件失败与提交歧义态。
+"""Shared exceptions for provider HTTP failures: redacted status errors, artifact fetch failures and submit ambiguous state.
+
+Independent of the backend layer: shared modules below the backends such as ``lib.backends.vidu_shared`` also raise
+redacted status errors, and placing them in some backend package would make those modules downstream of the backend
+layer; likewise ``lib.billing.call_failure`` (the ledger layer's failure classification) -- it recognizes "download
+failure" by exception type, and the ledger layer is below the backend layer.
+
+供应商 HTTP 失败的共享异常：脱敏后的状态错误、产物取件失败与提交歧义态。
 
 独立于 backend 层：``lib.backends.vidu_shared`` 等 backend 之下的共享模块也要抛脱敏后的状态错误，
 放在某个通道包里会把它们拖成 backend 层的下游；``lib.billing.call_failure``
@@ -11,7 +18,18 @@ import httpx
 
 
 class ProviderRejectedError(httpx.HTTPStatusError):
-    """上游确定性 4xx 拒绝，可另带脱敏截断后的拒因摘要。
+    """Upstream deterministic 4xx rejection, optionally carrying a redacted, truncated rejection reason summary.
+
+    Still an ``httpx.HTTPStatusError``: retry predicates and existing ``except httpx.HTTPStatusError`` branches judge by
+    status_code as usual; it only adds a ``provider_reason`` for the persisting side to pick up separately -- the summary
+    is upstream original text, stored separately from localized copy, so the read side can show it verbatim rather than
+    stuffing it into a translation template.
+
+    The summary may be absent (empty response body, auth status codes not passed through, no fields recognized); then
+    ``provider_reason`` is ``None``: the rejection itself must still be persisted in structured form, otherwise the read
+    side doesn't get the status code and the follow-up action "fix the input".
+
+    上游确定性 4xx 拒绝，可另带脱敏截断后的拒因摘要。
 
     仍是 ``httpx.HTTPStatusError``：重试谓词与既有 ``except httpx.HTTPStatusError`` 分支
     照常按 status_code 判定，只是多出一个 ``provider_reason`` 供落库侧单独取用——摘要是
@@ -34,7 +52,9 @@ class ProviderRejectedError(httpx.HTTPStatusError):
 
 
 class ArtifactDownloadError(RuntimeError):
-    """供应商任务已成功、仅产物下载耗尽，可接续原任务重试取件。"""
+    """The provider task succeeded and only the artifact download was exhausted; fetching can be retried by continuing the original task.
+
+    供应商任务已成功、仅产物下载耗尽，可接续原任务重试取件。"""
 
     code = "artifact_download_failed"
 
@@ -44,7 +64,16 @@ class ArtifactDownloadError(RuntimeError):
 
 
 class AmbiguousSubmitError(RuntimeError):
-    """create/submit（非幂等的「创建 + 计费」）阶段的歧义态失败。
+    """Ambiguous-state failure during create/submit (non-idempotent "create + bill").
+
+    The request may already have reached the server and been persisted + billed, but the response was lost in transit
+    (ReadTimeout, write timeout, connection dropped midway, RemoteProtocolError, etc.). Retrying automatically would create
+    duplicate tasks + duplicate billing, so it is not retried and fails terminally; error_message carries a
+    ``[create_ambiguous]`` prefix prompting ops to confirm the task status on the provider side before retrying manually
+    (consistent with the ``[restart_lost]`` / ``[resume_unsupported]`` precedent of "rather retry manually than bill twice";
+    agent-facing, exempt from i18n).
+
+    create/submit（非幂等的「创建 + 计费」）阶段的歧义态失败。
 
     请求可能已抵达服务端并已落库 + 已计费，但响应在途丢失（ReadTimeout、写超时、
     连接中途断开、RemoteProtocolError 等）。此时自动重试会重复建任务 + 重复计费，故
@@ -64,7 +93,17 @@ class AmbiguousSubmitError(RuntimeError):
 
 
 def redacted_status_error(exc: httpx.HTTPStatusError, *, provider_reason: str | None = None) -> httpx.HTTPStatusError:
-    """同一个响应，换一条不含查询串与 userinfo 的消息。
+    """The same response with a message that contains no query string or userinfo.
+
+    ``raise_for_status`` writes the whole request URL into the exception message, and backends that pass credentials in the
+    query would render the api_key in that URL; a Basic-auth-style base_url also leaves the password in the userinfo part;
+    that message ends up via ``str(exc)`` in ``task.error_message``, logs and API responses.
+    Type and ``response`` are kept as is, so retry predicates judge by status_code as usual.
+
+    A non-empty ``provider_reason`` turns it into :class:`ProviderRejectedError`; when the summary is absent but it really is
+    a rejected submit, construct that subclass directly with :func:`provider_rejected_error`.
+
+    同一个响应，换一条不含查询串与 userinfo 的消息。
 
     ``raise_for_status`` 把整条请求 URL 写进异常消息，而按 query 传凭证的通道会把 api_key
     渲染在那条 URL 里，Basic 认证式的 base_url 还会把口令留在 userinfo 段；该消息经
@@ -80,7 +119,13 @@ def redacted_status_error(exc: httpx.HTTPStatusError, *, provider_reason: str | 
 
 
 def provider_rejected_error(exc: httpx.HTTPStatusError, *, provider_reason: str | None) -> ProviderRejectedError:
-    """确定性 4xx 的提交被拒：同一响应，换一条不含查询串与 userinfo 的消息，摘要可缺席。
+    """Deterministic 4xx submit rejection: the same response with a message containing no query string or userinfo; the summary may be absent.
+
+    Used whether or not there is a summary: the read side recognizes "rejected" by exception type and renders localized
+    copy plus FIX_INPUT accordingly; routing only by whether a summary exists would make empty response bodies and
+    non-passed-through auth failures fall back to a bare status line.
+
+    确定性 4xx 的提交被拒：同一响应，换一条不含查询串与 userinfo 的消息，摘要可缺席。
 
     摘要有无都走这条：读侧靠异常类型认出「被拒」，据此渲染本地化文案并给出 FIX_INPUT；
     只按摘要有无分流会让空响应体与不透传的认证失败退回裸状态行。
@@ -91,13 +136,17 @@ def provider_rejected_error(exc: httpx.HTTPStatusError, *, provider_reason: str 
 
 
 def _redacted_message(exc: httpx.HTTPStatusError) -> str:
+    # Strip userinfo along with the query string: base_url can be entered by the user, and when written as https://user:pw@host the password is
+    # in the authority part; httpx keeps it as is, and this message would end up in task.error_message and be returned with the task list.
     # userinfo 与查询串一并剥掉：base_url 允许用户自填，写成 https://user:pw@host 时口令就在
     # 权限段里，httpx 原样保留它，这条消息又会落进 task.error_message 并随任务列表回传。
     return f"{exc.response.status_code} response for {exc.request.url.copy_with(query=None, userinfo=b'')}"
 
 
 def raise_for_status_redacted(response: httpx.Response) -> None:
-    """校验响应状态；失败时抛出不含查询串与 userinfo 的 ``HTTPStatusError``。"""
+    """Validate the response status; on failure raise an ``HTTPStatusError`` without query string or userinfo.
+
+    校验响应状态；失败时抛出不含查询串与 userinfo 的 ``HTTPStatusError``。"""
     try:
         response.raise_for_status()
     except httpx.HTTPStatusError as exc:

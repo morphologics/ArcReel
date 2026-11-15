@@ -75,6 +75,7 @@ class WorkflowProblem(BaseModel):
     params: dict[str, Any] = Field(default_factory=dict)
 
 
+#: params keys not sent as message parameters: the unit ID is lifted into ``unit_id``; the voice admission payload is the raw structure for per-field locating.
 #: 不作为文案参数下发的 params 键：单元 ID 已提为 ``unit_id``，发声准入载荷是逐字段定位用的原始结构。
 _UNLOCALIZABLE_PARAMS = frozenset({"unit_id", "speech_admission"})
 
@@ -88,7 +89,9 @@ def _problem_unit_id(problem: GenerationProblem) -> str | None:
 
 
 def workflow_problem(problem: GenerationProblem) -> WorkflowProblem:
-    """把生成契约里的问题投影成计划提示：提出所属单元，去掉原始理由与定位载荷。"""
+    """Project a problem from the generation contract into a plan hint: lift out the owning unit, drop the raw reason and locating payload.
+
+    把生成契约里的问题投影成计划提示：提出所属单元，去掉原始理由与定位载荷。"""
 
     return WorkflowProblem(
         code=problem.code,
@@ -173,9 +176,13 @@ _ARTIFACT_BY_STEP: dict[str, str] = {
     "edit": "edit_timelines",
 }
 
+#: Task type of draft AI repair; for the resource ID see :func:`draft_repair_resource_id`.
 #: 草稿 AI 修复的任务类型；资源 ID 见 :func:`draft_repair_resource_id`。
 TEXT_DRAFT_REPAIR_TASK_TYPE = "text_draft_repair"
 _PROMPT_AUTHORING_DRAFT_DOC_TYPE = "reference_prompt_authoring"
+#: The two occupancy slots of episode planning. The Agent's single-batch planning and the first window of the web's
+#: window-by-window chain take the first one; when chaining, the running window queues the next window into the other
+#: slot before calling the model; the two slots alternate, and stopping planning cancels the queued window.
 #: 分集规划的两个占用槽。Agent 的单批规划与 Web 逐窗串联的首窗占前一个；串联时，执行中的窗口
 #: 在请求模型前把下一窗排进另一个槽，两槽交替，停止规划即取消排队中的那一窗。
 EPISODE_PLANNING_SLOT = "episode-planning"
@@ -184,7 +191,9 @@ EPISODE_PLANNING_SLOTS = (EPISODE_PLANNING_SLOT, EPISODE_PLANNING_NEXT_SLOT)
 
 
 def draft_repair_resource_id(episode: int, doc_type: str) -> str:
-    """AI 修复任务的占用槽：一份草稿一个，同一集的脚本规划草稿与提示词编写草稿互不占用。"""
+    """Occupancy slot of an AI repair task: one per draft; the script plan draft and prompt authoring draft of the same episode do not block each other.
+
+    AI 修复任务的占用槽：一份草稿一个，同一集的脚本规划草稿与提示词编写草稿互不占用。"""
     return f"episode-{episode}-{doc_type}"
 
 
@@ -203,13 +212,16 @@ _TASK_STEP: dict[str, str] = {
 
 
 def _task_step(observation: WorkflowTaskObservation) -> str | None:
-    """任务归入的步骤：草稿 AI 修复按草稿归入脚本规划或正式脚本（提示词编写草稿），其余按任务类型。"""
+    """Step a task belongs to: draft AI repair belongs to script planning or the final script (prompt authoring drafts) by draft; others by task type.
+
+    任务归入的步骤：草稿 AI 修复按草稿归入脚本规划或正式脚本（提示词编写草稿），其余按任务类型。"""
     if observation.task_type == TEXT_DRAFT_REPAIR_TASK_TYPE:
         prompt_authoring = observation.unit_id.endswith(f"-{_PROMPT_AUTHORING_DRAFT_DOC_TYPE}")
         return "final_script" if prompt_authoring else "script_plan_content"
     return _TASK_STEP.get(observation.task_type)
 
 
+#: Step that owns the suggested next step: step order is for presentation only; the next step hangs on the step of the content it belongs to.
 #: 建议下一步归属的步骤：步骤顺序只用于呈现，下一步挂在它所属内容的那一步上。
 _ACTION_STEP: dict[WorkflowActionType, str] = {
     WorkflowActionType.COLLECT_PROJECT_INPUT: "project_input",
@@ -235,7 +247,9 @@ _ACTION_STEP: dict[WorkflowActionType, str] = {
 
 
 def _owner_step(status: WorkflowStatus) -> str:
-    """建议下一步所属的步骤 id；没有动作时按陈述了问题的那类内容归属。"""
+    """Step id the suggested next step belongs to; without an action, it belongs to the kind of content whose problem was stated.
+
+    建议下一步所属的步骤 id；没有动作时按陈述了问题的那类内容归属。"""
     action = status.next_action
     if action.type is WorkflowActionType.RESOLVE_DRAFT:
         return (
@@ -263,7 +277,9 @@ def _owner_step(status: WorkflowStatus) -> str:
 
 
 def _step_done(step_id: str, status: WorkflowStatus) -> bool:
-    """该步的内容自身是否已齐：只看这一类内容，不看前面的步骤。"""
+    """Whether this step's own content is complete: only looks at this kind of content, not at earlier steps.
+
+    该步的内容自身是否已齐：只看这一类内容，不看前面的步骤。"""
     content = status.content
     if content is None:
         return False
@@ -377,6 +393,10 @@ def build_workflow_plan(
 ) -> WorkflowPlan:
     """Project one immutable status snapshot and transient request observations.
 
+    Each hint is sent only once: ``project_problems`` (project level, e.g. data upgrade failure) go in top-level
+    ``problems``, ``structure_problems`` in the "script structure" step, and per-unit problems of video batch admission
+    only in the video step's ``admission``.
+
     每条提示只下发一次：``project_problems``（项目级，如数据升级失败）在顶层 ``problems``，
     ``structure_problems`` 在「脚本结构」一步，视频整批准入的逐单元问题只在视频一步的 ``admission`` 里。
     """
@@ -408,7 +428,7 @@ def build_workflow_plan(
 
     for step_rule in rules:
         artifact_key = _ARTIFACT_BY_STEP.get(step_rule.id)
-        # 走完的工作流没有下一步可挂：完成的「剪辑」一步不带动作。
+        # A finished workflow has no next step to hang: the completed "edit" step carries no action. / 走完的工作流没有下一步可挂：完成的「剪辑」一步不带动作。
         owns = step_rule.id == owner and not complete
         step = WorkflowPlanStep(
             id=step_rule.id,

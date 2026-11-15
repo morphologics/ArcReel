@@ -1,4 +1,15 @@
-"""项目级 BGM 库的存储形态、产物身份与生成依据（``docs/adr/0090``）。
+"""Storage shape, artifact identity and generation basis of the project-level BGM library (``docs/adr/0090``).
+
+Each BGM's metadata is recorded under ``bgm`` in ``project.json``, keyed by BGM ID; the value holds the name, file,
+duration, measured loudness and derived gain. The file lives at ``bgm/<BGM ID><extension>`` and is never rewritten
+after upload. The artifact identity is the BGM ID and the only generation basis is the content fingerprint of the
+file bytes: as long as the bytes are unchanged it stays current; once replaced it reads as stale.
+
+Loudness is measured once at registration as EBU R128 integrated loudness and converted into a cached static gain
+that normalizes it to :data:`TARGET_LOUDNESS_LUFS`; the actual volume of a BGM clip in the final cut and the
+JianYing draft is this gain multiplied by the clip volume.
+
+项目级 BGM 库的存储形态、产物身份与生成依据（``docs/adr/0090``）。
 
 每首 BGM 的元数据记在 ``project.json`` 的 ``bgm`` 下，键是 BGM ID，值是名称、文件、时长、实测响度与折算增益；
 文件放在 ``bgm/<BGM ID><扩展名>``，上传后不再改写。产物身份是 BGM ID，生成依据只有文件字节的内容指纹：
@@ -57,7 +68,7 @@ class BgmTrack(BaseModel):
 
     @property
     def gain(self) -> float:
-        """静态增益的线性倍数。"""
+        """Linear factor of the static gain. / 静态增益的线性倍数。"""
         return 10 ** (self.gain_db / 20)
 
     @property
@@ -74,7 +85,9 @@ def bgm_file_path(bgm_id: str, extension: str) -> str:
 
 
 def loudness_gain_db(integrated_lufs: float) -> float:
-    """把实测积分响度统一到 :data:`TARGET_LOUDNESS_LUFS` 的增益（dB），保留两位小数。"""
+    """Gain (dB) that normalizes the measured integrated loudness to :data:`TARGET_LOUDNESS_LUFS`, rounded to two decimals.
+
+    把实测积分响度统一到 :data:`TARGET_LOUDNESS_LUFS` 的增益（dB），保留两位小数。"""
     return round(TARGET_LOUDNESS_LUFS - integrated_lufs, 2)
 
 
@@ -91,7 +104,7 @@ def _parse_track(bgm_id: object, raw: object) -> BgmTrack | None:
 
 
 def read_bgm_library(project: Mapping[str, Any]) -> dict[str, BgmTrack]:
-    """``project.json`` 里登记的 BGM，按上传先后排列；形态不对的条目不计。"""
+    """BGM registered in ``project.json``, in upload order; malformed entries are skipped. / ``project.json`` 里登记的 BGM，按上传先后排列；形态不对的条目不计。"""
     bucket = project.get(PROJECT_BGM_FIELD)
     if not isinstance(bucket, Mapping):
         return {}
@@ -100,7 +113,7 @@ def read_bgm_library(project: Mapping[str, Any]) -> dict[str, BgmTrack]:
 
 
 def bgm_entry(track: BgmTrack) -> dict[str, object]:
-    """写进 ``project.json`` 的形态：ID 是键，不重复存。"""
+    """The shape written into ``project.json``: the ID is the key and is not stored again. / 写进 ``project.json`` 的形态：ID 是键，不重复存。"""
     return track.model_dump(mode="json", exclude={"id"})
 
 
@@ -109,13 +122,17 @@ def bgm_key(bgm_id: str) -> ArtifactKey:
 
 
 def bgm_basis(content_digest: str) -> ArtifactBasis:
-    """BGM 的生成依据只有上传字节的内容指纹；登记与比对都经这里构造。"""
+    """A BGM's generation basis is only the content fingerprint of the uploaded bytes; both registration and comparison build it here.
+
+    BGM 的生成依据只有上传字节的内容指纹；登记与比对都经这里构造。"""
     return ArtifactBasis.build(BGM_BASIS_KIND, kind_version=BGM_BASIS_VERSION, inputs={"content": content_digest})
 
 
 @dataclass(frozen=True, slots=True)
 class BgmSource:
-    """渲染读取的一首 BGM：项目内路径、正式文件当前字节的内容指纹，以及登记时缓存的静态增益。"""
+    """One BGM read by rendering: in-project path, content fingerprint of the final file's current bytes, and the static gain cached at registration.
+
+    渲染读取的一首 BGM：项目内路径、正式文件当前字节的内容指纹，以及登记时缓存的静态增益。"""
 
     bgm_id: str
     path: str
@@ -133,7 +150,9 @@ class BgmSource:
 def resolve_bgm_sources(
     project_dir: Path, project: Mapping[str, Any], bgm_ids: Collection[str], digest: Callable[[str], str]
 ) -> dict[str, BgmSource]:
-    """``bgm_ids`` 里仍在项目里、文件在场的 BGM；``digest`` 按项目内路径取正式文件的内容指纹。"""
+    """BGM in ``bgm_ids`` that are still in the project and whose file is present; ``digest`` gets the final file's content fingerprint by in-project path.
+
+    ``bgm_ids`` 里仍在项目里、文件在场的 BGM；``digest`` 按项目内路径取正式文件的内容指纹。"""
     library = read_bgm_library(project)
     sources: dict[str, BgmSource] = {}
     for bgm_id in bgm_ids:

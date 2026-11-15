@@ -1,4 +1,4 @@
-"""OpenAITextBackend — OpenAI 文本生成后端。"""
+"""OpenAITextBackend — OpenAI text generation backend. / OpenAITextBackend — OpenAI 文本生成后端。"""
 
 from __future__ import annotations
 
@@ -33,7 +33,7 @@ DEFAULT_MODEL = "gpt-5.4-mini"
 
 
 class OpenAITextBackend:
-    """OpenAI 文本生成后端，支持 Chat Completions API。"""
+    """OpenAI text generation backend, supporting the Chat Completions API. / OpenAI 文本生成后端，支持 Chat Completions API。"""
 
     def __init__(
         self,
@@ -44,14 +44,18 @@ class OpenAITextBackend:
         transport_layer: TransportLayer | None = None,
         provider_name: str = PROVIDER_OPENAI,
     ):
-        # 禁用 SDK 内置重试，由本层 generate() 统一管理重试策略
+        # Disable the SDK's built-in retries; this layer's generate() manages the retry strategy / 禁用 SDK 内置重试，由本层 generate() 统一管理重试策略
         self._client = create_openai_client(
             api_key=api_key, base_url=base_url, max_retries=0, transport_layer=transport_layer
         )
         self._model = model or DEFAULT_MODEL
+        # Providers reusing the OpenAI-compatible protocol (e.g. dashscope) must bill under the real provider,
+        # otherwise the billing lookup would hit OpenAI's USD rates instead of their own pricing.
         # 复用 OpenAI 兼容协议的 provider（如 dashscope）须用真实 provider 记账，
         # 否则计费查表会命中 OpenAI 的 USD 费率而非自身定价。
         self._provider_name = provider_name
+        # The official endpoint has deprecated max_tokens (reasoning models reject it outright), so use max_completion_tokens;
+        # third-party compatible endpoints (custom providers, dashscope etc.) are not guaranteed to support the new parameter, so conservatively keep max_tokens
         # 官方端点已弃用 max_tokens（推理模型直接拒绝），用 max_completion_tokens；
         # 第三方兼容端点（自定义供应商、dashscope 等）不保证支持新参数，保守沿用 max_tokens
         self._max_tokens_param: TokenParam = (
@@ -60,7 +64,9 @@ class OpenAITextBackend:
         self._capabilities: set[TextCapability] = self._resolve_capabilities()
 
     def _resolve_capabilities(self) -> set[TextCapability]:
-        """官方 OpenAI 与自定义 provider 保持固定能力；DashScope 按注册表声明判定。"""
+        """Official OpenAI and custom providers keep fixed capabilities; DashScope is decided by the registry declaration.
+
+        官方 OpenAI 与自定义 provider 保持固定能力；DashScope 按注册表声明判定。"""
         base = {TextCapability.TEXT_GENERATION, TextCapability.VISION}
         if self._provider_name != PROVIDER_DASHSCOPE:
             base.add(TextCapability.STRUCTURED_OUTPUT)
@@ -86,13 +92,21 @@ class OpenAITextBackend:
         return self._capabilities
 
     async def generate(self, request: TextGenerationRequest) -> TextGenerationResult:
-        """生成文本回复。
+        """Generate a text reply.
+
+        This method has no retry decorator: transient error retries happen in the :meth:`_generate_native` and
+        :func:`_instructor_fallback` layers respectively. If re-validation/fallback were also inside the retry scope, a
+        failed fallback attempt would also replay the already successful native call (multiplied retries), and fallback
+        exception messages contain model-side dynamic text that could accidentally match the retry check's string patterns.
+
+        生成文本回复。
 
         本方法不带重试装饰器：瞬态错误重试分别在 :meth:`_generate_native` 与
         :func:`_instructor_fallback` 层完成。若把复验/降级也包进重试范围，降级尝试的
         失败会连带重放已成功的原生调用（重试叠乘），且降级异常消息含模型侧动态文本，
         可能误中重试判定的字符串模式。
         """
+        # Requests with images need to read local images and encode data URIs; build them in a thread to avoid blocking the event loop
         # 带图请求要读本地图片编码 data URI，放线程里构建，避免阻塞事件循环
         messages = await asyncio.to_thread(_build_messages, request)
         if request.response_schema and TextCapability.STRUCTURED_OUTPUT not in self._capabilities:
@@ -108,6 +122,7 @@ class OpenAITextBackend:
 
         native = await self._generate_native(request, messages)
         if native is None:
+            # The native response_format channel is incompatible (schema error); structured output falls back as a whole
             # 原生 response_format 通道不兼容（schema 错误），结构化输出整体降级
             return await _instructor_fallback(
                 self._client,
@@ -134,6 +149,7 @@ class OpenAITextBackend:
                     provider=self._provider_name,
                     token_param=self._max_tokens_param,
                 )
+                # This native 200 call has already been billed by the proxy; merge its tokens into the fallback result.
                 # 这次原生 200 调用已被代理计费，把它的 token 并入降级结果。
                 merge_billed_usage(result, native)
                 return result
@@ -144,7 +160,13 @@ class OpenAITextBackend:
     async def _generate_native(
         self, request: TextGenerationRequest, messages: list[dict]
     ) -> TextGenerationResult | None:
-        """单次原生调用：构造 kwargs、发请求、解析与截断告警，瞬态错误重试。
+        """A single native call: build kwargs, send the request, parse and warn on truncation, with transient error retries.
+
+        On schema incompatibility it returns ``None`` (fallback signal) instead of raising: proxies may wrap upstream schema
+        errors in status codes such as 429, and as an exception passing through the retry decorator it would be misjudged
+        as transient by the string patterns and retried for nothing.
+
+        单次原生调用：构造 kwargs、发请求、解析与截断告警，瞬态错误重试。
 
         schema 不兼容时返回 ``None``（降级信号）而不抛异常：代理可能把上游 schema 错误
         包装成 429 等状态码，若以异常形式穿过重试装饰器，会被字符串模式误判为瞬态错误
@@ -181,6 +203,8 @@ class OpenAITextBackend:
         choice = response.choices[0]
         output_tokens = usage.completion_tokens if usage else None
         raw_text = choice.message.content or ""
+        # Thinking models embed the thinking block at the start of content by default, with the body (JSON for structured
+        # output) after it; re-validation and the return value look only at the body; the thinking block is not in the result.
         # 思考模型默认把思考块内嵌在 content 开头，正文（结构化输出即 JSON）跟在其后；
         # 复验与返回都只看正文，思考块不进结果。
         text = strip_leading_think_block(raw_text)
@@ -205,13 +229,13 @@ class OpenAITextBackend:
 
 
 def _build_messages(request: TextGenerationRequest) -> list[dict]:
-    """将 TextGenerationRequest 转为 OpenAI messages 格式。"""
+    """Convert a TextGenerationRequest to the OpenAI messages format. / 将 TextGenerationRequest 转为 OpenAI messages 格式。"""
     messages: list[dict] = []
 
     if request.system_prompt:
         messages.append({"role": "system", "content": request.system_prompt})
 
-    # 构建 user message
+    # Build the user message / 构建 user message
     if request.images:
         from lib.backends.image_backends.base import image_to_base64_data_uri
 
@@ -240,7 +264,13 @@ _SCHEMA_ERROR_KEYWORDS = (
 
 
 def _is_schema_error(exc: BaseException) -> bool:
-    """判断异常是否为 JSON Schema 不兼容导致的错误。
+    """Determine whether the exception is caused by JSON Schema incompatibility.
+
+    Besides the standard 400 BadRequestError, some OpenAI-compatible proxies (such as the Gemini
+    compatible endpoint) wrap upstream schema errors in other status codes (such as 429),
+    so the error message is also checked for schema-related keywords.
+
+    判断异常是否为 JSON Schema 不兼容导致的错误。
 
     除了标准的 400 BadRequestError，一些 OpenAI 兼容代理（如 Gemini
     兼容端点）会将上游 schema 错误包装成其他状态码（如 429），
@@ -248,7 +278,7 @@ def _is_schema_error(exc: BaseException) -> bool:
     """
     if isinstance(exc, BadRequestError):
         return True
-    # 代理可能把上游 schema 错误包装成非 400 状态码
+    # Proxies may wrap upstream schema errors in non-400 status codes / 代理可能把上游 schema 错误包装成非 400 状态码
     error_str = str(exc)
     return any(kw in error_str for kw in _SCHEMA_ERROR_KEYWORDS)
 
@@ -263,7 +293,12 @@ async def _instructor_fallback(
     provider: str = PROVIDER_OPENAI,
     token_param: TokenParam = "max_tokens",
 ) -> TextGenerationResult:
-    """Instructor 降级：当原生 response_format 不可用时的备选路径。
+    """Instructor fallback: the alternative path when native response_format is unavailable.
+
+    instructor_fallback_async does no transient retries itself, so a retry layer with the same config as the native
+    call is added here; it only covers the fallback itself, and a failure does not replay the already successful native call.
+
+    Instructor 降级：当原生 response_format 不可用时的备选路径。
 
     instructor_fallback_async 自身不做瞬态重试，这里补一层与原生调用同配置的重试；
     范围仅覆盖降级自身，失败不会重放已成功的原生调用。

@@ -1,4 +1,16 @@
-"""角色声音绑定方式：项目级设置，决定角色的声音靠什么约束。
+"""Character voice binding: a project-level setting that decides what constrains a character's voice.
+
+``prompt`` (the default) only writes the character's ``voice_style`` into the prompt as a soft constraint;
+only ``reference_audio`` attaches the character's set reference audio to the request to the video model, gaining
+native voice consistency across clips. The difference between the two paths is funnelled by
+:func:`lib.config.resolver.derive_voice_consistency` into the ``voice_consistency`` level; the render layer,
+script preview and execution-time wiring only read that level, so this module only provides the value and its
+normalization and does not repeat the decision.
+
+This is a leaf module (depends on no other module in lib), referenced by lib.config and the layers above it as
+well as the server side.
+
+角色声音绑定方式：项目级设置，决定角色的声音靠什么约束。
 
 ``prompt``（默认）只把角色的 ``voice_style`` 写进提示词做软约束；``reference_audio`` 才把角色
 已设的参考音频随请求挂给视频模型，换来跨片段的原生音色一致。两条路径的差别一路由
@@ -13,9 +25,11 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Literal, cast, get_args
 
+#: Character voice binding. Maps one-to-one to the frontend ``CharacterVoiceBinding``; adding or removing values must be synced on both sides.
 #: 角色声音绑定方式。前端 ``CharacterVoiceBinding`` 与之一一对应，取值增减须两侧同步。
 CharacterVoiceBinding = Literal["prompt", "reference_audio"]
 
+#: Value when undeclared: prompt soft constraint. Reference audio is an optional enhancement that only takes effect when the user explicitly chooses it.
 #: 未声明时的取值：提示词软约束。参考音频是可选增强，须由用户显式选择才生效。
 DEFAULT_CHARACTER_VOICE_BINDING: CharacterVoiceBinding = "prompt"
 
@@ -25,7 +39,17 @@ PROJECT_FIELD = "character_voice_binding"
 
 
 def character_voice_binding(project: Mapping[str, object] | None) -> CharacterVoiceBinding | None:
-    """项目声明的角色声音绑定方式；无项目上下文返回 None。
+    """The project's declared character voice binding; None without a project context.
+
+    Returns None rather than the default level, consistent with :func:`lib.config.resolver.caps_generation_mode`:
+    queries without a project context such as the model catalog should not be rendered as if the user had
+    explicitly chosen a binding.
+
+    project.json is a plain-text file; if the field is hand-edited to an invalid value it is read as the default
+    level (prompt soft constraint) -- degrading on this side only attaches less reference audio, which is safer than
+    reading an unknown value as the reference-audio level.
+
+    项目声明的角色声音绑定方式；无项目上下文返回 None。
 
     返回 None 而非默认档，口径与 :func:`lib.config.resolver.caps_generation_mode` 一致：模型目录
     等无项目上下文的查询不该被渲染成用户显式选过某种绑定方式。

@@ -1,4 +1,10 @@
-"""供应商调用的共享词汇：供应商名称常量与调用的类型 / 状态 / 来源。
+"""Shared vocabulary of provider calls: provider name constants and call type / status / purpose.
+
+Provider names are shared by image_backends / video_backends; call vocabulary (``CallType`` / ``CallStatus`` /
+``CallPurpose``) is shared by the ledger layer, repositories and routes -- the status and purpose values of
+``api_calls`` are defined only once here, and call sites no longer each write string literals.
+
+供应商调用的共享词汇：供应商名称常量与调用的类型 / 状态 / 来源。
 
 供应商名称供 image_backends / video_backends 共用；调用词汇（``CallType`` / ``CallStatus`` /
 ``CallPurpose``）供记账层、仓储与路由共用——``api_calls`` 的状态与来源取值只在这里定义一次，
@@ -57,7 +63,14 @@ class CallPurpose(StrEnum):
 
 
 def require_provider_pair(kind: str, backend: object | None, provider_id: str | None) -> None:
-    """构造期成对不变量：媒体/文本 backend 与其解析层 registry provider_id 必须同在同缺。
+    """Construction-time pairing invariant: a media/text backend and its resolution-layer registry provider_id must be both present or both absent.
+
+    The ledger provider always comes from the resolution-layer provider_id (single source of truth); the backend only
+    handles the generation call and log/error context. Missing either is an assembly error: backend present without
+    provider_id → the ledger loses its identity source; provider_id present without backend → the lane is declared but has
+    no usable backend. It is caught once here, with no per-call checks and no exemption list.
+
+    构造期成对不变量：媒体/文本 backend 与其解析层 registry provider_id 必须同在同缺。
 
     记账 provider 一律取解析层 provider_id（单一真相源），backend 仅承担生成调用与日志/错误
     上下文。二者缺一即为装配错误：backend 有而 provider_id 无 → 记账失去身份来源；provider_id

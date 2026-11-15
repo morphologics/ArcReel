@@ -1,4 +1,10 @@
-"""剪辑时间线的领域模型（``docs/adr/0090``）。
+"""Domain model of the edit timeline (``docs/adr/0090``).
+
+An episode can have several named edit timelines; each is stored as one file per episode containing an append-only
+sequence of immutable revisions. Revision content consists of the main track of edit clips and the BGM track;
+internal times are always integer microseconds; seconds appear only in the readout projection and tool arguments.
+
+剪辑时间线的领域模型（``docs/adr/0090``）。
 
 一集可以有多条具名剪辑时间线；每条按集存成一个文件，内含不可变修订的追加序列。修订内容由
 剪辑片段排成的主轨与 BGM 轨组成；内部时间一律是整数微秒，秒制只出现在读取投影与工具入参上。
@@ -47,12 +53,12 @@ def is_timeline_id(value: object) -> bool:
 
 
 def seconds_to_microseconds(seconds: float) -> int:
-    """秒按毫秒精度规整后换算成整数微秒。"""
+    """Round seconds to millisecond precision and convert to integer microseconds. / 秒按毫秒精度规整后换算成整数微秒。"""
     return round(round(seconds, 3) * MICROSECONDS_PER_SECOND)
 
 
 def microseconds_to_seconds(microseconds: int) -> float:
-    """整数微秒换算成最多三位小数的秒。"""
+    """Convert integer microseconds to seconds with at most three decimals. / 整数微秒换算成最多三位小数的秒。"""
     return round(microseconds / MICROSECONDS_PER_SECOND, 3)
 
 
@@ -168,7 +174,7 @@ class EditTimelineContent(_Frozen):
 
 
 def clip_number(clip_id: str) -> int:
-    """片段编号里的序号：``c12`` / ``b3`` → 12 / 3。"""
+    """Sequence number in a clip ID: ``c12`` / ``b3`` -> 12 / 3. / 片段编号里的序号：``c12`` / ``b3`` → 12 / 3。"""
     return int(clip_id[1:])
 
 

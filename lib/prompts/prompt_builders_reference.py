@@ -97,6 +97,13 @@ def build_reference_units_split_prompt(
         if not set(tier) <= set(normalized_durations):
             raise ValueError(f"{name}={tier} 不是 supported_durations={normalized_durations} 的子集")
 
+    # The "reference image <-> duration" coupling constraint is only written into the prompt when the model really declares it and
+    # the two tier sets differ: for most models the two are equivalent, and an extra no-op constraint only crowds the model's
+    # attention. When they differ, write both sets in full rather than "union + narrowed with images" -- the two buckets may use
+    # different models and the with-image set may be wider, in which case units without references are the narrowed side;
+    # mentioning only the with-image set would make them pick a tier from the union that they cannot request.
+    # The actual enforcement happens tool-side per unit on the mechanically derived references; this prompt section is teaching,
+    # not the only line of defence.
     # 「参考图↔时长」联动约束只在型号真的声明它、且两套档位不同时才写进 prompt：多数型号两者
     # 等价，多写一条无效约束只会挤占模型注意力。两套不同时两套都写全，不写成「并集 + 带图收窄」
     # ——两桶可以使用不同模型，带图那套也可能更宽，此时无引用 unit 才是被收窄的一方；只讲
@@ -108,6 +115,10 @@ def build_reference_units_split_prompt(
         and normalized_text_durations
         and normalized_reference_durations != normalized_text_durations
     ):
+        # The default preference is only priority 3, optimizing within hard constraint 1, but when the two tier sets differ it may be
+        # valid for only one reference state (Veo 3.1 at 720p allows only 8s with images, while the project default may be 4s). In
+        # that case state its scope, so the model does not apply "default 4 seconds" to units with references and split out durations
+        # that cannot be requested at execution time.
         # 默认偏好只是第 3 优先级、在第 1 条硬约束内做优化，但两套档位不同时它可能只对其中一种
         # 引用状态合法（Veo 3.1 在 720p 下带图仅 8s，而项目默认可能是 4s）。此时点明它的适用范围，
         # 免得模型把「默认 4 秒」套到带引用的 unit 上、拆出执行期申请不到的时长。
@@ -119,6 +130,9 @@ def build_reference_units_split_prompt(
             "default_with_references_only": in_reference and not in_text,
             "default_without_references_only": in_text and not in_reference,
         }
+    # The speech rate comes from the single source of truth lib.speech.speech_rate (project-level override first, otherwise the
+    # source_language default), not hard-coded; it uses the same conversion as the tool-side post-check for dialogue overload, so
+    # the lower bound given in the prompt and the upper bound judged by the validator use the same ruler.
     # 语速从 lib.speech.speech_rate 单一真相源取（项目级覆盖优先、否则按 source_language 的语言默认）、
     # 不写死；与工具侧的台词超载后校验同一套换算，prompt 给的下界和校验器判的上界因此是同一把尺。
     source_language = source_language if isinstance(source_language, str) else None

@@ -1,4 +1,4 @@
-"""官方同步取回的目录数据与同步状态。"""
+"""Catalogue data fetched by official sync, and sync status. / 官方同步取回的目录数据与同步状态。"""
 
 from __future__ import annotations
 
@@ -11,7 +11,15 @@ from lib.db.base import Base, TimestampMixin
 
 
 class CatalogOfficialSync(TimestampMixin, Base):
-    """官方同步的状态，只有一行（docs/adr/0103）。
+    """Official sync status, single row only (docs/adr/0103).
+
+    ``catalog`` is the most recently applied data file (JSON in catalogue data format), already supplemented with entries
+    deleted upstream whose last version is kept locally; the hash in the manifest file was checked when fetching, and
+    loading only runs instance-side parsing. When data was never fetched successfully, ``dataset_version`` and ``catalog``
+    are empty. ``last_success_at`` is the time of the last successful check (including when the dataset version had not
+    changed); ``last_error`` is the reason the latest check failed, cleared after a successful check.
+
+    官方同步的状态，只有一行（docs/adr/0103）。
 
     ``catalog`` 是最近一次应用的数据文件（目录数据格式的 JSON），已补上上游删除、本地保留最后一个版本的条目；
     抓取时已核对清单文件里的哈希，读入时只过实例侧解析。从未成功取回数据时 ``dataset_version`` 与 ``catalog``

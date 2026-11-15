@@ -1,4 +1,15 @@
-"""按会话把 Agent 上下文记录改到另一个存储键下。
+"""Move a session's Agent context records under another storage key.
+
+SDK transcripts are stored by ``(project_key, session_id)``; ``project_key`` is derived from the project directory's
+absolute path (:func:`make_project_key`), and CLI resume only looks up the current directory's key. When the project
+directory's absolute path changes but the sessions still belong to the project, :class:`SessionRekey` moves those
+sessions under the new directory's key: the transcript mirror and summaries in the database, and the local jsonl under
+the SDK config directory (the only session source when ``ARCREEL_SDK_SESSION_STORE=off``).
+
+Only the named sessions are touched: the same key may hold sessions of other projects, e.g. a new project of the same
+name that took over the original name; rewriting the whole key would take them along.
+
+按会话把 Agent 上下文记录改到另一个存储键下。
 
 SDK transcript 按 ``(project_key, session_id)`` 存取，``project_key`` 由项目目录的绝对路径派生
 （:func:`make_project_key`），CLI 续聊只按当前目录的键查找。项目目录换了绝对路径而会话仍归这个项目时，
@@ -28,7 +39,14 @@ _TABLES = (AgentSessionEntry, AgentSessionSummary)
 
 @dataclass(frozen=True)
 class SessionRekey:
-    """把 ``session_ids`` 这些会话的 Agent 上下文记录改到 ``target_key`` 下。
+    """Move the Agent context records of the sessions in ``session_ids`` under ``target_key``.
+
+    When ``source_key`` is given, only records under that key are moved; when ``None``, records are moved from any key
+    other than the target key, for cases where the old path is unknown. If a session already has records under the
+    target key, or has records under several non-target keys, it is left untouched with a warning, and the two
+    transcripts are not merged. If the records are already under the target key nothing is written; re-running is a no-op.
+
+    把 ``session_ids`` 这些会话的 Agent 上下文记录改到 ``target_key`` 下。
 
     ``source_key`` 给出时只搬这个键下的记录；为 ``None`` 时从目标键以外的任何键搬，适用于不知道旧路径的场合。
     一个会话在目标键下已有记录，或在多个非目标键下都有记录时，这个会话原样不动并告警，不合并两份 transcript。
@@ -47,7 +65,9 @@ class SessionRekey:
         return not self.session_ids or self.source_key == self.target_key
 
     async def rewrite_records(self, session: AsyncSession) -> set[str]:
-        """在 ``session`` 的事务里改写数据库中的 transcript 镜像与摘要，返回改到目标键下的会话。不提交。"""
+        """Rewrite the transcript mirror and summaries in the database within ``session``'s transaction, returning the sessions moved under the target key. Does not commit.
+
+        在 ``session`` 的事务里改写数据库中的 transcript 镜像与摘要，返回改到目标键下的会话。不提交。"""
         if self._is_noop():
             return set()
         keys_by_session: dict[str, set[str]] = defaultdict(set)
@@ -88,7 +108,13 @@ class SessionRekey:
         return set(moves)
 
     def move_local_transcripts(self, sdk_config_dir: Path) -> set[str]:
-        """把 SDK 配置目录下这些会话的本地 jsonl 与同名子目录移到目标键目录，返回移过去的会话。
+        """Move these sessions' local jsonl and same-named subdirectories under the SDK config directory to the target key directory, returning the sessions moved.
+
+        Synchronous file operations; the caller runs this in a thread. Best effort: if the target key directory already
+        has the same session, or the session appears in several source directories, it is left untouched with a warning;
+        rename failures only warn.
+
+        把 SDK 配置目录下这些会话的本地 jsonl 与同名子目录移到目标键目录，返回移过去的会话。
 
         同步文件操作，由调用方放进线程。尽力而为：目标键目录下已有同一会话，或会话出现在多个来源目录时
         原样不动并告警；改名失败只告警。

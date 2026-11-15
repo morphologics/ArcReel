@@ -1,4 +1,11 @@
-"""生成输入的缺口，以及它在产物依据里的缺席记录。
+"""Generation input gaps, and their absence records in artifact bases.
+
+Gaps only block the act of generation, not basis projection (``docs/adr/0098``): the expected basis is built from
+the input values present as usual, with missing items recorded in the basis's ``absent``. Without gaps this key is
+not written, the basis is byte for byte the same as with complete inputs, and digests of registered entries are
+unaffected. Filling a gap changes the basis, and registered artifacts are judged stale as usual.
+
+生成输入的缺口，以及它在产物依据里的缺席记录。
 
 缺口只拦生成这个动作，不阻止依据投影（``docs/adr/0098``）：期望依据照常由已有的输入值构造，
 缺的项记在依据的 ``absent`` 里。没有缺口时不写这个键，依据与输入完整时的形态逐字节相同，
@@ -12,15 +19,21 @@ from dataclasses import dataclass
 
 from lib.project.project_schema import parse_project_schema_version
 
-#: 依据里记录缺席输入的键。
+#: Key in the basis that records absent inputs. / 依据里记录缺席输入的键。
 ABSENT_INPUTS_FIELD = "absent"
 
-#: 从这一 schema 起生成缺口不阻止依据投影。
+#: From this schema on, generation gaps do not block basis projection. / 从这一 schema 起生成缺口不阻止依据投影。
 GAP_TOLERANT_BASIS_SCHEMA_VERSION = 18
 
 
 def project_basis_records_gaps(project: Mapping[str, object]) -> bool:
-    """项目的期望依据是否把生成缺口记为缺席。
+    """Whether the project's expected basis records generation gaps as absences.
+
+    Projects with schema below 18 only appear in the migration chain: whole activation and provenance backfill in the
+    steps before v17→v18 keep the rule "any gap means no projection and no registration"; artifacts previously left
+    unregistered because of gaps are backfilled by v17→v18 planning once before and once after the change.
+
+    项目的期望依据是否把生成缺口记为缺席。
 
     schema 低于 18 的项目只在迁移链中出现：v17→v18 之前各步的整份激活与来源补写沿用「有缺口即
     投影不出、不登记」的口径，原先因缺口没登记的产物由 v17→v18 改前改后各规划一次后补录。
@@ -31,7 +44,12 @@ def project_basis_records_gaps(project: Mapping[str, object]) -> bool:
 
 @dataclass(frozen=True, slots=True)
 class InputGap:
-    """生成输入不成立的一处缺口。
+    """One gap that makes a generation input invalid.
+
+    ``name`` is the object the gap points to: for reference gaps the reference name written in the script, for
+    semantic gaps the target's own resource id.
+
+    生成输入不成立的一处缺口。
 
     ``name`` 是缺口指向的对象：引用缺口是剧本里写的引用名，语义缺口是目标自身的资源 id。
     """
@@ -41,7 +59,7 @@ class InputGap:
     name: str | None = None
 
     def evidence(self) -> dict[str, object]:
-        """缺席记录：缺口码与它指向的对象。"""
+        """Absence record: the gap code and the object it points to. / 缺席记录：缺口码与它指向的对象。"""
 
         evidence: dict[str, object] = {"code": self.code}
         if self.asset_type is not None:
@@ -52,7 +70,9 @@ class InputGap:
 
 
 def add_absent_inputs(inputs: MutableMapping[str, object], gaps: Sequence[InputGap]) -> None:
-    """有缺口才把缺席记录写进依据输入，按缺口顺序、逐项去重。"""
+    """Write absence records into the basis inputs only when there are gaps, in gap order, deduplicated per item.
+
+    有缺口才把缺席记录写进依据输入，按缺口顺序、逐项去重。"""
 
     if gaps:
         inputs[ABSENT_INPUTS_FIELD] = [gap.evidence() for gap in dict.fromkeys(gaps)]

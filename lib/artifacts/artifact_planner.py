@@ -1,4 +1,9 @@
-"""从项目规范状态投影产物目标态。
+"""Project the artifact target state from the project's canonical state.
+
+Planning is read-only: it projects project.json, scripts, asset definitions and grid records into a complete set of
+artifact entries, reused by activation commits and runtime comparison; write-back and commit guards are not in this module.
+
+从项目规范状态投影产物目标态。
 
 规划期只读：把 project.json、剧本、资产定义与宫格记录投影成一份完整的产物条目集合，
 供激活提交与运行期比对复用；写回与提交守卫都不在本模块。
@@ -119,11 +124,18 @@ from lib.speech.speech_presentation import (
     presentation_artifact_paths,
 )
 
+#: Version that manifest activation raises the project to. It is the landing point of the v7→v8 step, which is a
+#: different thing from "is the project at the current version": the latter follows ``CURRENT_PROJECT_SCHEMA_VERSION``;
+#: tying both to one constant would silently change the precondition of that middle step of the migration chain on
+#: every schema bump, and existing v7 projects could no longer migrate.
 #: 清单激活把项目提升到的版本。它是 v7→v8 这一步的落点，与「项目是否为当前版本」是两件事：
 #: 后者随 ``CURRENT_PROJECT_SCHEMA_VERSION`` 走，把两者绑成一个常量会让每次 schema 升版都
 #: 悄悄改掉迁移链中间那一步的前置条件，存量 v7 项目从此迁不动。
 ARTIFACT_MANIFEST_SCHEMA_VERSION = 8
 
+#: Versions allowed to run manifest activation: v7 mid-migration (raised to v8 by activation afterwards), and the
+#: current-version range after the full migration chain (archive import activates only after ``migrate_project_dir``
+#: and sees the current version).
 #: 允许跑清单激活的版本：迁移途中的 v7（此后由激活提升到 v8），以及已经走完迁移链的当前版本
 #: 区间（归档导入在 ``migrate_project_dir`` 之后才激活，看到的是当前版本）。
 _ACTIVATION_SCHEMA_VERSIONS = frozenset(
@@ -186,12 +198,21 @@ class _PersistedPresentationProof:
     frozen_presentation_basis: ArtifactBasis
     current_subtitle_basis: ArtifactBasis | None
     current_presentation_basis: ArtifactBasis | None
+    #: The unit currently passes utterance admission; when it does not, the current basis is only a basis with absences recorded, not a usable asset layer.
     #: 单位当前通过发声准入；不通过时当前依据只是记有缺席的依据，不是可用的素材层。
     admitted: bool = True
 
 
 class _PlannerInputObservation:
-    """规划器私有的生成输入观测。
+    """The planner's private generation-input observation.
+
+    The observation finds the current on-disk location via the pending rename map, answers by canonical path, and
+    records a content digest for every dependency file it reads, for activation's stability gate to re-check. In
+    activation mode, registered entries are looked up among the entries planned in this round (the manifest is not yet
+    written, so this round's plan is the manifest about to be committed); in post-commit mode the manifest on disk is
+    used, and one planning pass reads only one snapshot.
+
+    规划器私有的生成输入观测。
 
     观测按待提交的改名映射找到当前落盘位置、按规范路径作答，并为读到的每个依赖文件登记内容
     摘要，供激活的稳定性闸门复核。登记条目在激活模式下查本轮已规划的条目——清单此时尚未
@@ -227,7 +248,16 @@ class _PlannerInputObservation:
 
 
 class SharedVersionMetadata:
-    """一次比对或对账内各 planner 共享的 ``versions/versions.json`` 解析结果。
+    """Parsed ``versions/versions.json`` shared by the planners within one comparison or reconciliation.
+
+    Each planner still checks, reads and records the bytes of the version history as usual; the parsed result is reused
+    only when the bytes read are exactly the ones recorded here; otherwise it is re-parsed and replaced, so a replaced,
+    deleted or corrupted file never returns a stale result.
+    The parsed result is one object shared by all users: users must not modify it, nested version records included.
+    The external type is only annotated as ``Mapping``, which constrains only the top level; nested structures rely on
+    this convention.
+
+    一次比对或对账内各 planner 共享的 ``versions/versions.json`` 解析结果。
 
     每个 planner 照常检查、读取并登记版本历史的字节；只有读到的字节与这里记下的完全相同时
     才复用解析结果，字节不同就重新解析并替换，因此文件被替换、删除或损坏后不会返回陈旧结果。
@@ -315,6 +345,7 @@ class TargetStatePlanner:
         self._shared_versions = shared_versions or SharedVersionMetadata()
         self._activation_mode = False
         self._planned: set[str] = set()
+        #: Generation input gaps are recorded as absences and projected as usual (ADR 0098); schema < 18 keeps the rule that a gap means no projection.
         #: 生成缺口记为缺席、照常投影（ADR 0098）；schema < 18 沿用缺口即投影不出的口径。
         self._records_gaps = project_basis_records_gaps(self.project)
         self._unreadable_grid_ids: set[str] = set()
@@ -522,7 +553,9 @@ class TargetStatePlanner:
         )
 
     def _plan_assets(self) -> None:
-        """规划资产图与衍生资产图：每个本体先于它的衍生，激活模式下衍生能看到本轮已规划的本体。"""
+        """Plan asset sheets and derivative asset sheets: each base look before its derivatives; in activation mode derivatives see the base looks planned this round.
+
+        规划资产图与衍生资产图：每个本体先于它的衍生，激活模式下衍生能看到本轮已规划的本体。"""
 
         if "assets" in self._planned:
             return
@@ -569,7 +602,12 @@ class TargetStatePlanner:
         resource_id: str,
         artifact_path: str,
     ) -> ArtifactBasis | None:
-        """作为成品带入的资产图或衍生资产图按图本身投影依据；否则返回 ``None``，改按生成输入投影。
+        """For an asset sheet or derivative asset sheet brought in as a finished image, project the basis from the image itself; otherwise return ``None`` and project from the generation inputs.
+
+        Images uploaded by the author and applied from the asset library are both backed by a selected manual-upload
+        version record; the conditions are in ``_selected_upload_digest``.
+
+        作为成品带入的资产图或衍生资产图按图本身投影依据；否则返回 ``None``，改按生成输入投影。
 
         作者上传与从资产库应用的图都以一条选中的手动上传版本记录为凭据，成立条件见
         ``_selected_upload_digest``。
@@ -587,7 +625,13 @@ class TargetStatePlanner:
         return build_uploaded_asset_sheet_basis(asset_type=asset_type, content_digest=digest)
 
     def _selected_upload_digest(self, history: object, resource_type: str, artifact_path: str) -> str | None:
-        """选中版本是与声明产物字节一致的手动上传时，返回上传字节的摘要；否则返回 ``None``。
+        """Return the digest of the uploaded bytes when the selected version is a manual upload matching the declared artifact bytes; otherwise ``None``.
+
+        Conditions: the selected version record of the resource is a manual upload, and its managed snapshot matches the
+        declared artifact bytes. If the artifact was replaced externally, or the selected version is a generated one, the
+        upload basis does not apply.
+
+        选中版本是与声明产物字节一致的手动上传时，返回上传字节的摘要；否则返回 ``None``。
 
         成立条件：该资源选中的版本记录是手动上传，且它的受管快照与声明的产物字节一致。外部
         替换了产物、或选中的是生成的版本，都不按上传依据判定。
@@ -620,7 +664,15 @@ class TargetStatePlanner:
         entry: Mapping[str, Any],
         observation: _PlannerInputObservation,
     ) -> None:
-        """规划一个本体条目下全部衍生资产图的规范依据。
+        """Plan the canonical basis of all derivative asset sheets under one base-look entry.
+
+        A generated derivative image is an edit of the base look's asset sheet, so its canonical basis is determined by
+        "content of the base asset sheet + change description" and does not include the project style. When the base asset
+        sheet is regenerated its content fingerprint changes, so the registered basis of every generated derivative under
+        that base look no longer matches canonical state and is judged stale. Derivatives brought in as finished images
+        project their basis from the image itself, independent of the base asset sheet and the description.
+
+        规划一个本体条目下全部衍生资产图的规范依据。
 
         生成的衍生图是对本体资产图的一次编辑，规范依据因此由「本体资产图的内容 + 变化描述」
         决定，不含项目画风。本体资产图重生成后其内容指纹改变，该本体下每一张生成的衍生图的
@@ -664,7 +716,11 @@ class TargetStatePlanner:
         *,
         label: str,
     ) -> None:
-        """按生成输入投影期望依据，缺口记为缺席；结构损坏时不登记、进迁移报告。
+        """Project the expected basis from the generation inputs, recording gaps as absences; when the structure is broken, do not register and add to the migration report.
+
+        Under the schema < 18 rule, any gap means no registration and an entry in the migration report.
+
+        按生成输入投影期望依据，缺口记为缺席；结构损坏时不登记、进迁移报告。
 
         schema < 18 的口径下有缺口即不登记、进迁移报告。
         """
@@ -732,6 +788,7 @@ class TargetStatePlanner:
         observation = self.adapter.inspect_artifact(self._pending_source(script_plan_rel))
         script_plan_key = ArtifactKey.episode_script_plan(binding.episode)
         if observation.blocker is not None and self._activation_mode:
+            # Unreadable drafts are kept as is, not registered, and added to the migration report (ADR 0098).
             # 读不出的草稿原样保留、不登记，进迁移报告（ADR 0098）。
             self._skip_blocked(script_plan_key, script_plan_rel, observation.blocker)
             return
@@ -743,10 +800,12 @@ class TargetStatePlanner:
         except ValueError:
             if not self._activation_mode:
                 raise
+            # A corrupted script plan draft is kept as is and not registered; the whole project is not rejected (ADR 0098 narrows ADR 0064).
             # 损坏的脚本规划草稿原样保留、不登记，不拒绝整个项目（ADR 0098 收窄 ADR 0064）。
             self._skip(script_plan_key, script_plan_rel, "script_plan draft cannot be read", category="unreadable")
             return
         entry = episode_entry(self.project, binding.episode)
+        # When the ledger records the episode source origin (since v16) and it is "no source", an episode file of the same name on disk is not this episode's planning basis.
         # 账本记录了集原文来源（v16 起）且为无原文时，盘上同名的集文件不是这一集的规划依据。
         if entry is not None and SOURCE_ORIGIN_FIELD in entry and episode_source_origin(entry) is SourceOrigin.NONE:
             return
@@ -759,6 +818,7 @@ class TargetStatePlanner:
             except UnicodeDecodeError as exc:
                 if not self._activation_mode:
                     raise ValueError(f"episode source {source_rel} is not UTF-8") from exc
+                # The basis takes the source as input; if the source cannot be resolved the basis cannot be computed: the draft is kept as is and not registered.
                 # 依据以源文为输入，源文解不出就算不出依据：草稿原样保留、不登记。
                 self._skip(script_plan_key, script_plan_rel, f"episode source {source_rel} is not UTF-8")
                 return
@@ -968,7 +1028,9 @@ class TargetStatePlanner:
         return tuple(members)
 
     def _grid_references(self, grid: GridGeneration) -> tuple[tuple[VisualReference, ...], tuple[InputGap, ...]] | None:
-        """宫格记录冻结的参考图与读不到的那几张；读不到的记为缺口（schema < 18 时整张宫格不投影）。"""
+        """Reference images frozen by the grid record, plus those that cannot be read; unreadable ones are recorded as gaps (schema < 18: the whole grid is not projected).
+
+        宫格记录冻结的参考图与读不到的那几张；读不到的记为缺口（schema < 18 时整张宫格不投影）。"""
 
         references: list[VisualReference] = []
         gaps: list[InputGap] = []
@@ -1013,12 +1075,14 @@ class TargetStatePlanner:
                 observation = self.adapter.inspect_artifact(rel)
                 blocker = observation.blocker
                 if self._activation_mode and blocker is not None and blocker.code == "artifact_unreadable":
+                    # A file that cannot be opened is treated the same as corrupted content; unsafe paths such as symlinks are still rejected as before.
                     # 文件本身打不开与内容坏了同等对待；符号链接等不安全路径仍按原样拒绝。
                     raise ValueError(blocker.detail)
                 loaded.append(self._load_grid_record(path, rel))
             except ValueError:
                 if not self._activation_mode:
                     raise
+                # A single grid record cannot be read: the record is kept as is, its grid image and split shots are not registered, and it goes into the migration report.
                 # 单个宫格记录读不出：记录原样保留，它的宫格图与切格分镜不登记，进迁移报告。
                 grid_id = path.name.removesuffix(".json")
                 self._unreadable_grid_ids.add(grid_id)
@@ -1026,6 +1090,7 @@ class TargetStatePlanner:
                     MigrationSkippedArtifact(
                         kind=ArtifactKind.EPISODE_GRID.value,
                         resource_id=grid_id,
+                        # What cannot be read is the grid record itself: the report points to it, not to the still-readable grid image.
                         # 读不出的是宫格记录本身：报告指向它，而不是仍可读的宫格图。
                         artifact_path=rel,
                         reason=f"grid record {rel} cannot be read",
@@ -1057,6 +1122,8 @@ class TargetStatePlanner:
             for item in episode.items:
                 video_only = False
                 if item.get("needs_replan") is True:
+                    # Media of units that need replanning are not formal artifacts; for units marked only because of mixed utterances,
+                    # existing videos are registered and checked for currency as usual (ADR 0098), voiceover audio still does not count.
                     # 需要重新规划的单位的媒体不是正式产物；只因混合发声带标记的单位，存量视频照常
                     # 登记、按常规判时效（ADR 0098），配音仍不算。
                     if not (self._records_gaps and replan_marked_only_for_mixed_speech(episode.kind, item)):
@@ -1099,14 +1166,18 @@ class TargetStatePlanner:
         *,
         category: SkippedArtifactCategory | None = None,
     ) -> None:
-        """记一件没登记的产物；``category`` 为空表示依据算不出，只记账、不给用户看。"""
+        """Record an artifact that was not registered; empty ``category`` means the basis cannot be computed: bookkeeping only, not shown to the user.
+
+        记一件没登记的产物；``category`` 为空表示依据算不出，只记账、不给用户看。"""
 
         self.skipped.append(
             MigrationSkippedArtifact.for_key(key, artifact_path=artifact_path, reason=reason, category=category)
         )
 
     def _skip_blocked(self, key: ArtifactKey, artifact_path: str, blocker: ArtifactBlocker) -> None:
-        """文件在场却被拦下：只有文件本身读不出才进「未能带入」，符号链接、非普通文件只记账。"""
+        """The file is present but blocked: only an unreadable file goes into "could not be carried over"; symlinks and non-regular files are bookkeeping only.
+
+        文件在场却被拦下：只有文件本身读不出才进「未能带入」，符号链接、非普通文件只记账。"""
 
         category: SkippedArtifactCategory | None = "unreadable" if blocker.code == "artifact_unreadable" else None
         self._skip(key, artifact_path, blocker.detail, category=category)
@@ -1150,6 +1221,7 @@ class TargetStatePlanner:
             else:
                 uploaded = None
             if uploaded is not None:
+                # Record the upload basis so resolve_basis can tell "selected upload" from generated video (asset-merge preview does not count it as stale on this basis).
                 # 记下上传依据，供 resolve_basis 区分「选中上传」与生成视频（资产合并预览据此不计过期）。
                 basis = self.bases[key] = build_uploaded_video_basis(content_digest=uploaded)
                 self.entries[key] = self._media_entry(artifact_path, basis.digest, uploaded)
@@ -1157,6 +1229,7 @@ class TargetStatePlanner:
         try:
             target = parse_typed_media_version_target(resource_type, record)
         except (TypeError, ValueError):
+            # Version records of old narration audio have no synthesis settings, so the basis cannot be backfilled: this kind is shown to the user (ADR 0098).
             # 旧版旁白音频的版本记录没有合成设置，依据无从补写：这一类给用户看（ADR 0098）。
             self._skip(
                 key,
@@ -1211,15 +1284,19 @@ class TargetStatePlanner:
         self.entries[key] = self._media_entry(artifact_path, current_basis.digest, artifact_digest)
 
     def _prove_media_snapshot(self, key: ArtifactKey, artifact_path: str, snapshot_rel: str) -> str | None:
-        """激活与登记前的证明：正式文件与选中版本快照字节一致时返回其内容指纹；不成立时记账并返回 ``None``。"""
+        """Proof before activation and registration: return the content fingerprint when the formal file and the selected version snapshot match byte for byte; otherwise record it and return ``None``.
+
+        激活与登记前的证明：正式文件与选中版本快照字节一致时返回其内容指纹；不成立时记账并返回 ``None``。"""
 
         observation = self.adapter.inspect_artifact(artifact_path)
         if observation.blocker is not None:
+            # The current media file cannot be opened: only unreadable files go into "could not be carried over"; symlinks and non-regular files are bookkeeping only.
             # 当前媒体文件打不开：只有读不出才进「未能带入」，符号链接、非普通文件只记账。
             self._skip_blocked(key, artifact_path, observation.blocker)
             return None
         snapshot_observation = self.adapter.inspect_artifact(snapshot_rel)
         if snapshot_observation.blocker is not None and snapshot_observation.blocker.code == "artifact_unreadable":
+            # The selected version's snapshot cannot be opened, so the current media cannot be verified: also counts as unreadable.
             # 选中版本的快照打不开，当前媒体无从对证：同样算读不出。
             self._skip(key, artifact_path, "selected version snapshot cannot be read", category="unreadable")
             return None
@@ -1249,7 +1326,15 @@ class TargetStatePlanner:
         return artifact_digest
 
     def _registered_media_digest(self, key: ArtifactKey, artifact_path: str) -> str | None:
-        """时效判定：正式文件就是清单登记的那个版本时返回登记的内容指纹，否则 ``None``。
+        """Currency check: return the registered content fingerprint when the formal file is the version registered in the manifest, otherwise ``None``.
+
+        When byte count and nanosecond mtime both match the registered content facts, the file is considered unchanged
+        without reading its content; only when either differs is the full fingerprint computed and compared with the
+        registered one. When the registered mtime is not earlier than the manifest file's own mtime, a rewrite within the
+        same timestamp might not change any stat field, so it is treated as racy and falls back to a full comparison (same
+        as git using the index file as reference). Entries without content facts cannot be proven and return ``None``.
+
+        时效判定：正式文件就是清单登记的那个版本时返回登记的内容指纹，否则 ``None``。
 
         字节数与纳秒 mtime 都与登记的内容事实一致就认定没变，不读文件内容；任一项不一致才完整取指纹
         与登记的比对。登记的 mtime 不早于清单文件自身的 mtime 时，同一时间戳内的改写可能不改变任何
@@ -1262,6 +1347,7 @@ class TargetStatePlanner:
         facts = entry.content if entry is not None and entry.artifact_path == artifact_path else None
         if facts is None:
             return None
+        # stat is taken from the descriptor of the safely opened file, not re-stat'ed by path, so a path later swapped for a symlink is not followed.
         # stat 取自安全打开文件时的描述符，不按路径重新 stat，路径事后换成符号链接也不会被跟随。
         observation = self._observe(artifact_path)
         if observation.blocker is not None or not observation.present or observation.file_stat is None:
@@ -1271,6 +1357,9 @@ class TargetStatePlanner:
         file_stat = observation.file_stat
         if not racy and (file_stat.st_size, file_stat.st_mtime_ns) == (facts.size, facts.mtime_ns):
             return facts.digest
+        # The full comparison also reads through the constrained descriptor. What this read sees is a newer observation: if
+        # the file was deleted or replaced by a symlink, the owning resolver's final comparison judges MISSING or BLOCKED
+        # from it rather than reusing the admission-time observation.
         # 完整比对同样经受约束的描述符读取。这次读到的是更新的观察：文件已删除或被换成符号链接时，
         # 所属解析器的末次比对据此判 MISSING 或 BLOCKED，不沿用准入时的观察。
         observation = self.adapter.inspect_artifact_content(artifact_path)
@@ -1279,7 +1368,11 @@ class TargetStatePlanner:
         return facts.digest if observation.content_digest == facts.digest else None
 
     def _media_entry(self, artifact_path: str, basis_digest: str, proven_digest: str) -> ArtifactManifestEntry:
-        """视频与音频的规划条目。激活模式下证明成立时顺带记下正式文件的内容事实（与 v18 补录同一条规则）：
+        """Planned entries for video and audio. In activation mode, when the proof holds, the formal file's content facts are
+        recorded too (same rule as the v18 backfill): size and mtime come from the same descriptor the fingerprint was
+        recomputed from, and the fingerprint must match the one at proof time.
+
+        视频与音频的规划条目。激活模式下证明成立时顺带记下正式文件的内容事实（与 v18 补录同一条规则）：
         size 与 mtime 取自重新取指纹的同一描述符，指纹须与证明时一致。"""
 
         entry = ArtifactManifestEntry(artifact_path=artifact_path, basis_digest=basis_digest)
@@ -1380,7 +1473,12 @@ class TargetStatePlanner:
         subtitle: Mapping[str, Any],
         presentation: Mapping[str, Any],
     ) -> None:
-        """单元换了选中视频或音频后，按旧版本物化的字幕与呈现暂不适用。
+        """After a unit switches its selected video or audio, subtitles and presentations materialized from the old version are temporarily not applicable.
+
+        The formal path is recorded only when they still fully self-prove against the video and audio versions they are
+        based on; other reasons that cannot be proven are not recorded as usual.
+
+        单元换了选中视频或音频后，按旧版本物化的字幕与呈现暂不适用。
 
         只有对它们自己依据的视频与音频版本仍完整自证时才记下正式路径；其余证明不了的原因照常不记。
         """
@@ -1474,7 +1572,9 @@ class TargetStatePlanner:
         )
 
     def _plan_bgm(self) -> None:
-        """上传的 BGM 按字节登记：依据只有正式文件当前字节的内容指纹，文件在场即可证明。"""
+        """Uploaded BGM is registered by bytes: the basis is only the content fingerprint of the formal file's current bytes, provable whenever the file is present.
+
+        上传的 BGM 按字节登记：依据只有正式文件当前字节的内容指纹，文件在场即可证明。"""
 
         if "bgm" in self._planned:
             return
@@ -1502,7 +1602,13 @@ class TargetStatePlanner:
         return observation.content_digest
 
     def _plan_jianying_draft(self, key: ArtifactKey) -> None:
-        """按剪辑时间线的最新修订与各单元当前的呈现模型重建剪映草稿的依据。
+        """Rebuild the JianYing draft basis from the edit timeline's latest revision and each unit's current presentation model.
+
+        JianYing drafts are registered only at render time and do not take part in whole activation. When the edit
+        timeline or episode no longer exists, no target is given; when a video unit has no provable current asset layer,
+        the basis records it as unusable, and an already registered draft reads as stale while its registration is kept.
+
+        按剪辑时间线的最新修订与各单元当前的呈现模型重建剪映草稿的依据。
 
         剪映草稿只在渲染时登记，不参与整份激活。剪辑时间线或集已不在时不给出目标；某个视频单元
         没有可证明的当前素材层时，依据把它记为不可用，已登记的草稿读作过期、登记保留。
@@ -1595,6 +1701,8 @@ class TargetStatePlanner:
     ) -> _PersistedPresentationProof | None:
         """Validate a frozen typed presentation and derive its current basis.
 
+        When ``allow_unselected_media`` is true, video and audio may be verified against their individually recorded historical versions (see :meth:`_presentation_media_pair`).
+
         ``allow_unselected_media`` 为真时，视频与音频可按各自记录的历史版本核验（见 :meth:`_presentation_media_pair`）。
         """
 
@@ -1657,6 +1765,7 @@ class TargetStatePlanner:
             isinstance(legacy_transition, str)
             and parse_project_schema_version(self.project) < PRESENTATION_WITHOUT_TRANSITION_SCHEMA_VERSION
         ):
+            # Activation before v15→v16 in the migration chain: existing files carry transitions; the basis is checked and registered under the rules of that time.
             # 迁移链中 v15→v16 之前的激活：存量文件带转场，依据按那时的口径核对与登记。
             frozen_presentation_basis = build_legacy_transition_presentation_basis(
                 frozen.presentation_basis, legacy_transition
@@ -1686,6 +1795,7 @@ class TargetStatePlanner:
                 current_subtitle = current.subtitle_basis
                 current_presentation = current.presentation_basis
         elif self._records_gaps:
+            # Failing admission (e.g. mixed utterances) only blocks generation: the current basis is projected as usual and the admission problem is recorded as an absence.
             # 准入不通过（如混合发声）只拦生成：当前依据照常投影，准入问题记为缺席。
             try:
                 current_subtitle = build_blocked_subtitle_basis(
@@ -1721,6 +1831,10 @@ class TargetStatePlanner:
         allow_unselected: bool = False,
     ) -> tuple[PresentationMedia, PresentationMedia] | None:
         """Prove one selected media snapshot and expose frozen/current currency.
+
+        When ``allow_unselected`` is true, non-selected historical versions can also be verified: their snapshot is not on
+        the formal path, so the formal file bytes are not compared; only the snapshot itself is checked against the
+        registered content digest.
 
         ``allow_unselected`` 为真时也可核验非选中的历史版本：它的快照不在正式路径上，
         不比对正式文件字节，只核验快照本身与登记的内容摘要一致。
@@ -1894,6 +2008,7 @@ class TargetStatePlanner:
         self.bases[key] = basis
         observation = self.adapter.inspect_artifact(self._pending_source(artifact_path))
         if observation.blocker is not None and self._activation_mode:
+            # Unreadable files are kept in place, not registered, and added to the migration report (ADR 0098).
             # 读不出的文件原地保留、不登记，进迁移报告（ADR 0098）。
             self._skip_blocked(key, artifact_path, observation.blocker)
             return
@@ -1992,17 +2107,21 @@ class TargetStatePlanner:
             raise ValueError(f"cannot read {label}") from exc
 
     def _pending_source(self, relative_path: str) -> str:
-        """该规范路径当前的落盘位置：待改名输入仍在旧名下，其余原样返回。"""
+        """Current on-disk location for this canonical path: inputs pending rename are still under the old name; others are returned as is.
+
+        该规范路径当前的落盘位置：待改名输入仍在旧名下，其余原样返回。"""
 
         return self.pending_renames.get(relative_path, relative_path)
 
     def _canonical_target(self, relative_path: str, observed: str) -> str:
-        """规划记下的落点：待改名输入按提交后的规范路径记，其余按实际观察到的路径记。"""
+        """Landing point recorded by the plan: inputs pending rename are recorded at their post-commit canonical path, others at the actually observed path.
+
+        规划记下的落点：待改名输入按提交后的规范路径记，其余按实际观察到的路径记。"""
 
         return relative_path if relative_path in self.pending_renames else observed
 
     def _canonical_path(self, relative_path: str, observed: str) -> Path:
-        """:meth:`_canonical_target` 的绝对路径形态。"""
+        """Absolute-path form of :meth:`_canonical_target`. / :meth:`_canonical_target` 的绝对路径形态。"""
 
         return self.project_dir.joinpath(*Path(self._canonical_target(relative_path, observed)).parts)
 
@@ -2036,6 +2155,11 @@ def plan_artifact_target_state(
 ) -> ArtifactTargetStatePlan:
     """Perform the complete read-only activation preflight.
 
+    ``pending_renames`` (canonical relative path → current on-disk relative path) is for schema migration: the
+    migration renames inputs to canonical paths in the same step, and the preflight must finish before the renames hit
+    disk, so it reads by old name and records by canonical path. The dependency and artifact paths in the plan are
+    thus facts as of commit time, and activation's stability gate can reuse them directly.
+
     ``pending_renames``（规范相对路径 → 当前落盘相对路径）供 schema 迁移使用：迁移在同一步里
     把输入改名到规范路径，预检必须在改名落盘之前完成，因而按旧名读取、按规范路径记录。计划
     里的依赖路径与产物路径因此都是提交时刻的事实，激活的稳定性闸门可直接复用。
@@ -2050,7 +2174,14 @@ def plan_artifact_target_state_by_gap_rule(
     *,
     record_gaps: bool,
 ) -> ArtifactTargetStatePlan:
-    """按指定的缺口口径规划一次完整目标态，不必先落盘。
+    """Plan one complete target state under the given gap rule, without writing to disk first.
+
+    With ``record_gaps`` false, the schema 17 rule applies (any generation input gap means no projection and no
+    registration); with it true, the schema 18 rule applies (gaps recorded as absences, registered as usual,
+    ``docs/adr/0098``). The difference between the two plans is the artifacts skipped because of gaps that can now be
+    backfilled, see :func:`gap_backfill_entries`.
+
+    按指定的缺口口径规划一次完整目标态，不必先落盘。
 
     ``record_gaps`` 为假时按 schema 17 的口径（有生成缺口即投影不出、不登记），为真时按 schema 18
     的口径（缺口记为缺席、照常登记，``docs/adr/0098``）。两次规划的差集就是因缺口被跳过、现在
@@ -2067,7 +2198,12 @@ def gap_backfill_entries(
     before: Mapping[ArtifactKey, ArtifactManifestEntry],
     after: Mapping[ArtifactKey, ArtifactManifestEntry],
 ) -> dict[ArtifactKey, ArtifactManifestEntry]:
-    """缺口即不登记的口径下规划不出（``before``）、缺口记为缺席后规划得出（``after``）、清单里也没有的条目。
+    """Entries not plannable under the gap-means-no-registration rule (``before``), plannable once gaps are recorded as absences (``after``), and not in the manifest.
+
+    Entries that already had a target before but are not in the manifest are registrations removed for other reasons
+    and are not restored here; registered entries are never touched.
+
+    缺口即不登记的口径下规划不出（``before``）、缺口记为缺席后规划得出（``after``）、清单里也没有的条目。
 
     改前就有目标却不在清单里的，是出于别的原因撤下的登记，不在这里补回；已登记条目一律不动。
     """

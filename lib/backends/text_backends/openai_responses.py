@@ -1,4 +1,11 @@
-"""OpenAIResponsesTextBackend — 经 OpenAI Responses API（``POST /v1/responses``）生成文本。
+"""OpenAIResponsesTextBackend — generates text via the OpenAI Responses API (``POST /v1/responses``).
+
+Models such as ``o3-pro``, ``gpt-5.5-pro`` and ``gpt-5.3-codex`` are only available via Responses and cannot be
+called through Chat Completions. Structured output is encoded as ``text.format`` (json_schema); when the provider
+rejects it or does not enforce the schema, it falls back to the prompt injection path; the fallback still uses
+Responses, so Responses-only models can complete too.
+
+OpenAIResponsesTextBackend — 经 OpenAI Responses API（``POST /v1/responses``）生成文本。
 
 ``o3-pro``、``gpt-5.5-pro``、``gpt-5.3-codex`` 等模型只开放 Responses，Chat Completions 调不了。
 结构化输出编码为 ``text.format``（json_schema）；供应商拒收或未强制 schema 时降级到 prompt
@@ -33,12 +40,15 @@ from lib.infra.retry import with_retry_async
 
 logger = logging.getLogger(__name__)
 
+# Responses expresses truncation with status=incomplete + incomplete_details.reason, not finish_reason.
 # Responses 以 status=incomplete + incomplete_details.reason 表达截断，不用 finish_reason。
 _TRUNCATION_REASONS = ("max_output_tokens",)
 
 
 class OpenAIResponsesTextBackend:
-    """OpenAI Responses 文本后端：原生 ``text.format`` 优先，不合规时降级到 prompt 注入。"""
+    """OpenAI Responses text backend: native ``text.format`` first, falling back to prompt injection when non-conforming.
+
+    OpenAI Responses 文本后端：原生 ``text.format`` 优先，不合规时降级到 prompt 注入。"""
 
     def __init__(
         self,
@@ -49,6 +59,7 @@ class OpenAIResponsesTextBackend:
         transport_layer: TransportLayer | None = None,
         provider_name: str = PROVIDER_OPENAI,
     ):
+        # Disable the SDK's built-in retries; this layer's _generate_once() manages the retry strategy
         # 禁用 SDK 内置重试，由本层 _generate_once() 统一管理重试策略
         self._client = create_openai_client(
             api_key=api_key, base_url=base_url, max_retries=0, transport_layer=transport_layer
@@ -74,7 +85,12 @@ class OpenAIResponsesTextBackend:
         return self._capabilities
 
     async def generate(self, request: TextGenerationRequest) -> TextGenerationResult:
-        """生成文本回复。
+        """Generate a text reply.
+
+        This method has no retry decorator: transient error retries happen at the :meth:`_generate_once` layer, so a
+        failed fallback attempt does not also replay the already successful native call.
+
+        生成文本回复。
 
         本方法不带重试装饰器：瞬态错误重试在 :meth:`_generate_once` 层完成，降级尝试的失败
         不会连带重放已成功的原生调用。
@@ -89,6 +105,7 @@ class OpenAIResponsesTextBackend:
             return await self._prompt_json_fallback(request)
 
         if structured:
+            # The native request does not declare strict (see _generate_once), so re-validation also uses strict=False, tolerating coercible values.
             # 原生请求不声明 strict（见 _generate_once），复验同样用 strict=False，容忍可强转值。
             fallback_reason = structured_fallback_reason(native.text, request.response_schema, strict=False)
             if fallback_reason:
@@ -98,6 +115,7 @@ class OpenAIResponsesTextBackend:
                     truncate_for_log(native.text),
                 )
                 result = await self._prompt_json_fallback(request)
+                # This native 200 call has already been billed; merge its tokens into the fallback result.
                 # 这次原生 200 调用已被计费，把它的 token 并入降级结果。
                 merge_billed_usage(result, native)
                 return result
@@ -114,13 +132,21 @@ class OpenAIResponsesTextBackend:
 
     @with_retry_async(max_attempts=4, backoff_seconds=(2, 4, 8), retryable_errors=OPENAI_RETRYABLE_ERRORS)
     async def _generate_once(self, request: TextGenerationRequest, *, structured: bool) -> TextGenerationResult:
-        """单次 Responses 调用：构造请求、解析与截断处理，瞬态错误重试。
+        """A single Responses call: build the request, parse and handle truncation, with transient error retries.
+
+        ``structured`` is passed according to this generate() call's original intent: the prompt injection fallback clears
+        ``response_schema`` and reuses this method, which is still a structured output attempt, so truncation must be a
+        hard error, not just a warning.
+
+        单次 Responses 调用：构造请求、解析与截断处理，瞬态错误重试。
 
         ``structured`` 按本次 generate() 的原始诉求传入：prompt 注入降级把 ``response_schema``
         置空后复用本方法，那仍是一次结构化输出尝试，截断要硬错误而非仅告警。
         """
+        # Requests with images need to read local images and encode data URIs; build them in a thread to avoid blocking the event loop
         # 带图请求要读本地图片编码 data URI，放线程里构建，避免阻塞事件循环
         input_items = await asyncio.to_thread(_build_input, request)
+        # store=False: consistent with the Chat Completions default; the conversation is not stored on the OpenAI side.
         # store=False：与 Chat Completions 的默认一致，不在 OpenAI 侧留存对话。
         kwargs: dict = {"model": self._model, "input": input_items, "store": False}
         if request.system_prompt:
@@ -128,6 +154,9 @@ class OpenAIResponsesTextBackend:
         if request.max_output_tokens is not None:
             kwargs["max_output_tokens"] = request.max_output_tokens
         if request.response_schema:
+            # Do not declare strict: strict requires every property in required and additionalProperties forbidden on every
+            # object, which business schemas with optional fields and defaults generally do not meet; declaring it would just get
+            # the whole request rejected. Conformance is decided by re-validation.
             # 不声明 strict：strict 要求每个属性都进 required、对象都禁 additionalProperties，
             # 业务 schema 的可选字段与默认值普遍不满足，声明了只会整次被拒收。是否合规由复验判定。
             kwargs["text"] = {
@@ -141,6 +170,7 @@ class OpenAIResponsesTextBackend:
         logger.info("调用 %s 文本 SDK kwargs=%s", self.name, format_kwargs_for_log(kwargs))
         response = await self._client.responses.create(**kwargs)
         if response.status == "failed":
+            # Some gateways report failure as 200 + status=failed with empty output_text, which must not be treated as success
             # 部分网关以 200 + status=failed 回报失败，output_text 为空，不能当成功结果
             detail = response.error.message if response.error else "unknown error"
             raise RuntimeError(f"Responses 调用失败 (model={self._model}): {detail}")
@@ -160,6 +190,7 @@ class OpenAIResponsesTextBackend:
             text=response.output_text,
             provider=self._provider_name,
             model=self._model,
+            # Responses' input_tokens is the total input; the cache-hit part is in input_tokens_details.cached_tokens.
             # Responses 的 input_tokens 是总输入，其中缓存命中的部分在 input_tokens_details.cached_tokens。
             input_tokens=usage.input_tokens if usage else None,
             output_tokens=output_tokens,
@@ -169,7 +200,9 @@ class OpenAIResponsesTextBackend:
 
 
 def _build_input(request: TextGenerationRequest) -> list[dict]:
-    """将 TextGenerationRequest 转为 Responses 的 input 列表；system_prompt 走 instructions。"""
+    """Convert a TextGenerationRequest to the Responses input list; system_prompt goes into instructions.
+
+    将 TextGenerationRequest 转为 Responses 的 input 列表；system_prompt 走 instructions。"""
     if not request.images:
         return [{"role": "user", "content": request.prompt}]
 

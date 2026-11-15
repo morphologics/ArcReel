@@ -273,7 +273,9 @@ class BatchAdmission:
 
 
 def batch_admission_withheld_problem(holding_unit_ids: Sequence[str]) -> GenerationProblem:
-    """本身通过准入、但因同批其它单元受阻而未创建任务的单元的结论。"""
+    """Verdict for a unit that passed admission itself but got no task created because other units in the same batch were blocked.
+
+    本身通过准入、但因同批其它单元受阻而未创建任务的单元的结论。"""
 
     return GenerationProblem(
         code=GenerationProblemCode.BATCH_ADMISSION_WITHHELD,

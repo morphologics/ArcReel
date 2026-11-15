@@ -1,4 +1,10 @@
 """
+Version management module
+
+Manages historical versions of storyboard images, videos, character sheets, scene asset sheets, prop asset sheets
+and grid images.
+Supports version backup, switching the current version, recording and querying.
+
 版本管理模块
 
 管理分镜图、视频、角色图、场景资产图、道具资产图、宫格图的历史版本。
@@ -46,9 +52,10 @@ MANUAL_UPLOAD_VERSION_SOURCE = "manual_upload"
 #: A storyboard image's / video's version record: the shot's editable prompt (``image_prompt`` / ``video_prompt``
 #: as in the script) it was generated from, so making the version current can restore the prompt too.
 SCRIPT_PROMPT_VERSION_FIELD = "script_prompt"
+# Bare sha256 hexdigest of this version's output (i.e. the version snapshot) in the version record, same algorithm as ``lib.infra.content_digest.sha256_file``.
 # 版本记录里该版本输出（即版本快照）的裸 sha256 hexdigest，算法同 ``lib.infra.content_digest.sha256_file``。
 VERSION_CONTENT_DIGEST = "content_digest"
-# 写入时记录内容指纹的资源类型：视频与音频产物。
+# Resource types whose content fingerprint is recorded on write: video and audio artifacts. / 写入时记录内容指纹的资源类型：视频与音频产物。
 CONTENT_DIGEST_RESOURCE_TYPES = frozenset({"videos", "reference_videos", "audio"})
 logger = logging.getLogger(__name__)
 
@@ -151,6 +158,7 @@ def _unlink_paths(*paths: Path | None) -> list[tuple[Path, OSError]]:
         if path is None:
             continue
         try:
+            # snapshot files removed when staging, rollback or restore fails; data deletions all go through the project trash
             # hard-delete: temp -- 暂存、回滚与恢复失败时撤下的快照文件；数据删除都经项目回收站
             path.unlink(missing_ok=True)
         except OSError as exc:
@@ -211,19 +219,32 @@ def _create_rollback_backup(current_file: Path) -> Path:
 
 
 class VersionManager:
-    """版本管理器
+    """Version manager
+
+    Reading/writing version records, committing versions and copying files are all synchronous disk operations, and
+    they hold a thread lock shared per versions.json; async callers only call these methods from worker threads, never
+    waiting for the lock on the event loop thread. Construction itself does not touch the file system and may happen
+    on the event loop.
+
+    版本管理器
 
     读写版本记录、提交版本与复制文件都是同步磁盘操作，并持有按 versions.json 共享的线程锁；
     异步调用方只在工作线程里调用这些方法，不在事件循环线程上等锁。构造本身不碰文件系统，
     可以在事件循环上进行。
     """
 
+    # Supported resource types and extensions are all derived from the single source of truth lib.project.resource_paths, to avoid copies drifting apart.
     # 支持的资源类型与扩展名均派生自单一真相源 lib.project.resource_paths，避免副本漂移。
     RESOURCE_TYPES = _RESOURCE_TYPES
     EXTENSIONS: ClassVar[dict[str, str]] = {rt: resource_extension(rt) for rt in _RESOURCE_TYPES}
 
     def __init__(self, project_path: Path):
         """
+        Initialize the version manager
+
+        Args:
+            project_path: project root directory path
+
         初始化版本管理器
 
         Args:
@@ -236,7 +257,12 @@ class VersionManager:
 
     @property
     def _lock(self) -> threading.RLock:
-        """按 versions.json 的规范路径共享的线程锁。
+        """Thread lock shared per canonical path of versions.json.
+
+        Resolving the canonical path needs a stat, so it is deferred to the first lock acquisition: locking already happens
+        in a worker thread, so construction does not block.
+
+        按 versions.json 的规范路径共享的线程锁。
 
         解析规范路径要 stat，推迟到首次加锁时进行：加锁本就发生在工作线程里，构造因此不阻塞。
         """
@@ -246,7 +272,14 @@ class VersionManager:
         return lock
 
     def _ensure_dirs(self) -> None:
-        """确保版本目录结构存在。
+        """Ensure the version directory structure exists.
+
+        Called on demand by write paths, not created in ``__init__``: read-only use (including the rename ``dry_run``
+        rehearsal) constructing this class should not leave an empty ``versions/`` tree in the project. If the project is
+        deleted during a running task, the write path aborts here with ``ProjectDeletedDuringTaskError`` instead of writing
+        into a new project with the same name.
+
+        确保版本目录结构存在。
 
         由写路径按需调用，不在 ``__init__`` 里建：只读用法（含改名的 ``dry_run`` 预演）
         构造本类时不应在项目下留下空的 ``versions/`` 目录树。项目已在执行中的任务期间删除时，
@@ -255,11 +288,14 @@ class VersionManager:
         ensure_task_project_claim(self.project_path.name)
         self.versions_dir.mkdir(parents=True, exist_ok=True)
         for resource_type in self.RESOURCE_TYPES:
+            # Snapshot bucket directories come from the path source of truth: types with multi-segment ids (character derivatives) land in nested subdirectories.
             # 快照桶目录取自路径真相源：多段 id 的类型（角色衍生）落在嵌套子目录下。
             (self.project_path / version_snapshot_dir(resource_type)).mkdir(parents=True, exist_ok=True)
 
     def _ensure_snapshot_dir(self, snapshot_abs_path: Path) -> None:
-        """确保版本目录树与该快照自身的父目录存在（多段 id 每个 id 前置段一层目录）。"""
+        """Ensure the version directory tree and the snapshot's own parent directory exist (one directory level per leading segment of a multi-segment id).
+
+        确保版本目录树与该快照自身的父目录存在（多段 id 每个 id 前置段一层目录）。"""
         self._ensure_dirs()
         snapshot_abs_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -309,7 +345,7 @@ class VersionManager:
         return self.resolve_snapshot_path(self.project_path, resource_type, record.get("file"))
 
     def _load_versions(self) -> dict:
-        """加载版本元数据"""
+        """Load version metadata / 加载版本元数据"""
         if not self.versions_file.exists():
             return {rt: {} for rt in self.RESOURCE_TYPES}
 
@@ -317,20 +353,29 @@ class VersionManager:
             return json.load(f)
 
     def _save_versions(self, data: dict) -> None:
-        """保存版本元数据"""
+        """Save version metadata / 保存版本元数据"""
         self._ensure_dirs()
         atomic_write_json(self.versions_file, data)
 
     def _generate_timestamp(self) -> str:
-        """生成时间戳字符串（用于文件名）"""
+        """Generate a timestamp string (for file names) / 生成时间戳字符串（用于文件名）"""
         return datetime.now().strftime("%Y%m%dT%H%M%S")
 
     def _generate_iso_timestamp(self) -> str:
-        """生成 ISO 格式时间戳（用于元数据）"""
+        """Generate an ISO-format timestamp (for metadata) / 生成 ISO 格式时间戳（用于元数据）"""
         return datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
 
     def get_versions(self, resource_type: str, resource_id: str) -> dict:
         """
+        Get all version info of a resource
+
+        Args:
+            resource_type: resource type (storyboards, videos, characters, clues)
+            resource_id: resource ID (e.g. E1S01, 姜月茴)
+
+        Returns:
+            Version info dict containing current_version and the versions list
+
         获取资源的所有版本信息
 
         Args:
@@ -350,7 +395,7 @@ class VersionManager:
             if not resource_data:
                 return {"current_version": 0, "versions": []}
 
-            # 添加 is_current 和 file_url 字段
+            # Add the is_current and file_url fields / 添加 is_current 和 file_url 字段
             versions = []
             for v in resource_data.get("versions", []):
                 version_info = v.copy()
@@ -362,6 +407,15 @@ class VersionManager:
 
     def get_current_version(self, resource_type: str, resource_id: str) -> int:
         """
+        Get the current version number
+
+        Args:
+            resource_type: resource type
+            resource_id: resource ID
+
+        Returns:
+            Current version number, 0 when there are no versions
+
         获取当前版本号
 
         Args:
@@ -385,6 +439,18 @@ class VersionManager:
         self, resource_type: str, resource_id: str, prompt: str, source_file: Path | None = None, **metadata
     ) -> int:
         """
+        Add a new version record
+
+        Args:
+            resource_type: resource type
+            resource_id: resource ID
+            prompt: prompt used to generate this version
+            source_file: source file path (copied into the version directory)
+            **metadata: extra metadata (e.g. aspect_ratio, duration_seconds)
+
+        Returns:
+            New version number
+
         添加新版本记录
 
         Args:
@@ -403,11 +469,11 @@ class VersionManager:
         with self._lock:
             data = self._load_versions()
 
-            # 确保资源类型存在
+            # Ensure the resource type exists / 确保资源类型存在
             if resource_type not in data:
                 data[resource_type] = {}
 
-            # 获取或创建资源记录
+            # Get or create the resource record / 获取或创建资源记录
             if resource_id not in data[resource_type]:
                 data[resource_type][resource_id] = {"current_version": 0, "versions": []}
 
@@ -422,21 +488,21 @@ class VersionManager:
             )
             new_version = max_version + 1
 
-            # 生成版本文件名和路径
+            # Generate the version file name and path / 生成版本文件名和路径
             timestamp = self._generate_timestamp()
             version_rel_path = version_snapshot_relative_path(
                 resource_type, resource_id, version=new_version, timestamp=timestamp
             )
             version_abs_path = self.project_path / version_rel_path
 
-            # 如果有源文件，复制到版本目录
+            # If there is a source file, copy it to the version directory / 如果有源文件，复制到版本目录
             snapshot: Path | None = None
             if source_file and Path(source_file).exists():
                 self._ensure_snapshot_dir(version_abs_path)
                 shutil.copy2(source_file, version_abs_path)
                 snapshot = version_abs_path
 
-            # 创建版本记录
+            # Create the version record / 创建版本记录
             version_record = _new_version_record(
                 resource_type,
                 version=new_version,
@@ -517,6 +583,7 @@ class VersionManager:
                 try:
                     if current_backup is None:
                         if not current_existed:
+                            # remove the current file newly created by this commit when the commit fails
                             # hard-delete: rollback -- 提交失败时移除本次新建的当前文件
                             current_file.unlink(missing_ok=True)
                     else:
@@ -525,6 +592,7 @@ class VersionManager:
                     rollback_errors.append(exc)
                 try:
                     if versions_snapshot is None:
+                        # remove the versions.json newly created by this commit when the commit fails
                         # hard-delete: rollback -- 提交失败时移除本次新建的 versions.json
                         self.versions_file.unlink(missing_ok=True)
                     else:
@@ -533,6 +601,7 @@ class VersionManager:
                     rollback_errors.append(exc)
                 for path in created_snapshots:
                     try:
+                        # remove the snapshot newly created by this commit when the commit fails
                         path.unlink(missing_ok=True)  # hard-delete: rollback -- 提交失败时移除本次新建的快照
                     except OSError as exc:
                         rollback_errors.append(exc)
@@ -670,6 +739,7 @@ class VersionManager:
                 rollback_errors: list[OSError] = []
                 try:
                     if versions_snapshot is None:
+                        # remove the versions.json newly created by this commit when the commit fails
                         # hard-delete: rollback -- 提交失败时移除本次新建的 versions.json
                         self.versions_file.unlink(missing_ok=True)
                     else:
@@ -806,6 +876,7 @@ class VersionManager:
                     try:
                         if backup is None:
                             if not current_existed:
+                                # remove the current file newly created by this commit when the commit fails
                                 # hard-delete: rollback -- 提交失败时移除本次新建的当前文件
                                 current_file.unlink(missing_ok=True)
                         else:
@@ -814,6 +885,7 @@ class VersionManager:
                         rollback_errors.append(exc)
                 try:
                     if versions_snapshot is None:
+                        # remove the versions.json newly created by this commit when the commit fails
                         # hard-delete: rollback -- 提交失败时移除本次新建的 versions.json
                         self.versions_file.unlink(missing_ok=True)
                     else:
@@ -822,6 +894,7 @@ class VersionManager:
                     rollback_errors.append(exc)
                 for path in created_snapshots:
                     try:
+                        # remove the snapshot newly created by this commit when the commit fails
                         path.unlink(missing_ok=True)  # hard-delete: rollback -- 提交失败时移除本次新建的快照
                     except OSError as exc:
                         rollback_errors.append(exc)
@@ -933,6 +1006,7 @@ class VersionManager:
                 history_rollback_errors: list[OSError] = []
                 try:
                     if versions_snapshot is None:
+                        # remove the versions.json newly created by this commit when the commit fails
                         # hard-delete: rollback -- 提交失败时移除本次新建的 versions.json
                         self.versions_file.unlink(missing_ok=True)
                     else:
@@ -949,6 +1023,7 @@ class VersionManager:
                     ) from history_rollback_errors[0]
                 raise
 
+            # Paid history is already persisted; even if the selection fails afterwards, the history content is still added.
             # 付费历史已持久化；即使随后选中失败，历史内容仍然新增。
             record_project_activity(self.project_path)
             try:
@@ -988,6 +1063,7 @@ class VersionManager:
                 try:
                     if current_backup is None:
                         if not current_existed:
+                            # remove the current file newly created by this selection when the selection fails
                             # hard-delete: rollback -- 选择失败时移除本次新建的当前文件
                             current_file.unlink(missing_ok=True)
                     else:
@@ -1097,6 +1173,7 @@ class VersionManager:
                 if current_existed:
                     current_backup = _create_rollback_backup(current_file)
                 if previous is None or previous_file is None:
+                    # rejecting the only version: the rejected version's snapshot stays in the version history, the current file is just a copy of it
                     # hard-delete: derived -- 拒绝唯一版本：被拒版本的快照仍留在版本历史，当前文件只是它的副本
                     current_file.unlink(missing_ok=True)
                     resource_data["current_version"] = 0
@@ -1118,6 +1195,7 @@ class VersionManager:
                 try:
                     if current_backup is None:
                         if not current_existed:
+                            # remove the current file newly created by this rejection when the rejection fails
                             # hard-delete: rollback -- 拒绝失败时移除本次新建的当前文件
                             current_file.unlink(missing_ok=True)
                     else:
@@ -1156,6 +1234,7 @@ class VersionManager:
             )
             if not current:
                 return current
+            # The ledger is project-global and not in the rollback set: individual rejections are not recorded, the whole batch is recorded once after commit
             # 账本是项目全局的，不进回滚集合：逐条拒绝不记账，整批提交后记一次
             with formal_write_transaction(
                 self.versions_file,
@@ -1177,7 +1256,23 @@ class VersionManager:
             return current
 
     def rename_resource(self, resource_type: str, old_id: str, new_id: str, *, dry_run: bool = False) -> int:
-        """把资源的版本历史整体迁移到新 id：re-key 元数据、重命名快照文件、改写记录内路径。
+        """Move a resource's whole version history to a new id: re-key the metadata, rename snapshot files, rewrite paths inside records.
+
+        The version time-machine migration entry point for asset renames. resource_id and snapshot file names are both
+        prefixed with the asset name (``{name}_v{n}_{timestamp}{ext}``); name equality uses the comparison coordinate
+        system (NFC), since existing records and file names may be stored as NFD. Returns the number of snapshot files
+        involved; returns 0 when the old id has no version records (idempotent: safe to rerun after a cascade transaction
+        fails midway). ``dry_run=True`` only counts, without migrating.
+
+        Rejected entirely when the new id already has someone else's version history: even when the asset bucket has no
+        matching entry, version records and snapshots may remain, and migrating onto them would irrecoverably overwrite
+        them. The rejection happens before the ``dry_run`` branch, so the cascade transaction's scan phase can already
+        stop it, keeping the zero-write promise.
+
+        Raises:
+            AssetRenameHistoryCollisionError: the new id already has version history belonging to another asset.
+
+        把资源的版本历史整体迁移到新 id：re-key 元数据、重命名快照文件、改写记录内路径。
 
         资产重命名的版本时光机迁移入口。resource_id 与快照文件名都以资产名为前缀
         （``{name}_v{n}_{timestamp}{ext}``），名字判等走比对坐标系（NFC）——存量记录
@@ -1206,6 +1301,7 @@ class VersionManager:
             if key is None or not isinstance(bucket.get(key), dict):
                 return 0
             record = bucket[key]
+            # Resolving to the key itself means only the encoding form or case changed; that is the same history, allow it.
             # 解析到 key 自身说明只是编码形式或大小写变化，那是同一份历史，放行。
             existing_new_key = resolve_asset_key(bucket, new_id)
             if existing_new_key is not None and existing_new_key != key:
@@ -1216,6 +1312,7 @@ class VersionManager:
                 return len(versions)
 
             self._ensure_dirs()
+            # Snapshot file names only carry the last segment of the id (leading segments of a multi-segment id are directory levels), so both prefix and new name use the last segment.
             # 快照文件名只带 id 的末段（多段 id 的前置段是目录层级），故前缀与新名都取末段。
             old_stem = normalize_asset_name(old_id).rpartition("/")[2]
             new_parent, _, new_stem = new_id.rpartition("/")
@@ -1232,6 +1329,9 @@ class VersionManager:
                     dst.parent.mkdir(parents=True, exist_ok=True)
                     src.replace(dst)
                 version["file"] = dst.relative_to(self.project_path).as_posix()
+            # Visually identical equivalent keys (NFC / NFD coexisting) are folded under the new id too; leaving one would keep a
+            # leftover under the old name for a later recreated asset of the same name to pick up. The snapshot files of the
+            # merged-away record stay on disk, to avoid silently deleting the user's history.
             # 视觉同名的等价 key（NFC / NFD 并存）一并收编到新 id 下，留一条会顶着旧名残留、
             # 之后被重建的同名资产接上。被合并掉的那条记录，其快照文件留在盘上，避免静默删除用户的历史。
             rekey_equivalent_entries(bucket, old_id, new_id)
@@ -1243,6 +1343,20 @@ class VersionManager:
         self, resource_type: str, resource_id: str, current_file: Path, prompt: str, **metadata
     ) -> int | None:
         """
+        Back up the current file into the version directory
+
+        Does nothing if the current file does not exist.
+
+        Args:
+            resource_type: resource type
+            resource_id: resource ID
+            current_file: current file path
+            prompt: prompt of the current version
+            **metadata: extra metadata
+
+        Returns:
+            The backed-up version number, or None if nothing was backed up
+
         将当前文件备份到版本目录
 
         如果当前文件不存在，不执行任何操作。
@@ -1269,6 +1383,21 @@ class VersionManager:
         self, resource_type: str, resource_id: str, current_file: Path, prompt: str, **metadata
     ) -> int | None:
         """
+        Ensure the "current file" has at least one version record
+
+        For upgrade/migration scenarios: current_file already exists on disk but versions.json has no record yet.
+        Nothing is written again if the resource already has version records (current_version > 0).
+
+        Args:
+            resource_type: resource type
+            resource_id: resource ID
+            current_file: current file path
+            prompt: prompt of the current file (for the record)
+            **metadata: extra metadata
+
+        Returns:
+            The newly added version number; None if nothing needed to be added or the file does not exist
+
         确保“当前文件”至少有一个版本记录
 
         用于升级/迁移场景：磁盘上已有 current_file，但 versions.json 还没有记录。
@@ -1304,7 +1433,9 @@ class VersionManager:
 
     @contextmanager
     def history_transaction(self) -> Generator[None]:
-        """批量恢复失败时撤销新增历史快照与版本登记；调用方持项目锁，不改当前文件。"""
+        """When a batch restore fails, undo the newly added history snapshots and version registrations; the caller holds the project lock; the current file is not changed.
+
+        批量恢复失败时撤销新增历史快照与版本登记；调用方持项目锁，不改当前文件。"""
 
         def snapshots() -> set[Path]:
             data = self._load_versions()
@@ -1336,7 +1467,16 @@ class VersionManager:
         prompt: str = "",
         metadata: Mapping[str, Any] | None = None,
     ) -> str:
-        """把 ``source_file`` 作为资源的一条历史版本加回，当前版本不变；返回新版本快照的项目内相对路径。
+        """Add ``source_file`` back as a historical version of the resource, leaving the current version unchanged; returns the project-relative path of the new version snapshot.
+
+        ``metadata`` is the deleted version's original metadata (generation basis etc.), added back with the version, so the
+        restored version can be selected again as usual.
+
+        Used when restoring a deletion record: the original path already has a current file, which the restored file does
+        not overwrite. When the current file has no version record yet it is first backfilled as the current version;
+        otherwise the restored version would be the only one and look like the current version.
+
+        把 ``source_file`` 作为资源的一条历史版本加回，当前版本不变；返回新版本快照的项目内相对路径。
 
         ``metadata`` 是被删版本原有的元数据（生成依据等），随版本一起加回，加回的版本才能照常选回。
 
@@ -1367,10 +1507,16 @@ class VersionManager:
             return resource_data["versions"][-1]["file"]
 
     def delete_history_version(self, snapshot_path: str) -> "TrashRecord":
-        """把快照路径为 ``snapshot_path`` 的一条历史版本移进项目回收站，返回删除记录；当前版本不能这样删除。
+        """Move the historical version whose snapshot path is ``snapshot_path`` into the project trash and return the deletion record; the current version cannot be deleted this way.
+
+        The caller holds the project lock (``project_metadata_lock``). On restore it is added back as a historical version
+        of the resource.
+
+        把快照路径为 ``snapshot_path`` 的一条历史版本移进项目回收站，返回删除记录；当前版本不能这样删除。
 
         调用方持有项目锁（``project_metadata_lock``）。恢复时它作为该资源的一条历史版本加回。
         """
+        # The trash module depends on this module (it adds historical versions back on restore), so it can only be imported here.
         # 回收站模块依赖本模块（恢复时加回历史版本），只能在这里导入。
         from lib.project import project_trash
 
@@ -1412,7 +1558,9 @@ class VersionManager:
         raise NotFoundError("version_not_found", version=snapshot_path)
 
     def resource_records(self, resources: Iterable[tuple[str, str]]) -> dict[str, dict[str, Any]]:
-        """这些资源的版本记录（按资源类型分桶）；没有记录的资源不出现。"""
+        """Version records of these resources (bucketed by resource type); resources without records do not appear.
+
+        这些资源的版本记录（按资源类型分桶）；没有记录的资源不出现。"""
         data = self._load_versions()
         found: dict[str, dict[str, Any]] = {}
         for resource_type, resource_id in resources:
@@ -1422,7 +1570,9 @@ class VersionManager:
         return found
 
     def snapshot_files(self, records: Mapping[str, Mapping[str, Any]]) -> list[str]:
-        """版本记录里各版本快照的项目内相对路径（快照文件可能已不在盘上）。"""
+        """Project-relative paths of each version snapshot in the version records (snapshot files may no longer be on disk).
+
+        版本记录里各版本快照的项目内相对路径（快照文件可能已不在盘上）。"""
         return [
             version["file"]
             for resource_type, bucket in records.items()
@@ -1432,7 +1582,9 @@ class VersionManager:
         ]
 
     def detach_resources(self, resources: Iterable[tuple[str, str]]) -> None:
-        """从版本历史里摘掉这些资源的记录，不动快照文件：它们已随删除记录移进项目回收站。调用方持项目锁。"""
+        """Remove these resources' records from the version history without touching snapshot files: they have already moved into the project trash with the deletion record. The caller holds the project lock.
+
+        从版本历史里摘掉这些资源的记录，不动快照文件：它们已随删除记录移进项目回收站。调用方持项目锁。"""
         with self._lock:
             data = self._load_versions()
             removed = [data[rt].pop(rid) for rt, rid in resources if rid in data.get(rt, {})]
@@ -1441,7 +1593,9 @@ class VersionManager:
                 record_project_activity(self.project_path)
 
     def attach_resources(self, records: Mapping[str, Mapping[str, Any]]) -> None:
-        """恢复删除记录时把整段版本记录加回，快照文件已放回原处；已有记录的资源保持现状。调用方持项目锁。"""
+        """When restoring a deletion record, add the whole set of version records back; snapshot files are already back in place; resources that already have records stay as they are. The caller holds the project lock.
+
+        恢复删除记录时把整段版本记录加回，快照文件已放回原处；已有记录的资源保持现状。调用方持项目锁。"""
         with self._lock:
             data = self._load_versions()
             added = False
@@ -1465,6 +1619,19 @@ class VersionManager:
         on_restore: Callable[[dict[str, Any]], None] | None = None,
     ) -> dict:
         """
+        Switch to the given version
+
+        Copies the given version to the current path and points current_version at it.
+
+        Args:
+            resource_type: resource type
+            resource_id: resource ID
+            version: version number to restore
+            current_file: current file path
+
+        Returns:
+            Switch info containing restored_version, current_version, prompt
+
         切换到指定版本
 
         将指定版本复制到当前路径，并将 current_version 指向该版本。
@@ -1525,6 +1692,7 @@ class VersionManager:
                 try:
                     if current_backup is None:
                         if not current_existed:
+                            # remove the current file newly created by this restore when the restore fails
                             # hard-delete: rollback -- 还原失败时移除本次新建的当前文件
                             current_file.unlink(missing_ok=True)
                     else:
@@ -1533,6 +1701,7 @@ class VersionManager:
                     rollback_errors.append(exc)
                 try:
                     if versions_snapshot is None:
+                        # remove the versions.json newly created by this restore when the restore fails
                         # hard-delete: rollback -- 还原失败时移除本次新建的 versions.json
                         self.versions_file.unlink(missing_ok=True)
                     else:
@@ -1572,7 +1741,22 @@ class VersionManager:
                     verify_version_snapshot(resource_type, resource_id, record, self.project_path / record["file"])
 
     def update_version_metadata(self, resource_type: str, resource_id: str, version: int, **metadata) -> bool:
-        """为既有版本记录补写元数据键（覆盖同名键）。
+        """Backfill metadata keys onto an existing version record (overwriting keys of the same name).
+
+        Lets generation finalize backfill metadata that is only known at finalize time after the version is stored (e.g.
+        the source signature of reference unit artifacts). Returns False without raising when the target record does not
+        exist: record backfill is best-effort, and a miss only degrades to that metadata being unavailable on a later restore.
+
+        Args:
+            resource_type: resource type
+            resource_id: resource ID
+            version: version number
+            **metadata: metadata keys and values to write
+
+        Returns:
+            Whether the record was found and written
+
+        为既有版本记录补写元数据键（覆盖同名键）。
 
         供生成 finalize 在版本入库后回填只有 finalize 阶段才确定的元数据（如参考
         单元产物的来源签名）。目标记录不存在时返回 False 不抛错：档案补写是
@@ -1604,7 +1788,7 @@ class VersionManager:
             return False
 
     def get_version_metadata(self, resource_type: str, resource_id: str, version: int, key: str) -> Any | None:
-        """读取指定版本记录上的元数据键，记录或键不存在时返回 None。"""
+        """Read a metadata key on the given version record; None when the record or key does not exist. / 读取指定版本记录上的元数据键，记录或键不存在时返回 None。"""
         info = self.get_versions(resource_type, resource_id)
         for v in info["versions"]:
             if v["version"] == version:
@@ -1613,6 +1797,16 @@ class VersionManager:
 
     def get_version_file_url(self, resource_type: str, resource_id: str, version: int) -> str | None:
         """
+        Get the file URL of the given version
+
+        Args:
+            resource_type: resource type
+            resource_id: resource ID
+            version: version number
+
+        Returns:
+            File URL, None when it does not exist
+
         获取指定版本的文件 URL
 
         Args:
@@ -1631,6 +1825,16 @@ class VersionManager:
 
     def get_version_prompt(self, resource_type: str, resource_id: str, version: int) -> str | None:
         """
+        Get the prompt of the given version
+
+        Args:
+            resource_type: resource type
+            resource_id: resource ID
+            version: version number
+
+        Returns:
+            Prompt text, None when it does not exist
+
         获取指定版本的 prompt
 
         Args:
@@ -1649,6 +1853,20 @@ class VersionManager:
 
     def get_version_created_at(self, resource_type: str, resource_id: str, version: int) -> str | None:
         """
+        Get the storage time of the given version (ISO8601)
+
+        When restoring a historical version, used to write that version's original generation time back into
+        generated_assets instead of stamping "now": what is restored is old content, so derived checks such as voice must
+        hold against the old time.
+
+        Args:
+            resource_type: resource type
+            resource_id: resource ID
+            version: version number
+
+        Returns:
+            ISO8601 timestamp, None when it does not exist
+
         获取指定版本的入库时间（ISO8601）
 
         还原历史版本时用于把该版本的原始生成时间写回 generated_assets，而不是戳成
@@ -1667,6 +1885,15 @@ class VersionManager:
 
     def has_versions(self, resource_type: str, resource_id: str) -> bool:
         """
+        Check whether the resource has version records
+
+        Args:
+            resource_type: resource type
+            resource_id: resource ID
+
+        Returns:
+            Whether there are version records
+
         检查资源是否有版本记录
 
         Args:

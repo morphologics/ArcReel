@@ -1,4 +1,13 @@
-"""市场源的登记与刷新。
+"""Registration and refresh of market sources.
+
+The official market source is the row with ``kind = official`` in the table, seeded at service start and not fetched.
+Adding a third-party source fetches it once and nothing is persisted on failure; deduplication runs before and after
+the fetch, and post-fetch deduplication plus persistence are serialised within the instance. A refresh ends in one of
+five states: success (incl. 304) updates ``fetched_at`` and clears the error; failure only records ``status`` and
+``last_error``, keeping the last successful snapshot. Concurrent refreshes of one source share one request, but a
+manual refresh does not join an in-flight automatic one. No DB session is held during network requests.
+
+市场源的登记与刷新。
 
 官方市场源是表里 ``kind = official`` 的一行，服务启动时 seed、不抓取。添加第三方源即抓取一次，
 失败不落库；判重在抓取前后各做一次，抓取后的判重与落库在实例内串行。刷新落五态之一：成功（含 304）更新 ``fetched_at`` 并清错误；失败只记 ``status`` 与
@@ -31,14 +40,15 @@ logger = logging.getLogger(__name__)
 
 OFFICIAL_SOURCE_ADDRESS = "ArcReel/arcreel-market"
 OFFICIAL_SOURCE_DISPLAY_NAME = "ArcReel Market"
-#: 系统设置：GitHub raw 代理前缀，空串即直连。
+#: System setting: GitHub raw proxy prefix; empty string means direct. / 系统设置：GitHub raw 代理前缀，空串即直连。
 PROXY_PREFIX_SETTING = "market_github_proxy_prefix"
+#: When opening the market page, only enabled sources whose last successful refresh is older than this are auto-refreshed.
 #: 打开市场页时，距上次成功刷新超过该时长的启用源才自动刷新。
 AUTO_REFRESH_AFTER = timedelta(hours=1)
 
 
 class DuplicateSourceError(Exception):
-    """同一规范键的市场源已登记。"""
+    """A market source with the same canonical key is already registered. / 同一规范键的市场源已登记。"""
 
 
 @dataclass(frozen=True)
@@ -48,7 +58,12 @@ class _InflightRefresh:
 
 
 async def seed_official_source(session: AsyncSession, *, address: str = OFFICIAL_SOURCE_ADDRESS) -> None:
-    """确保官方市场源存在并指向当前地址常量，然后提交；不抓取。
+    """Make sure the official market source exists and points at the current URL constant, then commit; no fetch.
+
+    If it exists, sync the URL; if the index URL or canonical key changed, also drop the old snapshot and refresh state
+    (relative paths in the old snapshot do not belong to the new URL); user-changed display name, enabled state and order are kept.
+
+    确保官方市场源存在并指向当前地址常量，然后提交；不抓取。
 
     已存在时同步地址；索引地址或规范键变了还会丢弃旧快照与刷新状态（旧快照里的相对路径不属于新地址），
     用户改过的显示名、启用状态与顺序保留。
@@ -90,7 +105,9 @@ def is_stale(source: MarketSource, now: datetime) -> bool:
 
 
 class MarketSourceService:
-    """添加与刷新市场源。添加串行与刷新去重按实例维持，生产环境经 :func:`get_market_source_service` 共享一个实例。"""
+    """Add and refresh market sources. Add serialisation and refresh deduplication are per instance; in production one instance is shared via :func:`get_market_source_service`.
+
+    添加与刷新市场源。添加串行与刷新去重按实例维持，生产环境经 :func:`get_market_source_service` 共享一个实例。"""
 
     def __init__(
         self,
@@ -106,7 +123,14 @@ class MarketSourceService:
         self._add_lock = asyncio.Lock()
 
     async def add_source(self, address: str, display_name: str | None = None) -> MarketSource:
-        """解析地址、抓取并整份判定索引，成功才落库。
+        """Parse the URL, fetch and fully judge the index; persist only on success.
+
+        Raises:
+            SourceAddressError: the URL form is not accepted.
+            DuplicateSourceError: the same canonical key is already registered.
+            MarketFetchError: the fetch failed or the index is unusable.
+
+        解析地址、抓取并整份判定索引，成功才落库。
 
         Raises:
             SourceAddressError: 地址形态不被接受。
@@ -155,7 +179,13 @@ class MarketSourceService:
             return source
 
     async def refresh_source(self, source_id: int, *, manual: bool) -> MarketSource | None:
-        """刷新一个启用源，返回刷新后的行；源不存在时返回 None，禁用时原样返回。
+        """Refresh one enabled source and return the refreshed row; None if the source does not exist, unchanged if disabled.
+
+        Manual refresh sends no ETag and bypasses the edge cache; automatic refresh sends ``If-None-Match``. If a refresh of
+        the same source is already in flight, wait for its result; if the in-flight one is automatic and this one manual, run
+        another manual refresh after it.
+
+        刷新一个启用源，返回刷新后的行；源不存在时返回 None，禁用时原样返回。
 
         手动刷新不带 ETag 并绕过边缘缓存；自动刷新带 ``If-None-Match``。同一源已有刷新在途时
         等待那一次的结果；在途的是自动刷新而本次是手动刷新时，排在它之后再做一次手动刷新。
@@ -185,7 +215,11 @@ class MarketSourceService:
         return await self._refresh(source_id, manual=manual)
 
     async def refresh_all(self, *, stale_only: bool) -> list[MarketSource]:
-        """并行刷新全部启用源，按源顺序返回刷新过的行。
+        """Refresh all enabled sources in parallel and return the refreshed rows in source order.
+
+        ``stale_only`` is the automatic refresh: only sources whose last successful refresh is older than :data:`AUTO_REFRESH_AFTER`.
+
+        并行刷新全部启用源，按源顺序返回刷新过的行。
 
         ``stale_only`` 为自动刷新：只刷距上次成功刷新超过 :data:`AUTO_REFRESH_AFTER` 的源。
         """
@@ -227,6 +261,7 @@ class MarketSourceService:
         async with self._session_factory() as session:
             source = await MarketSourceRepository(session).get(source_id)
             if source is None or source.index_url != index_url:
+                # The source was deleted during the fetch and its id reused by a new source, or the official source URL moved: the result does not belong to this row
                 # 抓取期间源被删除后 id 被新源复用，或官方源地址已迁移：结果不属于当前这一行
                 return source
             if failure is not None:
@@ -244,7 +279,9 @@ class MarketSourceService:
 
 
 async def _ensure_unregistered(repo: MarketSourceRepository, canonical_key: str) -> None:
-    """按 :func:`source_identity` 判重；数据库唯一约束只认完全相同的规范键，大小写变体靠这里拦。"""
+    """Deduplicate by :func:`source_identity`; the DB unique constraint only matches identical canonical keys, case variants are caught here.
+
+    按 :func:`source_identity` 判重；数据库唯一约束只认完全相同的规范键，大小写变体靠这里拦。"""
     registered = await repo.list_ordered()
     identity = source_identity(canonical_key)
     if any(source_identity(source.canonical_key) == identity for source in registered):
@@ -252,7 +289,9 @@ async def _ensure_unregistered(repo: MarketSourceRepository, canonical_key: str)
 
 
 def _last_error_translate(key: str, **params: Any) -> str:
-    """``last_error`` 记的是技术原因，与界面语言无关，固定用英文渲染。"""
+    """``last_error`` records a technical reason independent of the UI language, always rendered in English.
+
+    ``last_error`` 记的是技术原因，与界面语言无关，固定用英文渲染。"""
     return _(key, locale="en", **params)
 
 
@@ -264,7 +303,7 @@ _service: MarketSourceService | None = None
 
 
 def get_market_source_service() -> MarketSourceService:
-    """进程内共享的服务实例：并发刷新去重依赖同一个实例。"""
+    """Service instance shared in process: concurrent refresh deduplication depends on a single instance. / 进程内共享的服务实例：并发刷新去重依赖同一个实例。"""
     global _service
     if _service is None:
         from lib.db import async_session_factory

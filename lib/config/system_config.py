@@ -177,6 +177,8 @@ class SystemConfigManager:
             raw = self.paths.config_path.read_text(encoding="utf-8")
             data = json.loads(raw)
         except (OSError, json.JSONDecodeError) as exc:
+            # TODO(multi-user): JSONDecodeError messages may contain config file fragments (including API keys);
+            # multi-user scenarios need to sanitize log content.
             # TODO(multi-user): JSONDecodeError 可能在消息中包含 config 文件片段（含 API key），
             # 多用户场景需 sanitize 日志内容。
             logger.warning("Failed to read system config, using empty overrides: %s", exc)
@@ -208,6 +210,7 @@ class SystemConfigManager:
             overrides.pop("storyboard_max_workers", None)
             migrated = True
 
+        # Migration: old AI Studio 001 suffix -> preview (001 is only used by Vertex)
         # Migration: AI Studio 旧 001 后缀 -> preview（001 仅 Vertex 使用）
         _model_migration = {
             "veo-3.1-generate-001": "veo-3.1-generate-preview",
@@ -246,6 +249,8 @@ class SystemConfigManager:
             tmp_path = Path(tmp.name)
 
         os.replace(tmp_path, self.paths.config_path)
+        # chmod 0o600 on Windows only clears/sets the read-only bit and cannot restrict other users' access;
+        # Windows credential file permissions rely on filesystem ACLs (user-level %LOCALAPPDATA%) instead.
         # chmod 0o600 在 Windows 上只会清/设只读位，无法限制其他用户访问；
         # Windows 凭证文件权限交给文件系统 ACL（用户级 %LOCALAPPDATA%）兜底。
         if os.name == "posix":
@@ -294,6 +299,9 @@ class SystemConfigManager:
 
     def apply(self) -> dict[str, Any]:
         """Load overrides (and migrate). Returns overrides.
+
+        Provider keys are no longer written to os.environ — the source of truth is the DB; callers get values explicitly via
+        ``lib.config.service``.
 
         Provider 密钥不再写 os.environ — 真相源是 DB，调用方通过
         ``lib.config.service`` 显式拿值。

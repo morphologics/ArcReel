@@ -1,4 +1,11 @@
-"""AgnesImageBackend — Agnes 图像生成后端（单步同步，OpenAI 兼容）。
+"""AgnesImageBackend — Agnes image generation backend (single-step synchronous, OpenAI compatible).
+
+Uses the OpenAI-compatible ``/images/generations`` synchronous endpoint on the apihub gateway: a single POST returns the
+image URL or base64 directly, which is immediately persisted as a local asset. T2I and I2I share the same endpoint; I2I
+sends the reference images in the request body. 2.1 computes ``size: WxH`` precisely per ADR 0011 aspect_size and sends
+it explicitly; 2.5 sends a ``size`` tier + ``ratio`` instead.
+
+AgnesImageBackend — Agnes 图像生成后端（单步同步，OpenAI 兼容）。
 
 走 apihub 网关上的 OpenAI 兼容 ``/images/generations`` 同步端点：单次 POST 直接返回图片
 URL 或 base64，立即落地为本地资产。T2I 与 I2I 共用同一端点，I2I 把参考图随请求体下发。
@@ -40,18 +47,23 @@ DEFAULT_MODEL = "agnes-image-2.5-flash"
 
 _IMAGE_ENDPOINT = "/images/generations"
 
+# Size constraints: width and height divisible by 8, long edge capped at 2048 (conservative, covering common flash image tiers). Without image_size
+# it falls back to the 2K short edge, giving 1152x2048 in portrait after the long-edge cap.
 # 尺寸约束：长宽被 8 整除、长边收口 2048（保守值，覆盖常见 flash 图像档）。缺 image_size
 # 时按 2K 短边兜底，经长边收口后竖屏得 1152x2048。
 _ROUND_TO = 8
 _MAX_LONG_EDGE = 2048
 _DEFAULT_SHORT = 1440
 
+# Allowlist of scalar fields allowed into logs; prompt only logs its length, image is only counted, base64/URLs never go into logs.
 # 仅允许进日志的标量字段白名单；prompt 仅记长度、image 仅计数，base64/URL 一律不入日志。
 _SAFE_LOG_KEYS = ("model", "size", "n")
 
 
 def _extract_first_str(payload: object, key: str) -> str | None:
-    """从 OpenAI 兼容响应 ``data[].<key>`` 取首个非空字符串（url / b64_json 共用）；无则 None。"""
+    """Take the first non-empty string from ``data[].<key>`` of an OpenAI-compatible response (shared by url / b64_json); None if absent.
+
+    从 OpenAI 兼容响应 ``data[].<key>`` 取首个非空字符串（url / b64_json 共用）；无则 None。"""
     data = payload.get("data") if isinstance(payload, dict) else None
     if isinstance(data, list):
         for item in data:
@@ -63,7 +75,7 @@ def _extract_first_str(payload: object, key: str) -> str | None:
 
 
 def _safe_body_for_log(body: dict) -> dict:
-    """生成安全日志视图：白名单标量 + prompt 仅长度 + image 仅计数。"""
+    """Produce a safe log view: allowlisted scalars + prompt length only + image count only. / 生成安全日志视图：白名单标量 + prompt 仅长度 + image 仅计数。"""
     view: dict = {key: body[key] for key in _SAFE_LOG_KEYS if key in body}
     prompt = body.get("prompt")
     if isinstance(prompt, str):
@@ -75,7 +87,9 @@ def _safe_body_for_log(body: dict) -> dict:
 
 
 class AgnesImageBackend:
-    """Agnes 图像后端（单步同步 OpenAI 兼容 images/generations 端点）。"""
+    """Agnes image backend (single-step synchronous OpenAI-compatible images/generations endpoint).
+
+    Agnes 图像后端（单步同步 OpenAI 兼容 images/generations 端点）。"""
 
     CHANNEL_CAPABILITIES: ClassVar[frozenset[ImageCapability]] = BOTH_IMAGE_CAPABILITIES
 
@@ -105,7 +119,7 @@ class AgnesImageBackend:
         return set(self.CHANNEL_CAPABILITIES)
 
     async def reference_image_limit(self) -> int:
-        # Agnes 不按数量裁剪参考图，全量随请求发出。
+        # Agnes doesn't trim reference images by count; all are sent with the request. / Agnes 不按数量裁剪参考图，全量随请求发出。
         return 0
 
     @staticmethod
@@ -114,7 +128,9 @@ class AgnesImageBackend:
 
     @staticmethod
     def _request_size(model: str, image_size: str | None, aspect_ratio: str) -> str:
-        """请求的 ``size`` 字段：2.5 发档位词，其余发按比例算出的宽高。"""
+        """The request's ``size`` field: 2.5 sends a tier word, others send width and height computed from the ratio.
+
+        请求的 ``size`` 字段：2.5 发档位词，其余发按比例算出的宽高。"""
         if AgnesImageBackend._uses_v25(model):
             return (image_size or "1K").upper()
         short = resolution_to_short_edge(
@@ -125,7 +141,12 @@ class AgnesImageBackend:
 
     @staticmethod
     def _billing_resolution(model: str, size: str) -> str:
-        """Agnes 按输出分辨率档计费：2.5 的 ``size`` 就是档位词；其余发的是宽高，按短边换算成档位。
+        """Agnes bills by output resolution tier: for 2.5 ``size`` is the tier word; others send width and height, converted to a tier by the short edge.
+
+        Width and height are derived from the tier's short edge (``IMAGE_TIER_SHORT_EDGE``) and the long edge is capped
+        within 2048, so a short edge not above the 1K tier's short edge counts as 1K, anything else as 2K.
+
+        Agnes 按输出分辨率档计费：2.5 的 ``size`` 就是档位词；其余发的是宽高，按短边换算成档位。
 
         宽高由档位短边推出（``IMAGE_TIER_SHORT_EDGE``），长边又收口在 2048 以内，所以短边不超过 1K 档短边的
         记 1K，其余记 2K。
@@ -145,6 +166,10 @@ class AgnesImageBackend:
         )
 
     async def generate(self, request: ImageGenerationRequest) -> ImageGenerationResult:
+        # The orchestration layer has no retries: the non-idempotent "create image + bill" submit and the idempotent result download are isolated
+        # in their own retry scopes (_submit / _download_result), so a download failure doesn't fall back to rerunning the generation POST and double billing.
+        # response_format is not sent: the upstream litellm gateway raises UnsupportedParamsError for it;
+        # the response carries both url and b64_json by default, and _persist_image prefers url.
         # 编排层不带重试：把非幂等的「建图 + 计费」submit 与幂等的结果下载隔离到各自的
         # 重试范围（_submit / _download_result），避免下载失败回退到重跑生成 POST 造成重复计费。
         # 不发 response_format：上游 litellm 网关对该参数报 UnsupportedParamsError；
@@ -158,6 +183,8 @@ class AgnesImageBackend:
         if self._uses_v25(self._model):
             payload["ratio"] = request.aspect_ratio
         if request.reference_images:
+            # I2I reference images are sent in the same request body as a list of data URIs (image field). Reading from disk + base64 encoding
+            # (possibly several MB) is offloaded to a thread to avoid blocking the event loop.
             # I2I 参考图随同一请求体下发 data-URI 列表（image 字段）。读盘 + base64 编码
             # （可能数 MB）offload 到线程，避免阻塞事件循环。
             payload["image"] = await asyncio.to_thread(self._build_reference_images, request)
@@ -180,7 +207,14 @@ class AgnesImageBackend:
 
     @with_retry_async(retry_if=should_retry_submit)
     async def _submit(self, payload: dict) -> dict:
-        """单步图像生成 POST（非幂等「建图 + 计费」），返回解析后的响应体。
+        """Single-step image generation POST (non-idempotent "create image + bill"), returning the parsed response body.
+
+        The retry scope is strictly limited to this method, excluding the download -- a download failure never triggers a retry
+        of the whole flow causing duplicate images and double billing. submit_post turns ambiguous transport errors into a
+        terminal AmbiguousSubmitError to avoid double billing; >=400 logs the body + raises HTTPStatusError, for
+        should_retry_submit to route by status code.
+
+        单步图像生成 POST（非幂等「建图 + 计费」），返回解析后的响应体。
 
         重试范围严格限定在本方法内、不含下载——下载失败不会触发整流程重试导致重复建图与
         重复计费。submit_post 把歧义传输错误转 AmbiguousSubmitError 终态失败避免重复计费；
@@ -204,13 +238,19 @@ class AgnesImageBackend:
             return resp.json()
 
     def _build_reference_images(self, request: ImageGenerationRequest) -> list[str]:
-        """构建 I2I 参考图列表（data-URI base64）。
+        """Build the I2I reference image list (data-URI base64).
+
+        If any reference image is missing / fails to read it fails loud with image_reference_images_unreadable, so the user
+        notices an image wasn't used rather than it being silently dropped and billed as usual.
+
+        构建 I2I 参考图列表（data-URI base64）。
 
         任一参考图缺失 / 读取失败即 fail-loud，报 image_reference_images_unreadable，让用户
         感知有图未被使用而非静默丢弃后照常计费。
         """
         uris: list[str] = []
         for idx, ref in enumerate(request.reference_images, start=1):
+            # An empty path has no file name to display, so use an index to identify it, avoiding a Chinese placeholder leaking into non-Chinese error templates.
             # 空路径无文件名可显示，用序号标识，避免中文占位漏进非中文报错模板。
             path = Path(ref.path) if ref.path else None
             if path is None or not path.is_file():
@@ -229,7 +269,13 @@ class AgnesImageBackend:
         return uris
 
     async def _persist_image(self, data: dict, output_path: Path) -> str | None:
-        """把 images/generations 响应落地为本地文件，返回远端 URL（base64 路径返回 None）。
+        """Persist the images/generations response as a local file, returning the remote URL (None for the base64 path).
+
+        Prefer the URL (download immediately); when the URL is missing or the download fails, degrade to decoding the base64 in
+        the same response and writing it, so a successful, already-billed generation isn't lost because of the download step;
+        error if both are empty.
+
+        把 images/generations 响应落地为本地文件，返回远端 URL（base64 路径返回 None）。
 
         优先 URL（立即下载）；URL 缺失或下载失败时降级到同响应内 base64 解码写盘，
         避免一次已计费的成功生成因下载环节失败而无法落盘；两者皆空即报错。
@@ -249,6 +295,9 @@ class AgnesImageBackend:
             await _write_base64_image(b64, output_path)
             return None
 
+        # The full response body may contain sensitive fields like prompt / signed URLs; consistent with the request log redaction policy, only key names and
+        # the data count are logged, not the whole body; exception messages don't embed the body either -- so "503"/"timeout" substrings aren't misjudged
+        # as retryable by the default should_retry (the repo has established retry decisions by status code rather than strings).
         # 完整响应体可能含 prompt / 签名 URL 等敏感字段，与请求日志脱敏策略一致：只记键名与
         # data 条数，不落整 body；异常消息同样不嵌 body——避免 "503"/"timeout" 子串被默认
         # should_retry 误判为可重试（仓库已确立按状态码而非字符串判重试）。
@@ -261,7 +310,13 @@ class AgnesImageBackend:
         raise RuntimeError("Agnes 图像响应缺少 url/b64_json")
 
     async def _download_result(self, url: str, output_path: Path) -> None:
-        """下载已签发的结果图 URL（幂等 GET），走共用的产物下载预算。
+        """Download the issued result image URL (idempotent GET), using the shared artifact download budget.
+
+        Transient failures are retried at this layer, never falling back to rerunning the non-idempotent generation POST. The
+        shared predicate also counts 403/404 as retryable: an artifact URL just issued at the terminal state may not have
+        propagated on the object storage side yet. Other 4xx are deterministic failures.
+
+        下载已签发的结果图 URL（幂等 GET），走共用的产物下载预算。
 
         瞬态失败在本层重试，绝不回退到重跑非幂等的生成 POST。共用谓词把 403/404 也算作
         可重试：终态刚签发的产物地址可能尚未在对象存储侧传播。其余 4xx 确定性失败。
@@ -270,7 +325,11 @@ class AgnesImageBackend:
 
 
 async def _write_base64_image(b64: str, output_path: Path) -> None:
-    """解码 base64 图片并写盘（解码 + 写盘 offload 到线程）。
+    """Decode a base64 image and write it to disk (decoding + writing offloaded to a thread).
+
+    Tolerates a few relays returning a data URI (``data:image/...;base64,<payload>``): the prefix is stripped before decoding.
+
+    解码 base64 图片并写盘（解码 + 写盘 offload 到线程）。
 
     容忍少数中转返回 data URI（``data:image/...;base64,<payload>``）：剥前缀后再解码。
     """

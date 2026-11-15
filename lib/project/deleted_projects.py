@@ -1,4 +1,18 @@
-"""已删除项目：被整体删除、仍可恢复的项目（``docs/adr/0107``）。
+"""Deleted projects: projects deleted as a whole that can still be restored (``docs/adr/0107``).
+
+Project deletion and overwrite import move the whole project directory (together with its project trash) to
+``deleted_projects/<tombstone name>/`` under the data root. The directory name is the tombstone name the database
+records were re-pointed to (``lib.db.repositories.project_records``), and restore uses it to point the records
+back. Kept for 30 days from deletion; restore moves it back into the projects directory as a whole, adding a
+suffix if the original name is taken, then runs the same migration chain as at startup.
+
+Both restore and permanent deletion first rename the directory as a whole; whoever renames first wins, the other
+gets "not found", so a half-deleted project is never moved back.
+
+This is where deleted projects are actually deleted; the hard-delete check in ``scripts/audit_conventions.py``
+exempts this module.
+
+已删除项目：被整体删除、仍可恢复的项目（``docs/adr/0107``）。
 
 项目删除与覆盖导入把整个项目目录（连同它的项目回收站）移到数据根的 ``deleted_projects/<墓碑名>/``。
 目录名就是数据库里改挂记录的墓碑名（``lib.db.repositories.project_records``），恢复时据此把记录改回。
@@ -45,7 +59,10 @@ _PURGING_PREFIX = ".purging-"
 
 @dataclass(frozen=True, slots=True)
 class DeletedProject:
-    """一个已删除项目。``id`` 是它的墓碑名，``name`` 是删除前的项目名，``size`` 是目录占用的字节数。"""
+    """A deleted project. ``id`` is its tombstone name, ``name`` the project name before deletion, ``size`` the bytes
+    used by the directory.
+
+    一个已删除项目。``id`` 是它的墓碑名，``name`` 是删除前的项目名，``size`` 是目录占用的字节数。"""
 
     id: str
     name: str
@@ -65,25 +82,37 @@ class DeletedProject:
 
 
 def move_in(layout: DataRootLayout, project_dir: Path, tombstone: str) -> Path:
-    """把 ``project_dir`` 整体移成已删除项目 ``tombstone``，返回它的新位置；同名的已删除项目已存在时报错。"""
+    """Move ``project_dir`` as a whole into deleted project ``tombstone`` and return its new location; error if a
+    deleted project with the same name already exists.
+
+    把 ``project_dir`` 整体移成已删除项目 ``tombstone``，返回它的新位置；同名的已删除项目已存在时报错。"""
     target = layout.deleted_projects_dir / tombstone
     layout.deleted_projects_dir.mkdir(parents=True, exist_ok=True)
     if target.exists():
         raise FileExistsError(target)
+    # If the rename fails (e.g. files in the project still open on Windows), re-raise as-is; the caller rolls back the
+    # records and the project stays in place.
     # 改名失败（如 Windows 上项目里仍有文件被打开）时原样抛出，调用方回滚记录，项目留在原处。
     project_dir.rename(target)
     return target
 
 
 def move_back(layout: DataRootLayout, project_dir: Path, tombstone: str) -> None:
-    """撤销 :func:`move_in`：记录没能提交时把已删除项目 ``tombstone`` 移回 ``project_dir``；没移走过时什么都不做。"""
+    """Undo :func:`move_in`: when the records could not be committed, move deleted project ``tombstone`` back to
+    ``project_dir``; does nothing if it was never moved.
+
+    撤销 :func:`move_in`：记录没能提交时把已删除项目 ``tombstone`` 移回 ``project_dir``；没移走过时什么都不做。"""
     moved = layout.deleted_projects_dir / tombstone
     if moved.is_dir() and not (project_dir.exists() or project_dir.is_symlink()):
         moved.rename(project_dir)
 
 
 def list_entries(layout: DataRootLayout) -> list[DeletedProject]:
-    """全部已删除项目，最近删除的在前。
+    """All deleted projects, most recently deleted first.
+
+    Walks each project directory to compute disk usage, which is blocking disk I/O: async callers run it in a thread.
+
+    全部已删除项目，最近删除的在前。
 
     逐个遍历项目目录统计占用空间，是阻塞的磁盘 I/O：异步调用方放进线程执行。
     """
@@ -110,13 +139,17 @@ def list_entries(layout: DataRootLayout) -> list[DeletedProject]:
 
 
 def move_out(layout: DataRootLayout, entry_id: str) -> Path:
-    """把已删除项目整体移回项目目录，返回恢复后的项目目录：原名空闲则沿用，被占用则加 ``-2``、``-3`` 后缀。"""
+    """Move a deleted project back into the projects directory as a whole and return the restored project directory:
+    keep the original name if free, otherwise add a ``-2``, ``-3`` suffix.
+
+    把已删除项目整体移回项目目录，返回恢复后的项目目录：原名空闲则沿用，被占用则加 ``-2``、``-3`` 后缀。"""
     source, name = _require(layout, entry_id)
     candidate, suffix = name, 2
-    # 大小写不敏感的盘上 exists() 同样认出只差大小写的现有项目。
+    # exists() on a case-insensitive disk also recognizes existing projects that differ only in case. / 大小写不敏感的盘上 exists() 同样认出只差大小写的现有项目。
     while (layout.projects_dir / candidate).exists():
         candidate, suffix = f"{name}-{suffix}", suffix + 1
     target = layout.projects_dir / candidate
+    # shortcut: there is a tiny window between the duplicate check and the rename, and POSIX rename would replace an empty project directory created at that instant; if reports of concurrent same-name restore/create appear, serialize with the project lock instead.
     # shortcut: 查重与改名之间有极短窗口，POSIX 的 rename 会顶替同一瞬间新建出的空项目目录；出现同名并发恢复/新建的报告时改用项目锁串行。
     try:
         source.rename(target)
@@ -126,7 +159,13 @@ def move_out(layout: DataRootLayout, entry_id: str) -> Path:
 
 
 def migrate_restored(project_dir: Path, *, recorded_episode_ids: RecordedEpisodeIds | None = None) -> None:
-    """对恢复回来的项目走一遍启动时的迁移链：源文编码迁移，再升级到当前 schema。
+    """Run the startup migration chain on a restored project: source encoding migration, then upgrade to the current
+    schema.
+
+    As at startup, migration failure is not raised: the verdict is stored beside the project, generation entry points
+    refuse work based on it, and the UI shows that migration failed.
+
+    对恢复回来的项目走一遍启动时的迁移链：源文编码迁移，再升级到当前 schema。
 
     与启动时一样，迁移失败不抛出：裁决落在项目旁，生成入口据此拒绝工作，界面提示迁移失败。
     """
@@ -135,7 +174,7 @@ def migrate_restored(project_dir: Path, *, recorded_episode_ids: RecordedEpisode
 
 
 def purge(layout: DataRootLayout, entry_id: str) -> None:
-    """彻底删除一个已删除项目。"""
+    """Permanently delete a deleted project. / 彻底删除一个已删除项目。"""
     source, _name = _require(layout, entry_id)
     claimed = layout.deleted_projects_dir / f"{_PURGING_PREFIX}{entry_id}"
     try:
@@ -146,7 +185,10 @@ def purge(layout: DataRootLayout, entry_id: str) -> None:
 
 
 def purge_expired(layout: DataRootLayout, *, now: datetime | None = None) -> int:
-    """彻底删除超过保留期的已删除项目，返回删除的个数；顺带清掉上次中断的彻底删除留下的目录。"""
+    """Permanently delete deleted projects past the retention period and return how many were deleted; also clears
+    directories left by a previously interrupted permanent deletion.
+
+    彻底删除超过保留期的已删除项目，返回删除的个数；顺带清掉上次中断的彻底删除留下的目录。"""
     cutoff = (now or datetime.now(UTC)) - RETENTION
     purged = 0
     for entry in list_entries(layout):
@@ -163,7 +205,10 @@ def purge_expired(layout: DataRootLayout, *, now: datetime | None = None) -> int
 
 
 def _require(layout: DataRootLayout, entry_id: str) -> tuple[Path, str]:
-    """已删除项目的目录与删除前的项目名；``entry_id`` 只有是墓碑名才拼进路径，拼不出数据根里的其他位置。"""
+    """A deleted project's directory and its name before deletion; ``entry_id`` is joined into the path only if it is a
+    tombstone name, so it can't build any other location under the data root.
+
+    已删除项目的目录与删除前的项目名；``entry_id`` 只有是墓碑名才拼进路径，拼不出数据根里的其他位置。"""
     parsed = parse_deleted_project_name(entry_id)
     path = layout.deleted_projects_dir / entry_id
     if parsed is None or path.is_symlink() or not path.is_dir():

@@ -1,4 +1,10 @@
-"""一集的剪辑概况：制作进度面板「剪辑」行陈述的现状与提醒。
+"""An episode's edit overview: current state and reminders shown in the "Edit" row of the workflow status panel.
+
+Number of edit timelines, the issue count of the most recently modified one (the same issues as in the edit
+timeline readout), and the edit timelines whose final cut is behind: any rendered variant being behind counts.
+Edit timelines that were never rendered do not count as behind.
+
+一集的剪辑概况：制作进度面板「剪辑」行陈述的现状与提醒。
 
 剪辑时间线条数、最近修改那条的问题数（与剪辑时间线读取结果的 issues 同一份），以及成片已落后于
 剪辑时间线的那几条：渲染过的任一版本落后就算。从未出片的剪辑时间线不算落后。
@@ -34,9 +40,9 @@ class EpisodeEditOverview(BaseModel):
 
     episode: int
     timeline_count: int
-    #: 最近修改的那条；该集还没有剪辑时间线时为 None。
+    #: The most recently modified one; None when the episode has no edit timeline yet. / 最近修改的那条；该集还没有剪辑时间线时为 None。
     latest: LatestTimeline | None
-    #: 成片已落后于剪辑时间线的那几条，按创建顺序。
+    #: Edit timelines whose final cut is behind, in creation order. / 成片已落后于剪辑时间线的那几条，按创建顺序。
     stale_final_cuts: tuple[TimelineRef, ...]
 
 
@@ -62,6 +68,7 @@ async def episode_edit_overview(projects: ProjectManager, project_name: str, epi
     stale: list[TimelineRef] = []
     for summary in summaries:
         for variant in FINAL_CUT_VARIANTS:
+            # Only compare rendered variants: variants without a file read as missing and need no basis rebuild.
             # 只比对渲染过的版本：没有文件的版本读 missing，不必为它重建依据。
             if (summary.id, variant) not in rendered:
                 continue

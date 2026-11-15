@@ -8,13 +8,19 @@ from lib.backends.ark_shared import ARK_BASE_URL
 from lib.backends.dashscope_shared import DASHSCOPE_BASE_URL
 from lib.backends.minimax_shared import MINIMAX_BASE_URL
 
+# Legal concurrency lane names, aligned with CapacityTable's three capacity channels image/video/audio.
 # 合法并发 lane 名，与 CapacityTable 的 image/video/audio 三条容量通道对齐。
 _VALID_LANES = frozenset({"image", "video", "audio"})
 
 
 @dataclass(frozen=True)
 class ProviderMeta:
-    """一个内置供应商的代码事实：显示名、凭证形态、默认地址与各条 lane 的出厂并发。
+    """Code facts of one built-in provider: display name, credential shape, default address and factory concurrency per lane.
+
+    The provider's model list, default model, model capabilities and prices are not here; they are read via catalog
+    queries (``lib.catalog.query``).
+
+    一个内置供应商的代码事实：显示名、凭证形态、默认地址与各条 lane 的出厂并发。
 
     供应商的模型清单、默认模型、模型能力与价格不在这里，经目录查询（``lib.catalog.query``）读取。
     """
@@ -25,12 +31,21 @@ class ProviderMeta:
     optional_keys: list[str] = field(default_factory=list)
     secret_keys: list[str] = field(default_factory=list)
     default_base_url: str | None = None
+    # Credential "either-or" groups: when non-empty, the credential form validates "any one group satisfied" (all fields in
+    # the group filled) instead of the default "all of required_keys ∩ secret_keys filled". Currently only Kling needs it
+    # (single api_key / access_key+secret_key pair, either-or); an empty list (default) keeps the original semantics, with
+    # the router falling back to [[all secret fields]] as a single required group. Every declared key must be a subset of
+    # required_keys ∩ secret_keys, checked in __post_init__, misconfig fails fast.
     # 凭证「二选一」分组：非空时凭证表单按「满足任一组」校验（组内字段全填），而非默认的
     # 「required_keys ∩ secret_keys 全填」。目前仅可灵需要（api_key 单键 / access_key+secret_key
     # 双键二选一）；空列表（默认）保持原语义不变，由 router 按
     # [[全部 secret 字段]] 回退成单一必填组。声明的每个 key 须是 required_keys ∩ secret_keys 的
     # 子集，在 __post_init__ 校验，misconfig fail-fast。
     credential_groups: list[list[str]] = field(default_factory=list)
+    # Factory default concurrency limits declared per lane (image / video / audio); a lane not listed uses the global
+    # default. Capacity fallback priority: user-configured value > default declared here > global default. Declaring an
+    # unsupported lane is harmless — _lane_limits projects unsupported lanes to 0 by media_types. Key names and limit values
+    # are checked in __post_init__.
     # 按 lane（image / video / audio）声明的出厂默认并发上限；某条 lane 未列入则该 lane
     # 走全局默认。容量回退优先级：用户配置值 > 此处声明默认 > 全局默认。声明给不支持的
     # lane 无害——_lane_limits 会按 media_types 把不支持的 lane 投影为 0。键名与上限值在
@@ -38,6 +53,10 @@ class ProviderMeta:
     default_concurrency: dict[str, int] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
+        # default_concurrency is a static registry declaration: a misspelled lane key would be silently ignored and that lane
+        # drift back to the global default (concurrency limit lost), and a non-positive limit becomes capacity<=0 after
+        # projection, misjudging a supported lane as unsupported. Both are author typos that should fail fast at import time,
+        # not surface only when a worker loads the capacity table.
         # default_concurrency 是注册表静态声明：拼错的 lane key 会被静默忽略、该 lane 漂回
         # 全局默认（限并发失效），非正整数上限则在投影后变成 capacity<=0、把支持的 lane 误判为
         # 不支持。这两类都是 import 期就该 fail-fast 的作者笔误，而非到 worker 装载容量表时才暴露。
@@ -46,6 +65,9 @@ class ProviderMeta:
                 raise ValueError(
                     f"{self.display_name} default_concurrency 含未知 lane {lane!r}，合法值：{sorted(_VALID_LANES)}"
                 )
+            # The registry is hand-written static data and Python does not enforce annotations at runtime; exact type checks catch author typos.
+            # bool is a subclass of int, isinstance(True, int) is true and would silently let True through as concurrency 1; the
+            # string "1" and the float 3.0 also violate the declared type. type() is int blocks all of these at import time.
             # 注册表是手写静态数据，运行时 Python 不强制注解；用精确类型判定兜住作者笔误。
             # bool 是 int 子类，isinstance(True, int) 为真会把 True 当并发 1 静默放行；字符串
             # "1"、浮点 3.0 同样违反声明类型。type() is int 把这几类一并挡在 import 期。
@@ -55,6 +77,8 @@ class ProviderMeta:
             allowed = set(self.required_keys) & set(self.secret_keys)
             covered: set[str] = set()
             for group in self.credential_groups:
+                # An empty group would be judged legal by unknown=set(), and the frontend's group.every(...) is always true for an empty
+                # array, misjudging the group as "satisfied" — likewise an author typo to block at import time.
                 # 空分组会被 unknown=set() 判定为合法、前端 group.every(...) 对空数组恒真，
                 # 误判该分组"已满足"——同属 import 期该拦的作者笔误。
                 if not group:
@@ -65,13 +89,21 @@ class ProviderMeta:
                         f"{self.display_name} credential_groups 含未登记为 required∩secret 的 key {sorted(unknown)}"
                     )
                 covered |= set(group)
+            # A key not covered by any group is bound neither by the old "all required" rule nor by any group —
+            # if groups are declared but a key is left unregistered, the frontend would misjudge that key as optional.
             # 未被任何分组覆盖的 key 既不受旧版"全部必填"约束，也不受任何分组约束——
             # 声明了分组却漏登记某个 key，前端会误判该 key 为可选。
             if covered != allowed:
                 raise ValueError(f"{self.display_name} credential_groups 未覆盖 {sorted(allowed - covered)}")
 
     def fully_covered_credential_groups(self, values: Mapping[str, str | None]) -> list[list[str]]:
-        """返回被 ``values`` 完整覆盖的凭证组（组内所有 key 均非空）。
+        """Return the credential groups fully covered by ``values`` (every key in the group non-empty).
+
+        Drives the group-switch decision of the credential create/update endpoints: for providers that declare no
+        credential_groups (the vast majority) this list is always empty, and callers keep the original "no group switching"
+        semantics accordingly.
+
+        返回被 ``values`` 完整覆盖的凭证组（组内所有 key 均非空）。
 
         驱动凭证创建/更新端点的切组判定：未声明 credential_groups 的 provider
         （绝大多数）该列表恒为空，调用方据此保持"不做切组处理"的原语义不变。
@@ -151,6 +183,9 @@ PROVIDER_REGISTRY: dict[str, ProviderMeta] = {
         display_name="阿里百炼",
         description="阿里云百炼（Model Studio）全模态平台，支持 Qwen 文本、Qwen-Image / 万相图像与 HappyHorse / 万相视频（含参考生视频）。",
         required_keys=["api_key"],
+        # wan3_base_url: Wan 3.0 uses a separate maas domain that contains region and workspace,
+        # which cannot be derived from the generic base_url, hence a separate key. Only wan3.0-video requests consume it (see
+        # lib/backends/video_backends/dashscope.py); if empty, that model falls back to the generic base_url.
         # wan3_base_url：万相 3.0 走独立 maas 域名，且域名里含地域与 workspace，
         # 无法由通用 base_url 派生，故单列一键。仅 wan3.0-video 的请求消费它（见
         # lib/backends/video_backends/dashscope.py），留空则该模型回落通用 base_url。
@@ -172,15 +207,22 @@ PROVIDER_REGISTRY: dict[str, ProviderMeta] = {
             "快手可灵 Kling 视频与图像生成平台。API Key（Bearer）适用于全部模型；"
             "Access Key + Secret Key（JWT）仅适用于 3.0 及更早模型，二者二选一，同时填写时 API Key 优先。"
         ),
+        # The first built-in provider needing two secret strings (JWT HS256 auth); credentials are stored by registry key name
+        # in the typed access_key / secret_key columns of provider_credential (see ADR 0037). api_key reuses the table's
+        # existing typed api_key column (where other providers' static Bearer keys go), no new migration needed.
         # 首个需要两个 secret 字符串的内置供应商（JWT HS256 鉴权），凭证按 registry key 名
         # 存入 provider_credential 的 access_key / secret_key 定型列（见 ADR 0037）。api_key 复用
         # 该表已有的 api_key 定型列（其余 provider 的静态 Bearer key 同列），无需新迁移。
         required_keys=["api_key", "access_key", "secret_key"],
         optional_keys=["base_url", "image_max_workers", "video_max_workers"],
         secret_keys=["api_key", "access_key", "secret_key"],
+        # Single api_key / access_key+secret_key pair, either-or (official API Key auth works for all models, AK/SK JWT
+        # only for 3.0 and earlier models); when both are filled, backend_assembly dispatches with api_key first.
         # api_key 单键 / access_key+secret_key 双键二选一（官方 API Key 鉴权全模型可用，AK/SK JWT
         # 仅 3.0 及更早模型）；同时填写时 backend_assembly 按 api_key 优先分派。
         credential_groups=[["api_key"], ["access_key", "secret_key"]],
+        # The official domestic API domain has moved from api.klingai.com to api-beijing.klingai.com (the old domain still
+        # works and has not been forcibly retired); this only affects new users who have not set base_url explicitly, existing explicit configs are unaffected.
         # 国内调用域名官方已由 api.klingai.com 迁移至 api-beijing.klingai.com（旧域名仍可用，
         # 未强制下线）；仅影响未显式配置 base_url 的新用户，存量显式配置不受影响。
         default_base_url="https://api-beijing.klingai.com/v1",
@@ -192,6 +234,8 @@ PROVIDER_REGISTRY: dict[str, ProviderMeta] = {
         optional_keys=["base_url", "image_max_workers", "video_max_workers"],
         secret_keys=["api_key"],
         default_base_url=AGNES_BASE_URL,
+        # The Agnes video upstream is sensitive to concurrency; the factory default is serial (default 1) to avoid provoking 503 Service busy;
+        # users can override via video_max_workers. Other lanes are not declared and use the global default.
         # Agnes 视频上游对并发敏感，出厂串行（默认 1）避免主动制造 503 Service busy；
         # 用户可经 video_max_workers 覆盖。其余 lane 未声明，走全局默认。
         default_concurrency={"video": 1},

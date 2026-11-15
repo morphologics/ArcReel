@@ -1,4 +1,4 @@
-"""OpenAIVideoBackend — OpenAI Sora 视频生成后端。"""
+"""OpenAIVideoBackend — OpenAI Sora video generation backend. / OpenAIVideoBackend — OpenAI Sora 视频生成后端。"""
 
 from __future__ import annotations
 
@@ -40,10 +40,17 @@ from lib.infra.retry import with_retry_async
 
 logger = logging.getLogger(__name__)
 
+# Sora's input_reference only takes a single file; the first frame and reference images share this one slot; both the capability declaration and the pre-submit check read it.
 # Sora 的 input_reference 只收单个文件，首帧与参考图共用这一槽位；能力声明与提交前检查都读它。
 _INPUT_REFERENCE_SLOTS = 1
 
 
+# Legal sora sizes are tiered by model capability + resolution tier (OpenAI official changelog / model pages):
+# - sora-2 (base): 720p only — 9:16 720x1280 / 16:9 1280x720.
+# - sora-2-pro: 720p as above + 1080p — 9:16 1080x1920 / 16:9 1920x1080.
+# The SDK's VideoSize Literal lags behind (only lists 720/1024 tiers, misses 1080); the official model page wins;
+# legal tiers exclude 1024x1792 / 1792x1024 (4:7, violates ratio-first; the exact 1080p tier already covers that use).
+# Not arbitrary WxH, only snapping to legal tiers: pick the tier ratio-first; the resolution tier only decides the 720p vs 1080p subset (sharpness second).
 # sora 合法 size 按 model 能力 + 分辨率档分级（OpenAI 官方 changelog / 模型页）：
 # - sora-2（base）：仅 720p —— 9:16 720x1280 / 16:9 1280x720。
 # - sora-2-pro：720p 同上 + 1080p —— 9:16 1080x1920 / 16:9 1920x1080。
@@ -52,13 +59,20 @@ _INPUT_REFERENCE_SLOTS = 1
 # 非任意 WxH，只能吸附合法档：比例优先选档，分辨率档只决定 720p vs 1080p 子集（清晰度其次）。
 _SORA_SIZES_720P: tuple[str, ...] = ("720x1280", "1280x720")
 _SORA_SIZES_1080P: tuple[str, ...] = ("1080x1920", "1920x1080")
-# 向后兼容的并集导出（外部/测试引用「全部合法档」）。
+# Backward-compatible union export (external code/tests refer to "all legal tiers"). / 向后兼容的并集导出（外部/测试引用「全部合法档」）。
 _SORA_LEGAL_SIZES: tuple[str, ...] = _SORA_SIZES_720P + _SORA_SIZES_1080P
 _SORA_1080P_MIN_SHORT = 1080
 
 
 def _video_status(video: object) -> ProviderJobStatus:
-    """SDK Video 对象 → canonical 状态。
+    """SDK Video object → canonical status.
+
+    This endpoint serves both built-in Sora and custom providers' openai-video protocol: official Sora only sends
+    ``queued`` / ``in_progress`` / ``completed`` / ``failed``, but OpenAI-compatible proxy gateways forwarding non-Sora
+    models pass through the underlying vendor's status strings (e.g. ``succeeded``), so everything goes through the
+    shared normalization.
+
+    SDK Video 对象 → canonical 状态。
 
     本端点同时服务内置 Sora 与自定义供应商的 openai-video 协议：官方 Sora 只发
     ``queued`` / ``in_progress`` / ``completed`` / ``failed``，而 OpenAI 兼容代理网关转发
@@ -68,7 +82,15 @@ def _video_status(video: object) -> ProviderJobStatus:
 
 
 def _video_error_message(video: object) -> str:
-    """SDK Video 对象 → 供应商失败原因文本；取不到返回 unknown。
+    """SDK Video object → provider failure reason text; unknown when unavailable.
+
+    This sentence goes verbatim into ``task.error_message`` and is the whole reason the user reads in the task panel, so
+    fields are taken explicitly instead of interpolating the whole object: ``Video.error`` is a model with ``code`` /
+    ``message``, and interpolating it directly would write class and field names to the user; ``None`` (the common form
+    where the gateway gives only status, no error) would write a failure without a reason. Bare dicts / bare strings
+    passed through by proxy gateways are recognized too; unrecognized forms are all unknown.
+
+    SDK Video 对象 → 供应商失败原因文本；取不到返回 unknown。
 
     这句话原样落进 ``task.error_message``，是用户在任务面板读到的全部原因，故显式取字段而不是
     插值整个对象：``Video.error`` 是带 ``code`` / ``message`` 的模型，直接插值会把类名与字段名
@@ -87,15 +109,24 @@ def _video_error_message(video: object) -> str:
     for value in candidates:
         if isinstance(value, str) and value.strip():
             return value.strip()
+        # Numeric error codes (bare HTTP codes are common from gateways) are reasons too; don't drop them just because they are not strings
         # 数字错误码（网关常见的裸 HTTP 码）也是原因，别因为不是字符串就丢掉
         if isinstance(value, int) and not isinstance(value, bool):
             return str(value)
+    # If an unrecognized form gives no reason, say unknown: writing the object's own repr into the task panel says nothing
     # 认不出的形态说不出原因就说 unknown：把对象自身的 repr 写进任务面板等于没说
     return "unknown"
 
 
 def _resolve_size(model: str, resolution: str | None, aspect_ratio: str) -> str:
-    """比例优先：在 model+分辨率档对应的 sora 合法档中选比例最接近 aspect_ratio 的；并列取像素更高者。
+    """Ratio first: among the legal sora tiers for model+resolution tier, pick the one whose ratio is closest to aspect_ratio; ties go to more pixels.
+
+    The resolution tier only decides the 720p vs 1080p subset, not the ratio: sora-2-pro choosing 1080p gives
+    9:16→1080x1920 (exact and high-res), sora-2 (base) or missing resolution lands on 720p (missing resolution defaults to
+    720P, no unilateral upgrade to 1080p to avoid overbilling). size is always sent to lock the ratio; never "no size →
+    upstream default ratio". Other ratios (1:1/21:9 etc.) have no sora tier and warn after snapping.
+
+    比例优先：在 model+分辨率档对应的 sora 合法档中选比例最接近 aspect_ratio 的；并列取像素更高者。
 
     分辨率档只决定 720p vs 1080p 子集、不决定比例：sora-2-pro 选 1080p 时 9:16→1080x1920（精确且高清），
     sora-2（base）或缺分辨率时落 720p（缺分辨率默认 720P，不擅自升 1080p 以免超额计费）。size 必传以锁定
@@ -105,12 +136,15 @@ def _resolve_size(model: str, resolution: str | None, aspect_ratio: str) -> str:
     target = aw / ah
     is_pro = "pro" in model.lower()
     short = resolution_to_short_edge(resolution, tier_map=VIDEO_TIER_SHORT_EDGE)
+    # Short-side tiers sora supports: base only 720; pro adds 1080. Pick by "nearest tier" (equidistant goes higher), to
+    # avoid needlessly dropping custom resolution values like short=1000 to 720p (floor would drop wrongly, nearest does not).
     # sora 支持的短边档：base 仅 720；pro 增 1080。按「最近档」选（等距取更高档），避免把
     # short=1000 这类自定义分辨率值无故降到 720p（floor 会误降，最近档不会）。
     supported_shorts = [720, _SORA_1080P_MIN_SHORT] if is_pro else [720]
     achieved_short = min(supported_shorts, key=lambda s: (abs(s - short), -s))
     legal = _SORA_SIZES_1080P if achieved_short == _SORA_1080P_MIN_SHORT else _SORA_SIZES_720P
     if short > achieved_short:
+        # Request above the model's reachable tier (base asking 1080p, or pro asking 4K): cap it and note that sharpness yields
         # 请求高于模型可达档（base 请 1080p、或 pro 请 4K）：封顶并提示清晰度让位
         logger.warning(
             "OpenAI video: model=%s 无法满足分辨率请求 %s（短边 %d），输出封顶到 %dp 档（清晰度让位比例）",
@@ -122,9 +156,11 @@ def _resolve_size(model: str, resolution: str | None, aspect_ratio: str) -> str:
 
     def _score(size: str) -> tuple[float, int]:
         w, h = (int(x) for x in size.split("x"))
-        return abs(w / h - target), -(w * h)  # 比例差小优先；并列取像素更多
+        return abs(w / h - target), -(w * h)  # smaller ratio difference first; ties go to more pixels / 比例差小优先；并列取像素更多
 
     chosen = min(legal, key=_score)
+    # 9:16 / 16:9 match exactly; other ratios (e.g. 1:1 / 21:9) have no sora tier, so the ratio necessarily deviates after
+    # snapping; warn regardless of the upstream protocol, to avoid silently producing wrong-ratio video (the image path also warns when out of bounds).
     # 9:16 / 16:9 精确命中；其它比例（如 1:1 / 21:9）sora 无对应档，吸附后比例必然偏差，
     # 与上游协议无关地告警，避免静默产出错比例视频（图片路径同样在超界时告警）。
     cw, ch = (int(x) for x in chosen.split("x"))
@@ -134,13 +170,14 @@ def _resolve_size(model: str, resolution: str | None, aspect_ratio: str) -> str:
             aspect_ratio,
             chosen,
         )
+    # Postcondition invariant: only return sizes within the full set of legal sora tiers, so future tier logic changes cannot silently produce an illegal size.
     # 后置不变量：只返回 sora 合法档全集内的尺寸，防止未来改档逻辑时静默产出非法 size。
     assert chosen in _SORA_LEGAL_SIZES, f"_resolve_size produced illegal sora size: {chosen}"
     return chosen
 
 
 class OpenAIVideoBackend(ProviderJobIdPersistenceMixin):
-    """OpenAI Sora 视频生成后端。"""
+    """OpenAI Sora video generation backend. / OpenAI Sora 视频生成后端。"""
 
     def __init__(
         self,
@@ -165,7 +202,17 @@ class OpenAIVideoBackend(ProviderJobIdPersistenceMixin):
 
     @staticmethod
     def video_capabilities_for_model(model: str) -> VideoCapabilities:
-        """按 model_id 纯计算 caps —— 不构造 SDK client（无需 api_key）。
+        """Pure computation of caps from model_id — no SDK client constructed (no api_key needed).
+
+        Sora's input_reference is a single first frame image, so the reference image limit is 1; the first frame and
+        references share that single slot. The Sora 2 series has consistent capabilities and is recognized by name family;
+        other names take name_family's generic fallback. The instance property
+        delegates here, keeping the backend the single source of truth.
+
+        Audio track always on: Sora output comes with an audio track, and the kwargs assembled by ``generate`` have no audio
+        switch field, so the user's intent to turn it off has nowhere to go.
+
+        按 model_id 纯计算 caps —— 不构造 SDK client（无需 api_key）。
 
         Sora input_reference 为单张首帧图，参考图上限为 1；首帧与参考共享该单槽位。
         Sora 2 系列能力一致，按名字族认定；其余名字取 name_family 的统一回落。instance property
@@ -190,11 +237,20 @@ class OpenAIVideoBackend(ProviderJobIdPersistenceMixin):
 
     @property
     def _request_base_url(self) -> str:
-        """本实例请求实际发往的域名，取自 SDK client 的公开属性（SDK 会补尾斜杠，此处去掉）。"""
+        """The domain this instance's requests are actually sent to, from the SDK client's public attribute (the SDK adds a trailing slash, removed here).
+
+        本实例请求实际发往的域名，取自 SDK client 的公开属性（SDK 会补尾斜杠，此处去掉）。"""
         return str(self._client.base_url).rstrip("/")
 
     def _client_for(self, request: VideoGenerationRequest) -> AsyncOpenAI:
-        """轮询与取件用的 client：续跑且提交域名与当下配置不同时，派生一个绑定提交域名的。
+        """Client for polling and retrieval: when resuming and the submit domain differs from the current config, derive one bound to the submit domain.
+
+        A task id can only be queried on the endpoint that created it; after the user changes base_url mid-flight, polling
+        the old task on the new domain would 404 and be misjudged as expired by ``resume_video``. A client derived via
+        ``with_options`` keeps the same credentials, timeout, retry config and connection pool. On the submit path
+        ``submitted_base_url`` is always None and the instance client is used.
+
+        轮询与取件用的 client：续跑且提交域名与当下配置不同时，派生一个绑定提交域名的。
 
         任务 id 只在创建它的 endpoint 上可查，用户在途改 base_url 后按新域名去轮旧任务会 404，
         被 ``resume_video`` 误判成过期。``with_options`` 派生的 client 沿用同一份凭据、超时、重试
@@ -209,7 +265,12 @@ class OpenAIVideoBackend(ProviderJobIdPersistenceMixin):
     def metered_usage(
         model: str, request: VideoGenerationRequest, result: VideoGenerationResult | None = None
     ) -> Usage:
-        """这次请求的计量（见 :mod:`lib.backends.video_backends.metering`）。
+        """Metering of this request (see :mod:`lib.backends.video_backends.metering`).
+
+        Resolution takes the short-side tier of the ``size`` sent (e.g. ``1024x1792`` counts as 1024p). The request has no
+        audio switch, so whether there is audio is not reported.
+
+        这次请求的计量（见 :mod:`lib.backends.video_backends.metering`）。
 
         分辨率取下发的 ``size`` 的短边档（如 ``1024x1792`` 记为 1024p）。请求没有音轨开关，不上报是否有声。
         """
@@ -223,11 +284,13 @@ class OpenAIVideoBackend(ProviderJobIdPersistenceMixin):
         )
 
     async def generate(self, request: VideoGenerationRequest) -> VideoGenerationResult:
+        # Sora request bodies have no end frame or reference audio fields; even when the user overrides capabilities to loosen them they cannot be sent, so reject before paying instead of silently dropping them.
         # Sora 请求体没有尾帧与参考音频字段；能力被用户覆盖放宽时也发不出，付费前拒绝而不是静默丢弃。
         if request.end_image:
             raise VideoCapabilityError("video_last_frame_unsupported", provider=self.name, model=self._model)
         if request.reference_audio_files:
             raise VideoCapabilityError("video_reference_audio_unsupported", provider=self.name, model=self._model)
+        # When the first frame and reference images together exceed the slot, the excess would be dropped or rejected upstream; reject before paying.
         # 首帧与参考图合计超过槽位时，超出部分会被丢弃或被上游拒绝，付费前拒绝。
         input_count = bool(request.start_image) + len(request.reference_images or [])
         if input_count > _INPUT_REFERENCE_SLOTS:
@@ -243,9 +306,11 @@ class OpenAIVideoBackend(ProviderJobIdPersistenceMixin):
             "model": self._model,
             "seconds": str(request.duration_seconds),
         }
+        # Always send a legal size to lock the ratio (sora has fixed tiers; without it upstream uses its own default ratio)
         # 始终下传合法 size 以锁定比例（sora 固定档，不传则上游用自家默认比例）
         kwargs["size"] = _resolve_size(self._model, request.resolution, request.aspect_ratio)
 
+        # Collect all reference images (start_image + reference_images): existence checks and image reads are blocking I/O; offload the whole thing to a thread
         # 收集所有参考图（start_image + reference_images）：存在性检查与读图都是阻塞 I/O，整体卸载到线程
         refs = await asyncio.to_thread(_encode_input_references, request, self._model)
         if refs:
@@ -255,6 +320,9 @@ class OpenAIVideoBackend(ProviderJobIdPersistenceMixin):
         logger.info("调用 %s 视频 SDK kwargs=%s", self.name, format_kwargs_for_log(kwargs))
 
         video = await self._create_video(**kwargs)
+        # Persist job_id right after a successful submit; a persistence failure raises → finally mark_failed.
+        # On non-worker paths (grid / direct generation / tests) request.task_id is None, and persistence is skipped at the single point.
+        # Also write back the domain actually requested this time: resume replays it, otherwise a mid-flight base_url change would query the old task on the new domain.
         # submit 成功立即持久化 job_id；持久化失败抛 → finally mark_failed。
         # 非 worker 路径（grid / 直生 / 测试）request.task_id 为 None，统一点内跳过持久化。
         # 一并写回本次实际请求的域名：续跑据此回放，否则在途改了 base_url 会按新域名去查旧任务。
@@ -263,6 +331,8 @@ class OpenAIVideoBackend(ProviderJobIdPersistenceMixin):
         )
         final = await self._poll_until_complete(self._client, video.id, request.poll_timeout_seconds)
 
+        # On the generate path, expired is a "provider error / input parameters expired" kind of failure;
+        # raise RuntimeError so the worker does mark_failed (without the [resume_expired] prefix).
         # generate 路径下 expired 是「provider 异常 / 输入参数过期」类失败，
         # 抛 RuntimeError 让 worker mark_failed（不带 [resume_expired] 前缀）。
         if _video_status(final) is ProviderJobStatus.EXPIRED:
@@ -271,7 +341,9 @@ class OpenAIVideoBackend(ProviderJobIdPersistenceMixin):
         return await self._download_and_build_result(self._client, final, request, kwargs)
 
     async def resume_video(self, job_id: str, request: VideoGenerationRequest) -> VideoGenerationResult:
-        """接续已 submit 的 OpenAI job：仅 poll + 下载，不调 videos.create；轮询与取件按提交域名回放。"""
+        """Resume an already submitted OpenAI job: only poll + download, no videos.create; polling and retrieval replay the submit domain.
+
+        接续已 submit 的 OpenAI job：仅 poll + 下载，不调 videos.create；轮询与取件按提交域名回放。"""
         client = self._client_for(request)
         try:
             final = await self._poll_until_complete(client, job_id, request.poll_timeout_seconds)
@@ -280,6 +352,8 @@ class OpenAIVideoBackend(ProviderJobIdPersistenceMixin):
                 raise ResumeExpiredError(job_id=job_id, provider=PROVIDER_OPENAI) from exc
             raise
 
+        # On the resume path, expired = the provider has forgotten it / input assets expired; classify as
+        # [resume_expired] so the worker prefixes the error and no longer tries restart self-healing
         # resume 路径下 expired = provider 端已忘 / 输入资产过期，归类
         # [resume_expired] 让 worker 错误前缀化、不再尝试重启自愈
         if _video_status(final) is ProviderJobStatus.EXPIRED:
@@ -317,15 +391,29 @@ class OpenAIVideoBackend(ProviderJobIdPersistenceMixin):
 
     @with_retry_async(retryable_errors=OPENAI_RETRYABLE_ERRORS)
     async def _create_video(self, **kwargs):
-        """仅创建视频任务（带重试）；轮询交由 _poll_until_complete 自管。"""
+        """Only create the video task (with retries); polling is handled by _poll_until_complete itself.
+
+        仅创建视频任务（带重试）；轮询交由 _poll_until_complete 自管。"""
         return await self._client.videos.create(**kwargs)
 
     async def _poll_until_complete(self, client: AsyncOpenAI, video_id: str, poll_timeout_seconds: int):
-        """轮询任务直到状态归一到终态。
+        """Poll the task until its status normalizes to a terminal state.
+
+        Does not reuse the SDK's client.videos.poll: it only recognizes in_progress/queued/completed/failed and would exit
+        early against OpenAI-compatible gateways that return non-standard statuses (e.g. NOT_START), downloading tasks that are
+        not ready.
+
+        轮询任务直到状态归一到终态。
 
         不复用 SDK 的 client.videos.poll：它仅识别 in_progress/queued/completed/failed，
         对接返回非标状态（如 NOT_START）的 OpenAI 兼容网关时会提前退出，导致下载未就绪任务。
         """
+        # is_done is a pure predicate: succeeded / failed / expired all count as "terminal" so poll returns.
+        # The caller (generate / resume_video) branches after getting the result:
+        #   - succeeded → download
+        #   - failed    → is_failed has already raised RuntimeError
+        #   - expired   → the caller raises RuntimeError / ResumeExpiredError depending on generate vs resume context
+        # Key invariant: is_failed does not recognize expired, so it does not override the caller's branching.
         # is_done 是纯谓词：成功 / 失败 / 过期三档都视为「已终态」让 poll 返回。
         # caller (generate / resume_video) 拿到 result 后再分流：
         #   - succeeded → 下载
@@ -349,7 +437,12 @@ class OpenAIVideoBackend(ProviderJobIdPersistenceMixin):
         )
 
     async def _download_content_with_retry(self, client: AsyncOpenAI, video_id: str):
-        """单独重试内容下载，避免因下载失败重新触发视频生成。
+        """Retry the content download separately, so a download failure does not re-trigger video generation.
+
+        SDK retrieval does not raise ``HTTPStatusError``, so fall back to judging by ``OPENAI_RETRYABLE_ERRORS``; the stop
+        condition is still the shared artifact download budget.
+
+        单独重试内容下载，避免因下载失败重新触发视频生成。
 
         SDK 取件抛的不是 ``HTTPStatusError``，故退到按 ``OPENAI_RETRYABLE_ERRORS`` 判定，
         终止条件仍是共用的产物下载预算。
@@ -368,7 +461,9 @@ def _encode_start_image(image_path: Path) -> tuple[str, bytes, str]:
 
 
 def _encode_input_references(request: VideoGenerationRequest, model: str) -> list[tuple[str, bytes, str]]:
-    """缺失的首帧 / 参考图不静默跳过：跳过后照常出片计费，却没用上用户给的图。"""
+    """Missing first frame / reference images are not silently skipped: skipping would still produce and bill the video without using the user's images.
+
+    缺失的首帧 / 参考图不静默跳过：跳过后照常出片计费，却没用上用户给的图。"""
     ref_paths: list[Path] = []
     if request.start_image:
         start_path = Path(request.start_image)
@@ -383,7 +478,13 @@ def _encode_input_references(request: VideoGenerationRequest, model: str) -> lis
 
 
 def _is_openai_not_found(exc: BaseException) -> bool:
-    """识别 OpenAI/Sora 「job 不存在」响应（NotFoundError / HTTP 404）。
+    """Recognize OpenAI/Sora "job does not exist" responses (NotFoundError / HTTP 404).
+
+    No ``"not found"`` / ``"expired"`` substring fallback: ``status='expired'`` is turned into ``ResumeExpiredError``
+    directly by ``resume_video`` after polling returns a terminal state, and broad strings would misjudge business errors
+    like ``"file not found in storage"`` as ghost tasks.
+
+    识别 OpenAI/Sora 「job 不存在」响应（NotFoundError / HTTP 404）。
 
     不做 ``"not found"`` / ``"expired"`` 子串兜底：``status='expired'`` 由 ``resume_video`` 在轮询
     返回终态后直接转 ``ResumeExpiredError``，宽泛字串会把诸如 ``"file not found in storage"`` 等

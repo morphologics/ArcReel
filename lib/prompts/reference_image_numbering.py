@@ -26,19 +26,20 @@ from lib.script.reference_video.text_parser import render_mentions
 
 logger = logging.getLogger(__name__)
 
-#: 类型声明行的 YAML 键，插在 ``Style`` 与 ``Scene`` 之间。
+#: YAML key of the type declaration line, inserted between ``Style`` and ``Scene``. / 类型声明行的 YAML 键，插在 ``Style`` 与 ``Scene`` 之间。
 REFERENCE_IMAGES_KEY = "Reference_Images"
 
-#: 上一分镜图在参考图证据里的角色名。
+#: Role name of the previous storyboard image in the reference image evidence. / 上一分镜图在参考图证据里的角色名。
 PREVIOUS_STORYBOARD_ROLE = "previous_storyboard"
 
-#: 上一分镜图的约束句，随类型声明行发给模型。
+#: Constraint sentence for the previous storyboard image, sent to the model with the type declaration line. / 上一分镜图的约束句，随类型声明行发给模型。
 PREVIOUS_STORYBOARD_REFERENCE_DESCRIPTION = "只参考构图与色调"
 
+#: Warning key when reference images over the limit are trimmed from the tail; shares the same i18n copy with the reference-to-video route.
 #: 参考图超限被去尾时的 warning key，与参考生视频路线共用同一条 i18n 文案。
 REFERENCE_IMAGES_CLAMPED_WARNING = "ref_too_many_images"
 
-#: 按资产类型的类型说明；商品条目并入保真要求。
+#: Type description per asset type; product entries fold in the fidelity requirement. / 按资产类型的类型说明；商品条目并入保真要求。
 _TYPE_DESCRIPTIONS: dict[str, str] = {
     "product": "商品参考图，画面中的商品须与之完全一致",
     "character": "角色参考图",

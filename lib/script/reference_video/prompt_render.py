@@ -1,4 +1,30 @@
-"""参考生视频路径的三段论渲染：unit 内容 + 资产表 + 能力档 → 发给视频模型的 prompt。
+"""Three-part rendering for the reference-to-video path: unit content + asset table + capability tier → the prompt
+sent to the video model.
+
+Part one (subject binding + voice declarations) and part three (style block + negative constraints) are
+generated mechanically at render time, not left to the LLM's diligence; the whole prompt is rendered by the
+built-in template ``reference_video/unit``, and this module produces the slot values for the first two parts.
+Rendering is a pure function and the result is not saved, so existing content gets the new rendering without
+migration.
+
+Division of the three parts:
+
+- **Part one**: short-form ``<X>@图片N`` binding (image number = order of reference images sent with the
+  request) + a central voice declaration block (``<X>的台词音色参考 @音频N，只取音色、语速与情绪，台词以正文为准，声音特征：…``,
+  i.e. "X's dialogue voice reference @audioN, take only timbre, pace and emotion, dialogue follows the text,
+  voice traits: ..."). Audible classes A/B both get voice traits injected; neither silent path (class C models
+  that produce no audio, audio turned off for this episode) gets them
+- **Part two**: unit text + character dialogue markers (``<X>说 {台词}``, "X says {line}"); unattributed narration
+  (bare ``{台词}``) is not sent to the video model, it is handled by TTS / post-production voice-over
+- **Part three**: shared style block + ``Avoid`` line (the video negative prompt; all negative constraints on this
+  path are carried by it); when two or more distinct characters appear in the frame, clone or twin exclusions are
+  appended. With product reference images, a product high-fidelity statement follows
+
+The input for every content mode is the unit text, a single free-text block, and the text only covers part two;
+subject binding and reference image order are both derived by parsing ``@[X]`` mentions
+(:func:`render_unit_prompt`). The text contains no absolute seconds; duration goes through the request field.
+
+参考生视频路径的三段论渲染：unit 内容 + 资产表 + 能力档 → 发给视频模型的 prompt。
 
 第一段（主体绑定 + 声音声明）与第三段（风格块 + 负向约束）在渲染期机械生成，不依赖 LLM 自觉；
 整段提示词由内置模版 ``reference_video/unit`` 渲染，前两段由本模块产出槽位值。渲染是纯函数、
@@ -46,12 +72,25 @@ from lib.script.reference_video.voice_settings import VoiceRenderSettings
 from lib.script.script_models import ReferenceResource
 from lib.speech.audio_utils import resolve_audio_ref_path
 
+#: Fixed in-project directory for character reference audio (same convention as upload / TTS sample storage).
 #: 角色参考音频的项目内固定目录（与上传 / TTS 样本落盘口径一致）。
 ASSET_AUDIO_SUBDIR = "characters/refs_audio"
 
 
 def _character_bucket(project: dict) -> dict[str, Any]:
-    """项目角色表，key 已归一到资产名比对坐标系；非 dict（外部编辑写坏的 project.json）按空处理。
+    """The project character table, keys already normalized into the asset-name comparison coordinate system; non-dict
+    (project.json broken by external editing) is treated as empty.
+
+    The validator only checks inner entries when the field itself is a dict (see ``lib.project.data_validator``), so a
+    malformed project whose whole field is not a dict is not rejected; this module indexes the character table by name
+    in several places, so it normalizes once where the value is taken, to avoid each call site adding its own
+    isinstance check.
+
+    Name-side normalization likewise lives here (see :func:`lib.project.asset_types.normalize_asset_bucket`): the
+    speakers and mention names compared against the character table come from the parser and are already normalized,
+    while the form in which the character table is stored is out of our control.
+
+    项目角色表，key 已归一到资产名比对坐标系；非 dict（外部编辑写坏的 project.json）按空处理。
 
     校验器只在该字段本身是 dict 时才校验内部条目（见 ``lib.project.data_validator``），字段整体
     非 dict 的畸形项目不会被拒绝；本模块多处按名字索引角色表，统一在取值处归一化，
@@ -65,7 +104,21 @@ def _character_bucket(project: dict) -> dict[str, Any]:
 
 @dataclass(frozen=True)
 class RenderedUnitPrompt:
-    """一个 unit 的渲染产物。
+    """The rendered output of one unit.
+
+    The order of ``audio_speakers`` is the ``@音频N`` (@audioN) numbering; callers must assemble
+    ``VideoGenerationRequest.reference_audio_files`` in the same order -- this is the only binding contract between
+    the prompt text and the request fields (which character maps to which audio is not in the request).
+
+    ``audio_speaker_reference_index`` has the same length and order as ``audio_speakers``: item i is the
+    ``reference_images`` index (0-based) for that speaker, None when there is no reference image (off-screen-only
+    character). Reference audio order (first appearance of dialogue speakers) and reference image order (first
+    appearance of mentions) are derived independently; if the backend requires each audio clip to be attached to a
+    specific reference item (``VideoCapabilities.reference_audio_per_image``), callers must assemble
+    ``VideoGenerationRequest.reference_audio_targets`` from this field and must not assume the two lists are
+    naturally in the same order.
+
+    一个 unit 的渲染产物。
 
     ``audio_speakers`` 的顺序即 ``@音频N`` 编号，调用方须按同一顺序组装
     ``VideoGenerationRequest.reference_audio_files``——这是 prompt 文本与请求字段之间唯一的
@@ -91,7 +144,39 @@ def render_unit_prompt(
     references: list[ReferenceResource],
     settings: VoiceRenderSettings,
 ) -> RenderedUnitPrompt:
-    """把一个 unit 的书写文稿渲染成三段论 backend prompt。
+    """Render one unit's written text into the three-part backend prompt.
+
+    ``references`` is the list of reference images **actually sent with the request** (already trimmed to the
+    capability limit), and its order is the ``图片N`` (imageN) numbering -- strictly the same length and order as
+    ``reference_images``; trimmed names degrade to plain text and produce no dangling binding. The caller derives the
+    reference image order from the same text (first appearance of ``@mention``; speaker slots of dialogue markers don't
+    count); this function only consumes it and does not recompute.
+
+    ``settings`` is the voice input profile used for rendering (see :class:`~lib.script.reference_video.voice_settings
+    .VoiceRenderSettings`), required with no fallback: it decides whether this episode has audible sound, and
+    defaulting either way would be guessing for the caller -- guessing audible would inject voice traits into silent
+    projects; erroring when it is omitted makes new callers find out at wiring time.
+    When ``requires_reference_image`` is True (the backend requires each audio clip to be attached to a specific
+    reference item), off-screen-only speakers get no audio binding (degraded + warning) -- once bound, the ``@音频N``
+    number is written into the prompt text, and filtering it later at the backend layer would make the binding promised
+    by the text diverge from the ``reference_audio_files`` actually sent, so it must be excluded before numbering.
+
+    The silent path (``settings.is_silent``) produces no audio binding: neither ``@音频N`` nor "声音特征：…" (voice
+    traits) enters the prompt, ``audio_speakers`` is empty, and the ``reference_audio_files`` the caller assembles is
+    empty accordingly. Dialogue rendering in part two ignores this flag -- in silent video the dialogue text is still
+    sent, and the provider may use it as a lip-sync reference.
+
+    Warnings are the same batch of ``{key, params}`` entries as the parse preview panel; the caller merges them into the
+    task ``result.warnings``.
+
+    The part three style block takes ``style`` and ``style_description`` from ``project``. Clone exclusions are decided
+    from the complete list of registered characters in the text, not trimmed by the provider's reference image limit;
+    the base look and derivatives of the same character still count as one (see ``docs/adr/0072``). The product
+    high-fidelity statement is only injected when product reference images are actually sent with the request -- the
+    statement points at "the product reference image", and injecting it when the reference is absent would only
+    mislead the model.
+
+    把一个 unit 的书写文稿渲染成三段论 backend prompt。
 
     ``references`` 是**实际随请求发出**的参考图列表（已按能力上限裁剪），其顺序即
     ``图片N`` 编号——与 ``reference_images`` 严格等长同序，被裁掉的名字退化为原文不产生
@@ -120,6 +205,10 @@ def render_unit_prompt(
     mentions = extract_mentions(text)
     utterances, warnings = derive_utterances(text)
 
+    # ``references`` is an input (derived results persisted upstream), and the encoding form its names were stored in
+    # is out of our control; the text side comes from the parser and is already normalized. Only when both sides have the
+    # same form do subject markers and image numbers match -- without normalization that character's binding line would
+    # be missing and the audio could not attach to an image, all without any error.
     # ``references`` 是入参（上游持久化的派生结果），其名字以哪种编码形式落盘不可控；正文一侧
     # 出自解析器、已归一。两侧同形，主体记号与图号才对得上——不归一时该角色的绑定行会缺位、
     # 音频也挂不到图上，且全程不报错。
@@ -127,10 +216,14 @@ def render_unit_prompt(
 
     registered, missing = resolve_references(mentions, project)
     warnings = [_warning_unregistered(name) for name in missing] + warnings
+    # Subject markers are decided by **asset table registration**, decoupled from reference image numbering: a name
+    # trimmed by the capability limit is still a subject in the frame, it just didn't get an image sent this time (same
+    # for off-screen-only characters -- subject, no image). Only unregistered mentions stay as plain text.
     # 主体记号按**资产表登记**判定，与参考图编号解耦：被能力上限裁掉的名字仍是画面主体，
     # 只是这次没随请求发图（纯画外角色同理——有主体、无图）。未登记的 mention 才留原文。
     subjects = {ref.name for ref in registered}
 
+    # Audio can only attach to character reference images; filter by type, then build the name → index map.
     # 音频只能挂到 character 参考图；按类型过滤后建 name → 序号映射。
     character_image_no = {ref.name: i for i, ref in enumerate(references, start=1) if ref.type == "character"}
 
@@ -201,7 +294,20 @@ def _render_voice_declarations(
     characters: dict,
     settings: VoiceRenderSettings,
 ) -> list[str]:
-    """声音声明行：``<X>的台词音色参考 @音频N，只取音色、语速与情绪，台词以正文为准，声音特征：…``。剧集与 ad 路径共用——两者的
+    """Voice declaration line: ``<X>的台词音色参考 @音频N，只取音色、语速与情绪，台词以正文为准，声音特征：…``. Shared by the
+    episode and ad paths -- both use mention-derived ``ReferenceResource`` for subject binding lines; voice
+    declarations only recognize "registered dialogue speakers", are decoupled from subject binding lines, and can be
+    reused as a whole.
+
+    Neither silent path (``settings.is_silent``: class C models that produce no audio, audio turned off for this
+    episode) injects voice declarations; audible classes A/B both get voice traits -- the official advice is to add a
+    description when voice reproduction is poor. Dialogue rendering is unaffected and still goes into part two (see
+    :func:`_render_segment_two`).
+
+    A non-dict character record (project.json broken by external editing) is treated as having no voice traits; dirty
+    values are not indexed, keeping soft degradation rather than crashing.
+
+    声音声明行：``<X>的台词音色参考 @音频N，只取音色、语速与情绪，台词以正文为准，声音特征：…``。剧集与 ad 路径共用——两者的
     主体绑定行统一使用 mention 派生的 ``ReferenceResource``；声音声明只认「已登记的
     dialogue speaker」，与主体绑定行解耦，可整段复用。
 
@@ -231,7 +337,15 @@ def _render_voice_declarations(
 def _number_audio_speakers(
     audio_speakers: list[str], character_image_no: dict[str, int]
 ) -> tuple[dict[str, int], list[int | None]]:
-    """``@音频N`` 编号与「每段音频对应哪张参考图」的下标，两条路径共用同一份派生口径。
+    """``@音频N`` numbering and the index of "which reference image each audio clip maps to", one derivation shared by
+    both paths.
+
+    The number is the position in ``audio_speakers`` (speaker first-appearance order), which is also the request field
+    order of ``reference_audio_files``; the index list has the same length and order, with None for off-screen-only
+    speakers without a reference image. Both must be derived in one place: computing them separately would let the
+    ``@音频N`` in the prompt text and the request field indexes drift apart.
+
+    ``@音频N`` 编号与「每段音频对应哪张参考图」的下标，两条路径共用同一份派生口径。
 
     编号即 ``audio_speakers`` 的位置（speaker 首现顺序），也是 ``reference_audio_files``
     的请求字段顺序；下标列表与之等长同序，无参考图的纯画外 speaker 落 None。两者必须在
@@ -252,7 +366,24 @@ def _render_segment_one(
     settings: VoiceRenderSettings,
     character_forms: dict[str, list[str]],
 ) -> str:
-    """主体绑定 + 声音声明。
+    """Subject binding + voice declarations.
+
+    Part one of the official three-part structure is the reference source declaration area (face / camera movement /
+    voice references side by side), so voice references and voice traits are concentrated here and dialogue only
+    keeps a uniform sentence pattern. Declarations iterate over "registered characters with dialogue" rather than the
+    reference image list: off-screen-only characters have no reference image (speaker slots don't count toward
+    reference image derivation), but still get a voice declaration.
+
+    ``labels`` are mention-derived subject marker texts, one per reference image sent with the request. Image numbers
+    are assigned directly by position (not by name lookup); an empty label placeholder produces no binding line but
+    the number still advances, so later image numbers don't fall out of step with the request order.
+
+    ``character_forms`` is the grouping from :func:`_character_forms_by_entity`, used to declare multiple forms of
+    the same character; it is grouped by asset entry and has a different source than the position-numbered ``labels``.
+
+    Returns the ``declarations`` slot value of the ``reference_video/unit`` template.
+
+    主体绑定 + 声音声明。
 
     官方三段论第一段即参考来源声明区（人脸 / 运镜 / 音色参考同位），故音色参考与声音特征
     集中于此，台词只留统一句式。声明遍历「有台词的已登记角色」而非参考图列表：纯画外角色
@@ -277,7 +408,19 @@ def _render_segment_one(
 
 
 def _character_forms_by_entity(references: list[ReferenceResource], catalog: ReferenceCatalog) -> dict[str, list[str]]:
-    """角色参考图按承载它的资产条目分组：``本体名 → [该条目出现的形态记号]``，顺序随参考图顺序。
+    """Group character reference images by the asset entry carrying them: ``base look name → [form markers of that
+    entry]``, in reference image order.
+
+    A derivative and its base look are two reference names with two reference images, yet refer to the same person
+    (see ``docs/adr/0072``). Part one calls this function on the reference images actually sent with the request, part
+    three on the complete registered references in the text; both merge character identity by the same project
+    catalog. An unregistered name stands alone: it points to no entry and should not be merged with other names.
+
+    Only ``character`` type references are considered: in legacy projects with names duplicated across types, looking
+    up a same-named scene in the character table would find an entry and describe two unrelated images as two looks of
+    the same character.
+
+    角色参考图按承载它的资产条目分组：``本体名 → [该条目出现的形态记号]``，顺序随参考图顺序。
 
     衍生与本体是两个引用名、两张参考图，指的却是同一个人（见 ``docs/adr/0072``）。第一段对实际
     随请求发出的参考图调用本函数，第三段对正文中完整的已登记引用调用；两处都按同一项目目录合并
@@ -296,7 +439,14 @@ def _character_forms_by_entity(references: list[ReferenceResource], catalog: Ref
 
 
 def _render_form_declarations(character_forms: dict[str, list[str]]) -> list[str]:
-    """同一角色的多个形态同现时，声明它们是同一个人的不同外观。
+    """When multiple forms of the same character appear together, declare that they are different looks of the same person.
+
+    A character's base look and derivatives are separate reference names, each with its own sheet (see
+    ``docs/adr/0072``), and may appear together without limit. Without a declaration the model only sees two similar
+    character reference images and treats them as two people in the frame, so ownership is made clear in the reference
+    source declaration area. Characters appearing in only one form produce no declaration.
+
+    同一角色的多个形态同现时，声明它们是同一个人的不同外观。
 
     角色的本体与衍生是各自独立的引用名、各带一张资产图（见 ``docs/adr/0072``），同现不设限。
     不声明时模型只看到两张长相相近的角色参考图，会当成两个人物同框，故在参考来源声明区就把
@@ -311,6 +461,9 @@ def _render_form_declarations(character_forms: dict[str, list[str]]) -> list[str
     return lines
 
 
+#: Separator punctuation and whitespace (Chinese and English forms) used to decide whether both sides need merging after
+#: a narration marker is dropped. Terminal punctuation is listed separately: at line end it legitimately closes the
+#: sentence, whereas connecting punctuation in the middle of a line would dangle at line end.
 #: 旁白记号被丢弃后，用于判定其两侧是否需要合并的分隔标点与空白（中英两形）。
 #: 终止标点单列：它在行尾是合法收句，行中的连接标点在行尾则是悬空的。
 _MARK_JOINERS = "，,、；;：:"
@@ -320,7 +473,35 @@ _MARK_SPACES = " \t\u3000"
 
 
 def _render_segment_two(text: str, subjects: Collection[str], characters: dict, catalog: ReferenceCatalog) -> str:
-    """单元正文段：画面描述做 mention 替换，发声记号就地重组为官方句式。
+    """Unit text part: visual description gets mention substitution, and utterance markers are reassembled in place into
+    the official sentence pattern.
+
+    ``subjects`` are registered mention names (not trimmed by the capability limit) -- the subject marker ``<X>``
+    expresses "this person / thing in the frame" and does not point at an image number, so it is decoupled from
+    reference image numbering: a name whose image was trimmed is still a subject, and only unregistered mentions keep
+    the editor's original text (with ``ref_warn_unregistered_mention``).
+
+    The text is rendered line by line as-is, without reordering or section prefixes: the text the author wrote is the
+    single source of truth, and its order is the delivery order. Markers may sit anywhere in a line; reassembly replaces
+    them in place by position and the description stays where it is. Speakers are decided by the **asset table** rather
+    than the reference image list: off-screen-only characters have no reference image but their dialogue is still
+    reassembled. Unregistered speakers are sent as in the original (the warning is already emitted by
+    :func:`derive_voice_bindings`), and braces not recognized as markers are also sent as-is -- not stripped, so the
+    author can see the part they broke in the final cut.
+
+    The form written in the speaker slot matches the description slot: ``@[张三/劲装]{台词}`` renders as
+    ``<张三/劲装>说 {台词}``, so one character has only one kind of subject marker in a prompt (see
+    ``docs/adr/0072``). The voice still binds to the base look -- that is the job of ``SpeechMark.speaker``,
+    independent of which look appears on screen. If the written derivative is unregistered it falls back to the base
+    look marker, unlike "unregistered mentions keep original text" in the description slot: the speaker slot marker is
+    reassembled at render time and has no original text to keep.
+
+    Unattributed narration (bare ``{台词}``) is dropped entirely and does not enter the prompt: narration voice-over is
+    delivered only via TTS and post-production voice-over (ADR 0040 / 0061); a video model that produces audio given
+    this text would read it aloud along with the prompt text, or make on-screen characters lip-sync to the narration.
+    Visual description on the same line is still rendered; only the marker itself disappears.
+
+    单元正文段：画面描述做 mention 替换，发声记号就地重组为官方句式。
 
     ``subjects`` 是已登记的 mention 名（未经能力上限裁剪）——主体记号 ``<X>`` 表达「画面里的
     这个人 / 物」，不指向图号，故与参考图编号解耦：裁掉图的名字照样是主体，只有未登记的
@@ -358,7 +539,9 @@ def _render_segment_two(text: str, subjects: Collection[str], characters: dict, 
 
 
 def _speaker_subject(mark: SpeechMark, catalog: ReferenceCatalog) -> str:
-    """说话人位的主体记号：写下且已登记的衍生取 ``本体/衍生``，否则取本体名。"""
+    """Subject marker for the speaker slot: a written and registered derivative gives ``本体/衍生`` (base/derivative), otherwise the base look name.
+
+    说话人位的主体记号：写下且已登记的衍生取 ``本体/衍生``，否则取本体名。"""
     reference = mark.speaker_reference
     if mark.derivative and catalog.lookup("character", reference) is not None:
         return reference
@@ -366,7 +549,19 @@ def _speaker_subject(mark: SpeechMark, catalog: ReferenceCatalog) -> str:
 
 
 def _join_line_pieces(pieces: list[str | None]) -> str:
-    """拼接一行的渲染片段；``None`` 是被丢弃的旁白记号，其两侧多出的分隔标点与空白在此合并。
+    """Join the rendered pieces of a line; ``None`` is a dropped narration marker, and the extra separator punctuation and
+    whitespace on its two sides are merged here.
+
+    When the author writes narration between two description pieces (``推门，{夜风灌进来}，他按住剑``), the marker has a
+    separator on each side, and joining directly would leave "，，". If the left side already has a separator, drop the
+    right one; if both sides are only whitespace, merge them into one.
+
+    When the marker is at line start or end, only one side has description, and the remaining separator has nothing
+    to connect to: at line start (``{夜风灌进来}，他按住剑``) drop the separator and whitespace to the right of the
+    marker; at line end (``推门，{夜风灌进来}``) drop the dangling connecting punctuation on the left; terminal
+    punctuation at line end (``推门。{夜风灌进来}``) legitimately closes the sentence and is kept.
+
+    拼接一行的渲染片段；``None`` 是被丢弃的旁白记号，其两侧多出的分隔标点与空白在此合并。
 
     作者把旁白写在两段描述之间时（``推门，{夜风灌进来}，他按住剑``），记号左右各有一个分隔
     标点，直接拼接会留下「，，」。左侧已有分隔时丢掉右侧的，两侧都只是空白时并成一个。
@@ -388,6 +583,7 @@ def _join_line_pieces(pieces: list[str | None]) -> str:
                 rendered = head
                 piece = piece.lstrip(_MARK_SEPARATORS + _MARK_SPACES)
             elif rendered[-1:].isspace():
+                # Both sides are only whitespace: merge into one; multiple spaces should not remain in the text just because the marker vanished.
                 # 两侧都只是空白：并成一个，多个空白不该因为记号消失而留在正文里。
                 rendered = head
                 piece = piece.lstrip()
@@ -400,7 +596,18 @@ def _join_line_pieces(pieces: list[str | None]) -> str:
 
 
 def resolve_reference_audio_paths(project: dict, project_path: Path) -> dict[str, Path]:
-    """项目内「参考音频确实可用」的角色 → 绝对路径映射。
+    """Map of characters in the project whose "reference audio is actually usable" → absolute path.
+
+    Only entries whose field points inside ``characters/refs_audio`` and whose file actually exists are included
+    (out-of-bounds paths are blocked by :func:`lib.speech.audio_utils.resolve_audio_ref_path` -- this field can be set
+    to any in-project string via asset PATCH). The render layer decides binding from this, so the numbering and the
+    number of audio clips actually sent are strictly the same length.
+
+    Keys are normalized character names (already normalized by ``_character_bucket``): this map is passed as
+    ``audio_ready`` to :func:`lib.script.reference_video.script_preview.derive_voice_bindings` and compared with
+    speakers; only same-form sides avoid misjudging "audio actually usable" as "unusable" and silently not binding.
+
+    项目内「参考音频确实可用」的角色 → 绝对路径映射。
 
     只收录字段指向 ``characters/refs_audio`` 内且文件确实存在的条目（越界路径由
     :func:`lib.speech.audio_utils.resolve_audio_ref_path` 挡下——该字段可经资产 PATCH 写成项目内

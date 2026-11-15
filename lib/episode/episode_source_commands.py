@@ -1,4 +1,21 @@
-"""登记集原文与整本源文文件的服务命令（ADR 0031、0097）。
+"""Service commands for registering episode source and whole-source files (ADR 0031, 0097).
+
+- Whole source: an uploaded or newly created source file is appended to the end of the manifest
+  (:func:`register_whole_source_file`); on deletion it is removed from the manifest.
+- Per-episode source: each file is registered as an episode with its own source at the end of the episode order,
+  with a new episode ID (:func:`add_own_source_episode`).
+- Filling in on the episode page: an episode without source becomes an episode with its own source once source is
+  filled in; an episode with its own source has its source rewritten; a cut episode's episode file is derived and is
+  not rewritten here (:func:`set_episode_source_text`).
+- Source kind (ADR 0036): drama projects record the kind together with the source when registering it, defaulting
+  to novel; the kind of a whole-source file can be changed separately (:func:`set_whole_source_file_kind`).
+  Changing the kind does not change the source fingerprint or touch the ledger; if it would make episodes with an
+  existing script plan stale, it is confirmed first.
+
+Writing the source and changing ``project.json`` are done under the same project lock
+(``ProjectManager.locked_source_registration``).
+
+登记集原文与整本源文文件的服务命令（ADR 0031、0097）。
 
 - 整本源文：上传或新建的源文件接在清单末尾（:func:`register_whole_source_file`）；删除时移出清单。
 - 逐集原文：每个文件登记为播出顺序末尾的一集自带原文的集，分配新集 ID（:func:`add_own_source_episode`）。
@@ -52,7 +69,9 @@ if TYPE_CHECKING:
 
 
 class EpisodeSourceError(ValueError):
-    """集原文登记被拒；``code`` 是稳定的原因码，入口据此映射状态码与文案。"""
+    """Episode source registration rejected; ``code`` is a stable reason code that entry points map to status codes and copy.
+
+    集原文登记被拒；``code`` 是稳定的原因码，入口据此映射状态码与文案。"""
 
     def __init__(self, code: str, message: str):
         super().__init__(message)
@@ -62,7 +81,14 @@ class EpisodeSourceError(ValueError):
 def register_whole_source_file(
     project: dict[str, Any], rel: str, *, index: int | None = None, source_kind: SourceKind | None = None
 ) -> bool:
-    """把直接位于 ``source/`` 下的源文件登记进整本源文，返回是否新增。
+    """Register a source file directly under ``source/`` into the whole source; returns whether it was added.
+
+    ``index`` is the file's index in the manifest after registration; appended at the end by default. Not registered
+    when already registered, not a source file name (dot / underscore prefix, extension not .txt / .md), or it is the
+    episode file of some episode in the ledger. Newly registered files in drama projects record ``source_kind``,
+    defaulting to novel; already registered files keep their kind.
+
+    把直接位于 ``source/`` 下的源文件登记进整本源文，返回是否新增。
 
     ``index`` 是登记后文件在清单里的下标，缺省时接在末尾。已登记、不是源文文件名（点 / 下划线前缀、
     扩展名不是 .txt / .md），或是账本里某一集的集文件时不登记。剧情演绎项目新登记的文件记
@@ -77,7 +103,11 @@ def register_whole_source_file(
 
 
 def unregister_source_file(project: dict[str, Any], rel: str) -> None:
-    """删除源文件前的登记处置：移出整本源文清单；是自带原文的集的集文件时，该集转为无原文。
+    """Registration handling before deleting a source file: remove it from the whole-source manifest; when it is the episode file of an episode with its own source, that episode becomes one without source.
+
+    Episode files of cut episodes are derived by episode planning; their deletion is refused.
+
+    删除源文件前的登记处置：移出整本源文清单；是自带原文的集的集文件时，该集转为无原文。
 
     切出集的集文件由分集规划派生，拒绝删除。
     """
@@ -98,8 +128,11 @@ def unregister_source_file(project: dict[str, Any], rel: str) -> None:
 
 
 def _restore_file(path: Path, content: bytes | None) -> None:
-    """把 ``path`` 恢复成 ``content``；``content`` 为 None 表示原先没有这个文件。"""
+    """Restore ``path`` to ``content``; ``content`` being None means the file did not exist before.
+
+    把 ``path`` 恢复成 ``content``；``content`` 为 None 表示原先没有这个文件。"""
     if content is None:
+        # on undo, remove a file that did not exist before the transaction
         path.unlink(missing_ok=True)  # hard-delete: rollback -- 撤销时移除事务前不存在的文件
     else:
         path.write_bytes(content)
@@ -108,7 +141,9 @@ def _restore_file(path: Path, content: bytes | None) -> None:
 def write_episode_source_file(
     project_dir: Path, episode: int, text: str, *, archive_existing: bool, undo: ExitStack
 ) -> None:
-    """写集文件，并把撤销登记进 ``undo``。``archive_existing`` 时盘上已有的同名文件不是这一集的原文，先改名留底再写。"""
+    """Write the episode file and register the undo in ``undo``. With ``archive_existing``, a same-named file already on disk is not this episode's source and is renamed as a backup before writing.
+
+    写集文件，并把撤销登记进 ``undo``。``archive_existing`` 时盘上已有的同名文件不是这一集的原文，先改名留底再写。"""
     path = episode_source_path(project_dir, episode)
     if path.is_symlink():
         raise EpisodeSourceError("episode_source_symlink", f"集（id={episode}）的集文件是符号链接，拒绝写入")
@@ -139,7 +174,12 @@ def add_own_source_episode(
     title: str = "",
     source_kind: SourceKind | None = None,
 ) -> int:
-    """在 ``locked_source_registration`` 块内登记一集自带原文的集：分配新集 ID、写集文件、接在播出顺序末尾。
+    """Within a ``locked_source_registration`` block, register an episode with its own source: allocate a new episode ID, write the episode file, append it to the end of the episode order.
+
+    An unregistered ``episode_N.txt`` on disk with the same name as the new episode ID is first renamed as a backup, not
+    overwritten. Entries in drama projects record ``source_kind``, defaulting to novel. Returns the new episode ID.
+
+    在 ``locked_source_registration`` 块内登记一集自带原文的集：分配新集 ID、写集文件、接在播出顺序末尾。
 
     盘上与新集 ID 同名、没有登记的 ``episode_N.txt`` 先改名留底，不被覆盖。剧情演绎项目的条目记
     ``source_kind``，缺省为小说。返回新集 ID。
@@ -163,12 +203,14 @@ def add_own_source_episode(
 
 @dataclass(frozen=True)
 class EpisodeSourceWrite:
-    """集页写本集原文的结果。"""
+    """Result of writing this episode's source from the episode page. / 集页写本集原文的结果。"""
 
+    #: Written. False means the kind change still needs confirmation; neither the source nor the kind was written.
     #: 已写入。为 False 时表示改类型还需要确认，原文与类型都没有写。
     applied: bool
-    #: 本集写入后（未写入时为写入前）的原文来源。
+    #: This episode's source origin after the write (before the write when not written). / 本集写入后（未写入时为写入前）的原文来源。
     origin: SourceOrigin
+    #: Episodes whose script plan would become stale because of the kind change: this episode when it already has a script plan and the kind changed.
     #: 会因改类型让脚本规划判 stale 的集：本集已有脚本规划且类型变了时为本集。
     affected_episodes: list[int]
 
@@ -182,7 +224,16 @@ def set_episode_source_text(
     source_kind: SourceKind | None = None,
     confirm: bool = False,
 ) -> EpisodeSourceWrite:
-    """集页填写或改写本集原文：写集文件，无原文的集转为自带原文的集。
+    """Fill in or rewrite this episode's source from the episode page: write the episode file; an episode without source becomes one with its own source.
+
+    A cut episode's episode file is derived from the ledger, changes must go through episode planning, so it is
+    refused here. When an episode without source happens to have a same-named file on disk, that file is not this
+    episode's source and is renamed as a backup before writing. Drama projects also record ``source_kind``: when
+    omitted the existing kind is kept, and novel is recorded when there is none. When changing the kind would make the
+    script plan of this episode, already in production (has a script plan), stale, nothing is written if ``confirm`` is
+    False.
+
+    集页填写或改写本集原文：写集文件，无原文的集转为自带原文的集。
 
     切出集的集文件由账本派生，改动要走分集规划，这里拒绝。无原文的集在盘上恰有同名文件时，那份文件不是
     本集原文，先改名留底再写。剧情演绎项目同时记 ``source_kind``：缺省时保留已有类型，没有记录时记小说。
@@ -228,7 +279,9 @@ def set_episode_source_text(
 
 
 def _unregistered_source_path(project_dir: Path, project: dict[str, Any], filename: str) -> Path:
-    """``source/`` 下一个没有登记的文本文件；文件名不合法、不存在或已登记时拒绝。"""
+    """An unregistered text file under ``source/``; rejected when the file name is invalid, the file does not exist or is already registered.
+
+    ``source/`` 下一个没有登记的文本文件；文件名不合法、不存在或已登记时拒绝。"""
     path = PurePosixPath(filename)
     rel = f"source/{filename}"
     if (
@@ -240,6 +293,7 @@ def _unregistered_source_path(project_dir: Path, project: dict[str, Any], filena
     ):
         raise EpisodeSourceError("source_file_not_found", f"没有这个源文件：{filename}")
     try:
+        # On Windows a single-segment name with a drive letter like "C:x.txt" would join outside the project; leave it to safe_join to detect escaping
         # Windows 上 "C:x.txt" 这类带盘符的单段名会拼到项目外，交给 safe_join 判越界
         safe_join(project_dir / "source", filename)
     except PathTraversalError as exc:
@@ -253,7 +307,9 @@ def _unregistered_source_path(project_dir: Path, project: dict[str, Any], filena
 
 
 def _read_source_bytes(path: Path) -> tuple[bytes, str]:
-    """读源文件的原始字节与 UTF-8 文本；读不出或不是 UTF-8 时拒绝。"""
+    """Read a source file's raw bytes and UTF-8 text; rejected when it cannot be read or is not UTF-8.
+
+    读源文件的原始字节与 UTF-8 文本；读不出或不是 UTF-8 时拒绝。"""
     try:
         raw = path.read_bytes()
         return raw, raw.decode("utf-8")
@@ -262,7 +318,9 @@ def _read_source_bytes(path: Path) -> tuple[bytes, str]:
 
 
 def adopt_source_file_as_whole_source(pm: ProjectManager, project_name: str, filename: str) -> None:
-    """把 ``source/`` 下没有登记的文件加入整本源文，接在清单末尾。"""
+    """Add an unregistered file under ``source/`` to the whole source, appended to the end of the manifest.
+
+    把 ``source/`` 下没有登记的文件加入整本源文，接在清单末尾。"""
     project_dir = pm.get_project_path(project_name)
     with pm.locked_source_registration(project_name) as (_source_dir, project, _undo):
         path = _unregistered_source_path(project_dir, project, filename)
@@ -275,7 +333,14 @@ def adopt_source_file_as_whole_source(pm: ProjectManager, project_name: str, fil
 
 
 def adopt_source_file_as_episode(pm: ProjectManager, project_name: str, filename: str, episode: int | None) -> int:
-    """把 ``source/`` 下没有登记的文件用作一集的原文，返回这一集的集 ID。
+    """Use an unregistered file under ``source/`` as an episode's source; returns that episode's episode ID.
+
+    When ``episode`` is None it is registered as a new episode with its own source at the end of the episode order;
+    otherwise it fills this episode, which must be an episode without source.
+    After the file content is written into the episode file, the original file is deleted; if the registration is not
+    written back, the episode file is undone and the original file is put back with its original bytes.
+
+    把 ``source/`` 下没有登记的文件用作一集的原文，返回这一集的集 ID。
 
     ``episode`` 为 None 时登记为播出顺序末尾的一集新的自带原文的集；否则填给这一集，这一集须是无原文的集。
     文件内容写进集文件后，原文件删除；登记没有写回时，集文件撤销、原文件按原字节放回。
@@ -300,7 +365,9 @@ def adopt_source_file_as_episode(pm: ProjectManager, project_name: str, filename
                 raise EpisodeSourceError("episode_not_found", f"集（id={episode}）不在账本中")
             if episode_source_origin(entry) is not SourceOrigin.NONE:
                 raise EpisodeSourceError("episode_source_present", f"集（id={episode}）已经有原文")
+        # Delete the original file before writing the episode file: when the original file happens to have the same name as the target episode file, the write is not treated as a placeholder file to be renamed as a backup
         # 先删原文件再写集文件：原文件恰好就是目标集文件的同名文件时，写入不会被当成占位文件改名留底
+        # source file adopted as episode source: the full text is written into that episode's source file with NFC and unified line breaks, no text is lost, equivalent to a move
         path.unlink()  # hard-delete: derived -- 源文件作为集原文采纳：全文按 NFC 与统一换行写入该集的原文文件，文本不丢，等同移动
         undo.callback(_restore_file, path, original)
         if entry is None or episode is None:
@@ -313,12 +380,13 @@ def adopt_source_file_as_episode(pm: ProjectManager, project_name: str, filename
 
 @dataclass(frozen=True)
 class SourceKindChange:
-    """改整本源文文件类型的结果。"""
+    """Result of changing the kind of a whole-source file. / 改整本源文文件类型的结果。"""
 
-    #: 类型确实变了（已写入，或待确认）。
+    #: The kind actually changed (written, or awaiting confirmation). / 类型确实变了（已写入，或待确认）。
     changed: bool
-    #: 已写入。``changed`` 为 True 而它为 False 时，表示还需要确认。
+    #: Written. When ``changed`` is True and this is False, confirmation is still needed. / 已写入。``changed`` 为 True 而它为 False 时，表示还需要确认。
     applied: bool
+    #: Cut episodes whose script plan would become stale because of the kind change (source range starts in this file, script plan exists), in episode order.
     #: 会因改类型让脚本规划判 stale 的切出集（原文范围起点在这个文件、已有脚本规划），按播出顺序。
     affected_episodes: list[int]
 
@@ -326,7 +394,15 @@ class SourceKindChange:
 def set_whole_source_file_kind(
     pm: ProjectManager, project_name: str, filename: str, source_kind: SourceKind, *, confirm: bool
 ) -> SourceKindChange:
-    """改整本源文文件 ``source/<filename>`` 的类型。
+    """Change the kind of the whole-source file ``source/<filename>``.
+
+    Only the record on the manifest item is changed, not the source fingerprint, and the ledger is untouched. Rejected
+    when the file was changed outside the service and the episode ledger has not been updated yet. When it would make
+    the script plan of episodes already in production (with a script plan) stale, nothing is written if ``confirm`` is
+    False and only those episodes are returned; when there are none it is written directly. Only drama projects have
+    kinds.
+
+    改整本源文文件 ``source/<filename>`` 的类型。
 
     只改清单项上的记录，不改源文指纹，也不动账本。文件在服务之外被改动过、还没有更新分集账本时拒绝。会让已开始制作的集（已有脚本规划）的脚本规划判
     stale 时，``confirm`` 为 False 就不写入，只返回这些集；没有这类集时直接写入。只有剧情演绎项目有类型。

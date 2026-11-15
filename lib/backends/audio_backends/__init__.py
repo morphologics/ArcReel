@@ -1,4 +1,4 @@
-"""语音合成（TTS）服务层公共 API。"""
+"""Public API of the speech synthesis (TTS) service layer. / 语音合成（TTS）服务层公共 API。"""
 
 from lib.backends.audio_backends.base import (
     AudioBackend,

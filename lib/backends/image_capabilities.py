@@ -1,4 +1,22 @@
-"""图片的生效能力：模型条目与调用通道都满足的部分（docs/adr/0104）。
+"""Effective image capabilities: the part satisfied by both the model entry and the backend (docs/adr/0104).
+
+Text-to-image and image-to-image are each one dimension on both sides: the model entry says whether the model accepts it
+(model fact), the backend says whether this backend implements it (backend fact; for built-in backends see
+``CHANNEL_CAPABILITIES``, for custom providers the endpoint declaration). Both the task type bucket candidates and the
+execution-time check use the result here.
+
+Model facts are taken from the entry the provider model maps to: built-in providers use the entry referenced by the
+list, custom providers look it up by model name (docs/adr/0105). When no entry matches, model facts impose no
+constraint and the effective capabilities are the backend facts; requests beyond the model's ability are rejected
+upstream. Custom provider models can replace text-to-image or image-to-image wholesale with capability overrides (see
+:mod:`lib.custom_provider.model_facts`); what is replaced is the model-fact side, and an override can't enable a
+capability the backend doesn't implement (rejected on write).
+
+ComfyUI endpoint capabilities are derived only from node bindings (docs/adr/0082): the model row's name is filled in
+freely by the user and has nothing to do with what the workflow can do, so it isn't mapped to an entry by name and
+doesn't accept capability overrides; the effective capabilities are the endpoint declaration.
+
+图片的生效能力：模型条目与调用通道都满足的部分（docs/adr/0104）。
 
 文生图与图生图在两侧各是一个维度：模型条目说模型接不接受（模型事实），调用通道说这条通道实现了没有
 （通道事实，内置调用通道见 ``CHANNEL_CAPABILITIES``，自定义供应商见端点声明）。任务类型桶的候选与执行时
@@ -26,7 +44,9 @@ from lib.custom_provider.model_facts import image_model_facts
 
 
 def builtin_channel_capabilities(provider_id: str) -> frozenset[ImageCapability]:
-    """内置供应商的图片调用通道实现了文生图还是图生图（通道事实）；供应商没有图片调用通道时抛 ``ValueError``。"""
+    """Whether the built-in provider's image backend implements text-to-image or image-to-image (backend facts); raises ``ValueError`` if the provider has no image backend.
+
+    内置供应商的图片调用通道实现了文生图还是图生图（通道事实）；供应商没有图片调用通道时抛 ``ValueError``。"""
     return channel_capabilities(get_provider_spec(provider_id, "image").registry_backend)
 
 
@@ -37,7 +57,13 @@ def image_model_capabilities(
     overrides: object | None = None,
     entry_binding: str | None = None,
 ) -> frozenset[ImageCapability] | None:
-    """模型事实一侧允许的文生图 / 图生图；两维都不加约束时为 ``None``。
+    """Text-to-image / image-to-image allowed on the model-fact side; ``None`` when neither dimension is constrained.
+
+    ``builtin_provider`` is the built-in provider id, with the entry taken from the list; for custom provider models pass
+    ``None`` and it is looked up by model name, ``overrides`` being its capability overrides (replacing the entry's value
+    per whole dimension) and ``entry_binding`` its entry binding. An unconstrained dimension counts as allowed.
+
+    模型事实一侧允许的文生图 / 图生图；两维都不加约束时为 ``None``。
 
     ``builtin_provider`` 是内置供应商 id，按清单取条目；自定义供应商的模型传 ``None``，按模型名现查，
     ``overrides`` 是它的能力覆盖（整维替换条目的值），``entry_binding`` 是它的条目绑定。不加约束的那一维按允许算。
@@ -60,7 +86,9 @@ def image_model_capabilities(
 def custom_image_model_capabilities(
     model_id: str, *, overrides: object | None, endpoint_kind: str, entry_binding: str | None = None
 ) -> frozenset[ImageCapability] | None:
-    """自定义供应商图片模型的模型事实一侧；ComfyUI 端点只看节点绑定，恒为 ``None``（不加约束）。"""
+    """Model-fact side of a custom provider image model; ComfyUI endpoints only look at node bindings, always ``None`` (unconstrained).
+
+    自定义供应商图片模型的模型事实一侧；ComfyUI 端点只看节点绑定，恒为 ``None``（不加约束）。"""
     if endpoint_kind == COMFYUI_KIND:
         return None
     return image_model_capabilities(model_id, builtin_provider=None, overrides=overrides, entry_binding=entry_binding)
@@ -69,7 +97,9 @@ def custom_image_model_capabilities(
 def intersect_image_capabilities(
     channel: Iterable[ImageCapability], model: frozenset[ImageCapability] | None
 ) -> frozenset[ImageCapability]:
-    """调用通道实现了、且模型事实一侧允许的部分；``model`` 为 ``None`` 时就是通道事实。"""
+    """The part implemented by the backend and allowed by the model-fact side; when ``model`` is ``None`` it is just the backend facts.
+
+    调用通道实现了、且模型事实一侧允许的部分；``model`` 为 ``None`` 时就是通道事实。"""
     implemented = frozenset(channel)
     return implemented if model is None else implemented & model
 
@@ -77,5 +107,7 @@ def intersect_image_capabilities(
 def effective_image_capabilities(
     channel: Iterable[ImageCapability], *, model_id: str, builtin_provider: str | None
 ) -> frozenset[ImageCapability]:
-    """调用通道实现了、且模型条目接受的文生图 / 图生图。参数含义同 :func:`image_model_capabilities`。"""
+    """Text-to-image / image-to-image implemented by the backend and accepted by the model entry. Parameters as in :func:`image_model_capabilities`.
+
+    调用通道实现了、且模型条目接受的文生图 / 图生图。参数含义同 :func:`image_model_capabilities`。"""
     return intersect_image_capabilities(channel, image_model_capabilities(model_id, builtin_provider=builtin_provider))

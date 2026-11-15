@@ -1,4 +1,11 @@
-"""随包的字幕字体：思源黑体 CN Bold（Source Han Sans 2.005 按地区子集的 OTF）。
+"""Bundled subtitle font: Source Han Sans CN Bold (the region-subset OTF of Source Han Sans 2.005).
+
+The font file is distributed as is, not subset by us, and lives under ``fonts/``; for the licence (SIL Open Font
+License 1.1) see ``fonts/LICENSE.txt``. When burning subtitles into the final cut, :data:`SUBTITLE_FONT_FILE` is
+handed to libass via ``fontsdir``; JianYing drafts use JianYing's built-in equivalent ``SourceHanSansCN_Bold``.
+:func:`missing_glyphs` pre-checks, via the font's cmap, which characters in the subtitle text the font does not cover.
+
+随包的字幕字体：思源黑体 CN Bold（Source Han Sans 2.005 按地区子集的 OTF）。
 
 字体文件原样分发，不自行子集化，放在 ``fonts/`` 下，许可证（SIL Open Font License 1.1）见 ``fonts/LICENSE.txt``。
 成片烧入字幕时把 :data:`SUBTITLE_FONT_FILE` 经 ``fontsdir`` 交给 libass；剪映草稿用剪映内置的同款
@@ -23,7 +30,7 @@ _UNICODE_FULL_REPERTOIRE = ((3, 10), (0, 4), (0, 6))
 
 
 class SubtitleFontError(RuntimeError):
-    """随包字体缺失或不是预期的 OpenType 形态。"""
+    """The bundled font is missing or not in the expected OpenType form. / 随包字体缺失或不是预期的 OpenType 形态。"""
 
 
 def _table_offsets(data: bytes) -> dict[bytes, int]:
@@ -43,7 +50,9 @@ def _table(data: bytes, tag: bytes) -> int:
 
 
 def _cmap_groups(data: bytes) -> tuple[tuple[int, ...], tuple[int, ...]]:
-    """读出 cmap format 12 子表的码位区间：区间起点与终点两个有序元组。"""
+    """Read the code point ranges of the cmap format 12 subtable: two sorted tuples of range starts and range ends.
+
+    读出 cmap format 12 子表的码位区间：区间起点与终点两个有序元组。"""
     cmap_offset = _table(data, b"cmap")
     (num_subtables,) = struct.unpack_from(">H", data, cmap_offset + 2)
     subtables: dict[tuple[int, int], int] = {}
@@ -59,6 +68,7 @@ def _cmap_groups(data: bytes) -> tuple[tuple[int, ...], tuple[int, ...]]:
     for index in range(num_groups):
         start, end, start_glyph = struct.unpack_from(">III", data, subtable + 16 + 12 * index)
         if start_glyph == 0:
+            # Code points mapped to glyph 0 (.notdef) count as missing; the range starts from the next code point.
             # 映射到 0 号字形（.notdef）的码位等于缺字，区间从下一个码位算起。
             start += 1
         if start <= end:
@@ -82,7 +92,11 @@ def _coverage() -> tuple[tuple[int, ...], tuple[int, ...]]:
 
 @functools.cache
 def cell_height_per_em() -> float:
-    """字体的行盒高度（OS/2 的 winAscent 与 winDescent 之和）与字身之比。
+    """Ratio of the font's line box height (sum of OS/2 winAscent and winDescent) to the em size.
+
+    libass interprets the ASS font size by line box height; final-cut subtitles use this to convert em pixels into an ASS font size.
+
+    字体的行盒高度（OS/2 的 winAscent 与 winDescent 之和）与字身之比。
 
     libass 按行盒高度解释 ASS 的字号，成片字幕据此把字身像素换算成 ASS 字号。
     """
@@ -99,12 +113,14 @@ def _covered(codepoint: int) -> bool:
 
 
 def _needs_glyph(character: str) -> bool:
-    """空白与控制、格式类字符不画出字形，不算缺字。"""
+    """Whitespace, control and format characters draw no glyph and do not count as missing. / 空白与控制、格式类字符不画出字形，不算缺字。"""
     return not character.isspace() and not unicodedata.category(character).startswith("C")
 
 
 def missing_glyphs(text: str) -> str:
-    """``text``（先做 NFC 规范化）里字幕字体覆盖不到的字符，去重后按首次出现的顺序拼成字符串。"""
+    """Characters in ``text`` (NFC-normalised first) that the subtitle font does not cover, deduplicated and joined in order of first appearance.
+
+    ``text``（先做 NFC 规范化）里字幕字体覆盖不到的字符，去重后按首次出现的顺序拼成字符串。"""
     missing = dict.fromkeys(
         character
         for character in unicodedata.normalize("NFC", text)

@@ -1,4 +1,4 @@
-"""内置供应商模型表的读写。"""
+"""Reads and writes of the built-in provider model table. / 内置供应商模型表的读写。"""
 
 from __future__ import annotations
 
@@ -9,7 +9,9 @@ from lib.db.repositories.base import BaseRepository
 
 
 class BuiltinProviderModelRepository(BaseRepository):
-    """官方收录模型的启用状态与用户添加的模型；调用方负责提交事务。"""
+    """Enabled state of officially listed models and user-added models; the caller commits the transaction.
+
+    官方收录模型的启用状态与用户添加的模型；调用方负责提交事务。"""
 
     async def list_all(self) -> list[BuiltinProviderModelState]:
         result = await self.session.execute(select(BuiltinProviderModelState).order_by(BuiltinProviderModelState.id))
@@ -30,7 +32,9 @@ class BuiltinProviderModelRepository(BaseRepository):
         return (await self.session.execute(stmt)).scalar_one_or_none()
 
     async def set_enabled(self, provider_id: str, model_id: str, enabled: bool) -> None:
-        """写入启用状态；还没有行时新建一行官方收录模型的状态。"""
+        """Write the enabled state; if there is no row yet, create a state row for an officially listed model.
+
+        写入启用状态；还没有行时新建一行官方收录模型的状态。"""
         row = await self.get(provider_id, model_id)
         if row is None:
             self.session.add(BuiltinProviderModelState(provider_id=provider_id, model_id=model_id, enabled=enabled))

@@ -1,4 +1,24 @@
-"""成片的产物身份与生成依据。
+"""Artifact identity and generation basis of the final cut.
+
+The artifact identity is "episode + edit timeline + narration variant + whether subtitles are burned in". The basis
+only records what rendering actually consumes: the parts of the edit timeline revision that affect picture and sound
+(clip order, effective trims, original audio volume, freeze extensions, transitions), the version, content
+fingerprint and provider-audio switch of the current video of each clip's video unit, and the output canvas. The
+revision number identifies this snapshot of edit decisions; edit rationale does not enter the basis separately; when
+the version a trim was based on is no longer current, the trim is ignored and the basis also records the whole stretch.
+
+When the edit timeline has BGM, the basis also records the BGM clips plus the content fingerprint and static gain of
+each referenced BGM; without BGM the basis form is unchanged.
+
+Variants with narration or burned-in subtitles also consume each video unit's asset layer (same source as the
+JianYing draft, see :mod:`lib.jianying_draft.placement`), and the basis also records each unit's asset-layer
+fingerprint, which includes the subtitle draft and, for the narrated variant, the narration audio. The variant without
+narration and without burned subtitles does not, so changes to narration audio and subtitle drafts do not make it stale.
+
+The render task takes a basis snapshot of the given revision when it starts; freshness checks rebuild the basis from
+the latest revision; both share :func:`resolve_final_cut_inputs` and :func:`final_cut_basis`.
+
+成片的产物身份与生成依据。
 
 产物身份是「集 + 剪辑时间线 + 旁白版本 + 是否烧入字幕」。生成依据只收录渲染实际消费的内容：
 剪辑时间线修订里影响画面与声音的部分（片段顺序、生效的截取、原声音量、定格延长、转场），
@@ -47,7 +67,9 @@ BURNED_SUBTITLES: SubtitleMode = "burned_subtitles"
 
 @dataclass(frozen=True, slots=True)
 class FinalCutVariant:
-    """成片的旁白版本与字幕方式；旁白版本的取值与剪映草稿相同。"""
+    """Narration variant and subtitle mode of the final cut; narration variant values are the same as for JianYing drafts.
+
+    成片的旁白版本与字幕方式；旁白版本的取值与剪映草稿相同。"""
 
     narration: DraftNarration = WITHOUT_NARRATION
     subtitles: SubtitleMode = NO_SUBTITLES
@@ -66,7 +88,9 @@ class FinalCutVariant:
 
     @property
     def consumes_unit_materials(self) -> bool:
-        """带旁白或烧入字幕的版本要取各视频单元的素材层（旁白配音与字幕）。"""
+        """Variants with narration or burned-in subtitles need each video unit's asset layer (narration audio and subtitles).
+
+        带旁白或烧入字幕的版本要取各视频单元的素材层（旁白配音与字幕）。"""
         return self.with_narration or self.burns_subtitles
 
 
@@ -81,7 +105,9 @@ FINAL_CUT_VARIANTS = tuple(
 def resolve_final_cut_variant(
     project: Mapping[str, Any], *, narration: DraftNarration | None = None, subtitles: SubtitleMode | None = None
 ) -> FinalCutVariant:
-    """补齐省略的选项：旁白版本 TTS 配音项目默认带旁白、其余不带旁白（与剪映草稿相同），字幕默认烧入。"""
+    """Fill in omitted options: narration defaults to on for TTS voiced projects and off otherwise (same as JianYing drafts); subtitles default to burned in.
+
+    补齐省略的选项：旁白版本 TTS 配音项目默认带旁白、其余不带旁白（与剪映草稿相同），字幕默认烧入。"""
     return FinalCutVariant(narration or default_draft_narration(project), subtitles or BURNED_SUBTITLES)
 
 
@@ -90,7 +116,7 @@ def final_cut_key(episode: int, timeline_id: str, variant: FinalCutVariant) -> A
 
 
 def final_cut_artifact_path(episode: int, timeline_id: str, variant: FinalCutVariant) -> str:
-    """成片的正式路径；每个产物身份只保留这一份最新文件。"""
+    """Final path of the final cut; only this one latest file is kept per artifact identity. / 成片的正式路径；每个产物身份只保留这一份最新文件。"""
     return f"{timeline_renders_dir(episode, timeline_id)}/final_cut.{variant.slug}.mp4"
 
 
@@ -104,7 +130,11 @@ def output_profile_for_project(project: Mapping[str, Any], script_kind: str) -> 
 
 @dataclass(frozen=True, slots=True)
 class CurrentVideo:
-    """视频单元 current 视频的正式文件，以及渲染读取的该版本快照文件与快照的内容指纹。
+    """The final file of a video unit's current video, plus the version snapshot file rendering reads and the snapshot's content fingerprint.
+
+    ``provider_audio`` comes from the provider-audio switch recorded for that version: if recorded as generated without original audio, rendering does not use the snapshot's audio track.
+
+    视频单元 current 视频的正式文件，以及渲染读取的该版本快照文件与快照的内容指纹。
 
     ``provider_audio`` 取自该版本记录的供应商原声开关：记录为未生成原声时，渲染不使用快照里的音轨。
     """
@@ -125,7 +155,14 @@ def current_video(
     unit_id: str,
     digest: Callable[[str], str],
 ) -> CurrentVideo | None:
-    """可用视频：current 版本 > 0、正式文件与该版本快照都在场；stale 视频同样可用。
+    """Usable video: current version > 0, with both the final file and that version's snapshot present; stale videos are usable too.
+
+    Rendering reads the version snapshot rather than the final file: the final file gets replaced by new generations or
+    version restores, the snapshot does not. The content fingerprint is the snapshot's: if the version record stored
+    the snapshot fingerprint when written, use it directly without reading the snapshot (the snapshot is verified against
+    the record before rendering uses it); only old versions without a recorded fingerprint compute it via ``digest``.
+
+    可用视频：current 版本 > 0、正式文件与该版本快照都在场；stale 视频同样可用。
 
     渲染读取版本快照而不是正式文件：正式文件会被新生成或版本恢复替换，快照不会。内容指纹是快照的：
     版本记录写入时记下了快照指纹就直接用它，不读快照（快照在渲染使用前对照记录校验）；没有记录指纹的
@@ -151,12 +188,16 @@ def current_video(
 
 
 def provider_audio_recorded(record: Mapping[str, Any]) -> bool:
-    """版本记录的供应商原声开关：只有明确记录为未生成原声才为 False，没有记录按带原声处理。"""
+    """Provider-audio switch of a version record: False only when explicitly recorded as generated without original audio; no record counts as with audio.
+
+    版本记录的供应商原声开关：只有明确记录为未生成原声才为 False，没有记录按带原声处理。"""
     return record.get("execution_generate_audio") is not False
 
 
 def current_provider_audio(versions: VersionManager, resource_type: str, unit_id: str) -> bool:
-    """视频单元 current 版本的供应商原声开关；没有版本记录时按带原声处理。"""
+    """Provider-audio switch of a video unit's current version; without a version record it counts as with audio.
+
+    视频单元 current 版本的供应商原声开关；没有版本记录时按带原声处理。"""
     info = versions.get_versions(resource_type, unit_id)
     current = info["current_version"]
     for record in info["versions"]:
@@ -168,7 +209,9 @@ def current_provider_audio(versions: VersionManager, resource_type: str, unit_id
 def version_snapshot(
     project_dir: Path, versions: VersionManager, resource_type: str, unit_id: str, version: int
 ) -> tuple[Path, Mapping[str, Any]] | None:
-    """指定视频版本的快照文件与版本记录；没有该版本、快照路径不受管或文件不在时为 None。"""
+    """Snapshot file and version record of the given video version; None when the version does not exist, the snapshot path is unmanaged, or the file is missing.
+
+    指定视频版本的快照文件与版本记录；没有该版本、快照路径不受管或文件不在时为 None。"""
     records = versions.get_versions(resource_type, unit_id).get("versions")
     for record in records if isinstance(records, list) else []:
         if isinstance(record, Mapping) and record.get("version") == version:
@@ -188,7 +231,9 @@ class ConsumedClip:
 
 @dataclass(frozen=True, slots=True)
 class FinalCutInputs:
-    """一次渲染消费的全部输入；``missing_video_units`` 非空时渲染不成立。"""
+    """All inputs one render consumes; rendering is not possible when ``missing_video_units`` is non-empty.
+
+    一次渲染消费的全部输入；``missing_video_units`` 非空时渲染不成立。"""
 
     episode: int
     timeline_id: str
@@ -214,7 +259,11 @@ def resolve_final_cut_inputs(
     video_of: Callable[[str], CurrentVideo | None],
     bgm_sources: Mapping[str, BgmSource] | None = None,
 ) -> FinalCutInputs:
-    """按修订的片段顺序解析每个剪辑片段用到的视频；视频单元已从脚本删除的片段跳过。
+    """Resolve the video used by each edit clip in the revision's clip order; clips whose video unit was deleted from the script are skipped.
+
+    ``bgm_sources`` are the BGMs referenced by the BGM track (:func:`~lib.bgm.library.resolve_bgm_sources`).
+
+    按修订的片段顺序解析每个剪辑片段用到的视频；视频单元已从脚本删除的片段跳过。
 
     ``bgm_sources`` 是 BGM 轨所引用的 BGM（:func:`~lib.bgm.library.resolve_bgm_sources`）。
     """
@@ -267,7 +316,7 @@ def _clip_input(item: ConsumedClip) -> dict[str, object]:
 
 
 def final_cut_basis(inputs: FinalCutInputs) -> ArtifactBasis:
-    """成片的生成依据；登记与时效比对都经这里构造。"""
+    """Generation basis of the final cut; registration and freshness comparison both build it here. / 成片的生成依据；登记与时效比对都经这里构造。"""
     if inputs.missing_video_units:
         raise ValueError(f"final cut inputs lack usable videos: {', '.join(inputs.missing_video_units)}")
     basis_inputs: dict[str, object] = {

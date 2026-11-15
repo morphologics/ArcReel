@@ -16,6 +16,11 @@ from lib.project.project_migrations.v9_to_v10_script_plan_naming import (
 def migrate_v7_to_v8(project_dir: Path) -> ArtifactBackfillOutcome:
     project_dir = Path(project_dir)
 
+    # Read-only pre-check section: activation resolves script plan draft paths with the current code (new names), so the
+    # v9->v10 draft rename is moved up to here; the refusal decisions for rename and activation are all made in this
+    # section, and if either refuses, not a single byte of the project directory has been touched. The rename isn't on
+    # disk yet, so the plan reads drafts by old names and records dependencies and artifact paths by the post-commit new
+    # names.
     # 只读预检段：激活按当前代码解析脚本规划草稿路径（新名），故 v9→v10 的草稿改名前置到这里；
     # 改名与激活的拒绝判定都在这一段完成，任一拒绝时项目目录一个字节都没被动过。改名尚未落盘，
     # 规划因此按旧名读取草稿、按提交后的新名记录依赖与产物路径。
@@ -25,6 +30,8 @@ def migrate_v7_to_v8(project_dir: Path) -> ArtifactBackfillOutcome:
         pending_renames=pending_draft_rename_map(renames, project_dir),
     )
 
+    # Write section: the rename is written first, so the paths recorded in the plan become on-disk fact; activation's
+    # stability gate then re-checks them one by one. The rename is idempotent; running it again after v8 does nothing.
     # 写盘段：改名先落盘，计划记录的路径由此成为盘上事实；激活的稳定性闸门随后逐一复核。
     # 改名幂等，v8 之后再跑一次不会有任何动作。
     apply_script_plan_draft_renames(renames, from_version=7)

@@ -1,4 +1,26 @@
-"""事件循环卡顿探针：事件循环停滞超过阈值时，把事件循环线程的调用栈写进日志。
+"""Event loop stall probe: when the event loop stalls beyond a threshold, write the event loop thread's call stack to the log.
+
+A heartbeat coroutine records a time on the event loop every heartbeat interval; a daemon thread wakes at the same
+interval to check. After a heartbeat the event loop is idle for one heartbeat interval anyway, so a stall counts from
+when the next heartbeat was due, and the stall duration in the log is therefore a lower bound. When the stall exceeds
+the threshold, ``sys._current_frames()`` gets the event loop thread's current frame, which is formatted and written via
+logger. The daemon thread is a normal Python thread; stack capture and formatting happen while holding the GIL, so it
+never reads a frame half-modified by another thread. The cost is that when the event loop thread holds the GIL in C
+code for a long time, stack capture waits until it is released. Only the event loop thread's stack is captured:
+locating a stall only needs that one, and the dump overhead is minimal.
+
+Dedup and rate limiting:
+
+- one stall (between two heartbeats) is logged once, however many times the daemon thread wakes during it.
+- when the same call stack stalls again within the repeat window, the stack is not rewritten, only counted; when the
+  window expires, repeats are merged into one summary, and later occurrences are logged in full as a new one. Call
+  stacks are compared by each frame's file and function name, not line numbers: stalls on different lines of the same
+  loop count as the same place. Both full records and summaries carry a call stack number, to match summaries back to
+  the full call stack.
+
+Standard library only; the heartbeat itself has no blocking calls.
+
+事件循环卡顿探针：事件循环停滞超过阈值时，把事件循环线程的调用栈写进日志。
 
 心跳协程每隔一个心跳间隔在事件循环上记一次时间；守护线程按同样的间隔醒来检查。心跳之后事件循环
 本就要空闲一个心跳间隔，停滞从下一次心跳该到的时刻算起，日志里的停滞时长因此是下限。停滞超过阈值时，
@@ -32,11 +54,11 @@ from dataclasses import dataclass
 
 logger = logging.getLogger(__name__)
 
-# 心跳间隔（秒），守护线程默认按同样的间隔醒来检查。
+# Heartbeat interval (seconds); the daemon thread wakes to check at the same interval by default. / 心跳间隔（秒），守护线程默认按同样的间隔醒来检查。
 HEARTBEAT_INTERVAL_SECONDS = 1.0
-# 事件循环停滞多久后记录调用栈（秒）。
+# How long the event loop must stall before the call stack is logged (seconds). / 事件循环停滞多久后记录调用栈（秒）。
 STALL_THRESHOLD_SECONDS = 2.0
-# 同一调用栈的重复停滞在这段时间内合并计数（秒）。
+# Repeated stalls of the same call stack within this period are merged into a count (seconds). / 同一调用栈的重复停滞在这段时间内合并计数（秒）。
 REPEAT_WINDOW_SECONDS = 300.0
 
 _StackKey = tuple[tuple[str, str], ...]
@@ -50,7 +72,9 @@ class _RepeatedStall:
 
 
 class LoopStallProbe:
-    """一个事件循环的卡顿探针；由 `start_loop_stall_probe` 创建并启动，`stop_loop_stall_probe` 收尾。"""
+    """Stall probe for one event loop; created and started by `start_loop_stall_probe`, wound down by `stop_loop_stall_probe`.
+
+    一个事件循环的卡顿探针；由 `start_loop_stall_probe` 创建并启动，`stop_loop_stall_probe` 收尾。"""
 
     def __init__(
         self,
@@ -68,6 +92,7 @@ class LoopStallProbe:
         self._check_interval = check_interval
         self._repeat_window = repeat_window
         self._clock = clock
+        # (heartbeat seq, heartbeat time); assigned as a whole, so the two values the daemon thread reads always belong to the same heartbeat.
         # (心跳序号, 心跳时刻)；整体赋值，守护线程读到的两项总是同一次心跳的。
         self._beat: tuple[int, float] = (0, clock())
         self._reported_beat: int | None = None
@@ -77,10 +102,13 @@ class LoopStallProbe:
         self._watchdog = threading.Thread(target=self._watch, name="loop-stall-probe", daemon=True)
 
     def check(self) -> None:
-        """守护线程每次醒来做的一次检查。生产中只由守护线程调用，测试可以直接调用来驱动。"""
+        """One check the daemon thread does each time it wakes. In production only the daemon thread calls it; tests may call it directly to drive it.
+
+        守护线程每次醒来做的一次检查。生产中只由守护线程调用，测试可以直接调用来驱动。"""
         now = self._clock()
         self._flush_repeats(now)
         beat, beat_at = self._beat
+        # A stall may start at any moment between two heartbeats; a certain stall only counts from when the next heartbeat was due.
         # 停滞可能始于两次心跳之间的任一时刻，确定的停滞只从下一次心跳该到时算起。
         stalled_for = now - beat_at - self._heartbeat_interval
         if stalled_for <= self._stall_threshold or beat == self._reported_beat:
@@ -137,7 +165,9 @@ def start_loop_stall_probe(
     repeat_window: float = REPEAT_WINDOW_SECONDS,
     clock: Callable[[], float] = time.monotonic,
 ) -> LoopStallProbe:
-    """在当前事件循环上启动心跳协程与守护线程；``check_interval`` 缺省时与心跳间隔相同。"""
+    """Start the heartbeat coroutine and daemon thread on the current event loop; ``check_interval`` defaults to the heartbeat interval.
+
+    在当前事件循环上启动心跳协程与守护线程；``check_interval`` 缺省时与心跳间隔相同。"""
     loop = asyncio.get_running_loop()
     probe = LoopStallProbe(
         loop_thread_id=threading.get_ident(),
@@ -153,7 +183,12 @@ def start_loop_stall_probe(
 
 
 async def stop_loop_stall_probe(probe: LoopStallProbe) -> None:
-    """停掉守护线程与心跳协程，返回后探针不再写日志。
+    """Stop the daemon thread and the heartbeat coroutine; after return the probe writes no more logs.
+
+    Notify the daemon thread to stop before waiting for the heartbeat to exit: if the shutdown itself is cancelled, the
+    ``await`` raises cancellation again, so the notification can't come after it.
+
+    停掉守护线程与心跳协程，返回后探针不再写日志。
 
     先通知守护线程停止再等心跳退出：关停本身被取消时，``await`` 处会再次抛出取消，通知不能排在它后面。
     """

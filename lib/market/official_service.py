@@ -1,4 +1,16 @@
-"""官方服务：地址与开关、实例标识，以及经共享 HTTP 客户端的出站调用。
+"""Official service: URL and switch, instance identity, and outbound calls via the shared HTTP client.
+
+The official service is an overlay on top of the market (``docs/adr/0093``). The URL is built into the release and can
+be overridden by the environment variable ``ARCREEL_OFFICIAL_SERVICE_URL``; overriding with empty disables it. The
+user-visible master switch, first-notice flag and instance identity are stored in system settings. When the URL is
+empty or the switch is off, :meth:`OfficialServiceGateway.open` returns None and callers make zero outbound calls to the official service.
+
+Outbound calls reuse the shared httpx client with a separate short timeout per request and no retries. Non-2xx
+response bodies ``{code, params}`` from the official service become :class:`OfficialServiceError`: status code kept,
+message key ``official_service_error_<code>`` (codes not in the catalogue fall back to a generic key), ``code`` and
+``params`` attached to diagnostics as is; when nothing is retrieved or the response is unusable: 502 ``official_service_unavailable``.
+
+官方服务：地址与开关、实例标识，以及经共享 HTTP 客户端的出站调用。
 
 官方服务是市场之上的覆盖层（``docs/adr/0093``）。地址随版内置，可由环境变量
 ``ARCREEL_OFFICIAL_SERVICE_URL`` 覆盖，覆盖为空即关闭；用户可见的总开关、首次告知标记与实例标识存系统设置。
@@ -33,15 +45,15 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_OFFICIAL_SERVICE_URL = "https://arc-reel.com"
 OFFICIAL_SERVICE_URL_ENV = "ARCREEL_OFFICIAL_SERVICE_URL"
-#: 系统设置：用户可见的总开关，``"false"`` 为关闭，缺省为开。
+#: System setting: user-visible master switch; ``"false"`` means off, default on. / 系统设置：用户可见的总开关，``"false"`` 为关闭，缺省为开。
 ENABLED_SETTING = "official_service_enabled"
-#: 系统设置：首次进入市场页的说明已确认。
+#: System setting: the first-visit explanation of the market page was acknowledged. / 系统设置：首次进入市场页的说明已确认。
 NOTICE_SEEN_SETTING = "official_service_notice_seen"
-#: 系统设置：实例标识（UUIDv4），首次出站时生成，重置即删除。
+#: System setting: instance identity (UUIDv4), generated on the first outbound call; reset means delete. / 系统设置：实例标识（UUIDv4），首次出站时生成，重置即删除。
 INSTANCE_ID_SETTING = "official_service_instance_id"
 INSTANCE_HEADER = "X-ArcReel-Instance"
 REQUEST_TIMEOUT_SECONDS = 3.0
-#: 官方服务批量查询聚合的单次条目上限。
+#: Per-call entry limit for official service batch aggregate queries. / 官方服务批量查询聚合的单次条目上限。
 AGGREGATES_BATCH_SIZE = 100
 
 _ERROR_KEY_PREFIX = "official_service_error_"
@@ -49,13 +61,15 @@ _UNKNOWN_ERROR_KEY = "official_service_error_unknown"
 
 
 def official_service_url() -> str:
-    """环境变量存在（含空串）即以它为准；为空表示关闭。"""
+    """If the environment variable exists (including empty string) it wins; empty means disabled. / 环境变量存在（含空串）即以它为准；为空表示关闭。"""
     raw = os.environ.get(OFFICIAL_SERVICE_URL_ENV)
     return (DEFAULT_OFFICIAL_SERVICE_URL if raw is None else raw).strip().rstrip("/")
 
 
 class OfficialServiceError(ApiError):
-    """官方服务以 ``{code, params}`` 拒绝了请求；状态码与 code 原样带回本地响应。"""
+    """The official service rejected the request with ``{code, params}``; status code and code are carried back into the local response as is.
+
+    官方服务以 ``{code, params}`` 拒绝了请求；状态码与 code 原样带回本地响应。"""
 
     def __init__(self, status_code: int, code: str, params: Mapping[str, Any]) -> None:
         key = _ERROR_KEY_PREFIX + code
@@ -73,7 +87,9 @@ def _unavailable(reason: str) -> BadGatewayError:
 
 @dataclass(frozen=True)
 class EntryRef:
-    """官方服务的条目引用；``source`` 为官方市场源的规范键。"""
+    """Entry reference for the official service; ``source`` is the canonical key of the official market source.
+
+    官方服务的条目引用；``source`` 为官方市场源的规范键。"""
 
     type: str
     source: str
@@ -86,16 +102,18 @@ class EntryRef:
 @dataclass(frozen=True)
 class EntryAggregate:
     ref: EntryRef
-    #: 服务端取整后的展示值。
+    #: Display value after server-side rounding. / 服务端取整后的展示值。
     installs: int
     rating_count: int
-    #: 评分人数不足服务端阈值时为 None。
+    #: None when the number of raters is below the server threshold. / 评分人数不足服务端阈值时为 None。
     rating_average: float | None
 
 
 @dataclass(frozen=True)
 class SubmissionStatus:
-    """官方服务上一次分享提交的状态；``status`` 为 ``open`` / ``merged`` / ``closed``。"""
+    """Status of the last share submission to the official service; ``status`` is ``open`` / ``merged`` / ``closed``.
+
+    官方服务上一次分享提交的状态；``status`` 为 ``open`` / ``merged`` / ``closed``。"""
 
     token: str
     type: str
@@ -109,17 +127,17 @@ SUBMISSION_STATUSES = frozenset({"open", "merged", "closed"})
 
 @dataclass(frozen=True)
 class OfficialServiceState:
-    #: 地址非空。
+    #: URL is non-empty. / 地址非空。
     available: bool
-    #: 地址非空且总开关为开：只有此时才会对官方服务出站。
+    #: URL non-empty and master switch on: only then are outbound calls made to the official service. / 地址非空且总开关为开：只有此时才会对官方服务出站。
     enabled: bool
     notice_seen: bool
-    #: 尚未生成时为 None。
+    #: None until generated. / 尚未生成时为 None。
     instance_id: str | None
 
 
 class OfficialServiceClient:
-    """已开启的官方服务的一次会话：每个请求携带实例标识头。"""
+    """A session with the enabled official service: every request carries the instance identity header. / 已开启的官方服务的一次会话：每个请求携带实例标识头。"""
 
     def __init__(self, *, base_url: str, instance_id: str, http_client: httpx.AsyncClient, timeout: float) -> None:
         self._base_url = base_url
@@ -128,7 +146,9 @@ class OfficialServiceClient:
         self._timeout = timeout
 
     async def request(self, method: str, path: str, *, json: object | None = None) -> httpx.Response:
-        """``path`` 相对 ``/api/v1``；2xx 原样返回，其余抛 :class:`OfficialServiceError` 或 502。"""
+        """``path`` is relative to ``/api/v1``; 2xx returned as is, otherwise raises :class:`OfficialServiceError` or 502.
+
+        ``path`` 相对 ``/api/v1``；2xx 原样返回，其余抛 :class:`OfficialServiceError` 或 502。"""
         try:
             response = await self._http_client.request(
                 method,
@@ -160,7 +180,7 @@ class OfficialServiceClient:
         await self.request("PUT", "/market/ratings", json={**ref.to_json(), "stars": stars})
 
     async def aggregates(self, refs: Sequence[EntryRef]) -> list[EntryAggregate]:
-        """按请求顺序返回；超过单次上限时分批查询。"""
+        """Returned in request order; queried in batches when over the per-call limit. / 按请求顺序返回；超过单次上限时分批查询。"""
         aggregates: list[EntryAggregate] = []
         for start in range(0, len(refs), AGGREGATES_BATCH_SIZE):
             batch = refs[start : start + AGGREGATES_BATCH_SIZE]
@@ -173,7 +193,9 @@ class OfficialServiceClient:
     async def create_submission(
         self, *, type: str, slug: str, files: Mapping[str, bytes], github_username: str | None
     ) -> SubmissionStatus:
-        """文件内容按标准 base64 发送；同实例同 slug 的开放中提交由官方服务推到同一 PR，令牌不变。"""
+        """File contents are sent as standard base64; open submissions from the same instance with the same slug are pushed to the same PR by the official service, token unchanged.
+
+        文件内容按标准 base64 发送；同实例同 slug 的开放中提交由官方服务推到同一 PR，令牌不变。"""
         meta = {"github_username": github_username} if github_username else {}
         response = await self.request(
             "POST",
@@ -192,7 +214,9 @@ class OfficialServiceClient:
 
 
 def _parse_submission(response: httpx.Response, *, expected: Mapping[str, str]) -> SubmissionStatus:
-    """``expected`` 是请求所指的字段；响应属于另一个提交时按不可用处理。"""
+    """``expected`` is the field the request refers to; a response belonging to another submission is treated as unavailable.
+
+    ``expected`` 是请求所指的字段；响应属于另一个提交时按不可用处理。"""
     try:
         body = response.json()
         fields = {name: body[name] for name in ("token", "type", "slug", "status", "pr_url")}
@@ -223,6 +247,7 @@ def _parse_aggregates(response: httpx.Response, refs: Sequence[EntryRef]) -> lis
                 and (average is None or (isinstance(average, int | float) and not isinstance(average, bool)))
             ):
                 raise TypeError("aggregate field types")
+            # Out-of-range values mean the response cannot be trusted: the whole batch is treated as unavailable and the frontend shows no numbers.
             # 越界值说明响应不可信：整批按不可用处理，前端不展示数字。
             if installs < 0 or count < 0 or (average is not None and not 1 <= average <= 5):
                 raise ValueError("aggregate field range")
@@ -244,7 +269,12 @@ def _is_enabled(raw: str) -> bool:
 
 
 class OfficialServiceGateway:
-    """官方服务的开关与实例标识，以及按当前设置开出的 :class:`OfficialServiceClient`。
+    """The official service switch and instance identity, plus the :class:`OfficialServiceClient` opened per current settings.
+
+    In production one instance is shared via :func:`get_official_service_gateway`; settings reads/writes use their own DB
+    session and do not involve the caller's transaction.
+
+    官方服务的开关与实例标识，以及按当前设置开出的 :class:`OfficialServiceClient`。
 
     生产环境经 :func:`get_official_service_gateway` 共享一个实例；设置读写使用自己的数据库会话，
     不牵连调用方的事务。
@@ -285,14 +315,18 @@ class OfficialServiceGateway:
         return await self.state()
 
     async def reset_instance_id(self) -> OfficialServiceState:
-        """删除实例标识；下次出站时生成新的，官方服务把它当作新实例。"""
+        """Delete the instance identity; a new one is generated on the next outbound call and the official service treats it as a new instance.
+
+        删除实例标识；下次出站时生成新的，官方服务把它当作新实例。"""
         async with self._session_factory() as session:
             await SystemSettingRepository(session).delete(INSTANCE_ID_SETTING)
             await session.commit()
         return await self.state()
 
     async def open(self) -> OfficialServiceClient | None:
-        """关闭时返回 None 且不生成实例标识；开启时按需生成实例标识。"""
+        """Returns None when disabled without generating an instance identity; when enabled generates one if needed.
+
+        关闭时返回 None 且不生成实例标识；开启时按需生成实例标识。"""
         if not self._base_url:
             return None
         async with self._session_factory() as session:
@@ -307,14 +341,18 @@ class OfficialServiceGateway:
         )
 
     async def require(self) -> OfficialServiceClient:
-        """同 :meth:`open`，关闭时抛 409 ``official_service_disabled``。"""
+        """Same as :meth:`open`, but raises 409 ``official_service_disabled`` when disabled.
+
+        同 :meth:`open`，关闭时抛 409 ``official_service_disabled``。"""
         client = await self.open()
         if client is None:
             raise ConflictError("official_service_disabled")
         return client
 
     async def report_install(self, ref: EntryRef, *, version: str, app_version: str) -> None:
-        """安装事务提交后的旁路上报：关闭时不出站；任何失败只记日志，不重试。"""
+        """Side-channel report after the install transaction commits: no outbound call when disabled; any failure is only logged, no retry.
+
+        安装事务提交后的旁路上报：关闭时不出站；任何失败只记日志，不重试。"""
         try:
             client = await self.open()
             if client is not None:
@@ -323,7 +361,9 @@ class OfficialServiceGateway:
             logger.warning("Official service install report failed for %s/%s", ref.type, ref.slug, exc_info=True)
 
     async def _create_instance_id(self) -> str:
-        """并发首次生成时以先落库者为准；先落库的标识随即被重置删除时重新生成。"""
+        """On concurrent first generation, the first one persisted wins; if that identity is then reset and deleted, generate again.
+
+        并发首次生成时以先落库者为准；先落库的标识随即被重置删除时重新生成。"""
         while True:
             candidate = str(uuid.uuid4())
             async with self._session_factory() as session:
@@ -341,7 +381,9 @@ _gateway: OfficialServiceGateway | None = None
 
 
 def get_official_service_gateway() -> OfficialServiceGateway:
-    """进程内共享的实例：地址在进程启动后首次使用时从环境变量读定。"""
+    """Instance shared in process: the URL is read from the environment variable on first use after process start.
+
+    进程内共享的实例：地址在进程启动后首次使用时从环境变量读定。"""
     global _gateway
     if _gateway is None:
         from lib.db import async_session_factory

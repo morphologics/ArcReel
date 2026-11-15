@@ -1,4 +1,9 @@
-"""TextGenerator — 文本生成 + 记账包装层。
+"""TextGenerator — text generation + ledger wrapper.
+
+Like MediaGenerator, it combines TextBackend + Ledger,
+so callers don't need to care about accounting details.
+
+TextGenerator — 文本生成 + 记账包装层。
 
 类似 MediaGenerator，组合 TextBackend + Ledger，
 调用方无需关心记账细节。
@@ -29,14 +34,21 @@ logger = logging.getLogger(__name__)
 
 
 def effective_max_output_tokens(registered: int | None) -> int:
-    """文本请求实际生效的输出上限：取 min(模型登记的最大输出长度, 64000)，未登记按 64000。"""
+    """The effective output limit of a text request: min(the model's registered max output length, 64000), or 64000 if unregistered.
+
+    文本请求实际生效的输出上限：取 min(模型登记的最大输出长度, 64000)，未登记按 64000。"""
     if registered is None or registered <= 0:
         return DEFAULT_MAX_OUTPUT_TOKENS
     return min(registered, DEFAULT_MAX_OUTPUT_TOKENS)
 
 
 class TextGenerator:
-    """组合 TextBackend + Ledger，统一封装文本生成 + 记账。
+    """Combines TextBackend + Ledger, wrapping text generation + accounting uniformly.
+
+    The output limit of each request is bounded by :func:`effective_max_output_tokens`: values passed by the caller can
+    only be lower, never exceeding the common cap of the model's registered max output length and 64000.
+
+    组合 TextBackend + Ledger，统一封装文本生成 + 记账。
 
     每次请求的输出上限按 :func:`effective_max_output_tokens` 收口：调用方传入的值只能更低，
     不能越过模型登记的最大输出长度与 64000 的共同上限。
@@ -64,12 +76,12 @@ class TextGenerator:
 
     @property
     def model(self) -> str:
-        """当前 backend 的模型名称。"""
+        """Model name of the current backend. / 当前 backend 的模型名称。"""
         return self.backend.model
 
     @property
     def max_output_tokens(self) -> int:
-        """本生成器每次请求实际生效的输出上限（单位 token）。"""
+        """The effective output limit (in tokens) of each request of this generator. / 本生成器每次请求实际生效的输出上限（单位 token）。"""
         return self._max_output_tokens
 
     @classmethod
@@ -81,7 +93,12 @@ class TextGenerator:
         purpose: CallPurpose,
         user_id: str = DEFAULT_USER_ID,
     ) -> TextGenerator:
-        """工厂方法：根据任务类型创建对应的 backend + ledger。
+        """Factory method: create the matching backend + ledger for the task type.
+
+        ``purpose`` is required: text calls have no task to point back to, so the purpose can only be declared by the call
+        site, and the same ``task_type`` serves several purposes (script generation and episode planning both use SCRIPT).
+
+        工厂方法：根据任务类型创建对应的 backend + ledger。
 
         ``purpose`` 是必填的：文本调用没有任务可回指，来源只能由调用点声明，
         同一个 ``task_type`` 会服务多种来源（剧本生成与分集规划都走 SCRIPT）。
@@ -105,7 +122,14 @@ class TextGenerator:
         *,
         require_complete: bool = False,
     ) -> TextGenerationResult:
-        """生成文本并自动记录用量。
+        """Generate text and record usage automatically.
+
+        The :class:`TextOutputTruncatedError` re-raised when structured output is truncated carries the resolution-layer
+        provider_id, model ID and whether it is a custom provider model. ``require_complete`` is for free-text requests that need
+        a complete reply (e.g. the whole reply must parse as JSON): on truncation it likewise raises that exception rather than
+        returning an incomplete result.
+
+        生成文本并自动记录用量。
 
         结构化输出被截断时重新抛出的 :class:`TextOutputTruncatedError` 带上解析层 provider_id、
         模型 ID 与是否为自定义供应商的模型。``require_complete`` 供需要完整回复的自由文本请求使用

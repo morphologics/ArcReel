@@ -1,4 +1,4 @@
-"""PDF 抽取：pdf_oxide 主线，扫描件检测后明确报错。"""
+"""PDF extraction: pdf_oxide main path, explicit error after scan detection. / PDF 抽取：pdf_oxide 主线，扫描件检测后明确报错。"""
 
 from pathlib import Path
 
@@ -38,12 +38,14 @@ class PdfOxideExtractor:
                     total_chars_via_chars_api += len(chars)
                     chars_api_ok_pages += 1
                 except Exception:
-                    # chars API 失败不视作致命，回退到文本长度判断
+                    # a chars API failure is not fatal; fall back to text-length judgment / chars API 失败不视作致命，回退到文本长度判断
                     pass
 
         full = "\n\n".join(pages_text).strip()
         page_count = max(page_count, 1)
 
+        # Only when the chars API succeeded on at least one page and the total char count is 0 is it a strong "no text layer"
+        # signal; otherwise fall back to the character density threshold. Avoids misjudging an all-page chars API failure as a scan.
         # 仅在 chars API 至少有一页成功且总字符数为 0 时，才视作"无文字层"的强信号；
         # 否则回退到字符密度阈值。避免把 chars API 全页异常误判为扫描件。
         chars_indicates_scanned = chars_api_ok_pages > 0 and total_chars_via_chars_api == 0

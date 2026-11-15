@@ -1,4 +1,22 @@
-"""单集目标时长（秒）的单一真相源：字段名、硬区间、读时解析。
+"""Single source of truth for the per-episode target duration (seconds): field name, hard range, parsing on read.
+
+An optional project-level setting, stored at the top level of ``project.json``. It describes the **expected size of
+the whole episode's final cut**, a different scale from ``default_duration`` (the default seconds preference for a
+single shot / unit): the former constrains "how many to split into", the latter "how long each is"; both are soft
+preferences that content needs may override, with no hard blocking (for why hard creative limits are rejected see
+``.out-of-scope/product-enforced-creative-limits.md``).
+
+Ad projects do not hold this field: the episode size of ads / shorts is governed by the ``target_duration`` budget +
+the ratio table, and having both would give shot planning two competing total-size rules at once. The ban follows the
+same rule as the ban of ``default_duration`` on ad: on the rewrite side (REST PATCH, ``patch_project``) the field is
+rejected as soon as it appears, including an explicit null, since null there is a "clear" action; on the create side
+null means "not provided", equivalent to omitting it, neither persisted nor an error.
+
+The write side (create / PATCH request models, the ``patch_project`` allowlist) and the read side share
+``is_valid_episode_target_duration`` as the one yardstick; consumers only take the value via
+``project_episode_target_duration``, not each reading the project.json field themselves.
+
+单集目标时长（秒）的单一真相源：字段名、硬区间、读时解析。
 
 项目级可选设置，落在 ``project.json`` 顶层。它描述的是**整集成片的期望体量**，与
 ``default_duration``（单个分镜 / unit 的默认秒数偏好）是两个尺度：前者约束「拆多少个」，
@@ -19,9 +37,13 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any
 
-#: 单集目标时长在 ``project.json`` 的顶层字段名（秒）。
+#: Top-level ``project.json`` field name of the per-episode target duration (seconds). / 单集目标时长在 ``project.json`` 的顶层字段名（秒）。
 EPISODE_TARGET_DURATION_FIELD: str = "episode_target_duration"
 
+#: Hard range of the per-episode target duration (closed interval, seconds). The loose range only catches obvious mis-entries (milliseconds,
+#: minutes, or the length of the whole series entered); within the range no leaning hint is given: the exact value is a creative decision.
+#: Lower bound 10 seconds: an "episode" shorter than this cannot fit one complete shortest-tier video unit plus one dialogue line, so it can only be a mis-entry.
+#: Upper bound 600 seconds: ten minutes is already far beyond a short-video episode; longer final cut needs should be split into episodes rather than stretching one.
 #: 单集目标时长的硬区间（闭区间，秒）。宽松区间只拦明显误输入（填了毫秒、填了分钟数、
 #: 填了整部剧的时长），区间内不做任何倾向性提示——具体取多少是创作决策。
 #: 下界 10 秒：短于此的「整集」装不下一个完整的最短档视频单元加一句台词，只可能是误输入。
@@ -31,7 +53,15 @@ MAX_EPISODE_TARGET_DURATION: int = 600
 
 
 def is_valid_episode_target_duration(value: Any) -> bool:
-    """该数值是否是落在硬区间内的整数秒（``10 <= value <= 600``）。
+    """Whether the value is an integer number of seconds within the hard range (``10 <= value <= 600``).
+
+    Frontend input validation, request model validation, ``patch_project`` coercion and the read guard after
+    persistence share this one yardstick. Only ``int`` is accepted: seconds are an integer quantity, and float values
+    are always judged unusable rather than silently rounded, since silent rounding would make the setting the user sees
+    differ from the effective value. ``bool`` is a subclass of ``int`` and is explicitly excluded, so a JSON ``true`` is
+    not taken as 1 second.
+
+    该数值是否是落在硬区间内的整数秒（``10 <= value <= 600``）。
 
     前端输入校验、请求模型校验、``patch_project`` 强制转换与持久化后的读时守卫共用这一把尺。
     只接受 ``int``：秒数是整数量纲，浮点值一律判为不可用而非静默取整——静默取整会让用户看到
@@ -44,7 +74,14 @@ def is_valid_episode_target_duration(value: Any) -> bool:
 
 
 def project_episode_target_duration(project: Mapping[str, Any] | None) -> int | None:
-    """从 project.json 解析单集目标时长，未填 / 脏值 / 越界一律返回 ``None``。
+    """Parse the per-episode target duration from project.json; unset / dirty / out-of-range values all return ``None``.
+
+    Returning ``None`` means "no target set": the script plan prompt does not inject this soft constraint and the review
+    panel shows no comparison. The write side already rejects out-of-range values by the same yardstick; this guard is a
+    read-time fallback against hand-edited project.json and historical dirty data: one broken preference field is not
+    worth crashing an already-paid generation.
+
+    从 project.json 解析单集目标时长，未填 / 脏值 / 越界一律返回 ``None``。
 
     返回 ``None`` 即「未设目标」，脚本规划的提示词不注入该软约束、审核面板不展示对比。
     写入侧已按同一把尺拒绝越界值，这里的守卫是对手改 project.json 与历史脏数据的读时兜底：
