@@ -18,6 +18,7 @@ import {
   useAppStore,
 } from "@/stores/app-store";
 import { GlobalHeader } from "./GlobalHeader";
+import { StudioNavHotkeys } from "./StudioNavHotkeys";
 import { useEditFocusStore } from "@/stores/edit-focus-store";
 import { AssetSidebar } from "./AssetSidebar";
 import { TaskFailureListener } from "./TaskFailureListener";
@@ -305,6 +306,8 @@ export function StudioLayout({ children }: StudioLayoutProps) {
     <div ref={shellRef} className="relative flex h-dvh flex-col overflow-hidden text-foreground">
       <TaskFailureListener projectName={sseProjectName} />
       <ScriptGenerationNoticeListener />
+      {/* YouReel: navigation hot keys (Settings → Hot keys) */}
+      <StudioNavHotkeys />
       {!focusOn && <GlobalHeader />}
       <ResizablePanelGroup className="min-h-0 flex-1" onLayoutChanged={handleLayoutChanged}>
         {/* focus mode (Edit view): no sidebar */}

@@ -41,6 +41,17 @@ export const HOTKEY_ACTIONS = {
     inTextFields: true,
     claimOutsideScope: true,
   },
+  // YouReel: go to the workspace pages from anywhere in a project. Alt+Shift + a letter: free in the browser on every
+  // platform we know of, and in OpenReel, which reads these same bindings (shared storage, same site) for its own
+  // way back to the studio.
+  "nav.overview": { scope: "global", labelKey: "dashboard:hotkeys_action_nav_overview", defaultBinding: { key: "o", alt: true, shift: true } },
+  "nav.episodes": { scope: "global", labelKey: "dashboard:hotkeys_action_nav_episodes", defaultBinding: { key: "e", alt: true, shift: true } },
+  "nav.characters": { scope: "global", labelKey: "dashboard:hotkeys_action_nav_characters", defaultBinding: { key: "c", alt: true, shift: true } },
+  "nav.scenes": { scope: "global", labelKey: "dashboard:hotkeys_action_nav_scenes", defaultBinding: { key: "s", alt: true, shift: true } },
+  "nav.props": { scope: "global", labelKey: "dashboard:hotkeys_action_nav_props", defaultBinding: { key: "p", alt: true, shift: true } },
+  "nav.settings": { scope: "global", labelKey: "dashboard:hotkeys_action_nav_settings", defaultBinding: { key: "g", alt: true, shift: true } },
+  "nav.editor": { scope: "global", labelKey: "dashboard:hotkeys_action_nav_editor", defaultBinding: { key: "r", alt: true, shift: true } },
+  "nav.agent": { scope: "global", labelKey: "dashboard:hotkeys_action_nav_agent", defaultBinding: { key: "a", alt: true, shift: true } },
 } satisfies Record<string, HotkeyActionDef>;
 
 export type HotkeyActionId = keyof typeof HOTKEY_ACTIONS;
@@ -79,8 +90,11 @@ export function sameBinding(a: HotkeyBinding, b: HotkeyBinding): boolean {
 
 /** ⌘ and Ctrl both count as `mod` on every platform, as the browser's own shortcuts are matched by users either way. */
 export function matchesBinding(event: KeyboardEvent, binding: HotkeyBinding): boolean {
+  // YouReel: with Alt (⌥) a Mac types a symbol instead of the letter (⌥⇧O = Ø), so letter bindings with Alt also
+  // match the physical key
+  const letterByCode = binding.alt && /^Key[A-Z]$/.test(event.code ?? "") ? event.code.slice(3).toLowerCase() : null;
   return (
-    normalizeKey(event.key) === normalizeKey(binding.key) &&
+    (normalizeKey(event.key) === normalizeKey(binding.key) || letterByCode === normalizeKey(binding.key)) &&
     (event.metaKey || event.ctrlKey) === Boolean(binding.mod) &&
     event.altKey === Boolean(binding.alt) &&
     event.shiftKey === Boolean(binding.shift)
