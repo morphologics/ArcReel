@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { navigate } from "wouter/use-browser-location";
 import { API } from "@/api";
 import { pickDefaultTimeline } from "./timeline-view";
 
@@ -75,3 +76,32 @@ export function openEpisodeInOpenReel(projectName: string, episode: number): voi
     })
     .catch(() => tab.close());
 }
+
+/** The browser tab name of the studio, so OpenReel's links back ("Open shot … in YouReel Studio") land in it. */
+export const STUDIO_TAB = "youreel-studio";
+
+/**
+ * Let OpenReel move this studio tab to another page without reloading it: the tab takes the name
+ * {@link STUDIO_TAB} (unless it already has one) and offers `window.youreelNavigate(url)`, which goes to a same-origin
+ * `/app/…` address in-app. OpenReel finds the tab by name (window.open with an empty address doesn't navigate an
+ * existing tab) and calls it, as the studio calls OpenReel's `youreelOpenPack`. Returns the undo (tests).
+ */
+export function exposeStudioNavigate(): () => void {
+  if (!window.name) window.name = STUDIO_TAB;
+  const target = window as Window & { youreelNavigate?: (url: string) => boolean };
+  target.youreelNavigate = (url: string) => {
+    let to: URL;
+    try {
+      to = new URL(url, window.location.href);
+    } catch {
+      return false;
+    }
+    if (to.origin !== window.location.origin || !to.pathname.startsWith("/app/")) return false;
+    navigate(to.pathname + to.search + to.hash);
+    return true;
+  };
+  return () => {
+    delete target.youreelNavigate;
+  };
+}
+

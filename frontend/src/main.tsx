@@ -5,6 +5,7 @@ import { i18nReady } from "@/i18n";
 import { BRAND, BRAND_DOCUMENT_TITLE } from "@/branding";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { initTheme } from "@/theme";
+import { exposeStudioNavigate } from "@/components/canvas/edit/open-in-openreel";
 
 import "@fontsource-variable/inter";
 import "@fontsource-variable/jetbrains-mono";
@@ -30,6 +31,9 @@ initTheme();
 
 // Restore login state from localStorage / 从 localStorage 恢复登录状态
 useAuthStore.getState().initialize();
+
+// YouReel: OpenReel's links back ("Open shot … in YouReel Studio") move this tab in-app instead of opening another
+exposeStudioNavigate();
 
 const root = document.getElementById("app-root");
 if (root) {
