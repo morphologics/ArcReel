@@ -706,8 +706,8 @@ async def lifespan(app: FastAPI):
 
 # Create the FastAPI app / 创建 FastAPI 应用
 app = FastAPI(
-    title="视频项目管理 WebUI",
-    description="AI 视频生成工作空间的 Web 管理界面",
+    title="YouReel Studio",
+    description="Web workspace for AI video production",
     version="1.0.0",
     lifespan=lifespan,
     dependencies=[Depends(require_valid_project_name)],
@@ -1015,8 +1015,8 @@ def create_generation_worker() -> GenerationWorker:
 
 @app.get("/health")
 async def health_check():
-    """健康检查"""
-    return {"status": "ok", "message": "视频项目管理 WebUI 运行正常"}
+    """Health check / 健康检查"""
+    return {"status": "ok", "message": "YouReel Studio is running"}
 
 
 @app.get("/agent-installation-guide.md", include_in_schema=False)
