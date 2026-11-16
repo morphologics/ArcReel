@@ -7,6 +7,7 @@
  */
 
 import { getToken, clearToken } from "@/utils/auth";
+import { noteStudioWaking, waitForStudio } from "./studio-waking";
 import type { SseStreamError } from "@/utils/sse-stream";
 import { isDemoProject } from "@/onboarding/demo-project";
 import i18n from "@/i18n";
@@ -37,6 +38,8 @@ export const API_BASE = "/api/v1";
 export async function throwIfNotOk(response: Response, fallbackMsg: string): Promise<void> {
   if (!response.ok) {
     handleUnauthorized(response);
+    // YouReel: the studio's backend is being woken: show the restarting screen until it answers
+    noteStudioWaking(response);
     const error = await response
       .json()
       .catch(() => ({ detail: response.statusText })) as ErrorResponse;
@@ -196,7 +199,9 @@ export async function requestJson<T = unknown>(
     },
   };
 
-  const response = await fetch(url, withAuth(endpoint, { ...defaultOptions, ...options }));
+  const init = withAuth(endpoint, { ...defaultOptions, ...options });
+  // YouReel: while the studio's backend is being woken, wait for it (restarting screen) instead of failing
+  const response = await waitForStudio(await fetch(url, init), () => fetch(url, init), options.signal);
 
   if (!response.ok) {
     handleUnauthorized(response);

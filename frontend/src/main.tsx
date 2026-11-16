@@ -6,6 +6,7 @@ import { BRAND, BRAND_DOCUMENT_TITLE } from "@/branding";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { initTheme } from "@/theme";
 import { exposeStudioNavigate } from "@/components/canvas/edit/open-in-openreel";
+import { StudioWakingOverlay } from "@/components/shared/StudioWakingOverlay";
 
 import "@fontsource-variable/inter";
 import "@fontsource-variable/jetbrains-mono";
@@ -49,6 +50,7 @@ if (root) {
     createRoot(root).render(
       <TooltipProvider>
         <AppRoutes />
+        <StudioWakingOverlay />
       </TooltipProvider>,
     );
   i18nReady.then(render, (err) => {
