@@ -15,9 +15,24 @@ export const STUDIO_WAKING_GIVE_UP_MS = 3 * 60_000;
 interface StudioWakingState {
   /** Requests waiting for the backend right now; the overlay shows while there are any. */
   waiting: number;
+  /** The host's waiting card (a self-contained HTML page sent with the wake answer as `html`), shown in the dialog;
+   * null until a wake answer has carried one (the dialog then shows its built-in card). */
+  html: string | null;
 }
 
-export const useStudioWakingStore = create<StudioWakingState>(() => ({ waiting: 0 }));
+export const useStudioWakingStore = create<StudioWakingState>(() => ({ waiting: 0, html: null }));
+
+/** Keep the waiting card a wake answer carries (`{"detail": …, "html": …}`); the answer itself stays unread. */
+function takeWaitingCard(response: Response): void {
+  void response
+    .clone()
+    .json()
+    .then((body: unknown) => {
+      const html = (body as { html?: unknown } | null)?.html;
+      if (typeof html === "string" && html.trim() !== "") useStudioWakingStore.setState({ html });
+    })
+    .catch(() => {});
+}
 
 /** Whether this answer is the host's "the studio is starting" rather than the backend's. */
 export function isStudioWakingResponse(response: Response): boolean {
@@ -58,6 +73,7 @@ export async function waitForStudio(
   signal?: AbortSignal | null,
 ): Promise<Response> {
   if (!isStudioWakingResponse(first)) return first;
+  takeWaitingCard(first);
   useStudioWakingStore.setState((s) => ({ waiting: s.waiting + 1 }));
   const started = Date.now();
   let last = first;

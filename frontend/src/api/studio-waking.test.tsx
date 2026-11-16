@@ -22,7 +22,7 @@ const ok = (body: unknown) => new Response(JSON.stringify(body), { status: 200, 
 describe("studio waking", () => {
   beforeEach(() => {
     vi.useFakeTimers();
-    useStudioWakingStore.setState({ waiting: 0 });
+    useStudioWakingStore.setState({ waiting: 0, html: null });
   });
   afterEach(() => {
     vi.useRealTimers();
@@ -83,6 +83,24 @@ describe("studio waking", () => {
     await vi.advanceTimersByTimeAsync(STUDIO_WAKING_RETRY_MS * 2);
     expect(fetchMock).toHaveBeenCalledWith("/health", expect.anything());
     expect(useStudioWakingStore.getState().waiting).toBe(0);
+  });
+
+  it("keeps the host's waiting card from a wake answer and shows it in a sandboxed frame", async () => {
+    const card = "<!doctype html><title>Waking</title><main>Waking your studio</main>";
+    const answer = () =>
+      new Response(JSON.stringify({ detail: "starting", html: card }), { status: 503, headers: { "X-Studio-Waking": "1" } });
+    const result = waitForStudio(answer(), vi.fn().mockResolvedValue(ok({})));
+    await vi.advanceTimersByTimeAsync(STUDIO_WAKING_RETRY_MS);
+    await result;
+    expect(useStudioWakingStore.getState().html).toBe(card);
+    vi.useRealTimers();
+    render(<StudioWakingOverlay />);
+    act(() => useStudioWakingStore.setState({ waiting: 1 }));
+    const dialog = await screen.findByRole("dialog");
+    const frame = dialog.querySelector("iframe");
+    expect(frame).toBeInTheDocument();
+    expect(frame).toHaveAttribute("sandbox", "");
+    expect(frame).toHaveAttribute("srcdoc", card);
   });
 
   it("the restarting dialog shows only while something waits", async () => {
