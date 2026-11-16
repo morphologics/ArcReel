@@ -9,16 +9,31 @@ const OPENREEL_PAGE = "/reel/index.html";
 // Whether this studio serves OpenReel (experimental, so far only on the DEV studio): asked once per page load. A
 // studio without it answers the path with its own app page (SPA fallback), which doesn't name OpenReel.
 let available: Promise<boolean> | null = null;
+// The served OpenReel build: its main script's hash (assets/index-<hash>.js), new with every build. It goes into
+// OpenReel's address as ?v=<build>, so a browser (tablets especially) can't keep showing an older cached page.
+let build: string | null = null;
 function openReelAvailable(): Promise<boolean> {
-  available ??= fetch(OPENREEL_PAGE, { credentials: "same-origin" })
-    .then(async (response) => response.ok && (await response.text()).includes("OpenReel"))
+  available ??= fetch(OPENREEL_PAGE, { credentials: "same-origin", cache: "no-cache" })
+    .then(async (response) => {
+      if (!response.ok) return false;
+      const html = await response.text();
+      if (!html.includes("OpenReel")) return false;
+      build = /assets\/index-([\w-]+)\.js/.exec(html)?.[1] ?? null;
+      return true;
+    })
     .catch(() => false);
   return available;
+}
+
+/** OpenReel's page with the served build as ?v= (known once the probe has answered). */
+function openReelPage(): string {
+  return build ? `${OPENREEL_PAGE}?v=${encodeURIComponent(build)}` : OPENREEL_PAGE;
 }
 
 /** Forget the cached probe so the next caller asks again. */
 export function resetOpenReelProbeForTests(): void {
   available = null;
+  build = null;
 }
 
 /** Whether this studio serves OpenReel; null until the (once per page load) probe has answered. */
@@ -45,7 +60,7 @@ export function useOpenReelHref(projectName: string, timelineId: string): string
   const served = useOpenReelAvailable();
   if (!served) return null;
   const pack = API.getEditTimelineOreelpackUrl(projectName, timelineId);
-  return `${OPENREEL_PAGE}#/arcreel?pack=${encodeURIComponent(pack)}`;
+  return `${openReelPage()}#/arcreel?pack=${encodeURIComponent(pack)}`;
 }
 
 /** The browser tab the studio keeps OpenReel in (one, reused). */
@@ -60,8 +75,8 @@ const OPENREEL_TAB = "youreel-openreel";
 export function openEpisodeInOpenReel(projectName: string, episode: number): void {
   const tab = window.open("", OPENREEL_TAB);
   if (!tab) return;
-  void API.listEditTimelines(projectName, episode)
-    .then(({ timelines }) => {
+  void Promise.all([API.listEditTimelines(projectName, episode), openReelAvailable()])
+    .then(([{ timelines }]) => {
       const timelineId = pickDefaultTimeline(timelines);
       if (!timelineId) {
         tab.close();
@@ -71,7 +86,7 @@ export function openEpisodeInOpenReel(projectName: string, episode: number): voi
       const packUrl = new URL(pack, window.location.href).href;
       const open = (tab as Window & { youreelOpenPack?: (url: string) => void }).youreelOpenPack;
       if (typeof open === "function") open(packUrl);
-      else tab.location.href = `${OPENREEL_PAGE}#/arcreel?pack=${encodeURIComponent(pack)}`;
+      else tab.location.href = `${openReelPage()}#/arcreel?pack=${encodeURIComponent(pack)}`;
       tab.focus();
     })
     .catch(() => tab.close());

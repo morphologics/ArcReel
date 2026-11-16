@@ -1,5 +1,6 @@
-import { afterEach, describe, expect, it } from "vitest";
-import { STUDIO_TAB, exposeStudioNavigate } from "./open-in-openreel";
+import { renderHook, waitFor } from "@testing-library/react";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { STUDIO_TAB, exposeStudioNavigate, resetOpenReelProbeForTests, useOpenReelHref } from "./open-in-openreel";
 
 type NavigateWindow = Window & { youreelNavigate?: (url: string) => boolean };
 
@@ -40,5 +41,31 @@ describe("exposeStudioNavigate", () => {
     undo();
     undo = null;
     expect((window as NavigateWindow).youreelNavigate).toBeUndefined();
+  });
+});
+
+describe("useOpenReelHref", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    resetOpenReelProbeForTests();
+  });
+
+  it("carries the served build as ?v= so a cached older page can't be shown", async () => {
+    const page = '<!doctype html><title>OpenReel</title><script type="module" src="/reel/assets/index-BaY9ACxq.js"></script>';
+    const fetchMock = vi.fn(async () => new Response(page, { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+    const { result } = renderHook(() => useOpenReelHref("demo", "tl-1"));
+    await waitFor(() => expect(result.current).not.toBeNull());
+    expect(result.current).toMatch(/^\/reel\/index\.html\?v=BaY9ACxq#\/arcreel\?pack=/);
+    expect(fetchMock).toHaveBeenCalledWith("/reel/index.html", expect.objectContaining({ cache: "no-cache" }));
+  });
+
+  it("offers nothing where the studio doesn't serve OpenReel", async () => {
+    const fetchMock = vi.fn(async () => new Response("<!doctype html><title>YouReel Studio</title>", { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+    const { result } = renderHook(() => useOpenReelHref("demo", "tl-1"));
+    await waitFor(() => expect(fetchMock).toHaveBeenCalled());
+    await new Promise((r) => setTimeout(r, 0));
+    expect(result.current).toBeNull();
   });
 });
