@@ -6,6 +6,7 @@ import {
   STUDIO_WAKING_RETRY_MS,
   isStudioWakingResponse,
   noteStudioWaking,
+  reloadIfNewerBuild,
   useStudioWakingStore,
   waitForStudio,
 } from "./studio-waking";
@@ -93,5 +94,39 @@ describe("studio waking", () => {
     expect(screen.getByRole("status")).toBeInTheDocument();
     act(() => useStudioWakingStore.setState({ waiting: 0 }));
     await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+  });
+
+  describe("after waking: a newer build reloads the page", () => {
+    let reload: ReturnType<typeof vi.fn<() => void>>;
+    beforeEach(() => {
+      vi.useRealTimers();
+      reload = vi.fn<() => void>();
+      const script = document.createElement("script");
+      script.type = "module";
+      script.src = "/assets/index-OLD123.js";
+      script.id = "main-under-test";
+      document.head.appendChild(script);
+    });
+    afterEach(() => document.getElementById("main-under-test")?.remove());
+
+    it("reloads when the studio now serves another main script", async () => {
+      vi.stubGlobal("fetch", vi.fn(async () => new Response('<script type="module" crossorigin src="/assets/index-NEW456.js"></script>')));
+      expect(await reloadIfNewerBuild(reload)).toBe(true);
+      expect(reload).toHaveBeenCalledTimes(1);
+    });
+
+    it("stays when the build is the same", async () => {
+      vi.stubGlobal("fetch", vi.fn(async () => new Response('<script type="module" crossorigin src="/assets/index-OLD123.js"></script>')));
+      expect(await reloadIfNewerBuild(reload)).toBe(false);
+      expect(reload).not.toHaveBeenCalled();
+    });
+
+    it("does nothing without a built main script (dev server)", async () => {
+      document.getElementById("main-under-test")?.remove();
+      const fetchMock = vi.fn();
+      vi.stubGlobal("fetch", fetchMock);
+      expect(await reloadIfNewerBuild(reload)).toBe(false);
+      expect(fetchMock).not.toHaveBeenCalled();
+    });
   });
 });

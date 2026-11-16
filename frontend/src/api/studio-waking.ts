@@ -70,11 +70,40 @@ export async function waitForStudio(
         if (signal?.aborted) throw error;
         continue;
       }
-      if (!isStudioWakingResponse(last)) return last;
+      if (!isStudioWakingResponse(last)) {
+        void reloadIfNewerBuild();
+        return last;
+      }
     }
     return last;
   } finally {
     useStudioWakingStore.setState((s) => ({ waiting: Math.max(0, s.waiting - 1) }));
+  }
+}
+
+const MAIN_SCRIPT = /\/assets\/index-[\w-]+\.js/;
+let checkingBuild = false;
+
+/**
+ * Once the woken backend answers, load the page again if the studio now serves another build: a release restarts
+ * every studio, so an open tab passes through here and would otherwise go on running the old app until reloaded.
+ * Compares the main script of the page the studio serves now with the one this page runs; nothing to compare on the
+ * dev server (no built script), so nothing happens there.
+ */
+export async function reloadIfNewerBuild(reload: () => void = () => window.location.reload()): Promise<boolean> {
+  const running = document.querySelector<HTMLScriptElement>('script[type="module"][src*="/assets/index-"]')?.getAttribute("src");
+  if (!running || checkingBuild) return false;
+  checkingBuild = true;
+  try {
+    const html = await (await fetch("/", { cache: "no-store", credentials: "same-origin" })).text();
+    const served = MAIN_SCRIPT.exec(html)?.[0];
+    if (!served || running.endsWith(served)) return false;
+    reload();
+    return true;
+  } catch {
+    return false;
+  } finally {
+    checkingBuild = false;
   }
 }
 
