@@ -661,10 +661,16 @@ async def lifespan(app: FastAPI):
     from server.services.presentation.timeline_stream import start_stream_prebuild, stop_stream_prebuild
 
     stream_prebuild = start_stream_prebuild(get_project_manager())
+    # YouReel: give freed memory back to the system every few minutes (glibc malloc_trim; off with
+    # ARCREEL_MALLOC_TRIM_INTERVAL=0); cancelled on app shutdown
+    from server.services.memory_trim import start_memory_trim, stop_memory_trim
+
+    memory_trim = start_memory_trim()
     try:
         async with remote_mcp_host.run():
             yield
     finally:
+        await stop_memory_trim(memory_trim)
         await stop_stream_prebuild(stream_prebuild)
         await stop_trash_expiry(trash_expiry)
         await stop_official_sync(catalog_sync)
