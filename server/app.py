@@ -83,6 +83,7 @@ from server.dependencies import require_project_migration_ok, require_valid_proj
 from server.error_handlers import register_error_handlers
 from server.remote_mcp import mount_remote_mcp, remote_mcp_host
 from server.routers import (
+    activity,
     ad_script,
     agent_config,
     agent_llm,
@@ -950,6 +951,7 @@ app.include_router(api_keys.router, prefix="/api/v1", dependencies=[Depends(get_
 app.include_router(agent_config.router, prefix="/api/v1", dependencies=[Depends(get_current_user)], tags=["Agent 配置"])
 # The studio agent's model for the editor's AI chat (OpenReel next to the studio)
 app.include_router(agent_llm.router, prefix="/api/v1", dependencies=[Depends(get_current_user)])
+app.include_router(activity.router, prefix="/api/v1", dependencies=[Depends(get_current_user)])
 app.include_router(
     custom_providers.router, prefix="/api/v1", dependencies=[Depends(get_current_user)], tags=["自定义供应商"]
 )

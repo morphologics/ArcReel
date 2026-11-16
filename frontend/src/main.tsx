@@ -7,6 +7,7 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { initTheme } from "@/theme";
 import { exposeStudioNavigate } from "@/components/canvas/edit/open-in-openreel";
 import { StudioWakingOverlay } from "@/components/shared/StudioWakingOverlay";
+import { startActivitySignal } from "@/api/activity-signal";
 
 import "@fontsource-variable/inter";
 import "@fontsource-variable/jetbrains-mono";
@@ -35,6 +36,8 @@ useAuthStore.getState().initialize();
 
 // YouReel: OpenReel's links back ("Open shot … in YouReel Studio") move this tab in-app instead of opening another
 exposeStudioNavigate();
+// YouReel: tell the host the member is using the studio (its idle stop), on real use, at most once a minute
+startActivitySignal();
 
 const root = document.getElementById("app-root");
 if (root) {
