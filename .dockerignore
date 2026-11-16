@@ -20,3 +20,11 @@ htmlcov
 *.egg-info
 .claude/worktrees
 mutants/
+# Local-only DEV material, kept out of git by this checkout's .git/info/exclude: never into the image (Vite would
+# otherwise copy frontend/public/* into the served site, e.g. the self-hosted OpenReel build only DEV serves)
+.pnpm-store/
+frontend/e2e/dev-browse/
+frontend/public/mse-proto/
+frontend/public/mb-proto/
+frontend/public/oreel/
+frontend/public/reel/
