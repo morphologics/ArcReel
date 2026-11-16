@@ -95,4 +95,11 @@ HEALTHCHECK --interval=30s --timeout=5s --retries=3 \
     CMD curl -f http://localhost:1241/health || exit 1
 
 # Start command. / 启动命令
-CMD ["uv", "run", "uvicorn", "server.app:app", "--host", "0.0.0.0", "--port", "1241"]
+# Start the backend directly rather than through `uv run`: that stayed up as the backend's parent in every container
+# (~57 MB each, seen 2026-11-16) and checks / syncs the environment on every start. Its environment is set here: the
+# virtualenv first on PATH (any `python` the backend or the agent's shell starts is the app's), VIRTUAL_ENV, and /app
+# importable from anywhere (as the installed project made it).
+ENV VIRTUAL_ENV=/app/.venv \
+    PATH="/app/.venv/bin:$PATH" \
+    PYTHONPATH=/app
+CMD ["uvicorn", "server.app:app", "--host", "0.0.0.0", "--port", "1241"]
