@@ -17,6 +17,8 @@ export default {
   'upload': '上传',
   'loading': '加载中…',
   'backend_unreachable_retrying': '工作室正在重启…正在重试',
+  'studio_waking_title': '正在唤醒你的工作室',
+  'studio_waking_hint': '通常约 10 秒，准备好后会在这里继续。',
   'error': '错误',
   'success': '成功',
   'required': '必填',

@@ -17,6 +17,8 @@ export default {
   'upload': 'Tải lên',
   'loading': 'Đang tải...',
   'backend_unreachable_retrying': 'Studio đang khởi động lại… đang thử lại',
+  'studio_waking_title': 'Đang đánh thức studio của bạn',
+  'studio_waking_hint': 'Thường mất khoảng 10 giây. Mọi thứ sẽ tiếp tục tại đây ngay khi studio sẵn sàng.',
   'error': 'Lỗi',
   'success': 'Thành công',
   'required': 'bắt buộc',

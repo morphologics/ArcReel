@@ -227,6 +227,18 @@
         0%, 50% { opacity: 1; }
         50.01%, 100% { opacity: 0; }
     }
+
+    /* YouReel: the "Waking your studio" dialog (StudioWakingOverlay), as the host's waking page: the mark breathes, a
+       bar sweeps across; stopped by the global rule below under reduced motion */
+    --animate-waking-breathe: waking-breathe 2.4s ease-in-out infinite;
+    @keyframes waking-breathe {
+        50% { opacity: 0.55; transform: scale(0.94); }
+    }
+    --animate-waking-slide: waking-slide 1.4s ease-in-out infinite;
+    @keyframes waking-slide {
+        0% { transform: translateX(-100%); }
+        100% { transform: translateX(250%); }
+    }
 }
 
 @theme inline {

@@ -17,6 +17,8 @@ export default {
   'upload': 'Загрузить',
   'loading': 'Загрузка...',
   'backend_unreachable_retrying': 'Студия перезапускается… повторная попытка',
+  'studio_waking_title': 'Пробуждаем вашу студию',
+  'studio_waking_hint': 'Обычно около 10 секунд. Всё продолжится здесь, как только она будет готова.',
   'error': 'Ошибка',
   'success': 'Готово',
   'required': 'обязательно',

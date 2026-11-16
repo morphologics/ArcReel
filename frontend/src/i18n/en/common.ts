@@ -16,6 +16,8 @@ export default {
   'upload': 'Upload',
   'loading': 'Loading...',
   'backend_unreachable_retrying': 'Studio is restarting… retrying',
+  'studio_waking_title': 'Waking your studio',
+  'studio_waking_hint': 'Usually about 10 seconds. Everything carries on here as soon as it\'s ready.',
   'error': 'Error',
   'success': 'Success',
   'required': 'required',
