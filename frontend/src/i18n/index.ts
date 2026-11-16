@@ -80,7 +80,8 @@ export const i18nReady = i18n
   .use(LanguageDetector)
   .use(initReactI18next)
   .init({
-    fallbackLng: 'zh',
+    // YouReel: English, not upstream's Chinese, for a browser language the studio doesn't offer
+    fallbackLng: 'en',
     supportedLngs: SUPPORTED_LANGUAGES,
     debug: false,
     interpolation: { escapeValue: false },
@@ -89,5 +90,15 @@ export const i18nReady = i18n
     partialBundledLanguages: true,
     react: { useSuspense: false },
   });
+
+// YouReel: the page's declared language follows the studio's. index.html said zh-CN whatever the language, so browsers
+// offered to translate English pages "from Chinese".
+function syncDocumentLang(): void {
+  if (typeof document === 'undefined') return;
+  const lng = i18n.resolvedLanguage ?? i18n.language;
+  if (lng) document.documentElement.lang = lng.startsWith('zh') ? 'zh-CN' : lng;
+}
+i18n.on('languageChanged', syncDocumentLang);
+void i18nReady.then(syncDocumentLang, () => {});
 
 export default i18n;
