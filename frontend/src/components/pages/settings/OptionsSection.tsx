@@ -76,10 +76,13 @@ function OptionRow({ id, requirements }: { id: UserOptionId; requirements: Requi
   const def: UserOptionDef = USER_OPTIONS[id];
   const [value, setValue] = useUserOption(id);
   const choiceLabel = (choice: UserOptionChoice<string>) => choice.label ?? t(choice.labelKey ?? "");
-  // A stored value whose requirement is gone stays listed, so the select never shows an empty value
+  // Only what this studio offers is listed, and the select shows what actually applies here: a value whose requirement
+  // is missing (e.g. OpenReel, the default editor, where OpenReel isn't served) shows as the first offered choice,
+  // which is what opens (useDefaultEditor)
   const items = def.choices
-    .filter((choice) => choice.value === value || offered(choice.requires, requirements))
+    .filter((choice) => offered(choice.requires, requirements))
     .map((choice) => ({ value: choice.value, label: choiceLabel(choice) }));
+  const shown = items.some((item) => item.value === value) ? value : (items[0]?.value ?? value);
 
   return (
     <SettingRow
@@ -107,7 +110,7 @@ function OptionRow({ id, requirements }: { id: UserOptionId; requirements: Requi
       ) : (
         <Select
           items={items}
-          value={value}
+          value={shown}
           onValueChange={(next) => {
             const choice = def.choices.find((c) => c.value === next);
             if (choice) setValue(choice.value as never);

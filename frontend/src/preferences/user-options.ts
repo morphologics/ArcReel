@@ -224,7 +224,9 @@ export const USER_OPTIONS = {
       { value: "arcreel", labelKey: "dashboard:options_default_editor_arcreel" },
       { value: "openreel", label: "OpenReel", requires: "openreel" },
     ],
-    default: "arcreel",
+    // YouReel (owner 2026-11-16): OpenReel is every member's editor; the built-in one is the fallback a member can
+    // choose here, and what opens wherever OpenReel isn't served (useDefaultEditor)
+    default: "openreel",
   }),
   editor_own_tab: deviceToggle(EDITOR_OWN_TAB_STORAGE_KEY, {
     group: "workflow",

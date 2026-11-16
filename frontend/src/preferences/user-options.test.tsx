@@ -134,8 +134,33 @@ describe("useDefaultEditor", () => {
     expect(result.current.editor).toBe("openreel");
   });
 
-  it("is ready with the built-in editor even when the options can't be loaded", async () => {
+  it("is ready with the default, OpenReel, even when the options can't be loaded", async () => {
     vi.spyOn(API, "getUserOptions").mockRejectedValue(new Error("offline"));
+    serveOpenReel(true);
+    const { result } = renderHook(() => useDefaultEditor());
+
+    await waitFor(() => expect(result.current.ready).toBe(true));
+    expect(result.current.editor).toBe("openreel");
+  });
+
+  it("a member who never chose gets OpenReel where it is served, the built-in editor elsewhere", async () => {
+    vi.spyOn(API, "getUserOptions").mockResolvedValue({});
+    serveOpenReel(true);
+    const served = renderHook(() => useDefaultEditor());
+    await waitFor(() => expect(served.result.current.ready).toBe(true));
+    expect(served.result.current.editor).toBe("openreel");
+    served.unmount();
+
+    resetOpenReelProbeForTests();
+    useStudioOptionsStore.setState(useStudioOptionsStore.getInitialState(), true);
+    serveOpenReel(false);
+    const notServed = renderHook(() => useDefaultEditor());
+    await waitFor(() => expect(notServed.result.current.ready).toBe(true));
+    expect(notServed.result.current.editor).toBe("arcreel");
+  });
+
+  it("the built-in editor, once chosen, opens even where OpenReel is served", async () => {
+    vi.spyOn(API, "getUserOptions").mockResolvedValue({ default_editor: "arcreel" });
     serveOpenReel(true);
     const { result } = renderHook(() => useDefaultEditor());
 

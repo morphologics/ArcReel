@@ -72,18 +72,19 @@ describe("OptionsSection", () => {
     expect(within(listbox).getAllByRole("option").map((option) => option.textContent)).toEqual(["内置编辑器"]);
   });
 
-  it("工作室提供 OpenReel 时可选它作默认编辑器，并保存到工作室", async () => {
+  it("served OpenReel is the default editor; the built-in one can be chosen as the fallback and is saved", async () => {
     serveOpenReel(true);
-    const update = vi.spyOn(API, "updateUserOptions").mockResolvedValue({ default_editor: "openreel" });
+    const update = vi.spyOn(API, "updateUserOptions").mockResolvedValue({ default_editor: "arcreel" });
     const user = userEvent.setup();
     render(<OptionsSection />);
 
     expect(await screen.findByRole("heading", { name: "OpenReel 编辑器" })).toBeInTheDocument();
-    await user.click(screen.getByRole("combobox", { name: "默认编辑器" }));
-    await user.click(await screen.findByRole("option", { name: "OpenReel" }));
-
-    expect(update).toHaveBeenCalledWith({ default_editor: "openreel" });
     expect(screen.getByRole("combobox", { name: "默认编辑器" })).toHaveTextContent("OpenReel");
+    await user.click(screen.getByRole("combobox", { name: "默认编辑器" }));
+    await user.click(await screen.findByRole("option", { name: "内置编辑器" }));
+
+    expect(update).toHaveBeenCalledWith({ default_editor: "arcreel" });
+    expect(screen.getByRole("combobox", { name: "默认编辑器" })).toHaveTextContent("内置编辑器");
   });
 
   it("片段拖动改为立即移动后写入 OpenReel 读取的键", async () => {
