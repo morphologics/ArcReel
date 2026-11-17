@@ -221,7 +221,17 @@ class TimelineOreelPackService:
     async def media_file(self, project_name: str, timeline_id: str, asset_id: str) -> _Asset | None:
         """One medium of the latest revision's pack, by its stable id; None when the pack has no such medium or the
         file changed since the pack was built (the editor then reads the manifest again)."""
-        pack = await self.cached(project_name, timeline_id)
+        # A medium's id names its bytes, so any cached pack of this timeline that lists it can serve it: no timeline
+        # read and no lock per request (the editor asks for many, three at a time, right after the manifest).
+        now = time.monotonic()
+        pack = next(
+            (cached_pack for (p_name, t_id, _), (expires, cached_pack) in list(_CACHE.items())
+             if p_name == project_name and t_id == timeline_id and expires > now
+             and any(a.id == asset_id for a in cached_pack.assets)),
+            None,
+        )
+        if pack is None:
+            pack = await self.cached(project_name, timeline_id)
         asset = next((a for a in pack.assets if a.id == asset_id), None)
         if asset is None:
             return None
