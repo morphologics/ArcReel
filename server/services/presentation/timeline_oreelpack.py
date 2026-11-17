@@ -18,6 +18,7 @@ preview media):
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import struct
 import tempfile
@@ -100,6 +101,8 @@ class _Asset:
     type: str
     size: int
     path: Path
+    # the file's modification time when the pack was built: a cached pack refuses to serve a file changed since
+    mtime_ns: int = 0
 
 
 @dataclass(frozen=True)
@@ -110,6 +113,8 @@ class OreelPack:
     head: bytes
     assets: tuple[_Asset, ...]
     workdir: tempfile.TemporaryDirectory[str]
+    #: the manifest JSON alone (also inside ``head``), for the manifest route
+    manifest: bytes = b""
 
     @property
     def size(self) -> int:
@@ -168,14 +173,21 @@ def _track(track_id: str, kind: str, role: str, name: str, clips: list[dict], tr
     }
 
 
+#: Packs kept for the manifest + per-medium route, by (project, timeline, revision): (expires at, pack). One studio
+#: process serves one member, so this stays small; a pack's temporary files (hold stills) go with it.
+CACHE_SECONDS = 600
+_CACHE: dict[tuple[str, str, int], tuple[float, OreelPack]] = {}
+_CACHE_LOCK = asyncio.Lock()
+
+
 class TimelineOreelPackService:
     def __init__(self, projects: ProjectManager) -> None:
         self._projects = projects
         self._timelines = EditTimelineService(projects)
         self._preview = TimelinePreviewService(projects)
 
-    async def build(self, project_name: str, timeline_id: str) -> OreelPack:
-        readout = await self._timelines.read(project_name, timeline_id)
+    async def build(self, project_name: str, timeline_id: str, readout: EditTimelineReadout | None = None) -> OreelPack:
+        readout = readout or await self._timelines.read(project_name, timeline_id)
         media = await self._preview.media(project_name, timeline_id)
         project_dir = await asyncio.to_thread(self._projects.get_project_path, project_name)
         project = await asyncio.to_thread(self._projects.load_project, project_name)
@@ -186,6 +198,44 @@ class TimelineOreelPackService:
         except BaseException:
             await asyncio.to_thread(workdir.cleanup)
             raise
+
+    async def cached(self, project_name: str, timeline_id: str) -> OreelPack:
+        """The latest revision's pack, kept for a few minutes: the editor reads the manifest, then fetches only the media
+        it doesn't hold yet, one request each (``media_file``), without rebuilding the pack for every one."""
+        readout = await self._timelines.read(project_name, timeline_id)
+        key = (project_name, timeline_id, readout.revision)
+        async with _CACHE_LOCK:
+            now = time.monotonic()
+            for stale_key, (expires, stale) in list(_CACHE.items()):
+                if expires <= now and stale_key != key:
+                    del _CACHE[stale_key]
+                    await asyncio.to_thread(stale.workdir.cleanup)
+            hit = _CACHE.get(key)
+            if hit is not None:
+                _CACHE[key] = (now + CACHE_SECONDS, hit[1])
+                return hit[1]
+            pack = await self.build(project_name, timeline_id, readout)
+            _CACHE[key] = (now + CACHE_SECONDS, pack)
+            return pack
+
+    async def media_file(self, project_name: str, timeline_id: str, asset_id: str) -> _Asset | None:
+        """One medium of the latest revision's pack, by its stable id; None when the pack has no such medium or the
+        file changed since the pack was built (the editor then reads the manifest again)."""
+        pack = await self.cached(project_name, timeline_id)
+        asset = next((a for a in pack.assets if a.id == asset_id), None)
+        if asset is None:
+            return None
+        try:
+            stat = await asyncio.to_thread(asset.path.stat)
+        except OSError:
+            return None
+        if stat.st_size != asset.size or stat.st_mtime_ns != asset.mtime_ns:
+            async with _CACHE_LOCK:
+                for cache_key, (_, cached_pack) in list(_CACHE.items()):
+                    if cached_pack is pack:
+                        del _CACHE[cache_key]
+            return None
+        return asset
 
     def _episode_shots(self, project_name: str, project: dict, episode: int | None) -> dict[str, dict]:
         """The episode script's shots by shot id (every field: description, prompts with composition, lighting,
@@ -220,12 +270,17 @@ class TimelineOreelPackService:
         assets: list[_Asset] = []
         ids: dict[str, str] = {}
 
-        async def add_media(key: str, name: str, kind: str, path: Path, **meta: Any) -> str:
+        async def add_media(key: str, name: str, kind: str, path: Path, identity: str | None = None, **meta: Any) -> str:
             if key in ids:
                 return ids[key]
-            media_id = str(uuid.uuid4())
+            stat = await asyncio.to_thread(path.stat)
+            size = stat.st_size
+            # A stable id: the same file (same project, same role and version, same bytes on disk) gets the same id in
+            # every pack, so the editor can reuse media it already holds instead of downloading it again.
+            # ``identity`` stands in for the file's own size and time where the file is made fresh for each pack.
+            basis = identity or f"{size}:{stat.st_mtime_ns}"
+            media_id = "m" + hashlib.sha1(f"{project_name}|{key}|{basis}".encode()).hexdigest()[:24]
             ids[key] = media_id
-            size = (await asyncio.to_thread(path.stat)).st_size
             content_type = CONTENT_TYPES.get(path.suffix.lower(), "application/octet-stream")
             items.append({
                 "id": media_id, "name": name, "type": kind, "fileHandle": None, "blob": None,
@@ -236,7 +291,7 @@ class TimelineOreelPackService:
                     "sampleRate": 48000, "channels": 2, "fileSize": size, **meta,
                 },
             })
-            assets.append(_Asset(id=media_id, type=content_type, size=size, path=path))
+            assets.append(_Asset(id=media_id, type=content_type, size=size, path=path, mtime_ns=stat.st_mtime_ns))
             return media_id
 
         def video_path(unit_id: str) -> Path:
@@ -290,8 +345,11 @@ class TimelineOreelPackService:
             if clip.hold > 0:
                 still = Path(workdir.name) / f"hold-{clip.id}.jpg"
                 await _last_frame(path, source_in + picture, still)
+                source = await asyncio.to_thread(path.stat)
                 still_id = await add_media(
                     f"still:{clip.id}", f"{clip.unit_id}-hold.jpg", "image", still,
+                    # made fresh for each pack: identified by its source video and the frame's time
+                    identity=f"{source.st_size}:{source.st_mtime_ns}@{_r(source_in + picture)}",
                     duration=3600, width=width, height=height, hasVideo=True, hasAudio=False,
                 )
                 video_clips.append((None, _clip(
@@ -388,7 +446,7 @@ class TimelineOreelPackService:
         }, ensure_ascii=False).encode("utf-8")
         head = MAGIC + struct.pack("<I", len(manifest)) + manifest
         filename = f"{project_name}-ep{readout.timeline.episode}-{readout.timeline.id}-r{readout.revision}.oreelpack"
-        return OreelPack(filename=filename, head=head, assets=tuple(assets), workdir=workdir)
+        return OreelPack(filename=filename, head=head, assets=tuple(assets), workdir=workdir, manifest=manifest)
 
 
 async def _last_frame(video: Path, at: float, output: Path) -> None:

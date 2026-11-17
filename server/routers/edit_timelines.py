@@ -13,6 +13,7 @@ rendering is enqueued as a ``render`` lane task.
 from __future__ import annotations
 
 import asyncio
+import json
 import shutil
 from collections.abc import Awaitable, Callable
 from functools import partial
@@ -522,6 +523,46 @@ async def download_edit_timeline_oreelpack(
             # declare an encoding), so no CPU spent on it and the length reaches the browser
             "Content-Encoding": "identity",
         },
+    )
+
+
+@router.get("/projects/{project_name}/edit-timelines/{timeline_id}/oreelpack/manifest")
+async def edit_timeline_oreelpack_manifest(
+    project_name: str,
+    timeline_id: str,
+    service: TimelineOreelPackServiceDep,
+) -> Response:
+    """The latest revision's pack without its media: ``{filename, version, projectJson, assets: [{id, size, type}]}``.
+    Media ids are stable (the same file has the same id in every pack), so the editor fetches only the media it
+    doesn't hold yet, from ``…/oreelpack/media/{asset_id}``."""
+    try:
+        pack = await service.cached(project_name, timeline_id)
+    except EditTimelineError as exc:
+        raise edit_timeline_api_error(exc) from exc
+    body = b'{"filename":' + json.dumps(pack.filename).encode() + b"," + pack.manifest[1:]
+    return Response(content=body, media_type="application/json", headers={"Cache-Control": "no-store"})
+
+
+@router.get("/projects/{project_name}/edit-timelines/{timeline_id}/oreelpack/media/{asset_id}")
+async def edit_timeline_oreelpack_media(
+    project_name: str,
+    timeline_id: str,
+    asset_id: str,
+    service: TimelineOreelPackServiceDep,
+) -> FileResponse:
+    """One medium of the latest revision's pack, by its stable id. 404 when the pack has no such medium (or the file
+    changed since the pack was built: read the manifest again)."""
+    try:
+        asset = await service.media_file(project_name, timeline_id, asset_id)
+    except EditTimelineError as exc:
+        raise edit_timeline_api_error(exc) from exc
+    if asset is None:
+        raise HTTPException(status_code=404, detail="media_not_in_pack")
+    return FileResponse(
+        asset.path,
+        media_type=asset.type,
+        # same id, same bytes: the browser may keep it
+        headers={"Cache-Control": "private, max-age=86400", "Content-Encoding": "identity"},
     )
 
 

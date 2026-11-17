@@ -160,3 +160,24 @@ async def test_clips_carry_their_shot_from_the_episode_script(service: TimelineO
     assert (first["shot_label"], second["shot_label"]) == ("Shot 1", "Shot 2 · Hallway")
     # E3S03 has no script entry: the clip keeps its link without a shot
     assert "shot" not in video["clips"][3]["metadata"]["arcreel"]
+
+
+async def test_media_ids_are_stable_across_builds(service: TimelineOreelPackService) -> None:
+    """The same file gets the same id in every pack (the editor reuses media it already holds)."""
+    first, _, _, _ = await _unpack(service)
+    second, _, _, _ = await _unpack(service)
+    assert [a["id"] for a in first["assets"]] == [a["id"] for a in second["assets"]]
+    assert all(a["id"].startswith("m") and len(a["id"]) == 25 for a in first["assets"])
+
+
+async def test_cached_pack_serves_its_manifest_and_media(service: TimelineOreelPackService) -> None:
+    timeline_oreelpack._CACHE.clear()
+    pack = await service.cached("demo", "tl-1")
+    assert await service.cached("demo", "tl-1") is pack  # the same build while cached
+    manifest = json.loads(pack.manifest)
+    assert [a["id"] for a in manifest["assets"]] == [a.id for a in pack.assets]
+    asset = await service.media_file("demo", "tl-1", pack.assets[0].id)
+    assert asset is not None and asset.path.is_file() and asset.size == pack.assets[0].size
+    assert await service.media_file("demo", "tl-1", "m-not-in-this-pack") is None
+    timeline_oreelpack._CACHE.clear()
+    await asyncio.to_thread(pack.workdir.cleanup)
