@@ -92,3 +92,33 @@ async def test_discovery_lists_tts_models_with_the_xi_key():
         found = await discover_models(discovery_format="elevenlabs", base_url="https://api.elevenlabs.io", api_key="xi")
     assert only_request(route).headers["xi-api-key"] == "xi"
     assert [(m["model_id"], m["endpoint"]) for m in found] == [("eleven_v3", "elevenlabs-tts")]
+
+
+async def test_check_falls_back_to_voices_and_echoes_the_reason():
+    from server.routers.custom_providers import _check_elevenlabs
+
+    def t(key, **kw):
+        return f"{key}:{kw.get('err_msg', '')}"
+
+    denied = httpx.Response(401, json={"detail": {"status": "missing_permissions", "message": "needs models_read"}})
+    with capture_http() as router:
+        router.get("https://api.elevenlabs.io/v1/models").mock(return_value=denied)
+        router.get("https://api.elevenlabs.io/v2/voices").mock(return_value=httpx.Response(200, json={"voices": []}))
+        ok = await _check_elevenlabs("https://api.elevenlabs.io", "xi", t)
+    assert ok.success
+
+    with capture_http() as router:
+        router.get("https://api.elevenlabs.io/v1/models").mock(return_value=denied)
+        router.get("https://api.elevenlabs.io/v2/voices").mock(return_value=denied)
+        bad = await _check_elevenlabs("https://api.elevenlabs.io", "xi", t)
+    assert not bad.success
+    assert "missing_permissions" in bad.message
+
+
+async def test_discovery_offers_known_models_to_a_restricted_key():
+    from lib.custom_provider.discovery import discover_models
+
+    with capture_http() as router:
+        router.get("https://api.elevenlabs.io/v1/models").mock(return_value=httpx.Response(401, json={}))
+        found = await discover_models(discovery_format="elevenlabs", base_url=None, api_key="xi")
+    assert "eleven_multilingual_v2" in [m["model_id"] for m in found]

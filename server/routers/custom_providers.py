@@ -2106,13 +2106,23 @@ async def _check_elevenlabs(
     api_key: str,
     _t: Callable[..., str],
 ) -> ConnectivityCheckResponse:
-    """YouReel: ElevenLabs answers ``GET /v1/models`` with the ``xi-api-key`` header (not a Bearer token)."""
-    from lib.backends.audio_backends.elevenlabs import elevenlabs_base_url
+    """YouReel: ElevenLabs takes the ``xi-api-key`` header (not a Bearer token). A restricted key may lack the Models
+    permission, so the voice list is tried next; either answering proves the key. A refusal echoes ElevenLabs' own
+    reason (detail.status / detail.message), which names a missing permission."""
+    from lib.backends.audio_backends.elevenlabs import elevenlabs_base_url, elevenlabs_error_text
 
+    host = elevenlabs_base_url(base_url)
+    headers = {"xi-api-key": api_key}
+    reason = ""
     async with artifact_http_client(timeout=_CONNECTIVITY_CHECK_TIMEOUT) as client:
-        resp = await client.get(f"{elevenlabs_base_url(base_url)}/v1/models", headers={"xi-api-key": api_key})
-    raise_for_status_redacted(resp)
-    return ConnectivityCheckResponse(success=True, message=_t("connectivity_check_ok"))
+        for path, params in (("/v1/models", None), ("/v2/voices", {"page_size": 1})):
+            resp = await client.get(f"{host}{path}", headers=headers, params=params)
+            if resp.is_success:
+                return ConnectivityCheckResponse(success=True, message=_t("connectivity_check_ok"))
+            reason = f"{resp.status_code} {path}: {elevenlabs_error_text(resp)}"
+            if resp.status_code not in (401, 403):
+                break
+    return ConnectivityCheckResponse(success=False, message=_t("connectivity_check_failed", err_msg=reason))
 
 
 async def _check_comfyui(

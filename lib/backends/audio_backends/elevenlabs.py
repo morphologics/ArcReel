@@ -79,6 +79,22 @@ def elevenlabs_base_url(base_url: str | None) -> str:
     return url or DEFAULT_BASE_URL
 
 
+#: Text-to-speech models offered when the account's model list can't be read (a key without the Models permission)
+KNOWN_TTS_MODELS: tuple[str, ...] = ("eleven_multilingual_v2", "eleven_v3", "eleven_flash_v2_5", "eleven_v4")
+
+
+def elevenlabs_error_text(resp: httpx.Response) -> str:
+    """ElevenLabs' reason from an error reply (``detail.status`` / ``detail.message``), without the request echo."""
+    try:
+        detail = resp.json().get("detail")
+    except Exception:
+        return resp.reason_phrase or ""
+    if isinstance(detail, dict):
+        parts = [str(detail.get(k)) for k in ("status", "message") if detail.get(k)]
+        return " — ".join(parts)[:300]
+    return str(detail)[:300] if detail else (resp.reason_phrase or "")
+
+
 def _output_format_for(output_path: Path) -> str:
     return "mp3_44100_128" if output_path.suffix.lower() == ".mp3" else "wav_24000"
 

@@ -77,10 +77,13 @@ async def _discover_elevenlabs(base_url: str | None, api_key: str) -> list[dict]
     """YouReel: the account's text-to-speech models (``GET /v1/models``, ``can_do_text_to_speech``)."""
     import httpx
 
-    from lib.backends.audio_backends.elevenlabs import elevenlabs_base_url
+    from lib.backends.audio_backends.elevenlabs import KNOWN_TTS_MODELS, elevenlabs_base_url
 
     async with httpx.AsyncClient(timeout=20.0) as client:
         resp = await client.get(f"{elevenlabs_base_url(base_url)}/v1/models", headers={"xi-api-key": api_key})
+    if resp.status_code in (401, 403):
+        # a restricted key without the Models permission: offer the current models instead
+        return _build_result_list(list(KNOWN_TTS_MODELS), "elevenlabs")
     resp.raise_for_status()
     rows = resp.json()
     model_ids = sorted(
