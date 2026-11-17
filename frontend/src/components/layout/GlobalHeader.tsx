@@ -134,8 +134,6 @@ export function GlobalHeader() {
         <span aria-hidden className="h-4 w-px shrink-0 bg-border" />
         <ProjectMenu />
         {demoMode && <DemoReadOnlyBadge />}
-        {/* the whole app full screen (like F11); while on, an "Exit full screen" link here */}
-        <FullScreenToggle />
       </div>
 
       <div className="flex min-w-0 justify-center overflow-hidden">
@@ -154,6 +152,9 @@ export function GlobalHeader() {
           />
         )}
         <DownloadsIndicator />
+        {/* the whole app full screen (like F11), left of the bell (owner 2026-11-17); while on, an "Exit full screen"
+            link here */}
+        <FullScreenToggle />
         <WorkspaceNotifications onNavigate={handleNotificationNavigate} />
         {usageProjectName && <UsageHeaderEntry projectName={usageProjectName} />}
         <span aria-hidden className="mx-1 h-4 w-px shrink-0 bg-border" />

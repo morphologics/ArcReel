@@ -103,7 +103,7 @@ export function EpisodePageHeader({
   const viewTabs = (
     <Tabs value={view} onValueChange={(next: EpisodeView) => onViewChange(next)} className="shrink-0">
       <TabsList variant="buttons" aria-label={t("episode_view_aria")}>
-        {tabs.map((tab) =>
+        {tabs.filter((tab) => !tab.hidden || tab.view === view).map((tab) =>
           tab.disabled ? (
             <DisabledViewTab key={tab.view} view={tab.view} label={label[tab.view]} />
           ) : (

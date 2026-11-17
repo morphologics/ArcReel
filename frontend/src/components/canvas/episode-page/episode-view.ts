@@ -81,6 +81,11 @@ export function showsEpisodeSource(
 export interface EpisodeViewTab {
   view: EpisodeView;
   disabled: boolean;
+  /**
+   * YouReel: selectable but not shown as a tab unless it is the current view. The script plan once the episode has its
+   * script: it is then a read-only record, reached from the episode's "⋯" menu (owner 2026-11-17).
+   */
+  hidden?: boolean;
 }
 
 function planAvailable(facts: EpisodeViewFacts): boolean {
@@ -93,7 +98,7 @@ export function episodeViewTabs(facts: EpisodeViewFacts): EpisodeViewTab[] {
   const plan = planAvailable(facts);
   const tabs: EpisodeViewTab[] = [];
   if (facts.isAd) tabs.push({ view: "setting", disabled: false });
-  if (plan) tabs.push({ view: "plan", disabled: false });
+  if (plan) tabs.push({ view: "plan", disabled: false, ...(facts.hasScript ? { hidden: true } : {}) });
   if (facts.grid) tabs.push({ view: "grid", disabled: facts.sourceReview });
   // Reference-to-video's unit list is viewable already at the intermediate draft stage; storyboard mode waits for the final script. Without a script plan, shots is the only view.
   // 参考生视频的单元列表在中间稿阶段就可查看；分镜图生视频要等正式剧本。没有脚本规划时分镜是唯一视图。

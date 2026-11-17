@@ -40,13 +40,14 @@ export function FullScreenToggle() {
         render={
           <Button
             variant="ghost"
-            size="icon-sm"
+            size="icon-lg"
             aria-label={t("full_screen")}
             onClick={() => void document.documentElement.requestFullscreen().catch(() => undefined)}
           />
         }
       >
-        <Maximize aria-hidden />
+        {/* YouReel (owner 2026-11-17): as large as the 48 px top bar allows */}
+        <Maximize aria-hidden className="size-7" />
       </TooltipTrigger>
       <TooltipContent side="bottom">{t("full_screen")}</TooltipContent>
     </Tooltip>

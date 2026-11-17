@@ -4019,6 +4019,8 @@ export default {
   'episode_menu_create_after': 'Создать эпизод после этого',
   'episode_menu_move_earlier': 'Переместить вверх',
   'episode_menu_move_later': 'Переместить вниз',
+  'episode_menu_view_plan': 'Открыть план сценария',
+  'episode_menu_replan': 'Перепланировать эпизод…',
   'episode_menu_delete': 'Удалить этот эпизод',
   'episode_menu_upload_sources': 'Загрузить исходный текст эпизода',
   'episode_plan_gap': 'Спланировать этот неразбитый текст',

@@ -3895,6 +3895,8 @@ export default {
   'episode_menu_create_after': 'Tạo tập sau tập này',
   'episode_menu_move_earlier': 'Di chuyển lên',
   'episode_menu_move_later': 'Di chuyển xuống',
+  'episode_menu_view_plan': 'Xem kế hoạch kịch bản',
+  'episode_menu_replan': 'Lập lại kế hoạch tập…',
   'episode_menu_delete': 'Xóa tập này',
   'episode_menu_upload_sources': 'Tải lên nguyên văn của tập',
   'episode_plan_gap': 'Lập kế hoạch cho đoạn nguyên văn chưa chia này',

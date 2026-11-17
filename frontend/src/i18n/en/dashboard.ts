@@ -3895,6 +3895,8 @@ export default {
   'episode_menu_create_after': 'Create an episode after this one',
   'episode_menu_move_earlier': 'Move up',
   'episode_menu_move_later': 'Move down',
+  'episode_menu_view_plan': 'View the script plan',
+  'episode_menu_replan': 'Replan the episode…',
   'episode_menu_delete': 'Delete this episode',
   'episode_menu_upload_sources': 'Upload episode source text',
   'episode_plan_gap': 'Plan this unsplit source text',

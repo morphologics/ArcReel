@@ -269,6 +269,12 @@ function EpisodePageContent({
               canEditTitle={Boolean(meta) && !demo}
               onSaveTitle={onSaveTitle}
               canDelete={!isAd && !demo}
+              // YouReel: the script plan's tab is hidden once the script exists; the menu opens it and replans
+              plan={
+                hasScript && !demo && tabs.some((tab) => tab.view === "plan" && tab.hidden)
+                  ? { onView: () => changeView("plan"), replaces: hasDraft ? "confirmed_plan" : "formal_script" }
+                  : null
+              }
             />
           }
           progress={

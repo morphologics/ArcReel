@@ -1,6 +1,6 @@
 import { useTranslation } from "react-i18next";
 import { useLocation } from "wouter";
-import { ChartBar, MoreHorizontal, Trash2 } from "lucide-react";
+import { ChartBar, MoreHorizontal, RotateCcw, ScrollText, Trash2 } from "lucide-react";
 
 import { useConfirmLeave } from "@/components/shared/edit-unit/LeaveGuard";
 import { Badge } from "@/components/ui/badge";
@@ -13,7 +13,9 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { Popover, PopoverContent, PopoverTitle, PopoverTrigger } from "@/components/ui/popover";
 import { useEpisodeLedger } from "@/hooks/useEpisodeLedger";
+import { useScriptPlanEntry } from "@/hooks/useScriptPlanEntry";
 import { useCostStore } from "@/stores/cost-store";
+import { useScriptPlanStore, type ScriptPlanReplacement } from "@/stores/script-plan-store";
 import type { EpisodeCost, EpisodeMeta } from "@/types";
 import { currentScriptBreakdown, formatCost, totalBreakdown } from "@/utils/cost-format";
 import { episodeDisplayName, episodePosition } from "@/utils/episode-display";
@@ -67,6 +69,7 @@ export function EpisodeHead({
   canEditTitle,
   onSaveTitle,
   canDelete,
+  plan = null,
 }: {
   projectName: string;
   episode: number;
@@ -76,6 +79,11 @@ export function EpisodeHead({
   onSaveTitle: (title: string) => Promise<void>;
   /** Ad/short is always a single episode and demo projects are read-only: no delete. / 广告/短片恒单集、演示项目只读：不给删除。 */
   canDelete: boolean;
+  /**
+   * YouReel: once the script exists the script plan has no tab; the "⋯" menu opens it, and starts a replan (what the
+   * new plan replaces decides the dialog's warning).
+   */
+  plan?: { onView: () => void; replaces: ScriptPlanReplacement } | null;
 }) {
   const { t } = useTranslation("dashboard");
   const [, setLocation] = useLocation();
@@ -90,6 +98,8 @@ export function EpisodeHead({
   // The leave guard sits at the confirm-delete step: ask about unsaved changes first, then confirm delete; otherwise cancelling the delete after discarding would lose the changes for nothing
   // 离开拦截放在确认删除这一步：先问未保存修改再确认删除，放弃后取消删除就白丢了修改
   const deletion = useDeleteEpisode(projectName, () => setLocation(episodesViewPath()), confirmLeave);
+  const openReplan = useScriptPlanStore((s) => s.open);
+  const { busy: planBusy, refusedReason: planRefused } = useScriptPlanEntry(projectName, episode);
 
   const facts: string[] = [];
   if (meta?.item_count != null) facts.push(t(itemCountKey(route), { count: meta.item_count }));
@@ -143,7 +153,7 @@ export function EpisodeHead({
           </PopoverContent>
         </Popover>
       ) : null}
-      {canDelete ? (
+      {canDelete || plan ? (
         <>
           <DropdownMenu>
             <DropdownMenuTrigger
@@ -152,10 +162,28 @@ export function EpisodeHead({
               <MoreHorizontal aria-hidden />
             </DropdownMenuTrigger>
             <DropdownMenuContent align="start" className="w-auto">
-              <DropdownMenuItem variant="destructive" onClick={() => void deletion.requestDelete(episode)}>
-                <Trash2 aria-hidden />
-                {t("episode_menu_delete")}
-              </DropdownMenuItem>
+              {plan ? (
+                <>
+                  <DropdownMenuItem onClick={plan.onView}>
+                    <ScrollText aria-hidden />
+                    {t("episode_menu_view_plan")}
+                  </DropdownMenuItem>
+                  <DropdownMenuItem
+                    disabled={planBusy || planRefused !== null}
+                    title={planBusy ? t("script_plan_busy") : (planRefused ?? undefined)}
+                    onClick={() => openReplan({ projectName, episode, replaces: plan.replaces })}
+                  >
+                    <RotateCcw aria-hidden />
+                    {t("episode_menu_replan")}
+                  </DropdownMenuItem>
+                </>
+              ) : null}
+              {canDelete ? (
+                <DropdownMenuItem variant="destructive" onClick={() => void deletion.requestDelete(episode)}>
+                  <Trash2 aria-hidden />
+                  {t("episode_menu_delete")}
+                </DropdownMenuItem>
+              ) : null}
             </DropdownMenuContent>
           </DropdownMenu>
           {deletion.dialog}

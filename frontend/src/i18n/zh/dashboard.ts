@@ -3894,6 +3894,8 @@ export default {
   'episode_menu_create_after': '在这一集之后新建',
   'episode_menu_move_earlier': '前移',
   'episode_menu_move_later': '后移',
+  'episode_menu_view_plan': '查看脚本规划',
+  'episode_menu_replan': '重新规划本集…',
   'episode_menu_delete': '删除这一集',
   'episode_menu_upload_sources': '上传集原文',
   'episode_plan_gap': '规划这段未切分的原文',

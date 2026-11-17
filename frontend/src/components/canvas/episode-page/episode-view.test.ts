@@ -21,8 +21,9 @@ const SCRIPTED: EpisodeViewFacts = {
 
 describe("episodeViewTabs", () => {
   it("lists plan, grid, board and edit for a scripted grid episode", () => {
+    // YouReel: with the script, the plan is selectable but has no tab (the episode's ⋯ menu opens it)
     expect(episodeViewTabs({ ...SCRIPTED, grid: true })).toEqual([
-      { view: "plan", disabled: false },
+      { view: "plan", disabled: false, hidden: true },
       { view: "grid", disabled: false },
       { view: "board", disabled: false },
       { view: "edit", disabled: false },
