@@ -31,7 +31,7 @@ class TestProjectsRouter:
             assert resp.status_code == 200
             data = fake_pm.project_data["tpl-1"]
             assert data["style_template_id"] == "live_premium_drama"
-            assert "真人电视剧" in data["style"] or "精品短剧" in data["style"]
+            assert "premium short-drama" in data["style"]
 
     def test_create_project_with_unknown_template_id_returns_400(self, tmp_path, monkeypatch):
         fake_pm = _FakePM(tmp_path)

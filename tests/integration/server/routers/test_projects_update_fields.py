@@ -28,7 +28,7 @@ class TestProjectsRouter:
             assert resp.status_code == 200
             data = fake_pm.project_data["ready"]
             assert data["style_template_id"] == "live_zhang_yimou"
-            assert "张艺谋" in data["style"]
+            assert "Zhang Yimou" in data["style"]
             assert "style_image" not in data
             assert "style_description" not in data
 

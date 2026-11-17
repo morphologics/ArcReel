@@ -795,6 +795,7 @@ async def list_projects(summaries: WorkflowStateServiceDep, _t: Translator):
 async def create_project(
     req: CreateProjectRequest,
     _t: Translator,
+    locale: Locale,
 ):
     """创建新项目"""
     try:
@@ -888,6 +889,10 @@ async def create_project(
             extras["grid_storyboard"] = req.grid_storyboard
             if speech_rate is not None:
                 extras[SPEECH_RATE_FIELD] = speech_rate
+            # YouReel: a new project starts in its creator's interface language. Without it the overview and the
+            # scripts fell back to Chinese ("中文") until a source file was analysed or the member asked for another
+            # language (owner 2026-11-17). Generating the overview still replaces it with the source's own language.
+            extras["source_language"] = locale
             with project_change_source("webui"):
                 project = manager.create_project_metadata(
                     project_name,
