@@ -16,13 +16,29 @@ import { episodeViewTabId, type EpisodeView, type EpisodeViewTab } from "./episo
  * 置灰的视图 tab：目前只在还没有正式脚本时出现（分镜、多宫格分镜图），悬停与读屏都说明「脚本生成后可用」。
  * 置灰的 tab 不接收指针事件，提示挂在外层；方向键仍能聚焦到它，焦点进入时同样显示提示。
  */
+// YouReel: the view tabs look like buttons, Render's height, each view with its own colour (TabsList variant
+// "buttons"; owner 2026-11-17)
+const VIEW_TAB_TONE: Record<EpisodeView, "neutral" | "plan" | "board" | "edit"> = {
+  setting: "neutral",
+  plan: "plan",
+  grid: "neutral",
+  board: "board",
+  edit: "edit",
+};
+
 function DisabledViewTab({ view, label }: { view: EpisodeView; label: string }) {
   const { t } = useTranslation("dashboard");
   const hintId = useId();
   return (
     <Tooltip>
       <TooltipTrigger render={<span className="flex h-full" />}>
-        <TabsTrigger value={view} id={episodeViewTabId(view)} disabled aria-describedby={hintId}>
+        <TabsTrigger
+          value={view}
+          id={episodeViewTabId(view)}
+          disabled
+          aria-describedby={hintId}
+          tone={VIEW_TAB_TONE[view]}
+        >
           {label}
         </TabsTrigger>
         <span id={hintId} className="sr-only">
@@ -35,13 +51,12 @@ function DisabledViewTab({ view, label }: { view: EpisodeView; label: string }) 
 }
 
 /**
- * Episode page header, about 85px across two rows: the first row is the episode head with the workflow progress entry at the end, the second is the view tabs and the current view's action slot.
- * Each view puts its actions into the slot via `EpisodeHeaderActions`; the header does not know the specific actions.
+ * Episode page header, one 44px row: the episode head, the view tabs, the current view's action slot, then the
+ * workflow progress entry. Each view puts its actions into the slot via `EpisodeHeaderActions`; the header does not
+ * know the specific actions. (YouReel: the second row that held the actions is gone, owner 2026-11-17.)
  *
- * 集页页头，两行共约 85px：第一行是集头与行尾的制作进度入口，第二行是视图 tab 与当前视图的动作插槽。
+ * 集页页头，单行 44px：集头、视图 tab、当前视图的动作插槽，行尾是制作进度入口。
  * 动作由各视图经 `EpisodeHeaderActions` 放进插槽，页头不认识具体动作。
- * `compact`: one 44px row (head, view tabs, action slot, progress) for views that need the height for
- * their own content, such as the Edit view's player.
  */
 export function EpisodePageHeader({
   head,
@@ -63,7 +78,7 @@ export function EpisodePageHeader({
   /** Name of the "Shots" tab: reference-to-video projects call it "Video units". / 「分镜」tab 的名称：参考生视频项目称「视频单元」。 */
   boardLabel: string;
   onActionsSlot: (node: HTMLDivElement | null) => void;
-  /** One row instead of two (see above). */
+  /** Edit view: no side padding beyond 12px (the row is the same single row in every view). */
   compact?: boolean;
   /**
    * Edit view focus mode (compact only): a Focus button right of the tabs; while `on`, the row holds only the episode
@@ -81,12 +96,17 @@ export function EpisodePageHeader({
   };
   const viewTabs = (
     <Tabs value={view} onValueChange={(next: EpisodeView) => onViewChange(next)} className="shrink-0">
-      <TabsList aria-label={t("episode_view_aria")}>
+      <TabsList variant="buttons" aria-label={t("episode_view_aria")}>
         {tabs.map((tab) =>
           tab.disabled ? (
             <DisabledViewTab key={tab.view} view={tab.view} label={label[tab.view]} />
           ) : (
-            <TabsTrigger key={tab.view} value={tab.view} id={episodeViewTabId(tab.view)}>
+            <TabsTrigger
+              key={tab.view}
+              value={tab.view}
+              id={episodeViewTabId(tab.view)}
+              tone={VIEW_TAB_TONE[tab.view]}
+            >
               {label[tab.view]}
             </TabsTrigger>
           ),
@@ -94,10 +114,9 @@ export function EpisodePageHeader({
       </TabsList>
     </Tabs>
   );
-  // The view tabs sit in the first row in every view, centred in the space between the episode head (title … ⋯) and
-  // the right-hand group (Edit view: its actions such as Render, then Production progress; other views: Production
-  // progress). The tabs keep their full width; the head shrinks first (its title truncates).
-  const centredTabs = <div className="flex flex-1 justify-center">{viewTabs}</div>;
+  // The view tabs sit centred in the space between the episode head (title … ⋯) and the right-hand group (the view's
+  // actions such as Write prompts and Render, then Production progress). The tabs keep their full width; the head
+  // shrinks first (its title truncates).
   // Edit view: right of the tabs, the button into focus mode (the Edit view alone, full screen, no app chrome)
   const centredTabsWithFocus = (
     <div className="flex flex-1 items-center justify-center gap-1">
@@ -115,40 +134,24 @@ export function EpisodePageHeader({
     </div>
   );
   const headSlot = <div className="flex min-w-0 shrink">{head}</div>;
-  if (compact) {
-    return (
-      <header className="shrink-0 border-b border-border">
-        <div className="flex h-11 items-center gap-3 px-3">
-          {focus?.on ? focus.switcher : headSlot}
-          {focus?.on ? <span className="flex-1" /> : centredTabsWithFocus}
-          {/* the actions slot stays mounted (the Edit view portals its Render button into it), hidden in focus mode */}
-          <div className={cn("relative flex min-w-0 shrink overflow-x-auto", focus?.on && "hidden")}>
-            <div ref={onActionsSlot} className="ml-auto flex shrink-0 items-center gap-1.5" />
-          </div>
-          {focus?.on ? (
-            <Button variant="ghost" size="sm" onClick={focus.onExit}>
-              <Minimize aria-hidden data-icon="inline-start" />
-              {t("edit_focus_exit")}
-            </Button>
-          ) : (
-            progress
-          )}
-        </div>
-      </header>
-    );
-  }
   return (
     <header className="shrink-0 border-b border-border">
-      <div className="flex h-11 items-center gap-3 px-4">
-        {headSlot}
-        {centredTabs}
-        {progress}
-      </div>
-      <div className="flex h-10 items-center gap-3 px-4">
-        {/* When there are too many actions to fit, scroll horizontally; the slot is right-aligned, and on overflow it scrolls from the left end without clipping the first action. / 动作多到放不下时横向滚动；插槽靠右，溢出时从左端开始滚，不裁掉第一个动作。 */}
-        <div className="relative flex min-w-0 flex-1 overflow-x-auto">
+      <div className={cn("flex h-11 items-center gap-3", compact ? "px-3" : "px-4")}>
+        {focus?.on ? focus.switcher : headSlot}
+        {focus?.on ? <span className="flex-1" /> : centredTabsWithFocus}
+        {/* the actions slot stays mounted (views portal their actions into it), hidden in focus mode; it keeps its
+            full width (the episode title truncates first) */}
+        <div className={cn("flex shrink-0", focus?.on && "hidden")}>
           <div ref={onActionsSlot} className="ml-auto flex shrink-0 items-center gap-1.5" />
         </div>
+        {focus?.on ? (
+          <Button variant="ghost" size="sm" onClick={focus.onExit}>
+            <Minimize aria-hidden data-icon="inline-start" />
+            {t("edit_focus_exit")}
+          </Button>
+        ) : (
+          progress
+        )}
       </div>
     </header>
   );

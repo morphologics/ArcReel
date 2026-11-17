@@ -303,8 +303,9 @@ function EpisodePageContent({
               : null
           }
         />
-        {/* Render shortcut on the views other than Edit (the Edit view places its own via EditTimelineView) */}
-        {!demo && view !== "edit" && (
+        {/* Render shortcut on the views other than Edit (the Edit view places its own via EditTimelineView). YouReel:
+            not with the built-in editor as the default, whose Edit view has Render already (owner 2026-11-17) */}
+        {!demo && view !== "edit" && defaultEditorReady && defaultEditor !== "arcreel" && (
           <EpisodeHeaderActions>
             <EpisodeRenderShortcut
               projectName={projectName}

@@ -299,6 +299,14 @@
     /* Clip color and narration color of video units on edit view tracks: hue taken from the video unit, written into --unit-hue via style by the caller (unitHue). / 剪辑视图轨道上视频单元的片段色与旁白色：色相按视频单元取，由调用处经 style 写入 --unit-hue（unitHue）。 */
     --color-unit-clip: oklch(0.42 0.07 var(--unit-hue, 0));
     --color-unit-narration: oklch(0.5 0.08 var(--unit-hue, 0) / 0.75);
+    /* YouReel: the episode page's view tabs as coloured buttons (TabsList variant "buttons"), the same in both themes:
+       Script plan black on light blue, Storyboards white on black, Edit black on mid yellow (owner 2026-11-17) */
+    --color-view-plan: oklch(0.83 0.11 230);
+    --color-view-plan-foreground: oklch(0 0 0);
+    --color-view-board: oklch(0 0 0);
+    --color-view-board-foreground: oklch(1 0 0);
+    --color-view-edit: oklch(0.85 0.2 92);
+    --color-view-edit-foreground: oklch(0 0 0);
     /* Clip color of the edit view BGM track / 剪辑视图 BGM 轨的片段色 */
     --color-bgm: oklch(0.45 0.09 300);
 
