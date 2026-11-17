@@ -1,16 +1,18 @@
-import { useRef, type ReactNode } from "react";
+import { useRef, useState, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { ContextMenu } from "@base-ui/react/context-menu";
-import { Box, UserRound } from "lucide-react";
+import { Box, ClipboardPaste, Copy, TextCursor, UserRound } from "lucide-react";
 import {
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuSeparator,
+  DropdownMenuShortcut,
   DropdownMenuSub,
   DropdownMenuSubContent,
   DropdownMenuSubTrigger,
 } from "@/components/ui/dropdown-menu";
 import { useProjectsStore } from "@/stores/projects-store";
+import { isApplePlatform } from "@/preferences/hotkeys";
 
 /** The mention a prompt writes for an asset: `@[Name]`, a character's derivative `@[Character/Derivative]`. */
 export function assetMention(name: string, derivative?: string): string {
@@ -34,6 +36,10 @@ export function insertAtSelection(
  * them) and Insert prop ›; the chosen asset's `@[name]` goes in at the cursor (replacing a selection). Shift +
  * right-click keeps the browser's own menu (copy, paste, spelling). Names are listed in ascending order; a space
  * follows the inserted mention.
+ *
+ * YouReel: Copy, Paste and Select All on top, as the browser's own menu has them (this menu replaces it, so they were
+ * only reachable with Shift + right-click or the keyboard). Paste reads the clipboard, which the browser may ask to
+ * allow; refused, the text box gets the focus back so Ctrl / ⌘ + V still works.
  */
 export function AssetMentionMenu({
   value,
@@ -51,6 +57,8 @@ export function AssetMentionMenu({
   const wrapRef = useRef<HTMLDivElement>(null);
   // where the cursor was when the menu opened (choosing an item moves the focus away from the text box)
   const selection = useRef<[number, number]>([value.length, value.length]);
+  // YouReel: whether text was selected when the menu opened (Copy is offered only then); state, so the menu re-renders
+  const [hasSelection, setHasSelection] = useState(false);
   const characters = useProjectsStore((s) => s.currentProjectData?.characters);
   const props = useProjectsStore((s) => s.currentProjectData?.props);
   if (disabled) return <>{children}</>;
@@ -70,6 +78,36 @@ export function AssetMentionMenu({
     });
   };
 
+  const mod = isApplePlatform() ? "⌘" : "Ctrl+";
+  const copySelection = () => {
+    const [start, end] = selection.current;
+    void navigator.clipboard?.writeText(value.slice(start, end)).catch(() => {});
+    window.requestAnimationFrame(() => {
+      const box = textarea();
+      box?.focus();
+      box?.setSelectionRange(start, end);
+    });
+  };
+  const pasteClipboard = () => {
+    const [start, end] = selection.current;
+    const backToBox = (caret: number) => window.requestAnimationFrame(() => {
+      const box = textarea();
+      box?.focus();
+      box?.setSelectionRange(caret, caret);
+    });
+    if (!navigator.clipboard?.readText) { backToBox(end); return; }
+    navigator.clipboard.readText().then((text) => {
+      const next = insertAtSelection(value, text, start, end);
+      onChange(next.value);
+      backToBox(next.caret);
+    }).catch(() => backToBox(end));
+  };
+  const selectAll = () => window.requestAnimationFrame(() => {
+    const box = textarea();
+    box?.focus();
+    box?.select();
+  });
+
   // listed in ascending order (in the project's language)
   const byName = (a: string, b: string) => a.localeCompare(b);
   const characterNames = Object.keys(characters ?? {}).sort(byName);
@@ -87,11 +125,28 @@ export function AssetMentionMenu({
           }
           const box = textarea();
           if (box) selection.current = [box.selectionStart, box.selectionEnd];
+          setHasSelection(Boolean(box && box.selectionEnd > box.selectionStart));
         }}
       >
         {children}
       </ContextMenu.Trigger>
       <DropdownMenuContent className="w-auto min-w-44">
+        <DropdownMenuItem disabled={!hasSelection} onClick={copySelection}>
+          <Copy aria-hidden />
+          {t("prompt_copy")}
+          <DropdownMenuShortcut>{mod}C</DropdownMenuShortcut>
+        </DropdownMenuItem>
+        <DropdownMenuItem onClick={pasteClipboard}>
+          <ClipboardPaste aria-hidden />
+          {t("prompt_paste")}
+          <DropdownMenuShortcut>{mod}V</DropdownMenuShortcut>
+        </DropdownMenuItem>
+        <DropdownMenuItem onClick={selectAll}>
+          <TextCursor aria-hidden />
+          {t("prompt_select_all")}
+          <DropdownMenuShortcut>{mod}A</DropdownMenuShortcut>
+        </DropdownMenuItem>
+        <DropdownMenuSeparator />
         <DropdownMenuSub>
           <DropdownMenuSubTrigger disabled={characterNames.length === 0}>
             <UserRound aria-hidden />
