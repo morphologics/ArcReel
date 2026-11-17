@@ -1825,6 +1825,7 @@ export default {
   'discovery_format_openai': 'OpenAI 兼容',
   'discovery_format_google': 'Google AI Studio',
   'discovery_format_comfyui': 'ComfyUI',
+  'discovery_format_elevenlabs': 'ElevenLabs',
   'discovery_not_applicable': '「获取模型」对 ComfyUI 不适用：能调用什么由你导入的 workflow 决定。请到「调用端点」导入 ComfyUI 端点，再在模型的编辑区里选择它。',
   'cp_comfyui_connectivity_hint': '测试连接会把密钥作为 Bearer 凭证直接请求 /system_stats（密钥留空则不带凭证）。如果反向代理用自定义请求头鉴权，测试可能报告不可达，此时以端点的「测试连接」为准。',
   'cp_comfyui_add_model_hint': '一行模型 = 项目里可选的一个名字，挂接一份 ComfyUI 端点。',

@@ -16,7 +16,7 @@ export type ImageCap = "text_to_image" | "image_to_image";
  */
 /** 模型发现协议：决定「模型发现」与「连通性检查」按哪套接口进行，不决定模型的调用协议。
  *  comfyui 取值下模型发现不适用，只做连通性检查。 */
-export type DiscoveryFormat = "openai" | "google" | "comfyui";
+export type DiscoveryFormat = "openai" | "google" | "comfyui" | "elevenlabs";
 
 export interface EndpointDescriptor {
   key: string;

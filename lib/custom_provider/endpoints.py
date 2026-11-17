@@ -1901,6 +1901,9 @@ def _infer_endpoint_by_name(model_id: str, discovery_format: str) -> str:
     7) 默认（文本）→ discovery_format=google 走 "gemini-generate" 否则 "openai-chat"
     """
     lowered = model_id.lower()
+    # YouReel: ElevenLabs model ids (eleven_multilingual_v2, eleven_v3 …) and every model of an ElevenLabs provider
+    if discovery_format == "elevenlabs" or lowered.startswith("eleven_"):
+        return "elevenlabs-tts"
     is_image = bool(_IMAGE_PATTERN.search(model_id))
     # Wan/happyhorse family ids that use the Bailian native endpoint (both video and image variants match), used once each by the
     # routing and the is_video exclusion below. Family membership, separator normalization, identifier boundaries, image-to-video

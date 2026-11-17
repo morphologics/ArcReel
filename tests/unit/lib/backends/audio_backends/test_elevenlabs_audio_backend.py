@@ -67,3 +67,28 @@ def test_lists_account_voices_and_falls_back(monkeypatch):
         router.get("https://api.elevenlabs.io/v2/voices").mock(return_value=httpx.Response(401, json={}))
         fallback = ElevenLabsAudioBackend(api_key="xi-bad").list_voices()
     assert "JBFqnCBsd6RMkjVDRZzb" in [v.id for v in fallback]
+
+
+def test_eleven_model_ids_infer_the_elevenlabs_endpoint():
+    from lib.custom_provider.endpoints import infer_endpoint
+
+    assert infer_endpoint("eleven_multilingual_v2", "openai") == "elevenlabs-tts"
+    assert infer_endpoint("eleven_v3", "elevenlabs") == "elevenlabs-tts"
+
+
+async def test_discovery_lists_tts_models_with_the_xi_key():
+    from lib.custom_provider.discovery import discover_models
+
+    with capture_http() as router:
+        route = router.get("https://api.elevenlabs.io/v1/models").mock(
+            return_value=httpx.Response(
+                200,
+                json=[
+                    {"model_id": "eleven_v3", "can_do_text_to_speech": True},
+                    {"model_id": "eleven_english_sts_v2", "can_do_text_to_speech": False},
+                ],
+            )
+        )
+        found = await discover_models(discovery_format="elevenlabs", base_url="https://api.elevenlabs.io", api_key="xi")
+    assert only_request(route).headers["xi-api-key"] == "xi"
+    assert [(m["model_id"], m["endpoint"]) for m in found] == [("eleven_v3", "elevenlabs-tts")]

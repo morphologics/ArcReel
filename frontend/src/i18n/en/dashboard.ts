@@ -1826,6 +1826,7 @@ export default {
   'discovery_format_openai': 'OpenAI Compatible',
   'discovery_format_google': 'Google AI Studio',
   'discovery_format_comfyui': 'ComfyUI',
+  'discovery_format_elevenlabs': 'ElevenLabs',
   'discovery_not_applicable': 'Fetching models does not apply to ComfyUI: what can be called is decided by the workflows you import. Import a ComfyUI endpoint under "Endpoints", then pick it in the model\'s edit area.',
   'cp_comfyui_connectivity_hint': 'Test connection sends the key as a bare Bearer token to /system_stats (no credentials when the key is left blank). If your reverse proxy authenticates with a custom header, the test may report unreachable — rely on the endpoint\'s test instead.',
   'cp_comfyui_add_model_hint': 'A model row is one name selectable in projects, attached to one ComfyUI endpoint.',

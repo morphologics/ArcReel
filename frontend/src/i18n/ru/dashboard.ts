@@ -1870,6 +1870,7 @@ export default {
   'discovery_format_openai': 'Совместимый с OpenAI',
   'discovery_format_google': 'Google AI Studio',
   'discovery_format_comfyui': 'ComfyUI',
+  'discovery_format_elevenlabs': 'ElevenLabs',
   'discovery_not_applicable': 'Получение моделей не применяется к ComfyUI: что можно вызвать, определяют импортированные вами рабочие процессы. Импортируйте эндпоинт ComfyUI в разделе «Эндпоинты», затем выберите его в области редактирования модели.',
   'cp_comfyui_connectivity_hint': 'Проверка подключения отправляет ключ как обычный Bearer-токен на /system_stats (без учётных данных, если ключ пуст). Если ваш обратный прокси проверяет подлинность через собственный заголовок, проверка может сообщить о недоступности — ориентируйтесь на проверку эндпоинта.',
   'cp_comfyui_add_model_hint': 'Строка модели — это одно имя, выбираемое в проектах и привязанное к одному эндпоинту ComfyUI.',

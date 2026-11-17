@@ -77,6 +77,8 @@ const DISCOVERY_FORMAT_OPTIONS: { value: DiscoveryFormat; labelKey: string }[] =
   { value: "openai", labelKey: "discovery_format_openai" },
   { value: "google", labelKey: "discovery_format_google" },
   { value: "comfyui", labelKey: "discovery_format_comfyui" },
+  // YouReel: ElevenLabs speech (its own key header for the check and the model list)
+  { value: "elevenlabs", labelKey: "discovery_format_elevenlabs" },
 ];
 
 interface CustomProviderFormProps {

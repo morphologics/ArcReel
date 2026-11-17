@@ -1816,6 +1816,7 @@ export default {
   'discovery_format_openai': 'Tương thích OpenAI',
   'discovery_format_google': 'Google AI Studio',
   'discovery_format_comfyui': 'ComfyUI',
+  'discovery_format_elevenlabs': 'ElevenLabs',
   'discovery_not_applicable': 'Lấy mô hình không áp dụng cho ComfyUI: gọi được gì là do các workflow bạn nhập quyết định. Hãy nhập một endpoint ComfyUI ở mục "Endpoint", rồi chọn nó trong vùng chỉnh sửa của mô hình.',
   'cp_comfyui_connectivity_hint': 'Kiểm tra kết nối gửi khóa dưới dạng Bearer trần tới /system_stats (để trống khóa thì không kèm thông tin xác thực). Nếu reverse proxy của bạn xác thực bằng header tùy chỉnh, kiểm tra này có thể báo không truy cập được — khi đó hãy căn cứ vào "Kiểm tra kết nối" của endpoint.',
   'cp_comfyui_add_model_hint': 'Một dòng mô hình = một tên chọn được trong dự án, gắn với một endpoint ComfyUI.',

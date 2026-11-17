@@ -54,6 +54,8 @@ async def discover_models(
         return await _discover_google(base_url, api_key)
     if discovery_format == "anthropic":
         return await _discover_anthropic(base_url, api_key)
+    if discovery_format == "elevenlabs":
+        return await _discover_elevenlabs(base_url, api_key)
     raise UnsupportedDiscoveryFormatError(
         f"不支持的 discovery_format: {discovery_format!r}，支持: 'openai', 'google', 'anthropic'"
     )
@@ -69,6 +71,24 @@ async def _discover_openai(base_url: str | None, api_key: str) -> list[dict]:
         return _build_result_list([m.id for m in models], "openai")
 
     return await asyncio.to_thread(_sync)
+
+
+async def _discover_elevenlabs(base_url: str | None, api_key: str) -> list[dict]:
+    """YouReel: the account's text-to-speech models (``GET /v1/models``, ``can_do_text_to_speech``)."""
+    import httpx
+
+    from lib.backends.audio_backends.elevenlabs import elevenlabs_base_url
+
+    async with httpx.AsyncClient(timeout=20.0) as client:
+        resp = await client.get(f"{elevenlabs_base_url(base_url)}/v1/models", headers={"xi-api-key": api_key})
+    resp.raise_for_status()
+    rows = resp.json()
+    model_ids = sorted(
+        str(row["model_id"])
+        for row in (rows if isinstance(rows, list) else [])
+        if isinstance(row, dict) and row.get("model_id") and row.get("can_do_text_to_speech")
+    )
+    return _build_result_list(model_ids, "elevenlabs")
 
 
 async def _discover_google(base_url: str | None, api_key: str) -> list[dict]:

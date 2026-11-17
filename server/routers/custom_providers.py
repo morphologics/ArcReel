@@ -90,7 +90,7 @@ def _validate_endpoint(value: str) -> str:
 # 写入路径上的 endpoint 字段统一走运行时校验，键集合自动跟随 ENDPOINT_REGISTRY；
 # 响应路径不需校验，直接 str。
 EndpointType = Annotated[str, AfterValidator(_validate_endpoint)]
-DiscoveryFormatLiteral = Literal["openai", "google", "comfyui"]
+DiscoveryFormatLiteral = Literal["openai", "google", "comfyui", "elevenlabs"]
 
 # Concurrency-limit field type: nullable positive integer (>=1); None = unset -> capacity loading falls back to the
 # global default.
@@ -2001,6 +2001,8 @@ async def _run_connectivity_check(
                 asyncio.to_thread(google_probe or _check_google, base_url, api_key, _t),
                 timeout=_CONNECTIVITY_CHECK_TIMEOUT,
             )
+        elif discovery_format == "elevenlabs":
+            result = await asyncio.wait_for(_check_elevenlabs(base_url, api_key, _t), timeout=_CONNECTIVITY_CHECK_TIMEOUT)
         elif is_comfyui_protocol(discovery_format):
             # Not run via to_thread: the ComfyUI probe calls httpx directly and is already a coroutine; the other two
             # are synchronous SDK calls.
@@ -2097,6 +2099,20 @@ def _comfyui_probe_headers(api_key: str) -> dict[str, str]:
     前端为此标注「以测试连接为准」。
     """
     return {"Authorization": f"Bearer {api_key}"} if api_key else {}
+
+
+async def _check_elevenlabs(
+    base_url: str,
+    api_key: str,
+    _t: Callable[..., str],
+) -> ConnectivityCheckResponse:
+    """YouReel: ElevenLabs answers ``GET /v1/models`` with the ``xi-api-key`` header (not a Bearer token)."""
+    from lib.backends.audio_backends.elevenlabs import elevenlabs_base_url
+
+    async with artifact_http_client(timeout=_CONNECTIVITY_CHECK_TIMEOUT) as client:
+        resp = await client.get(f"{elevenlabs_base_url(base_url)}/v1/models", headers={"xi-api-key": api_key})
+    raise_for_status_redacted(resp)
+    return ConnectivityCheckResponse(success=True, message=_t("connectivity_check_ok"))
 
 
 async def _check_comfyui(
