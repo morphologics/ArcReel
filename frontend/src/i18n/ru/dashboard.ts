@@ -4028,7 +4028,7 @@ export default {
   'episode_view_edit': 'Монтаж',
   'episode_view_plan': 'План сценария',
   'episode_view_grid': 'Сетки раскадровки',
-  'episode_view_board': 'Раскадровки',
+  'episode_view_board': 'Кадры',
   'episode_view_units': 'Видеоблоки',
   'episode_view_needs_script': 'Доступно после генерации сценария',
   'episode_head_more': 'Другие действия с этим эпизодом',

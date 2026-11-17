@@ -30,7 +30,7 @@ const tabsListVariants = cva(
         default: "bg-muted",
         line: "gap-1 bg-transparent",
         // YouReel: tabs drawn as coloured buttons (TabsTrigger `tone`), Button size sm's height
-        buttons: "gap-1.5 bg-transparent px-1",
+        buttons: "gap-3 bg-transparent px-1",
       },
     },
     defaultVariants: {

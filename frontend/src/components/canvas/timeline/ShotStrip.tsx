@@ -10,7 +10,7 @@ import {
   type WheelEvent,
 } from "react";
 import { useTranslation } from "react-i18next";
-import { ArrowDownUp, ArrowLeft, ArrowRight, Eye, EyeOff, Film, ImageIcon, ParkingSquare, Scissors, SquarePlay, Undo2 } from "lucide-react";
+import { ArrowDownUp, ArrowLeft, ArrowRight, ArrowUpRight, Eye, EyeOff, Film, ImageIcon, ParkingSquare, Scissors, SquarePlay, Undo2 } from "lucide-react";
 import { ContextMenu } from "@base-ui/react/context-menu";
 import { useLocation, useSearchParams } from "wouter";
 import { cn } from "cn";
@@ -23,6 +23,8 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { ItemPositionBadge } from "@/components/shared/episode-item/ItemPositionBadge";
 import { statusFromAssets } from "@/components/canvas/timeline/shot-status";
 import { StatusBadge } from "@/components/canvas/timeline/StatusBadge";
+import { openEpisodeInOpenReel } from "@/components/canvas/edit/open-in-openreel";
+import { useDefaultEditor } from "@/preferences/user-options";
 import { useAppStore } from "@/stores/app-store";
 import { useProjectsStore } from "@/stores/projects-store";
 import { useShotMediaStore, type ShotMediaKind } from "@/stores/shot-media-store";
@@ -186,8 +188,15 @@ export function ShotStrip({
     useAppStore.getState().triggerScrollTo({ type: "segment", id: shotId });
   };
 
-  // "Edit view": the episode's Edit view with the playhead on this shot's first clip (selected there).
+  // "Edit view": the episode's Edit view with the playhead on this shot's first clip (selected there). YouReel: with
+  // OpenReel as the default editor (Settings → Options) the episode opens in OpenReel's own tab instead, as the Edit tab
+  const { editor: defaultEditor, ready: defaultEditorReady } = useDefaultEditor();
+  const editInOpenReel = defaultEditorReady && defaultEditor === "openreel";
   const openInEditView = (target: StripEpisode, shotId: string) => {
+    if (editInOpenReel) {
+      openEpisodeInOpenReel(projectName, target.episode);
+      return;
+    }
     const query = new URLSearchParams({ [EPISODE_VIEW_PARAM]: EPISODE_VIEW_EDIT, [LINK_UNIT_PARAM]: shotId });
     startTransition(() => navigate(`/${WORKSPACE_ROUTE_EPISODES}/${target.episode}?${query.toString()}`));
   };
@@ -386,7 +395,8 @@ export function ShotStrip({
                         )}
                         <DropdownMenuItem onClick={() => openInEditView(group, id)}>
                           <SquarePlay aria-hidden />
-                          {t("shot_strip_edit_view")}
+                          {t(editInOpenReel ? "edit_open_in_openreel" : "shot_strip_edit_view")}
+                          {editInOpenReel && <ArrowUpRight aria-hidden className="ms-auto" />}
                         </DropdownMenuItem>
                         <ShotVersionsMenu
                           projectName={projectName}

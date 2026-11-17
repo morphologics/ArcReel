@@ -3904,7 +3904,7 @@ export default {
   'episode_view_edit': 'Edit',
   'episode_view_plan': 'Script plan',
   'episode_view_grid': 'Storyboard grids',
-  'episode_view_board': 'Storyboards',
+  'episode_view_board': 'Shots',
   'episode_view_units': 'Video units',
   'episode_view_needs_script': 'Available once the script is generated',
   'episode_head_more': 'More actions for this episode',
