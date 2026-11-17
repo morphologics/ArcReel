@@ -32,6 +32,7 @@ from arcreel_market_core.endpoint_definition.kinds import COMFYUI_KIND
 from arcreel_market_core.endpoint_definition.media_type import definition_media_type
 from arcreel_market_core.video_backend_contract import ReferenceAudioMode, VideoCapabilities
 from lib.backends.audio_backends.dashscope import DashScopeAudioBackend
+from lib.backends.audio_backends.elevenlabs import ElevenLabsAudioBackend, elevenlabs_base_url
 from lib.backends.audio_backends.gemini import GeminiAudioBackend
 from lib.backends.audio_backends.minimax import MiniMaxAudioBackend
 from lib.backends.audio_backends.openai import OpenAIAudioBackend
@@ -576,6 +577,26 @@ def _build_minimax_tts(
     return CustomAudioBackend(provider_id=provider.provider_id, delegate=delegate, model=model_id)
 
 
+def _build_elevenlabs_tts(
+    provider, model_id: str, path_overrides: PathOverrides = NO_PATH_OVERRIDES
+) -> CustomAudioBackend:
+    # YouReel: the backend tolerates the host with or without /v1; pass the raw base_url
+    delegate = ElevenLabsAudioBackend(
+        api_key=provider.api_key,
+        base_url=provider.base_url,
+        model=model_id,
+        provider_name=provider.provider_id,
+        transport_layer=path_override_layer(
+            _ELEVENLABS_TTS_REQUESTS,
+            path_overrides,
+            provider.base_url,
+            elevenlabs_base_url(provider.base_url),
+            model_id,
+        ),
+    )
+    return CustomAudioBackend(provider_id=provider.provider_id, delegate=delegate, model=model_id)
+
+
 def _build_gemini_tts(provider, model_id: str, path_overrides: PathOverrides = NO_PATH_OVERRIDES) -> CustomAudioBackend:
     base_url = ensure_google_base_url(provider.base_url) or None
     delegate = GeminiAudioBackend(
@@ -687,6 +708,10 @@ _OPENROUTER_IMAGES_REQUESTS = _python_requests(
     ("model_catalog", "cp_request_model_catalog", OPENROUTER_MODELS_PATH),
 )
 _MINIMAX_TTS_REQUESTS = _python_requests("ensure_v1", ("generate", "cp_request_generate", "/t2a_v2"))
+# YouReel: ElevenLabs puts the voice in the path; the backend adds the host, so the path is relative to it
+_ELEVENLABS_TTS_REQUESTS = _python_requests(
+    "strip_version", ("generate", "cp_request_generate", "/v1/text-to-speech/{{ voice }}")
+)
 # The SDK appends /v1beta itself after the base_url with /vN stripped / SDK 在剥去 /vN 的 base_url 后自己拼 /v1beta
 _GEMINI_GENERATE_REQUESTS = _python_requests(
     "strip_version", ("generate", "cp_request_generate", "/v1beta/models/{{ model }}:generateContent")
@@ -1110,6 +1135,17 @@ ENDPOINT_REGISTRY: dict[str, EndpointSpec] = {
         request_path_template="/v1/t2a_v2",
         build_backend=_build_minimax_tts,
         requests=_MINIMAX_TTS_REQUESTS,
+    ),
+    # YouReel (owner 2026-11-17): ElevenLabs speech, base URL https://api.elevenlabs.io, key from the account
+    "elevenlabs-tts": EndpointSpec(
+        key="elevenlabs-tts",
+        media_type="audio",
+        family="elevenlabs",
+        display_name_key="endpoint_elevenlabs_tts_display",
+        request_method="POST",
+        request_path_template="/v1/text-to-speech/{voice}",
+        build_backend=_build_elevenlabs_tts,
+        requests=_ELEVENLABS_TTS_REQUESTS,
     ),
     "gemini-tts": EndpointSpec(
         key="gemini-tts",

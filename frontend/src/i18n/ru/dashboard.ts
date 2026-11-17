@@ -1905,6 +1905,7 @@ export default {
   'endpoint_kling_video_display': 'Kling (видео)',
   'endpoint_gemini_video_display': 'Google Gemini Video (Veo)',
   'endpoint_minimax_tts_display': 'MiniMax (речь)',
+  'endpoint_elevenlabs_tts_display': 'ElevenLabs (речь)',
   'endpoint_openai_tts_display': 'OpenAI Speech (TTS)',
   'endpoint_dashscope_tts_display': 'Alibaba Model Studio (TTS)',
   'endpoint_gemini_tts_display': 'Google Gemini Speech (TTS)',

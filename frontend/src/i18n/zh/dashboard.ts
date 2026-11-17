@@ -1860,6 +1860,7 @@ export default {
   'endpoint_kling_video_display': '可灵 Kling（视频）',
   'endpoint_gemini_video_display': 'Gemini 视频 (Veo)',
   'endpoint_minimax_tts_display': 'MiniMax（语音）',
+  'endpoint_elevenlabs_tts_display': 'ElevenLabs（语音）',
   'endpoint_openai_tts_display': 'OpenAI 语音合成 (TTS)',
   'endpoint_dashscope_tts_display': '阿里百炼（语音合成）',
   'endpoint_gemini_tts_display': 'Gemini 语音合成 (TTS)',

@@ -89,6 +89,7 @@ class TestRegistry:
             "openai-tts",
             "dashscope-tts",
             "minimax-tts",
+            "elevenlabs-tts",
             "gemini-tts",
         }
 
@@ -109,6 +110,7 @@ class TestRegistry:
                 "kling",
                 "openrouter",
                 "xai",
+                "elevenlabs",
             }
             # Everything in the registry is a built-in endpoint, so the source is always builtin; user
             # endpoints are not in the registry and are built on the fly from ce- keys.
@@ -352,7 +354,7 @@ class TestRegistry:
         image_keys = {s.key for s in ENDPOINT_REGISTRY.values() if s.media_type == "image"}
         video_keys = {s.key for s in ENDPOINT_REGISTRY.values() if s.media_type == "video"}
         audio_keys = {s.key for s in ENDPOINT_REGISTRY.values() if s.media_type == "audio"}
-        assert audio_keys == {"openai-tts", "dashscope-tts", "minimax-tts", "gemini-tts"}
+        assert audio_keys == {"openai-tts", "dashscope-tts", "minimax-tts", "gemini-tts", "elevenlabs-tts"}
         assert text_keys == {"openai-chat", "openai-responses", "gemini-generate", "anthropic-messages"}
         assert image_keys == {
             "openai-images",

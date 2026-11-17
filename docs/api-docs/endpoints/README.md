@@ -20,6 +20,7 @@ File names match the endpoint ids in `lib.custom_provider.endpoints.ENDPOINT_REG
 - [minimax-image](minimax-image.md)
 - [minimax-s2v-01](minimax-s2v-01.md)
 - [minimax-tts](minimax-tts.md)
+- [elevenlabs-tts](elevenlabs-tts.md)
 - [newapi-video](newapi-video.md)
 - [openai-chat](openai-chat.md)
 - [openai-chat-image](openai-chat-image.md)

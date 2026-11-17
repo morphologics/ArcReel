@@ -243,6 +243,7 @@ class TestEndpointCatalog:
             "openai-tts",
             "dashscope-tts",
             "minimax-tts",
+            "elevenlabs-tts",
             "gemini-tts",
         }
 
