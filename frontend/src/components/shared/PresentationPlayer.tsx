@@ -26,6 +26,7 @@ import type {
 import { errMsg } from "@/utils/async";
 import { downloadBlob } from "@/utils/download";
 import { useItemPositionLabel } from "@/components/shared/episode-item/useEpisodeItem";
+import { keepVideoFocus, refocusVideoAfterSeek, toggleVideoOnSpace } from "@/components/shared/video-space-key";
 
 interface PresentationPlayerProps {
   projectName: string;
@@ -431,9 +432,16 @@ export function PresentationPlayer({
   );
 
   return (
-    <div className={`dark relative h-full w-full bg-black ${className}`}>
+    // the space bar plays / pauses, also after a seek (video-space-key.ts)
+    // eslint-disable-next-line jsx-a11y/no-static-element-interactions -- the keys belong to the focusable video inside
+    <div
+      className={`dark relative h-full w-full bg-black ${className}`}
+      onPointerUp={(event) => keepVideoFocus(event, videoRef.current)}
+      onKeyDownCapture={(event) => toggleVideoOnSpace(event, videoRef.current)}
+    >
       <video
         ref={bindVideo}
+        tabIndex={0}
         src={videoUrl}
         poster={posterUrl}
         aria-label={t("presentation_video_aria", { id: itemLabel })}
@@ -456,6 +464,7 @@ export function PresentationPlayer({
         onWaiting={() => audioRef.current?.pause()}
         onStalled={() => audioRef.current?.pause()}
         onSeeked={(event) => {
+          refocusVideoAfterSeek(event.currentTarget);
           if (!stopAtPresentationBoundary(event.currentTarget)) {
             synchronizeNarration(!event.currentTarget.paused);
           }
