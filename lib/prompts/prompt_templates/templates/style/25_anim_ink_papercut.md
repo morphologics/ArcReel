@@ -1,8 +1,8 @@
 ---
 id: style/anim_ink_papercut
 category: style
-title: 水墨剪纸
-description: "动画画风，雾山五行 · 重彩。"
+title: Ink & Paper-Cut
+description: "Animation, Fog Hill of Five Elements · rich colour."
 stage: style
 invoked_by:
   kind: user_action
@@ -11,4 +11,4 @@ applies_to: {}
 slots: {}
 protected: false
 ---
-硬核传统2D水墨/剪纸，视觉特点：保留生猛的毛笔枯笔笔触，色彩借鉴中国传统重彩，战斗动作如中国武术般行云流水，张力拉满。参考《雾山五行》风格
+Hardcore traditional 2D ink wash / paper-cut; visual traits: keeps raw, dry-brush calligraphy strokes, colours drawn from traditional Chinese heavy-colour painting, fight action flowing like Chinese martial arts, maximum tension. In the style of Fog Hill of Five Elements

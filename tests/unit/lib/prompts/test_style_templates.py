@@ -37,23 +37,20 @@ def test_style_templates_are_slotless_and_grouped_under_style_category():
 
 def test_no_preset_starts_with_huafeng_prefix():
     # Preset values do not start with "画风：" (avoids stacking with the English Style: label and rendering as "Style: 画风：").
-    # anim_arcane is the only exception: its "画风" is part of the compound word "油画三渲二画风", not a removable prefix.
+    # (YouReel: the presets are English since 2026-11-17, so anim_arcane's compound word "油画三渲二画风：" is gone too.)
     # 预设值不以「画风：」开头（避免叠加英文 Style: 标签渲染成 "Style: 画风："）。
     # anim_arcane 是唯一例外：其「画风」是复合词「油画三渲二画风」的一部分，非可删前缀。
     for tpl_id in list_template_ids():
         prompt = resolve_template_prompt(tpl_id)
         assert prompt.strip()
         assert prompt == prompt.strip()
-        if tpl_id == "anim_arcane":
-            assert prompt.startswith("油画三渲二画风：")
-            continue
         # Both full-width and half-width colons must be excluded, consistent with the stripping rule of the v13→v14 migration (画风： / 画风:)
         # 全角/半角冒号都要排除，与 v13→v14 迁移的剥离口径（画风： / 画风:）一致
         assert not prompt.startswith(("画风：", "画风:")), tpl_id
 
 
 def test_resolve_template_prompt_ok():
-    assert resolve_template_prompt("live_premium_drama") == "真人电视剧风格，精品短剧画风，大师级构图"
+    assert resolve_template_prompt("live_premium_drama") == "Live-action TV-series style, premium short-drama look, master-level composition"
 
 
 @pytest.mark.parametrize("template_id", ["no_such_id", "../asset/sheet", "asset/sheet", ""])
@@ -70,6 +67,6 @@ def test_list_templates_by_category():
     assert len(grouped["anim"]) == 18
     assert grouped["live"][0] == {
         "id": "live_cinematic_ancient",
-        "prompt": "精品古装真人短剧风格，专业打光，高质量电视剧质感",
+        "prompt": "Premium live-action period short drama style, professional lighting, high-quality TV-series look",
     }
     assert [item["id"] for item in grouped["live"] + grouped["anim"]] == list_template_ids()

@@ -1,8 +1,8 @@
 ---
 id: style/anim_cyberpunk
 category: style
-title: 动画赛博朋克
-description: "动画画风，电影质感 · 高清。"
+title: Anime Cyberpunk
+description: "Animation, cinematic texture · HD."
 stage: style
 invoked_by:
   kind: user_action
@@ -11,4 +11,4 @@ applies_to: {}
 slots: {}
 protected: false
 ---
-参考动画赛博朋克电影，电影质感，极致高清画质
+In the style of animated cyberpunk films, cinematic texture, ultra-high-definition image quality

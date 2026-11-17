@@ -1,8 +1,8 @@
 ---
 id: style/anim_ghibli
 category: style
-title: 吉卜力
-description: "动画画风，宫崎骏 · 温暖质感。"
+title: Ghibli
+description: "Animation, Miyazaki · warm texture."
 stage: style
 invoked_by:
   kind: user_action
@@ -11,4 +11,4 @@ applies_to: {}
 slots: {}
 protected: false
 ---
-参考吉卜力动画电影风格，宫崎骏动画风格
+In the style of Studio Ghibli animated films, Hayao Miyazaki animation style

@@ -1,8 +1,8 @@
 ---
 id: style/live_ancient_xianxia
 category: style
-title: 古装仙侠
-description: "真人画风，临江仙 · 美白滤镜。"
+title: Period Xianxia
+description: "Live action, Lin Jiang Xian · fair-skin filter."
 stage: style
 invoked_by:
   kind: user_action
@@ -11,4 +11,4 @@ applies_to: {}
 slots: {}
 protected: false
 ---
-精品古装仙侠真人电视剧临江仙风格，美白滤镜，细腻真实的皮肤质感，精致打光，极致高清画质
+Premium live-action period xianxia (immortal fantasy) TV-series style like Lin Jiang Xian, skin-brightening filter, fine and realistic skin texture, refined lighting, ultra-high-definition image quality

@@ -1,8 +1,8 @@
 ---
 id: style/anim_us_3d
 category: style
-title: 美式 3D 动画
-description: "动画画风，影视级 · 皮克斯。"
+title: American 3D Animation
+description: "Animation, film grade · Pixar."
 stage: style
 invoked_by:
   kind: user_action
@@ -11,4 +11,4 @@ applies_to: {}
 slots: {}
 protected: false
 ---
-美式3D动画电影风格、影视级、虚幻引擎渲染
+American 3D animated feature style, film grade, Unreal Engine render

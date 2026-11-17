@@ -1,8 +1,8 @@
 ---
 id: style/live_premium_drama
 category: style
-title: 精品短剧
-description: "真人画风，真人电视剧 · 大师构图。"
+title: Premium Short Drama
+description: "Live action, live TV series · master composition."
 stage: style
 invoked_by:
   kind: user_action
@@ -11,4 +11,4 @@ applies_to: {}
 slots: {}
 protected: false
 ---
-真人电视剧风格，精品短剧画风，大师级构图
+Live-action TV-series style, premium short-drama look, master-level composition
