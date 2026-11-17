@@ -1,5 +1,5 @@
 import { useId, type ReactNode } from "react";
-import { Focus, Minimize } from "lucide-react";
+import { ArrowUpRight, Focus, Minimize } from "lucide-react";
 import { cn } from "cn";
 import { useTranslation } from "react-i18next";
 
@@ -68,6 +68,7 @@ export function EpisodePageHeader({
   onActionsSlot,
   compact = false,
   focus = null,
+  editLaunches = false,
 }: {
   head: ReactNode;
   /** Workflow progress entry; demo projects have none. / 制作进度入口；演示项目没有。 */
@@ -85,6 +86,11 @@ export function EpisodePageHeader({
    * switcher and "Exit focus" (head, tabs, actions and progress hidden).
    */
   focus?: { on: boolean; onEnter: () => void; onExit: () => void; switcher: ReactNode } | null;
+  /**
+   * YouReel: the Edit tab opens the episode in OpenReel's own browser tab (OpenReel is the default editor), so it is a
+   * launcher, not a view of this page: it carries an "opens elsewhere" arrow. With the built-in editor it stays a tab.
+   */
+  editLaunches?: boolean;
 }) {
   const { t } = useTranslation("dashboard");
   const label: Record<EpisodeView, string> = {
@@ -108,6 +114,7 @@ export function EpisodePageHeader({
               tone={VIEW_TAB_TONE[tab.view]}
             >
               {label[tab.view]}
+              {tab.view === "edit" && editLaunches && <ArrowUpRight aria-hidden data-icon="inline-end" />}
             </TabsTrigger>
           ),
         )}

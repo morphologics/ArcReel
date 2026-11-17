@@ -290,6 +290,7 @@ function EpisodePageContent({
           onActionsSlot={setActionsSlot}
           // the Edit view needs the height for its player
           compact={view === "edit"}
+          editLaunches={defaultEditorReady && defaultEditor === "openreel"}
           focus={
             view === "edit"
               ? {
