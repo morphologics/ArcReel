@@ -83,6 +83,9 @@ function deviceOption<const V extends string>(
 
 export type ToggleValue = "on" | "off";
 
+/** The OpenReel timeline's auto re-centre on zoom, per device (same origin: OpenReel reads it). */
+export const TIMELINE_RECENTER_STORAGE_KEY = "youreel.timeline.autoRecenter";
+
 /** An on / off option kept in this browser under `storageKey`; the default is stored as "key absent", the other as its value. */
 function deviceToggle(
   storageKey: string,
@@ -245,6 +248,15 @@ export const USER_OPTIONS = {
     default: "pan",
     requires: "openreel",
     device: localStorageChoice(CLIP_DRAG_STORAGE_KEY, ["pan", "move"], "pan"),
+  }),
+  // YouReel (owner 2026-11-18): zooming the OpenReel timeline (− / +, slider, keys) re-centres it on the playhead;
+  // off, the view stays where it is (Shift+C still centres). OpenReel reads the same key (Timeline.tsx).
+  timeline_auto_recenter: deviceToggle(TIMELINE_RECENTER_STORAGE_KEY, {
+    group: "openreel",
+    labelKey: "dashboard:options_timeline_recenter",
+    descriptionKey: "dashboard:options_timeline_recenter_desc",
+    default: "on",
+    requires: "openreel",
   }),
   confirm_delete_track: deviceOption({
     group: "openreel",

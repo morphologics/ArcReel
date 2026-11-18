@@ -119,6 +119,8 @@ export default {
   'options_clip_drag_desc': "На таймлайне OpenReel. Когда перетаскивание прокручивает, удерживайте клип, чтобы взять его.",
   'options_clip_drag_pan': "Прокрутка таймлайна",
   'options_clip_drag_move': "Сразу перемещать клип",
+  'options_timeline_recenter': "Автоматически центрировать таймлайн при масштабировании",
+  'options_timeline_recenter_desc': "При масштабировании таймлайна (− / +, ползунок или клавиши) указатель воспроизведения встаёт в центр. Выкл.: вид остаётся на месте (Shift+C по-прежнему центрирует).",
   'options_confirm_delete_track': "Удаление дорожки",
   'options_confirm_delete_track_ask': "Спрашивать",
   'options_confirm_delete_track_off': "Удалять без вопроса",

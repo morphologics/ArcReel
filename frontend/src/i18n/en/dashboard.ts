@@ -115,6 +115,8 @@ export default {
   'options_clip_drag_desc': "On the OpenReel timeline. While dragging pans, press and hold a clip to lift it.",
   'options_clip_drag_pan': "Pan the timeline",
   'options_clip_drag_move': "Move the clip at once",
+  'options_timeline_recenter': "Automatically recenter timeline when zoomed in",
+  'options_timeline_recenter_desc': "Zooming the timeline (− / +, the slider or the keys) brings the playhead to the middle of the view. Off: the view stays where it is (Shift+C still centres it).",
   'options_confirm_delete_track': "Deleting a track",
   'options_confirm_delete_track_ask': "Ask first",
   'options_confirm_delete_track_off': "Delete without asking",

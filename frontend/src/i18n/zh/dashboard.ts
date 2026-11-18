@@ -116,6 +116,8 @@ export default {
   'options_clip_drag_desc': "用于 OpenReel 时间线。拖动为平移时，长按片段即可拿起。",
   'options_clip_drag_pan': "平移时间线",
   'options_clip_drag_move': "立即移动片段",
+  'options_timeline_recenter': "缩放时间线时自动居中",
+  'options_timeline_recenter_desc': "缩放时间线（− / +、滑块或快捷键）时把播放头移到视图中央。关闭：视图保持原位（Shift+C 仍可居中）。",
   'options_confirm_delete_track': "删除轨道",
   'options_confirm_delete_track_ask': "先询问",
   'options_confirm_delete_track_off': "直接删除",

@@ -116,6 +116,8 @@ export default {
   'options_clip_drag_desc': "Trên dòng thời gian OpenReel. Khi kéo để cuộn, nhấn giữ một clip để nhấc nó lên.",
   'options_clip_drag_pan': "Cuộn dòng thời gian",
   'options_clip_drag_move': "Di chuyển clip ngay",
+  'options_timeline_recenter': "Tự căn giữa dòng thời gian khi phóng to",
+  'options_timeline_recenter_desc': "Khi phóng to / thu nhỏ dòng thời gian (− / +, thanh trượt hoặc phím tắt), đầu phát được đưa về giữa khung nhìn. Tắt: khung nhìn giữ nguyên (Shift+C vẫn căn giữa).",
   'options_confirm_delete_track': "Xóa track",
   'options_confirm_delete_track_ask': "Hỏi trước",
   'options_confirm_delete_track_off': "Xóa không hỏi",
