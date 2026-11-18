@@ -26,5 +26,10 @@ export const BRAND = {
   ),
 } as const;
 
+// The editor the studio opens in its own tab (our fork of OpenReel, MIT: its copyright notice stays with that code),
+// shown under this name everywhere in the studio (owner 2026-11-18). Override with VITE_EDITOR_BRAND. i18n resources
+// write it as the [[editor]] placeholder.
+export const EDITOR_BRAND = fallback(env.VITE_EDITOR_BRAND, "YouReel Editor");
+
 export const BRAND_DOCUMENT_TITLE = `${BRAND.name} · ${BRAND.tagline}`;
 

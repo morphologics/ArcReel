@@ -2,6 +2,7 @@ import { useCallback, useEffect, useSyncExternalStore } from "react";
 import { create } from "zustand";
 
 import { API } from "@/api";
+import { EDITOR_BRAND } from "@/branding";
 import { useOpenReelAvailable } from "@/components/canvas/edit/open-in-openreel";
 import i18n, { LANGUAGE_DISPLAY_LABELS, SUPPORTED_LANGUAGES, type SupportedLanguage } from "@/i18n";
 import { useAppStore } from "@/stores/app-store";
@@ -225,7 +226,7 @@ export const USER_OPTIONS = {
     descriptionKey: "dashboard:options_default_editor_desc",
     choices: [
       { value: "arcreel", labelKey: "dashboard:options_default_editor_arcreel" },
-      { value: "openreel", label: "OpenReel", requires: "openreel" },
+      { value: "openreel", label: EDITOR_BRAND, requires: "openreel" },
     ],
     // YouReel (owner 2026-11-16): OpenReel is every member's editor; the built-in one is the fallback a member can
     // choose here, and what opens wherever OpenReel isn't served (useDefaultEditor)

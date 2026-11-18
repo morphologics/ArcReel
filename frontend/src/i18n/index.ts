@@ -2,7 +2,7 @@ import i18n from 'i18next';
 import { initReactI18next } from 'react-i18next';
 import LanguageDetector from 'i18next-browser-languagedetector';
 import resourcesToBackend from 'i18next-resources-to-backend';
-import { BRAND } from '@/branding';
+import { BRAND, EDITOR_BRAND } from '@/branding';
 
 // 按需加载 i18n namespace（issue #489）：
 // Vite import.meta.glob 在编译期为每个 (lang, ns) 文件生成独立 chunk；运行时由
@@ -46,7 +46,9 @@ function applyBrandPlaceholders(value: unknown): unknown {
   if (typeof value === 'string') {
     // Function replacer avoids `$`-sequences in BRAND.name (e.g. "Product$1")
     // being interpreted as String.prototype.replace patterns.
-    return value.replace(/\[\[\s*brand\s*\]\]/g, () => BRAND.name);
+    return value
+      .replace(/\[\[\s*brand\s*\]\]/g, () => BRAND.name)
+      .replace(/\[\[\s*editor\s*\]\]/g, () => EDITOR_BRAND);
   }
   if (Array.isArray(value)) {
     return value.map(applyBrandPlaceholders);

@@ -66,7 +66,7 @@ describe("OptionsSection", () => {
     render(<OptionsSection />);
     await waitFor(() => expect(globalThis.fetch).toHaveBeenCalled());
 
-    expect(screen.queryByRole("heading", { name: "OpenReel 编辑器" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "YouReel Editor" })).not.toBeInTheDocument();
     await user.click(screen.getByRole("combobox", { name: "默认编辑器" }));
     const listbox = await screen.findByRole("listbox");
     expect(within(listbox).getAllByRole("option").map((option) => option.textContent)).toEqual(["内置编辑器"]);
@@ -78,8 +78,8 @@ describe("OptionsSection", () => {
     const user = userEvent.setup();
     render(<OptionsSection />);
 
-    expect(await screen.findByRole("heading", { name: "OpenReel 编辑器" })).toBeInTheDocument();
-    expect(screen.getByRole("combobox", { name: "默认编辑器" })).toHaveTextContent("OpenReel");
+    expect(await screen.findByRole("heading", { name: "YouReel Editor" })).toBeInTheDocument();
+    expect(screen.getByRole("combobox", { name: "默认编辑器" })).toHaveTextContent("YouReel Editor");
     await user.click(screen.getByRole("combobox", { name: "默认编辑器" }));
     await user.click(await screen.findByRole("option", { name: "内置编辑器" }));
 
