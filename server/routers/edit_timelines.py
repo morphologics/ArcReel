@@ -21,7 +21,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Annotated, Any, Literal
 
 import jwt
-from fastapi import APIRouter, Depends, HTTPException, Query, Response
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from fastapi import Path as PathParam
 from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field
@@ -50,6 +50,7 @@ from lib.jianying_draft.results import JianyingDraftStatus
 from lib.project.project_change_hints import project_change_source
 from lib.project.project_manager import get_project_manager
 from server.services.presentation.project_state_cache import PROJECT_STATE_CACHE
+from server.services.presentation.timeline_editor_save import EditorSaveError, TimelineEditorSaveService
 from server.services.presentation.timeline_oreelpack import TimelineOreelPackService
 from server.services.presentation.timeline_stream import TimelineStream, TimelineStreamService
 from lib.workflow.operation_admission import AdmissionState
@@ -117,6 +118,13 @@ def get_timeline_oreelpack_service() -> TimelineOreelPackService:
 
 
 TimelineOreelPackServiceDep = Annotated[TimelineOreelPackService, Depends(get_timeline_oreelpack_service)]
+
+
+def get_timeline_editor_save_service() -> TimelineEditorSaveService:
+    return TimelineEditorSaveService(get_project_manager())
+
+
+TimelineEditorSaveServiceDep = Annotated[TimelineEditorSaveService, Depends(get_timeline_editor_save_service)]
 
 
 def get_workflow_state_service() -> WorkflowStateService:
@@ -562,6 +570,92 @@ async def edit_timeline_oreelpack_media(
         asset.path,
         media_type=asset.type,
         # same id, same bytes: the browser may keep it
+        headers={"Cache-Control": "private, max-age=86400", "Content-Encoding": "identity"},
+    )
+
+
+def _editor_save_error(exc: EditorSaveError) -> HTTPException:
+    status = {"media_missing": 409, "media_too_large": 413, "save_too_large": 413}.get(exc.code, 422)
+    return HTTPException(status_code=status, detail={"code": exc.code, **exc.details})
+
+
+@router.get("/projects/{project_name}/edit-timelines/{timeline_id}/editor-save")
+async def get_editor_save(
+    project_name: str,
+    timeline_id: str,
+    service: TimelineEditorSaveServiceDep,
+) -> Response:
+    """The latest YouReel Editor save of this timeline (the editor's own project, pack manifest format with
+    ``filename``, ``revision``, ``savedAt``, ``editorProjectId``, ``name``); 404 when there is none."""
+    try:
+        save = await service.latest(project_name, timeline_id)
+    except EditTimelineError as exc:
+        raise edit_timeline_api_error(exc) from exc
+    if save is None:
+        raise HTTPException(status_code=404, detail="no_editor_save")
+    return Response(content=json.dumps(save), media_type="application/json", headers={"Cache-Control": "no-store"})
+
+
+@router.put("/projects/{project_name}/edit-timelines/{timeline_id}/editor-save")
+async def put_editor_save(
+    project_name: str,
+    timeline_id: str,
+    request: Request,
+    service: TimelineEditorSaveServiceDep,
+) -> dict[str, Any]:
+    """Keep the editor's project in the studio ("Save to Studio"). 409 ``media_missing`` lists the media the studio
+    can't supply: the editor uploads those (``…/editor-save/media/{id}``) and saves again."""
+    try:
+        body = await request.json()
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail={"code": "invalid_save"}) from exc
+    if not isinstance(body, dict):
+        raise HTTPException(status_code=422, detail={"code": "invalid_save"})
+    try:
+        with project_change_source("webui"):
+            return await service.save(project_name, timeline_id, body)
+    except EditTimelineError as exc:
+        raise edit_timeline_api_error(exc) from exc
+    except EditorSaveError as exc:
+        raise _editor_save_error(exc) from exc
+
+
+@router.put("/projects/{project_name}/edit-timelines/{timeline_id}/editor-save/media/{asset_id}")
+async def put_editor_save_media(
+    project_name: str,
+    timeline_id: str,
+    asset_id: str,
+    request: Request,
+    service: TimelineEditorSaveServiceDep,
+) -> dict[str, Any]:
+    """A medium added in the editor (an upload, generated speech, a recording), the raw bytes as the request body."""
+    try:
+        with project_change_source("webui"):
+            size = await service.store_media(project_name, timeline_id, asset_id, request.stream())
+    except EditTimelineError as exc:
+        raise edit_timeline_api_error(exc) from exc
+    except EditorSaveError as exc:
+        raise _editor_save_error(exc) from exc
+    return {"id": asset_id, "size": size}
+
+
+@router.get("/projects/{project_name}/edit-timelines/{timeline_id}/editor-save/media/{asset_id}")
+async def get_editor_save_media(
+    project_name: str,
+    timeline_id: str,
+    asset_id: str,
+    service: TimelineEditorSaveServiceDep,
+) -> FileResponse:
+    """A medium of the editor saves, by its id."""
+    try:
+        medium = await service.medium(project_name, timeline_id, asset_id)
+    except EditTimelineError as exc:
+        raise edit_timeline_api_error(exc) from exc
+    if medium is None:
+        raise HTTPException(status_code=404, detail="media_not_saved")
+    return FileResponse(
+        medium.path,
+        media_type=medium.type,
         headers={"Cache-Control": "private, max-age=86400", "Content-Encoding": "identity"},
     )
 
