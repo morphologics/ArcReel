@@ -274,6 +274,20 @@ interface StudioOptionsState {
   save: <K extends keyof StudioUserOptions>(key: K, value: NonNullable<StudioUserOptions[K]>) => Promise<void>;
 }
 
+/**
+ * YouReel (owner 2026-11-18): the Easy / Advanced mode mirrored into this browser's storage, which the OpenReel editor
+ * (same origin) reads for its first paint and watches (the storage event), so an editor tab open beside the studio
+ * follows a change at once; the studio's database stays the truth (the editor also asks it).
+ */
+export const STUDIO_MODE_MIRROR_KEY = "youreel.studioMode";
+function mirrorStudioMode(values: StudioUserOptions): void {
+  try {
+    localStorage.setItem(STUDIO_MODE_MIRROR_KEY, values.mode === "easy" ? "easy" : "advanced");
+  } catch {
+    // storage blocked: the editor asks the studio instead
+  }
+}
+
 export const useStudioOptionsStore = create<StudioOptionsState>((set, get) => ({
   values: {},
   status: "idle",
@@ -286,6 +300,7 @@ export const useStudioOptionsStore = create<StudioOptionsState>((set, get) => ({
       const stored = await API.getUserOptions();
       // A change made while the request was in flight wins over the older stored value
       set((state) => ({ values: { ...stored, ...state.values }, status: "ready" }));
+      mirrorStudioMode(get().values);
     } catch (err) {
       console.warn("[user-options] load failed; using defaults", err);
       set({ status: "failed" });
@@ -297,6 +312,7 @@ export const useStudioOptionsStore = create<StudioOptionsState>((set, get) => ({
     set((state) => ({ values: { ...state.values, [key]: value } }));
     try {
       await API.updateUserOptions({ [key]: value });
+      mirrorStudioMode(get().values);
     } catch (err) {
       console.warn("[user-options] save failed", err);
       // Roll back only if no newer change to the same option came in meanwhile
