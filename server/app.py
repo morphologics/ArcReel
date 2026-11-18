@@ -99,6 +99,7 @@ from server.routers import (
     custom_providers,
     derivative_uploads,
     edit_timelines,
+    editor_text_templates,
     end_frames,
     episode_drafts,
     episode_management,
@@ -990,6 +991,7 @@ app.include_router(
 )
 app.include_router(onboarding.router, prefix="/api/v1", dependencies=[Depends(get_current_user)], tags=["首次使用引导"])
 app.include_router(user_options.router, prefix="/api/v1", dependencies=[Depends(get_current_user)], tags=["User options"])
+app.include_router(editor_text_templates.router, prefix="/api/v1", dependencies=[Depends(get_current_user)], tags=["User options"])
 app.include_router(
     prompt_templates.router, prefix="/api/v1", dependencies=[Depends(get_current_user)], tags=["提示词模版"]
 )
