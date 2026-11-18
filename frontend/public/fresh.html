@@ -1,0 +1,48 @@
+<!doctype html>
+<!--
+  YouReel (owner 2026-11-18): a fresh start for testing on tablets, which keep old copies of pages. Removes this site's
+  service workers and Cache Storage (an older OpenReel build could leave a service worker behind), then opens the studio
+  (or, with ?to=reel, the editor) at an address it has not seen, so the page itself is fetched again. Settings and
+  stored episodes (localStorage, IndexedDB) are kept. Usage: /fresh.html, /fresh.html?to=reel
+-->
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="Cache-Control" content="no-store">
+  <title>Fresh start</title>
+  <style>
+    body { font: 16px/1.5 system-ui, sans-serif; margin: 0; display: grid; place-items: center; min-height: 100vh; background: #f6f8f7; color: #17221f; }
+    @media (prefers-color-scheme: dark) { body { background: #0f1513; color: #e4ece9; } }
+    main { max-width: 420px; padding: 24px; }
+    li { margin: 4px 0; }
+  </style>
+</head>
+<body>
+  <main>
+    <h1 style="font-size:20px;margin:0 0 12px">Fresh start</h1>
+    <ul id="steps"></ul>
+  </main>
+  <script>
+    (async () => {
+      const steps = document.getElementById("steps");
+      const say = (text) => { const li = document.createElement("li"); li.textContent = text; steps.appendChild(li); };
+      try {
+        const regs = (await navigator.serviceWorker?.getRegistrations?.()) ?? [];
+        for (const reg of regs) await reg.unregister();
+        say(`Service workers removed: ${regs.length}`);
+      } catch (e) { say("Service workers: could not check"); }
+      try {
+        const keys = (await caches?.keys?.()) ?? [];
+        for (const key of keys) await caches.delete(key);
+        say(`Cached files removed: ${keys.length} store(s)`);
+      } catch (e) { say("Cached files: could not check"); }
+      const to = new URLSearchParams(location.search).get("to");
+      const stamp = Date.now();
+      const target = to === "reel" ? `/reel/index.html?v=fresh-${stamp}` : `/?fresh=${stamp}`;
+      say(`Opening ${to === "reel" ? "the editor" : "the studio"}…`);
+      setTimeout(() => location.replace(target), 700);
+    })();
+  </script>
+</body>
+</html>
