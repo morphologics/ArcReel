@@ -79,3 +79,22 @@ def test_a_stored_template_that_no_longer_validates_is_dropped_not_fatal():
     with _client(settings) as client:
         resp = client.get("/api/v1/editor/text-templates")
     assert resp.json() == {"templates": [TEMPLATE]}
+
+
+def test_subtitle_styles_are_remembered_per_episode_and_forgotten():
+    settings = _InMemorySettings()
+    with _client(settings) as client:
+        assert client.get("/api/v1/editor/subtitle-styles").json() == {"styles": {}}
+        client.put("/api/v1/editor/subtitle-styles", json={"key": "broken-mirror#7", "template": TEMPLATE})
+        client.put("/api/v1/editor/subtitle-styles", json={"key": "broken-mirror#9", "template": {**TEMPLATE, "name": "Top"}})
+        both = client.get("/api/v1/editor/subtitle-styles").json()["styles"]
+        assert both["broken-mirror#7"]["name"] == "Lower third"
+        assert both["broken-mirror#9"]["name"] == "Top"
+        client.put("/api/v1/editor/subtitle-styles", json={"key": "broken-mirror#7"})
+        assert list(client.get("/api/v1/editor/subtitle-styles").json()["styles"]) == ["broken-mirror#9"]
+
+
+def test_a_bad_subtitle_style_is_refused():
+    with _client(_InMemorySettings()) as client:
+        resp = client.put("/api/v1/editor/subtitle-styles", json={"key": "", "template": TEMPLATE})
+        assert resp.status_code == 422

@@ -100,3 +100,63 @@ async def put_text_templates(
     await svc.set_setting(TEXT_TEMPLATES_KEY, json.dumps(templates, ensure_ascii=False))
     await session.commit()
     return {"templates": templates}
+
+
+# YouReel (owner 2026-11-19): the subtitle style chosen for each episode ("remember the subtitle style per episode"):
+# the template itself (so it survives the template being renamed or deleted), keyed by the Editor as "<project>#<episode>".
+# A new revision of the episode's cut opens with it already applied.
+SUBTITLE_STYLES_KEY = "editor_subtitle_styles"
+MAX_SUBTITLE_STYLES = 1000
+
+
+class SubtitleStyleChoice(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    key: str = Field(min_length=1, max_length=300)
+    #: None forgets the episode's choice
+    template: TextTemplate | None = None
+
+
+class SubtitleStyles(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    styles: dict[str, TextTemplate]
+
+
+async def _read_styles(svc: ConfigService) -> dict[str, dict[str, Any]]:
+    raw = await svc.get_setting(SUBTITLE_STYLES_KEY)
+    if not raw:
+        return {}
+    kept: dict[str, dict[str, Any]] = {}
+    for key, item in json.loads(raw).items():
+        try:
+            kept[key] = TextTemplate.model_validate(item).model_dump()
+        except ValueError:
+            continue
+    return kept
+
+
+@router.get("/editor/subtitle-styles", response_model=SubtitleStyles)
+async def get_subtitle_styles(svc: Annotated[ConfigService, Depends(get_config_service)]) -> dict[str, Any]:
+    """The subtitle style remembered for each episode."""
+    return {"styles": await _read_styles(svc)}
+
+
+@router.put("/editor/subtitle-styles", response_model=SubtitleStyles)
+async def put_subtitle_style(
+    body: SubtitleStyleChoice,
+    svc: Annotated[ConfigService, Depends(get_config_service)],
+    session: AsyncSession = Depends(get_async_session),
+) -> dict[str, Any]:
+    """Remember (or, with no template, forget) one episode's subtitle style."""
+    styles = await _read_styles(svc)
+    if body.template is None:
+        styles.pop(body.key, None)
+    else:
+        styles[body.key] = body.template.model_dump()
+        # the oldest choices go first beyond the limit
+        while len(styles) > MAX_SUBTITLE_STYLES:
+            styles.pop(next(iter(styles)))
+    await svc.set_setting(SUBTITLE_STYLES_KEY, json.dumps(styles, ensure_ascii=False))
+    await session.commit()
+    return {"styles": styles}
