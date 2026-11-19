@@ -102,9 +102,9 @@ async def put_text_templates(
     return {"templates": templates}
 
 
-# YouReel (owner 2026-11-19): the subtitle style chosen for each episode ("remember the subtitle style per episode"):
-# the template itself (so it survives the template being renamed or deleted), keyed by the Editor as "<project>#<episode>".
-# A new revision of the episode's cut opens with it already applied.
+# YouReel (owner 2026-11-19): the subtitle style chosen for a project (owner: consistent for the whole project): the
+# template itself (so it survives the template being renamed or deleted), keyed by the Editor with the project's name.
+# A new copy of any of the project's cuts opens with it already applied.
 SUBTITLE_STYLES_KEY = "editor_subtitle_styles"
 MAX_SUBTITLE_STYLES = 1000
 
