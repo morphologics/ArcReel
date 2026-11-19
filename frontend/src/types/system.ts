@@ -109,6 +109,8 @@ export interface OnboardingStatus {
 export interface StudioUserOptions {
   default_editor?: "arcreel" | "openreel";
   mode?: "easy" | "advanced";
+  /** The YouReel Editor's "Include motion transitions" (set in the Editor; kept here for the member). */
+  motion_transitions?: "on" | "off";
 }
 
 export type StudioUserOptionsPatch = { [K in keyof StudioUserOptions]?: StudioUserOptions[K] | null };

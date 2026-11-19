@@ -91,3 +91,15 @@ def test_stored_keys_no_longer_known_are_left_out_of_the_answer():
         resp = client.get("/api/v1/user-options")
 
     assert resp.json() == {"mode": "advanced"}
+
+
+def test_motion_transitions_is_kept_for_the_editor_and_null_turns_it_off():
+    settings = _InMemorySettings({user_options.USER_OPTIONS_KEY: json.dumps({"mode": "easy"})})
+    with _client(settings) as client:
+        on = client.put("/api/v1/user-options", json={"motion_transitions": "on"})
+        bad = client.put("/api/v1/user-options", json={"motion_transitions": "maybe"})
+        off = client.put("/api/v1/user-options", json={"motion_transitions": None})
+
+    assert on.json() == {"mode": "easy", "motion_transitions": "on"}
+    assert bad.status_code == 422
+    assert off.json() == {"mode": "easy"}

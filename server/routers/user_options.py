@@ -35,6 +35,9 @@ class UserOptions(BaseModel):
 
     default_editor: Literal["arcreel", "openreel"] | None = None
     mode: Literal["easy", "advanced"] | None = None
+    #: YouReel (owner 2026-11-19): the YouReel Editor's "Include motion transitions" (set in the Editor's Settings; the
+    #: studio only keeps it for the member). Missing = off.
+    motion_transitions: Literal["on", "off"] | None = None
 
 
 async def _read(svc: ConfigService) -> dict[str, str]:
