@@ -98,3 +98,41 @@ def test_a_bad_subtitle_style_is_refused():
     with _client(_InMemorySettings()) as client:
         resp = client.put("/api/v1/editor/subtitle-styles", json={"key": "", "template": TEMPLATE})
         assert resp.status_code == 422
+
+
+TOOL_TEMPLATE = {
+    "id": "mine:1",
+    "name": "Shot 2 · Dining Room",
+    "tool": "Color Grading",
+    "settings": {"colorGrading": {"temperature": 12, "tint": -3}},
+}
+
+
+def test_tool_templates_start_empty_and_put_replaces_them():
+    settings = _InMemorySettings()
+    with _client(settings) as client:
+        empty = client.get("/api/v1/editor/tool-templates")
+        put = client.put("/api/v1/editor/tool-templates", json={"templates": [TOOL_TEMPLATE]})
+        get = client.get("/api/v1/editor/tool-templates")
+    assert empty.json() == {"templates": []}
+    assert put.status_code == 200
+    assert get.json() == {"templates": [TOOL_TEMPLATE]}
+    assert json.loads(settings.stored["editor_tool_templates"]) == [TOOL_TEMPLATE]
+
+
+def test_a_tool_template_without_a_tool_or_too_large_is_refused():
+    with _client(_InMemorySettings()) as client:
+        no_tool = client.put("/api/v1/editor/tool-templates", json={"templates": [{**TOOL_TEMPLATE, "tool": ""}]})
+        huge = client.put(
+            "/api/v1/editor/tool-templates",
+            json={"templates": [{**TOOL_TEMPLATE, "settings": {"blob": "x" * (70 * 1024)}}]},
+        )
+    assert no_tool.status_code == 422
+    assert huge.status_code == 422
+
+
+def test_a_stored_tool_template_that_no_longer_validates_is_dropped():
+    stored = json.dumps([TOOL_TEMPLATE, {"id": "bad", "name": "no tool", "settings": {}}])
+    with _client(_InMemorySettings({"editor_tool_templates": stored})) as client:
+        resp = client.get("/api/v1/editor/tool-templates")
+    assert resp.json() == {"templates": [TOOL_TEMPLATE]}

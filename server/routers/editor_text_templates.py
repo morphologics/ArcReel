@@ -160,3 +160,68 @@ async def put_subtitle_style(
     await svc.set_setting(SUBTITLE_STYLES_KEY, json.dumps(styles, ensure_ascii=False))
     await session.commit()
     return {"styles": styles}
+
+
+# YouReel (owner 2026-11-19): the member's own tool templates. Each clip-settings tool of the Editor (Color, Effects,
+# Transform, Audio FX, …) has its own set: a named copy of that tool's settings, saved from a clip (right-click or long
+# press on the tool's header) and applied to other clips in any project. ``tool`` is the tool's title as the Editor
+# shows it; ``settings`` the tool's values, as the Editor keeps them (the server only checks their size).
+TOOL_TEMPLATES_KEY = "editor_tool_templates"
+MAX_TOOL_TEMPLATES = 1000
+#: one template's settings, as JSON (a colour grade with curves is the largest; this only stops abuse)
+MAX_TOOL_SETTINGS_BYTES = 64 * 1024
+
+
+class ToolTemplate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    id: str = Field(min_length=1, max_length=64)
+    name: str = Field(min_length=1, max_length=80)
+    tool: str = Field(min_length=1, max_length=80)
+    settings: dict[str, Any]
+
+    @field_validator("settings")
+    @classmethod
+    def _small_settings(cls, value: dict[str, Any]) -> dict[str, Any]:
+        if len(json.dumps(value)) > MAX_TOOL_SETTINGS_BYTES:
+            raise ValueError("settings too large")
+        return value
+
+
+class ToolTemplates(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    templates: list[ToolTemplate] = Field(max_length=MAX_TOOL_TEMPLATES)
+
+
+async def _read_tool_templates(svc: ConfigService) -> list[dict[str, Any]]:
+    raw = await svc.get_setting(TOOL_TEMPLATES_KEY)
+    if not raw:
+        return []
+    kept = []
+    # a template a later version can't read is dropped instead of failing the whole list
+    for item in json.loads(raw):
+        try:
+            kept.append(ToolTemplate.model_validate(item).model_dump())
+        except ValueError:
+            continue
+    return kept
+
+
+@router.get("/editor/tool-templates", response_model=ToolTemplates)
+async def get_tool_templates(svc: Annotated[ConfigService, Depends(get_config_service)]) -> dict[str, Any]:
+    """The member's own tool templates (every tool's)."""
+    return {"templates": await _read_tool_templates(svc)}
+
+
+@router.put("/editor/tool-templates", response_model=ToolTemplates)
+async def put_tool_templates(
+    body: ToolTemplates,
+    svc: Annotated[ConfigService, Depends(get_config_service)],
+    session: AsyncSession = Depends(get_async_session),
+) -> dict[str, Any]:
+    """Replace the member's own tool templates with the given list."""
+    templates = [template.model_dump() for template in body.templates]
+    await svc.set_setting(TOOL_TEMPLATES_KEY, json.dumps(templates, ensure_ascii=False))
+    await session.commit()
+    return {"templates": templates}
