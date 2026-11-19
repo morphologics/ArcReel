@@ -60,6 +60,14 @@ describe("useOpenReelHref", () => {
     expect(fetchMock).toHaveBeenCalledWith("/reel/index.html", expect.objectContaining({ cache: "no-cache" }));
   });
 
+  it("recognises the editor by its name, YouReel Editor, without the word OpenReel", async () => {
+    const page = '<!doctype html><title>YouReel Editor</title><script type="module" src="/reel/assets/index-Xy12AbCd.js"></script>';
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(page, { status: 200 })));
+    const { result } = renderHook(() => useOpenReelHref("demo", "tl-1"));
+    await waitFor(() => expect(result.current).not.toBeNull());
+    expect(result.current).toMatch(/^\/reel\/index\.html\?v=Xy12AbCd#/);
+  });
+
   it("offers nothing where the studio doesn't serve OpenReel", async () => {
     const fetchMock = vi.fn(async () => new Response("<!doctype html><title>YouReel Studio</title>", { status: 200 }));
     vi.stubGlobal("fetch", fetchMock);

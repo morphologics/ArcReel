@@ -7,7 +7,8 @@ import { pickDefaultTimeline } from "./timeline-view";
 const OPENREEL_PAGE = "/reel/index.html";
 
 // Whether this studio serves OpenReel (experimental, so far only on the DEV studio): asked once per page load. A
-// studio without it answers the path with its own app page (SPA fallback), which doesn't name OpenReel.
+// studio without it answers the path with its own app page (SPA fallback), which names neither "YouReel Editor" nor
+// OpenReel.
 let available: Promise<boolean> | null = null;
 // The served OpenReel build: its main script's hash (assets/index-<hash>.js), new with every build. It goes into
 // OpenReel's address as ?v=<build>, so a browser (tablets especially) can't keep showing an older cached page.
@@ -17,7 +18,9 @@ function openReelAvailable(): Promise<boolean> {
     .then(async (response) => {
       if (!response.ok) return false;
       const html = await response.text();
-      if (!html.includes("OpenReel")) return false;
+      // the editor's page names itself "YouReel Editor" (owner 2026-11-19: the check on our own brand; "YouReel" alone
+      // would also match the studio's own page, "YouReel Studio"). "OpenReel": editor builds published before that.
+      if (!html.includes("YouReel Editor") && !html.includes("OpenReel")) return false;
       build = /assets\/index-([\w-]+)\.js/.exec(html)?.[1] ?? null;
       return true;
     })
