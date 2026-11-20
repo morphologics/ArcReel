@@ -258,6 +258,9 @@ def _markers_of(save: dict[str, Any], document: Any, *, include_local: bool) -> 
         episode_name = str(marker.get("episode") or "")
         try:
             at = float(marker.get("time") or 0)
+            # a clip time marker follows its clip: its time is the clip's start + its offset
+            if marker.get("bound") and clip:
+                at = float(clip.get("startTime") or 0) + float(marker.get("clipOffset") or 0)
         except (TypeError, ValueError):
             at = 0.0
         out.append({
@@ -271,6 +274,7 @@ def _markers_of(save: dict[str, Any], document: Any, *, include_local: bool) -> 
             "label": label,
             "color": str(marker.get("color") or ""),
             "for_director": for_director,
+            "bound": marker.get("bound") is True,
             "episode_name": episode_name,
             "tag": f"{episode_name}_{label}" if episode_name else label,
             "clip_id": marker.get("clipId"),

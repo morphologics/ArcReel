@@ -133,7 +133,7 @@ def _editor_project(markers: list[dict]) -> str:
     return json.dumps({"version": "1", "project": {
         "timeline": {
             "tracks": [{"id": "v1", "clips": [
-                {"id": "c1", "mediaId": "mshot", "metadata": {"arcreel": {"shot_label": "Shot 4 · Hallway"}}},
+                {"id": "c1", "mediaId": "mshot", "startTime": 20, "metadata": {"arcreel": {"shot_label": "Shot 4 · Hallway"}}},
                 {"id": "c2", "mediaId": "mup"},
             ]}],
             "markers": markers,
@@ -179,6 +179,7 @@ def test_review_markers_list_the_markers_for_the_director_from_each_latest_save(
     assert first["clip_name"] == "Shot 4 · Hallway"
     assert (first["timeline_id"], first["episode"], first["revision"], first["for_director"]) == ("tl-a", 3, 7, True)
     assert found[1]["tag"] == "check" and found[1]["clip_name"] is None
+    assert first["bound"] is False and first["time"] == 21.1
 
     with_local = asyncio.run(service.review_markers("demo", include_local=True))
     assert [m["id"] for m in with_local] == ["m2", "m1", "m3"]
@@ -208,3 +209,30 @@ def test_review_markers_skip_an_unreadable_save(tmp_path, monkeypatch) -> None:
     folder.mkdir(parents=True)
     (folder / "save.json").write_text(json.dumps({"projectJson": "{not json"}), encoding="utf-8")
     assert asyncio.run(service.review_markers("demo")) == []
+
+
+def test_a_marker_bound_to_its_clip_takes_the_clips_time(tmp_path, monkeypatch) -> None:
+    class _Projects:
+        def get_project_path(self, name: str) -> Path:
+            return tmp_path / name
+
+    class _Store:
+        def __init__(self, projects: object, name: str) -> None:
+            pass
+
+        def find(self, timeline_id: str) -> SimpleNamespace:
+            return SimpleNamespace(id=timeline_id, episode=2, name="cut")
+
+        def list_documents(self, episode: int | None = None) -> list[SimpleNamespace]:
+            return [SimpleNamespace(id="tl-b", episode=2, name="cut")]
+
+    monkeypatch.setattr(timeline_editor_save, "EditTimelineStore", _Store)
+    service = TimelineEditorSaveService(_Projects())  # type: ignore[arg-type]  # a stand-in with only get_project_path
+    folder = tmp_path / "demo" / "renders" / "episode_2" / "tl-b" / "editor"
+    folder.mkdir(parents=True)
+    # the clip moved to 20 s after the marker was dropped 1.5 s into it at 9.5 s: the marker is at 21.5 s now
+    bound = {"id": "m", "time": 9.5, "label": "look", "color": "#ef4444", "clipId": "c1", "bound": True, "clipOffset": 1.5,
+             "forDirector": True}
+    (folder / "save.json").write_text(json.dumps({"projectJson": _editor_project([bound])}), encoding="utf-8")
+    [found] = asyncio.run(service.review_markers("demo"))
+    assert found["bound"] is True and found["time"] == 21.5

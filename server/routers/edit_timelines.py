@@ -609,6 +609,8 @@ class ReviewMarker(BaseModel):
     label: str
     color: str
     for_director: bool
+    #: a clip time marker (follows its clip; ``time`` is computed from the clip), else a timeline marker
+    bound: bool = False
     episode_name: str
     tag: str
     clip_id: str | None = None
