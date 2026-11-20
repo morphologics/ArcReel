@@ -1,5 +1,7 @@
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { Router } from "wouter";
+import { memoryLocation } from "wouter/memory-location";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { API } from "@/api";
 import { LeaveGuardProvider, useLeaveGuard } from "@/components/shared/edit-unit/LeaveGuard";
@@ -96,6 +98,27 @@ describe("AssetGallery", () => {
 
     const sheet = await screen.findByRole("dialog", { name: "书房" });
     expect(within(sheet).getByRole("textbox", { name: "描述" })).toHaveValue("堆满古籍");
+  });
+
+  it("opens the asset named by ?asset= in the address, then drops the parameter (YouReel: Flow review links)", async () => {
+    const { hook, searchHook, history } = memoryLocation({ path: "/scenes?asset=书房", record: true });
+    render(
+      <Router hook={hook} searchHook={searchHook}>
+        <AssetGallery<Source>
+          projectName="demo"
+          assetType="scene"
+          title="场景"
+          assets={SCENES}
+          readOnly={false}
+          onGenerate={vi.fn()}
+          libraryPreview={libraryPreview}
+        />
+      </Router>,
+    );
+
+    const sheet = await screen.findByRole("dialog", { name: "书房" });
+    expect(within(sheet).getByRole("textbox", { name: "描述" })).toHaveValue("堆满古籍");
+    await waitFor(() => expect(history.at(-1)).toBe("/scenes"));
   });
 
   it("collects the secondary actions in the card menu", async () => {

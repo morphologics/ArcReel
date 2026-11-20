@@ -1,4 +1,6 @@
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { useSearchParams } from "wouter";
+import { ASSET_DETAIL_PARAM } from "@/app-routes";
 import { useTranslation } from "react-i18next";
 import { API } from "@/api";
 import type { LibraryImportPreview } from "@/components/assets/AddToLibraryDialog";
@@ -118,6 +120,23 @@ export function AssetGallery<T extends GalleryAssetSource>({
   useScrollTarget(assetType, { prepareTarget });
 
   const openAsset = useCallback((name: string) => setEditorTarget({ mode: "edit", name }), []);
+  // YouReel: a link to one asset (`?asset=<name>`, e.g. from YouReel Flow) opens its details once the asset is known
+  // (set while rendering, as the viewer's close above), then the parameter is dropped from the address
+  const [searchParams, setSearchParams] = useSearchParams();
+  const linkedAsset = searchParams.get(ASSET_DETAIL_PARAM);
+  const [openedLink, setOpenedLink] = useState<string | null>(null);
+  if (linkedAsset && linkedAsset !== openedLink && linkedAsset in assets) {
+    setOpenedLink(linkedAsset);
+    setEditorTarget({ mode: "edit", name: linkedAsset });
+  }
+  useEffect(() => {
+    if (!openedLink) return;
+    setSearchParams((params) => {
+      const next = new URLSearchParams(params);
+      next.delete(ASSET_DETAIL_PARAM);
+      return next;
+    }, { replace: true });
+  }, [openedLink, setSearchParams]);
   const onAdd = readOnly ? undefined : () => setEditorTarget({ mode: "create" });
   const viewAsset = useCallback((name: string) => setViewName(name), []);
   // The viewer switches only among assets with a sheet, in the same order as the filtered grid; the criterion matches the card's "View full image"

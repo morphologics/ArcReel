@@ -175,6 +175,10 @@ export const EPISODE_VIEW_EDIT = "edit";
 export const EPISODE_VIEW_TIMELINE_PARAM = "tl";
 /** Shot to show on arrival (the shot view scrolls to it), e.g. from a link in the editor; removed from the URL once used. */
 export const EPISODE_SHOT_PARAM = "shot";
+/** YouReel (owner 2026-11-20): an asset to open in its details (the editor sheet) on arrival on the Characters / Scenes /
+ *  Props / Products page, by name (`?asset=Curtained%20Room`), e.g. from YouReel Flow's review links; removed once used.
+ *  YouReel：到达角色 / 场景 / 道具 / 商品页时按名称打开该资产的详情（编辑面板），如来自 YouReel Flow 的审阅链接；用后从地址移除。 */
+export const ASSET_DETAIL_PARAM = "asset";
 
 /** Relative path within the project workspace to open an episode's (episode ID) edit view; with `timelineId`, switch to that edit timeline. / 项目工作区内打开某集（集 ID）剪辑视图的相对路径；给出 `timelineId` 时切到那条剪辑时间线。 */
 export function episodeEditViewPath(episode: number, timelineId?: string): string {
