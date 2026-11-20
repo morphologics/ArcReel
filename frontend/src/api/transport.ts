@@ -147,13 +147,13 @@ export function withAuth(endpoint: string, options: RequestInit = {}): RequestIn
     headers.set("Authorization", `Bearer ${token}`);
   }
   // Add Accept-Language header based on current i18n language
-  headers.set("Accept-Language", i18n.language || "zh");
+  headers.set("Accept-Language", i18n.language || "en" /* YouReel: English fallback (upstream "zh") */);
   return { ...options, headers };
 }
 
 /** SSE connection headers: same credentials and language as {@link withAuth}, re-read before every reconnect. / SSE 建连请求头：与 {@link withAuth} 同一套凭证与语言，每次重建前重新取。 */
 export function sseHeaders(): HeadersInit {
-  const headers: Record<string, string> = { "Accept-Language": i18n.language || "zh" };
+  const headers: Record<string, string> = { "Accept-Language": i18n.language || "en" /* YouReel: English fallback (upstream "zh") */ };
   const token = getToken();
   if (token) {
     headers.Authorization = `Bearer ${token}`;
