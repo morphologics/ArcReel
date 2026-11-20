@@ -22,6 +22,7 @@ import { formatCost } from "@/utils/cost-format";
 import type { CostBreakdown } from "@/types";
 import { useItemPositionLabel } from "@/components/shared/episode-item/useEpisodeItem";
 import { ImageEditButton } from "./ImageEditButton";
+import { usePortraitFitWidth } from "@/hooks/usePortraitFitWidth";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useResourceVersions, invalidateResourceVersions } from "@/hooks/useResourceVersions";
@@ -131,6 +132,7 @@ export function MediaCard({
   const { t } = useTranslation("dashboard");
   const itemLabel = useItemPositionLabel(segmentId);
   const [restoring, setRestoring] = useState(false);
+  const fit = usePortraitFitWidth<HTMLDivElement>(aspectRatio === "9:16");
   const restoringRef = useRef(false);
   const freshBusy = () => restoringRef.current || Boolean(checkBusy?.()) || isResourceBusy(kind, projectName, segmentId);
   const setRestoreBusy = (next: boolean) => {
@@ -392,6 +394,8 @@ export function MediaCard({
           }}
         />
       )}
+      {/* YouReel: a 9:16 frame narrowed so its height fits the screen (usePortraitFitWidth) */}
+      <div ref={fit.ref} style={fit.style} className={cn(aspectRatio === "9:16" && "mx-auto w-full")}>
       {history ? (
         <VersionHistoryPanel
           kind={kind}
@@ -490,6 +494,8 @@ export function MediaCard({
           </AspectFrame>
         </ImageContextMenu>
       )}
+
+      </div>
 
       {belowPreview && <div className="mt-2.5">{belowPreview}</div>}
 
