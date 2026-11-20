@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import re
 import secrets
 from collections.abc import Sequence
 from dataclasses import dataclass
@@ -51,30 +50,9 @@ from lib.edit_timeline.store import EditTimelineStore
 from lib.infra.async_thread import run_sync_transaction
 from lib.project.project_manager import ProjectManager
 
-# YouReel (owner 2026-11-20): the summary in English. Revisions made before keep the upstream Chinese text on disk;
-# _display_summary shows it in English when read.
-# YouReel（所有者 2026-11-20）：摘要改为英文。此前的修订在磁盘上保留上游中文文本；读取时由 _display_summary 显示为英文。
+# YouReel (owner 2026-11-20): new projects in English (summaries included); stored data is left as it is.
+# YouReel（所有者 2026-11-20）：新项目一律英文（含摘要）；已存数据保持原样。
 MECHANICAL_CREATION_SUMMARY = "Created from the script: each video unit used whole, all hard cuts"
-
-_LEGACY_SUMMARIES = {"按当前脚本机械新建：每个视频单元整段使用、全部硬切": MECHANICAL_CREATION_SUMMARY}
-
-
-_LEGACY_COPY = re.compile(r"复制自「(?P<name>.*)」的修订 (?P<number>\d+)")
-_LEGACY_ROLLBACK = re.compile(r"回滚到修订 (?P<number>\d+)，撤销之后的改动；回滚前的修订仍保留在历史里")
-
-
-def _display_summary(summary: str) -> str:
-    """A revision summary as shown: a known upstream Chinese summary in English. / 显示用摘要：已知的上游中文摘要显示为英文。"""
-    if summary in _LEGACY_SUMMARIES:
-        return _LEGACY_SUMMARIES[summary]
-    if match := _LEGACY_COPY.fullmatch(summary):
-        return f"Copied from '{match['name']}' revision {match['number']}"
-    if match := _LEGACY_ROLLBACK.fullmatch(summary):
-        return (
-            f"Rolled back to revision {match['number']}, undoing the later changes; "
-            "the revisions before the rollback stay in the history"
-        )
-    return summary
 
 REVISION_SUMMARY_MAX_LENGTH = 200
 
@@ -250,7 +228,7 @@ def _summarize(document: EditTimelineDocument) -> TimelineSummary:
         created_at=document.created_at,
         updated_at=latest.created_at,
         updated_by=latest.author,
-        update_summary=_display_summary(latest.summary),
+        update_summary=latest.summary,
     )
 
 
@@ -374,7 +352,7 @@ class EditTimelineService:
                     number=revision.number,
                     parent=revision.parent,
                     author=revision.author,
-                    summary=_display_summary(revision.summary),
+                    summary=revision.summary,
                     created_at=revision.created_at,
                     clip_count=len(revision.content.clips),
                     changed_clip_ids=revision.changed_clip_ids,
@@ -532,7 +510,7 @@ class EditTimelineService:
             author,
         )
         concurrent = tuple(
-            ConcurrentRevision(number=revision.number, author=revision.author, summary=_display_summary(revision.summary))
+            ConcurrentRevision(number=revision.number, author=revision.author, summary=revision.summary)
             for revision in written.document.revisions[written.base_revision : written.previous_latest.number]
         )
         message = f"剪辑时间线「{document.name}」已追加修订 {written.document.latest.number}：{normalized_summary}"
