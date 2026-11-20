@@ -78,7 +78,7 @@ async def test_copy_of_a_given_revision_matches_the_source_content(service: Edit
     [only] = history.revisions
     assert (only.author, only.parent) == (AGENT, None)
     assert "初剪" in only.summary
-    assert "修订 2" in only.summary
+    assert "revision 2" in only.summary
     # The source timeline is unaffected.
     # 源时间线不受影响。
     assert (await service.read("demo", source_id)).revision == 3
