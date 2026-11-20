@@ -2348,6 +2348,8 @@ export default {
   'video_regenerate_with': 'Перегенерировать с…',
   'video_model_unavailable': 'Не может выполнить этот кадр (изображение в видео)',
   'video_model_duration_unsupported': '{{seconds}} с недоступно (допустимо: {{supported}})',
+  'video_model_too_short': 'Сократите длину клипа или выберите подходящую модель',
+  'video_model_max_length': 'макс. {{seconds}} с',
   'version_restore_unsaved': 'Сначала сохраните или отмените правки этого кадра: «Сделать текущей» также восстанавливает промпт',
   'version_prompt_restore_failed': 'Версия стала текущей, но её промпт восстановить не удалось: {{message}}',
   'video_generate_with': 'Сгенерировать с…',

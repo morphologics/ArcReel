@@ -121,4 +121,38 @@ describe("VideoRegenerateItems", () => {
     expect(screen.queryByRole("menuitem", { name: /MiniMax H3/ })).not.toBeInTheDocument();
     expect(screen.getAllByRole("menuitem")).toHaveLength(1);
   });
+
+  it("gates the configured model and lists a model limited to shorter clips last, with its limit (YouReel)", async () => {
+    vi.spyOn(API, "getModelCandidates").mockResolvedValue(CANDIDATES as never);
+    vi.spyOn(API, "quoteVideoModels").mockResolvedValue({
+      current: "runware/minimax",
+      quotes: {
+        "runware/minimax": { cost: { amount: 0.5, currency: "USD", unpriced_reason: null }, duration_supported: false, supported_durations: [4, 5] },
+        "runware/seedance": { cost: { amount: 0.3, currency: "USD", unpriced_reason: null }, duration_supported: true, supported_durations: [6, 10] },
+      },
+    });
+    const onGenerate = vi.fn();
+    render(
+      <ContextMenu.Root open>
+        <ContextMenu.Trigger render={<div />}>video</ContextMenu.Trigger>
+        <DropdownMenuContent>
+          <VideoRegenerateItems
+            projectName="demo"
+            segmentId="E1S01"
+            scriptFile="episode_1.json"
+            durationSeconds={6}
+            hasVideo
+            disabled={false}
+            onGenerate={onGenerate}
+          />
+        </DropdownMenuContent>
+      </ContextMenu.Root>,
+    );
+
+    const configured = await screen.findByRole("menuitem", { name: /MiniMax H3/ });
+    expect(configured).toHaveTextContent("5");
+    expect(configured).toHaveAttribute("aria-disabled", "true");
+    fireEvent.click(configured);
+    expect(onGenerate).not.toHaveBeenCalled();
+  });
 });

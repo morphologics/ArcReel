@@ -31,6 +31,9 @@ export interface ModelOption {
   cost: string | null;
   /** Why the model can't be used for this shot; null when it can. */
   reason: string | null;
+  /** YouReel (owner 2026-11-20): the model's length limit when it is shorter than the clip ("max 5 s"), shown
+   *  highlighted; such models are listed after the ones that fit. */
+  limit?: string | null;
 }
 
 export interface ModelOptions {
@@ -90,7 +93,10 @@ function ModelGenerateItems({
   }, [load]);
 
   const current = options?.models.find((m) => m.pair === options.current);
-  const others = options?.models.filter((m) => m.pair !== options.current) ?? [];
+  // YouReel: the models that fit the clip first, then those limited to shorter clips
+  const others = (options?.models.filter((m) => m.pair !== options.current) ?? []).sort(
+    (a, b) => Number(Boolean(a.limit)) - Number(Boolean(b.limit)),
+  );
   const otherItems = failed ? (
     <DropdownMenuItem disabled>{t("generate_models_load_failed")}</DropdownMenuItem>
   ) : !options ? (
@@ -104,6 +110,11 @@ function ModelGenerateItems({
           <span className="text-sm">
             {m.name}
             <span className="text-xs text-muted-foreground"> · {m.provider}</span>
+            {m.limit && (
+              <span className="num ml-1.5 rounded-full bg-warn/10 px-1.5 py-0.5 text-xs text-warn ring-1 ring-warn/30">
+                {m.limit}
+              </span>
+            )}
           </span>
           {m.reason && <span className="text-xs text-muted-foreground">{m.reason}</span>}
         </span>
@@ -114,12 +125,21 @@ function ModelGenerateItems({
   if (flat) return <DropdownMenuGroup label={withLabel}>{otherItems}</DropdownMenuGroup>;
   return (
     <>
-      <DropdownMenuItem disabled={disabled} onClick={() => onGenerate(null)}>
+      {/* YouReel: the configured model is gated as the others when it can't make this clip */}
+      <DropdownMenuItem disabled={disabled || Boolean(current?.reason)} onClick={() => onGenerate(null)}>
         <Sparkles aria-hidden />
-        <span>
-          {label}
-          {current && <span className="text-muted-foreground"> — {current.name}</span>}
-          {current?.cost && <span className="num text-muted-foreground"> {current.cost}</span>}
+        <span className="flex min-w-0 flex-col">
+          <span>
+            {label}
+            {current && <span className="text-muted-foreground"> — {current.name}</span>}
+            {current?.limit && (
+              <span className="num ml-1.5 rounded-full bg-warn/10 px-1.5 py-0.5 text-xs text-warn ring-1 ring-warn/30">
+                {current.limit}
+              </span>
+            )}
+            {current?.cost && <span className="num text-muted-foreground"> {current.cost}</span>}
+          </span>
+          {current?.reason && <span className="text-xs text-muted-foreground">{current.reason}</span>}
         </span>
       </DropdownMenuItem>
       <DropdownMenuSub>
@@ -169,17 +189,25 @@ export function VideoRegenerateItems({
       current: quotes.current,
       models: pairs.map((pair) => {
         const quote = quotes.quotes[pair];
+        // YouReel (owner 2026-11-20): a model whose longest length is shorter than the clip is gated with its limit
+        const longest = quote && !("unavailable" in quote) && quote.supported_durations.length > 0
+          ? Math.max(...quote.supported_durations)
+          : null;
+        const tooShort = longest !== null && longest < durationSeconds;
         const reason = !quote
           ? null
           : "unavailable" in quote
             ? t("video_model_unavailable")
-            : !quote.duration_supported
-              ? t("video_model_duration_unsupported", {
-                  seconds: durationSeconds,
-                  supported: quote.supported_durations.join(", "),
-                })
-              : null;
-        return { pair, ...describe(candidates, pair), cost: quote && "cost" in quote ? costText(quote.cost) : null, reason };
+            : tooShort
+              ? t("video_model_too_short")
+              : !quote.duration_supported
+                ? t("video_model_duration_unsupported", {
+                    seconds: durationSeconds,
+                    supported: quote.supported_durations.join(", "),
+                  })
+                : null;
+        const limit = tooShort ? t("video_model_max_length", { seconds: longest }) : null;
+        return { pair, ...describe(candidates, pair), cost: quote && "cost" in quote ? costText(quote.cost) : null, reason, limit };
       }),
     };
   }, [projectName, segmentId, scriptFile, durationSeconds, t]);
