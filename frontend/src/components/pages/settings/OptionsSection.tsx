@@ -17,6 +17,7 @@ import {
   type UserOptionRequirement,
 } from "@/preferences/user-options";
 
+import { DiagnosticsSection } from "./DiagnosticsSection";
 import { SettingRow } from "./SettingRow";
 
 type Requirements = Record<UserOptionRequirement, boolean | null>;
@@ -27,7 +28,8 @@ function offered(requirement: UserOptionRequirement | undefined, requirements: R
 
 /**
  * Global settings "Options": the member's own preferences from the option registry, grouped under headings.
- * Every change applies at once (no save bar); options saved per device carry a "This device" note.
+ * Every change applies at once (no save bar); options saved per device carry a "This device" note. Below them, the
+ * studio's error log (Diagnostics).
  */
 export function OptionsSection() {
   const { t } = useTranslation("dashboard");
@@ -49,6 +51,8 @@ export function OptionsSection() {
       {groups.map(({ group, ids }) => (
         <OptionGroup key={group} group={group} ids={ids} requirements={requirements} />
       ))}
+      {/* YouReel: the errors this studio's UI reported, for us to trace problems */}
+      <DiagnosticsSection />
     </div>
   );
 }

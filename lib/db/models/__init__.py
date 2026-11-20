@@ -7,6 +7,7 @@ from lib.db.models.asset import Asset, AssetDerivative
 from lib.db.models.builtin_provider_model import BuiltinProviderModelState
 from lib.db.models.catalog_official_sync import CatalogOfficialSync
 from lib.db.models.catalog_user_entry import CatalogUserEntry
+from lib.db.models.client_error_report import ClientErrorReport
 from lib.db.models.config import ProviderConfig, SystemSetting
 from lib.db.models.credential import ProviderCredential
 from lib.db.models.custom_endpoint import CustomEndpoint
@@ -33,6 +34,7 @@ __all__ = [
     "BuiltinProviderModelState",
     "CatalogOfficialSync",
     "CatalogUserEntry",
+    "ClientErrorReport",
     "CustomEndpoint",
     "CustomProvider",
     "CustomProviderModel",

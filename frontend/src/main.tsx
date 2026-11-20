@@ -8,6 +8,7 @@ import { initTheme } from "@/theme";
 import { exposeStudioNavigate } from "@/components/canvas/edit/open-in-openreel";
 import { StudioWakingOverlay } from "@/components/shared/StudioWakingOverlay";
 import { startActivitySignal } from "@/api/activity-signal";
+import { startClientErrorReporter } from "@/diagnostics/client-error-reporter";
 
 import "@fontsource-variable/inter";
 import "@fontsource-variable/jetbrains-mono";
@@ -38,6 +39,9 @@ useAuthStore.getState().initialize();
 exposeStudioNavigate();
 // YouReel: tell the host the member is using the studio (its idle stop), on real use, at most once a minute
 startActivitySignal();
+// YouReel: errors the member hits (error toasts, uncaught exceptions, failed requests) go to the studio's error log
+// (Settings → Options → Diagnostics)
+startClientErrorReporter();
 
 const root = document.getElementById("app-root");
 if (root) {

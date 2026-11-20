@@ -98,6 +98,7 @@ from server.routers import (
     custom_endpoints,
     custom_providers,
     derivative_uploads,
+    diagnostics,
     edit_timelines,
     editor_text_templates,
     end_frames,
@@ -961,6 +962,10 @@ app.include_router(
 # The studio agent's model for the editor's AI chat (OpenReel next to the studio)
 app.include_router(agent_llm.router, prefix="/api/v1", dependencies=[Depends(get_current_user)])
 app.include_router(activity.router, prefix="/api/v1", dependencies=[Depends(get_current_user)])
+# YouReel: errors the studio's browser UI reports (Settings → Options → Diagnostics)
+app.include_router(
+    diagnostics.router, prefix="/api/v1", dependencies=[Depends(get_current_user)], tags=["Diagnostics"]
+)
 app.include_router(
     custom_providers.router, prefix="/api/v1", dependencies=[Depends(get_current_user)], tags=["Custom providers"]
 )

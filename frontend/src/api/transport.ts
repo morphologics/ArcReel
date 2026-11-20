@@ -7,7 +7,7 @@
  */
 
 import { getToken, clearToken } from "@/utils/auth";
-import { noteStudioWaking, waitForStudio } from "./studio-waking";
+import { isStudioWakingResponse, noteStudioWaking, waitForStudio } from "./studio-waking";
 import type { SseStreamError } from "@/utils/sse-stream";
 import { isDemoProject } from "@/onboarding/demo-project";
 import i18n from "@/i18n";
@@ -37,6 +37,8 @@ export const API_BASE = "/api/v1";
  */
 export async function throwIfNotOk(response: Response, fallbackMsg: string): Promise<void> {
   if (!response.ok) {
+    // YouReel: custom fetches only hand over the answer: the method isn't known here, the path is the answer's
+    noteFailedResponse(null, response.url ? new URL(response.url, globalThis.location.href).pathname : "", response);
     handleUnauthorized(response);
     // YouReel: the studio's backend is being woken: show the restarting screen until it answers
     noteStudioWaking(response);
@@ -52,6 +54,56 @@ export async function throwIfNotOk(response: Response, fallbackMsg: string): Pro
     }
     throw new ApiRequestError(messageFromDetail(detail, fallbackMsg), error.diagnostic, response.status);
   }
+}
+
+/** YouReel: a request that failed by the network (`status` null) or with HTTP 5xx. */
+export interface RequestFailure {
+  /** null for custom fetches checked by {@link throwIfNotOk}: only the answer is handed over there */
+  method: string | null;
+  /** The request's path (with the API prefix); may carry a query string (the reporter strips it, the backend again) */
+  path: string;
+  status: number | null;
+  message: string;
+}
+
+let requestFailureObserver: ((failure: RequestFailure) => void) | null = null;
+
+/**
+ * YouReel: who is told about failed requests (src/diagnostics/client-error-reporter.ts records them for Settings →
+ * Options → Diagnostics); null stops it. Only network errors and 5xx: 4xx answers are the backend's own refusals and
+ * already surface as error toasts, which the reporter records on their own. Aborted requests and the host's
+ * "studio is waking" answers aren't failures.
+ */
+export function setRequestFailureObserver(observer: ((failure: RequestFailure) => void) | null): void {
+  requestFailureObserver = observer;
+}
+
+function noteRequestFailure(failure: RequestFailure): void {
+  try {
+    requestFailureObserver?.(failure);
+  } catch {
+    // the observer must never change what the caller gets
+  }
+}
+
+function noteFailedResponse(method: string | null, path: string, response: Response): void {
+  if (response.status < 500 || isStudioWakingResponse(response)) return;
+  noteRequestFailure({
+    method,
+    path,
+    status: response.status,
+    message: `HTTP ${response.status}${response.statusText ? ` ${response.statusText}` : ""}`,
+  });
+}
+
+function noteNetworkError(method: string, path: string, error: unknown, signal?: AbortSignal | null): void {
+  if (signal?.aborted || (error instanceof DOMException && error.name === "AbortError")) return;
+  noteRequestFailure({
+    method,
+    path,
+    status: null,
+    message: error instanceof Error ? error.message : String(error),
+  });
 }
 
 export function handleUnauthorized(response: Response): void {
@@ -100,14 +152,17 @@ export function setApiReadOnly(readOnly: boolean): void {
 const RESERVED_PROJECT_ENDPOINTS = new Set(["/projects/import"]);
 
 // System-level endpoints with no project ownership that do not write any project data themselves: by default the gate blocks all
-// write requests without project ownership (global asset library, provider credentials, etc.); this is the only narrow exemption.
+// write requests without project ownership (global asset library, provider credentials, etc.); this is the narrow exemption
+// (upstream's only one; YouReel adds the error log below).
 // When the onboarding tour exits, it writes this "seen" flag while still on the demo route (apiReadOnly not yet reset); it only affects
 // the current user's onboarding state and is outside what the gate guards against ("accidentally writing demo state / other project data").
 // 不带项目归属、但本身不写入任何项目数据的系统级端点：闸门默认拦截所有无项目归属的
 // 写请求（全局资产库、供应商凭证等），这里是唯一的窄豁免。引导 tour 退出时会在仍处于
 // 演示路由（apiReadOnly 尚未复位）期间写这一条「已看过」标记，它只影响当前用户的引导
 // 状态，不属于闸门要防的「误写演示态/其他项目数据」范畴。
-const READ_ONLY_GATE_EXEMPT_ENDPOINTS = new Set(["/onboarding/seen"]);
+// YouReel: client error reports (src/diagnostics/client-error-reporter.ts) write only the studio's own error log, no
+// project data; errors hit during the demo tour are worth keeping too
+const READ_ONLY_GATE_EXEMPT_ENDPOINTS = new Set(["/onboarding/seen", "/diagnostics/client-errors"]);
 
 /** Extract the project name from an endpoint like `/projects/{name}` or `/projects/{name}/...`; return null for non-project paths or static reserved endpoints / 从形如 `/projects/{name}` 或 `/projects/{name}/...` 的 endpoint 中取出项目名；非项目路径或静态保留端点返回 null */
 function extractProjectName(endpoint: string): string | null {
@@ -201,9 +256,17 @@ export async function requestJson<T = unknown>(
 
   const init = withAuth(endpoint, { ...defaultOptions, ...options });
   // YouReel: while the studio's backend is being woken, wait for it (restarting screen) instead of failing
-  const response = await waitForStudio(await fetch(url, init), () => fetch(url, init), options.signal);
+  let response: Response;
+  try {
+    response = await waitForStudio(await fetch(url, init), () => fetch(url, init), options.signal);
+  } catch (error) {
+    // YouReel: a network error (or an abort, which isn't reported) — told to the failure observer, then thrown as before
+    noteNetworkError((init.method ?? "GET").toUpperCase(), url, error, options.signal);
+    throw error;
+  }
 
   if (!response.ok) {
+    noteFailedResponse((init.method ?? "GET").toUpperCase(), url, response);
     handleUnauthorized(response);
     const payload = await response
       .json()

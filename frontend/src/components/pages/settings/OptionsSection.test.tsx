@@ -20,6 +20,7 @@ describe("OptionsSection", () => {
     useStudioOptionsStore.setState(useStudioOptionsStore.getInitialState(), true);
     resetOpenReelProbeForTests();
     vi.spyOn(API, "getUserOptions").mockResolvedValue({});
+    vi.spyOn(API, "listClientErrors").mockResolvedValue({ entries: [], kept: 1000 });
   });
 
   afterEach(async () => {
