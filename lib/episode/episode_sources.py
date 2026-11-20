@@ -227,7 +227,7 @@ def append_whole_source_file(project: dict[str, Any], rel: str, *, index: int | 
     ``index`` 是登记后文件在 :func:`whole_source_files` 里的下标，缺省或超出末尾时接在末尾，负数按 0 处理。
     """
     if not is_whole_source_file_path(rel):
-        raise ValueError(f"整本源文的文件须直接位于 source/ 下且为 .txt / .md：{rel}")
+        raise ValueError(f"Whole-source files must sit directly under source/ and be .txt / .md: {rel}")
     files = whole_source_files(project)
     if rel in files:
         return False
@@ -680,7 +680,7 @@ def sync_source_snapshots(
             continue
         path = source_snapshot_path(project_dir, rel)
         if path.is_symlink():
-            raise ValueError(f"源文快照不能是符号链接：{path.name}")
+            raise ValueError(f"Source snapshot must not be a symlink: {path.name}")
         if path.is_file() and _read_text_or_none(path) == text:
             continue
         snapshot_dir.mkdir(parents=True, exist_ok=True)

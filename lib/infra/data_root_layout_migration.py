@@ -77,7 +77,10 @@ def _move_entry(source: Path, target: Path) -> None:
         source.unlink()  # hard-delete: infra -- data root layout migration: old symlink after repointing / 数据根布局迁移：重指向后的旧符号链接
         return
     if target.exists() or target.is_symlink():
-        raise FileExistsError(f"数据根布局迁移：{target} 已存在，无法把 {source} 挪过去，请人工处理后重启")
+        raise FileExistsError(
+            f"Data root layout migration: {target} already exists, cannot move {source} there; resolve manually and "
+            "restart",
+        )
     if rebased_link is not None:
         target.symlink_to(rebased_link, target_is_directory=True)
         source.unlink()  # hard-delete: infra -- data root layout migration: old symlink after repointing / 数据根布局迁移：重指向后的旧符号链接

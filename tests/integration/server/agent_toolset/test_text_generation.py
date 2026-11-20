@@ -682,7 +682,7 @@ async def test_generate_episode_script_unknown_entry_id_is_refused_not_internal(
 
     assert out.problem is not None
     text = said(out)
-    assert "编写范围无效" in text
+    assert "Invalid authoring scope" in text
     assert "generate_episode_script 失败" not in text
 
 
@@ -840,7 +840,7 @@ async def test_generate_episode_script_rejects_removed_scope_with_migration_note
     out = await run_declared_tool("generate_episode_script", fake_ctx, {"episode_id": 1, "scope": scope})
     assert problem_of(out).code == "invalid_request"
     text = said(out)
-    assert "scope 参数已取消" in text
+    assert "the scope parameter has been removed" in text
     assert "entry_ids" in text
 
 
@@ -915,7 +915,7 @@ def test_parse_normalized_content_uses_dynamic_duration_schema() -> None:
     # Outside the enum -> dynamic schema validation fails -> fail-loud raises ValueError; unvalidated content is not
     # persisted as a formal script_plan
     # 超出枚举 → 动态 schema 校验失败 → fail-loud 抛 ValueError，不把未校验内容当成正式 script_plan 落盘
-    with pytest.raises(ValueError, match="script_plan 规范化内容结构校验失败"):
+    with pytest.raises(ValueError, match="script_plan normalized content: structure validation failed"):
         _parse_normalized_content(json.dumps({"title": "t", "scenes": [bad]}), model)
 
 
@@ -1450,7 +1450,7 @@ async def test_normalize_drama_script_rejects_an_empty_explicit_source(fake_ctx:
     out = await run_declared_tool("generate_script_plan", fake_ctx, {"episode_id": 1, "source": "", "dry_run": True})
 
     assert out.problem is not None
-    assert "源文件路径不能为空" in problem_of(out).detail
+    assert "source file path must not be empty" in problem_of(out).detail
 
 
 async def test_normalize_drama_script_treats_a_default_source_symlink_escape_as_no_episode_source(

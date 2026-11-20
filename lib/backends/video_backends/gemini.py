@@ -123,7 +123,7 @@ class GeminiVideoBackend(ProviderJobIdPersistenceMixin):
 
             credentials_file = Path(credentials_path) if credentials_path else resolve_vertex_credentials_path()
             if credentials_file is None:
-                raise ValueError("未找到 Vertex AI 凭证文件")
+                raise ValueError("Vertex AI credentials file not found")
 
             with open(credentials_file, encoding="utf-8") as f:
                 creds_data = json_module.load(f)
@@ -262,7 +262,7 @@ class GeminiVideoBackend(ProviderJobIdPersistenceMixin):
             # fail-fast：缺 operation.name 意味着 submit 成功但无法持久化 provider_job_id，
             # 一旦进程中断，孤儿处理会走 [restart_lost] 回退到重新提交路径——这正是要避免的
             # 重复扣费场景。直接抛错让 worker finally 标 failed，比静默继续 poll 安全。
-            raise RuntimeError("Gemini 提交成功但未返回 operation.name，无法持久化 provider_job_id")
+            raise RuntimeError("Gemini submit succeeded but returned no operation.name, so provider_job_id cannot be persisted")
         # Also write back the domain actually requested this time: resume replays it, otherwise a mid-flight base_url change would query the old operation on the new domain
         # 一并写回本次实际请求的域名：续跑据此回放，否则在途改了 base_url 会按新域名去查旧 operation
         await self._persist_provider_job_id(request, op_name, provider=PROVIDER_GEMINI, endpoint=self._request_base_url)
@@ -433,8 +433,8 @@ class GeminiVideoBackend(ProviderJobIdPersistenceMixin):
                 metadata,
             )
             if error_detail:
-                raise RuntimeError(f"视频生成失败: {error_detail}")
-            raise RuntimeError("视频生成失败: API 返回空结果")
+                raise RuntimeError(f"Video generation failed: {error_detail}")
+            raise RuntimeError("Video generation failed: the API returned an empty result")
 
         # Extract and download the video / 提取并下载视频
         generated_video = operation.response.generated_videos[0]
@@ -538,7 +538,7 @@ class GeminiVideoBackend(ProviderJobIdPersistenceMixin):
                 uri = video_ref.uri
                 _write_atomically(output_path, lambda target: _fetch_uri(uri, target, deadline))
             else:
-                raise RuntimeError("视频生成成功但无法获取视频数据")
+                raise RuntimeError("Video generation succeeded but the video data could not be retrieved")
         else:
             # AI Studio mode: files.download with destination writes chunk by chunk directly, without reading the whole video into memory.
             # AI Studio 模式：files.download 带 destination 时分块直写，不把整段视频读进内存。
@@ -578,7 +578,7 @@ class _DeadlineWriter(io.RawIOBase):
 
     def write(self, b: Buffer, /) -> int:
         if time.monotonic() >= self._deadline:
-            raise TimeoutError("Gemini 成片下载超出取件预算")
+            raise TimeoutError("Gemini video download exceeded the fetch budget")
         written = self._handle.write(b)
         self.written += written
         return written
@@ -590,7 +590,7 @@ def _io_timeout(deadline: float) -> float:
     单次网络读写的超时：不超过 I/O 超时上限，也不越过期限；期限已过则直接抛 ``TimeoutError``。"""
     remaining = deadline - time.monotonic()
     if remaining <= 0:
-        raise TimeoutError("Gemini 成片下载超出取件预算")
+        raise TimeoutError("Gemini video download exceeded the fetch budget")
     return min(_DOWNLOAD_IO_TIMEOUT_SECONDS, remaining)
 
 

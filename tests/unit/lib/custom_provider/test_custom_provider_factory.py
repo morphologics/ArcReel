@@ -417,7 +417,7 @@ class TestErrors:
 
         v2-video-generations 强制要求 base_url（无默认 host），空值 fail-loud。"""
         provider = _make_provider(base_url="")
-        with pytest.raises(ValueError, match="需要 base_url"):
+        with pytest.raises(ValueError, match="requires base_url"):
             create_custom_backend(provider=provider, model_id="some-model", endpoint="v2-video-generations")
 
 

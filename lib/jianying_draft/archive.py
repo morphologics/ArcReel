@@ -64,8 +64,8 @@ ASSETS_DIR = "assets"
 CONTENT_NAME = "draft_content.json"
 INDEX_FORMAT = 1
 
-SUBTITLE_TRACK = "字幕"
-NARRATION_TRACK = "旁白"
+SUBTITLE_TRACK = "Subtitles"
+NARRATION_TRACK = "Narration"
 BGM_TRACK = "BGM"
 SUBTITLE_FONT = FontType.SourceHanSansCN_Bold
 EXTRA_SUBTITLE_TRACK_RAISE = 0.2
@@ -145,7 +145,7 @@ class _AssetStaging:
             try:
                 source = safe_join(self._project_dir, relative_path, require_file=True)
             except (PathTraversalError, FileNotFoundError) as exc:
-                raise JianyingDraftArchiveError(f"草稿素材不在项目内或已不存在：{relative_path}") from exc
+                raise JianyingDraftArchiveError(f"Draft asset is outside the project or gone: {relative_path}") from exc
             name = self._unique_name(source.name)
             try:
                 (self.directory / name).hardlink_to(source)
@@ -321,9 +321,9 @@ def _read_index(archive: zipfile.ZipFile) -> dict[str, dict[str, object]]:
     try:
         index = json.loads(archive.read(INDEX_NAME).decode("utf-8"))
     except (KeyError, UnicodeDecodeError, ValueError) as exc:
-        raise JianyingDraftArchiveError("剪映草稿产物缺少可读的素材索引") from exc
+        raise JianyingDraftArchiveError("JianYing draft artifact has no readable asset index") from exc
     if not isinstance(index, dict) or index.get("format") != INDEX_FORMAT or not isinstance(index.get("assets"), dict):
-        raise JianyingDraftArchiveError("剪映草稿产物的素材索引格式不受支持")
+        raise JianyingDraftArchiveError("JianYing draft artifact asset index format is not supported")
     return index["assets"]
 
 
@@ -331,9 +331,9 @@ def _read_content(archive: zipfile.ZipFile) -> dict[str, Any]:
     try:
         content = json.loads(archive.read(f"{DRAFT_DIR}/{CONTENT_NAME}").decode("utf-8"))
     except (KeyError, UnicodeDecodeError, ValueError) as exc:
-        raise JianyingDraftArchiveError("剪映草稿产物缺少可读的草稿内容") from exc
+        raise JianyingDraftArchiveError("JianYing draft artifact has no readable draft content") from exc
     if not isinstance(content, dict):
-        raise JianyingDraftArchiveError("剪映草稿产物的草稿内容不是对象")
+        raise JianyingDraftArchiveError("JianYing draft artifact draft content is not an object")
     return content
 
 
@@ -353,11 +353,11 @@ def _material_paths(content: Mapping[str, Any]) -> list[str]:
 def _resolve_project_asset(project_dir: Path, source: Mapping[str, object]) -> Path:
     relative = source.get("project")
     if not isinstance(relative, str):
-        raise JianyingDraftArchiveError("剪映草稿产物的素材来源无效")
+        raise JianyingDraftArchiveError("JianYing draft artifact has an invalid asset source")
     try:
         return safe_join(project_dir, relative, require_file=True)
     except (PathTraversalError, FileNotFoundError) as exc:
-        raise JianyingDraftArchiveError(f"剪映草稿引用的项目素材已不存在：{relative}") from exc
+        raise JianyingDraftArchiveError(f"Project asset used by the JianYing draft is gone: {relative}") from exc
 
 
 def verify_jianying_draft(path: Path, *, project_dir: Path, expected_duration_us: int) -> None:
@@ -371,11 +371,11 @@ def verify_jianying_draft(path: Path, *, project_dir: Path, expected_duration_us
     for material_path in _material_paths(content):
         name = material_path.removeprefix(f"{ASSETS_PLACEHOLDER}/")
         if name == material_path or name not in assets:
-            raise JianyingDraftArchiveError(f"草稿素材路径没有写成占位符：{material_path}")
+            raise JianyingDraftArchiveError(f"Draft asset path is not written as a placeholder: {material_path}")
     for name, source in assets.items():
         if source.get("bundled") is True:
             if f"{ASSETS_DIR}/{name}" not in names:
-                raise JianyingDraftArchiveError(f"剪映草稿产物缺少自带素材：{name}")
+                raise JianyingDraftArchiveError(f"JianYing draft artifact is missing a bundled asset: {name}")
         else:
             _resolve_project_asset(project_dir, source)
     video_end = 0
@@ -387,7 +387,7 @@ def verify_jianying_draft(path: Path, *, project_dir: Path, expected_duration_us
                     video_end = max(video_end, int(target["start"]) + int(target["duration"]))
     if video_end != expected_duration_us:
         raise JianyingDraftArchiveError(
-            f"草稿主视频轨时长 {video_end} 微秒与剪辑时间线时长 {expected_duration_us} 微秒不一致"
+            f"Draft main video track length {video_end} us != edit timeline length {expected_duration_us} us"
         )
 
 

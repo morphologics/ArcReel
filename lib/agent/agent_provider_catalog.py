@@ -69,7 +69,7 @@ PRESET_PROVIDERS: dict[str, PresetProvider] = {
     ),
     "glm-cn": PresetProvider(
         id="glm-cn",
-        display_name="Zhipu GLM (中国)",
+        display_name="Zhipu GLM (China)",
         icon_key="Zhipu",
         messages_url="https://open.bigmodel.cn/api/anthropic",
         discovery_url="https://open.bigmodel.cn/api/anthropic",
@@ -125,7 +125,7 @@ PRESET_PROVIDERS: dict[str, PresetProvider] = {
     ),
     "minimax-cn": PresetProvider(
         id="minimax-cn",
-        display_name="MiniMax (中国)",
+        display_name="MiniMax (China)",
         icon_key="Minimax",
         messages_url="https://api.minimaxi.com/anthropic",
         discovery_url="https://api.minimaxi.com/anthropic",

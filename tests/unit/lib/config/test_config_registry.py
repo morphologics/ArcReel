@@ -110,7 +110,7 @@ class TestCredentialGroups:
         assert meta.credential_groups == [["api_key"], ["access_key", "secret_key"]]
 
     def test_empty_group_rejected(self):
-        with pytest.raises(ValueError, match="空分组"):
+        with pytest.raises(ValueError, match="empty group"):
             ProviderMeta(
                 display_name="t",
                 description="t",
@@ -120,7 +120,7 @@ class TestCredentialGroups:
             )
 
     def test_uncovered_key_rejected(self):
-        with pytest.raises(ValueError, match="未覆盖"):
+        with pytest.raises(ValueError, match="does not cover"):
             ProviderMeta(
                 display_name="t",
                 description="t",
@@ -205,7 +205,7 @@ class TestDefaultConcurrency:
         assert meta.default_concurrency == {"image": 2}
 
     def test_unknown_lane_raises(self):
-        with pytest.raises(ValueError, match="未知 lane"):
+        with pytest.raises(ValueError, match="unknown lane"):
             ProviderMeta(
                 display_name="T",
                 description="T",
@@ -219,7 +219,7 @@ class TestDefaultConcurrency:
     # 会被静默当成并发 1。
     @pytest.mark.parametrize("bad_limit", [0, -1, "1", 3.0, True])
     def test_non_positive_int_raises(self, bad_limit):
-        with pytest.raises(ValueError, match=">=1 的整数"):
+        with pytest.raises(ValueError, match="integer >= 1"):
             ProviderMeta(
                 display_name="T",
                 description="T",

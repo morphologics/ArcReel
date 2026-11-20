@@ -122,10 +122,10 @@ def _raw_output_from_exception(exc: BaseException) -> str:
             if completion is not None:
                 break
     if completion is None:
-        return "<无响应>"
+        return "<no response>"
     choices = getattr(completion, "choices", None) or []
     if not choices:
-        return "<无响应>"
+        return "<no response>"
     message = getattr(choices[0], "message", None)
     content = getattr(message, "content", None)
     if content:
@@ -133,7 +133,7 @@ def _raw_output_from_exception(exc: BaseException) -> str:
     tool_calls = getattr(message, "tool_calls", None) or []
     if tool_calls:
         return truncate_for_log(str(getattr(getattr(tool_calls[0], "function", None), "arguments", None)))
-    return "<无响应>"
+    return "<no response>"
 
 
 def _api_call_failure(exc: InstructorRetryException) -> BaseException | None:
@@ -228,13 +228,13 @@ def _failure_reason(exc: BaseException) -> str:
 
     把某一档的失败压成一句可读原因，供 StructuredOutputExhaustedError 携带。"""
     if not isinstance(exc, InstructorRetryException):
-        return f"降级链失败（{type(exc).__name__}: {exc}）"
+        return f"fallback chain failed ({type(exc).__name__}: {exc})"
     api_failure = _api_call_failure(exc)
     if api_failure is not None:
-        return f"降级链各档传递 schema 的方式均被上游拒收（{api_failure}）"
+        return f"the upstream rejected every fallback tier's way of passing the schema ({api_failure})"
     last = exc.failed_attempts[-1].exception if exc.failed_attempts else None
-    detail = type(last).__name__ if last is not None else "未知原因"
-    return f"降级链各档重试耗尽后模型输出仍不合规（{exc.n_attempts} 次尝试，最后一次 {detail}）"
+    detail = type(last).__name__ if last is not None else "unknown reason"
+    return f"model output still invalid after all fallback tiers exhausted their retries ({exc.n_attempts} attempts, last: {detail})"
 
 
 def _billed_usage(exc: BaseException, *, provider: str, model: str) -> TextGenerationResult:

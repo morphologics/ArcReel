@@ -543,7 +543,7 @@ class ProjectEventService:
                 except FileNotFoundError:
                     channel.pending_sources |= covered_sources
                     await self._handle_scan_file_not_found(
-                        project_name, channel, log_message="构建显式项目事件快照失败 project=%s"
+                        project_name, channel, log_message="Failed to build explicit project event snapshot project=%s"
                     )
                     return
                 except Exception:
@@ -775,7 +775,7 @@ class ProjectEventService:
                     raise
                 except FileNotFoundError:
                     if await self._handle_scan_file_not_found(
-                        project_name, channel, log_message="项目事件扫描失败 project=%s"
+                        project_name, channel, log_message="Project event scan failed project=%s"
                     ):
                         return
                 except Exception:

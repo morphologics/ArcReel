@@ -342,9 +342,13 @@ class TestTaskErrorLocalization:
         by_id = {t["task_id"]: t["error_message"] for t in out}
         assert by_id["raw"] == "RuntimeError: provider 500"
         assert by_id["legacy"] == "[restart_lost] image 任务无法接续，需手动重试以避免重复计费"
-        assert by_id["refused"] == "❌ 源文读取失败"
         assert by_id["ok"] is None
-        assert all("error_detail" not in t for t in out)
+        # Text-task problem codes render a translated summary; the raw detail moves to error_detail.
+        # 文本任务的问题码渲染为译文摘要，原文移入 error_detail。
+        refused_row = next(t for t in out if t["task_id"] == "refused")
+        assert by_id["refused"] == "The model provider refused this request; adjust the input or settings and try again"
+        assert refused_row["error_detail"] == "❌ 源文读取失败"
+        assert all("error_detail" not in t for t in out if t["task_id"] != "refused")
 
     def test_get_task_renders_error_message(self, monkeypatch):
         from lib.generation.task_failure import encode_failure

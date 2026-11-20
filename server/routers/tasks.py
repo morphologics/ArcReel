@@ -99,7 +99,7 @@ def _localize_task(task: dict[str, Any], translate: Callable[..., str], names: D
             params = dict(problem.params)
             issues = params.get("issues")
             if isinstance(issues, list):
-                params["units"] = "、".join(
+                params["units"] = ", ".join(
                     dict.fromkeys(
                         str(issue["unit_id"]) for issue in issues if isinstance(issue, dict) and issue.get("unit_id")
                     )

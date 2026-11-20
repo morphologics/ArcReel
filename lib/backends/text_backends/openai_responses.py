@@ -173,7 +173,7 @@ class OpenAIResponsesTextBackend:
             # Some gateways report failure as 200 + status=failed with empty output_text, which must not be treated as success
             # 部分网关以 200 + status=failed 回报失败，output_text 为空，不能当成功结果
             detail = response.error.message if response.error else "unknown error"
-            raise RuntimeError(f"Responses 调用失败 (model={self._model}): {detail}")
+            raise RuntimeError(f"Responses call failed (model={self._model}): {detail}")
 
         usage = response.usage
         output_tokens = usage.output_tokens if usage else None

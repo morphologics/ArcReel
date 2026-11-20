@@ -65,7 +65,7 @@ def test_amphibious_model_is_two_hits_distinguished_by_media_type() -> None:
     [
         ("GPT-5.5", ["gpt-5.5", "gpt-5.5-pro"]),
         ("gpt-5-5", ["gpt-5.5", "gpt-5.5-pro"]),
-        ("豆包", ["doubao-seed-2.0-pro"]),
+        ("Doubao Seed", ["doubao-seed-2.0-pro"]),
         ("260215", ["doubao-seed-2.0-pro"]),
         ("openai/gpt-5.5-pro", ["gpt-5.5-pro"]),
         ("gpt pro", ["gpt-5.5-pro"]),

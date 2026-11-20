@@ -45,7 +45,7 @@ class TestDataValidator:
 
         assert result.valid
         assert result.errors == []
-        assert "验证通过" in str(result)
+        assert "Validation passed" in str(result)
 
     @pytest.mark.parametrize("style", [None, ""], ids=["absent", "empty"])
     def test_validate_project_accepts_project_without_style(self, tmp_path, style):

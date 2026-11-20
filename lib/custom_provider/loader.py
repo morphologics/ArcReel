@@ -90,7 +90,7 @@ async def load_custom_backend(
     db_id = parse_provider_id(provider_id)
     provider = await repo.get_provider(db_id)
     if provider is None:
-        raise ValueError(f"自定义供应商 {provider_id} 不存在")
+        raise ValueError(f"Custom provider {provider_id} does not exist")
 
     model = None
     if model_id:
@@ -129,7 +129,7 @@ async def load_custom_backend(
         model_id = default_model.model_id
 
     if model_id is None:
-        raise ValueError(f"自定义供应商 {provider_id} 解析后仍缺少 model_id")
+        raise ValueError(f"Custom provider {provider_id} is still missing model_id after resolution")
     spec = await resolve_endpoint_spec(model.endpoint, endpoint_repo.get)
     return create_custom_backend(
         provider=provider,

@@ -1,4 +1,5 @@
 import { useId, useState } from "react";
+import { useTranslation } from "react-i18next";
 
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -18,11 +19,13 @@ export function ResolutionPicker({
   options,
   value,
   onChange,
-  placeholder = "默认（不传）",
+  placeholder: placeholderProp,
   disabled,
   "aria-label": ariaLabel,
 }: ResolutionPickerProps) {
+  const { t } = useTranslation("dashboard");
   const listId = useId();
+  const placeholder = placeholderProp ?? t("resolution_default_placeholder");
   if (options.length === 0) return null;
 
   if (mode === "select") {

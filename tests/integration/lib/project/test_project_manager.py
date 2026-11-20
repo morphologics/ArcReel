@@ -240,9 +240,9 @@ class TestProjectManager:
     def test_project_identifier_validation_and_empty_title(self, tmp_path):
         pm = ProjectManager(tmp_path / "projects")
 
-        with pytest.raises(ValueError, match=r"项目标识仅允许英文字母、数字和中划线"):
+        with pytest.raises(ValueError, match=r"Project identifier may only contain English letters, digits and hyphens"):
             pm.create_project("bad name")
-        with pytest.raises(ValueError, match=r"项目标识仅允许英文字母、数字和中划线"):
+        with pytest.raises(ValueError, match=r"Project identifier may only contain English letters, digits and hyphens"):
             pm.create_project("bad_name")
 
         pm.create_project("demo")
@@ -544,7 +544,7 @@ class TestProjectManager:
         # bad is structurally valid (only the episode mismatches): after the guard lets it through, the consistency check
         # fails fast, verifying the guard does not misfire
         # bad 结构合法（仅 episode 错配）：守卫放行后由一致性校验 fail-fast，验证守卫不误伤
-        with pytest.raises(ValueError, match="不一致"):
+        with pytest.raises(ValueError, match="does not match its owning"):
             pm.save_script("demo", bad, "episode_10.json")
 
         # Key assertion: the file must not be written to disk (atomicity preserved)
@@ -590,7 +590,7 @@ class TestProjectManager:
         script = _narration_script("E1S01")
 
         assert ProjectManager.filename_episode("episode_0.json") is None
-        with pytest.raises(ValueError, match="不是规范名"):
+        with pytest.raises(ValueError, match="does not have a canonical file name"):
             pm.save_script("demo", script, "episode_0.json", validate=False)
         assert not (project_dir / "scripts" / "episode_0.json").exists()
         assert pm.load_project("demo")["episodes"] == []
@@ -635,15 +635,15 @@ class TestProjectManager:
         script = _narration_script("E1S01")
         stored = project_dir / "scripts" / ProjectManager.normalize_script_filename(filename)
 
-        with pytest.raises(ValueError, match="不是规范名"):
+        with pytest.raises(ValueError, match="does not have a canonical file name"):
             ProjectManager.require_filename_episode_consistency({}, filename)
-        with pytest.raises(ValueError, match="不是规范名"):
+        with pytest.raises(ValueError, match="does not have a canonical file name"):
             pm.save_script("demo", script, filename, validate=False)
         assert not stored.exists()
 
         stored.parent.mkdir(parents=True, exist_ok=True)
         stored.write_text(json.dumps(script), encoding="utf-8")
-        with pytest.raises(ValueError, match="不是规范名"):
+        with pytest.raises(ValueError, match="does not have a canonical file name"):
             pm.sync_episode_from_script("demo", filename)
         assert pm.load_project("demo").get("episodes", []) == []
 
@@ -684,7 +684,7 @@ class TestProjectManager:
         scripts_dir = pm.get_project_path("demo") / "scripts"
         (scripts_dir / "episode_10.json").write_text(json.dumps(corrupted, ensure_ascii=False), encoding="utf-8")
 
-        with pytest.raises(ValueError, match="不一致"):
+        with pytest.raises(ValueError, match="does not match its owning"):
             pm.sync_episode_from_script("demo", "episode_10.json")
 
         # Episode 1's entry in project.json must stay unpolluted
@@ -970,7 +970,7 @@ class TestProjectManager:
         pm_empty = ProjectManager(tmp_path / "projects-empty")
         pm_empty.create_project("demo")
         pm_empty.create_project_metadata("demo", "Demo")
-        with pytest.raises(EmptySourceError, match=r"source 目录为空"):
+        with pytest.raises(EmptySourceError, match=r"The source directory is empty"):
             await pm_empty.generate_overview("demo")
 
     @pytest.mark.parametrize("lang", ["zh", "en", "vi"])
@@ -1108,25 +1108,25 @@ class TestPathTraversalProtection:
         pm.create_project("demo")
         # The normalize_project_name regex catches it first
         # normalize_project_name 的正则先拦截
-        with pytest.raises(ValueError, match=r"项目标识仅允许英文字母、数字和中划线"):
+        with pytest.raises(ValueError, match=r"Project identifier may only contain English letters, digits and hyphens"):
             pm.get_project_path("../etc")
-        with pytest.raises(ValueError, match=r"项目标识仅允许英文字母、数字和中划线"):
+        with pytest.raises(ValueError, match=r"Project identifier may only contain English letters, digits and hyphens"):
             pm.get_project_path("demo/../../etc")
 
     def test_normalize_project_name_rejects_special_chars(self, tmp_path):
         pm = ProjectManager(tmp_path / "projects")
-        with pytest.raises(ValueError, match=r"项目标识仅允许英文字母、数字和中划线"):
+        with pytest.raises(ValueError, match=r"Project identifier may only contain English letters, digits and hyphens"):
             pm.normalize_project_name("../hack")
-        with pytest.raises(ValueError, match=r"项目标识仅允许英文字母、数字和中划线"):
+        with pytest.raises(ValueError, match=r"Project identifier may only contain English letters, digits and hyphens"):
             pm.normalize_project_name("foo/bar")
-        with pytest.raises(ValueError, match=r"项目标识不能为空"):
+        with pytest.raises(ValueError, match=r"Project identifier must not be empty"):
             pm.normalize_project_name("")
 
     def test_load_script_rejects_traversal_filename(self, tmp_path):
         pm = ProjectManager(tmp_path / "projects")
         pm.create_project("demo")
         pm.create_project_metadata("demo", "Demo")
-        with pytest.raises(ValueError, match="非法文件名"):
+        with pytest.raises(ValueError, match="Invalid file name"):
             pm.load_script("demo", "../../etc/passwd")
 
     def test_save_script_rejects_traversal_filename(self, tmp_path):
@@ -1134,7 +1134,7 @@ class TestPathTraversalProtection:
         pm.create_project("demo")
         pm.create_project_metadata("demo", "Demo")
         script = {"novel": {"chapter": "ch1"}, "scenes": [], "metadata": {}}
-        with pytest.raises(ValueError, match="非法文件名"):
+        with pytest.raises(ValueError, match="Invalid file name"):
             pm.save_script("demo", script, filename="../../evil.json")
 
     def test_safe_subpath_allows_normal_filenames(self, tmp_path):
@@ -1179,7 +1179,7 @@ class TestResolveEpisodeFromScript:
         assert ProjectManager.resolve_episode_from_script({"episode": True}, "episode_9.json") == 9
 
     def test_raises_when_unresolvable(self):
-        with pytest.raises(ValueError, match="无法确定集号"):
+        with pytest.raises(ValueError, match="Cannot determine the episode number"):
             ProjectManager.resolve_episode_from_script({}, "random_name.json")
 
 

@@ -406,7 +406,13 @@ async def refresh_source(source_id: int, service: Service) -> MarketSourceRespon
 async def refresh_sources(
     service: Service,
     stale_only: Annotated[
-        bool, Query(description="只刷新距上次成功刷新超过 1 小时的启用源（打开市场页时的自动刷新）")
+        bool,
+        Query(
+            description=(
+                "Only refresh enabled sources last refreshed successfully over 1 hour ago"
+                " (auto-refresh when the market page opens)"
+            )
+        ),
     ] = False,
 ) -> MarketSourceListResponse:
     """刷新全部启用源，逐源返回刷新后的行；禁用源不刷新、不出现在结果里。"""
@@ -418,7 +424,9 @@ async def refresh_sources(
 async def list_entries(
     read_app_version: AppVersionReader,
     session: AsyncSession = Depends(get_async_session),
-    entry_type: Annotated[str, Query(alias="type", description="条目类型；首期只有 endpoint")] = ENDPOINT_ENTRY_TYPE,
+    entry_type: Annotated[
+        str, Query(alias="type", description="Entry type; only endpoint for now")
+    ] = ENDPOINT_ENTRY_TYPE,
 ) -> MarketEntryListResponse:
     """所有启用源缓存快照里的条目：按源顺序、源内按名称排列，不分页、不发请求。"""
     sources = await MarketSourceRepository(session).list_ordered()
@@ -438,7 +446,9 @@ async def list_entries(
 async def list_entry_aggregates(
     official: OfficialService,
     session: AsyncSession = Depends(get_async_session),
-    entry_type: Annotated[str, Query(alias="type", description="条目类型；首期只有 endpoint")] = ENDPOINT_ENTRY_TYPE,
+    entry_type: Annotated[
+        str, Query(alias="type", description="Entry type; only endpoint for now")
+    ] = ENDPOINT_ENTRY_TYPE,
 ) -> MarketEntryAggregateListResponse:
     """启用的官方市场源里各条目在官方服务的安装量与评分；第三方源的条目不发给官方服务。官方服务关闭时 409。"""
     client = await official.require()

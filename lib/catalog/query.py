@@ -56,6 +56,7 @@ from arcreel_catalog_core import (
 )
 from lib.app_version import app_version
 from lib.catalog.composition import ComposedCatalog, EntrySource, compose_catalog, merge_official
+from lib.catalog.english_display_names import with_english_display_names
 from lib.catalog.entry_matching import match_entry
 
 logger = logging.getLogger(__name__)
@@ -474,7 +475,9 @@ def composed_catalog() -> ComposedCatalog:
     """The composed catalog: official data plus user-modified entry copies. / 合成后的目录：官方数据加上用户修改的条目副本。"""
     official = official_data()
     if not _composed_cache or _composed_cache[0][0] is not official:
-        _composed_cache[:] = [(official, compose_catalog(official, *_user_entries[0]))]
+        # Official display names are shown in English; see lib.catalog.english_display_names.
+        # 官方显示名以英文呈现，见 lib.catalog.english_display_names。
+        _composed_cache[:] = [(official, compose_catalog(with_english_display_names(official), *_user_entries[0]))]
     return _composed_cache[0][1]
 
 

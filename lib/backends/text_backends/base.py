@@ -110,9 +110,9 @@ class TextOutputTruncatedError(NonRetryableError):
         self.output_tokens = output_tokens
         self.provider_id = provider_id
         self.custom_model = custom_model
-        detail = f"在 output_tokens={output_tokens} 处" if output_tokens is not None else ""
+        detail = f" at output_tokens={output_tokens}" if output_tokens is not None else ""
         super().__init__(
-            f"{provider}/{model} 的输出{detail}被模型输出上限截断，内容不完整。请改用输出能力更高的文本模型。"
+            f"The output of {provider}/{model} was cut off{detail} by the model's output limit and is incomplete. Use a text model with a larger output capacity."
         )
 
 
@@ -144,7 +144,7 @@ class StructuredOutputExhaustedError(NonRetryableError):
         self.provider = provider
         self.model = model
         self.reason = reason
-        super().__init__(f"{provider}/{model} 的结构化输出能力不足：{reason}。请更换文本模型或供应商后重试。")
+        super().__init__(f"{provider}/{model} could not produce valid structured output: {reason}. Switch to another text model or provider and retry.")
 
 
 # Truncation length of raw model output in diagnostic logs: enough to see structural problems (prose or JSON, object or
@@ -169,9 +169,9 @@ def truncate_for_log(text: str | None, limit: int = RAW_OUTPUT_LOG_LIMIT) -> str
     后者是每次校验失败都会走的高频路径，本函数只用在 warning 级的降级 / 拒绝分支。
     """
     if not text:
-        return "<空>"
+        return "<empty>"
     if len(text) > limit:
-        return f"{text[:limit]}…（截断，共 {len(text)} 字符）"
+        return f"{text[:limit]}… (truncated, {len(text)} chars total)"
     return text
 
 
@@ -320,7 +320,7 @@ TEXT_TASK_TIERS: dict[TextTaskType, TextTaskTier] = {
 }
 
 if _missing := set(TextTaskType) - set(TEXT_TASK_TIERS):
-    raise RuntimeError(f"TextTaskType 成员未归档到 TEXT_TASK_TIERS: {sorted(m.value for m in _missing)}")
+    raise RuntimeError(f"TextTaskType members missing from TEXT_TASK_TIERS: {sorted(m.value for m in _missing)}")
 
 # Tasks that need image input (vision) capability. If the resolved model does not support vision, raise directly instead of silently switching models.
 # 需要图像输入（vision）能力的任务。解析出的模型不支持 vision 时直接报错，不静默换模型。
@@ -575,7 +575,7 @@ def resolve_schema(schema: dict | type[BaseModel]) -> dict:
             if "$ref" in obj:
                 ref_name = obj["$ref"].split("/")[-1]
                 if ref_name in visited_refs:
-                    raise ValueError(f"检测到 schema 中的循环引用: {ref_name}")
+                    raise ValueError(f"Circular reference detected in schema: {ref_name}")
                 resolved = _inline(defs[ref_name], visited_refs | {ref_name})
                 extra = {k: v for k, v in obj.items() if k != "$ref"}
                 return {**resolved, **extra} if extra else resolved
@@ -680,10 +680,13 @@ def structured_fallback_reason(text: str, response_schema: dict | type | None, *
         try:
             response_schema.model_validate_json(text, strict=strict)
         except ValidationError as exc:
-            return f"返回内容不满足 response_schema（供应商可能未强制 schema）：{summarize_validation_error(exc)}"
+            return (
+                "output does not satisfy response_schema (provider may not enforce the schema): "
+                f"{summarize_validation_error(exc)}"
+            )
         return None
     if not is_valid_json(text):
-        return "返回非 JSON 内容（供应商可能未支持结构化输出）"
+        return "returned non-JSON content (provider may not support structured output)"
     return None
 
 
@@ -749,7 +752,7 @@ async def prompt_json_fallback(
     raise StructuredOutputExhaustedError(
         provider=provider,
         model=model,
-        reason=f"prompt 注入降级 {PROMPT_JSON_FALLBACK_MAX_ATTEMPTS} 次尝试后输出仍不合规（{last_reason}）",
+        reason=f"output still invalid after {PROMPT_JSON_FALLBACK_MAX_ATTEMPTS} prompt-injection fallback attempts ({last_reason})",
     )
 
 

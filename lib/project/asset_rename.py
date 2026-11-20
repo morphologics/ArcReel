@@ -62,7 +62,10 @@ class AssetRenameConflictError(ValueError):
     目标名与既有同类型资产归一化判定冲突，整体拒绝、不落盘。"""
 
     def __init__(self, conflict_name: str):
-        super().__init__(f"目标名与既有资产 {conflict_name!r} 冲突（按 NFC 归一判定），请换一个名字或先处理既有资产")
+        super().__init__(
+            f"Target name conflicts with existing asset {conflict_name!r} (NFC-normalized); "
+            "choose another name or resolve that asset first"
+        )
         self.conflict_name = conflict_name
 
 
@@ -79,7 +82,7 @@ class AssetRenameFileCollisionError(ValueError):
     """
 
     def __init__(self, destination: Path):
-        super().__init__(f"迁移目标文件已存在: {destination}，请先移除该文件或换一个名字")
+        super().__init__(f"Migration target file already exists: {destination}; remove it or choose another name")
         self.destination = destination
 
 
@@ -97,7 +100,9 @@ class AssetRenameHistoryCollisionError(ValueError):
     """
 
     def __init__(self, resource_id: str):
-        super().__init__(f"新名 {resource_id!r} 下已有保留的版本历史，请先清理该历史或换一个名字")
+        super().__init__(
+            f"New name {resource_id!r} already has retained version history; clear it or choose another name"
+        )
         self.resource_id = resource_id
 
 

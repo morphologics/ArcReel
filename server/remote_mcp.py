@@ -56,7 +56,7 @@ def build_remote_mcp_server(
     """Build one restart-safe MCP server instance for the host lifespan."""
     if services is not None:
         if projects is not None and projects.data_root.resolve() != services.projects.data_root.resolve():
-            raise ValueError("projects 与 services.projects 必须属于同一项目根")
+            raise ValueError("projects and services.projects must share the same project root")
         projects = services.projects
     else:
         projects = projects or get_project_manager()

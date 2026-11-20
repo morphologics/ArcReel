@@ -46,8 +46,8 @@ class CatalogSearchResponse(BaseModel):
 
 @router.get("/entries", response_model=CatalogSearchResponse)
 async def search_catalog_entries(
-    q: Annotated[str, Query(max_length=200, description="按名称搜索；留空列出全部")] = "",
-    media_type: Annotated[MediaType | None, Query(description="只列这个媒体类型的条目")] = None,
+    q: Annotated[str, Query(max_length=200, description="Search by name; leave empty to list all")] = "",
+    media_type: Annotated[MediaType | None, Query(description="Only list entries of this media type")] = None,
 ) -> CatalogSearchResponse:
     hits = catalog.search_entries(q, media_type)
     return CatalogSearchResponse(entries=[CatalogEntryHit.model_validate(vars(hit)) for hit in hits])
@@ -63,8 +63,8 @@ class NewEntryHints(BaseModel):
 
 @router.get("/new-entry-hints", response_model=NewEntryHints)
 async def get_new_entry_hints(
-    name: Annotated[str, Query(max_length=255, description="准备填写的模型名称")],
-    media_type: Annotated[MediaType, Query(description="准备填写的媒体类型")],
+    name: Annotated[str, Query(max_length=255, description="Model name about to be entered")],
+    media_type: Annotated[MediaType, Query(description="Media type about to be entered")],
 ) -> NewEntryHints:
     entry = catalog.find_entry(name.strip(), media_type=media_type) if name.strip() else None
     hit = (

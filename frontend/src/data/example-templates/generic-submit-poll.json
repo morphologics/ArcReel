@@ -5,7 +5,7 @@
     "name": "Generic Submit + Poll",
     "author": "ArcReel",
     "version": "1.0.0",
-    "description": "JSON in/out 的提交+轮询协议骨架：提交拿 task_id，按 task_id 轮询状态，成功后取产物地址。字段名与取值路径按供应商文档逐条替换。"
+    "description": "Skeleton for a JSON in/out submit + poll protocol: submit to get a task_id, poll status by task_id, then read the output URL on success. Replace each field name and value path according to the provider's documentation."
   },
   "auth": {
     "headers": {

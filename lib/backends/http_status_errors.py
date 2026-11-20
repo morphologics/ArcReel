@@ -86,9 +86,9 @@ class AmbiguousSubmitError(RuntimeError):
         self.provider = provider
         super().__init__(
             message
-            or f"[create_ambiguous] {provider} 创建请求可能已送达服务端但响应在途丢失"
-            "（读超时/连接中途断开），为避免重复建任务与重复计费不自动重试；"
-            "请到供应商侧确认任务状态后再手动重试"
+            or f"[create_ambiguous] {provider}: the create request may have reached the server but the response was lost"
+            " (read timeout / connection dropped); not retried automatically to avoid a duplicate task and duplicate billing. "
+            "Check the task status with the provider, then retry manually"
         )
 
 

@@ -106,7 +106,7 @@ def _write_audio(data: bytes, mime_type: str | None, output_path: Path) -> None:
     # Only raw PCM can be wrapped as WAV; when a relay returns a compressed format like mp3, forcing a wrapper would only produce noise
     # 只有裸 PCM 才能封装成 WAV；中转站回了 mp3 等压缩格式时，硬封装只会得到一段噪声
     if mime_type and not mime_type.lower().startswith(("audio/l16", "audio/pcm")):
-        raise RuntimeError(f"Gemini 语音合成返回了不支持的音频格式: {mime_type}")
+        raise RuntimeError(f"Gemini speech synthesis returned an unsupported audio format: {mime_type}")
     rate, channels = _pcm_params(mime_type)
     with wave.open(str(output_path), "wb") as wav:
         wav.setnchannels(channels)
@@ -144,7 +144,7 @@ class GeminiAudioBackend:
 
             credentials_file = Path(credentials_path) if credentials_path else resolve_vertex_credentials_path()
             if credentials_file is None:
-                raise ValueError("未找到 Vertex AI 凭证文件")
+                raise ValueError("Vertex AI credentials file not found")
             with open(credentials_file, encoding="utf-8") as f:
                 project_id = json_module.load(f).get("project_id")
             credentials = service_account.Credentials.from_service_account_file(
@@ -231,4 +231,4 @@ class GeminiAudioBackend:
                     return part.inline_data.data, part.inline_data.mime_type, response.usage_metadata
         # Synthesis is already billed on the provider side; retrying would bill again, so fail directly and let the task layer handle it
         # 合成已在供应商侧计费，重试等于再次计费，直接失败交由任务层处理
-        raise RuntimeError("Gemini 语音合成未返回音频")
+        raise RuntimeError("Gemini speech synthesis returned no audio")

@@ -132,8 +132,9 @@ MAX_INSTRUCTIONS_LEN = 4000
 #: Refusal message given by the prompt authoring tool's request model when it receives the removed ``scope`` parameter.
 #: 提示词编写工具收到已取消的 ``scope`` 参数时的拒绝说明，由其请求模型给出。
 SCOPE_REMOVED_MESSAGE = (
-    "scope 参数已取消：generate_episode_script 默认只编写正式脚本中全部待编写的条目；"
-    "要覆盖已有提示词的条目，请用 entry_ids 点名这些条目并传 rewrite=true；要整集重做，请重跑脚本规划并重新完成内容确认。"
+    "the scope parameter has been removed: generate_episode_script by default authors only the entries of the final "
+    "script that are still pending; to overwrite entries that already have prompts, name them in entry_ids and pass "
+    "rewrite=true; to redo the whole episode, re-run script planning and confirm the content again."
 )
 
 
@@ -242,10 +243,11 @@ class PromptOverwriteRequiredError(TextGenerationError):
 def _prompt_overwrite_error(episode_label: str, exc: PromptOverwriteRequired) -> PromptOverwriteRequiredError:
     overwrite = prompt_overwrite_with_text(exc.overwrite.to_dict(), translate)
     return PromptOverwriteRequiredError(
-        f"⚠️ {episode_label} 的显式重写需要用户确认覆盖，本次未调用文本模型、未写入。\n{overwrite['text']}\n"
-        "须先把上面的丢失清单原文转述给用户，得到明确同意后，再以 "
-        "overwrite_revision=params.prompt_overwrite.revision 重新调用；"
-        "正式脚本在此期间又有变化时会按新清单再次拒绝。",
+        f"⚠️ The explicit rewrite of {episode_label} needs the user to confirm the overwrite; the text model was not "
+        f"called and nothing was written.\n{overwrite['text']}\n"
+        "First relay the loss list above to the user verbatim; after explicit consent, call again with "
+        "overwrite_revision=params.prompt_overwrite.revision. "
+        "If the final script changes again in the meantime, the call is refused again with a new list.",
         overwrite,
     )
 
@@ -343,8 +345,8 @@ def _quarantine_formal_generation_conflict(
         content=content,
         violations=[
             DraftViolation(
-                f"正式内容在模型生成期间已变化（expected {expected}, actual {actual}）；"
-                "本次生成结果已保留为草稿，请合并最新正式内容后再晋升",
+                f"the final content changed while the model was generating (expected {expected}, actual {actual}); "
+                "this result was kept as a draft, merge the latest final content before promoting",
                 code="formal_revision_conflict",
             )
         ],
@@ -489,10 +491,10 @@ def _instructions(value: Any) -> str | None:
     if value is None:
         return None
     if not isinstance(value, str):
-        raise TextGenerationError("❌ 参数错误：instructions 必须是文本")
+        raise TextGenerationError("❌ Invalid parameter: instructions must be text")
     if len(value) > MAX_INSTRUCTIONS_LEN:
         raise TextGenerationError(
-            f"❌ 参数错误：instructions 过长（{len(value)} 字符，上限 {MAX_INSTRUCTIONS_LEN}），请精简后重试"
+            f"❌ Invalid parameter: instructions too long ({len(value)} characters, limit {MAX_INSTRUCTIONS_LEN}); shorten them and try again"
         )
     return value.strip() or None
 
@@ -588,20 +590,22 @@ def _parse_script_plan_json(response_text: str, model: type[BaseModel], *, label
     try:
         data = json.loads(text)
     except json.JSONDecodeError as e:
-        raise ValueError(f"{label} JSON 解析失败: {e}") from e
+        raise ValueError(f"{label}: JSON parse failed: {e}") from e
     if not isinstance(data, dict):
-        raise ValueError(f"{label}结构异常：顶层应为对象 {top_shape}")
+        raise ValueError(f"{label} has an invalid structure: top level must be an object {top_shape}")
     try:
         return model.model_validate(data).model_dump()
     except ValidationError as e:
-        raise ValueError(f"{label}结构校验失败: {e}") from e
+        raise ValueError(f"{label}: structure validation failed: {e}") from e
 
 
 def _parse_normalized_content(response_text: str, model: type[BaseModel]) -> dict:
     """Parse the drama script_plan (normalize) response: see ``_parse_script_plan_json``.
 
     drama script_plan（normalize）响应解析：见 ``_parse_script_plan_json``。"""
-    return _parse_script_plan_json(response_text, model, label="script_plan 规范化内容", top_shape="{title, scenes}")
+    return _parse_script_plan_json(
+        response_text, model, label="script_plan normalized content", top_shape="{title, scenes}"
+    )
 
 
 def load_novel_source(project_path: Path, source: str | None, *, episode: int) -> str:
@@ -642,9 +646,9 @@ def load_novel_source(project_path: Path, source: str | None, *, episode: int) -
     500，而不是「无法重算」这个本该有的降级态。
     """
     if source is not None and not is_str(source):
-        raise ValueError(f"meta.source 类型非法，须为字符串或 null：{source!r}")
+        raise ValueError(f"meta.source has an invalid type; it must be a string or null: {source!r}")
     if source == "":
-        raise ValueError("源文件路径不能为空")
+        raise ValueError("source file path must not be empty")
     resolved = episode_source_relpath(episode) if source is None else source
     try:
         # The default path is built from the episode number and is not untrusted input, but still goes through
@@ -654,7 +658,7 @@ def load_novel_source(project_path: Path, source: str | None, *, episode: int) -
         # 符号链接，两条分支共用同一道越界校验才不留下只有缺省路径才踩得到的缝。
         source_path = safe_join(project_path, resolved)
     except PathTraversalError as exc:
-        raise ValueError(f"路径超出项目目录: {resolved}") from exc
+        raise ValueError(f"path is outside the project directory: {resolved}") from exc
     if not source_path.is_file():
         # Existing but not a file (e.g. pointing to a directory) is likewise treated as "source file not found":
         # read_text() on a directory raises IsADirectoryError, which falls outside the ValueError this function's
@@ -663,13 +667,14 @@ def load_novel_source(project_path: Path, source: str | None, *, episode: int) -
         # 会抛 IsADirectoryError，落进本函数调用方一律只接的 ValueError 之外，在内容确认的
         # 读时重算里会变成未处理的 500。
         if source is not None:
-            raise ValueError(f"未找到源文件: {source_path}")
+            raise ValueError(f"source file not found: {source_path}")
         raise ValueError(
-            f"未找到本集派生源文: {source_path}；请先运行分集规划工具（plan_episodes）按账本派生该文件，再重试"
+            f"derived source for this episode not found: {source_path}; run the episode planning tool (plan_episodes) "
+            "to derive the file from the ledger, then retry"
         )
     novel_text = source_path.read_text(encoding="utf-8")
     if not novel_text.strip():
-        raise ValueError("小说原文为空")
+        raise ValueError("novel source text is empty")
     return novel_text
 
 
@@ -751,10 +756,12 @@ def _ad_overwrite_error(
     rendered = script_review.overwrite_with_text(overwrite.to_dict(), translate)
     assert rendered is not None
     return ScriptOverwriteRequiredError(
-        f"⚠️ {episode_label} 的整份重做会替换已有的正式脚本，需要用户确认覆盖，本次未调用文本模型、未写入。\n"
+        f"⚠️ A full redo of {episode_label} would replace the existing final script and needs the user to confirm "
+        "the overwrite; the text model was not called and nothing was written.\n"
         f"{rendered['text']}\n"
-        "须先把上面的丢失清单原文转述给用户，得到明确同意后，再以 regenerate=true、"
-        "overwrite_revision=params.script_overwrite.revision 重新调用；正式脚本在此期间又有变化时会按新清单再次拒绝。",
+        "First relay the loss list above to the user verbatim; after explicit consent, call again with "
+        "regenerate=true and overwrite_revision=params.script_overwrite.revision. If the final script changes again "
+        "in the meantime, the call is refused again with a new list.",
         rendered,
     )
 
@@ -768,7 +775,7 @@ def _regenerate_preflight(
     整份重做的准入与覆盖确认：只适用于广告/短片，已有正式脚本时须认可它的丢失清单。"""
     if content_mode != "ad":
         raise TextGenerationError(
-            "❌ regenerate 只适用于广告/短片；其他创作类型要整集重做，请重跑脚本规划并重新完成内容确认"
+            "❌ regenerate only applies to ads/shorts; to redo a whole episode of another project type, rerun script planning and confirm the content again"
         )
     projects = ProjectManager.for_project_dir(project_path)
     project = projects.load_project(project_path.name)
@@ -841,7 +848,7 @@ def prompt_authoring_preflight(
                 episode, entry_ids=entry_ids, rewrite=rewrite, overwrite_revision=overwrite_revision
             )
         except PromptAuthoringTargetError as exc:
-            raise TextGenerationError(f"❌ 编写范围无效: {exc}") from exc
+            raise TextGenerationError(f"❌ Invalid authoring scope: {exc}") from exc
         except PromptOverwriteRequired as exc:
             raise _prompt_overwrite_error(
                 describe_episode_for_agent(projects.load_project(project_path.name), episode), exc
@@ -926,9 +933,9 @@ async def generate_episode_script(
         )
     except AdScriptRejected as exc:
         raise AdScriptRejectedError(
-            f"❌ {await _describe(projects, project_name, episode)} 的 AI 生成脚本不合规，本次未写入正式脚本、未登记资产：\n"
+            f"❌ The AI-generated script for {await _describe(projects, project_name, episode)} is invalid; no final script was written and no assets were registered:\n"
             + "\n".join(f"   - {problem}" for problem in exc.problems)
-            + "\n   可以带上针对这些问题的附加指令重新生成。",
+            + "\n   You can regenerate with extra instructions addressing these problems.",
             exc.problems,
         ) from exc
     except AdScriptOverwriteRequired as exc:
@@ -942,11 +949,11 @@ async def generate_episode_script(
         # it surface as internal_error, which would lead the Agent to retry the same certain-to-fail parameters as is.
         # 点名的条目不在正式剧本内是调用方的错：报「拒绝生成」而不是让它冒成 internal_error，
         # 后者会引导 Agent 原样重试同一份必然失败的参数。
-        raise TextGenerationError(f"❌ 编写范围无效: {exc}") from exc
+        raise TextGenerationError(f"❌ Invalid authoring scope: {exc}") from exc
     except VideoRequestFactsError as exc:
         raise VideoRequestFactsUnavailableError(exc.failure) from exc
     except FileNotFoundError as exc:
-        raise TextGenerationError(f"❌ 文件错误: {exc}") from exc
+        raise TextGenerationError(f"❌ File error: {exc}") from exc
     skipped_note = (
         f"\n   视觉层已齐、补缺未改动的条目: {'、'.join(skipped)}（要覆盖请传 rewrite=true）" if skipped else ""
     )
@@ -1030,15 +1037,18 @@ async def confirm_script_review(
             overwrite = script_review.overwrite_with_text(exc.overwrite, translate)
             loss_text = overwrite["text"] if overwrite is not None else ""
             raise ScriptOverwriteRequiredError(
-                f"⚠️ {await _describe(projects, project_name, episode)} 需要用户确认覆盖，本次未写入。\n{loss_text}\n"
-                "须先把上面的丢失清单原文转述给用户，得到明确同意后，再以 "
-                "overwrite_revision=params.script_overwrite.revision 重新确认；"
-                "正式脚本在此期间又有变化时会按新清单再次拒绝。",
+                f"⚠️ {await _describe(projects, project_name, episode)} needs the user to confirm the overwrite; "
+                f"nothing was written.\n{loss_text}\n"
+                "First relay the loss list above to the user verbatim; after explicit consent, confirm again with "
+                "overwrite_revision=params.script_overwrite.revision. "
+                "If the final script changes again in the meantime, the call is refused again with a new list.",
                 overwrite,
             ) from exc
         if exc.problem is not None:
             raise VideoRequestFactsUnavailableError(exc.problem) from exc
-        raise TextGenerationError(f"❌ 无法完成 script_plan 内容确认（{exc.code}）：{exc.message or exc.code}") from exc
+        raise TextGenerationError(
+            f"❌ Could not confirm the script_plan content ({exc.code}): {exc.message or exc.code}"
+        ) from exc
     return TextGenerationResult(
         f"✅ {await _describe(projects, project_name, episode)} 的 script_plan 已确认并整份转为正式脚本，全部分镜待编写，"
         f"prompt_authoring 视觉生成已放行（status={state['status']}）"
@@ -1072,8 +1082,8 @@ def _unregistered_reference_violations(
         if bad:
             violations.append(
                 DraftViolation(
-                    f"{label} 的 {field} 引用了未登记的资产名: {bad}；"
-                    "资产名必须逐字取自已登记资产，或把它列进 new_assets 并给出处理决定",
+                    f"{label} {field} references unregistered asset names: {bad}; "
+                    "asset names must match registered assets exactly, or be listed in new_assets with a decision",
                     code="unregistered_asset",
                     label=label,
                     item_index=item_index,
@@ -1187,7 +1197,9 @@ async def generate_drama_script_plan(
         content = _parse_normalized_content(result.text, schema)
         raw_scenes = content.get("scenes")
         if not isinstance(raw_scenes, list) or not raw_scenes:
-            raise ValueError("script_plan 规范化内容结构异常：scenes 必须是非空的分镜对象数组")
+            raise ValueError(
+                "script_plan normalized content has an invalid structure: scenes must be a non-empty array of shot objects"
+            )
         for scene in raw_scenes:
             admission = admit_script_unit("scenes", scene, ignore_marker=True)
             if admission.allowed:
@@ -1252,7 +1264,7 @@ async def generate_drama_script_plan(
     except VideoRequestFactsError as exc:
         raise VideoRequestFactsUnavailableError(exc.failure) from exc
     except Exception as exc:
-        raise UnexpectedTextGenerationError(f"generate_script_plan 失败: {exc}") from exc
+        raise UnexpectedTextGenerationError(f"generate_script_plan failed: {exc}") from exc
 
 
 # ---------------------------------------------------------------------------
@@ -1393,7 +1405,7 @@ def _validate_unit_duration_tier(label: str, duration: int, *, has_references: b
         failure = caps.text_problem
         params: dict[str, Any] = failure.parameters()
         raise DraftViolation(
-            f"{label}：{translate(failure.code, **params)}（{failure.summary()}）",
+            f"{label}: {translate(failure.code, **params)} ({failure.summary()})",
             code=failure.code,
             label=label,
             params=params,
@@ -1401,14 +1413,14 @@ def _validate_unit_duration_tier(label: str, duration: int, *, has_references: b
     tiers = caps.tiers_for(has_references=has_references)
     if duration in tiers:
         return
-    state = "带可用参考图" if has_references else "无可用参考图"
+    state = "with usable reference images" if has_references else "without usable reference images"
     remedy = (
-        "；请改取该档位内的时长，或把次要资产融入描述文字、不用 `@` 引用"
+        "; choose a duration from those options, or fold minor assets into the description without `@` references"
         if has_references
-        else "；请改取该档位内的时长"
+        else "; choose a duration from those options"
     )
     raise DraftViolation(
-        f"{label} 时长 {duration}s 不在{state}的 unit 的生效档位 {tiers} 内{remedy}",
+        f"{label} duration {duration}s is not among the available durations {tiers} for a unit {state}{remedy}",
         code="duration_off_tier",
         label=label,
     )
@@ -1900,7 +1912,7 @@ def coverage_source_scope(source: str | None, *, episode: int) -> str:
     范围本身：范围取错了（如拿别集的源文件判这一集的分镜表），分镜一个字没改也判不过。不把
     范围写进消息，Agent 只会反复去改分镜正文，而问题不在那里。
     """
-    return f"源文件 {source or episode_source_relpath(episode)}"
+    return f"source file {source or episode_source_relpath(episode)}"
 
 
 def _covers_source_verbatim(parts: list[str], source: str) -> bool:
@@ -1989,7 +2001,7 @@ def collect_narration_violations(
             label = _narration_segment_label(segment, index)
             violations.append(
                 DraftViolation(
-                    f"{label} 的 segment_id 必须为 E{episode}S## 格式且集号匹配",
+                    f"{label} segment_id must have the format E{episode}S## with a matching episode number",
                     code="invalid_segment_id",
                     label=label,
                     item_index=index,
@@ -2001,7 +2013,7 @@ def collect_narration_violations(
         # Episode-level violation with no single shot owner: the presentation layer puts it in the aggregate area. / 集级违约，无单分镜归属：呈现层落聚合区。
         violations.append(
             DraftViolation(
-                f"segment_id 重复: {dupes}；每个分镜的 id 须全集唯一（prompt_authoring 视觉层按 id 与分镜对齐）",
+                f"duplicate segment_id: {dupes}; every segment id must be unique within the episode (the prompt_authoring visual layer aligns by id)",
                 code="duplicate_segment_id",
             )
         )
@@ -2031,7 +2043,7 @@ def collect_narration_violations(
         if not str(segment.get("novel_text") or "").strip():
             violations.append(
                 DraftViolation(
-                    f"{label} 的 novel_text 为空白；每个分镜必须携带逐字取自原文的旁白正文",
+                    f"{label} has a blank novel_text; every segment must carry narration text copied verbatim from the source",
                     code="blank_novel_text",
                     label=label,
                     item_index=index,
@@ -2053,7 +2065,7 @@ def collect_narration_violations(
         if not isinstance(duration, int) or duration not in allowed:
             violations.append(
                 DraftViolation(
-                    f"{label} 的时长 {duration} 不在模型档位 {sorted(allowed)} 内；请改取该档位内的时长",
+                    f"{label} duration {duration} is not among the model durations {sorted(allowed)}; choose one of those durations",
                     code="duration_off_tier",
                     label=label,
                     item_index=index,
@@ -2093,9 +2105,9 @@ def collect_narration_violations(
     if not _covers_source_verbatim(parts, _normalize_for_coverage(novel_text)):
         violations.append(
             DraftViolation(
-                "各分镜的 novel_text 未按序、逐字、完整覆盖小说原文（存在删减、改写或重排）；"
-                "分镜正文须原样复制原文、不要转述，且按序拼接后即是整篇原文。"
-                f"本次判定依据的源文范围：{source_scope}",
+                "the segments' novel_text does not cover the novel source in order, verbatim and completely (text was cut, rewritten or reordered); "
+                "segment text must copy the source exactly without paraphrasing, and concatenated in order must equal the whole source. "
+                f"Source range checked: {source_scope}",
                 code="novel_text_coverage",
             )
         )
@@ -2182,10 +2194,12 @@ async def generate_reference_script_plan(
             ),
             project_name=project_name,
         )
-        flat = _parse_script_plan_json(result.text, schema, label="script_plan 拆分内容", top_shape="{units}")
+        flat = _parse_script_plan_json(result.text, schema, label="script_plan split content", top_shape="{units}")
         flat_units = flat.get("units")
         if not isinstance(flat_units, list) or not flat_units:
-            raise ValueError("script_plan 拆分内容结构异常：units 必须是非空的 unit 对象数组")
+            raise ValueError(
+                "script_plan split content has an invalid structure: units must be a non-empty array of unit objects"
+            )
         new_assets = dedupe_new_assets(flat[NEW_ASSETS_FIELD])
 
         violations = await asyncio.to_thread(
@@ -2283,7 +2297,7 @@ async def generate_reference_script_plan(
     except VideoRequestFactsError as exc:
         raise VideoRequestFactsUnavailableError(exc.failure) from exc
     except Exception as exc:
-        raise UnexpectedTextGenerationError(f"generate_script_plan 失败: {exc}") from exc
+        raise UnexpectedTextGenerationError(f"generate_script_plan failed: {exc}") from exc
 
 
 async def generate_narration_script_plan(
@@ -2359,12 +2373,14 @@ async def generate_narration_script_plan(
         content = _parse_script_plan_json(
             result.text,
             NarrationScriptPlanDraft,
-            label="script_plan 拆分内容",
+            label="script_plan split content",
             top_shape="{segments}",
         )
         raw_segments = content.get("segments")
         if not isinstance(raw_segments, list) or not raw_segments:
-            raise ValueError("script_plan 拆分内容结构异常：segments 必须是非空的分镜对象数组")
+            raise ValueError(
+                "script_plan split content has an invalid structure: segments must be a non-empty array of shot objects"
+            )
         content = with_new_assets(content, content[NEW_ASSETS_FIELD])
 
         violations = collect_narration_violations(
@@ -2431,4 +2447,4 @@ async def generate_narration_script_plan(
     except VideoRequestFactsError as exc:
         raise VideoRequestFactsUnavailableError(exc.failure) from exc
     except Exception as exc:
-        raise UnexpectedTextGenerationError(f"generate_script_plan 失败: {exc}") from exc
+        raise UnexpectedTextGenerationError(f"generate_script_plan failed: {exc}") from exc

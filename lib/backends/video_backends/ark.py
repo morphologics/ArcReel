@@ -196,7 +196,7 @@ class ArkVideoBackend(ProviderJobIdPersistenceMixin):
         # 本实例请求实际发往的域名，与 create_ark_client 同一套归一化；提交时随 job_id 一并落库。
         self._base_url = ark_base_url(base_url)
         if not model:
-            raise ValueError("ArkVideoBackend 需要指定模型")
+            raise ValueError("ArkVideoBackend requires a model")
         self._model = model
         # The service_tier parameter is only supported by older models such as seedance-1.x; the 2.0 upstream rejects it with
         # 400 under r2v, so it must not be sent. 2.5 drops it too by the same-generation rule; that rule is inferred from 2.0's
@@ -741,7 +741,7 @@ class ArkVideoBackend(ProviderJobIdPersistenceMixin):
                 poll_fn=lambda: asyncio.to_thread(client.content_generation.tasks.get, task_id=task_id),
                 is_done=lambda r: r.status == "succeeded",
                 is_failed=lambda r: (
-                    f"Ark 视频生成失败(status={r.status}): {getattr(r, 'error', None) or 'Unknown error'}"
+                    f"Ark video generation failed (status={r.status}): {getattr(r, 'error', None) or 'Unknown error'}"
                     if r.status in ("failed", "expired")
                     else None
                 ),

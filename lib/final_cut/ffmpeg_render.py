@@ -357,12 +357,12 @@ async def _run(
             cwd=cwd,
         )
     except SubprocessDeadlineExceeded:
-        raise FinalCutError("final_cut_render_failed", f"ffmpeg 渲染超时：{output.name}") from None
+        raise FinalCutError("final_cut_render_failed", f"ffmpeg render timed out: {output.name}") from None
     if result.returncode != 0:
         stderr = result.stderr.decode(errors="replace").strip()[-_STDERR_TAIL:]
         raise FinalCutError(
             "final_cut_render_failed",
-            f"ffmpeg 渲染失败（退出码 {result.returncode}）：{stderr}",
+            f"ffmpeg render failed (exit code {result.returncode}): {stderr}",
             returncode=result.returncode,
         )
 
@@ -457,13 +457,13 @@ async def accept_final_cut(path: Path, plan: RenderPlan, *, spawn: Spawner | Non
     try:
         probe = await probe_media(path, spawn=spawn)
     except MediaProbeError as exc:
-        raise FinalCutError("final_cut_acceptance_failed", f"成片无法探测：{exc}") from exc
+        raise FinalCutError("final_cut_acceptance_failed", f"Final cut cannot be probed: {exc}") from exc
     video = probe.first_stream("video")
     audio = probe.first_stream("audio")
     if video is None or video.duration_seconds is None or audio is None or audio.duration_seconds is None:
         raise FinalCutError(
             "final_cut_acceptance_failed",
-            "成片缺少视频流或音频流",
+            "Final cut is missing its video or audio stream",
             has_video=video is not None,
             has_audio=audio is not None,
         )
@@ -478,8 +478,8 @@ async def accept_final_cut(path: Path, plan: RenderPlan, *, spawn: Spawner | Non
     if worst > ACCEPTANCE_TOLERANCE_SECONDS:
         raise FinalCutError(
             "final_cut_acceptance_failed",
-            f"成片时长偏差超出容差：应为 {acceptance.expected_duration} 秒，"
-            f"视频 {acceptance.video_duration} 秒、音频 {acceptance.audio_duration} 秒",
+            f"Final cut duration is off beyond tolerance: expected {acceptance.expected_duration} s,"
+            f" video {acceptance.video_duration} s, audio {acceptance.audio_duration} s",
             expected_duration=acceptance.expected_duration,
             video_duration=acceptance.video_duration,
             audio_duration=acceptance.audio_duration,

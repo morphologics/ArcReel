@@ -1288,7 +1288,7 @@ class TestDeclarativeVideoBackend:
         logged = "\n".join(
             record.getMessage() for record in caplog.records if record.name == "lib.custom_provider.declarative_backend"
         )
-        assert "声明式视频请求" in logged
+        assert "declarative video request" in logged
         assert "sk-super-secret" not in logged
 
     async def test_request_log_summarizes_raw_base64_assets(self, tmp_path: Path, caplog):
@@ -1325,7 +1325,7 @@ class TestDeclarativeVideoBackend:
         logged = "\n".join(
             record.getMessage() for record in caplog.records if record.name == "lib.custom_provider.declarative_backend"
         )
-        assert "声明式视频请求" in logged
+        assert "declarative video request" in logged
         assert encoded_prefix not in logged
 
     async def test_request_log_summarizes_assets_shorter_than_the_shape_threshold(self, tmp_path: Path, caplog):
@@ -1434,7 +1434,7 @@ class TestDeclarativeVideoBackend:
         logged = "\n".join(
             record.getMessage() for record in caplog.records if record.name == "lib.custom_provider.declarative_backend"
         )
-        assert "声明式视频请求" in logged
+        assert "declarative video request" in logged
         assert "sk-super-secret" not in logged
 
 

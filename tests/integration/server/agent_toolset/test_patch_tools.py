@@ -1903,7 +1903,7 @@ class TestRenameAssetTool:
             RENAME_ASSET, rename_ctx, {"table": "characters", "old_name": "角色A", "new_name": "主角甲"}
         )
         assert out.problem is not None
-        assert "可能上次重命名已成功" in _said(out)
+        assert "the previous rename may have succeeded" in _said(out)
 
     async def test_conflict_rejected(self, rename_ctx: ToolHarness) -> None:
         rename_ctx.pm.upsert_assets("demo", "characters", {"主角甲": {"description": "另一个"}})
@@ -1911,7 +1911,7 @@ class TestRenameAssetTool:
             RENAME_ASSET, rename_ctx, {"table": "characters", "old_name": "角色A", "new_name": "主角甲"}
         )
         assert out.problem is not None
-        assert "冲突" in _said(out)
+        assert "conflicts" in _said(out)
         assert "角色A" in rename_ctx.pm.load_project("demo")["characters"]
 
 

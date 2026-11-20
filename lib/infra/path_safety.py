@@ -115,7 +115,7 @@ def safe_join(
     try:
         candidate_real = os.path.realpath(os.path.join(base_real, *parts))
     except (OSError, ValueError) as exc:
-        raise PathTraversalError(f"路径解析失败：{parts!r}") from exc
+        raise PathTraversalError(f"Path resolution failed: {parts!r}") from exc
 
     # Branch on candidate_real == base_real separately: when base is the file system root / a drive root,
     # base_prefix == base_real, and an equal candidate path would also pass the startswith branch below;
@@ -125,9 +125,9 @@ def safe_join(
     # 若把 allow_base 判断合并进该分支会让根目录下的 allow_base=False 被绕过。
     if candidate_real == base_real:
         if not allow_base:
-            raise PathTraversalError(f"路径越界：{candidate_real!r} 不在 {base_real!r} 内")
+            raise PathTraversalError(f"Path out of bounds: {candidate_real!r} is not inside {base_real!r}")
     elif not candidate_real.startswith(base_prefix):
-        raise PathTraversalError(f"路径越界：{candidate_real!r} 不在 {base_real!r} 内")
+        raise PathTraversalError(f"Path out of bounds: {candidate_real!r} is not inside {base_real!r}")
 
     # is_file/exists check candidate_real directly (the string carrying the barrier) rather than wrapping it in
     # Path first: a Path() wrapper would also break the recognition above.

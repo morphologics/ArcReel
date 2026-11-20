@@ -180,7 +180,7 @@ class TestResolveSchema:
             "properties": {"root": {"$ref": "#/$defs/Node"}},
         }
 
-        with pytest.raises(ValueError, match="循环引用"):
+        with pytest.raises(ValueError, match="Circular reference"):
             resolve_schema(schema)
 
     def test_preserves_extra_keys_on_ref(self):
@@ -553,7 +553,7 @@ class TestCheckTruncation:
         assert exc.output_tokens == 8192
         # Names the current model + suggests switching models. / 点名当前模型 + 换模型建议
         assert "ark/doubao" in str(exc)
-        assert "输出能力更高的文本模型" in str(exc)
+        assert "larger output capacity" in str(exc)
         assert "output_tokens=8192" in str(exc)
 
     def test_structured_truncation_without_output_tokens_omits_placeholder(self):

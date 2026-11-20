@@ -456,7 +456,7 @@ class TestArkImageBackendGenerate:
             output = tmp_path / "out.png"
             request = ImageGenerationRequest(prompt="a cat", output_path=output)
 
-            with pytest.raises(RuntimeError, match="data 为空"):
+            with pytest.raises(RuntimeError, match="empty data"):
                 await backend.generate(request)
 
     async def test_t2i_url_fallback(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path):

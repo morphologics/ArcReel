@@ -6,7 +6,7 @@
     "name": "Generic Image Submit + Poll",
     "author": "ArcReel",
     "version": "1.0.0",
-    "description": "OpenAI 风格路径、异步任务语义的图片协议骨架：提交拿 task_id，按 task_id 轮询状态，成功后取图片地址。参考图可选，同一份定义同时用于文生图与图生图。字段名与取值路径按供应商文档逐条替换。"
+    "description": "Skeleton for an image protocol with OpenAI-style paths and async task semantics: submit to get a task_id, poll status by task_id, then read the image URL on success. Reference images are optional, so the same definition serves both text-to-image and image-to-image. Replace each field name and value path according to the provider's documentation."
   },
   "auth": {
     "headers": {

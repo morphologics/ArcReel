@@ -880,7 +880,7 @@ class TestStructuredModeChainSync:
             self._call()
 
         assert self._modes(mock_gen) == [Mode.TOOLS]
-        assert "模型输出仍不合规" in str(exc_info.value)
+        assert "model output still invalid" in str(exc_info.value)
         assert "ResponseParsingError" in str(exc_info.value)
 
     def test_tools_validation_exhaustion_is_terminal(self):
@@ -911,12 +911,12 @@ class TestStructuredModeChainSync:
                 "lib.backends.text_backends.instructor_support.generate_structured_via_instructor",
                 side_effect=[_tools_rejected_error(), _retry_exhausted(_validation_error())],
             ) as mock_gen,
-            pytest.raises(StructuredOutputExhaustedError, match="结构化输出能力不足") as exc_info,
+            pytest.raises(StructuredOutputExhaustedError, match="could not produce valid structured output") as exc_info,
         ):
             self._call()
 
         assert self._modes(mock_gen) == [Mode.TOOLS, Mode.MD_JSON]
-        assert "最后一次 ValidationError" in exc_info.value.reason
+        assert "last: ValidationError" in exc_info.value.reason
 
     def test_transient_error_propagates_unchanged(self):
         """Transient errors neither drop a tier nor converge to the final exception; they bubble up as is for the caller's retry decorator to judge.
@@ -1098,7 +1098,7 @@ class TestStructuredModeChainSync:
                 "lib.backends.text_backends.instructor_support.generate_structured_via_instructor",
                 side_effect=[_tools_rejected_error(), _tools_rejected_error()],
             ) as mock_gen,
-            pytest.raises(StructuredOutputExhaustedError, match="被上游拒收"),
+            pytest.raises(StructuredOutputExhaustedError, match="upstream rejected"),
         ):
             self._call()
 

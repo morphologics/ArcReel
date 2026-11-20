@@ -33,6 +33,7 @@ from lib.artifacts.artifact_activation import (
 )
 from lib.artifacts.artifact_manifest import ArtifactBasisDescriptor, ArtifactKey
 from lib.artifacts.artifact_provenance import (
+    DEFAULT_SOURCE_LANGUAGE,
     build_ad_episode_script_basis,
     project_ad_episode_script_inputs,
 )
@@ -290,7 +291,7 @@ class AdScriptRejected(ValueError):
 
     def __init__(self, problems: Sequence[str]) -> None:
         self.problems = tuple(problems)
-        super().__init__("；".join(self.problems))
+        super().__init__("; ".join(self.problems))
 
 
 class AdScriptOverwriteRequired(ValueError):
@@ -300,7 +301,7 @@ class AdScriptOverwriteRequired(ValueError):
 
     def __init__(self, overwrite: FormalScriptOverwrite) -> None:
         self.overwrite = overwrite
-        super().__init__("整份重做会替换已有的正式脚本，需要用户确认覆盖")
+        super().__init__("a full redo would replace the existing final script; the user must confirm the overwrite")
 
 
 @dataclass(frozen=True, slots=True)
@@ -547,13 +548,15 @@ class ScriptGenerator:
         kind = resolve_declared_kind(self.content_mode, self.generation_mode)
         raw_items, id_field, _kind = resolve_kind_items(script, kind=kind)
         if not isinstance(raw_items, list):
-            raise ValueError(f"集（id={episode}）正式脚本的 {kind} 不是条目数组，无法编写提示词")
+            raise ValueError(
+                f"episode (id={episode}): {kind} in the final script is not an entry array; cannot author prompts"
+            )
         items = [item for item in cast(list[Any], raw_items) if isinstance(item, dict) and id_field in item]
         requested = tuple(dict.fromkeys(entry_ids or ()))
         known = {str(item[id_field]) for item in items}
         unknown = [entry_id for entry_id in requested if entry_id not in known]
         if unknown:
-            raise PromptAuthoringTargetError(f"entry_ids 不在集（id={episode}）正式脚本内: {unknown}")
+            raise PromptAuthoringTargetError(f"entry_ids not in the final script of episode (id={episode}): {unknown}")
         selection = select_prompt_authoring(items, kind=kind, id_field=id_field, entry_ids=requested, rewrite=rewrite)
         selected = {entry.entry_id for entry in selection.entries}
         entries = tuple(item for item in items if str(item[id_field]) in selected)
@@ -640,7 +643,7 @@ class ScriptGenerator:
             正式剧本 JSON 文件路径
         """
         if self.generator is None:
-            raise RuntimeError("TextGenerator 未初始化，请使用 ScriptGenerator.create() 工厂方法")
+            raise RuntimeError("TextGenerator is not initialized; use the ScriptGenerator.create() factory method")
 
         # Honor the docstring contract "only decides the file name, accepts no directory": the write choke point _safe_subpath
         # blocks absolute paths and path traversal, but not subdirectories (the realpath of `subdir/x.json` is still inside
@@ -659,7 +662,10 @@ class ScriptGenerator:
         if output_filename is not None and (
             not output_filename or Path(output_filename).name != output_filename or "\\" in output_filename
         ):
-            raise ValueError(f"output_filename 只接受纯文件名，不允许目录或路径分隔符: {output_filename!r}")
+            raise ValueError(
+                "output_filename accepts a bare file name only; directories and path separators are not allowed: "
+                f"{output_filename!r}"
+            )
 
         self._script_plan_fingerprint = None
         self._artifact_basis = None
@@ -672,9 +678,12 @@ class ScriptGenerator:
         filename, formal_baseline = await asyncio.to_thread(self._formal_script_baseline, episode, output_filename)
         if regenerate:
             if self.content_mode != "ad":
-                raise PromptAuthoringTargetError("整份重做只适用于广告/短片；其他创作类型请重跑脚本规划并重新确认")
+                raise PromptAuthoringTargetError(
+                    "a full redo applies to ad/short projects only; for other project types re-run script planning "
+                    "and confirm again"
+                )
             if entry_ids or rewrite:
-                raise PromptAuthoringTargetError("整份重做不能与 entry_ids / rewrite 同时使用")
+                raise PromptAuthoringTargetError("a full redo cannot be combined with entry_ids / rewrite")
             overwrite = await asyncio.to_thread(formal_script_overwrite, self.project_path, self.project_json, episode)
             if overwrite is not None and fingerprint_of_revision(overwrite_revision) != overwrite.fingerprint:
                 raise AdScriptOverwriteRequired(overwrite)
@@ -693,10 +702,13 @@ class ScriptGenerator:
         if targets is None:
             if self.content_mode != "ad":
                 raise PromptAuthoringTargetError(
-                    f"集（id={episode}）尚无正式脚本：请先完成脚本规划并在 Web 端完成内容确认，确认即生成正式脚本"
+                    f"episode (id={episode}) has no final script yet: finish script planning and confirm the content "
+                    "in the web app; confirming creates the final script"
                 )
             if entry_ids:
-                raise PromptAuthoringTargetError(f"集（id={episode}）尚无正式脚本，entry_ids 无从对应")
+                raise PromptAuthoringTargetError(
+                    f"episode (id={episode}) has no final script yet; entry_ids cannot be matched"
+                )
             # Both ad generation modes generate in one click without script_plan; reference-to-video directly produces self-contained video_units.
             # ad 两种生成模式都一键生成、不走 script_plan；参考生视频直接产出自包含 video_units。
             prompt, schema = await self._compose_ad(episode, gen_mode, instructions)
@@ -789,7 +801,7 @@ class ScriptGenerator:
             episode=episode,
             # Output language follows the project source_language, the same language as the content fields passed through from the final script (same as drama)
             # 输出语言取项目 source_language，与正式剧本透传的内容字段同一语言（同 drama）
-            target_language=self.project_json.get("source_language") or "中文",
+            target_language=self.project_json.get("source_language") or DEFAULT_SOURCE_LANGUAGE,
             instructions=instructions,
         )
 
@@ -805,11 +817,11 @@ class ScriptGenerator:
         try:
             data = json.loads(text)
         except json.JSONDecodeError as e:
-            raise ValueError(f"提示词编写视觉层 JSON 解析失败: {e}") from e
+            raise ValueError(f"prompt authoring visual layer: JSON parse failed: {e}") from e
         try:
             validated = _VISUAL_RESPONSE_SCHEMA[targets.kind].model_validate(data)
         except ValidationError as e:
-            raise ValueError(f"提示词编写视觉层结构校验失败: {e}") from e
+            raise ValueError(f"prompt authoring visual layer: structure validation failed: {e}") from e
         return cast(list[dict], validated.model_dump()[targets.kind])
 
     @staticmethod
@@ -828,14 +840,16 @@ class ScriptGenerator:
         for item in visual_items:
             entry_id = str(item[id_field])
             if entry_id in visual_by_id:
-                raise ValueError(f"集（id={episode}）视觉层 {id_field} 重复: {entry_id}")
+                raise ValueError(f"episode (id={episode}): duplicate {id_field} in visual layer: {entry_id}")
             visual_by_id[entry_id] = item
         missing = [entry_id for entry_id in targets.ids if entry_id not in visual_by_id]
         if missing:
-            raise ValueError(f"集（id={episode}）视觉层缺少本次编写的条目: {missing}")
+            raise ValueError(f"episode (id={episode}): visual layer is missing entries authored in this run: {missing}")
         extra = sorted(set(visual_by_id) - set(targets.ids))
         if extra:
-            raise ValueError(f"集（id={episode}）视觉层含本次编写范围之外的 {id_field}: {extra}")
+            raise ValueError(
+                f"episode (id={episode}): visual layer contains {id_field} outside this run's scope: {extra}"
+            )
         return [
             {
                 **entry,
@@ -907,7 +921,9 @@ class ScriptGenerator:
         """
         gen_mode = self.generation_mode
         if self.content_mode == "ad":
-            raise ValueError("广告/短片项目没有脚本规划步骤，不适用内容确认转换")
+            raise ValueError(
+                "ad/short projects have no script planning step; content confirmation conversion does not apply"
+            )
         if gen_mode == "reference_video":
             facts = await self._fetch_video_request_facts()
             units = await run_sync_transaction(
@@ -992,7 +1008,7 @@ class ScriptGenerator:
         previous_ids = tuple(entry.entry_id for entry in previous.entries) if previous is not None else ()
         plan_path = script_plan_path(self.project_path, self.project_json, episode)
         if plan_path is None:
-            raise FileNotFoundError(f"集（id={episode}）不适用脚本规划")
+            raise FileNotFoundError(f"script planning does not apply to episode (id={episode})")
         claim = self._script_plan_input_claim
 
         def _commit() -> None:
@@ -1075,8 +1091,9 @@ class ScriptGenerator:
         bad = sorted(seen - allowed)
         if bad:
             raise ValueError(
-                f"script_plan 已定分镜时长非法（不在 {sorted(allowed)} 内）: {bad}；"
-                "当前分辨率与型号下这些时长不可用，请调用 generate_script_plan 按当前能力规范化"
+                f"script_plan has invalid fixed shot durations (not in {sorted(allowed)}): {bad}; "
+                "these durations are unavailable for the current resolution and model; call generate_script_plan to "
+                "normalize to the current capabilities"
             )
 
     def _build_drama_prompt_authoring_prompt(
@@ -1100,7 +1117,7 @@ class ScriptGenerator:
             aspect_ratio=self._resolve_aspect_ratio(),
             # Output language follows the project source_language, same as script_plan (normalize), so non-Chinese projects don't get script_plan content and prompt_authoring visuals in different languages
             # 输出语言与 script_plan（normalize）同取项目 source_language，避免非中文项目 script_plan 内容与 prompt_authoring 视觉割裂
-            target_language=self.project_json.get("source_language") or "中文",
+            target_language=self.project_json.get("source_language") or DEFAULT_SOURCE_LANGUAGE,
             characters=characters,
             scenes=scenes,
             props=props,
@@ -1157,7 +1174,7 @@ class ScriptGenerator:
         # 空的正式脚本对手写合法，但 AI 整份生成必须产出条目：「非空」只在这里验收。
         items, id_field, _kind = resolve_kind_items(script_data)
         if not isinstance(items, list) or not items:
-            raise AdScriptRejected([f"第 {episode} 集的 AI 生成脚本没有任何条目"])
+            raise AdScriptRejected([f"the AI-generated script for episode {episode} has no entries"])
         registered_project = self._settle_ad_new_assets(script_data, new_assets, id_field)
         # Units with non-compliant speaker attribution are carried by needs_replan and written as usual: the flag is judged on entries after reference rewriting.
         # 发声归属不合规的单元由 needs_replan 承接、照常写入：标记按改写引用后的条目判定。
@@ -1213,13 +1230,13 @@ class ScriptGenerator:
         """
         items, _id_field, kind = resolve_kind_items(script_data)
         if not all(isinstance(item, dict) for item in items):
-            raise AdScriptRejected([f"{kind} 里有不是对象的条目"])
+            raise AdScriptRejected([f"{kind} contains entries that are not objects"])
         entries = new_assets.rewrite_entries(items)
         script_data[kind] = entries
         registered_project = copy.deepcopy(self.project_json)
         new_assets.apply_to_project(registered_project)
         problems = [
-            f"{reference.item_id} 引用了未登记、也不在本次新增资产里的名字：{'、'.join(reference.names)}"
+            f"{reference.item_id} references names that are neither registered nor among this run's new assets: {', '.join(reference.names)}"
             for reference in unregistered_references(registered_project, entries, id_field=id_field)
         ]
         products = registered_project.get("products")
@@ -1234,7 +1251,7 @@ class ScriptGenerator:
                 if isinstance(name, str) and asset_name_comparison_key(name) not in known_products
             ]
             if unknown:
-                problems.append(f"{entry.get(id_field)} 引用了未登记的商品：{'、'.join(unknown)}")
+                problems.append(f"{entry.get(id_field)} references unregistered products: {', '.join(unknown)}")
         if problems:
             raise AdScriptRejected(problems)
         return registered_project
@@ -1349,10 +1366,13 @@ class ScriptGenerator:
         if targets is None:
             if self.content_mode != "ad":
                 raise PromptAuthoringTargetError(
-                    f"集（id={episode}）尚无正式脚本：请先完成脚本规划并在 Web 端完成内容确认，确认即生成正式脚本"
+                    f"episode (id={episode}) has no final script yet: finish script planning and confirm the content "
+                    "in the web app; confirming creates the final script"
                 )
             if entry_ids:
-                raise PromptAuthoringTargetError(f"集（id={episode}）尚无正式脚本，entry_ids 无从对应")
+                raise PromptAuthoringTargetError(
+                    f"episode (id={episode}) has no final script yet; entry_ids cannot be matched"
+                )
             prompt, _schema = await self._compose_ad(episode, self.generation_mode, instructions)
             return prompt
         if not targets.entries:
@@ -1509,7 +1529,7 @@ class ScriptGenerator:
         """Load project.json / 加载 project.json"""
         path = self.project_path / "project.json"
         if not path.exists():
-            raise FileNotFoundError(f"未找到 project.json: {path}")
+            raise FileNotFoundError(f"project.json not found: {path}")
 
         with open(path, encoding="utf-8") as f:
             return json.load(f)
@@ -1567,7 +1587,8 @@ class ScriptGenerator:
 
         if not script_plan_path.exists():
             raise ScriptPlanNotFoundError(
-                f"未找到脚本规划中间文件: {script_plan_path}；content_mode={self.content_mode} 期望该文件，请先完成本集脚本规划"
+                f"script planning intermediate file not found: {script_plan_path}; content_mode={self.content_mode} "
+                f"expects this file; finish script planning for this episode first"
             )
 
         raw = script_plan_path.read_bytes()
@@ -1608,19 +1629,20 @@ class ScriptGenerator:
         quarantine = quarantine_path(self.project_path, episode, QUARANTINE_KIND_SCRIPT_PLAN)
         if quarantine.exists():
             raise ValueError(
-                f"集（id={episode}）有待修复草稿（{quarantine}），脚本规划转换已中止；"
-                f"请先修改该草稿并经 {PROMOTE_TOOL_NAME} 晋升为正式 script_plan"
+                f"episode (id={episode}) has a draft awaiting repair ({quarantine}); "
+                "script planning conversion aborted; "
+                f"fix that draft first and promote it to the final script_plan via {PROMOTE_TOOL_NAME}"
             )
         if not script_plan_json.exists():
             legacy_md = drafts_path / REFERENCE_VIDEO_SCRIPT_PLAN_LEGACY_FILENAME
             if legacy_md.exists():
                 raise ScriptPlanNotFoundError(
-                    f"仅找到结构化前的旧拆分表 {legacy_md}，未找到 {script_plan_json}；"
-                    f"请调用 generate_script_plan 产出结构化 {REFERENCE_VIDEO_SCRIPT_PLAN_FILENAME}"
+                    f"only the legacy pre-structured split table {legacy_md} was found, not {script_plan_json}; "
+                    f"call generate_script_plan to produce a structured {REFERENCE_VIDEO_SCRIPT_PLAN_FILENAME}"
                 )
             raise ScriptPlanNotFoundError(
-                f"未找到脚本规划中间文件: {script_plan_json}；generation_mode=reference_video 期望该文件，"
-                "请先完成 video_unit 拆分"
+                f"script planning intermediate file not found: {script_plan_json}; generation_mode=reference_video "
+                "expects this file; finish the video_unit split first"
             )
 
         pm = ProjectManager.for_project_dir(self.project_path)
@@ -1633,7 +1655,7 @@ class ScriptGenerator:
             try:
                 raw = json.loads(script_plan_json.read_text(encoding="utf-8"))
             except json.JSONDecodeError as e:
-                raise ValueError(f"script_plan_reference_units.json 解析失败: {e}") from e
+                raise ValueError(f"script_plan_reference_units.json parse failed: {e}") from e
 
             # Per-shot durations of legacy drafts are absorbed once to unit level and written back (a second load doesn't trigger it).
             # When i2v facts are available, absorb per structural options; when i2v is unknown, don't borrow r2v to rewrite seconds of image-less units.
@@ -1659,16 +1681,16 @@ class ScriptGenerator:
         try:
             draft = ReferenceScriptPlanDraft.model_validate(raw)
         except ValidationError as e:
-            raise ValueError(f"script_plan_reference_units.json 结构校验失败: {e}") from e
+            raise ValueError(f"script_plan_reference_units.json structure validation failed: {e}") from e
 
         units = [u.model_dump() for u in draft.units]
         if not units:
-            raise ValueError("script_plan_reference_units.json units 为空")
+            raise ValueError("script_plan_reference_units.json units is empty")
 
         ids = [u["unit_id"] for u in units]
         dupes = sorted(uid for uid, count in Counter(ids).items() if count > 1)
         if dupes:
-            raise ValueError(f"script_plan_reference_units.json unit_id 重复: {dupes}")
+            raise ValueError(f"script_plan_reference_units.json duplicate unit_id: {dupes}")
 
         # Before persisting, _add_metadata rewrites the E\d+ prefix to the current episode: original ids differ but may collide after
         # rewriting (E1U01 and E2U01 both become E2U01 at episode=2). Fail loud early, so duplicate ids never persist silently.
@@ -1680,7 +1702,8 @@ class ScriptGenerator:
         rewritten_dupes = sorted(uid for uid, count in Counter(rewritten_ids).items() if count > 1)
         if rewritten_dupes:
             raise ValueError(
-                f"script_plan_reference_units.json unit_id 改写到 episode={episode} 后重复: {rewritten_dupes}"
+                f"script_plan_reference_units.json unit_id duplicates after rewriting to episode={episode}: "
+                f"{rewritten_dupes}"
             )
 
         return units
@@ -1714,8 +1737,9 @@ class ScriptGenerator:
         quarantine = quarantine_path(self.project_path, episode, QUARANTINE_KIND_NARRATION_SCRIPT_PLAN)
         if quarantine.exists():
             raise ValueError(
-                f"集（id={episode}） script_plan 有草稿待处置（{quarantine}），脚本规划转换已中止；"
-                f"请先修改该草稿并经 {PROMOTE_TOOL_NAME} 晋升为正式 script_plan"
+                f"episode (id={episode}) script_plan has a pending draft ({quarantine}); "
+                "script planning conversion aborted; "
+                f"fix that draft first and promote it to the final script_plan via {PROMOTE_TOOL_NAME}"
             )
         drafts_path = episode_drafts_dir(self.project_path, episode)
         narration_json = SCRIPT_PLAN_FILENAMES["narration"]
@@ -1724,18 +1748,19 @@ class ScriptGenerator:
             legacy_md = drafts_path / SCRIPT_PLAN_LEGACY_FILENAMES["narration"][0]
             if legacy_md.exists():
                 raise ScriptPlanNotFoundError(
-                    f"仅找到结构化前的旧拆分表 {legacy_md}，未找到 {script_plan_json}；"
-                    f"请调用 generate_script_plan 产出结构化 {narration_json}"
+                    f"only the legacy pre-structured split table {legacy_md} was found, not {script_plan_json}; "
+                    f"call generate_script_plan to produce a structured {narration_json}"
                 )
             raise ScriptPlanNotFoundError(
-                f"未找到脚本规划中间文件: {script_plan_json}；content_mode=narration 期望该文件，请先完成分镜拆分"
+                f"script planning intermediate file not found: {script_plan_json}; "
+                "content_mode=narration expects this file; finish the shot split first"
             )
 
         raw_bytes = script_plan_json.read_bytes()
         try:
             raw = json.loads(raw_bytes.decode("utf-8"))
         except json.JSONDecodeError as e:
-            raise ValueError(f"script_plan_segments.json 解析失败: {e}") from e
+            raise ValueError(f"script_plan_segments.json parse failed: {e}") from e
         self._script_plan_fingerprint = content_fingerprint_of_data(raw)
         self._script_plan_new_assets = raw.get(NEW_ASSETS_FIELD) if isinstance(raw, dict) else None
         self._freeze_script_plan_input_claim(
@@ -1747,16 +1772,16 @@ class ScriptGenerator:
         try:
             draft = NarrationScriptPlanDraft.model_validate(raw)
         except ValidationError as e:
-            raise ValueError(f"script_plan_segments.json 结构校验失败: {e}") from e
+            raise ValueError(f"script_plan_segments.json structure validation failed: {e}") from e
 
         segments = [s.model_dump() for s in draft.segments]
         if not segments:
-            raise ValueError("script_plan_segments.json segments 为空")
+            raise ValueError("script_plan_segments.json segments is empty")
 
         ids = [s["segment_id"] for s in segments]
         dupes = sorted(sid for sid, count in Counter(ids).items() if count > 1)
         if dupes:
-            raise ValueError(f"script_plan_segments.json segment_id 重复: {dupes}")
+            raise ValueError(f"script_plan_segments.json duplicate segment_id: {dupes}")
 
         # Before persisting, _add_metadata rewrites the E\d+ prefix to the current episode: original ids differ but may collide after
         # rewriting (E1S02_1 and E2S02_1 both become E2S02_1 at episode=2). Fail loud early, so duplicate ids never persist silently.
@@ -1765,12 +1790,15 @@ class ScriptGenerator:
         rewritten_ids = [str(rewrite_episode_prefix(sid, episode)) for sid in ids]
         rewritten_dupes = sorted(sid for sid, count in Counter(rewritten_ids).items() if count > 1)
         if rewritten_dupes:
-            raise ValueError(f"script_plan_segments.json segment_id 改写到 episode={episode} 后重复: {rewritten_dupes}")
+            raise ValueError(
+                f"script_plan_segments.json segment_id duplicates after rewriting to episode={episode}: "
+                f"{rewritten_dupes}"
+            )
 
         allowed = {int(d) for d in supported_durations}
         bad = sorted({s["duration_seconds"] for s in segments if s["duration_seconds"] not in allowed})
         if bad:
-            raise ValueError(f"script_plan_segments.json duration_seconds 非法（不在 {sorted(allowed)} 内）: {bad}")
+            raise ValueError(f"script_plan_segments.json invalid duration_seconds (not in {sorted(allowed)}): {bad}")
 
         return segments
 
@@ -1803,28 +1831,41 @@ class ScriptGenerator:
         quarantine = quarantine_path(self.project_path, episode, QUARANTINE_KIND_DRAMA_SCRIPT_PLAN)
         if quarantine.exists():
             raise ValueError(
-                f"集（id={episode}）有待修复草稿（{quarantine}），脚本规划转换已中止；"
-                f"请先修改该草稿并经 {PROMOTE_TOOL_NAME} 晋升为正式 script_plan"
+                f"episode (id={episode}) has a draft awaiting repair ({quarantine}); "
+                "script planning conversion aborted; "
+                f"fix that draft first and promote it to the final script_plan via {PROMOTE_TOOL_NAME}"
             )
         raw = self._load_script_plan(episode)
         try:
             data = json.loads(raw)
         except json.JSONDecodeError as e:
-            raise ValueError(f"脚本规划内容文件不是合法 JSON（drama script_plan 应为结构化内容）: {e}") from e
+            raise ValueError(
+                f"script planning content file is not valid JSON (a drama script_plan must be structured content): {e}"
+            ) from e
         if not isinstance(data, dict):
-            raise ValueError("脚本规划内容文件结构异常：顶层应为对象 {title, scenes}")
+            raise ValueError(
+                "script planning content file has an invalid structure: top level must be an object {title, scenes}"
+            )
         self._script_plan_fingerprint = content_fingerprint_of_data(data)
         self._script_plan_new_assets = data.get(NEW_ASSETS_FIELD)
         scenes = data.get("scenes")
         if not isinstance(scenes, list) or not scenes:
-            raise ValueError("脚本规划内容文件结构异常：scenes 必须是非空的分镜对象数组")
+            raise ValueError(
+                "script planning content file has an invalid structure: scenes must be a non-empty array of shot "
+                "objects"
+            )
         scene_ids: list[str] = []
         for idx, scene in enumerate(scenes):
             if not isinstance(scene, dict):
-                raise ValueError(f"脚本规划内容文件结构异常：scenes[{idx}] 必须是分镜对象")
+                raise ValueError(
+                    f"script planning content file has an invalid structure: scenes[{idx}] must be a shot object"
+                )
             scene_id = scene.get("scene_id")
             if not isinstance(scene_id, str) or not scene_id:
-                raise ValueError(f"脚本规划内容文件结构异常：scenes[{idx}].scene_id 必须是非空字符串")
+                raise ValueError(
+                    f"script planning content file has an invalid structure: scenes[{idx}].scene_id must be a "
+                    "non-empty string"
+                )
             scene_ids.append(scene_id)
         # Before persisting, _add_metadata rewrites the E\d+ prefix to the current episode: original ids differ but may collide after
         # rewriting (E1S02_1 and E2S02_1 both become E2S02_1 at episode=2). Fail loud early, so duplicate ids never persist silently
@@ -1835,7 +1876,10 @@ class ScriptGenerator:
         rewritten_ids = [str(rewrite_episode_prefix(sid, episode)) for sid in scene_ids]
         rewritten_dupes = sorted(sid for sid, count in Counter(rewritten_ids).items() if count > 1)
         if rewritten_dupes:
-            raise ValueError(f"脚本规划内容文件 scene_id 改写到 episode={episode} 后重复: {rewritten_dupes}")
+            raise ValueError(
+                f"script planning content file: scene_id duplicates after rewriting to episode={episode}: "
+                f"{rewritten_dupes}"
+            )
         return data
 
     def _assert_reference_script_plan_durations(
@@ -1862,9 +1906,10 @@ class ScriptGenerator:
             if off_tiers is not None:
                 tiers = sorted(set(off_tiers))
                 raise UnitDurationOffTier(
-                    f"视频单元 {position} 已确认时长 {duration}s 不在当前生效档位 {tiers} 内；"
-                    "通常是模型或分辨率配置变化让档位收窄导致，请调整配置回原档位，"
-                    "或在脚本规划里把该单元时长改到档位内（也可重新拆分该集 script_plan）后重新完成内容确认",
+                    f"video unit {position}: confirmed duration {duration}s is not in the active duration tiers "
+                    f"{tiers}; usually a model or resolution change narrowed the tiers. Restore the configuration, "
+                    "or change this unit's duration in script planning to an allowed tier (or re-split the "
+                    "episode's script_plan) and confirm the content again",
                     unit_id=str(unit["unit_id"]),
                     duration_seconds=duration,
                     tiers=tiers,
@@ -1893,8 +1938,9 @@ class ScriptGenerator:
             if off_tiers is not None:
                 tiers = sorted(set(off_tiers))
                 raise UnitDurationOffTier(
-                    f"unit {unit['unit_id']} 时长 {duration}s 不在当前生效档位 {tiers} 内；"
-                    "通常是模型或分辨率配置变化让档位收窄导致，请调整配置回原档位，或在时间线上把该单元时长改到档位内",
+                    f"unit {unit['unit_id']}: duration {duration}s is not in the active duration tiers {tiers}; "
+                    "usually a model or resolution change narrowed the tiers. Restore the configuration, "
+                    "or change this unit's duration on the timeline to an allowed tier",
                     unit_id=str(unit["unit_id"]),
                     duration_seconds=duration,
                     tiers=tiers,
@@ -1976,7 +2022,7 @@ class ScriptGenerator:
         if isinstance(exc, DraftViolation) and rejection.code == "prompt_authoring_unit_invalid":
             # The specific reason of a text violation is appended after switching to the position reference, so the Agent knows what to change; entries whose internal IDs can't be replaced get nothing appended.
             # 正文违约的具体原因换成位置称呼后附上，Agent 据此知道该改什么；改不掉内部 ID 的条目不附。
-            label = f"视频单元 {params['position']}"
+            label = f"video unit {params['position']}"
             reasons = [
                 f"{label}{str(item)[len(item.label) :]}"
                 for item in violation_items(exc)
@@ -2008,9 +2054,9 @@ class ScriptGenerator:
         """
         source_language = self.project_json.get("source_language")
         speech_rate_override = project_speech_rate_override(self.project_json)
-        hint = "这段正文来自正式脚本，提示词编写会逐字保留其中的台词，请先在时间线上修正该单元的正文或时长"
+        hint = "this text comes from the final script and prompt authoring keeps its dialogue verbatim; fix this unit's text or duration on the timeline first"
         for unit in units:
-            label = f"正式脚本 的 unit {unit['unit_id']}"
+            label = f"final script unit {unit['unit_id']}"
             text = str(unit.get("text") or "")
             try:
                 validate_unit_text(
@@ -2027,7 +2073,7 @@ class ScriptGenerator:
             except DraftViolation as exc:
                 enriched = [
                     DraftViolation(
-                        f"{item}；{hint}",
+                        f"{item}; {hint}",
                         code=item.code,
                         label=label,
                         line=item.line,
@@ -2056,7 +2102,7 @@ class ScriptGenerator:
             max_refs=self._resolve_max_refs(facts),
             aspect_ratio=self._resolve_aspect_ratio(),
             episode=episode,
-            target_language=self.project_json.get("source_language") or "中文",
+            target_language=self.project_json.get("source_language") or DEFAULT_SOURCE_LANGUAGE,
             instructions=instructions,
         )
 
@@ -2110,7 +2156,7 @@ class ScriptGenerator:
 
         if await asyncio.to_thread(preflight) is not None:
             raise DraftViolation(
-                "reference prompt_authoring 草稿待处置；正式生成已中止，请先晋升或丢弃现有草稿",
+                "a reference prompt_authoring draft is pending; generation was stopped, promote or discard the existing draft first",
                 code="draft_revision_conflict",
             )
         max_refs = self._resolve_max_refs(facts)
@@ -2162,7 +2208,7 @@ class ScriptGenerator:
         except ScriptWriteConflict as exc:
             raise await quarantine(
                 DraftViolation(
-                    "正式剧本在模型生成期间已变化；本次生成结果已保留为 prompt_authoring 草稿，请合并最新正式内容后再晋升",
+                    "the final script changed while the model was generating; this result was kept as a prompt_authoring draft, merge the latest final content before promoting",
                     code="formal_revision_conflict",
                 )
             ) from exc
@@ -2175,7 +2221,7 @@ class ScriptGenerator:
         try:
             data = json.loads(text)
         except json.JSONDecodeError as e:
-            raise ValueError(f"JSON 解析失败: {e}") from e
+            raise ValueError(f"JSON parse failed: {e}") from e
         # The missing/blank title fallback must come before validation: title is not written back, and the model omitting the whole
         # field on a non-constrained decoding channel shouldn't fail a paid expansion (same fallback as _parse_response).
         # title 缺失/空白兜底须在校验之前：title 不参与写回，非约束解码通道下模型整字段漏写
@@ -2187,7 +2233,7 @@ class ScriptGenerator:
         try:
             return ReferencePromptAuthoringFlatScript.model_validate(data)
         except ValidationError as e:
-            raise ValueError(f"prompt_authoring 提示词编写结构校验失败: {e}") from e
+            raise ValueError(f"prompt_authoring structure validation failed: {e}") from e
 
     def _merge_reference_visual(
         self,
@@ -2219,8 +2265,8 @@ class ScriptGenerator:
         flat = self._parse_unit_texts(response_text, episode)
         if len(flat.units) != len(units):
             raise DraftViolation(
-                f"prompt_authoring 产出的 unit 数（{len(flat.units)}）与待编写单元数（{len(units)}）不一致；"
-                "prompt_authoring 只做提示词编写，不得合并、拆分或增删 unit",
+                f"prompt_authoring produced {len(flat.units)} units but {len(units)} were to be written; "
+                "prompt_authoring only writes prompts and must not merge, split, add or remove units",
                 code="unit_count_changed",
             )
 
@@ -2288,7 +2334,8 @@ class ScriptGenerator:
         flat = self._parse_unit_texts(result.text, episode)
         if len(flat.units) != len(targets.entries):
             raise ValueError(
-                f"提示词编写产出的 unit 数（{len(flat.units)}）与待编写单元数（{len(targets.entries)}）不一致"
+                f"prompt authoring returned {len(flat.units)} units, "
+                f"but {len(targets.entries)} units were to be authored"
             )
         authored: list[dict] = []
         problems: list[str] = []
@@ -2306,7 +2353,7 @@ class ScriptGenerator:
                     continue
             authored.append({**unit, "text": flat_unit.text})
         if problems:
-            raise ValueError("提示词编写产出的单元正文不合规：" + "；".join(problems))
+            raise ValueError("prompt authoring returned invalid unit text: " + "; ".join(problems))
         script_data = self._authored_script(episode, targets, authored)
         output_path = await run_sync_transaction(
             self._save_script,
@@ -2408,7 +2455,7 @@ class ScriptGenerator:
             actual_draft_revision = draft_revision(current) if current is not None else None
             if actual_draft_revision != expected_draft_revision:
                 return DraftViolation(
-                    "reference prompt_authoring 草稿在模型生成期间已变化；本次生成结果未覆盖并发编辑，请先处置现有草稿",
+                    "the reference prompt_authoring draft changed while the model was generating; this result did not overwrite the concurrent edit, resolve the existing draft first",
                     code="draft_revision_conflict",
                 )
             if before_commit is not None:
@@ -2453,7 +2500,7 @@ class ScriptGenerator:
             actual_draft_revision = draft_revision(current) if current is not None else None
             if actual_draft_revision != expected_draft_revision:
                 raise DraftViolation(
-                    "reference prompt_authoring 草稿在模型生成期间已变化；本次生成结果未覆盖并发编辑，请先处置现有草稿",
+                    "the reference prompt_authoring draft changed while the model was generating; this result did not overwrite the concurrent edit, resolve the existing draft first",
                     code="draft_revision_conflict",
                 )
             return pm.save_script(
@@ -2496,8 +2543,8 @@ class ScriptGenerator:
         if draft is None:
             draft_path = quarantine_path(self.project_path, episode, QUARANTINE_KIND_PROMPT_AUTHORING)
             raise FileNotFoundError(
-                f"集（id={episode}）没有可晋升的 prompt_authoring 待修复草稿"
-                f"（{draft_path.relative_to(self.project_path).as_posix()} 缺失或内容不是合法信封）"
+                f"episode (id={episode}) has no prompt_authoring draft awaiting repair to promote "
+                f"({draft_path.relative_to(self.project_path).as_posix()} is missing or not a valid envelope)"
             )
 
         filename = output_filename or formal_script_filename(self.project_path, self.project_json, episode)
@@ -2509,7 +2556,9 @@ class ScriptGenerator:
         )
         targets = self._load_prompt_authoring_targets(episode, filename, unit_ids, rewrite=True)
         if targets is None:
-            raise FileNotFoundError(f"集（id={episode}）尚无正式脚本，无法晋升 prompt_authoring 待修复草稿")
+            raise FileNotFoundError(
+                f"episode (id={episode}) has no final script yet; cannot promote the prompt_authoring draft"
+            )
         if unit_ids is None:
             # A draft without recorded units comes from whole-script authoring: re-check against all units of the final script and report honestly if unit counts don't match.
             # 未记录单元的草稿产自整份编写：按正式剧本的全部单元重判，单元数对不上时如实报告。
@@ -2571,7 +2620,8 @@ class ScriptGenerator:
                 if isinstance(exc.__cause__, ValidationError)
                 else [
                     DraftViolation(
-                        f"待修复草稿的 content 不符合 prompt_authoring 产出结构：{exc}", code="schema_invalid"
+                        f"the draft content awaiting repair does not match the prompt_authoring output structure: {exc}",
+                        code="schema_invalid",
                     )
                 ]
             )
@@ -2594,7 +2644,7 @@ class ScriptGenerator:
         if isinstance(expected_fingerprint, _UnsetExpectedFingerprint):
             if "base_fingerprint" not in draft.meta:
                 raise DraftViolation(
-                    "reference prompt_authoring 草稿缺少生成时的正式剧本基线 base_fingerprint；无法安全晋升",
+                    "the reference prompt_authoring draft lacks base_fingerprint (the final script baseline at generation time); it cannot be promoted safely",
                     code="formal_revision_missing",
                 )
             resolved_expected_fingerprint = cast(str | None, draft.meta["base_fingerprint"])
@@ -2677,9 +2727,9 @@ class ScriptGenerator:
         try:
             data = json.loads(text)
         except json.JSONDecodeError as e:
-            raise ValueError(f"JSON 解析失败: {e}") from e
+            raise ValueError(f"JSON parse failed: {e}") from e
         if not isinstance(data, dict):
-            raise ValueError(f"JSON 顶层须是对象，实际是 {type(data).__name__}")
+            raise ValueError(f"JSON top level must be an object, got {type(data).__name__}")
 
         # Missing/blank title fallback: on non-constrained decoding channels the model may omit the whole field. title is display only and
         # user-editable, not worth failing a whole-episode generation for; same fallback as _merge_narration_visual.
@@ -2749,11 +2799,11 @@ class ScriptGenerator:
         try:
             data = json.loads(text)
         except json.JSONDecodeError as exc:
-            raise AdScriptRejected([f"广告参考剧本 JSON 解析失败: {exc}"]) from exc
+            raise AdScriptRejected([f"ad reference script: JSON parse failed: {exc}"]) from exc
         try:
             flat = AdReferenceFlatScript.model_validate(data)
         except ValidationError as exc:
-            raise AdScriptRejected([f"广告参考剧本结构校验失败: {exc}"]) from exc
+            raise AdScriptRejected([f"ad reference script: structure validation failed: {exc}"]) from exc
         raw_new_assets = [item.model_dump() for item in flat.new_assets]
         planning = planning_project(self.project_json, raw_new_assets)
         problems: list[str] = []
@@ -2835,13 +2885,13 @@ class ScriptGenerator:
             # 更根本的问题——与分镜视觉层写回（_merge_visual_layer）同一套 fail-loud 口径。
             dupes = sorted(uid for uid, count in Counter(rewritten_output_ids).items() if count > 1)
             if dupes:
-                raise ValueError(f"reference_video 输出 unit_id 重复: {dupes}")
+                raise ValueError(f"reference_video output has duplicate unit_id: {dupes}")
             missing = sorted(set(reference_unit_durations) - set(rewritten_output_ids))
             if missing:
-                raise ValueError(f"reference_video 输出缺少 script_plan 已确认的 unit_id: {missing}")
+                raise ValueError(f"reference_video output is missing unit_id confirmed in script_plan: {missing}")
             unknown = sorted(set(rewritten_output_ids) - set(reference_unit_durations))
             if unknown:
-                raise ValueError(f"reference_video 输出包含 script_plan 之外的未知 unit_id: {unknown}")
+                raise ValueError(f"reference_video output contains unknown unit_id outside script_plan: {unknown}")
 
             raw_rewrite_items, id_field, _kind = resolve_kind_items(
                 script_data, kind=resolve_declared_kind(self.content_mode, gen_mode)
@@ -2852,7 +2902,7 @@ class ScriptGenerator:
                 if isinstance(s, dict) and id_field in s
             ]
             if facts is None:
-                raise ValueError("reference_video 取档校验需要视频请求事实")
+                raise ValueError("reference_video duration tier check requires video request facts")
             # Options are computed from the unit's final landed text, not its state at script_plan split time: `@[名称]` in the text
             # is decided by the LLM in the prompt_authoring output and may differ from script_plan; the bucket is judged by the
             # reference images available for that text right now, same criterion as the content review panel and execution, each reading its bucket's video request facts.
@@ -2869,7 +2919,7 @@ class ScriptGenerator:
                     # 视频模型配置问题而非正文违约：按问题码陈述原因与出路，Web 视图按问题码本地化。
                     params: dict[str, Any] = exc.params
                     raise DraftViolation(
-                        f"unit {s[id_field]}：{translate(exc.code, **params)}（{exc.failure.summary()}）",
+                        f"unit {s[id_field]}: {translate(exc.code, **params)} ({exc.failure.summary()})",
                         code=exc.code,
                         label=f"unit {s[id_field]}",
                         item_id=str(s[id_field]),
@@ -2886,10 +2936,10 @@ class ScriptGenerator:
                     # 份已付费产出落待修复草稿：成因通常是该次生成给这个 unit 新增/去掉了 `@` 引用，
                     # 改一改草稿正文的引用即可修好，不该退回丢弃重抽。
                     raise DraftViolation(
-                        f"unit {s[id_field]} 已确认时长 {target_duration}s 不在当前生效档位 "
-                        f"{sorted(set(unit_tiers))} 内；通常是该次生成给该 unit 新增/去掉了引用"
-                        "导致，请调整该 unit 正文里的 `@` 引用使其回到该档位；若引用本就该是这样，"
-                        "说明模型能力已变化，需要重新拆分该集 script_plan",
+                        f"unit {s[id_field]} confirmed duration {target_duration}s is not among the currently available durations "
+                        f"{sorted(set(unit_tiers))}; usually this generation added or removed references for the unit, "
+                        "so adjust the `@` references in the unit text to return to that duration; if the references "
+                        "are meant to be this way, the model capabilities have changed and the episode script_plan must be re-split",
                         code="duration_off_tier",
                         label=f"unit {s[id_field]}",
                         item_id=str(s[id_field]),

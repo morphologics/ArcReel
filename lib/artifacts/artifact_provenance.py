@@ -14,13 +14,20 @@ from lib.artifacts.artifact_manifest import ArtifactBasis
 from lib.episode.episode_ledger import episode_outline_context
 from lib.episode.episode_target_duration import project_episode_target_duration
 from lib.episode.source_kinds import DEFAULT_SOURCE_KIND, episode_source_kind
+from lib.i18n import DEFAULT_LOCALE, LOCALE_LANGUAGE_MAP
 from lib.infra.text_metrics import reading_unit_noun
 from lib.infra.text_utils import normalize_newlines
 from lib.speech.speech_rate import project_speech_rate_override, speech_rate_units_per_second
 
 _STRUCTURED_CONTENT_MODES = frozenset({"narration", "drama"})
 _GENERATION_MODES = frozenset({"storyboard", "reference_video"})
-_DEFAULT_SOURCE_LANGUAGE = "中文"
+# YouReel (owner 2026-11-20): a project without source_language writes in the default locale's language: English in
+# production (upstream: always "中文"; the test suite runs the zh default). The script generator and the overview use
+# the same value, so provenance and generation agree.
+# YouReel：未设 source_language 的项目按默认语言写作：生产为英文（上游恒为「中文」；测试套件以 zh 默认运行）。
+# 脚本生成器与概览用同一个值，出处指纹与生成一致。
+DEFAULT_SOURCE_LANGUAGE = LOCALE_LANGUAGE_MAP[DEFAULT_LOCALE]
+_DEFAULT_SOURCE_LANGUAGE = DEFAULT_SOURCE_LANGUAGE
 _AD_OVERVIEW_FIELDS = ("synopsis", "genre", "theme")
 
 ScriptPlanPromptVariant = Literal["drama", "narration", "reference_video"]

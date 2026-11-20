@@ -57,7 +57,7 @@ async def discover_models(
     if discovery_format == "elevenlabs":
         return await _discover_elevenlabs(base_url, api_key)
     raise UnsupportedDiscoveryFormatError(
-        f"不支持的 discovery_format: {discovery_format!r}，支持: 'openai', 'google', 'anthropic'"
+        f"Unsupported discovery_format: {discovery_format!r}; supported: 'openai', 'google', 'anthropic'"
     )
 
 

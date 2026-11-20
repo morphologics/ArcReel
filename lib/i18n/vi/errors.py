@@ -2,6 +2,7 @@ MESSAGES = {
     "episode_position_name": "Tập {position}",
     "episode_unlisted_name": "Tập chưa đặt tên",
     "episode_script_name": "Kịch bản của “{name}”",
+    "jianying_draft_with_narration_suffix": "_co_loi_dan",
     "operation_operation_not_applicable": "Thao tác này không áp dụng cho loại dự án này",
     "operation_whole_source_missing": "Dự án chưa có toàn bộ văn bản nguồn; hãy tải lên hoặc tạo tập thủ công trước khi AI lập kế hoạch các tập",
     "operation_replan_candidate_pending": "Có một phương án phân tập mới đang chờ xử lý. Hãy áp dụng hoặc bỏ phương án đó trong chế độ xem «Phân tập» rồi mới lập kế hoạch tiếp",
@@ -150,6 +151,10 @@ MESSAGES = {
         "Việc xếp hàng loạt bị gián đoạn trước khi đơn vị này có tác vụ; các tác vụ đã tạo vẫn chạy "
         "bình thường, thử lại chỉ xếp hàng phần còn thiếu"
     ),
+    "generation_refused": "Nhà cung cấp mô hình đã từ chối yêu cầu này; hãy điều chỉnh đầu vào hoặc cài đặt rồi thử lại",
+    "generation_task_failed": "Tác vụ tạo thất bại; vui lòng thử lại",
+    "internal_error": "Đã xảy ra lỗi nội bộ khi chạy tác vụ này; vui lòng thử lại",
+    "invalid_request": "Yêu cầu không hợp lệ; hãy kiểm tra đầu vào rồi thử lại",
     "video_supported_durations_missing": "Mô hình video đã chọn chưa khai báo các mức thời lượng được hỗ trợ",
     "video_supported_durations_invalid": "Dữ liệu mức thời lượng của {provider}/{model} không hợp lệ, nên không thể báo giá hoặc tạo video",
     "video_supported_durations_incompatible": "{provider}/{model} không có mức thời lượng tương thích với độ phân giải hiện tại",

@@ -368,7 +368,7 @@ def test_generate_grid_corrupted_project_maps_to_500_not_invalid_name(monkeypatc
             json={"script_file": "episode_1.json"},
         )
         assert resp.status_code == 500
-        assert "非法项目名称" not in resp.text
+        assert "Invalid project name" not in resp.text
 
 
 def test_regenerate_grid_corrupted_project_maps_to_500_not_invalid_name(monkeypatch):
@@ -379,7 +379,7 @@ def test_regenerate_grid_corrupted_project_maps_to_500_not_invalid_name(monkeypa
     with client:
         resp = client.post("/api/v1/projects/demo/grids/grid-123/regenerate")
         assert resp.status_code == 500
-        assert "非法项目名称" not in resp.text
+        assert "Invalid project name" not in resp.text
 
 
 class _FakePMInvalidScriptFile:

@@ -734,7 +734,7 @@ async def test_generate_grid_legacy_unresolvable_episode_fails_before_enqueue(
     out = await run_declared_tool("generate_grid", fake_ctx, {"script": "draft.json"}, batch_waiter=batch_waiter)
 
     assert out.problem is not None
-    assert "无法确定集号" in out.problem.detail
+    assert "Cannot determine the episode number" in out.problem.detail
     enqueue.assert_not_awaited()
 
 

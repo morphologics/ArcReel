@@ -2,6 +2,7 @@ MESSAGES = {
     "episode_position_name": "Episode {position}",
     "episode_unlisted_name": "Untitled episode",
     "episode_script_name": "Script for “{name}”",
+    "jianying_draft_with_narration_suffix": "_with_narration",
     "operation_operation_not_applicable": "This operation does not apply to this project type",
     "operation_whole_source_missing": "The project has no whole source text; upload it or create an episode manually before AI episode planning",
     "operation_replan_candidate_pending": "A new episode plan is waiting for review. Adopt or discard it in the Episodes view before planning again",
@@ -150,6 +151,10 @@ MESSAGES = {
         "Batch enqueue was interrupted before this unit got a task; the tasks already created keep "
         "running, and a retry only queues what is still missing"
     ),
+    "generation_refused": "The model provider refused this request; adjust the input or settings and try again",
+    "generation_task_failed": "The generation task failed; please try again",
+    "internal_error": "An internal error occurred while running this task; please try again",
+    "invalid_request": "The request is invalid; check the input and try again",
     "video_supported_durations_missing": "The selected video model does not declare supported duration tiers",
     "video_supported_durations_invalid": "{provider}/{model} has invalid duration tier metadata, so it cannot be quoted or generated",
     "video_supported_durations_incompatible": "{provider}/{model} has no compatible duration tier for the current resolution",

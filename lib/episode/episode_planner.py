@@ -157,8 +157,8 @@ class NoCutPointError(EpisodePlanningError):
         self.source_file = source_file
         self.offset = offset
         super().__init__(
-            f"{source_file} 从偏移 {offset} 起的这一段原文里找不到剧情弧完整的切分点；"
-            "可以先手工切出这一段，再从切分处继续规划。"
+            f"No cut point with a complete story arc in the source of {source_file} from offset {offset}; "
+            "split this part manually first, then continue planning from the split."
         )
 
 
@@ -576,14 +576,18 @@ def _language_of(project: Mapping[str, Any]) -> str | None:
 
 #: The two entry points for replanning from the first cut episode: both Web and Agent see the reason planning failed.
 #: 从第一个切出集起重新规划的两个入口：Web 与 Agent 都会看到规划失败的原因。
-_REPLAN_FROM_FIRST = "在「分集」视图选中第一个切出集，选「从这一集开始重新规划」；或由 Agent 调用 reset_episode_planning（不带 episode_id）"
+_REPLAN_FROM_FIRST = (
+    'in the "Episodes" view select the first cut episode and choose "Replan from this episode"; '
+    "or have the Agent call reset_episode_planning (without episode_id)"
+)
 
 
 def _source_changed_error(paths: list[str]) -> EpisodePlanningError:
     """Build the rejection error for changed source: name the changed files and point to a full reset. / 构造源文已变动的拒绝错误：指名变动文件并指路全量重置。"""
     return EpisodePlanningError(
-        f"源文件已被修改或移除：{'、'.join(paths)}。账本坐标绑定的是修改前的原文内容，继续规划会静默切出"
-        f"错误内容；需要从第一个切出集起重新规划：{_REPLAN_FROM_FIRST}。"
+        f"Source files were modified or removed: {', '.join(paths)}. Ledger coordinates are bound to the source text "
+        f"before the change, so continuing would silently cut the wrong text; replan from the first cut episode: "
+        f"{_REPLAN_FROM_FIRST}."
     )
 
 
@@ -591,14 +595,15 @@ def _missing_source_range_error(nums: list[int]) -> EpisodePlanningError:
     """Build the rejection error for a ledger with leftover episodes from the old split flow: name the episode IDs and point to a full reset.
 
     构造账本有旧拆分流程存量集的拒绝错误：指名集 ID 并指路全量重置。"""
-    listed = "、".join(str(num) for num in nums[:_MISSING_RANGE_LISTED_LIMIT])
+    listed = ", ".join(str(num) for num in nums[:_MISSING_RANGE_LISTED_LIMIT])
     if len(nums) > _MISSING_RANGE_LISTED_LIMIT:
-        listed += f" 等 {len(nums)} 集"
+        listed += f" ({len(nums)} episodes in total)"
     return EpisodePlanningError(
-        f"账本中集 ID 为 {listed} 的切出集没有原文范围记录（source_range），无法据此续接规划——它们由旧拆分"
-        "流程切出，物理集文件就是它们的最终记录，既无法重造也无法确定下一批的起点。这些集照常可以做脚本"
-        f"规划；确需重新切分时才从第一个切出集起重新规划：{_REPLAN_FROM_FIRST}（这些集的集文件会改名留底、"
-        "下游产物不删）。"
+        f"Cut episodes with IDs {listed} in the ledger have no source range record (source_range), so planning "
+        "cannot continue from them: they were cut by the old split flow, and their episode files are their final "
+        "record, which can neither be rebuilt nor tell where the next batch starts. These episodes can still get "
+        "script planning as usual; only if they really need re-splitting, replan from the first cut episode: "
+        f"{_REPLAN_FROM_FIRST} (their episode files are renamed and kept, downstream artifacts are not deleted)."
     )
 
 
@@ -723,7 +728,9 @@ class EpisodePlanner:
         source_rel, start = start_ref
         text = next(doc.text for doc in pre_call_sources if doc.rel_path == source_rel)
         if start > len(text):
-            raise EpisodePlanningError(f"规划起点越界：{source_rel} 长度 {len(text)}，起点 {start}；请检查账本")
+            raise EpisodePlanningError(
+                f"Planning start out of range: {source_rel} length {len(text)}, start {start}; check the ledger"
+            )
         # End point of planning in the current file: the end of the gap when planning a gap, otherwise the end of the file
         # 规划在当前文件里的终点：规划空段时是空段结尾，否则是文件末尾
         limit = len(text) if gap is None else gap[1]
@@ -799,7 +806,9 @@ class EpisodePlanner:
                 self._effective_start(p, current_sources) if gap is None else _gap_start(p, current_sources, gap)
             )
             if locked_start != start_ref:
-                raise PlanningConflictError("规划期间账本进度被并发修改，本次结果作废；请重新调用规划")
+                raise PlanningConflictError(
+                    "Ledger progress was changed concurrently during planning; result discarded, run planning again"
+                )
             # The fingerprint comparison only covers "recorded" files and is always empty on the backfill path of existing projects; but the cut coordinates and derived
             # files are all based on the used_fingerprints read in this call, so comparing fingerprints directly closes the window exposed on the backfill path:
             # if any source read in this call is changed during the model call, it is likewise caught here
@@ -832,7 +841,9 @@ class EpisodePlanner:
             new_entries: list[dict[str, Any]] = []
             new_ids = allocate_episode_ids(p, len(drafts))
             if new_ids != protected_ids:
-                raise PlanningConflictError("规划期间有并发写入分配了新的集 ID，本次结果作废；请重新调用规划")
+                raise PlanningConflictError(
+                    "A concurrent write allocated new episode IDs during planning; result discarded, run planning again"
+                )
             prev = start
             for num, draft_ep, rel_end in zip(new_ids, drafts, ends, strict=True):
                 abs_end = start + rel_end
@@ -934,7 +945,7 @@ class EpisodePlanner:
         source_order = [doc.rel_path for doc in sources]
         source_rel, start = cursor
         if source_rel not in source_order:
-            raise EpisodePlanningError(f"整本源文里没有这个可读的文件：{source_rel}")
+            raise EpisodePlanningError(f"The whole source has no readable file named: {source_rel}")
         text = sources[source_order.index(source_rel)].text
         while not text[start:].strip():
             next_rel = _next_source_rel(source_order, source_rel)
@@ -1015,7 +1026,9 @@ class EpisodePlanner:
         def _commit(p: dict) -> None:
             locked = _require_candidate(p, candidate_id)
             if _candidate_cursor(locked) != cursor:
-                raise PlanningConflictError("新的分集方案在生成期间被并发追加，本批结果作废")
+                raise PlanningConflictError(
+                    "The new episode plan was appended to concurrently during generation; this batch is discarded"
+                )
             current = compute_source_fingerprints(discover_sources(self.project_path, p))
             if locked.get("source_fingerprints") != current or current != dict(fingerprints):
                 raise _candidate_source_changed_error()
@@ -1047,7 +1060,7 @@ class EpisodePlanner:
         窗口内找不到剧情弧完整的切分点时抛 :class:`NoCutPointError`。``on_more_to_plan`` 的调用时机见 :meth:`plan`。
         """
         if self.generator is None:
-            raise RuntimeError("TextGenerator 未初始化，请使用 EpisodePlanner.create() 工厂方法")
+            raise RuntimeError("TextGenerator is not initialized; use the EpisodePlanner.create() factory method")
         content_mode = "drama" if project.get("content_mode") == "drama" else "narration"
         max_episodes = episodes_per_batch(self.generator.max_output_tokens, content_mode)
         window_end = window.end(self.window_chars)
@@ -1137,7 +1150,7 @@ class EpisodePlanner:
         话术而非后端内部异常原文。
         """
         if self.generator is None:
-            raise RuntimeError("TextGenerator 未初始化，请使用 EpisodePlanner.create() 工厂方法")
+            raise RuntimeError("TextGenerator is not initialized; use the EpisodePlanner.create() factory method")
         failure: list[str] | None = None
         for attempt in range(1, self.max_attempts + 1):
             try:
@@ -1174,7 +1187,8 @@ class EpisodePlanner:
                 failure = exc.reasons
                 logger.warning("分集规划第 %d/%d 次尝试未通过校验：%s", attempt, self.max_attempts, exc)
         raise EpisodePlanningError(
-            f"分集规划连续 {self.max_attempts} 次未通过校验，最后一轮原因：{'; '.join(failure or [])}"
+            f"Episode planning failed validation {self.max_attempts} times in a row; "
+            f"last reasons: {'; '.join(failure or [])}"
         )
 
     @staticmethod
@@ -1201,7 +1215,7 @@ class EpisodePlanner:
         下一批规划起点：由账本推导，见 :func:`lib.episode.episode_sources.planning_start`。"""
         start = planning_start(project, sources)
         if start is None:
-            raise EpisodePlanningError("整本源文还没有文件，请先上传小说原文")
+            raise EpisodePlanningError("The whole source has no files yet; upload the novel text first")
         return start
 
     @staticmethod
@@ -1217,13 +1231,13 @@ class EpisodePlanner:
         try:
             path = safe_join(self.project_path, rel, allow_base=True)
         except PathTraversalError as exc:
-            raise EpisodePlanningError(f"源文件路径越出项目目录：{rel}") from exc
+            raise EpisodePlanningError(f"Source file path escapes the project directory: {rel}") from exc
         if not path.is_file():
-            raise EpisodePlanningError(f"源文件不存在：{rel}")
+            raise EpisodePlanningError(f"Source file does not exist: {rel}")
         try:
             return normalize_source_text(path.read_text(encoding="utf-8"))
         except (OSError, UnicodeDecodeError) as exc:
-            raise EpisodePlanningError(f"源文件读取失败：{rel}: {exc}") from exc
+            raise EpisodePlanningError(f"Failed to read source file: {rel}: {exc}") from exc
 
     def _check_source_fingerprints(self, project: Mapping[str, Any], *, sources: list[SourceDoc] | None = None) -> None:
         """Compare the source fingerprints recorded in the ledger with the current source; reject planning on any mismatch (including a recorded file that has disappeared).
@@ -1339,7 +1353,7 @@ class EpisodePlanner:
         # Refuse to write when source/ is a symlink: derived files would land in the link target (possibly outside the project)
         # source/ 是符号链接时拒绝写入：派生文件会落到链接目标（可能在项目外）
         if source_dir.is_symlink():
-            raise EpisodePlanningError("source/ 不能是符号链接，拒绝派生集文件")
+            raise EpisodePlanningError("source/ must not be a symlink; refusing to derive episode files")
         writes: list[tuple[Path, str]] = []
         order = whole_source_files(project)
         for entry in project.get("episodes") or []:
@@ -1350,20 +1364,24 @@ class EpisodePlanner:
                 continue
             span = parse_source_range(entry)
             if span is None:
-                raise EpisodePlanningError(f"集（id={num}）原文范围记录非法，无法写入集文件，提交已中止")
+                raise EpisodePlanningError(
+                    f"Episode (id={num}) has an invalid source range record; episode file not written, commit aborted"
+                )
             for rel in self._span_files(order, span):
                 if rel not in text_cache:
                     try:
                         text_cache[rel] = self._load_normalized_source(rel)
                     except EpisodePlanningError as exc:
-                        raise EpisodePlanningError(f"集（id={num}）集文件写入失败，提交已中止：{exc}") from exc
+                        raise EpisodePlanningError(
+                            f"Writing the episode file of episode (id={num}) failed, commit aborted: {exc}"
+                        ) from exc
             # Python slicing silently tolerates negative/out-of-range values; dirty coordinates would write content that does not match the ledger, so they must be caught explicitly
             # Python 切片对负值/越界静默容忍，脏坐标会写出与账本不符的内容，必须显式拦截
             content = span_text(text_cache, order, span)
             if content is None:
                 raise EpisodePlanningError(
-                    f"集（id={num}）原文范围越界（{span.source_file} start={span.start}，{span.end_file} end={span.end}），"
-                    "无法写入集文件，提交已中止"
+                    f"Episode (id={num}) source range is out of bounds ({span.source_file} start={span.start}, "
+                    f"{span.end_file} end={span.end}); cannot write its episode file, commit aborted"
                 )
             writes.append((episode_source_path(self.project_path, num), content))
         source_dir.mkdir(exist_ok=True)
@@ -1447,12 +1465,16 @@ def _gap_start(project: Mapping[str, Any], sources: list[SourceDoc], gap: tuple[
     rel, end = gap
     index = next((i for i, doc in enumerate(sources) if doc.rel_path == rel), None)
     if index is None:
-        raise EpisodePlanningError(f"整本源文里没有这个可读的文件：{rel}")
+        raise EpisodePlanningError(f"The whole source has no readable file named: {rel}")
     if not 0 < end <= len(sources[index].text):
-        raise EpisodePlanningError(f"未切分原文的终点越界：{rel} 长度 {len(sources[index].text)}，终点 {end}")
+        raise EpisodePlanningError(
+            f"End of unsplit source out of range: {rel} length {len(sources[index].text)}, end {end}"
+        )
     found = unsplit_range_ending_at(cut_episode_placements(project, sources), file_index=index, end=end)
     if found is None:
-        raise EpisodePlanningError("这段原文已经切成集，不再是未切分的原文；请刷新后重试")
+        raise EpisodePlanningError(
+            "This source text is already cut into episodes and no longer unsplit; refresh and try again"
+        )
     return rel, found[0]
 
 
@@ -1474,13 +1496,15 @@ def _gap_context_entries(
 
 
 def _candidate_source_changed_error() -> EpisodePlanningError:
-    return EpisodePlanningError("整本源文在生成新的分集方案后有改动，这份方案已过时；请放弃后重新规划")
+    return EpisodePlanningError(
+        "The whole source changed after the new episode plan was generated; the plan is stale, discard it and replan"
+    )
 
 
 def _require_candidate(project: Mapping[str, Any], candidate_id: str) -> dict[str, Any]:
     candidate = replan_candidate(project)
     if candidate is None or candidate.get("id") != candidate_id:
-        raise PlanningConflictError("这份新的分集方案已经被采纳或放弃，本批结果作废")
+        raise PlanningConflictError("This new episode plan was already adopted or discarded; this batch is discarded")
     return candidate
 
 

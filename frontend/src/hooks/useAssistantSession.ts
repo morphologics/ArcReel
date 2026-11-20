@@ -592,7 +592,7 @@ export function useAssistantSession(projectName: string | null) {
           const newSession: SessionMeta = {
             id: returnedSessionId,
             project_name: projectName!,
-            title: content.trim().slice(0, 30) || "图片消息",
+            title: content.trim().slice(0, 30) || t("assistant_image_message_title"),
             status: "running",
             created_at: new Date().toISOString(),
             updated_at: new Date().toISOString(),
@@ -657,13 +657,13 @@ export function useAssistantSession(projectName: string | null) {
         if (err instanceof AgentFailureError) {
           store.getState().setStartupFailure(err.failure);
         } else {
-          store.getState().setError(errMsg(err, "发送失败"));
+          store.getState().setError(errMsg(err, t("assistant_send_failed")));
         }
         store.getState().setSending(false);
         return false;
       }
     },
-    [projectName, abortSessionLoad, connectStream, store, writeSessions],
+    [projectName, abortSessionLoad, connectStream, store, t, writeSessions],
   );
 
   const answerQuestion = useCallback(
@@ -678,12 +678,12 @@ export function useAssistantSession(projectName: string | null) {
         await API.answerAssistantQuestion(projectName, sessionId, questionId, answers);
         store.getState().setPendingQuestion(null);
       } catch (err) {
-        store.getState().setError(errMsg(err, "回答失败"));
+        store.getState().setError(errMsg(err, t("assistant_answer_failed")));
       } finally {
         store.getState().setAnsweringQuestion(false);
       }
     },
-    [projectName, store],
+    [projectName, store, t],
   );
 
   // Edit or delete a queued message: the server first retracts it from the Agent. On successful edit retraction the content is appended to the input;
@@ -763,10 +763,10 @@ export function useAssistantSession(projectName: string | null) {
       await API.interruptAssistantSession(projectName, sessionId);
     } catch (err) {
       if (projectAbortOwnerRef.current !== projectName || store.getState().currentSessionId !== sessionId) return;
-      store.getState().setError(errMsg(err, "中断失败"));
+      store.getState().setError(errMsg(err, t("assistant_interrupt_failed")));
       store.getState().setInterrupting(false);
     }
-  }, [projectName, store]);
+  }, [projectName, store, t]);
 
   // Create a new session (lazy: only clears state; actual creation is deferred to the first message sent) / 创建新会话（懒创建：仅清空状态，实际创建延迟到首次发消息时）
   const createNewSession = useCallback(() => {

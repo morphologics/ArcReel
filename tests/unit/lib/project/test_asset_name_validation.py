@@ -93,7 +93,7 @@ class TestResolveAssetKey:
         ],
     )
     def test_illegal_names_rejected(self, bad):
-        with pytest.raises(ValueError, match=r"含非法字符|不能为空或仅含空白字符|必须是字符串"):
+        with pytest.raises(ValueError, match=r"illegal characters|must not be empty|must be a string"):
             validate_asset_name(bad)
 
     @pytest.mark.parametrize(
@@ -127,7 +127,7 @@ class TestResolveAssetKey:
 
         名称会拼进文件名，Windows 上保留字符 / 控制字符 / 尾随点 / 保留设备名
         会"校验通过但写盘失败"；项目须可跨平台迁移，所有平台统一拒绝。"""
-        with pytest.raises(ValueError, match=r"含非法字符|是 Windows 保留设备名|不能以点结尾"):
+        with pytest.raises(ValueError, match=r"illegal characters|reserved device name|end with a dot"):
             validate_asset_name(bad)
 
     def test_mention_delimiter_rejected(self):
@@ -135,14 +135,14 @@ class TestResolveAssetKey:
         would cut the written reference short.
 
         正文引用写作 ``@[名称]``、以首个 ``]`` 收尾，名字含 ``]`` 会让写出的引用中途截断。"""
-        with pytest.raises(ValueError, match="含非法字符"):
+        with pytest.raises(ValueError, match="contains illegal characters"):
             validate_asset_name("甲]乙")
         assert validate_asset_name("甲[乙") == "甲[乙"
 
     def test_non_string_reports_type_error(self):
-        with pytest.raises(ValueError, match="必须是字符串"):
+        with pytest.raises(ValueError, match="must be a string"):
             validate_asset_name(None)
-        with pytest.raises(ValueError, match="必须是字符串"):
+        with pytest.raises(ValueError, match="must be a string"):
             validate_asset_name(123)
 
     def test_reserved_device_names_not_overmatched(self):
@@ -164,16 +164,16 @@ def demo_pm(tmp_path):
 
 class TestProjectManagerCreationEntryPoints:
     def test_add_character_rejects_slash(self, demo_pm):
-        with pytest.raises(ValueError, match=r"含非法字符"):
+        with pytest.raises(ValueError, match=r"contains illegal characters"):
             demo_pm.add_character("demo", "李白/诗人", "desc")
         assert "李白/诗人" not in demo_pm.load_project("demo")["characters"]
 
     def test_add_project_character_rejects_slash(self, demo_pm):
-        with pytest.raises(ValueError, match=r"含非法字符"):
+        with pytest.raises(ValueError, match=r"contains illegal characters"):
             demo_pm.add_project_character("demo", "李白/诗人", "desc")
 
     def test_add_batch_rejects_slash(self, demo_pm):
-        with pytest.raises(ValueError, match=r"含非法字符"):
+        with pytest.raises(ValueError, match=r"contains illegal characters"):
             demo_pm.add_scenes_batch("demo", {"庙/宇": {"description": "d"}})
         assert "庙/宇" not in demo_pm.load_project("demo").get("scenes", {})
 
@@ -182,12 +182,12 @@ class TestProjectManagerCreationEntryPoints:
         loudly and nothing is written (consistent with upsert_assets).
 
         strip 后等价的两个 key 不允许静默覆盖，整批 fail-loud 不落盘（与 upsert_assets 一致）。"""
-        with pytest.raises(ValueError, match="冲突"):
+        with pytest.raises(ValueError, match="conflicts after normalization"):
             demo_pm.add_scenes_batch("demo", {"庙宇": {"description": "a"}, "  庙宇  ": {"description": "b"}})
         assert "庙宇" not in demo_pm.load_project("demo").get("scenes", {})
 
     def test_upsert_assets_rejects_slash(self, demo_pm):
-        with pytest.raises(ValueError, match=r"props: 资产名称 .+ 含非法字符"):
+        with pytest.raises(ValueError, match=r"props: Asset name .+ contains illegal characters"):
             demo_pm.upsert_assets("demo", "props", {"玉/佩": {"description": "d"}})
         assert "玉/佩" not in demo_pm.load_project("demo").get("props", {})
 
@@ -230,7 +230,7 @@ class TestNfcConvergence:
         assert list(chars) == [_NAME_NFD]
 
     def test_add_batch_rejects_nfc_nfd_collision(self, demo_pm):
-        with pytest.raises(ValueError, match="冲突"):
+        with pytest.raises(ValueError, match="conflicts after normalization"):
             demo_pm.add_scenes_batch("demo", {_NAME_NFC: {"description": "a"}, _NAME_NFD: {"description": "b"}})
         assert demo_pm.load_project("demo").get("scenes", {}) == {}
 

@@ -368,9 +368,9 @@ def plan_asset_sheet_batch(
     按范围选出这一批的目标并逐项判准入；集范围由调用方传入本集引用的资产。"""
 
     if scope.names is not None and scope.asset_type is None:
-        raise ValueError("names 必须配合 type 使用")
+        raise ValueError("names requires type")
     if scope.episode_id is not None and (scope.asset_type is not None or scope.names is not None):
-        raise ValueError("episode_id 不能与 type / names 同时使用")
+        raise ValueError("episode_id cannot be combined with type / names")
 
     units = project_asset_sheet_units(project, scope.asset_type)
     if scope.episode_id is not None:

@@ -158,7 +158,8 @@ def _verify_snapshots(versions: VersionManager, resource_type: str, snapshot_pat
             "final_cut_narration_version_corrupted"
             if resource_type == "audio"
             else "final_cut_video_version_corrupted",
-            f"视频单元 {unit_id} 的 {resource_type} 版本 {version} 快照已损坏：内容与该版本入库时记录的指纹不一致",
+            f"Snapshot of {resource_type} version {version} of video unit {unit_id} is corrupted: "
+            "its content does not match the fingerprint recorded when that version was stored",
             unit_id=unit_id,
             resource_type=resource_type,
             version=version,
@@ -197,7 +198,11 @@ class FinalCutService:
 
     def _project_dir(self, project_name: str) -> Path:
         if not self._projects.project_exists(project_name):
-            raise EditTimelineError("project_not_found", f"项目「{project_name}」不存在", project=project_name)
+            raise EditTimelineError(
+                "project_not_found",
+                f"Project '{project_name}' does not exist",
+                project=project_name,
+            )
         return self._projects.get_project_path(project_name)
 
     def _load_project(self, project_name: str) -> dict[str, Any]:
@@ -216,7 +221,9 @@ class FinalCutService:
         variant = resolve_final_cut_variant(project, narration=narration, subtitles=subtitles)
         if variant.with_narration and project_narration_delivery(project) != USE_TTS:
             raise FinalCutError(
-                "final_cut_narration_unavailable", "只有 TTS 配音项目可以渲染带旁白版本", narration=variant.narration
+                "final_cut_narration_unavailable",
+                "Only TTS voice-over projects can render a narrated version",
+                narration=variant.narration,
             )
         document = await asyncio.to_thread(lambda: EditTimelineStore(self._projects, project_name).find(timeline_id))
         number = revision if revision is not None else document.latest.number
@@ -224,7 +231,7 @@ class FinalCutService:
         if target is None:
             raise EditTimelineError(
                 "revision_not_found",
-                f"剪辑时间线「{document.id}」没有修订 {number}（最新修订为 {document.latest.number}）",
+                f"Edit timeline '{document.id}' has no revision {number} (latest revision is {document.latest.number})",
                 timeline_id=document.id,
                 revision=number,
                 latest_revision=document.latest.number,
@@ -239,16 +246,16 @@ class FinalCutService:
         if blocking:
             raise FinalCutError(
                 "final_cut_blocked",
-                "剪辑时间线有阻断出片的问题："
-                + "、".join(f"{issue.code}({issue.unit_id or '、'.join(issue.clip_ids)})" for issue in blocking),
+                "The edit timeline has issues that block rendering: "
+                + ", ".join(f"{issue.code}({issue.unit_id or ', '.join(issue.clip_ids)})" for issue in blocking),
                 issues=[issue.model_dump(mode="json") for issue in blocking],
             )
         if not any(clip.status != "unit_deleted" for clip in readout.clips):
-            raise FinalCutError("final_cut_empty", "剪辑时间线没有可渲染的剪辑片段", timeline_id=document.id)
+            raise FinalCutError("final_cut_empty", "The edit timeline has no clips to render", timeline_id=document.id)
         try:
             await asyncio.to_thread(ffmpeg_executable)
         except FfmpegUnavailableError as exc:
-            raise FinalCutError("final_cut_ffmpeg_unavailable", f"随包 ffmpeg 不可用：{exc}") from exc
+            raise FinalCutError("final_cut_ffmpeg_unavailable", f"Bundled ffmpeg is unavailable: {exc}") from exc
         check = FinalCutCheck(
             episode=document.episode,
             timeline_id=document.id,
@@ -294,8 +301,8 @@ class FinalCutService:
         if missing_bgm := bgm_missing_issues(checked.revision.content, bgm_sources):
             raise FinalCutError(
                 "final_cut_blocked",
-                "BGM 不在项目里或文件已不在："
-                + "、".join(dict.fromkeys(issue.params["bgm_id"] for issue in missing_bgm)),
+                "BGM is not in the project or its file is gone: "
+                + ", ".join(dict.fromkeys(issue.params["bgm_id"] for issue in missing_bgm)),
                 issues=[issue.model_dump(mode="json") for issue in missing_bgm],
             )
         inputs = resolve_final_cut_inputs(
@@ -316,7 +323,7 @@ class FinalCutService:
         if inputs.missing_video_units:
             raise FinalCutError(
                 "final_cut_blocked",
-                "视频单元还没有可用视频：" + "、".join(inputs.missing_video_units),
+                "Video units have no usable video yet: " + ", ".join(inputs.missing_video_units),
                 issues=[{"code": "video_missing", "unit_id": unit_id} for unit_id in inputs.missing_video_units],
             )
         _verify_snapshots(
@@ -338,12 +345,16 @@ class FinalCutService:
                 probe = probe or await probe_media(path, spawn=self._spawn)
             except MediaProbeError as exc:
                 raise FinalCutError(
-                    "final_cut_render_failed", f"视频单元 {video.unit_id} 的视频无法探测：{exc}", unit_id=video.unit_id
+                    "final_cut_render_failed",
+                    f"The video of video unit {video.unit_id} cannot be probed: {exc}",
+                    unit_id=video.unit_id,
                 ) from exc
             stream = probe.first_stream("video")
             if stream is None or not stream.duration_seconds:
                 raise FinalCutError(
-                    "final_cut_render_failed", f"视频单元 {video.unit_id} 的视频没有可用画面", unit_id=video.unit_id
+                    "final_cut_render_failed",
+                    f"The video of video unit {video.unit_id} has no usable frames",
+                    unit_id=video.unit_id,
                 )
             media[video.unit_id] = RenderMedia(
                 path=path,
@@ -370,7 +381,7 @@ class FinalCutService:
                 await asyncio.to_thread(self._verify_selected_narration, project_name, exc.unit_id)
             raise FinalCutError(
                 "final_cut_presentation_unavailable",
-                f"视频单元 {exc.unit_id} 的旁白配音或字幕取不出：{exc}",
+                f"Could not get the narration voice-over or subtitles of video unit {exc.unit_id}: {exc}",
                 unit_id=exc.unit_id,
             ) from exc
 
@@ -401,7 +412,7 @@ class FinalCutService:
             except (PathTraversalError, FileNotFoundError) as exc:
                 raise FinalCutError(
                     "final_cut_render_failed",
-                    f"剪辑片段 {narration.clip_id} 的旁白配音已不在：{narration.audio_path}",
+                    f"The narration voice-over of clip {narration.clip_id} is gone: {narration.audio_path}",
                     clip_id=narration.clip_id,
                 ) from exc
             narrations.append(NarrationInput(path=path, start_us=narration.start_us))
@@ -421,7 +432,7 @@ class FinalCutService:
             except (PathTraversalError, FileNotFoundError) as exc:
                 raise FinalCutError(
                     "final_cut_render_failed",
-                    f"BGM 片段 {placed.clip_id} 的 BGM 文件已不在：{source.path}",
+                    f"The BGM file of BGM clip {placed.clip_id} is gone: {source.path}",
                     clip_id=placed.clip_id,
                 ) from exc
             items.append(
@@ -471,7 +482,11 @@ class FinalCutService:
         media = await self._render_media(inputs)
         plan = plan_render(render_clips([item.clip for item in inputs.clips], media), inputs.profile)
         if not plan.segments:
-            raise FinalCutError("final_cut_empty", "剪辑时间线没有可渲染的剪辑片段", timeline_id=inputs.timeline_id)
+            raise FinalCutError(
+                "final_cut_empty",
+                "The edit timeline has no clips to render",
+                timeline_id=inputs.timeline_id,
+            )
         placement = self._placement(checked, materials, media) if materials is not None else None
         burned: tuple[BurnedSubtitle, ...] | None = None
         if placement is not None and variant.burns_subtitles:

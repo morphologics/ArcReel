@@ -120,7 +120,10 @@ def unregister_source_file(project: dict[str, Any], rel: str) -> None:
         and episode_source_relpath(episode) == rel
     ]
     if any(episode_source_origin(entry) is SourceOrigin.WHOLE_SOURCE for entry in owners):
-        raise EpisodeSourceError("episode_source_derived", f"{rel} 是切出集的集文件，由分集规划派生，不能直接删除")
+        raise EpisodeSourceError(
+            "episode_source_derived",
+            f"{rel} is the episode file of a cut episode, derived by episode planning; it cannot be deleted directly",
+        )
     remove_whole_source_file(project, rel)
     for entry in owners:
         if episode_source_origin(entry) is SourceOrigin.OWN:
@@ -146,7 +149,9 @@ def write_episode_source_file(
     写集文件，并把撤销登记进 ``undo``。``archive_existing`` 时盘上已有的同名文件不是这一集的原文，先改名留底再写。"""
     path = episode_source_path(project_dir, episode)
     if path.is_symlink():
-        raise EpisodeSourceError("episode_source_symlink", f"集（id={episode}）的集文件是符号链接，拒绝写入")
+        raise EpisodeSourceError(
+            "episode_source_symlink", f"Episode (id={episode}) file is a symlink; refusing to write"
+        )
     previous: bytes | None = None
     if archive_existing and path.exists():
         archived = archive_episode_file_path(path)
@@ -161,7 +166,7 @@ def write_episode_source_file(
 def _require_text(text: str) -> str:
     normalized = normalize_source_text(text)
     if not normalized.strip():
-        raise EpisodeSourceError("episode_source_empty", "集原文不能为空")
+        raise EpisodeSourceError("episode_source_empty", "Episode source text cannot be empty")
     return normalized
 
 
@@ -252,12 +257,13 @@ def set_episode_source_text(
             None,
         )
         if entry is None:
-            raise EpisodeSourceError("episode_not_found", f"集（id={episode}）不在账本中")
+            raise EpisodeSourceError("episode_not_found", f"Episode (id={episode}) is not in the ledger")
         origin = episode_source_origin(entry)
         if origin is SourceOrigin.WHOLE_SOURCE:
             raise EpisodeSourceError(
                 "episode_source_derived",
-                f"集（id={episode}）切自整本源文，集原文由分集规划派生，不能直接改写",
+                f"Episode (id={episode}) is cut from the whole source; its text is derived by episode planning and "
+                "cannot be rewritten directly",
             )
         affected = (
             [episode]
@@ -291,18 +297,18 @@ def _unregistered_source_path(project_dir: Path, project: dict[str, Any], filena
         or "\\" in filename
         or path.suffix.lower() not in SOURCE_TEXT_SUFFIXES
     ):
-        raise EpisodeSourceError("source_file_not_found", f"没有这个源文件：{filename}")
+        raise EpisodeSourceError("source_file_not_found", f"No such source file: {filename}")
     try:
         # On Windows a single-segment name with a drive letter like "C:x.txt" would join outside the project; leave it to safe_join to detect escaping
         # Windows 上 "C:x.txt" 这类带盘符的单段名会拼到项目外，交给 safe_join 判越界
         safe_join(project_dir / "source", filename)
     except PathTraversalError as exc:
-        raise EpisodeSourceError("source_file_not_found", f"没有这个源文件：{filename}") from exc
+        raise EpisodeSourceError("source_file_not_found", f"No such source file: {filename}") from exc
     source_path = project_dir / "source" / filename
     if source_path.is_symlink() or not source_path.is_file():
-        raise EpisodeSourceError("source_file_not_found", f"没有这个源文件：{filename}")
+        raise EpisodeSourceError("source_file_not_found", f"No such source file: {filename}")
     if rel in whole_source_files(project) or is_episode_source_file(project, rel):
-        raise EpisodeSourceError("source_file_registered", f"源文件已经登记过：{filename}")
+        raise EpisodeSourceError("source_file_registered", f"Source file is already registered: {filename}")
     return source_path
 
 
@@ -314,7 +320,9 @@ def _read_source_bytes(path: Path) -> tuple[bytes, str]:
         raw = path.read_bytes()
         return raw, raw.decode("utf-8")
     except (OSError, UnicodeDecodeError) as exc:
-        raise EpisodeSourceError("source_file_unreadable", f"源文件不是可读的 UTF-8 文本：{path.name}") from exc
+        raise EpisodeSourceError(
+            "source_file_unreadable", f"Source file is not readable UTF-8 text: {path.name}"
+        ) from exc
 
 
 def adopt_source_file_as_whole_source(pm: ProjectManager, project_name: str, filename: str) -> None:
@@ -326,7 +334,9 @@ def adopt_source_file_as_whole_source(pm: ProjectManager, project_name: str, fil
         path = _unregistered_source_path(project_dir, project, filename)
         rel = f"source/{filename}"
         if not is_whole_source_file_path(rel):
-            raise EpisodeSourceError("source_name_not_whole_source", f"这个文件名不能用作整本源文：{filename}")
+            raise EpisodeSourceError(
+                "source_name_not_whole_source", f"This file name cannot be used as a whole source: {filename}"
+            )
         _read_source_bytes(path)
         append_whole_source_file(project, rel)
         record_whole_source_file_kind(project, rel, None)
@@ -362,9 +372,9 @@ def adopt_source_file_as_episode(pm: ProjectManager, project_name: str, filename
                 None,
             )
             if entry is None:
-                raise EpisodeSourceError("episode_not_found", f"集（id={episode}）不在账本中")
+                raise EpisodeSourceError("episode_not_found", f"Episode (id={episode}) is not in the ledger")
             if episode_source_origin(entry) is not SourceOrigin.NONE:
-                raise EpisodeSourceError("episode_source_present", f"集（id={episode}）已经有原文")
+                raise EpisodeSourceError("episode_source_present", f"Episode (id={episode}) already has source text")
         # Delete the original file before writing the episode file: when the original file happens to have the same name as the target episode file, the write is not treated as a placeholder file to be renamed as a backup
         # 先删原文件再写集文件：原文件恰好就是目标集文件的同名文件时，写入不会被当成占位文件改名留底
         # source file adopted as episode source: the full text is written into that episode's source file with NFC and unified line breaks, no text is lost, equivalent to a move
@@ -411,16 +421,18 @@ def set_whole_source_file_kind(
     rel = f"source/{filename}"
     with pm.locked_source_registration(project_name) as (_source_dir, project, _undo):
         if not source_kind_applies(project):
-            raise EpisodeSourceError("source_kind_not_applicable", "只有剧情演绎项目有源文件类型")
+            raise EpisodeSourceError("source_kind_not_applicable", "Only drama projects have source file kinds")
         if rel not in whole_source_files(project):
-            raise EpisodeSourceError("source_file_not_found", f"整本源文里没有这个文件：{filename}")
+            raise EpisodeSourceError("source_file_not_found", f"The whole source has no such file: {filename}")
         if whole_source_file_kind(project, rel) == source_kind:
             return SourceKindChange(changed=False, applied=False, affected_episodes=[])
         if any(
             doc.rel_path == rel and changed_outside_service(project_dir, project, doc)
             for doc in discover_sources(project_dir, project)
         ):
-            raise EpisodeSourceError("source_changed_outside", f"源文件在服务之外被改动过：{filename}")
+            raise EpisodeSourceError(
+                "source_changed_outside", f"Source file was changed outside the service: {filename}"
+            )
         affected = [
             episode
             for episode in episodes_from_whole_source_file(project, rel)

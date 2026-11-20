@@ -296,7 +296,7 @@ class MiniMaxImageBackend:
         # 完整响应体记日志便于诊断，但不嵌进异常消息——避免 body 里的 "503"/"timeout" 等子串
         # 被默认 should_retry 误判为可重试（仓库已确立按状态码而非字符串判重试）。
         logger.error("MiniMax 图像响应缺少 image_urls/image_base64: %s", data)
-        raise RuntimeError("MiniMax 图像响应缺少 image_urls/image_base64")
+        raise RuntimeError("MiniMax image response is missing image_urls/image_base64")
 
     async def _download_result(self, url: str, output_path: Path) -> None:
         """Download the issued result image URL (idempotent GET) using the shared artifact download budget.
@@ -313,7 +313,7 @@ class MiniMaxImageBackend:
         可重试：终态刚签发的产物地址可能尚未在对象存储侧传播。其余 4xx 确定性失败。
         下载比生成更宽容——失败不浪费生成额度，故预算比生成阶段大得多。
         """
-        await with_artifact_retry(lambda: download_image_to_path(url, output_path), label="MiniMax 图像")
+        await with_artifact_retry(lambda: download_image_to_path(url, output_path), label="MiniMax image")
 
 
 async def _write_base64_image(b64: str, output_path: Path) -> None:

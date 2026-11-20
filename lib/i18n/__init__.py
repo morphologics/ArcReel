@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import os
 from collections.abc import Callable, Mapping
 from typing import Any
 
@@ -40,8 +41,16 @@ from .zh import validation as zh_validation
 
 logger = logging.getLogger(__name__)
 
-# Default locale
-DEFAULT_LOCALE = "zh"
+# Default locale. YouReel (owner 2026-11-20): English (upstream: "zh"). ARCREEL_DEFAULT_LOCALE overrides it: the test
+# suite sets "zh" (tests/conftest.py), as upstream's tests are written against the Chinese default.
+# 默认语言。YouReel（所有者 2026-11-20）：英文（上游为 "zh"）。ARCREEL_DEFAULT_LOCALE 可覆盖：测试套件设为 "zh"
+# （tests/conftest.py），因为上游测试按中文默认值编写。
+def default_locale_from(environ: Mapping[str, str]) -> str:
+    value = environ.get("ARCREEL_DEFAULT_LOCALE", "").strip().lower()
+    return value if value in ("zh", "en", "vi", "ru") else "en"
+
+
+DEFAULT_LOCALE = default_locale_from(os.environ)
 SUPPORTED_LOCALES = ["zh", "en", "vi", "ru"]
 
 # Mapping from locale code to human-readable language name

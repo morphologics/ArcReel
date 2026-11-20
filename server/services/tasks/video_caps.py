@@ -395,5 +395,5 @@ async def resolve_project_is_silent(project: dict) -> bool:
     ``project_video_caps`` 独立解析（双重失败才落 ``False``）——即解析全线失败时按无声处理，
     宁可少注入声音风格也不把用户已关闭的音频当成有声。
     """
-    caps = await project_video_caps(project, degraded_to="Voice_Profiles 按无声兜底不注入")
+    caps = await project_video_caps(project, degraded_to="Voice_Profiles not injected (silent fallback)")
     return VoiceRenderSettings.from_caps(caps).is_silent

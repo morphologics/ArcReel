@@ -574,7 +574,7 @@ class TestPromptAuthoring:
         project_dir, _plan_path = await _converted_and_authored(tmp_path, variant)
         before = (project_dir / "scripts" / "episode_1.json").read_bytes()
 
-        with pytest.raises(PromptAuthoringTargetError, match="不在集（id=1）正式脚本内"):
+        with pytest.raises(PromptAuthoringTargetError, match=r"not in the final script of episode \(id=1\)"):
             await variant.generator(project_dir, []).generate(1, entry_ids=["E9U99"])
 
         assert (project_dir / "scripts" / "episode_1.json").read_bytes() == before
@@ -615,7 +615,7 @@ class TestPromptAuthoring:
     async def test_missing_formal_script_is_refused(self, tmp_path: Path, variant: _Variant) -> None:
         project_dir, _plan_path = variant.build(tmp_path)
 
-        with pytest.raises(PromptAuthoringTargetError, match="尚无正式脚本"):
+        with pytest.raises(PromptAuthoringTargetError, match="has no final script yet"):
             await variant.generator(project_dir, []).generate(1)
 
         assert not (project_dir / "scripts" / "episode_1.json").exists()

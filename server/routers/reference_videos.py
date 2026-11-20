@@ -597,7 +597,7 @@ async def preview_script(
     开关，与执行层同一份解析出口；能力解析失败时按 ``soft`` 降级，只是少发这几条提示。
     """
     project, _script, _sf = await _read_episode_script(project_name, episode, _t)
-    caps = await project_video_caps(project, degraded_to="解析预览不发声音相关提示")
+    caps = await project_video_caps(project, degraded_to="parse preview emits no audio-related hints")
     preview = build_script_preview(
         req.prompt,
         project,
@@ -731,7 +731,7 @@ async def _admit_units_batch(
         refused_ticket(
             unit_id,
             code=GenerationProblemCode.UNIT_NOT_FOUND,
-            detail=f"unit {unit_id} 不在 video_units 中",
+            detail=f"unit {unit_id} is not in video_units",
             action=GenerationAction.FIX_INPUT,
         )
         for unit_id in selection.unmatched_ids

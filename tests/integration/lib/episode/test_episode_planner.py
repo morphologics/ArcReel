@@ -417,10 +417,10 @@ class TestPlan:
         (project_dir / "source" / "episode_1.txt").write_text(SOURCE[: _end_of(ANCHOR_EP1)], encoding="utf-8")
         fake = _FakeTextGenerator([])
 
-        with pytest.raises(EpisodePlanningError, match="没有原文范围记录") as excinfo:
+        with pytest.raises(EpisodePlanningError, match="no source range record") as excinfo:
             await EpisodePlanner(project_dir, generator=fake).plan()
 
-        assert "照常可以做脚本规划" in str(excinfo.value)
+        assert "can still get script planning as usual" in str(excinfo.value)
         assert "reset_episode_planning" in str(excinfo.value)
         assert fake.requests == []
         assert _load_project(project_dir)["episodes"] == [legacy]
@@ -552,7 +552,7 @@ class TestPlan:
         )
         planner = EpisodePlanner(project_dir, generator=fake)
 
-        with pytest.raises(EpisodePlanningError, match="没有原文范围记录"):
+        with pytest.raises(EpisodePlanningError, match="no source range record"):
             await planner.plan()
 
         reset = reset_episode_planning(project_dir, confirm_consumed=True)
@@ -998,7 +998,7 @@ class TestPlan:
                 )
 
         fake = _ExhaustedGenerator()
-        with pytest.raises(EpisodePlanningError, match="结构化输出能力不足") as exc_info:
+        with pytest.raises(EpisodePlanningError, match="could not produce valid structured output") as exc_info:
             await EpisodePlanner(project_dir, generator=fake).plan()
 
         assert fake.calls == 1
@@ -1028,7 +1028,7 @@ class TestPlan:
             [_plan_response([{"title": "古玉藏诀", "hook": "玉中剑诀来历成谜", "end_anchor": ANCHOR_EP1}])]
         )
 
-        with pytest.raises(PlanningConflictError, match="并发"):
+        with pytest.raises(PlanningConflictError, match="concurrent"):
             await EpisodePlanner(project_dir, generator=fake).plan()
 
         # The ledger stays verbatim at the state after the concurrent commit: not one byte of this call's episode entries or
@@ -1057,7 +1057,7 @@ class TestPlan:
             [_plan_response([{"title": "古玉藏诀", "hook": "玉中剑诀来历成谜", "end_anchor": ANCHOR_EP1}])]
         )
 
-        with pytest.raises(PlanningConflictError, match="并发"):
+        with pytest.raises(PlanningConflictError, match="concurrent"):
             await EpisodePlanner(project_dir, generator=fake).plan()
 
         assert (project_dir / "project.json").read_text(encoding="utf-8") == after_concurrent_write[0]
@@ -1521,7 +1521,7 @@ class TestPlan:
 
         fake.generate = _generate_then_pollute
 
-        with pytest.raises(EpisodePlanningError, match="没有原文范围记录"):
+        with pytest.raises(EpisodePlanningError, match="no source range record"):
             await planner.plan()
 
         episodes = _load_project(project_dir)["episodes"]

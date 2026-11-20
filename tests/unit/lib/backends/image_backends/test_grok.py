@@ -324,7 +324,7 @@ class TestModeration:
             prompt="Something problematic",
             output_path=output,
         )
-        with pytest.raises(RuntimeError, match="内容审核"):
+        with pytest.raises(RuntimeError, match="content moderation"):
             await grok_backend.generate(request)
 
 

@@ -1694,7 +1694,7 @@ class DataValidator:
             )
         # resolve_declared_kind only returns four skeletons; an unhandled fifth raises
         else:  # pragma: no cover - resolve_declared_kind 只回四种骨架；第五种未处置即报错
-            raise ValueError(f"未处置的骨架种类: {kind!r}")
+            raise ValueError(f"Unhandled skeleton kind: {kind!r}")
 
     def validate_episode(self, project_name: str, episode_file: str) -> ValidationResult:
         """Validate episode JSON / 验证 episode JSON"""
@@ -1925,9 +1925,9 @@ if __name__ == "__main__":
     import sys
 
     if len(sys.argv) < 2:
-        print("用法: python data_validator.py <project_name> [episode_file]")
-        print("  验证 project.json: python data_validator.py my_project")
-        print("  验证 episode JSON: python data_validator.py my_project episode_1.json")
+        print("Usage: python data_validator.py <project_name> [episode_file]")
+        print("  Validate project.json: python data_validator.py my_project")
+        print("  Validate episode JSON: python data_validator.py my_project episode_1.json")
         sys.exit(1)
 
     project_name = sys.argv[1]
@@ -1935,10 +1935,10 @@ if __name__ == "__main__":
     if len(sys.argv) >= 3:
         episode_file = sys.argv[2]
         result = validate_episode(project_name, episode_file)
-        print(f"验证 {project_name}/scripts/{episode_file}:")
+        print(f"Validating {project_name}/scripts/{episode_file}:")
     else:
         result = validate_project(project_name)
-        print(f"验证 {project_name}/project.json:")
+        print(f"Validating {project_name}/project.json:")
 
     print(result)
     sys.exit(0 if result.valid else 1)

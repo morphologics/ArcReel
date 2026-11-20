@@ -996,11 +996,11 @@ class TestRenameAssetCascade:
     def test_missing_old_name_hints_idempotency(self, pm_with_assets: ProjectManager) -> None:
         with pytest.raises(AssetRenameNotFoundError) as exc_info:
             pm_with_assets.rename_asset("demo", "characters", "不存在", "角色A")
-        assert "可能上次重命名已成功" in str(exc_info.value)
+        assert "the previous rename may have succeeded" in str(exc_info.value)
 
         with pytest.raises(AssetRenameNotFoundError) as plain:
             pm_with_assets.rename_asset("demo", "characters", "不存在", "全新名字")
-        assert "可能上次重命名已成功" not in str(plain.value)
+        assert "the previous rename may have succeeded" not in str(plain.value)
 
     def test_dry_run_previews_without_writing(self, pm_with_assets: ProjectManager) -> None:
         pm_with_assets.save_script("demo", _narration_script(), "episode_1.json")
@@ -1054,9 +1054,9 @@ class TestRenameAssetCascade:
         assert not versions_dir.exists()
 
     def test_invalid_new_name_rejected(self, pm_with_assets: ProjectManager) -> None:
-        with pytest.raises(ValueError, match=r"含非法字符"):
+        with pytest.raises(ValueError, match=r"contains illegal characters"):
             pm_with_assets.rename_asset("demo", "characters", "角色A", "坏/名字")
-        with pytest.raises(ValueError, match=r"未知资产表"):
+        with pytest.raises(ValueError, match=r"Unknown asset table"):
             pm_with_assets.rename_asset("demo", "unknown_table", "角色A", "新名")
 
 
@@ -1288,7 +1288,7 @@ class TestDerivativeReferenceCascade:
     ) -> None:
         self._register(pm_with_assets, "劲装")
 
-        with pytest.raises(ValueError, match="非法字符"):
+        with pytest.raises(ValueError, match="illegal characters"):
             pm_with_assets.rename_asset_derivative("character", "demo", "角色A", "劲装", "夜/行衣")
 
         assert list(pm_with_assets.load_project("demo")["characters"]["角色A"]["derivatives"]) == ["劲装"]

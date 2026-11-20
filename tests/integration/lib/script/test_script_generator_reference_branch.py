@@ -447,7 +447,7 @@ async def test_prompt_authoring_rejects_formal_duration_outside_effective_tiers(
     generator = _idle_generator()
 
     gen = ScriptGenerator(reference_project, generator=generator)
-    with pytest.raises(PromptAuthoringUnitRejected, match=r"不在当前生效档位.*时间线") as exc_info:
+    with pytest.raises(PromptAuthoringUnitRejected, match=r"not in the active duration tiers.*timeline") as exc_info:
         await gen.generate(episode=1)
     generator.generate.assert_not_awaited()
     # Classified as an input to fix; the unit is named by its UI position (the 2nd), with the current duration and the
@@ -678,7 +678,7 @@ async def test_prompt_authoring_reads_the_r2v_tier_for_a_unit_with_a_usable_refe
     generator = _fake_prompt_authoring_generator(PROMPT_AUTHORING_UNIT_TEXT)
 
     gen = ScriptGenerator(reference_project, generator=generator)
-    with pytest.raises(DraftViolation, match="不在当前生效档位"):
+    with pytest.raises(DraftViolation, match="not among the currently available durations"):
         await gen.generate(episode=1)
 
     generator.generate.assert_awaited_once()
@@ -696,7 +696,7 @@ async def test_script_generator_rejects_prompt_authoring_unit_count_change(refer
     gen = ScriptGenerator(
         reference_project, generator=_fake_prompt_authoring_generator(PROMPT_AUTHORING_UNIT_TEXT, "镜头1：多出来的一段")
     )
-    with pytest.raises(ValueError, match="unit 数"):
+    with pytest.raises(ValueError, match="units but"):
         await gen.generate(episode=1)
 
 
@@ -711,7 +711,7 @@ async def test_script_generator_rejects_prompt_authoring_dialogue_rewrite(refere
         reference_project,
         generator=_fake_prompt_authoring_generator("镜头1：中景。@[主角] 推门跨入\n@[主角]：{我到了。}"),
     )
-    with pytest.raises(ValueError, match="台词"):
+    with pytest.raises(ValueError, match="dialogue line"):
         await gen.generate(episode=1)
 
 
@@ -741,7 +741,7 @@ async def test_script_generator_rejects_prompt_authoring_unregistered_mention(re
     gen = ScriptGenerator(
         reference_project, generator=_fake_prompt_authoring_generator("镜头1：@[主角] 与 @[路人乙] 对视")
     )
-    with pytest.raises(ValueError, match="未登记"):
+    with pytest.raises(ValueError, match="unregistered"):
         await gen.generate(episode=1)
 
 
@@ -770,7 +770,7 @@ async def test_prompt_authoring_refuses_a_speaker_the_formal_unit_did_not_have(r
         generator=_fake_prompt_authoring_generator("镜头1：@[主角] 推门\n@[主角]{我来了。}\n@[路人乙]{谁？}"),
     )
 
-    with pytest.raises(ValueError, match="说话人"):
+    with pytest.raises(ValueError, match="speakers not registered"):
         await gen.generate(episode=1)
 
 
@@ -955,7 +955,7 @@ async def test_reference_script_plan_missing_raises(plan_only_reference_project:
     (drafts / "script_plan_reference_units.json").unlink()
 
     gen = ScriptGenerator(plan_only_reference_project)
-    with pytest.raises(FileNotFoundError, match="video_unit 拆分"):
+    with pytest.raises(FileNotFoundError, match="video_unit split"):
         await _materialize(gen)
 
 
@@ -980,7 +980,7 @@ async def test_reference_script_plan_rejects_out_of_enum_duration(
     _claim_character_sheet(plan_only_reference_project, "主角")
 
     gen = ScriptGenerator(plan_only_reference_project)
-    with pytest.raises(UnitDurationOffTier, match="视频单元 1 已确认时长 6s 不在当前生效档位") as exc_info:
+    with pytest.raises(UnitDurationOffTier, match="video unit 1: confirmed duration 6s is not in the active duration tiers") as exc_info:
         await _materialize(gen)
     assert (exc_info.value.position, exc_info.value.duration_seconds, exc_info.value.tiers) == (1, 6, [4, 8])
     assert "E1U01" not in str(exc_info.value)
@@ -995,7 +995,7 @@ async def test_reference_script_plan_rejects_duplicate_unit_ids(plan_only_refere
     )
 
     gen = ScriptGenerator(plan_only_reference_project)
-    with pytest.raises(ValueError, match="unit_id 重复"):
+    with pytest.raises(ValueError, match="duplicate unit_id"):
         await _materialize(gen)
 
 
@@ -1193,7 +1193,7 @@ async def test_formal_text_violation_is_caught_before_the_paid_prompt_authoring_
     _write_formal_units(reference_project, [{**SCRIPT_PLAN_UNIT, "text": "@[查无此人} 推门"}])
     generator = _idle_generator()
 
-    with pytest.raises(PromptAuthoringUnitRejected, match=r"来自正式脚本.*时间线") as exc_info:
+    with pytest.raises(PromptAuthoringUnitRejected, match=r"comes from the final script.*timeline") as exc_info:
         await ScriptGenerator(reference_project, generator=generator).generate(episode=1)
     generator.generate.assert_not_awaited()
     assert (exc_info.value.code, exc_info.value.params) == (
@@ -1217,8 +1217,8 @@ def test_speech_violation_preserves_canonical_unit_and_locations(reference_proje
 
     problem = exc_info.value
     assert problem.code == "mixed_speech"
-    assert "unit E1U01 发声准入未通过" in str(problem)
-    assert "unit 正式脚本 的 unit" not in str(problem)
+    assert "unit E1U01 failed the speech admission check" in str(problem)
+    assert "unit final script unit" not in str(problem)
     assert problem.locations == (
         {"path": ["text"], "line": 1},
         {"path": ["text"], "line": 2},
@@ -1248,7 +1248,7 @@ async def test_dialogue_overload_is_caught_before_the_paid_prompt_authoring_call
     )
     generator = _idle_generator()
 
-    with pytest.raises(PromptAuthoringUnitRejected, match="台词念完约需") as exc_info:
+    with pytest.raises(PromptAuthoringUnitRejected, match="dialogue takes about") as exc_info:
         await ScriptGenerator(reference_project, generator=generator).generate(episode=1)
     generator.generate.assert_not_awaited()
     # Problem codes are classified by input problem, and params name the unit by UI position (the 2nd) rather than by
@@ -1787,7 +1787,7 @@ async def test_prompt_authoring_duration_off_tier_after_merge_quarantines(
     with pytest.raises(DraftViolation) as excinfo:
         await gen.generate(episode=1)
 
-    assert "生效档位" in str(excinfo.value)
+    assert "available durations" in str(excinfo.value)
     assert _script_path(project).read_bytes() == formal_before
     envelope = _json.loads(_prompt_authoring_quarantine(project).read_text(encoding="utf-8"))
     assert [v["code"] for v in envelope["violations"]] == ["duration_off_tier"]
@@ -1833,7 +1833,7 @@ async def test_promote_prompt_authoring_draft_revalidates_edited_formal_unit(ref
     # Body violations name the unit by UI position with the specific reason attached, without the internal unit ID
     # 正文违约按界面位置称呼，具体原因随附，不带内部单元 ID
     assert (excinfo.value.code, excinfo.value.params) == ("draft_formal_unit_invalid", {"position": 1})
-    assert "视频单元 1 引用了未登记的资产名" in str(excinfo.value)
+    assert "video unit 1 references unregistered asset names" in str(excinfo.value)
     assert "E1U01" not in str(excinfo.value)
 
 
@@ -1898,7 +1898,7 @@ async def test_promote_prompt_authoring_draft_names_rejected_formal_unit_by_posi
 
 @pytest.mark.asyncio
 async def test_promote_prompt_authoring_draft_without_draft(reference_project: Path):
-    with pytest.raises(FileNotFoundError, match="没有可晋升的 prompt_authoring 待修复草稿"):
+    with pytest.raises(FileNotFoundError, match="has no prompt_authoring draft awaiting repair to promote"):
         await ScriptGenerator(reference_project).promote_reference_prompt_authoring_draft(episode=1)
 
 

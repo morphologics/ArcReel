@@ -189,16 +189,16 @@ class TestLaneDeclaration:
         assert ctx.image.provider_model == ProviderModel("ark", "img-model-x")
         assert ctx.image.backend_name == "ark"
         assert ctx.image.backend_model == "img-model-x"
-        with pytest.raises(RuntimeError, match="video lane 未声明"):
+        with pytest.raises(RuntimeError, match="video lane not declared"):
             _ = ctx.video
-        with pytest.raises(RuntimeError, match="audio lane 未声明"):
+        with pytest.raises(RuntimeError, match="audio lane not declared"):
             _ = ctx.audio
 
     async def test_no_lane_declared_still_returns_generator(self, patched_session_factory, project_env, fake_assemble):
         ctx = await resolve_generation_context("demo", None, project={})
         assert isinstance(ctx.generator, MediaGenerator)
         assert fake_assemble == []
-        with pytest.raises(RuntimeError, match="image lane 未声明"):
+        with pytest.raises(RuntimeError, match="image lane not declared"):
             _ = ctx.image
 
     async def test_preloaded_project_path_avoids_the_default_executor(
@@ -806,7 +806,7 @@ class TestValueObjectAssembly:
         )
         ctx = GenerationContext(generator=MediaGenerator(tmp_path / "p"), video_lane=lane)
         assert ctx.video is lane
-        with pytest.raises(RuntimeError, match="image lane 未声明"):
+        with pytest.raises(RuntimeError, match="image lane not declared"):
             _ = ctx.image
 
     def test_lane_results_are_frozen(self):

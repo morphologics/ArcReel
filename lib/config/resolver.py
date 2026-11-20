@@ -2493,4 +2493,4 @@ class ConfigResolver:
         if candidates:
             return make_provider_id(candidates[0].provider_id), candidates[0].model_id
 
-        raise ValueError(f"未找到可用的 {media_type} 供应商。请在「全局设置 → 供应商」页面配置至少一个供应商。")
+        raise ValueError(f"No available {media_type} provider. Configure at least one provider under Settings → Providers.")

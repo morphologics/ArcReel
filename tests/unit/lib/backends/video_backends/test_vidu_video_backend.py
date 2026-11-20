@@ -285,7 +285,7 @@ class TestBuildRequest:
             reference_images=[ref],
             duration_seconds=5,
         )
-        with pytest.raises(RuntimeError, match="不支持"):
+        with pytest.raises(RuntimeError, match="does not support"):
             backend._build_request(req)
 
     def test_non_q3_model_does_not_send_audio(self, video_output_path: Path):
@@ -301,7 +301,7 @@ class TestBuildRequest:
         # 简化：直接构造一个 text2video 请求验证 audio 不写入
         # —— 但 vidu2.0 不在 text2video 集合里，应该 raise
         req = VideoGenerationRequest(prompt="x", output_path=video_output_path, duration_seconds=4)
-        with pytest.raises(RuntimeError, match="不支持"):
+        with pytest.raises(RuntimeError, match="does not support"):
             backend._build_request(req)
 
 
@@ -555,7 +555,7 @@ class TestCreateTaskAmbiguity:
         backend = ViduVideoBackend(api_key="k", model="viduq3-turbo")
         with (
             bounded_poll_clock(),
-            pytest.raises(AmbiguousSubmitError, match="手动重试"),
+            pytest.raises(AmbiguousSubmitError, match="retry manually"),
         ):
             await backend._create_task(client, "/text2video", {"model": "viduq3-turbo", "prompt": "x", "duration": 8})
         # Ambiguous state: the request may have arrived, no retry. / 歧义态：请求可能已送达，不重试

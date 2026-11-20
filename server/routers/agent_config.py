@@ -34,7 +34,7 @@ from server.i18n import Translator
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/agent", tags=["Agent 配置"])
+router = APIRouter(prefix="/agent", tags=["Agent config"])
 
 
 # ── Response models ─────────────────────────────────────────────────

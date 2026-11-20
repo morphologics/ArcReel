@@ -270,9 +270,9 @@ class UploadSpec:
         # up the translation with an empty key
         # 宿主约束与其 404 文案必须成对登记，否则拒收路径会拿空 key 去取翻译
         if (self.host_bucket is None) != (not self.host_not_found_key):
-            raise ValueError("host_bucket 与 host_not_found_key 必须成对登记")
+            raise ValueError("host_bucket and host_not_found_key must be registered together")
         if self.tracks_stale_audio and self.host_bucket is None:
-            raise ValueError("tracks_stale_audio 必须登记宿主约束")
+            raise ValueError("tracks_stale_audio requires a host constraint")
 
 
 UPLOAD_SPECS: dict[str, UploadSpec] = {

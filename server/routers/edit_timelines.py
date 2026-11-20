@@ -189,7 +189,7 @@ def final_cut_api_error(exc: FinalCutError) -> ApiError:
     成片错误的摘要只列出阻断的视频单元；结构化的问题清单与片段 ID 挂在诊断上。"""
     params = exc.params
     issues = params.get("issues") or []
-    units = "、".join(dict.fromkeys(str(issue.get("unit_id")) for issue in issues if issue.get("unit_id")))
+    units = ", ".join(dict.fromkeys(str(issue.get("unit_id")) for issue in issues if issue.get("unit_id")))
     values = {key: value for key, value in params.items() if key != "issues"}
     error = ApiError(exc.code, status_code=_FINAL_CUT_STATUS[exc.code], **values, units=units)
     if params:
@@ -743,8 +743,10 @@ async def read_final_cut(
     project_name: str,
     timeline_id: str,
     service: FinalCutServiceDep,
-    narration: DraftNarration | None = Query(None, description="旁白版本；省略时按项目取默认版本"),
-    subtitles: SubtitleMode | None = Query(None, description="字幕方式；省略时为烧入字幕"),
+    narration: DraftNarration | None = Query(
+        None, description="Narration version; defaults to the project's default when omitted"
+    ),
+    subtitles: SubtitleMode | None = Query(None, description="Subtitle mode; burned-in subtitles when omitted"),
 ) -> FinalCutStatusResponse:
     """成片现状；stale 的成片仍可下载，``download_url`` 只在文件存在时给出。"""
     try:
@@ -842,7 +844,9 @@ async def read_jianying_draft(
     project_name: str,
     timeline_id: str,
     service: JianyingDraftServiceDep,
-    narration: DraftNarration | None = Query(None, description="旁白版本；省略时按项目取默认版本"),
+    narration: DraftNarration | None = Query(
+        None, description="Narration version; defaults to the project's default when omitted"
+    ),
 ) -> JianyingDraftStatus:
     """剪映草稿现状：current、stale（已落后于剪辑时间线，仍可下载）或 missing（还没导出过）。"""
     try:
@@ -867,10 +871,14 @@ async def download_jianying_draft(
     timeline_id: str,
     _t: Translator,
     service: JianyingDraftServiceDep,
-    draft_path: str = Query(..., description="用户本机的剪映草稿目录"),
-    download_token: str = Query(..., description="下载 token"),
-    jianying_version: Literal["5", "6"] = Query("6", description="剪映版本：6 表示 6 及以上，5 表示 5.x"),
-    narration: DraftNarration | None = Query(None, description="旁白版本；省略时按项目取默认版本"),
+    draft_path: str = Query(..., description="CapCut (Jianying) draft directory on the user's machine"),
+    download_token: str = Query(..., description="Download token"),
+    jianying_version: Literal["5", "6"] = Query(
+        "6", description="CapCut (Jianying) version: 6 means 6 and later, 5 means 5.x"
+    ),
+    narration: DraftNarration | None = Query(
+        None, description="Narration version; defaults to the project's default when omitted"
+    ),
 ) -> FileResponse:
     """下载已登记的剪映草稿：本机草稿目录与剪映版本在此代入，过期的草稿照常可下载。"""
     try:

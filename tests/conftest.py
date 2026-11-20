@@ -35,6 +35,13 @@ DB fixture 一律派生自唯一的 engine 构造点 `make_test_engine`：
 
 from __future__ import annotations
 
+import os
+
+# YouReel: the production default locale is English; upstream's tests are written against the Chinese default, so the
+# suite runs with "zh" (set before any lib.i18n import). tests/unit/lib/i18n/test_youreel_default_locale.py checks "en".
+# YouReel：生产默认语言为英文；上游测试按中文默认值编写，测试套件以 "zh" 运行（在 import lib.i18n 之前设置）。
+os.environ.setdefault("ARCREEL_DEFAULT_LOCALE", "zh")
+
 import asyncio
 import atexit
 import ipaddress

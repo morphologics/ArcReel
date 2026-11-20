@@ -43,7 +43,7 @@ router = APIRouter()
 # Two views of usage records: "generation calls" excludes Agent records, "Agent sessions" contains only Agent records.
 # 使用记录的两个视图：「生成调用」不含 Agent 记录，「Agent 会话」只含 Agent 记录。
 UsageView = Literal["generation", "agent"]
-_VIEW_DESCRIPTION = "视图：generation（生成调用，默认，不含 Agent 记录）或 agent（Agent 会话的记录）"
+_VIEW_DESCRIPTION = "View: generation (generation calls, default, no Agent records) or agent (Agent session records)"
 
 
 def _view_filter(view: UsageView) -> bool:
@@ -53,7 +53,7 @@ def _view_filter(view: UsageView) -> bool:
     return view == "agent"
 
 
-_CALL_STATUS_DESCRIPTION = f"状态 ({'/'.join(CallStatus)})"
+_CALL_STATUS_DESCRIPTION = f"Status ({'/'.join(CallStatus)})"
 
 
 # ---------------------------------------------------------------------------
@@ -184,16 +184,16 @@ def _multi(value: str | None) -> tuple[str, ...]:
 @router.get("/usage/records", response_model=UsageRecordPage)
 async def list_usage_records(
     _t: Translator,
-    project_name: str | None = Query(None, description="项目名称；端点试跑记录用空串"),
-    provider: str | None = Query(None, description="供应商 id，逗号分隔多选"),
-    model: str | None = Query(None, description="模型，逗号分隔多选"),
-    media_type: str | None = Query(None, description="媒体类型 (image/video/text/audio)，逗号分隔多选"),
-    status: str | None = Query(None, description=f"{_CALL_STATUS_DESCRIPTION}，逗号分隔多选"),
-    segment_id: str | None = Query(None, description="分镜 id，逗号分隔多选"),
-    since: datetime | None = Query(None, description="起始时刻（含），ISO 8601，无时区按 UTC"),
-    until: datetime | None = Query(None, description="结束时刻（不含），ISO 8601，无时区按 UTC"),
-    limit: int = Query(20, ge=1, le=200, description="每页记录数"),
-    cursor: str | None = Query(None, description="上一页返回的不透明游标"),
+    project_name: str | None = Query(None, description="Project name; empty string for endpoint trial-run records"),
+    provider: str | None = Query(None, description="Provider id; comma-separated for multiple"),
+    model: str | None = Query(None, description="Model; comma-separated for multiple"),
+    media_type: str | None = Query(None, description="Media type (image/video/text/audio); comma-separated"),
+    status: str | None = Query(None, description=f"{_CALL_STATUS_DESCRIPTION}; comma-separated for multiple"),
+    segment_id: str | None = Query(None, description="Segment id; comma-separated for multiple"),
+    since: datetime | None = Query(None, description="Start time (inclusive), ISO 8601; UTC if no time zone"),
+    until: datetime | None = Query(None, description="End time (exclusive), ISO 8601; UTC if no time zone"),
+    limit: int = Query(20, ge=1, le=200, description="Records per page"),
+    cursor: str | None = Query(None, description="Opaque cursor returned by the previous page"),
     view: UsageView = Query("generation", description=_VIEW_DESCRIPTION),
 ) -> UsageRecordPage:
     try:
@@ -359,13 +359,13 @@ class UsageAgentSessionDetail(BaseModel):
 
 @router.get("/usage/sessions", response_model=UsageAgentSessionPage)
 async def list_usage_sessions(
-    project_name: str | None = Query(None, description="项目名称"),
-    provider: str | None = Query(None, description="供应商 id，逗号分隔多选"),
-    model: str | None = Query(None, description="模型，逗号分隔多选"),
-    since: datetime | None = Query(None, description="起始时刻（含），ISO 8601，无时区按 UTC"),
-    until: datetime | None = Query(None, description="结束时刻（不含），ISO 8601，无时区按 UTC"),
-    limit: int = Query(20, ge=1, le=200, description="每页会话数"),
-    cursor: str | None = Query(None, description="上一页返回的不透明游标"),
+    project_name: str | None = Query(None, description="Project name"),
+    provider: str | None = Query(None, description="Provider id; comma-separated for multiple"),
+    model: str | None = Query(None, description="Model; comma-separated for multiple"),
+    since: datetime | None = Query(None, description="Start time (inclusive), ISO 8601; UTC if no time zone"),
+    until: datetime | None = Query(None, description="End time (exclusive), ISO 8601; UTC if no time zone"),
+    limit: int = Query(20, ge=1, le=200, description="Sessions per page"),
+    cursor: str | None = Query(None, description="Opaque cursor returned by the previous page"),
 ) -> UsageAgentSessionPage:
     """Agent 会话列表：按 ``session_id`` 聚合，每个会话一行，按最近一轮的时间倒序。
 
@@ -543,14 +543,14 @@ class UsageSummaryResponse(BaseModel):
 @router.get("/usage/summary", response_model=UsageSummaryResponse)
 async def get_usage_summary(
     locale: Locale,
-    tz: str = Query("UTC", description="IANA 时区名，按此切天"),
-    project_name: str | None = Query(None, description="项目名称（空串筛选端点试跑）"),
-    provider: str | None = Query(None, description="按供应商筛选"),
-    model: str | None = Query(None, description="按模型筛选"),
-    media_type: CallType | None = Query(None, description="媒体类型 (image/video/text/audio)"),
-    since: datetime | None = Query(None, description="起始时刻（含），ISO 8601，无时区按 UTC"),
-    until: datetime | None = Query(None, description="结束时刻（不含），ISO 8601，无时区按 UTC"),
-    view: UsageView = Query("generation", description="决定筛选候选值列哪个视图的项目、供应商与模型；合计不分视图"),
+    tz: str = Query("UTC", description="IANA time zone name used to split days"),
+    project_name: str | None = Query(None, description="Project name (empty string filters endpoint trial runs)"),
+    provider: str | None = Query(None, description="Filter by provider"),
+    model: str | None = Query(None, description="Filter by model"),
+    media_type: CallType | None = Query(None, description="Media type (image/video/text/audio)"),
+    since: datetime | None = Query(None, description="Start time (inclusive), ISO 8601; UTC if no time zone"),
+    until: datetime | None = Query(None, description="End time (exclusive), ISO 8601; UTC if no time zone"),
+    view: UsageView = Query("generation", description="View that supplies the filter options; totals span both"),
 ) -> dict[str, object]:
     """一次返回总览所需的全部聚合；不传 since / until 即全部时间。
 

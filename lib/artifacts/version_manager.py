@@ -464,7 +464,7 @@ class VersionManager:
             新版本号
         """
         if resource_type not in self.RESOURCE_TYPES:
-            raise ValueError(f"不支持的资源类型: {resource_type}")
+            raise ValueError(f"Unsupported resource type: {resource_type}")
 
         with self._lock:
             data = self._load_versions()
@@ -542,7 +542,7 @@ class VersionManager:
         """
 
         if resource_type not in self.RESOURCE_TYPES:
-            raise ValueError(f"不支持的资源类型: {resource_type}")
+            raise ValueError(f"Unsupported resource type: {resource_type}")
         staged_file = Path(staged_file)
         current_file = Path(current_file)
         if not staged_file.is_file():
@@ -703,7 +703,7 @@ class VersionManager:
         identities: set[tuple[str, str]] = set()
         for commit in batch:
             if commit.resource_type not in self.RESOURCE_TYPES:
-                raise ValueError(f"不支持的资源类型: {commit.resource_type}")
+                raise ValueError(f"Unsupported resource type: {commit.resource_type}")
             identity = (commit.resource_type, commit.resource_id)
             if identity in identities:
                 raise ValueError(f"duplicate installed version identity: {identity!r}")
@@ -774,7 +774,7 @@ class VersionManager:
         current_paths: set[Path] = set()
         for commit in batch:
             if commit.resource_type not in self.RESOURCE_TYPES:
-                raise ValueError(f"不支持的资源类型: {commit.resource_type}")
+                raise ValueError(f"Unsupported resource type: {commit.resource_type}")
             identity = (commit.resource_type, commit.resource_id)
             if identity in identities:
                 raise ValueError(f"duplicate staged version identity: {identity!r}")
@@ -936,7 +936,7 @@ class VersionManager:
         """
 
         if resource_type not in self.RESOURCE_TYPES:
-            raise ValueError(f"不支持的资源类型: {resource_type}")
+            raise ValueError(f"Unsupported resource type: {resource_type}")
         if not isinstance(select_current, bool) and not callable(select_current):
             assert_never(select_current)
         if expected_current_version is not None and (
@@ -1114,7 +1114,7 @@ class VersionManager:
         """
 
         if resource_type not in self.RESOURCE_TYPES:
-            raise ValueError(f"不支持的资源类型: {resource_type}")
+            raise ValueError(f"Unsupported resource type: {resource_type}")
         current_file = Path(current_file)
         with self._lock:
             data = self._load_versions()
@@ -1179,7 +1179,7 @@ class VersionManager:
                     resource_data["current_version"] = 0
                 else:
                     if not previous_file.is_file():
-                        raise FileNotFoundError(f"版本文件不存在: {previous_file}")
+                        raise FileNotFoundError(f"Version file does not exist: {previous_file}")
                     verify_version_snapshot(resource_type, resource_id, previous, previous_file)
                     _install_snapshot(previous_file, current_file)
                     resource_data["current_version"] = previous["version"]
@@ -1287,7 +1287,7 @@ class VersionManager:
             AssetRenameHistoryCollisionError: 新 id 下已有属于别的资产的版本历史。
         """
         if resource_type not in self.RESOURCE_TYPES:
-            raise ValueError(f"不支持的资源类型: {resource_type}")
+            raise ValueError(f"Unsupported resource type: {resource_type}")
 
         from lib.project.asset_rename import AssetRenameHistoryCollisionError
         from lib.project.asset_types import normalize_asset_name, rekey_equivalent_entries
@@ -1418,7 +1418,7 @@ class VersionManager:
             return None
 
         if resource_type not in self.RESOURCE_TYPES:
-            raise ValueError(f"不支持的资源类型: {resource_type}")
+            raise ValueError(f"Unsupported resource type: {resource_type}")
 
         with self._lock:
             if self.get_current_version(resource_type, resource_id) > 0:
@@ -1484,7 +1484,7 @@ class VersionManager:
         先补录成当前版本，否则加回的版本会成为唯一一条、看起来像是当前版本。
         """
         if resource_type not in self.RESOURCE_TYPES:
-            raise ValueError(f"不支持的资源类型: {resource_type}")
+            raise ValueError(f"Unsupported resource type: {resource_type}")
 
         with self._lock:
             self.ensure_current_tracked(resource_type, resource_id, current_file, prompt)
@@ -1668,7 +1668,7 @@ class VersionManager:
 
             target_file = self._resolve_snapshot(resource_type, target_version)
             if not target_file.exists():
-                raise FileNotFoundError(f"版本文件不存在: {target_file}")
+                raise FileNotFoundError(f"Version file does not exist: {target_file}")
             verify_version_snapshot(resource_type, resource_id, target_version, target_file)
 
             versions_existed = self.versions_file.is_file()
@@ -1772,7 +1772,7 @@ class VersionManager:
             是否找到记录并写入
         """
         if resource_type not in self.RESOURCE_TYPES:
-            raise ValueError(f"不支持的资源类型: {resource_type}")
+            raise ValueError(f"Unsupported resource type: {resource_type}")
 
         with self._lock:
             data = self._load_versions()

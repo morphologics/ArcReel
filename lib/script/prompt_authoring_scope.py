@@ -146,7 +146,10 @@ class PromptOverwriteRequired(ValueError):
 
     def __init__(self, overwrite: PromptOverwrite) -> None:
         ids = "、".join(entry.entry_id for entry in overwrite.entries)
-        super().__init__(f"显式重写会替换这些条目已有的视觉层内容，需先确认覆盖: {ids}")
+        super().__init__(
+            f"An explicit rewrite would replace the existing visual-layer content of these entries;"
+            f" confirm the overwrite first: {ids}"
+        )
         self.overwrite = overwrite
 
 

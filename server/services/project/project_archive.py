@@ -389,7 +389,7 @@ class ProjectArchiveService:
     ) -> dict[str, list[dict[str, Any]]]:
         self._validate_scope(scope)
         if not self.project_manager.project_exists(project_name):
-            raise FileNotFoundError(f"项目 '{project_name}' 不存在或未初始化")
+            raise FileNotFoundError(f"Project '{project_name}' does not exist or is not initialized")
 
         temp_dir, _, _, diagnostics = self._prepare_export_snapshot(project_name, scope=scope)
         temp_dir.cleanup()
@@ -403,7 +403,7 @@ class ProjectArchiveService:
     ) -> tuple[Path, str]:
         self._validate_scope(scope)
         if not self.project_manager.project_exists(project_name):
-            raise FileNotFoundError(f"项目 '{project_name}' 不存在或未初始化")
+            raise FileNotFoundError(f"Project '{project_name}' does not exist or is not initialized")
 
         fd, archive_path_str = tempfile.mkstemp(
             prefix=f"{project_name}-",
@@ -1332,7 +1332,7 @@ class ProjectArchiveService:
         # 假值绕过 fail-loud，又使非 reference 分支的报错语义失真。
         raw_content_mode = script_payload.get("content_mode") or project_payload.get("content_mode")
         if not isinstance(raw_content_mode, str):
-            raise ValueError(f"未知或缺失 content_mode: {raw_content_mode!r}")
+            raise ValueError(f"Unknown or missing content_mode: {raw_content_mode!r}")
         content_mode = raw_content_mode
         generation_mode = project_payload.get("generation_mode")
 
@@ -2203,7 +2203,7 @@ class ProjectArchiveService:
     def _write_json_file(self, path: Path, payload: dict[str, Any]) -> None:
         real = self._resolve_json_path(path)
         if real is None:
-            raise ValueError(f"路径越界，拒绝写入: {path}")
+            raise ValueError(f"Path escapes the project, refusing to write: {path}")
         real.parent.mkdir(parents=True, exist_ok=True)
         with open(real, "w", encoding="utf-8") as handle:
             json.dump(payload, handle, ensure_ascii=False, indent=2)
@@ -2211,7 +2211,7 @@ class ProjectArchiveService:
     @staticmethod
     def _validate_scope(scope: str) -> None:
         if scope not in {"full", "current"}:
-            raise ValueError(f"scope 仅支持 full 或 current，收到: {scope}")
+            raise ValueError(f"scope must be full or current, got: {scope}")
 
     def _scan_archive_members(self, archive: zipfile.ZipFile) -> list[ArchiveMember]:
         members: list[ArchiveMember] = []
@@ -2474,7 +2474,7 @@ class ProjectArchiveService:
         记录回滚，旧目录原样还原；还原也只用改名，不会因删不净新目录而卡在已删除项目里。
         """
         if self._retire_project is None:
-            raise RuntimeError("覆盖导入需要收尾现有项目的记录")
+            raise RuntimeError("Overwrite import needs a way to retire the existing project record")
         deleted_dir: Path | None = None
 
         try:

@@ -45,7 +45,7 @@ def _ledger(project: dict[str, Any]) -> list[dict[str, Any]]:
     if raw is None:
         return []
     if not isinstance(raw, list) or not all(isinstance(entry, dict) for entry in raw):
-        raise EpisodeManagementError("ledger_invalid", "分集账本的形状异常")
+        raise EpisodeManagementError("ledger_invalid", "Episode ledger has an unexpected shape")
     return raw
 
 
@@ -54,7 +54,7 @@ def _index_of(entries: list[dict[str, Any]], episode: int) -> int:
         (i for i, entry in enumerate(entries) if parse_positive_episode_num(entry.get("episode")) == episode), None
     )
     if index is None:
-        raise EpisodeManagementError("episode_not_found", f"集（id={episode}）不在账本中")
+        raise EpisodeManagementError("episode_not_found", f"Episode (id={episode}) is not in the ledger")
     return index
 
 
@@ -83,7 +83,9 @@ def create_episode(
     project_dir = pm.get_project_path(project_name)
     with pm.locked_source_registration(project_name) as (_source_dir, project, undo):
         if project.get("content_mode") == "ad":
-            raise EpisodeManagementError("ad_episode_locked", "广告/短片项目只有一集，不能新建或删除集")
+            raise EpisodeManagementError(
+                "ad_episode_locked", "Ad/short projects have a single episode; episodes cannot be added or deleted"
+            )
         entries = _ledger(project)
         insert_at = len(entries) if after is None else _index_of(entries, after) + 1
         (episode,) = allocate_episode_ids(project, 1)
@@ -127,7 +129,9 @@ def move_episode(pm: ProjectManager, project_name: str, episode: int, *, after: 
             if (num := parse_positive_episode_num(entry.get("episode"))) is not None and num in placements
         ]
         if positions != sorted(positions):
-            raise EpisodeManagementError("cut_order_locked", "切出集之间按源文位置排列，不能调换它们的先后")
+            raise EpisodeManagementError(
+                "cut_order_locked", "Cut episodes follow their source position; their order cannot be swapped"
+            )
         project["episodes"] = entries
 
     pm.update_project(project_name, _mutate)

@@ -170,7 +170,7 @@ class DeclarativeImageBackend:
             definition=definition,
             provider=provider,
             read_state=extract_image_state,
-            log_label="声明式图片请求",
+            log_label="declarative image request",
             path_overrides=path_overrides,
         )
         self._model = model

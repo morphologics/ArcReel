@@ -264,7 +264,7 @@ class TestOpenAIVideoBackend:
                 prompt="Bad content",
                 output_path=output_path,
             )
-            with pytest.raises(RuntimeError, match="Sora 视频生成失败"):
+            with pytest.raises(RuntimeError, match="Sora video generation failed"):
                 await backend.generate(request)
 
         # The failure should be raised in the polling phase, never reaching the download. / 失败应该在轮询阶段抛出，不会进入下载
@@ -567,7 +567,7 @@ class TestOpenAIVideoBackend:
                 output_path=output_path,
                 duration_seconds=8,
             )
-            with pytest.raises(RuntimeError, match="Sora 视频生成失败"):
+            with pytest.raises(RuntimeError, match="Sora video generation failed"):
                 await backend.generate(request)
 
         assert mock_client.videos.retrieve.call_count == 1
@@ -606,7 +606,7 @@ class TestOpenAIVideoBackend:
                 output_path=output_path,
                 duration_seconds=8,
             )
-            with pytest.raises(RuntimeError, match="Sora 视频生成失败"):
+            with pytest.raises(RuntimeError, match="Sora video generation failed"):
                 await backend.generate(request)
 
         mock_client.videos.download_content.assert_not_called()
@@ -813,7 +813,7 @@ class TestProxyStatusSynonyms:
             from lib.backends.video_backends.openai import OpenAIVideoBackend
 
             backend = OpenAIVideoBackend(api_key="test-key", model="sora-2")
-            with pytest.raises(RuntimeError, match="Sora 视频生成失败"):
+            with pytest.raises(RuntimeError, match="Sora video generation failed"):
                 await backend.generate(
                     VideoGenerationRequest(prompt="p", output_path=tmp_path / "out.mp4", duration_seconds=8)
                 )
@@ -890,7 +890,7 @@ class TestFailureMessage:
 
         # Verbatim assertion: the error text lands in task.error_message as is; reprs of internal types must not appear in it.
         # 逐字断言：错误文本原样落 task.error_message，内部类型的 repr 不该出现在里面
-        assert str(ei.value) == f"Sora 视频生成失败: {expected}"
+        assert str(ei.value) == f"Sora video generation failed: {expected}"
 
 
 _RELAY_A = "https://relay-a.example.com/v1"

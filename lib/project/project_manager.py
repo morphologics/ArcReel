@@ -444,9 +444,9 @@ class ProjectManager:
         """Validate and normalize a project identifier."""
         normalized = str(name).strip()
         if not normalized:
-            raise ValueError("项目标识不能为空")
+            raise ValueError("Project identifier must not be empty")
         if not PROJECT_NAME_PATTERN.fullmatch(normalized):
-            raise ValueError("项目标识仅允许英文字母、数字和中划线")
+            raise ValueError("Project identifier may only contain English letters, digits and hyphens")
         return normalized
 
     @staticmethod
@@ -567,7 +567,7 @@ class ProjectManager:
         try:
             project_dir.mkdir()
         except FileExistsError as exc:
-            raise FileExistsError(f"项目 '{name}' 已存在") from exc
+            raise FileExistsError(f"Project '{name}' already exists") from exc
 
         # A single-step call persists content_mode by default; a composite creation flow can defer to publishing the full
         # metadata at once.
@@ -840,9 +840,9 @@ class ProjectManager:
         try:
             project_dir = safe_join(self.projects_dir, name)
         except PathTraversalError as exc:
-            raise ValueError(f"非法项目名称: '{name}'") from exc
+            raise ValueError(f"Invalid project name: '{name}'") from exc
         if not project_dir.exists():
-            raise FileNotFoundError(f"项目 '{name}' 不存在")
+            raise FileNotFoundError(f"Project '{name}' does not exist")
         return project_dir
 
     @staticmethod
@@ -853,7 +853,7 @@ class ProjectManager:
         try:
             return str(safe_join(base_dir, filename))
         except PathTraversalError as exc:
-            raise ValueError(f"非法文件名: '{filename}'") from exc
+            raise ValueError(f"Invalid file name: '{filename}'") from exc
 
     def get_project_status(self, name: str) -> dict[str, Any]:
         """
@@ -1553,15 +1553,16 @@ class ProjectManager:
         owner_episode = ProjectManager.canonical_script_episode(base_name)
         if owner_episode is None:
             raise ValueError(
-                f"脚本 {base_name} 的文件名不是规范名（应为 episode_N.json），拒绝操作以避免污染 project.json"
+                f"Script {base_name} does not have a canonical file name (expected episode_N.json); "
+                "refusing to avoid corrupting project.json"
             )
         script_episode = script.get("episode")
         if not is_episode_number(script_episode):
             return
         if script_episode != owner_episode:
             raise ValueError(
-                f"脚本 {base_name} 内部 episode={script_episode} 与它归属的 "
-                f"episode={owner_episode} 不一致，拒绝操作以避免污染 project.json"
+                f"Script {base_name} has internal episode={script_episode}, which does not match its owning "
+                f"episode={owner_episode}; refusing to avoid corrupting project.json"
             )
 
     def _persist_script_json(self, path: Path, script: dict) -> None:
@@ -1652,7 +1653,8 @@ class ProjectManager:
         match = re.search(r"episode[-_\s]*(\d+)", script_filename, re.IGNORECASE)
         if match:
             return int(match.group(1))
-        raise ValueError(f"无法确定集号：剧本缺少 episode 字段且文件名 {script_filename} 不含 episodeN 模式")
+        raise ValueError(f"Cannot determine the episode number: the script has no episode field and the file name "
+            f"{script_filename} does not contain an episodeN pattern")
 
     def sync_episode_from_script(self, project_name: str, script_filename: str) -> dict:
         """
@@ -1868,7 +1870,7 @@ class ProjectManager:
             # The existence check only holds for the file-system path; whether the script exists is decided by the actual reader.
             # 存在性检查只对文件系统这条路径成立；剧本是否存在由实际读取方判定。
             if not real.exists():
-                raise FileNotFoundError(f"剧本文件不存在: {real}")
+                raise FileNotFoundError(f"Script file does not exist: {real}")
             with open(real, encoding="utf-8") as f:
                 script = json.load(f)
         else:
@@ -1914,7 +1916,7 @@ class ProjectManager:
             key = resolve_asset_key(script.get("characters"), name)
             if key is None:
                 # Raised within the lock; locked_script skips the write-back / 在锁内抛出，locked_script 跳过写回
-                raise KeyError(f"角色 '{name}' 不存在")
+                raise KeyError(f"Character '{name}' not found")
             script["characters"][key]["character_sheet"] = sheet_path
         return script
 
@@ -2204,7 +2206,7 @@ class ProjectManager:
             assets[asset_type] = asset_path
             self.update_scene_status(item)
             return item
-        raise KeyError(f"分镜 '{scene_id}' 不存在")
+        raise KeyError(f"Storyboard item '{scene_id}' not found")
 
     def update_scene_asset_across_scripts(
         self,
@@ -2386,7 +2388,7 @@ class ProjectManager:
                 self.update_scene_status(item)
 
             if missing:
-                raise KeyError(f"批量回写命中失败：以下分镜不存在 {sorted(set(missing))}")
+                raise KeyError(f"Batch write-back failed: these storyboard items do not exist {sorted(set(missing))}")
         return script
 
     def get_pending_scenes(self, project_name: str, script_filename: str, asset_type: str) -> list[dict]:
@@ -2529,7 +2531,7 @@ class ProjectManager:
         project_file = self._get_project_file_path(project_name)
 
         if not project_file.exists():
-            raise FileNotFoundError(f"项目元数据文件不存在: {project_file}")
+            raise FileNotFoundError(f"Project metadata file does not exist: {project_file}")
 
         with open(project_file, encoding="utf-8") as f:
             return json.load(f)
@@ -2561,7 +2563,7 @@ class ProjectManager:
         with self._project_lock(project_name):
             source_dir = project_path / "source"
             if source_dir.is_symlink() or source_dir.is_junction():
-                raise ValueError("source 目录不得是符号链接或 junction")
+                raise ValueError("The source directory must not be a symlink or junction")
             source_dir.mkdir(parents=True, exist_ok=True)
             yield source_dir
 
@@ -3019,7 +3021,7 @@ class ProjectManager:
                     destination for _content, destination in writes
                 ]
                 if len(set(replacement_destinations)) != len(replacement_destinations):
-                    raise ValueError("项目文件事务包含重复目标路径")
+                    raise ValueError("The project file transaction contains duplicate target paths")
                 for index, (source, destination) in enumerate(copies):
                     destination.parent.mkdir(parents=True, exist_ok=True)
                     temporary = destination.with_name(f".{destination.name}.{token}-{index}.tmp")
@@ -3201,18 +3203,20 @@ class ProjectManager:
         # 数据层守卫：模式专属字段互斥。路由层已返回 400，这里再兜一道防非路由调用方。
         if resolved_mode == "ad":
             if default_duration is not None:
-                raise ValueError("广告/短片项目不持有 default_duration（分镜时长按 target_duration 预算逐个分镜规划）")
+                raise ValueError("Ad/short projects do not hold default_duration "
+                    "(shot durations are planned per shot from the target_duration budget)")
             if episode_target_duration is not None:
-                raise ValueError("广告/短片项目不持有 episode_target_duration（整集体量按 target_duration 预算规划）")
+                raise ValueError("Ad/short projects do not hold episode_target_duration "
+                    "(the episode size is planned from the target_duration budget)")
             if target_duration is not None and not is_int(target_duration, minimum=1):
-                raise ValueError(f"target_duration 必须为正整数秒，当前为 {target_duration!r}")
+                raise ValueError(f"target_duration must be a positive integer of seconds, got {target_duration!r}")
             if brief is not None and not is_str(brief):
-                raise ValueError(f"brief 必须是字符串，当前为 {brief!r}")
+                raise ValueError(f"brief must be a string, got {brief!r}")
         else:
             if target_duration is not None:
-                raise ValueError("target_duration 仅广告/短片项目（content_mode=ad）可用")
+                raise ValueError("target_duration is only available for ad/short projects (content_mode=ad)")
             if brief is not None:
-                raise ValueError("brief 仅广告/短片项目（content_mode=ad）可用")
+                raise ValueError("brief is only available for ad/short projects (content_mode=ad)")
 
         # schema_version aligns with CURRENT_SCHEMA_VERSION: a new project is already in the latest shape, so startup
         # migration doesn't mishandle it (e.g. v0->v1 wrongly clearing scenes/props when "no clues field").
@@ -3244,7 +3248,7 @@ class ProjectManager:
         if narration is not None:
             unknown = set(narration) - set(NARRATION_CONFIG_FIELDS)
             if unknown:
-                raise ValueError(f"narration 只接受旁白交付配置字段，收到: {sorted(unknown)}")
+                raise ValueError(f"narration only accepts narration delivery settings fields, got: {sorted(unknown)}")
             project.update(narration)
             validate_project_narration_config(project)
         if resolved_mode == "ad":
@@ -3258,8 +3262,8 @@ class ProjectManager:
         if episode_target_duration is not None:
             if not is_valid_episode_target_duration(episode_target_duration):
                 raise ValueError(
-                    f"episode_target_duration 必须是 {MIN_EPISODE_TARGET_DURATION}–"
-                    f"{MAX_EPISODE_TARGET_DURATION} 秒的整数，当前为 {episode_target_duration!r}"
+                    f"episode_target_duration must be an integer of {MIN_EPISODE_TARGET_DURATION}–"
+                    f"{MAX_EPISODE_TARGET_DURATION} seconds, got {episode_target_duration!r}"
                 )
             project[EPISODE_TARGET_DURATION_FIELD] = episode_target_duration
         if style_template_id is not None:
@@ -3271,7 +3275,7 @@ class ProjectManager:
             # 数据层守卫：退役的单字段 image_backend 不得写入（解析链不读取，写回只会
             # 重新制造被静默忽略的 legacy 形态）。路由层已返回 400，这里再兜一道防非路由调用方。
             if "image_backend" in extras:
-                raise ValueError("image_backend 已废弃，请改用 image_provider_t2i / image_provider_i2i")
+                raise ValueError("image_backend is deprecated; use image_provider_t2i / image_provider_i2i instead")
             # extras may only append optional fields and must not overwrite the core fields validated/built above -- otherwise
             # non-route callers could bypass the mode mutual-exclusion guard via extras (e.g. an ad project writing back
             # default_duration).
@@ -3286,7 +3290,7 @@ class ProjectManager:
             }
             forbidden = reserved & set(extras)
             if forbidden:
-                raise ValueError(f"extras 不允许覆盖核心字段: {sorted(forbidden)}")
+                raise ValueError(f"extras may not override core fields: {sorted(forbidden)}")
             project.update(extras)
 
         # Generation mode and grid switch: the routing layer already enforces the required binary and the ad mutual exclusion
@@ -3296,12 +3300,14 @@ class ProjectManager:
         # 调用方；未传时按数据层默认补写显式值，保证新项目落盘即含两字段（与 schema v5 形态对齐）。
         generation_mode = project.setdefault("generation_mode", _DEFAULT_GENERATION_MODE)
         if not isinstance(generation_mode, str) or generation_mode not in VALID_GENERATION_MODES:
-            raise ValueError(f"generation_mode 值无效: {generation_mode!r}，必须是 {sorted(VALID_GENERATION_MODES)}")
+            raise ValueError(
+                f"Invalid generation_mode value: {generation_mode!r}, must be one of {sorted(VALID_GENERATION_MODES)}",
+            )
         grid_storyboard = project.setdefault("grid_storyboard", False)
         if not isinstance(grid_storyboard, bool):
-            raise ValueError(f"grid_storyboard 必须是布尔值，当前为 {grid_storyboard!r}")
+            raise ValueError(f"grid_storyboard must be a boolean, got {grid_storyboard!r}")
         if resolved_mode == "ad" and grid_storyboard:
-            raise ValueError("广告/短片项目不支持宫格分镜（grid_storyboard）")
+            raise ValueError("Ad/short projects do not support grid storyboards (grid_storyboard)")
 
         self.save_project(project_name, project)
         return project
@@ -3377,7 +3383,8 @@ class ProjectManager:
         import warnings
 
         warnings.warn(
-            "sync_project_status() 已废弃。status 等统计字段现由项目摘要读时计算。",
+            "sync_project_status() is deprecated. status and other statistics fields are now computed when the "
+            "project summary is read.",
             DeprecationWarning,
             stacklevel=2,
         )
@@ -3468,8 +3475,9 @@ class ProjectManager:
             name = validate_asset_name(raw_name)
             if name in normalized_entries:
                 raise ValueError(
-                    f"{spec.bucket_key} 的 entries 含规范化后冲突的 name {name!r}："
-                    f"原始键 {raw_keys_by_normalized[name]!r} 与 {raw_name!r} 在规范化（strip + NFC）后等价"
+                    f"{spec.bucket_key} entries contain name {name!r} that conflicts after normalization: "
+                    f"raw keys {raw_keys_by_normalized[name]!r} and {raw_name!r} are equal after normalization "
+                    "(strip + NFC)"
                 )
             normalized_entries[name] = entry
             raw_keys_by_normalized[name] = raw_name
@@ -3536,9 +3544,9 @@ class ProjectManager:
         # A wrong entries type and an empty object need different hints, so the Agent can fix its input precisely.
         # entries 类型错误与空对象需要不同提示，便于 Agent 精确修正输入。
         if not is_shape(entries, dict):
-            raise ValueError(f"entries 必须是对象（dict），当前为 {type(entries).__name__}")
+            raise ValueError(f"entries must be an object (dict), got {type(entries).__name__}")
         if not entries:
-            raise ValueError("entries 不能为空（至少需要一个 name → attrs 条目）")
+            raise ValueError("entries must not be empty (at least one name → attrs entry is required)")
         # Normalize name: non-empty after strip + NFC, and must be a path-safe single component (validate_asset_name; names
         # are joined into file paths and single-segment route parameters). An Agent mistakenly passing a name with spaces like
         # "  李白  " would make later name-indexed lookups (character generation etc.) mismatch on whitespace. Invalid names
@@ -3558,11 +3566,12 @@ class ProjectManager:
             except ValueError as exc:
                 raise ValueError(f"{table}: {exc}") from None
             if not is_shape(attrs, dict):
-                raise ValueError(f"{table} '{name}' 的内容必须是对象")
+                raise ValueError(f"The content of {table} '{name}' must be an object")
             if name in normalized_entries:
                 raise ValueError(
-                    f"{table} 的 entries 含规范化后冲突的 name {name!r}："
-                    f"原始键 {raw_keys_by_normalized[name]!r} 与 {raw_name!r} 在规范化（strip + NFC）后等价"
+                    f"{table} entries contain name {name!r} that conflicts after normalization: "
+                    f"raw keys {raw_keys_by_normalized[name]!r} and {raw_name!r} are equal after normalization "
+                    "(strip + NFC)"
                 )
             normalized_entries[name] = attrs
             raw_keys_by_normalized[name] = raw_name
@@ -3638,7 +3647,7 @@ class ProjectManager:
                 # 历史脏数据：bucket_key 已存在却非 dict（如 list/str）。继续会让下方
                 # bucket.get/bucket[name].update 抛含糊的 AttributeError，故先 fail-loud
                 # 给出意外类型与 offending key（mutation 物理上无法对非 dict 施加，与「不更坏」无关）。
-                raise ValueError(f"project[{spec.bucket_key!r}] 必须是对象，当前为 {type(bucket).__name__}")
+                raise ValueError(f"project[{spec.bucket_key!r}] must be an object, got {type(bucket).__name__}")
             for name, attrs in cleaned.items():
                 # An existing entry's key may be NFD: resolve the real key and update in place, rather than creating a second entry
                 # under the NFC name
@@ -3691,7 +3700,7 @@ class ProjectManager:
             # 比单纯比 valid 标志更严：堵住「带历史脏数据的项目里新 entry 的结构错误 piggyback 落盘」。
             new_errors = after_errors - before_errors
             if new_errors:
-                raise ValueError("project.json 结构校验失败: " + "; ".join(sorted(new_errors)))
+                raise ValueError("project.json structure validation failed: " + "; ".join(sorted(new_errors)))
 
         self.update_project(project_name, _mutate)
         return {
@@ -3731,7 +3740,7 @@ class ProjectManager:
             bucket = project.get(spec.bucket_key)
             key = resolve_asset_key(bucket, name)
             if not isinstance(bucket, dict) or key is None:
-                raise KeyError(f"{spec.label_zh} '{name}' 不存在")
+                raise KeyError(f"{spec.asset_type.capitalize()} '{name}' not found")
             before.update(asset_trash.state_before(project_dir))
             deleted_name = key
             entry = bucket[key]
@@ -3774,12 +3783,12 @@ class ProjectManager:
         asset_type = self._resolve_asset_type(table)
         spec = ASSET_SPECS[asset_type]
         if not self.project_exists(project_name):
-            raise FileNotFoundError(f"项目不存在: {project_name}")
+            raise FileNotFoundError(f"Project does not exist: {project_name}")
         with self._asset_cascade_locks(project_name) as (script_files, draft_files):
             bucket = self._read_project_raw_unlocked(project_name).get(spec.bucket_key)
             key = resolve_asset_key(bucket, name)
             if key is None:
-                raise KeyError(f"{spec.label_zh} '{name}' 不存在")
+                raise KeyError(f"{spec.asset_type.capitalize()} '{name}' not found")
             scan = self._scan_asset_references(
                 project_name, script_files, draft_files, asset_type, key, _DELETION_SCAN_TARGET
             )
@@ -3809,7 +3818,7 @@ class ProjectManager:
         bucket_key → 资产类型；未知表名抛 ValueError（message 列出合法取值）。"""
         asset_type = cls._BUCKET_TO_ASSET_TYPE.get(table)
         if asset_type is None:
-            raise ValueError(f"未知资产表: {table!r}，须是 {sorted(cls._BUCKET_TO_ASSET_TYPE)} 之一")
+            raise ValueError(f"Unknown asset table: {table!r}, must be one of {sorted(cls._BUCKET_TO_ASSET_TYPE)}")
         return asset_type
 
     _LEGACY_ASSET_FIELDS = frozenset({"type", "importance"})
@@ -4004,7 +4013,7 @@ class ProjectManager:
         spec = ASSET_SPECS[asset_type]
         new_clean = validate_asset_name(new_name)
         if not self.project_exists(project_name):
-            raise FileNotFoundError(f"项目不存在: {project_name}")
+            raise FileNotFoundError(f"Project does not exist: {project_name}")
         project_dir = self.get_project_path(project_name)
 
         with self._asset_cascade_locks(project_name) as (script_files, draft_files):
@@ -4070,11 +4079,12 @@ class ProjectManager:
                             dry_run=dry_run,
                         )
                 hint = (
-                    "；新名已存在于资产表——可能上次重命名已成功（级联重命名可安全重试）"
+                    "; the new name already exists in the asset table - the previous rename may have succeeded "
+                    "(cascading rename is safe to retry)"
                     if completed_key is not None
                     else ""
                 )
-                raise AssetRenameNotFoundError(f"{table} 中不存在名为 {old_name!r} 的资产{hint}")
+                raise AssetRenameNotFoundError(f"No asset named {old_name!r} exists in {table}{hint}")
             conflict_key = resolve_asset_key(bucket, new_clean)
             if conflict_key is not None and conflict_key != old_key:
                 raise AssetRenameConflictError(conflict_key)
@@ -4129,7 +4139,7 @@ class ProjectManager:
             after_errors = _rename_agnostic_errors(validator.validate_project_payload(mutated), old_key, new_clean)
             new_errors = {after_errors[fingerprint] for fingerprint in after_errors.keys() - before_errors.keys()}
             if new_errors:
-                raise ValueError("project.json 结构校验失败: " + "; ".join(sorted(new_errors)))
+                raise ValueError("project.json structure validation failed: " + "; ".join(sorted(new_errors)))
 
             manifest_rekey_plan = None
             if manifest_adapter is not None:
@@ -4279,7 +4289,7 @@ class ProjectManager:
         spec = ASSET_SPECS[asset_type]
         new_clean = validate_asset_name(new_name)
         if not self.project_exists(project_name):
-            raise FileNotFoundError(f"项目不存在: {project_name}")
+            raise FileNotFoundError(f"Project does not exist: {project_name}")
         project_dir = self.get_project_path(project_name)
 
         with self._asset_cascade_locks(project_name) as (script_files, draft_files):
@@ -4293,10 +4303,10 @@ class ProjectManager:
                 raise ValueError(f"project asset {spec.bucket_key}/{base_key} must be an object")
             table = entry.get(DERIVATIVES_FIELD)
             if not isinstance(table, dict):
-                raise AssetRenameNotFoundError(f"{base_key} 没有登记任何衍生")
+                raise AssetRenameNotFoundError(f"{base_key} has no registered derivatives")
             old_key = resolve_asset_key(table, old_name)
             if old_key is None:
-                raise AssetRenameNotFoundError(f"{base_key} 下不存在名为 {old_name!r} 的衍生")
+                raise AssetRenameNotFoundError(f"No derivative named {old_name!r} exists under {base_key}")
             taken = find_derivative_name(table, new_clean, exclude=old_key)
             if taken is not None:
                 raise AssetRenameConflictError(taken)
@@ -4443,12 +4453,15 @@ class ProjectManager:
 
         asset_type = self._resolve_asset_type(table)
         if asset_type not in MERGEABLE_ASSET_TYPES:
-            raise AssetMergeRejectedError("type_not_mergeable", f"{table} 不支持合并")
+            raise AssetMergeRejectedError("type_not_mergeable", f"{table} does not support merging")
         spec = ASSET_SPECS[asset_type]
         if as_derivative and not spec.supports_derivatives:
-            raise AssetMergeRejectedError("derivative_needs_character", f"{table} 没有衍生，不能并为衍生")
+            raise AssetMergeRejectedError(
+                "derivative_needs_character",
+                f"{table} has no derivatives; cannot merge as a derivative",
+            )
         if not self.project_exists(project_name):
-            raise FileNotFoundError(f"项目不存在: {project_name}")
+            raise FileNotFoundError(f"Project does not exist: {project_name}")
         project_dir = self.get_project_path(project_name)
 
         with self._asset_cascade_locks(project_name) as (script_files, draft_files):
@@ -4461,7 +4474,7 @@ class ProjectManager:
             if target is None:
                 raise AssetMergeNotFoundError(target_name)
             if source == target:
-                raise AssetMergeRejectedError("same_asset", f"不能把 {source!r} 并入它自己")
+                raise AssetMergeRejectedError("same_asset", f"Cannot merge {source!r} into itself")
             source_entry, target_entry = bucket[source], bucket[target]
             if not isinstance(source_entry, dict) or not isinstance(target_entry, dict):
                 raise ValueError(f"project asset {spec.bucket_key} entries must be objects")
@@ -4599,7 +4612,7 @@ class ProjectManager:
             after_errors = _rename_agnostic_errors(validator.validate_project_payload(mutated), target, target)
             new_errors = {after_errors[fingerprint] for fingerprint in after_errors.keys() - before_errors.keys()}
             if new_errors:
-                raise ValueError("project.json 结构校验失败: " + "; ".join(sorted(new_errors)))
+                raise ValueError("project.json structure validation failed: " + "; ".join(sorted(new_errors)))
 
             report = AssetMergeReport(
                 table=table,
@@ -4686,7 +4699,7 @@ class ProjectManager:
             bucket = project.get(spec.bucket_key)
             key = resolve_asset_key(bucket, name)
             if not isinstance(bucket, dict) or key is None:
-                raise KeyError(f"{spec.label_zh} '{name}' 不存在")
+                raise KeyError(f"{spec.asset_type.capitalize()} '{name}' does not exist")
             bucket[key][spec.sheet_field] = sheet_path
 
         return self.update_project(project_name, _mutate, on_commit=on_commit)
@@ -4727,7 +4740,7 @@ class ProjectManager:
                 locked_bucket = locked_project.get(spec.bucket_key)
                 key = resolve_asset_key(locked_bucket, name)
                 if not isinstance(locked_bucket, dict) or key is None:
-                    raise KeyError(f"{spec.label_zh} '{name}' 不存在")
+                    raise KeyError(f"{spec.asset_type.capitalize()} '{name}' does not exist")
                 locked_bucket[key][spec.sheet_field] = sheet_path
 
             with formal_write_transaction(project_file, target):
@@ -4751,7 +4764,7 @@ class ProjectManager:
         bucket = project.get(spec.bucket_key)
         key = resolve_asset_key(bucket, name)
         if not isinstance(bucket, dict) or key is None:
-            raise KeyError(f"{spec.label_zh} '{name}' 不存在")
+            raise KeyError(f"{spec.asset_type.capitalize()} '{name}' does not exist")
         return bucket[key]
 
     def _get_asset_path(self, asset_type: str, project_name: str, filename: str) -> Path:
@@ -4852,7 +4865,7 @@ class ProjectManager:
         def _mutate(project: dict) -> None:
             key = resolve_asset_key(project.get("characters"), char_name)
             if key is None:
-                raise KeyError(f"角色 '{char_name}' 不存在")
+                raise KeyError(f"Character '{char_name}' does not exist")
             project["characters"][key]["reference_image"] = ref_path
 
         return self.update_project(project_name, _mutate)
@@ -4863,7 +4876,7 @@ class ProjectManager:
         def _mutate(project: dict) -> None:
             key = resolve_asset_key(project.get("props"), prop_name)
             if key is None:
-                raise KeyError(f"道具 '{prop_name}' 不存在")
+                raise KeyError(f"Prop '{prop_name}' does not exist")
             project["props"][key]["reference_image"] = ref_path
 
         return self.update_project(project_name, _mutate)
@@ -4878,7 +4891,7 @@ class ProjectManager:
         def _mutate(project: dict) -> None:
             key = resolve_asset_key(project.get(bucket), name)
             if key is None:
-                raise KeyError(f"{asset_type} '{name}' 不存在")
+                raise KeyError(f"{asset_type} '{name}' does not exist")
             project[bucket][key]["reference_image"] = ""
 
         return self.update_project(project_name, _mutate)
@@ -4932,7 +4945,7 @@ class ProjectManager:
     def _set_character_reference_audio(project: dict, char_name: str, ref_path: str) -> None:
         key = resolve_asset_key(project.get("characters"), char_name)
         if key is None:
-            raise KeyError(f"角色 '{char_name}' 不存在")
+            raise KeyError(f"Character '{char_name}' does not exist")
         project["characters"][key]["reference_audio"] = ref_path
         project["characters"][key]["voice_updated_at"] = datetime.now(UTC).isoformat()
 
@@ -4960,7 +4973,7 @@ class ProjectManager:
         def _mutate(project: dict) -> None:
             key = resolve_asset_key(project.get("characters"), char_name)
             if key is None:
-                raise KeyError(f"角色 '{char_name}' 不存在")
+                raise KeyError(f"Character '{char_name}' does not exist")
             old_audio = project["characters"][key].get("reference_audio")
             stale_audio = resolve_stale_reference_audio(project_dir, refs_audio_dir, old_audio, target)
             self._set_character_reference_audio(project, char_name, ref_path)
@@ -4999,7 +5012,7 @@ class ProjectManager:
         def _mutate(project: dict) -> None:
             key = resolve_asset_key(project.get("characters"), char_name)
             if key is None:
-                raise KeyError(f"角色 '{char_name}' 不存在")
+                raise KeyError(f"Character '{char_name}' does not exist")
             old_audio = project["characters"][key].get("reference_audio")
             stale_audio = resolve_audio_ref_path(
                 project_dir,
@@ -5077,11 +5090,11 @@ class ProjectManager:
             bucket = project.get("products")
             key = resolve_asset_key(bucket, product_name)
             if not isinstance(bucket, dict) or key is None:
-                raise KeyError(f"商品 '{product_name}' 不存在")
+                raise KeyError(f"Product '{product_name}' does not exist")
             refs = bucket[key].setdefault("reference_images", [])
             if not isinstance(refs, list):
                 raise ValueError(
-                    f"products['{product_name}'].reference_images 必须是列表，当前为 {type(refs).__name__}"
+                    f"products['{product_name}'].reference_images must be a list, got {type(refs).__name__}"
                 )
             if ref_path not in refs:
                 refs.append(ref_path)
@@ -5278,6 +5291,7 @@ class ProjectManager:
         Returns:
             生成的 overview 字典，包含 synopsis, genre, theme, world_setting, generated_at
         """
+        from lib.artifacts.artifact_provenance import DEFAULT_SOURCE_LANGUAGE
         from lib.backends.providers import CallPurpose
         from lib.backends.text_backends.base import TextGenerationRequest, TextTaskType
         from lib.backends.text_generator import TextGenerator
@@ -5286,7 +5300,7 @@ class ProjectManager:
         # Read source file contents / 读取源文件内容
         source_content = await asyncio.to_thread(self._read_source_files, project_name)
         if not source_content:
-            raise EmptySourceError("source 目录为空，无法生成概述")
+            raise EmptySourceError("The source directory is empty; cannot generate an overview")
 
         # Create a TextGenerator (tracks usage automatically) / 创建 TextGenerator（自动追踪用量）
         generator = await TextGenerator.create(
@@ -5303,9 +5317,13 @@ class ProjectManager:
         # source_language comes from project.json and may be non-string dirty data; non-string or empty string falls back to
         # the default language
         # source_language 来自 project.json，可能是非字符串脏数据；非字符串或空串回退默认语言
+        # YouReel (owner 2026-11-20): the fallback is the default locale's language (artifact_provenance), English in
+        # production (upstream: "中文"). / YouReel：回退为默认语言（生产为英文；上游为「中文」）。
         raw_source_language = project_data.get("source_language")
         target_language = (
-            raw_source_language if isinstance(raw_source_language, str) and raw_source_language.strip() else "中文"
+            raw_source_language
+            if isinstance(raw_source_language, str) and raw_source_language.strip()
+            else DEFAULT_SOURCE_LANGUAGE
         )
         prompt = build_overview_prompt(source_content, source_kind=source_kind, target_language=target_language)
 

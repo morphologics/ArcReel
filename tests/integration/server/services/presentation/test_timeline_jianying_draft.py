@@ -5,6 +5,7 @@ and JianYing version at download time, artifact currency, registered versions an
 
 from __future__ import annotations
 
+import functools
 import json
 import shutil
 import zipfile
@@ -25,8 +26,9 @@ from lib.edit_timeline import EditTimelineService
 from lib.edit_timeline.model import BgmClip, EditTimelineContent
 from lib.edit_timeline.operations import InsertBgm, SetHold, SetReason, SetTransition, SetVolume, TransitionSpec
 from lib.edit_timeline.store import EditTimelineStore
+from lib.i18n import _ as translate
 from lib.jianying_draft.errors import JianyingDraftError
-from server.services.presentation.timeline_jianying_draft import TimelineJianyingDraftService
+from server.services.presentation.timeline_jianying_draft import TimelineJianyingDraftService, draft_folder_name
 from tests.factories import wav_bytes
 from tests.integration.server.services.presentation.timeline_render_support import (
     CREATOR,
@@ -98,7 +100,7 @@ async def test_with_narration_draft_maps_trim_volume_hold_narration_and_subtitle
     hold_material = videos[main[1]["material_id"]]
     assert hold_material["path"] == f"{PLACEHOLDER}hold_c1.png"
 
-    narration = _track(content, "audio", "旁白")["segments"]
+    narration = _track(content, "audio", "Narration")["segments"]
     audios = _materials(content, "audios")
     # S02's 2 s narration is longer than the 1.5 s video; it is exported as usual, the part beyond the timeline
     # end is cut and reported as a warning
@@ -114,7 +116,7 @@ async def test_with_narration_draft_maps_trim_volume_hold_narration_and_subtitle
         ("旁白一句", 0, 1_200_000, "7265596643066516029"),
         ("第二段", 1_500_000, 1_500_000, "7265596643066516029"),
     ]
-    assert _track(content, "text")["name"] == "字幕"
+    assert _track(content, "text")["name"] == "Subtitles"
     assert all(material["path"].startswith(PLACEHOLDER) for material in [*videos.values(), *audios.values()])
 
 
@@ -150,8 +152,8 @@ async def test_overlapping_narrations_and_subtitles_get_extra_tracks_and_extra_s
         for track in content["tracks"]
         if track["type"] == "audio"
     ] == [
-        ("旁白", [((0, 1_200_000), "E1S01")]),
-        ("旁白 2", [((1_000_000, 1_500_000), "E1S02")]),
+        ("Narration", [((0, 1_200_000), "E1S01")]),
+        ("Narration 2", [((1_000_000, 1_500_000), "E1S02")]),
     ]
     texts = _materials(content, "texts")
     assert [
@@ -166,10 +168,10 @@ async def test_overlapping_narrations_and_subtitles_get_extra_tracks_and_extra_s
         for track in content["tracks"]
         if track["type"] == "text"
     ] == [
-        ("字幕", [("旁白一句", 0, 1_200_000)], [-0.75]),
+        ("Subtitles", [("旁白一句", 0, 1_200_000)], [-0.75]),
         # The new subtitle track is moved up as a whole by 0.2 (JianYing vertical position; half the canvas height is 1)
         # 新增的字幕轨整轨上移 0.2（剪映纵向位置，半个画布高为 1）
-        ("字幕 2", [("第二段", 1_000_000, 1_500_000)], [-0.55]),
+        ("Subtitles 2", [("第二段", 1_000_000, 1_500_000)], [-0.55]),
     ]
     assert {issue.code for issue in result.warnings} == {"narration_overrun"}
 
@@ -202,10 +204,15 @@ async def test_download_substitutes_local_draft_directory_and_jianying_version(t
         ("C:\\Users\\me\\JianyingPro Drafts\\", "5", "C:\\Users\\me\\JianyingPro Drafts", "draft_content.json"),
     ):
         package, name = await service.package_download(
-            "demo", timeline_id, narration="with_narration", draft_root=draft_root, jianying_version=jianying_version
+            "demo",
+            timeline_id,
+            narration="with_narration",
+            draft_root=draft_root,
+            jianying_version=jianying_version,
+            translate=functools.partial(translate, locale="en"),
         )
         try:
-            assert name == "01_One_完整版_带旁白"
+            assert name == "01_One_完整版_with_narration"
             assets_dir = f"{assets_prefix}/{name}/assets/"
             with zipfile.ZipFile(package) as archive:
                 names = set(archive.namelist())
@@ -525,3 +532,26 @@ async def test_omitted_narration_version_follows_the_project_narration_delivery(
 
     assert check.narration == expected
     assert (status.narration, status.status) == (expected, ArtifactStatus.CURRENT)
+
+
+@pytest.mark.parametrize(("locale", "suffix"), [("en", "_with_narration"), ("zh", "_带旁白")])
+def test_with_narration_folder_suffix_follows_the_request_language(locale: str, suffix: str) -> None:
+    project = {"title": "Demo", "episodes": []}
+    name = draft_folder_name(
+        "demo",
+        project,
+        episode=1,
+        timeline_name="Cut",
+        narration="with_narration",
+        translate=functools.partial(translate, locale=locale),
+    )
+    assert name.endswith(f"_Cut{suffix}")
+    without = draft_folder_name(
+        "demo",
+        project,
+        episode=1,
+        timeline_name="Cut",
+        narration="without_narration",
+        translate=functools.partial(translate, locale=locale),
+    )
+    assert without.endswith("_Cut")

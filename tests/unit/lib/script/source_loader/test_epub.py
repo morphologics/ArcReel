@@ -34,8 +34,8 @@ def test_epub_falls_back_to_index_when_no_toc(epub_factory):
     result = EpubExtractor().extract(src)
     assert result.chapter_count == 2
     # No toc -> titles degrade to "第 N 章" / 没有 toc → 标题降级为 "第 N 章"
-    assert "# 第 1 章" in result.text
-    assert "# 第 2 章" in result.text
+    assert "# Chapter 1" in result.text
+    assert "# Chapter 2" in result.text
 
 
 def test_epub_excludes_nav_with_nonstandard_id(tmp_path):

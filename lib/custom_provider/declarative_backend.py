@@ -923,7 +923,7 @@ class DeclarativeVideoBackend(ProviderJobIdPersistenceMixin):
             definition=definition,
             provider=provider,
             read_state=extract_provider_state,
-            log_label="声明式视频请求",
+            log_label="declarative video request",
             path_overrides=path_overrides,
         )
         self._model = model

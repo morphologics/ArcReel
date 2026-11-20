@@ -132,11 +132,11 @@ class TestCredentialResolution:
 
     @pytest.mark.parametrize(("ak", "sk"), [(None, "sk"), ("ak", None), ("", "sk"), ("  ", "sk")])
     def test_jwt_credentials_missing_raises(self, ak, sk):
-        with pytest.raises(ValueError, match=r"请到系统配置页填写可灵 Kling 的 Access Key 与 Secret Key"):
+        with pytest.raises(ValueError, match=r"Enter the Kling Access Key and Secret Key on the settings page"):
             resolve_kling_jwt_credentials(ak, sk)
 
     def test_api_key_missing_raises(self):
-        with pytest.raises(ValueError, match=r"请填写可灵 Kling 的 API Key"):
+        with pytest.raises(ValueError, match=r"Enter the Kling API Key"):
             resolve_kling_api_key("  ")
 
 

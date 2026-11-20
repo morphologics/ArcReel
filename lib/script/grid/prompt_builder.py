@@ -164,7 +164,10 @@ def build_grid_prompt(
         # would mismatch -- callers should first chunk by max_cell_count (see lib.script.grid.layout.plan_grid_chunks); fail loud here.
         # 超员场景在成图中没有对应画格，切格回填会按位置错配——调用方应先按
         # max_cell_count 切块（见 lib.script.grid.layout.plan_grid_chunks），此处 fail loud。
-        raise ValueError(f"分镜数 {n_scenes} 超过 {rows}×{cols} 宫格的画格数 {total}，分组应先切块再构建 prompt")
+        raise ValueError(
+            f"Shot count {n_scenes} exceeds the {total} panels of a {rows}×{cols} grid; "
+            "chunk the group before building the prompt"
+        )
 
     # Cell 0 is the opening of the first shot, cells 1..n-1 are transitions between adjacent shots, the rest are placeholders.
     # 格0 是首个分镜的开场，格1..n-1 是相邻分镜的过渡，其余格为占位。

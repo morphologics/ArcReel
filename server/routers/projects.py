@@ -1506,7 +1506,7 @@ async def preview_script_item_prompts(
     item_id: str,
     _t: Translator,
     names: DisplayNamesCatalog,
-    script_file: str = Query(..., description="剧本文件名"),
+    script_file: str = Query(..., description="Script file name"),
 ):
     """渲染该条目当前会送进图像 / 视频模型的最终提示词文本。
 
@@ -1675,7 +1675,7 @@ async def remove_script_item(
     item_id: str,
     _t: Translator,
     make_script_batch_editor: ScriptBatchEditorFactoryDep,
-    script_file: str = Query(..., description="剧本文件名"),
+    script_file: str = Query(..., description="Script file name"),
 ):
     """移除分镜 ``item_id``，按当前剧本 revision 执行 ``remove``；其产物随分镜一并移除。"""
     try:

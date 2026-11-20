@@ -63,7 +63,8 @@ class ProviderMeta:
         for lane, limit in self.default_concurrency.items():
             if lane not in _VALID_LANES:
                 raise ValueError(
-                    f"{self.display_name} default_concurrency 含未知 lane {lane!r}，合法值：{sorted(_VALID_LANES)}"
+                    f"{self.display_name} default_concurrency has unknown lane {lane!r};"
+                    f" valid values: {sorted(_VALID_LANES)}"
                 )
             # The registry is hand-written static data and Python does not enforce annotations at runtime; exact type checks catch author typos.
             # bool is a subclass of int, isinstance(True, int) is true and would silently let True through as concurrency 1; the
@@ -72,7 +73,9 @@ class ProviderMeta:
             # bool 是 int 子类，isinstance(True, int) 为真会把 True 当并发 1 静默放行；字符串
             # "1"、浮点 3.0 同样违反声明类型。type() is int 把这几类一并挡在 import 期。
             if type(limit) is not int or limit < 1:
-                raise ValueError(f"{self.display_name} default_concurrency[{lane!r}] 必须是 >=1 的整数，得到 {limit!r}")
+                raise ValueError(
+                    f"{self.display_name} default_concurrency[{lane!r}] must be an integer >= 1, got {limit!r}"
+                )
         if self.credential_groups:
             allowed = set(self.required_keys) & set(self.secret_keys)
             covered: set[str] = set()
@@ -82,11 +85,12 @@ class ProviderMeta:
                 # 空分组会被 unknown=set() 判定为合法、前端 group.every(...) 对空数组恒真，
                 # 误判该分组"已满足"——同属 import 期该拦的作者笔误。
                 if not group:
-                    raise ValueError(f"{self.display_name} credential_groups 含空分组")
+                    raise ValueError(f"{self.display_name} credential_groups has an empty group")
                 unknown = set(group) - allowed
                 if unknown:
                     raise ValueError(
-                        f"{self.display_name} credential_groups 含未登记为 required∩secret 的 key {sorted(unknown)}"
+                        f"{self.display_name} credential_groups has keys not registered as"
+                        f" required∩secret: {sorted(unknown)}"
                     )
                 covered |= set(group)
             # A key not covered by any group is bound neither by the old "all required" rule nor by any group —
@@ -94,7 +98,7 @@ class ProviderMeta:
             # 未被任何分组覆盖的 key 既不受旧版"全部必填"约束，也不受任何分组约束——
             # 声明了分组却漏登记某个 key，前端会误判该 key 为可选。
             if covered != allowed:
-                raise ValueError(f"{self.display_name} credential_groups 未覆盖 {sorted(allowed - covered)}")
+                raise ValueError(f"{self.display_name} credential_groups does not cover {sorted(allowed - covered)}")
 
     def fully_covered_credential_groups(self, values: Mapping[str, str | None]) -> list[list[str]]:
         """Return the credential groups fully covered by ``values`` (every key in the group non-empty).
@@ -114,7 +118,10 @@ class ProviderMeta:
 PROVIDER_REGISTRY: dict[str, ProviderMeta] = {
     "gemini-aistudio": ProviderMeta(
         display_name="AI Studio",
-        description="Google AI Studio 提供 Gemini 系列模型，支持图片、视频和语音生成，适合快速原型和个人项目。",
+        description=(
+            "Google AI Studio provides Gemini models with image, video and speech generation,"
+            " ideal for rapid prototyping and personal projects."
+        ),
         required_keys=["api_key"],
         optional_keys=[
             "base_url",
@@ -129,7 +136,10 @@ PROVIDER_REGISTRY: dict[str, ProviderMeta] = {
     ),
     "gemini-vertex": ProviderMeta(
         display_name="Vertex AI",
-        description="Google Cloud Vertex AI 企业级平台，支持 Gemini 和 Imagen 模型，提供更高配额和音频生成能力。",
+        description=(
+            "Google Cloud Vertex AI enterprise platform supporting Gemini and Imagen models,"
+            " with higher quotas and audio generation."
+        ),
         required_keys=["credentials_path"],
         optional_keys=[
             "gcs_bucket",
@@ -143,16 +153,22 @@ PROVIDER_REGISTRY: dict[str, ProviderMeta] = {
         secret_keys=[],
     ),
     "ark": ProviderMeta(
-        display_name="火山方舟",
-        description="字节跳动火山方舟 AI 平台，支持 Seedance 视频生成和 Seedream 图片生成，具备音频生成和种子控制能力。",
+        display_name="Volcengine Ark",
+        description=(
+            "ByteDance Volcengine Ark AI platform supporting Seedance video generation and Seedream image generation,"
+            " with audio generation and seed control."
+        ),
         required_keys=["api_key"],
         optional_keys=["base_url", "image_max_workers", "video_max_workers"],
         secret_keys=["api_key"],
         default_base_url=ARK_BASE_URL,
     ),
     "ark-agent-plan": ProviderMeta(
-        display_name="火山方舟 Agent Plan",
-        description="火山方舟 Agent Plan 套餐，聚合豆包及多家主流大模型，覆盖文本、图片与视频生成。",
+        display_name="Volcengine Ark Agent Plan",
+        description=(
+            "Volcengine Ark Agent Plan bundle aggregating Doubao and other major models"
+            " for text, image and video generation."
+        ),
         required_keys=["api_key"],
         optional_keys=["video_max_workers", "image_max_workers"],
         secret_keys=["api_key"],
@@ -160,28 +176,34 @@ PROVIDER_REGISTRY: dict[str, ProviderMeta] = {
     ),
     "grok": ProviderMeta(
         display_name="Grok",
-        description="xAI Grok 模型，支持视频和图片生成。",
+        description="xAI Grok models supporting video and image generation.",
         required_keys=["api_key"],
         optional_keys=["video_max_workers", "image_max_workers"],
         secret_keys=["api_key"],
     ),
     "openai": ProviderMeta(
         display_name="OpenAI",
-        description="OpenAI 官方平台，支持 GPT-5.5 / GPT-5.4 文本与 GPT Image 2 图片生成。",
+        description="Official OpenAI platform supporting GPT-5.5 / GPT-5.4 text and GPT Image 2 image generation.",
         required_keys=["api_key"],
         optional_keys=["base_url", "image_max_workers"],
         secret_keys=["api_key"],
     ),
     "vidu": ProviderMeta(
         display_name="Vidu",
-        description="生数科技 Vidu 视频生成平台，支持文生视频、图生视频、首尾帧、参考生视频与参考生图，仅图片与视频能力。",
+        description=(
+            "Shengshu Vidu video platform supporting text-to-video, image-to-video, first/last frame,"
+            " reference-to-video and reference-to-image. Image and video only."
+        ),
         required_keys=["api_key"],
         optional_keys=["base_url", "image_max_workers", "video_max_workers"],
         secret_keys=["api_key"],
     ),
     "dashscope": ProviderMeta(
-        display_name="阿里百炼",
-        description="阿里云百炼（Model Studio）全模态平台，支持 Qwen 文本、Qwen-Image / 万相图像与 HappyHorse / 万相视频（含参考生视频）。",
+        display_name="Alibaba Model Studio",
+        description=(
+            "Alibaba Cloud Model Studio (DashScope) full-modality platform supporting Qwen text,"
+            " Qwen-Image / Wan images and HappyHorse / Wan video (including reference-to-video)."
+        ),
         required_keys=["api_key"],
         # wan3_base_url: Wan 3.0 uses a separate maas domain that contains region and workspace,
         # which cannot be derived from the generic base_url, hence a separate key. Only wan3.0-video requests consume it (see
@@ -195,17 +217,21 @@ PROVIDER_REGISTRY: dict[str, ProviderMeta] = {
     ),
     "minimax": ProviderMeta(
         display_name="MiniMax",
-        description="MiniMax（海螺）多模态平台，提供文本、图片、视频与语音生成。默认连接国内站，海外可将 base_url 切换到国际站。",
+        description=(
+            "MiniMax (Hailuo) multimodal platform with text, image, video and speech generation."
+            " Connects to the China site by default; set base_url to the international site for overseas access."
+        ),
         required_keys=["api_key"],
         optional_keys=["base_url", "image_max_workers", "video_max_workers", "audio_max_workers"],
         secret_keys=["api_key"],
         default_base_url=MINIMAX_BASE_URL,
     ),
     "kling": ProviderMeta(
-        display_name="可灵 Kling",
+        display_name="Kling",
         description=(
-            "快手可灵 Kling 视频与图像生成平台。API Key（Bearer）适用于全部模型；"
-            "Access Key + Secret Key（JWT）仅适用于 3.0 及更早模型，二者二选一，同时填写时 API Key 优先。"
+            "Kuaishou Kling video and image generation platform. An API Key (Bearer) works with all models; "
+            "Access Key + Secret Key (JWT) only works with 3.0 and earlier models. Use one or the other;"
+            " when both are set, the API Key takes priority."
         ),
         # The first built-in provider needing two secret strings (JWT HS256 auth); credentials are stored by registry key name
         # in the typed access_key / secret_key columns of provider_credential (see ADR 0037). api_key reuses the table's
@@ -229,7 +255,10 @@ PROVIDER_REGISTRY: dict[str, ProviderMeta] = {
     ),
     "agnes": ProviderMeta(
         display_name="Agnes",
-        description="Agnes 多模态平台（OpenAI 风格），使用 Bearer API Key 鉴权；当前支持图像 / 文本 / 视频生成。",
+        description=(
+            "Agnes multimodal platform (OpenAI-style), authenticated with a Bearer API key;"
+            " currently supports image / text / video generation."
+        ),
         required_keys=["api_key"],
         optional_keys=["base_url", "image_max_workers", "video_max_workers"],
         secret_keys=["api_key"],

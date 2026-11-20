@@ -284,7 +284,7 @@ class ViduVideoBackend:
         # The orphan handler marks [resume_unsupported] on NotImplementedError
         # Vidu 不支持 resume：poll 完全内联在 generate，没有可供接续的独立轮询入口。
         # orphan handler 据 NotImplementedError 标 [resume_unsupported]
-        raise NotImplementedError("ViduVideoBackend 暂不支持 resume_video")
+        raise NotImplementedError("ViduVideoBackend does not support resume_video yet")
 
     async def generate(self, request: VideoGenerationRequest) -> VideoGenerationResult:
         endpoint, body = self._build_request(request)
@@ -363,7 +363,7 @@ class ViduVideoBackend:
         # 1) 校验认得的型号 × 端点（提前失败比 400 含义更清晰）；认不得的模型由上游判定
         endpoint_models = _ENDPOINT_MODELS.get(endpoint, frozenset())
         if self._known_model is not None and endpoint_models and self._known_model not in endpoint_models:
-            raise RuntimeError(f"Vidu 模型 {self._model} 不支持 {endpoint} 端点；该端点支持: {sorted(endpoint_models)}")
+            raise RuntimeError(f"Vidu model {self._model} does not support the {endpoint} endpoint; supported models: {sorted(endpoint_models)}")
 
         # 2) Take the nearest duration within the legal set / 2) duration 在合法集合内取最近值
         duration = _coerce_duration(self._known_model or self._model, endpoint, request.duration_seconds)
@@ -434,9 +434,9 @@ class ViduVideoBackend:
         # If the user explicitly passed start/end_image but the file does not exist, fail directly instead of silently degrading to text2video.
         # 若用户显式传了 start/end_image 但文件不存在，应直接失败而不是静默降级到 text2video。
         if request.start_image is not None and not Path(request.start_image).exists():
-            raise FileNotFoundError(f"start_image 文件不存在: {request.start_image}")
+            raise FileNotFoundError(f"start_image file does not exist: {request.start_image}")
         if request.end_image is not None and not Path(request.end_image).exists():
-            raise FileNotFoundError(f"end_image 文件不存在: {request.end_image}")
+            raise FileNotFoundError(f"end_image file does not exist: {request.end_image}")
         return _endpoint_for(request)
 
     @staticmethod
@@ -492,7 +492,7 @@ class ViduVideoBackend:
         resp = await submit_post(lambda: client.post(endpoint, json=body), provider=PROVIDER_VIDU, request=request)
         data = resp.json()
         if not data.get("task_id"):
-            raise RuntimeError(f"Vidu 视频任务创建响应缺少 task_id: {data}")
+            raise RuntimeError(f"Vidu video task create response is missing task_id: {data}")
         return data
 
     async def _download_video(self, url: str, output_path: Path) -> None:

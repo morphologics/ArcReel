@@ -169,7 +169,7 @@ def _as_float(value: object) -> float | None:
     if value is None:
         return None
     if isinstance(value, bool) or not isinstance(value, (int, float, str)):
-        raise TypeError(f"不是数值：{value!r}")
+        raise TypeError(f"Not a number: {value!r}")
     return float(value)
 
 
@@ -177,14 +177,14 @@ def _as_int(value: object) -> int | None:
     if value is None:
         return None
     if isinstance(value, bool) or not isinstance(value, (int, str)):
-        raise TypeError(f"不是整数：{value!r}")
+        raise TypeError(f"Not an integer: {value!r}")
     return int(value)
 
 
 def _as_str(value: object) -> str | None:
     if value is None or isinstance(value, str):
         return value
-    raise TypeError(f"不是字符串：{value!r}")
+    raise TypeError(f"Not a string: {value!r}")
 
 
 @dataclass

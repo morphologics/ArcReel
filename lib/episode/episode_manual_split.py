@@ -231,13 +231,15 @@ class _Layout:
     def doc_index(self, source_file: str) -> int:
         index = next((i for i, doc in enumerate(self.docs) if doc.rel_path == source_file), None)
         if index is None:
-            raise ManualSplitError("source_file_not_found", f"整本源文里没有这个可读的文件：{source_file}")
+            raise ManualSplitError(
+                "source_file_not_found", f"The whole source has no readable file named: {source_file}"
+            )
         return index
 
     def to_global(self, source_file: str, offset: int) -> int:
         index = self.doc_index(source_file)
         if not 0 <= offset <= len(self.docs[index].text):
-            raise ManualSplitError("position_invalid", f"位置 {offset} 超出文件范围")
+            raise ManualSplitError("position_invalid", f"Position {offset} is outside the file")
         return self.bases[index] + offset
 
     def start_point(self, position: int) -> tuple[str, int]:
@@ -274,10 +276,13 @@ class _Layout:
 
     def placement(self, episode: int) -> CutPlacement:
         if all(parse_positive_episode_num(entry.get("episode")) != episode for entry in self.entries):
-            raise ManualSplitError("episode_not_found", f"集（id={episode}）不在账本中")
+            raise ManualSplitError("episode_not_found", f"Episode (id={episode}) is not in the ledger")
         placement = self.placements.get(episode)
         if placement is None:
-            raise ManualSplitError("episode_not_placed", f"集（id={episode}）的原文不在整本源文里，不能调整它的边界")
+            raise ManualSplitError(
+                "episode_not_placed",
+                f"Source text of episode (id={episode}) is outside the whole source; its bounds are fixed",
+            )
         return placement
 
     def ordered(self) -> list[CutPlacement]:
@@ -293,7 +298,7 @@ class _Layout:
 def _layout(project_dir: Path, project: Mapping[str, Any]) -> _Layout:
     entries = well_formed_ledger_entries(project)
     if entries is None:
-        raise ManualSplitError("ledger_invalid", "分集账本的形状异常，不能手工切分")
+        raise ManualSplitError("ledger_invalid", "Episode ledger has an unexpected shape; cannot split manually")
     docs = discover_sources(project_dir, project)
     kinds = [whole_source_file_kind(project, doc.rel_path) for doc in docs]
     walls: list[int] = []
@@ -318,29 +323,33 @@ def _language(project: Mapping[str, Any]) -> str | None:
 
 def _require_text(layout: _Layout, start: int, end: int) -> None:
     if not layout.text[start:end].strip():
-        raise ManualSplitError("empty_range", "分出的集没有正文")
+        raise ManualSplitError("empty_range", "The split-off episode has no text")
 
 
 def _require_inside(at: int, low: int, high: int) -> None:
     if not low < at < high:
-        raise ManualSplitError("position_invalid", f"分集点 {at} 不在 ({low}, {high}) 之内")
+        raise ManualSplitError("position_invalid", f"Split point {at} is not within ({low}, {high})")
 
 
 def _require_same_kind(layout: _Layout, new: tuple[int, int], *old: tuple[int, int]) -> None:
     """A changed source range must not newly cross a source kind switch. / 改动后的原文范围不能新跨过源文件类型的切换处。"""
     allowed = set().union(*(layout.walls_inside(*span) for span in old))
     if layout.walls_inside(*new) - allowed:
-        raise ManualSplitError("crosses_source_kind", "一集的原文不能跨过源文件类型不同的两个文件")
+        raise ManualSplitError(
+            "crosses_source_kind", "An episode's source text cannot span two files of different source kinds"
+        )
 
 
 def _plan_cut(layout: _Layout, *, source_file: str, end: int, title: str) -> _Edit:
     index = layout.doc_index(source_file)
     if not 0 < end <= len(layout.docs[index].text):
-        raise ManualSplitError("position_invalid", f"分集点 {end} 超出文件范围")
+        raise ManualSplitError("position_invalid", f"Split point {end} is outside the file")
     at = layout.to_global(source_file, end)
     spans = [layout.span(p) for p in layout.ordered()]
     if any(low < at < high for low, high in spans):
-        raise ManualSplitError("inside_episode", "这个位置在一集的原文里，应当拆分这一集")
+        raise ManualSplitError(
+            "inside_episode", "This position is inside an episode's source text; split that episode instead"
+        )
     # Cut from the end of the nearest preceding cut episode (from the start of the whole source when there is none), without crossing a source kind switch
     # 从前面最近的切出集结尾（没有时从整本源文开头）切起，不跨过源文件类型的切换处
     start = max([high for _low, high in spans if high <= at] + [wall for wall in layout.kind_walls if wall < at] + [0])
@@ -379,12 +388,14 @@ def _plan_move(layout: _Layout, *, episode: int, at: int, source_file: str | Non
         None,
     )
     if right is None:
-        raise ManualSplitError("no_adjacent_episode", f"集（id={episode}）与之后的切出集之间没有相连的分界")
+        raise ManualSplitError(
+            "no_adjacent_episode", f"Episode (id={episode}) shares no boundary with the next cut episode"
+        )
     right_span = layout.span(right)
     point = layout.to_global(source_file or layout.docs[left.end_file_index].rel_path, at)
     _require_inside(point, left_span[0], right_span[1])
     if point == left_span[1]:
-        raise ManualSplitError("position_invalid", "分界没有移动")
+        raise ManualSplitError("position_invalid", "The boundary did not move")
     _require_text(layout, left_span[0], point)
     _require_text(layout, point, right_span[1])
     _require_same_kind(layout, (left_span[0], point), left_span)
@@ -400,12 +411,14 @@ def _plan_merge(layout: _Layout, *, episode: int) -> _Edit:
     ordered = layout.ordered()
     following = ordered[ordered.index(placement) + 1 :]
     if not following:
-        raise ManualSplitError("no_next_episode", f"集（id={episode}）之后没有切出集")
+        raise ManualSplitError("no_next_episode", f"No cut episode follows episode (id={episode})")
     nxt = following[0]
     own, nxt_span = layout.span(placement), layout.span(nxt)
     merged = (own[0], nxt_span[1])
     if layout.walls_inside(*merged) - layout.walls_inside(*own) - layout.walls_inside(*nxt_span):
-        raise ManualSplitError("merge_across_kinds", f"集（id={episode}）的下一集在源文件类型不同的文件里")
+        raise ManualSplitError(
+            "merge_across_kinds", f"The episode after episode (id={episode}) is in a file of a different source kind"
+        )
     return _Edit(
         touches_source=True,
         ranges={episode: merged},
@@ -418,7 +431,7 @@ def _plan_clear_after(layout: _Layout, *, episode: int) -> _Edit:
     placement = layout.placement(episode)
     after = {p.episode for p in layout.ordered() if p.position > placement.position}
     if not after:
-        raise ManualSplitError("nothing_after", f"集（id={episode}）之后没有切出集")
+        raise ManualSplitError("nothing_after", f"No cut episode follows episode (id={episode})")
     return _Edit(
         dropped=[num for entry in layout.entries if (num := parse_positive_episode_num(entry.get("episode"))) in after]
     )
@@ -462,7 +475,7 @@ def _check_fingerprints(project_dir: Path, project: dict[str, Any], docs: list[S
     recorded = dict(raw) if isinstance(raw, Mapping) else {}
     for doc in docs:
         if changed_outside_service(project_dir, project, doc):
-            raise ManualSplitError("source_changed", f"源文件在服务之外被改动过：{doc.rel_path}")
+            raise ManualSplitError("source_changed", f"Source file was changed outside the service: {doc.rel_path}")
         recorded[doc.rel_path] = compute_source_fingerprints([doc])[doc.rel_path]
     if docs:
         project[SOURCE_FINGERPRINTS_KEY] = recorded
@@ -471,7 +484,9 @@ def _check_fingerprints(project_dir: Path, project: dict[str, Any], docs: list[S
 def _write_derived(project_dir: Path, episode: int, text: str, *, fresh: bool) -> None:
     path = episode_source_path(project_dir, episode)
     if path.is_symlink() and not fresh:
-        raise ManualSplitError("episode_source_symlink", f"集（id={episode}）的集文件是符号链接，拒绝写入")
+        raise ManualSplitError(
+            "episode_source_symlink", f"Episode file of episode (id={episode}) is a symlink; refusing to write"
+        )
     if fresh and (path.exists() or path.is_symlink()):
         # A same-named file for the new episode ID is not in the ledger and is not the source of any episode; rename it as a backup first
         # 新集 ID 的同名文件不在账本里，不是任何一集的原文，先改名留底
@@ -589,7 +604,7 @@ def _run(
         if locked_edit.new_range is not None:
             locked_touched.add(episode_id_high_water(p) + 1)
         if not locked_touched <= touched:
-            raise ManualSplitError("conflict", "分集账本刚被改动，本次调整没有执行")
+            raise ManualSplitError("conflict", "The episode ledger just changed; this adjustment was not applied")
         committed["episode"] = _apply(project_dir, p, locked_layout, locked_edit, locked_impact)
         committed["impact"] = locked_impact
 

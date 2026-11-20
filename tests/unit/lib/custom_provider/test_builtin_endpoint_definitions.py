@@ -98,19 +98,19 @@ def test_invalid_definition_fails_loading(tmp_path: Path):
     document = _example_template()
     del document["submit"]["extract"]
     _write(tmp_path, "broken-video", document)
-    with pytest.raises(BuiltinDefinitionError, match="未通过校验"):
+    with pytest.raises(BuiltinDefinitionError, match="failed validation"):
         load_builtin_definitions(tmp_path)
 
 
 def test_malformed_json_fails_loading(tmp_path: Path):
     (tmp_path / "broken-video.json").write_text("{not json", encoding="utf-8")
-    with pytest.raises(BuiltinDefinitionError, match="不是合法 JSON"):
+    with pytest.raises(BuiltinDefinitionError, match="is not valid JSON"):
         load_builtin_definitions(tmp_path)
 
 
 def test_key_taking_the_custom_endpoint_prefix_fails_loading(tmp_path: Path):
     _write(tmp_path, f"{CUSTOM_ENDPOINT_KEY_PREFIX}7", _example_template())
-    with pytest.raises(BuiltinDefinitionError, match="自定义端点前缀"):
+    with pytest.raises(BuiltinDefinitionError, match="custom endpoint prefix"):
         load_builtin_definitions(tmp_path)
 
 
@@ -123,7 +123,7 @@ def test_foreign_author_fails_loading(tmp_path: Path):
 
 
 def test_missing_directory_fails_loading(tmp_path: Path):
-    with pytest.raises(BuiltinDefinitionError, match="目录不存在"):
+    with pytest.raises(BuiltinDefinitionError, match="directory does not exist"):
         load_builtin_definitions(tmp_path / "absent")
 
 
@@ -134,7 +134,7 @@ def test_key_colliding_with_a_python_endpoint_fails_merging(tmp_path: Path):
     同键换实现是 Python→声明式收编那一刻的迁移动作，不能靠往目录里丢一份文件悄悄发生。"""
     _write(tmp_path, "newapi-video", _example_template())
     registry: dict[str, EndpointSpec] = {"newapi-video": ENDPOINT_REGISTRY["newapi-video"]}
-    with pytest.raises(BuiltinDefinitionError, match="重复"):
+    with pytest.raises(BuiltinDefinitionError, match="duplicates an existing endpoint"):
         merge_builtin_definitions(registry, tmp_path)
 
 

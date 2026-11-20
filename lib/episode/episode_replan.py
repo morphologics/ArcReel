@@ -163,10 +163,10 @@ def candidate_episodes(candidate: Mapping[str, Any]) -> list[dict[str, Any]]:
 def candidate_start(candidate: Mapping[str, Any]) -> tuple[str, int]:
     start = candidate.get("start")
     if not isinstance(start, Mapping):
-        raise ReplanError("candidate_invalid", "候选没有记录重新规划的起点")
+        raise ReplanError("candidate_invalid", "The candidate has no recorded replan starting point")
     source_file, offset = start.get("source_file"), start.get("offset")
     if not isinstance(source_file, str) or not isinstance(offset, int) or isinstance(offset, bool):
-        raise ReplanError("candidate_invalid", "候选记录的起点形状异常")
+        raise ReplanError("candidate_invalid", "The candidate's recorded starting point is malformed")
     return source_file, offset
 
 
@@ -178,7 +178,7 @@ def candidate_cursor(candidate: Mapping[str, Any]) -> tuple[str, int]:
     if episodes:
         span = parse_source_range(episodes[-1])
         if span is None:
-            raise ReplanError("candidate_invalid", "候选集的原文范围形状异常")
+            raise ReplanError("candidate_invalid", "A candidate episode's source range is malformed")
         return span.end_file, span.end
     return candidate_start(candidate)
 
@@ -243,7 +243,7 @@ class ReplanScope:
 def _entries(project: Mapping[str, Any]) -> list[dict[str, Any]]:
     entries = well_formed_ledger_entries(project)
     if entries is None:
-        raise ReplanError("ledger_invalid", "分集账本的形状异常，不能重新规划")
+        raise ReplanError("ledger_invalid", "The episode ledger is malformed; cannot replan")
     return entries
 
 
@@ -276,27 +276,34 @@ def replan_scope(project_dir: Path, project: Mapping[str, Any], episode: int) ->
 
     从 ``episode`` 起重新规划的范围；不能从这一集起重新规划时抛 :class:`ReplanError`。"""
     if replan_candidate(project) is not None:
-        raise ReplanError("candidate_pending", "已有一份新的分集方案等待采纳或放弃")
+        raise ReplanError("candidate_pending", "A new episode plan is already waiting to be adopted or discarded")
     entries = _entries(project)
     entry = next((e for e in entries if parse_positive_episode_num(e.get("episode")) == episode), None)
     if entry is None:
-        raise ReplanError("episode_not_found", f"集（id={episode}）不在账本中")
+        raise ReplanError("episode_not_found", f"Episode (id={episode}) is not in the ledger")
     if not is_cut_episode(entry):
-        raise ReplanError("not_cut_episode", f"集（id={episode}）不是切自整本源文的集")
+        raise ReplanError("not_cut_episode", f"Episode (id={episode}) was not cut from the whole source text")
     docs = discover_sources(project_dir, project)
     if not any(doc.text.strip() for doc in docs):
-        raise ReplanError("whole_source_missing", "整本源文还没有可规划的原文")
+        raise ReplanError("whole_source_missing", "The whole source text has no text to plan yet")
     source_replaced = bool(mismatched_source_fingerprints(project.get(SOURCE_FINGERPRINTS_KEY), docs))
     from_beginning = source_replaced or bool(legacy_cut_episode_ids(project))
     placements = cut_episode_placements(project, docs)
     if from_beginning:
         if episode != first_cut_episode_id(project):
-            raise ReplanError("from_first_only", "现有分集的原文范围对不上当前源文，只能从第一个切出集起重新规划")
+            raise ReplanError(
+                "from_first_only",
+                "The existing episodes' source ranges do not match the current source; replanning can only start "
+                "from the first cut episode",
+            )
         source_file, offset, start = docs[0].rel_path, 0, (0, 0)
     else:
         placement = placements.get(episode)
         if placement is None:
-            raise ReplanError("episode_not_placed", f"集（id={episode}）的原文范围落不到整本源文里")
+            raise ReplanError(
+                "episode_not_placed",
+                f"The source range of episode (id={episode}) does not fall within the whole source text",
+            )
         source_file, offset, start = docs[placement.file_index].rel_path, placement.start, placement.position
     replaced = _replaced_ids(entries, placements, episode=episode, start=start, from_beginning=from_beginning)
     product_nums = discover_product_episode_nums(project_dir)
@@ -359,7 +366,7 @@ def record_replan_interruption(project_path: str | Path, candidate_id: str, reas
 
     记下候选生成中途停止的原因；候选已不在（已采纳或放弃）时什么都不做。"""
     if reason not in REPLAN_INTERRUPTIONS:
-        raise ValueError(f"未知的中断原因：{reason}")
+        raise ValueError(f"Unknown interruption reason: {reason}")
     project_dir = Path(project_path)
     pm = ProjectManager.for_project_dir(project_dir)
 
@@ -393,10 +400,16 @@ def resume_replan_candidate(project_path: str | Path, candidate_id: str) -> str 
     def _commit(p: dict[str, Any]) -> None:
         candidate = _require_candidate(p, candidate_id)
         if candidate.get("complete"):
-            raise ReplanError("candidate_complete", "新的分集方案已覆盖到整本源文结尾")
+            raise ReplanError(
+                "candidate_complete",
+                "The new episode plan already reaches the end of the whole source text",
+            )
         stale = candidate_staleness(p, candidate, discover_sources(project_dir, p))
         if stale is not None:
-            raise ReplanError(stale, "生成这份方案之后分集或源文有改动，需要重新生成")
+            raise ReplanError(
+                stale,
+                "Episodes or the source changed after this plan was generated; it needs to be regenerated",
+            )
         candidate.pop("interrupted", None)
         instructions = candidate.get("instructions")
         resumed["instructions"] = instructions if isinstance(instructions, str) else None
@@ -409,7 +422,7 @@ def resume_replan_candidate(project_path: str | Path, candidate_id: str) -> str 
 def _require_candidate(project: Mapping[str, Any], candidate_id: str) -> dict[str, Any]:
     candidate = replan_candidate(project)
     if candidate is None or candidate.get("id") != candidate_id:
-        raise ReplanError("candidate_not_found", "这份新的分集方案已经不在了")
+        raise ReplanError("candidate_not_found", "This new episode plan no longer exists")
     return candidate
 
 
@@ -459,7 +472,10 @@ def _candidate_positions(candidate: Mapping[str, Any], docs: list[SourceDoc]) ->
         raw = episode.get("source_range")
         position = _source_position(order, raw) if isinstance(raw, Mapping) else None
         if position is None:
-            raise ReplanError("candidate_invalid", "候选集的原文范围落不到整本源文里")
+            raise ReplanError(
+                "candidate_invalid",
+                "A candidate episode's source range does not fall within the whole source text",
+            )
         positions.append(position)
     return positions
 
@@ -468,16 +484,22 @@ def _plan_adoption(project_dir: Path, project: Mapping[str, Any], candidate: Map
     docs = discover_sources(project_dir, project)
     stale = candidate_staleness(project, candidate, docs)
     if stale is not None:
-        raise ReplanError(stale, "生成这份方案之后分集或源文有改动，需要重新生成")
+        raise ReplanError(
+            stale,
+            "Episodes or the source changed after this plan was generated; it needs to be regenerated",
+        )
     positions = _candidate_positions(candidate, docs)
     if not positions:
-        raise ReplanError("candidate_empty", "新的分集方案里还没有集")
+        raise ReplanError("candidate_empty", "The new episode plan has no episodes yet")
     entries = _entries(project)
     placements = cut_episode_placements(project, docs)
     order = {doc.rel_path: index for index, doc in enumerate(docs)}
     source_file, offset = candidate_start(candidate)
     if source_file not in order:
-        raise ReplanError("source_changed", "重新规划的起点所在文件已不在整本源文里")
+        raise ReplanError(
+            "source_changed",
+            "The file containing the replan starting point is no longer in the whole source text",
+        )
     start = (order[source_file], offset)
     replaced = _replaced_ids(
         entries,
@@ -774,7 +796,7 @@ def adopt_replan_candidate(
         if locked_impact.revision != revision:
             raise _StaleConfirmation(locked_impact)
         if episode_id_high_water(p) + 1 != planned_first:
-            raise ReplanError("conflict", "分集账本刚被改动，这次采纳没有执行")
+            raise ReplanError("conflict", "The episode ledger was just changed; this adoption was not applied")
         committed["episodes"] = _apply_adoption(
             project_dir, p, locked_candidate, locked_adoption, delete_retired=delete_retired
         )

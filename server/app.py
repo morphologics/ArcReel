@@ -158,8 +158,8 @@ def assert_no_provider_secrets_in_environ() -> None:
     leaked = sorted(k for k in PROVIDER_SECRET_KEYS if os.environ.get(k))
     if leaked:
         raise RuntimeError(
-            f"SECURITY: 父进程 os.environ 含 provider 密钥: {leaked}. "
-            "请到 WebUI 系统配置页填写，并从 env / .env 中移除对应条目。"
+            f"SECURITY: parent process os.environ holds provider secrets: {leaked}. "
+            "Enter them on the WebUI system config page and remove those entries from env / .env."
         )
 
 
@@ -827,187 +827,199 @@ async def request_logging_middleware(
 # 认证要求的唯一真相源就是这个区块：带 dependencies 的 router 要求 Bearer token，
 # 端点签名里的 CurrentUser 只表示「处理函数要用用户对象」，不承担授权职责。
 # 不挂依赖的两组另有说明，见下方分组注释。
-app.include_router(projects.router, prefix="/api/v1", dependencies=[Depends(get_current_user)], tags=["项目管理"])
-app.include_router(characters.router, prefix="/api/v1", dependencies=[Depends(get_current_user)], tags=["角色管理"])
-app.include_router(scenes.router, prefix="/api/v1", dependencies=[Depends(get_current_user)], tags=["场景管理"])
-app.include_router(props.router, prefix="/api/v1", dependencies=[Depends(get_current_user)], tags=["道具管理"])
-app.include_router(products.router, prefix="/api/v1", dependencies=[Depends(get_current_user)], tags=["商品管理"])
-app.include_router(presentations.router, prefix="/api/v1", dependencies=[Depends(get_current_user)], tags=["成片演示"])
+app.include_router(projects.router, prefix="/api/v1", dependencies=[Depends(get_current_user)], tags=["Projects"])
+app.include_router(characters.router, prefix="/api/v1", dependencies=[Depends(get_current_user)], tags=["Characters"])
+app.include_router(scenes.router, prefix="/api/v1", dependencies=[Depends(get_current_user)], tags=["Scenes"])
+app.include_router(props.router, prefix="/api/v1", dependencies=[Depends(get_current_user)], tags=["Props"])
+app.include_router(products.router, prefix="/api/v1", dependencies=[Depends(get_current_user)], tags=["Products"])
 app.include_router(
-    edit_timelines.router, prefix="/api/v1", dependencies=[Depends(get_current_user)], tags=["剪辑时间线"]
+    presentations.router, prefix="/api/v1", dependencies=[Depends(get_current_user)], tags=["Presentations"]
 )
-app.include_router(files.router, prefix="/api/v1", dependencies=[Depends(get_current_user)], tags=["文件管理"])
+app.include_router(
+    edit_timelines.router, prefix="/api/v1", dependencies=[Depends(get_current_user)], tags=["Edit timelines"]
+)
+app.include_router(files.router, prefix="/api/v1", dependencies=[Depends(get_current_user)], tags=["Files"])
 app.include_router(
     file_view.router,
     prefix="/api/v1",
     dependencies=[Depends(get_current_user), Depends(require_project_migration_ok)],
-    tags=["文件视图"],
+    tags=["File view"],
 )
 app.include_router(
     project_trash.router,
     prefix="/api/v1",
     dependencies=[Depends(get_current_user), Depends(require_project_migration_ok)],
-    tags=["项目回收站"],
+    tags=["Project trash"],
 )
-app.include_router(episodes_view.router, prefix="/api/v1", dependencies=[Depends(get_current_user)], tags=["分集视图"])
 app.include_router(
-    episode_management.router, prefix="/api/v1", dependencies=[Depends(get_current_user)], tags=["集管理"]
+    episodes_view.router, prefix="/api/v1", dependencies=[Depends(get_current_user)], tags=["Episodes view"]
+)
+app.include_router(
+    episode_management.router, prefix="/api/v1", dependencies=[Depends(get_current_user)], tags=["Episode management"]
 )
 app.include_router(
     generate.router,
     prefix="/api/v1",
     dependencies=[Depends(get_current_user), Depends(require_project_migration_ok)],
-    tags=["生成"],
+    tags=["Generation"],
 )
 app.include_router(
     storyboard_batches.router,
     prefix="/api/v1",
     dependencies=[Depends(get_current_user), Depends(require_project_migration_ok)],
-    tags=["生成"],
+    tags=["Generation"],
 )
 app.include_router(
     asset_sheets.router,
     prefix="/api/v1",
     dependencies=[Depends(get_current_user), Depends(require_project_migration_ok)],
-    tags=["资产图"],
+    tags=["Asset sheets"],
 )
 app.include_router(
     script_review.router,
     prefix="/api/v1",
     dependencies=[Depends(get_current_user), Depends(require_project_migration_ok)],
-    tags=["内容确认"],
+    tags=["Content review"],
 )
 app.include_router(
     episode_drafts.router,
     prefix="/api/v1",
     dependencies=[Depends(get_current_user), Depends(require_project_migration_ok)],
-    tags=["内容确认"],
+    tags=["Content review"],
 )
 app.include_router(
     prompt_authoring.router,
     prefix="/api/v1",
     dependencies=[Depends(get_current_user), Depends(require_project_migration_ok)],
-    tags=["提示词编写"],
+    tags=["Prompt authoring"],
 )
 app.include_router(
     episode_planning.router,
     prefix="/api/v1",
     dependencies=[Depends(get_current_user), Depends(require_project_migration_ok)],
-    tags=["分集规划"],
+    tags=["Episode planning"],
 )
 app.include_router(
     script_plan.router,
     prefix="/api/v1",
     dependencies=[Depends(get_current_user), Depends(require_project_migration_ok)],
-    tags=["脚本规划"],
+    tags=["Script planning"],
 )
 app.include_router(
     ad_script.router,
     prefix="/api/v1",
     dependencies=[Depends(get_current_user), Depends(require_project_migration_ok)],
-    tags=["广告/短片脚本"],
+    tags=["Ad / short scripts"],
 )
 app.include_router(
     shot_uploads.router,
     prefix="/api/v1",
     dependencies=[Depends(get_current_user), Depends(require_project_migration_ok)],
-    tags=["分镜上传"],
+    tags=["Shot uploads"],
 )
 app.include_router(
     derivative_uploads.router,
     prefix="/api/v1",
     dependencies=[Depends(get_current_user), Depends(require_project_migration_ok)],
-    tags=["衍生资产图上传"],
+    tags=["Derivative sheet uploads"],
 )
 app.include_router(
     end_frames.router,
     prefix="/api/v1",
     dependencies=[Depends(get_current_user), Depends(require_project_migration_ok)],
-    tags=["分镜尾帧"],
+    tags=["Shot end frames"],
 )
 app.include_router(
-    project_migration.router, prefix="/api/v1", dependencies=[Depends(get_current_user)], tags=["项目数据升级"]
+    project_migration.router, prefix="/api/v1", dependencies=[Depends(get_current_user)], tags=["Project migration"]
 )
-app.include_router(versions.router, prefix="/api/v1", dependencies=[Depends(get_current_user)], tags=["版本管理"])
-app.include_router(usage.router, prefix="/api/v1", dependencies=[Depends(get_current_user)], tags=["费用统计"])
-app.include_router(auth_router.router, prefix="/api/v1", dependencies=[Depends(get_current_user)], tags=["认证"])
+app.include_router(versions.router, prefix="/api/v1", dependencies=[Depends(get_current_user)], tags=["Versions"])
+app.include_router(usage.router, prefix="/api/v1", dependencies=[Depends(get_current_user)], tags=["Usage"])
+app.include_router(auth_router.router, prefix="/api/v1", dependencies=[Depends(get_current_user)], tags=["Auth"])
 app.include_router(
     assistant.router,
     prefix="/api/v1/projects/{project_name}/assistant",
     dependencies=[Depends(get_current_user)],
-    tags=["Agent 会话"],
+    tags=["Agent sessions"],
 )
 app.include_router(
-    project_events.router, prefix="/api/v1", dependencies=[Depends(get_current_user)], tags=["项目变更流"]
+    project_events.router, prefix="/api/v1", dependencies=[Depends(get_current_user)], tags=["Project events"]
 )
-app.include_router(tasks.router, prefix="/api/v1", dependencies=[Depends(get_current_user)], tags=["任务队列"])
-app.include_router(providers.router, prefix="/api/v1", dependencies=[Depends(get_current_user)], tags=["供应商管理"])
+app.include_router(tasks.router, prefix="/api/v1", dependencies=[Depends(get_current_user)], tags=["Task queue"])
+app.include_router(providers.router, prefix="/api/v1", dependencies=[Depends(get_current_user)], tags=["Providers"])
 app.include_router(
-    provider_models.router, prefix="/api/v1", dependencies=[Depends(get_current_user)], tags=["供应商管理"]
+    provider_models.router, prefix="/api/v1", dependencies=[Depends(get_current_user)], tags=["Providers"]
 )
-app.include_router(catalog.router, prefix="/api/v1", dependencies=[Depends(get_current_user)], tags=["模型目录"])
-app.include_router(system_config.router, prefix="/api/v1", dependencies=[Depends(get_current_user)], tags=["系统配置"])
-app.include_router(system.router, prefix="/api/v1", dependencies=[Depends(get_current_user)], tags=["系统"])
-app.include_router(api_keys.router, prefix="/api/v1", dependencies=[Depends(get_current_user)], tags=["API Key 管理"])
-app.include_router(agent_config.router, prefix="/api/v1", dependencies=[Depends(get_current_user)], tags=["Agent 配置"])
+app.include_router(catalog.router, prefix="/api/v1", dependencies=[Depends(get_current_user)], tags=["Model catalog"])
+app.include_router(
+    system_config.router, prefix="/api/v1", dependencies=[Depends(get_current_user)], tags=["System config"]
+)
+app.include_router(system.router, prefix="/api/v1", dependencies=[Depends(get_current_user)], tags=["System"])
+app.include_router(api_keys.router, prefix="/api/v1", dependencies=[Depends(get_current_user)], tags=["API keys"])
+app.include_router(
+    agent_config.router, prefix="/api/v1", dependencies=[Depends(get_current_user)], tags=["Agent config"]
+)
 # The studio agent's model for the editor's AI chat (OpenReel next to the studio)
 app.include_router(agent_llm.router, prefix="/api/v1", dependencies=[Depends(get_current_user)])
 app.include_router(activity.router, prefix="/api/v1", dependencies=[Depends(get_current_user)])
 app.include_router(
-    custom_providers.router, prefix="/api/v1", dependencies=[Depends(get_current_user)], tags=["自定义供应商"]
+    custom_providers.router, prefix="/api/v1", dependencies=[Depends(get_current_user)], tags=["Custom providers"]
 )
 app.include_router(
-    custom_endpoints.router, prefix="/api/v1", dependencies=[Depends(get_current_user)], tags=["自定义调用端点"]
+    custom_endpoints.router, prefix="/api/v1", dependencies=[Depends(get_current_user)], tags=["Custom endpoints"]
 )
-app.include_router(market.router, prefix="/api/v1", dependencies=[Depends(get_current_user)], tags=["市场"])
-app.include_router(market_submissions.router, prefix="/api/v1", dependencies=[Depends(get_current_user)], tags=["市场"])
+app.include_router(market.router, prefix="/api/v1", dependencies=[Depends(get_current_user)], tags=["Market"])
 app.include_router(
-    official_service.router, prefix="/api/v1", dependencies=[Depends(get_current_user)], tags=["官方服务"]
+    market_submissions.router, prefix="/api/v1", dependencies=[Depends(get_current_user)], tags=["Market"]
 )
 app.include_router(
-    cost_estimation.router, prefix="/api/v1", dependencies=[Depends(get_current_user)], tags=["费用估算"]
+    official_service.router, prefix="/api/v1", dependencies=[Depends(get_current_user)], tags=["Official service"]
+)
+app.include_router(
+    cost_estimation.router, prefix="/api/v1", dependencies=[Depends(get_current_user)], tags=["Cost estimation"]
 )
 app.include_router(
     grids.router,
     prefix="/api/v1",
     dependencies=[Depends(get_current_user), Depends(require_project_migration_ok)],
-    tags=["多宫格分镜图"],
+    tags=["Grid storyboards"],
 )
 app.include_router(
     reference_videos.router,
     prefix="/api/v1",
     dependencies=[Depends(get_current_user), Depends(require_project_migration_ok)],
-    tags=["参考生视频"],
+    tags=["Reference video"],
 )
-app.include_router(assets.router, prefix="/api/v1", dependencies=[Depends(get_current_user)], tags=["全局资产库"])
 app.include_router(
-    agent_memory.user_router, prefix="/api/v1", dependencies=[Depends(get_current_user)], tags=["Agent 记忆"]
+    assets.router, prefix="/api/v1", dependencies=[Depends(get_current_user)], tags=["Global asset library"]
+)
+app.include_router(
+    agent_memory.user_router, prefix="/api/v1", dependencies=[Depends(get_current_user)], tags=["Agent memory"]
 )
 app.include_router(
     agent_memory.project_router,
     prefix="/api/v1",
     dependencies=[Depends(get_current_user), Depends(require_project_migration_ok)],
-    tags=["Agent 记忆"],
+    tags=["Agent memory"],
 )
-app.include_router(onboarding.router, prefix="/api/v1", dependencies=[Depends(get_current_user)], tags=["首次使用引导"])
+app.include_router(onboarding.router, prefix="/api/v1", dependencies=[Depends(get_current_user)], tags=["Onboarding"])
 app.include_router(user_options.router, prefix="/api/v1", dependencies=[Depends(get_current_user)], tags=["User options"])
 app.include_router(editor_text_templates.router, prefix="/api/v1", dependencies=[Depends(get_current_user)], tags=["User options"])
 app.include_router(
-    prompt_templates.router, prefix="/api/v1", dependencies=[Depends(get_current_user)], tags=["提示词模版"]
+    prompt_templates.router, prefix="/api/v1", dependencies=[Depends(get_current_user)], tags=["Prompt templates"]
 )
 
 # Public endpoints: reachable anonymously. The login entry is the prerequisite for getting a token, and static media
 # is loaded via <img src> / <video src>.
 # 公开端点：匿名可达。登录入口是拿 token 的前提，静态媒体经 <img src> / <video src> 加载。
-app.include_router(auth_router.public_router, prefix="/api/v1", tags=["认证"])
-app.include_router(files.public_router, prefix="/api/v1", tags=["文件管理"])
+app.include_router(auth_router.public_router, prefix="/api/v1", tags=["Auth"])
+app.include_router(files.public_router, prefix="/api/v1", tags=["Files"])
 
 # Self-authenticating endpoints: native browser download navigation cannot carry an Authorization header, so the
 # endpoint checks a short-lived download token via verify_download_token (see docs/adr/0071).
 # 自带认证端点：浏览器原生下载导航带不了 Authorization header，
 # 端点内 verify_download_token 校验短时效下载 token（见 docs/adr/0071）。
-app.include_router(projects.self_auth_router, prefix="/api/v1", tags=["项目管理"])
-app.include_router(edit_timelines.self_auth_router, prefix="/api/v1", tags=["剪辑时间线"])
+app.include_router(projects.self_auth_router, prefix="/api/v1", tags=["Projects"])
+app.include_router(edit_timelines.self_auth_router, prefix="/api/v1", tags=["Edit timelines"])
 
 
 mount_remote_mcp(app, remote_mcp_host)
@@ -1037,7 +1049,7 @@ async def serve_agent_installation_guide(request: Request) -> Response:
 
     exists, template = await asyncio.to_thread(_read)
     if not exists:
-        return PlainTextResponse("Agent 安装指引不存在", status_code=404)
+        return PlainTextResponse("Agent install guide not found", status_code=404)
 
     # Infer the base URL from the request; only trust x-forwarded-proto (standard reverse proxy header); host uses the
     # connection's actual target address and does not accept x-forwarded-host, which users can forge.

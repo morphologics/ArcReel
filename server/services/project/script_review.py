@@ -489,7 +489,7 @@ class ScriptReviewService:
             # 文件存在但信封形状坏（非法 JSON / 顶层非对象 / content 非对象）：`read_quarantine`
             # 按「无草稿」返回 None 是它自己的读取口径（供 confirm 的存在性判断照常阻塞），
             # 但呈现层不能照单全收——那会让面板看起来「干净」，实际草稿仍在阻塞确认。
-            view["violations"] = [_unreadable_violation("草稿文件已损坏或格式不符，无法解析")]
+            view["violations"] = [_unreadable_violation("The draft file is corrupted or malformed; cannot parse it")]
             return view
         view["revision"] = draft_revision(draft)
         view["editable_by"] = draft_owner(draft)
@@ -532,7 +532,9 @@ class ScriptReviewService:
             # meta.source 缺失等草稿被改坏的情形：把重算失败本身报成一条整集层面的违约。异常文本含
             # draft.path，只记日志、不回传给调用方——面向用户的 message 不能带内部路径。
             logger.warning("草稿重算失败 project=%s episode=%s：%s", project_name, episode, exc)
-            view["violations"] = [_unreadable_violation("草稿的产出上下文缺失或损坏，无法重新校验")]
+            view["violations"] = [
+                _unreadable_violation("The draft's generation context is missing or corrupted, so it cannot be revalidated")
+            ]
             return view
         view["violations"] = violation_entries(revalidation.violations)
         view["soft_violations"] = soft_violation_entries(list(revalidation.soft_violations))
@@ -818,7 +820,7 @@ class ScriptReviewService:
         # 口径与生成侧同一把尺——晋升工具用的正是产出时那套校验器，这里只判待处置草稿是否在场。
         quarantine = script_review.script_plan_quarantine_path(project_path, project, episode)
         if quarantine is not None and quarantine.exists():
-            raise ScriptReviewError("quarantined", f"script_plan 草稿待处置: {quarantine}")
+            raise ScriptReviewError("quarantined", f"script_plan has a pending draft: {quarantine}")
         # Existing drafts get duration normalization before validation: the Agent / direct calls may confirm without
         # going through get_state. The same per-path lock covers the whole read-modify-write (including the
         # reference_video branch's own write below), so writes from save_content or migration cannot cut in midway;

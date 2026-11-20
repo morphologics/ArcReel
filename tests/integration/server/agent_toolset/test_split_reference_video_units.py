@@ -418,7 +418,7 @@ async def test_split_reference_video_units_rejects_unregistered_asset(
     rv_source(fake_ctx)
     out = await run_rv_split(fake_ctx, monkeypatch, [rv_unit("@[不存在的人] 出场")])
     assert out.problem is not None
-    assert "未登记" in said(out)
+    assert "unregistered asset names" in said(out)
     assert not rv_script_plan_path(fake_ctx).exists()
 
 
@@ -431,7 +431,7 @@ async def test_split_reference_video_units_rejects_unregistered_speaker(
     rv_source(fake_ctx)
     out = await run_rv_split(fake_ctx, monkeypatch, [rv_unit("门开了\n@[无名氏]：{我来了。}")])
     assert out.problem is not None
-    assert "说话人未登记" in said(out)
+    assert "speakers not registered" in said(out)
     assert not rv_script_plan_path(fake_ctx).exists()
 
 
@@ -445,7 +445,7 @@ async def test_split_reference_video_units_rejects_over_max_refs(
     set_video_request_facts(_reference_facts("r2v", max_reference_images=2))
     out = await run_rv_split(fake_ctx, monkeypatch, [rv_unit("@[张三] 与 @[李四] 在 @[村口]")])
     assert out.problem is not None
-    assert "参考图数" in said(out)
+    assert "above the model limit" in said(out)
     assert not rv_script_plan_path(fake_ctx).exists()
 
 
@@ -468,7 +468,7 @@ async def test_split_reference_video_units_rejects_duration_off_reference_tier(
     out = await run_rv_split(fake_ctx, monkeypatch, [rv_unit("@[张三] 起身", duration=4)])
     assert out.problem is not None
     text = said(out)
-    assert "生效档位" in text
+    assert "available durations" in text
     assert "[8]" in text
     # Goes to the draft like the other violation classes: an off-tier duration is also a content violation the Agent can fix
     # by editing the draft
@@ -549,7 +549,7 @@ async def test_split_reference_video_units_rejects_out_of_enum_duration(
     rv_source(fake_ctx)
     out = await run_rv_split(fake_ctx, monkeypatch, [rv_unit("@[张三] 起身", duration=5)])
     assert out.problem is not None
-    assert "script_plan 拆分内容结构校验失败" in said(out)
+    assert "script_plan split content: structure validation failed" in said(out)
     assert not rv_script_plan_path(fake_ctx).exists()
 
 
@@ -570,7 +570,7 @@ async def test_split_reference_video_units_rejects_non_verbatim_source_text(
     units = [rv_unit("@[张三] 起身", source_text="张三在城里等人")]
     out = await run_rv_split(fake_ctx, monkeypatch, units)
     assert out.problem is not None
-    assert "不是小说原文的逐字片段" in said(out)
+    assert "not a verbatim excerpt of the novel" in said(out)
     assert not rv_script_plan_path(fake_ctx).exists()
 
 
@@ -597,7 +597,7 @@ async def test_split_reference_video_units_rejects_dialogue_overload(
     units = [rv_unit(f"@[张三] 起身\n@[张三]：{{{long_line}}}", duration=4)]
     out = await run_rv_split(fake_ctx, monkeypatch, units)
     assert out.problem is not None
-    assert "超过该 unit" in said(out)
+    assert "longer than the unit" in said(out)
     assert not rv_script_plan_path(fake_ctx).exists()
 
 
@@ -611,7 +611,7 @@ async def test_split_reference_video_units_rejects_braces_in_description(
     rv_source(fake_ctx)
     out = await run_rv_split(fake_ctx, monkeypatch, [rv_unit("@[张三] 推门，音量 {}，转身离开")])
     assert out.problem is not None
-    assert "花括号" in said(out)
+    assert "curly braces" in said(out)
     assert not rv_script_plan_path(fake_ctx).exists()
 
 
@@ -722,7 +722,7 @@ async def test_split_reference_video_units_reports_soft_violations_alongside_the
 
     assert out.problem is not None
     text = said(out)
-    assert "未登记" in text
+    assert "unregistered asset names" in text
     assert "降级提示" in text
     assert "未引用场景" in text
     assert "unit E1U02：" in text

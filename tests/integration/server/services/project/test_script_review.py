@@ -1201,7 +1201,7 @@ class TestReferenceVideoGateFlow:
 
         assert exc.value.code == "duration_off_tier"
         assert exc.value.params == {"position": 2, "duration_seconds": 6, "tiers": "4 / 8"}
-        assert "视频单元 2" in exc.value.message
+        assert "video unit 2" in exc.value.message
         assert "E1U02" not in exc.value.message
         assert not (pm.get_project_path("demo") / "scripts" / "episode_1.json").exists()
         assert (await _service(pm).get_state("demo", 1))["status"] == "pending_review"
@@ -1227,7 +1227,7 @@ class TestReferenceVideoGateFlow:
         refused = await run_declared_tool(CONFIRM_SCRIPT_REVIEW, ctx, {"episode_id": 1})
 
         assert refused.problem is not None
-        assert "视频单元 2" in refused.problem.detail
+        assert "video unit 2" in refused.problem.detail
         assert "6s" in refused.problem.detail
         assert "[4, 8]" in refused.problem.detail
         assert "E1U02" not in refused.problem.detail
@@ -1245,7 +1245,7 @@ class TestReferenceVideoGateFlow:
             await _service(pm).confirm("demo", 1)
 
         assert exc.value.code == "conversion_refused"
-        assert "unit_id 重复" in exc.value.message
+        assert "duplicate unit_id" in exc.value.message
 
     async def test_reference_duration_tiers_take_narrowed_with_reference_durations(
         self, tmp_path, set_video_request_facts

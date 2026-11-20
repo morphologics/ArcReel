@@ -253,14 +253,10 @@ class ProjectAssetNameConflictError(ValueError):
         self.name = name
         self.existing = existing
         self.requested_asset_type = requested_asset_type
-        requested = (
-            f"新增/改名后的{ASSET_SPECS[requested_asset_type].label_zh}"
-            if requested_asset_type in ASSET_SPECS
-            else "待写入资产"
-        )
+        requested = f"New/renamed {requested_asset_type}" if requested_asset_type in ASSET_SPECS else "Pending asset"
         super().__init__(
-            f"{requested}名称 {name!r} 与项目内已有{ASSET_SPECS[existing.asset_type].label_zh} "
-            f"{existing.name!r} 冲突（按 strip + Unicode NFC、不区分大小写判定）"
+            f"{requested} name {name!r} conflicts with existing {existing.asset_type} "
+            f"{existing.name!r} in the project (compared after strip + Unicode NFC, case-insensitive)"
         )
 
 
@@ -648,21 +644,22 @@ def validate_asset_name(name: object) -> str:
     引用会在中途截断。``[`` 不致坏——名为 ``[甲`` 时 ``@[[甲]`` 仍解析回完整的 ``[甲``——不拦。
     """
     if not isinstance(name, str):
-        raise ValueError(f"资产名称必须是字符串，当前为 {type(name).__name__}")
+        raise ValueError(f"Asset name must be a string, got {type(name).__name__}")
     cleaned = normalize_asset_name(name.strip())
     if not cleaned:
-        raise ValueError("资产名称不能为空或仅含空白字符")
+        raise ValueError("Asset name must not be empty or whitespace only")
     if (
         ".." in cleaned
         or any(c in cleaned for c in ILLEGAL_ASSET_NAME_CHARS)
         or any(ord(c) < 32 or ord(c) == 127 for c in cleaned)
     ):
         raise ValueError(
-            f"资产名称 {cleaned!r} 含非法字符：不允许路径分隔符（/ \\）、"
-            f'Windows 保留字符（: * ? " < > |）、引用定界符（]）、控制字符或 ..'
+            f"Asset name {cleaned!r} contains illegal characters: path separators (/ \\), "
+            f'Windows reserved characters (: * ? " < > |), the reference delimiter (]), control characters or .. '
+            "are not allowed"
         )
     if cleaned.endswith("."):
-        raise ValueError(f"资产名称 {cleaned!r} 不能以点结尾（Windows 文件名约束）")
+        raise ValueError(f"Asset name {cleaned!r} must not end with a dot (Windows file name rule)")
     if cleaned.split(".", 1)[0].upper() in WINDOWS_RESERVED_BASENAMES:
-        raise ValueError(f"资产名称 {cleaned!r} 是 Windows 保留设备名（CON/PRN/AUX/NUL/COM1-9/LPT1-9）")
+        raise ValueError(f"Asset name {cleaned!r} is a Windows reserved device name (CON/PRN/AUX/NUL/COM1-9/LPT1-9)")
     return cleaned

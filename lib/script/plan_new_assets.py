@@ -89,7 +89,7 @@ class NewAssetsError(ValueError):
     新增资产的处理决定解析不出：确认整笔拒绝，项目与正式脚本都不改。"""
 
     def __init__(self, problems: Sequence[NewAssetProblem]):
-        super().__init__("；".join(problem.message for problem in problems))
+        super().__init__("; ".join(problem.message for problem in problems))
         self.problems = list(problems)
 
 
@@ -262,7 +262,7 @@ def _parse_items(raw_items: object) -> tuple[list[PlanNewAsset | None], list[New
     if raw_items is None:
         return [], []
     if not isinstance(raw_items, list):
-        return [], [NewAssetProblem("new_asset_invalid", "new_assets 必须是数组", -1)]
+        return [], [NewAssetProblem("new_asset_invalid", "new_assets must be an array", -1)]
     items: list[PlanNewAsset | None] = []
     problems: list[NewAssetProblem] = []
     for index, raw in enumerate(raw_items):
@@ -270,7 +270,7 @@ def _parse_items(raw_items: object) -> tuple[list[PlanNewAsset | None], list[New
             items.append(PlanNewAsset.model_validate(raw))
         except ValidationError as exc:
             items.append(None)
-            problems.append(NewAssetProblem("new_asset_invalid", f"new_assets[{index}] 结构非法: {exc}", index))
+            problems.append(NewAssetProblem("new_asset_invalid", f"new_assets[{index}] has an invalid structure: {exc}", index))
     return items, problems
 
 
@@ -337,10 +337,14 @@ class _Resolver:
                 continue
             owner = self.owners.get(key, item_types.get(key))
             if owner is not None and owner != item.type:
-                self._problem("new_asset_name_taken", index, f"「{item.name}」已是{_label(owner)}的名字")
+                self._problem(
+                    "new_asset_name_taken",
+                    index,
+                    f"'{item.name}' is already the name of a {_label(owner)}",
+                )
                 continue
             if item.decision == "derivative" and item.type != "character":
-                self._problem("new_asset_derivative_not_character", index, "只有角色可以登记衍生")
+                self._problem("new_asset_derivative_not_character", index, "only characters can register variants")
                 continue
             if item.asset_name and not self._valid_name(item.asset_name, index, "asset_name"):
                 continue
@@ -363,7 +367,7 @@ class _Resolver:
         self._assets: dict[tuple[str, str], str | None] = {}
 
     def _problem(self, code: str, index: int, message: str) -> None:
-        self.problems.append(NewAssetProblem(code, f"new_assets[{index}]：{message}", index))
+        self.problems.append(NewAssetProblem(code, f"new_assets[{index}]: {message}", index))
 
     def _valid_name(self, name: str, index: int, field_name: str) -> bool:
         try:
@@ -409,7 +413,7 @@ class _Resolver:
             return registered
         index, item = found
         if key in chain:
-            self._problem("new_asset_merge_cycle", index, f"归并关系成环：{' → '.join((*chain, key))}")
+            self._problem("new_asset_merge_cycle", index, f"merge chain forms a cycle: {' → '.join((*chain, key))}")
             return None
         result: str | None = None
         if item.decision == "register":
@@ -421,7 +425,7 @@ class _Resolver:
                 self._problem(
                     "new_asset_target_unresolved",
                     index,
-                    f"归入目标「{item.target}」不是已登记的{_label(asset_type)}，也不是本集登记的新增项",
+                    f"merge target '{item.target}' is neither a registered {_label(asset_type)} nor a new item registered in this episode",
                 )
             else:
                 result = target
@@ -440,13 +444,19 @@ class _Resolver:
         taken = self.namespace.get(namespace_key)
         if taken is not None:
             owner, existing = taken
-            self._problem("new_asset_name_taken", index, f"登记名「{final}」与已有{_label(owner)}「{existing}」重名")
+            self._problem(
+                "new_asset_name_taken",
+                index,
+                f"registered name '{final}' clashes with existing {_label(owner)} '{existing}'",
+            )
             return None
         claimed = self.claimed.setdefault(namespace_key, (asset_type, final))
         if claimed != (asset_type, final):
             owner, existing = claimed
             self._problem(
-                "new_asset_name_taken", index, f"登记名「{final}」与本集新增的{_label(owner)}「{existing}」重名"
+                "new_asset_name_taken",
+                index,
+                f"registered name '{final}' clashes with {_label(owner)} '{existing}' added in this episode",
             )
             return None
         registrations = self.registrations[asset_type]
@@ -484,14 +494,14 @@ class _Resolver:
             self._problem(
                 "new_asset_base_unresolved",
                 index,
-                f"衍生的本体「{item.target}」不是已登记的角色，也不是本集登记的新角色",
+                f"variant base '{item.target}' is neither a registered character nor a new character registered in this episode",
             )
             return
         derivative = validate_asset_name(item.asset_name or item.name)
         existing = find_derivative_name(_derivatives_of(self.project, base), derivative)
-        owner = "已有的"
+        owner = "existing"
         if existing is None:
-            owner = "本集新增的"
+            owner = "newly added"
             claimed = self.claimed_derivatives.setdefault(base, {})
             existing = find_derivative_name(claimed, derivative)
             if existing is None:
@@ -499,14 +509,18 @@ class _Resolver:
                 self.derivatives.append((base, derivative, item.description))
         if existing is not None and asset_name_comparison_key(existing) != asset_name_comparison_key(derivative):
             self._problem(
-                "new_asset_name_taken", index, f"衍生名「{derivative}」与「{base}」{owner}衍生「{existing}」重名"
+                "new_asset_name_taken",
+                index,
+                f"variant name '{derivative}' clashes with {owner} variant '{existing}' of '{base}'",
             )
             return
         self.outcomes[("character", key)] = _Outcome("derivative", base, existing or derivative)
 
 
 def _label(asset_type: str) -> str:
-    return ASSET_SPECS[asset_type].label_zh
+    # User-facing violation text is English: the asset type key itself (character / scene / prop / product) is the label.
+    # 面向用户的违约文案为英文：直接以资产类型键作标签。
+    return asset_type
 
 
 def resolve_new_assets(project: Mapping[str, Any], raw_items: object) -> NewAssetResolution:
@@ -525,7 +539,7 @@ def new_asset_violations(project: Mapping[str, Any], raw_items: object) -> list[
     except NewAssetsError as exc:
         return [
             DraftViolation(
-                f"{problem.message}；请改正该项的 decision / target，或改用 register / skip",
+                f"{problem.message}; fix this item's decision / target, or use register / skip instead",
                 code=problem.code,
                 label=f"new_assets[{problem.index}]" if problem.index >= 0 else "new_assets",
             )

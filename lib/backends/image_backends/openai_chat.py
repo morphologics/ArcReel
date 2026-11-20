@@ -79,7 +79,7 @@ async def _save_image(url: str, output_path: Path) -> None:
     if not url.startswith("data:"):
         # Fetch failures are retried only at the download layer, never falling back to rerunning the already billed image request
         # 取件失败只在下载层重试，不回退到重跑已计费的出图请求
-        await with_artifact_retry(lambda: download_image_to_path(url, output_path), label="Chat Completions 图像")
+        await with_artifact_retry(lambda: download_image_to_path(url, output_path), label="Chat Completions image")
         return
 
     def _decode_and_save() -> None:
@@ -131,7 +131,7 @@ class OpenAIChatImageBackend:
         url = _extract_image_url(message) if message is not None else None
         if not url:
             raise RuntimeError(
-                f"Chat Completions 出图响应中没有图片 (model={self._model})，可能触发内容安全过滤或模型不支持出图"
+                f"Chat Completions image response contains no image (model={self._model}); possibly a content safety filter or the model does not support image output"
             )
         await _save_image(url, request.output_path)
         logger.info("Chat Completions 出图完成: %s", request.output_path)

@@ -736,7 +736,7 @@ async def _run_text_generation(
     except ModelNotInCatalogError as exc:
         return ToolOutcome(problem=model_not_in_catalog_problem(exc))
     except Exception as exc:
-        return ToolOutcome(problem=_unexpected_text_failure_problem(f"{operation} 失败: {exc}", exc))
+        return ToolOutcome(problem=_unexpected_text_failure_problem(f"{operation} failed: {exc}", exc))
 
 
 def _unexpected_text_failure_problem(detail: str, cause: BaseException) -> ToolProblem:
@@ -1017,7 +1017,7 @@ async def generate_episode_script(
     except TextGenerationError as exc:
         return ToolOutcome(problem=ToolProblem("generation_refused", str(exc)))
     except Exception as exc:
-        return ToolOutcome(problem=ToolProblem("internal_error", f"generate_episode_script 失败: {exc}"))
+        return ToolOutcome(problem=ToolProblem("internal_error", f"generate_episode_script failed: {exc}"))
     return await _submit_text_task(
         task_type=_TEXT_EPISODE_SCRIPT,
         operation="generate_episode_script",
@@ -1060,7 +1060,7 @@ async def generate_script_plan(
     except TextGenerationError as exc:
         return ToolOutcome(problem=ToolProblem("generation_refused", str(exc)))
     except Exception as exc:
-        return ToolOutcome(problem=ToolProblem("internal_error", f"generate_script_plan 失败: {exc}"))
+        return ToolOutcome(problem=ToolProblem("internal_error", f"generate_script_plan failed: {exc}"))
     if text_request.dry_run:
         return await _execute_text_handler("generate_script_plan", handler, text_request, scope, services)
     return await _submit_text_task(

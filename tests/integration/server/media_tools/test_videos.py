@@ -773,7 +773,7 @@ async def test_generate_reference_video_legacy_unresolvable_episode_fails_before
     out = await run_generate_videos(fake_ctx, _EPISODE_1, script="draft.json", batch_waiter=enqueue)
 
     assert out.problem is not None
-    assert "无法确定集号" in out.problem.detail
+    assert "Cannot determine the episode number" in out.problem.detail
     enqueue.assert_not_awaited()
 
 

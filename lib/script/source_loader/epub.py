@@ -13,7 +13,7 @@ from .errors import CorruptFileError
 
 
 def _resolve_titles(book: epub.EpubBook, doc_items: list) -> list[str]:
-    """Three-level fallback: toc → nav.xhtml → "第 N 章" (chapter N). / 三级退化：toc → nav.xhtml → "第 N 章"。"""
+    """Three-level fallback: toc → nav.xhtml → "Chapter N". / 三级退化：toc → nav.xhtml → "第 N 章"。"""
     by_href: dict[str, str] = {}
 
     def _walk(toc):
@@ -36,7 +36,7 @@ def _resolve_titles(book: epub.EpubBook, doc_items: list) -> list[str]:
     for idx, item in enumerate(doc_items, start=1):
         title = by_href.get(item.file_name)
         if not title:
-            title = f"第 {idx} 章"
+            title = f"Chapter {idx}"
         titles.append(title)
     return titles
 
@@ -46,7 +46,7 @@ class EpubExtractor:
         try:
             book = epub.read_epub(str(path))
         except Exception as exc:
-            raise CorruptFileError(filename=path.name, reason=f"EPUB 解析失败: {exc}") from exc
+            raise CorruptFileError(filename=path.name, reason=f"EPUB parsing failed: {exc}") from exc
 
         # get ITEM_DOCUMENT items in spine order / 按 spine 顺序拿到 ITEM_DOCUMENT
         spine_ids = [s[0] for s in book.spine]
@@ -61,7 +61,7 @@ class EpubExtractor:
         # 读回时 ebooklib 依据 OPF manifest 的 properties="nav" 识别为 EpubNav 实例。
         doc_items = [it for it in doc_items if not isinstance(it, epub.EpubNav)]
         if not doc_items:
-            raise CorruptFileError(filename=path.name, reason="EPUB 不含正文章节")
+            raise CorruptFileError(filename=path.name, reason="EPUB contains no body chapters")
 
         titles = _resolve_titles(book, doc_items)
 

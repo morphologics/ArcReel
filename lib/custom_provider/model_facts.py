@@ -123,10 +123,10 @@ def _parse_size(value: object) -> tuple[int, int] | None:
 
 _TYPE_NAMES: Mapping[str, str] = {
     "max_output_tokens": "int > 0",
-    "durations": "list[int > 0]（非空）",
-    "resolutions": "list[str]（非空）",
+    "durations": "list[int > 0] (non-empty)",
+    "resolutions": "list[str] (non-empty)",
     "duration_constraints": "{by_resolution: {str: list[int > 0]}, with_reference_images: list[int > 0]}",
-    "sizes": "list[\"<width>x<height>\"]（非空）",
+    "sizes": "list[\"<width>x<height>\"] (non-empty)",
 }
 
 

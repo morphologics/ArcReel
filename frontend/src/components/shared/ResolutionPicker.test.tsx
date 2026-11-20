@@ -26,6 +26,12 @@ describe("ResolutionPicker", () => {
     expect(onChange).toHaveBeenLastCalledWith(null);
   });
 
+  it("select mode falls back to the localized default placeholder", () => {
+    render(<ResolutionPicker mode="select" options={["720p"]} value={null} onChange={() => {}} />);
+    // Tests run in zh (see test/setup.ts). / 测试以 zh 运行（见 test/setup.ts）。
+    expect(screen.getByRole("combobox")).toHaveTextContent("默认（不传）");
+  });
+
   it("empty options not rendered", () => {
     const { container } = render(
       <ResolutionPicker

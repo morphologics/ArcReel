@@ -106,7 +106,7 @@ class TestDeclaredResolver:
     @pytest.mark.parametrize("generation_mode", [None, "reference_video"])
     def test_unknown_or_missing_content_mode_raises(self, content_mode, generation_mode):
         # fail-loud: do not silently fall to drama/narration. / fail-loud：不静默落 drama/narration。
-        with pytest.raises(ValueError, match=r"未知或缺失 content_mode"):
+        with pytest.raises(ValueError, match=r"Unknown or missing content_mode"):
             resolve_declared_kind(content_mode, generation_mode)
 
 
@@ -274,7 +274,7 @@ class TestRouteSkeletonGate:
         )
 
     def test_unknown_content_mode_still_fails_loud(self):
-        with pytest.raises(ValueError, match=r"未知或缺失 content_mode"):
+        with pytest.raises(ValueError, match=r"Unknown or missing content_mode"):
             ensure_route_skeleton({"segments": []}, None, "storyboard")
 
 

@@ -577,7 +577,7 @@ class OpenRouterImageBackend:
             return
         # Fetch failures are retried only at the download layer, never falling back to rerunning the already billed image request
         # 取件失败只在下载层重试，不回退到重跑已计费的出图请求
-        await with_artifact_retry(lambda: download_image_to_path(first["url"], output_path), label="OpenRouter 图像")
+        await with_artifact_retry(lambda: download_image_to_path(first["url"], output_path), label="OpenRouter image")
         await run_noninterruptible_sync(self._ensure_png, output_path, media_type)
 
     def _ensure_png(self, output_path: Path, media_type: str | None) -> None:

@@ -307,7 +307,7 @@ class AgnesImageBackend:
             sorted(str(key) for key in data),
             len(data_items) if isinstance(data_items, list) else None,
         )
-        raise RuntimeError("Agnes 图像响应缺少 url/b64_json")
+        raise RuntimeError("Agnes image response is missing url/b64_json")
 
     async def _download_result(self, url: str, output_path: Path) -> None:
         """Download the issued result image URL (idempotent GET), using the shared artifact download budget.
@@ -321,7 +321,7 @@ class AgnesImageBackend:
         瞬态失败在本层重试，绝不回退到重跑非幂等的生成 POST。共用谓词把 403/404 也算作
         可重试：终态刚签发的产物地址可能尚未在对象存储侧传播。其余 4xx 确定性失败。
         """
-        await with_artifact_retry(lambda: download_image_to_path(url, output_path), label="Agnes 图像")
+        await with_artifact_retry(lambda: download_image_to_path(url, output_path), label="Agnes image")
 
 
 async def _write_base64_image(b64: str, output_path: Path) -> None:

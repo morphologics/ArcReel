@@ -537,7 +537,7 @@ def admit_script_unit(
     try:
         adapter = _SKELETON_ADAPTERS[skeleton_kind]
     except KeyError as exc:
-        raise ValueError(f"未知剧本骨架: {skeleton_kind!r}") from exc
+        raise ValueError(f"Unknown script skeleton: {skeleton_kind!r}") from exc
     source = dict(unit)
     if ignore_marker:
         source.pop("needs_replan", None)

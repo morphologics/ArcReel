@@ -1354,7 +1354,7 @@ class TestFilesRouter:
         translation key at rejection time.
 
         登记宿主约束却漏配 404 文案时，构造期即失败，而非拒收时取到空翻译 key。"""
-        with pytest.raises(ValueError, match=r"host_bucket 与 host_not_found_key 必须成对登记"):
+        with pytest.raises(ValueError, match=r"host_bucket and host_not_found_key must be registered together"):
             files.UploadSpec(
                 allowed_exts=(".png",),
                 subdir=("x",),
@@ -1364,7 +1364,7 @@ class TestFilesRouter:
             )
         # The reverse is also a config error: a registered message without a host constraint can never be fetched
         # 反方向同样是配置错误：登记了文案却没有宿主约束，该文案永远取不到
-        with pytest.raises(ValueError, match=r"host_bucket 与 host_not_found_key 必须成对登记"):
+        with pytest.raises(ValueError, match=r"host_bucket and host_not_found_key must be registered together"):
             files.UploadSpec(
                 allowed_exts=(".png",),
                 subdir=("x",),
@@ -1376,7 +1376,7 @@ class TestFilesRouter:
         # The reference audio metadata field is the file's only pointer; types that clean up old files must not miss the
         # host existence constraint.
         # 参考音频的元数据字段是文件唯一指针；清理旧文件的类型不能漏掉宿主存在性约束。
-        with pytest.raises(ValueError, match=r"tracks_stale_audio 必须登记宿主约束"):
+        with pytest.raises(ValueError, match=r"tracks_stale_audio requires a host constraint"):
             files.UploadSpec(
                 allowed_exts=(".wav",),
                 subdir=("x",),

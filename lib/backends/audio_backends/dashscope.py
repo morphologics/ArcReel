@@ -222,7 +222,7 @@ class DashScopeAudioBackend:
         """
         content = await with_artifact_retry(
             lambda: self._fetch_audio(url),
-            label="DashScope 音频",
+            label="DashScope audio",
             retry_if=lambda e: isinstance(e, _EmptyDownloadError) or should_retry_signed_download(e),
         )
         # Writing to disk is outside the retry's wall-clock budget: a non-interruptible thread call inside an asyncio.timeout block would defeat the timeout.
@@ -250,12 +250,12 @@ class DashScopeAudioBackend:
                 # 不用 raise_for_status：它生成的异常文本携带完整预签名 URL；
                 # 手动构造保留异常类型与 .response.status_code，消息只带脱敏 URL。
                 raise httpx.HTTPStatusError(
-                    f"DashScope 音频下载返回 {resp.status_code}: {safe_url}",
+                    f"DashScope audio download returned {resp.status_code}: {safe_url}",
                     request=resp.request,
                     response=await buffered_error_response(resp),
                 )
             content = await read_body_capped(resp, max_bytes=AUDIO_ARTIFACT_MAX_BYTES)
         if not content:
             # 200 but empty body: don't write a 0-byte wav / 200 但空体：不写 0 字节 wav
-            raise _EmptyDownloadError(f"DashScope 音频下载返回空内容: {safe_url}")
+            raise _EmptyDownloadError(f"DashScope audio download returned empty content: {safe_url}")
         return content

@@ -710,10 +710,10 @@ async def execute_tts_task(
             text = canonical_narration_text(admission.preparation)
             if not admission.allowed:
                 if not text:
-                    raise ValueError(f"segment {resource_id} 无可合成的旁白文本")
+                    raise ValueError(f"segment {resource_id} has no narration text to synthesize")
                 raise SpeechAdmissionError(admission)
             if not text:
-                raise ValueError(f"segment {resource_id} 无可合成的旁白文本")
+                raise ValueError(f"segment {resource_id} has no narration text to synthesize")
             return (
                 current_project,
                 project_path,
@@ -726,7 +726,7 @@ async def execute_tts_task(
 
         legacy_text = payload.get("text") or payload.get("prompt")
         if not isinstance(legacy_text, str) or not legacy_text.strip():
-            raise ValueError("tts task 需要 payload.text 或 payload.script_file 之一")
+            raise ValueError("tts task requires either payload.text or payload.script_file")
         return current_project, project_path, legacy_text.strip(), None, None, reference_video_route, ()
 
     (
@@ -1078,16 +1078,16 @@ async def execute_character_voice_sample_task(
     text = payload.get("prompt")
     voice = payload.get("voice")
     if not isinstance(text, str) or not text.strip():
-        raise ValueError("voice sample 任务需要非空 payload.prompt（待合成文本）")
+        raise ValueError("voice sample task requires a non-empty payload.prompt (text to synthesize)")
     if not isinstance(voice, str) or not voice.strip():
-        raise ValueError("voice sample 任务需要 payload.voice（音色 id）")
+        raise ValueError("voice sample task requires payload.voice (voice id)")
     if not task_id:
         # The worker always passes the queue task's own id via execute_generation_task; if missing, the caller
         # bypassed the normal queue execution path (e.g. called directly from elsewhere by mistake), and sample_id's
         # cross-task isolation depends on it, so fail fast.
         # 恒由 worker 经 execute_generation_task 传入队列任务自身 id；缺失说明调用方绕过了
         # 常规队列执行路径（如误从别处直接调用），而 sample_id 的跨任务隔离依赖它，fail-fast。
-        raise ValueError("voice sample 任务需要 task_id")
+        raise ValueError("voice sample task requires task_id")
 
     project = await asyncio.to_thread(get_project_manager().load_project, project_name)
     if resolve_asset_key(project.get("characters"), character_name) is None:
@@ -1126,13 +1126,13 @@ async def execute_character_voice_sample_task(
 
     content = await asyncio.to_thread(_read_bytes)
     if len(content) > AUDIO_REFERENCE_MAX_BYTES:
-        raise ValueError(f"生成的语音样本超过 {AUDIO_REFERENCE_MAX_BYTES // (1024 * 1024)}MB 限制")
+        raise ValueError(f"The generated voice sample exceeds the {AUDIO_REFERENCE_MAX_BYTES // (1024 * 1024)}MB limit")
 
     duration = await probe_audio_duration_seconds(content, audio_abs.suffix)
     if duration is not None and not (AUDIO_REFERENCE_MIN_SECONDS <= duration <= AUDIO_REFERENCE_MAX_SECONDS):
         raise ValueError(
-            f"生成的语音样本时长 {duration:.1f}s 超出 "
-            f"{AUDIO_REFERENCE_MIN_SECONDS:.0f}-{AUDIO_REFERENCE_MAX_SECONDS:.0f} 秒范围"
+            f"The generated voice sample is {duration:.1f}s long, outside the "
+            f"{AUDIO_REFERENCE_MIN_SECONDS:.0f}-{AUDIO_REFERENCE_MAX_SECONDS:.0f}s range"
         )
 
     return {

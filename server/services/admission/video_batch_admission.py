@@ -491,7 +491,7 @@ def reference_unit_task_spec(unit: object, script_file: str) -> TaskSpec:
     # 用 .get 归一化：缺失 unit_id 的坏数据（Agent 可裸写 script JSON）会被 from_request
     # 当作空 resource_id 拒绝，而不是在此抛 KeyError 中断整批。
     if not isinstance(unit, dict):
-        raise ValueError("unit 必须是对象")
+        raise ValueError("unit must be an object")
     unit_id = str(unit.get("unit_id") or "")
     if unit.get("needs_replan") is True:
         require_script_unit_admitted("video_units", unit)
@@ -504,9 +504,9 @@ def reference_unit_task_spec(unit: object, script_file: str) -> TaskSpec:
         # 容器校验落在入队校验这一处：脏值（导入 / Agent 裸写 script 产生的 dict、数字）
         # 不拦就会在下游拼接提示词时抛出 TypeError，把整批打成 500，而不是让这个 unit
         # 带着自己的问题码进入准入结论。
-        raise ValueError(f"text 必须是字符串，当前为 {type(text).__name__}")
+        raise ValueError(f"text must be a string, got {type(text).__name__}")
     if not text.strip():
-        raise ValueError("正文为空")
+        raise ValueError("text is empty")
     spec = TaskSpec.from_request(
         task_type="reference_video",
         media_type="video",
@@ -896,13 +896,13 @@ def storyboard_video_prompt(
     prompt = item.get("video_prompt")
     if not prompt:
         item_id = item.get("segment_id") or item.get("scene_id")
-        raise ValueError(f"分镜缺少 video_prompt 字段: {item_id}")
+        raise ValueError(f"Storyboard item is missing the video_prompt field: {item_id}")
     if isinstance(prompt, dict) and not is_structured_video_prompt(prompt):
         item_id = item.get("segment_id") or item.get("scene_id")
-        raise ValueError(f"分镜 video_prompt 为对象但格式不符合结构化规范: {item_id}")
+        raise ValueError(f"Storyboard video_prompt is an object but not a valid structured prompt: {item_id}")
     if not isinstance(prompt, (dict, str)):
         item_id = item.get("segment_id") or item.get("scene_id")
-        raise TypeError(f"分镜 video_prompt 类型无效（期望 str 或 dict）: {item_id}")
+        raise TypeError(f"Storyboard video_prompt has an invalid type (expected str or dict): {item_id}")
     # Shares render_storyboard_video_prompt with the execution path: the enqueue snapshot and the actually sent text
     # have the same structure, and the negative constraint tail is appended uniformly by that exit (idempotent at
     # execution time on strings that already carry it).
@@ -1181,7 +1181,7 @@ async def admit_storyboard_video_request(
     for spec in specs:
         item = items_by_id.get(spec.resource_id)
         if item is None:
-            raise ValueError(f"找不到待生成条目: {spec.resource_id}")
+            raise ValueError(f"Item to generate not found: {spec.resource_id}")
         targets.append((spec.resource_id, item))
     request_facts = (
         (video_request_facts or await storyboard_video_request_facts(project, config_resolver)) if specs else None

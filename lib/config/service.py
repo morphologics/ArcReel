@@ -77,7 +77,7 @@ _ANTHROPIC_ENV_MAP: dict[str, str] = {
 }
 # Consistency guard: the env name list must align with ANTHROPIC_ENV_KEYS. / 一致性守护：env 名单与 ANTHROPIC_ENV_KEYS 必须对齐。
 assert set(_ANTHROPIC_ENV_MAP.values()) == set(ANTHROPIC_ENV_KEYS), (
-    "_ANTHROPIC_ENV_MAP 与 lib.config.env_keys.ANTHROPIC_ENV_KEYS 漂移"
+    "_ANTHROPIC_ENV_MAP has drifted from lib.config.env_keys.ANTHROPIC_ENV_KEYS"
 )
 
 

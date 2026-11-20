@@ -172,5 +172,5 @@ class OpenAIAudioBackend:
             # and retrying would bill again, so raise directly and let the task layer fail it (regeneration is cheap).
             # 宽松 shim 可能 200 + 空体；不落 0 字节文件、不计成功。该次合成已在供应商侧
             # 发生，重试等于再次计费，故直接抛错交由任务层失败（重生成廉价）。
-            raise RuntimeError("OpenAI 兼容语音合成返回空响应体")
+            raise RuntimeError("OpenAI-compatible speech synthesis returned an empty response body")
         return content
