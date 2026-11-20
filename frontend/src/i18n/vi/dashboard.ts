@@ -541,6 +541,7 @@ export default {
   'edit_view_empty_title': 'Tập này chưa có dòng thời gian dựng',
   'edit_view_empty_description': 'Có thể giao cho Agent dựng một bản, hoặc tạo từ kịch bản: mỗi đơn vị video dùng trọn vẹn, các đoạn nối bằng cắt thẳng.',
   'edit_timeline_create_failed': 'Không tạo được dòng thời gian dựng: {{message}}',
+  'openreel_open_failed': 'Không mở được tập này trong trình biên tập: {{message}}',
   'edit_render_button': 'Xuất phim',
   'edit_open_in_openreel': 'Mở trong [[editor]]',
   'edit_open_in_openreel_hint': 'Mở dòng thời gian dựng này trong [[editor]] (thử nghiệm): tải tập phim cùng tư liệu và mở ở đó như một dự án riêng',

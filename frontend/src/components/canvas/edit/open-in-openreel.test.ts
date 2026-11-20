@@ -1,6 +1,7 @@
 import { renderHook, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { STUDIO_TAB, exposeStudioNavigate, resetOpenReelProbeForTests, useOpenReelHref } from "./open-in-openreel";
+import { API } from "@/api";
+import { STUDIO_TAB, exposeStudioNavigate, openEpisodeInOpenReel, resetOpenReelProbeForTests, useOpenReelHref } from "./open-in-openreel";
 
 type NavigateWindow = Window & { youreelNavigate?: (url: string) => boolean };
 
@@ -75,5 +76,44 @@ describe("useOpenReelHref", () => {
     await waitFor(() => expect(fetchMock).toHaveBeenCalled());
     await new Promise((r) => setTimeout(r, 0));
     expect(result.current).toBeNull();
+  });
+});
+
+describe("openEpisodeInOpenReel without a timeline (YouReel)", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+    resetOpenReelProbeForTests();
+  });
+
+  function stubTab() {
+    const tab = { close: vi.fn(), focus: vi.fn(), location: { href: "" } };
+    vi.spyOn(window, "open").mockReturnValue(tab as unknown as Window);
+    vi.stubGlobal("fetch", vi.fn(async () => new Response("<title>YouReel Editor</title>", { status: 200 })));
+    vi.spyOn(API, "listEditTimelines").mockResolvedValue({ timelines: [] } as unknown as Awaited<ReturnType<typeof API.listEditTimelines>>);
+    return tab;
+  }
+
+  it("creates one first, then opens it", async () => {
+    const tab = stubTab();
+    const createTimeline = vi.fn(async () => "tl-new");
+    openEpisodeInOpenReel("demo", 3, { createTimeline });
+    await waitFor(() => expect(tab.location.href).toContain("#/arcreel?pack="));
+    expect(createTimeline).toHaveBeenCalledOnce();
+    expect(decodeURIComponent(tab.location.href)).toContain("/edit-timelines/tl-new/");
+    expect(tab.close).not.toHaveBeenCalled();
+  });
+
+  it("closes the tab and reports the error when none can be made", async () => {
+    const tab = stubTab();
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const onError = vi.fn();
+    const onNoTimeline = vi.fn();
+    const failure = new Error("422");
+    openEpisodeInOpenReel("demo", 3, { createTimeline: async () => { throw failure; }, onError, onNoTimeline });
+    await waitFor(() => expect(onError).toHaveBeenCalledWith(failure, true));
+    expect(tab.close).toHaveBeenCalledOnce();
+    expect(onNoTimeline).not.toHaveBeenCalled();
+    expect(consoleError).toHaveBeenCalled();
   });
 });

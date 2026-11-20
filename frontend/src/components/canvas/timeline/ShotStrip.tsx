@@ -10,6 +10,8 @@ import {
   type WheelEvent,
 } from "react";
 import { useTranslation } from "react-i18next";
+import { createScriptEditTimeline } from "@/components/canvas/edit-render/create-script-timeline";
+import { errMsg } from "@/utils/async";
 import { ArrowDownUp, ArrowLeft, ArrowRight, ArrowUpRight, Eye, EyeOff, Film, ImageIcon, ParkingSquare, Scissors, SquarePlay, Undo2 } from "lucide-react";
 import { ContextMenu } from "@base-ui/react/context-menu";
 import { useLocation, useSearchParams } from "wouter";
@@ -193,12 +195,21 @@ export function ShotStrip({
   const { editor: defaultEditor, ready: defaultEditorReady } = useDefaultEditor();
   const editInOpenReel = defaultEditorReady && defaultEditor === "openreel";
   const openInEditView = (target: StripEpisode, shotId: string) => {
+    const query = new URLSearchParams({ [EPISODE_VIEW_PARAM]: EPISODE_VIEW_EDIT, [LINK_UNIT_PARAM]: shotId });
+    const builtIn = () => startTransition(() => navigate(`/${WORKSPACE_ROUTE_EPISODES}/${target.episode}?${query.toString()}`));
     if (editInOpenReel) {
-      openEpisodeInOpenReel(projectName, target.episode);
+      // YouReel: without a timeline one is made first; when none can be, the built-in Edit view says why
+      openEpisodeInOpenReel(projectName, target.episode, {
+        createTimeline: async () => (await createScriptEditTimeline(projectName, target.episode, t)).created.timeline.id,
+        onError: (error, creating) =>
+          useAppStore
+            .getState()
+            .pushToast(t(creating ? "edit_timeline_create_failed" : "openreel_open_failed", { message: errMsg(error) }), "error"),
+        onNoTimeline: builtIn,
+      });
       return;
     }
-    const query = new URLSearchParams({ [EPISODE_VIEW_PARAM]: EPISODE_VIEW_EDIT, [LINK_UNIT_PARAM]: shotId });
-    startTransition(() => navigate(`/${WORKSPACE_ROUTE_EPISODES}/${target.episode}?${query.toString()}`));
+    builtIn();
   };
 
   // Mouse drag scrolls the strip (touch and pens scroll natively). A press that moved past the threshold

@@ -539,6 +539,7 @@ export default {
   'edit_view_empty_title': 'This episode has no edit timeline yet',
   'edit_view_empty_description': 'Let the Agent make a cut, or create one from the script: every video unit is used in full, with hard cuts between clips.',
   'edit_timeline_create_failed': 'Couldn’t create the edit timeline: {{message}}',
+  'openreel_open_failed': 'Couldn’t open the episode in the Editor: {{message}}',
   'edit_render_button': 'Render',
   'edit_open_in_openreel': 'Open in [[editor]]',
   'edit_open_in_openreel_hint': 'Open this edit timeline in [[editor]] (experimental): it downloads the episode with its media and opens it there as a separate project',

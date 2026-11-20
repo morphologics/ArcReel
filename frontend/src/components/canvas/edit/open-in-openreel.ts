@@ -75,14 +75,40 @@ const OPENREEL_TAB = "youreel-openreel";
  * loads OpenReel with the episode. Must be called from the click itself (the tab opens before the timeline list
  * arrives, so pop-up blockers allow it).
  */
-export function openEpisodeInOpenReel(projectName: string, episode: number): void {
+export function openEpisodeInOpenReel(
+  projectName: string,
+  episode: number,
+  options: {
+    /** YouReel (owner 2026-11-20): an episode without an edit timeline gets one first (as the built-in editor's
+     *  "Create edit timeline"); resolves to its id; throws when it can't be made (e.g. no usable video yet). */
+    createTimeline?: () => Promise<string | null>;
+    /** No timeline and none was asked to be made: the caller shows the built-in Edit view. */
+    onNoTimeline?: () => void;
+    /** Owner: "if that error path ever occurs, it should surface": making the timeline or opening failed (the
+     *  Editor tab is closed); `creating` tells which. */
+    onError?: (error: unknown, creating: boolean) => void;
+  } = {},
+): void {
   const tab = window.open("", OPENREEL_TAB);
   if (!tab) return;
   void Promise.all([API.listEditTimelines(projectName, episode), openReelAvailable()])
-    .then(([{ timelines }]) => {
-      const timelineId = pickDefaultTimeline(timelines);
+    .then(async ([{ timelines }]) => {
+      // YouReel: an episode never edited had no timeline, and the tab closed again without a word (owner: "Edit doesn't
+      // open the Editor")
+      let timelineId = pickDefaultTimeline(timelines);
+      if (!timelineId && options.createTimeline) {
+        try {
+          timelineId = await options.createTimeline();
+        } catch (error) {
+          tab.close();
+          console.error("[YouReel] couldn't create the edit timeline to open in the Editor", error);
+          options.onError?.(error, true);
+          return;
+        }
+      }
       if (!timelineId) {
         tab.close();
+        options.onNoTimeline?.();
         return;
       }
       const pack = API.getEditTimelineOreelpackUrl(projectName, timelineId);
@@ -92,7 +118,11 @@ export function openEpisodeInOpenReel(projectName: string, episode: number): voi
       else tab.location.href = `${openReelPage()}#/arcreel?pack=${encodeURIComponent(pack)}`;
       tab.focus();
     })
-    .catch(() => tab.close());
+    .catch((error: unknown) => {
+      tab.close();
+      console.error("[YouReel] couldn't open the episode in the Editor", error);
+      options.onError?.(error, false);
+    });
 }
 
 /** The browser tab name of the studio, so OpenReel's links back ("Open shot … in YouReel Studio") land in it. */

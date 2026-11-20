@@ -6,6 +6,9 @@ import { useConfirmLeave } from "@/components/shared/edit-unit/LeaveGuard";
 import { RetainedEditUnit } from "@/components/shared/edit-unit/RetainedEditUnit";
 import { EPISODE_SHOT_PARAM, EPISODE_VIEW_PARAM } from "@/app-routes";
 import { EditTimelineEmptyState } from "@/components/canvas/edit-render/EditTimelineEmptyState";
+import { createScriptEditTimeline } from "@/components/canvas/edit-render/create-script-timeline";
+import { useAppStore } from "@/stores/app-store";
+import { errMsg } from "@/utils/async";
 import { EpisodeRenderShortcut } from "@/components/canvas/edit-render/EpisodeRenderShortcut";
 import { RenderButton } from "@/components/canvas/edit-render/RenderButton";
 import { EpisodeSourceReview } from "@/components/canvas/EpisodeSourceReview";
@@ -159,12 +162,20 @@ function EpisodePageContent({
   const selectTab = useCallback(
     (next: EpisodeView, options?: EpisodeViewChangeOptions) => {
       if (next === "edit" && defaultEditorReady && defaultEditor === "openreel") {
-        openEpisodeInOpenReel(projectName, episode);
+        // YouReel: without a timeline one is made first; when none can be, the built-in Edit view says why
+        openEpisodeInOpenReel(projectName, episode, {
+          createTimeline: async () => (await createScriptEditTimeline(projectName, episode, t)).created.timeline.id,
+          onError: (error, creating) =>
+            useAppStore
+              .getState()
+              .pushToast(t(creating ? "edit_timeline_create_failed" : "openreel_open_failed", { message: errMsg(error) }), "error"),
+          onNoTimeline: () => changeView("edit", options),
+        });
         return;
       }
       changeView(next, options);
     },
-    [changeView, defaultEditor, defaultEditorReady, projectName, episode],
+    [changeView, defaultEditor, defaultEditorReady, projectName, episode, t],
   );
 
   // "View" in workflow progress: shots and video units can only be selected in the shot view. When not in that view, switching view and locating are combined into one leave guard,
