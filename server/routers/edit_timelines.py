@@ -596,6 +596,45 @@ async def get_editor_save(
     return Response(content=json.dumps(save), media_type="application/json", headers={"Cache-Control": "no-store"})
 
 
+class ReviewMarker(BaseModel):
+    """One review marker from a YouReel Editor save (``TimelineEditorSaveService.review_markers``)."""
+
+    timeline_id: str
+    timeline_name: str
+    episode: int
+    revision: int | None = None
+    saved_at: int | float | str | None = None
+    id: str
+    time: float
+    label: str
+    color: str
+    for_director: bool
+    episode_name: str
+    tag: str
+    clip_id: str | None = None
+    clip_name: str | None = None
+
+
+class ReviewMarkerListResponse(BaseModel):
+    markers: list[ReviewMarker]
+
+
+@router.get("/projects/{project_name}/review-markers")
+async def list_review_markers(
+    project_name: str,
+    service: TimelineEditorSaveServiceDep,
+    episode: int | None = Query(None, ge=1),
+    include_local: bool = Query(False),
+) -> ReviewMarkerListResponse:
+    """The review markers for the Director in the latest YouReel Editor save of each edit timeline (owner 2026-11-20,
+    for YouReel Flow); ``episode`` narrows to one episode, ``include_local`` adds the team's own markers (testing)."""
+    try:
+        markers = await service.review_markers(project_name, episode=episode, include_local=include_local)
+    except EditTimelineError as exc:
+        raise edit_timeline_api_error(exc) from exc
+    return ReviewMarkerListResponse(markers=[ReviewMarker(**m) for m in markers])
+
+
 @router.put("/projects/{project_name}/edit-timelines/{timeline_id}/editor-save")
 async def put_editor_save(
     project_name: str,

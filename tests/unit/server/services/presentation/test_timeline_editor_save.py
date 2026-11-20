@@ -127,3 +127,84 @@ def test_uploads_refuse_bad_ids_and_empty_bodies(setup) -> None:
     assert empty.value.code == "media_empty"
     assert [p.name for p in (folder / "media").iterdir()] == []  # no partial left behind
     assert asyncio.run(service.medium("demo", "tl-1", "../escape")) is None
+
+
+def _editor_project(markers: list[dict]) -> str:
+    return json.dumps({"version": "1", "project": {
+        "timeline": {
+            "tracks": [{"id": "v1", "clips": [
+                {"id": "c1", "mediaId": "mshot", "metadata": {"arcreel": {"shot_label": "Shot 4 · Hallway"}}},
+                {"id": "c2", "mediaId": "mup"},
+            ]}],
+            "markers": markers,
+        },
+        "mediaLibrary": {"items": [{"id": "mshot", "name": "E3S04.mp4"}, {"id": "mup", "name": "upload.mov"}]},
+    }})
+
+
+def test_review_markers_list_the_markers_for_the_director_from_each_latest_save(tmp_path, monkeypatch) -> None:
+    timelines = [SimpleNamespace(id="tl-a", episode=3, name="Full cut"), SimpleNamespace(id="tl-b", episode=4, name="Draft"),
+                 SimpleNamespace(id="tl-c", episode=4, name="No save")]
+
+    class _Projects:
+        def get_project_path(self, name: str) -> Path:
+            return tmp_path / name
+
+    class _Store:
+        def __init__(self, projects: object, name: str) -> None:
+            pass
+
+        def find(self, timeline_id: str) -> SimpleNamespace:
+            return next(t for t in timelines if t.id == timeline_id)
+
+        def list_documents(self, episode: int | None = None) -> list[SimpleNamespace]:
+            return [t for t in timelines if episode is None or t.episode == episode]
+
+    monkeypatch.setattr(timeline_editor_save, "EditTimelineStore", _Store)
+    service = TimelineEditorSaveService(_Projects())  # type: ignore[arg-type]  # a stand-in with only get_project_path
+    star = {"id": "m1", "time": 21.1, "label": "Shot 4 · Hallway_0:21.1", "color": "#ef4444", "episode": "3 · Title",
+            "clipId": "c1", "forDirector": True}
+    local = {"id": "m2", "time": 5, "label": "note", "color": "#38bdf8", "clipId": "c2"}
+    later = {"id": "m3", "time": 2, "label": "check", "color": "#a855f7", "forDirector": True}
+    for timeline, markers, revision in (("tl-a", [star, local], 7), ("tl-b", [later], 2)):
+        folder = tmp_path / "demo" / "renders" / f"episode_{3 if timeline == 'tl-a' else 4}" / timeline / "editor"
+        folder.mkdir(parents=True)
+        (folder / "save.json").write_text(json.dumps({"projectJson": _editor_project(markers), "revision": revision,
+                                                       "savedAt": 1700000000000}), encoding="utf-8")
+
+    found = asyncio.run(service.review_markers("demo"))
+    assert [m["id"] for m in found] == ["m1", "m3"]  # the Director's only, in episode then time order
+    first = found[0]
+    assert first["tag"] == "3 · Title_Shot 4 · Hallway_0:21.1"
+    assert first["clip_name"] == "Shot 4 · Hallway"
+    assert (first["timeline_id"], first["episode"], first["revision"], first["for_director"]) == ("tl-a", 3, 7, True)
+    assert found[1]["tag"] == "check" and found[1]["clip_name"] is None
+
+    with_local = asyncio.run(service.review_markers("demo", include_local=True))
+    assert [m["id"] for m in with_local] == ["m2", "m1", "m3"]
+    assert with_local[0]["clip_name"] == "upload.mov" and with_local[0]["for_director"] is False
+
+    assert [m["id"] for m in asyncio.run(service.review_markers("demo", episode=4))] == ["m3"]
+
+
+def test_review_markers_skip_an_unreadable_save(tmp_path, monkeypatch) -> None:
+    class _Projects:
+        def get_project_path(self, name: str) -> Path:
+            return tmp_path / name
+
+    class _Store:
+        def __init__(self, projects: object, name: str) -> None:
+            pass
+
+        def find(self, timeline_id: str) -> SimpleNamespace:
+            return SimpleNamespace(id=timeline_id, episode=1, name="x")
+
+        def list_documents(self, episode: int | None = None) -> list[SimpleNamespace]:
+            return [SimpleNamespace(id="tl-x", episode=1, name="x")]
+
+    monkeypatch.setattr(timeline_editor_save, "EditTimelineStore", _Store)
+    service = TimelineEditorSaveService(_Projects())  # type: ignore[arg-type]  # a stand-in with only get_project_path
+    folder = tmp_path / "demo" / "renders" / "episode_1" / "tl-x" / "editor"
+    folder.mkdir(parents=True)
+    (folder / "save.json").write_text(json.dumps({"projectJson": "{not json"}), encoding="utf-8")
+    assert asyncio.run(service.review_markers("demo")) == []

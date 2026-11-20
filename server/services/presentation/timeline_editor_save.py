@@ -95,6 +95,28 @@ class TimelineEditorSaveService:
 
         return await asyncio.to_thread(read)
 
+    async def review_markers(
+        self, project_name: str, *, episode: int | None = None, include_local: bool = False
+    ) -> list[dict[str, Any]]:
+        """The review markers in the latest editor save of each edit timeline (owner 2026-11-20, YouReel Flow).
+
+        Artists and the editor drop markers on the YouReel Editor's timeline; those marked for the Director
+        (``forDirector``) are what Flow lists (``include_local`` adds the team's own, for testing). A marker reaches the
+        studio with the editor's "Save to Studio". Each entry: the timeline (id, name, episode, the save's revision and
+        time), the marker (id, time in seconds, label, colour, for the Director or not, its tag ``{episode}_{label}``)
+        and the clip it was dropped on (id, its shot or media name). Read-only; timelines without a save give nothing.
+        """
+        store = EditTimelineStore(self._projects, project_name)
+        documents = await asyncio.to_thread(store.list_documents, episode)
+        found: list[dict[str, Any]] = []
+        for document in documents:
+            save = await self.latest(project_name, document.id)
+            if not save:
+                continue
+            found.extend(_markers_of(save, document, include_local=include_local))
+        found.sort(key=lambda m: (m["episode"], m["time"], m["timeline_id"]))
+        return found
+
     async def medium(self, project_name: str, timeline_id: str, asset_id: str) -> SavedMedium | None:
         """A medium the saves use; None when there is no such file."""
         if not valid_asset_id(asset_id):
@@ -198,6 +220,63 @@ class TimelineEditorSaveService:
         }
         await asyncio.to_thread(_keep, folder, record)
         return {"savedAt": saved_at, "assets": len(clean_assets)}
+
+
+def _markers_of(save: dict[str, Any], document: Any, *, include_local: bool) -> list[dict[str, Any]]:
+    """The review markers of one editor save (``projectJson``: the editor's project, as a string or an object)."""
+    raw = save.get("projectJson")
+    try:
+        data = json.loads(raw) if isinstance(raw, str) else raw
+    except ValueError:
+        return []
+    if not isinstance(data, dict):
+        return []
+    editor = data.get("project") if isinstance(data.get("project"), dict) else data
+    timeline = editor.get("timeline") if isinstance(editor.get("timeline"), dict) else {}
+    clips = {
+        clip.get("id"): clip
+        for track in timeline.get("tracks") or []
+        if isinstance(track, dict)
+        for clip in track.get("clips") or []
+        if isinstance(clip, dict)
+    }
+    media = {
+        item.get("id"): item.get("name")
+        for item in (editor.get("mediaLibrary") or {}).get("items") or []
+        if isinstance(item, dict)
+    }
+    out: list[dict[str, Any]] = []
+    for marker in timeline.get("markers") or []:
+        if not isinstance(marker, dict):
+            continue
+        for_director = marker.get("forDirector") is True
+        if not for_director and not include_local:
+            continue
+        clip = clips.get(marker.get("clipId")) or {}
+        shot = ((clip.get("metadata") or {}).get("arcreel") or {}).get("shot_label") if clip else None
+        label = str(marker.get("label") or "")
+        episode_name = str(marker.get("episode") or "")
+        try:
+            at = float(marker.get("time") or 0)
+        except (TypeError, ValueError):
+            at = 0.0
+        out.append({
+            "timeline_id": document.id,
+            "timeline_name": getattr(document, "name", ""),
+            "episode": document.episode,
+            "revision": save.get("revision"),
+            "saved_at": save.get("savedAt"),
+            "id": str(marker.get("id") or ""),
+            "time": at,
+            "label": label,
+            "color": str(marker.get("color") or ""),
+            "for_director": for_director,
+            "episode_name": episode_name,
+            "tag": f"{episode_name}_{label}" if episode_name else label,
+            "clip_id": marker.get("clipId"),
+            "clip_name": shot or media.get(clip.get("mediaId")) if clip else None,
+        })
+    return out
 
 
 def _size_of(path: Path) -> int | None:
