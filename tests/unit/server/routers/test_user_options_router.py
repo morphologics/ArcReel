@@ -103,3 +103,13 @@ def test_motion_transitions_is_kept_for_the_editor_and_null_turns_it_off():
     assert on.json() == {"mode": "easy", "motion_transitions": "on"}
     assert bad.status_code == 422
     assert off.json() == {"mode": "easy"}
+
+
+def test_keep_toasts_is_kept_for_the_editor():
+    settings = _InMemorySettings()
+    with _client(settings) as client:
+        on = client.put("/api/v1/user-options", json={"keep_toasts": "on"})
+        bad = client.put("/api/v1/user-options", json={"keep_toasts": "always"})
+
+    assert on.json() == {"keep_toasts": "on"}
+    assert bad.status_code == 422

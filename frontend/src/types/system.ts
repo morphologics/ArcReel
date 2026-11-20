@@ -111,6 +111,8 @@ export interface StudioUserOptions {
   mode?: "easy" | "advanced";
   /** The YouReel Editor's "Include motion transitions" (set in the Editor; kept here for the member). */
   motion_transitions?: "on" | "off";
+  /** The YouReel Editor's "Keep messages open until closed" (set in the Editor; kept here for the member). */
+  keep_toasts?: "on" | "off";
 }
 
 export type StudioUserOptionsPatch = { [K in keyof StudioUserOptions]?: StudioUserOptions[K] | null };

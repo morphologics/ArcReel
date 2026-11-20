@@ -38,6 +38,9 @@ class UserOptions(BaseModel):
     #: YouReel (owner 2026-11-19): the YouReel Editor's "Include motion transitions" (set in the Editor's Settings; the
     #: studio only keeps it for the member). Missing = off.
     motion_transitions: Literal["on", "off"] | None = None
+    #: YouReel (owner 2026-11-20): the YouReel Editor's "Keep messages open until closed" (set in the Editor). Missing =
+    #: off.
+    keep_toasts: Literal["on", "off"] | None = None
 
 
 async def _read(svc: ConfigService) -> dict[str, str]:
