@@ -306,22 +306,6 @@ export function PresentationPlayer({
     [presentation],
   );
 
-  // YouReel: Space plays / pauses in the video's own full screen too (the wrapper's key handler no longer sees the
-  // keys there: the focus leaves the video)
-  useEffect(() => {
-    const onKey = (event: KeyboardEvent) => {
-      const video = videoRef.current;
-      if (!video || document.fullscreenElement !== video) return;
-      if (event.key !== " " || event.repeat || event.altKey || event.ctrlKey || event.metaKey) return;
-      event.preventDefault();
-      event.stopPropagation();
-      if (video.paused) void video.play().catch(() => undefined);
-      else video.pause();
-    };
-    document.addEventListener("keydown", onKey, true);
-    return () => document.removeEventListener("keydown", onKey, true);
-  }, []);
-
   const refreshNativeCaptionMode = useCallback(() => {
     const tracks = videoRef.current?.textTracks;
     let showing = false;
