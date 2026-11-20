@@ -1,4 +1,5 @@
 import { useCallback, useId, useMemo, useState, type ReactNode } from "react";
+import { previewWidth, withWidth } from "@/hooks/useProgressiveImage";
 import { useTranslation } from "react-i18next";
 import { ChevronLeft, ChevronRight, Eye, History } from "lucide-react";
 import { cn } from "cn";
@@ -181,7 +182,7 @@ export function AssetDetailEditor({
   const previewUrl =
     imageUrl && gallery.sheetPath
       ? API.getFileUrl(projectName, gallery.sheetPath, sheetFp, {
-          width: typeof window !== "undefined" && window.devicePixelRatio > 1.25 ? 1280 : 640,
+          width: previewWidth(),
         })
       : null;
   const Icon = ASSET_SHEET_TYPE_ICON[assetType];
@@ -443,7 +444,7 @@ export function AssetDetailEditor({
             >
               {showingOld && viewedInfo.file_url ? (
                 <img
-                  src={viewedInfo.file_url}
+                  src={withWidth(viewedInfo.file_url, previewWidth())}
                   alt={t("dashboard:version_preview_alt", { version: viewedInfo.version })}
                   decoding="async"
                   className="size-full object-contain"

@@ -502,7 +502,7 @@ describe("AssetGallery", () => {
 
       await user.click(await within(viewer).findByRole("button", { name: "第 1 版" }));
 
-      expect(within(viewer).getByRole("img", { name: "「庭院」的资产图，第 1 版" })).toHaveAttribute("src", "/files/庭院_v1.png");
+      expect(within(viewer).getByRole("img", { name: "「庭院」的资产图，第 1 版" })).toHaveAttribute("src", "/files/庭院_v1.png?w=640")  // YouReel: the resized copy first;
       expect(within(viewer).getByText("正在查看旧版本，当前是第 2 版")).toBeInTheDocument();
       expect(restore).not.toHaveBeenCalled();
 

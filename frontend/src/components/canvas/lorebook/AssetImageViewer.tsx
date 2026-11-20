@@ -1,4 +1,5 @@
 import { useEffect, useId, useState, type KeyboardEvent } from "react";
+import { useProgressiveImage, withWidth } from "@/hooks/useProgressiveImage";
 import { useTranslation } from "react-i18next";
 import { ChevronLeft, ChevronRight, ImageOff, Loader2, PenLine, RotateCcw } from "lucide-react";
 import { cn } from "cn";
@@ -115,15 +116,17 @@ export function AssetImageViewer({
     return () => controller.abort();
   }, [open, projectName, type, assetName, fingerprint, reload]);
 
-  if (!asset) return null;
-
   const current = versions?.phase === "ready" ? versions.current : 0;
   const list = versions?.phase === "ready" ? versions.versions : [];
   const viewedInfo = viewing !== null ? list.find((v) => v.version === viewing) : undefined;
   // When viewing a version other than the current one, the image switches to that version's file / 正在看的不是当前版本时，图片换成那个版本的文件
   const oldInfo = viewedInfo !== undefined && !viewedInfo.is_current ? viewedInfo : undefined;
   const shownVersion = viewedInfo?.version ?? (current > 0 ? current : null);
-  const src = oldInfo ? (oldInfo.file_url ?? null) : currentUrl;
+  const fullSrc = oldInfo ? (oldInfo.file_url ?? null) : currentUrl;
+  // YouReel: the resized copy first, the original once loaded
+  const src = useProgressiveImage(fullSrc);
+
+  if (!asset) return null;
   const restorable = oldInfo !== undefined && !readOnly && oldInfo.restorable !== false;
 
   const navigate = (to: string | undefined) => {
@@ -367,7 +370,7 @@ function VersionStrip({
               )}
             >
               {v.file_url ? (
-                <img src={v.file_url} alt="" loading="lazy" className="aspect-video w-full object-cover" />
+                <img src={withWidth(v.file_url, 320)} alt="" loading="lazy" className="aspect-video w-full object-cover" />
               ) : (
                 <span className="flex aspect-video w-full items-center justify-center text-muted-foreground">
                   <ImageOff aria-hidden className="size-4" />

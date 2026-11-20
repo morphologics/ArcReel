@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { Dialog, DialogBody, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { useProgressiveImage } from "@/hooks/useProgressiveImage";
 
 /**
  * View the full image inside the details Sheet. Rendered within the Sheet's subtree: the Sheet is a modal, and an overlay mounted elsewhere would
@@ -23,6 +24,8 @@ export function AssetImageDialog({
   // Keep the previous image during the close animation / 关闭动画期间沿用上一张图
   const [shown, setShown] = useState(src);
   if (src !== null && src !== shown) setShown(src);
+  // YouReel: the resized copy first, the original once loaded
+  const display = useProgressiveImage(shown);
   return (
     <Dialog
       open={src !== null}
@@ -36,7 +39,7 @@ export function AssetImageDialog({
           <DialogTitle>{title}</DialogTitle>
         </DialogHeader>
         <DialogBody>
-          {shown && <img src={shown} alt={alt} className="mx-auto max-h-[70dvh] w-auto max-w-full object-contain" />}
+          {display && <img src={display} alt={alt} className="mx-auto max-h-[70dvh] w-auto max-w-full object-contain" />}
         </DialogBody>
       </DialogContent>
     </Dialog>

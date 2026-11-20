@@ -18,7 +18,7 @@ describe("AssetOriginalsField", () => {
 
     await user.click(tile);
     const dialog = await screen.findByRole("dialog");
-    expect(within(dialog).getByRole("img")).toHaveAttribute("src", "/api/v1/files/p/products/a.png?v=7");
+    expect(within(dialog).getByRole("img")).toHaveAttribute("src", "/api/v1/files/p/products/a.png?v=7&w=640")  // YouReel: the resized copy first;
   });
 
   it("requests a wider thumbnail for a single character original", () => {
