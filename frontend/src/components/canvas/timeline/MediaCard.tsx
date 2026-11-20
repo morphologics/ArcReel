@@ -1,4 +1,4 @@
-import { useRef, useState, type ReactNode } from "react";
+import { useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { cn } from "cn";
 import { ContextMenu } from "@base-ui/react/context-menu";
 import { DropdownMenuContent, DropdownMenuItem } from "@/components/ui/dropdown-menu";
@@ -132,7 +132,7 @@ export function MediaCard({
   const { t } = useTranslation("dashboard");
   const itemLabel = useItemPositionLabel(segmentId);
   const [restoring, setRestoring] = useState(false);
-  const fit = usePortraitFitWidth<HTMLDivElement>(aspectRatio === "9:16");
+  const [fitRef, fitWidth] = usePortraitFitWidth<HTMLDivElement>(aspectRatio === "9:16");
   const restoringRef = useRef(false);
   const freshBusy = () => restoringRef.current || Boolean(checkBusy?.()) || isResourceBusy(kind, projectName, segmentId);
   const setRestoreBusy = (next: boolean) => {
@@ -395,7 +395,11 @@ export function MediaCard({
         />
       )}
       {/* YouReel: a 9:16 frame narrowed so its height fits the screen (usePortraitFitWidth) */}
-      <div ref={fit.ref} style={fit.style} className={cn(aspectRatio === "9:16" && "mx-auto w-full")}>
+      <div
+        ref={fitRef}
+        style={fitWidth !== null ? ({ "--fit-max-w": `${fitWidth}px` } as CSSProperties) : undefined}
+        className={cn(aspectRatio === "9:16" && "mx-auto w-full", fitWidth !== null && "max-w-(--fit-max-w)")}
+      >
       {history ? (
         <VersionHistoryPanel
           kind={kind}
