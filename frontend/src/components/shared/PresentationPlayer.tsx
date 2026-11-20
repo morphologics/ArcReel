@@ -291,6 +291,37 @@ export function PresentationPlayer({
     [presentation],
   );
 
+  // YouReel (owner 2026-11-20): play pressed at the shot's end point starts the shot over. The player stops a shot at
+  // its end point (stopAtPresentationBoundary); when that point is before the end of the file the browser doesn't
+  // count it as ended, so a new play started there and was paused at once (a flash of play).
+  const restartAtPresentationEnd = useCallback(
+    (video: HTMLVideoElement) => {
+      if (!presentation) return false;
+      const start = presentation.video.start_microseconds / 1_000_000;
+      const boundary = start + presentation.video.duration_microseconds / 1_000_000;
+      if (video.currentTime < boundary - 0.05) return false;
+      video.currentTime = start;
+      return true;
+    },
+    [presentation],
+  );
+
+  // YouReel: Space plays / pauses in the video's own full screen too (the wrapper's key handler no longer sees the
+  // keys there: the focus leaves the video)
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      const video = videoRef.current;
+      if (!video || document.fullscreenElement !== video) return;
+      if (event.key !== " " || event.repeat || event.altKey || event.ctrlKey || event.metaKey) return;
+      event.preventDefault();
+      event.stopPropagation();
+      if (video.paused) void video.play().catch(() => undefined);
+      else video.pause();
+    };
+    document.addEventListener("keydown", onKey, true);
+    return () => document.removeEventListener("keydown", onKey, true);
+  }, []);
+
   const refreshNativeCaptionMode = useCallback(() => {
     const tracks = videoRef.current?.textTracks;
     let showing = false;
@@ -455,6 +486,7 @@ export function PresentationPlayer({
         }}
         onRateChange={(event) => synchronizeNarrationControls(event.currentTarget)}
         onPlay={(event) => {
+          if (restartAtPresentationEnd(event.currentTarget)) return;
           if (!stopAtPresentationBoundary(event.currentTarget)) synchronizeNarration(true);
         }}
         onPlaying={(event) => {
