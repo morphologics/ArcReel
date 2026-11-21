@@ -187,6 +187,8 @@ export interface ReferenceBatchAdmission extends WorkflowAdmission {
   /** Units not reached when enqueueing was interrupted; empty array when the whole batch enqueued successfully. / 入队中断时没轮到的 unit；整批入队成功时为空数组。 */
   enqueue_failures: ReferenceBatchEnqueueFailure[];
   deduped: boolean;
+  /** Durable generation batch of the admitted units (readable via `GET /batches/{batch_id}`); null when nothing was enqueued. / 准入单元的持久生成批次（可经 `GET /batches/{batch_id}` 读取）；没有入队时为 null。 */
+  batch_id?: string | null;
 }
 
 /** Batch preview: the same admission verdict as submit, plus the estimated cost of the priced part; creates no task at all. / 批量预览：与提交同一份准入结论，外加已定价部分的预估费用；一个任务也不建。 */

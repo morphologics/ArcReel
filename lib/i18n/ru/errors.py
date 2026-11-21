@@ -76,6 +76,8 @@ MESSAGES = {
     "engine_token_required": "Сервер принимает запросы только через свой обратный прокси (нет токена движка)",
     "engine_token_invalid": "Недействительный токен движка",
     "task_not_found": "Задача «{id}» не существует",
+    "generation_batch_not_found": "Пакет генерации «{id}» не существует",
+    "client_header_invalid": "Заголовок X-Client должен содержать одно значение из 1–32 символов: a-z, 0-9, «.», «_» или «-»",
     "task_running_not_cancellable": "Задача «{id}» уже запущена и не может быть отменена; она выполнится до конца, и результат будет сохранён",
     "task_retry_download_unavailable": "Для задачи «{id}» повтор скачивания недоступен",
     # Task failure reasons (GenerationWorker stores a code + params; tasks API renders per locale on read)

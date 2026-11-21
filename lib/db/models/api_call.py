@@ -37,6 +37,11 @@ class ApiCall(TimestampMixin, UserOwnedMixin, Base):
     # 该调用服务的生成任务；无任务的调用（文本四处、助手会话、端点试跑）留空，由 purpose 说明来源。
     task_id: Mapped[str | None] = mapped_column(String, nullable=True)
     purpose: Mapped[str | None] = mapped_column(String, nullable=True)
+    # The client (caller label) this call was made for: the source of the task it serves, else the client of the scope
+    # that made it (lib/billing/call_client.py); NULL for rows written before the column existed and for Agent turns.
+    # 该调用所属的客户端（调用方标签）：服务任务时取任务的 source，否则取发起它的作用域的客户端
+    # （lib/billing/call_client.py）；该列出现之前写入的行与 Agent 轮次为 NULL。
+    client: Mapped[str | None] = mapped_column(String, nullable=True)
     session_id: Mapped[str | None] = mapped_column(String, nullable=True)
     # Inputs sent with this call: reference images [{path, label, role}], first / last frame, voice, request params not given their own column;
     # paths are project-relative (see input normalisation in lib/generation/media_generator.py).

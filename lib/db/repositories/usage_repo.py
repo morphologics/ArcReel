@@ -14,6 +14,7 @@ from sqlalchemy import ColumnElement, and_, case, func, null, or_, select, updat
 
 from lib.agent.credential_tiers import AgentPricing
 from lib.backends.providers import CALL_TYPE_TEXT, CallPurpose, CallStatus, CallType
+from lib.billing.call_client import current_call_client
 from lib.billing.call_failure import CallErrorCode
 from lib.billing.catalog_pricing import (
     is_builtin_provider,
@@ -28,10 +29,11 @@ from lib.custom_provider import is_custom_provider
 from lib.db.base import DEFAULT_USER_ID, utc_now
 from lib.db.models.api_call import ApiCall
 from lib.db.models.session import AgentSession
-from lib.db.models.task import Task
+from lib.db.models.task import BatchTask, Task
 from lib.db.repositories.base import BaseRepository, rowcount
 from lib.db.repositories.custom_provider_repo import CustomProviderRepository
 from lib.db.repositories.display_names import provider_display_names
+from lib.episode.episode_paths import episode_script_filename
 from lib.generation.task_terminal_events import TERMINAL_TASK_STATUSES
 from lib.i18n import DEFAULT_LOCALE
 
@@ -275,11 +277,13 @@ class UsageRepository(BaseRepository):
         purpose: CallPurpose | None = None,
         session_id: str | None = None,
         inputs: object | None = None,
+        client: str | None = None,
     ) -> int:
         """Write a pending row and return its id.
 
         ``prompt`` is stored in full (details must show the complete input); empty ``task_id`` means the call serves no
-        generation task, in which case ``purpose`` explains the origin.
+        generation task, in which case ``purpose`` explains the origin. ``client`` defaults to the source of the task
+        the call serves, else to the client of the current scope (``lib/billing/call_client.py``).
 
         落一条 pending 行并返回它的 id。
 
@@ -287,6 +291,12 @@ class UsageRepository(BaseRepository):
         任务，此时来源由 ``purpose`` 说明。
         """
         now = utc_now()
+        if client is None and task_id:
+            client = (
+                await self.session.execute(select(Task.source).where(Task.task_id == task_id))
+            ).scalar_one_or_none()
+        if client is None:
+            client = current_call_client()
 
         row = ApiCall(
             project_name=project_name,
@@ -306,6 +316,7 @@ class UsageRepository(BaseRepository):
             purpose=purpose,
             session_id=session_id,
             inputs=inputs,
+            client=client,
         )
         self.session.add(row)
         await self.session.commit()
@@ -814,6 +825,38 @@ class UsageRepository(BaseRepository):
             result.setdefault(key, {}).setdefault(call_type, {})[currency] = round(total, 6)
         return result
 
+    async def get_batch_cost(self, batch_id: str) -> dict[str, Any]:
+        """Actual spend of a generation batch's member tasks, with the same rules as the usage summary.
+
+        Returns ``{"calls", "cost", "unpriced_calls", "pending_calls"}``: ``cost`` sums terminal rows with
+        ``cost_amount > 0`` per currency regardless of status (failed calls may be billed too); ``unpriced_calls``
+        counts terminal rows with ``cost_amount`` NULL; ``pending_calls`` counts calls still in flight, which carry no
+        cost yet. ``calls`` counts terminal rows.
+
+        生成批次成员任务的实际花费，口径与使用汇总相同。
+
+        返回 ``{"calls", "cost", "unpriced_calls", "pending_calls"}``：``cost`` 按币种合计 ``cost_amount > 0`` 的
+        终态行，不看状态（失败的调用一样可能被计费）；``unpriced_calls`` 是 ``cost_amount`` 为 NULL 的终态行数；
+        ``pending_calls`` 是仍在进行、尚无费用的调用数。``calls`` 是终态行数。
+        """
+        stmt = select(ApiCall.status, ApiCall.cost_amount, ApiCall.currency).where(
+            *usage_filter_clauses(UsageFilters(batch_id=batch_id))
+        )
+        stmt = self._scope_query(stmt, ApiCall)
+        calls = unpriced = pending = 0
+        cost: dict[str, float] = {}
+        for status, amount, currency in (await self.session.execute(stmt)).all():
+            if status == CallStatus.PENDING:
+                pending += 1
+                continue
+            calls += 1
+            if amount is None:
+                unpriced += 1
+            elif amount > 0:
+                key = currency or "USD"
+                cost[key] = round(cost.get(key, 0.0) + amount, 6)
+        return {"calls": calls, "cost": cost, "unpriced_calls": unpriced, "pending_calls": pending}
+
     async def list_successful_calls_for_output(self, project_name: str, output_path: str) -> list[dict[str, Any]]:
         """Successful generation calls that wrote this project file, oldest first (for the version history's model
         and cost: each generated version is the output of the call that finished just before it was recorded)."""
@@ -1286,6 +1329,19 @@ class UsageFilters:
     # 视图：``False`` 只要生成调用，``True`` 只要 Agent 会话的记录（来源 assistant_session），
     # ``None`` 不分。汇总默认不分，计入合计的口径包含 Agent。
     agent: bool | None = None
+    # Generation tasks the calls served (multi-select). / 调用所服务的生成任务（多选）。
+    task_ids: tuple[str, ...] = ()
+    # Calls that served a member task of this generation batch (``batch_tasks``; a deduplicated member counts for every
+    # batch that adopted it).
+    # 服务于该生成批次成员任务的调用（按 ``batch_tasks``；被去重复用的成员计入每个采用它的批次）。
+    batch_id: str | None = None
+    # Calls that served a task on this episode's script (``tasks.script_file`` = ``episode_N.json``). Calls without a
+    # task or whose task has no script (asset sheets, text calls) never match.
+    # 服务于该集剧本上的任务的调用（``tasks.script_file`` = ``episode_N.json``）。无任务、或任务不绑定剧本的调用
+    # （资产图、文本调用）不会命中。
+    episode: int | None = None
+    # Client labels (multi-select, ``api_calls.client``). / 客户端标签（多选，``api_calls.client``）。
+    clients: tuple[str, ...] = ()
 
 
 def _view_clauses(agent: bool | None) -> list[ColumnElement[bool]]:
@@ -1327,6 +1383,18 @@ def usage_filter_clauses(filters: UsageFilters) -> list[ColumnElement[bool]]:
     if filters.until is not None:
         clauses.append(ApiCall.started_at < as_utc(filters.until))
     clauses.extend(_view_clauses(filters.agent))
+    if filters.task_ids:
+        clauses.append(ApiCall.task_id.in_(filters.task_ids))
+    if filters.batch_id is not None:
+        clauses.append(ApiCall.task_id.in_(select(BatchTask.task_id).where(BatchTask.batch_id == filters.batch_id)))
+    if filters.episode is not None:
+        clauses.append(
+            ApiCall.task_id.in_(
+                select(Task.task_id).where(Task.script_file == episode_script_filename(filters.episode))
+            )
+        )
+    if filters.clients:
+        clauses.append(ApiCall.client.in_(filters.clients))
     return clauses
 
 
@@ -1468,6 +1536,7 @@ def _record_to_dict(row: ApiCall, task_type: str | None) -> dict[str, Any]:
         "duration_seconds": row.duration_seconds,
         "aspect_ratio": row.aspect_ratio,
         "session_id": row.session_id,
+        "client": row.client,
     }
 
 

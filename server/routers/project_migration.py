@@ -23,6 +23,7 @@ from lib.project.project_change_hints import emit_project_change_hint, project_c
 from lib.project.project_manager import ProjectManager, get_project_manager
 from lib.project.project_migration_report import acknowledge_migration_report
 from server.auth import CurrentUser
+from server.client_identity import RequestClient
 from server.tool_runtime import (
     CallerContext,
     NoArguments,
@@ -36,7 +37,7 @@ router = APIRouter()
 
 
 @router.post("/projects/{name}/migration/retry")
-async def retry_migration(name: str, user: CurrentUser):
+async def retry_migration(name: str, user: CurrentUser, client: RequestClient):
     """重跑本项目的数据升级链（含产物补录）；已是最新版本时直接成功。
 
     升级仍失败时 422，诊断里的 ``reason`` 是失败原文，``details`` 是结构化明细（集 / 文件 / 违约）。
@@ -49,7 +50,7 @@ async def retry_migration(name: str, user: CurrentUser):
             outcome = await retry_project_migration(
                 ToolRequest(NoArguments()),
                 ProjectScope(project_name=name, data_root=pm.data_root),
-                CallerContext(user_id=user.id, source="webui"),
+                CallerContext(user_id=user.id, source="webui", client=client),
                 Services.defaults(pm),
             )
         finally:

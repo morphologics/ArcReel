@@ -39,6 +39,7 @@ from lib.infra.api_errors import NotFoundError
 from lib.project.asset_derivatives import split_derivative_artifact_id
 from lib.project.project_manager import get_project_manager
 from server.auth import CurrentUser
+from server.client_identity import RequestClient
 from server.services.admission.asset_sheet_batch import (
     DERIVATIVE_OWNER_SHEET_MISSING,
     DESCRIPTION_REQUIRED_CODES,
@@ -167,7 +168,12 @@ async def preview_asset_sheet_batch(project_name: str, request: AssetSheetBatchR
 
 
 @router.post("/projects/{project_name}/asset-sheets/batch")
-async def submit_asset_sheet_batch_route(project_name: str, request: AssetSheetBatchRequest, user: CurrentUser):
+async def submit_asset_sheet_batch_route(
+    project_name: str,
+    request: AssetSheetBatchRequest,
+    user: CurrentUser,
+    client: RequestClient,
+):
     """提交一批，立即返回；成员任务的终态由界面按任务跟踪，整批汇总成一条通知。"""
 
     _project, plan = await _plan(project_name, request, user.id)
@@ -175,7 +181,7 @@ async def submit_asset_sheet_batch_route(project_name: str, request: AssetSheetB
         plan,
         project_name=project_name,
         queue=get_generation_queue(),
-        source="webui",
+        source=client,
         user_id=user.id,
     )
     task_by_unit = {task.unit_id: task for task in enqueued if task.unit_id is not None}

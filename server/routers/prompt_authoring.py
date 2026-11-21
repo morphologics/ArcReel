@@ -23,6 +23,7 @@ from lib.project.project_manager import get_project_manager
 from lib.script.prompt_authoring_scope import prompt_overwrite_with_text
 from server.agent_toolset.envelope import json_value
 from server.auth import CurrentUser
+from server.client_identity import RequestClient
 from server.i18n import Translator
 from server.services.project.episode_instructions import EpisodeInstructionKind, save_episode_instructions
 from server.text_generation import MAX_INSTRUCTIONS_LEN
@@ -94,6 +95,7 @@ async def author_prompts(
     episode: int,
     req: AuthorPromptsRequest,
     user: CurrentUser,
+    client: RequestClient,
     _t: Translator,
 ):
     """保存附加指令并提交提示词编写，返回生成批次。
@@ -121,7 +123,7 @@ async def author_prompts(
             )
         ),
         ProjectScope(project_name=project_name, data_root=pm.data_root),
-        CallerContext(user_id=user.id, source="webui"),
+        CallerContext(user_id=user.id, source="webui", client=client),
         Services.defaults(pm),
     )
     if outcome.problem is not None:

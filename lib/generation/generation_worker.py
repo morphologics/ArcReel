@@ -41,6 +41,7 @@ from typing import TYPE_CHECKING, Any, Protocol
 
 from sqlalchemy import update
 
+from lib.billing.call_client import call_client_scope
 from lib.billing.ledger import Ledger
 from lib.catalog import query as catalog
 from lib.config.registry import PROVIDER_REGISTRY
@@ -1026,7 +1027,13 @@ class GenerationWorker:
         无论执行器以什么结果返回，任务都以 ``project_deleted_during_task`` 失败。
         """
         task_id = task["task_id"]
-        with claim_task_project(task_id, task.get("project_name")) as claim:
+        # Provider calls made while running the task, including those without the task's id (text calls), are booked to
+        # the client that created the task.
+        # 执行任务期间发出的供应商调用（包括不带任务 id 的文本调用）记到创建该任务的客户端名下。
+        with (
+            call_client_scope(task.get("source")),
+            claim_task_project(task_id, task.get("project_name")) as claim,
+        ):
             await self._run_claimed_task(task, claim, claimed_provider_id=claimed_provider_id)
 
     async def _run_claimed_task(

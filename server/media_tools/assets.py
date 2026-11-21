@@ -185,7 +185,7 @@ async def generate_assets(
             operation=ASSET_BATCH_OPERATION,
             preflight=plan.preflight,
             pending_ids=plan.target_ids,
-            specs=plan.task_specs(source=caller.source),
+            specs=plan.task_specs(source=caller.task_source),
             states=dict(plan.states),
             dependencies=plan.dependencies,
         )

@@ -223,6 +223,7 @@ async def test_episode_asset_batch_keeps_uploaded_storyboard_while_generating_it
         "demo",
         asset_sheets.AssetSheetBatchRequest(episode_id=1),
         CurrentUserInfo(id=DEFAULT_USER_ID, sub="testuser", role="admin"),
+        "webui",
     )
 
     assert [member["unit_id"] for member in response["members"]] == ["character/Alice"]

@@ -534,7 +534,7 @@ async def _submit(
     # Persisting grid records writes official files: a thread transaction already started settles first, then the
     # cancellation is honored
     # 落地宫格记录要写正式文件：已开始的线程事务先结算再响应取消
-    committed = await run_sync_transaction(_commit_submission, plan, scope.project_name, services, caller.source)
+    committed = await run_sync_transaction(_commit_submission, plan, scope.project_name, services, caller.task_source)
     if isinstance(committed, ToolOutcome):
         return committed
 

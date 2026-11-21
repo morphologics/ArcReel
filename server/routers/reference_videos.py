@@ -23,15 +23,17 @@ from lib.artifacts.version_manager import VersionManager
 from lib.config.resolver import ConfigResolver
 from lib.db import async_session_factory
 from lib.generation.batch_admission import BatchAdmission, BatchAdmissionDecision, refused_ticket
+from lib.generation.generation_batch import build_generation_batch_admission
 from lib.generation.generation_queue import get_generation_queue
 from lib.generation.generation_queue_client import (
     TaskSpec,
     TaskSpecValidationError,
-    batch_enqueue_only,
+    submit_generation_batch,
 )
 from lib.generation.generation_result import (
     GenerationAction,
     GenerationProblemCode,
+    GenerationResultBuilder,
     GenerationSelection,
     GenerationSelectionMode,
     normalize_requested_ids,
@@ -58,6 +60,7 @@ from lib.script.script_batch_edit import ScriptBatchEditResult
 from lib.script.script_editor import ScriptEditError, new_item_id
 from lib.speech.speech_composition import admit_script_unit, refresh_video_unit_replan_state
 from server.auth import CurrentUser
+from server.client_identity import RequestClient
 from server.error_handlers import script_edit_detail
 from server.i18n import DisplayNamesCatalog, Translator
 from server.routers._batch_admission import enqueue_failure_payload, localized_admission_payload
@@ -91,6 +94,10 @@ from server.services.tasks.video_caps import (
 )
 
 logger = logging.getLogger(__name__)
+
+#: Operation name of the whole-episode / selected reference units batch (admission and the durable batch record).
+#: 整集 / 选中参考单元批量的操作名（准入与持久批次记录共用）。
+REFERENCE_UNITS_BATCH_OPERATION = "generate_reference_videos_batch"
 
 router = APIRouter(
     prefix="/projects/{project_name}/reference-videos",
@@ -624,6 +631,7 @@ async def generate_unit(
     episode: int,
     unit_id: str,
     user: CurrentUser,
+    client: RequestClient,
     _t: Translator,
     names: DisplayNamesCatalog,
     req: GenerateUnitRequest | None = None,
@@ -666,7 +674,7 @@ async def generate_unit(
         resource_id=spec.resource_id,
         payload=spec.payload,
         script_file=spec.script_file,
-        source="webui",
+        source=client,
         user_id=user.id,
     )
     return {
@@ -744,7 +752,7 @@ async def _admit_units_batch(
         script_file=script_file,
         units=targets,
         request_options=ReferenceRequestOptions(),
-        operation="generate_reference_videos_batch",
+        operation=REFERENCE_UNITS_BATCH_OPERATION,
         selection=(
             GenerationSelectionMode.EXPLICIT if requested_ids is not None else GenerationSelectionMode.MISSING_ONLY
         ),
@@ -795,6 +803,7 @@ async def generate_units_batch(
     project_name: str,
     episode: int,
     user: CurrentUser,
+    client: RequestClient,
     _t: Translator,
     names: DisplayNamesCatalog,
     req: GenerateUnitsBatchRequest,
@@ -813,6 +822,7 @@ async def generate_units_batch(
     payload = localized_admission_payload(admission, _t, names)
     payload["skipped_unit_ids"] = _skipped_unit_ids(selection)
     if admission.decision is not BatchAdmissionDecision.ADMITTED:
+        payload["batch_id"] = None
         payload["task_ids"] = []
         payload["task_ids_by_unit"] = {}
         payload["enqueue_failures"] = []
@@ -821,7 +831,7 @@ async def generate_units_batch(
 
     specs = [reference_unit_task_spec(unit, script_file) for unit in targets]
     for spec in specs:
-        spec.source = "webui"
+        spec.source = client
         # Record the confirmed duration option per unit in the request facts: it is part of this request, not one
         # value shared across the batch. Reuse the derivation used by admission; computing it separately in two places
         # is exactly how conventions diverge.
@@ -836,12 +846,37 @@ async def generate_units_batch(
             **(spec.payload or {}),
             "reference_request_options": options.to_payload(),
         }
-    enqueued, enqueue_failures = await batch_enqueue_only(
-        project_name=project_name,
-        specs=specs,
-        user_id=user.id,
-        queue=get_generation_queue(),
-    )
+    # YouReel (G2): the admitted units become one durable generation batch, readable and cancellable over REST
+    # (GET /batches/{batch_id}) like the storyboard and video batches. No targets, no batch.
+    # YouReel（G2）：准入通过的单元成为一个持久生成批次，与分镜图、视频批次一样可经 REST 读取与取消
+    # （GET /batches/{batch_id}）。没有目标就不建批次。
+    batch_id: str | None = None
+    if specs:
+        for spec in specs:
+            spec.unit_id = spec.resource_id
+        builder = GenerationResultBuilder(REFERENCE_UNITS_BATCH_OPERATION, selection.mode)
+        for state in selection.skipped:
+            builder.skip(state)
+        requested, blocked = build_generation_batch_admission(
+            preflight=builder.build(),
+            pending_ids=[spec.resource_id for spec in specs],
+            states={state.unit_id: state for state in selection.targets},
+            admission={str(item["unit_id"]): item for item in admission.projections()},
+        )
+        batch, enqueued, enqueue_failures = await submit_generation_batch(
+            project_name=project_name,
+            operation=REFERENCE_UNITS_BATCH_OPERATION,
+            requested=requested,
+            blocked=blocked,
+            specs=specs,
+            source=client,
+            user_id=user.id,
+            queue=get_generation_queue(),
+        )
+        batch_id = batch.batch_id
+    else:
+        enqueued, enqueue_failures = [], []
+    payload["batch_id"] = batch_id
     # An enqueue interruption does not undo tasks already created: they are complete paid units that passed admission
     # and run as usual. Targets not reached are reported per ID, so the UI releases the optimistic busy markers, and
     # the next "generate missing" fills only these.

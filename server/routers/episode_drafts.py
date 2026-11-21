@@ -25,6 +25,7 @@ from lib.project.project_change_hints import project_change_source
 from lib.project.project_manager import get_project_manager
 from server.agent_toolset.envelope import json_value
 from server.auth import CurrentUser
+from server.client_identity import RequestClient
 from server.draft_workflow import DraftWorkflowError
 from server.i18n import DisplayNamesCatalog, Translator
 from server.routers.script_review import localize_draft_view
@@ -165,6 +166,7 @@ async def repair_episode_draft(
     episode: int,
     doc_type: str,
     user: CurrentUser,
+    client: RequestClient,
     req: RepairDraftBody = Body(...),
 ):
     """提交 AI 修复，返回生成批次：只改违约所在的条目，修完照常重判，违约清零即采用。"""
@@ -183,7 +185,7 @@ async def repair_episode_draft(
     outcome = await repair_draft(
         ToolRequest(command),
         ProjectScope(project_name=project_name, data_root=pm.data_root),
-        CallerContext(user_id=user.id, source="webui"),
+        CallerContext(user_id=user.id, source="webui", client=client),
         Services.defaults(pm),
     )
     if outcome.problem is not None:

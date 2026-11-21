@@ -715,7 +715,7 @@ async def _generate_reference_units(
         unit_options = request_options_for_unit(request_options, spec.resource_id, confirmed_request_durations)
         spec.payload = {**(spec.payload or {}), "reference_request_options": unit_options.to_payload()}
         spec.unit_id = spec.resource_id
-        spec.source = call.caller.source
+        spec.source = call.caller.task_source
 
     submitted = await submit_media_generation(
         scope=call.scope,
@@ -1204,7 +1204,7 @@ class _StoryboardBatch:
 
         for spec in specs:
             spec.unit_id = spec.resource_id
-            spec.source = self.call.caller.source
+            spec.source = self.call.caller.task_source
 
         submitted = await submit_media_generation(
             scope=self.call.scope,

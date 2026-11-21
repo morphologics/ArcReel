@@ -282,6 +282,19 @@ class CallerContext:
     user_id: str
     source: Literal["embedded", "mcp", "webui"]
     batch_waiter: BatchWaiter | None = None
+    #: Client label recorded on the tasks and usage this call creates, when it differs from the host kind ``source``
+    #: (an HTTP caller's ``X-Client``, see ``server/client_identity.py``). Labels only; ``source`` keeps deciding how
+    #: the call is handled.
+    #: 本次调用创建的任务与用量上记录的客户端标签，与宿主种类 ``source`` 不同时设定（HTTP 调用方的
+    #: ``X-Client``，见 ``server/client_identity.py``）。只是标签；调用的处理方式仍由 ``source`` 决定。
+    client: str | None = None
+
+    @property
+    def task_source(self) -> str:
+        """The label recorded as ``tasks.source`` and usage ``client``: ``client`` if set, else ``source``.
+
+        记为 ``tasks.source`` 与用量 ``client`` 的标签：设了 ``client`` 用它，否则用 ``source``。"""
+        return self.client or self.source
 
     def waiting_with(self, **options: Any) -> CallerContext:
         """Bind extra options to the waiter (such as ``on_enqueued`` / ``stop_on_failure``); returned unchanged when
@@ -388,7 +401,7 @@ async def submit_media_generation(
             requested=requested,
             blocked=blocked,
             specs=specs,
-            source=caller.source,
+            source=caller.task_source,
             user_id=caller.user_id,
             queue=services.queue,
         )
@@ -398,7 +411,7 @@ async def submit_media_generation(
         operation=operation,
         requested=requested,
         blocked=blocked,
-        source=caller.source,
+        source=caller.task_source,
         user_id=caller.user_id,
     )
     try:
@@ -432,7 +445,10 @@ async def submit_media_generation(
         raise
 
 
-def _batch_currency_resolver(projects: ProjectManager, project_name: str) -> ArtifactCurrencyResolver | None:
+def batch_currency_resolver(projects: ProjectManager, project_name: str) -> ArtifactCurrencyResolver | None:
+    """Artifact currency resolver for reading a batch's results; ``None`` when the project's migration failed.
+
+    读取批次结果所用的产物时效解析器；项目迁移失败时为 ``None``。"""
     try:
         project = projects.load_project(project_name)
         return active_artifact_currency_resolver(projects.get_project_path(project_name), project)
@@ -447,7 +463,7 @@ async def get_generation_batch(
     services: Services,
 ) -> ToolOutcome[Any]:
     try:
-        resolver = await asyncio.to_thread(_batch_currency_resolver, services.projects, scope.project_name)
+        resolver = await asyncio.to_thread(batch_currency_resolver, services.projects, scope.project_name)
         result = await services.queue.get_generation_batch(
             project_name=scope.project_name,
             batch_id=request.value.batch_id,
@@ -822,7 +838,7 @@ async def _submit_text_task(
         operation=operation,
         requested=snapshot,
         blocked=[],
-        source=caller.source,
+        source=caller.task_source,
         user_id=caller.user_id,
     )
     try:
@@ -832,7 +848,7 @@ async def _submit_text_task(
             media_type="text",
             resource_id=unit_id,
             payload=payload,
-            source=caller.source,
+            source=caller.task_source,
             user_id=caller.user_id,
             batch_id=batch_id,
             batch_unit_id=unit_id,
@@ -4053,6 +4069,7 @@ __all__ = [
     "ToolProblem",
     "ToolRequest",
     "UploadSourceRequest",
+    "batch_currency_resolver",
     "cancel_generation_batch",
     "complete_script_plan_rebuild",
     "confirm_script_review",

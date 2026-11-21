@@ -98,7 +98,9 @@ def reference_videos_client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> 
     app = FastAPI()
     register_error_handlers(app)
     app.include_router(router_mod.router, prefix="/api/v1", dependencies=AUTH_DEPENDENCIES)
-    app.dependency_overrides[get_current_user] = lambda: CurrentUserInfo(id="u1", sub="test", role="admin")
+    # # The default user: an admitted batch is stored as a generation batch owned by an existing user row.
+    # 默认用户：准入通过的批量要存成生成批次，归属于一个已存在的用户行。
+    app.dependency_overrides[get_current_user] = lambda: CurrentUserInfo(id="default", sub="test", role="admin")
     return TestClient(app)
 
 
@@ -1383,6 +1385,10 @@ def test_generate_batch_creates_the_whole_task_set_in_one_admission(
         "reference_request_options": {},
     }
     assert enqueued[0]["source"] == "webui"
+    # # The admitted units form one durable batch, readable over GET /batches/{batch_id}.
+    # 准入通过的单元组成一个持久批次，可经 GET /batches/{batch_id} 读取。
+    assert body["batch_id"]
+    assert {call["batch_id"] for call in enqueued} == {body["batch_id"]}
 
 
 def test_generate_batch_keeps_created_tasks_when_the_enqueue_is_interrupted(

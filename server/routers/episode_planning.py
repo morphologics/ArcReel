@@ -46,6 +46,7 @@ from lib.project.project_change_hints import project_change_source
 from lib.project.project_manager import ProjectManager, get_project_manager
 from server.agent_toolset.envelope import json_value
 from server.auth import CurrentUser
+from server.client_identity import RequestClient
 from server.dependencies import require_project_migration_ok
 from server.i18n import Translator
 from server.routers.episode_management import episode_has_active_tasks
@@ -118,22 +119,30 @@ def _raise_problem(problem: ToolProblem, _t: Translator) -> None:
     raise UnprocessableError("episode_planning_refused", reason=text).with_diagnostic(problem.detail)
 
 
-def _context(project_name: str, user_id: str) -> tuple[ProjectScope, CallerContext, Services]:
+def _context(
+    project_name: str, user_id: str, client: str | None = None
+) -> tuple[ProjectScope, CallerContext, Services]:
     pm = get_project_manager()
     return (
         ProjectScope(project_name=project_name, data_root=pm.data_root),
-        CallerContext(user_id=user_id, source="webui"),
+        CallerContext(user_id=user_id, source="webui", client=client),
         Services.defaults(pm),
     )
 
 
 @router.post("/projects/{project_name}/episode-planning")
-async def plan_episodes_to_end(project_name: str, req: EpisodePlanningRequest, user: CurrentUser, _t: Translator):
+async def plan_episodes_to_end(
+    project_name: str,
+    req: EpisodePlanningRequest,
+    user: CurrentUser,
+    client: RequestClient,
+    _t: Translator,
+):
     """提交 AI 分集规划，从规划起点逐窗规划到整本源文结尾，返回首窗的生成批次。
 
     带 ``gap`` 时是「规划这段未切分的原文」：只规划到这段原文的结尾，新集按源文位置插入。
     """
-    scope, caller, services = _context(project_name, user.id)
+    scope, caller, services = _context(project_name, user.id, client)
     outcome = await start_episode_planning(
         ToolRequest(PlanEpisodesRequest(instructions=req.instructions)),
         scope,
@@ -166,12 +175,18 @@ class EpisodeReplanRequest(BaseModel):
 
 
 @router.post("/projects/{project_name}/episode-replan", dependencies=[Depends(require_project_migration_ok)])
-async def start_replan(project_name: str, req: EpisodeReplanRequest, user: CurrentUser, _t: Translator):
+async def start_replan(
+    project_name: str,
+    req: EpisodeReplanRequest,
+    user: CurrentUser,
+    client: RequestClient,
+    _t: Translator,
+):
     """从某一集开始重新规划：逐窗生成一份候选，分集账本不动，返回首窗的生成批次。
 
     ``dry_run`` 时返回 ``status=preview``：会被替换的切出集 ``replaced`` 与其中已开始制作的集 ``started``。
     """
-    scope, caller, services = _context(project_name, user.id)
+    scope, caller, services = _context(project_name, user.id, client)
     outcome = await start_episode_replan(
         ToolRequest(PlanEpisodesRequest(instructions=req.instructions)),
         scope,
@@ -194,12 +209,18 @@ class ReplanContinueRequest(BaseModel):
 
 
 @router.post("/projects/{project_name}/episode-replan/continue", dependencies=[Depends(require_project_migration_ok)])
-async def continue_replan(project_name: str, req: ReplanContinueRequest, user: CurrentUser, _t: Translator):
+async def continue_replan(
+    project_name: str,
+    req: ReplanContinueRequest,
+    user: CurrentUser,
+    client: RequestClient,
+    _t: Translator,
+):
     """接着生成中途停止的新的分集方案：从方案的结尾逐窗生成到整本源文结尾，沿用发起时的附加指令。
 
     返回首窗的生成批次。方案已覆盖到结尾、已过时或已不在时按原因码拒绝；分集规划在进行时 409。
     """
-    scope, caller, services = _context(project_name, user.id)
+    scope, caller, services = _context(project_name, user.id, client)
     outcome = await continue_episode_replan(req.candidate_id, scope, caller, services)
     if outcome.problem is not None:
         _raise_problem(outcome.problem, _t)

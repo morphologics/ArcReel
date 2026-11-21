@@ -78,6 +78,7 @@ from lib.infra.path_safety import try_safe_join
 from lib.project.project_migrations import cleanup_stale_backups, run_project_migrations
 from lib.script.source_loader.migration import migrate_project_source_encoding, migrate_project_source_encoding_once
 from server.auth import ensure_auth_password, ensure_token_secret, get_current_user, warn_if_auth_disabled
+from server.client_identity import request_client
 from server.cors_config import resolve_cors_policy
 from server.dependencies import require_project_migration_ok, require_valid_project_name
 from server.engine_token import EngineTokenMiddleware
@@ -93,6 +94,7 @@ from server.routers import (
     asset_sheets,
     assets,
     assistant,
+    batches,
     catalog,
     characters,
     cost_estimation,
@@ -714,7 +716,8 @@ app = FastAPI(
     description="Web workspace for AI video production",
     version="1.0.0",
     lifespan=lifespan,
-    dependencies=[Depends(require_valid_project_name)],
+    # YouReel (G3): X-Client is validated and scoped once per request (server/client_identity.py) / 每个请求校验并设定 X-Client
+    dependencies=[Depends(require_valid_project_name), Depends(request_client)],
     # YouReel (G4): document the shared error body on every operation / 在每个操作上记录共用的错误体
     responses=ERROR_RESPONSES,
 )
@@ -954,6 +957,9 @@ app.include_router(
     project_events.router, prefix="/api/v1", dependencies=[Depends(get_current_user)], tags=["Project events"]
 )
 app.include_router(tasks.router, prefix="/api/v1", dependencies=[Depends(get_current_user)], tags=["Task queue"])
+app.include_router(
+    batches.router, prefix="/api/v1", dependencies=[Depends(get_current_user)], tags=["Generation batches"]
+)
 app.include_router(providers.router, prefix="/api/v1", dependencies=[Depends(get_current_user)], tags=["Providers"])
 app.include_router(
     provider_models.router, prefix="/api/v1", dependencies=[Depends(get_current_user)], tags=["Providers"]

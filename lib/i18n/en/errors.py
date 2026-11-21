@@ -76,6 +76,8 @@ MESSAGES = {
     "engine_token_required": "This server only accepts requests through its reverse proxy (engine token missing)",
     "engine_token_invalid": "Engine token is invalid",
     "task_not_found": "Task '{id}' does not exist",
+    "generation_batch_not_found": "Generation batch '{id}' does not exist",
+    "client_header_invalid": "The X-Client header must be one value of 1-32 characters: a-z, 0-9, '.', '_' or '-'",
     "task_running_not_cancellable": "Task '{id}' has already started and cannot be cancelled; it will run to completion and its result will be kept",
     "task_retry_download_unavailable": "Task '{id}' is not eligible for download retry",
     # Task failure reasons (GenerationWorker stores a code + params; tasks API renders per locale on read)

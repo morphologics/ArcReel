@@ -51,7 +51,10 @@ export interface TaskItem {
   /** Model of the most recent call of a running task; null when queued or no call sent yet. Returned only by the task list API. / 运行中任务最近一次调用的模型；排队中或尚未发出调用时为 null。仅任务列表接口返回。 */
   model?: string | null;
   provider_job_id: string | null;
-  source: "webui" | "agent";
+  /** Client label that created the task: "webui" (this UI), "mcp" / "embedded" (agent hosts), or an API caller's X-Client value. / 创建任务的客户端标签："webui"（本界面）、"mcp" / "embedded"（Agent 宿主），或 API 调用方的 X-Client 值。 */
+  source: string;
+  /** Generation batch the task was created in, if any. / 任务所属的生成批次（如有）。 */
+  batch_id?: string | null;
   queued_at: string;
   started_at: string | null;
   finished_at: string | null;

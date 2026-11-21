@@ -34,18 +34,18 @@ from lib.artifacts.artifact_activation import (
     resolve_usable_storyboard_video_inputs,
 )
 from lib.artifacts.artifact_manifest import ArtifactKey
-from lib.catalog.errors import ModelNotInCatalogError
 from lib.artifacts.generation_input import asset_sheet_input, project_input_observation, storyboard_image_input
 from lib.artifacts.video_visual_provenance import resolve_video_aspect_ratio
+from lib.catalog.errors import ModelNotInCatalogError
 from lib.config.resolver import VIDEO_MODEL_OVERRIDE_KEY, ConfigResolver, video_bucket_for_generation_mode
+from lib.generation.generation_queue import get_generation_queue
+from lib.generation.generation_queue_client import TaskSpec
 from lib.generation.video_request_facts import (
     ExecutionVideoIdentity,
     VideoRequestCostFacts,
     VideoRequestFacts,
     evaluate_video_request_facts,
 )
-from lib.generation.generation_queue import get_generation_queue
-from lib.generation.generation_queue_client import TaskSpec
 from lib.infra.api_errors import BadRequestError, ConflictError, NotFoundError
 from lib.infra.async_thread import run_sync_transaction
 from lib.infra.json_io import domain_error_on_value_error
@@ -67,6 +67,7 @@ from lib.speech.narration_config import NarrationConfigError, require_project_tt
 from lib.speech.narration_delivery import canonical_narration_text
 from lib.speech.speech_composition import SpeechMode, admit_script_unit
 from server.auth import CurrentUser
+from server.client_identity import RequestClient
 from server.i18n import Translator
 from server.routers._validators import require_audio_switch_supported, require_video_bucket_capability
 from server.services.admission.cost_estimation import quote_image_models, quote_video_request
@@ -238,6 +239,7 @@ async def generate_storyboard(
     segment_id: str,
     req: GenerateStoryboardRequest,
     user: CurrentUser,
+    client: RequestClient,
     _t: Translator,
 ):
     """
@@ -293,7 +295,7 @@ async def generate_storyboard(
         resource_id=spec.resource_id,
         script_file=spec.script_file,
         payload=spec.payload,
-        source="webui",
+        source=client,
         user_id=user.id,
     )
 
@@ -341,6 +343,7 @@ async def generate_video(
     segment_id: str,
     req: GenerateVideoRequest,
     user: CurrentUser,
+    client: RequestClient,
     _t: Translator,
 ):
     """
@@ -468,7 +471,7 @@ async def generate_video(
         resource_id=spec.resource_id,
         script_file=spec.script_file,
         payload=spec.payload,
-        source="webui",
+        source=client,
         user_id=user.id,
     )
 
@@ -578,6 +581,7 @@ async def _enqueue_tts_segment(
     segment_id: str,
     script_file: str,
     user_id: str,
+    client: str,
     provider_id: str | None,
 ) -> dict:
     spec = TaskSpec.from_request(
@@ -595,7 +599,7 @@ async def _enqueue_tts_segment(
         resource_id=spec.resource_id,
         script_file=spec.script_file,
         payload=spec.payload,
-        source="webui",
+        source=client,
         user_id=user_id,
         provider_id=provider_id,
     )
@@ -607,6 +611,7 @@ async def generate_tts(
     segment_id: str,
     req: GenerateTtsRequest,
     user: CurrentUser,
+    client: RequestClient,
     _t: Translator,
 ):
     """显式提交一个 narrator-owned unit 的旁白配音任务。"""
@@ -640,6 +645,7 @@ async def generate_tts(
         segment_id=segment_id,
         script_file=req.script_file,
         user_id=user.id,
+        client=client,
         provider_id=provider_id,
     )
 
@@ -656,6 +662,7 @@ async def generate_tts_batch(
     project_name: str,
     req: GenerateTtsRequest,
     user: CurrentUser,
+    client: RequestClient,
     _t: Translator,
 ):
     """批量提交旁白配音任务：只入队缺少 narration_audio 的 narrator-owned 单元。"""
@@ -709,6 +716,7 @@ async def generate_tts_batch(
             segment_id=seg_id,
             script_file=req.script_file,
             user_id=user.id,
+            client=client,
             provider_id=provider_id,
         )
         task_ids.append(result["task_id"])
@@ -781,6 +789,7 @@ async def generate_character_voice_sample(
     name: str,
     req: GenerateVoiceSampleRequest,
     user: CurrentUser,
+    client: RequestClient,
     _t: Translator,
 ):
     """提交角色 TTS 试听样本生成任务：文本/音色显式传入，不落回全局旁白配置。
@@ -818,7 +827,7 @@ async def generate_character_voice_sample(
         resource_id=char_name,
         prompt=text,
         extra_payload={"voice": voice},
-        source="webui",
+        source=client,
     )
     queue = get_generation_queue()
     result = await queue.enqueue_task(
@@ -827,7 +836,7 @@ async def generate_character_voice_sample(
         media_type=spec.media_type,
         resource_id=spec.resource_id,
         payload=spec.payload,
-        source="webui",
+        source=client,
         user_id=user.id,
         provider_id=provider_id,
     )
@@ -954,6 +963,7 @@ async def _enqueue_asset_generation(
     project_name: str,
     resource_name: str,
     user_id: str,
+    client: str,
     _t: Translator,
     image_model: str | None = None,
 ) -> dict:
@@ -1011,7 +1021,7 @@ async def _enqueue_asset_generation(
         media_type=task_spec.media_type,
         resource_id=task_spec.resource_id,
         payload=task_spec.payload,
-        source="webui",
+        source=client,
         user_id=user_id,
     )
 
@@ -1028,6 +1038,7 @@ async def generate_character(
     project_name: str,
     char_name: str,
     user: CurrentUser,
+    client: RequestClient,
     _t: Translator,
     req: GenerateAssetRequest | None = None,
 ):
@@ -1037,6 +1048,7 @@ async def generate_character(
         project_name=project_name,
         resource_name=char_name,
         user_id=user.id,
+        client=client,
         _t=_t,
         image_model=req.image_model if req else None,
     )
@@ -1048,6 +1060,7 @@ async def generate_character_derivative(
     char_name: str,
     derivative_name: str,
     user: CurrentUser,
+    client: RequestClient,
     _t: Translator,
     req: GenerateAssetRequest | None = None,
 ):
@@ -1088,7 +1101,7 @@ async def generate_character_derivative(
         media_type=spec.media_type,
         resource_id=spec.resource_id,
         payload=spec.payload,
-        source="webui",
+        source=client,
         user_id=user.id,
         provider_id=provider_id,
     )
@@ -1105,6 +1118,7 @@ async def generate_scene(
     project_name: str,
     scene_name: str,
     user: CurrentUser,
+    client: RequestClient,
     _t: Translator,
     req: GenerateAssetRequest | None = None,
 ):
@@ -1114,6 +1128,7 @@ async def generate_scene(
         project_name=project_name,
         resource_name=scene_name,
         user_id=user.id,
+        client=client,
         _t=_t,
         image_model=req.image_model if req else None,
     )
@@ -1124,6 +1139,7 @@ async def generate_prop(
     project_name: str,
     prop_name: str,
     user: CurrentUser,
+    client: RequestClient,
     _t: Translator,
     req: GenerateAssetRequest | None = None,
 ):
@@ -1133,6 +1149,7 @@ async def generate_prop(
         project_name=project_name,
         resource_name=prop_name,
         user_id=user.id,
+        client=client,
         _t=_t,
         image_model=req.image_model if req else None,
     )
@@ -1143,6 +1160,7 @@ async def generate_product(
     project_name: str,
     product_name: str,
     user: CurrentUser,
+    client: RequestClient,
     _t: Translator,
     req: GenerateAssetRequest | None = None,
 ):
@@ -1152,6 +1170,7 @@ async def generate_product(
         project_name=project_name,
         resource_name=product_name,
         user_id=user.id,
+        client=client,
         _t=_t,
         image_model=req.image_model if req else None,
     )
@@ -1255,6 +1274,7 @@ async def edit_image(
     project_name: str,
     req: EditImageRequest,
     user: CurrentUser,
+    client: RequestClient,
     _t: Translator,
 ):
     """提交图片指令式编辑任务到队列，立即返回 task_id。
@@ -1330,7 +1350,7 @@ async def edit_image(
         # 不互斥（角色和道具可能同名）；纳入去重键避免跨类型误判为重复任务。
         resource_type=req.resource_type,
         payload=spec.payload,
-        source="webui",
+        source=client,
         user_id=user.id,
         provider_id=provider_id,
     )

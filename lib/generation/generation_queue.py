@@ -605,6 +605,41 @@ class GenerationQueue:
             raise
         return batch_id
 
+    async def find_generation_batch(self, *, batch_id: str, user_id: str = DEFAULT_USER_ID) -> dict[str, str] | None:
+        """Locate a batch by id alone: ``{"project_name", "source"}``, or ``None`` when the user has no such batch.
+
+        只凭 id 定位批次：返回 ``{"project_name", "source"}``；该用户没有这个批次时为 ``None``。"""
+        async with self._task_repo() as repo:
+            return await repo.find_batch(batch_id=batch_id, user_id=user_id)
+
+    async def preview_generation_batch_cancel(
+        self,
+        *,
+        project_name: str,
+        batch_id: str,
+        user_id: str = DEFAULT_USER_ID,
+    ) -> GenerationBatchCancelResult:
+        """What :meth:`cancel_generation_batch` would do now, without cancelling anything.
+
+        Queued members are listed under ``cancelled`` (they would be cancelled), running ones under ``skipped_running``,
+        terminal ones under ``skipped_terminal``. A member can change state between the preview and the cancel.
+
+        :meth:`cancel_generation_batch` 此刻会做什么，但不取消任何任务。
+
+        排队中的成员列在 ``cancelled``（将被取消），执行中的列在 ``skipped_running``，终态的列在
+        ``skipped_terminal``。预览与真正取消之间成员状态可能变化。
+        """
+        async with self._task_repo() as repo:
+            batch = await repo.get_batch(project_name=project_name, batch_id=batch_id, user_id=user_id)
+        if batch is None:
+            raise GenerationBatchNotFound(f"batch '{batch_id}' does not belong to project '{project_name}'")
+        statuses = {item["task_id"]: item["status"] for item in batch["memberships"]}
+        return GenerationBatchCancelResult(
+            cancelled=[task_id for task_id, status in statuses.items() if status == "queued"],
+            skipped_running=[task_id for task_id, status in statuses.items() if status == "running"],
+            skipped_terminal=[task_id for task_id, status in statuses.items() if status not in ("queued", "running")],
+        )
+
     async def get_generation_batch(
         self,
         *,
@@ -835,6 +870,7 @@ class GenerationQueue:
         status: str | None = None,
         task_type: str | None = None,
         source: str | None = None,
+        batch_id: str | None = None,
         page: int = 1,
         page_size: int = 50,
     ) -> dict[str, Any]:
@@ -845,6 +881,7 @@ class GenerationQueue:
                 status=status,
                 task_type=task_type,
                 source=source,
+                batch_id=batch_id,
                 page=page,
                 page_size=page_size,
             )

@@ -229,7 +229,7 @@ async def generate_narration_audio(
                 prompt=None,
                 script_file=script_filename,
                 unit_id=state.unit_id,
-                source=caller.source,
+                source=caller.task_source,
             )
             for state in targets
         ]

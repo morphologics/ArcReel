@@ -147,6 +147,7 @@ async def test_reference_projection_contract_stays_aligned_across_public_consume
                 episode=1,
                 unit_id="E1U1",
                 user=CurrentUserInfo(id="u1", sub="test", role="admin"),
+                client="webui",
                 _t=lambda key, **_params: key,
                 names=make_display_names(),
                 req=reference_videos.GenerateUnitRequest(),

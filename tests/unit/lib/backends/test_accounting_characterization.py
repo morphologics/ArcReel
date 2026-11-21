@@ -199,6 +199,8 @@ def _expected_row(**overrides: Any) -> dict[str, Any]:
         "task_id": None,
         "purpose": None,
         "session_id": None,
+        # No task and no client scope in these direct ledger calls. / 这些直接的记账调用没有任务，也不在客户端作用域内。
+        "client": None,
         "inputs": None,
         "started_at": T0,
         "finished_at": T1,

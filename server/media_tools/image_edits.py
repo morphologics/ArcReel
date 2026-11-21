@@ -309,7 +309,7 @@ async def edit_images(
                 warnings=warnings,
                 builder=builder,
                 states=states,
-                caller_source=caller.source,
+                caller_source=caller.task_source,
             )
         if not specs and not builder.recorded_ids:
             return tool_problem("\n".join([*warnings, "没有可执行的编辑任务"]))

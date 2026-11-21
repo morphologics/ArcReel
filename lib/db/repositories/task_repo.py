@@ -379,6 +379,21 @@ class TaskRepository(BaseRepository):
         self.session.add(BatchTask(batch_id=batch_id, task_id=task_id, unit_id=unit_id, deduped=deduped))
         await self.session.commit()
 
+    async def find_batch(self, *, batch_id: str, user_id: str = DEFAULT_USER_ID) -> dict[str, str] | None:
+        """Locate a batch by id alone: ``{"project_name", "source"}``, or ``None`` when the user has no such batch.
+
+        只凭 id 定位批次：返回 ``{"project_name", "source"}``；该用户没有这个批次时为 ``None``。"""
+        result = await self.session.execute(
+            select(GenerationBatch.project_name, GenerationBatch.source).where(
+                GenerationBatch.batch_id == batch_id,
+                GenerationBatch.user_id == user_id,
+            )
+        )
+        row = result.one_or_none()
+        if row is None:
+            return None
+        return {"project_name": row.project_name, "source": row.source}
+
     async def get_batch(
         self, *, project_name: str, batch_id: str, user_id: str = DEFAULT_USER_ID
     ) -> dict[str, Any] | None:
@@ -1208,6 +1223,7 @@ class TaskRepository(BaseRepository):
         status: str | None = None,
         task_type: str | None = None,
         source: str | None = None,
+        batch_id: str | None = None,
         page: int = 1,
         page_size: int = 50,
     ) -> dict[str, Any]:
@@ -1224,6 +1240,10 @@ class TaskRepository(BaseRepository):
             filters.append(Task.task_type == task_type)
         if source:
             filters.append(Task.source == source)
+        if batch_id:
+            # Membership is batch_tasks: a deduplicated task adopted by this batch belongs to it too.
+            # 成员关系以 batch_tasks 为准：被本批次去重采用的任务也属于本批次。
+            filters.append(Task.task_id.in_(select(BatchTask.task_id).where(BatchTask.batch_id == batch_id)))
 
         count_stmt = select(func.count()).select_from(Task).where(*filters)
         count_stmt = self._scope_query(count_stmt, Task)

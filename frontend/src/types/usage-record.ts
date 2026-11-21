@@ -49,6 +49,8 @@ export interface UsageRecord {
   duration_seconds: number | null;
   aspect_ratio: string | null;
   session_id: string | null;
+  /** Client label the call was made for (the task's source or the request's X-Client); null for older records and Agent turns. / 调用所属的客户端标签（任务的 source 或请求的 X-Client）；旧记录与 Agent 轮次为 null。 */
+  client?: string | null;
 }
 
 /** Input materials such as reference images / first frame; paths are project-relative. / 参考图 / 首帧等输入素材，路径为项目内相对路径。 */

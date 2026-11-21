@@ -163,7 +163,10 @@ async def list_tasks(
     project_name: str | None = None,
     status: str | None = None,
     task_type: str | None = None,
-    source: str | None = None,
+    source: str | None = Query(
+        default=None, description="Client label that created the task (webui, mcp, embedded, or an X-Client value)"
+    ),
+    batch_id: str | None = Query(default=None, description="Only member tasks of this generation batch"),
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=50, ge=1, le=500),
 ):
@@ -173,6 +176,7 @@ async def list_tasks(
         status=status,
         task_type=task_type,
         source=source,
+        batch_id=batch_id,
         page=page,
         page_size=page_size,
     )
@@ -189,7 +193,10 @@ async def list_project_tasks(
     names: DisplayNamesCatalog,
     status: str | None = None,
     task_type: str | None = None,
-    source: str | None = None,
+    source: str | None = Query(
+        default=None, description="Client label that created the task (webui, mcp, embedded, or an X-Client value)"
+    ),
+    batch_id: str | None = Query(default=None, description="Only member tasks of this generation batch"),
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=50, ge=1, le=500),
 ):
@@ -199,6 +206,7 @@ async def list_project_tasks(
         status=status,
         task_type=task_type,
         source=source,
+        batch_id=batch_id,
         page=page,
         page_size=page_size,
     )

@@ -70,14 +70,14 @@ async def submit_render_task(
         operation=operation,
         requested=snapshot,
         blocked=[],
-        source=caller.source,
+        source=caller.task_source,
         user_id=caller.user_id,
     )
     try:
         enqueued = await enqueue_task_only(
             project_name=scope.project_name,
             **request.enqueue_fields(),
-            source=caller.source,
+            source=caller.task_source,
             user_id=caller.user_id,
             batch_id=batch_id,
             batch_unit_id=request.resource_id,

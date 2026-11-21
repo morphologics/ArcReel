@@ -42,6 +42,7 @@ from lib.script.grid.models import GridGeneration, build_grid_task_payload
 from lib.script.grid.prompt_builder import pending_grid_prompt_ids
 from lib.script.storyboard_sequence import get_storyboard_items
 from server.auth import CurrentUser
+from server.client_identity import RequestClient
 from server.i18n import Translator
 from server.services.admission.reference_admission import require_admitted_storyboard_references
 from server.services.currency.upload_finalize import (
@@ -121,6 +122,7 @@ async def generate_grid(
     episode: int,
     req: GenerateGridRequest,
     user: CurrentUser,
+    client: RequestClient,
     _t: Translator,
 ):
     """提交宫格联合图生成任务到队列，立即返回 grid_ids、task_ids 与两者的逐项映射。
@@ -180,7 +182,7 @@ async def generate_grid(
                 resource_id=submission.grid.id,
                 payload=submission.payload,
                 script_file=req.script_file,
-                source="webui",
+                source=client,
                 user_id=user.id,
             )
             grid_ids.append(submission.grid.id)
@@ -359,7 +361,7 @@ async def _ensure_grid_idle(project_name: str, grid: GridGeneration, user_id: st
 
 
 @router.post("/grids/{grid_id}/regenerate")
-async def regenerate_grid(project_name: str, grid_id: str, user: CurrentUser):
+async def regenerate_grid(project_name: str, grid_id: str, user: CurrentUser, client: RequestClient):
     """重置宫格图状态并重新入队联合图生成任务（不隐含落格，切分另行显式触发）。
 
     读记录、置 pending 与入队同在提交临界区内：另一提交既不会在其间清理掉这条记录，
@@ -425,7 +427,7 @@ async def regenerate_grid(project_name: str, grid_id: str, user: CurrentUser):
                 video_aspect_ratio=aspect_ratio,
             ),
             script_file=grid.script_file,
-            source="webui",
+            source=client,
             user_id=user.id,
         )
 

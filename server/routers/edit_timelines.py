@@ -49,17 +49,18 @@ from lib.jianying_draft.errors import JianyingDraftError
 from lib.jianying_draft.results import JianyingDraftStatus
 from lib.project.project_change_hints import project_change_source
 from lib.project.project_manager import get_project_manager
-from server.services.presentation.project_state_cache import PROJECT_STATE_CACHE
-from server.services.presentation.timeline_editor_save import EditorSaveError, TimelineEditorSaveService
-from server.services.presentation.timeline_oreelpack import TimelineOreelPackService
-from server.services.presentation.timeline_stream import TimelineStream, TimelineStreamService
 from lib.workflow.operation_admission import AdmissionState
 from lib.workflow.workflow_state import WorkflowActionType, WorkflowRequestError, WorkflowStateService
 from server.auth import CurrentUser, verify_download_token
+from server.client_identity import RequestClient
 from server.dependencies import require_project_migration_ok
 from server.i18n import Translator
 from server.media_tools.final_cuts import final_cut_download_url
+from server.services.presentation.project_state_cache import PROJECT_STATE_CACHE
+from server.services.presentation.timeline_editor_save import EditorSaveError, TimelineEditorSaveService
+from server.services.presentation.timeline_oreelpack import TimelineOreelPackService
 from server.services.presentation.timeline_preview import TimelinePreviewMedia, TimelinePreviewService
+from server.services.presentation.timeline_stream import TimelineStream, TimelineStreamService
 from server.services.tasks.render_tasks import (
     final_cut_task_request,
     jianying_draft_task_request,
@@ -708,6 +709,7 @@ async def render_final_cut(
     service: FinalCutServiceDep,
     queue: GenerationQueueDep,
     user: CurrentUser,
+    client: RequestClient,
     body: RenderFinalCutBody | None = None,
 ) -> FinalCutSubmission:
     """先按所选版本检查阻断问题再入队；``revision`` 省略时渲染提交时的最新修订。"""
@@ -729,7 +731,7 @@ async def render_final_cut(
     )
     try:
         enqueued = await queue.enqueue_task(
-            project_name=project_name, **request.enqueue_fields(), source="webui", user_id=user.id
+            project_name=project_name, **request.enqueue_fields(), source=client, user_id=user.id
         )
     except ActiveTaskRequestConflict as exc:
         raise ApiError("final_cut_render_in_progress", status_code=409, task_id=exc.existing_task_id) from exc
@@ -810,6 +812,7 @@ async def export_jianying_draft(
     service: JianyingDraftServiceDep,
     queue: GenerationQueueDep,
     user: CurrentUser,
+    client: RequestClient,
     body: ExportJianyingDraftBody | None = None,
 ) -> JianyingDraftSubmission:
     """先检查阻断问题再入队；``revision`` 省略时导出提交时的最新修订。"""
@@ -830,7 +833,7 @@ async def export_jianying_draft(
     )
     try:
         enqueued = await queue.enqueue_task(
-            project_name=project_name, **request.enqueue_fields(), source="webui", user_id=user.id
+            project_name=project_name, **request.enqueue_fields(), source=client, user_id=user.id
         )
     except ActiveTaskRequestConflict as exc:
         raise ApiError("jianying_draft_export_in_progress", status_code=409, task_id=exc.existing_task_id) from exc

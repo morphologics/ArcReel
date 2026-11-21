@@ -76,6 +76,8 @@ MESSAGES = {
     "engine_token_required": "本服务只接受经由反向代理的请求（缺少引擎令牌）",
     "engine_token_invalid": "引擎令牌无效",
     "task_not_found": "任务 '{id}' 不存在",
+    "generation_batch_not_found": "生成批次 '{id}' 不存在",
+    "client_header_invalid": "X-Client 请求头须为单个值，由 1～32 个 a-z、0-9、'.'、'_'、'-' 组成",
     "task_running_not_cancellable": "任务 '{id}' 已开始执行，不可取消；它会照常跑完并保留结果",
     "task_retry_download_unavailable": "任务 '{id}' 当前不可重试下载",
     # 任务失败原因（GenerationWorker 写入错误码 + 参数，tasks API 读取时按语言渲染）

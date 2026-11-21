@@ -37,6 +37,7 @@ from lib.infra.api_errors import BadRequestError, ConflictError, NotFoundError
 from lib.project.project_manager import get_project_manager
 from lib.script.script_skeleton import SkeletonRouteMismatchError
 from server.auth import CurrentUser
+from server.client_identity import RequestClient
 from server.i18n import DisplayNamesCatalog, Translator
 from server.routers._batch_admission import enqueue_failure_payload, localized_admission_payload
 from server.services.admission.cost_estimation import estimate_image_batch_cost
@@ -127,12 +128,18 @@ async def preview_storyboard_batch(project_name: str, episode: int, user: Curren
 
 
 @router.post("/storyboards/batch")
-async def submit_storyboard_batch(project_name: str, episode: int, user: CurrentUser, _t: Translator) -> dict[str, Any]:
+async def submit_storyboard_batch(
+    project_name: str,
+    episode: int,
+    user: CurrentUser,
+    client: RequestClient,
+    _t: Translator,
+) -> dict[str, Any]:
     """提交一批分镜图，立即返回；相邻分镜在批内按参考链排队。"""
 
     _loaded, plan = await _image_plan(project_name, episode, user.id)
     batch, enqueued, failures = await submit_storyboard_image_batch(
-        plan, project_name=project_name, queue=get_generation_queue(), source="webui", user_id=user.id
+        plan, project_name=project_name, queue=get_generation_queue(), source=client, user_id=user.id
     )
     return {
         "batch_id": batch.batch_id,
@@ -160,7 +167,12 @@ async def preview_storyboard_video_batch(
 
 @router.post("/videos/batch")
 async def submit_storyboard_video_batch_route(
-    project_name: str, episode: int, user: CurrentUser, _t: Translator, names: DisplayNamesCatalog
+    project_name: str,
+    episode: int,
+    user: CurrentUser,
+    client: RequestClient,
+    _t: Translator,
+    names: DisplayNamesCatalog,
 ) -> dict[str, Any]:
     """重新规划后提交一批分镜视频。整批准入未通过时以 200 返回结论、一个任务也不建。"""
 
@@ -175,7 +187,7 @@ async def submit_storyboard_video_batch_route(
     if not plan.admission.admitted or not plan.specs:
         return payload
     batch, enqueued, failures = await submit_storyboard_video_batch(
-        plan, project_name=project_name, queue=get_generation_queue(), source="webui", user_id=user.id
+        plan, project_name=project_name, queue=get_generation_queue(), source=client, user_id=user.id
     )
     payload["batch_id"] = batch.batch_id
     payload["task_ids_by_unit"] = {task.resource_id: task.task_id for task in enqueued}

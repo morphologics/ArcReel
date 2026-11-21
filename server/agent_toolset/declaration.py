@@ -20,6 +20,7 @@ from pydantic import BaseModel, ValidationError
 from pydantic.json_schema import GenerateJsonSchema, JsonSchemaValue
 from pydantic_core import core_schema
 
+from lib.billing.call_client import call_client_scope
 from server.tool_runtime import (
     CallerContext,
     ProjectScope,
@@ -202,7 +203,10 @@ async def invoke_declaration(
         return ToolOutcome(problem=request)
     if isinstance(declaration.migration, Blocked) and (problem := await migration_gate(scope, services)) is not None:
         return ToolOutcome(problem=problem)
-    return await declaration.handler(ToolRequest(request), scope, caller, services)
+    # Provider calls the tool makes without a task (text calls) are booked to the caller's client.
+    # 工具不经任务发出的供应商调用（文本调用）记到调用方的客户端名下。
+    with call_client_scope(caller.task_source):
+        return await declaration.handler(ToolRequest(request), scope, caller, services)
 
 
 async def invoke_unscoped_declaration(
@@ -215,7 +219,8 @@ async def invoke_unscoped_declaration(
     request = _validated_request(declaration.request_model, arguments)
     if isinstance(request, ToolProblem):
         return ToolOutcome(problem=request)
-    return await declaration.handler(ToolRequest(request), caller, services)
+    with call_client_scope(caller.task_source):
+        return await declaration.handler(ToolRequest(request), caller, services)
 
 
 __all__ = [

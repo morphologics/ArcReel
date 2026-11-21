@@ -24,6 +24,7 @@ from lib.project.project_manager import get_project_manager
 from lib.script.script_review import overwrite_with_text
 from server.agent_toolset.envelope import json_value
 from server.auth import CurrentUser
+from server.client_identity import RequestClient
 from server.i18n import Translator
 from server.text_generation import MAX_INSTRUCTIONS_LEN
 from server.tool_runtime import (
@@ -74,6 +75,7 @@ async def generate_ad_script(
     episode: Annotated[int, PathParam(ge=1)],
     req: AdScriptRequest,
     user: CurrentUser,
+    client: RequestClient,
     _t: Translator,
 ):
     """提交广告/短片整份生成，返回生成批次。
@@ -92,7 +94,7 @@ async def generate_ad_script(
             )
         ),
         ProjectScope(project_name=project_name, data_root=pm.data_root),
-        CallerContext(user_id=user.id, source="webui"),
+        CallerContext(user_id=user.id, source="webui", client=client),
         Services.defaults(pm),
     )
     if outcome.problem is not None:

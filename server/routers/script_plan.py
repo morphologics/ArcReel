@@ -23,6 +23,7 @@ from lib.infra.async_thread import run_sync_transaction
 from lib.project.project_manager import get_project_manager
 from server.agent_toolset.envelope import json_value
 from server.auth import CurrentUser
+from server.client_identity import RequestClient
 from server.i18n import Translator
 from server.services.project.episode_instructions import EpisodeInstructionKind, save_episode_instructions
 from server.text_generation import MAX_INSTRUCTIONS_LEN
@@ -83,6 +84,7 @@ async def plan_script(
     episode: int,
     req: ScriptPlanInstructions,
     user: CurrentUser,
+    client: RequestClient,
     _t: Translator,
 ):
     """保存附加指令并提交 AI 规划脚本，返回生成批次。
@@ -94,7 +96,7 @@ async def plan_script(
     outcome = await generate_script_plan(
         ToolRequest(GenerateScriptPlanRequest(episode_id=episode, instructions=req.instructions)),
         ProjectScope(project_name=project_name, data_root=pm.data_root),
-        CallerContext(user_id=user.id, source="webui"),
+        CallerContext(user_id=user.id, source="webui", client=client),
         Services.defaults(pm),
     )
     if outcome.problem is not None:

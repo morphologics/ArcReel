@@ -54,6 +54,11 @@ def _view_filter(view: UsageView) -> bool:
 
 
 _CALL_STATUS_DESCRIPTION = f"Status ({'/'.join(CallStatus)})"
+_BATCH_DESCRIPTION = "Generation batch id: calls that served one of its member tasks"
+_EPISODE_DESCRIPTION = (
+    "Episode number: calls that served a task on that episode's script (asset sheets and text calls never match)"
+)
+_CLIENT_DESCRIPTION = "Client label (webui, mcp, embedded, or an X-Client value); comma-separated for multiple"
 
 
 # ---------------------------------------------------------------------------
@@ -126,6 +131,11 @@ class UsageRecord(BaseModel):
     duration_seconds: int | None = None
     aspect_ratio: str | None = None
     session_id: str | None = None
+    # Client label the call was made for (the creating task's source, or the X-Client of the request that made it);
+    # None for records written before it was recorded and for Agent session turns.
+    # 调用所属的客户端标签（创建任务的 source，或发起它的请求的 X-Client）；记录该字段之前写入的记录与 Agent
+    # 会话轮次为 None。
+    client: str | None = None
 
 
 class UsageRecordDetail(UsageRecord):
@@ -195,6 +205,10 @@ async def list_usage_records(
     limit: int = Query(20, ge=1, le=200, description="Records per page"),
     cursor: str | None = Query(None, description="Opaque cursor returned by the previous page"),
     view: UsageView = Query("generation", description=_VIEW_DESCRIPTION),
+    task_id: str | None = Query(None, description="Generation task id; comma-separated for multiple"),
+    batch_id: str | None = Query(None, description=_BATCH_DESCRIPTION),
+    episode: int | None = Query(None, ge=1, description=_EPISODE_DESCRIPTION),
+    client: str | None = Query(None, description=_CLIENT_DESCRIPTION),
 ) -> UsageRecordPage:
     try:
         decoded = UsageCursor.decode(cursor) if cursor else None
@@ -211,6 +225,10 @@ async def list_usage_records(
                 since=_utc_instant(since),
                 until=_utc_instant(until),
                 agent=_view_filter(view),
+                task_ids=_multi(task_id),
+                batch_id=batch_id or None,
+                episode=episode,
+                clients=_multi(client),
             ),
             statuses=_multi(status),
             segment_ids=_multi(segment_id),
@@ -551,6 +569,10 @@ async def get_usage_summary(
     since: datetime | None = Query(None, description="Start time (inclusive), ISO 8601; UTC if no time zone"),
     until: datetime | None = Query(None, description="End time (exclusive), ISO 8601; UTC if no time zone"),
     view: UsageView = Query("generation", description="View that supplies the filter options; totals span both"),
+    task_id: str | None = Query(None, description="Generation task id; comma-separated for multiple"),
+    batch_id: str | None = Query(None, description=_BATCH_DESCRIPTION),
+    episode: int | None = Query(None, ge=1, description=_EPISODE_DESCRIPTION),
+    client: str | None = Query(None, description=_CLIENT_DESCRIPTION),
 ) -> dict[str, object]:
     """一次返回总览所需的全部聚合；不传 since / until 即全部时间。
 
@@ -578,6 +600,10 @@ async def get_usage_summary(
         media_types=(media_type,) if media_type else (),
         since=since_utc,
         until=until_utc,
+        task_ids=_multi(task_id),
+        batch_id=batch_id or None,
+        episode=episode,
+        clients=_multi(client),
     )
 
     async with async_session_factory() as session:
