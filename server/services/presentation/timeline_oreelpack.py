@@ -173,10 +173,47 @@ def _track(track_id: str, kind: str, role: str, name: str, clips: list[dict], tr
     }
 
 
-#: Packs kept for the manifest + per-medium route, by (project, timeline, revision): (expires at, pack). One studio
-#: process serves one member, so this stays small; a pack's temporary files (hold stills) go with it.
+def media_fingerprint(project_dir: Path, readout: EditTimelineReadout, media: TimelinePreviewMedia) -> str:
+    """A short fingerprint of the media a pack holds, taken before building it.
+
+    YouReel (owner 2026-11-21): generating or regenerating a shot's video (or its narration, or a BGM change) does not
+    make a timeline revision, so a pack named by its revision alone looked unchanged to the editor, which kept showing
+    gaps for videos made since. The pack's identity is its revision + this fingerprint (in the filename and the cache
+    key), so new media counts as newer exactly like a new revision. Inputs: each clip's unit, status and video version;
+    each unit's provider-sound switch and narration audio (path + version); each BGM's id, path, gain and file size +
+    modification time (a BGM has no version). Subtitles and the timeline's own edits are not media: the revision
+    covers the edits; a subtitle-only change keeps the fingerprint."""
+    parts: list[str] = [f"c|{clip.unit_id}|{clip.status}|{clip.video_version}" for clip in readout.clips]
+    for unit in media.units:
+        audio = unit.narration_audio
+        narration = f"{audio.path}|{audio.version}" if audio else "-"
+        parts.append(f"u|{unit.unit_id}|{int(unit.provider_audio)}|{narration}")
+    for bgm in media.bgm:
+        try:
+            stat = (project_dir / bgm.path).stat()
+            basis = f"{stat.st_size}:{stat.st_mtime_ns}"
+        except OSError:
+            basis = "-"
+        parts.append(f"b|{bgm.bgm_id}|{bgm.path}|{bgm.gain}|{basis}")
+    parts.append(f"n|{media.narration}")
+    return hashlib.sha1("\n".join(parts).encode()).hexdigest()[:8]
+
+
+def pack_filename(project_name: str, readout: EditTimelineReadout, fingerprint: str) -> str:
+    """``{project}-ep{N}-{timeline}-r{revision}-m{fingerprint}.oreelpack``: the editor reads the revision and the
+    fingerprint from it (older studios: no ``-m…``)."""
+    return (
+        f"{project_name}-ep{readout.timeline.episode}-{readout.timeline.id}"
+        f"-r{readout.revision}-m{fingerprint}.oreelpack"
+    )
+
+
+#: Packs kept for the manifest + per-medium route, by (project, timeline, revision, media fingerprint): (expires at,
+#: pack). One studio process serves one member, so this stays small; a pack's temporary files (hold stills) go with
+#: it. YouReel (owner 2026-11-21): the fingerprint is in the key, so a video generated since the last build gets a
+#: fresh pack instead of the cached one with a gap.
 CACHE_SECONDS = 600
-_CACHE: dict[tuple[str, str, int], tuple[float, OreelPack]] = {}
+_CACHE: dict[tuple[str, str, int, str], tuple[float, OreelPack]] = {}
 _CACHE_LOCK = asyncio.Lock()
 
 
@@ -186,9 +223,15 @@ class TimelineOreelPackService:
         self._timelines = EditTimelineService(projects)
         self._preview = TimelinePreviewService(projects)
 
-    async def build(self, project_name: str, timeline_id: str, readout: EditTimelineReadout | None = None) -> OreelPack:
+    async def build(
+        self,
+        project_name: str,
+        timeline_id: str,
+        readout: EditTimelineReadout | None = None,
+        media: TimelinePreviewMedia | None = None,
+    ) -> OreelPack:
         readout = readout or await self._timelines.read(project_name, timeline_id)
-        media = await self._preview.media(project_name, timeline_id)
+        media = media or await self._preview.media(project_name, timeline_id)
         project_dir = await asyncio.to_thread(self._projects.get_project_path, project_name)
         project = await asyncio.to_thread(self._projects.load_project, project_name)
         shots = await asyncio.to_thread(self._episode_shots, project_name, project, readout.timeline.episode)
@@ -203,7 +246,11 @@ class TimelineOreelPackService:
         """The latest revision's pack, kept for a few minutes: the editor reads the manifest, then fetches only the media
         it doesn't hold yet, one request each (``media_file``), without rebuilding the pack for every one."""
         readout = await self._timelines.read(project_name, timeline_id)
-        key = (project_name, timeline_id, readout.revision)
+        # the preview media is itself cached while the project's files are unchanged: cheap to read for the key
+        media = await self._preview.media(project_name, timeline_id)
+        project_dir = await asyncio.to_thread(self._projects.get_project_path, project_name)
+        fingerprint = await asyncio.to_thread(media_fingerprint, project_dir, readout, media)
+        key = (project_name, timeline_id, readout.revision, fingerprint)
         async with _CACHE_LOCK:
             now = time.monotonic()
             for stale_key, (expires, stale) in list(_CACHE.items()):
@@ -214,7 +261,7 @@ class TimelineOreelPackService:
             if hit is not None:
                 _CACHE[key] = (now + CACHE_SECONDS, hit[1])
                 return hit[1]
-            pack = await self.build(project_name, timeline_id, readout)
+            pack = await self.build(project_name, timeline_id, readout, media)
             _CACHE[key] = (now + CACHE_SECONDS, pack)
             return pack
 
@@ -225,7 +272,7 @@ class TimelineOreelPackService:
         # read and no lock per request (the editor asks for many, three at a time, right after the manifest).
         now = time.monotonic()
         pack = next(
-            (cached_pack for (p_name, t_id, _), (expires, cached_pack) in list(_CACHE.items())
+            (cached_pack for (p_name, t_id, *_), (expires, cached_pack) in list(_CACHE.items())
              if p_name == project_name and t_id == timeline_id and expires > now
              and any(a.id == asset_id for a in cached_pack.assets)),
             None,
@@ -455,7 +502,9 @@ class TimelineOreelPackService:
             "assets": [{"id": a.id, "size": a.size, "type": a.type} for a in assets],
         }, ensure_ascii=False).encode("utf-8")
         head = MAGIC + struct.pack("<I", len(manifest)) + manifest
-        filename = f"{project_name}-ep{readout.timeline.episode}-{readout.timeline.id}-r{readout.revision}.oreelpack"
+        # YouReel (owner 2026-11-21): the media fingerprint names the pack too (see ``media_fingerprint``)
+        fingerprint = await asyncio.to_thread(media_fingerprint, project_dir, readout, media)
+        filename = pack_filename(project_name, readout, fingerprint)
         return OreelPack(filename=filename, head=head, assets=tuple(assets), workdir=workdir, manifest=manifest)
 
 
@@ -476,4 +525,4 @@ async def _last_frame(video: Path, at: float, output: Path) -> None:
         raise RuntimeError(f"could not take the last frame of {video.name}: {stderr.decode(errors='replace')[-300:]}")
 
 
-__all__ = ["OreelPack", "TimelineOreelPackService"]
+__all__ = ["OreelPack", "TimelineOreelPackService", "media_fingerprint", "pack_filename"]

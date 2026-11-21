@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 import struct
 from pathlib import Path
 from typing import Any
@@ -13,7 +14,7 @@ import pytest
 from lib.edit_timeline.readout import EditTimelineReadout
 from server.services.presentation import timeline_oreelpack
 from server.services.presentation.timeline_oreelpack import TimelineOreelPackService
-from server.services.presentation.timeline_preview import TimelinePreviewMedia
+from server.services.presentation.timeline_preview import PreviewNarrationAudio, TimelinePreviewMedia
 
 
 def _clip(clip_id: str, unit: str, start: float, duration: float, **fields: Any) -> dict[str, Any]:
@@ -112,7 +113,7 @@ async def test_the_pack_follows_openreels_backup_format(service: TimelineOreelPa
     ids = [item["id"] for item in project["mediaLibrary"]["items"]]
     assert [asset["id"] for asset in manifest["assets"]] == ids
     assert sum(asset["size"] for asset in manifest["assets"]) == len(media)
-    assert filename == "demo-ep3-tl-1-r4.oreelpack"
+    assert re.fullmatch(r"demo-ep3-tl-1-r4-m[0-9a-f]{8}\.oreelpack", filename)
     clips = [clip for track in project["timeline"]["tracks"] for clip in track["clips"]]
     assert all(clip["mediaId"] in ids for clip in clips)
 
@@ -181,3 +182,64 @@ async def test_cached_pack_serves_its_manifest_and_media(service: TimelineOreelP
     assert await service.media_file("demo", "tl-1", "m-not-in-this-pack") is None
     timeline_oreelpack._CACHE.clear()
     await asyncio.to_thread(pack.workdir.cleanup)
+
+
+async def test_new_media_names_a_new_pack_at_the_same_revision(
+    service: TimelineOreelPackService, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """YouReel (owner 2026-11-21): a video generated (or regenerated) since the last build makes no timeline revision;
+    the media fingerprint in the filename and the cache key makes the pack newer all the same, while the same media
+    keeps the same name and the cached build."""
+    timeline_oreelpack._CACHE.clear()
+    first = await service.cached("demo", "tl-1")
+    again = await service.cached("demo", "tl-1")
+    assert again is first and again.filename == first.filename
+
+    # E3S03 had no video: now it has one (still revision 4)
+    missing = READOUT.model_copy(update={"clips": (
+        *READOUT.clips[:2], READOUT.clips[2].model_copy(update={"status": "video_missing", "video_version": None}),
+    )})
+    regenerated = READOUT.model_copy(update={"clips": (
+        *READOUT.clips[:2], READOUT.clips[2].model_copy(update={"video_version": 2}),
+    )})
+    current = {"readout": missing}
+
+    async def read(self, project_name, timeline_id, *, revision=None):
+        return current["readout"]
+
+    monkeypatch.setattr(timeline_oreelpack.EditTimelineService, "read", read)
+    gap = await service.cached("demo", "tl-1")
+    current["readout"] = READOUT
+    filled = await service.cached("demo", "tl-1")
+    current["readout"] = regenerated
+    newer = await service.cached("demo", "tl-1")
+
+    names = [gap.filename, filled.filename, newer.filename]
+    assert all(name.startswith("demo-ep3-tl-1-r4-m") for name in names)
+    assert len(set(names)) == 3
+    assert filled is first  # the same media as the first build: the cached pack again
+    assert len({key[3] for key in timeline_oreelpack._CACHE}) == 3
+    assert json.loads(gap.manifest)["assets"] != json.loads(newer.manifest)["assets"]
+    # a medium of any cached pack of the timeline is still served
+    assert await service.media_file("demo", "tl-1", gap.assets[0].id) is not None
+    timeline_oreelpack._CACHE.clear()
+    for pack in (gap, filled, newer):
+        await asyncio.to_thread(pack.workdir.cleanup)
+
+
+def test_the_fingerprint_follows_narration_and_bgm(tmp_path: Path) -> None:
+    (tmp_path / "bgm").mkdir()
+    (tmp_path / "bgm" / "bgm-1.mp3").write_bytes(b"mp3")
+    base = timeline_oreelpack.media_fingerprint(tmp_path, READOUT, MEDIA)
+    assert base == timeline_oreelpack.media_fingerprint(tmp_path, READOUT, MEDIA)
+    voiced = MEDIA.model_copy(update={"units": (
+        MEDIA.units[0].model_copy(update={"narration_audio": PreviewNarrationAudio(path="narration/E3S01.mp3", version=2)}),
+        *MEDIA.units[1:],
+    )})
+    assert timeline_oreelpack.media_fingerprint(tmp_path, READOUT, voiced) != base
+    # subtitles are not media: a cue change keeps the fingerprint
+    retitled = MEDIA.model_copy(update={"units": (MEDIA.units[0].model_copy(update={"subtitles": ()}), *MEDIA.units[1:])})
+    assert timeline_oreelpack.media_fingerprint(tmp_path, READOUT, retitled) == base
+    # a BGM has no version: its file's size and time stand in
+    (tmp_path / "bgm" / "bgm-1.mp3").write_bytes(b"another mp3")
+    assert timeline_oreelpack.media_fingerprint(tmp_path, READOUT, MEDIA) != base
