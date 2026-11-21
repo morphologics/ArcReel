@@ -1,4 +1,4 @@
-"""Light read routes: one asset, one episode's shot list (``GET /projects?covers=1`` lives in ``projects.py``).
+"""Light read routes: the asset list, one asset, one episode's shot list (``GET /projects?covers=1``: ``projects.py``).
 
 Cheap alternatives to ``GET /projects/{name}`` for clients that show one card or one board; see
 :mod:`server.services.project.light_reads` for what each one reads.
@@ -23,7 +23,9 @@ from server.services.project.light_reads import (
     AssetNotFound,
     EpisodeNotFound,
     EpisodeShotList,
+    ProjectAssetList,
     ProjectAssetResponse,
+    list_project_assets,
     read_episode_shots,
     read_project_asset,
 )
@@ -45,6 +47,26 @@ _CURRENCY_DESCRIPTION = (
     "registered (default): registered in the artifact manifest and present, cheap, never reports stale; "
     "verified: compared with the canonical state, reports stale, hashes images (slower)"
 )
+
+
+@router.get("/projects/{project_name}/assets", response_model=ProjectAssetList)
+async def list_assets(
+    project_name: str,
+    asset_type: list[AssetType] | None = Query(
+        None, alias="type", description="repeat to choose several (type=character&type=scene); default: all four"
+    ),
+    currency: ArtifactCurrency = Query("registered", description=_CURRENCY_DESCRIPTION),
+) -> ProjectAssetList:
+    """The project's assets with their current sheet (path, URL, status, version), short description and derivative
+    count. Reads no scripts: a cheap alternative to ``GET /projects/{name}`` for asset galleries."""
+
+    def _sync() -> ProjectAssetList:
+        return list_project_assets(get_project_manager(), project_name, asset_type, currency=currency)
+
+    try:
+        return await asyncio.to_thread(_sync)
+    except FileNotFoundError as exc:
+        raise NotFoundError("project_not_found", name=project_name) from exc
 
 
 @router.get("/projects/{project_name}/assets/{asset_type}/{name}", response_model=ProjectAssetResponse)

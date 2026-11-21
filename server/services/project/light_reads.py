@@ -128,6 +128,31 @@ class ProjectAssetResponse(BaseModel):
     currency: ArtifactCurrency
 
 
+class ProjectAssetListItem(BaseModel):
+    """One asset in the list read: its name, short text, current sheet and how many derivatives it has.
+
+    列表读取中的一个资产：名称、简短文字、当前资产图与衍生数量。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    asset_type: Literal["character", "scene", "prop", "product"]
+    name: str
+    aliases: list[str] = Field(default_factory=list)
+    description: str = Field(default="", description="the stored description, cut to 280 characters")
+    sheet: ArtifactRef
+    derivatives: int = Field(default=0, description="number of derivatives (character looks)")
+
+
+class ProjectAssetList(BaseModel):
+    """``GET /projects/{name}/assets``."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    project: str
+    currency: ArtifactCurrency
+    assets: list[ProjectAssetListItem]
+
+
 class ShotPrompts(BaseModel):
     """Prompt presence (always) and the prompts themselves (only with ``include=prompts``).
 
@@ -334,6 +359,68 @@ def read_project_asset(
         derivatives=derivatives,
         currency=currency,
     )
+
+
+_ASSET_TYPES: tuple[Literal["character", "scene", "prop", "product"], ...] = ("character", "scene", "prop", "product")
+_DESCRIPTION_CUT = 280
+
+
+def list_project_assets(
+    pm: ProjectManager,
+    project_name: str,
+    asset_types: list[Literal["character", "scene", "prop", "product"]] | None = None,
+    *,
+    currency: ArtifactCurrency = "registered",
+) -> ProjectAssetList:
+    """The project's assets (all types, or ``asset_types``) with their current sheet: reads ``project.json``, the
+    manifest and ``versions.json`` once, no scripts. Raises ``FileNotFoundError`` when the project doesn't exist.
+
+    项目的资产（全部类型或 ``asset_types``）及其当前资产图：各读一次 ``project.json``、清单与
+    ``versions.json``，不读剧本。项目不存在时抛 ``FileNotFoundError``。"""
+    project = pm.load_project(project_name)
+    project_dir = pm.get_project_path(project_name)
+    resolver = _resolver(project_dir, project, currency)
+    wanted = asset_types or list(_ASSET_TYPES)
+
+    rows: list[tuple[str, str, Mapping[str, Any], Any]] = []
+    for asset_type in wanted:
+        spec = ASSET_SPECS[asset_type]
+        bucket = project.get(spec.bucket_key)
+        if not isinstance(bucket, Mapping):
+            continue
+        sheets = {
+            unit.name: unit
+            for unit in project_asset_sheet_units({spec.bucket_key: bucket}, asset_type)
+            if not unit.is_derivative
+        }
+        for name, entry in bucket.items():
+            if isinstance(entry, Mapping):
+                rows.append((asset_type, str(name), entry, sheets.get(str(name))))
+
+    records = _version_records(project_dir, [(_ASSET_VERSION_TYPES[t], n) for t, n, _e, _u in rows])
+    assets: list[ProjectAssetListItem] = []
+    for asset_type, name, entry, unit in rows:
+        record = records.get(_ASSET_VERSION_TYPES[asset_type], {}).get(name)
+        sheet = ArtifactRef(status="missing")
+        if unit is not None:
+            candidate = unit.candidate
+            sheet = _artifact(
+                project_name, project_dir, resolver, candidate.artifact_key, candidate.artifact_path, record
+            )
+        aliases = entry.get("aliases")
+        derivatives = entry.get(DERIVATIVES_FIELD)
+        description = entry.get("description")
+        assets.append(
+            ProjectAssetListItem(
+                asset_type=asset_type,
+                name=name,
+                aliases=[str(a) for a in aliases] if isinstance(aliases, list) else [],
+                description=description[:_DESCRIPTION_CUT] if isinstance(description, str) else "",
+                sheet=sheet,
+                derivatives=len(derivatives) if isinstance(derivatives, Mapping | list) else 0,
+            )
+        )
+    return ProjectAssetList(project=project_name, currency=currency, assets=assets)
 
 
 # ---------------------------------------------------------------------------

@@ -71,6 +71,48 @@ async def http(pm: ProjectManager, monkeypatch) -> AsyncIterator[httpx.AsyncClie
         yield client
 
 
+class TestAssetList:
+    async def test_lists_every_type_with_sheet_and_derivative_count(self, http, pm):
+        project_path = pm.get_project_path(PROJECT)
+        pm.add_character(PROJECT, "Alice", "a brave girl " * 40)
+        _write(project_path, "characters/Alice.png")
+        pm.update_project_character_sheet(PROJECT, "Alice", "characters/Alice.png")
+        register_current_artifact(project_path, ArtifactKey.asset_sheet("character", "Alice"))
+        pm.update_project(
+            PROJECT,
+            lambda project: project["characters"]["Alice"].update(
+                {"aliases": ["Al"], "derivatives": {"Armor": {"description": "armored"}}}
+            ),
+        )
+        pm.add_scenes_batch(PROJECT, {"Hall": {"description": "a long hall"}})
+
+        response = await http.get(f"/api/v1/projects/{PROJECT}/assets")
+
+        assert response.status_code == 200, response.text
+        body = response.json()
+        assert body["project"] == PROJECT and body["currency"] == "registered"
+        by_name = {(a["asset_type"], a["name"]): a for a in body["assets"]}
+        alice = by_name[("character", "Alice")]
+        assert alice["aliases"] == ["Al"]
+        assert alice["derivatives"] == 1
+        assert len(alice["description"]) == 280
+        assert alice["sheet"]["status"] == "current"
+        assert alice["sheet"]["file"]["path"] == "characters/Alice.png"
+        hall = by_name[("scene", "Hall")]
+        assert hall["sheet"]["status"] == "missing" and hall["derivatives"] == 0
+
+    async def test_type_filter_and_unknown_project(self, http, pm):
+        pm.add_character(PROJECT, "Alice", "x")
+        pm.add_scenes_batch(PROJECT, {"Hall": {"description": "y"}})
+
+        only = (await http.get(f"/api/v1/projects/{PROJECT}/assets", params={"type": "scene"})).json()
+        assert [a["name"] for a in only["assets"]] == ["Hall"]
+
+        missing = await http.get("/api/v1/projects/no-such-project/assets")
+        assert missing.status_code == 404
+        assert missing.json()["code"] == "project_not_found"
+
+
 class TestAsset:
     async def test_character_with_registered_sheet_and_derivative(self, http, pm):
         project_path = pm.get_project_path(PROJECT)
