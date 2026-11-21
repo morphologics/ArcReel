@@ -64,6 +64,14 @@ const FAILURE_TEXT_KEYS: Partial<
   text_drama_script_plan: { key: "script_plan_task_failed", idParam: "episode" },
   text_narration_script_plan: { key: "script_plan_task_failed", idParam: "episode" },
   text_reference_script_plan: { key: "script_plan_task_failed", idParam: "episode" },
+  // YouReel (owner 2026-11-21: "generation error should display a toast with a plain text explanation"): these failed
+  // without any toast
+  tts: { key: "narration_task_failed", idParam: "id" },
+  voice_sample: { key: "voice_sample_generation_failed", idParam: "id" },
+  grid_split: { key: "grid_task_failed", idParam: "id" },
+  text_episode_plan: { key: "episode_plan_task_failed", idParam: "episode" },
+  text_episode_script: { key: "episode_script_task_failed", idParam: "episode" },
+  text_draft_repair: { key: "draft_repair_task_failed", idParam: "episode" },
 };
 
 /** Episode-level tasks have resource_id like `episode-3`; failure text refers to it by episode name. / 集级任务的 resource_id 形如 `episode-3`，失败文案按集名指称。 */
@@ -202,7 +210,8 @@ function truncateProviderReason(reason: string): string {
 }
 
 /**
- * Notification text of a failed task. Unknown task_type returns null (the caller skips pushing on this).
+ * Notification text of a failed task. YouReel: an unknown task_type gets the generic text (upstream returned null and
+ * the caller pushed nothing).
  * Entries are referred to as "title · 5" (current position in the episode); an upstream rejection summary, if any, is appended after the text chosen by task_type.
  *
  * 失败任务的通知文案。未知 task_type 返回 null（调用方据此跳过推送）。
@@ -216,9 +225,10 @@ export function describeTaskFailure(
 ): string | null {
   const reason = task.error_message ?? t("reference_status_failed");
   const config = FAILURE_TEXT_KEYS[task.task_type];
-  if (!config) return null;
-  const target = failureTarget(config.idParam, task, projectData, scripts, t);
-  const message = t(config.key, { [config.idParam]: target, reason });
+  // YouReel: any other task type still gets a toast with the reason (it got none)
+  const message = config
+    ? t(config.key, { [config.idParam]: failureTarget(config.idParam, task, projectData, scripts, t), reason })
+    : t("task_failed_generic", { reason });
   const providerReason = providerReasonOf(task);
   if (!providerReason) return message;
   // The rejection suffix takes its own template and is concatenated, rather than passing the rendered message back to i18next as an interpolation variable: interpolation

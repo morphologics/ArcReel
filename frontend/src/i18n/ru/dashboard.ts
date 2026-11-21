@@ -1285,6 +1285,12 @@ export default {
   'grid_task_failed': 'Не удалось сгенерировать сетку раскадровки: {{reason}}',
   'image_edit_task_failed': 'Не удалось отредактировать «{{id}}»: {{reason}}',
   'script_plan_task_failed': 'Не удалось спланировать сценарий «{{episode}}» с помощью ИИ: {{reason}}',
+  'narration_task_failed': 'Не удалось создать закадровый текст для «{{id}}»: {{reason}}',
+  'voice_sample_generation_failed': 'Не удалось создать образец голоса для «{{id}}»: {{reason}}',
+  'episode_plan_task_failed': 'Не удалось спланировать эпизод «{{episode}}»: {{reason}}',
+  'episode_script_task_failed': 'Не удалось написать сценарий для «{{episode}}»: {{reason}}',
+  'draft_repair_task_failed': 'Не удалось исправить черновик для «{{episode}}»: {{reason}}',
+  'task_failed_generic': 'Ошибка генерации: {{reason}}',
   'task_failed_provider_reason_suffix': ' (причина от провайдера: {{reason}})',
   // ========== reference-to-video editor ==========
   'reference_editor_view_aria': 'Вид редактора',

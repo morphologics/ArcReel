@@ -1247,6 +1247,12 @@ export default {
   'grid_task_failed': 'Tạo phân cảnh đa lưới thất bại: {{reason}}',
   'image_edit_task_failed': 'Chỉnh sửa "{{id}}" thất bại: {{reason}}',
   'script_plan_task_failed': 'AI lập kế hoạch kịch bản cho "{{episode}}" thất bại: {{reason}}',
+  'narration_task_failed': 'Tạo lời dẫn cho "{{id}}" thất bại: {{reason}}',
+  'voice_sample_generation_failed': 'Tạo giọng mẫu cho "{{id}}" thất bại: {{reason}}',
+  'episode_plan_task_failed': 'Lập kế hoạch tập "{{episode}}" thất bại: {{reason}}',
+  'episode_script_task_failed': 'Viết kịch bản cho "{{episode}}" thất bại: {{reason}}',
+  'draft_repair_task_failed': 'Sửa bản nháp của "{{episode}}" thất bại: {{reason}}',
+  'task_failed_generic': 'Tạo thất bại: {{reason}}',
   'task_failed_provider_reason_suffix': ' (Lý do từ nhà cung cấp: {{reason}})',
   // ========== reference-to-video editor ==========
   'reference_editor_view_aria': 'Chế độ xem trình soạn thảo',

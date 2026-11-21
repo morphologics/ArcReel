@@ -1256,6 +1256,12 @@ export default {
   'grid_task_failed': '多宫格分镜生成失败：{{reason}}',
   'image_edit_task_failed': '「{{id}}」编辑失败：{{reason}}',
   'script_plan_task_failed': '「{{episode}}」AI 规划脚本失败：{{reason}}',
+  'narration_task_failed': '「{{id}}」的旁白生成失败：{{reason}}',
+  'voice_sample_generation_failed': '「{{id}}」的试听音生成失败：{{reason}}',
+  'episode_plan_task_failed': '「{{episode}}」的分集规划失败：{{reason}}',
+  'episode_script_task_failed': '「{{episode}}」的脚本编写失败：{{reason}}',
+  'draft_repair_task_failed': '「{{episode}}」的草稿修复失败：{{reason}}',
+  'task_failed_generic': '生成失败：{{reason}}',
   'task_failed_provider_reason_suffix': '（供应商拒因：{{reason}}）',
   // ========== 参考生视频编辑器 ==========
   'reference_editor_view_aria': '编辑器视图',

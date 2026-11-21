@@ -194,8 +194,15 @@ describe("describeTaskFailure", () => {
     expect(text).toContain("reference_status_failed");
   });
 
-  it("returns null for unknown task types", () => {
-    expect(describeFailure(t, makeTask({ task_type: "unknown" }))).toBeNull();
+  it("gives any other task type the generic text with its reason (YouReel: it got no toast)", () => {
+    const text = describeFailure(t, makeTask({ task_type: "unknown" }));
+    expect(text).toContain("task_failed_generic");
+    expect(text).toContain("boom");
+  });
+
+  it("names narration and voice-sample failures (YouReel)", () => {
+    expect(describeFailure(t, makeTask({ task_type: "tts", resource_id: "E1S01" }))).toContain("narration_task_failed");
+    expect(describeFailure(t, makeTask({ task_type: "voice_sample", resource_id: "Hero" }))).toContain("voice_sample_generation_failed");
   });
 
   it("uses the image_edit key regardless of resource_type", () => {

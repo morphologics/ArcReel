@@ -1257,6 +1257,12 @@ export default {
   'grid_task_failed': 'Multi-grid storyboard generation failed: {{reason}}',
   'image_edit_task_failed': 'Edit for "{{id}}" failed: {{reason}}',
   'script_plan_task_failed': 'AI script planning for "{{episode}}" failed: {{reason}}',
+  'narration_task_failed': 'Narration for "{{id}}" failed: {{reason}}',
+  'voice_sample_generation_failed': 'Voice sample for "{{id}}" failed: {{reason}}',
+  'episode_plan_task_failed': 'Episode planning for "{{episode}}" failed: {{reason}}',
+  'episode_script_task_failed': 'Writing the script for "{{episode}}" failed: {{reason}}',
+  'draft_repair_task_failed': 'Repairing the draft for "{{episode}}" failed: {{reason}}',
+  'task_failed_generic': 'Generation failed: {{reason}}',
   'task_failed_provider_reason_suffix': ' (Provider reason: {{reason}})',
   // ========== reference-to-video editor ==========
   'reference_editor_view_aria': 'Editor view',
