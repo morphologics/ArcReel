@@ -2278,7 +2278,6 @@ export default {
   'video_model_unavailable': '无法生成此分镜（图生视频）',
   'video_model_duration_unsupported': '不支持 {{seconds}} 秒（可选 {{supported}}）',
   'video_model_too_short': '请缩短片段时长，或选择支持该时长的模型',
-  'video_model_max_length': '最长 {{seconds}} 秒',
   'version_restore_unsaved': '请先保存或放弃此分镜的修改：设为当前会同时恢复提示词',
   'version_prompt_restore_failed': '已设为当前版本，但提示词未能恢复：{{message}}',
   'video_generate_with': '换模型生成…',

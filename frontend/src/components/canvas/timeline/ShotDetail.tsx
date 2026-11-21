@@ -1136,7 +1136,7 @@ export function ShotDetail({
       </span>
     ) : null;
   // The shot's facts (duration, status, chapter break): in the shot header, or (minimal header, under the
-  // storyboard strip) with the position, centred in the storyboard image's title row.
+  // storyboard strip) with the position, centred in the video's title row (YouReel; upstream: the storyboard image's).
   const shotMeta = (
     <>
       <DurationPill
@@ -1225,15 +1225,6 @@ export function ShotDetail({
       onRestorePrompt={restorePrompt}
       unsavedEdits={dirty}
       previewCorner={segmentBreak}
-      centerContent={
-        minimalHeader ? (
-          <>
-            {/* the "N / T" shot position, hidden for now (operator 2026-11-12); restore with its import:
-            <ItemPositionOfTotal itemId={segmentId} kind="shot" position={selectedIndex + 1} total={totalCount} /> */}
-            {shotMeta}
-          </>
-        ) : undefined
-      }
     />
   );
 
@@ -1282,6 +1273,17 @@ export function ShotDetail({
           ) : undefined
         }
         contextMenuItems={videoGenerateItems()}
+        // YouReel (owner 2026-11-21): the shot's facts (clip length, status, chapter break) in the video's title row,
+        // not the storyboard image's: the length matters for the video and its model
+        centerContent={
+          minimalHeader ? (
+            <>
+              {/* the "N / T" shot position, hidden for now (operator 2026-11-12); restore with its import:
+              <ItemPositionOfTotal itemId={segmentId} kind="shot" position={selectedIndex + 1} total={totalCount} /> */}
+              {shotMeta}
+            </>
+          ) : undefined
+        }
       />
     </>
   );

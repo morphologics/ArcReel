@@ -2279,7 +2279,6 @@ export default {
   'video_model_unavailable': 'Can’t run this shot (image-to-video)',
   'video_model_duration_unsupported': '{{seconds}}s not offered (takes {{supported}})',
   'video_model_too_short': 'Reduce the clip length or choose a compatible model',
-  'video_model_max_length': 'max {{seconds}} s',
   'version_restore_unsaved': 'Save or discard your edits to this shot first: Make current also restores the prompt',
   'version_prompt_restore_failed': 'Version made current, but its prompt couldn’t be restored: {{message}}',
   'video_generate_with': 'Generate with…',

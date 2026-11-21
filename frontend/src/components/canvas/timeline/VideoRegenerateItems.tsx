@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
+import { formatDurationsLabel } from "@/utils/duration_format";
 import { useTranslation } from "react-i18next";
 import { Film, ImageIcon, Sparkles } from "lucide-react";
 import { API } from "@/api";
@@ -31,9 +32,23 @@ export interface ModelOption {
   cost: string | null;
   /** Why the model can't be used for this shot; null when it can. */
   reason: string | null;
-  /** YouReel (owner 2026-11-20): the model's length limit when it is shorter than the clip ("max 5 s"), shown
-   *  highlighted; such models are listed after the ones that fit. */
-  limit?: string | null;
+  /** YouReel (owner 2026-11-21): the clip lengths the model makes ("4-15s", "5, 10s"), in the middle column. */
+  range?: string | null;
+  /** YouReel (owner 2026-11-20): the model's longest length is shorter than the clip: its range is highlighted and it
+   *  is listed after the ones that fit. */
+  tooShort?: boolean;
+}
+
+/** The middle column: the model's lengths, highlighted when they stop short of the clip. */
+function RangeCell({ option }: { option: ModelOption | undefined }) {
+  if (!option?.range) return null;
+  return option.tooShort ? (
+    <span className="num ml-3 shrink-0 rounded-full bg-warn/10 px-1.5 py-0.5 text-xs text-warn ring-1 ring-warn/30">
+      {option.range}
+    </span>
+  ) : (
+    <span className="num ml-3 shrink-0 text-xs text-muted-foreground">{option.range}</span>
+  );
 }
 
 export interface ModelOptions {
@@ -95,7 +110,7 @@ function ModelGenerateItems({
   const current = options?.models.find((m) => m.pair === options.current);
   // YouReel: the models that fit the clip first, then those limited to shorter clips
   const others = (options?.models.filter((m) => m.pair !== options.current) ?? []).sort(
-    (a, b) => Number(Boolean(a.limit)) - Number(Boolean(b.limit)),
+    (a, b) => Number(Boolean(a.tooShort)) - Number(Boolean(b.tooShort)),
   );
   const otherItems = failed ? (
     <DropdownMenuItem disabled>{t("generate_models_load_failed")}</DropdownMenuItem>
@@ -110,14 +125,10 @@ function ModelGenerateItems({
           <span className="text-sm">
             {m.name}
             <span className="text-xs text-muted-foreground"> · {m.provider}</span>
-            {m.limit && (
-              <span className="num ml-1.5 rounded-full bg-warn/10 px-1.5 py-0.5 text-xs text-warn ring-1 ring-warn/30">
-                {m.limit}
-              </span>
-            )}
           </span>
           {m.reason && <span className="text-xs text-muted-foreground">{m.reason}</span>}
         </span>
+        <RangeCell option={m} />
         <span className="num ml-3 text-xs text-muted-foreground">{m.cost ?? (m.reason ? "" : "—")}</span>
       </DropdownMenuItem>
     ))
@@ -128,19 +139,15 @@ function ModelGenerateItems({
       {/* YouReel: the configured model is gated as the others when it can't make this clip */}
       <DropdownMenuItem disabled={disabled || Boolean(current?.reason)} onClick={() => onGenerate(null)}>
         <Sparkles aria-hidden />
-        <span className="flex min-w-0 flex-col">
+        <span className="flex min-w-0 flex-1 flex-col">
           <span>
             {label}
             {current && <span className="text-muted-foreground"> — {current.name}</span>}
-            {current?.limit && (
-              <span className="num ml-1.5 rounded-full bg-warn/10 px-1.5 py-0.5 text-xs text-warn ring-1 ring-warn/30">
-                {current.limit}
-              </span>
-            )}
-            {current?.cost && <span className="num text-muted-foreground"> {current.cost}</span>}
           </span>
           {current?.reason && <span className="text-xs text-muted-foreground">{current.reason}</span>}
         </span>
+        <RangeCell option={current} />
+        {current?.cost && <span className="num ml-3 text-xs text-muted-foreground">{current.cost}</span>}
       </DropdownMenuItem>
       <DropdownMenuSub>
         <DropdownMenuSubTrigger disabled={disabled}>
@@ -206,8 +213,15 @@ export function VideoRegenerateItems({
                     supported: quote.supported_durations.join(", "),
                   })
                 : null;
-        const limit = tooShort ? t("video_model_max_length", { seconds: longest }) : null;
-        return { pair, ...describe(candidates, pair), cost: quote && "cost" in quote ? costText(quote.cost) : null, reason, limit };
+        const range = quote && !("unavailable" in quote) ? formatDurationsLabel(quote.supported_durations) || null : null;
+        return {
+          pair,
+          ...describe(candidates, pair),
+          cost: quote && "cost" in quote ? costText(quote.cost) : null,
+          reason,
+          range,
+          tooShort,
+        };
       }),
     };
   }, [projectName, segmentId, scriptFile, durationSeconds, t]);
