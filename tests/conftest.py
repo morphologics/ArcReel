@@ -134,6 +134,9 @@ _OWNED_TEST_HOME_DIR = tempfile.mkdtemp(prefix="arcreel-test-home-")
 os.environ["ARCREEL_DATA_DIR"] = str(Path(_OWNED_TEST_HOME_DIR) / "data")
 os.environ["CLAUDE_CONFIG_DIR"] = str(Path(_OWNED_TEST_HOME_DIR) / "claude-config")
 os.environ.pop("AI_ANIME_PROJECTS", None)
+# A deployment's engine token (server/engine_token.py) would turn every test request into a 401; the tests that need
+# it set it themselves.
+os.environ.pop("ENGINE_PROXY_TOKEN", None)
 
 # Without AUTH_TOKEN_SECRET, lifespan reads or generates the signing key from the data root at startup and then caches
 # it in the process. Tests that issue tokens without lifespan read/write the key file on the event loop the first time,

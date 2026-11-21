@@ -73,6 +73,8 @@ MESSAGES = {
     "file_too_large": "Kích thước tệp vượt quá giới hạn (tối đa khoảng {max_chars} ký tự)",
     "invalid_encoding": "Lỗi mã hóa tệp, vui lòng dùng tệp văn bản mã hóa UTF-8",
     "unauthorized": "Tên đăng nhập hoặc mật khẩu không đúng",
+    "engine_token_required": "Máy chủ này chỉ nhận yêu cầu qua reverse proxy của nó (thiếu engine token)",
+    "engine_token_invalid": "Engine token không hợp lệ",
     "task_not_found": "Tác vụ '{id}' không tồn tại",
     "task_running_not_cancellable": "Tác vụ '{id}' đã bắt đầu chạy nên không thể hủy; tác vụ sẽ chạy đến khi hoàn tất và giữ lại kết quả",
     "task_retry_download_unavailable": "Tác vụ '{id}' hiện không thể thử tải lại",

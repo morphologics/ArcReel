@@ -73,6 +73,8 @@ MESSAGES = {
     "file_too_large": "文件大小超出限制（最大约 {max_chars} 字符）",
     "invalid_encoding": "文件编码错误，请使用 UTF-8 编码的文本文件",
     "unauthorized": "用户名或密码错误",
+    "engine_token_required": "本服务只接受经由反向代理的请求（缺少引擎令牌）",
+    "engine_token_invalid": "引擎令牌无效",
     "task_not_found": "任务 '{id}' 不存在",
     "task_running_not_cancellable": "任务 '{id}' 已开始执行，不可取消；它会照常跑完并保留结果",
     "task_retry_download_unavailable": "任务 '{id}' 当前不可重试下载",

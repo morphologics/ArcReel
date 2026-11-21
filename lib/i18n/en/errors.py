@@ -73,6 +73,8 @@ MESSAGES = {
     "file_too_large": "File size exceeds limit (max approx {max_chars} characters)",
     "invalid_encoding": "File encoding error, please use UTF-8 encoded text file",
     "unauthorized": "Invalid username or password",
+    "engine_token_required": "This server only accepts requests through its reverse proxy (engine token missing)",
+    "engine_token_invalid": "Engine token is invalid",
     "task_not_found": "Task '{id}' does not exist",
     "task_running_not_cancellable": "Task '{id}' has already started and cannot be cancelled; it will run to completion and its result will be kept",
     "task_retry_download_unavailable": "Task '{id}' is not eligible for download retry",

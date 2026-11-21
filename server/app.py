@@ -80,6 +80,7 @@ from lib.script.source_loader.migration import migrate_project_source_encoding, 
 from server.auth import ensure_auth_password, ensure_token_secret, get_current_user, warn_if_auth_disabled
 from server.cors_config import resolve_cors_policy
 from server.dependencies import require_project_migration_ok, require_valid_project_name
+from server.engine_token import EngineTokenMiddleware
 from server.error_handlers import ERROR_RESPONSES, register_error_handlers
 from server.remote_mcp import mount_remote_mcp, remote_mcp_host
 from server.routers import (
@@ -732,6 +733,11 @@ _allow_origins, _allow_credentials = resolve_cors_policy()
 # server/error_handlers.py)
 # app 级异常处理器：异常→状态码→detail 映射的单点（见 server/error_handlers.py）
 register_error_handlers(app, cors_allow_origins=_allow_origins, cors_allow_credentials=_allow_credentials)
+
+# Engine token (env ENGINE_PROXY_TOKEN; off when unset): for reverse-proxy deployments with login off, every request
+# must carry X-Engine-Token (server/engine_token.py). Added before CORSMiddleware so it sits inside it: preflights are
+# answered by CORS first, and 401 answers still get CORS headers.
+app.add_middleware(EngineTokenMiddleware)
 
 app.add_middleware(
     CORSMiddleware,
