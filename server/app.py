@@ -83,6 +83,7 @@ from server.cors_config import resolve_cors_policy
 from server.dependencies import require_project_migration_ok, require_valid_project_name
 from server.engine_token import EngineTokenMiddleware
 from server.error_handlers import ERROR_RESPONSES, register_error_handlers
+from server.perf_timing import ServerTimingMiddleware
 from server.remote_mcp import mount_remote_mcp, remote_mcp_host
 from server.routers import (
     activity,
@@ -121,6 +122,7 @@ from server.routers import (
     products,
     project_events,
     project_migration,
+    project_reads,
     project_trash,
     projects,
     prompt_authoring,
@@ -750,6 +752,11 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# YouReel: slow / very large answers are recorded as server_slow in Settings → Options → Diagnostics
+# (server/perf_timing.py; thresholds from DIAGNOSTICS_SERVER_SLOW_* env, off with DIAGNOSTICS_SERVER_SLOW=0). Outside
+# CORS and the engine token, so it times what the client waits for.
+app.add_middleware(ServerTimingMiddleware)
+
 
 def _resolve_listen_addr() -> tuple[str, int]:
     """Parse ``LISTEN_HOST`` / ``LISTEN_PORT``, shared by the ``__main__`` block and tests.
@@ -955,6 +962,9 @@ app.include_router(
 )
 app.include_router(
     project_events.router, prefix="/api/v1", dependencies=[Depends(get_current_user)], tags=["Project events"]
+)
+app.include_router(
+    project_reads.router, prefix="/api/v1", dependencies=[Depends(get_current_user)], tags=["Projects"]
 )
 app.include_router(tasks.router, prefix="/api/v1", dependencies=[Depends(get_current_user)], tags=["Task queue"])
 app.include_router(

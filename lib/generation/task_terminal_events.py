@@ -21,9 +21,10 @@ shows no notification and triggers no focus jump, only refetches the task list a
 from __future__ import annotations
 
 import logging
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from typing import Any
 
+from lib.generation.task_lifecycle_events import build_task_change
 from lib.project.project_change_hints import emit_project_change_batch
 
 logger = logging.getLogger(__name__)
@@ -44,39 +45,37 @@ _STATUS_ACTIONS: dict[str, str] = {
 def build_task_terminal_change(event: dict[str, Any]) -> dict[str, Any] | None:
     """Turn one terminal record into a project change dict; return None when the status is not terminal.
 
-    把一条终态记录转成项目变更 dict；状态非终态时返回 None。"""
+    Besides the identity fields the change carries the task's facts (``batch_id``, ``resource_id``, ``status``,
+    ``source``, timestamps; ``error_code`` when failed, ``cancelled_by`` when cancelled), see
+    :func:`lib.generation.task_lifecycle_events.build_task_change`.
+
+    把一条终态记录转成项目变更 dict；状态非终态时返回 None。
+
+    除身份字段外，变更还带着任务的事实（``batch_id``、``resource_id``、``status``、``source``、时间戳；失败时
+    ``error_code``，取消时 ``cancelled_by``），见 :func:`lib.generation.task_lifecycle_events.build_task_change`。
+    """
     action = _STATUS_ACTIONS.get(str(event.get("status") or ""))
     if action is None:
         return None
-
-    task_id = str(event.get("task_id") or "")
-    if not task_id:
-        return None
-
-    return {
-        "entity_type": TASK_ENTITY_TYPE,
-        "action": action,
-        "entity_id": task_id,
-        # label does not go into notification text (important=False); it is only a readable identifier for logs/debugging.
-        # label 不进通知文案（important=False），仅作日志/调试可读标识。
-        "label": task_id,
-        "focus": None,
-        "important": False,
-        # The frontend uses this to decide which canvas needs refetching (currently only reference_video uses it).
-        # 前端据此判定哪类画布需要重拉（当前只有 reference_video 用到）。
-        "task_type": str(event.get("task_type") or ""),
-    }
+    # task_type: the frontend uses it to decide which canvas needs refetching (currently only reference_video uses it).
+    # task_type：前端据此判定哪类画布需要重拉（当前只有 reference_video 用到）。
+    return build_task_change(event, action)
 
 
-def emit_task_terminal_events(events: Iterable[dict[str, Any]]) -> None:
+def emit_task_terminal_events(
+    events: Iterable[dict[str, Any]],
+    extra_changes: Mapping[str, list[dict[str, Any]]] | None = None,
+) -> None:
     """Publish task terminal events grouped by project.
 
     Publish failures are not raised: the task status itself is already persisted, events are only a real-time
-    optimisation, and frontend polling is the fallback.
+    optimisation, and frontend polling is the fallback. ``extra_changes`` (by project) are appended to the same
+    project's batch: the ``batch_done`` of batches these terminal states completed, so they arrive after them.
 
     按项目分组发布任务终态事件。
 
-    发布失败不向上抛：任务状态本身已落库，事件只是实时性优化，前端轮询兜底。
+    发布失败不向上抛：任务状态本身已落库，事件只是实时性优化，前端轮询兜底。``extra_changes``（按项目）
+    追加到同一项目的批次末尾：这些终态完成的批次的 ``batch_done``，因此在它们之后到达。
     """
     by_project: dict[str, list[dict[str, Any]]] = {}
     for event in events:
@@ -87,6 +86,8 @@ def emit_task_terminal_events(events: Iterable[dict[str, Any]]) -> None:
         if change is None:
             continue
         by_project.setdefault(project_name, []).append(change)
+    for project_name, changes in (extra_changes or {}).items():
+        by_project.setdefault(project_name, []).extend(changes)
 
     for project_name, changes in by_project.items():
         try:

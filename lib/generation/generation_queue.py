@@ -28,6 +28,7 @@ from lib.generation.generation_batch import (
     validate_blocked_items,
 )
 from lib.generation.render_lane import RENDER_MEDIA_TYPE, RENDER_PROVIDER_ID, is_render_task_type
+from lib.generation.task_lifecycle_events import batch_done_changes, emit_task_lifecycle_events
 from lib.generation.task_terminal_events import TERMINAL_TASK_STATUSES, emit_task_terminal_events
 from lib.infra.async_thread import run_noninterruptible_async, run_sync_transaction
 from lib.project.asset_derivatives import DERIVATIVE_TASK_TYPE
@@ -438,6 +439,9 @@ class GenerationQueue:
     async def _task_repo(self) -> AsyncGenerator[TaskRepository]:
         """Open a TaskRepository session, and on exit publish the persisted task terminal states to the project event bus.
 
+        Also published on exit: the tasks the session created (``task_queued``, signal bus) and the ``batch_done`` of
+        generation batches the terminal states completed (in the terminal states' own change batch).
+
         Publishing happens after the session exits rather than inside the repo: publishing directly inside the repo would let
         the frontend read state not yet committed. If the body raises, the session does not commit and nothing is published
         -- no persisted terminal state, nothing to announce.
@@ -448,6 +452,9 @@ class GenerationQueue:
 
         打开一条 TaskRepository 会话，退出时把落地的任务终态发上项目事件总线。
 
+        退出时一并发布：本会话新建的任务（``task_queued``，信号总线），以及终态完成的生成批次的
+        ``batch_done``（与终态同一变更批）。
+
         发布放在会话退出之后而非 repo 内部：repo 内直接发会让前端读到尚未提交的状态。
         body 抛异常时会话不提交、发布也不发生——没有终态落库就没有终态可通告。
 
@@ -457,7 +464,34 @@ class GenerationQueue:
         async with self._session_factory() as session:
             repo = TaskRepository(session)
             yield repo
-        emit_task_terminal_events(repo.terminal_events)
+        emit_task_lifecycle_events(repo.lifecycle_events)
+        if repo.terminal_events:
+            try:
+                finished_batches = await self._finished_batch_changes(repo.terminal_events)
+            except asyncio.CancelledError:
+                emit_task_terminal_events(repo.terminal_events)
+                raise
+            emit_task_terminal_events(repo.terminal_events, finished_batches)
+
+    async def _finished_batch_changes(self, terminal_events: list[dict[str, Any]]) -> dict[str, list[dict[str, Any]]]:
+        """``batch_done`` changes (by project) for the generation batches these terminal states just completed.
+
+        Sent in the same change batch as the terminal states, so ``batch_done`` arrives after the last member's
+        terminal change. A failed read loses only the event: ``GET /batches/{id}`` still reports ``done``.
+
+        这些终态刚完成的生成批次的 ``batch_done`` 变更（按项目）。
+
+        与终态同批发送，``batch_done`` 因此在最后一个成员的终态变更之后到达。读取失败只丢这条事件：
+        ``GET /batches/{id}`` 照样报告 ``done``。
+        """
+        task_ids = [str(event["task_id"]) for event in terminal_events if event.get("task_id")]
+        try:
+            async with self._session_factory() as session:
+                progress = await TaskRepository(session).batch_progress_for_tasks(task_ids)
+        except Exception:
+            logger.warning("读取批次进度失败，跳过 batch_done count=%d", len(task_ids), exc_info=True)
+            return {}
+        return batch_done_changes(progress)
 
     async def enqueue_task(
         self,
@@ -604,6 +638,25 @@ class GenerationQueue:
             )
             raise
         return batch_id
+
+    async def announce_batch_if_done(self, batch_id: str) -> None:
+        """Send ``batch_done`` for ``batch_id`` now if it is complete and not announced yet; never raises.
+
+        For the end of a batch submission: members that finished (or failed to enqueue) during the enqueue phase were
+        held back by :func:`lib.generation.task_lifecycle_events.batch_submission`.
+
+        若 ``batch_id`` 已完成且尚未通告，现在发送 ``batch_done``；从不抛错。
+
+        用于批次提交的末尾：入队阶段内完成（或入队失败）的成员被
+        :func:`lib.generation.task_lifecycle_events.batch_submission` 压住了。
+        """
+        try:
+            async with self._session_factory() as session:
+                progress = await TaskRepository(session).batch_progress([batch_id])
+        except Exception:
+            logger.warning("读取批次进度失败，跳过 batch_done batch_id=%s", batch_id, exc_info=True)
+            return
+        emit_task_terminal_events([], batch_done_changes(progress))
 
     async def find_generation_batch(self, *, batch_id: str, user_id: str = DEFAULT_USER_ID) -> dict[str, str] | None:
         """Locate a batch by id alone: ``{"project_name", "source"}``, or ``None`` when the user has no such batch.
@@ -861,7 +914,10 @@ class GenerationQueue:
 
     async def retry_artifact_download(self, task_id: str) -> dict[str, Any]:
         async with self._task_repo() as repo:
-            return await repo.retry_artifact_download(task_id)
+            task = await repo.retry_artifact_download(task_id)
+        # The task is running again: announce it like a dispatch. / 任务重新进入执行：与派发一样通告。
+        emit_task_lifecycle_events([task])
+        return task
 
     async def list_tasks(
         self,

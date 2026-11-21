@@ -22,6 +22,7 @@ ProjectChangeBatchListener = Callable[
     [str, ProjectChangeSource, tuple[ProjectChangeBatch, ...]],
     None,
 ]
+ProjectSignalListener = Callable[[str, tuple[ProjectChangeBatch, ...]], None]
 
 _current_source: ContextVar[ProjectChangeSource] = ContextVar(
     "project_change_source",
@@ -29,6 +30,7 @@ _current_source: ContextVar[ProjectChangeSource] = ContextVar(
 )
 _listeners: list[ProjectChangeListener] = []
 _batch_listeners: list[ProjectChangeBatchListener] = []
+_signal_listeners: list[ProjectSignalListener] = []
 _listeners_lock = RLock()
 
 
@@ -131,6 +133,46 @@ def register_project_change_batch_listener(
         with _listeners_lock:
             try:
                 _batch_listeners.remove(listener)
+            except ValueError:
+                return
+
+    return unregister
+
+
+def emit_project_signal_batch(project_name: str, changes: Iterable[ProjectChangeBatch]) -> None:
+    """Notify signal listeners with changes that describe no project file change (task queued / started).
+
+    Unlike :func:`emit_project_change_batch`, a signal makes the event stream re-read nothing: it is broadcast as is
+    (after a short coalescing window) with the fingerprint the subscribers already have.
+
+    向信号监听者通告不对应任何项目文件变化的变更（任务入队 / 开始执行）。
+
+    与 :func:`emit_project_change_batch` 不同，信号不让事件流重读项目：它（经一个短的合并窗口后）
+    原样广播，指纹沿用订阅者已有的那个。
+    """
+    payload = tuple(dict(change) for change in changes)
+    if not payload:
+        return
+
+    with _listeners_lock:
+        listeners = list(_signal_listeners)
+
+    for listener in listeners:
+        try:
+            listener(project_name, payload)
+        except Exception:
+            logger.exception("项目信号 listener 执行失败")
+
+
+def register_project_signal_listener(listener: ProjectSignalListener) -> Callable[[], None]:
+    """Register a signal listener. Returns an unregister callback."""
+    with _listeners_lock:
+        _signal_listeners.append(listener)
+
+    def unregister() -> None:
+        with _listeners_lock:
+            try:
+                _signal_listeners.remove(listener)
             except ValueError:
                 return
 

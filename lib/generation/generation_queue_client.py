@@ -27,6 +27,7 @@ from lib.generation.generation_queue import (
     get_generation_queue,
     read_queue_poll_interval,
 )
+from lib.generation.task_lifecycle_events import batch_submission
 from lib.project.asset_derivatives import DERIVATIVE_TASK_TYPE
 from lib.project.asset_types import ASSET_SPECS
 from lib.project.resource_paths import CHARACTER_DERIVATIVE_RESOURCE_TYPE, resource_id_segments
@@ -771,13 +772,17 @@ async def submit_generation_batch(
         user_id=user_id,
     )
     try:
-        enqueued, failures = await batch_enqueue_only(
-            project_name=project_name,
-            specs=specs,
-            user_id=user_id,
-            batch_id=batch_id,
-            queue=queue,
-        )
+        with batch_submission(batch_id):
+            enqueued, failures = await batch_enqueue_only(
+                project_name=project_name,
+                specs=specs,
+                user_id=user_id,
+                batch_id=batch_id,
+                queue=queue,
+            )
+        # Members may have finished (or failed to enqueue) while the rest were being enqueued.
+        # 其余成员入队期间，已有成员可能完成（或入队失败）。
+        await queue.announce_batch_if_done(batch_id)
         return (
             await queue.get_generation_batch(project_name=project_name, batch_id=batch_id, user_id=user_id),
             enqueued,

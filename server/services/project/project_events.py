@@ -17,12 +17,14 @@ from pathlib import Path
 from typing import Any
 
 from lib import PROJECT_ROOT
+from lib.generation.task_lifecycle_events import coalesce_task_signals
 from lib.infra.content_digest import FileIdentity, file_identity
 from lib.project.project_change_hints import (
     ProjectChangeBatch,
     ProjectChangeSource,
     register_project_change_batch_listener,
     register_project_change_listener,
+    register_project_signal_listener,
 )
 from lib.project.project_manager import ProjectManager
 from lib.script.draft_quarantine import DOC_TYPE_TO_QUARANTINE_KIND, quarantine_filename
@@ -38,6 +40,13 @@ from server.sse_channel import IDLE, DropSubscriber, SseChannel
 logger = logging.getLogger(__name__)
 
 PROJECT_EVENTS_POLL_SECONDS = 0.5
+
+#: How long task signals (task_queued / task_started) are collected before one ``changes`` broadcast: a batch route
+#: enqueuing 60 members, or the worker dispatching several at once, becomes one message (members folded into
+#: ``batch_queued``) instead of a storm.
+#: 任务信号（task_queued / task_started）收集多久再广播一条 ``changes``：批次路由入队 60 个成员、或 worker 一次
+#: 派发多个，成为一条消息（成员合并为 ``batch_queued``），而不是一阵风暴。
+TASK_SIGNAL_COALESCE_SECONDS = 0.25
 
 # Name of the terminal event broadcast to subscribers after the project directory is deleted; the stream ends normally
 # after it (see stream_events._iter).
@@ -224,6 +233,10 @@ class _ProjectChannel:
     # skip rebuilding when inputs have not changed.
     # ``snapshot`` 读盘前的输入 stat 标识，与 ``snapshot`` 同时更新；轮询据此在输入未变时跳过重建。
     input_stamp: ProjectInputStamp | None = None
+    # Task signals collected for the next coalesced broadcast, and the timer that sends them.
+    # 为下一次合并广播收集的任务信号，以及发送它们的定时器。
+    pending_signals: list[dict[str, Any]] = field(default_factory=list)
+    signal_flush: asyncio.TimerHandle | None = None
 
 
 class ProjectEventService:
@@ -253,6 +266,7 @@ class ProjectEventService:
         self._channels: dict[str, _ProjectChannel] = {}
         self._listener_unregister = None
         self._batch_listener_unregister = None
+        self._signal_listener_unregister = None
         self._loop: asyncio.AbstractEventLoop | None = None
         self._pending_batch_tasks: set[asyncio.Task] = set()
 
@@ -262,6 +276,7 @@ class ProjectEventService:
         self._loop = asyncio.get_running_loop()
         self._listener_unregister = register_project_change_listener(self._on_hint)
         self._batch_listener_unregister = register_project_change_batch_listener(self._on_batch_hint)
+        self._signal_listener_unregister = register_project_signal_listener(self._on_signal_batch)
 
     async def shutdown(self) -> None:
         unregister = self._listener_unregister
@@ -272,6 +287,14 @@ class ProjectEventService:
         self._batch_listener_unregister = None
         if batch_unregister is not None:
             batch_unregister()
+        signal_unregister = self._signal_listener_unregister
+        self._signal_listener_unregister = None
+        if signal_unregister is not None:
+            signal_unregister()
+        for channel in self._channels.values():
+            if channel.signal_flush is not None:
+                channel.signal_flush.cancel()
+                channel.signal_flush = None
 
         tasks = [channel.task for channel in self._channels.values() if channel.task is not None]
         tasks.extend(self._pending_batch_tasks)
@@ -471,6 +494,53 @@ class ProjectEventService:
             changes,
         )
 
+    def _on_signal_batch(self, project_name: str, changes: tuple[ProjectChangeBatch, ...]) -> None:
+        loop = self._loop
+        if loop is None or loop.is_closed():
+            return
+        loop.call_soon_threadsafe(self._apply_signal_batch, project_name, changes)
+
+    def _apply_signal_batch(self, project_name: str, changes: tuple[ProjectChangeBatch, ...]) -> None:
+        """Collect task signals for the project's next coalesced broadcast; dropped when nobody subscribes.
+
+        收集任务信号，留给该项目下一次合并广播；没有订阅者时丢弃。"""
+        channel = self._channels.get(project_name)
+        if channel is None or not changes:
+            return
+        channel.pending_signals.extend(dict(change) for change in changes)
+        if channel.signal_flush is None:
+            loop = asyncio.get_running_loop()
+            channel.signal_flush = loop.call_later(
+                TASK_SIGNAL_COALESCE_SECONDS, self._flush_signals, project_name, channel
+            )
+
+    def _flush_signals(self, project_name: str, channel: _ProjectChannel) -> None:
+        """Broadcast the collected task signals as one ``changes`` message, without re-reading the project.
+
+        The fingerprint is the channel's current one: signals change no project file, so subscribers have nothing
+        to refetch. Called by the timer, and before an explicit change batch is applied, so a task's
+        ``task_started`` is always sent before its terminal change.
+
+        把收集到的任务信号作为一条 ``changes`` 广播，不重读项目。
+
+        指纹沿用通道当前的指纹：信号不改任何项目文件，订阅者没有要重拉的。由定时器调用，也在应用显式变更批之前
+        调用，因此任务的 ``task_started`` 总在它的终态变更之前发出。
+        """
+        if channel.signal_flush is not None:
+            channel.signal_flush.cancel()
+            channel.signal_flush = None
+        signals = channel.pending_signals
+        channel.pending_signals = []
+        if not signals or self._channels.get(project_name) is not channel or channel.snapshot is None:
+            return
+        self._broadcast_changes(
+            project_name,
+            channel,
+            fingerprint=channel.snapshot.fingerprint,
+            source="worker",
+            changes=coalesce_task_signals(signals),
+        )
+
     def _apply_hint(
         self,
         project_name: str,
@@ -499,6 +569,9 @@ class ProjectEventService:
         if channel is None or not changes:
             return
 
+        # Pending task signals describe earlier steps (queued / started) than this batch's terminal changes.
+        # 待发的任务信号描述的是比本批终态更早的步骤（入队 / 开始）。
+        self._flush_signals(project_name, channel)
         channel.scan_now.clear()
 
         # Registration must happen before this batch's rebuild read, so other batches' catch-up scans can leave these

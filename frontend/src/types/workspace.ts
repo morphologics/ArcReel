@@ -63,6 +63,13 @@ export interface ProjectChange {
     | "task_succeeded"
     | "task_failed"
     | "task_cancelled"
+    // Task lifecycle signals (entity_type "task", refresh-only like the terminal ones): a task queued / dispatched,
+    // a generation batch's members queued (coalesced), a generation batch complete. The UI only refetches tasks on them.
+    // 任务生命周期信号（entity_type 为 "task"，与终态一样只作刷新）：任务入队 / 派发、生成批次成员入队（合并）、生成批次完成。界面据此只重拉任务。
+    | "task_queued"
+    | "task_started"
+    | "batch_queued"
+    | "batch_done"
     | "recorded";
   entity_id: string;
   /** Entry label rendered by the backend in the default language, only for logs and as a fallback for old publishers; UI copy follows label_key. / 后端按默认语言渲染的条目标签，只作日志与旧发布方兜底；界面文案以 label_key 为准。 */

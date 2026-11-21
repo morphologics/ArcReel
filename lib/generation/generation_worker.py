@@ -68,6 +68,7 @@ from lib.generation.render_lane import RENDER_LANE_CONCURRENCY, RENDER_MEDIA_TYP
 from lib.generation.restart_recovery import InterruptedCallSettler, RestartRecovery
 from lib.generation.task_failure import encode_failure
 from lib.generation.task_failure_encoding import encode_task_failure_message
+from lib.generation.task_lifecycle_events import emit_task_lifecycle_events
 from lib.generation.video_resume import ResumeExecutor, VideoResumeRunner, fail_task_of_deleted_project
 from lib.project.project_manager import get_project_manager
 from lib.project.task_project_claim import TaskProjectClaim, claim_task_project
@@ -882,6 +883,9 @@ class GenerationWorker:
                 # Dispatch: register the occupancy (INFLIGHT); the bucket is created automatically by register
                 # Dispatch：登记占用（INFLIGHT），bucket 由 register 自动创建
                 claimed_any = True
+                # Announced here rather than at claim: a claim put straight back (pool full) never started.
+                # 在此通告而非认领时：认领后立刻回队（池满）的任务并未开始。
+                emit_task_lifecycle_events([task])
                 self._slots.register(
                     provider_id,
                     media_type,
@@ -1092,6 +1096,7 @@ class GenerationWorker:
                     )
                 )
                 return
+            emit_task_lifecycle_events([{**task, "status": "queued", "started_at": None, "requeued": True}])
             logger.info(
                 "任务 %s 执行 provider 从 %s 变为 %s，已回队等待新槽",
                 task_id,

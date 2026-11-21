@@ -136,6 +136,7 @@ from server.services.project.project_archive import (
     ProjectArchiveService,
     ProjectArchiveValidationError,
 )
+from server.services.project.light_reads import list_project_covers
 from server.services.project.project_cover import resolve_project_cover
 from server.services.project.project_retirement import restore_retired_project, retire_project_on, retiring_project
 from server.services.tasks.video_caps import (
@@ -696,8 +697,24 @@ _NO_ACTIVITY = datetime.min.replace(tzinfo=UTC)
 
 
 @router.get("/projects")
-async def list_projects(summaries: WorkflowStateServiceDep, _t: Translator):
-    """列出所有项目，最近有活动的在前。"""
+async def list_projects(
+    summaries: WorkflowStateServiceDep,
+    _t: Translator,
+    covers: bool = Query(
+        False,
+        description=(
+            "true: the light list instead (ProjectCoverList: name, title, cover URL, episode / shot counts, "
+            "updated_at), without the project summary projection"
+        ),
+    ),
+):
+    """列出所有项目，最近有活动的在前。``covers=1`` 时返回轻量列表（ProjectCoverList）。"""
+
+    if covers:
+        # Light list (G10): cover, counts, last business write; see server/services/project/light_reads.py.
+        # 轻量列表（G10）：封面、计数、最近业务写入；见 server/services/project/light_reads.py。
+        light = await asyncio.to_thread(list_project_covers, get_project_manager())
+        return light.model_dump(mode="json")
 
     def _sync():
         manager = get_project_manager()

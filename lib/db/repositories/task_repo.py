@@ -142,6 +142,31 @@ def _task_to_dict(row: Task) -> dict[str, Any]:
     }
 
 
+def task_event_record(row: Task, *, status: str | None = None) -> dict[str, Any]:
+    """The facts a task event carries about one row (see ``lib.generation.task_lifecycle_events``), without the
+    payload and result JSON; ``status`` overrides the row's when the caller just wrote it.
+
+    任务事件携带的一行任务的事实（见 ``lib.generation.task_lifecycle_events``），不含载荷与结果 JSON；
+    调用方刚写入状态时用 ``status`` 覆盖行上的值。"""
+    return {
+        "task_id": row.task_id,
+        "project_name": row.project_name,
+        "status": status or row.status,
+        "task_type": row.task_type,
+        "batch_id": row.batch_id,
+        "resource_id": row.resource_id,
+        "resource_type": row.resource_type,
+        "script_file": row.script_file,
+        "media_type": row.media_type,
+        "source": row.source,
+        "cancelled_by": row.cancelled_by,
+        "error_message": row.error_message,
+        "queued_at": dt_to_iso(row.queued_at),
+        "started_at": dt_to_iso(row.started_at),
+        "finished_at": dt_to_iso(row.finished_at),
+    }
+
+
 class TaskNotCancellableError(Exception):
     """The task has started running and cannot be cancelled: cancellation is only open to queued tasks; running tasks run to completion.
 
@@ -162,27 +187,20 @@ class TaskRepository(BaseRepository):
         # 在此收集而非各终态方法各自记账：所有终态迁移（含级联失败/级联取消、批量取消
         # 队列）都经 _record_terminal_event 收口，一处挂钩即全覆盖。
         self.terminal_events: list[dict[str, Any]] = []
+        # New tasks created in this session (task_queued), published after the commit like the terminal states.
+        # 该 session 内新建的任务（task_queued），与终态一样在提交后发布。
+        self.lifecycle_events: list[dict[str, Any]] = []
 
-    def _record_terminal_event(
-        self,
-        *,
-        task_id: str,
-        project_name: str,
-        status: str,
-        task_type: str | None = None,
-    ) -> None:
-        """Calls with a non-terminal state are no-ops: the status guard catches future non-terminal call sites and avoids emitting events without a matching action.
+    def _record_terminal_event(self, task: Task, *, status: str) -> None:
+        """Record ``task`` (just written with ``status``) for publishing after the commit.
+
+        Calls with a non-terminal state are no-ops: the status guard catches future non-terminal call sites and avoids emitting events without a matching action.
+
+        记下刚写成 ``status`` 的 ``task``，供提交后发布。
 
         非终态调用是空操作：状态守卫兜住未来新增的非终态调用点，避免发出无对应动作的事件。"""
         if status in TERMINAL_TASK_STATUSES:
-            self.terminal_events.append(
-                {
-                    "task_id": task_id,
-                    "project_name": project_name,
-                    "status": status,
-                    "task_type": task_type,
-                }
-            )
+            self.terminal_events.append(task_event_record(task, status=status))
 
     async def _require_batch_units(
         self,
@@ -308,6 +326,8 @@ class TaskRepository(BaseRepository):
                 raise
         else:
             status = "queued"
+            # Read before the commit expires the row's attributes. / 在提交让行属性过期之前读取。
+            self.lifecycle_events.append(task_event_record(task))
 
         if batch_id is not None:
             self.session.add_all(
@@ -449,6 +469,80 @@ class TaskRepository(BaseRepository):
             "memberships": memberships,
             "queue_depth": depth,
         }
+
+    async def batch_progress_for_tasks(self, task_ids: Collection[str]) -> list[dict[str, Any]]:
+        """Progress of every generation batch any of ``task_ids`` belongs to, for announcing ``batch_done``.
+
+        One item per batch: ``{batch_id, project_name, operation, source, created_at, counts, done}``. ``counts``
+        follows the batch read model (``GET /batches/{id}``): each requested unit counts once as blocked (blocked at
+        admission), as its task's status, or as failed when it has no task; ``done`` when nothing is queued or
+        running. Reads only the batch rows and their members' statuses (no payloads), so it stays cheap enough to
+        run after every terminal transition.
+
+        ``task_ids`` 所属的每个生成批次的进度，供通告 ``batch_done``。
+
+        每批一项：``{batch_id, project_name, operation, source, created_at, counts, done}``。``counts`` 与批次读模型
+        （``GET /batches/{id}``）同口径：每个请求单元计一次——准入时被拦为 blocked，否则取其任务的状态，没有任务
+        时计 failed；没有排队中与执行中的成员即 ``done``。只读批次行与成员状态（不读载荷），每次终态迁移后都跑得起。
+        """
+        ids = list(dict.fromkeys(task_ids))
+        if not ids:
+            return []
+        batch_rows = await self.session.execute(
+            select(BatchTask.batch_id).where(BatchTask.task_id.in_(ids)).distinct()
+        )
+        return await self.batch_progress([row[0] for row in batch_rows.all()])
+
+    async def batch_progress(self, batch_ids: Collection[str]) -> list[dict[str, Any]]:
+        """Progress of these generation batches (unknown ids are left out); see :meth:`batch_progress_for_tasks`.
+
+        这些生成批次的进度（未知 id 不列出）；见 :meth:`batch_progress_for_tasks`。"""
+        batch_ids = list(dict.fromkeys(batch_ids))
+        if not batch_ids:
+            return []
+        batches = (
+            (await self.session.execute(select(GenerationBatch).where(GenerationBatch.batch_id.in_(batch_ids))))
+            .scalars()
+            .all()
+        )
+        member_rows = await self.session.execute(
+            select(BatchTask.batch_id, BatchTask.unit_id, Task.status)
+            .join(Task, Task.task_id == BatchTask.task_id)
+            .where(BatchTask.batch_id.in_(batch_ids))
+        )
+        statuses: dict[str, dict[str, str]] = {}
+        for batch_id, unit_id, status in member_rows.all():
+            statuses.setdefault(batch_id, {})[unit_id] = status
+        progress: list[dict[str, Any]] = []
+        for batch in batches:
+            requested = _json_loads(batch.requested_json, {}).get("requested", [])
+            blocked_ids = {
+                entry["item"].get("unit_id")
+                for entry in _json_loads(batch.blocked_json, [])
+                if isinstance(entry, dict) and isinstance(entry.get("item"), dict)
+            }
+            members = statuses.get(batch.batch_id, {})
+            counts = dict.fromkeys(("queued", "running", "succeeded", "failed", "cancelled", "blocked"), 0)
+            for item in requested if isinstance(requested, list) else []:
+                unit_id = item.get("unit_id") if isinstance(item, dict) else None
+                if unit_id in blocked_ids:
+                    state = "blocked"
+                else:
+                    state = members.get(unit_id, "failed") if isinstance(unit_id, str) else "failed"
+                counts[state] = counts.get(state, 0) + 1
+            counts["total"] = sum(counts.values())
+            progress.append(
+                {
+                    "batch_id": batch.batch_id,
+                    "project_name": batch.project_name,
+                    "operation": batch.operation,
+                    "source": batch.source,
+                    "created_at": dt_to_iso(batch.created_at),
+                    "counts": counts,
+                    "done": counts["queued"] == 0 and counts["running"] == 0,
+                }
+            )
+        return progress
 
     async def delete_fresh_batch(self, *, project_name: str, batch_id: str, user_id: str) -> int:
         scope = (
@@ -642,12 +736,7 @@ class TaskRepository(BaseRepository):
         await self.session.flush()
         res = await self.session.execute(select(Task).where(Task.task_id == task_id))
         done_task = res.scalar_one()
-        self._record_terminal_event(
-            task_id=task_id,
-            project_name=done_task.project_name,
-            status="succeeded",
-            task_type=done_task.task_type,
-        )
+        self._record_terminal_event(done_task, status="succeeded")
         await self.session.commit()
         return affected
 
@@ -769,12 +858,7 @@ class TaskRepository(BaseRepository):
         await self.session.flush()
         res = await self.session.execute(select(Task).where(Task.task_id == task_id))
         failed_task = res.scalar_one()
-        self._record_terminal_event(
-            task_id=task_id,
-            project_name=failed_task.project_name,
-            status="failed",
-            task_type=failed_task.task_type,
-        )
+        self._record_terminal_event(failed_task, status="failed")
         return affected
 
     async def _mark_failed_queued_dep(self, *, task_id: str, error_message: str) -> int:
@@ -799,12 +883,7 @@ class TaskRepository(BaseRepository):
         await self.session.flush()
         res = await self.session.execute(select(Task).where(Task.task_id == task_id))
         failed_task = res.scalar_one()
-        self._record_terminal_event(
-            task_id=task_id,
-            project_name=failed_task.project_name,
-            status="failed",
-            task_type=failed_task.task_type,
-        )
+        self._record_terminal_event(failed_task, status="failed")
         return affected
 
     async def _cascade_failed_queued(self, *, task_id: str, error_message: str) -> int:
@@ -959,12 +1038,7 @@ class TaskRepository(BaseRepository):
         res = await self.session.execute(select(Task).where(Task.task_id == task_id))
         cancelled_task = res.scalar_one()
         task_data = _task_to_dict(cancelled_task)
-        self._record_terminal_event(
-            task_id=task_id,
-            project_name=cancelled_task.project_name,
-            status="cancelled",
-            task_type=cancelled_task.task_type,
-        )
+        self._record_terminal_event(cancelled_task, status="cancelled")
 
         # Add itself first, then cascade, so parents come before children in the response body. / 先把自身入列再级联，响应体里父先于子。
         cancelled.append(task_data)
@@ -1151,12 +1225,7 @@ class TaskRepository(BaseRepository):
             select(Task).where(Task.task_id.in_(task_ids), Task.status == "cancelled")
         )
         for updated_task in refreshed.scalars().all():
-            self._record_terminal_event(
-                task_id=updated_task.task_id,
-                project_name=project_name,
-                status="cancelled",
-                task_type=updated_task.task_type,
-            )
+            self._record_terminal_event(updated_task, status="cancelled")
 
         await self.session.commit()
         # In a race some tasks may be claimed by a worker before the UPDATE; skipped = expected cancellations - actual cancellations
