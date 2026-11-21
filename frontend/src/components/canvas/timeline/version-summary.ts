@@ -26,6 +26,19 @@ export function versionCost(version: VersionInfo): string | null {
   return formatCost({ [g.currency]: g.cost_amount });
 }
 
+/** YouReel (owner 2026-11-21): the time the generation took, "took 42 s" / "took 1 min 23 s"; null when unknown. */
+export function versionGenerationTime(version: VersionInfo, t: (key: string, options?: Record<string, unknown>) => string): string | null {
+  const ms = version.generation?.duration_ms;
+  if (ms == null || ms <= 0) return null;
+  const total = Math.max(1, Math.round(ms / 1000));
+  const minutes = Math.floor(total / 60);
+  const seconds = total % 60;
+  const time = minutes > 0
+    ? t("version_generation_time_min_sec", { minutes, seconds })
+    : t("version_generation_time_sec", { seconds });
+  return t("version_generation_took", { time });
+}
+
 export function versionSize(version: VersionInfo): string | null {
   if (!version.file_size) return null;
   const mb = version.file_size / (1024 * 1024);

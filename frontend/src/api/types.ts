@@ -155,6 +155,8 @@ export interface VersionGeneration {
   model: string;
   cost_amount: number | null;
   currency: string;
+  /** YouReel: how long the generation took (ms); null / absent when not recorded (older studios, older calls). */
+  duration_ms?: number | null;
 }
 
 /** Unified response for shot / video unit media uploads. / 分镜/视频单元媒体上传的统一响应。 */

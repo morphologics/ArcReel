@@ -4,7 +4,7 @@ import type { VersionInfo } from "@/api";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { AspectFrame } from "@/components/canvas/shared/AspectFrame";
-import { promptSummary, versionCost, versionOrigin, versionSize, versionTime } from "./version-summary";
+import { promptSummary, versionCost, versionGenerationTime, versionOrigin, versionSize, versionTime } from "./version-summary";
 
 interface VersionHistoryPanelProps {
   /** sheet: an asset's image (thumbnails like a storyboard's). */
@@ -91,6 +91,9 @@ export function VersionHistoryPanel({
                         <span className="text-subtle-foreground">· {versionOrigin(v, t)}</span>
                         {v.generation?.model && <span className="text-subtle-foreground">· {v.generation.model}</span>}
                         {cost && <span className="num font-medium">· {cost}</span>}
+                        {versionGenerationTime(v, t) && (
+                          <span className="num text-subtle-foreground">· {versionGenerationTime(v, t)}</span>
+                        )}
                       </span>
                       <span className="num text-xs text-subtle-foreground">
                         {[

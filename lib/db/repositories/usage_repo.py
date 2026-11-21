@@ -825,6 +825,7 @@ class UsageRepository(BaseRepository):
                 ApiCall.cost_amount,
                 ApiCall.currency,
                 ApiCall.call_type,
+                ApiCall.duration_ms,
             )
             .where(
                 ApiCall.project_name == project_name,
@@ -844,8 +845,10 @@ class UsageRepository(BaseRepository):
                 "cost_amount": cost_amount,
                 "currency": currency,
                 "call_type": call_type,
+                # YouReel (owner 2026-11-21): how long the generation took, shown in the version history
+                "duration_ms": duration_ms,
             }
-            for finished_at, provider, model, cost_amount, currency, call_type in rows
+            for finished_at, provider, model, cost_amount, currency, call_type, duration_ms in rows
         ]
 
     async def get_unpriced_calls_by_model(self, project_name: str) -> list[tuple[str, str, str, int]]:

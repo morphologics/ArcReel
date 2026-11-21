@@ -31,7 +31,7 @@ import { useAppStore } from "@/stores/app-store";
 import { useTrackWrite } from "@/components/canvas/lorebook/useAssetWrites";
 import { errMsg } from "@/utils/async";
 import { VersionHistoryPanel } from "./VersionHistoryPanel";
-import { versionCost, versionOrigin, versionTime } from "./version-summary";
+import { versionCost, versionGenerationTime, versionOrigin, versionTime } from "./version-summary";
 import { MEDIA_SIDE_BY_SIDE_QUERY, useMediaQuery } from "@/hooks/useMediaQuery";
 import { GenerateButton } from "@/components/canvas/shared/GenerateButton";
 import { generateDetail } from "@/components/canvas/shared/GenerateLabel";
@@ -362,7 +362,7 @@ export function MediaCard({
             <span className="num font-medium">{t("version_viewing", { version: viewedInfo.version })}</span>
             <span className="text-subtle-foreground">
               {" · "}
-              {[versionTime(viewedInfo), versionOrigin(viewedInfo, t), viewedInfo.generation?.model, versionCost(viewedInfo)]
+              {[versionTime(viewedInfo), versionOrigin(viewedInfo, t), viewedInfo.generation?.model, versionCost(viewedInfo), versionGenerationTime(viewedInfo, t)]
                 .filter(Boolean)
                 .join(" · ")}
             </span>

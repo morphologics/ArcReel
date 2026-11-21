@@ -30,7 +30,7 @@ def _parse(value: object) -> datetime | None:
 
 
 def attach_version_generations(versions: Iterable[dict[str, Any]], calls: list[Mapping[str, Any]]) -> None:
-    """Set ``generation`` ({provider, model, cost_amount, currency} or None) on each version record, in place."""
+    """Set ``generation`` ({provider, model, cost_amount, currency, duration_ms} or None) on each version record, in place."""
     taken: set[int] = set()
     for record in sorted(versions, key=lambda r: r.get("version", 0)):
         record["generation"] = None
@@ -56,4 +56,6 @@ def attach_version_generations(versions: Iterable[dict[str, Any]], calls: list[M
                 "model": call["model"],
                 "cost_amount": call["cost_amount"],
                 "currency": call["currency"],
+                # YouReel (owner 2026-11-21): the time the generation took (ms; None when not recorded)
+                "duration_ms": call.get("duration_ms"),
             }

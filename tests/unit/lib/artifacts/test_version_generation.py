@@ -11,6 +11,7 @@ def _call(minute: int, model: str, cost: float) -> dict:
         "cost_amount": cost,
         "currency": "USD",
         "call_type": "video",
+        "duration_ms": 83_000,
     }
 
 
@@ -25,7 +26,13 @@ def test_each_generated_version_takes_the_call_that_finished_just_before_it():
     calls = [_call(1, "seedance", 0.5), _call(30, "kling", 0.7), _call(40, "minimax", 0.9)]
     attach_version_generations(versions, calls)
 
-    assert versions[0]["generation"] == {"provider": "runware", "model": "seedance", "cost_amount": 0.5, "currency": "USD"}
+    assert versions[0]["generation"] == {
+        "provider": "runware",
+        "model": "seedance",
+        "cost_amount": 0.5,
+        "currency": "USD",
+        "duration_ms": 83_000,
+    }
     assert versions[1]["generation"] is None
     assert versions[2]["generation"]["model"] == "minimax"
     assert versions[3]["generation"] is None
