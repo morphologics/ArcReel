@@ -34,6 +34,7 @@ INTENTIONAL_TASKS_INDEX_DROPS = {
     "26c2f9d11c8e": frozenset({"ix_tasks_batch_id"}),
     "285dbe1e9824": frozenset({"idx_tasks_status_provider_queued"}),
     "ea2e1a477bbf": frozenset({"ix_tasks_user_id"}),
+    "e5b9c3d71a42": frozenset({"idx_tasks_updated_at", "idx_tasks_project_queued_at"}),
 }
 
 # Migrations whose downgrade rebuilds the tasks table via batch.
@@ -45,6 +46,7 @@ REBUILD_MIGRATIONS = [
     "285dbe1e9824",
     "548f6ca3e91c",
     "ea2e1a477bbf",
+    "e5b9c3d71a42",
 ]
 
 # initial schema: its downgrade drops the tasks table itself, so the full-chain walk stops here.

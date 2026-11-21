@@ -2236,3 +2236,39 @@ class TestFirstFrameRatioAdaptiveOnly:
         )
 
         assert gen.ledger.started[-1]["aspect_ratio"] == "16:9"
+
+
+class TestGenerationVersionLink:
+    """API G16: a version committed for a queue task records its task and ledger call; direct calls record neither.
+
+    API G16：为队列任务提交的版本记下它的任务与账本调用；直接调用两者都不记。"""
+
+    async def test_image_version_records_task_and_call(self, tmp_path):
+        gen = _build_generator(tmp_path)
+
+        await gen.generate_image_async(prompt="p", resource_type="storyboards", resource_id="E1S01", task_id="T-img")
+
+        added = gen.versions.add_calls[-1]
+        assert added["generation_task_id"] == "T-img"
+        assert added["generation_call_id"] == 1
+
+    async def test_direct_image_generation_has_no_link(self, tmp_path):
+        gen = _build_generator(tmp_path)
+
+        await gen.generate_image_async(prompt="p", resource_type="storyboards", resource_id="E1S01")
+
+        added = gen.versions.add_calls[-1]
+        assert "generation_task_id" not in added
+        assert "generation_call_id" not in added
+
+    async def test_video_version_records_task_and_call(self, tmp_path):
+        gen = _build_generator(tmp_path)
+        gen.versions = VersionManager(gen.project_path)
+
+        await gen.generate_image_async(prompt="p", resource_type="storyboards", resource_id="E1S02")
+        await gen.generate_video_async(prompt="p", resource_type="videos", resource_id="E1S01", task_id="T-vid")
+
+        [record] = gen.versions.get_versions("videos", "E1S01")["versions"]
+        assert record["generation_task_id"] == "T-vid"
+        # The second ledger bracket of this generator. / 本生成器的第二个记账括号。
+        assert record["generation_call_id"] == 2

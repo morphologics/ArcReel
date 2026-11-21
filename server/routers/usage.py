@@ -158,6 +158,9 @@ class UsageRecordPage(BaseModel):
     items: list[UsageRecord]
     next_cursor: str | None = None
     total: int
+    # Server clock when the read started (UTC ISO); pass it as the next ``updated_since`` (API G24).
+    # 读取开始时的服务器时钟（UTC ISO）；作为下一次的 ``updated_since`` 传回（API G24）。
+    server_time: str | None = None
 
 
 # UTC range representable by the time parameters: one day of margin, so no time zone offset, the minus-one-microsecond
@@ -179,6 +182,11 @@ def _utc_instant(value: datetime | None) -> datetime | None:
     if not _EARLIEST_INSTANT <= aware <= _LATEST_INSTANT:
         raise UnprocessableError("usage_time_out_of_range")
     return as_utc(value)
+
+
+#: Public name for other routers' time query parameters (``updated_since`` on tasks and generation records).
+#: 供其他路由的时间查询参数使用的公开名（任务与生成记录的 ``updated_since``）。
+utc_query_instant = _utc_instant
 
 
 def _multi(value: str | None) -> tuple[str, ...]:
@@ -209,11 +217,19 @@ async def list_usage_records(
     batch_id: str | None = Query(None, description=_BATCH_DESCRIPTION),
     episode: int | None = Query(None, ge=1, description=_EPISODE_DESCRIPTION),
     client: str | None = Query(None, description=_CLIENT_DESCRIPTION),
+    updated_since: datetime | None = Query(
+        None,
+        description=(
+            "Incremental sync: only calls that started or finished at or after this moment (ISO 8601, UTC if no "
+            "time zone; inclusive, dedupe by id). Pass the previous answer's server_time"
+        ),
+    ),
 ) -> UsageRecordPage:
     try:
         decoded = UsageCursor.decode(cursor) if cursor else None
     except UsageCursorError as exc:
         raise UnprocessableError("usage_cursor_invalid") from exc
+    server_time = datetime.now(UTC).isoformat()
 
     async with async_session_factory() as session:
         page = await UsageRepository(session).list_records(
@@ -229,6 +245,7 @@ async def list_usage_records(
                 batch_id=batch_id or None,
                 episode=episode,
                 clients=_multi(client),
+                updated_since=_utc_instant(updated_since),
             ),
             statuses=_multi(status),
             segment_ids=_multi(segment_id),
@@ -236,7 +253,7 @@ async def list_usage_records(
             cursor=decoded,
         )
     page["items"] = await asyncio.to_thread(_present_records, page["items"], _t)
-    return UsageRecordPage.model_validate(page)
+    return UsageRecordPage.model_validate({**page, "server_time": server_time})
 
 
 def _with_segment_refs(items: list[dict[str, Any]], translate: Callable[..., str] = _) -> list[dict[str, Any]]:

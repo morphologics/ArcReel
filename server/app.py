@@ -113,6 +113,7 @@ from server.routers import (
     file_view,
     files,
     generate,
+    generations,
     grids,
     market,
     market_submissions,
@@ -969,6 +970,9 @@ app.include_router(
 app.include_router(tasks.router, prefix="/api/v1", dependencies=[Depends(get_current_user)], tags=["Task queue"])
 app.include_router(
     batches.router, prefix="/api/v1", dependencies=[Depends(get_current_user)], tags=["Generation batches"]
+)
+app.include_router(
+    generations.router, prefix="/api/v1", dependencies=[Depends(get_current_user)], tags=["Generation records"]
 )
 app.include_router(providers.router, prefix="/api/v1", dependencies=[Depends(get_current_user)], tags=["Providers"])
 app.include_router(

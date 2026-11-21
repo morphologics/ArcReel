@@ -54,6 +54,15 @@ class Task(UserOwnedMixin, Base):
     # 参考生视频首次提交前冻结的严格执行事实。独立列避免与可变 enqueue payload 混合，且让
     # checkpoint/job 组合在重启时可无歧义分流；只由 worker 内部消费，不属于 tasks API 契约。
     execution_checkpoint_json: Mapped[str | None] = mapped_column(Text)
+    # The inputs the task was submitted with, taken at enqueue for media generation tasks
+    # (``lib.generation.request_snapshot``): the editable prompt, the declared options and model, the reference inputs
+    # with their versions. Kept so an attempt refused or cancelled before any provider call still has its inputs; the
+    # prompt actually sent is in ``api_calls.prompt``. NULL for tasks queued before the column existed, for text /
+    # render tasks, and when taking the snapshot failed (enqueue never fails for it).
+    # 任务提交时的输入，媒体生成任务在入队时取下（``lib.generation.request_snapshot``）：可编辑提示词、声明的选项与模型、
+    # 参考输入及其版本。留着它，在任何供应商调用之前被拒绝或取消的尝试也有输入；实际发出的提示词在 ``api_calls.prompt``。
+    # 该列出现之前入队的任务、文本 / 渲染任务、以及取快照失败时为 NULL（入队绝不因它失败）。
+    request_snapshot_json: Mapped[str | None] = mapped_column(Text)
     queued_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
@@ -62,6 +71,11 @@ class Task(UserOwnedMixin, Base):
     __table_args__ = (
         Index("idx_tasks_status_queued_at", "status", "queued_at"),
         Index("idx_tasks_project_updated_at", "project_name", "updated_at"),
+        # Changed-since reads across projects (``GET /tasks?updated_since=``, generation records).
+        # 跨项目的「自某时刻以来的变化」读取（``GET /tasks?updated_since=``、生成记录）。
+        Index("idx_tasks_updated_at", "updated_at"),
+        # A project's generation records, newest first. / 一个项目的生成记录，新的在前。
+        Index("idx_tasks_project_queued_at", "project_name", "queued_at"),
         Index("idx_tasks_dependency_task_id", "dependency_task_id"),
         Index("idx_tasks_status_provider_queued", "status", "provider_id", "queued_at"),
         Index(

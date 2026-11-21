@@ -82,4 +82,6 @@ class ApiCall(TimestampMixin, UserOwnedMixin, Base):
         Index("idx_api_calls_status", "status"),
         Index("idx_api_calls_started_at", "started_at"),
         Index("idx_api_calls_task_id", "task_id"),
+        # ``GET /usage/records?updated_since=`` (a call changes when it finishes). / 调用在结束时变化。
+        Index("idx_api_calls_finished_at", "finished_at"),
     )

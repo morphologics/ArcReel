@@ -12,6 +12,7 @@ import threading
 import uuid
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
+from datetime import datetime
 from typing import TYPE_CHECKING, Any
 
 from lib.backends.backend_runtime import install_provider_job_id_store
@@ -543,6 +544,17 @@ class GenerationQueue:
                 # Video provider/model is only an advisory claim projection until the worker materializes the
                 # current request and persists its pre-submit checkpoint. Enqueue payload never freezes identity.
 
+        request_snapshot = await self._take_request_snapshot(
+            project_name=project_name,
+            task_type=task_type,
+            media_type=media_type,
+            resource_id=resource_id,
+            resource_type=resource_type,
+            script_file=script_file,
+            payload=payload,
+            provider_id=provider_id,
+        )
+
         requested_facts = _reference_request_facts(task_type, payload)
         text_request_facts = _text_request_facts(task_type, payload)
         render_request_facts = _render_request_facts(task_type, payload)
@@ -581,6 +593,7 @@ class GenerationQueue:
                     batch_unit_id=batch_unit_id,
                     batch_unit_ids=batch_unit_ids,
                     dedupe_guard=_guard_deduped,
+                    request_snapshot=request_snapshot,
                 )
 
         # Audio restoration observes active TTS/video consumers while holding the
@@ -604,6 +617,55 @@ class GenerationQueue:
         else:
             logger.debug("任务去重 task_id=%s", result["task_id"])
         return result
+
+    async def _take_request_snapshot(
+        self,
+        *,
+        project_name: str,
+        task_type: str,
+        media_type: str,
+        resource_id: str,
+        resource_type: str | None,
+        script_file: str | None,
+        payload: dict[str, Any] | None,
+        provider_id: str | None,
+    ) -> dict[str, Any] | None:
+        """The inputs a media generation task is submitted with (``lib.generation.request_snapshot``), stored on the
+        task so an attempt refused or cancelled before any provider call keeps them. Best effort: ``None`` for text /
+        render tasks and when the project cannot be read; the enqueue goes ahead either way.
+
+        媒体生成任务提交时的输入（``lib.generation.request_snapshot``），存在任务上，在任何供应商调用之前被拒绝或取消的尝试
+        也留有它们。尽力而为：文本 / 渲染任务与项目读不了时为 ``None``；入队照常进行。"""
+        from lib.generation.request_snapshot import GENERATION_MEDIA_TYPES, build_request_snapshot
+
+        if media_type not in GENERATION_MEDIA_TYPES or task_type.startswith("text_") or is_render_task_type(task_type):
+            return None
+        project_manager = self._project_manager
+        if project_manager is None:
+            from lib.project.project_manager import get_project_manager
+
+            project_manager = get_project_manager()
+        try:
+            return await asyncio.to_thread(
+                build_request_snapshot,
+                project_manager,
+                project_name=project_name,
+                task_type=task_type,
+                resource_id=resource_id,
+                resource_type=resource_type,
+                script_file=script_file,
+                payload=payload,
+                provider_id=provider_id,
+            )
+        except Exception:
+            logger.warning(
+                "取请求快照失败，任务不带快照入队 project=%s type=%s resource=%s",
+                project_name,
+                task_type,
+                resource_id,
+                exc_info=True,
+            )
+            return None
 
     async def create_generation_batch(
         self,
@@ -927,6 +989,7 @@ class GenerationQueue:
         task_type: str | None = None,
         source: str | None = None,
         batch_id: str | None = None,
+        updated_since: datetime | None = None,
         page: int = 1,
         page_size: int = 50,
     ) -> dict[str, Any]:
@@ -938,6 +1001,7 @@ class GenerationQueue:
                 task_type=task_type,
                 source=source,
                 batch_id=batch_id,
+                updated_since=updated_since,
                 page=page,
                 page_size=page_size,
             )

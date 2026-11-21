@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Callable
+from datetime import UTC, datetime
 from typing import Any, cast
 
 from fastapi import APIRouter, Query, Request
@@ -22,9 +23,15 @@ from lib.i18n.display_names import DisplayNames
 from lib.infra.api_errors import BadRequestError, ConflictError, NotFoundError
 from lib.project.project_manager import get_project_manager
 from server.i18n import DisplayNamesCatalog, Translator
+from server.routers.usage import utc_query_instant
 from server.services.project.episode_item_refs import with_episode_item_refs
 
 router = APIRouter()
+
+_UPDATED_SINCE_DESCRIPTION = (
+    "Incremental sync: only tasks changed at or after this moment (ISO 8601, UTC if no time zone; inclusive, dedupe "
+    "by task_id). Pass the previous answer's server_time"
+)
 
 
 def get_task_queue():
@@ -149,6 +156,39 @@ async def _with_resource_refs(tasks: list[dict[str, Any]], translate: Callable[.
     )
 
 
+async def _list_tasks(
+    _t: Callable[..., str],
+    names: DisplayNames,
+    *,
+    project_name: str | None,
+    status: str | None,
+    task_type: str | None,
+    source: str | None,
+    batch_id: str | None,
+    updated_since: datetime | None,
+    page: int,
+    page_size: int,
+) -> dict[str, Any]:
+    # Taken before the read, so a change committed while it runs is in the next ``updated_since`` window.
+    # 在读取之前取，读取期间提交的变化落在下一个 ``updated_since`` 窗口里。
+    server_time = datetime.now(UTC).isoformat()
+    result = await get_task_queue().list_tasks(
+        project_name=project_name,
+        status=status,
+        task_type=task_type,
+        source=source,
+        batch_id=batch_id,
+        updated_since=utc_query_instant(updated_since),
+        page=page,
+        page_size=page_size,
+    )
+    result["items"] = await _with_resource_refs(
+        [_localize_task(task, _t, names) for task in result.get("items", [])], _t
+    )
+    result["server_time"] = server_time
+    return result
+
+
 @router.get("/tasks/stats")
 async def get_task_stats(project_name: str | None = None):
     queue = get_task_queue()
@@ -167,23 +207,22 @@ async def list_tasks(
         default=None, description="Client label that created the task (webui, mcp, embedded, or an X-Client value)"
     ),
     batch_id: str | None = Query(default=None, description="Only member tasks of this generation batch"),
+    updated_since: datetime | None = Query(default=None, description=_UPDATED_SINCE_DESCRIPTION),
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=50, ge=1, le=500),
 ):
-    queue = get_task_queue()
-    result = await queue.list_tasks(
+    return await _list_tasks(
+        _t,
+        names,
         project_name=project_name,
         status=status,
         task_type=task_type,
         source=source,
         batch_id=batch_id,
+        updated_since=updated_since,
         page=page,
         page_size=page_size,
     )
-    result["items"] = await _with_resource_refs(
-        [_localize_task(task, _t, names) for task in result.get("items", [])], _t
-    )
-    return result
 
 
 @router.get("/projects/{project_name}/tasks")
@@ -197,23 +236,22 @@ async def list_project_tasks(
         default=None, description="Client label that created the task (webui, mcp, embedded, or an X-Client value)"
     ),
     batch_id: str | None = Query(default=None, description="Only member tasks of this generation batch"),
+    updated_since: datetime | None = Query(default=None, description=_UPDATED_SINCE_DESCRIPTION),
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=50, ge=1, le=500),
 ):
-    queue = get_task_queue()
-    result = await queue.list_tasks(
+    return await _list_tasks(
+        _t,
+        names,
         project_name=project_name,
         status=status,
         task_type=task_type,
         source=source,
         batch_id=batch_id,
+        updated_since=updated_since,
         page=page,
         page_size=page_size,
     )
-    result["items"] = await _with_resource_refs(
-        [_localize_task(task, _t, names) for task in result.get("items", [])], _t
-    )
-    return result
 
 
 @router.get("/tasks/{task_id}/cancel-preview")

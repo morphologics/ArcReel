@@ -52,6 +52,16 @@ MANUAL_UPLOAD_VERSION_SOURCE = "manual_upload"
 #: A storyboard image's / video's version record: the shot's editable prompt (``image_prompt`` / ``video_prompt``
 #: as in the script) it was generated from, so making the version current can restore the prompt too.
 SCRIPT_PROMPT_VERSION_FIELD = "script_prompt"
+#: A generated version's exact link to the attempt that produced it (generation records, API G16): the queue task id
+#: and the usage ledger call id (``api_calls.id``). Written on every version a queue task commits since 2026-11; older
+#: versions (and direct, taskless generations) don't have them and are matched to their call by time
+#: (``lib.artifacts.version_generation``). Video versions of reference-video / i2v tasks also carry the checkpoint's
+#: ``execution_task_id``.
+#: 生成版本与产出它的那次尝试的精确关联（生成记录，API G16）：队列任务 id 与用量账本调用 id（``api_calls.id``）。
+#: 自 2026-11 起队列任务提交的每个版本都写；更早的版本（以及无任务的直接生成）没有，按时间与调用匹配
+#: （``lib.artifacts.version_generation``）。参考生视频 / 图生视频任务的视频版本另带检查点的 ``execution_task_id``。
+GENERATION_TASK_VERSION_FIELD = "generation_task_id"
+GENERATION_CALL_VERSION_FIELD = "generation_call_id"
 # Bare sha256 hexdigest of this version's output (i.e. the version snapshot) in the version record, same algorithm as ``lib.infra.content_digest.sha256_file``.
 # 版本记录里该版本输出（即版本快照）的裸 sha256 hexdigest，算法同 ``lib.infra.content_digest.sha256_file``。
 VERSION_CONTENT_DIGEST = "content_digest"

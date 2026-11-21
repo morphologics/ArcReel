@@ -157,6 +157,11 @@ export interface VersionGeneration {
   currency: string;
   /** YouReel: how long the generation took (ms); null / absent when not recorded (older studios, older calls). */
   duration_ms?: number | null;
+  /** The usage ledger call (``api_calls.id``) and its queue task; absent from older studios. */
+  call_id?: number | null;
+  task_id?: string | null;
+  /** True when the version record names its call (versions committed since API G16); false = matched by time. */
+  exact?: boolean;
 }
 
 /** Unified response for shot / video unit media uploads. / 分镜/视频单元媒体上传的统一响应。 */

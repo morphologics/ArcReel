@@ -46,7 +46,12 @@ if TYPE_CHECKING:
     from lib.config.resolver import ConfigResolver
     from lib.references.reference_compression import CompressedRef, PayloadLimits, ReferenceSpec
 
-from lib.artifacts.version_manager import PaidVersionCommit, VersionManager
+from lib.artifacts.version_manager import (
+    GENERATION_CALL_VERSION_FIELD,
+    GENERATION_TASK_VERSION_FIELD,
+    PaidVersionCommit,
+    VersionManager,
+)
 from lib.backends.gemini_shared import RateLimiter
 from lib.backends.providers import CallPurpose, CallType, require_provider_pair
 from lib.billing.ledger import Ledger
@@ -277,6 +282,19 @@ def _collect_result_warnings(warnings: list[dict[str, Any]] | None, result: "Vid
     if warnings is None or not result.warnings:
         return
     warnings.extend(dict(warning) for warning in result.warnings)
+
+
+def _generation_link(task_id: str | None, call_id: int | None) -> dict[str, Any]:
+    """Version metadata linking a version to the queue task and the ledger call that produced it (API G16); empty for
+    direct calls without a task, which keep the time-based match.
+
+    把版本与产出它的队列任务和账本调用关联起来的版本元数据（API G16）；无任务的直接调用为空，仍按时间匹配。"""
+    if task_id is None:
+        return {}
+    link: dict[str, Any] = {GENERATION_TASK_VERSION_FIELD: task_id}
+    if call_id is not None:
+        link[GENERATION_CALL_VERSION_FIELD] = call_id
+    return link
 
 
 def _commit_formal_image_output(
@@ -941,7 +959,11 @@ class MediaGenerator:
                 staged_file=staged_output_path,
                 task_id=task_id,
             )
-            metadata: dict[str, Any] = {"aspect_ratio": aspect_ratio, **version_metadata}
+            metadata: dict[str, Any] = {
+                "aspect_ratio": aspect_ratio,
+                **version_metadata,
+                **_generation_link(task_id, call.call_id),
+            }
             if staged_output_path is None:
                 new_version = await run_noninterruptible_sync(
                     self.versions.add_version,
@@ -1085,6 +1107,7 @@ class MediaGenerator:
                     staged_file=staged_path,
                     current_file=output_path,
                     **version_metadata,
+                    **_generation_link(task_id, call.call_id),
                 )
             else:
                 committed = await run_noninterruptible_sync(commit, staged_path, output_path)
@@ -1427,6 +1450,7 @@ class MediaGenerator:
             _merge_result_provenance(version_metadata, result)
             _collect_result_warnings(warnings, result)
             call.success(result, usage=backend_metered_usage(video_backend, sent_request[0], result))
+            version_metadata.update(_generation_link(task_id, call.call_id))
 
         await self._trash_if_target_deleted(
             resource_type=resource_type,
@@ -1631,6 +1655,10 @@ class MediaGenerator:
                 task_id,
                 job_id,
             )
+
+        # Same link as a first run: the resumed version belongs to the same task and the same ledger call.
+        # 与首跑同一关联：续跑出的版本属于同一个任务、同一条账本调用。
+        version_metadata.update(_generation_link(task_id, api_call_id))
 
         # backend.resume_video has already downloaded the paid result to the requested path. Final media requests write to staging,
         # and the commit callback then saves history and decides whether to select it within one controlled transaction; non-final requests append a version directly.

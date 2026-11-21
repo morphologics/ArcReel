@@ -869,6 +869,8 @@ class UsageRepository(BaseRepository):
                 ApiCall.currency,
                 ApiCall.call_type,
                 ApiCall.duration_ms,
+                ApiCall.id,
+                ApiCall.task_id,
             )
             .where(
                 ApiCall.project_name == project_name,
@@ -890,8 +892,11 @@ class UsageRepository(BaseRepository):
                 "call_type": call_type,
                 # YouReel (owner 2026-11-21): how long the generation took, shown in the version history
                 "duration_ms": duration_ms,
+                # the exact link of versions that record their call (API G16)
+                "id": call_id,
+                "task_id": task_id,
             }
-            for finished_at, provider, model, cost_amount, currency, call_type, duration_ms in rows
+            for finished_at, provider, model, cost_amount, currency, call_type, duration_ms, call_id, task_id in rows
         ]
 
     async def get_unpriced_calls_by_model(self, project_name: str) -> list[tuple[str, str, str, int]]:
@@ -1342,6 +1347,10 @@ class UsageFilters:
     episode: int | None = None
     # Client labels (multi-select, ``api_calls.client``). / 客户端标签（多选，``api_calls.client``）。
     clients: tuple[str, ...] = ()
+    # Incremental sync (API G24): calls that started or finished at or after this moment (inclusive; a call changes
+    # when it starts and when it settles).
+    # 增量同步（API G24）：在此刻或之后开始或结束的调用（含端点；调用在开始与结算时变化）。
+    updated_since: datetime | None = None
 
 
 def _view_clauses(agent: bool | None) -> list[ColumnElement[bool]]:
@@ -1395,6 +1404,10 @@ def usage_filter_clauses(filters: UsageFilters) -> list[ColumnElement[bool]]:
         )
     if filters.clients:
         clauses.append(ApiCall.client.in_(filters.clients))
+    if filters.updated_since is not None:
+        since = as_utc(filters.updated_since)
+        # Two indexed range scans (idx_api_calls_finished_at, idx_api_calls_started_at). / 两条走索引的区间扫描。
+        clauses.append(or_(ApiCall.finished_at >= since, ApiCall.started_at >= since))
     return clauses
 
 

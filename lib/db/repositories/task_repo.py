@@ -7,6 +7,7 @@ import logging
 import time
 import uuid
 from collections.abc import Callable, Collection
+from datetime import UTC, datetime
 from typing import Any
 
 from sqlalchemy import ColumnElement, func, select, text, update
@@ -95,6 +96,11 @@ def _encode_bounded_cascade_failure(*, dependency_task_id: str, reason: str) -> 
             break
         budget = max(budget - overflow, 0)
     return encoded
+
+
+def _as_utc(value: datetime) -> datetime:
+    """Moments without a timezone are taken as UTC. / 无时区的时刻按 UTC 理解。"""
+    return value.replace(tzinfo=UTC) if value.tzinfo is None else value.astimezone(UTC)
 
 
 def _json_dumps(value: Any) -> str:
@@ -252,6 +258,7 @@ class TaskRepository(BaseRepository):
         batch_unit_id: str | None = None,
         batch_unit_ids: tuple[str, ...] = (),
         dedupe_guard: Callable[[dict[str, Any], str], None] | None = None,
+        request_snapshot: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         unit_ids = tuple(dict.fromkeys((*(batch_unit_ids or ()), *((batch_unit_id,) if batch_unit_id else ()))))
         if unit_ids and batch_id is None:
@@ -278,6 +285,9 @@ class TaskRepository(BaseRepository):
             script_file=script_file,
             resource_type=resource_type,
             payload_json=_json_dumps(payload or {}),
+            # A deduplicated enqueue keeps the existing task's snapshot: that task is the attempt.
+            # 被去重的入队保留已有任务的快照：那个任务才是这次尝试。
+            request_snapshot_json=_json_dumps(request_snapshot) if request_snapshot is not None else None,
             status="queued",
             source=source,
             dependency_task_id=dependency_task_id,
@@ -1293,6 +1303,7 @@ class TaskRepository(BaseRepository):
         task_type: str | None = None,
         source: str | None = None,
         batch_id: str | None = None,
+        updated_since: datetime | None = None,
         page: int = 1,
         page_size: int = 50,
     ) -> dict[str, Any]:
@@ -1313,6 +1324,11 @@ class TaskRepository(BaseRepository):
             # Membership is batch_tasks: a deduplicated task adopted by this batch belongs to it too.
             # 成员关系以 batch_tasks 为准：被本批次去重采用的任务也属于本批次。
             filters.append(Task.task_id.in_(select(BatchTask.task_id).where(BatchTask.batch_id == batch_id)))
+        if updated_since is not None:
+            # Incremental sync (API G24): inclusive, so a row written in the same instant as the previous read's
+            # ``server_time`` is not lost; the client dedupes by task id.
+            # 增量同步（API G24）：含端点，与上次读取的 ``server_time`` 同一时刻写入的行不会丢；客户端按任务 id 去重。
+            filters.append(Task.updated_at >= _as_utc(updated_since))
 
         count_stmt = select(func.count()).select_from(Task).where(*filters)
         count_stmt = self._scope_query(count_stmt, Task)
