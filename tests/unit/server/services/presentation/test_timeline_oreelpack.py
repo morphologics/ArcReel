@@ -243,3 +243,50 @@ def test_the_fingerprint_follows_narration_and_bgm(tmp_path: Path) -> None:
     # a BGM has no version: its file's size and time stand in
     (tmp_path / "bgm" / "bgm-1.mp3").write_bytes(b"another mp3")
     assert timeline_oreelpack.media_fingerprint(tmp_path, READOUT, MEDIA) != base
+
+
+async def test_video_media_name_their_shots_still_for_the_clip_thumbnail(
+    service: TimelineOreelPackService, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """YouReel (owner 2026-11-21, Performance): the editor takes each clip's thumbnail from the studio's small image of
+    the shot (the video thumbnail, else the storyboard image, resized by the files route) instead of decoding the
+    video; none when the shot has neither. Not part of the media's identity."""
+    project = tmp_path / "demo"
+    (project / "thumbnails").mkdir()
+    (project / "storyboards").mkdir()
+    (project / "thumbnails" / "scene_E3S01.jpg").write_bytes(b"jpg")
+    (project / "storyboards" / "scene_E3S02.png").write_bytes(b"png")
+    timeline_oreelpack._CACHE.clear()
+    before = await service.cached("demo", "tl-1")
+    timeline_oreelpack._CACHE.clear()
+
+    shots = {
+        "E3S01": {"scene_id": "E3S01", "generated_assets": {"storyboard_image": "storyboards/scene_E3S02.png"}},
+        "E3S02": {"scene_id": "E3S02", "generated_assets": {"storyboard_image": "storyboards/scene_E3S02.png"}},
+        # an untrusted path out of the project is never named
+        "E3S03": {"scene_id": "E3S03", "generated_assets": {"storyboard_image": "../outside.png"}},
+    }
+    (tmp_path / "outside.png").write_bytes(b"png")
+    monkeypatch.setattr(TimelineOreelPackService, "_episode_shots", lambda self, *args: shots)
+    manifest, project_file, _, filename = await _unpack(service)
+    items = {item["name"]: item for item in project_file["project"]["mediaLibrary"]["items"]}
+
+    thumb = project / "thumbnails" / "scene_E3S01.jpg"
+    board = project / "storyboards" / "scene_E3S02.png"
+    assert items["E3S01.mp4"]["thumbnail_url"] == (
+        f"/api/v1/files/demo/thumbnails/scene_E3S01.jpg?w=320&v={thumb.stat().st_mtime_ns}"
+    )
+    assert items["E3S02.mp4"]["thumbnail_url"] == (
+        f"/api/v1/files/demo/storyboards/scene_E3S02.png?w=320&v={board.stat().st_mtime_ns}"
+    )
+    assert items["E3S03.mp4"]["thumbnail_url"] is None
+    # stills and audio carry none; thumbnailUrl stays empty (older editors decode as before)
+    assert all("thumbnail_url" not in item for item in items.values() if item["type"] != "video")
+    assert all(item["thumbnailUrl"] is None for item in items.values())
+
+    # a new still alone doesn't change the media's ids or the pack's name
+    thumb.write_bytes(b"another jpg")
+    again, _, _, again_name = await _unpack(service)
+    assert [a["id"] for a in again["assets"]] == [a["id"] for a in manifest["assets"]]
+    assert again_name == filename == before.filename
+    await asyncio.to_thread(before.workdir.cleanup)

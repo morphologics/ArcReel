@@ -12,7 +12,9 @@ preview media):
   its player doesn't render them);
 - transitions mapped to OpenReel's (dissolve → crossfade, fade to black → dipToBlack, …; squeeze, curtains and the
   gradient wipe approximated); both models centre a transition on the cut;
-- subtitles, narration (dialogue track) and BGM (music track, volume × the loudness gain, fades).
+- subtitles, narration (dialogue track) and BGM (music track, volume × the loudness gain, fades);
+- YouReel (owner 2026-11-21): each video medium names a small image of its shot for the editor's clip thumbnail
+  (``thumbnail_url`` on the media item, see ``_thumbnail_url``), so the editor need not decode every video for it.
 """
 
 from __future__ import annotations
@@ -24,6 +26,7 @@ import struct
 import tempfile
 import time
 import uuid
+from urllib.parse import quote
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from pathlib import Path
@@ -50,6 +53,11 @@ CONTENT_TYPES = {
     ".ogg": "audio/ogg",
     ".flac": "audio/flac",
 }
+
+#: The width of a clip thumbnail the files route serves (``?w=``, see ``lib.infra.image_thumbnails``).
+THUMBNAIL_WIDTH = 320
+#: Images the files route can serve resized.
+_THUMBNAIL_SOURCES = frozenset({".png", ".jpg", ".jpeg", ".webp"})
 
 TRANSITIONS: dict[str, tuple[str, dict[str, Any]]] = {
     "dissolve": ("crossfade", {}),
@@ -171,6 +179,43 @@ def _track(track_id: str, kind: str, role: str, name: str, clips: list[dict], tr
         "muted": False,
         "solo": False,
     }
+
+
+def _thumbnail_url(project_name: str, project_dir: Path, unit_id: str, video: Path, shot: dict | None) -> str | None:
+    """A same-origin URL of a small image of the shot, for the editor's clip thumbnail; None when there is none.
+
+    YouReel (owner 2026-11-21, Performance): the editor decoded one video per clip for its thumbnail (19 decodes,
+    11–13 s on opening an episode). The studio already has the shot's still: the video thumbnail made with the video
+    (``thumbnails/scene_<unit>.jpg``, ``reference_videos/thumbnails/<unit>.jpg`` for a reference video), else the
+    storyboard image. Served resized by the files route (``?w=320``), with the file's modification time as ``v`` (a
+    new still gets a new URL; the route marks ``?v=`` responses immutable). Not part of the media's identity (id or
+    pack fingerprint): a new still alone doesn't make the editor fetch the video again."""
+    reference = video.parent.name == "reference_videos"
+    candidates = [f"reference_videos/thumbnails/{unit_id}.jpg" if reference else f"thumbnails/scene_{unit_id}.jpg"]
+    assets = (shot or {}).get("generated_assets")
+    storyboard = assets.get("storyboard_image") if isinstance(assets, dict) else None
+    if isinstance(storyboard, str) and storyboard:
+        candidates.append(storyboard)
+    root = project_dir.resolve()
+    for relative in candidates:
+        if relative.startswith("/") or "\\" in relative or ".." in relative.split("/"):
+            continue   # the script is untrusted: only plain paths inside the project
+        path = project_dir / relative
+        if path.suffix.lower() not in _THUMBNAIL_SOURCES:
+            continue
+        try:
+            if not path.resolve().is_relative_to(root):
+                continue
+            stat = path.stat()
+        except OSError:
+            continue
+        if not path.is_file() or stat.st_size == 0:
+            continue
+        return (
+            f"/api/v1/files/{quote(project_name, safe='')}/{quote(relative)}"
+            f"?w={THUMBNAIL_WIDTH}&v={stat.st_mtime_ns}"
+        )
+    return None
 
 
 def media_fingerprint(project_dir: Path, readout: EditTimelineReadout, media: TimelinePreviewMedia) -> str:
@@ -327,7 +372,10 @@ class TimelineOreelPackService:
         assets: list[_Asset] = []
         ids: dict[str, str] = {}
 
-        async def add_media(key: str, name: str, kind: str, path: Path, identity: str | None = None, **meta: Any) -> str:
+        async def add_media(
+            key: str, name: str, kind: str, path: Path, identity: str | None = None, thumbnail: str | None = None,
+            **meta: Any,
+        ) -> str:
             if key in ids:
                 return ids[key]
             stat = await asyncio.to_thread(path.stat)
@@ -342,6 +390,8 @@ class TimelineOreelPackService:
             items.append({
                 "id": media_id, "name": name, "type": kind, "fileHandle": None, "blob": None,
                 "thumbnailUrl": None, "waveformData": None, "isPlaceholder": False,
+                # YouReel: the shot's still for the clip thumbnail (``_thumbnail_url``); older editors ignore it
+                **({"thumbnail_url": thumbnail} if kind == "video" else {}),
                 "sourceFile": {"name": name, "size": size, "lastModified": int(time.time() * 1000)},
                 "metadata": {
                     "duration": 0, "width": 0, "height": 0, "frameRate": 0, "codec": "",
@@ -369,8 +419,11 @@ class TimelineOreelPackService:
                 continue
             unit = units.get(clip.unit_id)
             path = await asyncio.to_thread(video_path, clip.unit_id)
+            thumbnail = await asyncio.to_thread(
+                _thumbnail_url, project_name, project_dir, clip.unit_id, path, (shots or {}).get(clip.unit_id)
+            )
             media_id = await add_media(
-                f"{clip.unit_id}@{clip.video_version}", f"{clip.unit_id}.mp4", "video", path,
+                f"{clip.unit_id}@{clip.video_version}", f"{clip.unit_id}.mp4", "video", path, thumbnail=thumbnail,
                 duration=clip.source_duration or 0, width=width, height=height, frameRate=FPS, codec="avc1",
                 hasVideo=True, hasAudio=True,
             )
