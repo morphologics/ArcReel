@@ -130,6 +130,9 @@ class TestProjectArchiveRoutes:
 
         assert response.status_code == 400
         assert response.json()["detail"] == "导入包校验失败"
+        # YouReel (G4): machine-readable code beside the translated detail / 译文 detail 旁的机器可读码
+        assert response.json()["code"] == "arch_import_validation_failed"
+        assert response.json()["params"] == {}
         assert any("project.json" in error for error in response.json()["errors"])
         assert "diagnostics" in response.json()
 
@@ -339,6 +342,7 @@ class TestProjectArchiveDiagnosticsLocalization:
         assert response.status_code == 409
         payload = response.json()
         assert payload["detail"] == "Phát hiện trùng mã dự án"
+        assert payload["code"] == "arch_conflict_detected"
         assert not _has_cjk(payload)
 
     def test_export_diagnostics_use_request_locale(self, tmp_path, monkeypatch):

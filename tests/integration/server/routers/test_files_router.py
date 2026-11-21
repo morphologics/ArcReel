@@ -2120,8 +2120,16 @@ class TestPublicFileRouteServesMediaOnly:
             existing = client.get("/api/v1/files/demo/project.json")
             missing = client.get("/api/v1/files/demo/missing.json")
         assert existing.status_code == missing.status_code == 404
-        assert existing.json() == {"detail": not_found.format(path="project.json")}
-        assert missing.json() == {"detail": not_found.format(path="missing.json")}
+        assert existing.json() == {
+            "detail": not_found.format(path="project.json"),
+            "code": "file_not_found",
+            "params": {"path": "project.json"},
+        }
+        assert missing.json() == {
+            "detail": not_found.format(path="missing.json"),
+            "code": "file_not_found",
+            "params": {"path": "missing.json"},
+        }
 
     def test_media_named_symlink_to_non_media_file_returns_404(self, tmp_path, monkeypatch):
         if sys.platform == "win32":

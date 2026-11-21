@@ -16,6 +16,10 @@ import { findEpisodeItem } from "@/utils/episode-item";
 
 /** Standard error response body from backend (mirrors FastAPI HTTPException detail). */
 export interface ErrorResponse {
+  /** YouReel (G4): stable machine-readable error code (snake_case), e.g. `segment_not_found`, `validation_failed`, or a generic code by status (`not_found`, `conflict`, …). / YouReel（G4）：稳定的机器可读错误码。 */
+  code?: string;
+  /** YouReel (G4): the values the `detail` text was rendered from (no secrets, no server paths); `{}` when none. / YouReel（G4）：渲染 `detail` 所用的值。 */
+  params?: Record<string, unknown>;
   /** Diagnostic or repair info attached by the backend; callers may parse it per request context, never merged into the detail summary. / 后端附加的诊断或修复信息；调用方可按请求语境解析，永不并进 detail 摘要。 */
   diagnostic?: unknown;
   detail:
@@ -98,6 +102,10 @@ export class ApiRequestError extends Error {
     public readonly diagnostic?: unknown,
     /** HTTP status code; callers use it to tell "resource no longer exists" apart from transient network/service errors. / HTTP 状态码；调用方据此区分「资源已不存在」与瞬时网络/服务错误。 */
     public readonly status?: number,
+    /** YouReel (G4): the backend's machine-readable error code; branch on this, never on `message`. / YouReel（G4）：后端的机器可读错误码；按它分支，不按 `message`。 */
+    public readonly code?: string,
+    /** YouReel (G4): the values `message` was rendered from. / YouReel（G4）：`message` 的渲染参数。 */
+    public readonly params?: Record<string, unknown>,
   ) {
     super(message);
     this.name = "ApiRequestError";
@@ -191,6 +199,22 @@ export function messageFromDetail(detail: unknown, fallback: string): string {
     if (typeof message === "string" && message) return message;
   }
   return fallback;
+}
+
+/** YouReel (G4): the `code` of an error body when it is a string. / YouReel（G4）：错误体里为字符串的 `code`。 */
+export function errorCode(body: unknown): string | undefined {
+  if (!body || typeof body !== "object" || Array.isArray(body)) return undefined;
+  const code = (body as { code?: unknown }).code;
+  return typeof code === "string" ? code : undefined;
+}
+
+/** YouReel (G4): the `params` of an error body when it is an object. / YouReel（G4）：错误体里为对象的 `params`。 */
+export function errorParams(body: unknown): Record<string, unknown> | undefined {
+  if (!body || typeof body !== "object" || Array.isArray(body)) return undefined;
+  const params = (body as { params?: unknown }).params;
+  return params && typeof params === "object" && !Array.isArray(params)
+    ? (params as Record<string, unknown>)
+    : undefined;
 }
 
 export function isAgentFailureDetail(value: unknown): value is AgentFailureDetail {

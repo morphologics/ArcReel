@@ -101,7 +101,7 @@ def test_send_and_rewrite_return_same_localized_422_for_oversized_image(
         response = client.post(path, json=body, headers={"Accept-Language": locale})
 
     assert response.status_code == 422
-    assert response.json() == {"detail": expected_detail}
+    assert response.json() == {"detail": expected_detail, "code": "assistant_image_too_large", "params": {}}
     service_call.assert_not_awaited()
 
 
@@ -132,5 +132,9 @@ def test_send_and_rewrite_return_same_localized_422_for_oversized_image_total(
         response = client.post(path, json=body, headers={"Accept-Language": "en"})
 
     assert response.status_code == 422
-    assert response.json() == {"detail": "The images must be no larger than 7.5 MB in total"}
+    assert response.json() == {
+        "detail": "The images must be no larger than 7.5 MB in total",
+        "code": "assistant_images_total_too_large",
+        "params": {},
+    }
     service_call.assert_not_awaited()

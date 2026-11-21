@@ -7,7 +7,9 @@ from pathlib import Path
 
 import pytest
 from fastapi import FastAPI
+from fastapi.exceptions import RequestValidationError
 from fastapi.testclient import TestClient
+from starlette.exceptions import HTTPException as StarletteHTTPException
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from lib.catalog.errors import ModelNotInCatalogError
@@ -244,8 +246,24 @@ class TestRealAppRegistration:
             ScriptEditError,
             FileNotFoundError,
             Exception,
+            StarletteHTTPException,
+            RequestValidationError,
         ):
             assert exc_type in real_app.exception_handlers, f"{exc_type} 未注册 app 级 handler"
+
+    def test_openapi_documents_the_error_body(self):
+        """YouReel (G4): every operation lists the shared ErrorResponse for 4XX / 5XX.
+
+        YouReel（G4）：每个操作都为 4XX / 5XX 列出共用的 ErrorResponse。"""
+        from server.app import app as real_app
+
+        spec = real_app.openapi()
+        schema = spec["components"]["schemas"]["ErrorResponse"]
+        assert {"detail", "code", "params"} <= set(schema["properties"])
+        operation = spec["paths"]["/api/v1/projects"]["get"]
+        assert operation["responses"]["4XX"]["content"]["application/json"]["schema"] == {
+            "$ref": "#/components/schemas/ErrorResponse"
+        }
 
 
 def _make_cors_client(allow_origins, allow_credentials) -> TestClient:
@@ -308,3 +326,249 @@ class TestUnexpectedErrorCorsHeaders:
         resp = client.get("/unexpected", headers={"Origin": "https://example.com"})
         assert resp.status_code == 500
         assert resp.headers.get("access-control-allow-origin") == "*"
+
+
+def _make_g4_client() -> TestClient:
+    """YouReel (G4): routes exercising the machine-readable ``code`` / ``params`` of every error kind.
+
+    YouReel（G4）：覆盖各类错误的机器可读 ``code`` / ``params`` 的路由。"""
+    from fastapi import HTTPException
+    from pydantic import BaseModel
+
+    from server.i18n import Translator
+
+    app = FastAPI()
+    register_error_handlers(app)
+
+    class _Body(BaseModel):
+        name: str
+        count: int
+
+    @app.get("/http-keyed")
+    async def _http_keyed(_t: Translator):
+        raise HTTPException(status_code=404, detail=_t("segment_not_found", id="E1S01"))
+
+    @app.get("/http-keyed-secret")
+    async def _http_keyed_secret(_t: Translator):
+        raise HTTPException(
+            status_code=400,
+            detail=_t("file_not_found", path=_SERVER_PATH, api_key="sk-secret-value"),
+        )
+
+    @app.get("/http-nested")
+    async def _http_nested(_t: Translator):
+        raise HTTPException(
+            status_code=400, detail=_t("script_data_corrupted", reason=_t("script_edit_error"))
+        )
+
+    @app.get("/http-literal")
+    async def _http_literal():
+        raise HTTPException(status_code=409, detail="The studio agent has no model configured.")
+
+    @app.get("/http-bare-code")
+    async def _http_bare_code():
+        raise HTTPException(status_code=404, detail="no_editor_save")
+
+    @app.get("/http-structured")
+    async def _http_structured():
+        raise HTTPException(status_code=413, detail={"code": "media_too_large", "asset_id": "a1"})
+
+    @app.get("/http-unauthorized")
+    async def _http_unauthorized():
+        raise HTTPException(status_code=401, detail="Not authenticated", headers={"WWW-Authenticate": "Bearer"})
+
+    @app.get("/api-error-params")
+    async def _api_error_params():
+        raise NotFoundError("segment_not_found", id="E1S01")
+
+    @app.get("/api-error-diagnostic")
+    async def _api_error_diagnostic():
+        raise UnprocessableError("script_validation_failed").with_diagnostic("scenes[0].shots must be a list")
+
+    @app.get("/active-video-request-conflict")
+    async def _active_video_request_conflict():
+        raise ActiveTaskRequestConflict(resource_id="E1S01", existing_task_id="task-existing")
+
+    @app.get("/model-not-in-catalog")
+    async def _model_not_in_catalog():
+        raise ModelNotInCatalogError(provider_id="ark", model_id="doubao-seed-1-8-251228", media_type="text")
+
+    @app.get("/task-spec-error")
+    async def _task_spec_error():
+        raise TaskSpecValidationError("prompt_text_empty")
+
+    @app.get("/script-edit-error-keyed")
+    async def _script_edit_error_keyed():
+        raise ScriptEditError("x", key="script_edit_items_not_list", kind="segments", type_name="NoneType")
+
+    @app.post("/validated")
+    async def _validated(body: _Body):
+        return body
+
+    @app.get("/file-not-found")
+    async def _file_not_found():
+        raise FileNotFoundError(f"剧本文件不存在: {_SERVER_PATH}")
+
+    @app.get("/unexpected")
+    async def _unexpected():
+        raise RuntimeError(f"boom at {_SERVER_PATH}")
+
+    return TestClient(app, raise_server_exceptions=False)
+
+
+class TestMachineReadableErrors:
+    """YouReel (G4): every error body is ``{"detail", "code", "params", "diagnostic"?}``; ``detail`` is unchanged.
+
+    YouReel（G4）：每个错误体都是 ``{"detail", "code", "params", "diagnostic"?}``；``detail`` 不变。"""
+
+    def test_http_exception_with_translated_detail_gets_key_and_params(self):
+        resp = _make_g4_client().get("/http-keyed", headers={"Accept-Language": "en"})
+        assert resp.status_code == 404
+        assert resp.json() == {
+            "detail": "Segment 'E1S01' does not exist",
+            "code": "segment_not_found",
+            "params": {"id": "E1S01"},
+        }
+
+    def test_params_hide_secrets_and_server_paths(self):
+        resp = _make_g4_client().get("/http-keyed-secret")
+        body = resp.json()
+        assert body["code"] == "file_not_found"
+        assert body["params"] == {"path": "<path>"}
+        assert "sk-secret-value" not in resp.text
+
+    def test_nested_rendered_param_carries_its_code(self):
+        body = _make_g4_client().get("/http-nested").json()
+        assert body["code"] == "script_data_corrupted"
+        assert body["params"]["reason"] == _("script_edit_error")
+        assert body["params"]["reason_code"] == "script_edit_error"
+
+    @pytest.mark.parametrize(
+        ("path", "status", "code"),
+        [
+            ("/http-literal", 409, "conflict"),
+            ("/http-bare-code", 404, "no_editor_save"),
+            ("/http-structured", 413, "media_too_large"),
+            ("/http-unauthorized", 401, "unauthorized"),
+        ],
+    )
+    def test_http_exception_without_key_gets_detail_code_or_generic_code(self, path, status, code):
+        resp = _make_g4_client().get(path)
+        assert resp.status_code == status
+        body = resp.json()
+        assert body["code"] == code
+        assert body["params"] == {}
+
+    def test_structured_detail_is_kept_as_is(self):
+        body = _make_g4_client().get("/http-structured").json()
+        assert body["detail"] == {"code": "media_too_large", "asset_id": "a1"}
+
+    def test_http_exception_keeps_headers(self):
+        resp = _make_g4_client().get("/http-unauthorized")
+        assert resp.headers.get("www-authenticate") == "Bearer"
+        assert resp.json()["detail"] == "Not authenticated"
+
+    def test_unknown_route_and_method_get_generic_codes(self):
+        client = _make_g4_client()
+        missing = client.get("/no-such-route")
+        assert missing.status_code == 404
+        assert missing.json() == {"detail": "Not Found", "code": "not_found", "params": {}}
+        wrong_method = client.delete("/http-keyed")
+        assert wrong_method.status_code == 405
+        assert wrong_method.json()["code"] == "method_not_allowed"
+
+    def test_domain_error_with_params(self):
+        resp = _make_g4_client().get("/api-error-params")
+        assert resp.json() == {"detail": "分镜 'E1S01' 不存在", "code": "segment_not_found", "params": {"id": "E1S01"}}
+
+    def test_domain_error_with_diagnostic(self):
+        body = _make_g4_client().get("/api-error-diagnostic").json()
+        assert body["code"] == "script_validation_failed"
+        assert body["params"] == {}
+        assert body["diagnostic"] == "scenes[0].shots must be a list"
+
+    @pytest.mark.parametrize(
+        ("path", "code", "params"),
+        [
+            (
+                "/active-video-request-conflict",
+                "video_request_conflicts_with_active_task",
+                {"resource_id": "E1S01", "existing_task_id": "task-existing"},
+            ),
+            (
+                "/model-not-in-catalog",
+                "model_not_in_provider_catalog",
+                {"provider": "ark", "model": "doubao-seed-1-8-251228"},
+            ),
+            ("/task-spec-error", "prompt_text_empty", {}),
+            (
+                "/script-edit-error-keyed",
+                "script_data_corrupted",
+                {
+                    "reason_code": "script_edit_items_not_list",
+                    "reason_params": {"kind": "segments", "type_name": "NoneType"},
+                },
+            ),
+        ],
+    )
+    def test_lib_exceptions_carry_their_codes(self, path, code, params):
+        body = _make_g4_client().get(path).json()
+        assert body["code"] == code
+        assert body["params"] == params
+
+    def test_request_validation_keeps_detail_list_and_adds_compact_errors(self):
+        resp = _make_g4_client().post("/validated", json={"name": "x", "count": "not-a-number"})
+        assert resp.status_code == 422
+        body = resp.json()
+        assert body["code"] == "validation_failed"
+        # detail stays FastAPI's list, so existing consumers keep reading ``msg`` / ``loc``
+        # detail 保持 FastAPI 的列表，既有消费方照旧读 ``msg`` / ``loc``
+        assert isinstance(body["detail"], list)
+        assert body["detail"][0]["loc"] == ["body", "count"]
+        assert "input" in body["detail"][0]
+        assert body["params"]["errors"] == [
+            {"type": body["detail"][0]["type"], "loc": ["body", "count"], "msg": body["detail"][0]["msg"]}
+        ]
+
+    def test_file_not_found_has_code_without_path(self):
+        resp = _make_g4_client().get("/file-not-found")
+        assert resp.json() == {"detail": "请求的资源不存在", "code": "resource_not_found", "params": {}}
+        assert _SERVER_PATH not in resp.text
+
+    def test_unexpected_500_has_code_without_details(self):
+        resp = _make_g4_client().get("/unexpected")
+        assert resp.status_code == 500
+        assert resp.json() == {"detail": "服务器内部错误，请稍后重试", "code": "internal_server_error", "params": {}}
+        assert "boom" not in resp.text
+        assert _SERVER_PATH not in resp.text
+
+
+class TestMachineParams:
+    """YouReel (G4): the param encoder alone. / YouReel（G4）：参数编码器本身。"""
+
+    def test_relative_paths_and_urls_stay(self):
+        from server.error_handlers import machine_params
+
+        params = machine_params(None, {"path": "scripts/episode_1.json", "url": "https://example.com/a/b"})
+        assert params == {"path": "scripts/episode_1.json", "url": "https://example.com/a/b"}
+
+    def test_absolute_paths_masked_inside_text_and_nested_values(self):
+        from server.error_handlers import machine_params
+
+        params = machine_params(None, {"err_msg": "cannot open /srv/data/x.json now", "gaps": [{"p": "C:\\data\\x"}]})
+        assert params == {"err_msg": "cannot open <path> now", "gaps": [{"p": "<path>"}]}
+
+    def test_credentials_dropped_by_name(self):
+        from server.error_handlers import machine_params
+
+        params = machine_params(None, {"api_key": "k", "token": "t", "max_tokens": 5, "key_id": "abc"})
+        assert params == {"max_tokens": 5, "key_id": "abc"}
+
+    def test_unserializable_values_become_text(self):
+        from server.error_handlers import machine_params
+
+        class _Opaque:
+            def __str__(self) -> str:
+                return "opaque"
+
+        assert machine_params(None, {"value": _Opaque()}) == {"value": "opaque"}

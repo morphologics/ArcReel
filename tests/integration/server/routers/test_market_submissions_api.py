@@ -211,7 +211,12 @@ async def test_submission_error_code_lands_in_local_response(
             response = await client.post("/market/submissions", json={"endpoint_id": endpoint_id, "slug": "acme"})
         listed = await _list_without_outbound(client)
     assert response.status_code == status
-    assert response.json() == {"detail": detail, "diagnostic": {"official_service": {"code": code, "params": params}}}
+    body = response.json()
+    # YouReel (G4): the local i18n key is the machine code; the remote code is in params
+    # YouReel（G4）：本地 i18n key 即机器码；远端码在 params 里
+    assert body.pop("code").startswith("official_service_error")
+    assert body.pop("params")["code"] == code
+    assert body == {"detail": detail, "diagnostic": {"official_service": {"code": code, "params": params}}}
     assert listed == []
 
 

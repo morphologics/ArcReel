@@ -139,6 +139,26 @@ describe("API", () => {
       const error = await API.request("/projects/missing").catch((e: unknown) => e);
 
       expect((error as ApiRequestError).diagnostic).toBeUndefined();
+      expect((error as ApiRequestError).code).toBeUndefined();
+      expect((error as ApiRequestError).params).toBeUndefined();
+    });
+
+    it("carries the machine-readable code and params beside the message (YouReel G4)", async () => {
+      const fetchMock = vi.fn().mockResolvedValue(
+        mockResponse({
+          ok: false,
+          jsonData: { detail: "分镜 'E1S01' 不存在", code: "segment_not_found", params: { id: "E1S01" } },
+          statusText: "Not Found",
+        }),
+      );
+      vi.stubGlobal("fetch", fetchMock);
+
+      const error = await API.request("/projects/demo/shots/E1S01").catch((e: unknown) => e);
+
+      expect(error).toBeInstanceOf(ApiRequestError);
+      expect((error as ApiRequestError).message).toBe("分镜 'E1S01' 不存在");
+      expect((error as ApiRequestError).code).toBe("segment_not_found");
+      expect((error as ApiRequestError).params).toEqual({ id: "E1S01" });
     });
 
     it("keeps the backend message of a structured error envelope", async () => {

@@ -43,12 +43,64 @@ def get_locale(request: Request) -> str:
     return DEFAULT_LOCALE
 
 
+#: YouReel (G4 machine-readable errors): how many rendered messages one request remembers. A request renders a handful
+#: of messages; the cap only guards against a loop rendering thousands (e.g. a list endpoint labelling every row).
+#: YouReel（G4 机器可读错误）：单个请求记住的已渲染文案上限。请求通常只渲染几条；上限只防循环渲染成千上万条。
+_RENDERED_LIMIT = 256
+
+
+def _rendered_messages(request: Request) -> dict[str, tuple[str, dict[str, Any]]]:
+    """YouReel (G4): the request's record of rendered text → (i18n key, params), kept in the request state.
+
+    ``request.state`` lives in the ASGI scope, so the exception handlers (which get their own ``Request`` object for the
+    same scope) read the same record. A stand-in request without state gets a throwaway record.
+
+    YouReel（G4）：请求内「已渲染文案 → (i18n key, params)」的记录，存于 request state。
+    ``request.state`` 在 ASGI scope 里，异常处理器（同一 scope 的另一个 ``Request`` 对象）读到同一份记录。
+    """
+    try:
+        state = request.state
+        record = getattr(state, "i18n_rendered", None)
+        if record is None:
+            record = {}
+            state.i18n_rendered = record
+        return record
+    except (AttributeError, KeyError):
+        return {}
+
+
+def rendered_message_source(request: Request, text: object) -> tuple[str, dict[str, Any]] | None:
+    """YouReel (G4): the (i18n key, params) a request translator used to render ``text``; None when ``text`` was not
+    rendered by this request's translator (composed text, a literal, another request's translator).
+
+    The error handlers use it to give an ``HTTPException(detail=_t("key", **params))`` its machine ``code`` and
+    ``params`` without touching the ~360 raise sites.
+
+    YouReel（G4）：本请求的 translator 渲染 ``text`` 时用的 (i18n key, params)；不是本请求 translator
+    渲染的文案（拼接文本、字面量）返回 None。错误处理器据此为 ``HTTPException(detail=_t("key", **params))``
+    补上机器 ``code`` 与 ``params``，不必改动约 360 处 raise。
+    """
+    if not isinstance(text, str):
+        return None
+    return _rendered_messages(request).get(text)
+
+
 def get_translator(request: Request) -> Callable[..., str]:
-    """Dependency to get a translator function for the current request."""
+    """Dependency to get a translator function for the current request.
+
+    YouReel (G4): every rendering is also recorded (text → key, params) for the error handlers, see
+    ``rendered_message_source``. The returned text is a plain ``str``, as before.
+    """
     locale = get_locale(request)
+    rendered = _rendered_messages(request)
 
     def translate(key: str, **kwargs: Any) -> str:
-        return _(key, locale=locale, **kwargs)
+        text = _(key, locale=locale, **kwargs)
+        # The latest rendering of a text wins: it is the one closest to the raise.
+        # 同一文案以最近一次渲染为准：离 raise 最近。
+        if text in rendered or len(rendered) < _RENDERED_LIMIT:
+            rendered[text] = (key, dict(kwargs))
+        return text
 
     return translate
 

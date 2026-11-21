@@ -18,6 +18,8 @@ import {
   ReferenceProjectionError,
   ScriptEditCommandError,
   SpeechAdmissionError,
+  errorCode,
+  errorParams,
   isAgentFailureDetail,
   isReferenceProjectionAdmission,
   isScriptEditResult,
@@ -52,7 +54,13 @@ export async function throwIfNotOk(response: Response, fallbackMsg: string): Pro
     if (isSpeechAdmission(detail)) {
       throw new SpeechAdmissionError(detail);
     }
-    throw new ApiRequestError(messageFromDetail(detail, fallbackMsg), error.diagnostic, response.status);
+    throw new ApiRequestError(
+      messageFromDetail(detail, fallbackMsg),
+      error.diagnostic,
+      response.status,
+      errorCode(error),
+      errorParams(error),
+    );
   }
 }
 
@@ -287,7 +295,13 @@ export async function requestJson<T = unknown>(
     if (isSpeechAdmission(error.detail)) {
       throw new SpeechAdmissionError(error.detail);
     }
-    throw new ApiRequestError(messageFromDetail(error.detail, i18n.t("errors:request_failed")), error.diagnostic, response.status);
+    throw new ApiRequestError(
+      messageFromDetail(error.detail, i18n.t("errors:request_failed")),
+      error.diagnostic,
+      response.status,
+      errorCode(error),
+      errorParams(error),
+    );
   }
 
   if (response.status === 204) {

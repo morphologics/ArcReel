@@ -111,6 +111,7 @@ from lib.workflow.workflow_state import (
 )
 from server.auth import CurrentUser, create_download_token, reject_embedded_agent, verify_download_token
 from server.dependencies import require_project_migration_ok
+from server.error_handlers import code_or_generic, machine_params
 from server.i18n import DisplayNamesCatalog, Locale, Translator
 from server.routers._coalesce import RequestCoalescer
 from server.routers._episode_source_errors import episode_source_http_error
@@ -571,6 +572,10 @@ async def import_project_archive(
             status_code=exc.status_code,
             content={
                 "detail": exc.detail.render(_t),
+                # YouReel (G4): machine-readable code + params, as every error body
+                # YouReel（G4）：与所有错误体一致的机器可读 code + params
+                "code": code_or_generic(exc.detail.key, exc.status_code),
+                "params": machine_params(None, exc.detail.params),
                 "errors": exc.render_errors(_t),
                 "warnings": exc.render_warnings(_t),
                 "diagnostics": exc.diagnostics_payload(_t),
@@ -581,7 +586,13 @@ async def import_project_archive(
         logger.exception("请求处理失败")
         return JSONResponse(
             status_code=500,
-            content={"detail": _t("internal_server_error"), "errors": [], "warnings": []},
+            content={
+                "detail": _t("internal_server_error"),
+                "code": "internal_server_error",
+                "params": {},
+                "errors": [],
+                "warnings": [],
+            },
         )
     finally:
         await file.close()

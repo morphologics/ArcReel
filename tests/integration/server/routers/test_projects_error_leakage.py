@@ -378,3 +378,7 @@ class TestUnexpectedErrorsDoNotLeak:
             )
             assert resp.status_code == 500
             assert sentinel not in self._body(resp)
+            # YouReel (G4): the import's own error body carries the machine code too
+            # YouReel（G4）：导入自身的错误体同样带机器码
+            assert resp.json()["code"] == "internal_server_error"
+            assert resp.json()["params"] == {}

@@ -80,7 +80,7 @@ from lib.script.source_loader.migration import migrate_project_source_encoding, 
 from server.auth import ensure_auth_password, ensure_token_secret, get_current_user, warn_if_auth_disabled
 from server.cors_config import resolve_cors_policy
 from server.dependencies import require_project_migration_ok, require_valid_project_name
-from server.error_handlers import register_error_handlers
+from server.error_handlers import ERROR_RESPONSES, register_error_handlers
 from server.remote_mcp import mount_remote_mcp, remote_mcp_host
 from server.routers import (
     activity,
@@ -714,6 +714,8 @@ app = FastAPI(
     version="1.0.0",
     lifespan=lifespan,
     dependencies=[Depends(require_valid_project_name)],
+    # YouReel (G4): document the shared error body on every operation / 在每个操作上记录共用的错误体
+    responses=ERROR_RESPONSES,
 )
 
 # CORS config (env-driven, parsed in server/cors_config.py; the remote MCP mount shares the same allowlist). Must be
