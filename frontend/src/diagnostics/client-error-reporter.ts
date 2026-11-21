@@ -18,7 +18,7 @@
 
 import { API_BASE, setRequestFailureObserver, withAuth, type RequestFailure } from "@/api/transport";
 import { useAppStore } from "@/stores/app-store";
-import type { ClientErrorDetail, ClientErrorEntry, ClientErrorKind } from "@/types/client-errors";
+import type { ClientErrorDetail, ClientErrorEntry } from "@/types/client-errors";
 
 export const CLIENT_ERRORS_ENDPOINT = "/diagnostics/client-errors";
 export const REPORT_DEDUPE_MS = 10_000;
@@ -84,9 +84,10 @@ let timer: ReturnType<typeof setTimeout> | null = null;
 
 /**
  * Record one error (deduped, capped, batched). Callers with a better label than the automatic hooks (a component or
- * an action) may call it themselves; it does nothing before {@link startClientErrorReporter}.
+ * an action) may call it themselves; it does nothing before {@link startClientErrorReporter}. The performance reporter
+ * (perf-reporter.ts) sends its `perf` / `jank` records through here too, so they share the batching and the cap.
  */
-export function recordClientError(kind: ClientErrorKind, message: string, detail: ClientErrorDetail = {}): void {
+export function recordClientError(kind: ClientErrorEntry["kind"], message: string, detail: ClientErrorDetail = {}): void {
   try {
     if (!started || recorded >= REPORTS_PER_PAGE_LOAD) return;
     const text = trim(message.trim() || kind, MESSAGE_MAX);

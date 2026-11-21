@@ -9,6 +9,7 @@ import { exposeStudioNavigate } from "@/components/canvas/edit/open-in-openreel"
 import { StudioWakingOverlay } from "@/components/shared/StudioWakingOverlay";
 import { startActivitySignal } from "@/api/activity-signal";
 import { startClientErrorReporter } from "@/diagnostics/client-error-reporter";
+import { startPerfReporter } from "@/diagnostics/perf-reporter";
 
 import "@fontsource-variable/inter";
 import "@fontsource-variable/jetbrains-mono";
@@ -42,6 +43,8 @@ startActivitySignal();
 // YouReel: errors the member hits (error toasts, uncaught exceptions, failed requests) go to the studio's error log
 // (Settings → Options → Diagnostics)
 startClientErrorReporter();
+// YouReel: one page-load performance record, and jank (main thread blocked) records, into the same log
+startPerfReporter();
 
 const root = document.getElementById("app-root");
 if (root) {

@@ -196,7 +196,7 @@ import type {
   AssetSheetStatusRow,
   AssetSheetType,
 } from "@/types/asset-sheet";
-import type { ClientErrorList } from "@/types/client-errors";
+import type { ClientErrorList, ReportKind } from "@/types/client-errors";
 import type {
   StoryboardBatchKind,
   StoryboardBatchPreview,
@@ -536,14 +536,18 @@ class API {
   // Reporting goes out from src/diagnostics/client-error-reporter.ts by its own fetch (never through request(), so its
   // failures are not reported again); these two serve Settings → Options → Diagnostics.
 
-  /** The newest client error reports the studio keeps, newest first. */
-  static async listClientErrors(options: { limit?: number; signal?: AbortSignal } = {}): Promise<ClientErrorList> {
-    return this.request(`/diagnostics/client-errors?limit=${options.limit ?? 200}`, { signal: options.signal });
+  /** The newest client error reports the studio keeps (of `kinds` when given), newest first. */
+  static async listClientErrors(
+    options: { limit?: number; kinds?: readonly ReportKind[]; signal?: AbortSignal } = {},
+  ): Promise<ClientErrorList> {
+    const kinds = options.kinds?.length ? `&kind=${options.kinds.join(",")}` : "";
+    return this.request(`/diagnostics/client-errors?limit=${options.limit ?? 200}${kinds}`, { signal: options.signal });
   }
 
-  /** Delete every client error report. */
-  static async clearClientErrors(): Promise<{ deleted: number }> {
-    return this.request("/diagnostics/client-errors", { method: "DELETE" });
+  /** Delete every client error report, or only those of `kinds`. */
+  static async clearClientErrors(options: { kinds?: readonly ReportKind[] } = {}): Promise<{ deleted: number }> {
+    const kinds = options.kinds?.length ? `?kind=${options.kinds.join(",")}` : "";
+    return this.request(`/diagnostics/client-errors${kinds}`, { method: "DELETE" });
   }
 
   static async downloadDiagnostics(): Promise<{ blob: Blob; filename: string }> {

@@ -2,14 +2,14 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Collection, Sequence
 from dataclasses import dataclass
 from typing import Any
 
 from sqlalchemy import delete, select
 
 from lib.db.base import utc_now
-from lib.db.models.client_error_report import CLIENT_ERROR_REPORTS_KEPT, ClientErrorReport
+from lib.db.models.client_error_report import ClientErrorReport, kept_for, kind_group
 from lib.db.repositories.base import BaseRepository, rowcount
 
 
@@ -25,8 +25,10 @@ class NewClientErrorReport:
 
 
 class ClientErrorReportRepository(BaseRepository):
-    async def add_many(self, reports: Sequence[NewClientErrorReport], *, keep: int = CLIENT_ERROR_REPORTS_KEPT) -> int:
-        """Insert the reports, then prune so only the newest ``keep`` rows stay. Returns how many were inserted."""
+    async def add_many(self, reports: Sequence[NewClientErrorReport], *, keep: int | None = None) -> int:
+        """Insert the reports, then prune each kind group they touch (errors / performance records, see
+        ``kind_group``) so only its newest rows stay: ``keep`` rows, or the group's own cap (``kept_for``) when not
+        given. Returns how many were inserted."""
         now = utc_now()
         for report in reports:
             self.session.add(
@@ -40,21 +42,36 @@ class ClientErrorReportRepository(BaseRepository):
                 )
             )
         await self.session.flush()
-        # The id of the oldest row still kept; everything older goes (ids are monotonic, see the model)
-        cutoff = await self.session.scalar(
-            select(ClientErrorReport.id).order_by(ClientErrorReport.id.desc()).offset(keep - 1).limit(1)
-        )
-        if cutoff is not None:
-            await self.session.execute(delete(ClientErrorReport).where(ClientErrorReport.id < cutoff))
+        groups = {kind_group(report.kind) for report in reports}
+        for group in groups:
+            kept = keep if keep is not None else kept_for(next(iter(group)))
+            in_group = ClientErrorReport.kind.in_(sorted(group))
+            # The id of the group's oldest row still kept; the group's older rows go (ids are monotonic, see the model)
+            cutoff = await self.session.scalar(
+                select(ClientErrorReport.id)
+                .where(in_group)
+                .order_by(ClientErrorReport.id.desc())
+                .offset(kept - 1)
+                .limit(1)
+            )
+            if cutoff is not None:
+                await self.session.execute(delete(ClientErrorReport).where(in_group, ClientErrorReport.id < cutoff))
         return len(reports)
 
-    async def list_recent(self, limit: int) -> list[ClientErrorReport]:
-        """The newest ``limit`` reports, newest first."""
-        result = await self.session.execute(
-            select(ClientErrorReport).order_by(ClientErrorReport.id.desc()).limit(limit)
-        )
+    async def list_recent(self, limit: int, *, kinds: Collection[str] | None = None) -> list[ClientErrorReport]:
+        """The newest ``limit`` reports (of ``kinds`` when given), newest first."""
+        query = select(ClientErrorReport)
+        if kinds:
+            query = query.where(ClientErrorReport.kind.in_(sorted(kinds)))
+        result = await self.session.execute(query.order_by(ClientErrorReport.id.desc()).limit(limit))
         return list(result.scalars())
 
-    async def clear(self) -> int:
-        """Delete every report; returns how many were deleted."""
-        return rowcount(await self.session.execute(delete(ClientErrorReport)))
+    async def clear(self, *, kinds: Collection[str] | None = None, min_id: int | None = None) -> int:
+        """Delete every report, or only those of ``kinds`` and / or with an id of at least ``min_id``; returns how
+        many were deleted."""
+        query = delete(ClientErrorReport)
+        if kinds:
+            query = query.where(ClientErrorReport.kind.in_(sorted(kinds)))
+        if min_id is not None:
+            query = query.where(ClientErrorReport.id >= min_id)
+        return rowcount(await self.session.execute(query))

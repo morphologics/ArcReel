@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useId, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import { ChevronRight, Loader2, RefreshCw, Trash2 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
@@ -18,7 +18,105 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
-import type { ClientErrorReport } from "@/types/client-errors";
+import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
+import type { ClientErrorReport, PerfResource, ReportKind } from "@/types/client-errors";
+
+/** The list's filter: which kinds it loads (none = all) */
+const FILTERS = {
+  all: undefined,
+  errors: ["toast", "exception", "request"],
+  perf: ["perf"],
+  jank: ["jank"],
+  server_slow: ["server_slow"],
+} as const satisfies Record<string, readonly ReportKind[] | undefined>;
+type Filter = keyof typeof FILTERS;
+const FILTER_IDS = Object.keys(FILTERS) as Filter[];
+const PERF_KINDS: ReadonlySet<string> = new Set(["perf", "jank", "server_slow"]);
+const SUMMARY_ROWS = 3;
+const SUMMARY_FILES = 5;
+
+function formatMs(ms: number): string {
+  return ms >= 1000 ? `${(ms / 1000).toFixed(1)} s` : `${Math.round(ms)} ms`;
+}
+
+function formatBytes(bytes: number): string {
+  if (bytes >= 1_048_576) return `${(bytes / 1_048_576).toFixed(1)} MB`;
+  if (bytes >= 1024) return `${Math.round(bytes / 1024)} KB`;
+  return `${Math.round(bytes)} B`;
+}
+
+/** A metric shown by its unit: `*_ms` durations, `*_bytes` sizes, anything else as a count. */
+function formatMetric(name: string, value: number): string {
+  if (name.endsWith("_ms")) return formatMs(value);
+  if (name.endsWith("_bytes")) return formatBytes(value);
+  return String(value);
+}
+
+function resourceWeight(resource: PerfResource): number {
+  return Math.max(resource.transfer_bytes, resource.decoded_bytes);
+}
+
+interface SummaryLine {
+  key: string;
+  value: string;
+  label: string;
+}
+
+/** The compact performance summary, from the loaded rows: slowest loads / Editor opens, heaviest files, worst jank,
+ * slowest server paths. */
+function perfSummary(
+  reports: readonly ClientErrorReport[],
+  packOpen: string,
+): { id: string; lines: SummaryLine[] }[] {
+  const metric = (report: ClientErrorReport, name: string) => report.detail?.metrics?.[name];
+  const page = (report: ClientErrorReport) => report.detail?.page ?? "?";
+  const top = (list: ClientErrorReport[], value: (report: ClientErrorReport) => number | undefined) =>
+    list
+      .map((report) => ({ report, value: value(report) }))
+      .filter((row): row is { report: ClientErrorReport; value: number } => row.value !== undefined)
+      .sort((a, b) => b.value - a.value)
+      .slice(0, SUMMARY_ROWS);
+
+  const perf = reports.filter((report) => report.kind === "perf");
+  const loads = top(perf, (report) => metric(report, "open_ms") ?? metric(report, "load_ms")).map(({ report, value }) => ({
+    key: String(report.id),
+    value: formatMs(value),
+    label: report.detail?.tag === "pack_open" ? `${page(report)} · ${packOpen}` : page(report),
+  }));
+
+  const files = new Map<string, PerfResource>();
+  for (const report of perf) {
+    for (const resource of report.detail?.top_resources ?? []) {
+      const seen = files.get(resource.path);
+      if (!seen || resourceWeight(resource) > resourceWeight(seen)) files.set(resource.path, resource);
+    }
+  }
+  const heaviest = [...files.values()]
+    .sort((a, b) => resourceWeight(b) - resourceWeight(a))
+    .slice(0, SUMMARY_FILES)
+    .map((resource) => ({ key: resource.path, value: formatBytes(resourceWeight(resource)), label: resource.path }));
+
+  const jank = top(
+    reports.filter((report) => report.kind === "jank"),
+    (report) => metric(report, "blocked_ms"),
+  ).map(({ report, value }) => ({ key: String(report.id), value: formatMs(value), label: page(report) }));
+
+  const server = top(
+    reports.filter((report) => report.kind === "server_slow"),
+    (report) => (report.detail?.tag === "stream" ? metric(report, "ttfb_ms") : metric(report, "wall_ms")),
+  ).map(({ report, value }) => ({
+    key: String(report.id),
+    value: formatMs(value),
+    label: `${report.detail?.method ?? ""} ${report.detail?.api_path ?? "?"}`.trim(),
+  }));
+
+  return [
+    { id: "loads", lines: loads },
+    { id: "files", lines: heaviest },
+    { id: "jank", lines: jank },
+    { id: "server", lines: server },
+  ].filter((section) => section.lines.length > 0);
+}
 
 function errorText(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
@@ -37,14 +135,18 @@ function whereText(report: ClientErrorReport, networkError: string): string | nu
 
 /**
  * YouReel: Settings → Options → Diagnostics. The errors the studio's UI reported (src/diagnostics/client-error-
- * reporter.ts), newest first, with Refresh and Clear (confirmed first: it can't be undone). A failure to load or
- * clear shows here, never as a toast (an error toast would be reported again).
+ * reporter.ts) and the performance records (perf / jank from src/diagnostics/perf-reporter.ts and the Editor,
+ * server_slow from the server), newest first, with a kind filter, a compact performance summary computed from the
+ * loaded rows, Refresh and Clear (confirmed first: it can't be undone; with a filter on, it clears only that kind). A
+ * failure to load or clear shows here, never as a toast (an error toast would be reported again).
  */
 export function DiagnosticsSection() {
   const { t } = useTranslation("dashboard");
   const headingId = useId();
   const [reports, setReports] = useState<ClientErrorReport[] | null>(null);
   const [kept, setKept] = useState(1000);
+  const [keptPerf, setKeptPerf] = useState(500);
+  const [filter, setFilter] = useState<Filter>("all");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [confirming, setConfirming] = useState(false);
@@ -57,10 +159,11 @@ export function DiagnosticsSection() {
     const controller = new AbortController();
     loadRef.current = controller;
     try {
-      const list = await API.listClientErrors({ signal: controller.signal });
+      const list = await API.listClientErrors({ kinds: FILTERS[filter], signal: controller.signal });
       if (controller.signal.aborted) return;
       setReports(list.entries);
       setKept(list.kept);
+      if (list.kept_perf !== undefined) setKeptPerf(list.kept_perf);
       setError(null);
     } catch (err) {
       if (controller.signal.aborted) return;
@@ -68,7 +171,7 @@ export function DiagnosticsSection() {
     } finally {
       if (!controller.signal.aborted) setLoading(false);
     }
-  }, []);
+  }, [filter]);
 
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect -- load the list after mount; state is written back after the await
@@ -80,7 +183,7 @@ export function DiagnosticsSection() {
     setClearing(true);
     setClearError(null);
     try {
-      await API.clearClientErrors();
+      await API.clearClientErrors({ kinds: FILTERS[filter] });
       setConfirming(false);
       setReports([]);
     } catch (err) {
@@ -91,6 +194,10 @@ export function DiagnosticsSection() {
   };
 
   const total = reports?.length ?? 0;
+  const summary = useMemo(
+    () => perfSummary(reports ?? [], t("options_diagnostics_summary_pack_open")),
+    [reports, t],
+  );
 
   return (
     <section aria-labelledby={headingId} className="flex flex-col gap-2">
@@ -100,6 +207,7 @@ export function DiagnosticsSection() {
             {t("options_diagnostics")}
           </h3>
           <p className="text-sm text-muted-foreground">{t("options_diagnostics_desc", { kept })}</p>
+          <p className="text-sm text-muted-foreground">{t("options_diagnostics_perf_desc", { kept: keptPerf })}</p>
         </div>
         <div className="flex flex-wrap gap-2">
           <Button
@@ -133,6 +241,51 @@ export function DiagnosticsSection() {
         </div>
       </div>
 
+      <ToggleGroup
+        aria-label={t("options_diagnostics_filter")}
+        variant="outline"
+        size="sm"
+        className="flex-wrap"
+        value={[filter]}
+        onValueChange={(next: string[]) => {
+          const to = (next[0] as Filter | undefined) ?? filter;
+          if (to === filter) return;
+          setLoading(true);
+          setFilter(to);
+        }}
+      >
+        {FILTER_IDS.map((id) => (
+          <ToggleGroupItem key={id} value={id}>
+            {t(`options_diagnostics_filter_${id}`)}
+          </ToggleGroupItem>
+        ))}
+      </ToggleGroup>
+
+      {summary.length > 0 && (
+        <section
+          aria-label={t("options_diagnostics_summary")}
+          className="@container rounded-lg border border-border bg-card px-4 py-3"
+        >
+          <div className="grid gap-3 @md:grid-cols-2">
+            {summary.map((part) => (
+              <div key={part.id} className="flex min-w-0 flex-col gap-1">
+                <h4 className="text-xs font-medium text-muted-foreground">
+                  {t(`options_diagnostics_summary_${part.id}`)}
+                </h4>
+                <ol className="flex flex-col gap-0.5">
+                  {part.lines.map((line) => (
+                    <li key={line.key} className="flex min-w-0 gap-2 text-xs">
+                      <span className="shrink-0 font-mono tabular-nums">{line.value}</span>
+                      <TruncatedText text={line.label} className="font-mono text-subtle-foreground" />
+                    </li>
+                  ))}
+                </ol>
+              </div>
+            ))}
+          </div>
+        </section>
+      )}
+
       {error && (
         <p role="alert" className="text-sm wrap-break-word text-destructive">
           {t("options_diagnostics_load_failed", { error })}
@@ -141,7 +294,7 @@ export function DiagnosticsSection() {
 
       {reports !== null && reports.length === 0 && !error && (
         <p className="rounded-lg border border-border bg-card px-4 py-3 text-sm text-muted-foreground">
-          {t("options_diagnostics_empty")}
+          {t(filter === "all" ? "options_diagnostics_empty" : "options_diagnostics_empty_filtered")}
         </p>
       )}
 
@@ -169,7 +322,11 @@ export function DiagnosticsSection() {
           </AlertDialogHeader>
           <AlertDialogBody>
             <div className="flex flex-col gap-2">
-              <AlertDialogDescription>{t("options_diagnostics_clear_desc", { total })}</AlertDialogDescription>
+              <AlertDialogDescription>
+                {t(filter === "all" ? "options_diagnostics_clear_desc" : "options_diagnostics_clear_desc_filtered", {
+                  total,
+                })}
+              </AlertDialogDescription>
               {clearError && (
                 <p role="alert" className="text-sm wrap-break-word text-destructive">
                   {t("options_diagnostics_clear_failed", { error: clearError })}
@@ -202,6 +359,28 @@ function ReportRow({ report }: { report: ClientErrorReport }) {
   if (detail?.page) rows.push([t("options_diagnostics_detail_page"), detail.page, false]);
   if (detail?.api_path) rows.push([t("options_diagnostics_detail_request"), where ?? detail.api_path, false]);
   if (detail?.source) rows.push([t("options_diagnostics_detail_source"), detail.source, false]);
+  if (detail?.client) rows.push([t("options_diagnostics_detail_client"), detail.client, false]);
+  if (detail?.metrics && Object.keys(detail.metrics).length > 0) {
+    const text = Object.entries(detail.metrics)
+      .map(([name, value]) => `${name} ${formatMetric(name, value)}`)
+      .join("\n");
+    rows.push([t("options_diagnostics_detail_metrics"), text, true]);
+  }
+  if (detail?.resource_groups?.length) {
+    const text = detail.resource_groups
+      .map((group) => `${group.type}: ${group.count} · ${formatBytes(group.transfer_bytes)} / ${formatBytes(group.decoded_bytes)}`)
+      .join("\n");
+    rows.push([t("options_diagnostics_detail_resources"), text, true]);
+  }
+  if (detail?.top_resources?.length) {
+    const text = detail.top_resources
+      .map(
+        (resource) =>
+          `${formatBytes(resourceWeight(resource))} · ${formatMs(resource.duration_ms)} · ${resource.type ?? "?"} · ${resource.path}`,
+      )
+      .join("\n");
+    rows.push([t("options_diagnostics_detail_top"), text, true]);
+  }
   if (report.user_agent) rows.push([t("options_diagnostics_detail_browser"), report.user_agent, false]);
   if (report.app_build) rows.push([t("options_diagnostics_detail_build"), report.app_build, false]);
   if (detail?.stack) rows.push([t("options_diagnostics_detail_stack"), detail.stack, true]);
@@ -209,7 +388,7 @@ function ReportRow({ report }: { report: ClientErrorReport }) {
   return (
     <li className="flex flex-col gap-1 px-4 py-3">
       <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
-        <Badge variant={report.kind === "toast" ? "outline" : "destructive"}>
+        <Badge variant={PERF_KINDS.has(report.kind) ? "secondary" : report.kind === "toast" ? "outline" : "destructive"}>
           {t(`options_diagnostics_kind_${report.kind}`)}
         </Badge>
         <time dateTime={report.created_at} className="text-xs text-muted-foreground tabular-nums">
